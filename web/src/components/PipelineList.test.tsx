@@ -48,6 +48,24 @@ describe('PipelineList — empty and loading states', () => {
     expect(screen.getByText(/No pipelines found/i)).toBeInTheDocument()
   })
 
+  // The fleet health bar's filter can hide every pipeline of a cluster that
+  // has some: that is not an empty cluster, and the filter input (and its /
+  // shortcut) stays.
+  it('says no pipeline matches when the fleet filter hides them all', () => {
+    const ref = createRef<HTMLInputElement>()
+    render(<PipelineList pipelines={[]} total={3} onSelect={vi.fn()} searchInputRef={ref} />)
+    expect(screen.queryByText(/No pipelines found/i)).not.toBeInTheDocument()
+    expect(screen.getByText('No pipelines match this filter.')).toBeInTheDocument()
+    expect(ref.current).toBe(screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' }))
+  })
+
+  it('names the query when the query and the fleet filter hide them all', async () => {
+    render(<PipelineList pipelines={[]} total={3} onSelect={vi.fn()} />)
+    await userEvent.type(screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' }), 'Shop')
+    expect(await screen.findByText('No pipelines match “shop”')).toBeInTheDocument()
+    expect(screen.queryByText('No pipelines match this filter.')).not.toBeInTheDocument()
+  })
+
   it('leaves the setup commands to the main panel onboarding card', () => {
     render(<PipelineList pipelines={[]} onSelect={vi.fn()} />)
     expect(screen.queryByText(/kubectl apply/i)).not.toBeInTheDocument()

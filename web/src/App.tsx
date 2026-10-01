@@ -553,6 +553,7 @@ export function App() {
               loading={pipelinesLoading}
               error={pipelinesError}
               searchInputRef={searchInputRef}
+              total={pipelines.length}
             />
           </ErrorBoundary>
         </div>

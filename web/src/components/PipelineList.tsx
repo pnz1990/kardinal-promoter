@@ -32,6 +32,13 @@ interface Props {
    * searchInputRef.current?.focus() when the / shortcut fires.
    */
   searchInputRef?: RefObject<HTMLInputElement | null>
+  /**
+   * Pipelines in the cluster before the fleet health bar's filter (default:
+   * pipelines.length). When that filter hides every pipeline, the list keeps
+   * its filter input and says nothing matches, instead of the note for an
+   * empty cluster.
+   */
+  total?: number
 }
 
 /** Shorten a long bundle name for the sidebar: names over 14 characters keep
@@ -58,7 +65,7 @@ function matchesQuery(p: Pipeline, query: string): boolean {
     `${p.namespace}/${p.name}`.toLowerCase().includes(query)
 }
 
-export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, searchInputRef }: Props) {
+export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, searchInputRef, total }: Props) {
   const isSelected = (p: Pipeline) =>
     selected === p.name && (selectedNamespace === undefined || selectedNamespace === p.namespace)
 
@@ -132,7 +139,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
       </div>
     )
   }
-  if (pipelines.length === 0) {
+  if ((total ?? pipelines.length) === 0) {
     return <NoPipelines />
   }
 
@@ -201,9 +208,11 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
         ref={listContainerRef}
         style={useVirtual ? { overflowY: 'auto', maxHeight: '100%' } : undefined}
       >
-        {filteredPipelines.length === 0 && debouncedQuery && (
+        {filteredPipelines.length === 0 && (
           <div style={{ padding: '0.75rem 1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
-            No pipelines match &ldquo;{debouncedQuery}&rdquo;
+            {debouncedQuery
+              ? <>No pipelines match &ldquo;{debouncedQuery}&rdquo;</>
+              : 'No pipelines match this filter.'}
           </div>
         )}
         {/* #358: multi-namespace grouped display — not virtualized (variable header heights) */}
