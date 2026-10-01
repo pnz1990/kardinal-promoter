@@ -168,9 +168,8 @@ func overrideFn(
 // usually longer than the 63 characters a label value may have, so a name
 // that is an instance is read directly and never used in a label selector
 // (E2E-R08). A template name is resolved to the instances of the Bundles
-// still in progress. The PolicyGate reconciler keeps evaluating the
-// instances of a Verified, Failed or Superseded Bundle, but no promotion
-// waits on them, so they are left alone.
+// still in progress. No promotion waits on the instances of a Verified,
+// Failed or Superseded Bundle, so they are left alone.
 func overrideTargets(ctx context.Context, c sigs_client.Client, ns, pipeline, stage, gateName string) (
 	[]v1alpha1.PolicyGate, error) {
 	var gate v1alpha1.PolicyGate

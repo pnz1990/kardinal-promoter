@@ -310,8 +310,10 @@ equivalent syntaxes are available:
 
 Gates fail closed:
 
-- If the named window does not exist, every syntax is an evaluation error and the gate blocks
-  (`unknown ChangeWindow "..."`). A typo or a deleted window never allows a promotion.
+- If the named window does not exist, every syntax is an evaluation error and the gate blocks:
+  `changewindow: unknown ChangeWindow "<name>"` for `isBlocked` and `isAllowed`, and
+  `no such key: <name>` for `changewindow["<name>"]`. A typo or a deleted window never allows a
+  promotion.
 - If the controller cannot list ChangeWindows (for example missing RBAC), gates that
   reference `changewindow` block with `context error: changewindow: list ChangeWindows: ...`.
 

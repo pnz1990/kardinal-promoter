@@ -30,10 +30,11 @@ import (
 // field is enough: SetPaused (the UI) and
 // `kubectl patch pipeline --type merge -p '{"spec":{"paused":true}}'` write
 // only the Pipeline. Pause and Resume (the CLI) also write the gate, so the
-// hold starts without waiting for the Pipeline reconciler. Deleting or
-// creating the gate wakes every PromotionStep in the namespace (the
-// PromotionStep reconciler watches PolicyGates), so resume takes effect at
-// once.
+// hold starts without waiting for the Pipeline reconciler. A held step
+// re-checks the gate every minute (requeuePaused in the PromotionStep
+// reconciler); its PolicyGate watch wakes only the steps whose
+// spec.requiredGates names a gate, and the freeze gate is never listed there.
+// So resume takes effect within a minute, not at once.
 //
 // Only kardinal's own gate counts (IsFreezeGate). A PolicyGate a user named
 // freeze-<pipeline> neither holds steps nor is deleted by resume; pausing

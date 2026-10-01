@@ -549,7 +549,7 @@ func buildUpstreamContext(bundle *kardinalv1alpha1.Bundle) map[string]interface{
 // promotion history (K-10). It lists the last historyLimit Bundles for the same
 // pipeline and computes per-environment history stats:
 //
-//   - soakMinutes         — contiguous healthy minutes (from current bundle)
+//   - soakMinutes         — minutes since this Bundle was Verified in the environment
 //   - recentSuccessCount  — number of Verified bundles in last historyLimit
 //   - recentFailureCount  — number of Failed bundles in last historyLimit
 //   - lastPromotedAt      — RFC3339 timestamp of last verified promotion (or "")
