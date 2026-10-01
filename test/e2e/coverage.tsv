@@ -175,8 +175,9 @@ GATE-FINISHED-01	live	core	covered	gates	gates of settled or Superseded Bundles 
 GATE-OVERRIDE-01	live	core	covered	gates	spec.overrides with reason and expiry makes the gate pass for that stage; PR body shows OVERRIDDEN by/reason	docs/policy-gates.md:533; pkg/reconciler/policygate/reconciler.go:147-159; pkg/reconciler/policygate/reconciler.go:148
 GATE-OVERRIDE-02	live	core	covered	gates	expired override or override for another stage (kardinal.io/environment label) does not unblock	pkg/reconciler/policygate/reconciler.go:147-159
 GATE-AUDIT-01	live	core	covered	gates	GateEvaluated AuditEvent on first evaluation and on every readiness flip	docs/guides/security.md:264-273; pkg/reconciler/policygate/audit.go:60
-GATE-MESSAGE-01	live	core	todo	gates	gate spec.message is shown to the user when the gate blocks	docs/policy-gates.md:27; pkg/reconciler/policygate/reconciler.go:175-208; cmd/kardinal/cmd/policy.go:364
+GATE-MESSAGE-01	live	core	covered	gates	gate spec.message is shown to the user when the gate blocks	docs/policy-gates.md:27; pkg/reconciler/policygate/reconciler.go:175-208; cmd/kardinal/cmd/policy.go:364
 GATE-REJECT-01	live	core	covered	gates	PolicyGate spec.selector or a name over 63 chars is rejected by the API server with a what-to-do message	docs/changelog.md:25
+GATE-REJECT-02	live	core	covered	gates	a PolicyGate template name over 63 characters is rejected whatever its pattern; controller-created instances and freeze gates are exempt	docs/changelog.md:14; api/v1alpha1/policygate_types.go:135
 METRIC-01	live	prometheus	todo	metriccheck	MetricCheck runs a PromQL query against Prometheus and records Pass/Fail using lt/gt/lte/gte/eq on a scalar or one-element vector	api/v1alpha1/metriccheck_types.go:13-16; pkg/reconciler/metriccheck/prometheus.go:153-174
 METRIC-02	live	prometheus	todo	metriccheck	metrics.<name> in a gate expression blocks promotion when the MetricCheck fails	docs/policy-gates.md:342-383; pkg/reconciler/policygate/reconciler.go:343-353
 METRIC-03	live	prometheus	todo	metriccheck	result older than validUntil (max(3x interval, 30s)) reads Stale and the gate fails closed	pkg/reconciler/metriccheck
