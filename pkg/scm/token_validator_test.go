@@ -234,3 +234,53 @@ func TestTokenValidators_Hardening(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// TestValidateGiteaFamilyTokenScopes_DocumentedScopes covers a token with only
+// the documented scopes (write:repository, write:issue). /api/v1/user needs
+// read:user, so Forgejo and Gitea answer 403: the token works, but its scopes
+// cannot be checked this way. That is ErrTokenScopesNotChecked, not a warning
+// and not a generic HTTP error. Messages name the provider that was called.
+func TestValidateGiteaFamilyTokenScopes_DocumentedScopes(t *testing.T) {
+	validators := []struct {
+		name     string
+		validate func(context.Context, string, string) ([]scm.TokenScopeWarning, error)
+		other    string
+	}{
+		{"Forgejo", scm.ValidateForgejoTokenScopes, "Gitea"},
+		{"Gitea", scm.ValidateGiteaTokenScopes, "Forgejo"},
+	}
+	for _, v := range validators {
+		t.Run(v.name+" 403 is not checked", func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+			}))
+			defer srv.Close()
+			warnings, err := v.validate(context.Background(), "tok", srv.URL)
+			assert.Empty(t, warnings)
+			require.ErrorIs(t, err, scm.ErrTokenScopesNotChecked)
+			assert.Equal(t, "token scopes not checked: /user returned 403 (the documented scopes don't include read:user)", err.Error())
+		})
+		t.Run(v.name+" 401 names the provider", func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusUnauthorized)
+			}))
+			defer srv.Close()
+			warnings, err := v.validate(context.Background(), "tok", srv.URL)
+			require.NoError(t, err)
+			require.Len(t, warnings, 1)
+			assert.Contains(t, warnings[0].Consequence, v.name)
+			assert.NotContains(t, warnings[0].Consequence, v.other)
+		})
+		t.Run(v.name+" 500 names the provider", func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer srv.Close()
+			_, err := v.validate(context.Background(), "tok", srv.URL)
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, scm.ErrTokenScopesNotChecked)
+			assert.Contains(t, err.Error(), v.name)
+			assert.NotContains(t, err.Error(), v.other)
+		})
+	}
+}

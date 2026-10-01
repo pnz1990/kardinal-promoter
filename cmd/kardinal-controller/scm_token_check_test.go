@@ -76,7 +76,7 @@ func TestCheckSCMTokenAtStartup(t *testing.T) {
 			token:        secret,
 			status:       http.StatusInternalServerError,
 			wantRequests: 1,
-			wantLog:      "network error",
+			wantLog:      "network or HTTP error",
 		},
 		{
 			name:     "empty token is not checked",
@@ -168,6 +168,76 @@ func TestCheckSCMTokenAtStartup_NotAvailable(t *testing.T) {
 			buf.Reset()
 			assert.Nil(t, checkSCMTokenAtStartup(context.Background(), logger, provider, " \n", srv.URL))
 			assert.Empty(t, buf.String(), "no token, no check and no log line")
+		})
+	}
+}
+
+// TestCheckSCMTokenAtStartup_GiteaFamily covers the Forgejo and Gitea check.
+// A token with only the documented scopes (write:repository, write:issue)
+// cannot read /api/v1/user, which needs read:user, so the SCM answers 403.
+// That is a working token whose scopes the call cannot show: it is logged at
+// info, not as a debug "network error", and it names the configured provider.
+func TestCheckSCMTokenAtStartup_GiteaFamily(t *testing.T) {
+	const secret = "s3cr3t-token-value"
+	tests := []struct {
+		name        string
+		provider    string
+		status      int
+		wantMissing []string
+		wantLevel   string
+		wantLog     string
+		wantName    string // provider name the logged text must use
+	}{
+		{name: "forgejo documented scopes 403", provider: "forgejo", status: http.StatusForbidden,
+			wantLevel: "info", wantLog: "token scopes not checked: /user returned 403 (the documented scopes don't include read:user)"},
+		{name: "gitea documented scopes 403", provider: "gitea", status: http.StatusForbidden,
+			wantLevel: "info", wantLog: "token scopes not checked: /user returned 403 (the documented scopes don't include read:user)"},
+		{name: "forgejo token with read:user", provider: "forgejo", status: http.StatusOK},
+		{name: "gitea rejected token warns and says Gitea", provider: "gitea", status: http.StatusUnauthorized,
+			wantMissing: []string{"<valid token>"}, wantLevel: "warn", wantLog: "SCM TOKEN SCOPE WARNING", wantName: "Gitea"},
+		{name: "forgejo rejected token warns and says Forgejo", provider: "forgejo", status: http.StatusUnauthorized,
+			wantMissing: []string{"<valid token>"}, wantLevel: "warn", wantLog: "SCM TOKEN SCOPE WARNING", wantName: "Forgejo"},
+		{name: "gitea server error is debug and says gitea", provider: "gitea", status: http.StatusInternalServerError,
+			wantLevel: "debug", wantLog: "network or HTTP error", wantName: "gitea"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				assert.Equal(t, "/api/v1/user", r.URL.Path)
+				assert.Equal(t, "token "+secret, r.Header.Get("Authorization"))
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(`{"message":"token does not have at least one of required scope(s)"}`))
+			}))
+			defer srv.Close()
+
+			var buf bytes.Buffer
+			logger := zerolog.New(&buf).Level(zerolog.DebugLevel)
+			warnings := checkSCMTokenAtStartup(context.Background(), logger, tt.provider, secret, srv.URL)
+
+			assert.Equal(t, int32(1), requests.Load())
+			var missing []string
+			for _, w := range warnings {
+				missing = append(missing, w.MissingScope)
+			}
+			assert.Equal(t, tt.wantMissing, missing)
+			out := buf.String()
+			assert.NotContains(t, out, "network error —", "a reachable SCM is not a network error")
+			if tt.wantLog == "" {
+				assert.Empty(t, out, "a token that reads /user logs nothing")
+				return
+			}
+			assert.Contains(t, out, tt.wantLog)
+			assert.Contains(t, out, `"level":"`+tt.wantLevel+`"`)
+			assert.Contains(t, out, `"provider":"`+tt.provider+`"`)
+			if tt.wantName != "" {
+				assert.Contains(t, out, tt.wantName)
+			}
+			other := map[string]string{"forgejo": "gitea", "gitea": "forgejo"}[tt.provider]
+			assert.NotContains(t, strings.ToLower(strings.ReplaceAll(out, `"provider":"`+tt.provider+`"`, "")), other,
+				"the logged text must name the configured provider only")
+			require.NotContains(t, out, secret, "the token must never be logged")
 		})
 	}
 }

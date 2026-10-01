@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -25,8 +26,9 @@ const scmTokenCheckTimeout = 15 * time.Second
 // It runs whenever a token is set, including chart installs, where the token
 // Secret is also watched for rotation: GITHUB_TOKEN holds the Secret's value at
 // start. It is skipped when the token is empty (the watcher loads it later) and
-// for providers without a validator (bitbucket, azuredevops). A network or HTTP
-// error is logged at debug level.
+// for providers without a validator (bitbucket, azuredevops). A token whose
+// scopes the SCM cannot show (scm.ErrTokenScopesNotChecked) is logged at info.
+// A network or HTTP error is logged at debug level.
 //
 // The token is trimmed the same way the SCM providers trim it, and it is never
 // logged.
@@ -42,8 +44,10 @@ func checkSCMTokenAtStartup(ctx context.Context, logger zerolog.Logger, provider
 		validate = scm.ValidateGitHubTokenScopes
 	case "gitlab":
 		validate = scm.ValidateGitLabTokenScopes
-	case "forgejo", "gitea":
+	case "forgejo":
 		validate = scm.ValidateForgejoTokenScopes
+	case "gitea":
+		validate = scm.ValidateGiteaTokenScopes
 	default:
 		logger.Info().
 			Str("provider", providerType).
@@ -54,10 +58,18 @@ func checkSCMTokenAtStartup(ctx context.Context, logger zerolog.Logger, provider
 	ctx, cancel := context.WithTimeout(ctx, scmTokenCheckTimeout)
 	defer cancel()
 	warnings, err := validate(ctx, token, apiURL)
+	if errors.Is(err, scm.ErrTokenScopesNotChecked) {
+		// The SCM answered and did not reject the token; it only cannot show
+		// the scopes (Forgejo/Gitea /user with the documented scopes).
+		logger.Info().
+			Str("provider", providerType).
+			Msg("SCM " + err.Error())
+		return nil
+	}
 	if err != nil {
 		logger.Debug().Err(err).
 			Str("provider", providerType).
-			Msg("SCM token scope check skipped (network error — non-fatal)")
+			Msg("SCM token scope check skipped (network or HTTP error — non-fatal)")
 		return nil
 	}
 	for _, w := range warnings {

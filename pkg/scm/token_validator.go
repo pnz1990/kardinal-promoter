@@ -16,6 +16,7 @@ package scm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -193,14 +194,39 @@ func ValidateGitLabTokenScopes(ctx context.Context, token, apiURL string) ([]Tok
 	return nil, nil
 }
 
-// ValidateForgejoTokenScopes calls the Forgejo/Gitea /user endpoint to verify
-// the token is valid. Forgejo uses fine-grained tokens and does not expose scope
-// information in a queryable way from the /user endpoint; we verify only that the
-// token is valid (200 OK from /user).
+// ErrTokenScopesNotChecked is wrapped by a validator that reached the SCM but
+// could not see the token's scopes. The token is not known to be bad, so the
+// caller should log it at info level, not as a warning or a network error.
+var ErrTokenScopesNotChecked = errors.New("token scopes not checked")
+
+// ValidateForgejoTokenScopes checks a Forgejo token. See
+// validateGiteaFamilyTokenScopes.
 func ValidateForgejoTokenScopes(ctx context.Context, token, apiURL string) ([]TokenScopeWarning, error) {
+	return validateGiteaFamilyTokenScopes(ctx, "Forgejo", token, apiURL)
+}
+
+// ValidateGiteaTokenScopes checks a Gitea token. See
+// validateGiteaFamilyTokenScopes.
+func ValidateGiteaTokenScopes(ctx context.Context, token, apiURL string) ([]TokenScopeWarning, error) {
+	return validateGiteaFamilyTokenScopes(ctx, "Gitea", token, apiURL)
+}
+
+// validateGiteaFamilyTokenScopes calls the Forgejo/Gitea /api/v1/user endpoint.
+// name ("Forgejo" or "Gitea") is used in the messages. These SCMs do not expose
+// a token's scopes, so the call shows only whether the token is accepted:
+//   - 401: the token is rejected, which is a warning.
+//   - 403: the token is accepted but lacks read:user, which /user needs. The
+//     documented scopes (write:repository, write:issue) do not include it, so
+//     this is the normal answer. It wraps ErrTokenScopesNotChecked.
+//   - 200: the token is accepted. Its scopes are still not known.
+//
+// No repository is probed instead: none is configured at startup (each Pipeline
+// names its own), and a repository read needs only read:repository, so it
+// would not show write:issue either.
+func validateGiteaFamilyTokenScopes(ctx context.Context, name, token, apiURL string) ([]TokenScopeWarning, error) {
 	if token == "" {
 		return []TokenScopeWarning{
-			{MissingScope: "<token>", Consequence: "no Forgejo token configured — all SCM operations will fail"},
+			{MissingScope: "<token>", Consequence: "no " + name + " token configured — all SCM operations will fail"},
 		}, nil
 	}
 
@@ -212,23 +238,25 @@ func ValidateForgejoTokenScopes(ctx context.Context, token, apiURL string) ([]To
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"/api/v1/user", nil)
 	if err != nil {
-		return nil, fmt.Errorf("construct Forgejo /user request: %w", err)
+		return nil, fmt.Errorf("construct %s /user request: %w", name, err)
 	}
 	req.Header.Set("Authorization", "token "+token)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("call Forgejo /user: %w", err)
+		return nil, fmt.Errorf("call %s /user: %w", name, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode == http.StatusUnauthorized {
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
 		return []TokenScopeWarning{
-			{MissingScope: "<valid token>", Consequence: "token rejected by Forgejo API (401) — token may be expired"},
+			{MissingScope: "<valid token>", Consequence: "token rejected by the " + name + " API (401) — token may be expired"},
 		}, nil
-	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("forgejo /user returned HTTP %d — cannot validate token", resp.StatusCode)
+	case resp.StatusCode == http.StatusForbidden:
+		return nil, fmt.Errorf("%w: /user returned 403 (the documented scopes don't include read:user)", ErrTokenScopesNotChecked)
+	case resp.StatusCode >= 400:
+		return nil, fmt.Errorf("%s /user returned HTTP %d — cannot validate token", name, resp.StatusCode)
 	}
 
 	return nil, nil
