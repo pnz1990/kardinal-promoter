@@ -110,10 +110,8 @@ func TestMultiCluster_ArgoHub(t *testing.T) {
 // environment to the spoke, and health.type flux reads it in the hub. With
 // spec.wait its Ready condition covers the spoke's workload: a release is
 // Verified once the spoke runs it and the Kustomization applied the promoted
-// commit, and a release whose pods never start stalls past the Deployment's
-// 60s progress deadline in the spoke: Flux gives up on the promoted commit
-// (Ready=False, "failed early due to stalled resources") and the step fails
-// at once, well before its 4m health.timeout.
+// commit, and a release whose pods never start stalls in the spoke: Flux
+// gives up on the promoted commit (Ready=False) and the step fails.
 //
 // Covers MC-FLUX-01.
 func TestMultiCluster_FluxHub(t *testing.T) {
@@ -153,10 +151,12 @@ func TestMultiCluster_FluxHub(t *testing.T) {
 
 	broken := fixtures.Image + ":" + fixtures.BrokenTag
 	bad := e.CreateBundle(t, ns, pipelineName, "--image", broken)
-	ps = e.WaitStepState(t, ns, pipelineName, bad, "prod", "Failed", 3*time.Minute)
-	assert.Contains(t, ps.Status.Message, "health alarm via flux (onHealthFailure=none): Ready=False")
-	assert.Contains(t, ps.Status.Message, "stalled resources")
-	assert.NotContains(t, ps.Status.Message, "health check timeout", "a stalled Kustomization fails before the timeout")
+	// Flux reports the spoke's stalled rollout as Ready=False, which fails
+	// the step at once when Flux names the stall, or at the 4m health.timeout
+	// when its own 2m wait expires first (HEALTH-FLUX-08 covers the stall).
+	ps = e.WaitStepState(t, ns, pipelineName, bad, "prod", "Failed", 5*time.Minute)
+	assert.Regexp(t, `^(health alarm via flux \(onHealthFailure=none\): |health check timeout after 4m0s; last result: unhealthy via flux: )Ready=False`,
+		ps.Status.Message, "the step fails on the Kustomization's Ready=False for the spoke")
 	assert.Equal(t, broken, s.DeploymentImage(t, ns, workload), "the broken release reached the spoke")
 	e.WaitBundlePhase(t, ns, bad, "Failed", time.Minute)
 }
