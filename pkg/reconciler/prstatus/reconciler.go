@@ -84,6 +84,9 @@ const (
 	requeuePollInterval = 30 * time.Second
 	// lastCheckedRefresh is how stale status.lastCheckedAt may get before an
 	// unchanged poll still patches it, so readers can tell polling is alive.
+	// An unchanged poll does not patch it sooner: each patch re-enqueues the
+	// PRStatus, and patching every poll made it poll in a tight loop. So
+	// lastCheckedAt lagging the last poll by up to this much is by design (B75).
 	lastCheckedRefresh = 5 * time.Minute
 	// mergeCommitWindow bounds how long after the merge was recorded the
 	// reconciler keeps asking the SCM for the merge commit. It is half the

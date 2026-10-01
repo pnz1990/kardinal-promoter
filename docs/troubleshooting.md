@@ -90,6 +90,15 @@ After those 5 minutes the controller comments on the PR that it no longer tracks
 kubectl get prstatus -o custom-columns=NAME:.metadata.name,OPEN:.status.open,CLOSED_AT:.status.closedAt,FINAL:.status.closedFinal
 ```
 
+The PRStatus polls an open PR every 30 seconds, but `status.lastCheckedAt` is not the time of
+the last poll. A poll that finds nothing changed writes nothing, unless `lastCheckedAt` is 5
+minutes old; then it refreshes it. This is by design: every status write is an update event
+that queues the PRStatus again, so writing on every poll made it poll in a loop, and it would
+also add an API server write every 30 seconds for each open PR. A `lastCheckedAt` up to 5
+minutes old is normal for an open PR; once a PR is merged or final-closed it stops changing.
+With `logLevel: debug`, the controller logs `PR still open, requeueing` with `prstatus` and
+`namespace` at every poll of an open PR.
+
 **If the PR was merged but the step is still "WaitingForMerge"**: this can happen if the controller was down when the webhook arrived. On next controller restart, startup reconciliation automatically re-checks all in-flight PRs and advances any that were merged during downtime. You can also force a restart:
 
 ```bash

@@ -57,7 +57,9 @@ type PRStatusStatus struct {
 
 	// LastCheckedAt records when the status was last written from an SCM API
 	// poll. Polls that change nothing refresh it at most every 5 minutes, so it
-	// can lag the most recent poll by up to that much.
+	// can lag the most recent poll by up to that much: every status write
+	// queues the PRStatus again, so writing on each unchanged poll would make
+	// it poll in a loop.
 	// +optional
 	LastCheckedAt *metav1.Time `json:"lastCheckedAt,omitempty"`
 
