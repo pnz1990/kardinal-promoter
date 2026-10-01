@@ -350,7 +350,7 @@ spec:
 
 ### Multi-cluster with Argo Rollouts
 
-The `argocd` checks work for any destination cluster because the Applications live in the controller's cluster. The `argoRollouts` checks read the Rollout in the controller's cluster, so this layout suits Rollouts that the controller's cluster runs (see [Remote Clusters](health-adapters.md#remote-clusters)).
+The `argocd` checks work for any destination cluster because the Applications live in the controller's cluster. The `argoRollouts` checks read the Rollout in the controller's cluster, so this layout suits Rollouts that the controller's cluster runs: here each prod region has its own namespace there. Give each environment its own Rollout; two environments that name the same one check the same object. For Rollouts in other clusters, check their hub Applications with `type: argocd` instead (see [Remote Clusters](health-adapters.md#remote-clusters)).
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -377,7 +377,7 @@ spec:
       approval: pr-review
       health:
         type: argoRollouts
-        argoRollouts: { name: my-app, namespace: prod }
+        argoRollouts: { name: my-app, namespace: prod-us }
       delivery:
         delegate: argoRollouts
     - name: prod-eu
@@ -385,7 +385,7 @@ spec:
       approval: pr-review
       health:
         type: argoRollouts
-        argoRollouts: { name: my-app, namespace: prod }
+        argoRollouts: { name: my-app, namespace: prod-eu }
       delivery:
         delegate: argoRollouts
 ```
