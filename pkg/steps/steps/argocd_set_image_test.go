@@ -287,6 +287,42 @@ func TestArgoCDSetImageStep_UsesUpdateConfig(t *testing.T) {
 	assert.Equal(t, "2.0.0", version)
 }
 
+// TestArgoCDSetImageStep_Defaults verifies the documented defaults: with
+// update.argocd.namespace and imageKey unset, the step patches
+// spec.source.helm.valuesObject.image.tag of the Application in argocd.
+func TestArgoCDSetImageStep_Defaults(t *testing.T) {
+	app := makeArgoCDApp("argocd", "my-app", map[string]interface{}{
+		"image": map[string]interface{}{"tag": "1.28.0"},
+	})
+	k8s := fake.NewClientBuilder().WithScheme(newArgoCDScheme(t)).WithObjects(app).Build()
+	state := &parentsteps.StepState{
+		K8sClient: k8s,
+		Environment: v1alpha1.EnvironmentSpec{
+			Name: "prod",
+			Update: v1alpha1.UpdateConfig{
+				Strategy: "argocd",
+				ArgoCD:   &v1alpha1.ArgoCDUpdateConfig{Application: "my-app"},
+			},
+		},
+		Bundle:  v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/myorg/app", Tag: "1.29.0"}}},
+		Outputs: map[string]string{},
+	}
+
+	step, err := parentsteps.Lookup("argocd-set-image")
+	require.NoError(t, err)
+	result, execErr := step.Execute(context.Background(), state)
+	require.NoError(t, execErr)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	assert.Equal(t, map[string]string{"argocdApplication": "my-app", "argocdNamespace": "argocd",
+		"imageKey": "image.tag", "imageTag": "1.29.0"}, result.Outputs)
+
+	got := makeArgoCDApp("argocd", "my-app", nil)
+	require.NoError(t, k8s.Get(context.Background(), client.ObjectKeyFromObject(got), got))
+	values, _, err := unstructured.NestedMap(got.Object, "spec", "source", "helm", "valuesObject")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]interface{}{"image": map[string]interface{}{"tag": "1.29.0"}}, values)
+}
+
 // TestDefaultSequenceForBundle_ArgoCDStrategy verifies O8:
 // updateStrategy=="argocd" produces [argocd-set-image, health-check].
 func TestDefaultSequenceForBundle_ArgoCDStrategy(t *testing.T) {
