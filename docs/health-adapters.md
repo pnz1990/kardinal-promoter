@@ -98,7 +98,7 @@ health:
 - `status.operationState.phase` = `Succeeded` (or no operation recorded)
 - the Application synced the promoted commit: it appears in `status.sync.revision(s)`, `status.operationState.syncResult.revision(s)` or `status.history`. `Synced` alone only means the cluster matches whatever commit Argo CD last fetched, which can be the previous one.
 
-On a branch shared with other environments, a later commit can reach Argo CD before ours does. The adapter accepts a revision other than the promoted one only when `status.summary.images` shows the Bundle images; it does not check that the revision is later. With `update.strategy: argocd-set-image` there is no commit to compare, so `status.summary.images` must show the Bundle images.
+On a branch shared with other environments, a later commit can reach Argo CD before ours does. The adapter accepts a revision other than the promoted one only when `status.summary.images` shows the Bundle images; it does not check that the revision is later. With `update.strategy: argocd` there is no commit to compare, so `status.summary.images` must show the Bundle images.
 
 **When to use:** Any cluster managed by Argo CD. This is the recommended adapter for Argo CD users because it verifies that Argo CD successfully synced the promoted manifests, not just that the Deployment is running.
 

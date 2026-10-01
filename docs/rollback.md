@@ -193,11 +193,13 @@ kardinal history my-app
 ```
 
 ```
-BUNDLE    ACTION     ENV     PR     APPROVER   DURATION   TIMESTAMP
-v1.29.0   promote    prod    #144   alice      15m        2026-04-09 10:20
-v1.28.0   rollback   prod    #145   bob        5m         2026-04-09 11:00
-v1.28.0   promote    prod    #138   alice      12m        2026-04-07 14:00
+BUNDLE                  ACTION     ENV    PR     DURATION   TIMESTAMP
+my-app-rollback-x7k2p   rollback   prod   #145   5m         2026-04-09 11:00
+my-app-v1-29-0          promote    prod   #144   15m        2026-04-09 10:20
+my-app-v1-28-0          promote    prod   #138   12m        2026-04-07 14:00
 ```
+
+There is one row per PromotionStep, newest first. ACTION is `rollback` for a rollback Bundle. PR is `--` in an environment that opened no PR (`approval: auto`), and DURATION is `...` while the step is in flight. The history ends at the Bundles `historyLimit` keeps (see below): a deleted Bundle's rows are gone too.
 
 ## How Far Back Can You Roll Back
 
