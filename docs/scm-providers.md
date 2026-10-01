@@ -326,6 +326,11 @@ the `helm upgrade` in [Upgrade](installation.md#upgrade) with `--set github.toke
    kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=20 \
      | grep "SCM credentials rotated"
    ```
+   The watcher logs this line only when it sees the token change after startup, so a line
+   with a `time` later than your Secret update means the controller now uses the new token.
+   When the controller starts, it logs "SCM credentials loaded" for its first read of the
+   Secret instead. That line confirms the new token only if the Pod started after you
+   updated the Secret. Revoke the old token only after one of these checks passes.
 
 ### Static mode (development / CI)
 

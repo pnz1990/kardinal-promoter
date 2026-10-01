@@ -61,6 +61,12 @@ type SecretWatcher struct {
 	// lastToken tracks the most recently applied token so we only call Reload
 	// when the token actually changes.
 	lastToken string
+
+	// seeded is set after the first successful read of the Secret. That read
+	// logs "SCM credentials loaded", not "rotated": docs/scm-providers.md tells
+	// users to wait for a "rotated" line before revoking the old token, so a
+	// "rotated" line at every startup would let them revoke too early.
+	seeded bool
 }
 
 // NewSecretWatcher constructs a SecretWatcher.
@@ -90,8 +96,8 @@ func (w *SecretWatcher) Start(ctx context.Context) error {
 
 	log.Info().Msg("SCM credential watcher started")
 
-	// Do an immediate check on startup so a rotated secret is picked up
-	// before the first reconcile loop runs.
+	// Read the Secret at once so a token changed since the Pod started is
+	// picked up before the first reconcile. This first read logs "loaded".
 	w.checkAndReload(ctx, log)
 
 	ticker := time.NewTicker(secretWatchInterval)
@@ -108,7 +114,9 @@ func (w *SecretWatcher) Start(ctx context.Context) error {
 	}
 }
 
-// checkAndReload reads the Secret and calls Provider.Reload if the token changed.
+// checkAndReload reads the Secret and calls Provider.Reload if the token
+// changed. The first successful read seeds lastToken and logs "SCM credentials
+// loaded"; only a later change logs "SCM credentials rotated".
 func (w *SecretWatcher) checkAndReload(ctx context.Context, log zerolog.Logger) {
 	secret := &corev1.Secret{}
 	key := types.NamespacedName{
@@ -140,5 +148,10 @@ func (w *SecretWatcher) checkAndReload(ctx context.Context, log zerolog.Logger) 
 	}
 
 	w.lastToken = token
+	if !w.seeded {
+		w.seeded = true
+		log.Info().Msg("SCM credentials loaded — provider uses the token in the Secret")
+		return
+	}
 	log.Info().Msg("SCM credentials rotated — provider reloaded with new token")
 }
