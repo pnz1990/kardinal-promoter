@@ -5,11 +5,13 @@ package promotionstep_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +22,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -29,15 +32,22 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
 // prStep is a prod pr-review step in state with PRStatus prs-step and, when
-// prNumber > 0, PR prNumber of test/repo in its status.
+// prNumber > 0, PR prNumber of test/repo in its status. A step past Pending
+// has the pr-review step sequence handlePending writes.
 func prStep(state string, prNumber int) *v1alpha1.PromotionStep {
 	ps := makeStep("step", "nginx-demo", "bundle-1", "prod")
 	ps.Spec.StepType = "pr-review"
 	ps.Spec.PRStatusRef = "prs-step"
 	ps.Status.State = state
+	if state != "" && state != "Pending" {
+		for _, name := range steps.DefaultSequenceForBundle("pr-review", "image", "", "") {
+			ps.Status.Steps = append(ps.Status.Steps, v1alpha1.StepStatus{Name: name, State: v1alpha1.StepExecutionPending})
+		}
+	}
 	if prNumber > 0 {
 		ps.Status.PRURL = "https://github.com/test/repo/pull/" + strconv.Itoa(prNumber)
 		ps.Status.Outputs = map[string]string{"prURL": ps.Status.PRURL, "prNumber": strconv.Itoa(prNumber)}
@@ -74,8 +84,13 @@ func TestPRFinalizer_FollowsState(t *testing.T) {
 			want:      true,
 		},
 		{
-			name:      "an auto step entering Promoting does not get it",
-			step:      makeStep("step", "nginx-demo", "bundle-1", "test"),
+			name: "an auto step entering Promoting does not get it, though it has a prStatusRef",
+			step: func() *v1alpha1.PromotionStep {
+				ps := makeStep("step", "nginx-demo", "bundle-1", "test")
+				ps.Spec.PRStatusRef = "prs-step"
+				return ps
+			}(),
+			prs:       openPRStatus("prs-step", "", 0),
 			wantState: "Promoting",
 			want:      false,
 		},
@@ -116,6 +131,108 @@ func TestPRFinalizer_FollowsState(t *testing.T) {
 			assert.Equal(t, tt.want, slices.Contains(got.Finalizers, promotionstep.FinalizerClosePR),
 				"finalizers %v", got.Finalizers)
 			assert.Empty(t, m.closed, "no PR is closed")
+		})
+	}
+}
+
+// builtStep returns the PromotionStep the Graph builder renders for env of
+// bundle, as kro creates it: the CEL placeholders resolved (prStatusRef to the
+// PRStatus node's name), in the Bundle's namespace.
+func builtStep(t *testing.T, pl *v1alpha1.Pipeline, b *v1alpha1.Bundle, env string) *v1alpha1.PromotionStep {
+	t.Helper()
+	withImage := b.DeepCopy() // the builder requires one; the step needs none to run
+	withImage.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/test/app", Tag: "1.2.3"}}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pl, Bundle: withImage})
+	require.NoError(t, err)
+	raw, err := json.Marshal(res.Graph.Spec.Nodes)
+	require.NoError(t, err)
+	var nodes []struct {
+		ID       string                 `json:"id"`
+		Template map[string]interface{} `json:"template"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &nodes))
+	names := map[string]string{}
+	for _, n := range nodes {
+		if name, ok, _ := unstructured.NestedString(n.Template, "metadata", "name"); ok {
+			names[n.ID] = name
+		}
+	}
+	for _, n := range nodes {
+		u := unstructured.Unstructured{Object: n.Template}
+		if u.GetKind() != "PromotionStep" || u.GetLabels()["kardinal.io/environment"] != env {
+			continue
+		}
+		ref, _, _ := unstructured.NestedString(u.Object, "spec", "prStatusRef")
+		id := strings.TrimSuffix(strings.TrimPrefix(ref, "${"), ".metadata.name}")
+		require.Contains(t, names, id, "prStatusRef %q names a node", ref)
+		require.NoError(t, unstructured.SetNestedField(u.Object, names[id], "spec", "prStatusRef"))
+		require.NoError(t, unstructured.SetNestedField(u.Object, b.Name, "spec", "bundleName"))
+		if ups, ok, _ := unstructured.NestedSlice(u.Object, "spec", "upstreamStates"); ok {
+			for i := range ups {
+				ups[i] = "Verified"
+			}
+			require.NoError(t, unstructured.SetNestedSlice(u.Object, ups, "spec", "upstreamStates"))
+		}
+		var ps v1alpha1.PromotionStep
+		require.NoError(t, runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &ps))
+		ps.Namespace = b.Namespace
+		return &ps
+	}
+	t.Fatalf("the builder rendered no PromotionStep for %s", env)
+	return nil
+}
+
+// TestPRFinalizer_BuiltSteps covers the #1387 review with steps as the Graph
+// builder renders them, which all have spec.prStatusRef: the pr-review step
+// gets kardinal.io/close-pr on entering Promoting, before its PR is opened,
+// and keeps it while it waits for the merge. The auto step never gets it.
+func TestPRFinalizer_BuiltSteps(t *testing.T) {
+	tests := []struct {
+		env        string
+		wantStates []string // after each reconcile
+		want       []bool   // the finalizer after each reconcile
+	}{
+		{env: "test", wantStates: []string{"Promoting", "HealthChecking"}, want: []bool{false, false}},
+		{env: "prod", wantStates: []string{"Promoting", "WaitingForMerge"}, want: []bool{true, true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.env, func(t *testing.T) {
+			pl, b := makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")
+			step := builtStep(t, pl, b, tt.env)
+			require.NotEmpty(t, step.Spec.PRStatusRef, "the builder sets prStatusRef on every step")
+			api := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}, &v1alpha1.Bundle{}).
+				WithObjects(step, pl, b, openPRStatus(step.Spec.PRStatusRef, "", 0)).Build()
+			everHeld := false
+			c := interceptor.NewClient(api, interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+					err := c.Patch(ctx, obj, p, opts...)
+					if _, ok := obj.(*v1alpha1.PromotionStep); ok && slices.Contains(obj.GetFinalizers(), promotionstep.FinalizerClosePR) {
+						everHeld = true
+					}
+					return err
+				},
+			})
+			m := &mockSCM{open: true, prURL: "https://github.com/test/repo/pull/5", prNumber: 5}
+			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+			for i, wantState := range tt.wantStates {
+				if i == 0 {
+					assert.Zero(t, m.openCalled)
+				}
+				reconcileStep(t, r, step.Name)
+				got := getStep(t, api, step.Name)
+				assert.Equal(t, wantState, got.Status.State, got.Status.Message)
+				assert.Equal(t, tt.want[i], slices.Contains(got.Finalizers, promotionstep.FinalizerClosePR),
+					"reconcile %d: finalizers %v", i+1, got.Finalizers)
+			}
+			if tt.env == "test" {
+				assert.False(t, everHeld, "the auto step never holds the finalizer")
+				assert.Zero(t, m.openCalled, "the auto step opens no PR")
+			} else {
+				assert.Equal(t, 1, m.openCalled, "the PR is opened after the finalizer is on")
+			}
 		})
 	}
 }

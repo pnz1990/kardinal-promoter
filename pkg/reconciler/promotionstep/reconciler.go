@@ -637,7 +637,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 // statuses record neither.
 func prOpenedAt(ps *v1alpha1.PromotionStep) (opened time.Time, ok bool) {
 	for _, s := range ps.Status.Steps {
-		if s.Name == "open-pr" && s.CompletedAt != nil {
+		if s.Name == openPRStep && s.CompletedAt != nil {
 			return s.CompletedAt.Time, true
 		}
 	}
