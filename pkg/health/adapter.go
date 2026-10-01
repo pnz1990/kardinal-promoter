@@ -513,7 +513,9 @@ var fluxKustomizationGVR = schema.GroupVersionResource{
 // observedGeneration == generation (fully reconciled) and, with
 // ExpectedRevision set, that status.lastAppliedRevision is that commit.
 // Ready=False is a health failure; Ready=Unknown, a generation not yet
-// observed or an older applied revision is Progressing.
+// observed or an older applied revision is Progressing. While the
+// Kustomization is suspended (spec.suspend) Flux applies nothing, so a
+// Progressing result says so.
 func (a *FluxAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatus, error) {
 	cfg := opts.Flux
 	if cfg.Namespace == "" {
@@ -530,6 +532,19 @@ func (a *FluxAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatu
 		return HealthStatus{}, fmt.Errorf("get flux kustomization %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}
 
+	st, err := a.check(ctx, ks, opts)
+	if err != nil {
+		return HealthStatus{}, err
+	}
+	if suspended, _, _ := unstructured.NestedBool(ks.Object, "spec", "suspend"); suspended && st.Progressing {
+		st.Reason = fmt.Sprintf("Kustomization %s/%s is suspended; Flux applies nothing until it is resumed (%s)",
+			cfg.Namespace, cfg.Name, st.Reason)
+	}
+	return st, nil
+}
+
+// check is Check on the Kustomization ks, without the suspend note.
+func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, opts CheckOptions) (HealthStatus, error) {
 	conditions, _, _ := unstructured.NestedSlice(ks.Object, "status", "conditions")
 	observedGen, observedFound, _ := unstructured.NestedInt64(ks.Object, "status", "observedGeneration")
 	generation, generationFound, _ := unstructured.NestedInt64(ks.Object, "metadata", "generation")
