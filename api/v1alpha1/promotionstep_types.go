@@ -185,7 +185,9 @@ type PromotionStepStatus struct {
 
 	// RetryCount is the number of consecutive step-engine errors retried in the
 	// current state. Reset when a step makes progress. When it reaches the retry
-	// limit the PromotionStep fails.
+	// limit the PromotionStep fails, except while the remote refuses
+	// git-clone or git-push and git has no credentials (condition
+	// GitCredentialMissing): that step retries until the Secret exists.
 	// +optional
 	RetryCount int `json:"retryCount,omitempty"`
 
