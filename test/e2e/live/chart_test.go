@@ -640,6 +640,14 @@ func TestChart_DeprecatedValues(t *testing.T) {
 	bindings, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().List(ctx, sel)
 	require.NoError(t, err)
 	assert.Empty(t, bindings.Items)
+	// The names the removed template gave its policies and bindings, in
+	// case one is created without the instance label.
+	for _, name := range []string{"kardinal-policygate-validation", "kardinal-pipeline-validation", "kardinal-bundle-validation"} {
+		_, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicies().Get(ctx, name, metav1.GetOptions{})
+		assert.True(t, apierrors.IsNotFound(err), "ValidatingAdmissionPolicy %s: %v", name, err)
+		_, err = e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().Get(ctx, name, metav1.GetOptions{})
+		assert.True(t, apierrors.IsNotFound(err), "ValidatingAdmissionPolicyBinding %s: %v", name, err)
+	}
 
 	controller := framework.ServiceAccountUser(ns, r.Fullname)
 	checkAccess(t, e, controller, nil, []framework.Access{
