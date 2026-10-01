@@ -103,7 +103,14 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 		// own header (or the payload); the provider validates and reads them.
 		event, err := scm.ParseWebhookRequest(s.scm, body, r.Header)
 		if err != nil {
-			s.log.Warn().Err(err).Msg("webhook signature invalid or parse error")
+			// The header's name, never its value: GitLab and Azure DevOps send
+			// the secret itself.
+			header := scm.WebhookSignatureHeader(r.Header)
+			if header == "" {
+				header = "none"
+			}
+			s.log.Warn().Err(err).Str("signatureHeader", header).Str("remoteAddr", r.RemoteAddr).
+				Msg("webhook signature invalid or parse error")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -115,6 +122,7 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 			Str("action", event.Action).
 			Bool("merged", event.Merged).
 			Int("pr", event.PRNumber).
+			Str("repo", event.RepoFullName).
 			Msg("webhook received")
 
 		// Only act on merged pull_request events.
@@ -244,6 +252,7 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 		}
 		s.log.Info().
 			Str("prstatus", prs.Name).
+			Str("namespace", prs.Namespace).
 			Int("pr", event.PRNumber).
 			Str("mergeCommit", event.MergeCommitSHA).
 			Msg("PRStatus marked merged via webhook")

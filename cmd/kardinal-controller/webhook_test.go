@@ -721,3 +721,101 @@ func TestWebhook_PRStatusDeletedBeforePatch(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, w.Code)
 	assert.NotContains(t, logs.String(), `"level":"error"`)
 }
+
+// webhookLogLine returns the JSON log line with message msg, or nil.
+func webhookLogLine(t *testing.T, logs *bytes.Buffer, msg string) map[string]any {
+	t.Helper()
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var l map[string]any
+		if json.Unmarshal([]byte(line), &l) == nil && l["message"] == msg {
+			return l
+		}
+	}
+	return nil
+}
+
+// TestWebhook_LogFields checks the webhook logs say where an event came from:
+// "webhook received" names the repo, "PRStatus marked merged via webhook" the
+// PRStatus namespace, and a refused event the header its signature was read
+// from (the one scm.WebhookSignature reads, "none" without one) and the remote
+// address, never the signature or token itself. The 401 stays a text error,
+// like the handler's other errors (B76).
+func TestWebhook_LogFields(t *testing.T) {
+	const secret = "s3cret"
+	const remote = "203.0.113.7:4711"
+	body := `{"action":"closed","number":5,"pull_request":{"number":5,"merged":true},"repository":{"full_name":"o/r"}}`
+
+	t.Run("accepted merge", func(t *testing.T) {
+		p, err := scm.NewProvider("github", "", prAPI(t, "github", 5, false), secret)
+		require.NoError(t, err)
+		c := fake.NewClientBuilder().WithScheme(webhookScheme()).
+			WithObjects(webhookPRS("prs", "team-a", "o/r", 5)).
+			WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+		var logs bytes.Buffer
+		req := httptest.NewRequest(http.MethodPost, "/webhook/scm", strings.NewReader(body))
+		req.Header.Set("X-GitHub-Event", "pull_request")
+		req.Header.Set("X-Hub-Signature-256", "sha256="+hmacHexOf(secret, body))
+		w := httptest.NewRecorder()
+		newWebhookServerWithConfig(p, c, zerolog.New(&logs), true).Handler()(w, req)
+		require.Equal(t, http.StatusNoContent, w.Code, logs.String())
+
+		received := webhookLogLine(t, &logs, "webhook received")
+		require.NotNil(t, received, logs.String())
+		assert.Equal(t, "o/r", received["repo"])
+		marked := webhookLogLine(t, &logs, "PRStatus marked merged via webhook")
+		require.NotNil(t, marked, logs.String())
+		assert.Equal(t, "prs", marked["prstatus"])
+		assert.Equal(t, "team-a", marked["namespace"])
+	})
+
+	tests := []struct {
+		name       string
+		provider   string
+		headers    map[string]string
+		wantHeader string
+	}{
+		{"github wrong signature", "github",
+			map[string]string{"X-Hub-Signature-256": "sha256=" + hmacHexOf("wrong-secret-value", body)}, "X-Hub-Signature-256"},
+		{"gitlab wrong token", "gitlab",
+			map[string]string{"X-Gitlab-Token": "wrong-secret-value"}, "X-Gitlab-Token"},
+		{"azure devops wrong token", "azuredevops",
+			map[string]string{"X-AzureDevOps-Token": "wrong-secret-value"}, "X-AzureDevOps-Token"},
+		{"gitea signature read from X-Hub-Signature-256 first", "gitea",
+			map[string]string{"X-Gitea-Signature": hmacHexOf("wrong-secret-value", body), "X-Hub-Signature-256": "sha256=" + hmacHexOf("wrong-secret-value", body)},
+			"X-Hub-Signature-256"},
+		{"unsigned", "forgejo", map[string]string{}, "none"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := scm.NewProvider(tc.provider, "", prAPI(t, tc.provider, 5, false), secret)
+			require.NoError(t, err)
+			c := fake.NewClientBuilder().WithScheme(webhookScheme()).
+				WithObjects(webhookPRS("prs", "team-a", "o/r", 5)).
+				WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+			var logs bytes.Buffer
+			req := httptest.NewRequest(http.MethodPost, "/webhook/scm", strings.NewReader(body))
+			req.RemoteAddr = remote
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			w := httptest.NewRecorder()
+			newWebhookServerWithConfig(p, c, zerolog.New(&logs), true).Handler()(w, req)
+
+			require.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"), "the 401 is a text error like the others")
+			refused := webhookLogLine(t, &logs, "webhook signature invalid or parse error")
+			require.NotNil(t, refused, logs.String())
+			assert.Equal(t, tc.wantHeader, refused["signatureHeader"])
+			assert.Equal(t, remote, refused["remoteAddr"])
+			assert.NotContains(t, logs.String(), "wrong-secret-value", "a signature or token is never logged")
+			assert.NotContains(t, logs.String(), hmacHexOf("wrong-secret-value", body), "a signature is never logged")
+			assert.False(t, webhookMerged(t, c, "prs", "team-a"))
+		})
+	}
+}
+
+func hmacHexOf(key, body string) string {
+	m := hmac.New(sha256.New, []byte(key))
+	m.Write([]byte(body))
+	return hex.EncodeToString(m.Sum(nil))
+}

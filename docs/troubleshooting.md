@@ -108,7 +108,15 @@ curl http://localhost:8083/webhook/scm/health
 type (push, comment, pull request), so any test delivery from your SCM raises it.
 `mergedPREvents` counts only merged pull request (merge request) events, the only events
 that move a promotion, including those the SCM API did not confirm. The `webhook received`
-log line names each event's type in `event_type`.
+log line names each event's type in `event_type` and its repository in `repo`, and
+`PRStatus marked merged via webhook` names the PRStatus in `prstatus` and `namespace`.
+
+With a secret set, an event the controller refuses gets `401` with a plain-text body, like
+the endpoint's other errors, and the controller logs `webhook signature invalid or parse
+error` with `signatureHeader`, the header the signature was read from (`none` when the
+request had none, usually because the webhook in the SCM has no secret), and `remoteAddr`,
+the sender's address (the proxy's, when requests come through an ingress). The signature
+itself is not logged.
 
 `webhookConfigured: false` means the `--webhook-secret` flag is not set. The controller
 then answers every `POST /webhook/scm` with `401` (it does not accept unsigned events)

@@ -221,7 +221,10 @@ func (a *app) mergeSeenByWebhook(t *testing.T, ps *v1alpha1.PromotionStep, pr gi
 		deliver(prs)
 	}
 	mark := a.e.WaitControllerLog(t, since, 25*time.Second, "the webhook to mark "+ref+" merged",
-		framework.LogMessage("PRStatus marked merged via webhook", "prstatus", ref, "pr", strconv.Itoa(pr.Number)))
+		framework.LogMessage("PRStatus marked merged via webhook", "prstatus", ref, "namespace", a.ns, "pr", strconv.Itoa(pr.Number)))
+	received := framework.LogMessage("webhook received", "pr", strconv.Itoa(pr.Number), "merged", "true")
+	a.e.WaitControllerLog(t, since, 5*time.Second, "the merge event of "+prs.Spec.Repo+" logged with its repo",
+		func(l framework.LogLine) bool { return received(l) && strings.EqualFold(l.Str("repo"), prs.Spec.Repo) })
 	for _, l := range a.e.ControllerLogLines(t, since, framework.LogMessage("PR merged — status updated", "prstatus", ref, "namespace", a.ns)) {
 		assert.False(t, l.At.Before(mark.At), "a poll saw the merge before the webhook: %s", l)
 	}
@@ -693,9 +696,12 @@ func TestSCM_DeletedStepTracksItsNewPR(t *testing.T) {
 // webhook secret, for a PR that is still open. The controller asks the git
 // server whether the PR is merged, so the PRStatus is not marked merged and
 // the step keeps waiting; any validly signed merge event used to advance the
-// step without a merge (B73). Merging the PR then promotes prod by polling.
+// step without a merge (B73). The same event signed wrong, and unsigned, is
+// refused and logged with the header its signature was read from and the
+// sender's address (B76). Once the PR is merged, the event is confirmed and
+// marks it merged, logged with its repo and the PRStatus namespace.
 //
-// Covers WEBHOOK-CONFIRM-01.
+// Covers WEBHOOK-CONFIRM-01, WEBHOOK-LOG-01.
 func TestSCM_WebhookMergeIsConfirmed(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -712,8 +718,24 @@ func TestSCM_WebhookMergeIsConfirmed(t *testing.T) {
 	a.stillOpen(t, bundle, "prod", 15*time.Second, "after the merge event of the open PR")
 	assert.Empty(t, e.ControllerLogLines(t, since, framework.LogMessage("PRStatus marked merged via webhook", "prstatus", prs.Name)))
 
-	a.merge(t, pr)
-	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	for _, c := range []struct {
+		header, logged string
+		headers        map[string]string
+	}{
+		{sig, sig, signedPREvent(sig, "not-the-secret", body)},
+		{"no signature", "none", map[string]string{eventHeader(sig): prEvent(sig)}},
+	} {
+		since := time.Now()
+		require.Equal(t, http.StatusUnauthorized, e.PostSCMWebhook(t, c.headers, body), "the merge event, %s", c.header)
+		l := e.WaitControllerLog(t, since, 30*time.Second, "the refused event logged with signatureHeader "+c.logged,
+			framework.LogMessage("webhook signature invalid or parse error", "signatureHeader", c.logged))
+		assert.NotEmpty(t, l.Str("remoteAddr"), "the sender of the refused event: %s", l)
+	}
+
+	// Signed right once the PR is merged, the event is confirmed and marks
+	// the PRStatus merged (mergeSeenByWebhook checks the logged repo and
+	// namespace).
+	a.mergeByWebhook(t, bundle, "prod", sig, kind == "github" || kind == "gitlab")
 	assertEnvAt(t, a, "prod", fixtures.V2)
 }
 
