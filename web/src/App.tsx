@@ -358,13 +358,12 @@ export function App() {
   )
 
   // Determine staleness indicator color — escalates at 15s (amber) and 30s (red).
+  // A failing poll is what makes data that old, so the error does not hold it amber.
   const staleness = elapsedSeconds ?? 0
-  const indicatorColor = pipelinesError
-    ? 'var(--color-warning)'   // amber on error
-    : staleness > 30
+  const indicatorColor = staleness > 30
     ? 'var(--color-error)'     // red when critically stale > 30s (#766)
-    : staleness > 15
-    ? 'var(--color-warning)'   // amber when stale > 15s
+    : pipelinesError || staleness > 15
+    ? 'var(--color-warning)'   // amber on error, or when stale > 15s
     : 'var(--color-text-secondary)'
 
   // PolicyGate nodes that hold the bundle back. The UI API decides (holding),
