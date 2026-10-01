@@ -9,7 +9,7 @@ GRAPH-DEP-01	live	core	covered	graph	dependsOn fan-out and fan-in: parallel envi
 GRAPH-DEP-02	live	core	covered	graph	unknown dependsOn or a dependency cycle sets Pipeline Ready=False and no promotion runs	docs/changelog.md:54; pkg/graph/cycle.go:20
 GRAPH-WAVE-01	live	core	covered	graph	wave: same-wave environments run in parallel, a wave waits for every environment of the next lower wave	docs/pipeline-reference.md:97; docs/pipeline-reference.md:202
 GRAPH-SKIP-01	live	core	covered	graph	intent.skipEnvironments bridges over skipped environments	api/v1alpha1/bundle_types.go:101; docs/ci-integration.md:372
-GRAPH-SKIP-02	live	core	covered	graph	skipping an org-gated environment requires a skip-permission PolicyGate (kardinal.io/type=skip-permission); without it the Bundle is refused	docs/policy-gates.md:400
+GRAPH-SKIP-02	live	core	covered	graph	skipping an org-gated environment requires a skip-permission PolicyGate (kardinal.io/type=skip-permission); without it the Bundle is refused	docs/policy-gates.md:430-458
 GRAPH-TARGET-01	live	core	covered	graph	intent.targetEnvironment promotes only up to the target and the Bundle finishes Verified	api/v1alpha1/bundle_types.go:96; docs/changelog.md:53
 GRAPH-INPLACE-01	live	core	covered	graph	Pipeline edit updates the Bundle Graph in place without re-running Verified environments	docs/changelog.md:37
 GRAPH-HEAL-01	live	core	covered	graph	a deleted Graph is recreated and the Bundle continues	docs/graph-coverage.md
