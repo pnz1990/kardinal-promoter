@@ -16,7 +16,8 @@ import (
 // pipeline, step) need beyond the Server interface: reading commits, adding
 // commits the way a developer or CI would, and changing repo visibility.
 // They work on Forgejo and Gitea, the core suite's git servers, and return an
-// error for any other server.
+// error for any other server. CommitFiles also works on GitLab and GitHub
+// (commit_files.go), whose suites run the TestCore_ tests too.
 
 // Commit is one commit as the git server reports it.
 type Commit struct {
@@ -76,8 +77,15 @@ func Commits(ctx context.Context, s Server, r Repo, branch string, limit int) ([
 
 // CommitFiles commits files (path to content) in one commit on branch, or on
 // newBranch created from branch when newBranch is set, and returns the commit
-// SHA. Existing files are updated, new ones created.
+// SHA. Existing files are updated, new ones created. On GitHub the branch
+// written must be under BranchPrefix.
 func CommitFiles(ctx context.Context, s Server, r Repo, branch, newBranch, message string, files map[string][]byte) (string, error) {
+	switch g := s.(type) {
+	case *gitlab:
+		return g.commitFiles(ctx, r, branch, newBranch, message, files)
+	case *github:
+		return g.commitFiles(ctx, branch, newBranch, message, files)
+	}
 	f, err := asForgejo(s)
 	if err != nil {
 		return "", err

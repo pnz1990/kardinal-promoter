@@ -107,3 +107,16 @@ func (r *Receiver) Fail(t *testing.T, bucket string, status, times int, location
 	}
 	t.Logf("receiver bucket %s answers HTTP %d (times %d, location %q)", bucket, status, times, location)
 }
+
+// FailRetryAfter makes the receiver answer bucket's next times requests (0:
+// every request) with status and a Retry-After header of retryAfter, the way
+// a rate-limited API answers.
+func (r *Receiver) FailRetryAfter(t *testing.T, bucket string, status, times int, retryAfter string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]interface{}{"status": status, "times": times, "retryAfter": retryAfter})
+	res := HTTP(t, http.MethodPost, r.api+"/_mode/"+bucket, map[string]string{"Content-Type": "application/json"}, body)
+	if res.Status != http.StatusNoContent {
+		t.Fatalf("set receiver mode for %s: HTTP %d %s", bucket, res.Status, clip(res.Body))
+	}
+	t.Logf("receiver bucket %s answers HTTP %d with Retry-After %s (times %d)", bucket, status, retryAfter, times)
+}

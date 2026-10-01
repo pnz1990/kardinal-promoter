@@ -66,14 +66,19 @@ func (f *forgejo) ReadFile(ctx context.Context, r Repo, ref, path string) ([]byt
 }
 
 type forgejoPR struct {
-	Number  int    `json:"number"`
-	Title   string `json:"title"`
-	Body    string `json:"body"`
-	State   string `json:"state"`
-	Merged  bool   `json:"merged"`
-	HTMLURL string `json:"html_url"`
-	Head    struct {
+	Number         int    `json:"number"`
+	Title          string `json:"title"`
+	Body           string `json:"body"`
+	State          string `json:"state"`
+	Merged         bool   `json:"merged"`
+	MergeCommitSHA string `json:"merge_commit_sha"`
+	HTMLURL        string `json:"html_url"`
+	User           struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	Head struct {
 		Ref string `json:"ref"`
+		SHA string `json:"sha"`
 	} `json:"head"`
 	Base struct {
 		Ref string `json:"ref"`
@@ -92,23 +97,27 @@ func (f *forgejo) PullRequests(ctx context.Context, r Repo) ([]PR, error) {
 			return nil, err
 		}
 		for _, p := range prs {
-			if p.Base.Ref != r.Branch {
-				continue
+			if p.Base.Ref == r.Branch {
+				out = append(out, p.pr())
 			}
-			pr := PR{Number: p.Number, Title: p.Title, Body: p.Body, Head: p.Head.Ref,
-				Base: p.Base.Ref, State: p.State, URL: p.HTMLURL}
-			if p.Merged {
-				pr.State = "merged"
-			}
-			for _, l := range p.Labels {
-				pr.Labels = append(pr.Labels, l.Name)
-			}
-			out = append(out, pr)
 		}
 		if len(prs) < 50 {
 			return out, nil
 		}
 	}
+}
+
+func (p forgejoPR) pr() PR {
+	pr := PR{Number: p.Number, Title: p.Title, Body: p.Body, Head: p.Head.Ref, Base: p.Base.Ref,
+		State: p.State, URL: p.HTMLURL, Author: p.User.Login, HeadSHA: p.Head.SHA}
+	if p.Merged {
+		pr.State = "merged"
+		pr.MergeCommit = p.MergeCommitSHA
+	}
+	for _, l := range p.Labels {
+		pr.Labels = append(pr.Labels, l.Name)
+	}
+	return pr
 }
 
 // How long, and how often, MergePR retries while the server is still checking

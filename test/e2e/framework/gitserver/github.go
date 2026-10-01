@@ -110,14 +110,19 @@ func (g *github) ReadFile(ctx context.Context, r Repo, ref, path string) ([]byte
 }
 
 type githubPR struct {
-	Number   int     `json:"number"`
-	Title    string  `json:"title"`
-	Body     string  `json:"body"`
-	State    string  `json:"state"`
-	MergedAt *string `json:"merged_at"`
-	HTMLURL  string  `json:"html_url"`
-	Head     struct {
+	Number         int     `json:"number"`
+	Title          string  `json:"title"`
+	Body           string  `json:"body"`
+	State          string  `json:"state"`
+	MergedAt       *string `json:"merged_at"`
+	MergeCommitSHA string  `json:"merge_commit_sha"`
+	HTMLURL        string  `json:"html_url"`
+	User           struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	Head struct {
 		Ref string `json:"ref"`
+		SHA string `json:"sha"`
 	} `json:"head"`
 	Base struct {
 		Ref string `json:"ref"`
@@ -136,20 +141,27 @@ func (g *github) PullRequests(ctx context.Context, r Repo) ([]PR, error) {
 			return nil, err
 		}
 		for _, p := range prs {
-			pr := PR{Number: p.Number, Title: p.Title, Body: p.Body, Head: p.Head.Ref,
-				Base: p.Base.Ref, State: p.State, URL: p.HTMLURL}
-			if p.MergedAt != nil {
-				pr.State = "merged"
-			}
-			for _, l := range p.Labels {
-				pr.Labels = append(pr.Labels, l.Name)
-			}
-			out = append(out, pr)
+			out = append(out, p.pr())
 		}
 		if len(prs) < 100 {
 			return out, nil
 		}
 	}
+}
+
+// pr converts the API's PR. GitHub sets merge_commit_sha on open PRs too
+// (a test merge commit), so it is kept only once the PR is merged.
+func (p githubPR) pr() PR {
+	pr := PR{Number: p.Number, Title: p.Title, Body: p.Body, Head: p.Head.Ref, Base: p.Base.Ref,
+		State: p.State, URL: p.HTMLURL, Author: p.User.Login, HeadSHA: p.Head.SHA}
+	if p.MergedAt != nil {
+		pr.State = "merged"
+		pr.MergeCommit = p.MergeCommitSHA
+	}
+	for _, l := range p.Labels {
+		pr.Labels = append(pr.Labels, l.Name)
+	}
+	return pr
 }
 
 func (g *github) MergePR(ctx context.Context, _ Repo, number int) error {

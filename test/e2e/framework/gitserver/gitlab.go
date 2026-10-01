@@ -10,22 +10,30 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"time"
 )
 
 // gitlab drives GitLab CE through /api/v4.
 type gitlab struct {
 	client
+	// retry is the MergePR retry interval; zero means 2s.
+	retry time.Duration
 }
 
 func (g *gitlab) Kind() string { return "gitlab" }
 
 func (g *gitlab) CreateRepo(ctx context.Context, name string, files map[string][]byte) (Repo, error) {
-	r := Repo{Owner: g.owner, Name: name, Branch: "main",
-		CloneURL: fmt.Sprintf("%s/%s/%s.git", g.cloneBase, g.owner, name)}
+	return g.createIn(ctx, g.owner, name, files)
+}
+
+// createIn creates project name in namespace owner (a group path).
+func (g *gitlab) createIn(ctx context.Context, owner, name string, files map[string][]byte) (Repo, error) {
+	r := Repo{Owner: owner, Name: name, Branch: "main",
+		CloneURL: fmt.Sprintf("%s/%s/%s.git", g.cloneBase, owner, name)}
 	var ns struct {
 		ID int `json:"id"`
 	}
-	if err := g.do(ctx, http.MethodGet, "/api/v4/namespaces/"+url.PathEscape(g.owner), nil, &ns); err != nil {
+	if err := g.do(ctx, http.MethodGet, "/api/v4/namespaces/"+url.PathEscape(owner), nil, &ns); err != nil {
 		return Repo{}, err
 	}
 	err := g.do(ctx, http.MethodPost, "/api/v4/projects", map[string]interface{}{
@@ -69,14 +77,40 @@ func (g *gitlab) ReadFile(ctx context.Context, r Repo, ref, path string) ([]byte
 }
 
 type gitlabMR struct {
-	IID          int      `json:"iid"`
-	Title        string   `json:"title"`
-	Description  string   `json:"description"`
-	State        string   `json:"state"`
-	SourceBranch string   `json:"source_branch"`
-	TargetBranch string   `json:"target_branch"`
-	Labels       []string `json:"labels"`
-	WebURL       string   `json:"web_url"`
+	IID             int      `json:"iid"`
+	Title           string   `json:"title"`
+	Description     string   `json:"description"`
+	State           string   `json:"state"`
+	SourceBranch    string   `json:"source_branch"`
+	TargetBranch    string   `json:"target_branch"`
+	Labels          []string `json:"labels"`
+	WebURL          string   `json:"web_url"`
+	SHA             string   `json:"sha"`
+	MergeCommitSHA  string   `json:"merge_commit_sha"`
+	SquashCommitSHA string   `json:"squash_commit_sha"`
+	Author          struct {
+		Username string `json:"username"`
+	} `json:"author"`
+}
+
+// pr converts the API's MR. A fast-forward merge leaves no merge commit:
+// the head commit is then what the merge put on the target branch.
+func (m gitlabMR) pr() PR {
+	pr := PR{Number: m.IID, Title: m.Title, Body: m.Description, Head: m.SourceBranch, Base: m.TargetBranch,
+		State: m.State, Labels: m.Labels, URL: m.WebURL, Author: m.Author.Username, HeadSHA: m.SHA}
+	switch pr.State {
+	case "opened":
+		pr.State = "open"
+	case "merged":
+		pr.MergeCommit = m.MergeCommitSHA
+		if pr.MergeCommit == "" {
+			pr.MergeCommit = m.SquashCommitSHA
+		}
+		if pr.MergeCommit == "" {
+			pr.MergeCommit = m.SHA
+		}
+	}
+	return pr
 }
 
 func (g *gitlab) PullRequests(ctx context.Context, r Repo) ([]PR, error) {
@@ -88,12 +122,7 @@ func (g *gitlab) PullRequests(ctx context.Context, r Repo) ([]PR, error) {
 			return nil, err
 		}
 		for _, m := range mrs {
-			state := m.State
-			if state == "opened" {
-				state = "open"
-			}
-			out = append(out, PR{Number: m.IID, Title: m.Title, Body: m.Description, Head: m.SourceBranch,
-				Base: m.TargetBranch, State: state, Labels: m.Labels, URL: m.WebURL})
+			out = append(out, m.pr())
 		}
 		if len(mrs) < 100 {
 			return out, nil
@@ -101,8 +130,44 @@ func (g *gitlab) PullRequests(ctx context.Context, r Repo) ([]PR, error) {
 	}
 }
 
+// gitlabMergeRetry is how long MergePR retries while GitLab is still checking
+// whether a new MR can be merged.
+const gitlabMergeRetry = time.Minute
+
+// MergePR merges the MR. GitLab computes a new MR's merge status in the
+// background and refuses the merge until it has (405, 406 or 422 "Branch
+// cannot be merged"; 409 while the head is still being updated), so those
+// answers are retried for up to gitlabMergeRetry.
 func (g *gitlab) MergePR(ctx context.Context, r Repo, number int) error {
-	return g.do(ctx, http.MethodPut, fmt.Sprintf("%s/merge_requests/%d/merge", g.projectPath(r), number), nil, nil)
+	path := fmt.Sprintf("%s/merge_requests/%d/merge", g.projectPath(r), number)
+	deadline := time.Now().Add(gitlabMergeRetry)
+	for {
+		err := g.do(ctx, http.MethodPut, path, nil, nil)
+		se, ok := err.(*StatusError)
+		if err == nil || !ok || !retryableMerge(se.Code) || time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(g.retryEvery()):
+		}
+	}
+}
+
+func retryableMerge(code int) bool {
+	switch code {
+	case http.StatusMethodNotAllowed, http.StatusNotAcceptable, http.StatusConflict, http.StatusUnprocessableEntity:
+		return true
+	}
+	return false
+}
+
+func (g *gitlab) retryEvery() time.Duration {
+	if g.retry > 0 {
+		return g.retry
+	}
+	return 2 * time.Second
 }
 
 func (g *gitlab) ClosePR(ctx context.Context, r Repo, number int) error {

@@ -111,6 +111,12 @@ export KARDINAL_SCM_API_URL=https://gitlab.com  # or your self-managed URL
 A **project access token** with `api` scope is recommended over a personal access token
 for production deployments.
 
+The token's user (or the project access token's role) needs the **Maintainer** role on the
+project. Environments without `pr-review` push straight to the Pipeline's `spec.git.branch`,
+and GitLab protects the default branch so that only Maintainers may push to it. With Developer, every
+such environment fails at git-push with "pre-receive hook declined". Developer is enough
+only if the branch's protection allows Developers to push.
+
 ### Webhook configuration
 
 1. In your GitLab project, go to **Settings → Webhooks**.
@@ -121,6 +127,27 @@ for production deployments.
 
 > GitLab validates webhooks by comparing the `X-Gitlab-Token` header against the
 > configured secret (plaintext comparison, not HMAC).
+
+GitLab refuses webhooks to private and local addresses by default. When the controller's
+webhook URL is one (an in-cluster Service, a private load balancer), a GitLab administrator
+must allow it: **Admin → Settings → Network → Outbound requests → Allow requests to the local
+network from webhooks and integrations** (the application setting
+`allow_local_requests_from_web_hooks_and_services`). Without it GitLab blocks the webhook,
+and merges are seen only by polling.
+
+### Repository URLs
+
+Use project URLs that end in `.git`, in the Pipeline's `spec.git.url` and in the GitOps
+tool's source (for example the Argo CD Application `repoURL`). Without `.git`, GitLab
+answers git requests with a `301` redirect, which Argo CD does not follow. kardinal drops
+the `.git` when it names the project for the API, so subgroup paths such as
+`https://gitlab.example.com/group/sub/app.git` work.
+
+### "PR" means merge request
+
+kardinal uses "PR" for GitLab merge requests too: in the comments it posts (for example
+"kardinal closed this PR: ..."), in step messages, in the `prNumber` and `prURL` step
+outputs, in the PRStatus resource and in the `bundle.pr` gate attributes.
 
 ### Self-managed GitLab
 
@@ -323,10 +350,20 @@ the `helm upgrade` in [Upgrade](installation.md#upgrade) with `--set github.toke
      --from-literal=token=<NEW_TOKEN> \
      --dry-run=client -o yaml | kubectl apply -f -
    ```
-3. Within 30 seconds the controller picks up the change. No controller restart is needed.
+3. Update every Secret that a Pipeline's `spec.git.secretRef` names and that holds the
+   old token. Git clone and push do not use the controller's Secret: each step reads the
+   `token` key of the Pipeline's Secret, in the Pipeline's namespace. If that Secret still
+   holds the revoked token, git-clone fails with "authentication required".
+   ```bash
+   kubectl create secret generic <pipeline-git-secret> \
+     --namespace <pipeline-namespace> \
+     --from-literal=token=<NEW_TOKEN> \
+     --dry-run=client -o yaml | kubectl apply -f -
+   ```
+4. Within 30 seconds the controller picks up the change. No controller restart is needed.
    Promotions in flight are not interrupted — the atomic swap completes before the next
-   reconcile iteration reads the token.
-4. Verify the rotation took effect by checking the controller log:
+   reconcile iteration reads the token. The next git step reads the Pipeline Secret again.
+5. Verify the rotation took effect by checking the controller log:
    ```bash
    kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=20 \
      | grep "SCM credentials rotated"
@@ -346,6 +383,8 @@ restart the controller:
 ```bash
 kubectl rollout restart deployment/kardinal-promoter -n kardinal-system
 ```
+
+Update the Pipeline git Secrets too, as in step 3 above.
 
 ---
 

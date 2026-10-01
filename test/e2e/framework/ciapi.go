@@ -160,6 +160,28 @@ type Variant struct {
 // the test ends.
 func (e *Env) ControllerVariant(t *testing.T, ns string, args []string, dropEnv ...string) *Variant {
 	t.Helper()
+	drop := map[string]bool{}
+	for _, n := range dropEnv {
+		drop[n] = true
+	}
+	return e.ControllerVariantSpec(t, ns, fmt.Sprintf("args %v, without %v", args, dropEnv), func(spec *corev1.PodSpec) {
+		c := &spec.Containers[0]
+		c.Args = append(c.Args, args...)
+		var env []corev1.EnvVar
+		for _, v := range c.Env {
+			if !drop[v.Name] {
+				env = append(env, v)
+			}
+		}
+		c.Env = env
+	})
+}
+
+// ControllerVariantSpec is ControllerVariant with the chart's pod spec
+// changed by edit; what describes the change in the test log (it must not
+// hold a secret).
+func (e *Env) ControllerVariantSpec(t *testing.T, ns, what string, edit func(*corev1.PodSpec)) *Variant {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var chart appsv1.Deployment
@@ -167,22 +189,17 @@ func (e *Env) ControllerVariant(t *testing.T, ns string, args []string, dropEnv 
 		t.Fatalf("read the controller Deployment: %v", err)
 	}
 	tmpl := chart.Spec.Template.DeepCopy()
-	c := &tmpl.Spec.Containers[0]
-	if !contains(c.Args, "--leader-elect=true") {
-		t.Fatalf("the controller runs without --leader-elect=true (%v); a variant would reconcile beside it", c.Args)
-	}
-	c.Args = append(c.Args, args...)
-	drop := map[string]bool{}
-	for _, n := range dropEnv {
-		drop[n] = true
-	}
-	var env []corev1.EnvVar
-	for _, v := range c.Env {
-		if !drop[v.Name] {
-			env = append(env, v)
+	edit(&tmpl.Spec)
+	// The last --leader-elect flag wins.
+	leaderElect := ""
+	for _, a := range tmpl.Spec.Containers[0].Args {
+		if a == "--leader-elect" || strings.HasPrefix(a, "--leader-elect=") {
+			leaderElect = a
 		}
 	}
-	c.Env = env
+	if leaderElect != "--leader-elect=true" {
+		t.Fatalf("the variant would run without --leader-elect=true (%v) and reconcile beside the controller", tmpl.Spec.Containers[0].Args)
+	}
 
 	name := fmt.Sprintf("variant-%s-%d", ns[len(ns)-8:], atomic.AddInt32(&variants, 1))
 	labels := map[string]string{"app.kubernetes.io/name": "kardinal-e2e-variant", variantLabel: name}
@@ -234,7 +251,7 @@ func (e *Env) ControllerVariant(t *testing.T, ns string, args []string, dropEnv 
 	v := &Variant{Name: name, URL: fmt.Sprintf("http://%s:%d", ip, svc.Spec.Ports[0].NodePort),
 		InClusterURL: fmt.Sprintf("http://%s.%s.svc.cluster.local:8083", name, ControllerNamespace),
 		UIURL:        fmt.Sprintf("http://%s:%d", ip, svc.Spec.Ports[1].NodePort)}
-	t.Logf("controller variant %s (args %v, without %v) at %s", name, args, dropEnv, v.URL)
+	t.Logf("controller variant %s (%s) at %s", name, what, v.URL)
 
 	Eventually(t, 3*time.Minute, "controller variant "+name+" to serve /webhook/scm/health", func(ctx context.Context) (bool, string) {
 		var d appsv1.Deployment

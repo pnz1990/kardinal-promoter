@@ -51,6 +51,14 @@ type PR struct {
 	State  string
 	Labels []string
 	URL    string
+	// Author is the login of the user who opened the PR.
+	Author string
+	// HeadSHA is the commit at the head of the PR's branch.
+	HeadSHA string
+	// MergeCommit is the commit the merge left on the base branch, once
+	// merged: the merge commit, or on GitLab the squash commit or, for a
+	// fast-forward merge, the head commit.
+	MergeCommit string
 }
 
 // Server is one git server.
