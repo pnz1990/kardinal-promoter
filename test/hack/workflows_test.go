@@ -4,6 +4,7 @@
 package hack
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/coverage"
 )
 
 type workflowStep struct {
@@ -238,6 +241,76 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 	require.NoError(t, err)
 	node := kindNodeImage.FindString(string(cfg))
 	assert.True(t, images[node], "kind-config.yaml's node image %s must be one of the KIND_NODE_* images", node)
+}
+
+// TestE2EMatrixRunsEverySuite checks hack/e2e/matrix.txt, the jobs
+// hack/e2e/all.sh runs locally and e2e-live.yml in CI: every suite in
+// hack/e2e/up.sh has a job and no other suite does, every job boots a
+// KIND_NODE_* minor of hack/tool-versions.env, and the core suite runs on
+// every one of those minors with a complete set of shards.
+func TestE2EMatrixRunsEverySuite(t *testing.T) {
+	root := repoRoot(t)
+	runs, err := coverage.SuiteRuns(root)
+	require.NoError(t, err)
+	tv := toolVersions(t)
+	data, err := os.ReadFile(filepath.Join(root, "hack/e2e/matrix.txt"))
+	require.NoError(t, err)
+
+	suites := map[string]bool{}
+	coreShards := map[string]map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 || strings.HasPrefix(f[0], "#") {
+			continue
+		}
+		if !assert.Len(t, f, 3, "matrix.txt %q: want suite, Kubernetes minor and shard", line) {
+			continue
+		}
+		suite, minor, shard := f[0], f[1], f[2]
+		_, known := runs[suite]
+		assert.True(t, known, "matrix.txt %q: hack/e2e/up.sh has no suite %s", line, suite)
+		assert.NotEmpty(t, tv["KIND_NODE_"+strings.ReplaceAll(minor, ".", "_")],
+			"matrix.txt %q: hack/tool-versions.env has no KIND_NODE_ image for %s", line, minor)
+		if shard != "-" {
+			assert.Regexp(t, `^[1-9][0-9]*/[1-9][0-9]*$`, shard, "matrix.txt %q", line)
+		}
+		suites[suite] = true
+		if suite == "core" {
+			if coreShards[minor] == nil {
+				coreShards[minor] = map[string]bool{}
+			}
+			assert.False(t, coreShards[minor][shard], "matrix.txt %q: duplicate job", line)
+			coreShards[minor][shard] = true
+		}
+	}
+	for s := range runs {
+		assert.True(t, suites[s], "hack/e2e/up.sh suite %s has no job in hack/e2e/matrix.txt", s)
+	}
+	for k := range tv {
+		if m := kindNodeKey.FindStringSubmatch(k); m != nil {
+			assert.NotEmpty(t, coreShards["1."+m[1]], "the core suite has no job on Kubernetes 1.%s (%s)", m[1], k)
+		}
+	}
+	for minor, shards := range coreShards {
+		n := 1
+		for sh := range shards {
+			if _, of, ok := strings.Cut(sh, "/"); ok {
+				n, _ = strconv.Atoi(of)
+			}
+		}
+		want := map[string]bool{"-": true}
+		if n > 1 || !shards["-"] {
+			want = map[string]bool{}
+			for i := 1; i <= n; i++ {
+				want[fmt.Sprintf("%d/%d", i, n)] = true
+			}
+		}
+		assert.Equal(t, want, shards, "core on Kubernetes %s: every shard 1/n to n/n, once", minor)
+	}
+
+	wf, err := os.ReadFile(filepath.Join(root, ".github/workflows/e2e-live.yml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(wf), "hack/e2e/all.sh -matrix", "e2e-live.yml must take its matrix from hack/e2e/matrix.txt")
 }
 
 func abs(n int) int {

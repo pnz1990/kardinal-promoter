@@ -183,10 +183,13 @@ make e2e-down SUITE=core        # delete the kind cluster
 
 - **A skipped live test fails CI.** run.sh fails when a test fails or skips, or when no test
   ran. A missing cluster, component or credential fails the test.
-- `.github/workflows/e2e-live.yml` runs every suite on every PR, on pushes to main and weekly
-  (each test three times); core runs on three Kubernetes minors. It needs no repo secret. Its
-  `e2e live` job runs `go run ./test/e2e/proof` on the suites' results and fails when a
-  coverage row's test failed, skipped or did not run.
+- **PRs don't run the live suites in CI**; they took too long. Before merging, run
+  `make e2e-all` (hack/e2e/all.sh: every job in hack/e2e/matrix.txt, each on its own kind
+  cluster, then `go run ./test/e2e/proof` on the results), or the suites the change touches,
+  and put the result in the PR body. `.github/workflows/e2e-live.yml` runs the same jobs weekly
+  (each test three times) and on dispatch; core runs on three Kubernetes minors. Its
+  `e2e live` job runs the proof and fails when a coverage row's test failed or skipped. Only
+  its github job gets a secret (DEMO_GITHUB_TOKEN).
 - test/e2e/coverage.tsv has one row per documented behavior. A live test claims rows with one
   sentence in its doc comment, `Covers STEP-AUTO-01, SCM-CLOSED-01.`, only for what it fully
   asserts. `go test ./test/hack -run TestE2ECoverage` fails when a row's status and the tests

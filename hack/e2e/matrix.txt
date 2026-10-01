@@ -1,0 +1,22 @@
+# hack/e2e/matrix.txt
+#
+# Every live e2e job: one kind cluster each, set up by hack/e2e/up.sh SUITE.
+# hack/e2e/all.sh runs them on this host, JOBS at a time, in this order
+# (longest first), and .github/workflows/e2e-live.yml runs them in CI
+# (all.sh -matrix prints its matrix). A suite's minors and shards are here,
+# nowhere else; test/hack checks that every suite in up.sh has a line and
+# that core runs on every KIND_NODE_* minor in hack/tool-versions.env.
+#
+# suite     Kubernetes  shard (hack/e2e/run.sh SHARD; - for the whole suite)
+core        1.35        1/2
+core        1.35        2/2
+core        1.36        1/2
+core        1.36        2/2
+core        1.37        1/2
+core        1.37        2/2
+gitlab      1.37        -
+gitea       1.37        -
+github      1.37        -
+delivery    1.37        -
+ui          1.37        -
+flux        1.37        -

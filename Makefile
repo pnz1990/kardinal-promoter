@@ -25,7 +25,7 @@ IMG      ?= $(IMG_REPO):$(IMG_TAG)
 .PHONY: all build build-controller build-cli ui ui-test ui-test-e2e test test-integration test-cover \
         lint lint-local vet vuln generate manifests api-docs \
         install uninstall docker-build helm-lint validate-manifests \
-        install-kro e2e-up e2e-down test-e2e-live \
+        install-kro e2e-up e2e-down test-e2e-live e2e-all \
         tools help
 
 all: generate build test lint
@@ -132,11 +132,13 @@ install-kro: ## Install upstream kro with the Graph controller (GraphKind featur
 ## this checkout.
 ## KIND_K8S picks the Kubernetes minor (e.g. 1.37; default kind-config.yaml's),
 ## COUNT the go test -count and RUN the go test -run pattern (default the suite's).
+## JOBS is how many clusters e2e-all runs at once.
 SUITE ?= core
 KIND_K8S ?=
 COUNT ?= 1
 RUN ?=
 SHARD ?=
+JOBS ?= 4
 
 e2e-up: ## Create or update the kind cluster for live suite SUITE (default core)
 	KIND_CLUSTER=kardinal-e2e-$(SUITE) KIND_K8S=$(KIND_K8S) bash hack/e2e/up.sh $(SUITE)
@@ -146,6 +148,9 @@ test-e2e-live: ## Run live suite SUITE against the cluster from make e2e-up; fai
 
 e2e-down: ## Delete the kind cluster of live suite SUITE
 	kind delete cluster --name kardinal-e2e-$(SUITE)
+
+e2e-all: ## Run every live suite on this host, JOBS clusters at a time, and prove the coverage (hack/e2e/all.sh)
+	JOBS=$(JOBS) COUNT=$(COUNT) bash hack/e2e/all.sh
 
 ## Tools
 $(LOCALBIN):
