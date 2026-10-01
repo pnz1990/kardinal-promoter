@@ -107,8 +107,8 @@ curl http://localhost:8083/webhook/scm/health
 `eventsProcessed` counts every signed event since the controller started, whatever its
 type (push, comment, pull request), so any test delivery from your SCM raises it.
 `mergedPREvents` counts only merged pull request (merge request) events, the only events
-that move a promotion. The `webhook received` log line names each event's type in
-`event_type`.
+that move a promotion, including those the SCM API did not confirm. The `webhook received`
+log line names each event's type in `event_type`.
 
 `webhookConfigured: false` means the `--webhook-secret` flag is not set. The controller
 then answers every `POST /webhook/scm` with `401` (it does not accept unsigned events)
@@ -239,6 +239,10 @@ Common causes:
 - Webhook not configured in GitHub (Settings > Webhooks)
 - Webhook URL is not accessible from GitHub (firewall, private cluster)
 - Webhook secret mismatch (`X-Hub-Signature-256` validation failing)
+- The SCM API did not confirm the merge. The controller asks it before it marks a PR
+  merged, and logs `SCM provider reports the PR of the merge event not merged` or `could not
+  confirm the merge event with the SCM provider` with the `prstatus`, `namespace`, `repo` and
+  `pr`. The event changes nothing; the next poll, within 30 seconds, sees the merge.
 
 On controller restart, the controller lists all open PRs with the `kardinal` label and reconciles any that were merged during downtime. If the controller recently restarted, wait 30 seconds and check again.
 

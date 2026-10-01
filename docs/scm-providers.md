@@ -20,7 +20,11 @@ Webhooks only speed things up: without them, the controller still sees merges by
 Only a merged pull request (merge request) event moves a promotion. The controller reads
 the event type from `X-GitHub-Event`, `X-Forgejo-Event` or `X-Gitea-Event`, or from
 GitLab's `object_kind` (`X-Gitlab-Event` when that is missing), and logs and ignores
-other events such as pushes and comments.
+other events such as pushes and comments. A merge event is checked before it counts: the
+controller asks the SCM API once, with its token, whether the PR is merged. A merge event
+for a PR the API reports not merged, or one the controller cannot check because the API
+call failed, is answered with `204` and changes nothing; polling records the merge when
+there is one.
 
 Bitbucket Cloud and Azure DevOps are newer and less tested than GitHub and GitLab.
 On Bitbucket, PRs carry no `kardinal` or `kardinal/rollback` labels, so find rollback

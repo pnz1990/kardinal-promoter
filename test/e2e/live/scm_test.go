@@ -104,6 +104,20 @@ func controllerArgs(t *testing.T, e *framework.Env) []string {
 	return nil
 }
 
+// kindSignature is the header the git server of kind signs its webhook
+// deliveries in.
+func kindSignature(kind string) string {
+	switch kind {
+	case "gitlab":
+		return gitlabToken
+	case "github":
+		return hubSignature
+	case "gitea":
+		return giteaSignature
+	}
+	return forgejoSignature
+}
+
 // eventHeader is the event header that goes with signature header sig.
 func eventHeader(sig string) string {
 	switch sig {
@@ -671,6 +685,34 @@ func TestSCM_DeletedStepTracksItsNewPR(t *testing.T) {
 		})
 
 	a.merge(t, again)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// TestSCM_WebhookMergeIsConfirmed posts a merge event, signed with the
+// webhook secret, for a PR that is still open. The controller asks the git
+// server whether the PR is merged, so the PRStatus is not marked merged and
+// the step keeps waiting; any validly signed merge event used to advance the
+// step without a merge (B73). Merging the PR then promotes prod by polling.
+//
+// Covers WEBHOOK-CONFIRM-01.
+func TestSCM_WebhookMergeIsConfirmed(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a, bundle, pr, prs := prOpenWithoutWebhook(t, e)
+	kind := e.Git.Kind()
+	sig := kindSignature(kind)
+	body := mergedEvent(t, kind, prs.Spec.Repo, pr.Number, pr.HeadSHA)
+	since := time.Now()
+	require.Equal(t, http.StatusNoContent, e.PostSCMWebhook(t, signedPREvent(sig, framework.WebhookSecret(t), body), body),
+		"the merge event of the open PR, signed in %s", sig)
+	e.WaitControllerLog(t, since, 30*time.Second, "the git server reporting PR #"+strconv.Itoa(pr.Number)+" open",
+		framework.LogMessage("SCM provider reports the PR of the merge event not merged; PRStatus not marked merged",
+			"prstatus", prs.Name, "namespace", a.ns, "repo", prs.Spec.Repo, "pr", strconv.Itoa(pr.Number), "open", "true"))
+	a.stillOpen(t, bundle, "prod", 15*time.Second, "after the merge event of the open PR")
+	assert.Empty(t, e.ControllerLogLines(t, since, framework.LogMessage("PRStatus marked merged via webhook", "prstatus", prs.Name)))
+
+	a.merge(t, pr)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
 }

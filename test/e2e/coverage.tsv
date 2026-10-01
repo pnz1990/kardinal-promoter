@@ -162,13 +162,13 @@ SCM-GT-11	live	scm-gitea	covered	webhook	Gitea: a merge webhook Gitea itself del
 SCM-BB-01	contract	core	covered	scm	Bitbucket Cloud: open PR with Bearer access token on workspace/repo from spec.git.url	docs/scm-providers.md:220-232; pkg/scm/bitbucket.go:84
 SCM-BB-02	contract	core	covered	scm	Bitbucket Cloud: no PR labels (AddLabelsToPR is a no-op); rollback PRs found by title	docs/scm-providers.md:15; docs/scm-providers.md:21-23; pkg/scm/bitbucket.go:302
 SCM-BB-03	contract	core	covered	scm	Bitbucket Cloud: merge detected by polling; merge commit fetched from API	pkg/scm/bitbucket.go:196; pkg/scm/revision.go:90
-SCM-BB-04	contract	core	covered	webhook	Bitbucket Cloud: X-Hub-Signature sha256 HMAC verified; pullrequest.state MERGED marks merged; bad signature 401	docs/scm-providers.md:15; pkg/scm/bitbucket.go:246-287
+SCM-BB-04	contract	core	covered	webhook	Bitbucket Cloud: X-Hub-Signature sha256 HMAC verified; pullrequest.state MERGED marks merged when the API reports the PR merged, 204 and not merged when it reports it open; bad signature 401	docs/scm-providers.md:15; pkg/scm/bitbucket.go:246-287
 SCM-BB-05	contract	core	covered	scm	Bitbucket Cloud: approvals read, close PR, existing-PR reuse	pkg/scm/bitbucket.go:123; pkg/scm/bitbucket.go:167; pkg/scm/bitbucket.go:217
 SCM-BB-06	contract	core	covered	scm	Bitbucket Cloud: no startup token check, info line logged	docs/scm-providers.md:293
 SCM-ADO-01	contract	core	covered	scm	Azure DevOps: open PR with PAT on org/project/repo from dev.azure.com URL	docs/scm-providers.md:239-254; pkg/scm/azuredevops.go
 SCM-ADO-02	contract	core	covered	scm	Azure DevOps: labels applied as PR tags	docs/scm-providers.md:16
 SCM-ADO-03	contract	core	covered	scm	Azure DevOps: merge detected by polling (status completed); merge commit fetched from API	docs/scm-providers.md:253; pkg/scm/revision.go:43-114
-SCM-ADO-04	contract	core	covered	webhook	Azure DevOps: X-AzureDevOps-Token compared in constant time; resource.status completed marks merged; wrong token 401	docs/scm-providers.md:16; pkg/scm/azuredevops.go:270-313
+SCM-ADO-04	contract	core	covered	webhook	Azure DevOps: X-AzureDevOps-Token compared in constant time; resource.status completed marks merged when the API reports the PR completed, 204 and not merged when it reports it active; wrong token 401	docs/scm-providers.md:16; pkg/scm/azuredevops.go:270-313
 SCM-ADO-05	contract	core	covered	scm	Azure DevOps: approvals read, close PR, existing-PR reuse	pkg/scm/azuredevops.go
 SCM-REOPEN-01	live	scm-forgejo	covered	scm	PR closed without merge can be reopened within 5 minutes and the promotion continues	docs/changelog.md:110
 SCM-CLOSED-01	live	scm-forgejo	covered	scm	PR closed for more than 5 minutes: kardinal comments once, stops polling, fails the step (closedAt, closedFinal)	docs/changelog.md:110
@@ -181,6 +181,7 @@ WEBHOOK-NOSECRET-01	live	scm-forgejo	covered	webhook	without --webhook-secret, P
 WEBHOOK-NONMERGE-01	live	scm-forgejo	covered	webhook	non-merge events (opened, closed without merge, push) return 204 and change nothing	cmd/kardinal-controller/webhook.go:119-122
 WEBHOOK-HEALTH-01	live	core	covered	webhook	GET /webhook/scm/health reports webhookConfigured and eventsProcessed	cmd/kardinal-controller/webhook.go:143
 WEBHOOK-SECRET-01	live	scm-forgejo	covered	webhook	webhook secret is read once at startup; changing it needs a restart	cmd/kardinal-controller/main.go:118; pkg/scm/dynamic.go:35-48
+WEBHOOK-CONFIRM-01	live	scm-all	covered	webhook	a validly signed merge event for a PR the SCM API reports open returns 204 and leaves the PRStatus and step unchanged; merging the PR promotes it (unit: the provider API is asked once, a provider error marks nothing; contract tests SCM-BB-04, SCM-ADO-04)	cmd/kardinal-controller/webhook.go:207-211; cmd/kardinal-controller/webhook.go:254-275; docs/scm-providers.md:23-27; docs/troubleshooting.md:242-245
 SCM-OTHERBASE-01	live	scm-all	covered	scm	a refused duplicate PR reuses only the open PR into the same base; a PR from the same branch into another base is never adopted	pkg/scm/github.go; pkg/scm/gitlab.go; pkg/scm/forgejo.go
 GATE-CEL-01	live	core	covered	gates	team PolicyGate CEL expression blocks the env step while false and releases it when true	docs/policy-gates.md:13-66; pkg/reconciler/policygate/reconciler.go:310-436
 GATE-CEL-02	live	core	covered	gates	invalid or non-bool CEL expression fails closed with a reason in status	docs/policy-gates.md:149-168; pkg/reconciler/policygate/cel_evaluator.go

@@ -127,7 +127,7 @@ func TestPromotionLoop_PRReview_ViaWebhook(t *testing.T) {
 	require.Equal(t, 5, prs.Spec.PRNumber, "the reconciler fills in the PRStatus spec the webhook matches on")
 	require.Equal(t, "owner/repo", prs.Spec.Repo)
 
-	provider, err := scm.NewProvider("github", "", "", secret)
+	provider, err := scm.NewProvider("github", "", prAPI(t, "github", 5, false), secret)
 	require.NoError(t, err)
 	handler := newWebhookServerWithConfig(provider, c, zerolog.Nop(), true).Handler()
 	payload := `{"action":"closed","pull_request":{"number":5,"merged":true},"repository":{"full_name":"owner/repo"}}`
