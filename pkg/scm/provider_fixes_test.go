@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -379,7 +380,7 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 				_, _ = w.Write([]byte(`[]`))
 				return
 			}
-			_, _ = w.Write([]byte(`[{"number":3,"html_url":"https://github.com/o/r/pull/3","head":{"ref":"kardinal/b/prod"}}]`))
+			_, _ = w.Write([]byte(`[{"number":3,"html_url":"https://github.com/o/r/pull/3","head":{"ref":"kardinal/b/prod"},"base":{"ref":"main"}}]`))
 		}))
 		defer srv.Close()
 		u, n, err := scm.NewGitHubProvider("t", srv.URL, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main")
@@ -398,7 +399,7 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 				_, _ = w.Write([]byte(`[]`))
 				return
 			}
-			_, _ = w.Write([]byte(`[{"iid":4,"web_url":"https://gitlab.com/g/p/-/merge_requests/4","source_branch":"kardinal/b/prod"}]`))
+			_, _ = w.Write([]byte(`[{"iid":4,"web_url":"https://gitlab.com/g/p/-/merge_requests/4","source_branch":"kardinal/b/prod","target_branch":"main"}]`))
 		}))
 		defer srv.Close()
 		_, n, err := scm.NewGitLabProvider("t", srv.URL, "").OpenPR(context.Background(), "g/p", "t", "b", head, "main")
@@ -454,7 +455,7 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 					prs = append(prs, map[string]interface{}{"number": 100 + i, "head": map[string]string{"ref": fmt.Sprintf("renovate/%d", i)}})
 				}
 			} else {
-				prs = append(prs, map[string]interface{}{"number": 6, "html_url": "https://f.example/o/r/pulls/6", "head": map[string]string{"ref": head, "label": head}})
+				prs = append(prs, map[string]interface{}{"number": 6, "html_url": "https://f.example/o/r/pulls/6", "head": map[string]string{"ref": head, "label": head}, "base": map[string]string{"ref": "main"}})
 			}
 			_ = json.NewEncoder(w).Encode(prs)
 		}))
@@ -463,6 +464,119 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 6, n)
 	})
+}
+
+// TestFindExistingPR_SameBaseOnly proves that, when the SCM refuses a new PR
+// as a duplicate, GitHub, GitLab and Forgejo/Gitea reuse only the open PR
+// from the same head branch into the same base branch. The refusal is about
+// that head and base; an open PR from the kardinal branch into another branch
+// must not become the promotion PR (the lookup used to match the head only).
+func TestFindExistingPR_SameBaseOnly(t *testing.T) {
+	const head = "kardinal/b/prod"
+	type provider struct {
+		name    string
+		open    func(serverURL string) (string, int, error)
+		refuse  func(w http.ResponseWriter)
+		list    func(w http.ResponseWriter, r *http.Request, prs [][2]interface{})
+		checkQS func(t *testing.T, q url.Values)
+	}
+	providers := []provider{
+		{
+			name: "github",
+			open: func(u string) (string, int, error) {
+				return scm.NewGitHubProvider("t", u, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main")
+			},
+			refuse: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = w.Write([]byte(`{"message":"Validation Failed","errors":[{"message":"A pull request already exists for o:kardinal/b/prod."}]}`))
+			},
+			list: func(w http.ResponseWriter, _ *http.Request, prs [][2]interface{}) {
+				var out []map[string]interface{}
+				for _, p := range prs {
+					out = append(out, map[string]interface{}{"number": p[0], "html_url": fmt.Sprintf("https://github.com/o/r/pull/%d", p[0]),
+						"head": map[string]string{"ref": head}, "base": map[string]string{"ref": p[1].(string)}})
+				}
+				_ = json.NewEncoder(w).Encode(out)
+			},
+			checkQS: func(t *testing.T, q url.Values) {
+				assert.Equal(t, "o:"+head, q.Get("head"))
+				assert.Equal(t, "main", q.Get("base"))
+			},
+		},
+		{
+			name: "gitlab",
+			open: func(u string) (string, int, error) {
+				return scm.NewGitLabProvider("t", u, "").OpenPR(context.Background(), "g/p", "t", "b", head, "main")
+			},
+			refuse: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"message":["Another open merge request already exists for this source branch: !7"]}`))
+			},
+			list: func(w http.ResponseWriter, _ *http.Request, prs [][2]interface{}) {
+				var out []map[string]interface{}
+				for _, p := range prs {
+					out = append(out, map[string]interface{}{"iid": p[0], "web_url": fmt.Sprintf("https://gitlab.com/g/p/-/merge_requests/%d", p[0]),
+						"state": "opened", "source_branch": head, "target_branch": p[1]})
+				}
+				_ = json.NewEncoder(w).Encode(out)
+			},
+			checkQS: func(t *testing.T, q url.Values) {
+				assert.Equal(t, head, q.Get("source_branch"))
+				assert.Equal(t, "main", q.Get("target_branch"))
+			},
+		},
+		{
+			name: "forgejo",
+			open: func(u string) (string, int, error) {
+				return scm.NewForgejoProvider("t", u, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main")
+			},
+			refuse: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"message":"pull request already exists for these targets"}`))
+			},
+			list: func(w http.ResponseWriter, _ *http.Request, prs [][2]interface{}) {
+				var out []map[string]interface{}
+				for _, p := range prs {
+					out = append(out, map[string]interface{}{"number": p[0], "html_url": fmt.Sprintf("https://f.example/o/r/pulls/%d", p[0]),
+						"head": map[string]string{"ref": head, "label": "o:" + head}, "base": map[string]string{"ref": p[1].(string)}})
+				}
+				_ = json.NewEncoder(w).Encode(out)
+			},
+		},
+	}
+	for _, p := range providers {
+		serve := func(prs [][2]interface{}, q *url.Values) *httptest.Server {
+			return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					p.refuse(w)
+					return
+				}
+				*q = r.URL.Query()
+				p.list(w, r, prs)
+			}))
+		}
+		t.Run(p.name+" reuses the PR into the same base", func(t *testing.T) {
+			var q url.Values
+			// The PR into another branch is listed first (newest first).
+			srv := serve([][2]interface{}{{9, "release"}, {3, "main"}}, &q)
+			defer srv.Close()
+			u, n, err := p.open(srv.URL)
+			require.NoError(t, err)
+			assert.Equal(t, 3, n)
+			assert.True(t, strings.HasSuffix(u, "/3"), u)
+			if p.checkQS != nil {
+				p.checkQS(t, q)
+			}
+		})
+		t.Run(p.name+" does not adopt a PR into another base", func(t *testing.T) {
+			var q url.Values
+			srv := serve([][2]interface{}{{9, "release"}}, &q)
+			defer srv.Close()
+			_, n, err := p.open(srv.URL)
+			require.Error(t, err, "adopted #%d", n)
+			assert.Contains(t, err.Error(), "into main")
+		})
+	}
 }
 
 // TestProviders_HTTPTimeout proves no provider can hang a reconcile worker

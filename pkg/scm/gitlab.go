@@ -68,8 +68,8 @@ func encodeProjectID(repo string) string {
 }
 
 // OpenPR creates a GitLab merge request and returns the MR web URL and IID.
-// It is idempotent: if an MR already exists for the source branch, it returns the
-// existing MR's URL and IID rather than failing.
+// It is idempotent: if an open MR from the source branch into the target branch
+// already exists, it returns that MR's URL and IID rather than failing.
 func (g *GitLabProvider) OpenPR(ctx context.Context, repo, title, body, head, base string) (string, int, error) {
 	projectID := encodeProjectID(repo)
 	payload := map[string]string{
@@ -85,36 +85,41 @@ func (g *GitLabProvider) OpenPR(ctx context.Context, repo, title, body, head, ba
 	}
 	if err := g.do(ctx, http.MethodPost,
 		fmt.Sprintf("/api/v4/projects/%s/merge_requests", projectID), payload, &result); err != nil {
-		// GitLab returns 409 Conflict when an MR already exists for the source branch.
+		// GitLab returns 409 Conflict when an open MR from the source branch
+		// into the target branch already exists.
 		if isGitLabExistingMRErr(err) {
-			return g.findExistingMR(ctx, repo, head)
+			return g.findExistingMR(ctx, repo, head, base)
 		}
 		return "", 0, fmt.Errorf("open MR %s: %w", repo, err)
 	}
 	return result.WebURL, result.IID, nil
 }
 
-// findExistingMR lists open MRs for the project and returns the one with the matching
-// source branch.
-func (g *GitLabProvider) findExistingMR(ctx context.Context, repo, sourceBranch string) (string, int, error) {
+// findExistingMR finds the open MR from sourceBranch into targetBranch.
+// GitLab refuses a duplicate only for the same source and target branch, so
+// an open MR from the branch into another target is not the one it refused
+// and must not be reused.
+func (g *GitLabProvider) findExistingMR(ctx context.Context, repo, sourceBranch, targetBranch string) (string, int, error) {
 	projectID := encodeProjectID(repo)
 	var mrs []struct {
 		IID          int    `json:"iid"`
 		WebURL       string `json:"web_url"`
 		SourceBranch string `json:"source_branch"`
+		TargetBranch string `json:"target_branch"`
 		State        string `json:"state"`
 	}
+	q := url.Values{"state": {"opened"}, "per_page": {"100"}, "source_branch": {sourceBranch}, "target_branch": {targetBranch}}
 	if err := g.do(ctx, http.MethodGet,
-		fmt.Sprintf("/api/v4/projects/%s/merge_requests?state=opened&per_page=100&source_branch=%s", projectID, url.QueryEscape(sourceBranch)),
+		fmt.Sprintf("/api/v4/projects/%s/merge_requests?%s", projectID, q.Encode()),
 		nil, &mrs); err != nil {
 		return "", 0, fmt.Errorf("list MRs to find existing %s: %w", sourceBranch, err)
 	}
 	for _, mr := range mrs {
-		if mr.SourceBranch == sourceBranch {
+		if mr.SourceBranch == sourceBranch && mr.TargetBranch == targetBranch {
 			return mr.WebURL, mr.IID, nil
 		}
 	}
-	return "", 0, fmt.Errorf("MR already exists for %s but could not find it in open MRs", sourceBranch)
+	return "", 0, fmt.Errorf("MR already exists for %s into %s but could not find it in open MRs", sourceBranch, targetBranch)
 }
 
 // isGitLabExistingMRErr returns true when GitLab rejected the MR creation with 409

@@ -491,6 +491,7 @@ func TestGitLabProvider_OpenPR_AlreadyExists(t *testing.T) {
 				"web_url":       "https://gitlab.com/owner/repo/-/merge_requests/88",
 				"state":         "opened",
 				"source_branch": "feature",
+				"target_branch": "main",
 			},
 		})
 	}))
@@ -765,6 +766,7 @@ func TestForgejoProvider_OpenPR_AlreadyExists(t *testing.T) {
 				"number":   55,
 				"html_url": "https://forgejo.example.com/owner/repo/pulls/55",
 				"head":     map[string]interface{}{"label": "owner:feature"},
+				"base":     map[string]interface{}{"ref": "main"},
 			},
 		})
 	}))
