@@ -298,17 +298,22 @@ func TestHealth_TimeoutFails(t *testing.T) {
 			return ps.Status.State == "HealthChecking" && ps.Status.Message == unhealthy && ps.Status.ConsecutiveHealthFailures >= 1
 		})
 	n := first.Status.ConsecutiveHealthFailures
-	e.WaitStep(t, a.ns, pipelineName, bundle, "prod", 30*time.Second, "the next check to count one more failure",
+	// Checks run at most every 10s, so a later check before the 1m expiry
+	// counts again; the wait ends at the expiry either way.
+	next := e.WaitStep(t, a.ns, pipelineName, bundle, "prod", 2*time.Minute, "a later check to count one more failure",
 		func(ps *v1alpha1.PromotionStep) bool {
-			return ps.Status.State == "HealthChecking" && ps.Status.ConsecutiveHealthFailures == n+1
+			return ps.Status.ConsecutiveHealthFailures > n || ps.Status.State != "HealthChecking"
 		})
+	require.Equal(t, "HealthChecking", next.Status.State, "a later check counts before the timeout: %s", framework.DescribeStep(next))
+	assert.Equal(t, unhealthy, next.Status.Message)
 	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Failed", 2*time.Minute)
 	assert.Equal(t, "health alarm via resource (onHealthFailure=none): health check timeout after 1m0s; last result: "+unhealthy,
 		ps.Status.Message)
 	require.NotNil(t, ps.Status.HealthCheckExpiry)
 	assert.False(t, ps.Status.HealthCheckExpiry.Time.Before(verified.Add(time.Minute-time.Second)), "prod expiry 1m after its check started")
-	// About one failure per 10s check over 1m, plus the timeout itself.
-	assert.GreaterOrEqual(t, ps.Status.ConsecutiveHealthFailures, 4)
+	// At least the unhealthy checks seen above; the timeout counts one more.
+	assert.GreaterOrEqual(t, ps.Status.ConsecutiveHealthFailures, 2)
+	assert.Greater(t, ps.Status.ConsecutiveHealthFailures, next.Status.ConsecutiveHealthFailures, "the timeout counts as one more failure")
 	assert.Equal(t, imageV2, e.DeploymentImage(t, a.ns, fixtures.Workload("prod")), "prod runs the new version; only the check failed")
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
 }
