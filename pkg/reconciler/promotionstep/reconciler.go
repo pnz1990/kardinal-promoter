@@ -925,6 +925,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	opts := health.OptionsForEnv(pipeline.Name, env)
 	opts.Timeout = timeout
 	opts.ExpectedRevision = r.expectedRevision(ctx, ps)
+	recordMergeCommit(ps, opts.ExpectedRevision)
 	for _, img := range bundle.Spec.Images {
 		opts.ExpectedImages = append(opts.ExpectedImages,
 			health.ImageExpectation{Repository: img.Repository, Tag: img.Tag, Digest: img.Digest})
@@ -1026,6 +1027,23 @@ func (r *Reconciler) expectedRevision(ctx context.Context, ps *v1alpha1.Promotio
 		return prs.Status.MergeCommitSHA
 	}
 	return ""
+}
+
+// recordMergeCommit sets status.outputs.mergeCommitSHA to rev, the revision
+// expectedRevision returned, when the outputs have neither a pushed commit
+// nor a merge commit: rev then came from the PRStatus. The step copies the
+// merge commit when it leaves WaitingForMerge, but a webhook can mark the PR
+// merged before the merge commit is known (the parsed Forgejo event has none),
+// and the PRStatus reconciler records it later. Every health-check path that
+// follows patches the status.
+func recordMergeCommit(ps *v1alpha1.PromotionStep, rev string) {
+	if rev == "" || ps.Status.Outputs["commitSHA"] != "" || ps.Status.Outputs["mergeCommitSHA"] != "" {
+		return
+	}
+	if ps.Status.Outputs == nil {
+		ps.Status.Outputs = map[string]string{}
+	}
+	ps.Status.Outputs["mergeCommitSHA"] = rev
 }
 
 // verify moves ps to Verified with a Verified condition.

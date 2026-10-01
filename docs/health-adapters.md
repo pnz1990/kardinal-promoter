@@ -24,7 +24,7 @@ An unknown `health.type` is rejected by the CRD schema when the Pipeline is appl
 The PromotionStep records the git commit its promotion delivered:
 
 - `status.outputs.commitSHA` — the commit pushed straight to the environment branch (`approval: auto`);
-- `status.outputs.mergeCommitSHA` — the merge commit of the promotion PR (`approval: pr-review`), copied from `PRStatus.status.mergeCommitSHA`.
+- `status.outputs.mergeCommitSHA` — the merge commit of the promotion PR (`approval: pr-review`), copied from `PRStatus.status.mergeCommitSHA` when the step sees the merge, or at the next health check when the PRStatus records it later (a webhook can report the merge before the merge commit is known).
 
 The `argocd` and `flux` adapters require that commit. Both also accept a later commit on a shared branch when the Bundle images run: for `argocd` in the Application, for `flux` in the Kustomization's Deployments (see below). The `resource` adapter requires the Bundle images in the Deployment's pod template, `argoRollouts` in the Rollout's, and `flagger` in the Canary's target Deployment and, for `Succeeded`, its primary Deployment. `kubectl get promotionstep <name> -o yaml` shows the recorded commit in `status.outputs` and the last health result in `status.message`.
 
