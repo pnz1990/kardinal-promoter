@@ -11,9 +11,10 @@
 //
 //	ANY  /<bucket>/...      recorded; answered 200 "ok" unless a mode is set
 //	GET  /_records/<bucket> the bucket's records, oldest first, as JSON
-//	POST /_mode/<bucket>    {"status":503,"times":2,"location":"..."}: answer
-//	                        the next times requests (0: all) with status, with
-//	                        a Location header when set; {"status":0} resets
+//	POST /_mode/<bucket>    {"status":503,"times":2,"location":"...",
+//	                        "retryAfter":"600"}: answer the next times
+//	                        requests (0: all) with status, with a Location or
+//	                        Retry-After header when set; {"status":0} resets
 //	GET  /_healthz          200
 //
 // Only the standard library, so it builds without downloading modules.
@@ -52,6 +53,8 @@ type mode struct {
 	Status   int    `json:"status"`
 	Times    int    `json:"times"`
 	Location string `json:"location,omitempty"`
+	// RetryAfter is the Retry-After header value (seconds or an HTTP date).
+	RetryAfter string `json:"retryAfter,omitempty"`
 }
 
 type receiver struct {
@@ -104,10 +107,10 @@ func (r *receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // record stores the request in its bucket and answers it.
 func (r *receiver) record(w http.ResponseWriter, req *http.Request, bucket string) {
 	body, _ := io.ReadAll(io.LimitReader(req.Body, maxBody))
-	status, location := http.StatusOK, ""
+	status, location, retryAfter := http.StatusOK, "", ""
 	r.mu.Lock()
 	if m := r.modes[bucket]; m != nil {
-		status, location = m.Status, m.Location
+		status, location, retryAfter = m.Status, m.Location, m.RetryAfter
 		if m.Times > 0 {
 			m.Times--
 			if m.Times == 0 {
@@ -127,6 +130,9 @@ func (r *receiver) record(w http.ResponseWriter, req *http.Request, bucket strin
 	r.mu.Unlock()
 	if location != "" {
 		w.Header().Set("Location", location)
+	}
+	if retryAfter != "" {
+		w.Header().Set("Retry-After", retryAfter)
 	}
 	w.WriteHeader(status)
 	_, _ = io.WriteString(w, http.StatusText(status))
