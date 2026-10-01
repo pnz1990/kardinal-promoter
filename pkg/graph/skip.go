@@ -44,6 +44,12 @@ func policyNamespaceSet(policyNamespaces []string) map[string]bool {
 	return set
 }
 
+// IsPolicyNamespace reports whether ns is one of the org policy namespaces
+// (DefaultPolicyNamespace when policyNamespaces is empty).
+func IsPolicyNamespace(ns string, policyNamespaces []string) bool {
+	return ns != "" && policyNamespaceSet(policyNamespaces)[ns]
+}
+
 // isOrgGate reports whether g is an ordinary (not skip-permission) gate owned
 // by the platform: it lives in an org policy namespace, or it is labelled
 // kardinal.io/scope=org.

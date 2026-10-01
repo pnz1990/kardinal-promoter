@@ -117,7 +117,7 @@ The controller runs in `kardinal-system` by default. It watches CRDs across all 
 
 PolicyGates are namespace-scoped:
 
-- **Org-level gates** (`namespace: platform-policies`): mandatory for all pipelines targeting the matching environment. Teams cannot override them.
+- **Org-level gates** (`namespace: platform-policies`): mandatory for all pipelines targeting the matching environment. Teams cannot override them. An org gate reads `metrics.*` from the MetricChecks of its own org policy namespace, so a team MetricCheck of the same name cannot decide it.
 - **Team-level gates** (team namespace): additive — injected alongside org gates. Teams add restrictions, not bypasses.
 
 ```yaml

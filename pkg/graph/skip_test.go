@@ -141,6 +141,7 @@ func TestBuild_SkipPermissionHoldsNextEnvironment(t *testing.T) {
 	labels := meta["labels"].(map[string]interface{})
 	assert.Equal(t, graph.GateTypeSkipPermission, labels[graph.LabelGateType])
 	assert.Equal(t, "allow-staging-skip-for-hotfix", labels["kardinal.io/gate-template"])
+	assert.Equal(t, "platform-policies", labels[graph.LabelGateTemplateNamespace])
 	assert.Equal(t, "app-x7k2m", labels["kardinal.io/bundle"], "an instance, not a template")
 	assert.Equal(t, map[string]interface{}{graph.AnnotationSkippedEnvironments: "staging"}, meta["annotations"])
 	assert.Equal(t, `bundle.version.startsWith("hotfix-")`, inst.Template["spec"].(map[string]interface{})["expression"])
@@ -247,4 +248,12 @@ func TestBuild_SkipBridgesFanOutFanIn(t *testing.T) {
 	nodes := nodeByID(res.Graph.Spec.Nodes)
 	assert.NotContains(t, nodes, "eu")
 	assert.Equal(t, []string{"test", "us"}, upstreamIDs(t, nodes, "global"))
+}
+
+func TestIsPolicyNamespace(t *testing.T) {
+	assert.True(t, graph.IsPolicyNamespace("platform-policies", nil), "the default")
+	assert.False(t, graph.IsPolicyNamespace("team-a", nil))
+	assert.True(t, graph.IsPolicyNamespace("org-b", []string{"org-a", "org-b"}))
+	assert.False(t, graph.IsPolicyNamespace("platform-policies", []string{"org-a"}), "the default only when none are set")
+	assert.False(t, graph.IsPolicyNamespace("", nil))
 }

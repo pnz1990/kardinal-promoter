@@ -335,14 +335,20 @@ func TestPolicySimulate_ControllerEnvironmentAndContext(t *testing.T) {
 	}
 	// Fresh at policyTestNow (the real time of the run), not at the simulated
 	// --time days later: simulate judges staleness at the real time (#1302).
+	// The gate is an org gate, so it reads the MetricChecks of
+	// platform-policies, not the Pipeline namespace's.
 	fresh := metav1.NewTime(policyTestNow.Add(5 * time.Minute))
 	errorRate := &v1alpha1.MetricCheck{
-		ObjectMeta: metav1.ObjectMeta{Name: "error-rate", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "error-rate", Namespace: "platform-policies"},
 		Status:     v1alpha1.MetricCheckStatus{Result: "Pass", LastValue: "0.01", ValidUntil: &fresh},
+	}
+	teamErrorRate := &v1alpha1.MetricCheck{
+		ObjectMeta: metav1.ObjectMeta{Name: "error-rate", Namespace: "default"},
+		Status:     v1alpha1.MetricCheckStatus{Result: "Fail", LastValue: "0.9", ValidUntil: &fresh},
 	}
 	expired := metav1.NewTime(policyTestNow.Add(-time.Minute))
 	staleRate := &v1alpha1.MetricCheck{
-		ObjectMeta: metav1.ObjectMeta{Name: "stale-rate", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "stale-rate", Namespace: "platform-policies"},
 		Status:     v1alpha1.MetricCheckStatus{Result: "Pass", LastValue: "0.01", ValidUntil: &expired},
 	}
 	tests := []struct {
@@ -371,12 +377,49 @@ func TestPolicySimulate_ControllerEnvironmentAndContext(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.expr+"@"+tt.time, func(t *testing.T) {
-			c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"), freeze, errorRate, staleRate,
-				policyGate("gate", "platform-policies", "prod", tt.expr))
+			c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"), freeze, errorRate, teamErrorRate,
+				staleRate, policyGate("gate", "platform-policies", "prod", tt.expr))
 			out, err := runSimulate(t, c, simulateOptions{Time: tt.time, SoakMinutes: tt.soak})
 			require.NoError(t, err)
 			assert.NotContains(t, out, "compile error")
 			assert.NotContains(t, out, "evaluation error")
+			if tt.pass {
+				assert.Contains(t, out, "RESULT: PASS", out)
+			} else {
+				assert.Contains(t, out, "RESULT: BLOCKED", out)
+			}
+		})
+	}
+}
+
+// An org gate reads metrics.* from its org policy namespace and a team gate
+// from the Pipeline namespace, as in the controller, also when both
+// namespaces have a MetricCheck of the same name.
+func TestPolicySimulate_GateMetricsNamespace(t *testing.T) {
+	fresh := metav1.NewTime(policyTestNow.Add(5 * time.Minute))
+	metric := func(ns, result string) *v1alpha1.MetricCheck {
+		return &v1alpha1.MetricCheck{
+			ObjectMeta: metav1.ObjectMeta{Name: "error-rate", Namespace: ns},
+			Status:     v1alpha1.MetricCheckStatus{Result: result, LastValue: "0.01", ValidUntil: &fresh},
+		}
+	}
+	const expr = `metrics["error-rate"].result == "Pass"`
+	tests := []struct {
+		name     string
+		gateNS   string
+		policyNS []string
+		pass     bool
+	}{
+		{name: "org gate", gateNS: "org-policies", policyNS: []string{"org-policies"}, pass: true},
+		{name: "team gate", gateNS: "default", policyNS: []string{"org-policies"}, pass: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := policyClient(t, policyPipeline("demo", "test", "prod"),
+				metric("org-policies", "Pass"), metric("default", "Fail"),
+				policyGate("error-budget", tt.gateNS, "prod", expr))
+			out, err := runSimulate(t, c, simulateOptions{Time: "Tuesday 10am", PolicyNamespaces: tt.policyNS})
+			require.NoError(t, err)
 			if tt.pass {
 				assert.Contains(t, out, "RESULT: PASS", out)
 			} else {

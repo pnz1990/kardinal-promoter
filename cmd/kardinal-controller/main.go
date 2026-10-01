@@ -365,6 +365,9 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to create PolicyGateReconciler (CEL env init failed)")
 	}
 	pgReconciler.Recorder = eventRecorder
+	// An org gate's instance reads metrics.* from its template's org policy
+	// namespace, the same namespaces the translator takes org gates from.
+	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}

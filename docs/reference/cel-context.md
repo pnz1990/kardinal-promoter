@@ -14,7 +14,7 @@ Referencing an attribute or map key that does not exist is an evaluation error, 
 | `schedule` | map | Current time context |
 | `environment` | map | The target environment |
 | `upstream` | map | Per-environment soak data from upstream |
-| `metrics` | map | MetricCheck results from the same namespace |
+| `metrics` | map | MetricCheck results from the gate's metrics namespace (the org policy namespace for an org gate, the gate's namespace otherwise) |
 | `changewindow` | map | ChangeWindow name → `true` while the window is active (blocking); also `changewindow.isBlocked("name")` and `changewindow.isAllowed("name")`. An unknown name blocks the gate. See [ChangeWindow attributes](../policy-gates.md#changewindow-attributes-k-04) |
 
 ---
@@ -121,7 +121,7 @@ bundle.upstreamSoakMinutes >= 30
 
 ## `metrics.*`
 
-The `metrics` map contains one entry per `MetricCheck` CRD in the same namespace as the gate. Keys are MetricCheck names.
+The `metrics` map contains one entry per `MetricCheck` CRD in the gate's metrics namespace. Keys are MetricCheck names. For a gate made from a template in an org policy namespace (the controller's `--policy-namespaces`) that is the template's namespace, so the org's MetricChecks decide an org gate; for every other gate it is the gate's own namespace, the Pipeline namespace.
 
 | Field | Type | Example | Notes |
 |---|---|---|---|
@@ -129,7 +129,7 @@ The `metrics` map contains one entry per `MetricCheck` CRD in the same namespace
 | `metrics.<name>.result` | string | `"Pass"` | `"Pass"` or `"Fail"` — result of the MetricCheck threshold; `"Stale"` when the result is stale |
 | `metrics.<name>.stale` | bool | `false` | `true` when the MetricCheck's `status.validUntil` is unset (for example before its first evaluation) or earlier than the gate's evaluation time |
 
-**Populated** when a `MetricCheck` CRD with the given name exists in the gate's namespace. `double("")` is an evaluation error, so a value-based gate blocks until the MetricCheck has a fresh value.
+**Populated** when a `MetricCheck` CRD with the given name exists in the gate's metrics namespace. `double("")` is an evaluation error, so a value-based gate blocks until the MetricCheck has a fresh value.
 
 **Staleness.** Each MetricCheck evaluation sets `status.validUntil` to the evaluation time plus
 `max(3 × interval, 30s)`. A result the gate reads after that time, or one without `validUntil`, is

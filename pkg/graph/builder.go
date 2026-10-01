@@ -720,6 +720,13 @@ func buildPromotionStepNode(
 	return node
 }
 
+// LabelGateTemplateNamespace is the namespace of the template a PolicyGate
+// instance was made from. The instance lives in the Pipeline namespace; when
+// the template is an org gate (from a --policy-namespaces namespace) the
+// PolicyGate reconciler reads metrics.* from this namespace, not the
+// instance's, so a team cannot decide an org gate with its own MetricChecks.
+const LabelGateTemplateNamespace = "kardinal.io/gate-template-namespace"
+
 // buildPolicyGateNode builds a Graph node for a PolicyGate instance.
 // nodeID is the CEL-safe identifier used in CEL expressions.
 // k8sName is the Kubernetes resource name (hyphens) for metadata.name.
@@ -762,10 +769,11 @@ func buildPolicyGateNode(
 			"kardinal.io/bundle":        bundleName,
 			"kardinal.io/environment":   envName,
 			"kardinal.io/gate-template": gate.Name,
-			// gate-template-namespace: the template's namespace, which can differ
-			// from the Pipeline's (an org policy namespace or spec.policyNamespaces),
-			// so `kardinal policy list` can match the instance to its template.
-			"kardinal.io/gate-template-namespace": gate.Namespace,
+			// The template's namespace, which can differ from the Pipeline's (an
+			// org policy namespace or spec.policyNamespaces): `kardinal policy
+			// list` matches the instance to its template with it, and an org
+			// gate reads metrics.* there.
+			LabelGateTemplateNamespace: gate.Namespace,
 			// gate-name: stable human-readable name, propagated through cross-product instances.
 			"kardinal.io/gate-name": gateName,
 			// Propagated from original PolicyGate template for CLI display.

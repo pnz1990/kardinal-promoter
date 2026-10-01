@@ -145,7 +145,7 @@ The CEL expression references an attribute that does not exist in the current ph
 kardinal policy test my-gate.yaml
 ```
 
-The output will show which attribute is unavailable. Only the attributes in the [CEL context reference](reference/cel-context.md) exist; anything else (for example `delegation.status`, `externalApproval.*`, `previousBundle.*` or `bundle.metadata.*`) is an error and the gate blocks. `metrics.<name>` exists only when a `MetricCheck` named `<name>` exists in the gate's namespace, and `upstream.<env>` only when that environment appears in the Bundle's status or recent history.
+The output will show which attribute is unavailable. Only the attributes in the [CEL context reference](reference/cel-context.md) exist; anything else (for example `delegation.status`, `externalApproval.*`, `previousBundle.*` or `bundle.metadata.*`) is an error and the gate blocks. `metrics.<name>` exists only when a `MetricCheck` named `<name>` exists in the gate's metrics namespace (the org policy namespace for an org gate, the Pipeline namespace otherwise), and `upstream.<env>` only when that environment appears in the Bundle's status or recent history.
 
 ## Bundle not promoting
 

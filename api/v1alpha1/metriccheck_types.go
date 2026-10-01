@@ -89,8 +89,9 @@ type MetricCheckStatus struct {
 // `metrics.<name>.stale`.
 //
 // MetricCheck objects are typically created alongside PolicyGates that
-// reference them. MetricCheck is namespaced and must be in the same
-// namespace as the PolicyGate that uses it.
+// reference them. MetricCheck is namespaced and must be in the namespace of
+// the PolicyGate template that uses it: an org policy namespace for an org
+// gate, the Pipeline namespace for a team gate.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

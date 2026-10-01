@@ -171,6 +171,13 @@ The controller reads gates from these places:
 
 Every matching PolicyGate from all three is added to the Graph. `spec.policyNamespaces` can only add namespaces; the org policy namespaces are read whatever it says. A gate from the Pipeline's namespace or from `spec.policyNamespaces` is a team gate, unless it is labelled `kardinal.io/scope: org`. Either way, it can never grant a skip (see [Skip Permissions](#skip-permissions)).
 
+The Graph creates every gate instance in the Pipeline namespace and labels it
+`kardinal.io/gate-template-namespace` with its template's namespace. A gate from an org policy
+namespace reads `metrics.*` from the MetricChecks of that namespace, so the platform team owns
+the MetricChecks its gates use and a team MetricCheck of the same name cannot decide them. Every
+other gate reads the MetricChecks of the Pipeline namespace. An instance created before this
+label existed reads the Pipeline namespace until its Bundle's Graph is applied again.
+
 ## CEL Context
 
 All PolicyGate expressions are evaluated against the following context. All attributes listed are available in the current release; a test evaluates every attribute and example on this page against the controller's real context. Referencing an attribute or map key that does not exist is an evaluation error, and the gate blocks (fail-closed). See the [CEL context reference](reference/cel-context.md) for the full list.
@@ -195,7 +202,7 @@ All PolicyGate expressions are evaluated against the following context. All attr
 
 | Attribute | Type | Description |
 |---|---|---|
-| `metrics.<name>.value` | string | Last value of the `MetricCheck` named `<name>` in the gate's namespace, as a string (`""` after a query error or when the result is stale). Convert with `double(...)` |
+| `metrics.<name>.value` | string | Last value of the `MetricCheck` named `<name>` in the gate's [metrics namespace](#matching) (the org policy namespace for an org gate, the Pipeline namespace otherwise), as a string (`""` after a query error or when the result is stale). Convert with `double(...)` |
 | `metrics.<name>.result` | string | `"Pass"` or `"Fail"`: the MetricCheck's own threshold result. `"Stale"` when the result is stale |
 | `metrics.<name>.stale` | bool | `true` when the MetricCheck's result has not been refreshed in time: its `status.validUntil` is unset or has passed |
 | `bundle.upstreamSoakMinutes` | int | Soak minutes of the environment(s) directly upstream of the gated environment. With several direct upstreams (fan-in) it is the minimum. An upstream that is not Verified counts as 0. A root environment gets 0. |
@@ -474,8 +481,8 @@ PolicyGates are re-evaluated when any of the following occurs:
    re-evaluation. The minimum is `10s`: a smaller value is raised to `10s`.
 
 3. **MetricCheck result change** — When a `MetricCheck`'s result or value changes, or an
-   evaluation refreshes a [stale result](#stale-metric-results), the gates in the same namespace
-   whose expression reads `metrics` are re-evaluated at once.
+   evaluation refreshes a [stale result](#stale-metric-results), the gates that read that
+   namespace's MetricChecks and whose expression reads `metrics` are re-evaluated at once.
 
 4. **ChangeWindow change** — When a `ChangeWindow` opens, closes or is edited, the gates whose
    expression reads `changewindow` are re-evaluated at once.

@@ -123,7 +123,7 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 
 `kardinal.io/v1alpha1`
 
-MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the same namespace as the PolicyGate that uses it.
+MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the namespace of the PolicyGate template that uses it: an org policy namespace for an org gate, the Pipeline namespace for a team gate.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
