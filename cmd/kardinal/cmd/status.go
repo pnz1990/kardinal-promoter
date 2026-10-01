@@ -45,18 +45,21 @@ any Degraded pipelines, and the bundle count (active = Available or Promoting).
 When called with a pipeline name: shows in-flight promotion details for that
 pipeline — the current bundle per environment (the newest bundle that is not
 Superseded and has a PromotionStep there, or a gate instance there and has not
-failed; see kardinal explain), its PromotionSteps
-(one row per region, active steps marked, with the Bundle each row belongs
-to), the Bundle deployed in every environment (the one whose change landed
-there last, as kardinal rollback judges it, with its image tags or config
-commit; "none" when no change has landed yet), the PolicyGates holding it back
-(with CEL expression and current reason), and open PR URLs. A gate is listed
-as blocking only while it holds the bundle back: it is not ready and either
-every upstream environment is Verified for that bundle and the bundle has no
-PromotionStep in the gate's environment yet, or the bundle's Pending
-PromotionStep there waits on it. A gate of an environment
-the bundle has not reached yet is not listed. This is the first command to
-run when a promotion is stuck.
+failed; see kardinal explain), its PromotionSteps (one row per environment it
+has a step in, ▶ marking a step that is Promoting, WaitingForMerge or
+HealthChecking, with the Bundle each row belongs to, the step it is on, and the
+last 40 characters of the step's PR URL, open or merged; REGION is - unless the
+step was created by a Graph built before spec.regions was removed), the Bundle
+deployed in every environment (the one whose change landed there last, as
+kardinal rollback judges it, with its image tags or config commit; "none" when
+no change has landed yet), and the PolicyGates holding it back (with their CEL
+expression cut to 40 characters, current reason and when each was last
+checked). A gate is listed as blocking only while it holds the bundle back: it
+is not ready and either every upstream environment is Verified for that bundle
+and the bundle has no PromotionStep in the gate's environment yet, or the
+bundle's Pending PromotionStep there waits on it. A gate of an environment the
+bundle has not reached yet is not listed. This is the first command to run
+when a promotion is stuck.
 
 Examples:
   # Cluster-level summary
