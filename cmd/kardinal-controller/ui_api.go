@@ -99,13 +99,15 @@ type uiBundleResponse struct {
 	Pipeline   string                     `json:"pipeline"`
 	CreatedAt  string                     `json:"createdAt,omitempty"` // ISO 8601 creation time for timeline sorting (#337)
 	Provenance *v1alpha1.BundleProvenance `json:"provenance,omitempty"`
-	// #503: Per-environment statuses for the bundle timeline view.
+	// #503: Per-environment statuses. The bundle comparison shows them and the
+	// release metrics bar reads HealthCheckedAt; the timeline does not.
 	Environments []uiBundleEnvStatus `json:"environments,omitempty"`
 	// #563: Container images in this Bundle — used by NodeDetail diff preview.
 	Images []v1alpha1.ImageRef `json:"images,omitempty"`
 }
 
-// uiBundleEnvStatus is the per-environment status summary for the timeline (#503).
+// uiBundleEnvStatus is the per-environment status summary of a Bundle (#503).
+// The UI reads Name, Phase and HealthCheckedAt; nothing in it reads PRURL.
 type uiBundleEnvStatus struct {
 	Name  string `json:"name"`
 	Phase string `json:"phase,omitempty"`
@@ -481,7 +483,7 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 	})
 	result := make([]uiBundleResponse, 0, len(items))
 	for _, b := range items {
-		// #503: Per-environment statuses for the timeline view.
+		// #503: Per-environment statuses.
 		envStatuses := make([]uiBundleEnvStatus, 0, len(b.Status.Environments))
 		for _, env := range b.Status.Environments {
 			es := uiBundleEnvStatus{

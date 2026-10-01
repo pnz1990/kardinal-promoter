@@ -43,6 +43,23 @@ describe('PipelineList — empty and loading states', () => {
     expect(screen.getByText(/Error: API unavailable/i)).toBeInTheDocument()
   })
 
+  // A failed poll keeps the last pipelines App read: the list, its filter and
+  // the / shortcut stay, and the error shows above the list.
+  it('keeps the list and the filter, and shows the error, when a read fails after one worked', async () => {
+    const user = userEvent.setup()
+    const ref = createRef<HTMLInputElement>()
+    const pipelines = [makePipeline({ name: 'alpha' }), makePipeline({ name: 'beta' })]
+    const { rerender } = render(<PipelineList pipelines={pipelines} onSelect={vi.fn()} searchInputRef={ref} />)
+    await user.type(screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' }), 'alp')
+
+    rerender(<PipelineList pipelines={pipelines} error="API error 503: unavailable" onSelect={vi.fn()} searchInputRef={ref} />)
+    expect(screen.getByRole('alert')).toHaveTextContent(/^Error: API error 503: unavailable$/)
+    const filter = screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })
+    expect(ref.current).toBe(filter)
+    expect(filter).toHaveValue('alp')
+    expect(screen.getByRole('list', { name: 'Pipelines' })).toHaveTextContent('alpha')
+  })
+
   it('renders empty state when pipelines=[]', () => {
     render(<PipelineList pipelines={[]} onSelect={vi.fn()} />)
     expect(screen.getByText(/No pipelines found/i)).toBeInTheDocument()

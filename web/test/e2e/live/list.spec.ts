@@ -40,6 +40,11 @@ function lastPipelineList(page: Page): () => ListedPipeline[] | undefined {
 
 const inFlight = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'RollingBack'])
 
+/** pipelines is "1 pipeline" or "N pipelines", as the fleet bar badges say. */
+function pipelines(n: number, word = 'pipeline'): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
 test('the sidebar shows each pipeline’s state, and the filters narrow it', async ({ page }) => {
   const listed = lastPipelineList(page)
   await page.goto(`${base}/ui/`)
@@ -86,17 +91,17 @@ test('the sidebar shows each pipeline’s state, and the filters narrow it', asy
     const healthy = count(p => !p.paused && (p.blockerCount ?? 0) === 0 && (p.failedStepCount ?? 0) === 0)
     const promoting = count(p => Object.values(p.environmentStates ?? {}).some(s => inFlight.has(s)))
     await expect(fleet.getByRole('button', { name: 'Show all pipelines' })).toHaveText(`Pipelines${list!.length}`, { timeout: 500 })
-    await expect(fleet.getByRole('button', { name: `${healthy} healthy pipelines` })).toBeVisible({ timeout: 500 })
-    await expect(fleet.getByRole('button', { name: `${blocked} blocked pipelines` })).toBeVisible({ timeout: 500 })
-    await expect(fleet.getByRole('button', { name: `${ciRed} pipelines with CI failures` })).toBeVisible({ timeout: 500 })
-    await expect(fleet.getByRole('button', { name: `${promoting} pipelines currently promoting` })).toBeVisible({ timeout: 500 })
+    await expect(fleet.getByRole('button', { name: pipelines(healthy, 'healthy pipeline'), exact: true })).toBeVisible({ timeout: 500 })
+    await expect(fleet.getByRole('button', { name: pipelines(blocked, 'blocked pipeline'), exact: true })).toBeVisible({ timeout: 500 })
+    await expect(fleet.getByRole('button', { name: `${pipelines(ciRed)} with CI failures`, exact: true })).toBeVisible({ timeout: 500 })
+    await expect(fleet.getByRole('button', { name: `${pipelines(promoting)} currently promoting`, exact: true })).toBeVisible({ timeout: 500 })
   }).toPass({ timeout: 30_000 })
 
   // Each badge filters the list, and a second click clears the filter.
   const all = fleet.getByRole('button', { name: 'Show all pipelines' })
-  const blockedBadge = fleet.getByRole('button', { name: /^\d+ blocked pipelines$/ })
-  const ciRedBadge = fleet.getByRole('button', { name: /^\d+ pipelines with CI failures$/ })
-  const healthyBadge = fleet.getByRole('button', { name: /^\d+ healthy pipelines$/ })
+  const blockedBadge = fleet.getByRole('button', { name: /^\d+ blocked pipelines?$/ })
+  const ciRedBadge = fleet.getByRole('button', { name: /^\d+ pipelines? with CI failures$/ })
+  const healthyBadge = fleet.getByRole('button', { name: /^\d+ healthy pipelines?$/ })
   await expect(all).toHaveAttribute('aria-pressed', 'true')
 
   await blockedBadge.click()

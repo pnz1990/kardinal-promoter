@@ -281,6 +281,103 @@ describe('App pipeline selection', () => {
   })
 })
 
+// #338: Shift-click picks the bundle to compare; the timeline then offers
+// Compare (opens the comparison, bundle= in the URL) and clear.
+describe('App bundle comparison', () => {
+  const dialog = () => screen.queryByRole('dialog', { name: 'Bundle comparison' })
+  const oldChip = () => screen.getByTitle(/^b-old: Superseded/)
+
+  it('leaves Compare and clear reachable after a shift-click, and Compare opens the comparison', async () => {
+    render(<App />)
+    await flush()
+    fireEvent.click(oldChip(), { shiftKey: true })
+    await flush()
+    expect(oldChip().className).toContain('bundle-chip--compare')
+    expect(dialog()).not.toBeInTheDocument()
+    expect(window.location.hash).not.toContain('bundle=')
+
+    // Compare opens the comparison and moves focus into it.
+    const compare = screen.getByRole('button', { name: 'Compare ↔' })
+    compare.focus()
+    fireEvent.click(compare)
+    await flush()
+    expect(dialog()).toBeInTheDocument()
+    expect(dialog()).toContainElement(document.activeElement as HTMLElement)
+    expect(window.location.hash).toContain('bundle=b-old')
+
+    // Closing it returns focus to Compare, which opens it again.
+    fireEvent.click(within(dialog()!).getByRole('button', { name: 'Close' }))
+    await flush()
+    expect(dialog()).not.toBeInTheDocument()
+    expect(window.location.hash).not.toContain('bundle=')
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Compare ↔' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Compare ↔' }))
+    await flush()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await flush()
+    expect(dialog()).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Compare ↔' }))
+
+    // clear drops the comparison bundle.
+    fireEvent.click(screen.getByRole('button', { name: '× clear' }))
+    await flush()
+    expect(oldChip().className).not.toContain('bundle-chip--compare')
+    expect(screen.queryByRole('button', { name: 'Compare ↔' })).not.toBeInTheDocument()
+    expect(screen.getByText('Shift-click to compare')).toBeInTheDocument()
+  })
+
+  it('opens the comparison from a bundle= link', async () => {
+    window.history.replaceState(null, '', '/ui/#pipeline=app&bundle=b-old')
+    render(<App />)
+    await flush()
+    expect(dialog()).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await flush()
+    expect(dialog()).not.toBeInTheDocument()
+    expect(window.location.hash).not.toContain('bundle=')
+    // The linked bundle stays picked, as after Compare.
+    expect(oldChip().className).toContain('bundle-chip--compare')
+    expect(screen.getByRole('button', { name: 'Compare ↔' })).toBeInTheDocument()
+  })
+
+  // The shown bundle is Bundle A: it is never also Bundle B.
+  it('does not compare the shown bundle with itself', async () => {
+    const newChip = () => screen.getByTitle(/^b-new: Promoting/)
+    const picked = () => screen.queryAllByTitle(/^b-(new|old): /).filter(c => c.className.includes('bundle-chip--compare'))
+    render(<App />)
+    await flush()
+
+    // A shift-click on the shown bundle does nothing.
+    fireEvent.click(newChip(), { shiftKey: true })
+    await flush()
+    expect(picked()).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: '× clear' })).not.toBeInTheDocument()
+    expect(screen.getByText('Shift-click to compare')).toBeInTheDocument()
+    expect(newChip().getAttribute('title')).toBe('b-new: Promoting')
+
+    // Showing Bundle B makes it Bundle A, and drops it as B.
+    fireEvent.click(oldChip(), { shiftKey: true })
+    await flush()
+    expect(picked()).toEqual([oldChip()])
+    fireEvent.click(oldChip())
+    await flush()
+    expect(oldChip().className).toContain('bundle-chip--selected')
+    expect(picked()).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: '× clear' })).not.toBeInTheDocument()
+    fireEvent.click(newChip())
+    await flush()
+    expect(picked()).toHaveLength(0)
+  })
+
+  it('does not open a comparison of the shown bundle with itself from a link', async () => {
+    window.history.replaceState(null, '', '/ui/#pipeline=app&bundle=b-new')
+    render(<App />)
+    await flush()
+    expect(screen.getByTitle(/^b-new: Promoting/).className).toContain('bundle-chip--selected')
+    expect(dialog()).not.toBeInTheDocument()
+  })
+})
+
 // docs/installation.md: a NodePort without TLS shows a security warning. The
 // API refuses such a client outright unless ui.allowedHosts names the host, so
 // the warning cannot wait for a pipeline view: it heads every view.
@@ -344,6 +441,25 @@ describe('App failed reads', () => {
     expect(screen.queryByText(/Error: Error/)).not.toBeInTheDocument()
   })
 
+  it('keeps the sidebar list while a pipelines poll fails, and drops the error when one works', async () => {
+    h.state.pipelines = [pipeline('app', { activeBundleName: 'b-new' }), pipeline('other')]
+    render(<App />)
+    await flush()
+    const list = () => screen.getByRole('list', { name: 'Pipelines' })
+    expect(within(list()).getByText('other')).toBeInTheDocument()
+
+    h.state.pipelinesError = 'API error 503: Service Unavailable'
+    await flush(5_100)
+    expect(screen.getByText('Error: API error 503: Service Unavailable')).toBeInTheDocument()
+    expect(within(list()).getByText('other')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })).toBeInTheDocument()
+
+    h.state.pipelinesError = undefined
+    await flush(5_100)
+    expect(screen.queryByText(/^Error: /)).not.toBeInTheDocument()
+    expect(within(list()).getByText('other')).toBeInTheDocument()
+  })
+
   it('shows the message of a failed graph read once', async () => {
     h.state.graphError = 'API error 500: Internal Server Error'
     render(<App />)
@@ -359,6 +475,28 @@ describe('App header', () => {
     render(<App />)
     await flush()
     expect(screen.getByAltText('Kardinal')).toHaveAttribute('src', '/ui/logo.png')
+  })
+
+  // #766, docs/changelog.md: the indicator is amber after 15 s and red after
+  // 30 s. A failing API is how data gets that old, so an error does not keep
+  // it amber.
+  it('turns the stale-data indicator red after 30 s, also while the polls fail', async () => {
+    render(<App />)
+    await flush()
+    const indicator = () => screen.getByRole('button', { name: 'Refresh data' }).querySelector<HTMLElement>('span[aria-live="polite"]')!
+    expect(indicator().style.color).toBe('var(--color-text-secondary)')
+
+    h.state.pipelinesError = 'API error 503: Service Unavailable'
+    await flush(5_100)
+    expect(indicator().style.color).toBe('var(--color-warning)')
+    await flush(11_000)
+    expect(indicator().textContent).toMatch(/^⚠ 1\ds ago$/)
+    expect(indicator().style.color).toBe('var(--color-warning)')
+    await flush(15_000)
+    expect(indicator().textContent).toMatch(/^⚠ 3\ds ago$/)
+    expect(indicator().style.color).toBe('var(--color-error)')
+    expect(indicator().style.animation).toContain('stalePulse')
+    expect(indicator()).toHaveAttribute('title', 'Error: API error 503: Service Unavailable')
   })
 })
 

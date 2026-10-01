@@ -137,7 +137,7 @@ The UI work from #462–#468 shipped in v0.5.0–v0.6.0. This is what the UI sho
 ### Currently available
 
 - DAG visualization with per-node health states
-- Bundle timeline: the 10 newest Bundles as chips colored by phase (the selected and comparison Bundles stay visible); click a chip to show that Bundle, Shift-click to compare two
+- Bundle timeline: the 10 newest Bundles as chips colored by phase (the selected and comparison Bundles stay visible); click a chip to show that Bundle, Shift-click another and press Compare to compare the two
 - PolicyGate expression display with CEL highlighting
 - HealthChip status chips
 - Live polling with staleness indicator
@@ -146,7 +146,7 @@ The UI work from #462–#468 shipped in v0.5.0–v0.6.0. This is what the UI sho
 - **Per-stage detail (#463)** — click an environment for the steps the controller runs, their conditions, Kubernetes events, and elapsed time
 - **In-UI actions (#464)** — create a bundle, pause/resume a pipeline, promote an environment whose upstream environments are Verified, roll back a Verified environment. Pause, resume, promote, and roll back ask for confirmation first
 - **Release efficiency metrics bar (#465)** — over the last 10 bundles: mean time from bundle creation to the last environment's health check, rollback rate, deploys to the last environment
-- **Bundle promotion timeline (#466)** — the 10 newest bundles, colored by phase; shift-click a second bundle to compare images, environments, and provenance side by side
+- **Bundle promotion timeline (#466)** — the 10 newest bundles, colored by phase; shift-click a second bundle and press Compare to see images, environments, and provenance side by side
 - **Policy gates (#468)** — a panel with each gate of the bundle on screen, its state, and its CEL expression; click a gate for the highlighted expression, when it was last evaluated, and a syntax check
 
 Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, and gate override history (see `kardinal explain` or `kubectl get policygate <name> -o yaml`).

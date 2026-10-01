@@ -1,8 +1,8 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// UI-TIMELINE-01: the bundle timeline (select, shift-click compare) and the
-// comparison panel. Go test: TestUI_BrowserTimeline
+// UI-TIMELINE-01: the bundle timeline (select, shift-click and Compare) and
+// the comparison panel. Go test: TestUI_BrowserTimeline
 // (test/e2e/live/ui_browser_test.go).
 //
 // podinfo in KARDINAL_UI_NAMESPACE has two Bundles, both promoted to its one
@@ -72,11 +72,12 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   await expect(page.getByText('Bundle History (newest → oldest)')).toBeVisible()
   await expect(page.getByText('Shift-click to compare', { exact: true })).toBeVisible()
 
-  // Newest first, each with its phase; the newest is on screen.
+  // Newest first, each with its phase; the newest is on screen, so only the
+  // other one offers a shift-click.
   await expect(chips(page)).toHaveCount(2)
   for (const [i, b] of [newer, older].entries()) {
     const c = chips(page).nth(i)
-    await expect(c).toHaveAttribute('title', `${b.name}: ${b.phase}\nShift-click to compare`)
+    await expect(c).toHaveAttribute('title', `${b.name}: ${b.phase}${b === newer ? '' : '\nShift-click to compare'}`)
     await expect(c).toHaveAttribute('data-bundle-phase', b.phase)
     await expect(c).toHaveClass(new RegExp(`bundle-chip--${b.phase.toLowerCase()}`))
     await expect(c.locator('.bundle-chip__name')).toHaveText(b.name.split('-').pop()!)
@@ -90,20 +91,49 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   await page.waitForResponse(r => r.url().includes(`/api/v1/ui/pipelines/${PIPELINE}/bundles`) && r.ok())
   await expectShown(page, older, newer)
 
-  // Shift-click the newer one: the comparison opens, the shown Bundle as A.
+  // A shift-click on the Bundle on screen does nothing: it is Bundle A.
+  await chip(page, older).click({ modifiers: ['Shift'] })
+  await expect(chip(page, older)).not.toHaveClass(/bundle-chip--compare/)
+  await expect(page.getByRole('button', { name: '× clear' })).toHaveCount(0)
+  await expect(page.getByText('Shift-click to compare', { exact: true })).toBeVisible()
+
+  // Shift-click the newer one: it becomes Bundle B, and Compare and clear
+  // show. Compare opens the comparison, the shown Bundle as A.
   await expect(comparison(page)).toHaveCount(0)
   await chip(page, newer).click({ modifiers: ['Shift'] })
+  await expect(chip(page, newer)).toHaveClass(/bundle-chip--compare/)
+  await expect(chip(page, newer)).toContainText('⇅B')
+  await expect(comparison(page)).toHaveCount(0)
+  expect(hashParams(page).get('bundle')).toBeNull()
+  const compare = page.getByRole('button', { name: 'Compare ↔' })
+  const clear = page.getByRole('button', { name: '× clear' })
+  await expect(clear).toBeVisible()
+  await compare.click()
   const panel = comparison(page)
   await expect(panel).toBeVisible()
   await expectComparison(panel, older, newer)
-  await expect(chip(page, newer)).toHaveClass(/bundle-chip--compare/)
-  await expect(chip(page, newer)).toContainText('⇅B')
   expect(hashParams(page).get('bundle')).toBe(newer.name)
 
+  // Closing keeps Bundle B and puts focus back on Compare, so the keyboard
+  // opens it again; Esc closes it.
   await panel.getByRole('button', { name: 'Close comparison' }).click()
   await expect(panel).toHaveCount(0)
-  await expect(chip(page, newer)).not.toHaveClass(/bundle-chip--compare/)
   await expect.poll(() => hashParams(page).get('bundle')).toBeNull()
+  await expect(chip(page, newer)).toHaveClass(/bundle-chip--compare/)
+  await expect(compare).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(panel).toBeVisible()
+  await expect(panel.getByRole('button', { name: 'Close comparison' })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(panel).toHaveCount(0)
+  await expect(compare).toBeFocused()
+
+  // clear drops Bundle B.
+  await clear.click()
+  await expect(chip(page, newer)).not.toHaveClass(/bundle-chip--compare/)
+  await expect(compare).toHaveCount(0)
+  await expect(page.getByText('Shift-click to compare', { exact: true })).toBeVisible()
+  expect(hashParams(page).get('bundle')).toBeNull()
   await expectShown(page, older, newer)
 })
 
@@ -116,4 +146,7 @@ test('a link with bundle= opens the comparison with the Bundle on screen', async
   await expect(panel).toHaveCount(0)
   await expect.poll(() => hashParams(page).get('bundle')).toBeNull()
   await expectShown(page, newer, older)
+  // The linked Bundle stays Bundle B, as after Compare.
+  await expect(chip(page, older)).toHaveClass(/bundle-chip--compare/)
+  await expect(page.getByRole('button', { name: 'Compare ↔' })).toBeVisible()
 })
