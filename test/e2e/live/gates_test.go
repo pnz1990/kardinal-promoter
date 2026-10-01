@@ -1058,7 +1058,7 @@ func TestGate_InvalidGatesRejected(t *testing.T) {
 		"empty-selector": {},
 	} {
 		g := framework.Gate(ns, name, "prod", "true", "")
-		g.Spec.Selector = sel
+		g.Spec.Selector = sel //nolint:staticcheck // the test checks the CRD refuses the deprecated field
 		err := e.Client.Create(ctx, g)
 		require.Error(t, err, name)
 		assert.True(t, apierrors.IsInvalid(err), "%s: %v", name, err)
