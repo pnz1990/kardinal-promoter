@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -330,7 +331,8 @@ func (r *Release) AllLogs(t *testing.T) string {
 	return b.String()
 }
 
-// LogLine is one controller log line and when the test read it.
+// LogLine is one controller log line. At is when the container runtime wrote
+// it (the kubelet's log timestamp; kind nodes share the host's clock).
 type LogLine struct {
 	At   time.Time
 	Text string
@@ -341,6 +343,10 @@ type LogStream struct {
 	mu    sync.Mutex
 	lines []LogLine
 	done  chan struct{}
+	// last is the latest timestamp read, and atLast how many lines had it:
+	// what a reconnected stream skips.
+	last   time.Time
+	atLast int
 }
 
 // Lines returns the lines read so far.
@@ -360,35 +366,133 @@ func (s *LogStream) Find(substr string) (LogLine, bool) {
 	return LogLine{}, false
 }
 
-// Done is closed when the log ends: the container exited.
+// Done is closed when the log ends: the container exited or restarted, the
+// Pod is gone, or the test ended.
 func (s *LogStream) Done() <-chan struct{} { return s.done }
 
 // FollowLogs streams pod's controller log from its start until the container
-// exits or the test ends, timestamping each line as it arrives.
+// exits or the test ends. The kubelet can end a follow stream while the
+// container still runs (a failed container status check or file watch), so
+// when the stream ends and the same container still runs, FollowLogs
+// reconnects from the last line it read.
 func (r *Release) FollowLogs(t *testing.T, pod string) *LogStream {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	rc, err := r.e.Kube.CoreV1().Pods(r.Namespace).GetLogs(pod, &corev1.PodLogOptions{
-		Container: "controller", Follow: true,
-	}).Stream(ctx)
+	pods := r.e.Kube.CoreV1().Pods(r.Namespace)
+	p, err := pods.Get(ctx, pod, metav1.GetOptions{})
+	if err != nil {
+		cancel()
+		t.Fatalf("get pod %s/%s: %v", r.Namespace, pod, err)
+	}
+	container := controllerContainerID(p)
+	open := func(since time.Time) (io.ReadCloser, error) {
+		opts := &corev1.PodLogOptions{Container: "controller", Follow: true, Timestamps: true}
+		if !since.IsZero() {
+			// SinceTime has second precision; follow skips what it read.
+			st := metav1.NewTime(since)
+			opts.SinceTime = &st
+		}
+		return pods.GetLogs(pod, opts).Stream(ctx)
+	}
+	rc, err := open(time.Time{})
 	if err != nil {
 		cancel()
 		t.Fatalf("follow logs of %s/%s: %v", r.Namespace, pod, err)
 	}
-	s := &LogStream{done: make(chan struct{})}
-	go func() {
-		defer close(s.done)
-		defer func() { _ = rc.Close() }()
-		sc := bufio.NewScanner(rc)
-		sc.Buffer(make([]byte, 64*1024), 1024*1024)
-		for sc.Scan() {
-			s.mu.Lock()
-			s.lines = append(s.lines, LogLine{At: time.Now(), Text: sc.Text()})
-			s.mu.Unlock()
+	running := func() bool {
+		p, err := pods.Get(ctx, pod, metav1.GetOptions{})
+		if err != nil {
+			// The Pod is gone; on another error, try again.
+			return !apierrors.IsNotFound(err)
 		}
-	}()
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.Name == "controller" {
+				return cs.ContainerID == container && cs.State.Running != nil
+			}
+		}
+		return false
+	}
+	s := &LogStream{done: make(chan struct{})}
+	go s.follow(ctx, rc, open, running)
 	return s
+}
+
+// controllerContainerID is the ID of pod's controller container.
+func controllerContainerID(pod *corev1.Pod) string {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == "controller" {
+			return cs.ContainerID
+		}
+	}
+	return ""
+}
+
+// follow reads rc, then reopens the log after the last line read for as
+// long as running reports the container runs, and closes s.done when it
+// stops or ctx ends.
+func (s *LogStream) follow(ctx context.Context, rc io.ReadCloser, open func(since time.Time) (io.ReadCloser, error), running func() bool) {
+	defer close(s.done)
+	for {
+		if rc != nil {
+			s.read(rc)
+			_ = rc.Close()
+		}
+		if ctx.Err() != nil || !running() {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+		s.mu.Lock()
+		since := s.last
+		s.mu.Unlock()
+		var err error
+		if rc, err = open(since); err != nil {
+			rc = nil
+		}
+	}
+}
+
+// read appends rc's lines ("<RFC3339Nano timestamp> <text>"), skipping
+// those an earlier stream read: the ones before s.last and the first
+// s.atLast at s.last.
+func (s *LogStream) read(rc io.Reader) {
+	s.mu.Lock()
+	from, skip := s.last, s.atLast
+	s.mu.Unlock()
+	resuming := !from.IsZero()
+	sc := bufio.NewScanner(rc)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		at, text := time.Now(), sc.Text()
+		if ts, rest, ok := strings.Cut(text, " "); ok {
+			if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+				at, text = parsed, rest
+			}
+		}
+		if resuming {
+			if at.Before(from) {
+				continue
+			}
+			if at.Equal(from) && skip > 0 {
+				skip--
+				continue
+			}
+			resuming = false
+		}
+		s.mu.Lock()
+		switch {
+		case at.After(s.last):
+			s.last, s.atLast = at, 1
+		case at.Equal(s.last):
+			s.atLast++
+		}
+		s.lines = append(s.lines, LogLine{At: at, Text: text})
+		s.mu.Unlock()
+	}
 }
 
 // dumpLogs writes every release Pod's log and status to the artifacts

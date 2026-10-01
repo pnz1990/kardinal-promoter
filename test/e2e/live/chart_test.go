@@ -996,13 +996,14 @@ func TestChart_WebhookSecret(t *testing.T) {
 	// The controller also polls PRs, so either path may mark the PRStatus
 	// merged first; the webhook's own log line shows it accepted the event.
 	framework.Eventually(t, time.Minute, "the signed merge event is accepted", func(context.Context) (bool, string) {
-		for _, l := range logs.Lines() {
+		lines := logs.Lines()
+		for _, l := range lines {
 			if strings.Contains(l.Text, "webhook received") && strings.Contains(l.Text, `"merged":true`) &&
 				strings.Contains(l.Text, fmt.Sprintf(`"pr":%d`, pr.Number)) {
 				return true, ""
 			}
 		}
-		return false, "no accepted merge event logged yet"
+		return false, fmt.Sprintf("no accepted merge event in the %d log lines read", len(lines))
 	})
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 
