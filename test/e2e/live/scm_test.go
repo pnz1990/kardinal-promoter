@@ -403,9 +403,11 @@ func prOpenWithoutWebhook(t *testing.T, e *framework.Env) (*app, string, gitserv
 
 // scmClosesPRs checks the two ways kardinal closes its PR: a newer Bundle
 // supersedes the older one's open PR, and waitForMergeTimeout fails the step
-// and closes its PR. Each PR gets one comment saying why, and neither can be
-// merged later.
-func scmClosesPRs(t *testing.T, e *framework.Env) {
+// and closes its PR. Each PR is closed unmerged with one comment saying why.
+// When the git server refuses to merge a closed PR (refusesClosedMerge),
+// neither can be merged later; GitHub's API merges a closed PR, so there the
+// test does not try.
+func scmClosesPRs(t *testing.T, e *framework.Env, refusesClosedMerge bool) {
 	t.Helper()
 	a := newArgoApp(t, e, "prod")
 	p := a.pipeline(map[string]string{"prod": "pr-review"})
@@ -427,9 +429,12 @@ func scmClosesPRs(t *testing.T, e *framework.Env) {
 	oneComment(t, a, pr2.Number, "kardinal closed this PR: it was not merged within waitForMergeTimeout (1m30s)")
 
 	for _, n := range []int{pr1.Number, pr2.Number} {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		assert.Error(t, e.Git.MergePR(ctx, a.repo, n), "closed PR #%d cannot be merged", n)
-		cancel()
+		if refusesClosedMerge {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			assert.Error(t, e.Git.MergePR(ctx, a.repo, n), "closed PR #%d cannot be merged", n)
+			cancel()
+		}
+		e.WaitPRState(t, a.repo, n, "closed", 30*time.Second) // not merged
 	}
 	assertEnvAt(t, a, "prod", fixtures.V1)
 }

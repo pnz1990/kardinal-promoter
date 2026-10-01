@@ -77,7 +77,7 @@ func TestGitea_ClosesPRs(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireKind(t, e, "gitea")
-	scmClosesPRs(t, e)
+	scmClosesPRs(t, e, true)
 }
 
 // TestGitea_Approvals checks that Gitea reviews reach bundle.pr.

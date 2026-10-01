@@ -236,7 +236,7 @@ func TestForgejo_ClosesPRs(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireKind(t, e, "forgejo")
-	scmClosesPRs(t, e)
+	scmClosesPRs(t, e, true)
 }
 
 // TestForgejo_Approvals checks that Forgejo reviews reach bundle.pr.

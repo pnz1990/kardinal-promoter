@@ -88,7 +88,7 @@ func TestGitLab_ClosesPRs(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireKind(t, e, "gitlab")
-	scmClosesPRs(t, e)
+	scmClosesPRs(t, e, true)
 }
 
 // TestGitLab_Approvals checks that GitLab MR approvals reach bundle.pr.
