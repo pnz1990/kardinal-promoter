@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -92,9 +93,17 @@ func (r *Reconciler) syncPRFinalizer(ctx context.Context, ps *v1alpha1.Promotion
 // the finalizer. A failed close is retried with backoff until closePRDeadline
 // after the delete request; then the finalizer is removed anyway and a Warning
 // Event and an error log say the PR must be closed by hand.
-func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(ps, FinalizerClosePR) {
+//
+// The step is read again from the API server first: the cached step can still
+// hold the finalizer the previous reconcile removed, and closing from it
+// closed and commented on the PR a second time.
+func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cached *v1alpha1.PromotionStep) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(cached, FinalizerClosePR) {
 		return ctrl.Result{}, nil
+	}
+	ps, err := r.readStep(ctx, client.ObjectKeyFromObject(cached))
+	if err != nil || ps == nil || !controllerutil.ContainsFinalizer(ps, FinalizerClosePR) {
+		return ctrl.Result{}, err
 	}
 	if holdsPR(ps.Status.State) {
 		if err := r.closeStepPR(ctx, ps, r.deleteReason(ctx, ps)); err != nil {
@@ -113,15 +122,51 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, ps *
 			kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, "ClosePRFailed", "Delete", note)
 		}
 	}
-	base := ps.DeepCopy()
-	controllerutil.RemoveFinalizer(ps, FinalizerClosePR)
-	if err := r.Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+	return ctrl.Result{}, r.removePRFinalizer(ctx, ps)
+}
+
+// removePRFinalizer removes FinalizerClosePR from the deleted step ps. A
+// conflict is retried at once against the step read again from the API server,
+// rather than by a new reconcile, which would close the PR again.
+func (r *Reconciler) removePRFinalizer(ctx context.Context, ps *v1alpha1.PromotionStep) error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		base := ps.DeepCopy()
+		controllerutil.RemoveFinalizer(ps, FinalizerClosePR)
+		err := r.Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		if !apierrors.IsConflict(err) {
+			return client.IgnoreNotFound(err)
 		}
-		return ctrl.Result{}, fmt.Errorf("remove finalizer %s: %w", FinalizerClosePR, err)
+		fresh, rerr := r.readStep(ctx, client.ObjectKeyFromObject(ps))
+		if rerr != nil {
+			return rerr
+		}
+		if fresh == nil || !controllerutil.ContainsFinalizer(fresh, FinalizerClosePR) {
+			return nil
+		}
+		*ps = *fresh
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("remove finalizer %s: %w", FinalizerClosePR, err)
 	}
-	return ctrl.Result{}, nil
+	return nil
+}
+
+// readStep reads the step key from the API server (APIReader, or Client when
+// it is nil). A step that is gone is nil.
+func (r *Reconciler) readStep(ctx context.Context, key client.ObjectKey) (*v1alpha1.PromotionStep, error) {
+	var reader client.Reader = r.Client
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	var ps v1alpha1.PromotionStep
+	if err := reader.Get(ctx, key, &ps); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get promotionstep %s: %w", key, err)
+	}
+	return &ps, nil
 }
 
 // deleteReason is the reason the PR comment gives for closing it: the Bundle

@@ -404,6 +404,7 @@ func main() {
 
 	if err := (&psreconciler.Reconciler{
 		Client:         mgr.GetClient(),
+		APIReader:      mgr.GetAPIReader(),
 		SCM:            scmProvider,
 		GitClient:      gitClient,
 		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),

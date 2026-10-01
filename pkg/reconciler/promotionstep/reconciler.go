@@ -125,6 +125,12 @@ const (
 type Reconciler struct {
 	client.Client
 
+	// APIReader reads straight from the API server (mgr.GetAPIReader()). A
+	// deleted step is read through it before its PR is closed, because the
+	// informer cache can lag the finalizer removal of the previous reconcile
+	// (handleDeleted). When nil, Client is used (tests).
+	APIReader client.Reader
+
 	// SCM is the SCM provider for PR operations.
 	SCM scm.SCMProvider
 

@@ -17,6 +17,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
@@ -241,6 +243,64 @@ func TestPRFinalizer_DeleteClosesPR(t *testing.T) {
 			default:
 				assert.Empty(t, tt.wantEvent, "no event emitted")
 			}
+		})
+	}
+}
+
+// TestPRFinalizer_DeleteClosesPROnce covers B40: the PR of a deleted step is
+// closed and commented on once, when the informer cache still shows the
+// finalizer the first reconcile removed, and when removing the finalizer hits
+// a conflict.
+func TestPRFinalizer_DeleteClosesPROnce(t *testing.T) {
+	tests := []struct {
+		name      string
+		conflicts int // finalizer patches that fail with a Conflict first
+		stale     bool
+	}{
+		{name: "a second reconcile reads the step from a lagging cache", stale: true},
+		{name: "removing the finalizer conflicts", conflicts: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			step := prStep("WaitingForMerge", 5)
+			step.Finalizers = []string{promotionstep.FinalizerClosePR}
+			deleted := metav1.NewTime(time.Now().Add(-time.Second))
+			step.DeletionTimestamp = &deleted
+			api := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}).
+				WithObjects(step, openPRStatus("prs-step", "test/repo", 5), makePipeline("nginx-demo")).Build()
+			stale := step.DeepCopy()
+			conflicts := tt.conflicts
+			cache := interceptor.NewClient(api, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if ps, ok := obj.(*v1alpha1.PromotionStep); ok && tt.stale && key.Name == "step" {
+						stale.DeepCopyInto(ps)
+						return nil
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+					if _, ok := obj.(*v1alpha1.PromotionStep); ok && conflicts > 0 {
+						conflicts--
+						return apierrors.NewConflict(v1alpha1.GroupVersion.WithResource("promotionsteps").GroupResource(),
+							obj.GetName(), errors.New("the object has been modified"))
+					}
+					return c.Patch(ctx, obj, p, opts...)
+				},
+			})
+			m := &mockSCM{}
+			r := &promotionstep.Reconciler{Client: cache, APIReader: api, SCM: m, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+			for range 2 {
+				_, err := r.Reconcile(context.Background(), reqFor("step"))
+				require.NoError(t, err)
+			}
+			assert.Equal(t, []string{"test/repo#5"}, m.closed, "the PR is closed once")
+			assert.Len(t, m.comments, 1, "the PR is commented on once")
+			var gone v1alpha1.PromotionStep
+			assert.True(t, apierrors.IsNotFound(api.Get(context.Background(), client.ObjectKeyFromObject(step), &gone)),
+				"the step is gone")
 		})
 	}
 }
