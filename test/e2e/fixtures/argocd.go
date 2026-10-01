@@ -45,10 +45,11 @@ func MarkerExists(ns, name string) string {
 // PostSync; a Job that exits non-zero fails the sync operation.
 //
 // Argo CD deletes the Job as soon as it succeeds, so the next sync creates a
-// new one. Leaving the completed Job for the next sync to delete and recreate
-// under the same name is racy: Argo CD can read the old Job's Complete status
-// and mark the operation Succeeded before the new Job runs (seen on Argo CD 3
-// in TestHealth_ArgoFailures).
+// new one. With BeforeHookCreation alone, the completed Job stays for the next
+// sync to delete and recreate under the same name, and Argo CD v3.5.3 marks
+// that sync Succeeded from the old Job's Complete status: in 4 of 4 tries
+// with a PostSync hook that fails on V2, the V2 operation was Succeeded and
+// the step Verified while the new Job still ran, and once after it failed.
 func WithHook(files map[string][]byte, env, name, phase, script string) {
 	kust := Path(env) + "/kustomization.yaml"
 	files[kust] = []byte(strings.Replace(string(files[kust]), "  - service.yaml\n",
