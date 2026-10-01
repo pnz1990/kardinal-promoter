@@ -7,7 +7,7 @@ In kardinal-promoter, rollback is not a special operation. It is a forward promo
 1. `kardinal rollback <pipeline> --env <environment>` picks the target: the most recent Bundle, other than the one deployed in that environment now, that was Verified there and deploys different artifacts. A Bundle that an earlier rollback in that environment rolled back from is skipped, so after `v2` was rolled back to `v1`, the next rollback does not return to `v2`. The UI Rollback button, `onHealthFailure: rollback` and RollbackPolicy use the same selection.
 2. It creates a new Bundle that copies the target's `spec.images` and `spec.configRef`, with `spec.provenance.rollbackOf` set to the target, `spec.intent.targetEnvironment` set to the environment, the label `kardinal.io/rollback: "true"` and the annotations `kardinal.io/rollback-from: <bundle deployed now>` and `kardinal.io/requested-by: <who ran the rollback>`. The rest of `spec.provenance` is the target's, so its author is the author of the restored build, not the person who rolled back. It also puts back what the deployed Bundle changed that the target does not name (see [Images the target does not name](#images-the-target-does-not-name)).
 3. This Bundle runs through the normal promotion flow: Graph generation, PolicyGate evaluation, Git write, PR creation (for pr-review environments), health verification. Like any Bundle with `intent.targetEnvironment`, it is promoted through every environment upstream of the target first (see [Multi-Environment Rollback](#multi-environment-rollback)).
-4. The PR title is `[kardinal] Rollback <environment> to <rollback bundle> (restores <target>)`, where `<target>` is the version the rollback deploys: the image tag (for example `(restores 1.28.0)`), `<image>:<tag>` for each of several images, or `config <commit>` for a config Bundle. It is the target Bundle's name when the Bundle has no images or config commit. The PR body says which Bundle and version it replaces, which it restores, and who rolled back (see [PR Evidence](pr-evidence.md)). The PR is labeled with `kardinal/rollback` in addition to `kardinal` and `kardinal/promotion`, so filter on `kardinal/rollback` to find rollback PRs. Bitbucket Cloud has no PR labels: there, find rollback PRs by their `[kardinal] Rollback` title (see [SCM providers](scm-providers.md)).
+4. The PR title is `[kardinal] Rollback <environment> to <rollback bundle> (restores <target>)`, where `<target>` is the version the rollback deploys: the image tag (for example `(restores 1.28.0)`), `<image>:<tag>` for each of several images, `config <commit>` for a config Bundle, or both for a mixed Bundle (`(restores 1.28.0 with config 0123abc)`). It is the target Bundle's name when the Bundle has no images or config commit. The PR body says which Bundle and version it replaces, which it restores, and who rolled back (see [PR Evidence](pr-evidence.md)). The PR is labeled with `kardinal/rollback` in addition to `kardinal` and `kardinal/promotion`, so filter on `kardinal/rollback` to find rollback PRs. Bitbucket Cloud has no PR labels: there, find rollback PRs by their `[kardinal] Rollback` title (see [SCM providers](scm-providers.md)).
 
 If there is nothing safe to roll back to (no earlier Verified Bundle, or only ones with the same artifacts as the failing Bundle), the command fails and creates nothing. The failing image is never promoted again.
 
@@ -19,13 +19,39 @@ For example, with `v0 = {a:0, b:0}`, `v1 = {a:1}` and `v2 = {b:2}` all promoted 
 
 If no such Bundle names the image, the rollback is refused, and the error names the image. `onHealthFailure: rollback` then stops the step at `AbortedByAlarm` for a human. Roll back with `--to` a Bundle that names the image, or promote a fixed version.
 
-The same rule applies to config commits. When the deployed Bundle is a config Bundle, the rollback carries the target's config commit, or, if the target has none, the newest earlier Verified one. A rollback Bundle deploys either images or a config commit, never both: `--to` a config Bundle when the deployed Bundle is an image Bundle, or the other way round, is refused. A `mixed` Bundle deploys its config commit and then its images (see [config-only promotions](design/09-config-only-promotions.md)), but rollback treats it like an image Bundle: rolling a deployed mixed Bundle back to an image Bundle restores only the images, and the mixed Bundle's config change stays.
+The same rule applies to config commits. A config Bundle deploys its config commit, and a `mixed` Bundle deploys its config commit and then its images (see [config-only promotions](design/09-config-only-promotions.md)). When the deployed Bundle is a config or mixed Bundle, the rollback carries the target's config commit or, if the target has none, the newest earlier Verified one, from a config or mixed Bundle. So rolling back a mixed Bundle restores both its images and its config commit.
 
-A target that, with the added images, deploys the same artifacts as the deployed Bundle is skipped, and `--to` such a target fails.
+The rollback Bundle has the target's type, with the one exception below, and deploys what that type deploys: images for an image Bundle, the config commit for a config Bundle, both for a mixed Bundle. Without `--to`, the target is a Bundle of the deployed Bundle's type, except when a mixed Bundle is deployed. Then the target can be a Bundle of any type, so the rollback puts back the newest earlier images and config commit, whichever Bundles deployed them. If the target's type cannot deploy everything the mixed Bundle changed, the rollback Bundle is mixed: it carries the target's artifacts and the newest earlier version of the rest, and `spec.provenance.rollbackOf` names the target. For example, with `m1 = {a:1, config c1}`, `v2 = {a:2}` and `m3 = {a:3, config c3}` promoted to prod, rolling back `m3` targets `v2` and deploys the mixed Bundle `{a:2, config c1}`. If `m3` had kept `c1`, the rollback would be the image Bundle `{a:2}`. The automatic rollbacks choose the same way.
+
+A `--to` target that cannot deploy what the deployed Bundle changed is refused, and the error names what it cannot restore:
+
+| Deployed | `--to` an image Bundle | `--to` a config Bundle | `--to` a mixed Bundle |
+|---|---|---|---|
+| image | restores the images | refused | restores the images, and deploys the target's config commit |
+| config | refused | restores the config commit | restores the config commit, and deploys the target's images |
+| mixed | restores the images; refused if the mixed Bundle changed the config commit (its commit is not the newest earlier Verified one) | restores the config commit; refused if the mixed Bundle changed an image (one of its images is not the newest earlier Verified version) | restores both |
+
+A target whose rollback Bundle, with the added images or config commit, would change nothing the environment runs is skipped, and `--to` such a target fails. Only what the rollback Bundle deploys is compared. The environment runs the deployed Bundle's images and config commit and, for what the deployed Bundle does not deploy (an image it does not name, or the config commit under an image Bundle), the newest earlier Verified version. For example, with the mixed Bundle `m1 = {a:2, config c1}` and then the image Bundle `v2 = {a:2}` promoted, `--to m1` is refused: prod already runs `a:2` and `c1`.
 
 `onHealthFailure: rollback` and RollbackPolicy never roll back a Bundle that is itself a rollback. If a rollback fails its health check, the step stops at `AbortedByAlarm` for a human, instead of starting another rollback.
 
 There is no separate rollback subsystem. The same code path handles promotions and rollbacks.
+
+### A config commit that pins images
+
+`config-merge` copies the environment's directory from the config commit over the same directory in the GitOps repo, file by file (see [config-only promotions](design/09-config-only-promotions.md#config-merge-step)). If that directory in the config commit has a kustomization file (`kustomization.yaml`, `kustomization.yml` or `Kustomization`), the copy replaces the GitOps repo's file, and with it the `images:` list where the image steps write each Bundle's tags. The environment then runs the images that the config commit's kustomization file pins, or, if it pins none, the images named in the manifests. This always happens when the config commit comes from the Pipeline's own repository (`configRef.gitRepo` not set): every commit there has the environment's kustomization file, with the images it had at that commit. With `update.strategy: helm`, the same applies to the values file.
+
+The rollback type model does not see this. It assumes a config Bundle deploys only its config commit, and that the images stay those of the newest earlier Bundle that deployed images. What you see:
+
+- The config Bundle's PR or commit changes the `images:` list, and the workload restarts with the pinned images. A config Bundle names no images, so its health check does not check which images run.
+- A rollback to an earlier config commit puts back that commit's pins, so it can change the images too, although it is a config Bundle. Rollback chooses its target from what Bundles deploy, not from the files. So it can skip or refuse a target as changing nothing, or accept `--to` a config Bundle under a mixed Bundle that kept the images, while the files change the images.
+- A mixed Bundle writes its images after the merge, so the images it names win over the pins. Only the images it does not name take the pinned versions.
+
+What to do:
+
+- Keep image pins out of config commits. Leave the kustomization file (or the Helm values file) out of the config repository's environment directory, and put the config in the files it references: manifests, patches, generator inputs. `config-merge` never deletes a file, so the GitOps repo's kustomization file stays. Use a config repository other than the Pipeline's own.
+- Or promote a config change as a mixed Bundle that names every image the environment runs. Its images are written after the merge.
+- If an environment already runs the pinned images, promote a new image Bundle with the images it should run (`kardinal create bundle <pipeline> --image <ref>`). Read the `images:` diff of a config Bundle's PR before you merge it.
 
 ## CLI
 
@@ -118,7 +144,9 @@ kubectl get rollbackpolicy
 kubectl get rollbackpolicy rp-1 -o jsonpath='{.status.conditions[?(@.type=="RollbackRefused")].message}'
 ```
 
-Roll back by hand (see [CLI](#cli)) or fix the policy. The RollbackPolicy is evaluated again when its PromotionSteps or its own spec change; when that evaluation creates the rollback Bundle, the condition becomes `False` with reason `RollbackCreated`.
+Roll back by hand (see [CLI](#cli)) or fix the policy. The RollbackPolicy is evaluated again when its PromotionSteps or its own spec change; when that evaluation creates the rollback Bundle, the condition becomes `False` with reason `RollbackCreated`. When the failures drop below the threshold first, it becomes `False` with reason `BelowThreshold`.
+
+`SHOULDROLLBACK` follows the failures until a rollback Bundle exists: when they drop below the threshold first (the health check passed again after a refusal), it is `false` again and nothing is created. Once the policy has created a rollback Bundle it stays `true`, and the policy does nothing more. That holds also when the controller stopped between creating the Bundle and writing `status.rollbackBundleName`: the next evaluation finds the Bundle and writes it, whatever the failures are then. `THRESHOLD` shows `3` when `spec.failureThreshold` is not set.
 
 ## What Happens in Git
 

@@ -122,6 +122,24 @@ func TestCreateBundle_DryRun_PipelineNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "dry-run", "error must mention dry-run context")
 }
 
+// TestCreateBundle_DryRun_BuildError shows the Graph builder's error with the
+// dry-run context once, not "dry-run: graph build failed: build: ..." (B47).
+func TestCreateBundle_DryRun_BuildError(t *testing.T) {
+	pipe := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{
+			{Name: "prod", DependsOn: []string{"staging"}},
+		}},
+	}
+	c := fake.NewClientBuilder().WithScheme(buildCreateBundleScheme(t)).WithObjects(pipe).Build()
+
+	var buf bytes.Buffer
+	err := createBundleDryRun(&buf, c, "default", "nginx-demo",
+		createBundleOptions{Images: []string{"ghcr.io/org/app:sha-abc123"}, Type: "image"})
+	require.Error(t, err)
+	assert.Equal(t, `dry-run: build: environment "prod" dependsOn unknown environment "staging"`, err.Error())
+}
+
 // TestCreateBundle_DryRun_InvalidImage returns an error for malformed image refs.
 func TestCreateBundle_DryRun_InvalidImage(t *testing.T) {
 	s := buildCreateBundleScheme(t)

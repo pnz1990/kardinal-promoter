@@ -27,7 +27,7 @@ import (
 // refuses) fails at once, and so does a step that reported StepFailed without
 // an error.
 func TestHandleStepError_Classification(t *testing.T) {
-	refused := errors.New("argocd-set-image: update.strategy argocd cannot honour approval: pr-review")
+	refused := errors.New("update.strategy argocd cannot honour approval: pr-review")
 	tests := []struct {
 		name        string
 		err         error
@@ -39,7 +39,7 @@ func TestHandleStepError_Classification(t *testing.T) {
 		wantNoMsg   string
 	}{
 		{name: "step error is retried",
-			err:       fmt.Errorf("step git-push: %w", fmt.Errorf("git-push: %w", context.DeadlineExceeded)),
+			err:       fmt.Errorf("step git-push: %w", fmt.Errorf("git push origin main: %w", context.DeadlineExceeded)),
 			wantState: StatePromoting, wantRetry: 1, wantRequeue: 10 * time.Second, wantMsg: "retrying in 10s (1/5)"},
 		{name: "step error fails once the retries are used up", retryCount: maxStepRetries,
 			err:       fmt.Errorf("step git-push: %w", context.DeadlineExceeded),
@@ -64,7 +64,7 @@ func TestHandleStepError_Classification(t *testing.T) {
 			base := ps.DeepCopy()
 
 			res, err := r.handleStepError(context.Background(), zerolog.Nop(), base, ps,
-				[]string{"git-clone", "argocd-set-image", "git-push"}, nil, tt.err, nil)
+				[]string{"git-clone", "argocd-set-image", "git-push"}, nil, tt.err, nil, gitCredential{})
 			require.NoError(t, err)
 
 			var got v1alpha1.PromotionStep

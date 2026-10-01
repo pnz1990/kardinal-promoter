@@ -24,11 +24,9 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -520,23 +518,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// the step engine (or cleanWorkDir) at another checkout.
 	workDir := r.workDir(ps)
 
-	token := ""
-	// Resolve git token from Pipeline.spec.git.secretRef if configured.
-	if secretRef := pipeline.Spec.Git.SecretRef; secretRef != nil && secretRef.Name != "" {
-		// Always the Pipeline's own namespace: unsupportedConfig has already
-		// refused any other secretRef.namespace (C03-promotionstep-18).
-		ns := pipeline.Namespace
-		var secret corev1.Secret
-		if err := r.Get(ctx, types.NamespacedName{Name: secretRef.Name, Namespace: ns}, &secret); err != nil {
-			log.Warn().Err(err).Str("secret", secretRef.Name).Msg("failed to read git secret — git operations may fail")
-		} else {
-			// A token pasted with a trailing newline breaks every git and
-			// SCM call (C06-scm-health-27).
-			if t := strings.TrimSpace(string(secret.Data["token"])); t != "" {
-				token = t
-			}
-		}
-	}
+	// The git token from Pipeline spec.git.secretRef. A git step that fails
+	// without one says why (B48).
+	cred := r.resolveGitCredential(ctx, log, pipeline)
 
 	state := &steps.StepState{
 		Pipeline:     pipeline.Spec,
@@ -549,7 +533,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		Git: steps.GitConfig{
 			URL:         pipeline.Spec.Git.URL,
 			Branch:      pipeline.Spec.Git.Branch,
-			Token:       token,
+			Token:       cred.token,
 			AuthorName:  "kardinal-promoter",
 			AuthorEmail: "kardinal@kardinal.io",
 		},
@@ -570,14 +554,17 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	ps.Status.Outputs = state.Outputs
 	ps.Status.CurrentStepIndex = nextIdx
 	if nextIdx > prevIdx {
-		ps.Status.RetryCount = 0 // progress resets the retry budget
+		// Progress resets the retry budget.
+		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
 	}
 	if prURL := state.Outputs["prURL"]; prURL != "" {
 		ps.Status.PRURL = prURL
 	}
+	// Every path below writes the status.
+	clearGitCredentialMissing(ps, cred)
 
 	if execErr != nil {
-		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr, nil)
+		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr, nil, cred)
 	}
 	closed := updateStepStatuses(ps, eng.StepNames(), nextIdx, false, "", eng.Timings())
 
@@ -640,7 +627,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// ExecuteFrom reports StepFailed with an error, so this is unreachable
 		// unless a step returns an unknown status.
 		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(),
-			fmt.Errorf("step %d returned status %q: %s", nextIdx, result.Status, result.Message), closed)
+			fmt.Errorf("step %d returned status %q: %s", nextIdx, result.Status, result.Message), closed, cred)
 	}
 }
 
@@ -672,18 +659,53 @@ func prOpenedAt(ps *v1alpha1.PromotionStep) (opened time.Time, ok bool) {
 // so a later merge cannot deliver a change whose step is Failed. closed holds
 // the steps this reconcile already closed; they are observed with the ones
 // closed here once the status patch succeeds.
+//
+// When the remote refuses git-clone or git-push and git has no token (cred),
+// the message names what is missing after the git error, and
+// ConditionGitCredentialMissing turns True with one Warning Event. When the
+// Secret or the secretRef is missing (cred.waitsForSecret), the step is
+// retried with no limit, counted in status.gitCredentialRetries and not in
+// status.retryCount: creating the Secret (or setting spec.git.secretRef) lets
+// it continue at its next retry, and an error after that still gets all
+// maxStepRetries retries (B48). A Secret that could not be read keeps the
+// limit, since creating it does not help.
 func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
-	stepNames []string, timings map[int]steps.StepTiming, execErr error, closed stepObservations) (ctrl.Result, error) {
-	retryable := errors.Unwrap(execErr) != nil && !errors.Is(execErr, steps.ErrPermanent)
+	stepNames []string, timings map[int]steps.StepTiming, execErr error, closed stepObservations,
+	cred gitCredential) (ctrl.Result, error) {
 	idx := ps.Status.CurrentStepIndex
-	if retryable && ps.Status.RetryCount < maxStepRetries {
-		ps.Status.RetryCount++
-		delay := retryDelay(ps.Status.RetryCount)
-		ps.Status.Message = fmt.Sprintf("retrying in %s (%d/%d) after error: %v",
-			delay, ps.Status.RetryCount, maxStepRetries, execErr)
+	retryable := errors.Unwrap(execErr) != nil && !errors.Is(execErr, steps.ErrPermanent)
+	// A git-clone or git-push that the remote refused for lack of
+	// credentials, while the Pipeline gives git none, says which, and keeps
+	// retrying past the limit so that creating the Secret is enough (B48).
+	step, note := "", ""
+	if idx >= 0 && idx < len(stepNames) {
+		step = stepNames[idx]
+		if retryable && isGitAuthError(execErr) {
+			note = cred.note(step)
+		}
+	}
+	emitCredential, waitForSecret := false, false
+	if note != "" {
+		execErr = fmt.Errorf("%w (%s)", execErr, note)
+		emitCredential = markGitCredentialMissing(ps, cred.reason, note)
+		waitForSecret = cred.waitsForSecret()
+	}
+	if retryable && (waitForSecret || ps.Status.RetryCount < maxStepRetries) {
+		var count string
+		if waitForSecret {
+			ps.Status.GitCredentialRetries++
+			count = fmt.Sprintf("%d, no limit while git has no credentials", ps.Status.GitCredentialRetries)
+		} else {
+			ps.Status.RetryCount++
+			count = fmt.Sprintf("%d/%d", ps.Status.RetryCount, maxStepRetries)
+		}
+		// Both kinds of retry back off together.
+		delay := retryDelay(ps.Status.RetryCount + ps.Status.GitCredentialRetries)
+		ps.Status.Message = fmt.Sprintf("retrying in %s (%s) after error: %v", delay, count, execErr)
 		closed = append(closed, updateStepStatuses(ps, stepNames, idx, false, "", timings)...)
 		log.Warn().Err(execErr).Str("env", ps.Spec.Environment).
-			Int("retry", ps.Status.RetryCount).Dur("delay", delay).Msg("step failed, will retry")
+			Int("retry", ps.Status.RetryCount).Int("gitCredentialRetries", ps.Status.GitCredentialRetries).
+			Dur("delay", delay).Msg("step failed, will retry")
 		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
@@ -691,6 +713,9 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 			return ctrl.Result{}, fmt.Errorf("patch step retry: %w", patchErr)
 		}
 		closed.record()
+		if emitCredential {
+			r.emitGitCredentialMissing(ps, step, note)
+		}
 		return ctrl.Result{RequeueAfter: delay}, nil
 	}
 
@@ -703,8 +728,15 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 	if closeErr := r.closeStepPR(ctx, ps, "the promotion failed: "+msg); closeErr != nil {
 		msg += fmt.Sprintf("; closing the PR it opened failed (%v) — close it by hand", closeErr)
 	}
-	_, err := r.transitionClosing(ctx, base, ps, StateFailed, msg, "", closed)
-	return ctrl.Result{}, err
+	if _, err := r.transitionClosing(ctx, base, ps, StateFailed, msg, "", closed); err != nil {
+		return ctrl.Result{}, err
+	}
+	// Reached when a Secret that could not be read is the first credential
+	// failure and the retries are used up already.
+	if emitCredential {
+		r.emitGitCredentialMissing(ps, step, note)
+	}
+	return ctrl.Result{}, nil
 }
 
 // recordPushedCommit stores, as outputs.commitSHA, the commit the health check

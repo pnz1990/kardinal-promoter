@@ -71,12 +71,14 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 	repoURL := scm.RedactURL(state.Git.URL)
 	if err := os.RemoveAll(state.WorkDir); err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("clean work dir: %v", err)},
-			fmt.Errorf("git-clone: clean work dir: %w", err)
+			fmt.Errorf("clean work dir: %w", err)
 	}
 	if err := state.GitClient.Clone(ctx, state.Git.URL, state.Git.Branch, state.WorkDir, state.Git.Token); err != nil {
-		msg := scm.RedactURL(fmt.Sprintf("clone %s failed: %v", repoURL, err))
+		// The GitClient names the operation and the URL ("git clone <url>:
+		// <reason>"), as for git-push; adding them here named the URL twice.
+		msg := scm.RedactURL(err.Error())
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg},
-			fmt.Errorf("git-clone: %s", msg)
+			errors.New(msg)
 	}
 
 	result := parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "cloned " + repoURL}
@@ -89,7 +91,7 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 		srcDir := parentsteps.ConfigSourceDir(state.WorkDir)
 		if err := os.RemoveAll(srcDir); err != nil {
 			return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("clean config source dir: %v", err)},
-				fmt.Errorf("git-clone: clean config source dir: %w", err)
+				fmt.Errorf("clean config source dir: %w", err)
 		}
 		// Only send the pipeline token to the origin (scheme, host and port)
 		// it belongs to: never over plain http or to another port.
@@ -98,9 +100,9 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 			srcToken = state.Git.Token
 		}
 		if err := state.GitClient.CloneAt(ctx, srcURL, ref.CommitSHA, srcDir, srcToken); err != nil {
-			msg := scm.RedactURL(fmt.Sprintf("clone config source %s@%s failed: %v", scm.RedactURL(srcURL), ref.CommitSHA, err))
+			msg := "config source: " + scm.RedactURL(err.Error())
 			return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg},
-				fmt.Errorf("git-clone: %s", msg)
+				errors.New(msg)
 		}
 		result.Message += fmt.Sprintf("; config source %s@%s", scm.RedactURL(srcURL), ref.CommitSHA)
 		result.Outputs = map[string]string{"configSourceDir": srcDir}

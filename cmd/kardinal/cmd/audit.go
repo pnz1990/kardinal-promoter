@@ -51,9 +51,13 @@ func newAuditSummaryCmd() *cobra.Command {
 
 Includes: promotion counts, success rate, average duration, gate block rate, and rollbacks.
 Rollbacks counts the rollback Bundles created in the window, from kardinal
-rollback, the UI, a RollbackPolicy or onHealthFailure=rollback.
+rollback, the UI, a RollbackPolicy or onHealthFailure=rollback, and how many
+rollback Bundles succeeded: wrote RollbackSucceeded in the window in the
+environment they roll back.
 The success rate is succeeded / (succeeded + failed + superseded) among the
-promotions that finished inside the window.`,
+promotions that finished inside the window. A rollback Bundle that reaches
+Verified in an environment writes PromotionSucceeded, counted as a succeeded
+promotion, and RollbackSucceeded, counted only as a succeeded rollback.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAuditSummary(cmd, pipeline, since)
 		},
@@ -108,7 +112,10 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 		return fmt.Errorf("list bundles: %w", err)
 	}
 	type rollbackKey struct{ pipeline, from, env string }
+	type bundleKey struct{ pipeline, bundle string }
 	rolledBack := make(map[rollbackKey]bool)
+	// rollbackTarget is the environment each rollback Bundle rolls back.
+	rollbackTarget := make(map[bundleKey]string)
 	rollbacks := 0
 	var rollbackPipelines []string
 	for _, b := range bundleList.Items {
@@ -119,6 +126,7 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 		if b.Spec.Intent != nil {
 			env = b.Spec.Intent.TargetEnvironment
 		}
+		rollbackTarget[bundleKey{b.Spec.Pipeline, b.Name}] = env
 		rolledBack[rollbackKey{b.Spec.Pipeline, b.Annotations[lifecycle.AnnotationRollbackFrom], env}] = true
 		if !b.CreationTimestamp.Before(&cutoff) {
 			rollbacks++
@@ -144,6 +152,8 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 		durationCount                          int
 		gateTotal, gateBlocked                 int
 		pipelines                              = make(map[string]bool)
+		// rollbackOK is the rollback Bundles that succeeded.
+		rollbackOK = make(map[bundleKey]bool)
 	)
 	for _, p := range rollbackPipelines {
 		pipelines[p] = true
@@ -181,6 +191,14 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 			if !rolledBack[k] {
 				rolledBack[k] = true
 				rollbacks++
+			}
+		case "RollbackSucceeded":
+			// One per step of the rollback Bundle: it succeeded when the
+			// step of the environment it rolls back did, or any step when
+			// the Bundle is gone or names no environment.
+			k := bundleKey{ae.Spec.PipelineName, ae.Spec.BundleName}
+			if target := rollbackTarget[k]; target == "" || target == ae.Spec.Environment {
+				rollbackOK[k] = true
 			}
 		}
 	}
@@ -221,7 +239,7 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 	}
 	_, _ = fmt.Fprintf(out, "Gates:        %d evaluations, %d blocked (%.1f%% block rate)\n",
 		gateTotal, gateBlocked, blockRate)
-	_, _ = fmt.Fprintf(out, "Rollbacks:    %d triggered\n", rollbacks)
+	_, _ = fmt.Fprintf(out, "Rollbacks:    %d triggered, %d succeeded\n", rollbacks, len(rollbackOK))
 
 	return nil
 }

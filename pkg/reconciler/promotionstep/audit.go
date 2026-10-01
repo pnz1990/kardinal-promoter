@@ -33,6 +33,9 @@ const (
 	AuditActionPromotionFailed     = "PromotionFailed"
 	AuditActionPromotionSuperseded = "PromotionSuperseded"
 	AuditActionRollbackStarted     = "RollbackStarted"
+	// AuditActionRollbackSucceeded is written, besides PromotionSucceeded,
+	// when a step of a rollback Bundle reaches Verified (B50).
+	AuditActionRollbackSucceeded = "RollbackSucceeded"
 )
 
 // AuditOutcome describes the result of the action.
@@ -120,6 +123,8 @@ func slugifyAction(action string) string {
 		return "superseded"
 	case AuditActionRollbackStarted:
 		return "rollback-started"
+	case AuditActionRollbackSucceeded:
+		return "rollback-succeeded"
 	default:
 		return "event"
 	}

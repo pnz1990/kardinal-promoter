@@ -185,9 +185,20 @@ type PromotionStepStatus struct {
 
 	// RetryCount is the number of consecutive step-engine errors retried in the
 	// current state. Reset when a step makes progress. When it reaches the retry
-	// limit the PromotionStep fails.
+	// limit the PromotionStep fails. Retries counted in gitCredentialRetries
+	// are not counted here.
 	// +optional
 	RetryCount int `json:"retryCount,omitempty"`
+
+	// GitCredentialRetries is the number of consecutive retries of a git-clone
+	// or git-push that the remote refused while git had no credentials because
+	// spec.git.secretRef is not set, or names a Secret that does not exist or
+	// has no token key (condition GitCredentialMissing). These retries have no
+	// limit, so creating the Secret is enough for the step to continue, and
+	// they do not use up the retries of retryCount. Reset with retryCount, and
+	// when git has a token.
+	// +optional
+	GitCredentialRetries int `json:"gitCredentialRetries,omitempty"`
 
 	// LastHealthCheckAt records when the health adapter was last called. Used to
 	// space health checks at the health-check interval regardless of how often

@@ -54,7 +54,12 @@ environment. An image the deployed Bundle changed and the target does not name
 gets the version from the newest earlier Bundle Verified in the environment;
 when there is none, the rollback is refused and names the image. The rollback
 goes through the same PolicyGates and PR flow as any Bundle, and through every
-environment upstream of the target first.`,
+environment upstream of the target first.
+
+Config and mixed Bundles get back their config commit the same way. Without
+--to, a mixed Bundle goes back to the newest earlier images and config commit,
+whichever Bundles deployed them; --to a Bundle whose type cannot deploy what the
+deployed Bundle changed is refused. See docs/rollback.md.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()

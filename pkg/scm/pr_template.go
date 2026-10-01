@@ -206,17 +206,28 @@ const maxVersionImages = 3
 // BundleVersion names the version a Bundle deploys, for the rollback PR title
 // and note: the tag of a one-image Bundle (its short digest, or the image name,
 // when it has no tag), "<image>:<tag>" for each of several images, or
-// "config <short commit>" for a config Bundle. A mixed Bundle deploys its
-// images. It returns "" when the Bundle has no artifacts.
+// "config <short commit>" for a config Bundle. A mixed Bundle deploys both, so
+// it reads "<images> with config <short commit>". It returns "" when the
+// Bundle has no artifacts.
 func BundleVersion(spec v1alpha1.BundleSpec) string {
-	if spec.Type == "config" || len(spec.Images) == 0 {
-		if spec.ConfigRef == nil || spec.ConfigRef.CommitSHA == "" {
-			return ""
-		}
-		return "config " + truncate(spec.ConfigRef.CommitSHA, 7)
+	config := ""
+	if spec.ConfigRef != nil && spec.ConfigRef.CommitSHA != "" {
+		config = "config " + truncate(spec.ConfigRef.CommitSHA, 7)
 	}
-	if len(spec.Images) == 1 {
-		img := spec.Images[0]
+	if spec.Type == "config" || len(spec.Images) == 0 {
+		return config
+	}
+	images := imagesVersion(spec.Images)
+	if spec.Type == "mixed" && config != "" {
+		return images + " with " + config
+	}
+	return images
+}
+
+// imagesVersion names the images of a Bundle for BundleVersion.
+func imagesVersion(images []v1alpha1.ImageRef) string {
+	if len(images) == 1 {
+		img := images[0]
 		switch {
 		case img.Tag != "":
 			return img.Tag
@@ -227,7 +238,7 @@ func BundleVersion(spec v1alpha1.BundleSpec) string {
 		}
 	}
 	parts := make([]string, 0, maxVersionImages)
-	for i, img := range spec.Images {
+	for i, img := range images {
 		if i == maxVersionImages {
 			break
 		}
@@ -241,7 +252,7 @@ func BundleVersion(spec v1alpha1.BundleSpec) string {
 		parts = append(parts, name)
 	}
 	v := strings.Join(parts, ", ")
-	if more := len(spec.Images) - maxVersionImages; more > 0 {
+	if more := len(images) - maxVersionImages; more > 0 {
 		v += fmt.Sprintf(" and %d more", more)
 	}
 	return v

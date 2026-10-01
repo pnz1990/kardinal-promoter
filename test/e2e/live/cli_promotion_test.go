@@ -652,7 +652,7 @@ func TestCLI_Reports(t *testing.T) {
 		`Success rate: 100\.0%\n` +
 		`Avg duration: (\d+s|\d+m|\d+m \d+s)\n\n` +
 		`Gates:        0 evaluations, 0 blocked \(0\.0% block rate\)\n` +
-		`Rollbacks:    0 triggered\n$`)
+		`Rollbacks:    0 triggered, 0 succeeded\n$`)
 	assert.Regexp(t, summary, c.Must(a.ns, "audit", "summary", "--pipeline", pipelineName))
 	assert.Regexp(t, summary, c.Must(a.ns, "audit", "summary", "--since", "7d"), "one pipeline in the namespace")
 	for _, tc := range []struct{ since, want string }{

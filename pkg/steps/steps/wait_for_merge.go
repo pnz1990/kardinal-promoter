@@ -72,7 +72,7 @@ func (s *waitForMergeStep) Execute(ctx context.Context, state *parentsteps.StepS
 	if err != nil && scm.IsPermanentError(err) {
 		msg := fmt.Sprintf("PR #%d: get PR status failed: %s", prNum, permanentSCMReason(err))
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("%s: %v", msg, err)},
-			parentsteps.Permanent(fmt.Errorf("wait-for-merge: %s: %w", msg, err))
+			parentsteps.Permanent(fmt.Errorf("%s: %w", msg, err))
 	}
 	if err != nil {
 		return parentsteps.StepResult{

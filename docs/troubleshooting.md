@@ -384,6 +384,35 @@ kubectl create secret generic github-token \
 
 A step that returns an error is retried with backoff (10s, 20s, 40s, 80s, then 2m) up to 5 times; `status.message` shows `retrying in <d> (<n>/5)`. Rotate the token within that window and the step continues. After the last retry the PromotionStep is Failed; create a new Bundle to promote again.
 
+### Symptom: "authentication required" with "git Secret ... not found" or "spec.git.secretRef is not set"
+
+git has no token for the Pipeline's HTTPS remote: `spec.git.secretRef` names a Secret that does not exist (or has no `token` key), or is not set. The git error is followed by what is missing:
+
+```
+retrying in 20s (2, no limit while git has no credentials) after error: step git-push: git push origin main: authentication required: Unauthorized (git Secret team-a/github-token not found)
+```
+
+The PromotionStep's `GitCredentialMissing` condition is `True` with the same message, and one `Warning` Event with reason `GitCredentialMissing` is emitted. Such a step is not failed after 5 retries: it retries every 2 minutes until git has a token. These retries are counted in `status.gitCredentialRetries`, not in `status.retryCount`, so another error, before or after the Secret exists, still gets its 5 retries. Create the Secret in the Pipeline's namespace (and set `spec.git.secretRef` if it is not set), and the step continues at its next retry:
+
+```bash
+kubectl create secret generic github-token -n team-a --from-literal=token=<token>
+```
+
+### Symptom: "authentication required" with "git Secret ... could not be read"
+
+The controller could not read the Secret that `spec.git.secretRef` names, for example because its
+ServiceAccount may not get Secrets in the Pipeline's namespace (`forbidden`) or the API server
+timed out. The message names the Secret and the read error:
+
+```
+retrying in 20s (2/5) after error: step git-push: git push origin main: authentication required: Unauthorized (git Secret team-a/github-token could not be read: secrets "github-token" is forbidden: ...)
+```
+
+The `GitCredentialMissing` condition is `True` with reason `SecretUnreadable`, with one `Warning`
+Event. Creating the Secret does not fix this, so the step keeps the limit of 5 retries and then
+fails. Fix the read error (for `forbidden`, the controller's RBAC: the chart grants `get` on
+Secrets in every namespace the controller reconciles), then create a new Bundle to promote again.
+
 ### Symptom: "get PR status failed: HTTP 401", "HTTP 403" or "HTTP 404" on a PromotionStep
 
 `wait-for-merge` fails the step at once, instead of polling, when the SCM API answers:

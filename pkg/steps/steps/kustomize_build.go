@@ -62,8 +62,7 @@ func (s *kustomizeBuildStep) Name() string { return "kustomize-build" }
 
 func (s *kustomizeBuildStep) Execute(ctx context.Context, state *parentsteps.StepState) (parentsteps.StepResult, error) {
 	fail := func(msg string, err error) (parentsteps.StepResult, error) {
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg},
-			fmt.Errorf("kustomize-build: %w", err)
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, err
 	}
 	envRel, err := envSubdir(state)
 	if err != nil {

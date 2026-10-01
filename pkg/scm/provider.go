@@ -105,10 +105,12 @@ type SCMProvider interface {
 // All implementations must be safe for sequential use within a single step sequence.
 type GitClient interface {
 	// Clone performs a shallow (depth=1) clone of branch into dir, using token
-	// (when non-empty) for HTTP(S) authentication.
+	// (when non-empty) for HTTP(S) authentication. Its error names the URL
+	// ("git clone <url>: <reason>"), so callers do not add it again.
 	Clone(ctx context.Context, url, branch, dir, token string) error
 
-	// CloneAt clones the repository into dir and checks out commitSHA.
+	// CloneAt clones the repository into dir and checks out commitSHA. Its
+	// error names the URL or the commit, as Clone's does.
 	CloneAt(ctx context.Context, url, commitSHA, dir, token string) error
 
 	// CommitAll stages all changes in dir and creates a commit with the given

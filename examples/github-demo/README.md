@@ -7,7 +7,7 @@ This example demonstrates every GitHub-specific feature of kardinal-promoter: st
 | Feature | How it's exercised |
 |---|---|
 | GitHub SCM provider | the controller's default `--scm-provider` (github) |
-| Structured PR evidence body | Prod PR body contains image digest, CI run URL, gate results, soak time |
+| Structured PR evidence body | Prod PR body lists the image provenance, each gate's result and reason, and when test and uat were Verified |
 | PR review gate | `approval: pr-review` on prod — requires GitHub review before merge |
 | PolicyGate: schedule | `!schedule.isWeekend` — blocks Saturday/Sunday UTC |
 | PolicyGate: upstream soak | `upstream.uat.soakMinutes >= 30` — 30-min contiguous healthy soak |
@@ -75,13 +75,12 @@ kardinal explain github-demo --env prod
 #
 # prod   deployed: none
 
-# 4. After UAT bake completes (30+ min), prod PR opens automatically
-# The PR body includes:
-#   Image: ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}
-#   Digest: sha256:...
-#   CI Run: <the ciRunURL on the Bundle, when CI created it>
-#   UAT soak: 31 minutes
-#   Gates: no-weekend-deploys=ALLOWED, uat-soak-gate=ALLOWED, no-bot-deploys=ALLOWED
+# 4. uat is Verified when its 30-minute bake ends. 30 minutes later
+#    uat-soak-gate passes and kardinal opens the prod PR:
+#   title:  [kardinal] Promote github-demo-9tptr to prod
+#   labels: kardinal, kardinal/promotion
+# The body lists the image, every prod gate's result and reason, and when
+# test and uat were Verified (see "PR Evidence Body" below).
 
 # 5. Review and merge the PR
 gh pr list --repo pnz1990/kardinal-demo
@@ -120,59 +119,96 @@ When a hotfix must be deployed despite a failing gate:
 kardinal override github-demo --stage prod --gate no-weekend-deploys \
   --reason "Critical security fix CVE-2026-1234 — approved by on-call lead"
 
-# The override is recorded in spec.overrides of the Bundle's instance of the gate
-# The prod PR body will show:
-#   ⚠️ OVERRIDE APPLIED
-#   Reason: Critical security fix CVE-2026-1234 — approved by on-call lead
-#   Overridden by: your-alias
-#   At: 2026-04-18T14:23:45Z
+# The override is recorded in spec.overrides of the Bundle's instance of the gate.
+# It expires after 1h (--expires-in). Until then the gate passes, and its
+# reason names the override.
+```
+
+The override is applied before the prod PR opens, because the PR waits for the
+gate. In the PR body, the gate's row in "Policy Gate Compliance" shows the
+override. `your-alias` is the local user who ran `kardinal override`:
+
+```markdown
+| no-weekend-deploys | default | Pass | OVERRIDDEN by your-alias: Critical security fix CVE-2026-1234 — approved by on-call lead (expires 2026-04-18T15:23Z) | 2026-04-18T14:23Z |
 ```
 
 ## Rollback
 
 ```bash
 # Option 1: Automatic rollback (triggered when health check fails after merge)
-# Set onHealthFailure: rollback on the environment (already in pipeline.yaml)
-# kardinal opens a PR reverting the image to the previous version
+# Set onHealthFailure: rollback on the environment (already in pipeline.yaml).
+# kardinal creates the rollback Bundle <bundle>-rollback-alarm. It restores the
+# artifacts of the most recent other Bundle that was Verified in prod.
 
 # Option 2: Manual rollback
 kardinal rollback github-demo --env prod
-# Opens a PR with:
-#   - label: kardinal/rollback
-#   - title: "revert(prod): roll back github-demo to sha-<previous>"
-#   - body: original evidence + rollback reason
-
-# After merging the rollback PR, promote back to good state:
-kardinal create bundle github-demo --image $TEST_IMAGE
+# Creates the rollback Bundle github-demo-rollback-<suffix>, with the same target.
 ```
 
-## PR Evidence Body Structure
+A rollback Bundle is a forward promotion. It goes through test and uat first,
+including the uat bake and `uat-soak-gate`, before it opens the prod PR (see
+[Multi-Environment Rollback](../../docs/rollback.md#multi-environment-rollback)).
+The prod PR has:
 
-Every production PR opened by kardinal includes:
+- title `[kardinal] Rollback prod to github-demo-rollback-x7k2p (restores sha-1a2b3c4)`
+- labels `kardinal`, `kardinal/promotion` and `kardinal/rollback`
+- a body that starts with a rollback note, followed by the sections of a
+  promotion PR:
 
 ```markdown
-## kardinal Promotion Evidence
+<!-- kardinal-promoter auto-generated PR -->
+## ROLLBACK: github-demo-rollback-x7k2p -> github-demo/prod
 
-**Bundle**: github-demo@sha-9349a3f
-**Image**: ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f
-**Image digest**: sha256:deadbeef...
-**CI Run**: https://github.com/pnz1990/kardinal-test-app/actions/runs/123456
-**Author**: your-alias
+> **This is a rollback PR.** It reverts environment prod to the state of bundle github-demo-4fq8m.
+> Rolling back FROM: github-demo-9tptr (sha-abc1234)
+> Rolling back TO: github-demo-4fq8m (sha-1a2b3c4)
+> Rolled back by: your-alias
+```
 
-## Gate Results
+`Rolled back by` is the local user who ran `kardinal rollback`. For an
+automatic rollback it is `kardinal-controller (onHealthFailure=rollback)`.
 
-| Gate | Expression | Result |
+After the rollback, ship the fix as a new Bundle with a new image:
+
+```bash
+kardinal create bundle github-demo --image ghcr.io/pnz1990/kardinal-test-app:sha-<fixed>
+```
+
+## PR Evidence Body
+
+The prod PR body from the walkthrough. The Bundle came from `kardinal create
+bundle` without `--commit`, `--author` or `--ci-run-url`, and the image has a
+tag but no digest, so those cells are `—`. A Bundle created by CI fills them in.
+`Elapsed` is the time between that environment's Verified and the PR opening.
+See [PR Evidence](../../docs/pr-evidence.md).
+
+```markdown
+<!-- kardinal-promoter auto-generated PR -->
+## Promotion: github-demo-9tptr -> github-demo/prod
+
+### Artifact Provenance
+
+| Image | Tag | Digest | CI Run | Commit SHA | Author |
+|---|---|---|---|---|---|
+| ghcr.io/pnz1990/kardinal-test-app | sha-abc1234 | — | — | — | — |
+
+### Policy Gate Compliance
+
+| Gate | Namespace | Result | Reason | Last Evaluated |
+|---|---|---|---|---|
+| no-bot-deploys | default | Pass | bundle.version=sha-abc1234: bundle.provenance.author != "dependabot[bot]" = true | 2026-04-15T14:02Z |
+| no-weekend-deploys | default | Pass | bundle.version=sha-abc1234: !schedule.isWeekend = true | 2026-04-15T14:02Z |
+| uat-soak-gate | default | Pass | bundle.version=sha-abc1234: upstream.uat.soakMinutes >= 30 = true | 2026-04-15T14:02Z |
+
+### Upstream Verification
+
+| Environment | Health Checked At | Elapsed |
 |---|---|---|
-| no-weekend-deploys | !schedule.isWeekend | ✅ ALLOWED (Wednesday) |
-| uat-soak-gate | upstream.uat.soakMinutes >= 30 | ✅ ALLOWED (42 min) |
-| no-bot-deploys | bundle.provenance.author != "dependabot[bot]" | ✅ ALLOWED |
+| test | 2026-04-15T12:55Z | 1h7m |
+| uat | 2026-04-15T13:31Z | 31m |
 
-## Upstream Environments
-
-| Env | Status | Soak (min) |
-|---|---|---|
-| test | Verified | 45 |
-| uat | Verified | 42 |
+---
+*Generated by [kardinal-promoter](https://github.com/pnz1990/kardinal-promoter)*
 ```
 
 ## Validation

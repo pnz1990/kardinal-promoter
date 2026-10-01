@@ -50,8 +50,7 @@ func (s *helmSetImageStep) Execute(_ context.Context, state *parentsteps.StepSta
 		return parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "no images to update"}, nil
 	}
 	fail := func(err error) (parentsteps.StepResult, error) {
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("helm-set-image: %v", err)},
-			permanentIfEscape(fmt.Errorf("helm-set-image: %w", err))
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, permanentIfEscape(err)
 	}
 
 	valuesFile := "values.yaml"

@@ -186,6 +186,16 @@ func TestPolicySimulate_InvalidInputIsAnError(t *testing.T) {
 	}
 }
 
+// A Pipeline the Graph builder rejects shows the builder's error once, not
+// "build graph: build: ..." (B47).
+func TestPolicySimulate_BuildError(t *testing.T) {
+	p := policyPipeline("demo", "prod")
+	p.Spec.Environments[0].DependsOn = []string{"staging"}
+	_, err := runSimulate(t, policyClient(t, p), simulateOptions{})
+	require.Error(t, err)
+	assert.Equal(t, `build: environment "prod" dependsOn unknown environment "staging"`, err.Error())
+}
+
 // ─── gate selection (C09b-cli-07, C12-examples-demo-05) ─────────────────────
 
 // Simulate reports exactly the gates the controller's Graph attaches to the

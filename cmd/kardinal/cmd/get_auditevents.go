@@ -47,6 +47,8 @@ AuditEvents are written by the controller at key points:
   PromotionSuperseded  — Newer Bundle superseded an in-flight promotion
   GateEvaluated        — PolicyGate changed readiness state
   RollbackStarted      — onHealthFailure=rollback triggered a rollback Bundle
+  RollbackSucceeded    — A rollback Bundle's step reached Verified (written
+                         besides PromotionSucceeded, once per step)
 
 Events are listed most recent first, at most --limit of them. -o json and
 -o yaml print the same events as a list of AuditEvent objects ([] when there

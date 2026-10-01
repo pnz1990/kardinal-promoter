@@ -404,6 +404,9 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 | `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion (a step that had not started writes none) |
 | `GateEvaluated` | A PolicyGate instance is first evaluated, and each later change of readiness (outcome `Failure` when blocked, `Success` when allowed) |
 | `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
+| `RollbackSucceeded` | A step of a rollback Bundle (from any rollback path) reaches Verified, besides `PromotionSucceeded`; one per step |
+
+The CRD also accepts the actions `HealthCheckFailed` and `GateBlocked`, but kardinal never writes them. A failed health check records `PromotionFailed`, or `RollbackStarted` with `onHealthFailure: rollback`, and a blocked gate records `GateEvaluated` with outcome `Failure`.
 
 ```bash
 # List all audit events across namespaces

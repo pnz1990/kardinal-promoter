@@ -60,13 +60,13 @@ func (s *configMergeStep) Execute(_ context.Context, state *parentsteps.StepStat
 	fail := func(format string, args ...any) (parentsteps.StepResult, error) {
 		msg := fmt.Sprintf(format, args...)
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg},
-			parentsteps.Permanent(fmt.Errorf("config-merge: %s", msg))
+			parentsteps.Permanent(errors.New(msg))
 	}
 	// ioFail reports a file system error, which is retried unless the checkout
 	// refused a path that escapes it.
 	ioFail := func(what string, err error) (parentsteps.StepResult, error) {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("%s: %v", what, err)},
-			permanentIfEscape(fmt.Errorf("config-merge: %s: %w", what, err))
+			permanentIfEscape(fmt.Errorf("%s: %w", what, err))
 	}
 
 	envRel, err := envSubdir(state)

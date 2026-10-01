@@ -70,8 +70,7 @@ func (s *gitCommitStep) Execute(ctx context.Context, state *parentsteps.StepStat
 		}, nil
 	}
 	if err != nil {
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("commit failed: %v", err)},
-			fmt.Errorf("git-commit: %w", err)
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("commit failed: %v", err)}, err
 	}
 
 	return parentsteps.StepResult{

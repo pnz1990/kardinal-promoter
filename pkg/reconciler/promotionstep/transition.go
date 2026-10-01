@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
@@ -24,7 +27,8 @@ import (
 // effects (C03-promotionstep-14, -15, -28):
 //
 //   - status.steps entries of the phases being left are closed (E2E-12);
-//   - an AuditEvent is written for start, success, failure and rollback;
+//   - an AuditEvent is written for start, success, failure and rollback,
+//     and for the success of a rollback Bundle (auditRollbackSucceeded);
 //   - the step counter and age metrics are recorded for terminal states;
 //   - a Kubernetes Event is emitted.
 //
@@ -86,7 +90,7 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 	changed := base.Status.State != state
 	if changed {
 		closed = append(closed, closeStepStatuses(ps, state)...)
-		ps.Status.RetryCount = 0
+		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
 	}
 	if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -116,6 +120,7 @@ func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.Promotio
 		eventAction = "Verify"
 		note = fmt.Sprintf("env %s: step completed successfully", env)
 		writeAuditEvent(ctx, r.Client, ps, AuditActionPromotionSucceeded, AuditOutcomeSuccess, message)
+		r.auditRollbackSucceeded(ctx, ps, message)
 		observability.StepsTotal.WithLabelValues("PromotionStep", "succeeded").Inc()
 		observability.PromotionStepAgeSeconds.Observe(time.Since(ps.CreationTimestamp.Time).Seconds())
 	case StateFailed, StateAbortedByAlarm:
@@ -136,6 +141,44 @@ func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.Promotio
 		return
 	}
 	kubeevent.Emit(r.Recorder, ps, eventType, reason, eventAction, note)
+}
+
+// auditRollbackSucceeded writes the RollbackSucceeded AuditEvent when ps,
+// which has just reached Verified, promoted a rollback Bundle: the
+// environment runs the restored artifacts and passed its health check. It
+// runs only on the transition to Verified, and the AuditEvent is named
+// {ps.Name}-rollback-succeeded, so a step writes at most one, also when a
+// reconcile is repeated after a controller restart. Errors are logged, like
+// every audit write: they never block the promotion.
+func (r *Reconciler) auditRollbackSucceeded(ctx context.Context, ps *v1alpha1.PromotionStep, message string) {
+	name := ps.Spec.BundleName
+	if name == "" {
+		name = ps.Labels["kardinal.io/bundle"]
+	}
+	if name == "" {
+		return
+	}
+	var bundle v1alpha1.Bundle
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: ps.Namespace}, &bundle); err != nil {
+		if !apierrors.IsNotFound(err) {
+			zerolog.Ctx(ctx).Error().Err(err).Str("bundle", name).
+				Msg("failed to read the Bundle; no RollbackSucceeded AuditEvent written")
+		}
+		return
+	}
+	if !isRollbackBundle(&bundle) {
+		return
+	}
+	detail := ""
+	if bundle.Spec.Provenance != nil && bundle.Spec.Provenance.RollbackOf != "" {
+		detail = " (artifacts of " + bundle.Spec.Provenance.RollbackOf
+		if from := bundle.Annotations[lifecycle.AnnotationRollbackFrom]; from != "" {
+			detail += ", rolled back from " + from
+		}
+		detail += ")"
+	}
+	writeAuditEvent(ctx, r.Client, ps, AuditActionRollbackSucceeded, AuditOutcomeSuccess,
+		fmt.Sprintf("rollback Bundle %s%s verified in %s: %s", name, detail, ps.Spec.Environment, message))
 }
 
 // closeStepStatuses brings status.steps in line with the state being entered

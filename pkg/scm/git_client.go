@@ -78,7 +78,8 @@ func httpAuth(remoteURL, token string) transport.AuthMethod {
 
 // Clone performs a shallow (depth=1) clone of branch into dir, authenticating
 // with token over HTTP(S) when it is set. dir must not already contain a repo.
-// Errors never contain URL credentials.
+// A clone error reads "git clone <url>: <reason>"; errors never contain URL
+// credentials.
 func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create clone dir: %w", err)
@@ -95,7 +96,7 @@ func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string)
 	}
 
 	if _, err := gogit.PlainCloneContext(ctx, dir, false, opts); err != nil {
-		return fmt.Errorf("git clone %s: %s", RedactURL(url), RedactURL(err.Error()))
+		return fmt.Errorf("git clone %s: %s", RedactURL(url), gitErrorText(err))
 	}
 	return nil
 }
@@ -112,7 +113,7 @@ func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir, token st
 		Auth:       httpAuth(url, token),
 	})
 	if err != nil {
-		return fmt.Errorf("git clone %s: %s", RedactURL(url), RedactURL(err.Error()))
+		return fmt.Errorf("git clone %s: %s", RedactURL(url), gitErrorText(err))
 	}
 	hash, err := repo.ResolveRevision(plumbing.Revision(commitSHA))
 	if err != nil {
@@ -223,9 +224,18 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 		if errors.Is(err, gogit.ErrNonFastForwardUpdate) || strings.Contains(err.Error(), "non-fast-forward") {
 			return fmt.Errorf("git push %s %s: %w", remote, branch, ErrNonFastForward)
 		}
-		return fmt.Errorf("git push %s %s: %s", remote, branch, RedactURL(err.Error()))
+		return fmt.Errorf("git push %s %s: %s", remote, branch, gitErrorText(err))
 	}
 	return nil
+}
+
+// gitErrorText returns the text of a go-git error without URL credentials and
+// without what go-git leaves at its end when it appends an HTTP response body:
+// the body's trailing newline ("authentication required: Unauthorized\n"),
+// or ": " when the body is empty.
+func gitErrorText(err error) string {
+	text := strings.TrimSpace(RedactURL(err.Error()))
+	return strings.TrimSpace(strings.TrimSuffix(text, ":"))
 }
 
 // remoteBranchHash returns the hash the remote advertises for ref.

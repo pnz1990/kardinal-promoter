@@ -72,7 +72,7 @@ func TestStepDuration_ObservedOnlyAfterThePatch(t *testing.T) {
 			reconcil: func(r *Reconciler, base, ps *v1alpha1.PromotionStep, seq []string) error {
 				now := time.Now()
 				_, err := r.handleStepError(context.Background(), zerolog.Nop(), base, ps, append(seq, healthCheckStep),
-					map[int]steps.StepTiming{0: {Started: now.Add(-time.Second), Finished: now}}, retryable, nil)
+					map[int]steps.StepTiming{0: {Started: now.Add(-time.Second), Finished: now}}, retryable, nil, gitCredential{})
 				return err
 			},
 			want: []uint64{1, 0}},
@@ -84,7 +84,7 @@ func TestStepDuration_ObservedOnlyAfterThePatch(t *testing.T) {
 					map[int]steps.StepTiming{
 						0: {Started: now.Add(-2 * time.Second), Finished: now.Add(-time.Second)},
 						1: {Started: now.Add(-time.Second), Finished: now},
-					}, errors.New("step git-clone: GitClient not configured"), nil)
+					}, errors.New("step git-clone: GitClient not configured"), nil, gitCredential{})
 				return err
 			},
 			want: []uint64{1, 1}},
