@@ -98,6 +98,7 @@ func TestGitLabSCM(t *testing.T) {
 		"GET /api/v4/users?username=nobody":                                             `[]`,
 		"DELETE /api/v4/users/21?hard_delete=true":                                      `{}`,
 		"POST /api/v4/projects/e2e%2Fr/members":                                         `{}`,
+		"DELETE /api/v4/projects/e2e%2Fr":                                               `{}`,
 	})
 	s := server(t, "gitlab", srv.URL, "")
 	s.(*gitlab).retry = time.Millisecond
@@ -147,6 +148,16 @@ func TestGitLabSCM(t *testing.T) {
 	assert.EqualValues(t, 30, f.bodies["POST /api/v4/projects/e2e%2Fr/members"]["access_level"])
 	require.NoError(t, u.DeleteUser(ctx, "u1"))
 	require.NoError(t, u.DeleteUser(ctx, "nobody"), "a missing user is already deleted")
+
+	del := "DELETE /api/v4/projects/e2e%2Fr"
+	f.fail[del] = []int{http.StatusInternalServerError, http.StatusInternalServerError}
+	require.NoError(t, s.DeleteRepo(ctx, r), "a 500 from a delete racing a push job is retried")
+	f.fail[del] = []int{http.StatusInternalServerError, http.StatusInternalServerError, http.StatusInternalServerError}
+	require.Error(t, s.DeleteRepo(ctx, r), "the delete gives up after 3 tries")
+	f.fail[del] = []int{http.StatusNotFound}
+	require.NoError(t, s.DeleteRepo(ctx, r), "a missing project is already deleted")
+	f.fail[del] = []int{http.StatusForbidden}
+	require.Error(t, s.DeleteRepo(ctx, r), "403 is not retried")
 }
 
 func TestGitHubSCM(t *testing.T) {
