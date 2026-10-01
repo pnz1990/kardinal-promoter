@@ -471,17 +471,16 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		approvalMode = "auto"
 	}
 
-	// Load bundle to determine type (image vs config) for step sequence routing.
-	bundle, bundleErr := r.loadBundle(ctx, ps)
-	bundleType := ""
-	updateStrategy := env.Update.Strategy
-	if bundleErr != nil {
-		log.Warn().Err(bundleErr).Msg("could not load bundle for sequence routing; using default kustomize sequence")
-	} else if bundle != nil {
-		bundleType = bundle.Spec.Type
+	// The Bundle type picks the step list: a config or mixed Bundle merges its
+	// config first. A failed read is retried, not taken as an image Bundle:
+	// the list recorded here is the one the step runs to the end, so an image
+	// list would verify a config or mixed Bundle without its config change.
+	bundle, err := r.loadBundle(ctx, ps)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 
-	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, env.Layout)
+	seq := steps.DefaultSequenceForBundle(approvalMode, bundle.Spec.Type, env.Update.Strategy, env.Layout)
 	log.Info().
 		Str("env", ps.Spec.Environment).
 		Str("approval", approvalMode).

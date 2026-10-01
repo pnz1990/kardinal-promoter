@@ -23,6 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
@@ -144,6 +146,57 @@ func TestApprovalEditMidPromotion(t *testing.T) {
 			}
 			assert.Equal(t, tt.wantSteps, names, "status.steps keeps the recorded list")
 			assert.Equal(t, v1alpha1.StepExecutionCompleted, stepStates(got)[tt.retrying])
+		})
+	}
+}
+
+// TestPendingRetriesFailedBundleRead proves that a step whose Bundle read
+// fails while it leaves Pending records no step list and returns the error,
+// so it is requeued, and records its Bundle type's list on the retry. The
+// recorded list is run to the end: recording the image list instead verified a
+// config or mixed Bundle without its config-merge step.
+func TestPendingRetriesFailedBundleRead(t *testing.T) {
+	for _, bundleType := range []string{"config", "mixed"} {
+		t.Run(bundleType, func(t *testing.T) {
+			pl, b := makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")
+			b.Spec.Type = bundleType
+			step := makeStep("step-1", pl.Name, b.Name, "test")
+			api := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}, &v1alpha1.Bundle{}).
+				WithObjects(step, pl, b).Build()
+			bundleGets := 0
+			c := interceptor.NewClient(api, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*v1alpha1.Bundle); ok {
+						bundleGets++
+						// The first Bundle read is the orphan guard's; the
+						// second is the one that picks the step list.
+						if bundleGets == 2 {
+							return errors.New("connection reset by peer")
+						}
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+			_, err := r.Reconcile(context.Background(), reqFor(step.Name))
+			require.Error(t, err, "a failed Bundle read is returned, so the step is requeued")
+			assert.ErrorContains(t, err, "load bundle")
+			got := getStep(t, api, step.Name)
+			assert.Equal(t, promotionstep.StatePending, got.Status.State, got.Status.Message)
+			assert.Empty(t, got.Status.Steps, "no step list is recorded without the Bundle type")
+
+			reconcileStep(t, r, step.Name)
+			got = getStep(t, api, step.Name)
+			require.Equal(t, "Promoting", got.Status.State, got.Status.Message)
+			names := make([]string, 0, len(got.Status.Steps))
+			for _, s := range got.Status.Steps {
+				names = append(names, s.Name)
+			}
+			assert.Equal(t, steps.DefaultSequenceForBundle("auto", bundleType, "", ""), names)
+			assert.Contains(t, names, "config-merge")
 		})
 	}
 }
