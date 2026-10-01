@@ -164,7 +164,7 @@ The kardinal controller serves an embedded web UI at port `8082` (configurable v
 
 ### In-cluster access (recommended): kubectl port-forward
 
-The supported access method for in-cluster deployments without Ingress is `kubectl port-forward`:
+The chart's Service is `ClusterIP` and the chart creates no Ingress. Without an Ingress, `NodePort` or `LoadBalancer` Service of your own, use `kubectl port-forward`:
 
 ```bash
 kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082
