@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,6 +110,46 @@ func TestForgejo(t *testing.T) {
 	assert.Equal(t, "gitea", f.bodies["POST /api/v1/repos/e2e/r/hooks"]["type"])
 
 	require.NoError(t, s.DeleteRepo(ctx, Repo{Owner: "e2e", Name: "gone"}), "404 on delete is success")
+}
+
+func TestForgejoMergeRetriesWhileChecking(t *testing.T) {
+	defer func(d, e time.Duration) { mergeRetry, mergeRetryEvery = d, e }(mergeRetry, mergeRetryEvery)
+	mergeRetry, mergeRetryEvery = 5*time.Second, time.Millisecond
+	for name, tc := range map[string]struct {
+		answers []string
+		calls   int
+		wantErr string
+	}{
+		"checking, then merged": {answers: []string{"try", "try", "ok"}, calls: 3},
+		"not mergeable":         {answers: []string{"no"}, calls: 1, wantErr: "HTTP 405"},
+		"other error":           {answers: []string{"500"}, calls: 1, wantErr: "HTTP 500"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				a := tc.answers[min(calls, len(tc.answers)-1)]
+				calls++
+				switch a {
+				case "try":
+					http.Error(w, `{"message":"Please try again later"}`, http.StatusMethodNotAllowed)
+				case "no":
+					http.Error(w, `{"message":"The PR is not mergeable"}`, http.StatusMethodNotAllowed)
+				case "500":
+					http.Error(w, `{"message":"boom"}`, http.StatusInternalServerError)
+				default:
+					_, _ = io.WriteString(w, `{}`)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			err := server(t, "gitea", srv.URL, "").MergePR(context.Background(), Repo{Owner: "e2e", Name: "r"}, 2)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+			assert.Equal(t, tc.calls, calls)
+		})
+	}
 }
 
 func TestGitLab(t *testing.T) {

@@ -6,10 +6,13 @@ package gitserver
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
+	"time"
 )
 
 // forgejo drives Forgejo and Gitea, which share the /api/v1 API.
@@ -108,9 +111,28 @@ func (f *forgejo) PullRequests(ctx context.Context, r Repo) ([]PR, error) {
 	}
 }
 
+// How long, and how often, MergePR retries while the server is still checking
+// whether the PR can be merged.
+var mergeRetry, mergeRetryEvery = 30 * time.Second, time.Second
+
+// MergePR merges the PR. Gitea and Forgejo answer 405 "Please try again
+// later" while they check a new PR's mergeability, so that answer is retried.
 func (f *forgejo) MergePR(ctx context.Context, r Repo, number int) error {
-	return f.do(ctx, http.MethodPost, fmt.Sprintf("%s/pulls/%d/merge", f.repoPath(r), number),
-		map[string]string{"Do": "merge"}, nil)
+	deadline := time.Now().Add(mergeRetry)
+	for {
+		err := f.do(ctx, http.MethodPost, fmt.Sprintf("%s/pulls/%d/merge", f.repoPath(r), number),
+			map[string]string{"Do": "merge"}, nil)
+		var se *StatusError
+		if !errors.As(err, &se) || se.Code != http.StatusMethodNotAllowed ||
+			!strings.Contains(se.Body, "try again later") || time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(mergeRetryEvery):
+		}
+	}
 }
 
 func (f *forgejo) ClosePR(ctx context.Context, r Repo, number int) error {
