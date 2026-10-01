@@ -457,7 +457,7 @@ func main() {
 	// readyz gates on informer cache sync: returns 503 until all informers are synced.
 	// Using healthz.Ping here would cause the pod to report as Ready before the cache is
 	// populated, which leads to a race condition where Bundles are created but the reconciler
-	// hasn't started yet (seen in PDCA S1 failures: "Starting EventSource" at check time).
+	// hasn't started yet (seen in old e2e runs: "Starting EventSource" at check time).
 	// The cache-sync check ensures helm --wait only returns after reconcilers can process events.
 	// See: https://github.com/pnz1990/kardinal-promoter/issues/1132
 	cacheSyncChecker := healthz.Checker(func(req *http.Request) error {

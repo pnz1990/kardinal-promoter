@@ -38,11 +38,10 @@
 #
 # Prerequisites:
 #   - Docker Desktop running
-#   - kind, kubectl, helm, argocd CLI installed
+#   - kind, kubectl, helm installed
 #   - GitHub PAT with repo write access (for the GitOps push step)
 #
 # After setup, run:
-#   ./demo/scripts/validate.sh    to verify all features work end-to-end
 #   kardinal dashboard            to open the UI
 #   ./demo/scripts/teardown.sh    to clean up everything
 #
@@ -121,12 +120,11 @@ check_tool docker
 check_tool kind
 check_tool kubectl
 check_tool helm
-check_tool argocd 2>/dev/null || warn "argocd CLI not found — some validation steps will be skipped"
 
 if [[ -z "$GITHUB_TOKEN" ]]; then
   warn "GITHUB_TOKEN is not set. The controller will install but promotions"
-  warn "will fail at the GitOps push step (bundle creation in validate.sh)."
-  warn "For full end-to-end validation, set GITHUB_TOKEN before running."
+  warn "will fail at the GitOps push step."
+  warn "To promote, set GITHUB_TOKEN before running."
 fi
 
 if ! docker info &>/dev/null; then
@@ -481,9 +479,6 @@ echo ""
 echo "  Trigger a promotion:"
 echo "    kardinal create bundle kardinal-test-app \\"
 echo "      --image ${TEST_APP_IMAGE}"
-echo ""
-echo "  Validate everything works:"
-echo "    ./demo/scripts/validate.sh"
 echo ""
 echo "  Tear down:"
 echo "    ./demo/scripts/teardown.sh"

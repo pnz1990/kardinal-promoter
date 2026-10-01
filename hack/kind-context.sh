@@ -1,29 +1,17 @@
 #!/usr/bin/env bash
 # hack/kind-context.sh
 #
-# Sourced by the hack/ scripts that install into a local kind cluster.
-# They must never act on whatever kube context happens to be current, so every
-# kubectl/helm call goes through the KUBECTL/HELM arrays set here, which carry
-# an explicit --context.
+# Sourced by hack/e2e/lib.sh, for the scripts that install into a local kind
+# cluster. They must never act on whatever kube context happens to be current,
+# so every kubectl/helm call goes through the KUBECTL/HELM arrays set here,
+# which carry an explicit --context.
 #
 #   source hack/kind-context.sh
-#   ensure_kind_cluster "$KIND_CLUSTER" test/e2e/kind-config.yaml
 #   use_kind_context "kind-$KIND_CLUSTER"
 #   "${KUBECTL[@]}" get nodes
 #
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
-
-# ensure_kind_cluster NAME CONFIG creates the kind cluster NAME from CONFIG
-# unless it exists. CONFIG sets the node image (test/e2e/kind-config.yaml).
-ensure_kind_cluster() {
-  local name="$1" config="$2"
-  if kind get clusters 2>/dev/null | grep -x "$name" >/dev/null; then
-    echo "kind cluster '$name' already exists — reusing it"
-    return 0
-  fi
-  kind create cluster --name "$name" --config "$config" --wait 60s
-}
 
 # require_kind_context CTX exits unless CTX is a kind context whose API server
 # is on the local host. It reads only the local kubeconfig.

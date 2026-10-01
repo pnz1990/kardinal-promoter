@@ -64,34 +64,3 @@ func TestScriptsDoNotPipeIntoGrepQ(t *testing.T) {
 		}
 	}
 }
-
-// longOutputCLI prints the line each scenario 9 check looks for, then more
-// output than a pipe buffer holds, as a real CLI can.
-const longOutputCLI = `#!/usr/bin/env bash
-case "$*" in
-  version) echo "CLI: v0.7.0" ;;
-  "get pipelines") echo "PIPELINE  kardinal-test-app" ;;
-  "explain "*) echo "prod  gate  no-weekend-deploys" ;;
-  "history "*) echo "Bundle  AGE" ;;
-  "get steps "*) echo "STEP  PromotionStep" ;;
-  "completion bash") ;;
-  *--dry-run*) echo "dry run: would create a Bundle" ;;
-  *) echo "unexpected call: $*" >&2; exit 1 ;;
-esac
-seq 1 100000
-`
-
-// TestDemoValidateSurvivesLongCLIOutput runs validate.sh scenario 9 against a
-// CLI whose output continues after the matching line. A check that pipes into
-// grep -q fails here the way it flaked in the Demo job.
-func TestDemoValidateSurvivesLongCLIOutput(t *testing.T) {
-	kardinal := filepath.Join(t.TempDir(), "kardinal")
-	require.NoError(t, os.WriteFile(kardinal, []byte(longOutputCLI), 0o755))
-	out, err := runWithFakes(t, filepath.Join(repoRoot(t), "demo", "scripts", "validate.sh"),
-		map[string]string{"kubectl": "#!/usr/bin/env bash\nexit 0\n", "curl": "#!/usr/bin/env bash\nexit 7\n"},
-		[]string{"KARDINAL=" + kardinal},
-		"--fast", "--scenario", "9")
-	require.NoError(t, err, out)
-	assert.Contains(t, out, "7 passed")
-	assert.Contains(t, out, "kardinal create bundle --dry-run works")
-}

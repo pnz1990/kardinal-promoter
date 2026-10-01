@@ -125,7 +125,6 @@ nav:
   - Architecture:
     - Overview: architecture.md
     - Graph Coverage: graph-coverage.md
-    - Demo Validation: demo-validation.md
   - Comparison: comparison.md
   - Roadmap: roadmap.md
   - Changelog: changelog.md

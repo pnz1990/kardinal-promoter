@@ -34,12 +34,18 @@ cd web && npm ci && npm run typecheck && npm test && npm run build
 ### Run Locally
 
 ```bash
-# Start a local kind cluster with all dependencies
-make setup-e2e-env
+# Create the kind cluster kardinal-e2e-core: kro, Forgejo, Argo CD and the
+# controller and CLI built from this checkout
+make e2e-up SUITE=core
 
-# Build and run the controller
-go run ./cmd/kardinal-controller/...
+# Run the core live suite against it, then delete the cluster
+make test-e2e-live SUITE=core
+make e2e-down SUITE=core
 ```
+
+`make e2e-up` wraps `hack/e2e/up.sh SUITE` and `make test-e2e-live` wraps
+`hack/e2e/run.sh SUITE`. [test/e2e/README.md](test/e2e/README.md) lists the
+suites.
 
 ## How to Contribute
 

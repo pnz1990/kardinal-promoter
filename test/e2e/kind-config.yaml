@@ -1,5 +1,5 @@
-# The kind cluster for e2e tests, PDCA and the demo (every kind cluster the
-# repo creates uses this file, so the node image is set only here).
+# The kind cluster for the live e2e suites and the demo (every kind cluster
+# the repo creates uses this file, so the node image is set only here).
 #
 # The node image must be Kubernetes 1.30 or newer: on 1.29 the API server's
 # CEL cost estimate rejects kro's graphs.kro.run CRD ("estimated rule cost

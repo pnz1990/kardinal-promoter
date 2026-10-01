@@ -22,16 +22,10 @@ IMG_REPO ?= ghcr.io/pnz1990/kardinal-promoter
 IMG_TAG  ?= dev
 IMG      ?= $(IMG_REPO):$(IMG_TAG)
 
-# kind cluster used by the e2e targets
-KIND_CLUSTER ?= kardinal-e2e
-
 .PHONY: all build build-controller build-cli ui ui-test ui-test-e2e test test-integration test-cover \
         lint lint-local vet vuln generate manifests api-docs \
         install uninstall docker-build helm-lint validate-manifests \
-        install-kro setup-e2e-env setup-e2e-env-fast \
-        e2e-setup e2e-teardown kind-up kind-down \
-        test-e2e test-e2e-kind test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
-        test-e2e-journey-4 test-e2e-journey-5 e2e-up e2e-down test-e2e-live \
+        install-kro e2e-up e2e-down test-e2e-live \
         tools help
 
 all: generate build test lint
@@ -56,7 +50,7 @@ ui-test-e2e: ## Run Playwright E2E tests (requires Node.js, npm, and a built dis
 	cd web && npm ci && npm run build && npx playwright install chromium --with-deps && npm run test:e2e
 
 ## Test
-## Cluster e2e tests (test/e2e with build tag e2e) are excluded; see test-e2e-kind.
+## The live e2e tests (test/e2e/live, build tag e2e) are excluded; see test-e2e-live.
 test:
 	$(GO) test ./... -race -count=1 -timeout 120s
 
@@ -130,26 +124,8 @@ helm-lint:
 validate-manifests: ## Validate demo/ and examples/ manifests against the CRD schemas (no cluster needed)
 	$(GO) test ./test/examples/... -count=1 -v -run 'TestExampleManifests|TestExamplePaths'
 
-## Kind cluster for E2E
-kind-up: e2e-setup ## Create local kind cluster and install kro + kardinal-promoter (alias of e2e-setup)
-
 install-kro: ## Install upstream kro with the Graph controller (GraphKind feature gate) into the current (or KUBE_CONTEXT) context
 	bash hack/install-kro.sh
-
-setup-e2e-env: ## Full single-cluster E2E: kind + kro + ArgoCD + test app in test/uat/prod (only touches kind-$(KIND_CLUSTER))
-	KIND_CLUSTER=$(KIND_CLUSTER) bash hack/setup-e2e-env.sh
-
-setup-e2e-env-fast: ## Single-cluster E2E without ArgoCD (faster, for integration testing)
-	KIND_CLUSTER=$(KIND_CLUSTER) SKIP_ARGOCD=1 bash hack/setup-e2e-env.sh
-
-kind-down: ## Delete the e2e kind cluster
-	kind delete cluster --name $(KIND_CLUSTER)
-
-e2e-setup: ## Create kind cluster + install kro + kardinal built from this checkout + quickstart fixtures
-	KIND_CLUSTER=$(KIND_CLUSTER) KARDINAL_IMAGE_REPO=$(IMG_REPO) KARDINAL_IMAGE_TAG=$(IMG_TAG) bash hack/e2e-setup.sh
-
-e2e-teardown: ## Convenience: tear down the e2e kind cluster
-	KIND_CLUSTER=$(KIND_CLUSTER) bash hack/e2e-teardown.sh
 
 ## Live e2e suites (test/e2e/live, test/e2e/README.md): a kind cluster per
 ## suite with real git servers, GitOps engines and the controller built from
@@ -169,35 +145,6 @@ test-e2e-live: ## Run live suite SUITE against the cluster from make e2e-up; fai
 
 e2e-down: ## Delete the kind cluster of live suite SUITE
 	kind delete cluster --name kardinal-e2e-$(SUITE)
-
-## Journey tests — each journey maps to docs/aide/definition-of-done.md.
-# test-e2e-journey-N run the fake-client journey tests (no cluster).
-# test-e2e-kind runs the tagged cluster tests against kind-$(KIND_CLUSTER) only.
-
-test-e2e: test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 test-e2e-journey-4 test-e2e-journey-5
-
-test-e2e-kind: ## Cluster e2e tests (build tag e2e) against kind-$(KIND_CLUSTER); run make e2e-setup first
-	KARDINAL_E2E_CONTEXT=kind-$(KIND_CLUSTER) $(GO) test -tags e2e ./test/e2e/... -run 'TestInfrastructure|TestKind' -count=1 -v -timeout 10m
-
-test-e2e-journey-1: ## Quickstart: 3-env pipeline, PolicyGates, PR for prod
-	@echo "=== Journey 1: Quickstart ==="
-	$(GO) test ./test/e2e/... -run TestJourney1Quickstart -v -timeout 10m
-
-test-e2e-journey-2: ## Multi-cluster fleet: parallel prod fan-out, Argo Rollouts
-	@echo "=== Journey 2: Multi-cluster fleet ==="
-	$(GO) test ./test/e2e/... -run TestJourney2MultiClusterFleet -v -timeout 15m
-
-test-e2e-journey-3: ## Policy governance: gate simulation, CEL, weekend block
-	@echo "=== Journey 3: Policy governance ==="
-	$(GO) test ./test/e2e/... -run TestJourney3PolicyGovernance -v -timeout 5m
-
-test-e2e-journey-4: ## Rollback: one command, rollback PR, same gates
-	@echo "=== Journey 4: Rollback ==="
-	$(GO) test ./test/e2e/... -run TestJourney4Rollback -v -timeout 10m
-
-test-e2e-journey-5: ## CLI: every command in docs/cli-reference.md
-	@echo "=== Journey 5: CLI workflow ==="
-	$(GO) test ./test/e2e/... -run TestJourney5CLI -v -timeout 5m
 
 ## Tools
 $(LOCALBIN):

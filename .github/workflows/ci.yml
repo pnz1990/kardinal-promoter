@@ -230,8 +230,8 @@ jobs:
         # do not go through the translator or the kro Graph.
         # TestJourney5 runs bin/kardinal, built above.
         # TestPromotionLoop_*: promotion loop unit tests.
-        # Tests that need a kind cluster are behind the e2e build tag and run
-        # in e2e.yml.
+        # The live tests (test/e2e/live) are behind the e2e build tag and run
+        # in e2e-live.yml.
         run: go test ./test/e2e/... -race -count=1 -timeout 120s -v
 
   # ── create-bundle composite action tests ──────────────────────────────────
