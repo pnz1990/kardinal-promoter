@@ -196,6 +196,48 @@ func TestGoGitClient_HTTPErrorsEndWithTheReason(t *testing.T) {
 	}
 }
 
+// TestGoGitClient_HTMLErrorBodyIsOneLine covers a proxy's HTML error page:
+// go-git puts the whole response body into the error, so the step message
+// spanned many lines and ended in "</html>". The body's whitespace collapses
+// to single spaces and it is cut at 200 characters with "…", so the error is
+// one line that names the URL once and ends with the reason.
+func TestGoGitClient_HTMLErrorBodyIsOneLine(t *testing.T) {
+	page := "<!DOCTYPE html>\r\n<html>\n<head>\n\t<title>403 Forbidden – proxy</title>\n</head>\n<body>\n" +
+		"  <h1>Forbidden</h1>\n  <p>You don't have permission to access this repository through the proxy.</p>\n" +
+		"  <p>Ask your network administrator to allow git traffic to this host.</p>\n  <hr>\n  <address>proxy/2.4</address>\n" +
+		"</body>\n</html>\n"
+	collapsed := []rune(strings.Join(strings.Fields(page), " "))
+	require.Greater(t, len(collapsed), 200, "the page must be longer than the cap")
+	short := "<html>\n<body>\n  Forbidden\n</body>\n</html>\n"
+
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	cases := []struct {
+		name, body, want string // want: %s is the URL
+	}{
+		{name: "long page", body: page,
+			want: "git clone %s: authorization failed: " + strings.TrimSpace(string(collapsed[:200])) + "…"},
+		{name: "short page", body: short,
+			want: "git clone %s: authorization failed: <html> <body> Forbidden </body> </html>"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(srv.Close)
+			url := srv.URL + "/org/repo.git"
+			err := c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+			require.Error(t, err)
+			assert.Equal(t, fmt.Sprintf(tc.want, url), err.Error())
+			assert.NotContains(t, err.Error(), "\n")
+			assert.Equal(t, 1, strings.Count(err.Error(), url), "the URL is named once: %q", err)
+		})
+	}
+}
+
 // TestHTTPAuthUsername verifies the push/clone username per provider (C06-scm-health-31).
 func TestHTTPAuthUsername(t *testing.T) {
 	cases := []struct {

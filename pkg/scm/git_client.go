@@ -229,13 +229,37 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 	return nil
 }
 
-// gitErrorText returns the text of a go-git error without URL credentials and
-// without what go-git leaves at its end when it appends an HTTP response body:
-// the body's trailing newline ("authentication required: Unauthorized\n"),
-// or ": " when the body is empty.
+// maxErrorBody is how many characters of an HTTP response body a git error
+// keeps.
+const maxErrorBody = 200
+
+// httpBodyErrors are the go-git errors that end with the HTTP response body.
+var httpBodyErrors = []error{
+	transport.ErrAuthenticationRequired, transport.ErrAuthorizationFailed, transport.ErrRepositoryNotFound,
+}
+
+// gitErrorText returns the text of a go-git error on one line, without URL
+// credentials and without what go-git leaves at its end when it appends an
+// HTTP response body: the body's trailing newline ("authentication required:
+// Unauthorized\n"), or ": " when the body is empty. Runs of whitespace become
+// one space, and a body longer than maxErrorBody characters, such as a proxy's
+// HTML error page, is cut with "…".
 func gitErrorText(err error) string {
-	text := strings.TrimSpace(RedactURL(err.Error()))
-	return strings.TrimSpace(strings.TrimSuffix(text, ":"))
+	text := strings.Join(strings.Fields(RedactURL(err.Error())), " ")
+	text = strings.TrimSpace(strings.TrimSuffix(text, ":"))
+	for _, bodyErr := range httpBodyErrors {
+		prefix := bodyErr.Error() + ": "
+		i := strings.Index(text, prefix)
+		if i < 0 || !errors.Is(err, bodyErr) {
+			continue
+		}
+		head, body := text[:i+len(prefix)], []rune(text[i+len(prefix):])
+		if len(body) <= maxErrorBody {
+			return text
+		}
+		return head + strings.TrimSpace(string(body[:maxErrorBody])) + "…"
+	}
+	return text
 }
 
 // remoteBranchHash returns the hash the remote advertises for ref.
