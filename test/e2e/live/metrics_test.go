@@ -653,16 +653,21 @@ func TestObs_ChartMonitoring(t *testing.T) {
 		}
 		return true, ""
 	})
-	// A queue's depth series appears once something is queued on it.
-	framework.Eventually(t, 2*time.Minute, "the queue depth panel to show the three queues", func(ctx context.Context) (bool, string) {
+	// A queue's depth series appears once something is queued on it: queue a
+	// PolicyGate.
+	e.CreateGate(t, framework.Gate(e.Namespace(t), "queued", "test", "true", recheck))
+	framework.Eventually(t, 2*time.Minute, "the queue depth panel to show the policygate queue", func(ctx context.Context) (bool, string) {
 		s, err := e.PromQuery(ctx, `workqueue_depth{name=~"bundle|promotionstep|policygate"}`)
 		if err != nil {
 			return false, err.Error()
 		}
-		names := map[string]bool{}
+		gate := false
 		for _, x := range s {
-			names[x.Metric["name"]] = true
+			if !assert.Contains(t, []string{"bundle", "promotionstep", "policygate"}, x.Metric["name"]) {
+				return true, ""
+			}
+			gate = gate || x.Metric["name"] == "policygate"
 		}
-		return len(names) == 3, fmt.Sprintf("%v", s)
+		return gate, fmt.Sprintf("%v", s)
 	})
 }

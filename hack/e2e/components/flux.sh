@@ -4,7 +4,8 @@
 # Installs Flux FLUX_RELEASE (release manifests) in namespace flux-system.
 # Only source-controller and kustomize-controller run: tests use
 # GitRepositories and Kustomizations, so the other controllers are scaled to
-# zero. Idempotent.
+# zero, and the two that run do not send events to notification-controller.
+# Idempotent.
 #
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
@@ -19,8 +20,10 @@ MANIFEST="$E2E_OUT/flux-$FLUX_RELEASE.yaml"
   "https://github.com/fluxcd/flux2/releases/download/$FLUX_RELEASE/install.yaml"
 mapfile -t images < <(awk '$1 == "image:" && $2 ~ /(source|kustomize)-controller/ {print $2}' "$MANIFEST" | sort -u)
 pull_images "${images[@]}"
-# Server-side: the Flux CRDs are too large for client-side apply.
-"${KUBECTL[@]}" apply --server-side --force-conflicts -f "$MANIFEST" >/dev/null
+# Server-side: the Flux CRDs are too large for client-side apply. Without
+# --events-addr the controllers do not post events to the scaled-down
+# notification-controller: each post blocks a reconcile for about 40s.
+sed '/--events-addr=/d' "$MANIFEST" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f - >/dev/null
 for d in helm-controller notification-controller image-automation-controller \
   image-reflector-controller source-watcher; do
   if "${KUBECTL[@]}" -n "$NS" get "deploy/$d" >/dev/null 2>&1; then
