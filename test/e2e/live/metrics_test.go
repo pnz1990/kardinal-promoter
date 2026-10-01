@@ -589,8 +589,12 @@ func TestObs_ChartMonitoring(t *testing.T) {
 		return len(s) == 1 && s[0].Value == "1" && s[0].Metric["namespace"] == framework.ControllerNamespace, fmt.Sprintf("%v", s)
 	})
 
+	// The rule group's last evaluation can predate the first scrape the
+	// query above saw, when absent(up) still held and KardinalControllerDown
+	// went pending; it is inactive from the first evaluation after that. A
+	// job label the alert does not match keeps it pending, then firing.
 	var group framework.PromRuleGroup
-	framework.Eventually(t, 2*time.Minute, "Prometheus to load and evaluate the chart's alerts", func(ctx context.Context) (bool, string) {
+	framework.Eventually(t, 2*time.Minute, "Prometheus to load and evaluate the chart's alerts, KardinalControllerDown inactive", func(ctx context.Context) (bool, string) {
 		groups, err := e.PromRules(ctx)
 		if err != nil {
 			return false, err.Error()
@@ -604,6 +608,9 @@ func TestObs_ChartMonitoring(t *testing.T) {
 			if r.Health != "ok" {
 				return false, fmt.Sprintf("%s health=%q lastError=%q", r.Name, r.Health, r.LastError)
 			}
+			if r.Name == "KardinalControllerDown" && r.State != "inactive" {
+				return false, fmt.Sprintf("%s state=%q", r.Name, r.State)
+			}
 		}
 		return len(group.Rules) > 0, fmt.Sprintf("group %q with %d rules", group.Name, len(group.Rules))
 	})
@@ -613,7 +620,6 @@ func TestObs_ChartMonitoring(t *testing.T) {
 		assert.Equal(t, "alerting", r.Type, r.Name)
 		assert.Empty(t, r.LastError, r.Name)
 		if r.Name == "KardinalControllerDown" {
-			assert.Equal(t, "inactive", r.State, "the controller is up")
 			assert.Contains(t, r.Query, fmt.Sprintf("up{job=%q}", job), "the alert watches the ServiceMonitor's job")
 		}
 	}
