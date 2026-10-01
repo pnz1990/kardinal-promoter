@@ -122,6 +122,27 @@ for production deployments.
 > GitLab validates webhooks by comparing the `X-Gitlab-Token` header against the
 > configured secret (plaintext comparison, not HMAC).
 
+GitLab refuses webhooks to private and local addresses by default. When the controller's
+webhook URL is one (an in-cluster Service, a private load balancer), a GitLab administrator
+must allow it: **Admin → Settings → Network → Outbound requests → Allow requests to the local
+network from webhooks and integrations** (the application setting
+`allow_local_requests_from_web_hooks_and_services`). Without it GitLab blocks the webhook,
+and merges are seen only by polling.
+
+### Repository URLs
+
+Use project URLs that end in `.git`, in the Pipeline's `spec.git.url` and in the GitOps
+tool's source (for example the Argo CD Application `repoURL`). Without `.git`, GitLab
+answers git requests with a `301` redirect, which Argo CD does not follow. kardinal drops
+the `.git` when it names the project for the API, so subgroup paths such as
+`https://gitlab.example.com/group/sub/app.git` work.
+
+### "PR" means merge request
+
+kardinal uses "PR" for GitLab merge requests too: in the comments it posts (for example
+"kardinal closed this PR: ..."), in step messages, in the `prNumber` and `prURL` step
+outputs, in the PRStatus resource and in the `bundle.pr` gate attributes.
+
 ### Self-managed GitLab
 
 Use `--scm-api-url` to override the API base URL:
