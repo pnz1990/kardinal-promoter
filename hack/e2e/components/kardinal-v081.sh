@@ -39,7 +39,11 @@ chart=$("${HELM[@]}" -n "$KARDINAL_NS" list --filter "^$KARDINAL_RELEASE\$" -o j
 [ -z "$chart" ] || [ "$chart" = "kardinal-promoter-$V081_CHART_VERSION" ] ||
   die "$CTX runs $chart, not v$V081_CHART_VERSION; delete it first: kind delete cluster --name $KIND_CLUSTER"
 
-pull_images "$V081_CONTROLLER_IMAGE" "$V081_KROCODILE_IMAGE" "$PROMETHEUS_IMAGE"
+# The test installs kro with hack/install-kro.sh (the guide's step 6); its
+# image is pulled here so the upgrade doesn't wait on the registry.
+KRO_IMAGE="registry.k8s.io/kro/kro:v$(sed -n 's/^KRO_VERSION="${KRO_VERSION:-\(.*\)}"$/\1/p' "$REPO_ROOT/hack/install-kro.sh")"
+[ "$KRO_IMAGE" != registry.k8s.io/kro/kro:v ] || die "can't read KRO_VERSION from hack/install-kro.sh"
+pull_images "$V081_CONTROLLER_IMAGE" "$V081_KROCODILE_IMAGE" "$PROMETHEUS_IMAGE" "$KRO_IMAGE"
 env_set KARDINAL_E2E_PROMETHEUS_IMAGE "$PROMETHEUS_IMAGE"
 
 CRDS="$E2E_OUT/v081-crds"
