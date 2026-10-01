@@ -142,13 +142,16 @@ type Variant struct {
 
 // ControllerVariant runs a second controller for the test ns: the chart's
 // pod template with args appended and the env vars named in dropEnv removed,
-// in ControllerNamespace under the same ServiceAccount, and a NodePort
-// Service to its webhook port. It needs --leader-elect=true (the chart's
-// setting) so it stays a standby while the chart's controller holds the lease:
-// it reconciles nothing, but its webhook port (/webhook/scm, its health and
-// the Bundle API) serves on every replica. That is how a test runs the
-// controller with other flags without touching the shared one. Both are
-// deleted when the test ends.
+// in ControllerNamespace, and a NodePort Service to its webhook port. The
+// variant runs under its own ServiceAccount, bound only to the ClusterRoles of
+// the chart's ServiceAccount and not to its leader election Role (see
+// variantServiceAccount). With --leader-elect=true (the chart's setting,
+// checked here) and no access to the Lease it stays a standby for good, even
+// if the chart's controller misses a renewal: it reconciles nothing, but its
+// webhook port (/webhook/scm, its health and the Bundle API) serves on every
+// replica. That is how a test runs the controller with other flags without
+// touching the shared one. The Deployment, Service, ServiceAccount and
+// ClusterRoleBindings are deleted when the test ends.
 func (e *Env) ControllerVariant(t *testing.T, ns string, args []string, dropEnv ...string) *Variant {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -177,6 +180,12 @@ func (e *Env) ControllerVariant(t *testing.T, ns string, args []string, dropEnv 
 
 	name := fmt.Sprintf("variant-%s-%d", ns[len(ns)-8:], atomic.AddInt32(&variants, 1))
 	labels := map[string]string{"app.kubernetes.io/name": "kardinal-e2e-variant", "kardinal.io/e2e-variant": name}
+	chartSA := tmpl.Spec.ServiceAccountName
+	if chartSA == "" {
+		chartSA = "default"
+	}
+	e.variantServiceAccount(t, name, chartSA, labels)
+	tmpl.Spec.ServiceAccountName = name
 	tmpl.Labels = labels
 	tmpl.Annotations = nil
 	one := int32(1)
