@@ -41,7 +41,7 @@ func TestAudit_PromotionRecords(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
 	a := newArgoApp(t, e, "test", "prod")
-	require.NoError(t, e.Client.Create(ctx, holdGate(a.ns, "prod")))
+	require.NoError(t, e.Client.Create(ctx, operatorHold(a.ns, "prod")))
 	a.apply(t, a.pipeline(nil))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	testStep := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
@@ -187,7 +187,7 @@ func TestAudit_Events(t *testing.T) {
 	a := newArgoApp(t, e, "test", "prod")
 	long := strings.Repeat("prod is frozen while the change board reviews this release. ", 20)
 	require.Greater(t, len(long), 1024)
-	gate := holdGate(a.ns, "prod")
+	gate := operatorHold(a.ns, "prod")
 	gate.Spec.Message = long
 	require.NoError(t, e.Client.Create(ctx, gate))
 	a.apply(t, a.pipeline(nil))

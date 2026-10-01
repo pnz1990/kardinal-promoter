@@ -38,7 +38,7 @@ func TestPipeline_ReadyAndPhase(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	a := newArgoApp(t, e, "test", "prod")
-	require.NoError(t, e.Client.Create(context.Background(), holdGate(a.ns, "prod")))
+	require.NoError(t, e.Client.Create(context.Background(), operatorHold(a.ns, "prod")))
 	a.apply(t, a.pipeline(nil))
 	p := waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=True Valid", func(p *v1alpha1.Pipeline) (bool, string) {
 		ok, seen := framework.CondIs(p.Status.Conditions, "Ready", metav1.ConditionTrue, "Valid")
@@ -427,7 +427,7 @@ func TestPipeline_DeploymentMetrics(t *testing.T) {
 	promote(e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2))
 	check(0, 0)
 
-	gate := holdGate(a.ns, "prod")
+	gate := operatorHold(a.ns, "prod")
 	require.NoError(t, e.Client.Create(ctx, gate))
 	held := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
 	e.WaitStepState(t, a.ns, pipelineName, held, "test", "Verified", promoteTimeout)
@@ -445,9 +445,9 @@ func TestPipeline_DeploymentMetrics(t *testing.T) {
 	check(333, 333)
 }
 
-// holdGate is a PolicyGate named hold that blocks env until an operator
+// operatorHold is a PolicyGate named hold that blocks env until an operator
 // overrides it.
-func holdGate(ns, env string) *v1alpha1.PolicyGate {
+func operatorHold(ns, env string) *v1alpha1.PolicyGate {
 	return &v1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{Name: "hold", Namespace: ns, Labels: map[string]string{"kardinal.io/applies-to": env}},
 		Spec:       v1alpha1.PolicyGateSpec{Expression: "false", Message: "held for an operator", RecheckInterval: "10s"},
