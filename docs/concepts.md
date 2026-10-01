@@ -155,7 +155,7 @@ Both prod regions promote in parallel after staging is verified.
 
 ### Promotion steps
 
-Each environment runs the default promotion sequence (clone, update image, commit, push/PR, health check). The sequence is inferred from `update.strategy` and `approval` when the environment's step starts, and recorded in its `status.steps`; the step runs that list to the end, so an `approval` edit made meanwhile applies from the next Bundle.
+Each environment runs the default promotion sequence (clone, update image, commit, push/PR, health check). The sequence is inferred from `update.strategy` and `approval` when the environment's step starts, and recorded in its `status.steps`; the step runs that list to the end, so an `approval` edit made meanwhile applies from the next Bundle. The Bundle in flight still finishes, and its Graph turns Ready once its steps are Verified, with or without a PR.
 
 kardinal has no custom step engine. The API server rejects a Pipeline that sets the deprecated `spec.environments[].steps` or `promotionTemplate`, and `kardinal validate` reports them. For image signature checks and tests, see [Pipeline Reference: Promotion Steps](pipeline-reference.md#promotion-steps).
 
