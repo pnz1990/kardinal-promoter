@@ -213,7 +213,7 @@ func TestFlux_VerifiesAppliedCommit(t *testing.T) {
 //   - behind: the Kustomization is Ready on the previous commit (its source is
 //     suspended). The step waits; once the source resumes it is Verified.
 //
-// Covers HEALTH-FLUX-02.
+// Covers HEALTH-FLUX-02, HEALTH-FLUX-08.
 func TestFlux_UnhealthyKustomizations(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -339,8 +339,7 @@ func TestFlux_PRReviewWaitsForMergeCommit(t *testing.T) {
 // TestFlux_SuspendedKustomization checks that a promotion into a suspended
 // Kustomization says so while it waits, and goes on once it is resumed.
 //
-// Covers no matrix row: it is the regression test for bug 11 of the health
-// spike (the flux adapter ignored spec.suspend).
+// Covers HEALTH-FLUX-05.
 func TestFlux_SuspendedKustomization(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -373,8 +372,7 @@ func TestFlux_SuspendedKustomization(t *testing.T) {
 // commit to both Kustomizations; the environment that pushed first must
 // still be Verified, because its Deployment runs the Bundle image.
 //
-// Covers no matrix row: it is the regression test for bug 6 of the health
-// spike (the flux adapter required its own commit to be the applied one).
+// Covers HEALTH-FLUX-06.
 func TestFlux_SiblingEnvsShareBranch(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -415,8 +413,7 @@ func TestFlux_SiblingEnvsShareBranch(t *testing.T) {
 // marks the Kustomization Ready=Unknown during each reconcile; the bake must
 // not count that as a health alarm while the Deployment stays healthy.
 //
-// Covers no matrix row: it is the regression test for the Flux reconcile
-// flicker found while writing EX-FLUX-01.
+// Covers HEALTH-FLUX-07.
 func TestFlux_BakeSurvivesFluxReconcile(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)

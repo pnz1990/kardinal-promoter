@@ -1,60 +1,60 @@
 id	tier	suite	status	area	feature	source
-INST-KRO-01	live	core	covered	install	kro v0.10.0-rc.0 Graph controller with GraphKind gate installed by hack/install-kro.sh; graphs.kro.run and graphrevisions CRDs present	docs/changelog.md:24; docs/installation.md:23
-INST-CRD-01	live	core	covered	install	kardinal CRDs installable from config/crd/bases (Pipeline, Bundle, PolicyGate, PromotionStep)	docs/installation.md:72; config/crd/bases
-INST-CRD-02	live	core	covered	install	secondary CRDs installed and served (Subscription, NotificationHook, MetricCheck, ChangeWindow, ScheduleClock, RollbackPolicy, AuditEvent, PRStatus)	config/crd/bases; docs/installation.md:72
-INST-QUICKSTART-01	live	core	covered	install	examples/quickstart pipeline.yaml and policy-gates.yaml are accepted by the API server	examples/quickstart/README.md:62-71; docs/quickstart.md:236
+INST-KRO-01	live	core	todo	install	kro v0.10.0-rc.0 Graph controller with GraphKind gate installed by hack/install-kro.sh; graphs.kro.run and graphrevisions CRDs present	docs/changelog.md:22; docs/installation.md:23
+INST-CRD-01	live	core	todo	install	kardinal CRDs installable from config/crd/bases (Pipeline, Bundle, PolicyGate, PromotionStep)	docs/installation.md:72; config/crd/bases
+INST-CRD-02	live	core	todo	install	secondary CRDs installed and served (Subscription, NotificationHook, MetricCheck, ChangeWindow, ScheduleClock, RollbackPolicy, AuditEvent, PRStatus)	config/crd/bases; docs/installation.md:72
+INST-QUICKSTART-01	live	core	todo	install	examples/quickstart pipeline.yaml and policy-gates.yaml are accepted by the API server	examples/quickstart/README.md:62-71; docs/quickstart.md:236
 INST-SHUTDOWN-01	live	upgrade	todo	install	graceful SIGTERM shutdown drains in-flight reconciles up to 30s (terminationGracePeriodSeconds 60)	docs/installation.md:258-268; chart/kardinal-promoter/values.yaml:10
-GRAPH-SEQ-01	live	core	covered	graph	default sequential ordering: each environment starts only after the previous one is Verified	docs/pipeline-reference.md:96
-GRAPH-DEP-01	live	core	covered	graph	dependsOn fan-out and fan-in: parallel environments, join waits for all	docs/pipeline-reference.md:96; docs/pipeline-reference.md:164
-GRAPH-DEP-02	live	core	covered	graph	unknown dependsOn or a dependency cycle sets Pipeline Ready=False and no promotion runs	docs/changelog.md:54; pkg/graph/cycle.go:20
-GRAPH-WAVE-01	live	core	covered	graph	wave: same-wave environments run in parallel, a wave waits for every environment of the next lower wave	docs/pipeline-reference.md:97; docs/pipeline-reference.md:202
-GRAPH-SKIP-01	live	core	covered	graph	intent.skipEnvironments bridges over skipped environments	api/v1alpha1/bundle_types.go:101; docs/ci-integration.md:372
-GRAPH-SKIP-02	live	core	covered	graph	skipping an org-gated environment requires a skip-permission PolicyGate (kardinal.io/type=skip-permission); without it the Bundle is refused	docs/policy-gates.md:430-458
-GRAPH-TARGET-01	live	core	covered	graph	intent.targetEnvironment promotes only up to the target and the Bundle finishes Verified	api/v1alpha1/bundle_types.go:96; docs/changelog.md:53
-GRAPH-INPLACE-01	live	core	covered	graph	Pipeline edit updates the Bundle Graph in place without re-running Verified environments	docs/changelog.md:37
-GRAPH-HEAL-01	live	core	covered	graph	a deleted Graph is recreated and the Bundle continues	docs/graph-coverage.md
+GRAPH-SEQ-01	live	core	todo	graph	default sequential ordering: each environment starts only after the previous one is Verified	docs/pipeline-reference.md:96
+GRAPH-DEP-01	live	core	todo	graph	dependsOn fan-out and fan-in: parallel environments, join waits for all	docs/pipeline-reference.md:96; docs/pipeline-reference.md:165
+GRAPH-DEP-02	live	core	todo	graph	unknown dependsOn or a dependency cycle sets Pipeline Ready=False and no promotion runs	docs/changelog.md:52; pkg/graph/cycle.go:20
+GRAPH-WAVE-01	live	core	todo	graph	wave: same-wave environments run in parallel, a wave waits for every environment of the next lower wave	docs/pipeline-reference.md:97; docs/pipeline-reference.md:203
+GRAPH-SKIP-01	live	core	todo	graph	intent.skipEnvironments bridges over skipped environments	api/v1alpha1/bundle_types.go:101; docs/ci-integration.md:370
+GRAPH-SKIP-02	live	core	todo	graph	skipping an org-gated environment requires a skip-permission PolicyGate (kardinal.io/type=skip-permission); without it the Bundle is refused	docs/policy-gates.md:400
+GRAPH-TARGET-01	live	core	todo	graph	intent.targetEnvironment promotes only up to the target and the Bundle finishes Verified	api/v1alpha1/bundle_types.go:96; docs/changelog.md:51
+GRAPH-INPLACE-01	live	core	todo	graph	Pipeline edit updates the Bundle Graph in place without re-running Verified environments	docs/changelog.md:35
+GRAPH-HEAL-01	live	core	todo	graph	a deleted Graph is recreated and the Bundle continues	docs/graph-coverage.md
 GRAPH-RBAC-01	live	chart	todo	graph	Graph ServiceAccount and RBAC (graph-rbac.yaml) let kro create PromotionSteps, PolicyGates and PRStatus nodes	chart/kardinal-promoter/templates/graph-rbac.yaml
 GRAPH-PRSTATUS-01	live	scm-forgejo	todo	graph	PRStatus companion node per pr-review step tracks PR state	docs/graph-coverage.md; api/v1alpha1/prstatus_types.go
-BUNDLE-PHASE-01	live	core	covered	bundle	a new Bundle is picked up by the controller and gets phase Available or Promoting	api/v1alpha1/bundle_types.go:107
-BUNDLE-VERIFIED-01	live	core	covered	bundle	image Bundle reaches Verified when every targeted environment is Verified	docs/changelog.md:53
-BUNDLE-FAILED-01	live	core	covered	bundle	a failing step fails the Bundle; a Failed Bundle retries after its Pipeline changes	docs/changelog.md:53
-BUNDLE-SUPERSEDE-01	live	core	covered	bundle	a newer Bundle supersedes the older one; the Superseded Bundle creates no new step and a never-started step fails without an AuditEvent	docs/changelog.md:45
-BUNDLE-SUPERSEDE-02	live	scm-forgejo	covered	bundle	the open PR of a Superseded Bundle is closed	docs/changelog.md:45; pkg/scm/provider.go:78
-BUNDLE-ORDER-01	live	core	covered	bundle	Bundles created in the same second are ordered by kardinal.io/created-at	docs/changelog.md:53; pkg/lifecycle/lifecycle.go:62
-BUNDLE-INVALID-01	live	core	covered	bundle	a Bundle missing the artifacts its type needs (mixed without configRef.commitSHA) or an unbuildable Graph fails with InvalidSpec instead of retrying	docs/changelog.md:53; pkg/lifecycle/newbundle.go:27
-BUNDLE-CONFIG-01	live	core	covered	bundle	config Bundle (configRef.gitRepo + commitSHA) runs config-merge and promotes a config change	docs/ci-integration.md:345; docs/pipeline-reference.md:280
-BUNDLE-MIXED-01	live	core	covered	bundle	mixed Bundle (images + configRef) promotes both in one step sequence	api/v1alpha1/bundle_types.go:16; docs/ci-integration.md:345
-BUNDLE-MULTI-01	live	core	covered	bundle	multi-image Bundle updates every image in kustomization.yaml	docs/ci-integration.md:320
-BUNDLE-DIGEST-01	live	core	covered	bundle	image digest (repo@sha256:...) is written instead of a tag	api/v1alpha1/bundle_types.go:54; docs/changelog.md:52
-BUNDLE-HISTORY-01	live	core	covered	bundle	historyLimit (default 50) garbage-collects the oldest finished Bundles when a new one is created	docs/pipeline-reference.md:127
-BUNDLE-SLOT-01	live	core	covered	bundle	maxConcurrentPromotions caps Promoting Bundles; an over-cap Bundle stays Available with Ready reason WaitingForSlot and starts when a slot frees	docs/pipeline-reference.md:139; pkg/reconciler/bundle/reconciler.go:669
-BUNDLE-METRICS-01	live	core	covered	bundle	Bundle status.metrics (commitToProductionMinutes, bakeResets, operatorInterventions)	api/v1alpha1/bundle_types.go:146-157; docs/changelog.md:50
-BUNDLE-GRAPHCOND-01	live	core	covered	bundle	Graph Accepted and Ready conditions are shown on the Bundle; GraphReady turns True for a Verified Bundle	docs/changelog.md:53
-BUNDLE-COLUMNS-01	live	core	covered	bundle	kubectl get printer columns for Bundle and PromotionStep	docs/changelog.md:85
-BUNDLE-SUPERSEDE-03	live	core	todo	bundle	three Bundles created back to back: the two older become Superseded and only the newest keeps promoting	docs/concepts.md:35; docs/changelog.md:51
+BUNDLE-PHASE-01	live	core	todo	bundle	a new Bundle is picked up by the controller and gets phase Available or Promoting	api/v1alpha1/bundle_types.go:107
+BUNDLE-VERIFIED-01	live	core	todo	bundle	image Bundle reaches Verified when every targeted environment is Verified	docs/changelog.md:51
+BUNDLE-FAILED-01	live	core	todo	bundle	a failing step fails the Bundle; a Failed Bundle retries after its Pipeline changes	docs/changelog.md:51
+BUNDLE-SUPERSEDE-01	live	core	todo	bundle	a newer Bundle supersedes the older one; the Superseded Bundle creates no new step and a never-started step fails without an AuditEvent	docs/changelog.md:43
+BUNDLE-SUPERSEDE-02	live	scm-forgejo	covered	bundle	the open PR of a Superseded Bundle is closed	docs/changelog.md:43; pkg/scm/provider.go:78
+BUNDLE-ORDER-01	live	core	todo	bundle	Bundles created in the same second are ordered by kardinal.io/created-at	docs/changelog.md:51; pkg/lifecycle/lifecycle.go:62
+BUNDLE-INVALID-01	live	core	todo	bundle	a Bundle missing the artifacts its type needs (mixed without configRef.commitSHA) or an unbuildable Graph fails with InvalidSpec instead of retrying	docs/changelog.md:51; pkg/lifecycle/newbundle.go:27
+BUNDLE-CONFIG-01	live	core	todo	bundle	config Bundle (configRef.gitRepo + commitSHA) runs config-merge and promotes a config change	docs/ci-integration.md:345; docs/pipeline-reference.md:281
+BUNDLE-MIXED-01	live	core	todo	bundle	mixed Bundle (images + configRef) promotes both in one step sequence	api/v1alpha1/bundle_types.go:16; docs/ci-integration.md:345
+BUNDLE-MULTI-01	live	core	todo	bundle	multi-image Bundle updates every image in kustomization.yaml	docs/ci-integration.md:320
+BUNDLE-DIGEST-01	live	core	todo	bundle	image digest (repo@sha256:...) is written instead of a tag	api/v1alpha1/bundle_types.go:54; docs/changelog.md:50
+BUNDLE-HISTORY-01	live	core	todo	bundle	historyLimit (default 50) garbage-collects the oldest finished Bundles when a new one is created	docs/pipeline-reference.md:128
+BUNDLE-SLOT-01	live	core	todo	bundle	maxConcurrentPromotions caps Promoting Bundles; an over-cap Bundle stays Available with Ready reason WaitingForSlot and starts when a slot frees	docs/pipeline-reference.md:140; pkg/reconciler/bundle/reconciler.go:669
+BUNDLE-METRICS-01	live	core	todo	bundle	Bundle status.metrics (commitToProductionMinutes, bakeResets, operatorInterventions)	api/v1alpha1/bundle_types.go:146-157; docs/changelog.md:48
+BUNDLE-GRAPHCOND-01	live	core	todo	bundle	Graph Accepted and Ready conditions are shown on the Bundle; GraphReady turns True for a Verified Bundle	docs/changelog.md:51
+BUNDLE-COLUMNS-01	live	core	todo	bundle	kubectl get printer columns for Bundle and PromotionStep	docs/changelog.md:83
+BUNDLE-SUPERSEDE-03	live	core	todo	bundle	three Bundles created back to back: the two older become Superseded and only the newest keeps promoting	docs/concepts.md:35; docs/changelog.md:49
 BUNDLE-SUPERSEDE-04	live	core	todo	bundle	supersession is per Bundle type: a new image Bundle does not supersede an in-flight config Bundle, and vice versa	docs/concepts.md:48
-PIPE-READY-01	live	core	covered	pipeline	a valid Pipeline gets Ready=True	docs/changelog.md:54
-PIPE-READY-02	live	core	covered	pipeline	duplicate environment names or git.secretRef in another namespace set Ready=False (ValidationFailed) and the step fails without reading the Secret	docs/pipeline-reference.md:74; docs/changelog.md:54
-PIPE-NOTIMPL-01	live	core	covered	pipeline	layout: branch, shard, two or more regions, health.cluster set Ready=False reason NotImplemented; the promotion fails with the documented message	docs/pipeline-reference.md:116-125
-PIPE-REJECT-01	live	core	covered	pipeline	API server rejects non-empty steps, promotionTemplate, autoRollback, argocd with pr-review, non-empty spec.policyGates, reserved environment names	docs/changelog.md:31; api/v1alpha1/pipeline_types.go:35; api/v1alpha1/pipeline_types.go:124-128
-PIPE-NAME-01	live	core	covered	pipeline	environment name must be a DNS label, unique; Go duration syntax enforced for health.timeout and waitForMergeTimeout	docs/pipeline-reference.md:78-90; api/v1alpha1/pipeline_types.go:137
-PIPE-PATH-01	live	core	covered	pipeline	environment path must stay inside the repo: absolute paths, .. segments and escaping symlinks fail the step	docs/pipeline-reference.md:95
-PIPE-PHASE-01	live	core	covered	pipeline	Pipeline status.phase is Promoting while a Bundle is in flight or held by a gate	docs/changelog.md:54
-PIPE-DORA-01	live	core	covered	pipeline	status.deploymentMetrics: rolloutsLast30Days, p50/p90 commit-to-prod, autoRollbackRateMillis, operatorInterventionRateMillis, staleProdDays	api/v1alpha1/pipeline_types.go:550-589
-STEP-SM-01	live	core	covered	step	PromotionStep state machine Pending -> Promoting -> (WaitingForMerge) -> HealthChecking -> Verified	docs/pipeline-reference.md:271-286
+PIPE-READY-01	live	core	todo	pipeline	a valid Pipeline gets Ready=True	docs/changelog.md:52
+PIPE-READY-02	live	core	todo	pipeline	duplicate environment names or git.secretRef in another namespace set Ready=False (ValidationFailed) and the step fails without reading the Secret	docs/pipeline-reference.md:74; docs/changelog.md:52
+PIPE-NOTIMPL-01	live	core	todo	pipeline	layout: branch, shard, two or more regions, health.cluster set Ready=False reason NotImplemented; the promotion fails with the documented message	docs/pipeline-reference.md:116-126
+PIPE-REJECT-01	live	core	todo	pipeline	API server rejects non-empty steps, promotionTemplate, autoRollback, argocd with pr-review, non-empty spec.policyGates, reserved environment names	docs/changelog.md:29; api/v1alpha1/pipeline_types.go:35; api/v1alpha1/pipeline_types.go:124-128
+PIPE-NAME-01	live	core	todo	pipeline	environment name must be a DNS label, unique; Go duration syntax enforced for health.timeout and waitForMergeTimeout	docs/pipeline-reference.md:78-90; api/v1alpha1/pipeline_types.go:137
+PIPE-PATH-01	live	core	todo	pipeline	environment path must stay inside the repo: absolute paths, .. segments and escaping symlinks fail the step	docs/pipeline-reference.md:95
+PIPE-PHASE-01	live	core	todo	pipeline	Pipeline status.phase is Promoting while a Bundle is in flight or held by a gate	docs/changelog.md:52
+PIPE-DORA-01	live	core	todo	pipeline	status.deploymentMetrics: rolloutsLast30Days, p50/p90 commit-to-prod, autoRollbackRateMillis, operatorInterventionRateMillis, staleProdDays	api/v1alpha1/pipeline_types.go:547-584
+STEP-SM-01	live	core	todo	step	PromotionStep state machine Pending -> Promoting -> (WaitingForMerge) -> HealthChecking -> Verified	docs/pipeline-reference.md:272-286
 STEP-AUTO-01	live	core	covered	step	approval: auto clones, commits and pushes straight to the base branch; no PR	docs/pipeline-reference.md:99; docs/pr-evidence.md:116
-STEP-KUST-01	live	core	covered	step	kustomize strategy writes an images entry named after the full repository (kustomize edit set image semantics)	docs/pipeline-reference.md:292-297
-STEP-KUST-02	live	core	covered	step	kustomize strategy also updates legacy newName and single short-name entries; leaves a short name pointing elsewhere	docs/pipeline-reference.md:299-307
-STEP-HELM-01	live	core	covered	step	helm strategy patches update.helm.imagePathTemplate in valuesFile	api/v1alpha1/pipeline_types.go:374; api/v1alpha1/pipeline_types.go:379
-STEP-COMMIT-01	live	core	covered	step	commit message and PR branch follow [kardinal] Promote <bundle> to <env> and kardinal/<bundle>/<env>	docs/pr-evidence.md:124-137; pkg/steps/steps/git_commit.go:51; pkg/steps/steps/git_push.go:57
-STEP-GITAUTH-01	live	core	covered	step	git.secretRef token Secret authenticates clone and push over HTTPS	docs/pipeline-reference.md:73; docs/installation.md:45
-STEP-RETRY-01	live	core	covered	step	transient git or SCM errors are retried with backoff before the step fails	docs/pipeline-reference.md:110
-STEP-TIMEOUT-01	live	core	covered	step	stepTimeoutSeconds cancels a step that runs too long; handled like a step error	docs/pipeline-reference.md:110
+STEP-KUST-01	live	core	todo	step	kustomize strategy writes an images entry named after the full repository (kustomize edit set image semantics)	docs/pipeline-reference.md:292-297
+STEP-KUST-02	live	core	todo	step	kustomize strategy also updates legacy newName and single short-name entries; leaves a short name pointing elsewhere	docs/pipeline-reference.md:299-307
+STEP-HELM-01	live	core	todo	step	helm strategy patches update.helm.imagePathTemplate in valuesFile	api/v1alpha1/pipeline_types.go:371; api/v1alpha1/pipeline_types.go:376
+STEP-COMMIT-01	live	core	todo	step	commit message and PR branch follow [kardinal] Promote <bundle> to <env> and kardinal/<bundle>/<env>	docs/pr-evidence.md:124-137; pkg/steps/steps/git_commit.go:51; pkg/steps/steps/git_push.go:57
+STEP-GITAUTH-01	live	core	todo	step	git.secretRef token Secret authenticates clone and push over HTTPS	docs/pipeline-reference.md:73; docs/installation.md:45
+STEP-RETRY-01	live	core	todo	step	transient git or SCM errors are retried with backoff before the step fails	docs/pipeline-reference.md:110
+STEP-TIMEOUT-01	live	core	todo	step	stepTimeoutSeconds cancels a step that runs too long; handled like a step error	docs/pipeline-reference.md:110
 STEP-MERGETIMEOUT-01	live	scm-forgejo	todo	step	waitForMergeTimeout fails the step and closes the PR so a late merge cannot deliver	docs/pipeline-reference.md:109
 STEP-RESUME-01	live	upgrade	todo	step	controller restart after git-push resumes the step without a duplicate commit or PR	docs/installation.md:258
-STEP-ORPHAN-01	live	core	covered	step	PromotionSteps whose Bundle is gone are cleaned up	pkg/reconciler/promotionstep
-STEP-AUDIT-01	live	core	covered	audit	AuditEvent objects are written for step transitions and gate decisions	api/v1alpha1/auditevent_types.go; docs/changelog.md:63
-STEP-EVENTS-01	live	core	covered	audit	controller emits events.k8s.io/v1 Events with action and note <=1024 bytes	docs/changelog.md:43
+STEP-ORPHAN-01	live	core	todo	step	PromotionSteps whose Bundle is gone are cleaned up	pkg/reconciler/promotionstep
+STEP-AUDIT-01	live	core	todo	audit	AuditEvent objects are written for step transitions and gate decisions	api/v1alpha1/auditevent_types.go; docs/changelog.md:61
+STEP-EVENTS-01	live	core	todo	audit	controller emits events.k8s.io/v1 Events with action and note <=1024 bytes	docs/changelog.md:41
 ARGOSTRAT-01	live	health-argocd	todo	step	update.strategy: argocd patches the Application spec.source.helm.valuesObject with no git commit or PR	docs/argocd-native-promotion.md:26; docs/argocd-native-promotion.md:65; pkg/steps/steps/argocd_set_image.go
 ARGOSTRAT-02	live	health-argocd	todo	step	argocd strategy imageKey dot-path and multi-image Bundles	docs/argocd-native-promotion.md:134; docs/argocd-native-promotion.md:148
 ARGOSTRAT-03	live	health-argocd	todo	step	argocd strategy: config or mixed Bundle fails before its first environment	docs/argocd-native-promotion.md:82; docs/pipeline-reference.md:98
@@ -63,19 +63,23 @@ HEALTH-RES-01	live	core	todo	health	resource adapter (default): Deployment runs 
 HEALTH-RES-02	live	core	todo	health	resource adapter waits (not updated yet) while the Deployment still runs the old image	docs/health-adapters.md:46
 HEALTH-RES-03	live	core	todo	health	ProgressDeadlineExceeded is a terminal Failed result and applies onHealthFailure at once	docs/health-adapters.md:48; docs/health-adapters.md:258; pkg/health/adapter.go:284
 HEALTH-RES-04	live	core	todo	health	health.labelSelector: every matching Deployment must be healthy; no match is unhealthy	docs/health-adapters.md:60-80; docs/pipeline-reference.md:104
-HEALTH-RES-05	live	core	todo	health	health.resource name/namespace/condition override the defaults (Pipeline name, environment name, Available)	docs/health-adapters.md:36-44; api/v1alpha1/pipeline_types.go:496-509
+HEALTH-RES-05	live	core	todo	health	health.resource name/namespace/condition override the defaults (Pipeline name, environment name, Available)	docs/health-adapters.md:36-44; api/v1alpha1/pipeline_types.go:493-506
 HEALTH-RES-06	live	core	todo	health	health.resource.kind other than Deployment fails the step after merge with the documented message	docs/health-adapters.md:56; docs/pipeline-reference.md:117
 HEALTH-TIMEOUT-01	live	core	todo	health	health.timeout (default 10m) expiry counts as a failure and applies onHealthFailure with the documented message	docs/health-adapters.md:248; docs/pipeline-reference.md:102
 HEALTH-UNKNOWN-01	live	core	todo	health	unknown health.type is rejected by the CRD schema; unset type selects resource	docs/health-adapters.md:14-20; pkg/health/adapter.go:742
 HEALTH-ARGO-01	live	health-argocd	todo	health	argocd adapter: Application Healthy, Synced on the promoted commit, last operation Succeeded -> Verified	docs/health-adapters.md:82-101; pkg/health/adapter.go:344; pkg/health/adapter.go:399
 HEALTH-ARGO-02	live	health-argocd	todo	health	argocd adapter: Degraded or a Failed/Error operation (PostSync hook failure) is a health failure	docs/pipeline-reference.md:318-324; pkg/health/adapter.go:397
-HEALTH-ARGO-03	live	health-argocd	todo	health	argocd adapter: not ready while a sync is running or on an older revision	docs/changelog.md:55; pkg/health/adapter.go:369
+HEALTH-ARGO-03	live	health-argocd	todo	health	argocd adapter: not ready while a sync is running or on an older revision	docs/changelog.md:53; pkg/health/adapter.go:369
 HEALTH-ARGO-04	live	health-argocd	todo	health	argocd adapter accepts a later commit on a shared branch when the Application runs the Bundle images	docs/health-adapters.md:27; pkg/health/adapter.go:450
 HEALTH-ARGO-05	live	health-argocd	todo	health	argocd adapter with pr-review uses the PR merge commit (mergeCommitSHA)	docs/health-adapters.md:24-26
-HEALTH-FLUX-01	live	health-flux	todo	health	flux adapter: Kustomization Ready with lastAppliedRevision on the promoted commit and observedGeneration current -> Verified	docs/health-adapters.md:119-140; pkg/health/adapter.go:479; pkg/health/adapter.go:557
-HEALTH-FLUX-02	live	health-flux	todo	health	flux adapter: Ready=False or Kustomization not found is unhealthy; Ready on the previous commit waits	docs/health-adapters.md:141-150
-HEALTH-FLUX-03	live	health-flux	todo	health	flux on pr-review waits for the PR merge commit, not a Ready on the previous commit	docs/changelog.md:55; docs/health-adapters.md:152
-HEALTH-FLUX-04	live	health-flux	todo	health	flux GitRepository sourced from self-hosted git (Forgejo) reconciles the promoted commit	docs/health-adapters.md:119
+HEALTH-FLUX-01	live	flux	covered	health	flux adapter: Kustomization Ready with lastAppliedRevision on the promoted commit and observedGeneration current -> Verified	docs/health-adapters.md:119-140; pkg/health/adapter.go:479; pkg/health/adapter.go:557
+HEALTH-FLUX-02	live	flux	covered	health	flux adapter: Ready=False or Kustomization not found is unhealthy; Ready on the previous commit waits	docs/health-adapters.md:141-150
+HEALTH-FLUX-03	live	flux	covered	health	flux on pr-review waits for the PR merge commit, not a Ready on the previous commit	docs/changelog.md:53; docs/health-adapters.md:152
+HEALTH-FLUX-04	live	flux	covered	health	flux GitRepository sourced from self-hosted git (Forgejo) reconciles the promoted commit	docs/health-adapters.md:119
+HEALTH-FLUX-05	live	flux	covered	health	flux adapter: a suspended Kustomization (spec.suspend) waits and says it is suspended; the step verifies once it is resumed	pkg/health/adapter.go:480-577
+HEALTH-FLUX-06	live	flux	covered	health	flux adapter: parallel environments on one branch are Verified when their Deployments run the Bundle images, though Flux applied a sibling's later commit	pkg/health/adapter.go:480-577; docs/health-adapters.md:119-150
+HEALTH-FLUX-07	live	flux	covered	health	flux adapter: a Flux reconcile (Ready=Unknown) during a bake neither alarms nor restarts the bake window while the Deployments stay healthy	pkg/health/adapter.go:480-577; pkg/reconciler/promotionstep/reconciler.go handleBake
+HEALTH-FLUX-08	live	flux	covered	health	flux adapter: Ready=False from a failed rollout (stalled resources) fails the step at once, not at the health timeout	docs/health-adapters.md:141-150; pkg/health/adapter.go:480-577
 HEALTH-ROLL-01	live	delivery	covered	health	argoRollouts adapter: Rollout Healthy on the Bundle image -> Verified	docs/health-adapters.md:159-184; pkg/health/adapter.go:630
 HEALTH-ROLL-02	live	delivery	covered	health	argoRollouts adapter: Degraded (aborted canary) on the Bundle image is unhealthy; Progressing waits	docs/health-adapters.md:176-183; pkg/health/adapter.go:704
 HEALTH-FLAG-01	live	delivery	covered	health	flagger adapter: Canary Succeeded on the promoted revision -> Verified	docs/health-adapters.md:186-216; pkg/health/adapter.go:849; pkg/health/adapter.go:929
@@ -94,7 +98,7 @@ BAKE-03	live	core	todo	health	bake policy fail-on-alarm applies onHealthFailure 
 BAKE-04	live	delivery	covered	health	bake: a Waiting check (a paused canary) stops the window without an alarm under fail-on-alarm; the window restarts at the next healthy check	docs/pipeline-reference.md:111; docs/health-adapters.md:257
 BAKE-05	live	delivery	covered	health	bake: a release that stays unhealthy under reset-on-alarm fails at health.timeout from the moment the window stopped	docs/health-adapters.md:255-257; docs/rollback.md:96
 ONFAIL-NONE-01	live	core	todo	health	onHealthFailure: none (default) marks the step Failed	docs/pipeline-reference.md:113
-ONFAIL-ABORT-01	live	core	todo	health	onHealthFailure: abort marks the step AbortedByAlarm and it does not reset to Pending	docs/pipeline-reference.md:113; docs/changelog.md:90
+ONFAIL-ABORT-01	live	core	todo	health	onHealthFailure: abort marks the step AbortedByAlarm and it does not reset to Pending	docs/pipeline-reference.md:113; docs/changelog.md:88
 ONFAIL-ROLLBACK-01	live	core	todo	rollback	onHealthFailure: rollback creates a rollback Bundle from the previous Verified Bundle; step RollingBack	docs/pipeline-reference.md:113; docs/rollback.md:55
 ONFAIL-ROLLBACK-02	live	core	todo	rollback	onHealthFailure: rollback with nothing safe to roll back to -> AbortedByAlarm; a rollback Bundle never rolls back again	docs/pipeline-reference.md:113; docs/rollback.md:55
 HEALTH-FAILCOUNT-01	live	core	todo	health	status.consecutiveHealthFailures increments per unhealthy check	docs/health-adapters.md:257
@@ -152,8 +156,8 @@ SCM-ADO-02	contract	core	covered	scm	Azure DevOps: labels applied as PR tags	doc
 SCM-ADO-03	contract	core	covered	scm	Azure DevOps: merge detected by polling (status completed); merge commit fetched from API	docs/scm-providers.md:226; pkg/scm/revision.go:43-114
 SCM-ADO-04	contract	core	covered	webhook	Azure DevOps: X-AzureDevOps-Token compared in constant time; resource.status completed marks merged; wrong token 401	docs/scm-providers.md:16; pkg/scm/azuredevops.go:270-313
 SCM-ADO-05	contract	core	covered	scm	Azure DevOps: approvals read, close PR, existing-PR reuse	pkg/scm/azuredevops.go
-SCM-REOPEN-01	live	scm-forgejo	covered	scm	PR closed without merge can be reopened within 5 minutes and the promotion continues	docs/changelog.md:56
-SCM-CLOSED-01	live	scm-forgejo	covered	scm	PR closed for more than 5 minutes: kardinal comments once, stops polling, fails the step (closedAt, closedFinal)	docs/changelog.md:56
+SCM-REOPEN-01	live	scm-forgejo	covered	scm	PR closed without merge can be reopened within 5 minutes and the promotion continues	docs/changelog.md:54
+SCM-CLOSED-01	live	scm-forgejo	covered	scm	PR closed for more than 5 minutes: kardinal comments once, stops polling, fails the step (closedAt, closedFinal)	docs/changelog.md:54
 SCM-ROTATE-01	live	scm-forgejo	todo	scm	SCM token Secret change is picked up within about 30s without restart (log SCM credentials rotated)	docs/scm-providers.md:281-329; pkg/scm/secret_watcher.go:31
 SCM-STATIC-01	live	scm-forgejo	todo	scm	static mode (--github-token without --scm-token-secret-name) needs a restart to rotate	docs/scm-providers.md:330-340
 SCM-BREAKER-01	live	scm-forgejo	todo	scm	SCM circuit breaker and rate-limit backoff stop hammering a failing SCM API	pkg/scm/circuit_breaker.go
@@ -176,22 +180,24 @@ GATE-PR-01	live	core	covered	gates	bundle.pr.* (isApproved, approvalCount) from 
 GATE-ORG-01	live	core	covered	gates	org gates in platform-policies with kardinal.io/applies-to are injected into matching Pipelines and cannot be removed by the team	docs/policy-gates.md:89-108; docs/policy-gates.md:129-148
 GATE-TEAM-01	live	core	covered	gates	team gates in the Pipeline namespace apply only to that team's matching envs	docs/policy-gates.md:109-128
 GATE-POLNS-01	live	core	covered	gates	Pipeline spec.policyNamespaces adds extra gate namespaces	api/v1alpha1/pipeline_types.go:52-58; docs/guides/security.md:116-133
-GATE-PREDEPLOY-01	live	core	covered	gates	step waits for a gate evaluation at or after its own creation; a gate that turns not-ready before start holds the step	docs/policy-gates.md:503-508; pkg/reconciler/promotionstep/reconciler.go:1100-1117
+GATE-PREDEPLOY-01	live	core	covered	gates	step waits for a gate evaluation at or after its own creation; a gate that turns not-ready before start holds the step	docs/policy-gates.md:498-503; pkg/reconciler/promotionstep/reconciler.go:1100-1117
 GATE-RECHECK-01	live	core	covered	gates	recheckInterval (default 5m, min 10s) re-evaluates gates periodically	docs/policy-gates.md:432-466
-GATE-FINISHED-01	live	core	covered	gates	gates of settled or Superseded Bundles are no longer evaluated	docs/policy-gates.md:489-502; pkg/reconciler/policygate/reconciler.go:136-139
-GATE-OVERRIDE-01	live	core	covered	gates	spec.overrides with reason and expiry makes the gate pass for that stage; PR body shows OVERRIDDEN by/reason	docs/policy-gates.md:538; pkg/reconciler/policygate/reconciler.go:147-159; pkg/reconciler/policygate/reconciler.go:148
+GATE-FINISHED-01	live	core	covered	gates	gates of settled or Superseded Bundles are no longer evaluated	docs/policy-gates.md:489-497; pkg/reconciler/policygate/reconciler.go:136-139
+GATE-OVERRIDE-01	live	core	covered	gates	spec.overrides with reason and expiry makes the gate pass for that stage; PR body shows OVERRIDDEN by/reason	docs/policy-gates.md:533; pkg/reconciler/policygate/reconciler.go:147-159; pkg/reconciler/policygate/reconciler.go:148
 GATE-OVERRIDE-02	live	core	covered	gates	expired override or override for another stage (kardinal.io/environment label) does not unblock	pkg/reconciler/policygate/reconciler.go:147-159
 GATE-AUDIT-01	live	core	covered	gates	GateEvaluated AuditEvent on first evaluation and on every readiness flip	docs/guides/security.md:264-273; pkg/reconciler/policygate/audit.go:60
-GATE-MESSAGE-01	live	core	covered	gates	gate spec.message is shown to the user when the gate blocks	docs/policy-gates.md:27; pkg/reconciler/policygate/reconciler.go:175-208; cmd/kardinal/cmd/policy.go:426
-GATE-REJECT-01	live	core	covered	gates	PolicyGate spec.selector or a name over 63 chars is rejected by the API server with a what-to-do message	docs/changelog.md:31
-GATE-REJECT-02	live	core	covered	gates	a PolicyGate template name over 63 characters is rejected whatever its pattern; controller-created instances and freeze gates are exempt	docs/changelog.md:16; api/v1alpha1/policygate_types.go:137
-METRIC-01	live	prometheus	todo	metriccheck	MetricCheck runs a PromQL query against Prometheus and records Pass/Fail using lt/gt/lte/gte/eq on a scalar or one-element vector	api/v1alpha1/metriccheck_types.go:13-16; pkg/reconciler/metriccheck/prometheus.go:153-174
-METRIC-02	live	prometheus	todo	metriccheck	metrics.<name> in a gate expression blocks promotion when the MetricCheck fails	docs/policy-gates.md:342-383; pkg/reconciler/policygate/reconciler.go:343-353
-METRIC-03	live	prometheus	todo	metriccheck	result older than validUntil (max(3x interval, 30s)) reads Stale and the gate fails closed	pkg/reconciler/metriccheck
-METRIC-04	live	prometheus	todo	metriccheck	query error, empty result or multi-element vector gives Fail (fail closed)	pkg/reconciler/metriccheck/prometheus.go:47-115
-METRIC-05	live	prometheus	todo	metriccheck	interval default 1m, minimum 10s; re-query on interval	api/v1alpha1/metriccheck_types.go
-METRIC-06	live	prometheus	todo	metriccheck	prometheusURL to loopback, link-local or metadata addresses is refused by the egress guard	docs/guides/security.md:371-408; pkg/egress/guard.go:66-89
-METRIC-07	live	prometheus	todo	metriccheck	MetricCheck supports custom query providers beyond Prometheus	docs/guides/migrating-from-kargo.md:17; api/v1alpha1/metriccheck_types.go:13-16
+GATE-MESSAGE-01	live	core	covered	gates	gate spec.message is shown to the user when the gate blocks	docs/policy-gates.md:27; pkg/reconciler/policygate/reconciler.go:175-208; cmd/kardinal/cmd/policy.go:364
+GATE-REJECT-01	live	core	covered	gates	PolicyGate spec.selector or a name over 63 chars is rejected by the API server with a what-to-do message	docs/changelog.md:29
+GATE-REJECT-02	live	core	covered	gates	a PolicyGate template name over 63 characters is rejected whatever its pattern; controller-created instances and freeze gates are exempt	docs/changelog.md:15; api/v1alpha1/policygate_types.go:135
+METRIC-01	live	flux	covered	metriccheck	MetricCheck runs a PromQL query against Prometheus and records Pass/Fail using lt/gt/lte/gte/eq on a scalar or one-element vector	api/v1alpha1/metriccheck_types.go:13-16; pkg/reconciler/metriccheck/prometheus.go:153-174
+METRIC-02	live	flux	covered	metriccheck	metrics.<name> in a gate expression blocks promotion when the MetricCheck fails	docs/policy-gates.md:342-383; pkg/reconciler/policygate/reconciler.go:343-353
+METRIC-03	live	flux	covered	metriccheck	result older than validUntil (max(3x interval, 30s)) reads Stale and the gate fails closed	pkg/reconciler/metriccheck
+METRIC-04	live	flux	covered	metriccheck	query error, empty result or multi-element vector gives Fail (fail closed)	pkg/reconciler/metriccheck/prometheus.go:47-115
+METRIC-05	live	flux	covered	metriccheck	interval default 1m, minimum 10s; re-query on interval	api/v1alpha1/metriccheck_types.go
+METRIC-06	live	flux	covered	metriccheck	prometheusURL to loopback, link-local or metadata addresses is refused by the egress guard	docs/guides/security.md:371-408; pkg/egress/guard.go:66-89
+METRIC-07	live	flux	covered	metriccheck	MetricCheck provider is prometheus only: the CRD rejects any other provider and an unset provider defaults to prometheus (docs claimed custom query providers)	docs/guides/migrating-from-kargo.md:17; api/v1alpha1/metriccheck_types.go:13-16
+METRIC-08	live	flux	covered	metriccheck	an org PolicyGate reads MetricChecks in its own namespace; a team MetricCheck with the same name cannot satisfy it	docs/policy-gates.md:173; docs/reference/cel-context.md:132; pkg/reconciler/policygate/reconciler.go
+METRIC-09	live	flux	covered	metriccheck	a MetricCheck whose status write fails re-queries at its interval and recovers within one interval	pkg/reconciler/metriccheck/reconciler.go
 CW-01	live	core	covered	changewindow	blackout ChangeWindow blocks via changewindow.isBlocked()/isAllowed() in gate CEL	docs/policy-gates.md:342-383; pkg/reconciler/policygate/reconciler.go:390-397; pkg/reconciler/policygate/cel_evaluator.go:124-156
 CW-02	live	core	covered	changewindow	recurring ChangeWindow (allowedDays, allowedHours, timezone with embedded tzdata)	api/v1alpha1/changewindow_types.go:20-62; pkg/reconciler/changewindow/window.go:92-201
 CW-03	live	core	covered	changewindow	invalid ChangeWindow spec sets Valid=False/InvalidSpec and the window blocks	pkg/reconciler/changewindow/window.go:92-201
@@ -209,7 +215,7 @@ RB-AUDIT-01	live	core	todo	rollback	RollbackStarted AuditEvent when onHealthFail
 PAUSE-01	live	core	covered	pause	paused Pipeline holds new steps via freeze-<pipeline> gate and a Paused condition	docs/rollback.md:192-200; pkg/lifecycle/pause.go:45
 PAUSE-02	live	core	covered	pause	in-flight WaitingForMerge/HealthChecking steps finish; others hold at the next safe point	docs/rollback.md:197
 PAUSE-03	live	core	covered	pause	resume deletes the freeze gate and held steps continue	docs/rollback.md:200
-PAUSE-04	live	core	covered	pause	setting spec.paused directly (kubectl) has the same effect as kardinal pause	docs/pipeline-reference.md:133-137
+PAUSE-04	live	core	covered	pause	setting spec.paused directly (kubectl) has the same effect as kardinal pause	docs/pipeline-reference.md:134-138
 SUB-OCI-01	live	core	covered	subscription	image Subscription polls a public OCI registry; a new matching tag creates Bundle <sub>-<tag>-<digest8>	docs/subscription.md:40-85; pkg/source/oci.go
 SUB-OCI-02	live	core	covered	subscription	tagFilter semver/regex picks the tag; no match (or over 50 non-semver tags) gives phase Error	docs/subscription.md:86-108; pkg/source/oci.go
 SUB-OCI-03	live	core	covered	subscription	digest-tracked tag (^main$): a new digest on the same tag creates a new Bundle	docs/subscription.md:86-108
@@ -225,7 +231,7 @@ NOTIF-01	live	core	covered	notifications	NotificationHook delivers Bundle.Verifi
 NOTIF-02	live	core	covered	notifications	NotificationHook delivers Bundle.Failed	docs/notifications.md:65-80
 NOTIF-03	live	core	covered	notifications	NotificationHook delivers PolicyGate.Blocked	docs/notifications.md:65-80
 NOTIF-04	live	core	covered	notifications	NotificationHook delivers PromotionStep.Failed	docs/notifications.md:65-80
-NOTIF-AUTH-01	live	core	covered	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:112-160; pkg/reconciler/notificationhook/reconciler.go:470-472
+NOTIF-AUTH-01	live	core	covered	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:112-160; pkg/reconciler/notificationhook/reconciler.go:441-443
 NOTIF-SEL-01	live	core	covered	notifications	pipelineSelector limits which Pipelines a hook reports on	docs/notifications.md:190
 NOTIF-EGRESS-01	live	core	covered	notifications	hook URL to loopback, link-local or metadata address is refused	docs/guides/security.md:371-408; pkg/egress/guard.go:66-89
 NOTIF-RETRY-01	live	core	covered	notifications	failed deliveries retried with backoff	docs/notifications.md:95-97; pkg/reconciler/notificationhook/reconciler.go:220-243
@@ -240,23 +246,23 @@ CLI-OUTPUT-01	live	cli	covered	cli	-o json|yaml on get pipelines/bundles/steps/s
 CLI-GET-PIPELINES-01	live	cli	covered	cli	get pipelines table per env (-A, -w) and -o json array	cmd/kardinal/cmd/get_pipelines.go:68; docs/reference/cli/kardinal-get-pipelines.md
 CLI-GET-BUNDLES-01	live	cli	covered	cli	get bundles (--active)	docs/reference/cli/kardinal-get-bundles.md
 CLI-GET-STEPS-01	live	cli	covered	cli	get steps (-w) one row per env	docs/reference/cli/kardinal-get-steps.md
-CLI-GET-AUDIT-01	live	cli	covered	cli	get auditevents --pipeline --bundle --env --limit [-o json|yaml]	docs/reference/cli/kardinal-get-auditevents.md; docs/guides/security.md:290-310
+CLI-GET-AUDIT-01	live	cli	covered	cli	get auditevents --pipeline --bundle --env --limit	docs/reference/cli/kardinal-get-auditevents.md; docs/guides/security.md:290-310
 CLI-GET-SUBS-01	live	core	covered	cli	get subscriptions -A	docs/reference/cli/kardinal-get-subscriptions.md
 CLI-EXPLAIN-01	live	cli	covered	cli	explain <pipeline> --env shows each gate STATE (Waiting/Block/Superseded), expression and reason	cmd/kardinal/cmd/explain.go:43; docs/reference/cli/kardinal-explain.md
 CLI-EXPLAIN-02	live	cli	covered	cli	explain --watch and --color	cmd/kardinal/cmd/explain.go:43
 CLI-STATUS-01	live	cli	covered	cli	status [pipeline] shows controller health, version and blocking gates	cmd/kardinal/cmd/status.go:37
 CLI-CREATE-BUNDLE-01	live	cli	covered	cli	create bundle <pipeline> --image --commit --author --ci-run-url creates an image Bundle	cmd/kardinal/cmd/create_bundle.go:65; cmd/kardinal/cmd/create_bundle.go:184; docs/ci-integration.md:168-190
 CLI-CREATE-BUNDLE-02	live	cli	covered	cli	create bundle --type config --config-commit [--config-repo]; config without --config-commit errors	cmd/kardinal/cmd/create_bundle.go:139-140; docs/ci-integration.md:183
-CLI-CREATE-DRYRUN-01	live	cli	covered	cli	create bundle --dry-run reads the Pipeline and its PolicyGates, builds the Graph in memory, prints its node count and the environments with their gates, and creates nothing	cmd/kardinal/cmd/create_bundle.go:65
+CLI-CREATE-DRYRUN-01	live	cli	covered	cli	create bundle --dry-run prints the Bundle and makes no API calls	cmd/kardinal/cmd/create_bundle.go:65
 CLI-DELETE-BUNDLE-01	live	cli	covered	cli	delete bundle	cmd/kardinal/cmd/delete_bundle.go:41
 CLI-PROMOTE-01	live	cli	covered	cli	promote <pipeline> -e <env> promotes the latest Verified upstream Bundle	cmd/kardinal/cmd/promote.go:33; pkg/lifecycle/promote.go:53
 CLI-ROLLBACK-01	live	cli	covered	cli	rollback <pipeline> --env [--to] prints Bundle X created (rollbackOf=T)	cmd/kardinal/cmd/rollback.go:40; cmd/kardinal/cmd/rollback.go:106
 CLI-PAUSE-01	live	cli	covered	cli	pause <pipeline> sets spec.paused=true and prints paused	cmd/kardinal/cmd/pause.go:31
 CLI-RESUME-01	live	cli	covered	cli	resume <pipeline> clears spec.paused and promotion continues	cmd/kardinal/cmd/pause.go:68
-CLI-OVERRIDE-01	live	cli	covered	cli	override --gate --reason [--stage] [--expires-in] patches gate instances in the Pipeline namespace	cmd/kardinal/cmd/override.go:43; cmd/kardinal/cmd/override.go:252
-CLI-POLICY-LIST-01	live	cli	covered	cli	policy list shows gates per namespace and when their instances were last evaluated	cmd/kardinal/cmd/policy.go:69
-CLI-POLICY-SIMULATE-01	live	cli	covered	cli	policy simulate --pipeline --env [--time] [--soak-minutes] prints RESULT: PASS or BLOCKED and a PASS or BLOCK row per gate; exits 0 either way	cmd/kardinal/cmd/policy.go:293
-CLI-POLICY-TEST-01	live	cli	covered	cli	policy test evaluates an expression locally	cmd/kardinal/cmd/policy.go:633
+CLI-OVERRIDE-01	live	cli	covered	cli	override --stage --reason --expires-in [--gate] patches gate instances in the Pipeline namespace	cmd/kardinal/cmd/override.go:43; cmd/kardinal/cmd/override.go:243
+CLI-POLICY-LIST-01	live	cli	covered	cli	policy list shows gates per namespace	cmd/kardinal/cmd/policy.go:69
+CLI-POLICY-SIMULATE-01	live	cli	covered	cli	policy simulate --pipeline --env --time [--soak-minutes] reports PASS/BLOCKED per gate	cmd/kardinal/cmd/policy.go:238
+CLI-POLICY-TEST-01	live	cli	covered	cli	policy test evaluates an expression locally	cmd/kardinal/cmd/policy.go:571
 CLI-HISTORY-01	live	cli	covered	cli	history <pipeline> --env --limit	cmd/kardinal/cmd/history.go:37
 CLI-LOGS-01	live	cli	covered	cli	logs <pipeline> --env --bundle [-f] follows until a terminal state	cmd/kardinal/cmd/logs.go:42; docs/reference/cli/kardinal-logs.md:16
 CLI-DIFF-01	live	cli	covered	cli	diff <bundleA> <bundleB>	cmd/kardinal/cmd/diff.go:32
@@ -268,8 +274,8 @@ CLI-DOCTOR-01	live	cli	covered	cli	doctor [--pipeline] runs preflight checks, pr
 CLI-INIT-01	live	cli	covered	cli	init --stdout/--file/--scaffold-gitops/--gitops-dir/--demo	cmd/kardinal/cmd/init.go:72
 CLI-VALIDATE-01	live	cli	covered	cli	validate -f rejects what the API server rejects and warns on deprecated fields	cmd/kardinal/cmd/validate.go:37
 CLI-COMPLETION-01	live	cli	covered	cli	completion bash|zsh|fish	cmd/kardinal/cmd/completion.go:24
-CLI-APPROVE-01	deprecated	cli	covered	cli	approve fails and points to kardinal override	cmd/kardinal/cmd/approve.go:32; docs/changelog.md:69
-CLI-EMERGENCY-01	deprecated	cli	covered	cli	rollback --emergency has no effect and prints a deprecation notice	cmd/kardinal/cmd/rollback.go:73-74; docs/changelog.md:69
+CLI-APPROVE-01	deprecated	cli	covered	cli	approve fails and points to kardinal override	cmd/kardinal/cmd/approve.go:32; docs/changelog.md:67
+CLI-EMERGENCY-01	deprecated	cli	covered	cli	rollback --emergency has no effect and prints a deprecation notice	cmd/kardinal/cmd/rollback.go:73-74; docs/changelog.md:67
 UIAPI-PIPELINES-01	live	ui	covered	ui-api	GET /api/v1/ui/pipelines lists pipelines with env status	cmd/kardinal-controller/ui_api.go:270
 UIAPI-BUNDLES-01	live	ui	covered	ui-api	GET pipelines/{p}/bundles	cmd/kardinal-controller/ui_api.go:441
 UIAPI-GRAPH-01	live	ui	covered	ui-api	GET bundles/{b}/graph returns nodes, edges and PR links	cmd/kardinal-controller/ui_api.go:521
@@ -282,7 +288,7 @@ UIAPI-PAUSE-01	live	ui	covered	ui-api	POST pause and resume	cmd/kardinal-control
 UIAPI-APPROVE-01	live	ui	covered	ui-api	POST gates/[{ns}/]{name}/approve writes an override	cmd/kardinal-controller/ui_api.go:1054
 UIAPI-VALIDATECEL-01	live	ui	covered	ui-api	POST validate-cel returns compile errors	cmd/kardinal-controller/ui_api.go:1006
 UIAPI-CREATE-01	live	ui	covered	ui-api	POST bundles creates a Bundle from the UI	cmd/kardinal-controller/ui_api.go:1368-1443
-UIAPI-LOCAL-01	live	ui	covered	ui-api	with no UI auth mode, non-loopback clients or requests with proxy headers get 403	cmd/kardinal-controller/ui_peer.go:33-71; docs/installation.md:161-200; docs/changelog.md:30
+UIAPI-LOCAL-01	live	ui	covered	ui-api	with no UI auth mode, non-loopback clients or requests with proxy headers get 403	cmd/kardinal-controller/ui_peer.go:33-71; docs/installation.md:161-200; docs/changelog.md:28
 UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:574-617; cmd/kardinal-controller/ui_hosts.go
 UIAPI-TOKEN-01	live	ui	covered	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:460-483
 UIAPI-TR-01	live	ui	covered	ui-api	TokenReview mode: 401 invalid token, 403 when SubjectAccessReview denies, 503 when review fails; 30s cache	docs/guides/security.md:484-558; pkg/uiauth/tokenreview.go
@@ -303,11 +309,11 @@ UI-SHELL-01	live	ui	covered	ui	keyboard shortcuts, theme, URL deep links, refres
 UI-OVERRIDE-01	live	ui	todo	ui	approve or override a gate from the UI	docs/roadmap.md:83-85; docs/guides/security.md:544-545
 CIAPI-OFF-01	live	core	covered	ci-api	without --bundle-api-token / KARDINAL_BUNDLE_TOKEN, POST /api/v1/bundles is not mounted (404)	docs/ci-integration.md:228-254; cmd/kardinal-controller/bundle_api.go
 CIAPI-AUTH-01	live	core	covered	ci-api	wrong bearer gets 401; non-POST gets 405	cmd/kardinal-controller/bundle_api.go:136-151
-CIAPI-CREATE-01	live	core	covered	ci-api	valid POST returns 201 {name,namespace}; the Bundle promotes with provenance	docs/ci-integration.md:7-36; docs/ci-integration.md:285-314; docs/ci-integration.md:390
+CIAPI-CREATE-01	live	core	covered	ci-api	valid POST returns 201 {name,namespace}; the Bundle promotes with provenance	docs/ci-integration.md:7-36; docs/ci-integration.md:285-314; docs/ci-integration.md:388
 CIAPI-VALIDATE-01	live	core	covered	ci-api	unknown fields, invalid Bundle, body over 1 MiB or bad ciRunURL gets 400 without echoing the URL	cmd/kardinal-controller/bundle_api.go:160-187; pkg/graph/validate.go:325-345
 CIAPI-NS-01	live	core	covered	ci-api	namespace outside --watch-namespace gets 403	cmd/kardinal-controller/bundle_api.go:194-197
 CIAPI-RATE-01	live	core	covered	ci-api	over the rate limit gets 429	docs/troubleshooting.md:238; cmd/kardinal-controller/bundle_api.go:43-46; cmd/kardinal-controller/bundle_api.go:154-157
-CIAPI-INTENT-01	live	core	covered	ci-api	Bundle intent (targetEnvironment, skipEnvironments) via the API	docs/ci-integration.md:365-389; cmd/kardinal-controller/bundle_api.go:63
+CIAPI-INTENT-01	live	core	covered	ci-api	Bundle intent (targetEnvironment, skipEnvironments) via the API	docs/ci-integration.md:365-387; cmd/kardinal-controller/bundle_api.go:63
 CIAPI-KUBECTL-01	live	core	covered	ci-api	Bundle applied with kubectl (spec.provenance) promotes like one from the API	docs/ci-integration.md:189-225
 CIAPI-ACTION-01	live	core	covered	ci-api	GitHub Action create-bundle posts an image Bundle with provenance from GITHUB_SHA/RUN/ACTOR	docs/ci-integration.md:37-125; .github/actions/create-bundle/action.yml:5-33
 CIAPI-ACTION-02	live	core	covered	ci-api	GitHub Action type config or mixed	docs/ci-integration.md:105; .github/actions/create-bundle/action.yml:9-12; .github/actions/create-bundle/parse.sh:65-82; pkg/lifecycle/newbundle.go:42
@@ -333,34 +339,34 @@ CHART-GRAPH-01	live	chart	todo	chart	graph.serviceAccountName, kroNamespace, rea
 CHART-NETPOL-01	live	chart	todo	chart	networkPolicy allows metrics/UI/webhook ingress and API/SCM egress only	chart/kardinal-promoter/values.yaml:243-255; docs/guides/security.md:352-370
 CHART-CLOCK-01	live	chart	todo	chart	scheduleClock creates kardinal-clock	chart/kardinal-promoter/values.yaml:261-263
 CHART-DEMO-01	live	chart	todo	chart	demo values	chart/kardinal-promoter/values.yaml:293-309
-CHART-MON-01	live	prometheus	todo	chart	serviceMonitor, prometheusRule and grafanaDashboard are picked up by Prometheus Operator	chart/kardinal-promoter/values.yaml:315-359; docs/guides/monitoring.md:205-327
-CHART-SCHEMA-01	live	chart	todo	chart	values schema rejects removed keys (controller.shard, v0.8.1 krocodile block) with a clear error	chart/kardinal-promoter/values.schema.json:6; chart/kardinal-promoter/values.schema.json:89; docs/changelog.md:29
-CHART-INTEGJOBS-01	deprecated	chart	todo	chart	rbac.integrationTestJobs has no effect	chart/kardinal-promoter/values.yaml:205; docs/changelog.md:69
-CHART-VAP-01	deprecated	chart	todo	chart	validatingAdmissionPolicy.enabled has no effect	chart/kardinal-promoter/values.yaml:238; docs/changelog.md:69
-OBS-METRICS-01	live	prometheus	todo	observability	/metrics exposes the 7 kardinal metrics with labels after a promotion	docs/guides/monitoring.md:74-90; pkg/reconciler/observability/metrics.go:47-133
-OBS-CRMETRICS-01	live	prometheus	todo	observability	controller-runtime reconcile and workqueue metrics	docs/guides/monitoring.md:46-73
-OBS-READYZ-01	live	core	covered	observability	/readyz readiness probe on the health port	chart/kardinal-promoter/templates/deployment.yaml:142-151
-OBS-HEALTHZ-01	live	core	covered	observability	/healthz liveness probe	chart/kardinal-promoter/templates/deployment.yaml:142-151
-UPG-CRDS-01	live	upgrade	todo	upgrade	v0.8.1 to v0.9.0-rc.1: kro first, CRDs applied by hand, then helm upgrade	docs/changelog.md:22-33; docs/installation.md:211-226; docs/installation.md:276-279
+CHART-MON-01	live	flux	covered	chart	serviceMonitor, prometheusRule and grafanaDashboard are picked up by Prometheus Operator	chart/kardinal-promoter/values.yaml:315-359; docs/guides/monitoring.md:205-327
+CHART-SCHEMA-01	live	chart	todo	chart	values schema rejects removed keys (controller.shard, v0.8.1 krocodile block) with a clear error	chart/kardinal-promoter/values.schema.json:6; chart/kardinal-promoter/values.schema.json:89; docs/changelog.md:27
+CHART-INTEGJOBS-01	deprecated	chart	todo	chart	rbac.integrationTestJobs has no effect	chart/kardinal-promoter/values.yaml:205; docs/changelog.md:67
+CHART-VAP-01	deprecated	chart	todo	chart	validatingAdmissionPolicy.enabled has no effect	chart/kardinal-promoter/values.yaml:238; docs/changelog.md:67
+OBS-METRICS-01	live	flux	covered	observability	/metrics exposes the 7 kardinal metrics with labels after a promotion	docs/guides/monitoring.md:74-90; pkg/reconciler/observability/metrics.go:47-133
+OBS-CRMETRICS-01	live	flux	covered	observability	controller-runtime reconcile and workqueue metrics	docs/guides/monitoring.md:46-73
+OBS-READYZ-01	live	core	todo	observability	/readyz readiness probe on the health port	chart/kardinal-promoter/templates/deployment.yaml:142-151
+OBS-HEALTHZ-01	live	core	todo	observability	/healthz liveness probe	chart/kardinal-promoter/templates/deployment.yaml:142-151
+UPG-CRDS-01	live	upgrade	todo	upgrade	v0.8.1 to v0.9.0-rc.1: kro first, CRDs applied by hand, then helm upgrade	docs/changelog.md:20-31; docs/installation.md:211-226; docs/installation.md:276-279
 UPG-REUSE-01	live	upgrade	todo	upgrade	helm upgrade --reuse-values from v0.8.1	docs/installation.md:223-226; chart/kardinal-promoter/values.schema.json:6
-UPG-INFLIGHT-01	live	upgrade	todo	upgrade	in-flight Bundles re-translate into kro Graphs and continue after the upgrade	docs/changelog.md:35-56
-UPG-PAUSED-01	live	upgrade	todo	upgrade	Pipelines paused before the upgrade stay held	docs/changelog.md:35-56; pkg/lifecycle/pause.go:45
-UPG-GATES-01	live	upgrade	todo	upgrade	gates are re-evaluated at startup and pre-upgrade MetricCheck results read Stale until refreshed	docs/changelog.md:35-56
-UPG-OLDK8S-01	live	upgrade	todo	upgrade	on Kubernetes older than 1.30, stored objects with now-rejected fields must be cleaned first	docs/changelog.md:28
+UPG-INFLIGHT-01	live	upgrade	todo	upgrade	in-flight Bundles re-translate into kro Graphs and continue after the upgrade	docs/changelog.md:33-54
+UPG-PAUSED-01	live	upgrade	todo	upgrade	Pipelines paused before the upgrade stay held	docs/changelog.md:33-54; pkg/lifecycle/pause.go:45
+UPG-GATES-01	live	upgrade	todo	upgrade	gates are re-evaluated at startup and pre-upgrade MetricCheck results read Stale until refreshed	docs/changelog.md:33-54
+UPG-OLDK8S-01	live	upgrade	todo	upgrade	on Kubernetes older than 1.30, stored objects with now-rejected fields must be cleaned first	docs/changelog.md:26
 MC-ARGO-01	live	multi-cluster	todo	multi-cluster	Argo CD hub: argocd health on a hub Application whose destination is a spoke cluster	docs/distributed-mode.md:5-15; docs/pipeline-reference.md:391-414
 MC-FLUX-01	live	multi-cluster	todo	multi-cluster	Flux hub: Kustomization with spec.kubeConfig.secretRef targets a remote cluster	docs/distributed-mode.md:10; docs/health-adapters.md:224
 MC-ROLLOUTS-01	live	multi-cluster	todo	multi-cluster	argoRollouts health reads the Rollout in the controller's cluster only	docs/pipeline-reference.md:349-389
-EX-QUICKSTART-01	live	core	covered	examples	quickstart promotes test to uat to prod with weekend and soak org gates	examples/quickstart; docs/quickstart.md
+EX-QUICKSTART-01	live	core	todo	examples	quickstart promotes test to uat to prod with weekend and soak org gates	examples/quickstart; docs/quickstart.md
 EX-GITHUB-DEMO-01	live	scm-github	todo	examples	github-demo: pr-review, bake, onHealthFailure rollback, team gates	examples/github-demo/README.md:10; examples/github-demo/README.md:79-84; examples/github-demo/README.md:124-128; examples/github-demo/README.md:140-175
-EX-FLUX-01	live	health-flux	todo	examples	flux-demo: flux health and bake fail-on-alarm	examples/flux-demo
+EX-FLUX-01	live	flux	covered	examples	flux-demo: flux health and bake fail-on-alarm	examples/flux-demo
 EX-ROLLOUTS-01	live	delivery	covered	examples	argo-rollouts-demo: Degraded rollout opens a rollback PR	examples/argo-rollouts-demo/README.md:21; examples/argo-rollouts-demo/README.md:150
 EX-FLAGGER-01	live	delivery	covered	examples	flagger-demo: failed canary opens a rollback PR	examples/flagger-demo/README.md:23; examples/flagger-demo/README.md:126
 EX-SUB-01	live	core	covered	examples	subscription example (OCI and git watchers)	examples/subscription
-EX-CONFIG-01	live	core	covered	examples	config-promotion example (config Bundle)	examples/config-promotion
-EX-WAVE-01	live	core	covered	examples	wave-topology example	examples/wave-topology
+EX-CONFIG-01	live	core	todo	examples	config-promotion example (config Bundle)	examples/config-promotion
+EX-WAVE-01	live	core	todo	examples	wave-topology example	examples/wave-topology
 EX-FLEET-01	live	multi-cluster	todo	examples	multi-cluster-fleet: fan-out to both prod regions	examples/multi-cluster-fleet/README.md:109; examples/multi-cluster-fleet/bundle.yaml:20-21
 EX-TENANT-01	live	health-argocd	todo	examples	multi-tenant Helm chart + ApplicationSet: each team Pipeline promotes	examples/multi-tenant/chart/templates/pipeline.yaml:13-16
-DEP-WHEN-01	deprecated	core	todo	deprecated	PolicyGate spec.when is accepted with a warning and has no effect	docs/changelog.md:69; docs/policy-gates.md:67-88
-DEP-CLUSTER-01	deprecated	multi-cluster	todo	deprecated	env health.cluster sets Pipeline Ready=False NotImplemented and steps fail	docs/changelog.md:69; pkg/graph/unimplemented.go:26-28; pkg/reconciler/promotionstep/config_check.go:20-45
-DEP-REGIONS-01	deprecated	core	todo	deprecated	regions: one region ignored, two or more set Ready=False NotImplemented	docs/changelog.md:60
-DEP-GITPROVIDER-01	deprecated	core	todo	deprecated	Pipeline spec.git.provider is ignored; --scm-provider decides	docs/changelog.md:69; docs/scm-providers.md:231-236
+DEP-WHEN-01	deprecated	core	todo	deprecated	PolicyGate spec.when is accepted with a warning and has no effect	docs/changelog.md:67; docs/policy-gates.md:67-88
+DEP-CLUSTER-01	deprecated	multi-cluster	todo	deprecated	env health.cluster sets Pipeline Ready=False NotImplemented and steps fail	docs/changelog.md:67; pkg/graph/unimplemented.go:26-28; pkg/reconciler/promotionstep/config_check.go:20-45
+DEP-REGIONS-01	deprecated	core	todo	deprecated	regions: one region ignored, two or more set Ready=False NotImplemented	docs/changelog.md:58
+DEP-GITPROVIDER-01	deprecated	core	todo	deprecated	Pipeline spec.git.provider is ignored; --scm-provider decides	docs/changelog.md:67; docs/scm-providers.md:231-236
