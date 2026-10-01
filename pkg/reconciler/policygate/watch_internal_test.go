@@ -208,6 +208,64 @@ func TestUnstartedStepCreated(t *testing.T) {
 	assert.False(t, unstartedStepCreated.Create(event.CreateEvent{Object: &kardinalv1alpha1.PolicyGate{}}), "not a step")
 }
 
+// TestScheduleClockTicked checks that only a new status.tick re-evaluates the
+// gates: a clock created, deleted, relabelled or with a new interval does not.
+func TestScheduleClockTicked(t *testing.T) {
+	clock := func(mutate func(c *kardinalv1alpha1.ScheduleClock)) *kardinalv1alpha1.ScheduleClock {
+		c := &kardinalv1alpha1.ScheduleClock{
+			ObjectMeta: metav1.ObjectMeta{Name: "fast", Namespace: "team-a", Generation: 1, ResourceVersion: "10"},
+			Spec:       kardinalv1alpha1.ScheduleClockSpec{Interval: "1s"},
+			Status:     kardinalv1alpha1.ScheduleClockStatus{Tick: "2026-10-01T07:27:26Z"},
+		}
+		if mutate != nil {
+			mutate(c)
+		}
+		return c
+	}
+	tests := []struct {
+		name   string
+		old    func(c *kardinalv1alpha1.ScheduleClock)
+		mutate func(c *kardinalv1alpha1.ScheduleClock)
+		want   bool
+	}{
+		{name: "tick", want: true, mutate: func(c *kardinalv1alpha1.ScheduleClock) {
+			c.Status.Tick = "2026-10-01T07:27:31Z"
+			c.ResourceVersion = "11"
+		}},
+		{name: "first tick", want: true, old: func(c *kardinalv1alpha1.ScheduleClock) {
+			c.Status.Tick = ""
+			c.ResourceVersion = "9"
+		}},
+		{name: "resync", want: false},
+		{name: "deleting (finalizer removed)", want: false, mutate: func(c *kardinalv1alpha1.ScheduleClock) {
+			now := metav1.NewTime(time.Date(2026, 10, 1, 7, 27, 27, 0, time.UTC))
+			c.DeletionTimestamp = &now
+			c.ResourceVersion = "11"
+		}},
+		{name: "label", want: false, mutate: func(c *kardinalv1alpha1.ScheduleClock) {
+			c.Labels = map[string]string{"team": "a"}
+			c.ResourceVersion = "11"
+		}},
+		{name: "interval", want: false, mutate: func(c *kardinalv1alpha1.ScheduleClock) {
+			c.Spec.Interval = "1m"
+			c.Generation = 2
+			c.ResourceVersion = "11"
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldC, newC := clock(tt.old), clock(tt.mutate)
+			assert.Equal(t, tt.want, scheduleClockTicked.Update(event.UpdateEvent{ObjectOld: oldC, ObjectNew: newC}))
+		})
+	}
+	c := clock(nil)
+	assert.False(t, scheduleClockTicked.Create(event.CreateEvent{Object: c}), "create (also the initial list at start)")
+	assert.False(t, scheduleClockTicked.Delete(event.DeleteEvent{Object: c}), "delete")
+	assert.False(t, scheduleClockTicked.Generic(event.GenericEvent{Object: c}), "generic")
+	assert.False(t, scheduleClockTicked.Update(event.UpdateEvent{ObjectOld: &kardinalv1alpha1.PolicyGate{},
+		ObjectNew: &kardinalv1alpha1.PolicyGate{}}), "not a clock")
+}
+
 // TestStepRequiredGateRequests covers #1300: a step create enqueues each gate
 // in its spec.requiredGates, in the step's namespace.
 func TestStepRequiredGateRequests(t *testing.T) {

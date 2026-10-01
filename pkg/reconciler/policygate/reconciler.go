@@ -986,6 +986,25 @@ func staleToFresh(oldStatus, newStatus kardinalv1alpha1.MetricCheckStatus) bool 
 	return oldStatus.ValidUntil == nil || oldStatus.ValidUntil.Before(newStatus.LastEvaluatedAt)
 }
 
+// scheduleClockTicked passes only the ScheduleClock updates that change
+// status.tick. A gate reads the time from its evaluation, not from the clock,
+// so a clock's create, delete or any other update tells it nothing. Each of
+// them re-evaluated every gate instance in the cluster, and so restarted each
+// gate's recheckInterval wait: a fast clock deleted at the end of one use gave
+// every gate an evaluation one second after its last. At controller start the
+// informer's initial list sends a create for every clock; the PolicyGates'
+// own initial list evaluates every gate then.
+var scheduleClockTicked = predicate.Funcs{
+	CreateFunc: func(event.CreateEvent) bool { return false },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldC, okOld := e.ObjectOld.(*kardinalv1alpha1.ScheduleClock)
+		newC, okNew := e.ObjectNew.(*kardinalv1alpha1.ScheduleClock)
+		return okOld && okNew && oldC.Status.Tick != newC.Status.Tick
+	},
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+}
+
 // stepRequiredGateRequests enqueues the PolicyGates a PromotionStep requires
 // (spec.requiredGates, in the step's namespace). A new step starts only on
 // gate results evaluated at or after it was created (checkRequiredGates in
@@ -1035,7 +1054,8 @@ var unstartedStepCreated = predicate.Funcs{
 // It also adds a Watch on ScheduleClock objects: when a ScheduleClock's status.tick
 // changes (updated on each interval by the ScheduleClockReconciler), all PolicyGate
 // instances in ALL namespaces are re-evaluated, so schedule.* expressions follow
-// the clock interval. The per-gate RequeueAfter: recheckInterval still runs as
+// the clock interval. No other event of a clock re-evaluates them
+// (scheduleClockTicked). The per-gate RequeueAfter: recheckInterval still runs as
 // well; it is the only periodic re-evaluation when no ScheduleClock exists.
 //
 // The gate's own status writes do not re-trigger it (eventfilter.SpecOrAnnotationChanged;
@@ -1075,8 +1095,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&kardinalv1alpha1.MetricCheck{}, handler.EnqueueRequestsFromMapFunc(r.metricCheckRequests),
 			builder.WithPredicates(metricCheckResultChanged)).
 		// Watch ScheduleClock objects: when status.tick changes, all PolicyGate instances
-		// are re-evaluated cluster-wide.
-		Watches(&kardinalv1alpha1.ScheduleClock{}, handler.EnqueueRequestsFromMapFunc(scheduleClockMapper)).
+		// are re-evaluated cluster-wide. Nothing else about a clock does that.
+		Watches(&kardinalv1alpha1.ScheduleClock{}, handler.EnqueueRequestsFromMapFunc(scheduleClockMapper),
+			builder.WithPredicates(scheduleClockTicked)).
 		// Watch ChangeWindow objects: a window boundary (status.active write) or a
 		// spec edit re-evaluates the gates that reference changewindow.
 		Watches(&kardinalv1alpha1.ChangeWindow{}, handler.EnqueueRequestsFromMapFunc(changeWindowMapper)).
