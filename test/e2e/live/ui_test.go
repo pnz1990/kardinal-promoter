@@ -343,9 +343,11 @@ func holdGate(ns, env string) *v1alpha1.PolicyGate {
 // TestUI_APIGateHoldsUntilApproved checks the gate views and the approve
 // endpoint: a gate that is false holds prod, and GET /gates, the Bundle graph
 // and the pipeline list all say so; bad approve requests change nothing; an
-// approve writes an override that opens the gate, and prod then promotes.
+// approve writes an override that opens the gate, and prod then promotes. The
+// main release has no UI auth, so the override and the gate reason name the
+// UI, kardinal-ui.
 //
-// Covers UIAPI-GATES-01, UIAPI-APPROVE-01.
+// Covers UIAPI-GATES-01, UIAPI-APPROVE-01, UIAPI-REQUESTER-04.
 func TestUI_APIGateHoldsUntilApproved(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -446,9 +448,9 @@ func TestUI_APIGateHoldsUntilApproved(t *testing.T) {
 	})
 	require.Len(t, gate.Overrides, 1)
 	assert.Equal(t, "e2e emergency", gate.Overrides[0].Reason)
-	assert.Equal(t, "ui-action", gate.Overrides[0].CreatedBy)
+	assert.Equal(t, "kardinal-ui", gate.Overrides[0].CreatedBy)
 	assert.Equal(t, until.UTC().Format(time.RFC3339), gate.Overrides[0].ExpiresAt)
-	assert.True(t, strings.HasPrefix(gate.Reason, "OVERRIDDEN by ui-action: e2e emergency"), gate.Reason)
+	assert.True(t, strings.HasPrefix(gate.Reason, "OVERRIDDEN by kardinal-ui: e2e emergency"), gate.Reason)
 
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assert.Equal(t, fixtures.Image+":"+fixtures.V2, e.DeploymentImage(t, a.ns, fixtures.Workload("prod")))
@@ -639,9 +641,11 @@ func TestUI_APIPromoteAndRollback(t *testing.T) {
 
 // TestUI_APICreateBundle checks POST /bundles: a valid request creates a
 // Bundle that promotes, and the requests the Bundle API refuses are refused
-// here too, with the reason and without creating anything.
+// here too, with the reason and without creating anything. The main release
+// has no UI auth, so the Bundle's kardinal.io/requested-by is kardinal-ui,
+// and spec.provenance.author is the author in the request.
 //
-// Covers UIAPI-CREATE-01.
+// Covers UIAPI-CREATE-01, UIAPI-REQUESTER-03.
 func TestUI_APICreateBundle(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -686,6 +690,7 @@ func TestUI_APICreateBundle(t *testing.T) {
 	require.NotNil(t, b.Spec.Provenance)
 	assert.Equal(t, "0123abc", b.Spec.Provenance.CommitSHA)
 	assert.Equal(t, "e2e-ui", b.Spec.Provenance.Author)
+	assert.Equal(t, "kardinal-ui", b.Annotations[lifecycle.AnnotationRequestedBy])
 	e.WaitStepState(t, a.ns, pipelineName, created.Bundle, "test", "Verified", promoteTimeout)
 	assert.Equal(t, fixtures.Image+":"+fixtures.V2, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
 }
@@ -1125,16 +1130,15 @@ func TestUI_APITokenReview(t *testing.T) {
 // SubjectAccessReviews.
 const tokenReviewClusterRole = "kui-tr-kardinal-promoter-cluster-scoped"
 
-// TestUI_APIRequesterTokenReview checks who a UI promote records with
-// TokenReview auth: the caller's Kubernetes username, in the new Bundle's
-// kardinal.io/requested-by annotation and in the requestedBy field of the
-// controller's log line. The caller is a ServiceAccount bound only to the
-// documented Promote rules. The UI is a controller variant run with
+// TestUI_APIRequesterTokenReview checks who a UI promote and a Bundle created
+// from the UI record with TokenReview auth: the caller's Kubernetes username,
+// in the new Bundle's kardinal.io/requested-by annotation and in the
+// requestedBy field of the controller's log line. The caller is a
+// ServiceAccount bound only to the documented Promote rules, which hold the
+// Create a Bundle rules. The UI is a controller variant run with
 // --ui-tokenreview-auth and bound to the chart's TokenReview rules
-// (tokenReviewClusterRole); it is a standby, so the main release alone
-// reconciles the test's namespace. (kui-tr would do, but the main release
-// reconciles the namespace kui-tr watches too.) The Bundle then deploys to
-// prod.
+// (tokenReviewClusterRole); it watches the test's namespace and is a standby,
+// so the main release alone reconciles it. Both Bundles deploy to prod.
 //
 // Covers UIAPI-REQUESTER-01.
 func TestUI_APIRequesterTokenReview(t *testing.T) {
@@ -1244,6 +1248,29 @@ func TestUI_APIRequesterTokenReview(t *testing.T) {
 
 	e.WaitStepState(t, a.ns, pipelineName, promoted.Bundle, "prod", "Verified", promoteTimeout)
 	assert.Equal(t, fixtures.Image+":"+fixtures.V2, e.DeploymentImage(t, a.ns, fixtures.Workload("prod")))
+
+	// A Bundle created from the UI records the same user; the author is the
+	// build's, as typed.
+	create := map[string]any{"pipeline": pipelineName, "image": fixtures.Image + ":" + fixtures.V3,
+		"author": "e2e-ci", "namespace": a.ns}
+	sent = time.Now()
+	r = framework.UIClient{BaseURL: v.UIURL, Token: tr.Status.Token}.Post(t, uiAPI+"/bundles", create)
+	require.Equal(t, http.StatusCreated, r.Status, r.String())
+	var created struct{ Bundle string }
+	r.JSON(t, &created)
+	var cb v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: created.Bundle}, &cb))
+	assert.Equal(t, user, cb.Annotations[lifecycle.AnnotationRequestedBy], "the token's user, not kardinal-ui")
+	require.NotNil(t, cb.Spec.Provenance)
+	assert.Equal(t, "e2e-ci", cb.Spec.Provenance.Author)
+
+	framework.Eventually(t, 30*time.Second, "the variant to log the new Bundle", func(context.Context) (bool, string) {
+		got, ok := loggedRequester(e.VariantLogs(t, v, sent.Add(-time.Second)), "ui: bundle created", created.Bundle)
+		return ok && got == user, fmt.Sprintf("logged=%v requestedBy=%q", ok, got)
+	})
+
+	e.WaitStepState(t, a.ns, pipelineName, created.Bundle, "prod", "Verified", promoteTimeout)
+	assert.Equal(t, fixtures.Image+":"+fixtures.V3, e.DeploymentImage(t, a.ns, fixtures.Workload("prod")))
 }
 
 // loggedRequester returns the requestedBy field of the controller's JSON log
