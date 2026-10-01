@@ -472,7 +472,8 @@ func TestChart_TerminationGrace(t *testing.T) {
 }
 
 // TestChart_LogLevel checks logLevel sets what the controller logs: debug
-// lines only at debug, info lines at info but not at warn.
+// lines only at debug, info lines at info but not at warn, and warn lines
+// still at warn.
 //
 // Covers CHART-LOG-01.
 func TestChart_LogLevel(t *testing.T) {
@@ -503,12 +504,32 @@ func TestChart_LogLevel(t *testing.T) {
 		return levels["debug"] == 0, fmt.Sprint(levels)
 	})
 
-	r.Upgrade(t, values("warn"))
+	// At warn the webhook secret is set, so an event with a bad signature
+	// makes the controller log a warn line on purpose.
+	hookSecret := randomHex(t, 16)
+	secret(t, e, ns, "scm-webhook", "secret", hookSecret)
+	r.Upgrade(t, framework.MergeValues(values("warn"),
+		framework.Values{"webhook": framework.Values{"secretRef": framework.Values{"name": "scm-webhook"}}}))
 	pod = runningPod(t, r)
 	framework.Consistently(t, 20*time.Second, "no info or debug lines at logLevel warn", func(context.Context) (bool, string) {
 		levels := logLevels(r.Logs(t, pod.Name, false))
 		return levels["debug"] == 0 && levels["info"] == 0, fmt.Sprint(levels)
 	})
+	probe := e.Probe(t, ns, "probe", nil)
+	res := probe.Curl(t, 5*time.Second, "-X", "POST", "-H", "Content-Type: application/json",
+		"-H", "X-Gitea-Event: pull_request", "-H", "X-Gitea-Signature: "+randomHex(t, 32), "-d", `{"action":"closed"}`,
+		serviceURL(r, 8083, "/webhook/scm"))
+	require.Equal(t, 401, res.Code, brief(res))
+	framework.Eventually(t, 30*time.Second, "the refused webhook event is logged at logLevel warn", func(context.Context) (bool, string) {
+		for _, line := range strings.Split(r.Logs(t, pod.Name, false), "\n") {
+			if strings.Contains(line, `"level":"warn"`) && strings.Contains(line, "webhook signature invalid or parse error") {
+				return true, ""
+			}
+		}
+		return false, "no warn line for the refused event"
+	})
+	levels := logLevels(r.Logs(t, pod.Name, false))
+	assert.Zero(t, levels["debug"]+levels["info"], "no info or debug lines at logLevel warn: %v", levels)
 	d := r.Deployment(t)
 	assert.Contains(t, d.Spec.Template.Spec.Containers[0].Args, "--zap-log-level=error",
 		"controller-runtime has no warn level; the chart maps warn to error")
