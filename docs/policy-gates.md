@@ -178,6 +178,12 @@ the MetricChecks its gates use and a team MetricCheck of the same name cannot de
 other gate reads the MetricChecks of the Pipeline namespace. An instance created before this
 label existed reads the Pipeline namespace until its Bundle's Graph is applied again.
 
+A team can edit the labels of the instances in its namespace, so the controller trusts the label
+only when the namespace it names is an org policy namespace and holds the PolicyGate that the
+instance's `kardinal.io/gate-template` label names. Otherwise the instance reads the Pipeline
+namespace, where a metric it names but cannot find still blocks it. If the controller cannot read
+the template, the gate evaluates with no metrics, so an expression that reads `metrics.*` blocks.
+
 ## CEL Context
 
 All PolicyGate expressions are evaluated against the following context. All attributes listed are available in the current release; a test evaluates every attribute and example on this page against the controller's real context. Referencing an attribute or map key that does not exist is an evaluation error, and the gate blocks (fail-closed). See the [CEL context reference](reference/cel-context.md) for the full list.

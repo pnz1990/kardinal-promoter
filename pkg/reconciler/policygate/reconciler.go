@@ -405,7 +405,11 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	if r.MetricsNowFn != nil {
 		metricsNow = r.MetricsNowFn()
 	}
-	metricsCtx, err := r.buildMetricsContext(ctx, r.metricsNamespace(gate), metricsNow)
+	metricsNS, err := r.metricsNamespace(ctx, gate)
+	var metricsCtx map[string]interface{}
+	if err == nil {
+		metricsCtx, err = r.buildMetricsContext(ctx, metricsNS, metricsNow)
+	}
 	if err != nil {
 		// Non-fatal: log and continue with empty metrics context so the gate
 		// evaluates with whatever data is available (fail-closed if expr references metrics).
@@ -526,11 +530,27 @@ func (r *Reconciler) directUpstreamSoakMinutes(ctx context.Context, gate *kardin
 // gate, and an org gate's instance, both live in the Pipeline namespace; only
 // the org gate reads the org's MetricChecks, so a team MetricCheck of the same
 // name cannot decide it.
-func (r *Reconciler) metricsNamespace(gate *kardinalv1alpha1.PolicyGate) string {
-	if ns := gate.Labels[graph.LabelGateTemplateNamespace]; graph.IsPolicyNamespace(ns, r.PolicyNamespaces) {
-		return ns
+//
+// A team can edit the labels of the instances in its own namespace, so the
+// kardinal.io/gate-template-namespace label is honored only when it names an
+// org policy namespace that holds a PolicyGate named by the instance's
+// kardinal.io/gate-template label. Otherwise the gate reads its own
+// namespace, where a metric it names but cannot find still blocks it. An
+// error reading the template is returned, and the gate then evaluates with no
+// metrics, so an expression that reads metrics blocks.
+func (r *Reconciler) metricsNamespace(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) (string, error) {
+	ns, name := gate.Labels[graph.LabelGateTemplateNamespace], gate.Labels[labelGateTemplate]
+	if ns == gate.Namespace || name == "" || !graph.IsPolicyNamespace(ns, r.PolicyNamespaces) {
+		return gate.Namespace, nil
 	}
-	return gate.Namespace
+	var template kardinalv1alpha1.PolicyGate
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &template); err != nil {
+		if apierrors.IsNotFound(err) {
+			return gate.Namespace, nil
+		}
+		return "", fmt.Errorf("get gate template %s/%s: %w", ns, name, err)
+	}
+	return ns, nil
 }
 
 // buildMetricsContext lists all MetricCheck objects in the given namespace and
