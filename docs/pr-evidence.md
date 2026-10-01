@@ -73,10 +73,10 @@ A rollback PR starts with `## ROLLBACK: <bundle> -> <pipeline>/<environment>` an
 > Rolled back by: alice
 ```
 
-The first line says what the rollback restores, by the rollback Bundle's type: the images of
-the target for an image Bundle, its config commit for a config Bundle, and for a mixed Bundle
-"It reverts environment prod to the state of bundle <target>". An image or config rollback can
-target a mixed Bundle and leave its other half as deployed (see
+The "This is a rollback PR." line of the note says what the rollback restores, by the rollback
+Bundle's type: the images of the target for an image Bundle, its config commit for a config
+Bundle, and for a mixed Bundle "It reverts environment prod to the state of bundle <target>".
+An image or config rollback can target a mixed Bundle and leave its other half as deployed (see
 [Rollback](rollback.md#images-the-target-does-not-name)).
 
 FROM is the Bundle the rollback replaces (the `kardinal.io/rollback-from` annotation) and the
