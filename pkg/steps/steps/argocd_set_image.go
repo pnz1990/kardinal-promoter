@@ -54,28 +54,30 @@ func init() {
 type argoCDSetImageStep struct{}
 
 // argoCDPRReviewRejected is the failure message for argocd + pr-review.
-const argoCDPRReviewRejected = "argocd-set-image: update.strategy argocd patches the Application directly " +
+const argoCDPRReviewRejected = "update.strategy argocd patches the Application directly " +
 	"and cannot honour approval: pr-review; use approval: auto with a PolicyGate, or a git-based strategy " +
 	"(kustomize or helm) for a reviewed promotion"
 
 func (s *argoCDSetImageStep) Name() string { return "argocd-set-image" }
 
 func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.StepState) (parentsteps.StepResult, error) {
+	// The engine prefixes the error with "step argocd-set-image: ", so
+	// messages here do not name the step again.
+	fail := func(err error) (parentsteps.StepResult, error) {
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
+	}
 	// A spec the strategy refuses is a permanent error: retrying cannot fix it.
 	if state.Environment.Approval == "pr-review" {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: argoCDPRReviewRejected},
 			parentsteps.Permanent(errors.New(argoCDPRReviewRejected))
 	}
 	if state.Bundle.Type == "config" || state.Bundle.Type == "mixed" {
-		msg := "argocd-set-image: " + state.Bundle.Type + " Bundles are not supported by update.strategy argocd"
+		msg := state.Bundle.Type + " Bundles are not supported by update.strategy argocd"
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, parentsteps.Permanent(errors.New(msg))
 	}
 	// O4: K8sClient is required.
 	if state.K8sClient == nil {
-		return parentsteps.StepResult{
-			Status:  parentsteps.StepFailed,
-			Message: "argocd-set-image: K8sClient is required but not set in StepState",
-		}, fmt.Errorf("argocd-set-image: K8sClient is required")
+		return fail(errors.New("K8sClient is required but not set in StepState"))
 	}
 
 	var cfg v1alpha1.ArgoCDUpdateConfig
@@ -86,10 +88,7 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 
 	// O5: Application name is required.
 	if appName == "" {
-		return parentsteps.StepResult{
-			Status:  parentsteps.StepFailed,
-			Message: "argocd-set-image: update.argocd.application is required",
-		}, parentsteps.Permanent(errors.New("argocd-set-image: update.argocd.application is required"))
+		return fail(parentsteps.Permanent(errors.New("update.argocd.application is required")))
 	}
 
 	namespace := cfg.Namespace
@@ -128,15 +127,9 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 	if err := state.K8sClient.Get(ctx, types.NamespacedName{Name: appName, Namespace: namespace}, app); err != nil {
 		if k8serrors.IsNotFound(err) {
 			// O6: not found → StepFailed with "not found" in message.
-			return parentsteps.StepResult{
-				Status:  parentsteps.StepFailed,
-				Message: fmt.Sprintf("argocd-set-image: Application %s/%s not found", namespace, appName),
-			}, fmt.Errorf("argocd-set-image: Application %s/%s not found", namespace, appName)
+			return fail(fmt.Errorf("argocd Application %s/%s not found", namespace, appName))
 		}
-		return parentsteps.StepResult{
-			Status:  parentsteps.StepFailed,
-			Message: fmt.Sprintf("argocd-set-image: get Application %s/%s: %v", namespace, appName, err),
-		}, fmt.Errorf("argocd-set-image: get Application: %w", err)
+		return fail(fmt.Errorf("get Application %s/%s: %w", namespace, appName, err))
 	}
 
 	// Check if the tag is already set (idempotency — O3).
@@ -157,17 +150,11 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 	// Build the merge patch that sets spec.source.helm.valuesObject.<imageKey> = tag.
 	patchData, err := buildValuesObjectPatch(imageKey, tag)
 	if err != nil {
-		return parentsteps.StepResult{
-			Status:  parentsteps.StepFailed,
-			Message: fmt.Sprintf("argocd-set-image: build patch: %v", err),
-		}, fmt.Errorf("argocd-set-image: build patch: %w", err)
+		return fail(fmt.Errorf("build patch: %w", err))
 	}
 
 	if err := state.K8sClient.Patch(ctx, app, client.RawPatch(types.MergePatchType, patchData)); err != nil {
-		return parentsteps.StepResult{
-			Status:  parentsteps.StepFailed,
-			Message: fmt.Sprintf("argocd-set-image: patch Application %s/%s: %v", namespace, appName, err),
-		}, fmt.Errorf("argocd-set-image: patch Application: %w", err)
+		return fail(fmt.Errorf("patch Application %s/%s: %w", namespace, appName, err))
 	}
 
 	return parentsteps.StepResult{

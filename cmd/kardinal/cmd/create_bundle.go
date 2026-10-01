@@ -232,7 +232,7 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 		PolicyGates: gates,
 	})
 	if err != nil {
-		return fmt.Errorf("dry-run: graph build failed: %w", err)
+		return fmt.Errorf("dry-run: %w", err) // Build errors start with "build: "
 	}
 
 	// Print a human-readable summary

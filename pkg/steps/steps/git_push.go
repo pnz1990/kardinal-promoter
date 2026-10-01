@@ -72,8 +72,7 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 		}, nil
 	}
 	if err != nil {
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("push failed: %v", err)},
-			fmt.Errorf("git-push: %w", err)
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("push failed: %v", err)}, err
 	}
 
 	outputs := map[string]string{"branch": branch}

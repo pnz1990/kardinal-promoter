@@ -189,7 +189,7 @@ func gatesForEnv(pipe *v1alpha1.Pipeline, bundle *v1alpha1.Bundle,
 		Pipeline: pipe, Bundle: targeted, PolicyGates: templates, PolicyNamespaces: policyNS,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("build graph: %w", err)
+		return nil, nil, err // Build errors start with "build: "
 	}
 
 	var gates []v1alpha1.PolicyGate

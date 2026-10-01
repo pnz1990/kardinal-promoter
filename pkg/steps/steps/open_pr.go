@@ -90,19 +90,17 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	body, err := scm.RenderPRBody(data)
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("render PR body: %v", err)},
-			fmt.Errorf("open-pr render body: %w", err)
+			fmt.Errorf("render PR body: %w", err)
 	}
 
 	repo, err := scm.RepoFromURL(state.Pipeline.Git.URL)
 	if err != nil {
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("open PR: %v", err)},
-			fmt.Errorf("open-pr: %w", err)
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
 
 	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
 	if err != nil {
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("open PR: %v", err)},
-			fmt.Errorf("open-pr: %w", err)
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
 
 	// Apply standard kardinal labels to the PR. Every PR gets kardinal/promotion

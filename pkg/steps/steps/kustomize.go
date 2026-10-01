@@ -68,8 +68,7 @@ func (s *kustomizeSetImageStep) Execute(_ context.Context, state *parentsteps.St
 	}
 
 	fail := func(err error) (parentsteps.StepResult, error) {
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("kustomize-set-image: %v", err)},
-			permanentIfEscape(fmt.Errorf("kustomize-set-image: %w", err))
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, permanentIfEscape(err)
 	}
 	envRel, err := envSubdir(state)
 	if err != nil {
