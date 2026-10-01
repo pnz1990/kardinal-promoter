@@ -595,7 +595,7 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 | `clusterroles` | `bind`, limited to `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` |
 | `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
 | `secrets` | get only: the controller reads each Secret by name and never lists or watches them. In the default cluster mode `get` covers **every Secret in the cluster**. The release-namespace Role adds `get` on the SCM token Secret by name |
-| `configmaps` | get, list, watch; the `kardinal-version` ConfigMap is written through the leader-election Role |
+| `configmaps` | None in the watched namespaces. The leader-election Role reads and writes the `kardinal-version` ConfigMap by name |
 | `leases` | Leader election, through a Role in the release namespace |
 | `events` | get, list, watch, create, patch |
 

@@ -37,11 +37,9 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get"]
-# The cached client lists and watches ConfigMaps; the only write is the
-# kardinal-version ConfigMap (rules.release).
-- apiGroups: [""]
-  resources: ["configmaps"]
-  verbs: ["get", "list", "watch"]
+# No ConfigMap rule: the only ConfigMap the controller touches is
+# kardinal-version, read uncached by name (manager_options.go uncachedObjects)
+# and written through rules.release.
 # kardinal.io kinds and their status subresources.
 - apiGroups: ["kardinal.io"]
   resources:
