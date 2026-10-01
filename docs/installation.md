@@ -494,11 +494,16 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 ## Graceful shutdown
 
-The controller handles `SIGTERM` gracefully: it stops accepting new reconcile requests
-and allows in-flight reconcile loops up to **30 seconds** to complete before exiting.
-This prevents mid-step interruptions during rolling updates or node evictions — for
-example, a git-push that was 5 seconds from finishing will complete rather than leaving
-the PromotionStep in an inconsistent state.
+On `SIGTERM` (a rolling update, a scale-down or a node drain) the controller stops starting
+reconciles and cancels the ones in flight, then waits up to **30 seconds** for them and for
+in-flight HTTP requests to return before it exits. A git push or SCM API call in progress is
+cancelled, not finished: the step logs `step failed, will retry` with `context canceled`, and
+the controller usually exits within a second.
+
+This leaves no inconsistent state. After the restart the step runs again from its last saved
+step. A `pr-review` step force-pushes its branch `kardinal/<bundle>/<env>`, so a step stopped
+after its push and before its PR opens one PR with one commit, and the base branch changes
+only when the PR is merged.
 
 The Helm chart sets `terminationGracePeriodSeconds: 60` (double the shutdown timeout)
 so Kubernetes sends `SIGKILL` only after the controller has had a full 30 seconds to drain.
