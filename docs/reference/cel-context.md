@@ -251,7 +251,7 @@ kardinal policy simulate \
   --time "Saturday 3pm"
 # RESULT: BLOCKED
 # Blocked by: no-weekend-deploys
-# Message: "Blocked by no-weekend-deploys"
+# Message: "Production deployments are blocked on weekends"
 # Next window: Monday 00:00 UTC
 #
 # no-weekend-deploys:   BLOCK   (!schedule.isWeekend = false)
@@ -269,6 +269,12 @@ Simulate evaluates the same gates the controller attaches to that environment
 with the controller's CEL environment. `--time` is UTC and accepts an RFC 3339
 timestamp or a weekday and an hour ("Saturday 3pm", "tue 10:30"); it defaults to
 now, and anything else is an error.
+
+Each blocked gate is listed with its `spec.message` (the expression's result
+when it has none) and, when a later hour within a week passes it, that hour as
+the next window. Then every gate gets a row, PASS or BLOCK, with what its
+expression evaluated to. Simulate exits 0 whether the result is PASS or
+BLOCKED.
 
 ---
 

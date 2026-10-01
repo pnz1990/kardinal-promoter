@@ -238,16 +238,16 @@ Additional attributes are available including metrics results (`metrics.*`), ups
 kardinal explain my-app --env prod
 
 # Output:
-# PROMOTION: my-app / prod
-#   Bundle: v1.29.0
+# ENVIRONMENT   BUNDLE         TYPE         NAME                 STATE   EXPRESSION                         REASON
+# prod          my-app-9tptr   PolicyGate   staging-soak         Block   bundle.upstreamSoakMinutes >= 30   bundle.version=1.29.0: bundle.upstreamSoakMinutes >= 30 = false
+# prod          my-app-9tptr   PolicyGate   no-weekend-deploys   Pass    !schedule.isWeekend                bundle.version=1.29.0: !schedule.isWeekend = true
 #
-# POLICY GATES:
-#   no-weekend-deploys  [org]   PASS   schedule.isWeekend = false
-#   staging-soak        [org]   FAIL   bundle.upstreamSoakMinutes = 12 (threshold: >= 30)
-#                                      ETA: ~18 minutes (based on staging verifiedAt)
-#
-# RESULT: BLOCKED by staging-soak
+# prod   deployed: my-app-7qvsr (1.28.0)
 ```
+
+Gates that are not ready come first. STATE is Pass, Block (holding the
+Bundle), Superseded, Pending or Waiting; REASON is the controller's latest
+evaluation. See [Inspecting PolicyGates](policy-gates.md#inspecting-policygates).
 
 ### Skip permissions
 

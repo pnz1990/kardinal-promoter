@@ -212,7 +212,7 @@ transitions from blocked to allowed, the Graph controller immediately advances.
 kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"
 # RESULT: BLOCKED
 # Blocked by: no-weekend-deploys
-# Message: "Blocked by no-weekend-deploys"
+# Message: "Production deployments are blocked on weekends"
 # Next window: Monday 00:00 UTC
 #
 # no-weekend-deploys:   BLOCK   (!schedule.isWeekend = false)
