@@ -523,13 +523,15 @@ var fluxKustomizationGVR = schema.GroupVersionResource{
 // observedGeneration == generation (fully reconciled) and, with
 // ExpectedRevision set, that status.lastAppliedRevision is that commit, or
 // another commit while the Kustomization's Deployments run the Bundle
-// images (a sibling environment pushed to the same branch).
+// images (a sibling environment pushed to the same branch). The adapter
+// cannot tell whether that other commit is later than the promoted one: it
+// checks the images, not the git history.
 // Ready=False is a health failure, and Terminal when Flux gave up on the
-// promoted commit because its resources stalled, or on a later commit while
-// the Kustomization's Deployments carry the Bundle images. Ready=Unknown, a generation
-// not yet observed or an older applied revision is Progressing. While the
-// Kustomization is suspended (spec.suspend) Flux applies nothing, so a
-// Progressing result says so.
+// promoted commit because its resources stalled, or on another commit while
+// the Kustomization's Deployments carry the Bundle images. Ready=Unknown, a
+// generation not yet observed or another applied revision is Progressing.
+// While the Kustomization is suspended (spec.suspend) Flux applies nothing,
+// so a Progressing result says so.
 func (a *FluxAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatus, error) {
 	cfg := opts.Flux
 	if cfg.Namespace == "" {
@@ -591,11 +593,9 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 			if want == "" || SameRevision(rev, want) {
 				return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s)", state, shortRev(rev))), nil
 			}
-			if len(opts.ExpectedImages) > 0 {
-				if w, err := a.workloads(ctx, ks, opts.ExpectedImages); err == nil && w.bundle {
-					return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s, not %s, but the Kustomization's Deployments carry the Bundle images)",
-						state, shortRev(rev), shortRev(want))), nil
-				}
+			if w, err := a.workloads(ctx, ks, opts.ExpectedImages); err == nil && w.runsBundle() {
+				return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s, not %s, but the Kustomization's Deployments carry the Bundle images)",
+					state, shortRev(rev), shortRev(want))), nil
 			}
 		}
 		return unhealthy(state), nil
@@ -625,15 +625,16 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 			reason += fmt.Sprintf(" (revision not verified: lastAppliedRevision %q is not a git commit)", applied)
 		case !SameRevision(rev, want):
 			waiting := progressing(fmt.Sprintf("%s, lastAppliedRevision=%s, waiting for %s", state, shortRev(rev), shortRev(want)))
-			// A later commit on the shared branch (another environment's
+			// Another commit on the shared branch (another environment's
 			// push) can supersede ours before Flux fetches it. Accept that
 			// revision only when the Kustomization's Deployments
-			// demonstrably run the Bundle images.
-			if len(opts.ExpectedImages) == 0 {
+			// demonstrably run the Bundle images and are all rolled out.
+			// Nothing here can tell whether that commit is later than ours.
+			w, err := a.workloads(ctx, ks, opts.ExpectedImages)
+			if err != nil || !w.runsBundle() {
 				return waiting, nil
 			}
-			w, err := a.workloads(ctx, ks, opts.ExpectedImages)
-			if err != nil || w.count == 0 || !w.bundle || !w.worst.Healthy {
+			if all, _ := w.worst(nil); !all.Healthy {
 				return waiting, nil
 			}
 			return healthy(fmt.Sprintf("%s (not %s, but the Kustomization's Deployments run the Bundle images)",
@@ -647,14 +648,21 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 // reconciles again the revision it last applied (its interval, `flux
 // reconcile` or a webhook receiver): Flux marks every reconcile
 // Ready=Unknown until it ends. That revision passed Flux's health checks
-// when Flux applied it, so while Flux checks again the Kustomization's
-// Deployments decide: the result is theirs, Healthy when they are all rolled
-// out and the applied revision is the promoted one. Without Deployments to
-// read, or for another revision, it is Progressing as before.
+// when Flux applied it, so while Flux checks again the Deployments that run
+// a Bundle repository decide: the result is theirs, Healthy when they are
+// all rolled out and the applied revision is the promoted one. The other
+// Deployments are not the promotion's: while one of them is not healthy the
+// result is Progressing, never a health failure, and Flux's own result
+// decides once the reconcile ends. Without Deployments that run a Bundle
+// repository, or for another revision, it is Progressing as before.
 func (a *FluxAdapter) reconcilingAgain(ctx context.Context, ks *unstructured.Unstructured, state, applied string,
 	opts CheckOptions) HealthStatus {
 	w, err := a.workloads(ctx, ks, opts.ExpectedImages)
-	if err != nil || w.count == 0 {
+	if err != nil {
+		return progressing(state)
+	}
+	ours, n := w.worst(func(d fluxDeployment) bool { return d.bundleRepo })
+	if n == 0 {
 		return progressing(state)
 	}
 	rev, verifiable := fluxCommit(applied)
@@ -664,30 +672,81 @@ func (a *FluxAdapter) reconcilingAgain(ctx context.Context, ks *unstructured.Uns
 	case !verifiable:
 		note = fmt.Sprintf(" (revision not verified: lastAppliedRevision %q is not a git commit)", applied)
 	case SameRevision(rev, want):
-	case w.bundle:
+	case w.runsBundle():
 		note = fmt.Sprintf(" (not %s, but the Kustomization's Deployments run the Bundle images)", shortRev(want))
 	default:
 		return progressing(fmt.Sprintf("%s, lastAppliedRevision=%s, waiting for %s", state, shortRev(rev), shortRev(want)))
 	}
-	st := w.worst
 	prefix := fmt.Sprintf("Ready=Unknown while Flux reconciles lastAppliedRevision=%s again", shortRev(rev))
 	if !verifiable {
 		prefix = "Ready=Unknown while Flux reconciles lastAppliedRevision again"
+	}
+	st := ours
+	if st.Healthy {
+		if other, _ := w.worst(func(d fluxDeployment) bool { return !d.bundleRepo }); !other.Healthy {
+			return progressing(fmt.Sprintf("%s: %s; waiting for Flux, because a Deployment that runs no Bundle image is not healthy: %s",
+				prefix, st.Reason, other.Reason))
+		}
 	}
 	st.Reason = fmt.Sprintf("%s: %s%s", prefix, st.Reason, note)
 	return st
 }
 
-// fluxWorkloads is the result of checking a Kustomization's Deployments.
-type fluxWorkloads struct {
-	// count is how many Deployments were checked.
-	count int
-	// worst is the worst result (severity), or a healthy summary when every
-	// Deployment is healthy.
-	worst HealthStatus
-	// bundle is true when at least one Deployment runs a Bundle image and
-	// none runs another tag of a Bundle repository.
+// fluxDeployment is one of a Kustomization's Deployments, checked with
+// checkDeployment.
+type fluxDeployment struct {
+	ref    types.NamespacedName
+	status HealthStatus
+	// bundleRepo is true when a container runs an image of a Bundle
+	// repository, whatever its tag.
+	bundleRepo bool
+	// bundle is true when the Deployment runs the Bundle images: it runs a
+	// Bundle repository and every such image matches the Bundle's.
 	bundle bool
+}
+
+// fluxWorkloads is the result of checking a Kustomization's Deployments.
+type fluxWorkloads []fluxDeployment
+
+// runsBundle reports whether at least one Deployment runs the Bundle images
+// and none runs another tag or digest of a Bundle repository.
+func (w fluxWorkloads) runsBundle() bool {
+	found := false
+	for _, d := range w {
+		if d.bundleRepo && !d.bundle {
+			return false
+		}
+		found = found || d.bundle
+	}
+	return found
+}
+
+// worst returns the worst result (severity) of the Deployments keep selects
+// (all of them when keep is nil), or a healthy summary when every one is
+// healthy, and how many it selected. With none selected it is Healthy.
+func (w fluxWorkloads) worst(keep func(fluxDeployment) bool) (HealthStatus, int) {
+	var worst HealthStatus
+	n := 0
+	for _, d := range w {
+		if keep != nil && !keep(d) {
+			continue
+		}
+		switch {
+		case n == 0:
+			worst = d.status
+		case d.status.Healthy:
+		case worst.Healthy || severity(d.status) > severity(worst):
+			worst = d.status
+		}
+		n++
+	}
+	switch {
+	case n == 0:
+		return HealthStatus{Healthy: true}, 0
+	case n > 1 && worst.Healthy:
+		return healthy(fmt.Sprintf("%d Deployments rolled out and Available", n)), n
+	}
+	return worst, n
 }
 
 // workloads checks, with checkDeployment, the Deployments the Kustomization
@@ -700,37 +759,27 @@ func (a *FluxAdapter) workloads(ctx context.Context, ks *unstructured.Unstructur
 		return w, nil
 	}
 	for _, ref := range fluxDeploymentRefs(ks) {
-		var st HealthStatus
+		fd := fluxDeployment{ref: ref}
 		d, err := getDeployment(ctx, a.dynamic, ref.Namespace, ref.Name)
 		switch {
 		case apierrors.IsNotFound(err):
-			st = unhealthy(fmt.Sprintf("Deployment %s not found", ref))
+			fd.status = unhealthy(fmt.Sprintf("Deployment %s not found", ref))
 		case err != nil:
-			return fluxWorkloads{}, err
+			return nil, err
 		default:
-			st = checkDeployment(d, string(appsv1.DeploymentAvailable), expected)
-			if st.Healthy {
-				st.Reason = fmt.Sprintf("Deployment %s: %s", ref, st.Reason)
+			fd.status = checkDeployment(d, string(appsv1.DeploymentAvailable), expected)
+			if fd.status.Healthy {
+				fd.status.Reason = fmt.Sprintf("Deployment %s: %s", ref, fd.status.Reason)
 			}
 			var images []string
 			for _, c := range d.Spec.Template.Spec.Containers {
 				images = append(images, c.Image)
 			}
-			if ok, note := checkImages(expected, images); ok && note == "" && len(expected) > 0 {
-				w.bundle = true
-			}
+			fd.bundleRepo = runsRepository(expected, images)
+			ok, note := checkImages(expected, images)
+			fd.bundle = fd.bundleRepo && ok && note == ""
 		}
-		switch {
-		case w.count == 0:
-			w.worst = st
-		case st.Healthy:
-		case w.worst.Healthy || severity(st) > severity(w.worst):
-			w.worst = st
-		}
-		w.count++
-	}
-	if w.count > 1 && w.worst.Healthy {
-		w.worst = healthy(fmt.Sprintf("%d Deployments rolled out and Available", w.count))
+		w = append(w, fd)
 	}
 	return w, nil
 }

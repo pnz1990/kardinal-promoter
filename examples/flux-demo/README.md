@@ -71,7 +71,7 @@ Together these prevent a false positive where Flux reconciled the previous commi
 **States that make the adapter wait:**
 - `Ready=Unknown` while Flux applies a commit, or `observedGeneration` lags `generation`
 - `Ready=True` on an older commit (Flux hasn't fetched or applied the new commit yet)
-- `Ready=Unknown` while Flux reconciles again the commit it already applied (every interval): the result is that of the Kustomization's Deployments, so a running bake continues
+- `Ready=Unknown` while Flux reconciles again the commit it already applied (every interval): the result is that of the Kustomization's Deployments that run the Bundle's images, so a running bake continues; another Deployment that is not healthy makes it wait
 - `spec.suspend: true` before the commit is applied: the message says the Kustomization is suspended; Flux applies nothing until it is resumed
 
 **States that count as a health failure:**

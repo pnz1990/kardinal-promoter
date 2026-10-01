@@ -175,6 +175,23 @@ func both(fs ...func(obj map[string]interface{})) func(obj map[string]interface{
 	}
 }
 
+// stalledDeployment is Deployment prod/<name> running image, past its
+// progress deadline.
+func stalledDeployment(name, image string) *unstructured.Unstructured {
+	d := deploymentObj(name, 2, image, 1)
+	d.Object["status"].(map[string]interface{})["conditions"].([]interface{})[1] = map[string]interface{}{
+		"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded"}
+	return d
+}
+
+// lostReplicas is Deployment prod/<name> running image, rolled out, with no
+// replica available.
+func lostReplicas(name, image string) *unstructured.Unstructured {
+	d := deploymentObj(name, 2, image, 1)
+	d.Object["status"].(map[string]interface{})["availableReplicas"] = int64(0)
+	return d
+}
+
 // TestFluxAdapter_SharedBranch proves bug 6 of the health spike fixed: when
 // Flux applied a later commit of the shared branch (a sibling environment's
 // push), the environment is healthy only if the Kustomization's Deployments
@@ -210,6 +227,14 @@ func TestFluxAdapter_SharedBranch(t *testing.T) {
 			want: isHealthy, reason: accepted},
 		{name: "the Deployment runs the previous image",
 			objs: []runtime.Object{later(withInventory("web")), deploymentObj("web", 2, podinfo+":6.14.0", 1)},
+			want: isProgressing, reason: waiting},
+		{name: "a second Deployment runs another tag of the Bundle repository",
+			objs: []runtime.Object{later(withInventory("web", "web-canary")), deploymentObj("web", 2, podinfo+":6.15.0", 1),
+				deploymentObj("web-canary", 2, podinfo+":6.14.0", 1)},
+			want: isProgressing, reason: waiting},
+		{name: "a second Deployment that runs no Bundle image lost its replicas",
+			objs: []runtime.Object{later(withInventory("web", "cache")), deploymentObj("web", 2, podinfo+":6.15.0", 1),
+				lostReplicas("cache", "docker.io/library/redis:7")},
 			want: isProgressing, reason: waiting},
 		{name: "the Deployment runs no Bundle repository",
 			objs: []runtime.Object{later(withInventory("cache")), deploymentObj("cache", 1, "docker.io/library/redis:7", 1)},
@@ -309,9 +334,11 @@ func reconciling(applied, attempted string, mutate func(obj map[string]interface
 // TestFluxAdapter_ReconcilingAgain proves the bake flicker of the flux e2e
 // suite fixed: Flux marks a Kustomization Ready=Unknown at the start of
 // every reconcile, also when it reconciles again the commit it applied. That
-// result is the Deployments' result, so a bake neither stops on a healthy
-// release nor misses a failure that Flux is still checking. A Kustomization
-// that is applying another commit still waits.
+// result is that of the Deployments that run a Bundle repository, so a bake
+// neither stops on a healthy release nor misses a failure that Flux is still
+// checking. A Deployment that runs no Bundle image makes it wait, never fail
+// (review item 1 of the flux suite). A Kustomization that is applying
+// another commit still waits.
 func TestFluxAdapter_ReconcilingAgain(t *testing.T) {
 	bundle := []health.ImageExpectation{{Repository: podinfo, Tag: "6.15.0"}}
 	pushed, previous, later := "main@sha1:"+fluxPushed, "main@sha1:"+fluxPrevious, "main@sha1:"+fluxLater
@@ -355,6 +382,29 @@ func TestFluxAdapter_ReconcilingAgain(t *testing.T) {
 			objs: []runtime.Object{reconciling(pushed, pushed, func(obj map[string]interface{}) {
 				delete(obj["status"].(map[string]interface{}), "inventory")
 			})}, want: isProgressing, reason: "Ready=Unknown, observedGen=3, generation=3: Reconciliation in progress"},
+		{name: "a Deployment that runs no Bundle image stalled while the Bundle Deployment is healthy",
+			objs: []runtime.Object{reconciling(pushed, pushed, withInventory("web", "cache")), good,
+				stalledDeployment("cache", "docker.io/library/redis:7")}, want: isProgressing,
+			reason: "Ready=Unknown while Flux reconciles lastAppliedRevision=034ce92a1b2c again: " +
+				"Deployment prod/web: Available=True, 1/1 replicas updated and available; waiting for Flux, because a " +
+				"Deployment that runs no Bundle image is not healthy: Deployment prod/cache rollout failed: ProgressDeadlineExceeded"},
+		{name: "a Deployment that runs no Bundle image lost its replicas while the Bundle Deployment is healthy",
+			objs: []runtime.Object{reconciling(pushed, pushed, withInventory("web", "cache")), good,
+				lostReplicas("cache", "docker.io/library/redis:7")}, want: isProgressing,
+			reason: "is not healthy: Deployment prod/cache: 0 of 1 updated replicas available"},
+		{name: "the Bundle Deployment lost its replicas and another Deployment stalled",
+			objs: []runtime.Object{reconciling(pushed, pushed, withInventory("web", "cache")), unready,
+				stalledDeployment("cache", "docker.io/library/redis:7")}, want: isUnhealthy,
+			reason: "Ready=Unknown while Flux reconciles lastAppliedRevision=034ce92a1b2c again: " +
+				"Deployment prod/web: 0 of 1 updated replicas available"},
+		{name: "only Deployments that run no Bundle image",
+			objs: []runtime.Object{reconciling(pushed, pushed, withInventory("cache")),
+				deploymentObj("cache", 1, "docker.io/library/redis:7", 1)},
+			want: isProgressing, reason: "Ready=Unknown, observedGen=3, generation=3: Reconciliation in progress"},
+		{name: "a sibling's commit again while a second Deployment runs another tag of the Bundle repository",
+			objs: []runtime.Object{reconciling(later, later, withInventory("web", "web-canary")), good,
+				deploymentObj("web-canary", 2, podinfo+":6.14.0", 1)},
+			want: isProgressing, reason: "lastAppliedRevision=8e9966475a0b, waiting for 034ce92a1b2c"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
