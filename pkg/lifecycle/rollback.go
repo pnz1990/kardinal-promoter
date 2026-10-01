@@ -5,6 +5,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -75,8 +76,13 @@ type RollbackPlan struct {
 //     the environment (every one of its PromotionSteps there is Verified).
 //   - Without ToBundle: the target is the most recent Bundle, other than the
 //     deployed one, whose PromotionSteps in the environment are all Verified,
-//     that has the same type as the deployed one, carries artifacts, and deploys
-//     different artifacts. A Bundle with the deployed (failing) images is never
+//     that has the same type as the deployed one (any type when the deployed
+//     one is mixed), carries artifacts, and deploys different artifacts. A
+//     deployed mixed Bundle so goes back to the newest earlier images and
+//     config commit, whichever Bundles deployed them: when the target's type
+//     cannot carry everything the mixed Bundle changed, the rollback Bundle is
+//     mixed, with the target's artifacts and the newest earlier version of
+//     the rest. A Bundle with the deployed (failing) images is never
 //     chosen, and neither is a Bundle that an earlier rollback in the
 //     environment rolled back from (named in the kardinal.io/rollback-from
 //     annotation of a rollback Bundle): after V2 was rolled back to V1, rolling
@@ -212,12 +218,22 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			if cand.Spec.Pipeline != req.Pipeline || !HasArtifacts(cand) {
 				continue
 			}
-			if plan.Current != nil && (cand.Spec.Type != plan.Current.Spec.Type || SameArtifacts(cand, plan.Current)) {
+			mixed := plan.Current != nil && plan.Current.Spec.Type == "mixed"
+			if plan.Current != nil && (SameArtifacts(cand, plan.Current) ||
+				(cand.Spec.Type != plan.Current.Spec.Type && !mixed)) {
 				continue
 			}
-			// A refusal does not depend on the candidate: an image or config
-			// commit missing from the history is missing for every one.
 			r, restoreErr := src.restore(ctx, plan.Current, cand)
+			if mixed && errors.Is(restoreErr, ErrInvalid) {
+				// cand's type cannot carry everything the mixed Bundle changed
+				// (an image Bundle its config commit, a config Bundle its
+				// images; restore refuses a target with ErrInvalid only for
+				// its type): the rollback is a mixed Bundle with cand's
+				// artifacts and the newest earlier version of the rest.
+				r, restoreErr = src.restore(ctx, plan.Current, asMixed(cand))
+			}
+			// Any other refusal does not depend on the candidate: an image or
+			// config commit missing from the history is missing for every one.
 			if restoreErr != nil {
 				return nil, fmt.Errorf("rollback: %w", restoreErr)
 			}
@@ -259,6 +275,14 @@ type restoreSources struct {
 	deployed          string
 	rolledBack        map[string]bool
 	cache             map[string]*v1alpha1.Bundle
+}
+
+// asMixed returns a copy of b of type mixed, so that a rollback to it deploys
+// a config commit as well as images.
+func asMixed(b *v1alpha1.Bundle) *v1alpha1.Bundle {
+	m := b.DeepCopy()
+	m.Spec.Type = "mixed"
+	return m
 }
 
 // deploysConfig reports whether promoting b deploys its config commit: config

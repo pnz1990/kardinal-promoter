@@ -24,6 +24,8 @@ import (
 // config). A target is refused only when its type cannot deploy what the
 // deployed Bundle changed: a config Bundle cannot deploy the images a mixed
 // Bundle changed, an image Bundle cannot deploy the config commit it changed.
+// Without --to, a mixed Bundle goes back to the newest earlier images and
+// config commit (B61), and an automatic rollback plans what a manual one does.
 func TestPlanRollback_BundleTypes(t *testing.T) {
 	// withImages adds images "repo:tag" under ghcr.io/x/ to b.
 	withImages := func(b *v1alpha1.Bundle, refs ...string) *v1alpha1.Bundle {
@@ -239,36 +241,96 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 				img("v2", 20, "a:2"), deployed("v2", 20)},
 			wantTarget: "v0", wantType: "image", wantImages: []string{"a:1"},
 		},
+
+		// Deployed mixed Bundle, without --to (B61): the rollback goes back to
+		// the newest earlier images and config commit, whichever Bundles
+		// deployed them. It used to consider only mixed Bundles, so it skipped
+		// newer image and config Bundles, or found nothing.
 		{
-			name: "without --to a mixed Bundle rolls back to the newest earlier mixed Bundle",
+			name: "without --to a mixed Bundle takes the image of a newer image Bundle",
+			objs: []client.Object{
+				mix("m1", 10, "c1", "a:1"), verified("m1", 10), img("v2", 12, "a:2"), verified("v2", 12),
+				mix("m3", 20, "c3", "a:3"), deployed("m3", 20)},
+			wantTarget: "v2", wantType: "mixed", wantImages: []string{"a:2"}, wantConfig: "c1",
+		},
+		{
+			name: "without --to a mixed Bundle takes the commit of a newer config Bundle",
+			objs: []client.Object{
+				mix("m1", 10, "c1", "a:1"), verified("m1", 10), cfg("k2", 12, "c2"), verified("k2", 12),
+				mix("m3", 20, "c3", "a:3"), deployed("m3", 20)},
+			wantTarget: "k2", wantType: "mixed", wantImages: []string{"a:1"}, wantConfig: "c2",
+		},
+		{
+			name: "without --to the newest earlier image and commit come from two Bundles",
 			objs: []client.Object{
 				mix("m1", 10, "c1", "a:1"), verified("m1", 10), img("v1", 12, "a:5"), verified("v1", 12),
 				cfg("c3", 14, "c3"), verified("c3", 14), mix("m2", 20, "c2", "a:2"), deployed("m2", 20)},
-			wantTarget: "m1", wantType: "mixed", wantImages: []string{"a:1"}, wantConfig: "c1",
+			wantTarget: "c3", wantType: "mixed", wantImages: []string{"a:5"}, wantConfig: "c3",
+		},
+		{
+			name: "without --to a mixed Bundle that kept the commit goes back to an image Bundle",
+			objs: []client.Object{
+				mix("m1", 10, "c1", "a:1"), verified("m1", 10), img("v2", 12, "a:2"), verified("v2", 12),
+				mix("m3", 20, "c1", "a:3"), deployed("m3", 20)},
+			wantTarget: "v2", wantType: "image", wantImages: []string{"a:2"},
+		},
+		{
+			name: "without --to a mixed Bundle that kept the images goes back to a config Bundle",
+			objs: []client.Object{
+				img("v1", 5, "a:1"), verified("v1", 5), cfg("k1", 10, "c1"), verified("k1", 10),
+				mix("m2", 20, "c2", "a:1"), deployed("m2", 20)},
+			wantTarget: "k1", wantType: "config", wantConfig: "c1",
+		},
+		{
+			name: "without --to a mixed Bundle with no earlier mixed Bundle",
+			objs: []client.Object{
+				cfg("k0", 5, "c0"), verified("k0", 5), img("v1", 10, "a:1"), verified("v1", 10),
+				mix("m2", 20, "c2", "a:2"), deployed("m2", 20)},
+			wantTarget: "v1", wantType: "mixed", wantImages: []string{"a:1"}, wantConfig: "c0",
+		},
+		{
+			name: "without --to a mixed Bundle with no earlier config commit is refused",
+			objs: []client.Object{
+				img("v1", 10, "a:1"), verified("v1", 10), mix("m2", 20, "c2", "a:2"), deployed("m2", 20)},
+			wantErr: lifecycle.ErrConflict,
+			errHas:  []string{"no Bundle other than m2 with a config commit of https://g/cfg was Verified in prod"},
 		},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			c := newClient(t, append(tc.objs, pipeline("app", "test", "prod"))...)
-			plan, err := lifecycle.PlanRollback(context.Background(), c, lifecycle.RollbackRequest{
-				Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: tc.to,
-			})
-			if tc.wantErr != nil {
-				require.ErrorIs(t, err, tc.wantErr)
-				for _, s := range tc.errHas {
-					assert.Contains(t, err.Error(), s)
+		// Without --to, an automatic rollback (RollbackPolicy,
+		// onHealthFailure=rollback) plans the same rollback.
+		modes := []bool{false}
+		if tc.to == "" {
+			modes = append(modes, true)
+		}
+		for _, automatic := range modes {
+			name := tc.name
+			if automatic {
+				name += " (automatic)"
+			}
+			t.Run(name, func(t *testing.T) {
+				c := newClient(t, append(tc.objs, pipeline("app", "test", "prod"))...)
+				plan, err := lifecycle.PlanRollback(context.Background(), c, lifecycle.RollbackRequest{
+					Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: tc.to, Automatic: automatic,
+				})
+				if tc.wantErr != nil {
+					require.ErrorIs(t, err, tc.wantErr)
+					for _, s := range tc.errHas {
+						assert.Contains(t, err.Error(), s)
+					}
+					return
 				}
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tc.wantTarget, plan.Target.Name)
-			assert.Equal(t, tc.wantType, plan.Bundle.Spec.Type, "the rollback keeps the target's type")
-			assert.Equal(t, tc.wantImages, images(plan.Bundle))
-			commit := ""
-			if ref := plan.Bundle.Spec.ConfigRef; ref != nil {
-				commit = ref.CommitSHA
-			}
-			assert.Equal(t, tc.wantConfig, commit)
-		})
+				require.NoError(t, err)
+				assert.Equal(t, tc.wantTarget, plan.Target.Name)
+				assert.Equal(t, tc.wantTarget, plan.Bundle.Spec.Provenance.RollbackOf)
+				assert.Equal(t, tc.wantType, plan.Bundle.Spec.Type)
+				assert.Equal(t, tc.wantImages, images(plan.Bundle))
+				commit := ""
+				if ref := plan.Bundle.Spec.ConfigRef; ref != nil {
+					commit = ref.CommitSHA
+				}
+				assert.Equal(t, tc.wantConfig, commit)
+			})
+		}
 	}
 }

@@ -30,6 +30,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 )
 
 // gitCredentialMissing is the PromotionStep condition, and the reason of its
@@ -299,6 +300,29 @@ func rfWaitConfigValue(t *testing.T, a *app, env, value string) {
 	})
 }
 
+// rfPushConfigValue2 pushes the second config commit to cfg, which sets
+// configVar to rfConfigValue2 in env test, and returns it.
+func rfPushConfigValue2(t *testing.T, e *framework.Env, cfg gitserver.Repo) string {
+	t.Helper()
+	return e.PushTree(t, cfg, "change the UI message", func(dir string) {
+		file := filepath.Join(dir, fixtures.Path("test"), "deployment.yaml")
+		body, err := os.ReadFile(file)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(file, []byte(strings.ReplaceAll(string(body), configValue, rfConfigValue2)), 0o600))
+	})
+}
+
+// rfRollbackBundle returns the rollback Bundle that `kardinal rollback`
+// printed it created.
+func rfRollbackBundle(t *testing.T, e *framework.Env, ns string, r framework.CLIResult) *v1alpha1.Bundle {
+	t.Helper()
+	m := regexp.MustCompile(`Bundle (podinfo-rollback-[a-z0-9]{5}) created`).FindStringSubmatch(r.Stdout)
+	require.NotNil(t, m, "rollback output:\n%s", r.Stdout)
+	var rb v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: m[1]}, &rb))
+	return &rb
+}
+
 // rfRollbackBundles lists the names of the rollback Bundles in ns.
 func rfRollbackBundles(t *testing.T, e *framework.Env, ns string) []string {
 	t.Helper()
@@ -329,7 +353,6 @@ func TestRollback_MixedBundle(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	c := e.CLI(t)
-	ctx := context.Background()
 	a := newArgoApp(t, e, "test")
 	a.apply(t, a.pipeline(nil))
 
@@ -352,12 +375,7 @@ func TestRollback_MixedBundle(t *testing.T) {
 	require.Empty(t, rfRollbackBundles(t, e, a.ns), "the refused rollback creates no Bundle:\n%s", r.Output())
 
 	// K3 deploys a second config commit, c2.
-	c2 := e.PushTree(t, cfg, "change the UI message", func(dir string) {
-		file := filepath.Join(dir, fixtures.Path("test"), "deployment.yaml")
-		body, err := os.ReadFile(file)
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(file, []byte(strings.ReplaceAll(string(body), configValue, rfConfigValue2)), 0o600))
-	})
+	c2 := rfPushConfigValue2(t, e, cfg)
 	k3 := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", c2, "--config-repo", cfg.CloneURL)
 	e.WaitStepState(t, a.ns, pipelineName, k3, "test", "Verified", promoteTimeout)
 	require.False(t, a.configDeployed(t, "test"), "K3 replaces c1 with c2")
@@ -367,10 +385,7 @@ func TestRollback_MixedBundle(t *testing.T) {
 	// A rollback to M2 is a mixed Bundle with M2's image and c1.
 	r = c.Run(a.ns, "rollback", pipelineName, "--env", "test", "--to", m2)
 	require.Equal(t, 0, r.Code, "a rollback of config Bundle %s to mixed Bundle %s:\n%s", k3, m2, r.Output())
-	m := regexp.MustCompile(`Bundle (podinfo-rollback-[a-z0-9]{5}) created`).FindStringSubmatch(r.Stdout)
-	require.NotNil(t, m, "rollback output:\n%s", r.Stdout)
-	var rb v1alpha1.Bundle
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: m[1]}, &rb))
+	rb := rfRollbackBundle(t, e, a.ns, r)
 	assert.Equal(t, "mixed", rb.Spec.Type, "the rollback keeps M2's type")
 	require.Len(t, rb.Spec.Images, 1)
 	assert.Equal(t, fixtures.Image, rb.Spec.Images[0].Repository)
@@ -389,6 +404,63 @@ func TestRollback_MixedBundle(t *testing.T) {
 	require.NotEqual(t, -1, merge, "the rollback merges c1: %v", names)
 	require.NotEqual(t, -1, setImage, "the rollback sets the image: %v", names)
 	assert.Less(t, merge, setImage, "the rollback merges c1, then sets the image: %v", names)
+	assert.True(t, a.configDeployed(t, "test"), "the rollback deploys c1 again")
+	a.waitConfigRunning(t, "test")
+	assertEnvAt(t, a, "test", fixtures.V3)
+}
+
+// TestRollback_MixedBundleNewestSources checks that a rollback of a mixed
+// Bundle with no --to puts back what the environment ran before it, whichever
+// Bundles deployed it. In env test:
+//
+//   - M1 (mixed: image V2 and config commit c1), I2 (image V3), then M3
+//     (mixed: image V1 and config commit c2).
+//   - `kardinal rollback` with no --to rolls M3 back to I2's image V3 and
+//     M1's commit c1, in a mixed rollback Bundle of I2. It used to consider
+//     only mixed Bundles, so it went back to M1 and deployed V2, skipping I2.
+//
+// The automatic rollbacks (RollbackPolicy, onHealthFailure=rollback) use the
+// same planner, lifecycle.PlanRollback; its unit tests run each case both ways.
+//
+// Covers RB-MIXED-02.
+func TestRollback_MixedBundleNewestSources(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	c := e.CLI(t)
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(nil))
+
+	cfg, c1 := a.configRepo(t, "test")
+	m1 := e.CreateBundle(t, a.ns, pipelineName, "--type", "mixed", "--image", imageV2,
+		"--config-commit", c1, "--config-repo", cfg.CloneURL)
+	e.WaitStepState(t, a.ns, pipelineName, m1, "test", "Verified", promoteTimeout)
+	a.waitConfigRunning(t, "test")
+	assertEnvAt(t, a, "test", fixtures.V2)
+	i2 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	e.WaitStepState(t, a.ns, pipelineName, i2, "test", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "test", fixtures.V3)
+	c2 := rfPushConfigValue2(t, e, cfg)
+	m3 := e.CreateBundle(t, a.ns, pipelineName, "--type", "mixed", "--image", imageV1,
+		"--config-commit", c2, "--config-repo", cfg.CloneURL)
+	e.WaitStepState(t, a.ns, pipelineName, m3, "test", "Verified", promoteTimeout)
+	rfWaitConfigValue(t, a, "test", rfConfigValue2)
+	assertEnvAt(t, a, "test", fixtures.V1)
+
+	r := c.Run(a.ns, "rollback", pipelineName, "--env", "test")
+	require.Equal(t, 0, r.Code, "a rollback of mixed Bundle %s:\n%s", m3, r.Output())
+	assert.Contains(t, r.Stdout, "from "+m3+" to "+i2+" (", "the target is I2, the newest Bundle before M3")
+	rb := rfRollbackBundle(t, e, a.ns, r)
+	assert.Equal(t, "mixed", rb.Spec.Type, "the rollback deploys an image and a config commit")
+	require.Len(t, rb.Spec.Images, 1)
+	assert.Equal(t, fixtures.Image, rb.Spec.Images[0].Repository)
+	assert.Equal(t, fixtures.V3, rb.Spec.Images[0].Tag, "I2's image, the newest before M3, not M1's")
+	require.NotNil(t, rb.Spec.ConfigRef, "the rollback puts back the config commit M3 changed")
+	assert.Equal(t, c1, rb.Spec.ConfigRef.CommitSHA, "M1's commit, the newest before M3")
+	require.NotNil(t, rb.Spec.Provenance)
+	assert.Equal(t, i2, rb.Spec.Provenance.RollbackOf)
+	assert.Equal(t, m3, rb.Annotations["kardinal.io/rollback-from"])
+
+	e.WaitStepState(t, a.ns, pipelineName, rb.Name, "test", "Verified", promoteTimeout)
 	assert.True(t, a.configDeployed(t, "test"), "the rollback deploys c1 again")
 	a.waitConfigRunning(t, "test")
 	assertEnvAt(t, a, "test", fixtures.V3)

@@ -21,7 +21,9 @@ If no such Bundle names the image, the rollback is refused, and the error names 
 
 The same rule applies to config commits. A config Bundle deploys its config commit, and a `mixed` Bundle deploys its config commit and then its images (see [config-only promotions](design/09-config-only-promotions.md)). When the deployed Bundle is a config or mixed Bundle, the rollback carries the target's config commit or, if the target has none, the newest earlier Verified one, from a config or mixed Bundle. So rolling back a mixed Bundle restores both its images and its config commit.
 
-The rollback Bundle has the target's type and deploys what that type deploys: images for an image Bundle, the config commit for a config Bundle, both for a mixed Bundle. Without `--to`, only a Bundle of the deployed Bundle's type is a target. A `--to` target that cannot deploy what the deployed Bundle changed is refused, and the error names what it cannot restore:
+The rollback Bundle has the target's type, with the one exception below, and deploys what that type deploys: images for an image Bundle, the config commit for a config Bundle, both for a mixed Bundle. Without `--to`, the target is a Bundle of the deployed Bundle's type, except when a mixed Bundle is deployed. Then the target can be a Bundle of any type, so the rollback puts back the newest earlier images and config commit, whichever Bundles deployed them. If the target's type cannot deploy everything the mixed Bundle changed, the rollback Bundle is mixed: it carries the target's artifacts and the newest earlier version of the rest, and `spec.provenance.rollbackOf` names the target. For example, with `m1 = {a:1, config c1}`, `v2 = {a:2}` and `m3 = {a:3, config c3}` promoted to prod, rolling back `m3` targets `v2` and deploys the mixed Bundle `{a:2, config c1}`. If `m3` had kept `c1`, the rollback would be the image Bundle `{a:2}`. The automatic rollbacks choose the same way.
+
+A `--to` target that cannot deploy what the deployed Bundle changed is refused, and the error names what it cannot restore:
 
 | Deployed | `--to` an image Bundle | `--to` a config Bundle | `--to` a mixed Bundle |
 |---|---|---|---|
