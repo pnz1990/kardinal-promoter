@@ -27,8 +27,8 @@ import (
 // Without --to, a mixed Bundle goes back to the newest earlier images and
 // config commit (B61), an image or config Bundle to the newest earlier images
 // or config commit, also from a mixed Bundle (B66), and an automatic rollback,
-// which names the failing Bundle as RollbackPolicy and onHealthFailure=rollback
-// do, plans what a manual one does.
+// asked for as RollbackPolicy and onHealthFailure=rollback ask (the failing
+// Bundle, each with its own rollback Bundle name), plans what a manual one does.
 func TestPlanRollback_BundleTypes(t *testing.T) {
 	// withImages adds images "repo:tag" under ghcr.io/x/ to b.
 	withImages := func(b *v1alpha1.Bundle, refs ...string) *v1alpha1.Bundle {
@@ -381,28 +381,27 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 		require.Len(t, names, 1, "one deployed Bundle")
 		return names[0]
 	}
+	// Without --to, an automatic rollback plans the same rollback. Each
+	// automatic caller names its rollback Bundle with its own source:
+	// RollbackPolicy "policy", onHealthFailure=rollback "alarm".
+	type mode struct{ name, source string }
 	for _, tc := range tests {
-		// Without --to, an automatic rollback (RollbackPolicy,
-		// onHealthFailure=rollback) plans the same rollback.
-		modes := []bool{false}
+		modes := []mode{{}}
 		if tc.to == "" {
-			modes = append(modes, true)
+			modes = append(modes, mode{" (RollbackPolicy)", "policy"}, mode{" (onHealthFailure)", "alarm"})
 		}
-		for _, automatic := range modes {
-			name := tc.name
-			if automatic {
-				name += " (automatic)"
-			}
-			t.Run(name, func(t *testing.T) {
+		for _, m := range modes {
+			automatic := m.source != ""
+			t.Run(tc.name+m.name, func(t *testing.T) {
 				c := newClient(t, append(tc.objs, pipeline("app", "test", "prod"))...)
 				req := lifecycle.RollbackRequest{Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: tc.to}
 				from := ""
 				if automatic {
-					// As RollbackPolicy and onHealthFailure=rollback ask:
-					// the failing Bundle, a fixed name and the reason.
+					// As the automatic callers ask: the failing Bundle, the
+					// caller's fixed name and the reason.
 					from = failing(t, tc.objs)
 					req.FromBundle, req.Automatic = from, true
-					req.Name, req.Reason = lifecycle.AutoRollbackName(from, "policy"), "AutoRollback"
+					req.Name, req.Reason = lifecycle.AutoRollbackName(from, m.source), "AutoRollback"
 				}
 				plan, err := lifecycle.PlanRollback(context.Background(), c, req)
 				if tc.wantErr != nil {
@@ -415,7 +414,7 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 				require.NoError(t, err)
 				if automatic {
 					assert.Equal(t, from, plan.CurrentName)
-					assert.Equal(t, lifecycle.AutoRollbackName(from, "policy"), plan.Bundle.Name)
+					assert.Equal(t, lifecycle.AutoRollbackName(from, m.source), plan.Bundle.Name)
 				}
 				assert.Equal(t, tc.wantTarget, plan.Target.Name)
 				assert.Equal(t, tc.wantTarget, plan.Bundle.Spec.Provenance.RollbackOf)
