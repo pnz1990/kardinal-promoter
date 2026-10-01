@@ -26,7 +26,7 @@ The PromotionStep records the git commit its promotion delivered:
 - `status.outputs.commitSHA` — the commit pushed straight to the environment branch (`approval: auto`);
 - `status.outputs.mergeCommitSHA` — the merge commit of the promotion PR (`approval: pr-review`), copied from `PRStatus.status.mergeCommitSHA`.
 
-The `argocd` and `flux` adapters require that commit. The `argocd` adapter also accepts a later commit on a shared branch when the Application runs the Bundle images; the `flux` adapter does not (see below). The `resource` adapter requires the Bundle images in the Deployment's pod template. `kubectl get promotionstep <name> -o yaml` shows the recorded commit in `status.outputs` and the last health result in `status.message`.
+The `argocd` and `flux` adapters require that commit. The `argocd` adapter also accepts a later commit on a shared branch when the Application runs the Bundle images; the `flux` adapter does not (see below). The `resource` adapter requires the Bundle images in the Deployment's pod template, `argoRollouts` in the Rollout's, and `flagger` in the Canary's target Deployment and, for `Succeeded`, its primary Deployment. `kubectl get promotionstep <name> -o yaml` shows the recorded commit in `status.outputs` and the last health result in `status.message`.
 
 ## Adapter: resource (default)
 
@@ -158,7 +158,7 @@ For those providers, use `argocd` or `resource`.
 
 ## Adapter: argoRollouts
 
-Watches an Argo Rollouts Rollout's phase after promotion.
+Watches an Argo Rollouts Rollout after promotion until it has rolled out the promoted revision.
 
 ```yaml
 health:
@@ -169,22 +169,22 @@ health:
   timeout: 30m
 ```
 
-**Healthy when:** `status.phase` = `Healthy`
+**Healthy when:** the Rollout's pod template (or the Deployment its `spec.workloadRef` names) runs the Bundle images, Argo Rollouts observed that spec (`status.observedGeneration`), `status.phase` = `Healthy`, and the stable ReplicaSet is the current pod template (`status.stableRS` = `status.currentPodHash`).
 
-This adapter is used when `delivery.delegate: argoRollouts` is set on the environment. After kardinal-promoter writes the new image tag to Git and the GitOps tool syncs, Argo Rollouts detects the image change and executes the canary or blue-green strategy. The adapter watches the Rollout until it completes.
+This adapter is used for `health.type: argoRollouts` and when `delivery.delegate: argoRollouts` is set on the environment. After kardinal-promoter writes the new image tag to Git and the GitOps tool syncs, Argo Rollouts detects the image change and executes the canary or blue-green strategy. The adapter watches the Rollout until it completes.
+
+Until the GitOps tool applied the change and Argo Rollouts observed it, the check waits (`Rollout <ns>/<name> not updated yet: ...`) whatever the phase says: the phase still describes the previous release, so neither a `Healthy` nor a `Degraded` phase from it counts. Then:
 
 | Rollout phase | Adapter behavior |
 |---|---|
 | `Progressing` | Wait (canary in progress) |
-| `Paused` | Wait (manual promotion step in Argo Rollouts) |
+| `Paused` | Wait (a pause step, or paused by hand) |
 | `Healthy` | Healthy (canary completed successfully) |
-| `Degraded` | Unhealthy (canary failed, Argo Rollouts rolled back; counts as a health failure) |
-
-**Limitation:** the adapter checks the Rollout phase only, not which revision it rolled out. A Rollout that is `Healthy` on the previous version before the GitOps tool applies the change can report Verified early. Use a `bake` window, or the `argocd`/`flux` adapter, when that matters.
+| `Degraded` | Unhealthy (canary aborted or analysis failed, Argo Rollouts serves the stable revision; counts as a health failure). Not final: Argo Rollouts can roll forward again, so without a `bake` window the step fails at `health.timeout`. |
 
 ## Adapter: flagger
 
-Watches a Flagger Canary's phase. Used for `health.type: flagger` and for `delivery.delegate: flagger`.
+Watches a Flagger Canary until Flagger has analyzed and promoted the promoted revision. Used for `health.type: flagger` and for `delivery.delegate: flagger`.
 
 ```yaml
 health:
@@ -195,18 +195,25 @@ health:
   timeout: 30m
 ```
 
-**Healthy when:** `status.phase` = `Succeeded`
+**Healthy when:** `status.phase` = `Succeeded` and the primary Deployment (`<target>-primary`, to which Flagger copies a revision it promotes) runs the Bundle images and is Available.
+
+Flagger keeps the phase of its last analysis until an analysis tick notices that the target changed, so right after the GitOps tool applies a change the phase describes the previous release. The adapter therefore checks the revision first:
+
+- Until the Canary's target Deployment (`spec.targetRef`) runs the Bundle images, the check waits (`Canary <ns>/<name>: target Deployment <ns>/<name> not updated yet: ...`).
+- `Succeeded` with a primary on other images is from an earlier release: Wait.
+- `Failed` that Flagger set before this health check started is from an earlier release: Wait. A `Failed` Canary whose primary runs the Bundle images (the Bundle is the revision Flagger last promoted) is checked like `Succeeded`.
+- When the images cannot be compared (a Bundle without images, a target that is not a Deployment), `Succeeded` and `Failed` count only when Flagger set them at or after the start of this health check.
+
+When Flagger set the phase is the `lastUpdateTime` of the Canary's `Promoted` condition, whose reason is the phase. `status.lastTransitionTime` is not used for this when that condition is there: Flagger rewrites it at every analysis tick of a `Failed` Canary.
 
 | Canary phase | Adapter behavior |
 |---|---|
 | `Initializing`, `Initialized`, `Waiting` | Wait |
 | `Progressing`, `WaitingPromotion`, `Promoting`, `Finalising` | Wait |
-| `Succeeded` | Healthy |
-| `Failed` | **Failed at once**: Flagger rolled the canary back, so `onHealthFailure` applies without waiting for the timeout |
+| `Succeeded` (this release) | Healthy |
+| `Failed` (this release) | **Failed at once**: Flagger rolled the canary back, so `onHealthFailure` applies without waiting for the timeout |
 
 The step message carries the message of the Canary's `Promoted` condition, for example why Flagger rolled it back.
-
-**Limitation:** like `argoRollouts`, the adapter checks the phase, not the revision. A Canary that is still `Succeeded` from the previous release can report Verified before Flagger detects the change.
 
 ## Remote Clusters
 
@@ -254,7 +261,7 @@ Each health check has one of four results:
 - **Healthy** — Verified (or the bake window starts or advances).
 - **Waiting** — the promoted revision is still rolling out or syncing. It does not count as a failure.
 - **Unhealthy** — for example Degraded, `Ready=False`, not found, or replicas unavailable after the rollout finished. Each check increments `status.consecutiveHealthFailures`, which a `RollbackPolicy` you create reads (see [Rollback](rollback.md)).
-- **Failed** — Deployment `ProgressDeadlineExceeded` or Flagger canary `Failed`. `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack) applies at once.
+- **Failed** — Deployment `ProgressDeadlineExceeded` or Flagger canary `Failed` on the promoted revision. `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack) applies at once.
 
 Reaching `health.timeout` without a Healthy result is treated like a Failed result: it is counted and applies `onHealthFailure`. A new image that crash-loops is **Waiting**, not Unhealthy: Kubernetes reports the rollout as still progressing (`Progressing=True`, reason `ReplicaSetUpdated`) until the Deployment's `progressDeadlineSeconds` (default 600s) passes. Set `progressDeadlineSeconds` below `health.timeout` to fail such a rollout sooner; otherwise the timeout fails it.
 
