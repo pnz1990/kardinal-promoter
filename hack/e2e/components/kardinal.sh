@@ -17,7 +17,9 @@
 #   KARDINAL_E2E_HELM_ARGS  extra helm arguments, word-split
 #   KARDINAL_E2E_INSTALL    0: build and load the image and the CLI and apply the
 #                           chart's CRDs, but install no release (the chart suite's
-#                           tests install their own); default 1
+#                           tests install their own); build: only build and load
+#                           the image and the CLI (the upgrade suite's test applies
+#                           the CRDs and upgrades the v0.8.1 release); default 1
 #
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
@@ -52,6 +54,11 @@ env_set KARDINAL_E2E_IMAGE "$IMAGE"
 env_set KARDINAL_E2E_CHART "$REPO_ROOT/chart/kardinal-promoter"
 env_set KARDINAL_E2E_HELM "$(command -v helm)"
 
+if [ "${KARDINAL_E2E_INSTALL:-1}" = build ]; then
+  env_set KARDINAL_E2E_CLI "$BIN/kardinal"
+  log "no controller release and no CRDs (KARDINAL_E2E_INSTALL=build)"
+  exit 0
+fi
 if [ "${KARDINAL_E2E_INSTALL:-1}" = 0 ]; then
   # Helm installs crds/ only when a CRD is missing, and parallel installs
   # would race for them; apply them once here.
