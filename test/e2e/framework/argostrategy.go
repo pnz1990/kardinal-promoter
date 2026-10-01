@@ -192,23 +192,3 @@ func ChartApplicationRules(t *testing.T, set ...string) []rbacv1.PolicyRule {
 	}
 	return rules
 }
-
-// repoRoot is the directory of the repo's go.mod, above the test's working
-// directory.
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("no go.mod above the working directory")
-		}
-		dir = parent
-	}
-}
