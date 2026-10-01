@@ -16,9 +16,13 @@ package scm_test
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -282,5 +286,118 @@ func TestValidateGiteaFamilyTokenScopes_DocumentedScopes(t *testing.T) {
 			assert.Contains(t, err.Error(), v.name)
 			assert.NotContains(t, err.Error(), v.other)
 		})
+	}
+}
+
+// connRecorder records the state of every connection an httptest.Server
+// accepts, in the order the connections were opened.
+type connRecorder struct {
+	mu    sync.Mutex
+	order []net.Conn
+	last  map[net.Conn]http.ConnState
+}
+
+func newConnRecorder() *connRecorder {
+	return &connRecorder{last: map[net.Conn]http.ConnState{}}
+}
+
+// record is the server's ConnState hook.
+func (r *connRecorder) record(c net.Conn, s http.ConnState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s == http.StateNew {
+		r.order = append(r.order, c)
+	}
+	r.last[c] = s
+}
+
+// states returns the last state of each connection, oldest first.
+func (r *connRecorder) states() []http.ConnState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]http.ConnState, len(r.order))
+	for i, c := range r.order {
+		out[i] = r.last[c]
+	}
+	return out
+}
+
+// TestTokenValidators_ConnectionDoesNotOutliveCheck covers B78: the startup
+// token check must not leave its connection where another client in the
+// process can reuse it. The controller's clone and push go through go-git's
+// HTTP transport, which pools in http.DefaultTransport. A check through that
+// pool left its connection idle there: a bodiless 401, 403 or 404 on every Go
+// version, and since Go 1.27 also a response whose body the check did not
+// read, which net/http now drains and keeps. The first clone to the same host
+// then reused a connection opened before the chart's NetworkPolicy was
+// enforced on the pod, and the policy did not apply to git traffic until the
+// pod restarted.
+//
+// The server records its connections' states. After the check returns, its
+// connection must be closed, not idle, and a request through
+// http.DefaultClient to the same server must open a connection of its own.
+func TestTokenValidators_ConnectionDoesNotOutliveCheck(t *testing.T) {
+	validators := []struct {
+		name     string
+		validate func(context.Context, string, string) ([]scm.TokenScopeWarning, error)
+	}{
+		{"GitHub", scm.ValidateGitHubTokenScopes},
+		{"GitLab", scm.ValidateGitLabTokenScopes},
+		{"Forgejo", scm.ValidateForgejoTokenScopes},
+		{"Gitea", scm.ValidateGiteaTokenScopes},
+	}
+	responses := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{"403 without a body", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+		}},
+		{"403 with a JSON body", func(w http.ResponseWriter, _ *http.Request) {
+			// Forgejo's answer to /user for a token without read:user.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"message": "token does not have at least one of required scope(s): [read:user]",
+			})
+		}},
+		{"200 with a JSON body", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-OAuth-Scopes", "repo")
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"login": "test-user", "scopes": []string{"api"}})
+		}},
+	}
+	for _, v := range validators {
+		for _, r := range responses {
+			t.Run(v.name+" "+r.name, func(t *testing.T) {
+				conns := newConnRecorder()
+				srv := httptest.NewUnstartedServer(r.handler)
+				srv.Config.ConnState = conns.record
+				srv.Start()
+				defer srv.Close()
+				t.Cleanup(http.DefaultTransport.(*http.Transport).CloseIdleConnections)
+
+				// The warnings and errors are covered by the other tests.
+				_, _ = v.validate(context.Background(), "tok", srv.URL)
+
+				require.Len(t, conns.states(), 1, "the check opens one connection")
+				closed := assert.Eventually(t, func() bool { return conns.states()[0] == http.StateClosed },
+					2*time.Second, 10*time.Millisecond,
+					"the check's connection must be closed once the check returns, not left idle for another client to reuse")
+				if !closed {
+					t.Logf("the check's connection is %s", conns.states()[0])
+				}
+
+				// go-git's clone and push use http.DefaultTransport; they must
+				// not find the check's connection in its pool.
+				req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+				require.NoError(t, err)
+				resp, err := http.DefaultClient.Do(req)
+				require.NoError(t, err)
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				assert.Len(t, conns.states(), 2, "http.DefaultClient must open a connection of its own")
+			})
+		}
 	}
 }
