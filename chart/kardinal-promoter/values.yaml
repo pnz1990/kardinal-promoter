@@ -64,6 +64,7 @@ controller:
   # When both tlsCertFile and tlsKeyFile are set, both servers use HTTPS; one alone fails the install.
   # Typically used with cert-manager: mount the certificate Secret with
   # extraVolumes/extraVolumeMounts, then set the paths to the mounted files.
+  # A path that is not in a secret, projected or csi volume mounted that way fails the install.
   # See docs/guides/security.md for the recommended cert-manager setup.
   #
   # -- Path to the TLS certificate file (PEM). Set together with tlsKeyFile to enable TLS.

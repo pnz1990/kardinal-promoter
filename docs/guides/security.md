@@ -718,8 +718,11 @@ controller:
 ```
 
 Apply it with `helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 -f tls-values.yaml`.
-The paths must point at a mounted certificate: if the files cannot be read, the controller
-exits at startup instead of serving plain HTTP.
+The paths must point at a mounted certificate. The chart refuses a path that is not in a
+`secret`, `projected` or `csi` volume mounted with `controller.extraVolumes` and
+`controller.extraVolumeMounts` (in the mounted directory, or the file a `subPath` mount puts
+there). If the files still cannot be read, for example a wrong file name in the Secret, the
+controller exits at startup instead of serving plain HTTP.
 
 ### Self-signed certificates (development only)
 

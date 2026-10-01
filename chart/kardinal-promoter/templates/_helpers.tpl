@@ -111,6 +111,33 @@ Install-mode checks. Rendered from deployment.yaml so a bad combination fails
 {{- if or (and $cert (not $key)) (and $key (not $cert)) -}}
 {{- fail (printf "controller.tlsCertFile and controller.tlsKeyFile must be set together (only %s is set): the UI and webhook servers use TLS only with both, and the controller does not start with one." (ternary "tlsCertFile" "tlsKeyFile" (not (empty $cert)))) -}}
 {{- end -}}
+{{- /* Each TLS path must be in a Secret (secret, projected or CSI volume)
+mounted with controller.extraVolumes and extraVolumeMounts: in a directory
+mount, or the file a subPath mount puts there. Else the controller cannot
+open it and crash-loops. */ -}}
+{{- if and $cert $key -}}
+{{- range $value, $path := dict "tlsCertFile" $cert "tlsKeyFile" $key -}}
+{{- $mount := "" -}}
+{{- range $.Values.controller.extraVolumeMounts -}}
+{{- $at := default "" .mountPath -}}
+{{- if or (and .subPath (eq $path $at)) (and (not .subPath) (hasPrefix (printf "%s/" (trimSuffix "/" $at)) $path)) -}}
+{{- $mount = default "" .name -}}
+{{- end -}}
+{{- end -}}
+{{- if not $mount -}}
+{{- fail (printf "controller.%s (%s) is not in a mounted Secret: mount the certificate Secret at its directory with controller.extraVolumes and controller.extraVolumeMounts (docs/guides/security.md, TLS Configuration). The controller cannot start without the file." $value $path) -}}
+{{- end -}}
+{{- $volume := dict -}}
+{{- range $.Values.controller.extraVolumes -}}
+{{- if eq (default "" .name) $mount -}}
+{{- $volume = . -}}
+{{- end -}}
+{{- end -}}
+{{- if not (or $volume.secret $volume.projected $volume.csi) -}}
+{{- fail (printf "controller.%s (%s) is in volume %q, which is not a secret, projected or csi volume in controller.extraVolumes: mount the certificate Secret there (docs/guides/security.md, TLS Configuration)." $value $path $mount) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- with .Values.github.secretRef.namespace -}}
 {{- if ne . $.Release.Namespace -}}
 {{- fail (printf "github.secretRef.namespace (%s) must be empty or the release namespace (%s): GITHUB_TOKEN is read with a secretKeyRef, which only reads the Pod's namespace, so the startup token and the rotation watcher would read different Secrets." . $.Release.Namespace) -}}

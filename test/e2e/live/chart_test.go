@@ -1352,12 +1352,12 @@ func listening(logs string) map[string]bool {
 // with extraArgs. A client that trusts the CA gets HTTPS answers and the
 // token and origin settings apply; plain HTTP and a client that does not
 // trust the CA are refused. The chart refuses a cert file without a key file
-// (or the reverse) before applying anything; when one TLS flag reaches the
-// controller anyway (through extraEnv), it exits with an error that says
-// so, and cert paths with nothing mounted stop it with an error naming the
-// file.
+// (or the reverse), and cert paths with no Secret mounted there, before
+// applying anything. When the same flags reach the controller anyway
+// (through extraEnv), one TLS flag stops it with an error that says so, and
+// paths with nothing mounted stop it with an error naming the file.
 //
-// Covers CHART-TLS-01, CHART-EXTRA-01, CHART-TLS-02.
+// Covers CHART-TLS-01, CHART-EXTRA-01, CHART-TLS-02, CHART-TLS-03.
 func TestChart_TLSAndExtras(t *testing.T) {
 	t.Parallel()
 	namespaceScoped(t)
@@ -1462,8 +1462,20 @@ func TestChart_TLSAndExtras(t *testing.T) {
 	require.NoError(t, err, out)
 	assert.Contains(t, crashLogs(t, e, rp), "--tls-cert-file and --tls-key-file must be set together")
 
+	// TLS paths with no Secret mounted there: the chart refuses them, and the
+	// controller exits when it cannot open the files (set through extraEnv).
 	unmounted := e.Namespace(t)
-	ru, out, err := e.TryInstallChart(t, releaseName(unmounted), unmounted, nsValues(unmounted, framework.Values{"controller": tlsFiles}), false)
+	_, out, err = e.TryInstallChart(t, releaseName(unmounted), unmounted, nsValues(unmounted, framework.Values{"controller": tlsFiles}), false)
+	require.Error(t, err, "helm install with TLS paths and no Secret mounted: %s", out)
+	assert.Contains(t, out, "controller.tlsCertFile (/etc/kardinal-tls/tls.crt) is not in a mounted Secret")
+	err = e.Client.Get(context.Background(), types.NamespacedName{Namespace: unmounted, Name: framework.ChartFullname(releaseName(unmounted))}, &d)
+	assert.True(t, apierrors.IsNotFound(err), "the refused install applies nothing: %v", err)
+	ru, out, err := e.TryInstallChart(t, releaseName(unmounted), unmounted, nsValues(unmounted, framework.Values{
+		"controller": framework.Values{"extraEnv": []interface{}{
+			framework.Values{"name": "KARDINAL_TLS_CERT_FILE", "value": tlsFiles["tlsCertFile"]},
+			framework.Values{"name": "KARDINAL_TLS_KEY_FILE", "value": tlsFiles["tlsKeyFile"]},
+		}},
+	}), false)
 	require.NoError(t, err, out)
 	assert.Contains(t, crashLogs(t, e, ru), "open /etc/kardinal-tls/tls.crt: no such file or directory")
 }

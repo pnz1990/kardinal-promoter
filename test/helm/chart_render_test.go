@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -807,6 +808,10 @@ func controllerEnvReads(t *testing.T) map[string]bool {
 var everyValue = []string{
 	"--set", "controller.tlsCertFile=/tls/tls.crt",
 	"--set", "controller.tlsKeyFile=/tls/tls.key",
+	"--set", "controller.extraVolumes[0].name=tls",
+	"--set", "controller.extraVolumes[0].secret.secretName=kardinal-tls",
+	"--set", "controller.extraVolumeMounts[0].name=tls",
+	"--set", "controller.extraVolumeMounts[0].mountPath=/tls",
 	"--set", "controller.policyNamespaces={platform-policies}",
 	"--set", "scm.provider=gitlab",
 	"--set", "scm.apiURL=https://gitlab.example.com",
@@ -906,6 +911,64 @@ func TestChartTLSFilesSetTogether(t *testing.T) {
 	assert.NotContains(t, env, "KARDINAL_TLS_KEY_FILE", "no TLS by default")
 }
 
+// TestChartTLSFilesInASecret: the controller crash-loops when it cannot open
+// --tls-cert-file or --tls-key-file, so the chart refuses TLS paths that are
+// not in a secret, projected or csi volume mounted with controller.extraVolumes
+// and extraVolumeMounts, naming the value and its path. A directory mount and
+// subPath mounts of the two files both render.
+func TestChartTLSFilesInASecret(t *testing.T) {
+	tls := func(cert, key string) []string {
+		return []string{"--set", "controller.tlsCertFile=" + cert, "--set", "controller.tlsKeyFile=" + key}
+	}
+	volume := func(source string) []string {
+		return []string{"--set", "controller.extraVolumes[0].name=tls", "--set", "controller.extraVolumes[0]." + source}
+	}
+	mount := func(i int, at, subPath string) []string {
+		m := fmt.Sprintf("controller.extraVolumeMounts[%d].", i)
+		args := []string{"--set", m + "name=tls", "--set", m + "mountPath=" + at}
+		if subPath != "" {
+			args = append(args, "--set", m+"subPath="+subPath)
+		}
+		return args
+	}
+	join := func(parts ...[]string) []string {
+		var out []string
+		for _, p := range parts {
+			out = append(out, p...)
+		}
+		return out
+	}
+	secret := volume("secret.secretName=kardinal-tls")
+	notInSecret := func(value, path string) string {
+		return "controller." + value + " (" + path + ") is not in a mounted Secret"
+	}
+	for name, c := range map[string]struct {
+		args []string
+		want string
+	}{
+		"no mount":           {tls("/tls/tls.crt", "/tls/tls.key"), notInSecret("tlsCertFile", "/tls/tls.crt")},
+		"key outside":        {join(tls("/tls/tls.crt", "/etc/tls.key"), secret, mount(0, "/tls", "")), notInSecret("tlsKeyFile", "/etc/tls.key")},
+		"sibling directory":  {join(tls("/tlsx/tls.crt", "/tlsx/tls.key"), secret, mount(0, "/tls", "")), notInSecret("tlsCertFile", "/tlsx/tls.crt")},
+		"path is the mount":  {join(tls("/tls", "/tls/tls.key"), secret, mount(0, "/tls", "")), notInSecret("tlsCertFile", "/tls")},
+		"configMap volume":   {join(tls("/tls/tls.crt", "/tls/tls.key"), volume("configMap.name=tls"), mount(0, "/tls", "")), `controller.tlsCertFile (/tls/tls.crt) is in volume "tls", which is not a secret, projected or csi volume`},
+		"mount of no volume": {join(tls("/tls/tls.crt", "/tls/tls.key"), mount(0, "/tls", "")), `controller.tlsCertFile (/tls/tls.crt) is in volume "tls", which is not a secret`},
+	} {
+		out, err := helmTemplate(t, "kardinal-promoter", c.args...)
+		require.Error(t, err, "%s must fail:\n%s", name, out)
+		assert.Contains(t, out, c.want, name)
+	}
+	for name, args := range map[string][]string{
+		"secret directory": join(tls("/tls/tls.crt", "/tls/tls.key"), secret, mount(0, "/tls/", "")),
+		"subPath files":    join(tls("/etc/c.crt", "/etc/c.key"), secret, mount(0, "/etc/c.crt", "tls.crt"), mount(1, "/etc/c.key", "tls.key")),
+		"projected":        join(tls("/tls/tls.crt", "/tls/tls.key"), volume("projected.sources[0].secret.name=kardinal-tls"), mount(0, "/tls", "")),
+		"csi":              join(tls("/tls/tls.crt", "/tls/tls.key"), volume("csi.driver=csi.cert-manager.io"), mount(0, "/tls", "")),
+	} {
+		env := envByName(controllerContainer(t, render(t, "kardinal-promoter", args...)))
+		assert.NotEmpty(t, env["KARDINAL_TLS_CERT_FILE"].Value, name)
+		assert.NotEmpty(t, env["KARDINAL_TLS_KEY_FILE"].Value, name)
+	}
+}
+
 // TestChartRejectsUnknownValues: values.schema.json fails unknown keys, so the
 // value names the docs used to give can no longer be silently ignored.
 // controller.shard was removed with distributed mode (#1321).
@@ -935,9 +998,11 @@ func TestChartAcceptsRepoSetKeys(t *testing.T) {
 		"networkPolicy.enabled=true",
 		"demo.enabled=true",
 		"controller.watchNamespace=" + releaseNS,
-		// Set together, as hack/e2e/components/ui.sh does; one alone fails
-		// (TestChartTLSFilesSetTogether).
-		"controller.tlsCertFile=/tls/tls.crt,controller.tlsKeyFile=/tls/tls.key",
+		// Set together and in a mounted Secret, as hack/e2e/components/ui.sh
+		// does (TestChartTLSFilesSetTogether, TestChartTLSFilesInASecret).
+		"controller.extraVolumes[0].name=tls,controller.extraVolumes[0].secret.secretName=kui-tls-cert," +
+			"controller.extraVolumeMounts[0].name=tls,controller.extraVolumeMounts[0].mountPath=/etc/kardinal/tls," +
+			"controller.tlsCertFile=/etc/kardinal/tls/tls.crt,controller.tlsKeyFile=/etc/kardinal/tls/tls.key",
 		"prometheusRule.enabled=true",
 		"prometheusRule.additionalLabels.release=kube-prometheus-stack",
 		"grafanaDashboard.enabled=true",
