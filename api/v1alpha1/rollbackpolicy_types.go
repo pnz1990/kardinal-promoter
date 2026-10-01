@@ -28,7 +28,9 @@ type RollbackPolicySpec struct {
 	BundleRef string `json:"bundleRef"`
 
 	// FailureThreshold is the number of consecutive health-check failures
-	// required to trigger a rollback. Defaults to 3 if <= 0.
+	// required to trigger a rollback. Defaults to 3; the controller also
+	// treats a value <= 0 as 3.
+	// +kubebuilder:default=3
 	// +optional
 	FailureThreshold int `json:"failureThreshold,omitempty"`
 }
@@ -36,8 +38,10 @@ type RollbackPolicySpec struct {
 // RollbackPolicyStatus holds the observed state of the rollback policy.
 // Written exclusively by the RollbackPolicyReconciler.
 type RollbackPolicyStatus struct {
-	// ShouldRollback is true when the failure threshold has been exceeded
-	// and a rollback Bundle has been (or is being) created.
+	// ShouldRollback is true while the failure threshold is reached, and
+	// stays true once a rollback Bundle has been created. It is false again
+	// when the failures drop below the threshold before a rollback Bundle
+	// exists (for example after RollbackRefused).
 	// The Graph can read this field via a Watch node expression.
 	// +optional
 	ShouldRollback bool `json:"shouldRollback,omitempty"`

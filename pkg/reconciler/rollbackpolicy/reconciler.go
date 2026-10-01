@@ -57,7 +57,8 @@ const (
 	// defaultFailureThreshold is used when spec.failureThreshold <= 0.
 	defaultFailureThreshold = 3
 
-	// requeueInterval is how often to recheck when the PromotionStep is not found.
+	// requeueInterval is how often to recheck while a policy is below its
+	// threshold, and after a failure to create the rollback Bundle.
 	requeueInterval = 30 * time.Second
 
 	labelPipeline    = "kardinal.io/pipeline"
@@ -120,14 +121,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 	if stepCount == 0 {
+		// No poll: the PromotionStep watch (policiesForStep) enqueues this
+		// policy when a step of spec.bundleRef in spec.environment appears.
 		log.Debug().
 			Str("pipeline", rp.Spec.PipelineName).
 			Str("environment", rp.Spec.Environment).
 			Str("bundle", rp.Spec.BundleRef).
-			Msg("no PromotionStep found yet for the bundle, requeueing")
-		return ctrl.Result{RequeueAfter: requeueInterval}, nil
+			Msg("no PromotionStep found yet for the bundle; waiting for one")
+		return ctrl.Result{}, nil
 	}
 
+	// The CRD defaults spec.failureThreshold to 3; an explicit value <= 0
+	// is treated as 3 too.
 	threshold := rp.Spec.FailureThreshold
 	if threshold <= 0 {
 		threshold = defaultFailureThreshold
@@ -139,9 +144,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	rp.Status.ConsecutiveFailures = failures
 	rp.Status.LastEvaluatedAt = &now
 
-	if failures >= threshold {
-		rp.Status.ShouldRollback = true
-	}
+	// Below the threshold, ShouldRollback is false again: it can only be
+	// true here when no rollback Bundle was recorded (the terminal case
+	// returned above), e.g. after RollbackRefused. Clearing it creates
+	// nothing, and a later crossing reuses any rollback Bundle that exists
+	// (ensureRollbackBundle), so it cannot start a second rollback.
+	rp.Status.ShouldRollback = failures >= threshold
 
 	if err := r.Status().Patch(ctx, &rp, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch rollbackpolicy status %s: %w", req.Name, err)
@@ -348,8 +356,9 @@ func (r *Reconciler) now() time.Time {
 
 // SetupWithManager registers the RollbackPolicyReconciler with controller-runtime.
 //
-// It watches PromotionStep so a threshold crossing is acted on when the step's
-// status changes, not only on the 30s requeue. Only spec or annotation changes
+// It watches PromotionStep so a policy is evaluated when a step of its Bundle
+// appears and when the step's status changes, not only on the 30s requeue
+// below the threshold. Only spec or annotation changes
 // of the RollbackPolicy itself trigger a reconcile: its own status writes do not.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).

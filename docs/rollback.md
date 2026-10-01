@@ -120,6 +120,8 @@ kubectl get rollbackpolicy rp-1 -o jsonpath='{.status.conditions[?(@.type=="Roll
 
 Roll back by hand (see [CLI](#cli)) or fix the policy. The RollbackPolicy is evaluated again when its PromotionSteps or its own spec change; when that evaluation creates the rollback Bundle, the condition becomes `False` with reason `RollbackCreated`.
 
+`SHOULDROLLBACK` follows the failures until a rollback Bundle exists: when they drop below the threshold first (the health check passed again after a refusal), it is `false` again and nothing is created. Once a rollback Bundle exists it stays `true`, and the policy does nothing more. `THRESHOLD` shows `3` when `spec.failureThreshold` is not set.
+
 ## What Happens in Git
 
 Rollback is a forward promotion. The controller writes the previous version's image tag to the environment's manifests, commits, and pushes (or opens a PR). The Git history shows:

@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
 )
 
@@ -274,9 +275,12 @@ func TestReconciler_AlreadyTriggered_IsNoOp(t *testing.T) {
 	assert.Len(t, bundleList.Items, 2, "no new rollback bundle should be created when already triggered")
 }
 
-// --- Test: no PromotionStep found — requeue gracefully ---
+// --- Test: no PromotionStep found — wait for the PromotionStep watch ---
 
-func TestReconciler_NoPromotionStep_RequeuesGracefully(t *testing.T) {
+// TestReconciler_NoPromotionStep_WaitsForTheWatch: with no step of the Bundle
+// yet, the policy is not polled (B49): the PromotionStep watch enqueues it
+// when the step appears (TestPoliciesForStep).
+func TestReconciler_NoPromotionStep_WaitsForTheWatch(t *testing.T) {
 	rp := makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3)
 	bundle := makeBundle("bundle-1", "nginx-demo")
 	// No PromotionStep created
@@ -295,7 +299,7 @@ func TestReconciler_NoPromotionStep_RequeuesGracefully(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), req)
 	require.NoError(t, err)
-	assert.Greater(t, result.RequeueAfter.Milliseconds(), int64(0), "should requeue when no PromotionStep found")
+	assert.Equal(t, ctrl.Result{}, result, "no poll while no PromotionStep exists")
 }
 
 // --- Test: not-found RollbackPolicy is a no-op ---
@@ -421,8 +425,94 @@ func TestReconciler_ReadsStepsOfBundleRef(t *testing.T) {
 			assert.Equal(t, tt.wantRollback, updated.Status.ShouldRollback)
 			if tt.wantRequeue {
 				assert.Nil(t, updated.Status.LastEvaluatedAt, "no status is written before the bundle's step exists")
-				assert.Equal(t, 30*time.Second, result.RequeueAfter)
+				assert.Equal(t, ctrl.Result{}, result, "the PromotionStep watch, not a poll, re-evaluates")
 			}
 		})
 	}
+}
+
+// TestReconciler_ShouldRollbackFollowsTheThreshold covers B49: below the
+// threshold status.shouldRollback is false again, unless a rollback Bundle
+// was already recorded (terminal). Clearing it creates no Bundle, and a later
+// crossing reuses the rollback Bundle that exists, so it cannot loop.
+func TestReconciler_ShouldRollbackFollowsTheThreshold(t *testing.T) {
+	existing := "bundle-1-rollback-policy"
+	tests := []struct {
+		name         string
+		recorded     *string
+		failures     int
+		wantRollback bool
+		wantRecorded *string
+	}{
+		{name: "true and nothing recorded, failures drop: false", failures: 1},
+		{name: "true and nothing recorded, still at the threshold: true", failures: 3,
+			wantRollback: true, wantRecorded: &existing},
+		{name: "rollback Bundle recorded: terminal, stays true", recorded: &existing, failures: 0,
+			wantRollback: true, wantRecorded: &existing},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3)
+			rp.Status.ShouldRollback = true
+			rp.Status.RollbackBundleName = tt.recorded
+			rollback := makeBundle(existing, "nginx-demo")
+			rollback.Labels[lifecycle.LabelRollback] = "true"
+			rollback.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-1"}
+			step := makePromotionStep("step-1", "nginx-demo", "prod", tt.failures)
+
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithObjects(rp, step, makeBundle("bundle-1", "nginx-demo"), rollback).
+				WithStatusSubresource(rp, step).Build()
+			r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}}
+			// Twice: the second reconcile must not flip the result back.
+			for range 2 {
+				_, err := r.Reconcile(context.Background(), req)
+				require.NoError(t, err)
+			}
+
+			var updated v1alpha1.RollbackPolicy
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &updated))
+			assert.Equal(t, tt.wantRollback, updated.Status.ShouldRollback)
+			assert.Equal(t, tt.wantRecorded, updated.Status.RollbackBundleName)
+			var bundles v1alpha1.BundleList
+			require.NoError(t, c.List(context.Background(), &bundles))
+			assert.Len(t, bundles.Items, 2, "no rollback Bundle is created besides the existing one")
+		})
+	}
+
+	t.Run("cleared, then crossing again reuses the rollback Bundle", func(t *testing.T) {
+		rp := makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3)
+		rp.Status.ShouldRollback = true
+		rollback := makeBundle(existing, "nginx-demo")
+		rollback.Labels[lifecycle.LabelRollback] = "true"
+		rollback.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-1"}
+		step := makePromotionStep("step-1", "nginx-demo", "prod", 1)
+		c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+			WithObjects(rp, step, makeBundle("bundle-1", "nginx-demo"), rollback).
+			WithStatusSubresource(rp, step).Build()
+		r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
+		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}}
+		get := func() v1alpha1.RollbackPolicy {
+			var got v1alpha1.RollbackPolicy
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			return got
+		}
+
+		_, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		assert.False(t, get().Status.ShouldRollback)
+
+		step.Status.ConsecutiveHealthFailures = 4
+		require.NoError(t, c.Status().Update(context.Background(), step))
+		_, err = r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		got := get()
+		assert.True(t, got.Status.ShouldRollback)
+		require.NotNil(t, got.Status.RollbackBundleName)
+		assert.Equal(t, existing, *got.Status.RollbackBundleName)
+		var bundles v1alpha1.BundleList
+		require.NoError(t, c.List(context.Background(), &bundles))
+		assert.Len(t, bundles.Items, 2, "the existing rollback Bundle is reused")
+	})
 }

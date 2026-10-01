@@ -391,7 +391,7 @@ RollbackPolicy monitors consecutive health-check failures on a PromotionStep and
 | `spec` | object |  | RollbackPolicySpec defines the desired state of a RollbackPolicy. Nothing creates RollbackPolicy objects automatically: the controller only reconciles the ones that exist. Automatic rollback on health failure is configured with Pipeline spec.environments[].onHealthFailure: rollback. |
 | `spec.bundleRef` | string | yes | BundleRef is the name of the Bundle being monitored. Only the PromotionSteps of this Bundle in Environment are read: the steps labelled kardinal.io/pipeline and kardinal.io/environment whose spec.bundleName (or, when that is empty, kardinal.io/bundle label) is BundleRef. When the highest ConsecutiveHealthFailures among them (one step per region) reaches FailureThreshold, a rollback Bundle is created. |
 | `spec.environment` | string | yes | Environment is the environment this policy monitors. |
-| `spec.failureThreshold` | integer |  | FailureThreshold is the number of consecutive health-check failures required to trigger a rollback. Defaults to 3 if &lt;= 0. |
+| `spec.failureThreshold` | integer |  | FailureThreshold is the number of consecutive health-check failures required to trigger a rollback. Defaults to 3; the controller also treats a value &lt;= 0 as 3. Default: `3`. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this policy monitors. |
 | `status` | object |  | RollbackPolicyStatus holds the observed state of the rollback policy. Written exclusively by the RollbackPolicyReconciler. |
 | `status.conditions` | []object |  | Conditions holds status conditions. RollbackRefused is True when the failure threshold was reached but no rollback Bundle was created because the rollback planner refused (the message says why, for example when no earlier Bundle was Verified in the environment). It is False once a rollback Bundle is created. Roll back by hand with kardinal rollback. |
@@ -404,7 +404,7 @@ RollbackPolicy monitors consecutive health-check failures on a PromotionStep and
 | `status.consecutiveFailures` | integer |  | ConsecutiveFailures is the most recent consecutive health failure count observed from the associated PromotionStep. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is the timestamp of the most recent reconcile evaluation. |
 | `status.rollbackBundleName` | string |  | RollbackBundleName is the name of the rollback Bundle created when ShouldRollback became true. Nil if no rollback has been triggered. |
-| `status.shouldRollback` | boolean |  | ShouldRollback is true when the failure threshold has been exceeded and a rollback Bundle has been (or is being) created. The Graph can read this field via a Watch node expression. |
+| `status.shouldRollback` | boolean |  | ShouldRollback is true while the failure threshold is reached, and stays true once a rollback Bundle has been created. It is false again when the failures drop below the threshold before a rollback Bundle exists (for example after RollbackRefused). The Graph can read this field via a Watch node expression. |
 
 ## ScheduleClock
 
