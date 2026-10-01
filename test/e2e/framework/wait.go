@@ -42,18 +42,25 @@ func Eventually(t *testing.T, timeout time.Duration, what string, check func(ctx
 	}
 }
 
+// checkTimeout bounds one Consistently check, which is a few API calls.
+const checkTimeout = 30 * time.Second
+
 // Consistently fails the test if check returns false at any poll during d.
 // Use it for "must not happen" assertions (a gate keeps blocking, no PR opens).
+// Each check gets its own context: one that starts just before d ends must
+// not fail with the window's deadline exceeded.
 func Consistently(t *testing.T, d time.Duration, what string, check func(ctx context.Context) (bool, string)) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), d)
-	defer cancel()
+	end := time.After(d)
 	for {
-		if ok, seen := check(ctx); !ok {
+		ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
+		ok, seen := check(ctx)
+		cancel()
+		if !ok {
 			t.Fatalf("%s stopped holding: %s", what, seen)
 		}
 		select {
-		case <-ctx.Done():
+		case <-end:
 			return
 		case <-time.After(Poll):
 		}
