@@ -296,6 +296,8 @@ UIAPI-CORS-01	live	ui	covered	ui-api	CORS: allowed origin reflected, others 403,
 UIAPI-TLS-01	live	ui	covered	ui-api	TLS on UI and webhook servers; cert without key is a startup error	docs/guides/security.md:647-710
 UIAPI-HEADERS-01	live	ui	covered	ui-api	browser security headers (CSP, nosniff, frame deny)	docs/guides/security.md:632-646; cmd/kardinal-controller/ui_security_headers.go:31-60
 UIAPI-BODY-01	live	ui	covered	ui-api	request body over 1 MiB rejected	cmd/kardinal-controller/ui_auth.go:67-103
+UIAPI-REQUESTER-01	live	ui	covered	ui-api	TokenReview mode: a UI promote records the caller's Kubernetes username as kardinal.io/requested-by and logs it as requestedBy	docs/guides/security.md:287-303; cmd/kardinal-controller/ui_lifecycle.go:27-41
+UIAPI-REQUESTER-02	live	ui	covered	ui-api	no UI auth: a UI promote and rollback record kardinal-ui as kardinal.io/requested-by	docs/guides/security.md:287-303; cmd/kardinal-controller/ui_lifecycle.go:23-25
 UI-STATIC-01	live	ui	covered	ui	/ui/ serves the embedded web app	docs/installation.md:161-200
 UI-LIST-01	live	ui	covered	ui	pipeline sidebar (PAUSED/Blocked/Degraded) and fleet health bar with filters	docs/roadmap.md:133
 UI-DAG-01	live	ui	covered	ui	promotion DAG with per-env state, PR badge and tooltip	docs/roadmap.md:133

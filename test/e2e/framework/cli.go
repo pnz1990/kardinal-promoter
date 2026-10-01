@@ -322,14 +322,28 @@ func prefixLines(prefix, s string) string {
 // ControllerLogs returns the log lines the controller pods wrote since since.
 func (e *Env) ControllerLogs(t *testing.T, since time.Time) string {
 	t.Helper()
+	return e.podLogs(t, ControllerSelector, since)
+}
+
+// VariantLogs returns the log lines the pods of controller variant v wrote
+// since since.
+func (e *Env) VariantLogs(t *testing.T, v *Variant, since time.Time) string {
+	t.Helper()
+	return e.podLogs(t, variantLabel+"="+v.Name, since)
+}
+
+// podLogs returns the log lines the pods in ControllerNamespace that match
+// selector wrote since since, pod by pod in name order.
+func (e *Env) podLogs(t *testing.T, selector string, since time.Time) string {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	pods, err := e.Kube.CoreV1().Pods(ControllerNamespace).List(ctx, metav1.ListOptions{LabelSelector: ControllerSelector})
+	pods, err := e.Kube.CoreV1().Pods(ControllerNamespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		t.Fatalf("list controller pods: %v", err)
 	}
 	if len(pods.Items) == 0 {
-		t.Fatalf("no controller pods (%s) in %s", ControllerSelector, ControllerNamespace)
+		t.Fatalf("no controller pods (%s) in %s", selector, ControllerNamespace)
 	}
 	names := make([]string, 0, len(pods.Items))
 	for _, p := range pods.Items {

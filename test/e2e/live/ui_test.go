@@ -7,6 +7,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -544,9 +545,11 @@ func metaCondition(conds []metav1.Condition, typ string) string {
 // TestUI_APIPromoteAndRollback checks POST /promote and /rollback. A Bundle
 // that stops at test (intent.targetEnvironment) is promoted to prod from the
 // UI, which deploys its version there; a rollback then puts prod back on the
-// Bundle before it. The requests the endpoints must refuse change nothing.
+// Bundle before it. The main release has no UI auth, so both Bundles name
+// kardinal-ui as the requester. The requests the endpoints must refuse change
+// nothing.
 //
-// Covers UIAPI-PROMOTE-01, UIAPI-ROLLBACK-01.
+// Covers UIAPI-PROMOTE-01, UIAPI-ROLLBACK-01, UIAPI-REQUESTER-02.
 func TestUI_APIPromoteAndRollback(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -605,6 +608,7 @@ func TestUI_APIPromoteAndRollback(t *testing.T) {
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: promoted.Bundle}, &pb))
 	assert.Equal(t, held.Spec.Images, pb.Spec.Images)
 	assert.Equal(t, held.Name, pb.Annotations[lifecycle.AnnotationPromotedFrom])
+	assert.Equal(t, "kardinal-ui", pb.Annotations[lifecycle.AnnotationRequestedBy])
 	require.NotNil(t, pb.Spec.Intent)
 	assert.Equal(t, "prod", pb.Spec.Intent.TargetEnvironment)
 	e.WaitStepState(t, a.ns, pipelineName, promoted.Bundle, "prod", "Verified", promoteTimeout)
@@ -626,6 +630,7 @@ func TestUI_APIPromoteAndRollback(t *testing.T) {
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: rolled.Bundle}, &rbb))
 	assert.Equal(t, "true", rbb.Labels[lifecycle.LabelRollback])
 	assert.Equal(t, promoted.Bundle, rbb.Annotations[lifecycle.AnnotationRollbackFrom], "the Bundle prod ran")
+	assert.Equal(t, "kardinal-ui", rbb.Annotations[lifecycle.AnnotationRequestedBy])
 	require.NotNil(t, rbb.Spec.Provenance)
 	assert.Equal(t, first, rbb.Spec.Provenance.RollbackOf)
 	e.WaitStepState(t, a.ns, pipelineName, rolled.Bundle, "prod", "Verified", promoteTimeout)
@@ -1112,6 +1117,145 @@ func TestUI_APITokenReview(t *testing.T) {
 	assert.Equal(t, "auth unavailable", strings.TrimSpace(r.Body))
 	app := framework.UIClient{BaseURL: url}.Get(t, "/ui/")
 	assert.Equal(t, http.StatusOK, app.Status, "/ui/ is not gated")
+}
+
+// tokenReviewClusterRole is the ClusterRole the chart renders for the kui-tr
+// release (ui.auth.tokenReview with controller.watchNamespace): the
+// cluster-scoped rules, among them create on TokenReviews and
+// SubjectAccessReviews.
+const tokenReviewClusterRole = "kui-tr-kardinal-promoter-cluster-scoped"
+
+// TestUI_APIRequesterTokenReview checks who a UI promote records with
+// TokenReview auth: the caller's Kubernetes username, in the new Bundle's
+// kardinal.io/requested-by annotation and in the requestedBy field of the
+// controller's log line. The caller is a ServiceAccount bound only to the
+// documented Promote rules. The UI is a controller variant run with
+// --ui-tokenreview-auth and bound to the chart's TokenReview rules
+// (tokenReviewClusterRole); it is a standby, so the main release alone
+// reconciles the test's namespace. (kui-tr would do, but the main release
+// reconciles the namespace kui-tr watches too.) The Bundle then deploys to
+// prod.
+//
+// Covers UIAPI-REQUESTER-01.
+func TestUI_APIRequesterTokenReview(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test", "prod")
+	a.apply(t, a.pipeline(nil))
+	ctx := context.Background()
+
+	// A Bundle that stops at test, for the UI to promote to prod.
+	held := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: pipelineName + "-", Namespace: a.ns},
+		Spec: v1alpha1.BundleSpec{
+			Type: "image", Pipeline: pipelineName,
+			Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}},
+			Intent: &v1alpha1.BundleIntent{TargetEnvironment: "test"},
+		},
+	}
+	lifecycle.StampCreatedAt(held, time.Now())
+	require.NoError(t, e.Client.Create(ctx, held))
+
+	v := e.ControllerVariant(t, a.ns, []string{"--ui-tokenreview-auth=true"})
+	_, err := e.Kube.RbacV1().ClusterRoles().Get(ctx, tokenReviewClusterRole, metav1.GetOptions{})
+	require.NoError(t, err, "hack/e2e/components/ui.sh installs kui-tr")
+	crb := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: v.Name + "-tokenreview"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: tokenReviewClusterRole},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: v.Name, Namespace: framework.ControllerNamespace}},
+	}
+	_, err = e.Kube.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = e.Kube.RbacV1().ClusterRoleBindings().Delete(context.Background(), crb.Name, metav1.DeleteOptions{})
+	})
+
+	// The caller: a ServiceAccount token bound to the Promote row of
+	// docs/guides/security.md, as a Role in the Pipeline's namespace.
+	const sa = "operator"
+	_, err = e.Kube.CoreV1().ServiceAccounts(a.ns).Create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: sa}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	tr, err := e.Kube.CoreV1().ServiceAccounts(a.ns).CreateToken(ctx, sa, &authnv1.TokenRequest{
+		Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](1800)}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	user := "system:serviceaccount:" + a.ns + ":" + sa
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: "ui-promote", Namespace: a.ns},
+		Rules: []rbacv1.PolicyRule{
+			{APIGroups: []string{"kardinal.io"}, Resources: []string{"pipelines"}, Verbs: []string{"get"}},
+			{APIGroups: []string{"kardinal.io"}, Resources: []string{"promotionsteps", "bundles"}, Verbs: []string{"list"}},
+			{APIGroups: []string{"kardinal.io"}, Resources: []string{"bundles"}, Verbs: []string{"create"}},
+		},
+	}
+	_, err = e.Kube.RbacV1().Roles(a.ns).Create(ctx, role, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = e.Kube.RbacV1().RoleBindings(a.ns).Create(ctx, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: role.Name, Namespace: a.ns},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: role.Name},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: a.ns}},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	// The UI caches denials, so its first request waits until the API server
+	// grants both bindings.
+	allows := func(ctx context.Context, account, ns string, ra authzv1.ResourceAttributes) string {
+		sar, err := e.Kube.AuthorizationV1().SubjectAccessReviews().Create(ctx, &authzv1.SubjectAccessReview{
+			Spec: authzv1.SubjectAccessReviewSpec{User: "system:serviceaccount:" + ns + ":" + account,
+				Groups:             []string{"system:serviceaccounts", "system:serviceaccounts:" + ns, "system:authenticated"},
+				ResourceAttributes: &ra},
+		}, metav1.CreateOptions{})
+		switch {
+		case err != nil:
+			return err.Error()
+		case !sar.Status.Allowed:
+			return fmt.Sprintf("%s/%s cannot %s %s", ns, account, ra.Verb, ra.Resource)
+		}
+		return ""
+	}
+	framework.Eventually(t, time.Minute, "the API server to grant the variant and the caller their bindings", func(ctx context.Context) (bool, string) {
+		msg := allows(ctx, v.Name, framework.ControllerNamespace,
+			authzv1.ResourceAttributes{Verb: "create", Group: "authentication.k8s.io", Resource: "tokenreviews"})
+		if msg == "" {
+			msg = allows(ctx, sa, a.ns, authzv1.ResourceAttributes{Namespace: a.ns, Verb: "create", Group: "kardinal.io", Resource: "bundles"})
+		}
+		return msg == "", msg
+	})
+
+	e.WaitStepState(t, a.ns, pipelineName, held.Name, "test", "Verified", promoteTimeout)
+	e.WaitBundlePhase(t, a.ns, held.Name, "Verified", time.Minute)
+
+	promote := map[string]any{"pipeline": pipelineName, "environment": "prod", "namespace": a.ns}
+	anon := framework.UIClient{BaseURL: v.UIURL}.Post(t, uiAPI+"/promote", promote)
+	require.Equal(t, http.StatusUnauthorized, anon.Status, "the variant runs with TokenReview auth: %s", anon)
+	sent := time.Now()
+	r := framework.UIClient{BaseURL: v.UIURL, Token: tr.Status.Token}.Post(t, uiAPI+"/promote", promote)
+	require.Equal(t, http.StatusCreated, r.Status, r.String())
+	var promoted struct{ Bundle, Source string }
+	r.JSON(t, &promoted)
+	assert.Equal(t, held.Name, promoted.Source)
+	var pb v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: promoted.Bundle}, &pb))
+	assert.Equal(t, user, pb.Annotations[lifecycle.AnnotationRequestedBy], "the token's user, not kardinal-ui")
+	assert.Equal(t, held.Name, pb.Annotations[lifecycle.AnnotationPromotedFrom])
+
+	framework.Eventually(t, 30*time.Second, "the variant to log the promote", func(context.Context) (bool, string) {
+		got, ok := loggedRequester(e.VariantLogs(t, v, sent.Add(-time.Second)), "ui: promote triggered", promoted.Bundle)
+		return ok && got == user, fmt.Sprintf("logged=%v requestedBy=%q", ok, got)
+	})
+
+	e.WaitStepState(t, a.ns, pipelineName, promoted.Bundle, "prod", "Verified", promoteTimeout)
+	assert.Equal(t, fixtures.Image+":"+fixtures.V2, e.DeploymentImage(t, a.ns, fixtures.Workload("prod")))
+}
+
+// loggedRequester returns the requestedBy field of the controller's JSON log
+// line with message msg about Bundle bundle.
+func loggedRequester(logs, msg, bundle string) (string, bool) {
+	for _, line := range strings.Split(logs, "\n") {
+		var entry struct{ Message, Bundle, RequestedBy string }
+		if json.Unmarshal([]byte(line), &entry) == nil && entry.Message == msg && entry.Bundle == bundle {
+			return entry.RequestedBy, true
+		}
+	}
+	return "", false
 }
 
 // TestUI_APITLS checks kui-tls, which serves its UI and webhook ports over
