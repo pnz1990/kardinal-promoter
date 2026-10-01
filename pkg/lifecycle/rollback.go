@@ -76,13 +76,19 @@ type RollbackPlan struct {
 //     the environment (every one of its PromotionSteps there is Verified).
 //   - Without ToBundle: the target is the most recent Bundle, other than the
 //     deployed one, whose PromotionSteps in the environment are all Verified,
-//     that has the same type as the deployed one (any type when the deployed
-//     one is mixed), carries artifacts, and deploys different artifacts. A
-//     deployed mixed Bundle so goes back to the newest earlier images and
-//     config commit, whichever Bundles deployed them: when the target's type
-//     cannot carry everything the mixed Bundle changed, the rollback Bundle is
-//     mixed, with the target's artifacts and the newest earlier version of
-//     the rest. A Bundle with the deployed (failing) images is never
+//     that deploys what the deployed one's type deploys, carries artifacts,
+//     and deploys different artifacts: an image or mixed Bundle when an image
+//     Bundle is deployed, a config or mixed Bundle when a config Bundle is,
+//     a Bundle of any type when a mixed Bundle is. A deployed image or config
+//     Bundle so goes back to the newest earlier images or config commit, also
+//     when a mixed Bundle deployed them (B66): the rollback Bundle then has
+//     the deployed type and only the mixed target's images, or only its
+//     config commit, and the rest stays as deployed. A deployed mixed Bundle
+//     goes back to the newest earlier images and config commit, whichever
+//     Bundles deployed them: when the target's type cannot carry everything
+//     the mixed Bundle changed, the rollback Bundle is mixed, with the
+//     target's artifacts and the newest earlier version of the rest. A Bundle
+//     with the deployed (failing) images is never
 //     chosen, and neither is a Bundle that an earlier rollback in the
 //     environment rolled back from (named in the kardinal.io/rollback-from
 //     annotation of a rollback Bundle): after V2 was rolled back to V1, rolling
@@ -218,12 +224,20 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			if cand.Spec.Pipeline != req.Pipeline || !HasArtifacts(cand) {
 				continue
 			}
-			mixed := plan.Current != nil && plan.Current.Spec.Type == "mixed"
-			if plan.Current != nil && (SameArtifacts(cand, plan.Current) ||
-				(cand.Spec.Type != plan.Current.Spec.Type && !mixed)) {
+			if plan.Current != nil && SameArtifacts(cand, plan.Current) {
 				continue
 			}
-			r, restoreErr := src.restore(ctx, plan.Current, cand)
+			mixed := plan.Current != nil && plan.Current.Spec.Type == "mixed"
+			from := cand
+			if plan.Current != nil && !mixed && cand.Spec.Type != plan.Current.Spec.Type {
+				// A deployed image or config Bundle goes back to the newest
+				// earlier images or config commit, which a mixed Bundle may
+				// have deployed: the rollback takes only that part of it.
+				if from = onlyTypeOf(cand, plan.Current); from == nil {
+					continue
+				}
+			}
+			r, restoreErr := src.restore(ctx, plan.Current, from)
 			if mixed && errors.Is(restoreErr, ErrInvalid) {
 				// cand's type cannot carry everything the mixed Bundle changed
 				// (an image Bundle its config commit, a config Bundle its
@@ -283,6 +297,31 @@ func asMixed(b *v1alpha1.Bundle) *v1alpha1.Bundle {
 	m := b.DeepCopy()
 	m.Spec.Type = "mixed"
 	return m
+}
+
+// onlyTypeOf returns a copy of the mixed Bundle b with only what the deployed
+// image or config Bundle cur deploys, and cur's type: b's images for an image
+// Bundle, b's config commit for a config Bundle. A rollback of cur to it
+// leaves the rest as deployed. It returns nil when b is not mixed, cur is
+// neither an image nor a config Bundle, or b carries none of it.
+func onlyTypeOf(b, cur *v1alpha1.Bundle) *v1alpha1.Bundle {
+	if b.Spec.Type != "mixed" {
+		return nil
+	}
+	n := b.DeepCopy()
+	n.Spec.Type = cur.Spec.Type
+	switch cur.Spec.Type {
+	case "image":
+		n.Spec.ConfigRef = nil
+	case "config":
+		n.Spec.Images = nil
+	default:
+		return nil
+	}
+	if !HasArtifacts(n) {
+		return nil
+	}
+	return n
 }
 
 // deploysConfig reports whether promoting b deploys its config commit: config

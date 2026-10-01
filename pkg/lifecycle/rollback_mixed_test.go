@@ -25,7 +25,9 @@ import (
 // deployed Bundle changed: a config Bundle cannot deploy the images a mixed
 // Bundle changed, an image Bundle cannot deploy the config commit it changed.
 // Without --to, a mixed Bundle goes back to the newest earlier images and
-// config commit (B61), and an automatic rollback plans what a manual one does.
+// config commit (B61), an image or config Bundle to the newest earlier images
+// or config commit, also from a mixed Bundle (B66), and an automatic rollback
+// plans what a manual one does.
 func TestPlanRollback_BundleTypes(t *testing.T) {
 	// withImages adds images "repo:tag" under ghcr.io/x/ to b.
 	withImages := func(b *v1alpha1.Bundle, refs ...string) *v1alpha1.Bundle {
@@ -294,6 +296,57 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 				img("v1", 10, "a:1"), verified("v1", 10), mix("m2", 20, "c2", "a:2"), deployed("m2", 20)},
 			wantErr: lifecycle.ErrConflict,
 			errHas:  []string{"no Bundle other than m2 with a config commit of https://g/cfg was Verified in prod"},
+		},
+
+		// Deployed image or config Bundle, without --to (B66): an image Bundle
+		// goes back to the newest earlier images, from an image or mixed
+		// Bundle, and a config Bundle to the newest earlier config commit, from
+		// a config or mixed Bundle. A mixed target gives only what the
+		// deployed type deploys, so the rest stays as deployed. It used to
+		// consider only Bundles of the deployed type, so it skipped a newer
+		// mixed Bundle for an older one, or found nothing.
+		{
+			name: "without --to an image Bundle takes the images of a newer mixed Bundle",
+			objs: []client.Object{
+				img("i0", 5, "a:0"), verified("i0", 5), mix("m1", 10, "c1", "a:1"), verified("m1", 10),
+				img("i2", 20, "a:2"), deployed("i2", 20)},
+			wantTarget: "m1", wantType: "image", wantImages: []string{"a:1"},
+		},
+		{
+			name: "without --to an image Bundle with no earlier image Bundle goes back to a mixed one",
+			objs: []client.Object{
+				mix("m1", 10, "c1", "a:1"), verified("m1", 10), img("i2", 20, "a:2"), deployed("i2", 20)},
+			wantTarget: "m1", wantType: "image", wantImages: []string{"a:1"},
+		},
+		{
+			name: "without --to an image rollback to a mixed Bundle fills an image the target does not name",
+			objs: []client.Object{
+				img("i0", 5, "a:0", "b:0"), verified("i0", 5), mix("m1", 10, "c1", "a:1"), verified("m1", 10),
+				img("i2", 20, "a:2", "b:2"), deployed("i2", 20)},
+			wantTarget: "m1", wantType: "image", wantImages: []string{"a:1", "b:0"},
+		},
+		{
+			name: "without --to an image rollback compares only images: a mixed Bundle with the deployed images is skipped",
+			objs: []client.Object{
+				img("i0", 0, "a:0"), verified("i0", 0), mix("m0", 5, "c0", "a:1"), verified("m0", 5),
+				mix("m1", 10, "c1", "a:3"), verified("m1", 10), cfg("k2", 15, "c2"), verified("k2", 15),
+				img("i3", 20, "a:3"), deployed("i3", 20)},
+			wantTarget: "m0", wantType: "image", wantImages: []string{"a:1"},
+		},
+		{
+			name: "without --to a config Bundle takes the commit of a newer mixed Bundle",
+			objs: []client.Object{
+				cfg("k0", 5, "c0"), verified("k0", 5), mix("m1", 10, "c1", "a:1"), verified("m1", 10),
+				cfg("k2", 20, "c2"), deployed("k2", 20)},
+			wantTarget: "m1", wantType: "config", wantConfig: "c1",
+		},
+		{
+			name: "without --to a config rollback compares only the commit: a mixed Bundle with the deployed commit is skipped",
+			objs: []client.Object{
+				cfg("k0", 0, "c0"), verified("k0", 0), mix("m0", 5, "c1", "a:0"), verified("m0", 5),
+				mix("m1", 10, "c3", "a:1"), verified("m1", 10), img("i2", 15, "a:2"), verified("i2", 15),
+				cfg("k3", 20, "c3"), deployed("k3", 20)},
+			wantTarget: "m0", wantType: "config", wantConfig: "c1",
 		},
 	}
 	for _, tc := range tests {
