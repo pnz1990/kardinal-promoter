@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,10 +17,28 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
 
-// uiActor is recorded as the requester of Bundles the UI creates.
+// uiActor is the requester the UI records when it does not know who the
+// caller is: with the static UI token (--ui-auth-token) or with no UI auth.
 const uiActor = "kardinal-ui"
+
+// uiRequester is who asked for a UI promote, rollback, pause or resume. With
+// --ui-tokenreview-auth it is the username the TokenReview middleware stored in
+// the request context, as the API server returned it (for example
+// system:serviceaccount:team-a:deployer); otherwise it is uiActor.
+//
+// The username is recorded as is. It only goes into the kardinal.io/requested-by
+// annotation (never a label, so the 63-character label limit does not apply),
+// the PR body (escaped by mdcell) and JSON log fields, and the API server
+// already bounds it: it refuses objects whose annotations exceed 256 KiB.
+func uiRequester(ctx context.Context) string {
+	if u, ok := uiauth.UserFrom(ctx); ok && u.Username != "" {
+		return u.Username
+	}
+	return uiActor
+}
 
 // writeLifecycleError maps a pkg/lifecycle error to an HTTP status. Planner
 // errors (not found, invalid, conflict) carry a message meant for the user;
@@ -79,11 +98,12 @@ func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
 		ns = "default"
 	}
 
+	requester := uiRequester(r.Context())
 	plan, err := lifecycle.PlanPromote(r.Context(), s.client, lifecycle.PromoteRequest{
 		Namespace:   ns,
 		Pipeline:    req.Pipeline,
 		Environment: req.Environment,
-		Actor:       uiActor,
+		Actor:       requester,
 		Now:         time.Now(),
 	})
 	if err != nil {
@@ -100,6 +120,7 @@ func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
 		Str("source", plan.Source.Name).
 		Str("pipeline", req.Pipeline).
 		Str("env", req.Environment).
+		Str("requestedBy", requester).
 		Msg("ui: promote triggered")
 
 	w.Header().Set("Content-Type", "application/json")
@@ -151,12 +172,13 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 		ns = "default"
 	}
 
+	requester := uiRequester(r.Context())
 	plan, err := lifecycle.PlanRollback(r.Context(), s.client, lifecycle.RollbackRequest{
 		Namespace:   ns,
 		Pipeline:    req.Pipeline,
 		Environment: req.Environment,
 		ToBundle:    req.ToBundle,
-		Actor:       uiActor,
+		Actor:       requester,
 		Now:         time.Now(),
 	})
 	if err != nil {
@@ -174,6 +196,7 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 		Str("env", req.Environment).
 		Str("rollbackOf", plan.Target.Name).
 		Str("rollbackFrom", plan.CurrentName).
+		Str("requestedBy", requester).
 		Msg("ui: rollback triggered")
 
 	w.Header().Set("Content-Type", "application/json")
@@ -240,7 +263,8 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	s.log.Info().Str("pipeline", req.Pipeline).Bool("paused", pause).Msg("ui: pipeline " + done)
+	s.log.Info().Str("pipeline", req.Pipeline).Bool("paused", pause).
+		Str("requestedBy", uiRequester(r.Context())).Msg("ui: pipeline " + done)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"message": "pipeline " + req.Pipeline + " " + done,
