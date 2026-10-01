@@ -130,22 +130,6 @@ func cliUser(t *testing.T) string {
 	return name
 }
 
-// bundles lists the Bundles of the test's pipeline in ns.
-func bundles(t *testing.T, e *framework.Env, ns string) []v1alpha1.Bundle {
-	t.Helper()
-	var list v1alpha1.BundleList
-	require.NoError(t, e.Client.List(context.Background(), &list, client.InNamespace(ns)))
-	return list.Items
-}
-
-// getBundle reads Bundle name in ns.
-func getBundle(t *testing.T, e *framework.Env, ns, name string) *v1alpha1.Bundle {
-	t.Helper()
-	var b v1alpha1.Bundle
-	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &b))
-	return &b
-}
-
 // openPR waits for the one open PR on repo whose body names tag.
 func openPR(t *testing.T, e *framework.Env, repo gitserver.Repo, tag string) gitserver.PR {
 	t.Helper()
