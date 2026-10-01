@@ -54,6 +54,18 @@ a test that needs one provider is named after it and checks `Env.Git.Kind()`
 first. The `github` suite takes its token from `KARDINAL_E2E_GITHUB_TOKEN_FILE`,
 `DEMO_GITHUB_TOKEN` or `gh auth token` (`hack/e2e/components/github.sh`).
 
+> **Warning: the `gh auth token` fallback hands your own GitHub login to the
+> cluster.** When neither variable is set, `github.sh` takes the token of
+> your `gh` login, with every scope that login has (often `repo`, `workflow`
+> and `read:org`, on every repo you can reach). It copies the token into the
+> kind cluster, as the controller's Secret `kardinal-system/git-token` and
+> a copy of it in every test namespace, and writes it to the suite's env file
+> and `secrets/` directory under `test/e2e/results/<cluster>/`. Anyone who can
+> read those Secrets or files can act as you on GitHub. Instead, create a
+> fine-grained token for the test repo only, with Contents and Pull requests
+> read and write, and pass it in `DEMO_GITHUB_TOKEN` (or a file named by
+> `KARDINAL_E2E_GITHUB_TOKEN_FILE`).
+
 ## Coverage
 
 `test/e2e/coverage.tsv` lists every documented behavior with an id, and
