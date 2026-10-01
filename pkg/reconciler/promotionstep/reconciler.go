@@ -128,7 +128,7 @@ type Reconciler struct {
 	// deleted step is read through it before its PR is closed, because the
 	// informer cache can lag the finalizer removal of the previous reconcile
 	// (handleDeleted), and so are the Bundle, namespace, Pipeline and Graph
-	// that tell whether the step comes back (stepRecreated). The supersession
+	// that tell whether the step comes back (stepComeback). The supersession
 	// guard reads a step through it too, before cancelling it (supersededStep).
 	// When nil, Client is used (tests).
 	APIReader client.Reader
@@ -350,7 +350,7 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 	if unstarted {
 		msg = fmt.Sprintf("bundle %s was superseded before this step started", ps.Spec.BundleName)
 	}
-	if closeErr := r.closeStepPR(ctx, ps, "bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle"); closeErr != nil {
+	if closeErr := r.closeStepPR(ctx, ps, "bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle", false); closeErr != nil {
 		if ps.Status.RetryCount < maxStepRetries {
 			ps.Status.RetryCount++
 			ps.Status.Message = fmt.Sprintf("bundle %s was superseded; closing its PR failed, retrying (%d/%d): %v",
@@ -394,9 +394,11 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 // once the branch is gone. A PR found closed (an earlier attempt closed it
 // and then failed or crashed before the delete, or a human closed it) gets
 // the delete too, so a retry finishes the job; a merged PR keeps its branch.
-// The status read, the close and the delete can fail; the comment is
-// best-effort.
-func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string) error {
+// With keepBranch the branch is kept: a deleted step that kro applies again
+// pushes it again at once, and deleting it closed the new step's PR on
+// Forgejo and Gitea (handleDeleted, B79). The status read, the close and the
+// delete can fail; the comment is best-effort.
+func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) error {
 	repo, num := "", 0
 	if ps.Spec.PRStatusRef != "" {
 		var prs v1alpha1.PRStatus
@@ -443,7 +445,7 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		if merged {
 			return nil
 		}
-		return r.deletePRBranch(ctx, ps, repo, num)
+		return r.closedPRBranch(ctx, ps, repo, num, keepBranch)
 	}
 	if err := r.SCM.ClosePR(ctx, repo, num); err != nil {
 		return fmt.Errorf("close PR #%d: %w", num, err)
@@ -454,7 +456,7 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 	if err := r.SCM.CommentOnPR(ctx, repo, num, body); err != nil {
 		log.Warn().Err(err).Int("pr", num).Msg("could not comment on the closed PR (non-fatal)")
 	}
-	return r.deletePRBranch(ctx, ps, repo, num)
+	return r.closedPRBranch(ctx, ps, repo, num, keepBranch)
 }
 
 // withLabelsError appends the error of open-pr's failed attempt to label the
@@ -825,7 +827,7 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 	}
 	log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
 	closed = append(closed, updateStepStatuses(ps, stepNames, idx, true, msg, timings)...)
-	if closeErr := r.closeStepPR(ctx, ps, "the promotion failed: "+msg); closeErr != nil {
+	if closeErr := r.closeStepPR(ctx, ps, "the promotion failed: "+msg, false); closeErr != nil {
 		msg += fmt.Sprintf("; closing the PR it opened failed (%v) — %s", closeErr, closeByHand(closeErr))
 	}
 	if _, err := r.transitionClosing(ctx, base, ps, StateFailed, msg, "", closed); err != nil {
@@ -912,7 +914,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 				msg := fmt.Sprintf("wait-for-merge timeout after %s: PR was not merged within the configured deadline", d)
 				// Close the PR so a late merge cannot deliver a change whose
 				// step already failed (C03-promotionstep-22).
-				if closeErr := r.closeStepPR(ctx, ps, fmt.Sprintf("it was not merged within waitForMergeTimeout (%s)", d)); closeErr != nil {
+				if closeErr := r.closeStepPR(ctx, ps, fmt.Sprintf("it was not merged within waitForMergeTimeout (%s)", d), false); closeErr != nil {
 					msg += fmt.Sprintf("; closing the PR failed (%v) — %s", closeErr, closeByHand(closeErr))
 				}
 				ps.Status.WaitForMergeExpiry = nil

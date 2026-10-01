@@ -655,7 +655,12 @@ func scmLabelsAndRotation(t *testing.T, e *framework.Env, scopes []string) {
 // Its PRStatus kept naming the old PR, so the controller polled the closed PR,
 // never saw a merge of the new one, and failed the new step when the 5-minute
 // grace window ended (B72). Now the PRStatus names the new PR, with a status
-// written for it, and merging the new PR promotes prod.
+// written for it, and merging the new PR promotes prod. The new PR is opened
+// from the same branch about a second after the delete; the controller deleted
+// that branch with the old PR, and Forgejo and Gitea close every open PR of a
+// deleted branch from a queue after the delete returns, so they closed the new
+// PR too (B79). The controller keeps the branch now, and the new PR stays open
+// until it is merged.
 //
 // Covers STEP-DELETE-PR-04.
 func TestSCM_DeletedStepTracksItsNewPR(t *testing.T) {
@@ -681,6 +686,7 @@ func TestSCM_DeletedStepTracksItsNewPR(t *testing.T) {
 		})
 	again := a.openPR(t, bundle, "prod")
 	require.NotEqual(t, pr.Number, again.Number, "the recreated step opened a new PR")
+	require.Equal(t, pr.Head, again.Head, "the new PR is from the old PR's branch")
 	e.WaitPRStatus(t, a.ns, pipelineName, bundle, "prod", time.Minute, fmt.Sprintf("tracking the new PR #%d", again.Number),
 		func(p *v1alpha1.PRStatus) bool {
 			return p.Spec.PRNumber == again.Number && p.Status.ObservedGeneration == p.Generation &&

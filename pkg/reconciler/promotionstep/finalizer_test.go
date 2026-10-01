@@ -661,6 +661,12 @@ func TestPRFinalizer_DeleteRestartAfterClose(t *testing.T) {
 // the five-minute deadline the finalizer goes and the PR is left open and
 // uncommented, with one error log and one PRLeftOpen Warning Event, since the
 // step may still come back and own the PR.
+//
+// It covers B79 too: a closed PR's head branch is deleted (B70), except when
+// only the step was deleted from a Promoting or Failed Bundle's Graph. kro
+// applies that step again, and it pushes the same branch at once; Forgejo and
+// Gitea close every open PR of a deleted branch from a queue, after the delete
+// call returns, and closed the new step's PR.
 func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 	deleted := metav1.NewTime(time.Now().Add(-time.Second).Truncate(time.Second))
 	type graphState int
@@ -681,6 +687,7 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 		readErr      string        // the kind whose read fails with an error other than NotFound
 		later        time.Duration // how long after the delete the reconcile runs (default 1s)
 		wantClosed   bool
+		keepsBranch  bool // a closed PR keeps its head branch: the step comes back and pushes it again
 		wantRetry    bool // the step stays and is reconciled again
 		wantComment  string
 		wantLeftOpen bool // the PRLeftOpen Event and error log
@@ -690,8 +697,18 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 		{name: "the Graph was recreated: the PR is kept", graph: graphNew, bundle: func(*v1alpha1.Bundle) {}},
 		{name: "the Graph was recreated in the same second: the PR is kept", graph: graphSameSecond,
 			bundle: func(*v1alpha1.Bundle) {}},
-		{name: "only the step was deleted: the PR is closed", graph: graphOld, bundle: func(*v1alpha1.Bundle) {},
-			wantClosed: true, wantComment: "PromotionStep step was deleted"},
+		{name: "only the step was deleted: the PR is closed, its branch kept", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, wantClosed: true, keepsBranch: true,
+			wantComment: "PromotionStep step was deleted"},
+		// A Failed Bundle's step that kro applies again runs again.
+		{name: "only the step of a failed Bundle was deleted: the PR is closed, its branch kept", graph: graphOld,
+			bundle: func(b *v1alpha1.Bundle) { b.Status.Phase = "Failed" }, wantClosed: true, keepsBranch: true,
+			wantComment: "PromotionStep step was deleted"},
+		// A superseded Bundle's step that kro applies again is cancelled
+		// before it pushes.
+		{name: "only the step of a superseded Bundle was deleted: the PR is closed", graph: graphOld,
+			bundle: func(b *v1alpha1.Bundle) { b.Status.Phase = "Superseded" }, wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
 		{name: "the namespace is being deleted: the PR is closed", graph: graphDeleting, nsDeleting: true,
 			bundle: func(*v1alpha1.Bundle) {}, wantClosed: true,
 			wantComment: "kardinal closed this PR: namespace default was deleted."},
@@ -840,6 +857,11 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 			} else {
 				assert.Empty(t, m.closed, "the PR is left open")
 				assert.Empty(t, m.comments, "the PR is not commented on")
+			}
+			if tt.wantClosed && !tt.keepsBranch {
+				assert.Equal(t, []string{"test/repo:kardinal/bundle-1/prod"}, m.deleted, "the closed PR's branch is deleted")
+			} else {
+				assert.Empty(t, m.deleted, "the branch is kept")
 			}
 			var gone v1alpha1.PromotionStep
 			assert.True(t, apierrors.IsNotFound(api.Get(context.Background(), client.ObjectKeyFromObject(step), &gone)),

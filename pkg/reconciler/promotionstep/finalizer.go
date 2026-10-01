@@ -133,15 +133,25 @@ func prFinalizerSyncFailed(log zerolog.Logger, err error) (ctrl.Result, error) {
 // anyway and a Warning Event and an error log say what to close or delete by
 // hand.
 //
-// The PR is left open when a new step reuses it (stepRecreated): the step went
-// with its Graph while the Bundle goes on promoting, so the Bundle reconciler
-// recreates the Graph and the new step reuses the PR. Closing it there made
-// the new step open a second PR. If no new step comes (the Bundle is deleted
-// or stops promoting first), nothing closes that PR: docs/troubleshooting.md
-// says how to find it. A failed read in stepRecreated is retried like a failed
-// close. Past closePRDeadline the finalizer is removed and the PR is left open
-// and uncommented, with an error log and a PRLeftOpen Warning Event: leaking an
-// open PR is safer than closing one a recreated step may own.
+// The PR is left open when a new step reuses it (comebackReusesPR): the step
+// went with its Graph while the Bundle goes on promoting, so the Bundle
+// reconciler recreates the Graph and the new step reuses the PR. Closing it
+// there made the new step open a second PR. If no new step comes (the Bundle
+// is deleted or stops promoting first), nothing closes that PR:
+// docs/troubleshooting.md says how to find it. A failed read in stepComeback
+// is retried like a failed close. Past closePRDeadline the finalizer is
+// removed and the PR is left open and uncommented, with an error log and a
+// PRLeftOpen Warning Event: leaking an open PR is safer than closing one a
+// recreated step may own.
+//
+// The PR is closed but its head branch kept when a new step pushes that
+// branch again (comebackPushesBranch): the step was deleted on its own, and
+// kro applies it again as soon as the finalizer is gone. Forgejo and Gitea
+// delete a branch at once but close its open PRs later, from a queue, and
+// they close every open PR of that branch name, so the new step's PR, opened
+// about a second later, was closed too (B79). The new step force-pushes the
+// branch with the same Bundle's change, so a late merge of the closed PR
+// through GitHub's API delivers what the new step promotes, untracked.
 //
 // In a namespace being deleted the API server refuses the ClosePRFailed
 // Event, so the error log is the only record of a PR left open there.
@@ -162,7 +172,7 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 		return ctrl.Result{}, r.removePRFinalizer(ctx, ps)
 	}
 	elapsed := r.now().Sub(ps.DeletionTimestamp.Time)
-	recreated, err := r.stepRecreated(ctx, ps)
+	back, err := r.stepComeback(ctx, ps)
 	switch {
 	case err != nil && elapsed < closePRDeadline:
 		// Closing the PR of a step that comes back would make the new step
@@ -180,12 +190,13 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 		log.Error().Err(err).Str("env", ps.Spec.Environment).Str("prURL", ps.Status.PRURL).
 			Msg("gave up telling whether a deleted PromotionStep comes back; left its PR open and removed its finalizer")
 		kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, ReasonPRLeftOpen, "Delete", note)
-	case recreated:
+	case back == comebackReusesPR:
 		log.Info().Str("env", ps.Spec.Environment).Str("prURL", ps.Status.PRURL).
 			Msg("left the PR of a step deleted with its Graph open: the Bundle recreates the Graph, " +
 				"and the new step reuses the PR")
 	default:
-		if err := r.closeStepPR(ctx, ps, r.deleteReason(ctx, ps)); err != nil {
+		keepBranch := back == comebackPushesBranch
+		if err := r.closeStepPR(ctx, ps, r.deleteReason(ctx, ps), keepBranch); err != nil {
 			if elapsed < closePRDeadline {
 				delay := closePRRetryDelay(elapsed)
 				log.Warn().Err(err).Dur("retryIn", delay).
@@ -207,12 +218,28 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 // left open because the controller could not tell whether the step comes back.
 const ReasonPRLeftOpen = "PRLeftOpen"
 
-// stepRecreated reports whether a new step for ps's environment will reuse
-// ps's open PR. That is when ps went with its Graph (deleted by hand, for
-// instance) while the Bundle goes on promoting: the Bundle reconciler
-// recreates the Graph, and kro creates a new step for ps's environment, which
-// finds and reuses ps's open PR (GRAPH-HEAL-01). All of these must hold, read
-// from the API server:
+// comeback is whether, and how, a new step for a deleted step's environment
+// comes after it.
+type comeback int
+
+const (
+	// noComeback: no new step pushes the deleted step's branch again.
+	noComeback comeback = iota
+	// comebackReusesPR: the step went with its Graph; a new step finds and
+	// reuses its open PR.
+	comebackReusesPR
+	// comebackPushesBranch: the step was deleted on its own; kro applies it
+	// again once it is gone, and the new step pushes the same branch and
+	// opens a new PR.
+	comebackPushesBranch
+)
+
+// stepComeback reports whether a new step comes for ps's environment, read
+// from the API server. A new step reuses ps's open PR (comebackReusesPR) when
+// ps went with its Graph (deleted by hand, for instance) while the Bundle goes
+// on promoting: the Bundle reconciler recreates the Graph, and kro creates a
+// new step for ps's environment, which finds and reuses ps's open PR
+// (GRAPH-HEAL-01). All of these must hold:
 //
 //   - the Bundle exists, is not being deleted, and is Promoting;
 //   - its namespace is not being deleted;
@@ -220,16 +247,22 @@ const ReasonPRLeftOpen = "PRLeftOpen"
 //   - its Graph is gone, is being deleted, or was created at or after ps's
 //     delete request (it was recreated before ps was reconciled).
 //
-// A step deleted on its own is not one: kro applies it again under the same
-// name, but only once it is gone, so after handleDeleted closed its PR, and
-// the new step opens a new PR (checked on kind). A step whose environment a
-// Pipeline edit dropped (kro updates the Graph in place) does not come back,
-// nor does one whose Bundle or namespace is being deleted or gone. A read that
-// fails for another reason than NotFound is an error: handleDeleted retries it
-// rather than close a PR the new step would reuse.
-func (r *Reconciler) stepRecreated(ctx context.Context, ps *v1alpha1.PromotionStep) (bool, error) {
+// A step deleted on its own (comebackPushesBranch) does not reuse the PR: kro
+// applies it again under the same name, but only once it is gone, so after
+// handleDeleted closed its PR, and the new step pushes the same branch and
+// opens a new PR (checked on kind). That is when the Bundle is Promoting or
+// Failed (a Failed Bundle's new step runs again), and the rest holds, with a
+// Graph that is there, not being deleted, and older than the delete request.
+// A superseded Bundle's new step is cancelled before it pushes.
+//
+// A step whose environment a Pipeline edit dropped (kro updates the Graph in
+// place) does not come back, nor does one whose Bundle or namespace is being
+// deleted or gone, nor one of a Failed Bundle whose Graph went (it is not
+// recreated). A read that fails for another reason than NotFound is an error:
+// handleDeleted retries it rather than close a PR the new step would reuse.
+func (r *Reconciler) stepComeback(ctx context.Context, ps *v1alpha1.PromotionStep) (comeback, error) {
 	if ps.Spec.BundleName == "" {
-		return false, nil
+		return noComeback, nil
 	}
 	reader := r.apiReader()
 	key := func(name string) client.ObjectKey { return client.ObjectKey{Namespace: ps.Namespace, Name: name} }
@@ -247,26 +280,27 @@ func (r *Reconciler) stepRecreated(ctx context.Context, ps *v1alpha1.PromotionSt
 	}
 	var b v1alpha1.Bundle
 	if ok, err := read(key(ps.Spec.BundleName), &b, "bundle"); !ok || err != nil {
-		return false, err
+		return noComeback, err
 	}
-	if !b.DeletionTimestamp.IsZero() || b.Status.Phase != bundlePhasePromoting {
-		return false, nil
+	promoting := b.Status.Phase == bundlePhasePromoting
+	if !b.DeletionTimestamp.IsZero() || (!promoting && b.Status.Phase != bundlePhaseFailed) {
+		return noComeback, nil
 	}
 	var ns corev1.Namespace
 	if ok, err := read(client.ObjectKey{Name: ps.Namespace}, &ns, "namespace"); !ok || err != nil {
-		return false, err
+		return noComeback, err
 	}
 	if !ns.DeletionTimestamp.IsZero() || ns.Status.Phase == corev1.NamespaceTerminating {
-		return false, nil
+		return noComeback, nil
 	}
 	var pl v1alpha1.Pipeline
 	if ok, err := read(key(b.Spec.Pipeline), &pl, "pipeline"); !ok || err != nil {
-		return false, err
+		return noComeback, err
 	}
 	if !slices.ContainsFunc(pl.Spec.Environments, func(e v1alpha1.EnvironmentSpec) bool {
 		return e.Name == ps.Spec.Environment
 	}) {
-		return false, nil
+		return noComeback, nil
 	}
 	name := b.Status.GraphRef
 	if name == "" {
@@ -274,15 +308,25 @@ func (r *Reconciler) stepRecreated(ctx context.Context, ps *v1alpha1.PromotionSt
 	}
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(graph.GraphGVK)
-	if ok, err := read(key(name), g, "graph"); !ok || err != nil {
-		return err == nil, err // a Graph that is gone is recreated
+	ok, err := read(key(name), g, "graph")
+	if err != nil {
+		return noComeback, err
 	}
 	created := g.GetCreationTimestamp()
-	return g.GetDeletionTimestamp() != nil || !created.Before(ps.DeletionTimestamp), nil
+	if ok && g.GetDeletionTimestamp() == nil && created.Before(ps.DeletionTimestamp) {
+		return comebackPushesBranch, nil // the step's own Graph applies it again
+	}
+	if promoting {
+		return comebackReusesPR, nil // the Bundle reconciler recreates the Graph
+	}
+	return noComeback, nil
 }
 
-// bundlePhasePromoting is the phase of a Bundle whose Graph is promoting it.
-const bundlePhasePromoting = "Promoting"
+// Phases of a Bundle whose deleted step kro applies again.
+const (
+	bundlePhasePromoting = "Promoting"
+	bundlePhaseFailed    = "Failed"
+)
 
 // removePRFinalizer removes FinalizerClosePR from the deleted step ps. A
 // conflict is retried at once against the step read again from the API server,

@@ -206,6 +206,11 @@ export KARDINAL_SCM_API_URL=https://codeberg.org   # or your self-hosted Forgejo
 Create an API token in your Forgejo/Gitea instance under **Settings → Applications → Access Tokens**.
 The startup token check cannot see these scopes; see [Token check at startup](#token-check-at-startup).
 
+Deleting a branch on Forgejo and Gitea also closes every open pull request from it, from a queue,
+shortly after the delete call returns. kardinal deletes the head branch of a PR it closed, but not
+for a PromotionStep deleted on its own: kro creates that step again, and the new step opens its
+PR from the same branch name about a second later, so deleting the branch would close that PR too.
+
 ### Webhook configuration
 
 1. In your Forgejo/Gitea repository, go to **Settings → Webhooks → Add Webhook → Gitea**.

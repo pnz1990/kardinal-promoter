@@ -597,7 +597,8 @@ was `pr-review` when the step started) carries it while it is `Promoting` or `Wa
 from before it opens the PR; an `auto` step never carries it. When the step is deleted, the controller asks the SCM whether
 the PR is still open, closes it with a comment if it is, and deletes its head branch
 (`kardinal/<bundle>/<env>`) so the closed PR cannot be merged later; a merged PR is left alone,
-and a closed one only loses its branch. Then it removes the finalizer. What happens to the PR depends on what was deleted:
+and a closed one only loses its branch. The branch is kept when the step comes back and pushes it
+again (the PromotionStep alone, below). Then it removes the finalizer. What happens to the PR depends on what was deleted:
 
 - **The Bundle.** The PR is closed with the comment `kardinal closed this PR: bundle <bundle>
   was deleted. ...`.
@@ -607,7 +608,13 @@ and a closed one only loses its branch. Then it removes the finalizer. What happ
   the same name, once the old one is gone. The old PR is closed first (`kardinal closed this PR:
   PromotionStep <name> was deleted. ...`), and the new step opens a new PR. The step's PRStatus
   then names the new PR (`spec.prNumber`), and the old PR's status is cleared before the new PR
-  is polled (`status.observedGeneration` catches up with `metadata.generation`).
+  is polled (`status.observedGeneration` catches up with `metadata.generation`). When the Bundle
+  is `Promoting` or `Failed`, the old PR keeps its branch, and the controller logs `kept the head
+  branch of the closed PR`: the new step pushes the same branch about a second later, and
+  Forgejo and Gitea close every open PR of a deleted branch from a queue after the delete
+  returns, so deleting it closed the new PR too. On GitHub the closed old PR can then still be
+  merged through the API, with the same Bundle's change for the same environment; the branch goes
+  when the controller closes the new step's PR.
 - **The Graph, while the Bundle is `Promoting`.** The PR stays open: the controller recreates the
   Graph, and the new step reuses the PR. The controller logs `left the PR of a step deleted with
   its Graph open` with the `env` and `prURL`.

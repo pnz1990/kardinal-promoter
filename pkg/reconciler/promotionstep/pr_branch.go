@@ -67,6 +67,18 @@ func closeByHand(err error) string {
 	return "close it by hand"
 }
 
+// closedPRBranch deletes the head branch of the step's closed, unmerged PR
+// number in repo (deletePRBranch), or, with keep, logs that it is kept: a new
+// step pushes it again (handleDeleted).
+func (r *Reconciler) closedPRBranch(ctx context.Context, ps *v1alpha1.PromotionStep, repo string, num int, keep bool) error {
+	if !keep {
+		return r.deletePRBranch(ctx, ps, repo, num)
+	}
+	zerolog.Ctx(ctx).Info().Int("pr", num).Str("step", ps.Name).Str("branch", prHeadBranch(ps)).
+		Msg("kept the head branch of the closed PR: the step comes back and pushes it again")
+	return nil
+}
+
 // deletePRBranch deletes the head branch of the step's closed, unmerged PR
 // number in repo. GitHub's merge API merges a closed PR without reopening it,
 // so closing alone did not keep a late merge from delivering; with its head
