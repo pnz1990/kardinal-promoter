@@ -44,10 +44,14 @@ import (
 // error of every push instead, as when the remote is down.
 type authGit struct {
 	failPush bool
+	cloneErr error
 	pushErr  error
 }
 
 func (g *authGit) Clone(_ context.Context, url, _, _, token string) error {
+	if g.cloneErr != nil {
+		return g.cloneErr
+	}
 	if token == "" && !g.failPush {
 		return fmt.Errorf("git clone %s: authentication required: Unauthorized", url)
 	}
@@ -242,9 +246,10 @@ func TestGitCredentialRetries_LeaveTheRetryLimit(t *testing.T) {
 
 // TestGitCredentialRetries_ResetOnProgress covers the B48 reset on progress:
 // a step that gets past the step that retried starts the next one with no
-// retries of either kind. Here the clone was refused while git had no
-// credentials, then the repository could be cloned without them, and the push
-// is refused: its first retry is counted as the first, and backs off 10s.
+// retries of either kind. Here the clone failed once on the network and then
+// was refused while git had no credentials, then the repository could be
+// cloned without them, and the push is refused: its first retry is counted as
+// the first, and backs off 10s.
 func TestGitCredentialRetries_ResetOnProgress(t *testing.T) {
 	ps := makeStep("step-cred", "nginx-demo", "b1", "test")
 	ps.Status.State = "Promoting"
@@ -256,10 +261,14 @@ func TestGitCredentialRetries_ResetOnProgress(t *testing.T) {
 	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
 		Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir }}
 
+	git.cloneErr = errors.New("git clone https://github.com/test/repo: dial tcp: connection refused")
+	reconcileStep(t, r, "step-cred")
+	git.cloneErr = nil
 	for range 3 {
 		reconcileStep(t, r, "step-cred")
 	}
 	got := getStep(t, c, "step-cred")
+	require.Equal(t, 1, got.Status.RetryCount, got.Status.Message)
 	require.Equal(t, 3, got.Status.GitCredentialRetries, got.Status.Message)
 	require.Contains(t, got.Status.Message, "step git-clone: ")
 
