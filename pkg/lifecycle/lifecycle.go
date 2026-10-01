@@ -45,7 +45,8 @@ const (
 	AnnotationRollbackFrom = "kardinal.io/rollback-from"
 	// AnnotationPromotedFrom names the Bundle whose artifacts a promote copied.
 	AnnotationPromotedFrom = "kardinal.io/promoted-from"
-	// AnnotationRequestedBy records who asked for a promote or a rollback.
+	// AnnotationRequestedBy records who asked for a promote, a rollback or a
+	// Bundle created from the UI.
 	AnnotationRequestedBy = "kardinal.io/requested-by"
 )
 

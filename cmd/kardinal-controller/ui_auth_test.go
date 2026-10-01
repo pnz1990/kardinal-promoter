@@ -322,7 +322,7 @@ func TestUIHandler_GateApproveBounds(t *testing.T) {
 				}
 				require.Len(t, gate.Spec.Overrides, 1)
 				o := gate.Spec.Overrides[0]
-				assert.Equal(t, "ui-action", o.CreatedBy)
+				assert.Equal(t, "kardinal-ui", o.CreatedBy, "no UI auth: the UI's requester")
 				assert.True(t, o.ExpiresAt.After(before))
 				assert.WithinDuration(t, before.Add(time.Duration(tt.wantMinutes)*time.Minute), o.ExpiresAt.Time, time.Minute)
 			}

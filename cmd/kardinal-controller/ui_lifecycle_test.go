@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authv1 "k8s.io/api/authentication/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -25,6 +27,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
 
 var uiLcT0 = time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
@@ -203,7 +206,131 @@ func TestUIAPI_Rollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 			assert.Equal(t, "1", rb.Spec.Images[0].Tag)
 			assert.Equal(t, "prod", rb.Spec.Intent.TargetEnvironment)
 			assert.Equal(t, "app-v2", rb.Annotations[lifecycle.AnnotationRollbackFrom])
+			assert.Equal(t, "kardinal-ui", rb.Annotations[lifecycle.AnnotationRequestedBy])
 		})
+	}
+}
+
+// TestUIRequester covers B53: the requester is the username in the request
+// context, and kardinal-ui when there is none or it is empty.
+func TestUIRequester(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{name: "no user", ctx: context.Background(), want: "kardinal-ui"},
+		{name: "empty username", ctx: uiauth.WithUser(context.Background(), authv1.UserInfo{Groups: []string{"devs"}}), want: "kardinal-ui"},
+		{name: "username", ctx: uiauth.WithUser(context.Background(), authv1.UserInfo{Username: "alice@example.com"}), want: "alice@example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, uiRequester(tt.ctx))
+		})
+	}
+}
+
+// TestUIHandler_ActionsRecordRequester covers B53, B56 and B57 through the
+// real UI handler: with --ui-tokenreview-auth, a UI promote, rollback and new
+// Bundle record the TokenReview username as kardinal.io/requested-by, exactly
+// as the API server returned it, a gate approval records it as the override's
+// createdBy, and each action's log line names it. The handler reads the user
+// the middleware stored in the request context, so each request is reviewed
+// once. The static-token and no-auth modes know no user and record
+// kardinal-ui, for gate approvals too (they recorded ui-action, B56).
+func TestUIHandler_ActionsRecordRequester(t *testing.T) {
+	const deployer = "system:serviceaccount:default:deployer"
+	const oidcUser = "oidc:Jane Doe | ops"
+	users := map[string]string{"deployer-token": deployer, "oidc-token": oidcUser}
+	verbs := []string{"get", "list", "create", "update"}
+	rbac := map[string]map[string][]string{deployer: {"default": verbs}, oidcUser: {"default": verbs}}
+	gate := func() client.Object {
+		return &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "no-weekend", Namespace: "default"}}
+	}
+
+	actions := []struct {
+		name, path, body string
+		objs             func() []client.Object
+		wantCode         int
+		createsBundle    bool
+		approvesGate     bool
+		logField         string
+	}{
+		{name: "promote", path: "/api/v1/ui/promote", body: `{"pipeline":"app","environment":"prod"}`,
+			objs: func() []client.Object {
+				return []client.Object{uiLcPipeline(), uiLcBundle("app-v1", "1", 0), uiLcStep("app-v1", "uat", "Verified", 5)}
+			},
+			wantCode: http.StatusCreated, createsBundle: true, logField: "requestedBy"},
+		{name: "rollback", path: "/api/v1/ui/rollback", body: `{"pipeline":"app","environment":"prod"}`,
+			objs: func() []client.Object {
+				return []client.Object{uiLcPipeline(), uiLcBundle("app-v1", "1", 0), uiLcBundle("app-v2", "2", 10),
+					uiLcStep("app-v1", "prod", "Verified", 5), uiLcStep("app-v2", "prod", "Verified", 15)}
+			},
+			wantCode: http.StatusCreated, createsBundle: true, logField: "requestedBy"},
+		{name: "create bundle", path: "/api/v1/ui/bundles", body: `{"pipeline":"app","image":"ghcr.io/org/app:3","author":"ci-bot"}`,
+			objs:     func() []client.Object { return []client.Object{uiLcPipeline()} },
+			wantCode: http.StatusCreated, createsBundle: true, logField: "requestedBy"},
+		{name: "approve gate", path: "/api/v1/ui/gates/default/no-weekend/approve", body: `{"reason":"hotfix"}`,
+			objs:     func() []client.Object { return []client.Object{gate()} },
+			wantCode: http.StatusOK, approvesGate: true, logField: "createdBy"},
+		{name: "pause", path: "/api/v1/ui/pause", body: `{"pipeline":"app"}`,
+			objs:     func() []client.Object { return []client.Object{uiLcPipeline()} },
+			wantCode: http.StatusOK, logField: "requestedBy"},
+	}
+	modes := []struct {
+		name        string
+		header      string
+		staticToken string
+		tokenReview bool
+		want        string
+	}{
+		{name: "TokenReview records the service account", header: "Bearer deployer-token", tokenReview: true, want: deployer},
+		{name: "TokenReview records any username as is", header: "Bearer oidc-token", tokenReview: true, want: oidcUser},
+		{name: "static token records kardinal-ui", header: "Bearer static-token", staticToken: "static-token", want: "kardinal-ui"},
+		{name: "no UI auth records kardinal-ui", want: "kardinal-ui"},
+	}
+	for _, m := range modes {
+		for _, a := range actions {
+			t.Run(m.name+"/"+a.name, func(t *testing.T) {
+				c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(a.objs()...).Build()
+				tokens := &uiTestTokens{users: users}
+				cfg := uiAuthConfig{staticToken: m.staticToken}
+				if m.tokenReview {
+					cfg.tokens, cfg.access = tokens, &uiTestAccess{rules: rbac}
+				}
+				var logs bytes.Buffer
+				h := newUIHandler(c, nil, cfg, "", nil, zerolog.New(&logs))
+
+				rec := uiAuthDo(t, h, http.MethodPost, a.path, m.header, a.body)
+				require.Equal(t, a.wantCode, rec.Code, rec.Body.String())
+				if m.tokenReview {
+					assert.Equal(t, 1, tokens.calls, "the token is reviewed once, by the middleware")
+				}
+				if a.createsBundle {
+					created := uiLcCreated(t, c, "app-v1", "app-v2")
+					require.Len(t, created, 1)
+					assert.Equal(t, m.want, created[0].Annotations[lifecycle.AnnotationRequestedBy])
+				}
+				if a.approvesGate {
+					var g v1alpha1.PolicyGate
+					require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(gate()), &g))
+					require.Len(t, g.Spec.Overrides, 1)
+					assert.Equal(t, m.want, g.Spec.Overrides[0].CreatedBy)
+				}
+				var logged []string
+				for _, line := range strings.Split(logs.String(), "\n") {
+					if line == "" {
+						continue
+					}
+					var entry map[string]any
+					require.NoError(t, json.Unmarshal([]byte(line), &entry), line)
+					if v, ok := entry[a.logField].(string); ok {
+						logged = append(logged, v)
+					}
+				}
+				assert.Equal(t, []string{m.want}, logged, "the %s log line names the requester in %s", a.name, a.logField)
+			})
+		}
 	}
 }
 

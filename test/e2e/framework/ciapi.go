@@ -132,26 +132,32 @@ func clip(s string) string {
 // variants numbers the controller variants, so one test can run several.
 var variants int32
 
+// variantLabel labels a controller variant's objects with its name.
+const variantLabel = "kardinal.io/e2e-variant"
+
 // Variant is a second controller Deployment made by ControllerVariant.
 type Variant struct {
 	Name string
 	// URL is its webhook port from the host; InClusterURL is the same port
 	// through its Service, as a pod (or the git server) reaches it.
 	URL, InClusterURL string
+	// UIURL is its UI port from the host.
+	UIURL string
 }
 
 // ControllerVariant runs a second controller for the test ns: the chart's
 // pod template with args appended and the env vars named in dropEnv removed,
-// in ControllerNamespace, and a NodePort Service to its webhook port. The
-// variant runs under its own ServiceAccount, bound only to the ClusterRoles of
-// the chart's ServiceAccount and not to its leader election Role (see
-// variantServiceAccount). With --leader-elect=true (the chart's setting,
-// checked here) and no access to the Lease it stays a standby for good, even
-// if the chart's controller misses a renewal: it reconciles nothing, but its
-// webhook port (/webhook/scm, its health and the Bundle API) serves on every
-// replica. That is how a test runs the controller with other flags without
-// touching the shared one. The Deployment, Service, ServiceAccount and
-// ClusterRoleBindings are deleted when the test ends.
+// in ControllerNamespace, and a NodePort Service to its webhook and UI ports.
+// The variant runs under its own ServiceAccount, bound only to the
+// ClusterRoles of the chart's ServiceAccount and not to its leader election
+// Role (see variantServiceAccount). With --leader-elect=true (the chart's
+// setting, checked here) and no access to the Lease it stays a standby for
+// good, even if the chart's controller misses a renewal: it reconciles
+// nothing, but its webhook port (/webhook/scm, its health and the Bundle API)
+// and its UI port serve on every replica. That is how a test runs the
+// controller with other flags without touching the shared one. The
+// Deployment, Service, ServiceAccount and ClusterRoleBindings are deleted when
+// the test ends.
 func (e *Env) ControllerVariant(t *testing.T, ns string, args []string, dropEnv ...string) *Variant {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -179,7 +185,7 @@ func (e *Env) ControllerVariant(t *testing.T, ns string, args []string, dropEnv 
 	c.Env = env
 
 	name := fmt.Sprintf("variant-%s-%d", ns[len(ns)-8:], atomic.AddInt32(&variants, 1))
-	labels := map[string]string{"app.kubernetes.io/name": "kardinal-e2e-variant", "kardinal.io/e2e-variant": name}
+	labels := map[string]string{"app.kubernetes.io/name": "kardinal-e2e-variant", variantLabel: name}
 	chartSA := tmpl.Spec.ServiceAccountName
 	if chartSA == "" {
 		chartSA = "default"
@@ -202,7 +208,10 @@ func (e *Env) ControllerVariant(t *testing.T, ns string, args []string, dropEnv 
 		Spec: corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeNodePort,
 			Selector: labels,
-			Ports:    []corev1.ServicePort{{Name: "webhook", Port: 8083, TargetPort: intstr.FromString("webhook")}},
+			Ports: []corev1.ServicePort{
+				{Name: "webhook", Port: 8083, TargetPort: intstr.FromString("webhook")},
+				{Name: "ui", Port: UIPort, TargetPort: intstr.FromString("ui")},
+			},
 		},
 	}
 	if err := e.Client.Create(ctx, dep); err != nil {
@@ -223,7 +232,8 @@ func (e *Env) ControllerVariant(t *testing.T, ns string, args []string, dropEnv 
 	}
 	ip := e.nodeIP(t)
 	v := &Variant{Name: name, URL: fmt.Sprintf("http://%s:%d", ip, svc.Spec.Ports[0].NodePort),
-		InClusterURL: fmt.Sprintf("http://%s.%s.svc.cluster.local:8083", name, ControllerNamespace)}
+		InClusterURL: fmt.Sprintf("http://%s.%s.svc.cluster.local:8083", name, ControllerNamespace),
+		UIURL:        fmt.Sprintf("http://%s:%d", ip, svc.Spec.Ports[1].NodePort)}
 	t.Logf("controller variant %s (args %v, without %v) at %s", name, args, dropEnv, v.URL)
 
 	Eventually(t, 3*time.Minute, "controller variant "+name+" to serve /webhook/scm/health", func(ctx context.Context) (bool, string) {

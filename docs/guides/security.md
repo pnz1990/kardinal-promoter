@@ -284,8 +284,27 @@ ISO 27001, and FedRAMP audit trail requirements.
 | `spec.outcome` | `Success`, `Failure`, or `Pending` |
 | `spec.message` | Human-readable description |
 
-An AuditEvent does not record who acted. For that, read the Bundle's
-`spec.provenance.author` and the Kubernetes API server audit log.
+An AuditEvent does not record who acted. A Bundle made by a promote or a
+rollback, or created from the UI, names who asked for it in its
+`kardinal.io/requested-by` annotation. A gate approval records the same value
+as the override's `createdBy`, which the gate's reason shows as
+`OVERRIDDEN by <createdBy>: <reason>`. The value is:
+
+- **UI with TokenReview auth** (`ui.auth.tokenReview`): the caller's Kubernetes
+  username, as the API server returned it for their token, for example
+  `system:serviceaccount:team-a:deployer`.
+- **UI with the static token, or with no UI auth**: `kardinal-ui`. The UI
+  cannot tell its callers apart in these modes.
+- **CLI** (`kardinal promote`, `kardinal rollback`, `kardinal override`): the
+  local username on the machine that ran it. Nothing verifies it.
+- **Automatic rollback**: `kardinal-controller (...)`, naming what triggered it.
+
+Anyone who may create Bundles can also set the annotation, and anyone who may
+update PolicyGates can set `createdBy`, so for a verified identity read the
+Kubernetes API server audit log. It names the kubeconfig user who created a
+CLI Bundle. The UI creates Bundles and approves gates with the controller's
+ServiceAccount, so for a UI action the audit log names the controller, and in
+TokenReview mode the annotation or `createdBy` names the user.
 
 ### Querying audit events
 
@@ -512,7 +531,7 @@ The user needs these permissions:
 |---|---|
 | View pipelines, bundles, gates and steps | `get`, `list` on `pipelines`, `bundles`, `policygates`, `promotionsteps` (`kardinal.io`) |
 | View step events | `list` on `events` (core) |
-| Create a Bundle | `create` on `bundles` |
+| Create a Bundle | `get` on `pipelines`; `create` on `bundles` |
 | Promote | `get` on `pipelines`; `list` on `promotionsteps` and `bundles`; `create` on `bundles` |
 | Roll back | `get` on `pipelines` and `bundles`; `list` on `promotionsteps` and `bundles`; `create` on `bundles` |
 | Pause, resume | `get`, `update` on `pipelines` |

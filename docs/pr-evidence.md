@@ -77,7 +77,9 @@ version it deploys; the version is left out when that Bundle was deleted, and th
 "the bundle deployed in prod now" when the annotation is not set. TO is the Bundle whose
 state it restores (`spec.provenance.rollbackOf`) and the version the rollback deploys.
 "Rolled back by" is the `kardinal.io/requested-by` annotation: the CLI or UI user, or the
-controller for an automatic rollback. The line is left out when it is not set.
+controller for an automatic rollback. The UI records the user only with TokenReview auth, and
+`kardinal-ui` otherwise (see [who asked](guides/security.md#fields-on-every-event)). The line is
+left out when it is not set.
 
 ## Sections Explained
 

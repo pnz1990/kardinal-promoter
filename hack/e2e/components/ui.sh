@@ -8,7 +8,10 @@
 #       release, so a test can call it from off the pod (not loopback)
 #   four more releases of the chart and the same image, each namespace-scoped
 #   (controller.watchNamespace) in its own namespace, with a NodePort Service
-#   <release>-nodeport for the ui and webhook ports:
+#   <release>-nodeport for the ui and webhook ports. Each is a standby for
+#   good (standby_lease): it serves those ports and reconciles nothing, so the
+#   main release, which watches every namespace, is the only reconciler of
+#   every namespace:
 #     kui-token      kardinal-ui-token      static UI token, CORS origin
 #                                           http://allowed.example, allowed
 #                                           host kardinal-ui.test
@@ -64,12 +67,38 @@ $ports
 EOF
 }
 
-# release NAME NS HELM_ARGS... installs a namespace-scoped release NAME in NS.
-# The CRDs come with the main release, and the ScheduleClock it creates has a
-# fixed name, so only the main release has one.
+# standby_lease NS keeps the controllers in NS standbys. A controller elects
+# its leader with the Lease kardinal-promoter-leader in its own namespace;
+# this gives that Lease to a holder that is no pod, for 2^31-1 seconds, so no
+# controller in NS ever acquires it and none reconciles. Its UI and webhook
+# servers serve on a standby. The chart has no setting for a UI-only release
+# or for the Lease's name or namespace. A leader left by an earlier run fails
+# its next renewal and exits, and release() restarts it anyway.
+standby_lease() {
+  local ns=$1 now
+  now=$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)
+  "${KUBECTL[@]}" create namespace "$ns" --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f - >/dev/null
+  "${KUBECTL[@]}" apply -f - >/dev/null <<EOF
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: kardinal-promoter-leader
+  namespace: $ns
+spec:
+  holderIdentity: kardinal-e2e-standby
+  leaseDurationSeconds: 2147483647
+  acquireTime: $now
+  renewTime: $now
+EOF
+}
+
+# release NAME NS HELM_ARGS... installs a namespace-scoped release NAME in NS,
+# a standby (standby_lease). The CRDs come with the main release, and the
+# ScheduleClock it creates has a fixed name, so only the main release has one.
 release() {
   local name=$1 ns=$2
   shift 2
+  standby_lease "$ns"
   "${HELM[@]}" upgrade --install "$name" "$REPO_ROOT/chart/kardinal-promoter" \
     -n "$ns" --create-namespace --skip-crds \
     --set "image.repository=${IMAGE%:*}" --set "image.tag=${IMAGE##*:}" --set image.pullPolicy=Never \
