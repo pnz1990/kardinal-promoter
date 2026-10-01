@@ -2,12 +2,16 @@
 # hack/e2e/components/gitlab.sh
 #
 # Installs a single-pod GitLab CE (omnibus) in namespace gitlab, trimmed for a
-# kind cluster on a CI runner (puma single mode, sidekiq concurrency 5, no
-# Prometheus, registry, KAS, Pages, packages, dependency proxy or usage ping),
-# and seeds it for the live suites. Puma gets 24 threads: a commit through the
-# API holds a thread while gitaly calls back into puma
+# kind cluster on a CI runner (puma single mode, 5 threads per Sidekiq
+# process, no Prometheus, registry, KAS, Pages, packages, dependency proxy or
+# usage ping), and seeds it for the live suites. Puma gets 24 threads: a
+# commit through the API holds a thread while gitaly calls back into puma
 # (/api/v4/internal/allowed), and with 4 threads the suite's parallel project
-# setups took every thread and waited on each other for 55s. The seed:
+# setups took every thread and waited on each other for 55s. Webhooks get
+# their own Sidekiq queue and process, so a delivery does not wait behind
+# project setup and GitLab's top-of-hour cron burst on the shared queue (over
+# 25s on a CI runner, B81). The webhook tests allow 25s because the PRStatus
+# reconciler polls every 30s. The seed:
 #   - a root personal access token (scopes api, sudo): the test runner's
 #     KARDINAL_E2E_GIT_TOKEN, used to create per-test projects, merge, close
 #     and approve MRs. The first token can only be made with gitlab-rails
@@ -75,6 +79,8 @@ spec:
                 puma['min_threads'] = 4
                 puma['max_threads'] = 24
                 sidekiq['concurrency'] = 5
+                sidekiq['routing_rules'] = [['worker_name=WebHookWorker', 'web_hooks'], ['*', 'default']]
+                sidekiq['queue_groups'] = ['web_hooks', 'default,mailers']
                 prometheus_monitoring['enable'] = false
                 registry['enable'] = false
                 gitlab_kas['enable'] = false
