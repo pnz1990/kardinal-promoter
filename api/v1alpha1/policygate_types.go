@@ -79,8 +79,10 @@ type PolicyGateSpec struct {
 
 // PolicyGateOverride is a time-limited emergency override record (K-09).
 // When any non-expired override exists for a gate, the gate passes immediately
-// without evaluating the CEL expression. The override is visible in the PR
-// evidence body with an "OVERRIDDEN" badge.
+// without evaluating the CEL expression, and status.reason reads
+// "OVERRIDDEN by <user>: <reason> (expires <time>)". A PR opened while the
+// override is active lists the gate as Pass with that reason. Expired entries
+// are kept as an audit record.
 type PolicyGateOverride struct {
 	// Reason is the mandatory human-readable justification for the override.
 	// +kubebuilder:validation:MinLength=1
