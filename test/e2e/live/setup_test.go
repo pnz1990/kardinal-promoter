@@ -39,13 +39,24 @@ type app struct {
 	envs []string
 }
 
+// repoFunc creates a test's GitOps repo holding files, as framework.Env.Repo
+// does.
+type repoFunc func(t *testing.T, ns string, files map[string][]byte) gitserver.Repo
+
 // newArgoApp sets up an app whose environments Argo CD deploys into the test
 // namespace.
 func newArgoApp(t *testing.T, e *framework.Env, envs ...string) *app {
 	t.Helper()
+	return newArgoAppIn(t, e, e.Repo, envs...)
+}
+
+// newArgoAppIn is newArgoApp with the repo made by mk, for a repo without the
+// webhook or in a subgroup.
+func newArgoAppIn(t *testing.T, e *framework.Env, mk repoFunc, envs ...string) *app {
+	t.Helper()
 	ns := e.Namespace(t)
 	a := &app{e: e, ns: ns, envs: envs,
-		repo: e.Repo(t, ns, fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: envs}))}
+		repo: mk(t, ns, fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: envs}))}
 	for _, env := range envs {
 		e.ArgoApp(t, a.argoApp(env), a.repo, fixtures.Path(env), ns)
 	}
