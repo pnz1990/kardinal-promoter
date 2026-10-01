@@ -46,11 +46,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	pgrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	psrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	rprec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
-	kardinalsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
 // journeyScheme builds the scheme used by all journey tests.
@@ -776,68 +776,56 @@ func runCLICmd(binary string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// TestJourney6RenderedManifests validates docs/aide/definition-of-done.md Journey 6.
-//
-// A pipeline with layout:branch + kustomize-build renders manifests at promotion time
-// and commits the rendered YAML to environment-specific branches.
-//
-// This test verifies the step sequence is correctly generated for layout:branch
-// pipelines, as the full rendering requires a live Git repo with a DRY source branch.
+// TestJourney6RenderedManifests checks docs/aide/definition-of-done.md
+// Journey 6 against what kardinal does today: layout: branch is not
+// implemented (docs/pipeline-reference.md). The Pipeline reports it
+// (graph.UnimplementedFields gives the message of its Ready=False,
+// NotImplemented condition), and a PromotionStep in a layout: branch
+// environment fails at git-clone with that message instead of rendering
+// manifests or pushing.
 func TestJourney6RenderedManifests(t *testing.T) {
-	// Verify that a Pipeline with layout:branch produces the kustomize-build step sequence.
-	// The DefaultSequenceForBundle function must include kustomize-build when layout=branch.
+	const notImplemented = "layout: branch is not implemented"
+	s := journeyScheme(t)
 	pipeline := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "rendered-demo", Namespace: "default"},
 		Spec: v1alpha1.PipelineSpec{
-			Environments: []v1alpha1.EnvironmentSpec{
-				{
-					Name:     "prod",
-					Approval: "pr-review",
-					Update:   v1alpha1.UpdateConfig{Strategy: "kustomize"},
-					Layout:   "branch",
-				},
-			},
+			Git: v1alpha1.PipelineGit{URL: "https://github.com/pnz1990/kardinal-demo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{{
+				Name:     "prod",
+				Approval: "auto",
+				Update:   v1alpha1.UpdateConfig{Strategy: "kustomize"},
+				Layout:   "branch",
+			}},
 		},
 	}
-	require.NotNil(t, pipeline, "pipeline must be created")
 
-	// The step sequence for a pr-review, kustomize, layout:branch pipeline
-	// must include kustomize-build (renders manifests before committing to env branch).
-	approvalMode := pipeline.Spec.Environments[0].Approval
-	strategy := pipeline.Spec.Environments[0].Update.Strategy
-	layout := pipeline.Spec.Environments[0].Layout
+	msgs := graph.UnimplementedFields(pipeline)
+	require.Len(t, msgs, 1, "journey 6: %v", msgs)
+	assert.Contains(t, msgs[0], `environment "prod": `+notImplemented)
 
-	seq := kardinalsteps.DefaultSequenceForBundle(approvalMode, "image", strategy, layout)
-
-	// layout:branch must include kustomize-build step
-	found := false
-	for _, s := range seq {
-		if s == "kustomize-build" {
-			found = true
-			break
-		}
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "rendered-demo-v1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "rendered-demo"},
 	}
-	assert.True(t, found,
-		"journey 6: layout:branch pipeline must include kustomize-build in step sequence; got: %v ✅", seq)
-	t.Logf("journey 6: step sequence for layout:branch = %v ✅", seq)
+	step := makeJourneyStep("step-prod", "rendered-demo", "rendered-demo-v1", "prod", "auto")
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, bundle, step).
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).
+		Build()
+	rec := &psrec.Reconciler{
+		Client:    c,
+		SCM:       &mockSCMForLoop{prURL: "https://github.com/pnz1990/kardinal-demo/pull/1", prNumber: 1},
+		GitClient: &mockGitForLoop{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
+	driveStepToVerified(t, ctx, rec, c, req, "step-prod")
 
-	// The kustomize-build step must appear BEFORE git-commit
-	// (rendered YAML is committed to the env branch, not the DRY source)
-	kustomizeBuildIdx := -1
-	gitCommitIdx := -1
-	for i, s := range seq {
-		if s == "kustomize-build" {
-			kustomizeBuildIdx = i
-		}
-		if s == "git-commit" {
-			gitCommitIdx = i
-		}
-	}
-	if kustomizeBuildIdx >= 0 && gitCommitIdx >= 0 {
-		assert.Less(t, kustomizeBuildIdx, gitCommitIdx,
-			"journey 6: kustomize-build must appear before git-commit in step sequence")
-		t.Log("journey 6: kustomize-build precedes git-commit ✅")
-	}
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+	assert.Equal(t, "Failed", got.Status.State, "journey 6: a layout: branch promotion must fail, not promote")
+	assert.Contains(t, got.Status.Message, notImplemented)
 }
 
 // TestJourney7MultiTenantSelfService validates docs/aide/definition-of-done.md Journey 7.
