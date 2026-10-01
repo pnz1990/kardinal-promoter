@@ -79,3 +79,37 @@ func TestHandleStepError_Classification(t *testing.T) {
 		})
 	}
 }
+
+// TestPatchState_ResetsBothRetryCounts covers the B48 reset on a state change:
+// a step that leaves its state starts the next one with no retries of either
+// kind, so credential retries from before do not lengthen its backoff. A patch
+// that keeps the state keeps the counts.
+func TestPatchState_ResetsBothRetryCounts(t *testing.T) {
+	for _, tt := range []struct {
+		state     string
+		wantRetry int
+		wantCred  int
+	}{
+		{state: StateFailed},
+		{state: StatePromoting, wantRetry: 2, wantCred: 3},
+	} {
+		t.Run(tt.state, func(t *testing.T) {
+			ps := &v1alpha1.PromotionStep{
+				ObjectMeta: metav1.ObjectMeta{Name: "step", Namespace: "default"},
+				Spec:       v1alpha1.PromotionStepSpec{PipelineName: "p", BundleName: "b1", Environment: "prod"},
+				Status:     v1alpha1.PromotionStepStatus{State: StatePromoting, RetryCount: 2, GitCredentialRetries: 3},
+			}
+			c := fake.NewClientBuilder().WithScheme(newTestScheme(t)).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}).WithObjects(ps).Build()
+			r := &Reconciler{Client: c}
+
+			changed, err := r.patchState(context.Background(), ps.DeepCopy(), ps, tt.state, "message", nil)
+			require.NoError(t, err)
+			assert.Equal(t, tt.state != StatePromoting, changed)
+			var got v1alpha1.PromotionStep
+			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(ps), &got))
+			assert.Equal(t, tt.wantRetry, got.Status.RetryCount)
+			assert.Equal(t, tt.wantCred, got.Status.GitCredentialRetries)
+		})
+	}
+}

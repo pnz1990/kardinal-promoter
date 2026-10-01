@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -236,6 +237,83 @@ func TestGitCredentialRetries_LeaveTheRetryLimit(t *testing.T) {
 			assert.Equal(t, "Failed", got.Status.State)
 			assert.Contains(t, got.Status.Message, "connection refused (gave up after 5 retries)")
 		})
+	}
+}
+
+// TestGitCredentialRetries_ResetOnProgress covers the B48 reset on progress:
+// a step that gets past the step that retried starts the next one with no
+// retries of either kind. Here the clone was refused while git had no
+// credentials, then the repository could be cloned without them, and the push
+// is refused: its first retry is counted as the first, and backs off 10s.
+func TestGitCredentialRetries_ResetOnProgress(t *testing.T) {
+	ps := makeStep("step-cred", "nginx-demo", "b1", "test")
+	ps.Status.State = "Promoting"
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		WithObjects(ps, makePipeline("nginx-demo"), makeBundle("b1", "nginx-demo")).Build()
+	git := &authGit{} // the clone needs a token
+	workDir := filepath.Join(t.TempDir(), "w")
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
+		Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir }}
+
+	for range 3 {
+		reconcileStep(t, r, "step-cred")
+	}
+	got := getStep(t, c, "step-cred")
+	require.Equal(t, 3, got.Status.GitCredentialRetries, got.Status.Message)
+	require.Contains(t, got.Status.Message, "step git-clone: ")
+
+	git.failPush = true // the clone needs no token now; the push still does
+	res, err := r.Reconcile(context.Background(), reqFor("step-cred"))
+	require.NoError(t, err)
+	got = getStep(t, c, "step-cred")
+	require.Contains(t, got.Status.Message, "step git-push: ")
+	assert.Equal(t, 1, got.Status.GitCredentialRetries, got.Status.Message)
+	assert.Zero(t, got.Status.RetryCount)
+	assert.Contains(t, got.Status.Message, "retrying in 10s (1, no limit while git has no credentials)")
+	assert.Equal(t, 10*time.Second, res.RequeueAfter)
+}
+
+// TestGitCredentialRetries_BackOffTogether covers the B48 backoff: the delay
+// grows with the retries of both kinds, so a network error after credential
+// retries, with the Secret still missing, does not start the backoff over,
+// and neither does a credential retry after it.
+func TestGitCredentialRetries_BackOffTogether(t *testing.T) {
+	pipeline := makePipeline("nginx-demo")
+	pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-creds"}
+	ps := makeStep("step-cred", "nginx-demo", "b1", "test")
+	ps.Status.State = "Promoting"
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		WithObjects(ps, pipeline, makeBundle("b1", "nginx-demo")).Build()
+	git := &authGit{failPush: true}
+	workDir := filepath.Join(t.TempDir(), "w")
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
+		Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir }}
+
+	steps := []struct {
+		pushErr   error
+		wantRetry int
+		wantCred  int
+		wantDelay time.Duration
+		wantCount string
+	}{
+		{wantCred: 1, wantDelay: 10 * time.Second, wantCount: "(1, no limit while git has no credentials)"},
+		{wantCred: 2, wantDelay: 20 * time.Second, wantCount: "(2, no limit while git has no credentials)"},
+		{pushErr: errors.New("git push origin main: dial tcp: connection refused"),
+			wantRetry: 1, wantCred: 2, wantDelay: 40 * time.Second, wantCount: "(1/5)"},
+		{wantRetry: 1, wantCred: 3, wantDelay: 80 * time.Second, wantCount: "(3, no limit while git has no credentials)"},
+	}
+	for i, s := range steps {
+		git.pushErr = s.pushErr
+		res, err := r.Reconcile(context.Background(), reqFor("step-cred"))
+		require.NoError(t, err)
+		got := getStep(t, c, "step-cred")
+		require.Equal(t, "Promoting", got.Status.State, "reconcile %d: %s", i+1, got.Status.Message)
+		assert.Equal(t, s.wantRetry, got.Status.RetryCount, "reconcile %d", i+1)
+		assert.Equal(t, s.wantCred, got.Status.GitCredentialRetries, "reconcile %d", i+1)
+		assert.Equal(t, s.wantDelay, res.RequeueAfter, "reconcile %d", i+1)
+		assert.Contains(t, got.Status.Message, fmt.Sprintf("retrying in %s %s", s.wantDelay, s.wantCount), "reconcile %d", i+1)
 	}
 }
 
