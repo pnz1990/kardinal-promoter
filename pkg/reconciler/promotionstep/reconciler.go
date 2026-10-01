@@ -581,6 +581,23 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 }
 
+// prOpenedAt is when the promotion PR was opened: when the open-pr step
+// completed, else when wait-for-merge started. ok is false when the step
+// statuses record neither.
+func prOpenedAt(ps *v1alpha1.PromotionStep) (opened time.Time, ok bool) {
+	for _, s := range ps.Status.Steps {
+		if s.Name == "open-pr" && s.CompletedAt != nil {
+			return s.CompletedAt.Time, true
+		}
+	}
+	for _, s := range ps.Status.Steps {
+		if s.Name == "wait-for-merge" && s.StartedAt != nil {
+			return s.StartedAt.Time, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // handleStepError decides what a step engine error means for the PromotionStep.
 //
 // The engine wraps an error returned by a step (network, API or git failures)
@@ -746,13 +763,17 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 			ps.Status.Outputs["mergeCommitSHA"] = prs.Status.MergeCommitSHA
 		}
 		ps.Status.WaitForMergeExpiry = nil // clear expiry on successful transition
+		// PR duration: from the PR opening to the merge seen here. Not from
+		// the PRStatus creationTimestamp: the Graph creates the PRStatus with
+		// the Bundle, before the upstream environments and the gates. Read
+		// before the transition, which closes the step statuses.
+		opened, openedKnown := prOpenedAt(ps)
 		if err := r.transition(ctx, base, ps, StateHealthChecking,
 			fmt.Sprintf("PR #%d merged", prs.Spec.PRNumber)); err != nil {
 			return ctrl.Result{}, err
 		}
-		// Emit PR duration histogram: time from PRStatus creation (PR opened) to now (PR merged).
-		if prDuration := time.Since(prs.CreationTimestamp.Time).Seconds(); prDuration > 0 {
-			observability.PRDurationSeconds.Observe(prDuration)
+		if openedKnown {
+			observability.PRDurationSeconds.Observe(max(time.Since(opened), 0).Seconds())
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
