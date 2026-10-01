@@ -25,16 +25,20 @@ and keeps the `go test -json` stream in `test/e2e/results/<cluster>/test.json`.
 tests starting at the second. `make e2e-up KIND_K8S=1.37` picks the
 Kubernetes minor (one of the `KIND_NODE_*` images in `hack/tool-versions.env`;
 the default is `test/e2e/kind-config.yaml`'s). Use the kind version pinned
-there: older kind releases can't boot its node images. The core suite also
+there: older kind releases can't boot its node images. CI also installs the
+helm version pinned there. The core suite also
 needs bash and zsh on PATH: `TestCLI_Completion` checks the completion scripts
 with `bash -n` and `zsh -n`.
 
 CI (`.github/workflows/e2e-live.yml`) runs every suite but `github` on every
-pull request, the core suite on each of the three Kubernetes minors, split
-across two jobs per minor with `SHARD`. The `github` suite needs the
-`DEMO_GITHUB_TOKEN` secret, so it runs only on pushes to main, the weekly run
-and manual dispatches. The weekly run repeats every test three times to find
-flakes. The `e2e live` check passes when every suite that ran passed.
+pull request: the core suite on each of the three Kubernetes minors, split
+across two jobs per minor with `SHARD`, and the upgrade suite on Kubernetes
+1.29 and the newest minor. The `github` suite needs the `DEMO_GITHUB_TOKEN`
+secret, so it runs only on pushes to main, the weekly run and manual
+dispatches. The weekly run repeats every test three times to find flakes,
+except the upgrade test, which runs once (`hack/e2e/run.sh` refuses `COUNT`
+above 1 for it). The `e2e live` check passes when every suite that ran passed.
+`make e2e-down SUITE=multi-cluster` deletes the spoke too.
 
 `hack/e2e/up.sh` defines the suites: each one's components and the `RUN`
 pattern of its tests.

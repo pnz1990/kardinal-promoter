@@ -5,10 +5,12 @@ name: E2E live
 # from this commit; nothing is faked. Every suite but github needs no
 # secret, so pull requests from forks run them too. The core suite runs on
 # the three Kubernetes minors in hack/tool-versions.env, split across two
-# jobs per minor (hack/e2e/run.sh SHARD). The github suite works on
+# jobs per minor (hack/e2e/run.sh SHARD); the upgrade suite on Kubernetes
+# 1.29 (UPG-OLDK8S-01) and the newest minor. The github suite works on
 # github.com with the DEMO_GITHUB_TOKEN secret, so it runs only on pushes to
 # main, the weekly run and manual dispatches, never on a pull request. The
-# weekly run repeats every test three times to find flakes.
+# weekly run repeats every test three times to find flakes, except the
+# upgrade test, which upgrades its cluster and so runs once.
 #
 # Branch protection requires only the "e2e live" job, which passes when
 # every suite that ran passed; the matrix can change without touching it.
@@ -79,11 +81,21 @@ jobs:
           - {suite: delivery, k8s: '1.37'}
           - {suite: ui, k8s: '1.37'}
           - {suite: flux, k8s: '1.37'}
+          # Expected job times: chart ~20 min, multi-cluster ~15, upgrade ~10
+          # (locally up + tests took 12, 9.5 and 6.5 min).
+          - {suite: chart, k8s: '1.37'}
+          # The spoke boots test/e2e/kind-config.yaml's node image; the hub
+          # runs the same minor.
+          - {suite: multi-cluster, k8s: '1.36'}
+          # KIND_NODE_UPGRADE_1_29 in hack/tool-versions.env.
+          - {suite: upgrade, k8s: '1.29'}
+          - {suite: upgrade, k8s: '1.37'}
     env:
       SUITE: ${{ matrix.suite }}
       KIND_K8S: ${{ matrix.k8s }}
       KARDINAL_E2E_BUILD: none
-      COUNT: ${{ github.event_name == 'schedule' && '3' || inputs.count || '1' }}
+      # hack/e2e/run.sh refuses COUNT above 1 for the upgrade suite.
+      COUNT: ${{ matrix.suite == 'upgrade' && '1' || github.event_name == 'schedule' && '3' || inputs.count || '1' }}
       SHARD: ${{ matrix.shard && format('{0}/{1}', matrix.shard, matrix.of) || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -106,6 +118,17 @@ jobs:
           curl -fsSLO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
           echo "${KUBECTL_SHA256}  kubectl" | sha256sum -c -
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+
+      # Every suite installs the chart with helm, and the chart suite tests
+      # what helm reports; the runner image's helm floats.
+      - name: Install helm
+        run: |
+          source hack/tool-versions.env
+          curl -fsSLO "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm-${HELM_VERSION}-linux-amd64.tar.gz" | sha256sum -c -
+          tar -xzf "helm-${HELM_VERSION}-linux-amd64.tar.gz" --strip-components=1 linux-amd64/helm
+          rm "helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          sudo mv helm /usr/local/bin/ && helm version
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:

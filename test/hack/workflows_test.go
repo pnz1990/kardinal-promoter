@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/coverage"
 )
 
 type workflowStep struct {
@@ -149,17 +151,18 @@ func toolVersions(t *testing.T) map[string]string {
 var (
 	semver    = regexp.MustCompile(`^v\d+\.(\d+)\.\d+$`)
 	sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	// toolDownload matches a download of kind, kubectl or the argocd CLI.
-	toolDownload = regexp.MustCompile(`kind\.sigs\.k8s\.io/dl/|dl\.k8s\.io/release/|argo-cd/releases/download/`)
+	// toolDownload matches a download of kind, kubectl, helm or the argocd
+	// CLI.
+	toolDownload = regexp.MustCompile(`kind\.sigs\.k8s\.io/dl/|dl\.k8s\.io/release/|get\.helm\.sh/|argo-cd/releases/download/`)
 )
 
-// TestToolDownloadsArePinnedAndVerified covers #1294: every kind, kubectl
-// and argocd download in a workflow takes its version from
+// TestToolDownloadsArePinnedAndVerified covers #1294: every kind, kubectl,
+// helm and argocd download in a workflow takes its version from
 // hack/tool-versions.env and is checked against the sha256 there, kubectl
 // matches the kind node's minor, and nothing installs a floating version.
 func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 	tv := toolVersions(t)
-	for _, tool := range []string{"KIND", "KUBECTL"} {
+	for _, tool := range []string{"KIND", "KUBECTL", "HELM"} {
 		assert.Regexp(t, semver, tv[tool+"_VERSION"], "%s_VERSION", tool)
 		assert.Regexp(t, sha256Hex, tv[tool+"_SHA256"], "%s_SHA256", tool)
 	}
@@ -190,7 +193,7 @@ func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 				"%s: step %q must check every download with sha256sum -c", f, s.Name)
 		}
 	}
-	assert.GreaterOrEqual(t, downloads, 2, "expected the kind and kubectl installs in e2e-live")
+	assert.GreaterOrEqual(t, downloads, 3, "expected the kind, kubectl and helm installs in e2e-live")
 
 	for _, rel := range append(workflowFiles(t), "Makefile") {
 		data, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
@@ -199,13 +202,19 @@ func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 	}
 }
 
-var kindNodeKey = regexp.MustCompile(`^KIND_NODE_1_(\d+)$`)
+var (
+	kindNodeKey = regexp.MustCompile(`^KIND_NODE_1_(\d+)$`)
+	// suiteNodeKey is KIND_NODE_<SUITE>_1_<minor>, a minor only that suite
+	// runs on (hack/e2e/up.sh, KIND_K8S).
+	suiteNodeKey = regexp.MustCompile(`^KIND_NODE_([A-Z][A-Z_]*)_1_(\d+)$`)
+)
 
 // TestKindNodeMatrixIsPinned checks the KIND_NODE_1_<minor> images in
 // hack/tool-versions.env that the live e2e matrix boots: at least three
 // minors, each image digest-pinned with the minor its key names and new
 // enough for kro, kind-config.yaml using one of them, and kubectl within its
-// one minor of skew of every one.
+// one minor of skew of every one. A KIND_NODE_<SUITE>_1_<minor> image is
+// digest-pinned with its key's minor too.
 func TestKindNodeMatrixIsPinned(t *testing.T) {
 	tv := toolVersions(t)
 	kubectl := semver.FindStringSubmatch(tv["KUBECTL_VERSION"])
@@ -215,6 +224,15 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 
 	images := map[string]bool{}
 	for k, v := range tv {
+		if m := suiteNodeKey.FindStringSubmatch(k); m != nil {
+			img := kindNodeImage.FindStringSubmatch(v)
+			if assert.NotNil(t, img, "%s=%s is not a kindest/node image", k, v) {
+				assert.Equal(t, v, img[0], "%s=%s: only the image, nothing else", k, v)
+				assert.Equal(t, m[2], img[1], "%s=%s: the image's minor must match the key", k, v)
+				assert.NotEmpty(t, img[2], "%s=%s: pin the image by digest", k, v)
+			}
+			continue
+		}
 		m := kindNodeKey.FindStringSubmatch(k)
 		if m == nil {
 			continue
@@ -238,6 +256,47 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 	require.NoError(t, err)
 	node := kindNodeImage.FindString(string(cfg))
 	assert.True(t, images[node], "kind-config.yaml's node image %s must be one of the KIND_NODE_* images", node)
+}
+
+// TestLiveMatrixRunsEverySuite checks e2e-live's suite matrix: it runs every
+// suite hack/e2e/up.sh defines (test/e2e/README.md says CI runs them all),
+// and each entry's Kubernetes minor is a node image hack/e2e/up.sh boots from
+// hack/tool-versions.env: KIND_NODE_1_<minor>, or KIND_NODE_<SUITE>_1_<minor>
+// for that suite.
+func TestLiveMatrixRunsEverySuite(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github/workflows/e2e-live.yml"))
+	require.NoError(t, err)
+	var wf struct {
+		Jobs map[string]struct {
+			Strategy struct {
+				Matrix struct {
+					Include []struct {
+						Suite string `json:"suite"`
+						K8s   string `json:"k8s"`
+					} `json:"include"`
+				} `json:"matrix"`
+			} `json:"strategy"`
+		} `json:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(data, &wf))
+	include := wf.Jobs["suite"].Strategy.Matrix.Include
+	require.NotEmpty(t, include, "e2e-live.yml: jobs.suite.strategy.matrix.include")
+
+	runs, err := coverage.SuiteRuns(repoRoot(t))
+	require.NoError(t, err)
+	tv := toolVersions(t)
+	inMatrix := map[string]bool{}
+	for _, e := range include {
+		inMatrix[e.Suite] = true
+		assert.Contains(t, runs, e.Suite, "matrix suite %q is not in hack/e2e/up.sh", e.Suite)
+		minor := strings.ReplaceAll(e.K8s, ".", "_")
+		suite := strings.ReplaceAll(strings.ToUpper(e.Suite), "-", "_")
+		assert.True(t, tv["KIND_NODE_"+minor] != "" || tv["KIND_NODE_"+suite+"_"+minor] != "",
+			"matrix entry %s on %s: no KIND_NODE_%s or KIND_NODE_%s_%s in hack/tool-versions.env", e.Suite, e.K8s, minor, suite, minor)
+	}
+	for suite := range runs {
+		assert.True(t, inMatrix[suite], "suite %q in hack/e2e/up.sh has no e2e-live matrix entry", suite)
+	}
 }
 
 func abs(n int) int {
