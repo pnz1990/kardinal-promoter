@@ -78,13 +78,13 @@ HEALTH-FLUX-03	live	health-flux	todo	health	flux on pr-review waits for the PR m
 HEALTH-FLUX-04	live	health-flux	todo	health	flux GitRepository sourced from self-hosted git (Forgejo) reconciles the promoted commit	docs/health-adapters.md:119
 HEALTH-ROLL-01	live	delivery	covered	health	argoRollouts adapter: Rollout Healthy on the Bundle image -> Verified	docs/health-adapters.md:159-184; pkg/health/adapter.go:630
 HEALTH-ROLL-02	live	delivery	covered	health	argoRollouts adapter: Degraded (aborted canary) on the Bundle image is unhealthy; Progressing waits	docs/health-adapters.md:176-183; pkg/health/adapter.go:704
-HEALTH-FLAG-01	live	delivery	covered	health	flagger adapter: Canary Succeeded on the promoted revision -> Verified	docs/health-adapters.md:186-216; pkg/health/adapter.go:834; pkg/health/adapter.go:897
-HEALTH-FLAG-02	live	delivery	covered	health	flagger adapter: Canary Failed is terminal at once, message includes Flagger's reason	docs/health-adapters.md:211-214; pkg/health/adapter.go:911
+HEALTH-FLAG-01	live	delivery	covered	health	flagger adapter: Canary Succeeded on the promoted revision -> Verified	docs/health-adapters.md:186-216; pkg/health/adapter.go:849; pkg/health/adapter.go:929
+HEALTH-FLAG-02	live	delivery	covered	health	flagger adapter: Canary Failed is terminal at once, message includes Flagger's reason	docs/health-adapters.md:215-219; pkg/health/adapter.go:943
 HEALTH-ROLL-03	live	delivery	covered	health	argoRollouts adapter: Paused waits and is not a health failure	docs/health-adapters.md:181; docs/rollback.md:90
 HEALTH-ROLL-04	live	delivery	covered	health	argoRollouts adapter: until the Rollout runs the Bundle image, a Healthy phase the previous release left waits and does not verify	docs/health-adapters.md:176; docs/rollback.md:90; pkg/health/adapter.go:672
 HEALTH-ROLL-05	live	delivery	covered	health	argoRollouts adapter: a Degraded phase the previous release left is not a health failure; the next release is Verified	docs/health-adapters.md:176; docs/rollback.md:90
 HEALTH-FLAG-03	live	delivery	covered	health	flagger adapter: until Flagger promotes the Bundle images to the primary, a Succeeded phase the previous release left waits and does not verify	docs/health-adapters.md:200-205; docs/rollback.md:102
-HEALTH-FLAG-04	live	delivery	covered	health	flagger adapter: a Failed phase the previous release left does not fail the next release, which is Verified once Flagger promotes it	docs/health-adapters.md:204-207; docs/rollback.md:102; pkg/health/adapter.go:932
+HEALTH-FLAG-04	live	delivery	covered	health	flagger adapter: a Failed phase the previous release left does not fail the next release, which is Verified once Flagger promotes it	docs/health-adapters.md:204-210; docs/rollback.md:102; pkg/health/adapter.go:901
 DELIVERY-01	live	delivery	covered	delivery	delivery.delegate: argoRollouts takes precedence over health.type and watches the Rollout	docs/pipeline-reference.md:105; docs/health-adapters.md:14-16
 DELIVERY-02	live	delivery	covered	delivery	delivery.delegate: flagger watches the Canary	docs/pipeline-reference.md:105
 DELIVERY-03	live	delivery	covered	delivery	delegation failure (Rollout aborted, Canary Failed) applies onHealthFailure	docs/rollback.md:102
