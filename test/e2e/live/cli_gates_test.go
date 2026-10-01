@@ -149,16 +149,18 @@ func policyRows(t *testing.T, out string, nss ...string) []map[string]string {
 // promotions.", and policy list shows the gate templates: every one in every
 // namespace, or with --pipeline the ones attached to the pipeline (with
 // --policy-namespaces, org gates from those namespaces too), with their
-// scope, environment, recheck interval and CEL check, never a gate instance.
+// scope, environment, recheck interval and CEL check, never a gate instance;
+// once the Bundle's gates are evaluated, it shows when for this namespace's
+// gates and not for the org gate of the same name.
 //
 // The Bundle's test gate holds it (Block; status lists it as blocking, its
 // reason cut to 35 characters) while prod's gate, not reached yet, is
 // Waiting with the gate's message and the expression's result. explain
 // --watch redraws until Ctrl-C, and shows the test gate pass once kardinal
 // override records an override on that Bundle's instance (not the
-// template), with who, why and the expiry; override rejects missing flags, a
-// bad duration, an unknown gate and an instance of another stage or
-// pipeline. With test Verified, prod's gate is Block and status shows its
+// template), with who, why and the expiry; override rejects missing or empty
+// flags, a bad duration, a pipeline that does not exist, an unknown gate and
+// an instance of another stage or pipeline. With test Verified, prod's gate is Block and status shows its
 // message whole; --color colors only the STATE cell and NO_COLOR turns it
 // off. Once prod's step waits for its PR, status marks it active with the
 // PR, and prod's gate, closed again, is Waiting. A newer Bundle supersedes
@@ -265,8 +267,18 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	assert.Equal(t, []map[string]string{{"GATE": "entry", "ENV": "test", "EXPRESSION": openExpr, "REASON": truncated(blocked)}},
 		stripAges(t, framework.ParseTable(tables["Blocking Policy Gates"]), "LAST CHECKED", agoRE), "only the gate holding the Bundle:\n%s", out)
 
-	// policy list never lists gate instances.
-	assert.Equal(t, want, policyRows(t, c.Must(ns, "policy", "list"), ns, ns2), "no gate instance")
+	// policy list never lists gate instances, but shows when they were last
+	// evaluated: for this namespace's team gates, not for ns2's org entry (the
+	// entry instances here are the team gate's).
+	list = c.Must(ns, "policy", "list")
+	rows := policyRows(t, list, ns, ns2)
+	for _, r := range rows {
+		if r["NAMESPACE"] == ns {
+			assert.Regexp(t, agoRE, r["LAST-EVALUATED"], "%s in:\n%s", r["NAME"], list)
+			r["LAST-EVALUATED"] = "-"
+		}
+	}
+	assert.Equal(t, want, rows, "no gate instance:\n%s", list)
 
 	// explain --watch redraws until Ctrl-C.
 	watch := c.Start(framework.CLIOptions{}, c.Args(ns, "explain", pipelineName, "--env", "test", "--watch")...)
@@ -283,8 +295,14 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 		`policygates.kardinal.io "nope" not found`, ns), "override", pipelineName, "--gate", "nope", "--reason", "r")
 	refuses(t, c, ns, fmt.Sprintf("policygate %s/%s is the instance for stage test, not prod", ns, entry.Name),
 		"override", pipelineName, "--stage", "prod", "--gate", entry.Name, "--reason", "r")
+	refuses(t, c, ns, `--reason is required for override (audit record)`, "override", pipelineName, "--gate", "entry", "--reason", "")
+	refuses(t, c, ns, `--gate is required`, "override", pipelineName, "--gate", "", "--reason", "r")
+	refuses(t, c, ns, fmt.Sprintf("pipeline \"other\" not found in namespace %q", ns),
+		"override", "other", "--gate", entry.Name, "--reason", "r")
+	other := barePipeline(t, e, ns, "other")
 	refuses(t, c, ns, fmt.Sprintf("policygate %s/%s is an instance of pipeline podinfo, not other", ns, entry.Name),
 		"override", "other", "--gate", entry.Name, "--reason", "r")
+	require.NoError(t, e.Client.Delete(ctx, other))
 	refuses(t, c, ns, fmt.Sprintf("no in-progress Bundle of pipeline podinfo has an instance of gate entry in namespace %s "+
 		`(stage "prod"; 0 instance(s) of finished Bundles); an override applies to the instances a promoting Bundle creates, `+
 		"so run it while the Bundle waits on the gate", ns), "override", pipelineName, "--stage", "prod", "--gate", "entry", "--reason", "r")
@@ -439,6 +457,63 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Empty(t, g.Spec.Overrides)
+}
+
+// lastEvaluatedIn maps name/namespace to LAST-EVALUATED for the policy list
+// rows in the namespaces nss.
+func lastEvaluatedIn(t *testing.T, out string, nss ...string) map[string]string {
+	t.Helper()
+	got := map[string]string{}
+	for _, r := range policyRows(t, out, nss...) {
+		got[r["NAME"]+"/"+r["NAMESPACE"]] = r["LAST-EVALUATED"]
+	}
+	return got
+}
+
+// TestCLI_PolicyListLastEvaluated checks policy list's LAST-EVALUATED. The
+// controller evaluates a template's instances, never the template, so the
+// column is the newest evaluation of the instances, "-" before there is one.
+// A team gate counts the instances in its own namespace, not those of a team
+// gate of the same name elsewhere; an org gate a Pipeline reads through
+// spec.policyNamespaces counts its instances in the Pipeline's namespace.
+//
+// Covers CLI-POLICY-LIST-01.
+func TestCLI_PolicyListLastEvaluated(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	c := e.CLI(t)
+	a := newArgoApp(t, e, "test")
+	ns, orgNS, otherNS := a.ns, e.Namespace(t), e.Namespace(t)
+	e.CreateGate(t, framework.Gate(ns, "entry", "test", openExpr, recheck))
+	audit := framework.Gate(orgNS, "audit", "test", "true", recheck)
+	audit.Labels["kardinal.io/scope"] = "org"
+	e.CreateGate(t, audit)
+	e.CreateGate(t, framework.Gate(otherNS, "entry", "test", openExpr, recheck))
+	p := a.pipeline(nil)
+	p.Spec.PolicyNamespaces = []string{orgNS}
+	a.apply(t, p)
+	waitPipelineValid(t, e, ns, pipelineName)
+
+	none := map[string]string{"entry/" + ns: "-", "audit/" + orgNS: "-", "entry/" + otherNS: "-"}
+	out := c.Must(ns, "policy", "list")
+	assert.Equal(t, none, lastEvaluatedIn(t, out, ns, orgNS, otherNS), "no instance yet:\n%s", out)
+
+	b := e.CreateBundle(t, ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitGateReady(t, ns, b, "test", "entry", false, "= false", gateTimeout)
+	e.WaitGateNamed(t, ns, framework.GateInstanceName(orgNS, "audit", "test", b), gateTimeout, "evaluated",
+		framework.Evaluated(true, "= true"))
+
+	out = c.Must(ns, "policy", "list")
+	got := lastEvaluatedIn(t, out, ns, orgNS, otherNS)
+	assert.Regexp(t, agoRE, got["entry/"+ns], "the team gate's instance:\n%s", out)
+	assert.Regexp(t, agoRE, got["audit/"+orgNS], "the org gate's instance, in %s:\n%s", ns, out)
+	assert.Equal(t, "-", got["entry/"+otherNS], "a team gate of the same name in another namespace:\n%s", out)
+
+	out = c.Must(ns, "policy", "list", "--pipeline", pipelineName)
+	got = lastEvaluatedIn(t, out, ns, orgNS, otherNS)
+	assert.Len(t, got, 2, "the gates attached to the pipeline:\n%s", out)
+	assert.Regexp(t, agoRE, got["entry/"+ns], out)
+	assert.Regexp(t, agoRE, got["audit/"+orgNS], out)
 }
 
 // simRows renders policy simulate's per-gate rows (name, PASS or BLOCK,

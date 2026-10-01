@@ -489,8 +489,13 @@ The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph 
 starts (see [When a gate holds a step](#when-a-gate-holds-a-step)). While the controller is down,
 every gate keeps its last result and no step starts. The controller re-evaluates every gate when it
 starts. A result from before an outage still counts for a step created before that result.
-`kardinal policy list`, `kardinal status` and the UI show when each gate was last evaluated, so a
-stale result is visible.
+The controller evaluates the per-Bundle instances of a gate, never the gate you wrote, so
+`kardinal policy list` shows in LAST-EVALUATED the newest evaluation of the gate's instances (with
+`--pipeline`, of that pipeline's instances), or `-` when none has been evaluated. An instance
+records its gate's name and namespace (the `kardinal.io/gate-template` and
+`kardinal.io/gate-template-namespace` labels), so a gate in an org policy namespace or in
+`spec.policyNamespaces` counts its instances in every Pipeline's namespace. `kardinal status` shows when each gate holding a Bundle was last checked, and the UI
+when each gate of the Bundle on screen was last evaluated, so a stale result is visible.
 
 ### ScheduleClock setup
 
@@ -575,7 +580,7 @@ kardinal override my-app --stage prod --gate no-weekend-deploy \
   --reason "P0 hotfix — incident #4521" --expires-in 2h
 ```
 
-`--gate` takes the name of the PolicyGate you wrote, the template, as `kardinal explain` and `kardinal policy list` show it. The command records a `PolicyGateOverride` entry in `spec.overrides[]` of every instance of that gate that the pipeline's in-progress Bundles have for the stage. With no `--stage`, it records the entry on the instances for every stage. The instances are the per-Bundle copies the Graph creates for each environment, so run the override while the Bundle waits on the gate. Instances of Verified, Failed and Superseded Bundles are skipped, because no promotion waits on them; if a Failed Bundle resumes, run the override again. If no in-progress Bundle has an instance, the command fails and says so; it does not write to the template. `--gate` also accepts the name of one instance, as `kubectl get policygates` shows it; the command then records the entry on that instance only. The gate passes immediately until the override expires, and is re-evaluated about a second after the expiry. **Expired overrides are never deleted** — they remain as an immutable audit trail visible in:
-- `kubectl get policygate <name> -o yaml`
-- PR evidence body (OVERRIDDEN badge in policy compliance table)
-- `kardinal explain` output
+`--gate` takes the name of the PolicyGate you wrote, the template, as `kardinal explain` and `kardinal policy list` show it. The command records a `PolicyGateOverride` entry in `spec.overrides[]` of every instance of that gate that the pipeline's in-progress Bundles have for the stage. With no `--stage`, it records the entry on the instances for every stage. The instances are the per-Bundle copies the Graph creates for each environment, so run the override while the Bundle waits on the gate. Instances of Verified, Failed and Superseded Bundles are skipped, because no promotion waits on them; if a Failed Bundle resumes, run the override again. If no in-progress Bundle has an instance, the command fails and says so; it does not write to the template. `--gate` also accepts the name of one instance, as `kubectl get policygates` shows it; the command then records the entry on that instance only. The gate passes immediately until the override expires, and is re-evaluated about a second after the expiry. While the override is active, the instance's `status.reason` is `OVERRIDDEN by <user>: <reason> (expires <time>)`. **Expired overrides are never deleted**: kardinal keeps every entry in `spec.overrides[]` as an audit record. Where to see an override:
+- `kubectl get policygate <instance> -o yaml` shows every entry in `spec.overrides[]`, active or expired.
+- `kardinal explain` shows the `OVERRIDDEN by ...` reason in the gate's REASON column while the override is active.
+- The PR evidence body has no separate badge. A PR opened while the override is active lists the gate in its Policy Gate Compliance table with Result `Pass` and the `OVERRIDDEN by ...` reason. The body is written when the PR is opened and is not updated afterwards, so an override recorded after that, or one that expired before it, does not appear there. An `auto` environment opens no PR.

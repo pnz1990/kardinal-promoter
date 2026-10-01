@@ -15,6 +15,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	sigsyaml "sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -189,4 +191,49 @@ func TestGetAuditEventsFn_Limit(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	// 1 header + 2 data rows = 3 lines
 	assert.Len(t, lines, 3, "--limit 2 must produce header + 2 rows")
+}
+
+// TestGetAuditEventsFn_StructuredOutput: -o json and -o yaml print the events
+// the table would show (most recent first, at most --limit) as AuditEvent
+// objects, and [] when there are none.
+func TestGetAuditEventsFn_StructuredOutput(t *testing.T) {
+	now := time.Now().UTC()
+	event := func(name string, ago time.Duration) *v1alpha1.AuditEvent {
+		return &v1alpha1.AuditEvent{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: v1alpha1.AuditEventSpec{Timestamp: metav1.NewTime(now.Add(-ago)), PipelineName: "nginx",
+				BundleName: "nginx-v1", Environment: "prod", Action: "PromotionStarted", Outcome: "Pending"},
+		}
+	}
+	c := fake.NewClientBuilder().WithScheme(buildGetAuditEventsScheme(t)).
+		WithObjects(event("old", 3*time.Minute), event("new", time.Minute), event("mid", 2*time.Minute)).Build()
+	empty := fake.NewClientBuilder().WithScheme(buildGetAuditEventsScheme(t)).Build()
+	t.Cleanup(func() { globalOutput = "" })
+
+	names := func(events []v1alpha1.AuditEvent) []string {
+		var n []string
+		for _, e := range events {
+			n = append(n, e.Name)
+		}
+		return n
+	}
+	for _, format := range []string{"json", "yaml"} {
+		t.Run(format, func(t *testing.T) {
+			globalOutput = format
+			var buf bytes.Buffer
+			require.NoError(t, getAuditEventsFn(&buf, c, "default", "", "", "", 2))
+			var got []v1alpha1.AuditEvent
+			if format == "json" {
+				require.NoError(t, json.Unmarshal(buf.Bytes(), &got), buf.String())
+			} else {
+				require.NoError(t, sigsyaml.Unmarshal(buf.Bytes(), &got), buf.String())
+			}
+			assert.Equal(t, []string{"new", "mid"}, names(got))
+			assert.Equal(t, "prod", got[0].Spec.Environment)
+
+			buf.Reset()
+			require.NoError(t, getAuditEventsFn(&buf, empty, "default", "", "", "", 20))
+			assert.Equal(t, "[]\n", buf.String())
+		})
+	}
 }

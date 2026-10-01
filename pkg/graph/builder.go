@@ -762,6 +762,10 @@ func buildPolicyGateNode(
 			"kardinal.io/bundle":        bundleName,
 			"kardinal.io/environment":   envName,
 			"kardinal.io/gate-template": gate.Name,
+			// gate-template-namespace: the template's namespace, which can differ
+			// from the Pipeline's (an org policy namespace or spec.policyNamespaces),
+			// so `kardinal policy list` can match the instance to its template.
+			"kardinal.io/gate-template-namespace": gate.Namespace,
 			// gate-name: stable human-readable name, propagated through cross-product instances.
 			"kardinal.io/gate-name": gateName,
 			// Propagated from original PolicyGate template for CLI display.

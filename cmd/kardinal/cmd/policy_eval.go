@@ -107,11 +107,12 @@ func newGateInstance(gate v1alpha1.PolicyGate, ns, pipeline, bundle, env string)
 	inst.Name = gate.Name
 	inst.Namespace = ns
 	inst.Labels = map[string]string{
-		"kardinal.io/pipeline":      pipeline,
-		"kardinal.io/bundle":        bundle,
-		"kardinal.io/environment":   env,
-		"kardinal.io/gate-template": gate.Name,
-		"kardinal.io/gate-name":     gate.Name,
+		"kardinal.io/pipeline":                pipeline,
+		"kardinal.io/bundle":                  bundle,
+		"kardinal.io/environment":             env,
+		"kardinal.io/gate-template":           gate.Name,
+		"kardinal.io/gate-template-namespace": gate.Namespace,
+		"kardinal.io/gate-name":               gate.Name,
 	}
 	inst.Spec = gate.Spec
 	return inst

@@ -65,18 +65,18 @@ Example:
     --reason "P0 hotfix — incident #4521"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// MarkFlagRequired refuses a missing flag, not an empty one:
+			// --reason "" and --gate "" get here.
 			if reason == "" {
 				return fmt.Errorf("--reason is required for override (audit record)")
+			}
+			gateName, _ := cmd.Flags().GetString("gate")
+			if gateName == "" {
+				return fmt.Errorf("--gate is required")
 			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("override: %w", err)
-			}
-			// Parse the gate name from args — the pipeline is args[0]
-			// The gate flag is required when --stage is set
-			gateName, _ := cmd.Flags().GetString("gate")
-			if gateName == "" {
-				return fmt.Errorf("--gate is required")
 			}
 			return overrideFn(cmd.OutOrStdout(), c, ns, args[0], stage, gateName, reason, expiresIn)
 		},
@@ -110,6 +110,15 @@ func overrideFn(
 	expDuration, err := time.ParseDuration(expiresIn)
 	if err != nil || expDuration <= 0 {
 		return fmt.Errorf("invalid --expires-in %q: must be a positive Go duration (e.g. 1h, 30m)", expiresIn)
+	}
+
+	// Say so when the pipeline is wrong, rather than that it has no gate.
+	var pl v1alpha1.Pipeline
+	if err := c.Get(ctx, types.NamespacedName{Name: pipeline, Namespace: ns}, &pl); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("pipeline %q not found in namespace %q", pipeline, ns)
+		}
+		return fmt.Errorf("get pipeline %s: %w", pipeline, err)
 	}
 
 	targets, err := overrideTargets(ctx, c, ns, pipeline, stage, gateName)

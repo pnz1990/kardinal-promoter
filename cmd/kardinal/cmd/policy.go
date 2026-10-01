@@ -74,7 +74,15 @@ Without --pipeline, lists every template in every namespace. With --pipeline,
 lists the templates the controller attaches to that pipeline's environments.
 
 The CEL column is the controller's syntax check of the expression: valid,
-invalid (see kubectl describe), or - when not checked yet.`,
+invalid (see kubectl describe), or - when not checked yet.
+
+The controller evaluates the per-Bundle instances the Graph creates from a
+template, never the template, so LAST-EVALUATED is the newest evaluation of
+the template's instances (with --pipeline, of that pipeline's instances), or
+- when none has been evaluated. An instance records its template's name and
+namespace (kardinal.io/gate-template and kardinal.io/gate-template-namespace),
+so a template in an org policy namespace or in spec.policyNamespaces counts the
+instances in every Pipeline's namespace.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
@@ -97,14 +105,15 @@ func policyListFn(w io.Writer, c sigs_client.Client, ns, pipelineFilter string, 
 		if err := c.List(ctx, &gates); err != nil {
 			return fmt.Errorf("list policy gates: %w", err)
 		}
-		var templates []v1alpha1.PolicyGate
+		var templates, instances []v1alpha1.PolicyGate
 		for _, g := range gates.Items {
 			if isGateInstance(g) {
+				instances = append(instances, g)
 				continue
 			}
 			templates = append(templates, g)
 		}
-		return formatPolicyGateTable(w, templates)
+		return formatPolicyGateTable(w, templates, instances)
 	}
 
 	pipe, err := getPipeline(ctx, c, ns, pipelineFilter)
@@ -131,7 +140,54 @@ func policyListFn(w io.Writer, c sigs_client.Client, ns, pipelineFilter string, 
 			shown = append(shown, g)
 		}
 	}
-	return formatPolicyGateTable(w, shown)
+	// The Graph creates a pipeline's instances in the pipeline's namespace.
+	var instances v1alpha1.PolicyGateList
+	if err := c.List(ctx, &instances, sigs_client.InNamespace(ns),
+		sigs_client.MatchingLabels{"kardinal.io/pipeline": pipelineFilter},
+		sigs_client.HasLabels{"kardinal.io/gate-template"}); err != nil {
+		return fmt.Errorf("list policy gate instances: %w", err)
+	}
+	return formatPolicyGateTable(w, shown, instances.Items)
+}
+
+// gateScope is g's kardinal.io/scope label, "team" when it has none, as the
+// Graph builder copies it from a template to its instances
+// (pkg/graph buildPolicyGateNode).
+func gateScope(g v1alpha1.PolicyGate) string {
+	if s := g.Labels["kardinal.io/scope"]; s != "" {
+		return s
+	}
+	return "team"
+}
+
+// instanceOf reports whether inst was created from template tmpl. The Graph
+// builder labels an instance with its template's name, scope and namespace,
+// and creates it in the Pipeline's namespace. An instance from an older
+// controller has no namespace label: then an org template matches the org
+// instances of that name in every namespace, and any other template the
+// instances of that name and scope in its own namespace.
+func instanceOf(inst, tmpl v1alpha1.PolicyGate) bool {
+	if inst.Labels["kardinal.io/gate-template"] != tmpl.Name || gateScope(inst) != gateScope(tmpl) {
+		return false
+	}
+	if ns := inst.Labels["kardinal.io/gate-template-namespace"]; ns != "" {
+		return ns == tmpl.Namespace
+	}
+	return gateScope(tmpl) == "org" || inst.Namespace == tmpl.Namespace
+}
+
+// lastEvaluated is the newest status.lastEvaluatedAt of g and of its
+// instances among instances, or nil when none was evaluated. The controller
+// never evaluates a template, only its instances.
+func lastEvaluated(g v1alpha1.PolicyGate, instances []v1alpha1.PolicyGate) *metav1.Time {
+	newest := g.Status.LastEvaluatedAt
+	for i := range instances {
+		at := instances[i].Status.LastEvaluatedAt
+		if at != nil && instanceOf(instances[i], g) && (newest == nil || at.After(newest.Time)) {
+			newest = at
+		}
+	}
+	return newest
 }
 
 // isGateInstance reports whether g was stamped by a Graph from a template.
@@ -143,7 +199,9 @@ func isGateInstance(g v1alpha1.PolicyGate) bool {
 	return ok
 }
 
-func formatPolicyGateTable(w io.Writer, gates []v1alpha1.PolicyGate) error {
+// formatPolicyGateTable writes the policy list table of the templates gates;
+// instances are the gate instances their LAST-EVALUATED is read from.
+func formatPolicyGateTable(w io.Writer, gates, instances []v1alpha1.PolicyGate) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "NAME\tNAMESPACE\tSCOPE\tAPPLIES-TO\tRECHECK\tCEL\tLAST-EVALUATED"); err != nil {
 		return fmt.Errorf("write policy list header: %w", err)
@@ -157,10 +215,7 @@ func formatPolicyGateTable(w io.Writer, gates []v1alpha1.PolicyGate) error {
 	})
 
 	for _, g := range gates {
-		scope := g.Labels["kardinal.io/scope"]
-		if scope == "" {
-			scope = "team"
-		}
+		scope := gateScope(g)
 		appliesTo := g.Labels["kardinal.io/applies-to"]
 		if appliesTo == "" {
 			appliesTo = "-"
@@ -170,8 +225,8 @@ func formatPolicyGateTable(w io.Writer, gates []v1alpha1.PolicyGate) error {
 			recheck = "5m"
 		}
 		lastEval := "-"
-		if g.Status.LastEvaluatedAt != nil {
-			lastEval = HumanAge(g.Status.LastEvaluatedAt.Time) + " ago"
+		if at := lastEvaluated(g, instances); at != nil {
+			lastEval = HumanAge(at.Time) + " ago"
 		}
 
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
@@ -257,6 +312,13 @@ stale now.
 
 A blocked gate shows the next hour, within 7 days, at which it would pass with
 the same inputs. Gates that do not depend on time show no window.
+
+The first line is RESULT: PASS or RESULT: BLOCKED. A blocked result then lists
+each blocking gate with its message and next window. Last comes one row per
+gate: its name, PASS or BLOCK, and the reason. The command exits 0 whether the
+result is PASS or BLOCKED, so a script reads the RESULT line; it exits non-zero
+only when it cannot simulate (a bad flag, a pipeline or environment that does
+not exist, or no cluster to read).
 
 Example:
   kardinal policy simulate --pipeline nginx-demo --env prod --time "Saturday 3pm"

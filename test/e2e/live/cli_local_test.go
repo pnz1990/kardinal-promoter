@@ -684,7 +684,8 @@ Some gates would BLOCK with current context (see FAIL results above) (3 gate(s))
 }
 
 // TestCLI_Doctor runs kardinal doctor against the suite's install: every
-// check passes and the summary counts them. --pipeline adds a check of that
+// check passes and the summary counts them, and the token check is named after
+// the controller's SCM provider. --pipeline adds a check of that
 // Pipeline in the -n namespace: it passes for a Pipeline the controller
 // accepted, and fails with the controller's reason for one it refused or with
 // a hint for a missing one. --controller-namespace looks for the controller
@@ -709,13 +710,20 @@ func TestCLI_Doctor(t *testing.T) {
 		return meta.IsStatusConditionFalse(p.Status.Conditions, "Ready"), fmt.Sprint(p.Status.Conditions)
 	})
 
+	// The token check is named after the scm.provider the suite installed the
+	// controller with (hack/e2e/components/kardinal.sh).
+	provider := os.Getenv("KARDINAL_E2E_SCM_PROVIDER")
+	tokenLabel, ok := map[string]string{"forgejo": "Forgejo token", "gitea": "Gitea token",
+		"gitlab": "GitLab token", "github": "GitHub token"}[provider]
+	require.True(t, ok, "KARDINAL_E2E_SCM_PROVIDER %q", provider)
+
 	header := "\nkardinal-promoter pre-flight check\n" + strings.Repeat("=", 50) + "\n"
 	row := func(icon, label, detail string) string { return fmt.Sprintf("%s  %-32s  %s\n", icon, label, detail) }
 	checks := row("✅", "Controller reachable", fmt.Sprintf("kardinal-promoter %s in kardinal-system", controllerVersion(t, e))) +
 		row("✅", "CRDs installed", "all 12 kardinal.io/v1alpha1 resources served") +
 		row("✅", "kro running", fmt.Sprintf("kro %s in kro-system", kroTag(t, e))) +
 		row("✅", "kro Graph CRD installed", "kro.run/v1alpha1 graphs registered") +
-		row("✅", "GitHub token", "secret "+framework.GitSecretName+" (key token) present in kardinal-system")
+		row("✅", tokenLabel, "secret "+framework.GitSecretName+" (key token) present in kardinal-system")
 
 	r := cli.Run("", "doctor")
 	require.Equal(t, 0, r.Code, r.Output())
@@ -747,7 +755,7 @@ func TestCLI_Doctor(t *testing.T) {
 	assert.Contains(t, r.Stdout, row("❌", "Controller reachable", "kardinal-version ConfigMap not found in "+ns))
 	assert.Contains(t, r.Stdout, "Installed elsewhere? Use --controller-namespace. Install: helm upgrade --install "+
 		"kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter")
-	assert.Contains(t, r.Stdout, row("⚠️", "GitHub token", "no kardinal-promoter Deployment in "+ns))
+	assert.Contains(t, r.Stdout, row("⚠️", "SCM token", "no kardinal-promoter Deployment in "+ns))
 	assert.True(t, strings.HasSuffix(r.Stdout, "\n3 check(s) passed, 1 warning(s), 1 failed\n"), r.Stdout)
 
 	r = cli.Exec(noCluster, "doctor")

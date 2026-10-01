@@ -433,9 +433,9 @@ func logBlocks(t *testing.T, out string) []logBlock {
 // --follow streams a promotion until the Bundle is Verified. history lists
 // each step newest first with its PR, diff compares the two Bundles' images
 // and provenance, metrics shows the controller's deployment metrics or
-// computes them for another window or environment, and get auditevents and
-// audit summary list and count the AuditEvents the controller wrote. Filters,
-// limits and bad flags are checked for each.
+// computes them for another window or environment, and get auditevents (as a
+// table, JSON or YAML) and audit summary list and count the AuditEvents the
+// controller wrote. Filters, limits and bad flags are checked for each.
 // Covers CLI-LOGS-01, CLI-HISTORY-01, CLI-DIFF-01, CLI-METRICS-01,
 // CLI-GET-AUDIT-01, CLI-AUDIT-01.
 func TestCLI_Reports(t *testing.T) {
@@ -629,8 +629,22 @@ func TestCLI_Reports(t *testing.T) {
 		assert.Equal(t, want, got, "get auditevents %s %s", tc.flag, tc.value)
 	}
 	assert.Equal(t, "No audit events found.\n", c.Must(a.ns, "get", "auditevents", "--pipeline", "nope"))
-	r = c.Fail(a.ns, "get", "auditevents", "-o", "json")
-	assert.Equal(t, "-o json is not supported by \"kardinal get auditevents\"; it prints a table\n", r.Stderr)
+	// -o json and -o yaml print the same events, newest first, as AuditEvents.
+	for _, format := range []string{"json", "yaml"} {
+		var list []v1alpha1.AuditEvent
+		out := c.Must(a.ns, "get", "auditevents", "-o", format)
+		if format == "json" {
+			require.NoError(t, json.Unmarshal([]byte(out), &list), out)
+		} else {
+			require.NoError(t, yaml.Unmarshal([]byte(out), &list), out)
+		}
+		var got []aeRow
+		for _, ev := range list {
+			got = append(got, aeRow{ev.Spec.PipelineName, ev.Spec.BundleName, ev.Spec.Environment, ev.Spec.Action, ev.Spec.Outcome})
+		}
+		assert.Equal(t, aes, got, "get auditevents -o %s", format)
+	}
+	assert.Equal(t, "[]\n", c.Must(a.ns, "get", "auditevents", "--pipeline", "nope", "-o", "json"))
 
 	// audit summary counts the same events.
 	summary := regexp.MustCompile(`^Pipeline: podinfo  \(last (24h|7d)\)\n\n` +

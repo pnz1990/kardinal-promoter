@@ -12,6 +12,14 @@ lists the templates the controller attaches to that pipeline's environments.
 The CEL column is the controller's syntax check of the expression: valid,
 invalid (see kubectl describe), or - when not checked yet.
 
+The controller evaluates the per-Bundle instances the Graph creates from a
+template, never the template, so LAST-EVALUATED is the newest evaluation of
+the template's instances (with --pipeline, of that pipeline's instances), or
+- when none has been evaluated. An instance records its template's name and
+namespace (kardinal.io/gate-template and kardinal.io/gate-template-namespace),
+so a template in an org policy namespace or in spec.policyNamespaces counts the
+instances in every Pipeline's namespace.
+
 ```
 kardinal policy list [flags]
 ```
