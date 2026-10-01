@@ -50,6 +50,12 @@ import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyG
 
 const POLL_INTERVAL_MS = 5000
 
+/** The message of a failed read. The views print it after "Error: ", so it
+ *  must not start with one (String(new Error(m)) is "Error: m"). */
+function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
 /** Format elapsed seconds into a human-readable staleness string. */
 function formatElapsed(seconds: number | null): string {
   if (seconds === null) return 'Loading...'
@@ -170,7 +176,7 @@ export function App() {
       // #522: mark poll success so the header staleness indicator clears "Loading..."
       onPollSuccess()
     } catch (e) {
-      setPipelinesError(String(e))
+      setPipelinesError(errorText(e))
     } finally {
       setPipelinesLoading(false)
     }
@@ -220,7 +226,7 @@ export function App() {
         }
       } catch (e) {
         if (!stale()) {
-          setGraphError(String(e))
+          setGraphError(errorText(e))
           setBundlesLoading(false)
         }
       } finally {
@@ -321,7 +327,7 @@ export function App() {
         setGraph(g)
         setActiveSteps(steps)
       })
-      .catch(e => { if (!stale()) setGraphError(String(e)) })
+      .catch(e => { if (!stale()) setGraphError(errorText(e)) })
       .finally(() => { if (!stale()) setGraphLoading(false) }))
   }, [setSelectedNode, bundles, selectedNamespace])
 

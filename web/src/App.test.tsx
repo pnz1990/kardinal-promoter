@@ -27,6 +27,8 @@ const h = vi.hoisted(() => {
     graph: undefined as unknown,
     // When set, listPipelines fails with this error (the API refuses the page).
     pipelinesError: undefined as string | undefined,
+    // When set, getGraph fails with this error.
+    graphError: undefined as string | undefined,
   }
   const graphFor = (b: string) => ({
     nodes: [{ id: `${b}-step`, type: 'PromotionStep', label: `env-of-${b}`, environment: `env-of-${b}`, state: 'Verified' }],
@@ -41,6 +43,7 @@ const h = vi.hoisted(() => {
     listBundles: vi.fn(async (p: string) => state.bundles[p] ?? []),
     getGraph: vi.fn(async (b: string) => {
       if (state.graphDelay) await state.graphDelay(b)
+      if (state.graphError) throw new Error(state.graphError)
       return state.graph ?? graphFor(b)
     }),
     getSteps: vi.fn(async () => []),
@@ -83,6 +86,7 @@ beforeEach(() => {
   h.state.graphDelay = undefined
   h.state.graph = undefined
   h.state.pipelinesError = undefined
+  h.state.graphError = undefined
   for (const fn of Object.values(h.api)) fn.mockClear()
   localStorage.clear()
   window.history.replaceState(null, '', '/ui/#pipeline=app')
@@ -324,6 +328,27 @@ describe('App insecure connection banner', () => {
     await flush()
     expect(screen.getByText('Select a pipeline to view its promotion DAG.')).toBeInTheDocument()
     expect(banners()).toHaveLength(0)
+  })
+})
+
+// The API client throws Error('API error 503: ...'); the views print the
+// message after "Error: ", so it reads once, not "Error: Error: ...".
+describe('App failed reads', () => {
+  it('shows the message of a failed pipelines read once', async () => {
+    h.state.pipelinesError = 'API error 503: Service Unavailable'
+    render(<App />)
+    await flush()
+    expect(screen.getByText('Error: API error 503: Service Unavailable')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Refresh data' }).querySelector('span[aria-live="polite"]'))
+      .toHaveAttribute('title', 'Error: API error 503: Service Unavailable')
+    expect(screen.queryByText(/Error: Error/)).not.toBeInTheDocument()
+  })
+
+  it('shows the message of a failed graph read once', async () => {
+    h.state.graphError = 'API error 500: Internal Server Error'
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('alert')).toHaveTextContent(/^Error: API error 500: Internal Server Error$/)
   })
 })
 
