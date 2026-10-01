@@ -50,8 +50,8 @@ The gate's `Ready` condition, `kardinal explain` and the UI show this reason. `k
 the gate and its message: `waiting for gate no-weekend-deploys: Production deployments are blocked
 on weekends`. A gate without a message shows only the result (`bundle.version=1.29.0:
 !schedule.isWeekend = false`). The message is not shown when the gate blocks for another reason: an
-evaluation error (`CEL evaluation error: ...`) or a context error (`context error: ...`) keeps its
-own reason, because the message does not explain it.
+evaluation error (`bundle.version=1.29.0: CEL evaluation error: ...`) or a context error
+(`context error: ...`) keeps its own reason, because the message does not explain it.
 
 ### When a gate holds a step
 

@@ -194,8 +194,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			reason = reason + "; " + notes
 		}
 	}
+	// Prefix reason with bundle version so it is CRD-observable without a
+	// separate status field (PG-6 partial fix — full fix requires api/v1alpha1
+	// field addition for a dedicated status.bundleVersion field). An
+	// evaluation error carries it too.
+	if bundleVersion != "" {
+		reason = fmt.Sprintf("bundle.version=%s: %s", bundleVersion, reason)
+	}
 	if evalErr != nil {
-		// Fail-closed on evaluation error
+		// Fail-closed on evaluation error. spec.message explains a false
+		// expression, not an error, so the reason does not lead with it.
 		log.Warn().Err(evalErr).Str("expr", gate.Spec.Expression).
 			Msg("CEL evaluation error, setting gate to blocked")
 		if patchErr := r.patchStatus(ctx, &gate, false, reason); patchErr != nil {
@@ -204,12 +212,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
 	}
 
-	// Prefix reason with bundle version so it is CRD-observable without a
-	// separate status field (PG-6 partial fix — full fix requires api/v1alpha1
-	// field addition for a dedicated status.bundleVersion field).
-	if bundleVersion != "" {
-		reason = fmt.Sprintf("bundle.version=%s: %s", bundleVersion, reason)
-	}
 	// A false expression is what spec.message explains: lead with it, so the
 	// Ready condition, kardinal explain/status, the UI, PR evidence and
 	// notifications show it (GATE-MESSAGE-01).
