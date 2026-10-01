@@ -527,8 +527,8 @@ var fluxKustomizationGVR = schema.GroupVersionResource{
 // cannot tell whether that other commit is later than the promoted one: it
 // checks the images, not the git history.
 // Ready=False is a health failure, and Terminal when Flux gave up on the
-// promoted commit because its resources stalled, or on another commit while
-// the Kustomization's Deployments carry the Bundle images. Ready=Unknown, a
+// promoted commit because its resources stalled, or on another commit when
+// a stalled Deployment itself runs the Bundle images. Ready=Unknown, a
 // generation not yet observed or another applied revision is Progressing.
 // While the Kustomization is suspended (spec.suspend) Flux applies nothing,
 // so a Progressing result says so.
@@ -580,10 +580,11 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 		// Flux gives up early on a Deployment past its progress deadline
 		// ("failed early due to stalled resources"); like the resource
 		// adapter's ProgressDeadlineExceeded, that will not recover. Only a
-		// stall of the promoted commit fails the step at once, or of a later
-		// commit on the shared branch (another environment's push) when the
-		// Kustomization's Deployments carry the Bundle images: Flux applied
-		// the Bundle's change and that rollout stalled.
+		// stall of the promoted commit fails the step at once, or of another
+		// commit on the shared branch (another environment's push) when a
+		// Deployment that runs the Bundle images is itself past its progress
+		// deadline: Flux applied the Bundle's change and that rollout
+		// stalled. Another Deployment's stall is not ours to fail on.
 		reason, _ := readyCond["reason"].(string)
 		msg, _ := readyCond["message"].(string)
 		if reason == "HealthCheckFailed" && strings.Contains(msg, "stalled resources") {
@@ -593,9 +594,13 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 			if want == "" || SameRevision(rev, want) {
 				return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s)", state, shortRev(rev))), nil
 			}
-			if w, err := a.workloads(ctx, ks, opts.ExpectedImages); err == nil && w.runsBundle() {
-				return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s, not %s, but the Kustomization's Deployments carry the Bundle images)",
-					state, shortRev(rev), shortRev(want))), nil
+			if w, err := a.workloads(ctx, ks, opts.ExpectedImages); err == nil {
+				for _, d := range w {
+					if d.bundle && d.status.Terminal {
+						return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s, not %s, but Deployment %s, which runs the Bundle images, stalled)",
+							state, shortRev(rev), shortRev(want), d.ref)), nil
+					}
+				}
 			}
 		}
 		return unhealthy(state), nil

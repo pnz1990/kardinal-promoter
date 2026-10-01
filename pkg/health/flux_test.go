@@ -269,11 +269,13 @@ func TestFluxAdapter_SharedBranch(t *testing.T) {
 	}
 }
 
-// TestFluxAdapter_StalledSharedBranch: when Flux gave up on a later commit of
-// the shared branch (a sibling environment pushed after the promoted commit)
-// and the Kustomization's Deployments carry the Bundle images, Flux applied
-// the Bundle's change and that rollout stalled: the step fails at once. A
-// stall while the Deployments still carry another image stays unhealthy.
+// TestFluxAdapter_StalledSharedBranch: when Flux gave up on another commit
+// of the shared branch (a sibling environment pushed after the promoted
+// commit) and a Deployment that runs the Bundle images is itself past its
+// progress deadline, Flux applied the Bundle's change and that rollout
+// stalled: the step fails at once. The stall of a Deployment that runs no
+// Bundle image, or still runs another image, stays unhealthy, also while a
+// Bundle Deployment is healthy (review item 2 of the flux suite).
 func TestFluxAdapter_StalledSharedBranch(t *testing.T) {
 	bundle := []health.ImageExpectation{{Repository: podinfo, Tag: "6.15.0"}}
 	stalledLater := func(mutate func(obj map[string]interface{})) *unstructured.Unstructured {
@@ -282,6 +284,7 @@ func TestFluxAdapter_StalledSharedBranch(t *testing.T) {
 				obj["status"].(map[string]interface{})["lastAttemptedRevision"] = "main@sha1:" + fluxLater
 			}, mutate))
 	}
+	const unhealthyReason = "Ready=False, observedGen=3, generation=3: " + stalledMessage
 	tests := []struct {
 		name   string
 		objs   []runtime.Object
@@ -289,20 +292,28 @@ func TestFluxAdapter_StalledSharedBranch(t *testing.T) {
 		want   wantKind
 		reason string
 	}{
-		{name: "the Deployment carries the Bundle image",
-			objs: []runtime.Object{stalledLater(withInventory("web")), deploymentObj("web", 2, podinfo+":6.15.0", 1)},
+		{name: "the stalled Deployment runs the Bundle image",
+			objs: []runtime.Object{stalledLater(withInventory("web")), stalledDeployment("web", podinfo+":6.15.0")},
 			want: isTerminal,
-			reason: "Ready=False, observedGen=3, generation=3: " + stalledMessage + " (lastAttemptedRevision=8e9966475a0b, " +
-				"not 034ce92a1b2c, but the Kustomization's Deployments carry the Bundle images)"},
-		{name: "the Deployment carries the previous image",
-			objs: []runtime.Object{stalledLater(withInventory("web")), deploymentObj("web", 2, podinfo+":6.14.0", 1)},
-			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + stalledMessage},
+			reason: unhealthyReason + " (lastAttemptedRevision=8e9966475a0b, " +
+				"not 034ce92a1b2c, but Deployment prod/web, which runs the Bundle images, stalled)"},
+		{name: "the Bundle Deployment is healthy and a Deployment that runs no Bundle image stalled",
+			objs: []runtime.Object{stalledLater(withInventory("web", "cache")), deploymentObj("web", 2, podinfo+":6.15.0", 1),
+				stalledDeployment("cache", "docker.io/library/redis:7")},
+			want: isUnhealthy, reason: unhealthyReason},
+		{name: "the Bundle Deployment lost its replicas but did not stall",
+			objs: []runtime.Object{stalledLater(withInventory("web", "cache")), lostReplicas("web", podinfo+":6.15.0"),
+				stalledDeployment("cache", "docker.io/library/redis:7")},
+			want: isUnhealthy, reason: unhealthyReason},
+		{name: "the stalled Deployment runs the previous image",
+			objs: []runtime.Object{stalledLater(withInventory("web")), stalledDeployment("web", podinfo+":6.14.0")},
+			want: isUnhealthy, reason: unhealthyReason},
 		{name: "no Deployments",
 			objs: []runtime.Object{stalledLater(func(map[string]interface{}) {})},
-			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + stalledMessage},
+			want: isUnhealthy, reason: unhealthyReason},
 		{name: "no Bundle images to compare",
-			objs:   []runtime.Object{stalledLater(withInventory("web")), deploymentObj("web", 2, podinfo+":6.15.0", 1)},
-			images: []health.ImageExpectation{}, want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + stalledMessage},
+			objs:   []runtime.Object{stalledLater(withInventory("web")), stalledDeployment("web", podinfo+":6.15.0")},
+			images: []health.ImageExpectation{}, want: isUnhealthy, reason: unhealthyReason},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

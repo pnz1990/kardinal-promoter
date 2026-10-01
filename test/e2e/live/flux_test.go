@@ -291,7 +291,8 @@ func TestFlux_UnhealthyKustomizations(t *testing.T) {
 // shared branch: another push lands after the promoted commit and before Flux
 // fetches, so Flux applies the later commit, which carries the Bundle's
 // change, and gives up on the stalled rollout. The step fails at once, not at
-// its 5m health timeout, and says the Deployment carries the Bundle image.
+// its 5m health timeout, and names the stalled Deployment that runs the
+// Bundle image.
 //
 // Covers HEALTH-FLUX-08.
 func TestFlux_StalledOnSiblingCommit(t *testing.T) {
@@ -313,8 +314,8 @@ func TestFlux_StalledOnSiblingCommit(t *testing.T) {
 	assert.Contains(t, ps.Status.Message, "health alarm via flux (onHealthFailure=none)")
 	assert.Contains(t, ps.Status.Message, "stalled resources")
 	assert.Contains(t, ps.Status.Message, fmt.Sprintf(
-		"(lastAttemptedRevision=%s, not %s, but the Kustomization's Deployments carry the Bundle images)",
-		shortSHA(later), shortSHA(commit)))
+		"(lastAttemptedRevision=%s, not %s, but Deployment %s/%s, which runs the Bundle images, stalled)",
+		shortSHA(later), shortSHA(commit), a.ns, fixtures.Workload("stalled")))
 	assert.NotContains(t, ps.Status.Message, "health check timeout", "a stalled Kustomization fails before the timeout")
 	attempted, _, _ := unstructured.NestedString(a.kustomization(t, "stalled").Object, "status", "lastAttemptedRevision")
 	assert.Equal(t, fluxRev(a.repo.Branch, later), attempted, "Flux attempted the later commit")
