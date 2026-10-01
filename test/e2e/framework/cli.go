@@ -7,11 +7,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -366,40 +363,13 @@ func (e *Env) podLogs(t *testing.T, selector string, since time.Time) string {
 // the git server's API.
 func (e *Env) BranchHead(t *testing.T, repo gitserver.Repo) string {
 	t.Helper()
-	var path, auth string
-	switch e.Git.Kind() {
-	case "forgejo", "gitea":
-		path = fmt.Sprintf("/api/v1/repos/%s/%s/branches/%s", repo.Owner, repo.Name, repo.Branch)
-		auth = "token " + os.Getenv(gitserver.EnvToken)
-	default:
-		t.Fatalf("BranchHead: git server %s is not supported", e.Git.Kind())
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(os.Getenv(gitserver.EnvAPI), "/")+path, nil)
-	if err != nil {
-		t.Fatalf("BranchHead: %v", err)
+	sha, err := e.Brancher(t).BranchHead(ctx, repo, repo.Branch)
+	if err != nil || sha == "" {
+		t.Fatalf("head of %s branch %s: %q, %v", repo.Name, repo.Branch, sha, err)
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", auth)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("BranchHead %s: %v", path, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("BranchHead %s: HTTP %d: %s", path, resp.StatusCode, raw)
-	}
-	var branch struct {
-		Commit struct {
-			ID string `json:"id"`
-		} `json:"commit"`
-	}
-	if err := json.Unmarshal(raw, &branch); err != nil || branch.Commit.ID == "" {
-		t.Fatalf("BranchHead %s: no commit id in %s (%v)", path, raw, err)
-	}
-	return branch.Commit.ID
+	return sha
 }
 
 // Path is the kardinal binary under test.

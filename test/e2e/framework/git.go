@@ -21,9 +21,41 @@ import (
 // test ends unless KARDINAL_E2E_KEEP=1.
 func (e *Env) Repo(t *testing.T, ns string, files map[string][]byte) gitserver.Repo {
 	t.Helper()
+	return e.newRepo(t, ns, true, func(ctx context.Context) (gitserver.Repo, error) {
+		return e.Git.CreateRepo(ctx, ns, files)
+	})
+}
+
+// RepoWithoutWebhook is Repo without the webhook: the controller learns of
+// merges only by polling the PR.
+func (e *Env) RepoWithoutWebhook(t *testing.T, ns string, files map[string][]byte) gitserver.Repo {
+	t.Helper()
+	return e.newRepo(t, ns, false, func(ctx context.Context) (gitserver.Repo, error) {
+		return e.Git.CreateRepo(ctx, ns, files)
+	})
+}
+
+// SubgroupRepo is Repo in subgroup sub of the owner (owner/sub/ns), on a git
+// server with nested namespaces.
+func (e *Env) SubgroupRepo(t *testing.T, sub, ns string, files map[string][]byte) gitserver.Repo {
+	t.Helper()
+	s, ok := e.Git.(gitserver.Subgrouper)
+	if !ok {
+		t.Fatalf("%s git server has no subgroups", e.Git.Kind())
+	}
+	return e.newRepo(t, ns, true, func(ctx context.Context) (gitserver.Repo, error) {
+		return s.CreateSubgroupRepo(ctx, sub, ns, files)
+	})
+}
+
+// newRepo creates a repo with create, deletes it when the test ends unless
+// KARDINAL_E2E_KEEP=1, and registers the suite's webhook on it when hook is
+// set.
+func (e *Env) newRepo(t *testing.T, ns string, hook bool, create func(context.Context) (gitserver.Repo, error)) gitserver.Repo {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	repo, err := e.Git.CreateRepo(ctx, ns, files)
+	repo, err := create(ctx)
 	if err != nil {
 		t.Fatalf("create %s repo %s: %v", e.Git.Kind(), ns, err)
 	}
@@ -39,7 +71,7 @@ func (e *Env) Repo(t *testing.T, ns string, files map[string][]byte) gitserver.R
 		}
 	})
 
-	if url := os.Getenv(EnvWebhookURL); url != "" {
+	if url := os.Getenv(EnvWebhookURL); url != "" && hook {
 		err := e.Git.AddWebhook(ctx, repo, url, os.Getenv(EnvWebhookSecret))
 		switch {
 		case errors.Is(err, gitserver.ErrNoWebhookDelivery):
