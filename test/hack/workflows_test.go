@@ -262,7 +262,8 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 // suite hack/e2e/up.sh defines (test/e2e/README.md says CI runs them all),
 // and each entry's Kubernetes minor is a node image hack/e2e/up.sh boots from
 // hack/tool-versions.env: KIND_NODE_1_<minor>, or KIND_NODE_<SUITE>_1_<minor>
-// for that suite.
+// for that suite. The upgrade suite must also run on a Kubernetes older than
+// 1.30 (no CRD validation ratcheting), the cluster UPG-OLDK8S-01 needs.
 func TestLiveMatrixRunsEverySuite(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github/workflows/e2e-live.yml"))
 	require.NoError(t, err)
@@ -286,8 +287,16 @@ func TestLiveMatrixRunsEverySuite(t *testing.T) {
 	require.NoError(t, err)
 	tv := toolVersions(t)
 	inMatrix := map[string]bool{}
+	var oldUpgrade []string
 	for _, e := range include {
 		inMatrix[e.Suite] = true
+		if e.Suite == "upgrade" {
+			if minor, ok := strings.CutPrefix(e.K8s, "1."); ok {
+				if n, err := strconv.Atoi(minor); err == nil && n < 30 {
+					oldUpgrade = append(oldUpgrade, e.K8s)
+				}
+			}
+		}
 		assert.Contains(t, runs, e.Suite, "matrix suite %q is not in hack/e2e/up.sh", e.Suite)
 		minor := strings.ReplaceAll(e.K8s, ".", "_")
 		suite := strings.ReplaceAll(strings.ToUpper(e.Suite), "-", "_")
@@ -297,6 +306,7 @@ func TestLiveMatrixRunsEverySuite(t *testing.T) {
 	for suite := range runs {
 		assert.True(t, inMatrix[suite], "suite %q in hack/e2e/up.sh has no e2e-live matrix entry", suite)
 	}
+	assert.NotEmpty(t, oldUpgrade, "e2e-live.yml has no upgrade matrix entry on Kubernetes < 1.30; UPG-OLDK8S-01 needs one (no CRD validation ratcheting)")
 }
 
 func abs(n int) int {
