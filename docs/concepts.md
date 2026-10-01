@@ -406,6 +406,8 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 | `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
 | `RollbackSucceeded` | A step of a rollback Bundle (from any rollback path) reaches Verified, besides `PromotionSucceeded`; one per step |
 
+The CRD also accepts the actions `HealthCheckFailed` and `GateBlocked`, but kardinal never writes them. A failed health check records `PromotionFailed`, or `RollbackStarted` with `onHealthFailure: rollback`, and a blocked gate records `GateEvaluated` with outcome `Failure`.
+
 ```bash
 # List all audit events across namespaces
 kubectl get auditevent --all-namespaces
