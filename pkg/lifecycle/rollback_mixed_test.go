@@ -26,8 +26,9 @@ import (
 // Bundle changed, an image Bundle cannot deploy the config commit it changed.
 // Without --to, a mixed Bundle goes back to the newest earlier images and
 // config commit (B61), an image or config Bundle to the newest earlier images
-// or config commit, also from a mixed Bundle (B66), and an automatic rollback
-// plans what a manual one does.
+// or config commit, also from a mixed Bundle (B66), and an automatic rollback,
+// which names the failing Bundle as RollbackPolicy and onHealthFailure=rollback
+// do, plans what a manual one does.
 func TestPlanRollback_BundleTypes(t *testing.T) {
 	// withImages adds images "repo:tag" under ghcr.io/x/ to b.
 	withImages := func(b *v1alpha1.Bundle, refs ...string) *v1alpha1.Bundle {
@@ -367,6 +368,19 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 			wantTarget: "m0", wantType: "config", wantConfig: "c1",
 		},
 	}
+	// failing names the Bundle whose step is health checking in prod: the
+	// Bundle an automatic rollback rolls back.
+	failing := func(t *testing.T, objs []client.Object) string {
+		t.Helper()
+		var names []string
+		for _, o := range objs {
+			if s, ok := o.(*v1alpha1.PromotionStep); ok && s.Status.State == "HealthChecking" {
+				names = append(names, s.Spec.BundleName)
+			}
+		}
+		require.Len(t, names, 1, "one deployed Bundle")
+		return names[0]
+	}
 	for _, tc := range tests {
 		// Without --to, an automatic rollback (RollbackPolicy,
 		// onHealthFailure=rollback) plans the same rollback.
@@ -381,9 +395,16 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				c := newClient(t, append(tc.objs, pipeline("app", "test", "prod"))...)
-				plan, err := lifecycle.PlanRollback(context.Background(), c, lifecycle.RollbackRequest{
-					Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: tc.to, Automatic: automatic,
-				})
+				req := lifecycle.RollbackRequest{Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: tc.to}
+				from := ""
+				if automatic {
+					// As RollbackPolicy and onHealthFailure=rollback ask:
+					// the failing Bundle, a fixed name and the reason.
+					from = failing(t, tc.objs)
+					req.FromBundle, req.Automatic = from, true
+					req.Name, req.Reason = lifecycle.AutoRollbackName(from, "policy"), "AutoRollback"
+				}
+				plan, err := lifecycle.PlanRollback(context.Background(), c, req)
 				if tc.wantErr != nil {
 					require.ErrorIs(t, err, tc.wantErr)
 					for _, s := range tc.errHas {
@@ -392,6 +413,10 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 					return
 				}
 				require.NoError(t, err)
+				if automatic {
+					assert.Equal(t, from, plan.CurrentName)
+					assert.Equal(t, lifecycle.AutoRollbackName(from, "policy"), plan.Bundle.Name)
+				}
 				assert.Equal(t, tc.wantTarget, plan.Target.Name)
 				assert.Equal(t, tc.wantTarget, plan.Bundle.Spec.Provenance.RollbackOf)
 				assert.Equal(t, tc.wantType, plan.Bundle.Spec.Type)
