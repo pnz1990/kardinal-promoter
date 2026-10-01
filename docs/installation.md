@@ -469,7 +469,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 - **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The chart ships no ValidatingAdmissionPolicy; the CRD schemas validate these fields.
 - **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart no longer grants `batch/jobs`.
-- **`--reuse-values`** fails with `Additional property krocodile is not allowed`, even when you never set `krocodile`. Use `--reset-then-reuse-values`.
+- **`--reuse-values`** fails with `additional properties 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
 
 #### Other notes
 
@@ -482,7 +482,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 #### If something goes wrong
 
-- **`helm upgrade` fails with `Additional property krocodile is not allowed`.** Nothing was changed. Rerun step 8 with `--reset-then-reuse-values`, or with `-f` and a values file without `krocodile`.
+- **`helm upgrade` fails with `additional properties 'krocodile' not allowed`** (Helm before 3.18.5: `Additional property krocodile is not allowed`). Nothing was changed. Rerun step 8 with `--reset-then-reuse-values`, or with `-f` and a values file without `krocodile`.
 - **`kro-system` was deleted** (step 5 skipped). kro was deleted with it. Rerun `KUBE_CONTEXT=<your-context> bash hack/install-kro.sh`. The Graphs are in the Bundles' namespaces and survive; kro picks them up again.
 - **`graphs.experimental.kro.run` is stuck `Terminating`** (step 4 skipped). Run the step 4 command. The CRD then finishes deleting (`kubectl wait --for=delete crd/graphs.experimental.kro.run --timeout=60s`), and no kardinal object is lost.
 - **Steps ran again after the upgrade.** The CRDs were applied while v0.8.1 was running. Nothing is lost, and the Bundles finish.
