@@ -52,6 +52,10 @@
 //     status.closedAt. A reopen clears closedAt. Once the window has passed
 //     the reconciler sets status.closedFinal, then comments on the PR once,
 //     and stops polling; only then does the PromotionStep fail (#1306).
+//   - status.observedGeneration records the spec the status describes. A
+//     PromotionStep recreated after its PR was closed opens a new PR and
+//     points the spec at it; the reconciler then clears the old PR's status
+//     and polls the new PR (clearForNewPR, B72).
 //   - Idempotent: a merged PR whose merge commit is known, or recorded
 //     unavailable, is a no-op, and so is a PR that is final-closed.
 //
@@ -118,6 +122,15 @@ func IsClosedFinal(s *v1alpha1.PRStatusStatus) bool {
 	return s.ClosedFinal || (IsClosed(s) && s.ClosedAt == nil)
 }
 
+// DescribesSpec reports whether the status was written for the current spec:
+// status.observedGeneration is the PRStatus generation, or zero (written by an
+// older release). It is false after the PromotionStep pointed the spec at
+// another PR, until this reconciler has cleared the old PR's status (B72).
+func DescribesSpec(prs *v1alpha1.PRStatus) bool {
+	g := prs.Status.ObservedGeneration
+	return g == 0 || g == prs.Generation
+}
+
 // Reconciler watches PRStatus objects and polls the SCM provider to update
 // status.merged / status.open.
 type Reconciler struct {
@@ -152,6 +165,13 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get prstatus %s: %w", req.Name, err)
+	}
+
+	// The spec names another PR than the one the status describes: a
+	// recreated PromotionStep opened a new PR. The old PR's status (merged,
+	// closed for good, its approvals) says nothing about the new one.
+	if !DescribesSpec(&prs) {
+		return r.clearForNewPR(ctx, log, &prs)
 	}
 
 	// Merged: only the merge commit may still be missing, for example when
@@ -232,11 +252,13 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		approved != prs.Status.Approved || approvalCount != prs.Status.ApprovalCount ||
 		mergeSHA != prs.Status.MergeCommitSHA || mergeUnavailable != prs.Status.MergeCommitUnavailable ||
 		prs.Status.PollError != "" ||
-		!closedAt.Equal(prs.Status.ClosedAt) || closedFinal != prs.Status.ClosedFinal
+		!closedAt.Equal(prs.Status.ClosedAt) || closedFinal != prs.Status.ClosedFinal ||
+		prs.Status.ObservedGeneration != prs.Generation
 	stale := prs.Status.LastCheckedAt == nil || now.Sub(prs.Status.LastCheckedAt.Time) >= lastCheckedRefresh
 	if changed || stale {
 		// This is the only CRD status this reconciler writes.
 		patch := client.MergeFrom(prs.DeepCopy())
+		prs.Status.ObservedGeneration = prs.Generation
 		prs.Status.Merged = merged
 		prs.Status.Open = open
 		prs.Status.Approved = approved
@@ -348,10 +370,11 @@ func (r *Reconciler) recordPollError(ctx context.Context, log zerolog.Logger, pr
 		Int("prNumber", prs.Spec.PRNumber).
 		Dur("retry", permanentErrorInterval).
 		Msg("GetPRStatus failed and a retry will not fix it; recorded in status.pollError")
-	if prs.Status.PollError != msg {
+	if prs.Status.PollError != msg || prs.Status.ObservedGeneration != prs.Generation {
 		// Written only when it changes: each patch re-enqueues the object.
 		patch := client.MergeFrom(prs.DeepCopy())
 		prs.Status.PollError = msg
+		prs.Status.ObservedGeneration = prs.Generation
 		if err := r.Status().Patch(ctx, prs, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch prstatus %s poll error: %w", prs.Name, err)
 		}
@@ -390,10 +413,30 @@ func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, 
 	patch := client.MergeFrom(prs.DeepCopy())
 	prs.Status.MergeCommitSHA = sha
 	prs.Status.MergeCommitUnavailable = sha == ""
+	prs.Status.ObservedGeneration = prs.Generation
 	if err := r.Status().Patch(ctx, prs, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch prstatus %s merge commit: %w", prs.Name, err)
 	}
 	return ctrl.Result{}, nil
+}
+
+// clearForNewPR clears the status of a PRStatus whose spec now names another
+// PR (DescribesSpec is false): a PromotionStep recreated after its PR was
+// closed opened a new PR and pointed the spec at it. Merged, closedFinal or
+// a poll error of the old PR would otherwise stop the new PR from being
+// polled, and fail the step or advance it without a merge. The cleared status
+// has no lastCheckedAt, so the reconcile the patch triggers polls the new PR
+// at once.
+func (r *Reconciler) clearForNewPR(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (ctrl.Result, error) {
+	log.Info().Str("prURL", prs.Spec.PRURL).Int("prNumber", prs.Spec.PRNumber).
+		Int64("generation", prs.Generation).Int64("observedGeneration", prs.Status.ObservedGeneration).
+		Msg("PRStatus names a new PR; cleared the status of the old one")
+	patch := client.MergeFrom(prs.DeepCopy())
+	prs.Status = v1alpha1.PRStatusStatus{ObservedGeneration: prs.Generation}
+	if err := r.Status().Patch(ctx, prs, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("clear prstatus %s for a new PR: %w", prs.Name, err)
+	}
+	return ctrl.Result{Requeue: true}, nil
 }
 
 // fetchMergeCommit asks the SCM provider for the merge commit of prs. retry

@@ -77,6 +77,8 @@ spec:
                 description: |-
                   PRNumber is the pull request number (numeric ID within the repo).
                   Set by the open-pr step after the PR is created. Zero in the placeholder.
+                  The PromotionStep sets it again when it opened another PR (a recreated
+                  step whose PR was closed): the spec always names the step's PR.
                 type: integer
               prURL:
                 description: |-
@@ -154,6 +156,17 @@ spec:
                   Merged is true when the pull request has been merged.
                   A PromotionStep in WaitingForMerge watches this field.
                 type: boolean
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the metadata.generation of the spec this status
+                  describes. The PromotionStep points the spec at another PR when a
+                  recreated step opened a new one; the PRStatus reconciler then clears
+                  the status of the old PR and polls the new one, and the PromotionStep
+                  does not act on a status whose observedGeneration is older than the
+                  spec. Zero on a status written by an older release: it is taken to
+                  describe the current spec.
+                format: int64
+                type: integer
               open:
                 description: |-
                   Open is true when the pull request is still open (not merged, not closed).

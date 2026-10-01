@@ -584,7 +584,9 @@ and a closed one only loses its branch. Then it removes the finalizer. What happ
   <namespace> was deleted. ...`.
 - **The PromotionStep alone** (`kubectl delete promotionstep`). kro creates the step again, under
   the same name, once the old one is gone. The old PR is closed first (`kardinal closed this PR:
-  PromotionStep <name> was deleted. ...`), and the new step opens a new PR.
+  PromotionStep <name> was deleted. ...`), and the new step opens a new PR. The step's PRStatus
+  then names the new PR (`spec.prNumber`), and the old PR's status is cleared before the new PR
+  is polled (`status.observedGeneration` catches up with `metadata.generation`).
 - **The Graph, while the Bundle is `Promoting`.** The PR stays open: the controller recreates the
   Graph, and the new step reuses the PR. The controller logs `left the PR of a step deleted with
   its Graph open` with the `env` and `prURL`.

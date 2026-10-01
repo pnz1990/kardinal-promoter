@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -193,12 +194,16 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 			continue
 		}
 
-		// Already marked merged, and nothing to add — idempotent skip.
-		if prs.Status.Merged && (prs.Status.MergeCommitSHA != "" || event.MergeCommitSHA == "") {
+		patch := client.MergeFrom(prs.DeepCopy())
+		if !prstatus.DescribesSpec(prs) {
+			// The status is still the one of the PR the spec named before (a
+			// recreated step opened this one, B72): none of it holds.
+			prs.Status = v1alpha1.PRStatusStatus{}
+		} else if prs.Status.Merged && (prs.Status.MergeCommitSHA != "" || event.MergeCommitSHA == "") {
+			// Already marked merged, and nothing to add — idempotent skip.
 			continue
 		}
-
-		patch := client.MergeFrom(prs.DeepCopy())
+		prs.Status.ObservedGeneration = prs.Generation
 		if !prs.Status.Merged {
 			prs.Status.Merged = true
 			prs.Status.Open = false

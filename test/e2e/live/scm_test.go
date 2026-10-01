@@ -632,6 +632,49 @@ func scmLabelsAndRotation(t *testing.T, e *framework.Env, scopes []string) {
 	assertEnvAt(t, a, "prod", fixtures.V3)
 }
 
+// TestSCM_DeletedStepTracksItsNewPR deletes, on its own, the prod
+// PromotionStep of a Bundle waiting for its PR. The controller closes that PR
+// with a comment, kro creates the step again, and the new step opens a new PR.
+// Its PRStatus kept naming the old PR, so the controller polled the closed PR,
+// never saw a merge of the new one, and failed the new step when the 5-minute
+// grace window ended (B72). Now the PRStatus names the new PR, with a status
+// written for it, and merging the new PR promotes prod.
+//
+// Covers STEP-DELETE-PR-04.
+func TestSCM_DeletedStepTracksItsNewPR(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	old, pr := a.waitOpenPR(t, bundle, "prod")
+	require.Contains(t, old.Finalizers, closePRFinalizer, "the step closes its PR when it is deleted")
+	e.WaitPRStatus(t, a.ns, pipelineName, bundle, "prod", time.Minute, fmt.Sprintf("tracking PR #%d", pr.Number),
+		func(p *v1alpha1.PRStatus) bool { return p.Spec.PRNumber == pr.Number && p.Status.Open })
+
+	require.NoError(t, e.Client.Delete(ctx, old))
+	e.WaitPRState(t, a.repo, pr.Number, "closed", 2*time.Minute)
+	oneComment(t, a, pr.Number, "kardinal closed this PR: PromotionStep "+old.Name+" was deleted")
+
+	e.WaitStep(t, a.ns, pipelineName, bundle, "prod", promoteTimeout, "the recreated step waiting for a new PR",
+		func(s *v1alpha1.PromotionStep) (bool, string) {
+			return s.UID != old.UID && s.Status.State == "WaitingForMerge",
+				fmt.Sprintf("uid=%s state=%q message=%q", s.UID, s.Status.State, s.Status.Message)
+		})
+	again := a.openPR(t, bundle, "prod")
+	require.NotEqual(t, pr.Number, again.Number, "the recreated step opened a new PR")
+	e.WaitPRStatus(t, a.ns, pipelineName, bundle, "prod", time.Minute, fmt.Sprintf("tracking the new PR #%d", again.Number),
+		func(p *v1alpha1.PRStatus) bool {
+			return p.Spec.PRNumber == again.Number && p.Status.ObservedGeneration == p.Generation &&
+				p.Status.Open && !p.Status.ClosedFinal && p.Status.ClosedAt == nil
+		})
+
+	a.merge(t, again)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
 // TestSCM_DuplicatePRReusesSameBase checks which PR open-pr adopts when the
 // git server refuses a duplicate: with the promotion PR open and a second PR
 // from the same branch into another base, a rerun of open-pr finds the PR

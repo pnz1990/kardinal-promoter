@@ -171,6 +171,39 @@ func TestWebhook_RecordsMergeCommit(t *testing.T) {
 	}
 }
 
+// TestWebhook_StatusOfTheOldPR covers B72: a PRStatus whose spec was pointed
+// at a new PR (a recreated step) still has the old PR's status until the
+// PRStatus reconciler clears it. A merge of the new PR replaces that status
+// and records the generation, so the clear does not undo the merge.
+func TestWebhook_StatusOfTheOldPR(t *testing.T) {
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-bundle-1-prod", Namespace: "default", Generation: 2},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/owner/repo/pull/43", PRNumber: 43, Repo: "owner/repo"},
+		Status: v1alpha1.PRStatusStatus{ClosedFinal: true, PollError: "status 404", Approved: true,
+			ApprovalCount: 2, ObservedGeneration: 1},
+	}
+	c := fake.NewClientBuilder().WithScheme(webhookScheme()).
+		WithObjects(prs).WithStatusSubresource(prs).Build()
+	mockSCM := &mockSCMProvider{event: scm.WebhookEvent{
+		EventType: "pull_request", Action: "closed", Merged: true,
+		PRNumber: 43, RepoFullName: "owner/repo", MergeCommitSHA: "e7ddb9e",
+	}}
+	w := httptest.NewRecorder()
+	newWebhookServerWithConfig(mockSCM, c, zerolog.Nop(), true).Handler()(w,
+		httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader([]byte(`{}`))))
+	assert.Equal(t, http.StatusNoContent, w.Code)
+
+	var got v1alpha1.PRStatus
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
+	assert.True(t, got.Status.Merged)
+	assert.Equal(t, "e7ddb9e", got.Status.MergeCommitSHA)
+	assert.Equal(t, int64(2), got.Status.ObservedGeneration)
+	assert.False(t, got.Status.ClosedFinal)
+	assert.Empty(t, got.Status.PollError)
+	assert.False(t, got.Status.Approved)
+	assert.Zero(t, got.Status.ApprovalCount)
+}
+
 // TestWebhook_RejectsInvalidSignature verifies that a webhook with an invalid
 // HMAC signature returns 401.
 func TestWebhook_RejectsInvalidSignature(t *testing.T) {

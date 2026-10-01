@@ -1511,6 +1511,31 @@ func TestPolicyGateReconciler_PRReviewGate_NotApproved(t *testing.T) {
 	assert.False(t, got.Status.Ready, "gate must block when PR is not approved")
 }
 
+// TestPolicyGateReconciler_PRReviewGate_OldPR covers B72: a PRStatus whose
+// spec was pointed at a new PR (a recreated step) keeps the old PR's reviews
+// until the PRStatus reconciler clears them; the gate does not count them.
+func TestPolicyGateReconciler_PRReviewGate_OldPR(t *testing.T) {
+	bundle := makeBundle("app-v1", "default")
+	prs := makePRStatus("prstatus-app-v1-prod", "default", "app-v1", "prod", true, 2)
+	prs.Generation, prs.Status.ObservedGeneration = 2, 1
+	gate := makeGateInstance("pr-review-gate", "default", "app-v1",
+		`bundle.pr["prod"].isApproved || bundle.pr["prod"].approvalCount > 0`, "5m")
+
+	c := fake.NewClientBuilder().WithScheme(newScheme()).
+		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = time.Now
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.False(t, got.Status.Ready, "the old PR's approvals must not pass the gate")
+}
+
 // TestPolicyGateReconciler_PRReviewGate_MinReviewers verifies that
 // bundle.pr["prod"].approvalCount >= 2 works correctly (K-08).
 func TestPolicyGateReconciler_PRReviewGate_MinReviewers(t *testing.T) {

@@ -37,6 +37,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 )
 
 const (
@@ -835,9 +836,14 @@ func (r *Reconciler) buildPRContext(ctx context.Context, ns, bundleName string) 
 		if envName == "" {
 			continue
 		}
+		approved, count := prs.Status.Approved, prs.Status.ApprovalCount
+		if !prstatus.DescribesSpec(&prs) {
+			// The reviews of the PR the spec named before (B72), not this one.
+			approved, count = false, 0
+		}
 		result[envName] = map[string]interface{}{
-			"isApproved":    prs.Status.Approved,
-			"approvalCount": int64(prs.Status.ApprovalCount),
+			"isApproved":    approved,
+			"approvalCount": int64(count),
 		}
 	}
 	return result, nil

@@ -373,9 +373,10 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 
 // closeStepPR closes the PR this step opened, if it is still open, and leaves
 // a comment with reason. The PR is found through the PRStatus spec, falling
-// back to the step outputs when the PRStatus is gone or was never filled in (a
-// crash between opening the PR and patching the PRStatus). A step that never
-// opened a PR returns nil.
+// back to the step outputs when the PRStatus is gone, was never filled in (a
+// crash between opening the PR and patching the PRStatus), or still names or
+// reports the PR from before the step was recreated (prStatusOfStepPR). A
+// step that never opened a PR returns nil.
 //
 // The SCM is asked first whether the PR is still open: the PRStatus can lag
 // (it is polled), or be gone with its Graph. A PR that is merged or closed
@@ -401,11 +402,14 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		var prs v1alpha1.PRStatus
 		err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs)
 		switch {
-		case err == nil:
+		case err == nil && prStatusOfStepPR(&prs, ps.Status.Outputs):
 			if prs.Status.Merged {
 				return nil // a merge is final: nothing to close
 			}
 			repo, num = prs.Spec.Repo, prs.Spec.PRNumber
+		case err == nil:
+			// The PRStatus still names, or reports, the PR from before the
+			// step was recreated (B72): close the step's own PR, below.
 		case !apierrors.IsNotFound(err):
 			return fmt.Errorf("get prstatus %s: %w", ps.Spec.PRStatusRef, err)
 		}
@@ -937,8 +941,10 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 
 	// The spec patch in handlePromoting is best-effort; until it lands the
 	// PRStatusReconciler has no PR to poll and the step would wait forever
-	// (C03-promotionstep-07).
-	if prs.Spec.PRNumber == 0 && ps.Status.Outputs["prURL"] != "" {
+	// (C03-promotionstep-07). A spec that names another PR, from before the
+	// step was recreated, is patched too, and the status the PRStatus
+	// reconciler wrote for that PR is not read: it polled a closed PR (B72).
+	if !prStatusOfStepPR(&prs, ps.Status.Outputs) {
 		if prErr := r.patchPRStatusSpec(ctx, ps, ps.Status.Outputs); prErr != nil {
 			log.Warn().Err(prErr).Msg("failed to patch PRStatus spec, will retry")
 		}
@@ -1227,8 +1233,9 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 // PRStatus is merged with neither status.mergeCommitSHA nor
 // status.mergeCommitUnavailable set, so the PRStatusReconciler is still
 // asking the SCM provider. A PRStatus that cannot be read (other than not
-// found) counts as pending too, so a cache error never turns into an image
-// fallback. A deleted PRStatus records nothing more.
+// found), or that still reports another PR than the step's (B72), counts as
+// pending too, so a cache error or a status that has not caught up never
+// turns into an image fallback. A deleted PRStatus records nothing more.
 func (r *Reconciler) expectedRevision(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (rev string, pending bool) {
 	if sha := ps.Status.Outputs["commitSHA"]; sha != "" {
 		return sha, false
@@ -1246,6 +1253,9 @@ func (r *Reconciler) expectedRevision(ctx context.Context, log zerolog.Logger, p
 			return "", false
 		}
 		log.Warn().Err(err).Str("prStatusRef", ps.Spec.PRStatusRef).Msg("could not read the PRStatus for the merge commit")
+		return "", true
+	}
+	if !prStatusOfStepPR(&prs, ps.Status.Outputs) {
 		return "", true
 	}
 	if !prs.Status.Merged {
@@ -1650,9 +1660,12 @@ func (r *Reconciler) policyGateMapper(ctx context.Context, obj client.Object) []
 	return reqs
 }
 
-// patchPRStatusSpec updates the spec of the companion PRStatus CRD with PR data
-// from the open-pr step outputs. This is idempotent: if the PRStatus already has
-// a PR number set, it is a no-op.
+// patchPRStatusSpec points the spec of the companion PRStatus at the PR in the
+// open-pr step outputs. It patches only when the spec names another PR (or
+// none): a step recreated after its PR was closed opens a new PR, and a spec
+// left on the old one polled that closed PR, failed the step after the grace
+// window and left the new PR open with nothing tracking it (B72). The PRStatus
+// reconciler then clears the old PR's status (prstatus.DescribesSpec).
 func (r *Reconciler) patchPRStatusSpec(ctx context.Context, ps *v1alpha1.PromotionStep, outputs map[string]string) error {
 	var prs v1alpha1.PRStatus
 	if err := r.Get(ctx, types.NamespacedName{
@@ -1661,38 +1674,48 @@ func (r *Reconciler) patchPRStatusSpec(ctx context.Context, ps *v1alpha1.Promoti
 	}, &prs); err != nil {
 		return fmt.Errorf("get prstatus %s: %w", ps.Spec.PRStatusRef, err)
 	}
-
-	// Idempotent: already has PR data — skip.
-	if prs.Spec.PRNumber > 0 {
+	want, ok := prSpecFromOutputs(outputs)
+	if !ok || specNamesPR(prs.Spec, want) {
 		return nil
 	}
-
-	prURL := outputs["prURL"]
-	prNumStr := outputs["prNumber"]
-	if prURL == "" {
-		return nil
-	}
-
-	prNum := 0
-	if prNumStr != "" {
-		if n, err := strconv.Atoi(prNumStr); err == nil {
-			prNum = n
-		}
-	}
-	if prNum == 0 {
-		prNum = extractPRNumber(prURL)
-	}
-	repo := extractRepo(prURL)
-
 	patch := client.MergeFrom(prs.DeepCopy())
-	prs.Spec.PRURL = prURL
-	prs.Spec.PRNumber = prNum
-	prs.Spec.Repo = repo
-
+	prs.Spec = want
 	if err := r.Patch(ctx, &prs, patch); err != nil {
 		return fmt.Errorf("patch prstatus spec %s: %w", ps.Spec.PRStatusRef, err)
 	}
 	return nil
+}
+
+// prSpecFromOutputs is the PRStatus spec for the PR in the open-pr outputs,
+// and false when they have no PR.
+func prSpecFromOutputs(outputs map[string]string) (v1alpha1.PRStatusSpec, bool) {
+	prURL := outputs["prURL"]
+	if prURL == "" {
+		return v1alpha1.PRStatusSpec{}, false
+	}
+	prNum, err := strconv.Atoi(outputs["prNumber"])
+	if err != nil || prNum == 0 {
+		prNum = extractPRNumber(prURL)
+	}
+	return v1alpha1.PRStatusSpec{PRURL: prURL, PRNumber: prNum, Repo: extractRepo(prURL)}, true
+}
+
+// specNamesPR reports whether spec names the PR of want: the same number and
+// URL. A spec without a URL, which patchPRStatusSpec never writes, is matched
+// on the number.
+func specNamesPR(spec, want v1alpha1.PRStatusSpec) bool {
+	return spec.PRNumber == want.PRNumber && (spec.PRURL == "" || spec.PRURL == want.PRURL)
+}
+
+// prStatusOfStepPR reports whether the PRStatus spec names the PR the step
+// opened (the open-pr outputs), and its status describes that spec. Before
+// patchPRStatusSpec lands after a recreated step opened a new PR, and until
+// the PRStatus reconciler cleared the old PR's status, the PRStatus still
+// reports the old PR. A step whose outputs have no PR takes the PRStatus as
+// it is.
+func prStatusOfStepPR(prs *v1alpha1.PRStatus, outputs map[string]string) bool {
+	want, ok := prSpecFromOutputs(outputs)
+	return (!ok || specNamesPR(prs.Spec, want)) && prstatus.DescribesSpec(prs)
 }
 
 // --- helpers ---
