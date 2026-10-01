@@ -8,7 +8,10 @@ package live
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -16,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -263,4 +267,115 @@ func TestRollback_SucceededAuditEvent(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, []string{"test", "prod"}, envs, "kardinal get auditevents:\n%s", out)
+}
+
+// rfConfigValue2 is the UI message of the second config commit in
+// TestRollback_MixedBundle.
+const rfConfigValue2 = "from-the-second-config-commit"
+
+// rfWaitConfigValue waits until env's Deployment in the cluster sets
+// configVar to value.
+func rfWaitConfigValue(t *testing.T, a *app, env, value string) {
+	t.Helper()
+	framework.Eventually(t, syncTimeout, env+" runs "+configVar+"="+value, func(ctx context.Context) (bool, string) {
+		var d appsv1.Deployment
+		if err := a.e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: fixtures.Workload(env)}, &d); err != nil {
+			return false, err.Error()
+		}
+		envVars := d.Spec.Template.Spec.Containers[0].Env
+		return slices.Contains(envVars, corev1.EnvVar{Name: configVar, Value: value}), fmt.Sprintf("env %v", envVars)
+	})
+}
+
+// rfRollbackBundles lists the names of the rollback Bundles in ns.
+func rfRollbackBundles(t *testing.T, e *framework.Env, ns string) []string {
+	t.Helper()
+	var list v1alpha1.BundleList
+	require.NoError(t, e.Client.List(context.Background(), &list, client.InNamespace(ns),
+		client.MatchingLabels{"kardinal.io/rollback": "true"}))
+	var out []string
+	for _, b := range list.Items {
+		out = append(out, b.Name)
+	}
+	return out
+}
+
+// TestRollback_MixedBundle checks that a rollback of a mixed Bundle, which
+// deploys a config commit and then its images, restores the config commit as
+// well as the images. In env test:
+//
+//   - I1 (image V2), then M2 (mixed: image V3 and config commit c1).
+//   - `kardinal rollback --to I1` is refused: an image Bundle cannot take back
+//     the config commit M2 deployed, and no earlier config commit was Verified.
+//     It used to roll back like an image Bundle, leaving c1 in place.
+//   - K3 (config commit c2), then `kardinal rollback --to M2`: the rollback
+//     Bundle is mixed, with M2's image and c1, and the Deployment runs c1's
+//     config again. It used to be refused because M2 is not a config Bundle.
+//
+// Covers RB-MIXED-01.
+func TestRollback_MixedBundle(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	c := e.CLI(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(nil))
+
+	i1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, i1, "test", "Verified", promoteTimeout)
+	cfg, c1 := a.configRepo(t, "test")
+	m2 := e.CreateBundle(t, a.ns, pipelineName, "--type", "mixed", "--image", imageV3,
+		"--config-commit", c1, "--config-repo", cfg.CloneURL)
+	e.WaitStepState(t, a.ns, pipelineName, m2, "test", "Verified", promoteTimeout)
+	require.True(t, a.configDeployed(t, "test"), "M2 deploys c1")
+	a.waitConfigRunning(t, "test")
+	assertEnvAt(t, a, "test", fixtures.V3)
+
+	// An image Bundle cannot take back the config commit M2 deployed.
+	r := c.Run(a.ns, "rollback", pipelineName, "--env", "test", "--to", i1)
+	assert.NotEqual(t, 0, r.Code, "a rollback to image Bundle %s must be refused:\n%s", i1, r.Output())
+	assert.Contains(t, r.Output(), "bundle "+i1+" is an image Bundle and cannot restore the config commit of ")
+	assert.Contains(t, r.Output(), "that the deployed mixed bundle "+m2+" changed to "+c1[:7]+
+		", and no earlier config commit was Verified in test; pick a config or mixed Bundle with --to")
+	require.Empty(t, rfRollbackBundles(t, e, a.ns), "the refused rollback creates no Bundle:\n%s", r.Output())
+
+	// K3 deploys a second config commit, c2.
+	c2 := e.PushTree(t, cfg, "change the UI message", func(dir string) {
+		file := filepath.Join(dir, fixtures.Path("test"), "deployment.yaml")
+		body, err := os.ReadFile(file)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(file, []byte(strings.ReplaceAll(string(body), configValue, rfConfigValue2)), 0o600))
+	})
+	k3 := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", c2, "--config-repo", cfg.CloneURL)
+	e.WaitStepState(t, a.ns, pipelineName, k3, "test", "Verified", promoteTimeout)
+	require.False(t, a.configDeployed(t, "test"), "K3 replaces c1 with c2")
+	rfWaitConfigValue(t, a, "test", rfConfigValue2)
+	assertEnvAt(t, a, "test", fixtures.V3)
+
+	// A rollback to M2 is a mixed Bundle with M2's image and c1.
+	r = c.Run(a.ns, "rollback", pipelineName, "--env", "test", "--to", m2)
+	require.Equal(t, 0, r.Code, "a rollback of config Bundle %s to mixed Bundle %s:\n%s", k3, m2, r.Output())
+	m := regexp.MustCompile(`Bundle (podinfo-rollback-[a-z0-9]{5}) created`).FindStringSubmatch(r.Stdout)
+	require.NotNil(t, m, "rollback output:\n%s", r.Stdout)
+	var rb v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: m[1]}, &rb))
+	assert.Equal(t, "mixed", rb.Spec.Type, "the rollback keeps M2's type")
+	require.Len(t, rb.Spec.Images, 1)
+	assert.Equal(t, fixtures.Image, rb.Spec.Images[0].Repository)
+	assert.Equal(t, fixtures.V3, rb.Spec.Images[0].Tag)
+	require.NotNil(t, rb.Spec.ConfigRef, "the rollback carries M2's config commit")
+	assert.Equal(t, c1, rb.Spec.ConfigRef.CommitSHA)
+	require.NotNil(t, rb.Spec.Provenance)
+	assert.Equal(t, m2, rb.Spec.Provenance.RollbackOf)
+
+	ps := e.WaitStepState(t, a.ns, pipelineName, rb.Name, "test", "Verified", promoteTimeout)
+	var names []string
+	for _, s := range ps.Status.Steps {
+		names = append(names, s.Name)
+	}
+	assert.Equal(t, []string{"git-clone", "config-merge", "kustomize-set-image", "git-commit", "git-push", "health-check"},
+		names, "the rollback merges c1, then sets the image")
+	assert.True(t, a.configDeployed(t, "test"), "the rollback deploys c1 again")
+	a.waitConfigRunning(t, "test")
+	assertEnvAt(t, a, "test", fixtures.V3)
 }
