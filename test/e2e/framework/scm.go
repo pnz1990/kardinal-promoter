@@ -87,22 +87,29 @@ func (l LogLine) String() string {
 // LogReader reads the controller's log lines written after a mark, from
 // every controller pod, a little more on each Next.
 type LogReader struct {
-	e     *Env
-	since time.Time
-	seen  map[string]time.Time // per pod: the last line read
+	e        *Env
+	selector string
+	since    time.Time
+	seen     map[string]time.Time // per pod: the last line read
 }
 
 // ControllerLog reads the lines the kubelet stamps after since. Use
 // time.Now() just before the action whose log lines a test waits for: the
 // kind node shares the test runner's clock.
 func (e *Env) ControllerLog(since time.Time) *LogReader {
-	return &LogReader{e: e, since: since, seen: map[string]time.Time{}}
+	return &LogReader{e: e, selector: ControllerSelector, since: since, seen: map[string]time.Time{}}
+}
+
+// VariantLog reads the log of controller variant v as ControllerLog reads the
+// controller's.
+func (e *Env) VariantLog(v *Variant, since time.Time) *LogReader {
+	return &LogReader{e: e, selector: variantLabel + "=" + v.Name, since: since, seen: map[string]time.Time{}}
 }
 
 // Next returns the lines written since the previous call, oldest first.
 // Pods whose container is not running are skipped.
 func (r *LogReader) Next(ctx context.Context) ([]LogLine, error) {
-	pods, err := r.e.Kube.CoreV1().Pods(ControllerNamespace).List(ctx, metav1.ListOptions{LabelSelector: ControllerSelector})
+	pods, err := r.e.Kube.CoreV1().Pods(ControllerNamespace).List(ctx, metav1.ListOptions{LabelSelector: r.selector})
 	if err != nil {
 		return nil, err
 	}
@@ -176,10 +183,15 @@ func (e *Env) podLog(ctx context.Context, pod string, from time.Time) ([]LogLine
 func (e *Env) WaitControllerLog(t *testing.T, since time.Time, timeout time.Duration, what string,
 	match func(LogLine) bool) LogLine {
 	t.Helper()
-	r := e.ControllerLog(since)
+	return e.ControllerLog(since).Wait(t, timeout, "controller log: "+what, match)
+}
+
+// Wait waits until a line read from now on matches match, and returns it.
+func (r *LogReader) Wait(t *testing.T, timeout time.Duration, what string, match func(LogLine) bool) LogLine {
+	t.Helper()
 	var found LogLine
 	read := 0
-	Eventually(t, timeout, "controller log: "+what, func(ctx context.Context) (bool, string) {
+	Eventually(t, timeout, what, func(ctx context.Context) (bool, string) {
 		lines, err := r.Next(ctx)
 		if err != nil {
 			return false, err.Error()
@@ -191,21 +203,20 @@ func (e *Env) WaitControllerLog(t *testing.T, since time.Time, timeout time.Dura
 				return true, ""
 			}
 		}
-		return false, fmt.Sprintf("%d lines since %s, none matches", read, since.UTC().Format(time.RFC3339Nano))
+		return false, fmt.Sprintf("%d lines since %s, none matches", read, r.since.UTC().Format(time.RFC3339Nano))
 	})
-	t.Logf("controller log: %s", found)
+	t.Logf("%s: %s", what, found)
 	return found
 }
 
-// ControllerLogLines returns the controller log lines written after since
-// that match match.
-func (e *Env) ControllerLogLines(t *testing.T, since time.Time, match func(LogLine) bool) []LogLine {
+// Lines reads the lines written since the previous call that match match.
+func (r *LogReader) Lines(t *testing.T, match func(LogLine) bool) []LogLine {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	lines, err := e.ControllerLog(since).Next(ctx)
+	lines, err := r.Next(ctx)
 	if err != nil {
-		t.Fatalf("read controller log: %v", err)
+		t.Fatalf("read log: %v", err)
 	}
 	var hits []LogLine
 	for _, l := range lines {
@@ -214,6 +225,13 @@ func (e *Env) ControllerLogLines(t *testing.T, since time.Time, match func(LogLi
 		}
 	}
 	return hits
+}
+
+// ControllerLogLines returns the controller log lines written after since
+// that match match.
+func (e *Env) ControllerLogLines(t *testing.T, since time.Time, match func(LogLine) bool) []LogLine {
+	t.Helper()
+	return e.ControllerLog(since).Lines(t, match)
 }
 
 // LogMessage matches lines whose message starts with prefix and whose
