@@ -107,7 +107,7 @@ Unchanged. After the config change is applied via Git, the health adapter verifi
 
 ### Rollback
 
-Rollback creates a new Bundle of the same type with `provenance.rollbackOf` set, and it follows the same Pipeline, PolicyGates, and PR flow. Neither `kardinal rollback` nor a RollbackPolicy copies `configRef` into it, so a config rollback has nothing to merge and changes nothing.
+Rollback creates a new Bundle of the target's type with `provenance.rollbackOf` set, and it follows the same Pipeline, PolicyGates, and PR flow. It copies the target's `configRef`, so a config or mixed rollback merges the target's config commit; when the deployed Bundle is a config or mixed Bundle and the target has no commit, it carries the newest earlier Verified one. See [Rollback](../rollback.md#images-the-target-does-not-name).
 
 ### Bundle Superseding
 
@@ -218,4 +218,3 @@ These parts of the original design were never built. Open an issue before relyin
 - A config-specific PR body (commit message, changed files).
 - Subscription path filtering (`pathGlob`) and one Bundle per commit.
 - CLI flags for a config reference.
-- Rollback of a config Bundle to the previous `configRef.commitSHA`.

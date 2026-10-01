@@ -85,13 +85,19 @@ type RollbackPlan struct {
 //     puts back everything else the deployed Bundle changed (#1315): for each
 //     image repository the deployed Bundle names and the target does not, the
 //     version from the newest Bundle, other than the deployed one and the ones
-//     rolled back from, that was Verified in the environment. The same for the
-//     config commit of a config Bundle. When no such Bundle exists the
-//     rollback is refused, naming the image or config repository, instead of
-//     leaving the failing version in place. A target whose type cannot carry
-//     what the deployed Bundle changed (a config Bundle for images, an image
-//     or mixed Bundle for a config commit) is refused too. Without ToBundle a
-//     target whose restored set equals what is deployed is skipped.
+//     rolled back from, that was Verified in the environment and deploys
+//     images (an image or mixed Bundle). The same for the config commit of a
+//     deployed config or mixed Bundle when the target has none, from the
+//     newest such Bundle that deploys a config commit (a config or mixed
+//     Bundle). When no such Bundle exists the rollback is refused, naming the
+//     image or config repository, instead of leaving the failing version in
+//     place. A target whose type cannot carry what the deployed Bundle changed
+//     is refused too: a config Bundle for the images of an image Bundle, an
+//     image Bundle for the commit of a config Bundle. A deployed mixed Bundle
+//     can go to a config Bundle only when its images are the newest earlier
+//     versions, and to an image Bundle only when its config commit is the
+//     newest earlier one. Without ToBundle a target whose restored set
+//     deploys nothing new is skipped.
 //   - It sets intent.targetEnvironment to this environment, and records the
 //     target in spec.provenance.rollbackOf and the deployed Bundle in the
 //     kardinal.io/rollback-from annotation. The Graph of a targetEnvironment
@@ -176,7 +182,7 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 		if restoreErr != nil {
 			return nil, fmt.Errorf("rollback: %w", restoreErr)
 		}
-		if plan.Current != nil && SameArtifacts(r, plan.Current) {
+		if plan.Current != nil && sameDeployed(r, plan.Current) {
 			return nil, fmt.Errorf("rollback: rolling back to bundle %s restores the same artifacts as the deployed bundle %s: %w",
 				target.Name, plan.CurrentName, ErrConflict)
 		}
@@ -209,7 +215,7 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			if restoreErr != nil {
 				return nil, fmt.Errorf("rollback: %w", restoreErr)
 			}
-			if plan.Current != nil && SameArtifacts(r, plan.Current) {
+			if plan.Current != nil && sameDeployed(r, plan.Current) {
 				continue
 			}
 			plan.Target, restored = cand, r
@@ -243,18 +249,34 @@ type restoreSources struct {
 	cache             map[string]*v1alpha1.Bundle
 }
 
-// deploysConfig reports whether promoting b deploys its config commit rather
-// than its images. Only config Bundles count: a mixed Bundle deploys its config
-// commit and then its images, but rollback restores it like an image Bundle
-// (docs/rollback.md).
+// deploysConfig reports whether promoting b deploys its config commit: config
+// Bundles do, and so do mixed Bundles, before their images (the config-merge
+// step, steps.DefaultSequenceForBundle).
 func deploysConfig(b *v1alpha1.Bundle) bool {
-	return b.Spec.Type == "config"
+	return b.Spec.Type == "config" || b.Spec.Type == "mixed"
+}
+
+// deploysImages reports whether promoting b deploys its images: every Bundle
+// but a config Bundle does.
+func deploysImages(b *v1alpha1.Bundle) bool {
+	return b.Spec.Type != "config"
+}
+
+// sameDeployed reports whether deploying the rollback artifacts r over cur
+// changes nothing: r's images, when r deploys images, and r's config commit,
+// when r deploys one, are cur's. What r does not deploy stays as cur left it.
+func sameDeployed(r, cur *v1alpha1.Bundle) bool {
+	if deploysImages(r) && !slices.Equal(imageKeys(r), imageKeys(cur)) {
+		return false
+	}
+	return !deploysConfig(r) || configKey(r) == configKey(cur)
 }
 
 // restore returns the artifacts of the rollback of cur to target: target's
 // images and config ref, plus, from the history, the version of every image
-// repository cur names that target does not, and, when cur is a config Bundle
-// and target has no config commit, the newest earlier config commit.
+// repository cur deployed that target does not name, and, when cur deployed a
+// config commit (a config or mixed Bundle) and target has none, the newest
+// earlier config commit.
 // It fails with ErrConflict naming what the history has no other version of,
 // and with ErrInvalid when target's type cannot carry what cur changed. With
 // cur unknown (deleted), target's artifacts are returned as they are.
@@ -264,50 +286,95 @@ func (s *restoreSources) restore(ctx context.Context, cur, target *v1alpha1.Bund
 	if cur == nil {
 		return out, nil
 	}
-
 	if deploysConfig(cur) {
-		ref := cur.Spec.ConfigRef
-		if ref == nil || ref.CommitSHA == "" {
-			return out, nil
-		}
-		if !deploysConfig(target) {
-			return nil, fmt.Errorf("bundle %s is a %s Bundle and cannot restore the config commit of %s that the deployed config bundle %s changed; pick a config Bundle with --to: %w",
-				target.Name, target.Spec.Type, ref.GitRepo, cur.Name, ErrInvalid)
-		}
-		if out.Spec.ConfigRef != nil && out.Spec.ConfigRef.CommitSHA != "" {
-			return out, nil
-		}
-		from, err := s.newest(ctx, func(b *v1alpha1.Bundle) bool {
-			return deploysConfig(b) && b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != ""
-		})
-		if err != nil {
+		if err := s.restoreConfig(ctx, cur, target, out); err != nil {
 			return nil, err
 		}
-		if from == nil {
-			return nil, fmt.Errorf("no Bundle other than %s with a config commit of %s was Verified in %s, so a rollback to %s would leave the deployed commit in place: %w",
-				cur.Name, ref.GitRepo, s.env, target.Name, ErrConflict)
-		}
-		fromRef := *from.Spec.ConfigRef
-		out.Spec.ConfigRef = &fromRef
-		return out, nil
 	}
+	if deploysImages(cur) {
+		if err := s.restoreImages(ctx, cur, target, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
 
-	if len(cur.Spec.Images) > 0 && deploysConfig(target) {
-		return nil, fmt.Errorf("bundle %s is a config Bundle and cannot restore the images (%s) that the deployed %s bundle %s changed; pick an image Bundle with --to: %w",
-			target.Name, repositories(cur.Spec.Images), cur.Spec.Type, cur.Name, ErrInvalid)
+// restoreConfig puts back the config commit cur deployed: out keeps target's
+// commit or, when target has none, gets the newest earlier one. An image
+// target deploys no config commit, so it is refused unless cur is a mixed
+// Bundle whose commit is the newest earlier one, i.e. cur changed only images.
+func (s *restoreSources) restoreConfig(ctx context.Context, cur, target, out *v1alpha1.Bundle) error {
+	ref := cur.Spec.ConfigRef
+	if ref == nil || ref.CommitSHA == "" {
+		return nil
+	}
+	if !deploysConfig(target) {
+		why := ""
+		if cur.Spec.Type == "mixed" {
+			prev, err := s.newestConfig(ctx)
+			if err != nil {
+				return err
+			}
+			if prev != nil && configKey(prev) == configKey(cur) {
+				return nil
+			}
+			why = fmt.Sprintf(" to %s, and no earlier config commit was Verified in %s", shortCommit(ref.CommitSHA), s.env)
+			if prev != nil {
+				why = fmt.Sprintf(" from %s to %s", shortCommit(prev.Spec.ConfigRef.CommitSHA), shortCommit(ref.CommitSHA))
+			}
+		}
+		return fmt.Errorf("bundle %s is an image Bundle and cannot restore the config commit of %s that the deployed %s bundle %s changed%s; pick a config or mixed Bundle with --to: %w",
+			target.Name, ref.GitRepo, cur.Spec.Type, cur.Name, why, ErrInvalid)
+	}
+	if out.Spec.ConfigRef != nil && out.Spec.ConfigRef.CommitSHA != "" {
+		return nil
+	}
+	from, err := s.newestConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if from == nil {
+		return fmt.Errorf("no Bundle other than %s with a config commit of %s was Verified in %s, so a rollback to %s would leave the deployed commit in place: %w",
+			cur.Name, ref.GitRepo, s.env, target.Name, ErrConflict)
+	}
+	fromRef := *from.Spec.ConfigRef
+	out.Spec.ConfigRef = &fromRef
+	return nil
+}
+
+// restoreImages puts back the images cur deployed: out keeps target's images
+// and gets, for each repository of cur that target does not name, the version
+// of the newest earlier Bundle that deployed it. A config target deploys no
+// images, so it is refused unless cur is a mixed Bundle whose images are all
+// the newest earlier versions, i.e. cur changed only its config commit.
+func (s *restoreSources) restoreImages(ctx context.Context, cur, target, out *v1alpha1.Bundle) error {
+	if len(cur.Spec.Images) == 0 {
+		return nil
+	}
+	if !deploysImages(target) {
+		changed := cur.Spec.Images
+		if cur.Spec.Type == "mixed" {
+			var err error
+			if changed, err = s.changedImages(ctx, cur); err != nil {
+				return err
+			}
+			if len(changed) == 0 {
+				return nil
+			}
+		}
+		return fmt.Errorf("bundle %s is a config Bundle and cannot restore the images (%s) that the deployed %s bundle %s changed; pick an image or mixed Bundle with --to: %w",
+			target.Name, repositories(changed), cur.Spec.Type, cur.Name, ErrInvalid)
 	}
 	for _, img := range cur.Spec.Images {
 		if hasRepository(out.Spec.Images, img.Repository) {
 			continue
 		}
-		from, err := s.newest(ctx, func(b *v1alpha1.Bundle) bool {
-			return !deploysConfig(b) && hasRepository(b.Spec.Images, img.Repository)
-		})
+		from, err := s.newestImage(ctx, img.Repository)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if from == nil {
-			return nil, fmt.Errorf("no Bundle other than %s with image %s was Verified in %s, so a rollback to %s would leave %s at the deployed version; roll back with a Bundle that names it: %w",
+			return fmt.Errorf("no Bundle other than %s with image %s was Verified in %s, so a rollback to %s would leave %s at the deployed version; roll back with a Bundle that names it: %w",
 				cur.Name, img.Repository, s.env, target.Name, img.Repository, ErrConflict)
 		}
 		for _, fromImg := range from.Spec.Images {
@@ -316,7 +383,44 @@ func (s *restoreSources) restore(ctx context.Context, cur, target *v1alpha1.Bund
 			}
 		}
 	}
-	return out, nil
+	return nil
+}
+
+// changedImages returns the images of cur that differ from the newest earlier
+// version of their repository, or have none.
+func (s *restoreSources) changedImages(ctx context.Context, cur *v1alpha1.Bundle) ([]v1alpha1.ImageRef, error) {
+	var changed []v1alpha1.ImageRef
+	for _, img := range cur.Spec.Images {
+		prev, err := s.newestImage(ctx, img.Repository)
+		if err != nil {
+			return nil, err
+		}
+		if prev == nil || !slices.Contains(prev.Spec.Images, img) {
+			changed = append(changed, img)
+		}
+	}
+	return changed, nil
+}
+
+// newestConfig returns the newest history Bundle that deployed a config
+// commit, or nil.
+func (s *restoreSources) newestConfig(ctx context.Context) (*v1alpha1.Bundle, error) {
+	return s.newest(ctx, func(b *v1alpha1.Bundle) bool {
+		return deploysConfig(b) && b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != ""
+	})
+}
+
+// newestImage returns the newest history Bundle that deployed an image of
+// repo, or nil.
+func (s *restoreSources) newestImage(ctx context.Context, repo string) (*v1alpha1.Bundle, error) {
+	return s.newest(ctx, func(b *v1alpha1.Bundle) bool {
+		return deploysImages(b) && hasRepository(b.Spec.Images, repo)
+	})
+}
+
+// shortCommit is the first 7 characters of a commit SHA, for messages.
+func shortCommit(sha string) string {
+	return sha[:min(7, len(sha))]
 }
 
 // newest returns the newest history Bundle that match accepts, or nil.
