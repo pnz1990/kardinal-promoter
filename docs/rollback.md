@@ -29,7 +29,7 @@ The rollback Bundle has the target's type and deploys what that type deploys: im
 | config | refused | restores the config commit | restores the config commit, and deploys the target's images |
 | mixed | restores the images; refused if the mixed Bundle changed the config commit (its commit is not the newest earlier Verified one) | restores the config commit; refused if the mixed Bundle changed an image (one of its images is not the newest earlier Verified version) | restores both |
 
-A target that, with the added images or config commit, deploys nothing the deployed Bundle did not is skipped, and `--to` such a target fails.
+A target whose rollback Bundle, with the added images or config commit, would change nothing the environment runs is skipped, and `--to` such a target fails. Only what the rollback Bundle deploys is compared. The environment runs the deployed Bundle's images and config commit and, for what the deployed Bundle does not deploy (an image it does not name, or the config commit under an image Bundle), the newest earlier Verified version. For example, with the mixed Bundle `m1 = {a:2, config c1}` and then the image Bundle `v2 = {a:2}` promoted, `--to m1` is refused: prod already runs `a:2` and `c1`.
 
 `onHealthFailure: rollback` and RollbackPolicy never roll back a Bundle that is itself a rollback. If a rollback fails its health check, the step stops at `AbortedByAlarm` for a human, instead of starting another rollback.
 

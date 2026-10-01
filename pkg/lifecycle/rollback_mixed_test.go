@@ -200,6 +200,45 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 			to:      "c1",
 			wantErr: lifecycle.ErrConflict, errHas: []string{"restores the same artifacts as the deployed bundle m2"},
 		},
+		// sameDeployed compares only what the rollback Bundle deploys with
+		// what the environment runs: cur's artifacts and, for what cur did
+		// not deploy, the newest earlier version in the history.
+		{
+			name: "image to mixed that changes nothing is a conflict: the config commit is the one deployed",
+			objs: []client.Object{
+				mix("m1", 10, "c1", "a:2"), verified("m1", 10), img("v2", 20, "a:2"), deployed("v2", 20)},
+			to:      "m1",
+			wantErr: lifecycle.ErrConflict, errHas: []string{"rolling back to bundle m1 restores the same artifacts as the deployed bundle v2"},
+		},
+		{
+			name: "image to image that changes nothing is a conflict: the other repository is at the target's version",
+			objs: []client.Object{
+				img("v1", 10, "a:2", "b:1"), verified("v1", 10), img("v2", 20, "a:2"), deployed("v2", 20)},
+			to:      "v1",
+			wantErr: lifecycle.ErrConflict, errHas: []string{"restores the same artifacts as the deployed bundle v2"},
+		},
+		{
+			name: "config to mixed that changes nothing is a conflict: the images are the ones deployed",
+			objs: []client.Object{
+				mix("m1", 10, "c2", "a:1"), verified("m1", 10), cfg("k2", 20, "c2"), deployed("k2", 20)},
+			to:      "m1",
+			wantErr: lifecycle.ErrConflict, errHas: []string{"restores the same artifacts as the deployed bundle k2"},
+		},
+		{
+			name: "image to image that changes only a repository the deployed Bundle does not name",
+			objs: []client.Object{
+				img("v1", 5, "a:2", "b:1"), verified("v1", 5), img("v1b", 10, "b:3"), verified("v1b", 10),
+				img("v2", 20, "a:2"), deployed("v2", 20)},
+			to:         "v1",
+			wantTarget: "v1", wantType: "image", wantImages: []string{"a:2", "b:1"},
+		},
+		{
+			name: "without --to a candidate that changes nothing is skipped",
+			objs: []client.Object{
+				img("v0", 5, "a:1"), verified("v0", 5), img("v1", 10, "a:2", "b:1"), verified("v1", 10),
+				img("v2", 20, "a:2"), deployed("v2", 20)},
+			wantTarget: "v0", wantType: "image", wantImages: []string{"a:1"},
+		},
 		{
 			name: "without --to a mixed Bundle rolls back to the newest earlier mixed Bundle",
 			objs: []client.Object{

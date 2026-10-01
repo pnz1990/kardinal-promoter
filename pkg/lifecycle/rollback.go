@@ -182,9 +182,15 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 		if restoreErr != nil {
 			return nil, fmt.Errorf("rollback: %w", restoreErr)
 		}
-		if plan.Current != nil && sameDeployed(r, plan.Current) {
-			return nil, fmt.Errorf("rollback: rolling back to bundle %s restores the same artifacts as the deployed bundle %s: %w",
-				target.Name, plan.CurrentName, ErrConflict)
+		if plan.Current != nil {
+			same, sameErr := src.sameDeployed(ctx, r, plan.Current)
+			if sameErr != nil {
+				return nil, fmt.Errorf("rollback: %w", sameErr)
+			}
+			if same {
+				return nil, fmt.Errorf("rollback: rolling back to bundle %s restores the same artifacts as the deployed bundle %s: %w",
+					target.Name, plan.CurrentName, ErrConflict)
+			}
 		}
 		plan.Target, restored = target, r
 	} else {
@@ -215,8 +221,14 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			if restoreErr != nil {
 				return nil, fmt.Errorf("rollback: %w", restoreErr)
 			}
-			if plan.Current != nil && sameDeployed(r, plan.Current) {
-				continue
+			if plan.Current != nil {
+				same, sameErr := src.sameDeployed(ctx, r, plan.Current)
+				if sameErr != nil {
+					return nil, fmt.Errorf("rollback: %w", sameErr)
+				}
+				if same {
+					continue
+				}
 			}
 			plan.Target, restored = cand, r
 			break
@@ -262,14 +274,64 @@ func deploysImages(b *v1alpha1.Bundle) bool {
 	return b.Spec.Type != "config"
 }
 
-// sameDeployed reports whether deploying the rollback artifacts r over cur
-// changes nothing: r's images, when r deploys images, and r's config commit,
-// when r deploys one, are cur's. What r does not deploy stays as cur left it.
-func sameDeployed(r, cur *v1alpha1.Bundle) bool {
-	if deploysImages(r) && !slices.Equal(imageKeys(r), imageKeys(cur)) {
-		return false
+// sameDeployed reports whether deploying the rollback artifacts r changes
+// nothing in the environment, where cur is deployed: each image r deploys,
+// and r's config commit when r deploys one, is what the environment runs.
+// What r does not deploy stays as it is, so it is not compared. The
+// environment runs what cur deployed and, for what cur did not deploy (an
+// image repository cur does not name, the config commit under an image
+// Bundle), the newest earlier version in the history, the one restore fills
+// from. When the history has none, the version is not known and counts as a
+// change.
+func (s *restoreSources) sameDeployed(ctx context.Context, r, cur *v1alpha1.Bundle) (bool, error) {
+	if deploysImages(r) {
+		for _, img := range r.Spec.Images {
+			at, err := s.deployedImage(ctx, cur, img.Repository)
+			if err != nil {
+				return false, err
+			}
+			if at == nil || imageKey(*at) != imageKey(img) {
+				return false, nil
+			}
+		}
 	}
-	return !deploysConfig(r) || configKey(r) == configKey(cur)
+	if !deploysConfig(r) {
+		return true, nil
+	}
+	at, err := s.deployedConfig(ctx, cur)
+	if err != nil {
+		return false, err
+	}
+	return at != nil && configKey(at) == configKey(r), nil
+}
+
+// deployedImage returns the image of repo the environment runs with cur
+// deployed: cur's when cur deploys an image of repo, otherwise the newest
+// earlier version in the history, or nil when there is none.
+func (s *restoreSources) deployedImage(ctx context.Context, cur *v1alpha1.Bundle, repo string) (*v1alpha1.ImageRef, error) {
+	from := cur
+	if !deploysImages(cur) || !hasRepository(cur.Spec.Images, repo) {
+		var err error
+		if from, err = s.newestImage(ctx, repo); err != nil || from == nil {
+			return nil, err
+		}
+	}
+	for i := range from.Spec.Images {
+		if from.Spec.Images[i].Repository == repo {
+			return &from.Spec.Images[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// deployedConfig returns the Bundle whose config commit the environment runs
+// with cur deployed: cur when cur deploys one, otherwise the newest earlier
+// one in the history, or nil when there is none.
+func (s *restoreSources) deployedConfig(ctx context.Context, cur *v1alpha1.Bundle) (*v1alpha1.Bundle, error) {
+	if deploysConfig(cur) && cur.Spec.ConfigRef != nil && cur.Spec.ConfigRef.CommitSHA != "" {
+		return cur, nil
+	}
+	return s.newestConfig(ctx)
 }
 
 // restore returns the artifacts of the rollback of cur to target: target's

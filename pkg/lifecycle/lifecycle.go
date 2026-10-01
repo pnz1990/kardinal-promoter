@@ -161,10 +161,15 @@ func SameArtifacts(a, b *v1alpha1.Bundle) bool {
 func imageKeys(b *v1alpha1.Bundle) []string {
 	keys := make([]string, 0, len(b.Spec.Images))
 	for _, img := range b.Spec.Images {
-		keys = append(keys, img.Repository+":"+img.Tag+"@"+img.Digest)
+		keys = append(keys, imageKey(img))
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// imageKey identifies an image by repository, tag and digest.
+func imageKey(img v1alpha1.ImageRef) string {
+	return img.Repository + ":" + img.Tag + "@" + img.Digest
 }
 
 func configKey(b *v1alpha1.Bundle) string {
