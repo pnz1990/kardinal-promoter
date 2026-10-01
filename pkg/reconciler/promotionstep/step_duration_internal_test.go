@@ -149,3 +149,83 @@ func TestUpdateStepStatuses_StepAcrossReconciles(t *testing.T) {
 	count, _ = stepDurationSamples(t, seq[0])
 	assert.Equal(t, uint64(1), count, "step 0 is observed once, in the reconcile it completed")
 }
+
+// TestStepDuration_StateMachineSteps: wait-for-merge and the health check are
+// closed by the state machine, not the engine. Each is observed once with its
+// real duration when it closes; the engine's placeholder health-check step is
+// not observed; a step that never started is not observed.
+func TestStepDuration_StateMachineSteps(t *testing.T) {
+	seq := []string{"git-clone", "open-pr", "wait-for-merge", "health-check"}
+	samples := func() map[string]uint64 {
+		m := map[string]uint64{}
+		for _, n := range seq {
+			m[n], _ = stepDurationSamples(t, n)
+		}
+		return m
+	}
+	delta := func(before map[string]uint64) map[string]uint64 {
+		m := map[string]uint64{}
+		for n, c := range samples() {
+			if c != before[n] {
+				m[n] = c - before[n]
+			}
+		}
+		return m
+	}
+	now := time.Now()
+	at := now.Add
+
+	t.Run("pr-review: merge, health check, Verified", func(t *testing.T) {
+		before := samples()
+		ps := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{Steps: initStepStatuses(seq)}}
+		updateStepStatuses(ps, seq, 2, false, "", map[int]steps.StepTiming{
+			0: {Started: at(-10 * time.Minute), Finished: at(-10*time.Minute + time.Second)},
+			1: {Started: at(-10*time.Minute + time.Second), Finished: at(-10*time.Minute + 2*time.Second)},
+			2: {Started: at(-10*time.Minute + 2*time.Second), Finished: at(-10*time.Minute + 2*time.Second)},
+		})
+		assert.Equal(t, map[string]uint64{"git-clone": 1, "open-pr": 1}, delta(before))
+
+		closeStepStatuses(ps, StateHealthChecking)
+		wfm := ps.Status.Steps[2]
+		assert.Equal(t, v1alpha1.StepExecutionCompleted, wfm.State)
+		assert.InDelta(t, (10*time.Minute - 2*time.Second).Milliseconds(), wfm.DurationMs, 1000, "wait-for-merge lasts until the merge")
+		assert.Equal(t, map[string]uint64{"git-clone": 1, "open-pr": 1, "wait-for-merge": 1}, delta(before))
+
+		hc := &ps.Status.Steps[3]
+		require.Equal(t, v1alpha1.StepExecutionInProgress, hc.State)
+		started := metav1.NewTime(at(-3 * time.Minute)) // the health check began 3m ago
+		hc.StartedAt = &started
+		closeStepStatuses(ps, StateVerified)
+		assert.Equal(t, v1alpha1.StepExecutionCompleted, hc.State)
+		assert.InDelta(t, (3 * time.Minute).Milliseconds(), hc.DurationMs, 1000)
+		assert.Equal(t, map[string]uint64{"git-clone": 1, "open-pr": 1, "wait-for-merge": 1, "health-check": 1}, delta(before))
+
+		closeStepStatuses(ps, StateVerified)
+		assert.Len(t, delta(before), 4, "closing again observes nothing")
+	})
+
+	t.Run("auto: the placeholder health-check is not observed", func(t *testing.T) {
+		auto := []string{"git-clone", "health-check"}
+		before := samples()
+		ps := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{Steps: initStepStatuses(auto)}}
+		updateStepStatuses(ps, auto, 2, false, "", map[int]steps.StepTiming{
+			0: {Started: at(-2 * time.Second), Finished: at(-time.Second)},
+			1: {Started: at(-time.Second), Finished: at(-time.Second)},
+		})
+		assert.Equal(t, v1alpha1.StepExecutionCompleted, ps.Status.Steps[1].State)
+		assert.Equal(t, map[string]uint64{"git-clone": 1}, delta(before))
+
+		closeStepStatuses(ps, StateHealthChecking)
+		closeStepStatuses(ps, StateFailed)
+		assert.Equal(t, v1alpha1.StepExecutionFailed, ps.Status.Steps[1].State)
+		assert.Equal(t, map[string]uint64{"git-clone": 1, "health-check": 1}, delta(before), "the failed health check is observed")
+	})
+
+	t.Run("a step that never started is not observed", func(t *testing.T) {
+		before := samples()
+		ps := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{Steps: initStepStatuses(seq)}}
+		closeStepStatuses(ps, StateFailed)
+		assert.Equal(t, v1alpha1.StepExecutionFailed, ps.Status.Steps[0].State)
+		assert.Empty(t, delta(before))
+	})
+}

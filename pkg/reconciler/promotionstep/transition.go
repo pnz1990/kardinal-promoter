@@ -133,29 +133,28 @@ func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.Promotio
 //   - Entering Verified: every entry that is not Completed becomes Completed.
 //   - Entering a failure state: the first entry that is not Completed is Failed
 //     with the message, unless one already failed.
+//
+// Each entry closed here goes through closeStep, so wait-for-merge and the
+// health check are observed in kardinal_step_duration_seconds like the
+// engine's steps.
 func closeStepStatuses(ps *v1alpha1.PromotionStep, state string) {
-	now := metav1.Now()
+	now := time.Now()
 	steps := ps.Status.Steps
 	complete := func(s *v1alpha1.StepStatus) {
-		if s.State == v1alpha1.StepExecutionCompleted {
-			return
+		if s.State != v1alpha1.StepExecutionCompleted {
+			closeStep(s, v1alpha1.StepExecutionCompleted, time.Time{}, now, true)
 		}
-		s.State = v1alpha1.StepExecutionCompleted
-		if s.StartedAt == nil {
-			s.StartedAt = &now
-		}
-		s.CompletedAt = &now
-		s.DurationMs = s.CompletedAt.Sub(s.StartedAt.Time).Milliseconds()
 	}
 	switch state {
 	case StateHealthChecking:
 		for i := range steps {
-			if steps[i].Name == "health-check" {
+			if steps[i].Name == healthCheckStep {
 				// The step engine runs a placeholder health-check step and marks
 				// it Completed; the real check only starts now.
 				if steps[i].State != v1alpha1.StepExecutionInProgress {
+					started := metav1.NewTime(now)
 					steps[i].State = v1alpha1.StepExecutionInProgress
-					steps[i].StartedAt = &now
+					steps[i].StartedAt = &started
 					steps[i].CompletedAt = nil
 					steps[i].DurationMs = 0
 				}
@@ -175,11 +174,7 @@ func closeStepStatuses(ps *v1alpha1.PromotionStep, state string) {
 			case v1alpha1.StepExecutionCompleted:
 				continue
 			}
-			steps[i].State = v1alpha1.StepExecutionFailed
-			if steps[i].StartedAt == nil {
-				steps[i].StartedAt = &now
-			}
-			steps[i].CompletedAt = &now
+			closeStep(&steps[i], v1alpha1.StepExecutionFailed, time.Time{}, now, true)
 			steps[i].Message = ps.Status.Message
 			return
 		}

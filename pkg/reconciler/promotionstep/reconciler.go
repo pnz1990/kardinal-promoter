@@ -1580,7 +1580,8 @@ func initStepStatuses(seq []string) []v1alpha1.StepStatus {
 // reconcile, so their times come from timings; otherwise every such step
 // would get startedAt == completedAt and no duration. Each step that becomes
 // Completed or Failed sets durationMs and is observed once in
-// kardinal_step_duration_seconds.
+// kardinal_step_duration_seconds, except the engine's placeholder
+// health-check step (see closeStepStatuses).
 func updateStepStatuses(ps *v1alpha1.PromotionStep, stepNames []string, currentIdx int, failed bool,
 	failMessage string, timings map[int]steps.StepTiming) {
 	if len(ps.Status.Steps) == 0 {
@@ -1590,30 +1591,20 @@ func updateStepStatuses(ps *v1alpha1.PromotionStep, stepNames []string, currentI
 	}
 
 	now := time.Now()
-	stamp := func(t time.Time) *metav1.Time {
-		if t.IsZero() {
-			t = now
-		}
-		mt := metav1.NewTime(t)
-		return &mt
-	}
-	// finish records the end of step i and observes its duration.
-	finish := func(i int, step *v1alpha1.StepStatus) {
+	// finish closes step i in state.
+	finish := func(i int, step *v1alpha1.StepStatus, state v1alpha1.StepExecutionState) {
 		t, ran := timings[i]
-		if step.StartedAt == nil {
-			step.StartedAt = stamp(t.Started)
+		finished := t.Finished
+		if !ran {
+			finished = now
+			if step.CompletedAt != nil {
+				finished = step.CompletedAt.Time
+			}
 		}
-		if ran || step.CompletedAt == nil {
-			step.CompletedAt = stamp(t.Finished)
-		}
-		d := step.CompletedAt.Sub(step.StartedAt.Time)
-		if d < 0 {
-			d = 0
-		}
-		step.DurationMs = d.Milliseconds()
-		observability.StepDurationSeconds.WithLabelValues(step.Name).Observe(d.Seconds())
+		// The engine's placeholder health-check step: closeStepStatuses
+		// reopens it when the health check starts and records that duration.
+		closeStep(step, state, t.Started, finished, step.Name != healthCheckStep)
 	}
-
 	for i := range ps.Status.Steps {
 		step := &ps.Status.Steps[i]
 		switch {
@@ -1622,25 +1613,58 @@ func updateStepStatuses(ps *v1alpha1.PromotionStep, stepNames []string, currentI
 			// reconcile or a previous one. Only update a step not already
 			// marked Completed (idempotent), so each is observed once.
 			if step.State != v1alpha1.StepExecutionCompleted {
-				step.State = v1alpha1.StepExecutionCompleted
-				finish(i, step)
+				finish(i, step, v1alpha1.StepExecutionCompleted)
 			}
 		case i == currentIdx && failed:
 			if step.State != v1alpha1.StepExecutionFailed {
-				step.State = v1alpha1.StepExecutionFailed
-				finish(i, step)
+				finish(i, step, v1alpha1.StepExecutionFailed)
 				step.Message = failMessage
 			}
 		case i == currentIdx:
 			// This step is in progress (StepPending result means "still running").
 			if step.State == v1alpha1.StepExecutionPending {
 				step.State = v1alpha1.StepExecutionInProgress
-				step.StartedAt = stamp(timings[i].Started)
+				started := timings[i].Started
+				if started.IsZero() {
+					started = now
+				}
+				mt := metav1.NewTime(started)
+				step.StartedAt = &mt
 			}
 		default:
 			// Future steps: leave as Pending. When currentIdx ==
 			// len(stepNames) every step is handled by the first case.
 		}
+	}
+}
+
+// healthCheckStep is the last step of every sequence. The engine runs a
+// placeholder of it; the health check itself is the HealthChecking state.
+const healthCheckStep = "health-check"
+
+// closeStep moves a step to Completed or Failed at finished and sets its
+// durationMs. started is the start to use when the step has no startedAt; a
+// zero started means the start is unknown (the step never ran, or ran in a
+// reconcile whose status was lost), so the step starts at finished. Unless
+// observe is false or the start is unknown, the duration is observed in
+// kardinal_step_duration_seconds. Callers close a step once, so each step
+// is observed once.
+func closeStep(s *v1alpha1.StepStatus, state v1alpha1.StepExecutionState, started, finished time.Time, observe bool) {
+	s.State = state
+	known := s.StartedAt != nil || !started.IsZero()
+	if s.StartedAt == nil {
+		if started.IsZero() {
+			started = finished
+		}
+		st := metav1.NewTime(started)
+		s.StartedAt = &st
+	}
+	ct := metav1.NewTime(finished)
+	s.CompletedAt = &ct
+	d := max(finished.Sub(s.StartedAt.Time), 0)
+	s.DurationMs = d.Milliseconds()
+	if observe && known {
+		observability.StepDurationSeconds.WithLabelValues(s.Name).Observe(d.Seconds())
 	}
 }
 
