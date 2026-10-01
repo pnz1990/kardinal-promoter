@@ -305,6 +305,128 @@ func TestPRFinalizer_DeleteClosesPROnce(t *testing.T) {
 	}
 }
 
+// TestPRFinalizer_SyncConflict covers B55 for the close-pr finalizer: when the
+// step changed since it was read, adding or removing kardinal.io/close-pr hits
+// a conflict. The reconcile then stops and requeues without a reconcile error,
+// and the next one syncs the finalizer. A step that needs the finalizer does
+// not reach its state handler without it.
+func TestPRFinalizer_SyncConflict(t *testing.T) {
+	merged := openPRStatus("prs-step", "test/repo", 5)
+	merged.Status.Open, merged.Status.Merged = false, true
+	conflict := apierrors.NewConflict(v1alpha1.GroupVersion.WithResource("promotionsteps").GroupResource(),
+		"step", errors.New("the object has been modified"))
+	tests := []struct {
+		name        string
+		step        *v1alpha1.PromotionStep
+		prs         *v1alpha1.PRStatus
+		finalizer   bool // the step holds the finalizer before the reconcile
+		patchErr    error
+		wantErr     bool
+		wantState   string
+		wantWrites  int  // status writes in the reconcile that conflicts
+		wantAfter   bool // the finalizer after the next reconcile
+		wantStopped bool // the conflicting reconcile stopped before the state handler
+	}{
+		{
+			name:        "adding it before the step's handler runs",
+			step:        prStep("Promoting", 0),
+			prs:         openPRStatus("prs-step", "", 0),
+			patchErr:    conflict,
+			wantState:   "Promoting",
+			wantAfter:   true,
+			wantStopped: true,
+		},
+		{
+			name:       "adding it on entering Promoting",
+			step:       prStep("", 0),
+			prs:        openPRStatus("prs-step", "", 0),
+			patchErr:   conflict,
+			wantState:  "Promoting",
+			wantWrites: 1,
+			wantAfter:  true,
+		},
+		{
+			name:       "removing it once the PR merged",
+			step:       prStep("WaitingForMerge", 5),
+			prs:        merged,
+			finalizer:  true,
+			patchErr:   conflict,
+			wantState:  "HealthChecking",
+			wantWrites: 1,
+			wantAfter:  false,
+		},
+		{
+			name:        "another error is still a reconcile error",
+			step:        prStep("Promoting", 0),
+			prs:         openPRStatus("prs-step", "", 0),
+			patchErr:    apierrors.NewInternalError(errors.New("etcdserver: request timed out")),
+			wantErr:     true,
+			wantState:   "Promoting",
+			wantAfter:   true,
+			wantStopped: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.finalizer {
+				tt.step.Finalizers = []string{promotionstep.FinalizerClosePR}
+			}
+			api := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}, &v1alpha1.Bundle{}).
+				WithObjects(tt.step, tt.prs, makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")).Build()
+			failing, writes := true, 0
+			c := interceptor.NewClient(api, interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+					if _, ok := obj.(*v1alpha1.PromotionStep); ok && failing {
+						return tt.patchErr
+					}
+					return c.Patch(ctx, obj, p, opts...)
+				},
+				SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+					if _, ok := obj.(*v1alpha1.PromotionStep); ok {
+						writes++
+					}
+					return c.SubResource(sub).Update(ctx, obj, opts...)
+				},
+				SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
+					if _, ok := obj.(*v1alpha1.PromotionStep); ok {
+						writes++
+					}
+					return c.SubResource(sub).Patch(ctx, obj, p, opts...)
+				},
+			})
+			m := &mockSCM{open: true, prURL: "https://github.com/test/repo/pull/5", prNumber: 5}
+			r := &promotionstep.Reconciler{Client: c, APIReader: api, SCM: m, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+			res, err := r.Reconcile(context.Background(), reqFor("step"))
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.False(t, apierrors.IsConflict(err))
+			} else {
+				require.NoError(t, err, "a conflict is not a reconcile error")
+				assert.Positive(t, res.RequeueAfter, "the step is reconciled again shortly")
+			}
+			got := getStep(t, api, "step")
+			assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
+			assert.Equal(t, tt.finalizer, slices.Contains(got.Finalizers, promotionstep.FinalizerClosePR),
+				"the finalizer is unchanged, finalizers %v", got.Finalizers)
+			assert.Equal(t, tt.wantWrites, writes, "status writes")
+			if tt.wantStopped {
+				assert.Zero(t, m.openCalled, "no PR is opened")
+			}
+
+			failing = false
+			_, err = r.Reconcile(context.Background(), reqFor("step"))
+			require.NoError(t, err)
+			got = getStep(t, api, "step")
+			assert.Equal(t, tt.wantAfter, slices.Contains(got.Finalizers, promotionstep.FinalizerClosePR),
+				"the next reconcile syncs the finalizer: state %s (%s), finalizers %v", got.Status.State, got.Status.Message, got.Finalizers)
+			assert.Empty(t, m.closed, "no PR is closed")
+		})
+	}
+}
+
 // TestPRFinalizer_OrphanedStepClosesPR covers B40 with the orphan guard: a
 // step whose Bundle is gone deletes itself, and the delete closes its PR.
 func TestPRFinalizer_OrphanedStepClosesPR(t *testing.T) {

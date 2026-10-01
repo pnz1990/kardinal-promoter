@@ -87,6 +87,24 @@ func (r *Reconciler) syncPRFinalizer(ctx context.Context, ps *v1alpha1.Promotion
 	return nil
 }
 
+// requeuePRFinalizerConflict is how soon a step is reconciled again when
+// syncing FinalizerClosePR hit a conflict.
+const requeuePRFinalizerConflict = time.Second
+
+// prFinalizerSyncFailed is the result of a reconcile whose syncPRFinalizer
+// failed. A conflict means kro or the controller wrote the step since it was
+// read: the step is reconciled again shortly and syncs the finalizer against
+// the new copy, so the conflict is not a reconcile error. Either way the
+// reconcile stops, so a step that needs the finalizer never reaches its state
+// handler (which opens the PR) without it.
+func prFinalizerSyncFailed(log zerolog.Logger, err error) (ctrl.Result, error) {
+	if apierrors.IsConflict(err) {
+		log.Debug().Err(err).Msg("step changed while syncing its close-pr finalizer; trying again")
+		return ctrl.Result{RequeueAfter: requeuePRFinalizerConflict}, nil
+	}
+	return ctrl.Result{}, err
+}
+
 // handleDeleted runs for a step with a deletionTimestamp. If the step holds
 // FinalizerClosePR and may still own an open PR, it closes the PR with a
 // comment (closeStepPR; a merged or closed PR is left alone) and then removes

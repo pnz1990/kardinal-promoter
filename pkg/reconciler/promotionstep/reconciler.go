@@ -173,14 +173,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.handleDeleted(ctx, log, &ps)
 	}
 	if err := r.syncPRFinalizer(ctx, &ps); err != nil {
-		return ctrl.Result{}, err
+		return prFinalizerSyncFailed(log, err)
 	}
 	res, err := r.reconcileState(ctx, log, &ps)
 	if err != nil {
 		return res, err
 	}
 	if err := r.syncPRFinalizer(ctx, &ps); err != nil {
-		return ctrl.Result{}, err
+		return prFinalizerSyncFailed(log, err)
 	}
 	return res, nil
 }
