@@ -323,10 +323,20 @@ the `helm upgrade` in [Upgrade](installation.md#upgrade) with `--set github.toke
      --from-literal=token=<NEW_TOKEN> \
      --dry-run=client -o yaml | kubectl apply -f -
    ```
-3. Within 30 seconds the controller picks up the change. No controller restart is needed.
+3. Update every Secret that a Pipeline's `spec.git.secretRef` names and that holds the
+   old token. Git clone and push do not use the controller's Secret: each step reads the
+   `token` key of the Pipeline's Secret, in the Pipeline's namespace. If that Secret still
+   holds the revoked token, git-clone fails with "authentication required".
+   ```bash
+   kubectl create secret generic <pipeline-git-secret> \
+     --namespace <pipeline-namespace> \
+     --from-literal=token=<NEW_TOKEN> \
+     --dry-run=client -o yaml | kubectl apply -f -
+   ```
+4. Within 30 seconds the controller picks up the change. No controller restart is needed.
    Promotions in flight are not interrupted — the atomic swap completes before the next
-   reconcile iteration reads the token.
-4. Verify the rotation took effect by checking the controller log:
+   reconcile iteration reads the token. The next git step reads the Pipeline Secret again.
+5. Verify the rotation took effect by checking the controller log:
    ```bash
    kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=20 \
      | grep "SCM credentials rotated"
@@ -346,6 +356,8 @@ restart the controller:
 ```bash
 kubectl rollout restart deployment/kardinal-promoter -n kardinal-system
 ```
+
+Update the Pipeline git Secrets too, as in step 3 above.
 
 ---
 
