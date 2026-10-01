@@ -184,7 +184,7 @@ describe('FleetHealthBar', () => {
     const onFilterChange = vi.fn()
     const pipelines = [makePipeline({ blockerCount: 1 })]
     render(<FleetHealthBar pipelines={pipelines} activeFilter="all" onFilterChange={onFilterChange} />)
-    fireEvent.click(screen.getByLabelText(/blocked pipelines/i))
+    fireEvent.click(screen.getByLabelText(/blocked pipeline/i))
     expect(onFilterChange).toHaveBeenCalledWith('blocked')
   })
 
@@ -192,14 +192,14 @@ describe('FleetHealthBar', () => {
     const onFilterChange = vi.fn()
     const pipelines = [makePipeline({ blockerCount: 1 })]
     render(<FleetHealthBar pipelines={pipelines} activeFilter="blocked" onFilterChange={onFilterChange} />)
-    fireEvent.click(screen.getByLabelText(/blocked pipelines/i))
+    fireEvent.click(screen.getByLabelText(/blocked pipeline/i))
     expect(onFilterChange).toHaveBeenCalledWith('all')
   })
 
   it('marks active filter badge as aria-pressed=true', () => {
     const pipelines = [makePipeline({ blockerCount: 1 })]
     render(<FleetHealthBar pipelines={pipelines} activeFilter="blocked" onFilterChange={() => {}} />)
-    const blockedBtn = screen.getByLabelText(/blocked pipelines/i)
+    const blockedBtn = screen.getByLabelText(/blocked pipeline/i)
     expect(blockedBtn).toHaveAttribute('aria-pressed', 'true')
   })
 
@@ -213,5 +213,41 @@ describe('FleetHealthBar', () => {
     const pipelines = [makePipeline({ failedStepCount: 0 })]
     render(<FleetHealthBar pipelines={pipelines} activeFilter="all" onFilterChange={() => {}} />)
     expect(screen.queryByText('CI Red')).not.toBeInTheDocument()
+  })
+
+  it('names each badge in the singular for one pipeline and the plural otherwise', () => {
+    const promoting = { environmentStates: { prod: 'Promoting' } }
+    const { unmount } = render(
+      <FleetHealthBar
+        pipelines={[
+          makePipeline({ name: 'ok' }),
+          makePipeline({ name: 'gated', blockerCount: 1 }),
+          makePipeline({ name: 'red', failedStepCount: 1 }),
+          makePipeline({ name: 'moving', blockerCount: 1, ...promoting }),
+        ]}
+        activeFilter="all"
+        onFilterChange={() => {}}
+      />
+    )
+    expect(screen.getByRole('button', { name: '1 healthy pipeline' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '2 blocked pipelines' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '1 pipeline with CI failures' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '1 pipeline currently promoting' })).toBeInTheDocument()
+    unmount()
+
+    render(
+      <FleetHealthBar
+        pipelines={[
+          makePipeline({ name: 'a', blockerCount: 1, failedStepCount: 1, ...promoting }),
+          makePipeline({ name: 'b', blockerCount: 1, failedStepCount: 1, ...promoting }),
+        ]}
+        activeFilter="all"
+        onFilterChange={() => {}}
+      />
+    )
+    expect(screen.getByRole('button', { name: '0 healthy pipelines' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '2 blocked pipelines' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '2 pipelines with CI failures' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '2 pipelines currently promoting' })).toBeInTheDocument()
   })
 })

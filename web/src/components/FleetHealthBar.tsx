@@ -227,7 +227,7 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         borderColor="var(--color-success)"
         active={activeFilter === 'healthy'}
         onClick={toggle('healthy')}
-        aria-label={`${s.healthy} healthy pipelines`}
+        aria-label={`${s.healthy} healthy pipeline${s.healthy === 1 ? '' : 's'}`}
       />
       <SummaryBadge
         label="Blocked"
@@ -237,7 +237,7 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         borderColor="var(--color-warning)"
         active={activeFilter === 'blocked'}
         onClick={toggle('blocked')}
-        aria-label={`${s.blocked} blocked pipelines`}
+        aria-label={`${s.blocked} blocked pipeline${s.blocked === 1 ? '' : 's'}`}
       />
       {s.ciRed > 0 && (
         <SummaryBadge
@@ -248,7 +248,7 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
           borderColor="var(--color-error)"
           active={activeFilter === 'ci-red'}
           onClick={toggle('ci-red')}
-          aria-label={`${s.ciRed} pipelines with CI failures`}
+          aria-label={`${s.ciRed} pipeline${s.ciRed === 1 ? '' : 's'} with CI failures`}
         />
       )}
 
@@ -262,7 +262,7 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         borderColor="var(--color-code)"
         active={activeFilter === 'promoting'}
         onClick={toggle('promoting')}
-        aria-label={`${s.promoting} pipelines currently promoting`}
+        aria-label={`${s.promoting} pipeline${s.promoting === 1 ? '' : 's'} currently promoting`}
       />
     </div>
   )
