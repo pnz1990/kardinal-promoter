@@ -445,8 +445,8 @@ func TestMetric_OrgGateUsesOrgMetrics(t *testing.T) {
 	assert.Equal(t, fixtures.Image+":"+fixtures.V2, e.DeploymentImage(t, a.ns, fixtures.Workload(env)))
 }
 
-// stepNames are the built-in promotion step names (pkg/steps/defaults.go).
-var stepNames = []string{
+// builtinSteps are the built-in promotion step names (pkg/steps/defaults.go).
+var builtinSteps = []string{
 	"argocd-set-image", "config-merge", "git-clone", "git-commit", "git-push", "health-check",
 	"helm-set-image", "kustomize-build", "kustomize-set-image", "open-pr", "wait-for-merge",
 }
@@ -528,7 +528,7 @@ func TestObs_ControllerMetrics(t *testing.T) {
 		assert.GreaterOrEqual(t, delta(h+"_count", nil), 1.0, "%s observations", h)
 	}
 	assert.GreaterOrEqual(t, delta("kardinal_gate_blocking_duration_seconds_sum", nil), 10.0, "prod's gate blocked for more than 10s")
-	assert.Subset(t, stepNames, after.LabelValues("kardinal_step_duration_seconds_count", "step"), "step labels are step names")
+	assert.Subset(t, builtinSteps, after.LabelValues("kardinal_step_duration_seconds_count", "step"), "step labels are step names")
 	// Four promotions above: older and bundle in test, bundle in prod, fails
 	// in gone. git-clone starts and finishes within one reconcile; the state
 	// machine closes wait-for-merge (prod) and the health check (all four).
