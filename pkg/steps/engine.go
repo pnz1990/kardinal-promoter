@@ -24,6 +24,10 @@ import (
 // Engine executes a named sequence of steps, accumulating outputs between steps.
 // It is not safe for concurrent use by multiple goroutines.
 type Engine struct {
+	// NowFn returns the current time for the step timings. Overridable for
+	// testing; time.Now when nil.
+	NowFn func() time.Time
+
 	steps   []string
 	timings map[int]StepTiming
 }
@@ -86,9 +90,9 @@ func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex i
 
 		log.Info().Str("step", name).Int("index", i).Msg("executing step")
 
-		started := time.Now()
+		started := e.now()
 		result, err = executeStep(ctx, step, state)
-		e.timings[i] = StepTiming{Started: started, Finished: time.Now()}
+		e.timings[i] = StepTiming{Started: started, Finished: e.now()}
 		if err != nil {
 			return i, result, fmt.Errorf("step %s: %w", name, err)
 		}
@@ -125,6 +129,14 @@ func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex i
 	}
 
 	return len(e.steps), StepResult{Status: StepSuccess, Message: "all steps complete"}, nil
+}
+
+// now returns the current time via NowFn if set (for testing), otherwise time.Now().
+func (e *Engine) now() time.Time {
+	if e.NowFn != nil {
+		return e.NowFn()
+	}
+	return time.Now()
 }
 
 // executeStep runs one step, applying the per-step timeout when configured.

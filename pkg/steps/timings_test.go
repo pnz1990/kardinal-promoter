@@ -6,6 +6,7 @@ package steps_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,4 +44,27 @@ func TestEngine_Timings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, eng.Timings(), 1)
 	assert.Contains(t, eng.Timings(), 2)
+}
+
+// TestEngine_TimingsUseNowFn: the timings come from the engine's clock, so a
+// test, or the reconciler, sets them through NowFn instead of the wall clock.
+func TestEngine_TimingsUseNowFn(t *testing.T) {
+	a := &countingStep{name: "test-timings-clock-a", statuses: []steps.StepStatus{steps.StepSuccess}}
+	b := &countingStep{name: "test-timings-clock-b", statuses: []steps.StepStatus{steps.StepPending}}
+	steps.Register(a)
+	steps.Register(b)
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	tick := 0
+	eng := steps.NewEngine([]string{a.name, b.name})
+	eng.NowFn = func() time.Time {
+		tick++
+		return t0.Add(time.Duration(tick) * time.Second)
+	}
+
+	_, _, err := eng.ExecuteFrom(context.Background(), &steps.StepState{}, 0)
+	require.NoError(t, err)
+	assert.Equal(t, map[int]steps.StepTiming{
+		0: {Started: t0.Add(1 * time.Second), Finished: t0.Add(2 * time.Second)},
+		1: {Started: t0.Add(3 * time.Second), Finished: t0.Add(4 * time.Second)},
+	}, eng.Timings())
 }

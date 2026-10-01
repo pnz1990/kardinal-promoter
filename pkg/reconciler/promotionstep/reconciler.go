@@ -1044,8 +1044,10 @@ func (r *Reconciler) expectedRevision(ctx context.Context, ps *v1alpha1.Promotio
 // nor a merge commit: rev then came from the PRStatus. The step copies the
 // merge commit when it leaves WaitingForMerge, but a webhook can mark the PR
 // merged before the merge commit is known (the parsed Forgejo event has none),
-// and the PRStatus reconciler records it later. Every health-check path that
-// follows patches the status.
+// and the PRStatus reconciler records it later. The health-check paths that
+// follow patch the status, except an adapter error, which requeues without a
+// patch: the merge commit is then recorded by the next check that reaches a
+// result.
 func recordMergeCommit(ps *v1alpha1.PromotionStep, rev string) {
 	if rev == "" || ps.Status.Outputs["commitSHA"] != "" || ps.Status.Outputs["mergeCommitSHA"] != "" {
 		return
