@@ -1,0 +1,32 @@
+# hack/e2e/matrix.txt
+#
+# Every live e2e job: one kind cluster each, set up by hack/e2e/up.sh SUITE.
+# hack/e2e/all.sh runs them on this host, JOBS at a time, in this order
+# (longest first), and .github/workflows/e2e-live.yml runs them in CI
+# (all.sh -matrix prints its matrix). A suite's minors and shards are here,
+# nowhere else; test/hack checks that every suite in up.sh has a line, that
+# core runs on every KIND_NODE_1_* minor in hack/tool-versions.env and that
+# upgrade runs on a minor below 1.30.
+#
+# suite       Kubernetes  shard (hack/e2e/run.sh SHARD; - for the whole suite)
+core          1.35        1/2
+core          1.35        2/2
+core          1.36        1/2
+core          1.36        2/2
+core          1.37        1/2
+core          1.37        2/2
+gitlab        1.37        -
+gitea         1.37        -
+github        1.37        -
+chart         1.37        -
+delivery      1.37        -
+ui            1.37        -
+# The spoke boots test/e2e/kind-config.yaml's node image; the hub runs the
+# same minor.
+multi-cluster 1.36        -
+flux          1.37        -
+# 1.29: KIND_NODE_UPGRADE_1_29, no CRD validation ratcheting (UPG-OLDK8S-01).
+# all.sh and CI run the upgrade test once whatever COUNT is: it upgrades its
+# cluster.
+upgrade       1.29        -
+upgrade       1.37        -

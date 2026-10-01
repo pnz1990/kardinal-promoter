@@ -472,9 +472,9 @@ make e2e-down SUITE=core
 
 test/e2e/coverage.tsv lists every documented behavior and whether a live test covers it. A test
 claims rows with `Covers ID, ID.` in its doc comment, and `go test ./test/hack -run TestE2ECoverage`
-fails when the file and the tests disagree. `.github/workflows/e2e-live.yml` runs every suite on
-every PR; its `e2e live` job (`go run ./test/e2e/proof`) fails when a claimed row's test failed,
-skipped or did not run.
+fails when the file and the tests disagree. `make e2e-all` (hack/e2e/all.sh) runs every suite
+locally before a merge, and `.github/workflows/e2e-live.yml` weekly and on dispatch; both end
+with `go run ./test/e2e/proof`, which fails when a claimed row's test failed or skipped.
 
 The journey tests below run without a cluster: they prove reconciler logic, not that the product
 works on a cluster.

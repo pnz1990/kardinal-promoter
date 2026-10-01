@@ -15,6 +15,7 @@ make e2e-down SUITE=core
 `make e2e-up` is idempotent: re-run it after changing the controller to
 rebuild and redeploy it. It writes `test/e2e/results/kardinal-e2e-<suite>/env`
 (git server URLs and tokens, mode 0600), which `make test-e2e-live` sources.
+`make e2e-down SUITE=multi-cluster` deletes its spoke cluster too.
 
 On hosts where `docker build` can't download Go modules, set
 `KARDINAL_E2E_BUILD=host` to build the controller binary on the host instead.
@@ -30,15 +31,37 @@ helm version pinned there. The core suite also
 needs bash and zsh on PATH: `TestCLI_Completion` checks the completion scripts
 with `bash -n` and `zsh -n`.
 
-CI (`.github/workflows/e2e-live.yml`) runs every suite but `github` on every
-pull request: the core suite on each of the three Kubernetes minors, split
-across two jobs per minor with `SHARD`, and the upgrade suite on Kubernetes
-1.29 and the newest minor. The `github` suite needs the `DEMO_GITHUB_TOKEN`
-secret, so it runs only on pushes to main, the weekly run and manual
-dispatches. The weekly run repeats every test three times to find flakes,
-except the upgrade test, which runs once (`hack/e2e/run.sh` refuses `COUNT`
-above 1 for it). The `e2e live` check passes when every suite that ran passed.
-`make e2e-down SUITE=multi-cluster` deletes the spoke too.
+## Run every suite
+
+```bash
+make e2e-all                       # hack/e2e/all.sh: every job in hack/e2e/matrix.txt
+make e2e-all JOBS=8                # clusters at once (default 4)
+SUITES='gitea flux' make e2e-all   # only these suites
+```
+
+`hack/e2e/matrix.txt` lists the jobs: every suite, the core suite on each of
+the three Kubernetes minors split across two jobs per minor with `SHARD`, and
+the upgrade suite on Kubernetes 1.29 and the newest minor.
+`make e2e-all` runs them on this host, each on a kind cluster of its own
+(`kardinal-e2e-all-<job>`), deletes the clusters (`KEEP=1` keeps them), and
+runs `go run ./test/e2e/proof` over all the results. It fails when a job
+fails, or when a covered row's test failed, skipped or did not run. Each
+cluster takes 2-3 GB of memory, GitLab's about 7 GB. The results, each
+job's log and the proof are in `test/e2e/results/all-<UTC time>/`. The
+`github` job runs only when `KARDINAL_E2E_GITHUB_TOKEN_FILE` or
+`DEMO_GITHUB_TOKEN` is set; otherwise it is listed as not run. The upgrade
+jobs run once whatever `COUNT` is: the test upgrades its cluster
+(`hack/e2e/run.sh` refuses `COUNT` above 1 for it).
+
+Pull requests don't run the live suites in CI: run `make e2e-all`, or the
+suites a change touches, before you merge, and put the result in the PR.
+`.github/workflows/e2e-live.yml` runs the same jobs weekly, repeating every
+test three times to find flakes (the upgrade test once), and when dispatched
+(`gh workflow run e2e-live.yml --ref <branch>`; `-f count=N` repeats each
+test). Only its `github` job gets the `DEMO_GITHUB_TOKEN` secret. Its
+`e2e live` job passes when every job passed and the coverage proof holds.
+
+## Suites
 
 `hack/e2e/up.sh` defines the suites: each one's components and the `RUN`
 pattern of its tests.

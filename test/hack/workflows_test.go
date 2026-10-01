@@ -4,6 +4,7 @@
 package hack
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -258,65 +259,111 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 	assert.True(t, images[node], "kind-config.yaml's node image %s must be one of the KIND_NODE_* images", node)
 }
 
-// TestLiveMatrixRunsEverySuite checks e2e-live's suite jobs: they run every
-// suite hack/e2e/up.sh defines (test/e2e/README.md says CI runs them all),
-// and each entry's Kubernetes minor is a node image hack/e2e/up.sh boots from
-// hack/tool-versions.env: KIND_NODE_1_<minor>, or KIND_NODE_<SUITE>_1_<minor>
-// for that suite. An entry is a row of the suite job's matrix, or a job of
-// its own that sets SUITE and KIND_K8S in its env (the github suite, which
-// needs a secret). The upgrade suite must also run on a Kubernetes older than
-// 1.30 (no CRD validation ratcheting), the cluster UPG-OLDK8S-01 needs.
-func TestLiveMatrixRunsEverySuite(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github/workflows/e2e-live.yml"))
-	require.NoError(t, err)
-	type entry struct {
-		Suite string `json:"suite"`
-		K8s   string `json:"k8s"`
-	}
-	var wf struct {
-		Jobs map[string]struct {
-			Strategy struct {
-				Matrix struct {
-					Include []entry `json:"include"`
-				} `json:"matrix"`
-			} `json:"strategy"`
-			Env map[string]string `json:"env"`
-		} `json:"jobs"`
-	}
-	require.NoError(t, yaml.Unmarshal(data, &wf))
-	include := wf.Jobs["suite"].Strategy.Matrix.Include
-	require.NotEmpty(t, include, "e2e-live.yml: jobs.suite.strategy.matrix.include")
-	for name, job := range wf.Jobs {
-		if suite, k8s := job.Env["SUITE"], job.Env["KIND_K8S"]; name != "suite" && suite != "" {
-			require.NotEmpty(t, k8s, "e2e-live.yml: job %s sets SUITE but not KIND_K8S", name)
-			include = append(include, entry{Suite: suite, K8s: k8s})
-		}
-	}
-
-	runs, err := coverage.SuiteRuns(repoRoot(t))
+// TestE2EMatrixRunsEverySuite checks hack/e2e/matrix.txt, the jobs
+// hack/e2e/all.sh runs locally and e2e-live.yml in CI: every suite in
+// hack/e2e/up.sh has a job and no other suite does, every job boots a node
+// image up.sh finds in hack/tool-versions.env (KIND_NODE_1_<minor>, or
+// KIND_NODE_<SUITE>_1_<minor> for a minor only that suite runs on), each
+// suite runs on a minor once, as a whole or with a complete set of shards,
+// and the core suite runs on every KIND_NODE_1_* minor. The upgrade suite
+// must also run on a Kubernetes older than 1.30 (no CRD validation
+// ratcheting), the cluster UPG-OLDK8S-01 needs. e2e-live.yml must take its
+// matrix from all.sh -matrix.
+func TestE2EMatrixRunsEverySuite(t *testing.T) {
+	root := repoRoot(t)
+	runs, err := coverage.SuiteRuns(root)
 	require.NoError(t, err)
 	tv := toolVersions(t)
-	inMatrix := map[string]bool{}
+	data, err := os.ReadFile(filepath.Join(root, "hack/e2e/matrix.txt"))
+	require.NoError(t, err)
+
+	suites := map[string]bool{}
+	// shards["core 1.37"] is the set of core's shards on 1.37 ("-" for none).
+	shards := map[string]map[string]bool{}
 	var oldUpgrade []string
-	for _, e := range include {
-		inMatrix[e.Suite] = true
-		if e.Suite == "upgrade" {
-			if minor, ok := strings.CutPrefix(e.K8s, "1."); ok {
-				if n, err := strconv.Atoi(minor); err == nil && n < 30 {
-					oldUpgrade = append(oldUpgrade, e.K8s)
-				}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 || strings.HasPrefix(f[0], "#") {
+			continue
+		}
+		if !assert.Len(t, f, 3, "matrix.txt %q: want suite, Kubernetes minor and shard", line) {
+			continue
+		}
+		suite, minor, shard := f[0], f[1], f[2]
+		_, known := runs[suite]
+		assert.True(t, known, "matrix.txt %q: hack/e2e/up.sh has no suite %s", line, suite)
+		node, suiteNode := "KIND_NODE_"+strings.ReplaceAll(minor, ".", "_"),
+			"KIND_NODE_"+strings.ReplaceAll(strings.ToUpper(suite), "-", "_")+"_"+strings.ReplaceAll(minor, ".", "_")
+		assert.True(t, tv[node] != "" || tv[suiteNode] != "",
+			"matrix.txt %q: hack/tool-versions.env has no %s or %s", line, node, suiteNode)
+		if n, err := strconv.Atoi(strings.TrimPrefix(minor, "1.")); suite == "upgrade" && err == nil && n < 30 {
+			oldUpgrade = append(oldUpgrade, minor)
+		}
+		if shard != "-" {
+			assert.Regexp(t, `^[1-9][0-9]*/[1-9][0-9]*$`, shard, "matrix.txt %q", line)
+		}
+		suites[suite] = true
+		key := suite + " " + minor
+		if shards[key] == nil {
+			shards[key] = map[string]bool{}
+		}
+		assert.False(t, shards[key][shard], "matrix.txt %q: duplicate job", line)
+		shards[key][shard] = true
+	}
+	for s := range runs {
+		assert.True(t, suites[s], "hack/e2e/up.sh suite %s has no job in hack/e2e/matrix.txt", s)
+	}
+	for k := range tv {
+		if m := kindNodeKey.FindStringSubmatch(k); m != nil {
+			assert.NotEmpty(t, shards["core 1."+m[1]], "the core suite has no job on Kubernetes 1.%s (%s)", m[1], k)
+		}
+	}
+	for key, got := range shards {
+		n := 1
+		for sh := range got {
+			if _, of, ok := strings.Cut(sh, "/"); ok {
+				n, _ = strconv.Atoi(of)
 			}
 		}
-		assert.Contains(t, runs, e.Suite, "matrix suite %q is not in hack/e2e/up.sh", e.Suite)
-		minor := strings.ReplaceAll(e.K8s, ".", "_")
-		suite := strings.ReplaceAll(strings.ToUpper(e.Suite), "-", "_")
-		assert.True(t, tv["KIND_NODE_"+minor] != "" || tv["KIND_NODE_"+suite+"_"+minor] != "",
-			"matrix entry %s on %s: no KIND_NODE_%s or KIND_NODE_%s_%s in hack/tool-versions.env", e.Suite, e.K8s, minor, suite, minor)
+		want := map[string]bool{"-": true}
+		if n > 1 || !got["-"] {
+			want = map[string]bool{}
+			for i := 1; i <= n; i++ {
+				want[fmt.Sprintf("%d/%d", i, n)] = true
+			}
+		}
+		assert.Equal(t, want, got, "%s: the whole suite, or every shard 1/n to n/n, once", key)
 	}
-	for suite := range runs {
-		assert.True(t, inMatrix[suite], "suite %q in hack/e2e/up.sh has no e2e-live matrix entry", suite)
+	assert.NotEmpty(t, oldUpgrade, "matrix.txt has no upgrade job on Kubernetes < 1.30; UPG-OLDK8S-01 needs one (no CRD validation ratcheting)")
+
+	const rel = ".github/workflows/e2e-live.yml"
+	data, err = os.ReadFile(filepath.Join(root, rel))
+	require.NoError(t, err)
+	var wf struct {
+		Jobs struct {
+			Image struct {
+				Outputs map[string]string `json:"outputs"`
+				Steps   []workflowStep    `json:"steps"`
+			} `json:"image"`
+			Suite struct {
+				Strategy struct {
+					Matrix any `json:"matrix"`
+				} `json:"strategy"`
+			} `json:"suite"`
+		} `json:"jobs"`
 	}
-	assert.NotEmpty(t, oldUpgrade, "e2e-live.yml has no upgrade matrix entry on Kubernetes < 1.30; UPG-OLDK8S-01 needs one (no CRD validation ratcheting)")
+	require.NoError(t, yaml.Unmarshal(data, &wf), rel)
+	assert.Equal(t, "${{ fromJSON(needs.image.outputs.matrix) }}", wf.Jobs.Suite.Strategy.Matrix,
+		"%s: the suite job's matrix must be the image job's matrix output", rel)
+	assert.Equal(t, "${{ steps.matrix.outputs.matrix }}", wf.Jobs.Image.Outputs["matrix"], rel)
+	var run string
+	for _, st := range wf.Jobs.Image.Steps {
+		if st.ID == "matrix" {
+			run = st.Run
+		}
+	}
+	assert.Regexp(t, `(?m)^m=\$\(bash hack/e2e/all\.sh -matrix\)$`, run,
+		"%s: the image job's matrix step must print the matrix with hack/e2e/all.sh -matrix", rel)
 }
 
 func abs(n int) int {
