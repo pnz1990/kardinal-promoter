@@ -26,7 +26,7 @@ The PromotionStep records the git commit its promotion delivered:
 - `status.outputs.commitSHA` — the commit pushed straight to the environment branch (`approval: auto`);
 - `status.outputs.mergeCommitSHA` — the merge commit of the promotion PR (`approval: pr-review`), copied from `PRStatus.status.mergeCommitSHA` when the step sees the merge, or at the next health check when the PRStatus records it later (a webhook can report the merge before the merge commit is known).
 
-The `argocd` and `flux` adapters require that commit. Both also accept a later commit on a shared branch when the Bundle images run: for `argocd` in the Application, for `flux` in the Kustomization's Deployments (see below). The `resource` adapter requires the Bundle images in the Deployment's pod template, `argoRollouts` in the Rollout's, and `flagger` in the Canary's target Deployment and, for `Succeeded`, its primary Deployment. `kubectl get promotionstep <name> -o yaml` shows the recorded commit in `status.outputs` and the last health result in `status.message`.
+The `argocd` and `flux` adapters require that commit. On a branch shared with other environments, both also accept another commit when the Bundle images run: for `argocd` in the Application, for `flux` in the Kustomization's Deployments (see below). They compare images, not git history, so they do not check that the other commit is later than the promoted one. The `resource` adapter requires the Bundle images in the Deployment's pod template, `argoRollouts` in the Rollout's, and `flagger` in the Canary's target Deployment and, for `Succeeded`, its primary Deployment. `kubectl get promotionstep <name> -o yaml` shows the recorded commit in `status.outputs` and the last health result in `status.message`.
 
 ## Adapter: resource (default)
 
@@ -98,7 +98,7 @@ health:
 - `status.operationState.phase` = `Succeeded` (or no operation recorded)
 - the Application synced the promoted commit: it appears in `status.sync.revision(s)`, `status.operationState.syncResult.revision(s)` or `status.history`. `Synced` alone only means the cluster matches whatever commit Argo CD last fetched, which can be the previous one.
 
-On a branch shared with other environments, a later commit can reach Argo CD before ours does. The adapter accepts that later revision only when `status.summary.images` shows the Bundle images. With `update.strategy: argocd-set-image` there is no commit to compare, so `status.summary.images` must show the Bundle images.
+On a branch shared with other environments, a later commit can reach Argo CD before ours does. The adapter accepts a revision other than the promoted one only when `status.summary.images` shows the Bundle images; it does not check that the revision is later. With `update.strategy: argocd-set-image` there is no commit to compare, so `status.summary.images` must show the Bundle images.
 
 **When to use:** Any cluster managed by Argo CD. This is the recommended adapter for Argo CD users because it verifies that Argo CD successfully synced the promoted manifests, not just that the Deployment is running.
 

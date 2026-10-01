@@ -64,7 +64,7 @@ The `flux` health adapter checks:
 
 1. **`Ready` condition is `True`** on the Kustomization resource
 2. **`observedGeneration == metadata.generation`** — the controller has reconciled the *current* spec, not a previous version
-3. **`lastAppliedRevision` is the commit kardinal promoted** — or a later commit while the Kustomization's Deployments run the Bundle images (a sibling environment pushed to the same branch)
+3. **`lastAppliedRevision` is the commit kardinal promoted** — or another commit while the Kustomization's Deployments run the Bundle images (a sibling environment pushed to the same branch). The adapter checks the images, not the git history, so it does not check that the other commit is later
 
 Together these prevent a false positive where Flux reconciled the previous commit successfully but hasn't yet applied the one kardinal pushed.
 
