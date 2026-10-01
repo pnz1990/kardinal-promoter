@@ -256,6 +256,7 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 	graphIdentity.ReaderNamespaces = splitCSV(graphReaderNamespaces)
+	graphIdentity.OnlyNamespace = watchNamespace
 
 	// Configure zerolog level
 	level, err := zerolog.ParseLevel(zerologLevel)

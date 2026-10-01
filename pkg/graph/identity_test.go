@@ -374,6 +374,86 @@ func TestIdentityProvisioner_PruneWithoutApplierBinding(t *testing.T) {
 	}
 }
 
+// TestIdentityProvisioner_PruneKeepsUnreadableRecord covers the #1387 review:
+// a recorded reader namespace whose binding the controller may not read (or
+// cannot read for another reason) is not dropped from the applier
+// RoleBinding's record, so a later Prune finds it again. The bindings it can
+// read are pruned and dropped from the record.
+func TestIdentityProvisioner_PruneKeepsUnreadableRecord(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		wantErr bool
+	}{
+		{name: "forbidden", err: apierrors.NewForbidden(rbacv1.Resource("rolebindings"), "x", errors.New("denied"))},
+		{name: "another error", err: apierrors.NewInternalError(errors.New("etcdserver: request timed out")),
+			wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			api := fake.NewClientBuilder().WithScheme(identityScheme(t)).Build()
+			p := &graph.IdentityProvisioner{Writer: api, Reader: api, ReaderNamespaces: graph.DefaultReaderNamespaces}
+			_, err := p.Ensure(ctx, refGraph("team-a", "argocd", "flux-system"))
+			require.NoError(t, err)
+			reader := interceptor.NewClient(api, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if key.Namespace == "argocd" {
+						return tt.err
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+			p.Reader = reader
+
+			err = p.Prune(ctx, "team-a", nil)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.ElementsMatch(t, []string{"argocd"}, readerBindings(t, api, "team-a"), "flux-system is pruned")
+			}
+			var applier rbacv1.RoleBinding
+			require.NoError(t, api.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: graph.DefaultApplierClusterRole}, &applier))
+			assert.Contains(t, applier.Annotations[graph.AnnotationReaderNamespaces], "argocd",
+				"the unread namespace stays in the record")
+		})
+	}
+}
+
+// TestIdentityProvisioner_PruneOnlyNamespace covers the #1387 review: in
+// namespace mode (OnlyNamespace) Prune looks for reader RoleBindings in that
+// namespace only. The controller has no RBAC anywhere else, so it could not
+// have created one there, and each read would be forbidden and logged.
+func TestIdentityProvisioner_PruneOnlyNamespace(t *testing.T) {
+	ctx := context.Background()
+	api := fake.NewClientBuilder().WithScheme(identityScheme(t)).Build()
+	p := &graph.IdentityProvisioner{Writer: api, Reader: api, ReaderNamespaces: graph.DefaultReaderNamespaces}
+	_, err := p.Ensure(ctx, refGraph("team-a", ""))
+	require.NoError(t, err)
+	// The applier RoleBinding is gone, so every ReaderNamespaces entry is a
+	// candidate.
+	require.NoError(t, api.Delete(ctx, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: graph.DefaultApplierClusterRole}}))
+	var read []string
+	p.Reader = interceptor.NewClient(api, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			read = append(read, key.Namespace)
+			if key.Namespace != "team-a" {
+				return apierrors.NewForbidden(rbacv1.Resource("rolebindings"), key.Name, errors.New("denied"))
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	p.OnlyNamespace = "team-a"
+
+	require.NoError(t, p.Prune(ctx, "team-a", nil))
+	assert.Empty(t, readerBindings(t, api, "team-a"), "the binding in the watch namespace is pruned")
+	for _, ns := range read {
+		assert.Equal(t, "team-a", ns, "no read outside the watch namespace")
+	}
+}
+
 // TestIdentityProvisioner_PruneLeavesForeignBindings verifies that Prune, even
 // without the applier RoleBinding's record, deletes only reader bindings the
 // controller created: a binding with the reader binding's name that lacks the
