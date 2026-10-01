@@ -490,6 +490,7 @@ func main() {
 		}
 		bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
 		bundleAPI.onlyNamespace = watchNamespace
+		bundleAPI.reader = mgr.GetAPIReader()
 		mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
 		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
 	}

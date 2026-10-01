@@ -370,3 +370,26 @@ func TestBundleAPI_EmptyTokenRejectsEverything(t *testing.T) {
 	srv.Handler()(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
+
+// TestBundleAPI_PipelineNotInCacheYet checks that a Pipeline the cache has not
+// seen yet is read from the API server before the API answers 404: a CI job
+// may apply a Pipeline and post a Bundle for it right after.
+func TestBundleAPI_PipelineNotInCacheYet(t *testing.T) {
+	image := `"images":[{"repository":"ghcr.io/x/app","tag":"1.0.0"}]`
+	cache := fake.NewClientBuilder().WithScheme(bundleAPIScheme()).Build()
+	live := fake.NewClientBuilder().WithScheme(bundleAPIScheme()).WithObjects(bundleAPIPipeline("default", "app")).Build()
+
+	srv := newBundleAPIServer(cache, "tok", "default")
+	w := bundleAPIPost(t, srv, `{"pipeline":"app",`+image+`}`)
+	assert.Equal(t, http.StatusNotFound, w.Code, "without a reader the cache is trusted: %s", w.Body.String())
+
+	srv.reader = live
+	w = bundleAPIPost(t, srv, `{"pipeline":"app",`+image+`}`)
+	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	var list v1alpha1.BundleList
+	require.NoError(t, cache.List(context.Background(), &list))
+	assert.Len(t, list.Items, 1, "the Bundle is created through the controller's client")
+
+	w = bundleAPIPost(t, srv, `{"pipeline":"missing",`+image+`}`)
+	assert.Equal(t, http.StatusNotFound, w.Code, "a Pipeline neither has is still 404: %s", w.Body.String())
+}
