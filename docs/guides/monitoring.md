@@ -319,9 +319,13 @@ Download the dashboard JSON from the repository:
 config/monitoring/kardinal-promoter-dashboard.json
 ```
 
-In Grafana: **Dashboards → Import → Upload JSON file**. Select your Prometheus datasource when prompted.
+In Grafana: **Dashboards → Import → Upload JSON file**.
 
 The dashboard UID is `kardinal-promoter-v1`. Importing a second time will overwrite the existing dashboard.
+
+With either option, the panels query the Prometheus datasource chosen in the
+dashboard's **Prometheus** selector, which starts at your default Prometheus
+datasource.
 
 ---
 

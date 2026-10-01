@@ -1,14 +1,4 @@
 {
-  "__inputs": [
-    {
-      "name": "DS_PROMETHEUS",
-      "label": "Prometheus",
-      "description": "",
-      "type": "datasource",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus"
-    }
-  ],
   "__requires": [
     {
       "type": "grafana",
@@ -70,7 +60,7 @@
       "type": "row"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "thresholds"},
@@ -100,14 +90,14 @@
       "type": "stat",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "sum(kardinal_bundles_total{phase=\"Verified\"}) or vector(0)",
           "legendFormat": "Verified"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "thresholds"},
@@ -135,14 +125,14 @@
       "type": "stat",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "sum(kardinal_bundles_total{phase=\"Failed\"}) or vector(0)",
           "legendFormat": "Failed"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "thresholds"},
@@ -170,14 +160,14 @@
       "type": "stat",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "sum(kardinal_bundles_total{phase=\"Superseded\"}) or vector(0)",
           "legendFormat": "Superseded"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "thresholds"},
@@ -206,14 +196,14 @@
       "type": "stat",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "sum(rate(kardinal_steps_total{result=\"failed\"}[5m])) / (sum(rate(kardinal_steps_total[5m])) > 0) or vector(0)",
           "legendFormat": "failure rate"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "thresholds"},
@@ -242,14 +232,14 @@
       "type": "stat",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "sum(kardinal_gate_evaluations_total{result=\"blocked\"}) or vector(0)",
           "legendFormat": "blocked"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "thresholds"},
@@ -277,7 +267,7 @@
       "type": "stat",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "sum(rate(controller_runtime_reconcile_errors_total[5m])) or vector(0)",
           "legendFormat": "errors/s"
         }
@@ -291,7 +281,7 @@
       "type": "row"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -327,14 +317,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "sum by (phase) (rate(kardinal_bundles_total[5m]))",
           "legendFormat": "{{phase}}"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -358,7 +348,7 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "sum by (result) (rate(kardinal_steps_total[5m]))",
           "legendFormat": "{{result}}"
         }
@@ -372,7 +362,7 @@
       "type": "row"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -396,14 +386,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.50, sum by (step, le) (rate(kardinal_step_duration_seconds_bucket[5m])))",
           "legendFormat": "p50 {{step}}"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -427,14 +417,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.99, sum by (step, le) (rate(kardinal_step_duration_seconds_bucket[5m])))",
           "legendFormat": "p99 {{step}}"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -458,24 +448,24 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.50, rate(kardinal_pr_duration_seconds_bucket[30m]))",
           "legendFormat": "p50"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.95, rate(kardinal_pr_duration_seconds_bucket[30m]))",
           "legendFormat": "p95"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.99, rate(kardinal_pr_duration_seconds_bucket[30m]))",
           "legendFormat": "p99"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -499,17 +489,17 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.50, rate(kardinal_promotionstep_age_seconds_bucket[30m]))",
           "legendFormat": "p50"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.95, rate(kardinal_promotionstep_age_seconds_bucket[30m]))",
           "legendFormat": "p95"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.99, rate(kardinal_promotionstep_age_seconds_bucket[30m]))",
           "legendFormat": "p99"
         }
@@ -523,7 +513,7 @@
       "type": "row"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -547,14 +537,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "sum by (result) (rate(kardinal_gate_evaluations_total[5m]))",
           "legendFormat": "{{result}}"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -578,17 +568,17 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.50, rate(kardinal_gate_blocking_duration_seconds_bucket[30m]))",
           "legendFormat": "p50"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.95, rate(kardinal_gate_blocking_duration_seconds_bucket[30m]))",
           "legendFormat": "p95"
         },
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.99, rate(kardinal_gate_blocking_duration_seconds_bucket[30m]))",
           "legendFormat": "p99"
         }
@@ -602,7 +592,7 @@
       "type": "row"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -626,14 +616,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "sum by (controller) (rate(controller_runtime_reconcile_total[5m]))",
           "legendFormat": "{{controller}}"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -657,14 +647,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "sum by (controller) (rate(controller_runtime_reconcile_errors_total[5m]))",
           "legendFormat": "{{controller}}"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -688,14 +678,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "histogram_quantile(0.99, sum by (controller, le) (rate(controller_runtime_reconcile_time_seconds_bucket[5m])))",
           "legendFormat": "p99 {{controller}}"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -719,7 +709,7 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "workqueue_depth{name=~\"bundle|promotionstep|policygate\"}",
           "legendFormat": "{{name}}"
         }
@@ -733,7 +723,7 @@
       "type": "row"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -757,14 +747,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "go_goroutines{job=\"kardinal-promoter\"}",
           "legendFormat": "goroutines"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -788,14 +778,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "go_memstats_alloc_bytes{job=\"kardinal-promoter\"}",
           "legendFormat": "heap alloc"
         }
       ]
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -819,7 +809,7 @@
       "type": "timeseries",
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "expr": "rate(process_cpu_seconds_total{job=\"kardinal-promoter\"}[5m])",
           "legendFormat": "cpu"
         }
@@ -832,7 +822,19 @@
   "style": "dark",
   "tags": ["kardinal", "promotions", "gitops"],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "options": []
+      }
+    ]
   },
   "time": {"from": "now-3h", "to": "now"},
   "timepicker": {},
