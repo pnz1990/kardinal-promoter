@@ -47,6 +47,12 @@ func prAt(lastChecked *time.Time, st v1alpha1.PRStatusStatus) *v1alpha1.PRStatus
 	}
 }
 
+// noNumber clears the PR number, as on a PRStatus created without one.
+func noNumber(pr *v1alpha1.PRStatus) *v1alpha1.PRStatus {
+	pr.Spec.PRNumber = 0
+	return pr
+}
+
 func ago(d time.Duration) *time.Time {
 	t := time.Now().Add(-d)
 	return &t
@@ -111,8 +117,10 @@ func TestPollThrottle(t *testing.T) {
 // commit is recorded, whether this reconciler or the webhook saw the merge.
 // When the reconciler stops asking for it, it says so in
 // status.mergeCommitUnavailable, which the argocd health check waits for
-// (B80): the provider answered without a commit, or still failed after the
-// window. A failed lookup within the window is retried and sets nothing.
+// (B80): the provider answered without a commit, there is no PR number to
+// ask about, the lookup failed with an error a retry cannot fix, or it still
+// failed after the window. Another failed lookup within the window is retried
+// and sets nothing.
 func TestMergeCommitRecorded(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -137,7 +145,17 @@ func TestMergeCommitRecorded(t *testing.T) {
 			wantUnavailable: true, wantSHACall: 1},
 		{name: "SCM error is retried", pr: prAt(ago(time.Second), v1alpha1.PRStatusStatus{Merged: true}),
 			shaErr: errors.New("502"), wantSHACall: 1, wantRequeue: true},
-		{name: "gives up after the window", pr: prAt(ago(11*time.Minute), v1alpha1.PRStatusStatus{Merged: true}),
+		{name: "SCM error is retried until the window ends", pr: prAt(ago(4*time.Minute), v1alpha1.PRStatusStatus{Merged: true}),
+			shaErr: apiErr(503, "unavailable", true), wantSHACall: 1, wantRequeue: true},
+		{name: "rate limit is retried", pr: prAt(ago(time.Second), v1alpha1.PRStatusStatus{Merged: true}),
+			shaErr: apiErr(403, "API rate limit exceeded", true), wantSHACall: 1, wantRequeue: true},
+		{name: "permanent SCM error gives up at once", pr: prAt(ago(time.Second), v1alpha1.PRStatusStatus{Merged: true}),
+			shaErr: apiErr(404, "Not Found", false), wantUnavailable: true, wantSHACall: 1},
+		{name: "poll sees the merge, permanent SCM error gives up at once", pr: prAt(nil, v1alpha1.PRStatusStatus{Open: true}),
+			shaErr: apiErr(401, "Bad credentials", false), wantUnavailable: true, wantCalls: 1, wantSHACall: 1},
+		{name: "gives up after the window", pr: prAt(ago(6*time.Minute), v1alpha1.PRStatusStatus{Merged: true}),
+			sha: "abc123", wantUnavailable: true},
+		{name: "no PR number gives up without asking", pr: noNumber(prAt(ago(time.Second), v1alpha1.PRStatusStatus{Merged: true})),
 			sha: "abc123", wantUnavailable: true},
 		{name: "known merge commit is a no-op", pr: prAt(ago(time.Second), v1alpha1.PRStatusStatus{Merged: true, MergeCommitSHA: "def456"}),
 			sha: "abc123", wantSHA: "def456"},

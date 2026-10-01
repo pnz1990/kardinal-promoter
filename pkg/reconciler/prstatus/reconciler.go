@@ -28,9 +28,10 @@
 //     status.approvalCount and status.lastCheckedAt. When the PR is merged it
 //     also records status.mergeCommitSHA, which the health check requires the
 //     GitOps tool to have deployed, or status.mergeCommitUnavailable once it
-//     stops trying: the provider cannot report it, reported none, or still
-//     failed mergeCommitWindow after the merge. An argocd health check waits
-//     until one of the two is set (B80).
+//     stops trying: the provider cannot report it, reported none, failed
+//     with an error a retry cannot fix, or still failed mergeCommitWindow
+//     after the merge. An argocd health check waits until one of the two is
+//     set (B80).
 //   - A poll error that a retry cannot fix (401, 403 that is not a rate limit,
 //     404, 410) is written to status.pollError and the PR is polled again
 //     every 5 minutes; the PromotionStep waiting for the PR fails with it.
@@ -81,8 +82,10 @@ const (
 	// unchanged poll still patches it, so readers can tell polling is alive.
 	lastCheckedRefresh = 5 * time.Minute
 	// mergeCommitWindow bounds how long after the merge was recorded the
-	// reconciler keeps asking the SCM for the merge commit.
-	mergeCommitWindow = 10 * time.Minute
+	// reconciler keeps asking the SCM for the merge commit. It is half the
+	// default health.timeout of 10m, so an argocd check that waited for it
+	// still has time to check the Bundle images.
+	mergeCommitWindow = 5 * time.Minute
 	// permanentErrorInterval is how often a PR whose last poll failed with a
 	// permanent SCM error (status.pollError) is polled again.
 	permanentErrorInterval = 5 * time.Minute
@@ -358,9 +361,10 @@ func (r *Reconciler) recordPollError(ctx context.Context, log zerolog.Logger, pr
 
 // recordMergeCommit fills in status.mergeCommitSHA of a merged PR, or sets
 // status.mergeCommitUnavailable once it stops trying: the SCM provider cannot
-// report merge commits, answered without one, or still failed
-// mergeCommitWindow after the merge was recorded (status.lastCheckedAt). A
-// failed lookup within the window is retried every requeuePollInterval. While
+// report merge commits, answered without one, failed with an error a retry
+// cannot fix, or still failed mergeCommitWindow after the merge was recorded
+// (status.lastCheckedAt). Another failed lookup within the window is retried
+// every requeuePollInterval. While
 // neither field is set the argocd health check waits for the merge commit;
 // once mergeCommitUnavailable is set it checks the Bundle images only, like
 // the resource check, and the flux check, which has no such fallback, waits
@@ -395,7 +399,8 @@ func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, 
 // fetchMergeCommit asks the SCM provider for the merge commit of prs. retry
 // is true only when the lookup failed and may succeed later; "" with retry
 // false means the commit will not be known: the provider cannot report merge
-// commits (or none is configured), there is no PR number, or the provider
+// commits (or none is configured), there is no PR number, the lookup failed
+// with an error a retry cannot fix (scm.IsPermanentError), or the provider
 // answered without one (a Bitbucket PR with no merge_commit, an Azure DevOps
 // PR with no lastMergeCommit, a provider the DynamicProvider has no lookup
 // for).
@@ -406,6 +411,11 @@ func (r *Reconciler) fetchMergeCommit(ctx context.Context, log zerolog.Logger, p
 	}
 	sha, err := getter.GetPRMergeCommit(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
 	if err != nil {
+		if scm.IsPermanentError(err) {
+			log.Warn().Err(err).Int("prNumber", prs.Spec.PRNumber).
+				Msg("could not read the merge commit and a retry will not fix it, giving up")
+			return "", false
+		}
 		log.Warn().Err(err).Int("prNumber", prs.Spec.PRNumber).Msg("could not read the merge commit, will retry")
 		return "", true
 	}

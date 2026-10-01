@@ -5,6 +5,7 @@ package promotionstep_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
@@ -39,6 +41,8 @@ type healthCase struct {
 	dynObjs []runtime.Object
 	// bundle, when set, adjusts the Bundle b1 before the reconcile.
 	bundle func(*v1alpha1.Bundle)
+	// prsGetErr, when set, is the error the reconciler gets reading a PRStatus.
+	prsGetErr error
 }
 
 func (hc healthCase) run(t *testing.T) (client.Client, v1alpha1.PromotionStep, time.Duration) {
@@ -58,7 +62,17 @@ func (hc healthCase) run(t *testing.T) (client.Client, v1alpha1.PromotionStep, t
 	}
 	ps.Status.State = "HealthChecking"
 	c := newClient(t, append([]client.Object{pipeline, bundle, ps}, hc.objs...)...)
-	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+	rc := c
+	if hc.prsGetErr != nil {
+		rc = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*v1alpha1.PRStatus); ok {
+					return hc.prsGetErr
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			}})
+	}
+	r := &promotionstep.Reconciler{Client: rc, SCM: &mockSCM{}, GitClient: &mockGit{},
 		HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme(), hc.dynObjs...))}
 	res, err := r.Reconcile(context.Background(), reqFor("step"))
 	require.NoError(t, err)
@@ -395,6 +409,11 @@ func TestArgoCDWaitsForTheMergeCommit(t *testing.T) {
 			hc: healthCase{env: v1alpha1.EnvironmentSpec{Name: "prod", Health: argo}, images: v2,
 				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", oldSHA, "ghcr.io/org/app:v2")}},
 			wantState: "Verified", wantMsg: "via argocd"},
+		{name: "PRStatus cannot be read: waits, not an image fallback",
+			hc: healthCase{env: prReview, images: v2, prsRef: "prs", objs: []client.Object{merged("")},
+				prsGetErr: errors.New("informer cache not synced"),
+				dynObjs:   []runtime.Object{argoApplicationWithImages("p-prod", oldSHA, "ghcr.io/org/app:v2")}},
+			wantState: "HealthChecking", wantMsg: waiting},
 		{name: "PRStatus deleted: nothing left to learn it from",
 			hc: healthCase{env: prReview, images: v2, prsRef: "prs",
 				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", oldSHA, "ghcr.io/org/app:v2")}},
