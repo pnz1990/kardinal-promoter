@@ -1317,10 +1317,13 @@ func listening(logs string) map[string]bool {
 // extraVolumeMounts, sets the UI token with extraEnv and the CORS origins
 // with extraArgs. A client that trusts the CA gets HTTPS answers and the
 // token and origin settings apply; plain HTTP and a client that does not
-// trust the CA are refused. A cert file without a key file, and cert paths
-// with nothing mounted, stop the controller with an error that says so.
+// trust the CA are refused. The chart refuses a cert file without a key file
+// (or the reverse) before applying anything; when one TLS flag reaches the
+// controller anyway (through extraEnv), it exits with an error that says
+// so, and cert paths with nothing mounted stop it with an error naming the
+// file.
 //
-// Covers CHART-TLS-01, CHART-EXTRA-01.
+// Covers CHART-TLS-01, CHART-EXTRA-01, CHART-TLS-02.
 func TestChart_TLSAndExtras(t *testing.T) {
 	t.Parallel()
 	namespaceScoped(t)
@@ -1405,9 +1408,22 @@ func TestChart_TLSAndExtras(t *testing.T) {
 	assert.Equal(t, 403, res.Code, brief(res))
 	assert.Contains(t, res.Body, "CORS: origin not allowed")
 
+	// A cert file without a key file: the chart refuses it before applying
+	// anything, and the controller refuses the same flags when they reach it
+	// another way (extraEnv here).
 	partial := e.Namespace(t)
+	for _, only := range []string{"tlsCertFile", "tlsKeyFile"} {
+		_, out, err := e.TryInstallChart(t, releaseName(partial), partial, nsValues(partial, framework.Values{
+			"controller": framework.Values{only: tlsFiles[only]},
+		}), false)
+		require.Error(t, err, "helm install with only %s: %s", only, out)
+		assert.Contains(t, out, "controller.tlsCertFile and controller.tlsKeyFile must be set together (only "+only+" is set)")
+	}
+	var d appsv1.Deployment
+	err := e.Client.Get(context.Background(), types.NamespacedName{Namespace: partial, Name: framework.ChartFullname(releaseName(partial))}, &d)
+	assert.True(t, apierrors.IsNotFound(err), "the refused installs apply nothing: %v", err)
 	rp, out, err := e.TryInstallChart(t, releaseName(partial), partial, nsValues(partial, framework.Values{
-		"controller": framework.Values{"tlsCertFile": "/etc/kardinal-tls/tls.crt"},
+		"controller": framework.Values{"extraEnv": []interface{}{framework.Values{"name": "KARDINAL_TLS_CERT_FILE", "value": tlsFiles["tlsCertFile"]}}},
 	}), false)
 	require.NoError(t, err, out)
 	assert.Contains(t, crashLogs(t, e, rp), "--tls-cert-file and --tls-key-file must be set together")
