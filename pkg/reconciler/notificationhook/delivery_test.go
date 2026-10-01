@@ -367,6 +367,63 @@ func TestDelivery_NoRetryBeforeNextRetryAt(t *testing.T) {
 	assert.Equal(t, "2026-04-11T10:01:00Z", h.Status.NextRetryAt)
 }
 
+// staleCache is a client whose reads of the NotificationHook return hook, a
+// copy taken before the last reconcile, as an informer cache that has not yet
+// seen the reconcile's status write does. Everything else, writes included,
+// goes to the cluster.
+type staleCache struct {
+	client.Client
+	hook *v1alpha1.NotificationHook
+}
+
+func (s *staleCache) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if h, ok := obj.(*v1alpha1.NotificationHook); ok {
+		s.hook.DeepCopyInto(h)
+		return nil
+	}
+	return s.Client.Get(ctx, key, obj, opts...)
+}
+
+// TestDelivery_StaleCacheDoesNotResend: the informer cache can lag the hook's
+// own status write, and a Bundle change in that window reconciles the hook
+// again (the live e2e run saw two POSTs 11ms apart, both logged as attempt 1).
+// The hook is read through the API reader, so that reconcile sees the failed
+// attempt's nextRetryAt, or the delivered event's key, and does not POST.
+func TestDelivery_StaleCacheDoesNotResend(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+	}{
+		{"after a failed POST", http.StatusServiceUnavailable},
+		{"after a delivered POST", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &webhookServer{statuses: []int{tc.status}}
+			ts := httptest.NewServer(srv)
+			defer ts.Close()
+
+			f := newFixture(t, newHook(ts.URL, v1alpha1.NotificationEventBundleFailed), failedBundle("app-v0", saturday))
+			before := f.hook()
+			f.hooks.Client = &staleCache{Client: f.c, hook: &before}
+			f.hooks.APIReader = f.c
+
+			f.reconcileHook()
+			require.Len(t, srv.received(), 1)
+			f.now = f.now.Add(10 * time.Millisecond)
+			f.reconcileHook()
+			assert.Len(t, srv.received(), 1, "the reconcile right after the status write does not POST again")
+			h := f.hook()
+			if tc.status == http.StatusOK {
+				assert.Equal(t, "Bundle.Failed/app-v0", h.Status.LastEventKey)
+				assert.Zero(t, h.Status.FailedAttempts)
+			} else {
+				assert.Equal(t, int32(1), h.Status.FailedAttempts)
+				assert.Equal(t, "2026-04-11T10:00:30Z", h.Status.NextRetryAt)
+			}
+		})
+	}
+}
+
 // TestDelivery_RedirectIsNotFollowed covers C04-gates-14: the controller does
 // not follow a redirect to another address.
 func TestDelivery_RedirectIsNotFollowed(t *testing.T) {

@@ -119,6 +119,14 @@ type pendingEvent struct {
 // It is idempotent and safe to re-run after a crash.
 type Reconciler struct {
 	client.Client
+	// APIReader reads straight from the API server (mgr.GetAPIReader()). The
+	// hook is read through it, so a reconcile sees the status the previous
+	// reconcile of the same hook wrote. The informer cache can lag that write
+	// by a few milliseconds, and a Bundle, PolicyGate or PromotionStep change
+	// in that window reconciles the hook again: from the cache it has no
+	// nextRetryAt and no record of the delivery, and the event is POSTed a
+	// second time. When nil, Client is used (tests).
+	APIReader client.Reader
 	// HTTPClient is the HTTP client used for webhook delivery. When nil, a
 	// client with the egress address guard is used (no loopback, link-local
 	// or cloud metadata destinations). Overridable for testing. Redirects are
@@ -146,8 +154,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		Str("namespace", req.Namespace).
 		Logger()
 
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
 	var hook v1alpha1.NotificationHook
-	if err := r.Get(ctx, req.NamespacedName, &hook); err != nil {
+	if err := reader.Get(ctx, req.NamespacedName, &hook); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}

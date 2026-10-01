@@ -421,7 +421,8 @@ func main() {
 	// NotificationHookReconciler: watches Bundle, PolicyGate, and PromotionStep objects
 	// and delivers outbound webhooks when promotion events occur.
 	if err := (&nhookrecon.Reconciler{
-		Client: mgr.GetClient(),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up NotificationHookReconciler")
 	}
