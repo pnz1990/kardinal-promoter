@@ -436,9 +436,11 @@ func TestHealth_BakeCompletes(t *testing.T) {
 }
 
 // TestHealth_BakeResetOnAlarm checks bake.policy reset-on-alarm (the
-// default): the pod turns unready during the window, and each unhealthy check
-// restarts the window and counts a reset instead of failing. Once the pod is
-// ready again, a full window completes the bake. Covers BAKE-02.
+// default): the pod turns unready during the window, and the first unhealthy
+// check stops the window and counts one reset instead of failing. Later
+// unhealthy checks wait for a healthy one without counting. Once the pod is
+// ready again, the window restarts and a full window completes the bake.
+// Covers BAKE-02.
 func TestHealth_BakeResetOnAlarm(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -447,28 +449,31 @@ func TestHealth_BakeResetOnAlarm(t *testing.T) {
 
 	waitBakeStarted(t, e, a, bundle, 2)
 	e.SetReadyz(t, a.ns, pods, false)
-	alarm := fmt.Sprintf("need 2m contiguous): Deployment %s/%s: 0 of 1 updated replicas available (Available=False",
+	unavailable := fmt.Sprintf("Deployment %s/%s: 0 of 1 updated replicas available (Available=False",
 		a.ns, fixtures.Workload("test"))
+	alarm := "bake: health alarm via resource — timer reset (resets=1, need 2m contiguous): " + unavailable
+	waiting := "bake: waiting for a healthy check to restart the window (resets=1, unhealthy via resource): " + unavailable
 	ps := e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, "the alarm to reset the window",
-		func(ps *v1alpha1.PromotionStep) bool {
-			return ps.Status.BakeResets >= 1 && strings.Contains(ps.Status.Message, alarm)
+		func(ps *v1alpha1.PromotionStep) bool { return ps.Status.BakeResets >= 1 })
+	assert.Equal(t, 1, ps.Status.BakeResets)
+	// The next check, 10s later, replaces the alarm's message.
+	assert.True(t, strings.HasPrefix(ps.Status.Message, alarm) || strings.HasPrefix(ps.Status.Message, waiting), ps.Status.Message)
+	assert.Nil(t, ps.Status.BakeStartedAt, "the alarm stops the window")
+	e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, "the next unhealthy check to wait",
+		func(ps *v1alpha1.PromotionStep) bool { return strings.HasPrefix(ps.Status.Message, waiting) })
+	framework.Consistently(t, 20*time.Second, "an alarm during the bake does not fail the step, and later unhealthy checks do not count",
+		func(ctx context.Context) (bool, string) {
+			ps, _, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+			if err != nil || ps == nil {
+				return false, "step lookup failed"
+			}
+			return ps.Status.State == "HealthChecking" && ps.Status.BakeResets == 1, framework.DescribeStep(ps)
 		})
-	assert.True(t, strings.HasPrefix(ps.Status.Message, fmt.Sprintf(
-		"bake: health alarm via resource — timer reset (resets=%d, ", ps.Status.BakeResets)), ps.Status.Message)
-	framework.Consistently(t, 20*time.Second, "an alarm during the bake does not fail the step", func(ctx context.Context) (bool, string) {
-		ps, _, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
-		if err != nil || ps == nil {
-			return false, "step lookup failed"
-		}
-		return ps.Status.State == "HealthChecking", framework.DescribeStep(ps)
-	})
-	resets := e.MustStep(t, a.ns, pipelineName, bundle, "test").Status.BakeResets
-	assert.Greater(t, resets, ps.Status.BakeResets, "every unhealthy check resets the window")
 
 	e.SetReadyz(t, a.ns, pods, true)
 	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", 4*time.Minute)
-	assert.Equal(t, fmt.Sprintf("bake complete: 2m contiguous healthy via resource (resets=%d)", ps.Status.BakeResets), ps.Status.Message)
-	assert.GreaterOrEqual(t, ps.Status.BakeResets, resets)
+	assert.Equal(t, "bake complete: 2m contiguous healthy via resource (resets=1)", ps.Status.Message)
+	assert.Equal(t, 1, ps.Status.BakeResets)
 	at, _ := verifiedAt(t, ps)
 	assert.GreaterOrEqual(t, at.Sub(ps.Status.BakeStartedAt.Time), 2*time.Minute-time.Second,
 		"a full window after the last reset")
