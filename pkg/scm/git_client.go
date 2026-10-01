@@ -78,11 +78,11 @@ func httpAuth(remoteURL, token string) transport.AuthMethod {
 
 // Clone performs a shallow (depth=1) clone of branch into dir, authenticating
 // with token over HTTP(S) when it is set. dir must not already contain a repo.
-// A clone error reads "git clone <url>: <reason>"; errors never contain URL
-// credentials.
+// A clone error reads "git clone <url>: <reason>". Every error names the URL
+// once and never contains URL credentials.
 func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create clone dir: %w", err)
+		return fmt.Errorf("create clone dir for %s: %w", RedactURL(url), err)
 	}
 
 	opts := &gogit.CloneOptions{
@@ -105,7 +105,7 @@ func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string)
 // to read the content of a specific commit, e.g. the source of a config Bundle.
 func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir, token string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create clone dir: %w", err)
+		return fmt.Errorf("create clone dir for %s: %w", RedactURL(url), err)
 	}
 	repo, err := gogit.PlainCloneContext(ctx, dir, false, &gogit.CloneOptions{
 		URL:        url,
@@ -121,10 +121,10 @@ func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir, token st
 	}
 	wt, err := repo.Worktree()
 	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
+		return fmt.Errorf("get worktree of %s: %w", RedactURL(url), err)
 	}
 	if err := wt.Checkout(&gogit.CheckoutOptions{Hash: *hash, Force: true}); err != nil {
-		return fmt.Errorf("checkout %s: %w", commitSHA, err)
+		return fmt.Errorf("checkout %s in %s: %w", commitSHA, RedactURL(url), err)
 	}
 	return nil
 }
@@ -139,7 +139,7 @@ func (c *GoGitClient) CommitAll(ctx context.Context, dir, message, authorName, a
 	}
 	wt, err := repo.Worktree()
 	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
+		return fmt.Errorf("get worktree of %s: %w", repoName(repo, dir), err)
 	}
 
 	// Stage all changes, including deletions (git add -A).
@@ -227,6 +227,15 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 		return fmt.Errorf("git push %s %s: %s", remote, branch, gitErrorText(err))
 	}
 	return nil
+}
+
+// repoName names the repository repo, opened at dir, in an error: its origin
+// URL without credentials, or dir when it has no origin.
+func repoName(repo *gogit.Repository, dir string) string {
+	if rem, err := repo.Remote("origin"); err == nil && len(rem.Config().URLs) > 0 {
+		return RedactURL(rem.Config().URLs[0])
+	}
+	return dir
 }
 
 // maxErrorBody is how many characters of an HTTP response body a git error

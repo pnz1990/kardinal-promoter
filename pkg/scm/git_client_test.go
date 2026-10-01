@@ -24,10 +24,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -236,6 +239,97 @@ func TestGoGitClient_HTMLErrorBodyIsOneLine(t *testing.T) {
 			assert.Equal(t, 1, strings.Count(err.Error(), url), "the URL is named once: %q", err)
 		})
 	}
+}
+
+// seedUncheckoutable creates a bare repository whose main commit holds a file
+// with a 300-byte name, which no checkout can write (file names are at most
+// 255 bytes), and returns its path and the commit.
+func seedUncheckoutable(t *testing.T) (string, plumbing.Hash) {
+	t.Helper()
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, true)
+	require.NoError(t, err)
+	st := repo.Storer
+	store := func(o interface {
+		Encode(plumbing.EncodedObject) error
+	}) plumbing.Hash {
+		obj := st.NewEncodedObject()
+		require.NoError(t, o.Encode(obj))
+		h, err := st.SetEncodedObject(obj)
+		require.NoError(t, err)
+		return h
+	}
+	blob := st.NewEncodedObject()
+	blob.SetType(plumbing.BlobObject)
+	w, err := blob.Writer()
+	require.NoError(t, err)
+	_, err = w.Write([]byte("x\n"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	blobHash, err := st.SetEncodedObject(blob)
+	require.NoError(t, err)
+	tree := store(&object.Tree{Entries: []object.TreeEntry{
+		{Name: strings.Repeat("n", 300), Mode: filemode.Regular, Hash: blobHash}}})
+	sig := object.Signature{Name: "t", Email: "t@example.com", When: time.Now()}
+	commit := store(&object.Commit{Author: sig, Committer: sig, Message: "seed", TreeHash: tree})
+	main := plumbing.NewBranchReferenceName("main")
+	require.NoError(t, st.SetReference(plumbing.NewHashReference(main, commit)))
+	require.NoError(t, st.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, main)))
+	return dir, commit
+}
+
+// TestGoGitClient_LocalErrorsNameTheRepository verifies the errors of the
+// local steps of a clone and a commit name the repository URL once, without
+// credentials, as "resolve commit <sha> in <url>" does: the git-clone and
+// git-commit steps do not add it.
+func TestGoGitClient_LocalErrorsNameTheRepository(t *testing.T) {
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	const secretURL = "https://user:ghp_SECRET@example.com/org/repo.git"
+	const shown = "https://example.com/org/repo.git"
+	// underFile returns a directory path whose parent is a regular file, so
+	// it cannot be created.
+	underFile := func(t *testing.T) string {
+		f := filepath.Join(t.TempDir(), "file")
+		require.NoError(t, os.WriteFile(f, nil, 0o600))
+		return filepath.Join(f, "w")
+	}
+
+	t.Run("clone, create clone dir", func(t *testing.T) {
+		err := c.Clone(ctx, secretURL, "main", underFile(t), "")
+		require.Error(t, err)
+		assert.True(t, strings.HasPrefix(err.Error(), "create clone dir for "+shown+": "), err.Error())
+		assert.Equal(t, 1, strings.Count(err.Error(), shown), err.Error())
+		assert.NotContains(t, err.Error(), "ghp_SECRET")
+	})
+	t.Run("clone at a commit, create clone dir", func(t *testing.T) {
+		err := c.CloneAt(ctx, secretURL, "abc123", underFile(t), "")
+		require.Error(t, err)
+		assert.True(t, strings.HasPrefix(err.Error(), "create clone dir for "+shown+": "), err.Error())
+		assert.Equal(t, 1, strings.Count(err.Error(), shown), err.Error())
+		assert.NotContains(t, err.Error(), "ghp_SECRET")
+	})
+	t.Run("clone at a commit, checkout", func(t *testing.T) {
+		remote, commit := seedUncheckoutable(t)
+		url := "file://" + remote
+		err := c.CloneAt(ctx, url, commit.String(), filepath.Join(t.TempDir(), "w"), "")
+		require.Error(t, err)
+		assert.True(t, strings.HasPrefix(err.Error(), "checkout "+commit.String()+" in "+url+": "), err.Error())
+		assert.Equal(t, 1, strings.Count(err.Error(), url), err.Error())
+	})
+	t.Run("commit, get worktree", func(t *testing.T) {
+		dir := t.TempDir()
+		repo, err := gogit.PlainInit(dir, true) // bare: no worktree
+		require.NoError(t, err)
+		_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{Name: "origin", URLs: []string{secretURL}})
+		require.NoError(t, err)
+
+		err = c.CommitAll(ctx, dir, "m", "t", "t@example.com")
+		require.Error(t, err)
+		assert.True(t, strings.HasPrefix(err.Error(), "get worktree of "+shown+": "), err.Error())
+		assert.Equal(t, 1, strings.Count(err.Error(), shown), err.Error())
+		assert.NotContains(t, err.Error(), "ghp_SECRET")
+	})
 }
 
 // TestHTTPAuthUsername verifies the push/clone username per provider (C06-scm-health-31).
