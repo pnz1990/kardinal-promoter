@@ -73,7 +73,7 @@ func TestBundle_LifecycleAndColumns(t *testing.T) {
 
 	a.merge(t, a.openPR(t, bundle, "prod"))
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
-	b = e.WaitBundle(t, a.ns, bundle, time.Minute, "Verified and Ready", func(b *v1alpha1.Bundle) (bool, string) {
+	e.WaitBundle(t, a.ns, bundle, time.Minute, "Verified and Ready", func(b *v1alpha1.Bundle) (bool, string) {
 		ok, seen := framework.CondIs(b.Status.Conditions, "Ready", metav1.ConditionTrue, "Verified")
 		return ok && b.Status.Phase == "Verified", fmt.Sprintf("phase=%q %s", b.Status.Phase, seen)
 	})
@@ -753,7 +753,10 @@ func TestBundle_ConcurrencyCap(t *testing.T) {
 // for a minute and its readiness is turned off during the bake, which resets
 // the timer once; prod is held by a gate an operator overrides. The metrics
 // are absent while the Bundle promotes and then show the bake resets, the one
-// override and the minutes from the Bundle's creation to prod.
+// override and the minutes from the Bundle's creation to prod. test checks
+// its Deployment (health.type resource): a replica lost after the rollout is
+// a health alarm there, while Argo CD reports it as Progressing, which only
+// stops the window.
 //
 // Covers BUNDLE-METRICS-01.
 func TestBundle_Metrics(t *testing.T) {
@@ -762,7 +765,10 @@ func TestBundle_Metrics(t *testing.T) {
 	a := newArgoApp(t, e, "test", "prod")
 	ctx := context.Background()
 	p := a.pipeline(nil)
-	envSpec(t, p, "test").Bake = &v1alpha1.BakeConfig{Minutes: 1}
+	testEnv := envSpec(t, p, "test")
+	testEnv.Bake = &v1alpha1.BakeConfig{Minutes: 1}
+	testEnv.Health = v1alpha1.HealthConfig{Type: "resource", Timeout: "3m",
+		Resource: &v1alpha1.ResourceRef{Name: fixtures.Workload("test"), Namespace: a.ns}}
 	require.NoError(t, e.Client.Create(ctx, &v1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{Name: "hold", Namespace: a.ns, Labels: map[string]string{"kardinal.io/applies-to": "prod"}},
 		Spec:       v1alpha1.PolicyGateSpec{Expression: "false", Message: "held for an operator", RecheckInterval: "10s"},
