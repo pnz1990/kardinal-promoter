@@ -112,7 +112,7 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 	if tag == "" {
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepSuccess,
-			Message: "argocd-set-image: no image tag to set",
+			Message: "no image tag to set",
 		}, nil
 	}
 
@@ -137,7 +137,7 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 	if existing == tag {
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepSuccess,
-			Message: fmt.Sprintf("argocd-set-image: %s/%s already has %s=%s", namespace, appName, imageKey, tag),
+			Message: fmt.Sprintf("Application %s/%s already has %s=%s", namespace, appName, imageKey, tag),
 			Outputs: map[string]string{
 				"argocdApplication": appName,
 				"argocdNamespace":   namespace,
@@ -159,7 +159,7 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 
 	return parentsteps.StepResult{
 		Status: parentsteps.StepSuccess,
-		Message: fmt.Sprintf("argocd-set-image: patched Application %s/%s — %s=%s",
+		Message: fmt.Sprintf("patched Application %s/%s: %s=%s",
 			namespace, appName, imageKey, tag),
 		Outputs: map[string]string{
 			"argocdApplication": appName,

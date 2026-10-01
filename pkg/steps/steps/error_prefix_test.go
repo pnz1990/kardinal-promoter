@@ -126,3 +126,42 @@ func TestStepErrors_NameTheStepOnce(t *testing.T) {
 		})
 	}
 }
+
+// TestStepSuccessMessages_DoNotNameTheStep: like its errors, a step's success
+// message does not start with the step's name, which the step list and the
+// logs already show (B47: "argocd-set-image: patched Application ...").
+func TestStepSuccessMessages_DoNotNameTheStep(t *testing.T) {
+	argoState := func(t *testing.T, tag string, deployed string) *parentsteps.StepState {
+		app := makeArgoCDApp("argocd", "my-app", map[string]interface{}{
+			"image": map[string]interface{}{"tag": deployed},
+		})
+		return &parentsteps.StepState{
+			K8sClient: fake.NewClientBuilder().WithScheme(newArgoCDScheme(t)).WithObjects(app).Build(),
+			Environment: v1alpha1.EnvironmentSpec{Name: "prod", Approval: "auto",
+				Update: v1alpha1.UpdateConfig{Strategy: "argocd",
+					ArgoCD: &v1alpha1.ArgoCDUpdateConfig{Application: "my-app", Namespace: "argocd"}}},
+			Bundle:  v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: tag}}},
+			Outputs: map[string]string{},
+		}
+	}
+	cases := []struct {
+		name  string
+		state *parentsteps.StepState
+		want  string
+	}{
+		{name: "patched", state: argoState(t, "v2", "v1"), want: "patched Application argocd/my-app: image.tag=v2"},
+		{name: "already set", state: argoState(t, "v2", "v2"), want: "Application argocd/my-app already has image.tag=v2"},
+		{name: "no tag", state: argoState(t, "", "v1"), want: "no image tag to set"},
+	}
+	for _, tc := range cases {
+		t.Run("argocd-set-image "+tc.name, func(t *testing.T) {
+			step, err := parentsteps.Lookup("argocd-set-image")
+			require.NoError(t, err)
+			result, err := step.Execute(context.Background(), tc.state)
+			require.NoError(t, err)
+			assert.Equal(t, parentsteps.StepSuccess, result.Status)
+			assert.Equal(t, tc.want, result.Message)
+			assert.False(t, strings.HasPrefix(result.Message, "argocd-set-image"), result.Message)
+		})
+	}
+}
