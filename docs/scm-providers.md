@@ -62,6 +62,11 @@ export KARDINAL_SCM_PROVIDER=github
 | `repo` | Create/close pull requests, post comments, read PR status, delete the head branch of a PR kardinal closed |
 | `write:repo_hook` | (Optional) Register webhooks programmatically |
 
+These are classic token scopes. With a fine-grained personal access token or a GitHub App
+token, deleting the head branch is a git refs call and needs the **Contents: read and write**
+repository permission, besides the pull request permissions kardinal already needs; without it
+every PR kardinal closes ends with its step asking you to delete the branch by hand.
+
 ### Webhook configuration
 
 1. In your GitHub repository, go to **Settings → Webhooks → Add webhook**.
