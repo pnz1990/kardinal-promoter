@@ -171,9 +171,9 @@ metrics["error-rate"].result == "Pass"
 
 ## E2E Testing Infrastructure
 
-The live e2e tests are in test/e2e/live, behind the `e2e` build tag. Each suite (core, gitea,
-delivery, ui; hack/e2e/up.sh) gets its own kind cluster with a real git server, a GitOps engine
-and the controller built from the checkout. test/e2e/README.md has the details.
+The live e2e tests are in test/e2e/live, behind the `e2e` build tag. Each suite (hack/e2e/up.sh
+defines them) gets its own kind cluster with a real git server, a GitOps engine and the
+controller built from the checkout. test/e2e/README.md has the details.
 
 ```bash
 make e2e-up SUITE=core          # hack/e2e/up.sh core: kind cluster kardinal-e2e-core + components
