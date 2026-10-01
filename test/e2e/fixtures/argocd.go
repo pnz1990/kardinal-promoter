@@ -35,6 +35,12 @@ version: 0.1.0
 // overlay's images entry retags with every promotion, so a script can tell
 // versions apart with ./podinfo --version. phase is PreSync, Sync or
 // PostSync; a Job that exits non-zero fails the sync operation.
+//
+// Argo CD deletes the Job as soon as it succeeds, so the next sync creates a
+// new one. Leaving the completed Job for the next sync to delete and recreate
+// under the same name is racy: Argo CD can read the old Job's Complete status
+// and mark the operation Succeeded before the new Job runs (seen on Argo CD 3
+// in TestHealth_ArgoFailures).
 func WithHook(files map[string][]byte, env, name, phase, script string) {
 	kust := Path(env) + "/kustomization.yaml"
 	files[kust] = []byte(strings.Replace(string(files[kust]), "  - service.yaml\n",
@@ -45,7 +51,7 @@ metadata:
   name: %s
   annotations:
     argocd.argoproj.io/hook: %s
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded,BeforeHookCreation
 spec:
   backoffLimit: 0
   template:
