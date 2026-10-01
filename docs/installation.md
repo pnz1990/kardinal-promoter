@@ -520,6 +520,10 @@ while it is `Promoting` or `WaitingForMerge`, and on delete the controller close
 comment before it lets the step go. Without the controller the finalizer stays, and the step,
 its Graph, its namespace and the PromotionStep CRD never finish deleting.
 
+In namespace mode (`controller.watchNamespace`), deleting the release namespace is the same as
+uninstalling first: the controller goes with the Bundles, so the finalizers stay and the
+namespace stays `Terminating` until you remove them by hand, as shown below.
+
 ```bash
 kubectl delete bundles.kardinal.io --all -A
 # The controller closes the open promotion PRs. It gives up on a PR after about 5 minutes of

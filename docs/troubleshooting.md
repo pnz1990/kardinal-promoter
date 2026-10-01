@@ -595,6 +595,15 @@ merging it would change the environment with no PromotionStep tracking it. It al
 `ClosePRFailed` Warning Event on the step, except in a namespace being deleted: the API server
 refuses new Events there, and the step is gone, so the controller log is the only record.
 
+Before it closes the PR, the controller reads the Bundle, its namespace, its Pipeline and its
+Graph to tell whether the step comes back (the Graph case above). If one of those reads keeps
+failing, it retries for about 5 minutes, then removes the finalizer without closing or
+commenting on the PR: a new step may still come back and reuse it, and leaking an open PR is
+safer than closing one that step owns. It logs the error `gave up telling whether a deleted
+PromotionStep comes back; left its PR open and removed its finalizer` with the `env` and
+`prURL`, and emits a `PRLeftOpen` Warning Event on the step (not in a namespace being deleted,
+as above). If no PromotionStep uses that PR, close it by hand, as below.
+
 **A PR left open with no PromotionStep.** In the Graph case above, the PR stays open on the
 promise that a new step reuses it. If the Bundle is deleted or stops `Promoting`, or its
 namespace is deleted, before the new step exists, nothing tracks the PR and the controller never

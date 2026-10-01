@@ -341,9 +341,12 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 // (by a human, or by an earlier attempt whose finalizer removal or response
 // was lost) is left alone, with no comment; without the check a merged PR got
 // a "kardinal closed this PR" comment, and Bitbucket and Azure DevOps were
-// asked to decline or abandon it. The PR is closed before it is commented on,
-// so a restart in between leaves no comment rather than two. Only the status
-// read and the close can fail; the comment is best-effort.
+// asked to decline or abandon it. Only a PRStatus that says merged is taken
+// without asking, since a merge is final; a closed PR can be reopened, so a
+// PRStatus that says closed is checked like an open one. The PR is closed
+// before it is commented on, so a restart in between leaves no comment rather
+// than two. Only the status read and the close can fail; the comment is
+// best-effort.
 func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string) error {
 	repo, num := "", 0
 	if ps.Spec.PRStatusRef != "" {
@@ -351,8 +354,8 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs)
 		switch {
 		case err == nil:
-			if prs.Status.Merged || prstatus.IsClosed(&prs.Status) {
-				return nil // merged or already closed: nothing to close
+			if prs.Status.Merged {
+				return nil // a merge is final: nothing to close
 			}
 			repo, num = prs.Spec.Repo, prs.Spec.PRNumber
 		case !apierrors.IsNotFound(err):

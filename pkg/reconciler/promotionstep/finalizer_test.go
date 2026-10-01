@@ -4,6 +4,7 @@
 package promotionstep_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -450,16 +452,30 @@ func TestPRFinalizer_DeleteWithoutPR(t *testing.T) {
 // the SCM whether its PR is still open before it closes it. A PR merged or
 // closed outside the controller's view (the PRStatus lags or is gone), or
 // closed by an earlier attempt that did not finish, is not closed or commented
-// on again. A failed status read is retried like a failed close.
+// on again. A failed status read is retried like a failed close. Only a
+// PRStatus that says merged is taken without asking: a merge is final, but a
+// closed PR can be reopened, and the reopened PR must be closed.
 func TestPRFinalizer_DeleteAsksSCM(t *testing.T) {
+	merged := openPRStatus("prs-step", "test/repo", 5)
+	merged.Status.Open, merged.Status.Merged = false, true
+	closed := openPRStatus("prs-step", "test/repo", 5)
+	closed.Status.Open = false
 	tests := []struct {
 		name        string
 		prs         *v1alpha1.PRStatus // nil: the PRStatus is gone
 		scm         mockSCM
+		notAsked    bool // the PRStatus answers, the SCM is not asked
 		wantClosed  []string
 		wantComment bool
 		wantRequeue bool
 	}{
+		{name: "merged per the PRStatus: final, the SCM is not asked",
+			prs: merged, scm: mockSCM{open: true}, notAsked: true},
+		{name: "closed per the PRStatus, reopened since: closed, then commented",
+			prs: closed, scm: mockSCM{open: true},
+			wantClosed: []string{"test/repo#5"}, wantComment: true},
+		{name: "closed per the PRStatus and still closed: not closed, no comment",
+			prs: closed},
 		{name: "merged, with the PRStatus gone: not closed, no comment",
 			scm: mockSCM{merged: true}},
 		{name: "merged since the PRStatus was polled: not closed, no comment",
@@ -490,7 +506,11 @@ func TestPRFinalizer_DeleteAsksSCM(t *testing.T) {
 
 			res, err := r.Reconcile(context.Background(), reqFor("step"))
 			require.NoError(t, err)
-			assert.Equal(t, 1, m.getPRCalled, "the SCM is asked once")
+			if tt.notAsked {
+				assert.Zero(t, m.getPRCalled, "the SCM is not asked")
+			} else {
+				assert.Equal(t, 1, m.getPRCalled, "the SCM is asked once")
+			}
 			assert.Equal(t, tt.wantClosed, m.closed)
 			if tt.wantComment {
 				require.Len(t, m.comments, 1)
@@ -634,7 +654,10 @@ func TestPRFinalizer_DeleteRestartAfterClose(t *testing.T) {
 // the PR is left open and uncommented. In every other case the PR is closed:
 // the step was deleted on its own (its Graph is still there), its Bundle or
 // namespace is being deleted, the Bundle is past Promoting, or the Pipeline no
-// longer has the step's environment.
+// longer has the step's environment. A read that keeps failing is retried; past
+// the five-minute deadline the finalizer goes and the PR is left open and
+// uncommented, with one error log and one PRLeftOpen Warning Event, since the
+// step may still come back and own the PR.
 func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 	deleted := metav1.NewTime(time.Now().Add(-time.Second).Truncate(time.Second))
 	type graphState int
@@ -646,17 +669,18 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 		graphNew        // recreated after the step was deleted
 	)
 	tests := []struct {
-		name        string
-		graph       graphState
-		nsDeleting  bool
-		bundle      func(*v1alpha1.Bundle) // nil: the Bundle is gone
-		dropEnv     bool                   // the Pipeline no longer has prod
-		noPipeline  bool
-		readErr     string        // the kind whose read fails with an error other than NotFound
-		later       time.Duration // how long after the delete the reconcile runs (default 1s)
-		wantClosed  bool
-		wantRetry   bool // the step stays and is reconciled again
-		wantComment string
+		name         string
+		graph        graphState
+		nsDeleting   bool
+		bundle       func(*v1alpha1.Bundle) // nil: the Bundle is gone
+		dropEnv      bool                   // the Pipeline no longer has prod
+		noPipeline   bool
+		readErr      string        // the kind whose read fails with an error other than NotFound
+		later        time.Duration // how long after the delete the reconcile runs (default 1s)
+		wantClosed   bool
+		wantRetry    bool // the step stays and is reconciled again
+		wantComment  string
+		wantLeftOpen bool // the PRLeftOpen Event and error log
 	}{
 		{name: "the Graph is being deleted: the PR is kept", graph: graphDeleting, bundle: func(*v1alpha1.Bundle) {}},
 		{name: "the Graph is gone: the PR is kept", graph: graphGone, bundle: func(*v1alpha1.Bundle) {}},
@@ -694,9 +718,14 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 			bundle: func(*v1alpha1.Bundle) {}, readErr: "Namespace", wantRetry: true},
 		{name: "the Pipeline cannot be read: retried, the PR is kept", graph: graphDeleting,
 			bundle: func(*v1alpha1.Bundle) {}, readErr: "Pipeline", wantRetry: true},
-		{name: "the Graph still cannot be read after five minutes: the PR is closed", graph: graphDeleting,
-			bundle: func(*v1alpha1.Bundle) {}, readErr: "Graph", later: 6 * time.Minute, wantClosed: true,
-			wantComment: "PromotionStep step was deleted"},
+		{name: "the Graph still cannot be read after five minutes: the PR is left open", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, readErr: "Graph", later: 6 * time.Minute, wantLeftOpen: true},
+		{name: "the Bundle still cannot be read after five minutes: the PR is left open", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, readErr: "Bundle", later: 6 * time.Minute, wantLeftOpen: true},
+		{name: "the namespace still cannot be read after five minutes: the PR is left open", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, readErr: "Namespace", later: 6 * time.Minute, wantLeftOpen: true},
+		{name: "the Pipeline still cannot be read after five minutes: the PR is left open", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, readErr: "Pipeline", later: 6 * time.Minute, wantLeftOpen: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -772,12 +801,27 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 				later = time.Second
 			}
 			m := &mockSCM{open: true}
+			rec := events.NewFakeRecorder(5)
 			r := &promotionstep.Reconciler{Client: api, APIReader: reader, SCM: m, GitClient: &mockGit{},
+				Recorder:  rec,
 				NowFn:     func() time.Time { return deleted.Add(later) },
 				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
 
-			res, err := r.Reconcile(context.Background(), reqFor("step"))
+			var logs bytes.Buffer
+			res, err := r.Reconcile(objectgonetest.Context(&logs), reqFor("step"))
 			require.NoError(t, err)
+			errorLines := strings.Count(logs.String(), `"level":"error"`)
+			evts := drain(rec)
+			if tt.wantLeftOpen {
+				assert.Equal(t, 1, errorLines, "one error log: %s", logs.String())
+				assert.Contains(t, logs.String(), "left its PR open and removed its finalizer")
+				require.Len(t, evts, 1, "one Event")
+				assert.Contains(t, evts[0], "Warning PRLeftOpen")
+				assert.Contains(t, evts[0], "left its PR open: close it by hand if no new PromotionStep uses it")
+			} else {
+				assert.Zero(t, errorLines, "no error log: %s", logs.String())
+				assert.Empty(t, evts, "no Event")
+			}
 			if tt.wantRetry {
 				assert.Positive(t, res.RequeueAfter)
 				assert.Empty(t, m.closed, "the PR is not closed yet")
