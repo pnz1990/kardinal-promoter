@@ -2,7 +2,7 @@
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "target": "ES2022",
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM"],
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
@@ -17,5 +17,5 @@
     "noUncheckedSideEffectImports": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "playwright.config.ts"]
+  "include": ["vite.config.ts", "playwright.config.ts", "playwright.live.config.ts", "test/e2e/live"]
 }
