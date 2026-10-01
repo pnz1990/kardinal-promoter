@@ -51,6 +51,7 @@ type AzureDevOpsProvider struct {
 	// WebhookSecret is the shared secret for validating incoming ADO service hook payloads.
 	// ADO service hooks do not natively sign payloads with HMAC; instead we validate
 	// a shared token sent in the X-AzureDevOps-Token header using constant-time comparison.
+	// Empty refuses every event (ErrNoWebhookSecret).
 	WebhookSecret string
 
 	// circuit guards all outbound Azure DevOps API calls.
@@ -277,10 +278,11 @@ func (a *AzureDevOpsProvider) GetPRReviewStatus(ctx context.Context, repo string
 // the X-AzureDevOps-Token header using constant-time comparison.
 // The caller must pass the value of the X-AzureDevOps-Token header as signature.
 func (a *AzureDevOpsProvider) ParseWebhookEvent(payload []byte, signature string) (WebhookEvent, error) {
-	if a.WebhookSecret != "" {
-		if subtle.ConstantTimeCompare([]byte(signature), []byte(a.WebhookSecret)) != 1 {
-			return WebhookEvent{}, fmt.Errorf("azuredevops webhook: token mismatch")
-		}
+	if a.WebhookSecret == "" {
+		return WebhookEvent{}, ErrNoWebhookSecret
+	}
+	if subtle.ConstantTimeCompare([]byte(signature), []byte(a.WebhookSecret)) != 1 {
+		return WebhookEvent{}, fmt.Errorf("azuredevops webhook: token mismatch")
 	}
 
 	// ADO service hook payload for git.pullrequest.merged / git.pullrequest.created

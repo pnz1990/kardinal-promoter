@@ -46,6 +46,7 @@ type BitbucketProvider struct {
 	// WebhookSecret is the shared secret for validating incoming Bitbucket webhook payloads.
 	// Bitbucket signs payloads with HMAC-SHA256 and sends the signature in
 	// X-Hub-Signature as "sha256=<hex>".
+	// Empty refuses every event (ErrNoWebhookSecret).
 	WebhookSecret string
 
 	// circuit guards all outbound Bitbucket API calls.
@@ -254,13 +255,14 @@ func (b *BitbucketProvider) GetPRReviewStatus(ctx context.Context, repo string, 
 // X-Hub-Signature HMAC-SHA256 header. The caller must pass the value of the
 // X-Hub-Signature header as signature.
 func (b *BitbucketProvider) ParseWebhookEvent(payload []byte, signature string) (WebhookEvent, error) {
-	if b.WebhookSecret != "" {
-		mac := hmac.New(sha256.New, []byte(b.WebhookSecret))
-		mac.Write(payload)
-		expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-		if !hmac.Equal([]byte(expected), []byte(signature)) {
-			return WebhookEvent{}, fmt.Errorf("bitbucket webhook: invalid HMAC-SHA256 signature")
-		}
+	if b.WebhookSecret == "" {
+		return WebhookEvent{}, ErrNoWebhookSecret
+	}
+	mac := hmac.New(sha256.New, []byte(b.WebhookSecret))
+	mac.Write(payload)
+	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(expected), []byte(signature)) {
+		return WebhookEvent{}, fmt.Errorf("bitbucket webhook: invalid HMAC-SHA256 signature")
 	}
 
 	// Bitbucket Cloud webhooks use pullrequest:fulfilled (merged), pullrequest:rejected (declined)

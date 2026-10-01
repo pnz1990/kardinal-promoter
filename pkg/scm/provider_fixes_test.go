@@ -41,6 +41,21 @@ func hmacHex(secret string, payload []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// testWebhookSecret is the webhook secret of the providers whose tests only
+// parse payloads; signedFor signs a payload with it the way p's SCM does.
+const testWebhookSecret = "s3cret"
+
+func signedFor(p scm.SCMProvider, payload []byte) string {
+	switch p.(type) {
+	case *scm.GitLabProvider, *scm.AzureDevOpsProvider:
+		return testWebhookSecret
+	case *scm.ForgejoProvider:
+		return hmacHex(testWebhookSecret, payload)
+	default:
+		return "sha256=" + hmacHex(testWebhookSecret, payload)
+	}
+}
+
 // TestParseWebhookEvent_MergedNormalised signs a merge event the way each
 // SCM does, reads the signature the way the webhook handler does
 // (scm.WebhookSignature) and checks every provider reports the same merged
@@ -237,22 +252,22 @@ func TestParseWebhookEvent_NotMerged(t *testing.T) {
 		provider scm.SCMProvider
 		payload  string
 	}{
-		{"gitlab opened", scm.NewGitLabProvider("t", "", ""),
+		{"gitlab opened", scm.NewGitLabProvider("t", "", testWebhookSecret),
 			`{"object_kind":"merge_request","object_attributes":{"iid":1,"state":"opened","action":"open"},"project":{"path_with_namespace":"g/p"}}`},
-		{"gitlab closed", scm.NewGitLabProvider("t", "", ""),
+		{"gitlab closed", scm.NewGitLabProvider("t", "", testWebhookSecret),
 			`{"object_kind":"merge_request","object_attributes":{"iid":1,"state":"closed","action":"close"},"project":{"path_with_namespace":"g/p"}}`},
-		{"bitbucket declined", scm.NewBitbucketProvider("t", "", ""),
+		{"bitbucket declined", scm.NewBitbucketProvider("t", "", testWebhookSecret),
 			`{"pullrequest":{"id":1,"state":"DECLINED"},"repository":{"full_name":"ws/r"}}`},
-		{"forgejo closed without merge", scm.NewForgejoProvider("t", "", ""),
+		{"forgejo closed without merge", scm.NewForgejoProvider("t", "", testWebhookSecret),
 			`{"action":"closed","number":1,"pull_request":{"merged":false},"repository":{"full_name":"o/r"}}`},
-		{"azure devops merge attempted on an active PR", scm.NewAzureDevOpsProvider("t", "", ""),
+		{"azure devops merge attempted on an active PR", scm.NewAzureDevOpsProvider("t", "", testWebhookSecret),
 			`{"eventType":"git.pullrequest.merged","resource":{"pullRequestId":1,"status":"active","mergeStatus":"succeeded","repository":{"remoteUrl":"https://dev.azure.com/org/proj/_git/repo"}}}`},
-		{"azure devops abandoned", scm.NewAzureDevOpsProvider("t", "", ""),
+		{"azure devops abandoned", scm.NewAzureDevOpsProvider("t", "", testWebhookSecret),
 			`{"eventType":"git.pullrequest.updated","resource":{"pullRequestId":1,"status":"abandoned","repository":{"remoteUrl":"https://dev.azure.com/org/proj/_git/repo"}}}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ev, err := tc.provider.ParseWebhookEvent([]byte(tc.payload), "")
+			ev, err := tc.provider.ParseWebhookEvent([]byte(tc.payload), signedFor(tc.provider, []byte(tc.payload)))
 			require.NoError(t, err)
 			assert.False(t, ev.Merged)
 			assert.False(t, ev.EventType == "pull_request" && ev.Action == "closed" && ev.Merged)
@@ -272,25 +287,93 @@ func TestParseWebhookEvent_MergeCommitSHA(t *testing.T) {
 		payload  string
 		want     string
 	}{
-		{"github merged", scm.NewGitHubProvider("t", "", ""),
+		{"github merged", scm.NewGitHubProvider("t", "", testWebhookSecret),
 			`{"action":"closed","pull_request":{"number":7,"merged":true,"merge_commit_sha":"` + sha + `"},"repository":{"full_name":"o/r"}}`,
 			sha},
-		{"github open with a test merge commit", scm.NewGitHubProvider("t", "", ""),
+		{"github open with a test merge commit", scm.NewGitHubProvider("t", "", testWebhookSecret),
 			`{"action":"synchronize","pull_request":{"number":7,"merged":false,"merge_commit_sha":"` + sha + `"},"repository":{"full_name":"o/r"}}`,
 			""},
-		{"gitlab merged", scm.NewGitLabProvider("t", "", ""),
+		{"gitlab merged", scm.NewGitLabProvider("t", "", testWebhookSecret),
 			`{"object_kind":"merge_request","object_attributes":{"iid":8,"state":"merged","action":"merge","merge_commit_sha":"` + sha + `"},"project":{"path_with_namespace":"g/p"}}`,
 			sha},
-		{"gitlab fast-forward merge", scm.NewGitLabProvider("t", "", ""),
+		{"gitlab fast-forward merge", scm.NewGitLabProvider("t", "", testWebhookSecret),
 			`{"object_kind":"merge_request","object_attributes":{"iid":8,"state":"merged","action":"merge","merge_commit_sha":null},"project":{"path_with_namespace":"g/p"}}`,
 			""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ev, err := tc.provider.ParseWebhookEvent([]byte(tc.payload), "")
+			ev, err := tc.provider.ParseWebhookEvent([]byte(tc.payload), signedFor(tc.provider, []byte(tc.payload)))
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, ev.MergeCommitSHA)
 		})
+	}
+}
+
+// TestParseWebhookEvent_RefusesEmptySecret proves every provider refuses every
+// event when it has no webhook secret, instead of skipping the check: an
+// unsigned event, and one signed with an empty key, which anyone can compute.
+// The webhook handler fails closed without a secret too; the provider refusing
+// on its own keeps every other caller safe (B74). Covers WEBHOOK-NOSECRET-02.
+func TestParseWebhookEvent_RefusesEmptySecret(t *testing.T) {
+	const secret = "s3cret"
+	hubSignature := func(key string, p []byte) string { return "sha256=" + hmacHex(key, p) }
+	plainToken := func(key string, _ []byte) string { return key }
+	forgejoPayload := `{"action":"closed","number":7,"pull_request":{"merged":true},"repository":{"full_name":"o/r"}}`
+	tests := []struct {
+		provider string
+		payload  string
+		header   string
+		sign     func(key string, payload []byte) string
+	}{
+		{"github", `{"action":"closed","pull_request":{"number":7,"merged":true},"repository":{"full_name":"o/r"}}`,
+			"X-Hub-Signature-256", hubSignature},
+		{"gitlab", `{"object_kind":"merge_request","object_attributes":{"iid":7,"state":"merged","action":"merge"},"project":{"path_with_namespace":"g/p"}}`,
+			"X-Gitlab-Token", plainToken},
+		{"forgejo", forgejoPayload, "X-Forgejo-Signature", hmacHex},
+		{"gitea", forgejoPayload, "X-Gitea-Signature", hmacHex},
+		{"bitbucket", `{"pullrequest":{"id":7,"state":"MERGED","destination":{"repository":{"full_name":"ws/r"}}},"repository":{"full_name":"ws/r"}}`,
+			"X-Hub-Signature", hubSignature},
+		{"azuredevops", `{"eventType":"git.pullrequest.merged","resource":{"pullRequestId":7,"status":"completed","repository":{"name":"repo","project":{"name":"proj"},"remoteUrl":"https://dev.azure.com/org/proj/_git/repo"}}}`,
+			"X-AzureDevOps-Token", plainToken},
+	}
+	constructors := []struct {
+		name string
+		new  func(providerType, webhookSecret string) (scm.SCMProvider, error)
+	}{
+		{"NewProvider", func(typ, s string) (scm.SCMProvider, error) { return scm.NewProvider(typ, "t", "", s) }},
+		{"NewDynamicProvider", func(typ, s string) (scm.SCMProvider, error) { return scm.NewDynamicProvider(typ, "t", "", s) }},
+	}
+	for _, tc := range tests {
+		for _, c := range constructors {
+			t.Run(tc.provider+"/"+c.name, func(t *testing.T) {
+				payload := []byte(tc.payload)
+
+				// Control: with a secret, the signed event is a merge.
+				p, err := c.new(tc.provider, secret)
+				require.NoError(t, err)
+				h := http.Header{}
+				h.Set(tc.header, tc.sign(secret, payload))
+				ev, err := scm.ParseWebhookRequest(p, payload, h)
+				require.NoError(t, err)
+				require.True(t, ev.Merged)
+
+				p, err = c.new(tc.provider, "")
+				require.NoError(t, err)
+				for _, s := range []struct{ name, signature string }{
+					{"unsigned", ""},
+					{"signed with an empty key", tc.sign("", payload)},
+				} {
+					h := http.Header{}
+					if s.signature != "" {
+						h.Set(tc.header, s.signature)
+					}
+					_, err := p.ParseWebhookEvent(payload, s.signature)
+					assert.ErrorIs(t, err, scm.ErrNoWebhookSecret, "ParseWebhookEvent, %s", s.name)
+					_, err = scm.ParseWebhookRequest(p, payload, h)
+					assert.ErrorIs(t, err, scm.ErrNoWebhookSecret, "ParseWebhookRequest, %s", s.name)
+				}
+			})
+		}
 	}
 }
 
