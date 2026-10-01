@@ -80,10 +80,9 @@ The controller evaluates the per-Bundle instances the Graph creates from a
 template, never the template, so LAST-EVALUATED is the newest evaluation of
 the template's instances (with --pipeline, of that pipeline's instances), or
 - when none has been evaluated. An instance records its template's name and
-scope, not its namespace: a gate labelled kardinal.io/scope: org counts its
-instances in every namespace, any other gate those in its own namespace. A
-gate without that label that Pipelines read from another namespace (an org
-policy namespace or spec.policyNamespaces) therefore shows -.`,
+namespace (kardinal.io/gate-template and kardinal.io/gate-template-namespace),
+so a template in an org policy namespace or in spec.policyNamespaces counts the
+instances in every Pipeline's namespace.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
@@ -162,14 +161,17 @@ func gateScope(g v1alpha1.PolicyGate) string {
 }
 
 // instanceOf reports whether inst was created from template tmpl. The Graph
-// builder labels an instance with its template's name and scope, not its
-// namespace, and creates it in the Pipeline's namespace. So an org template
-// matches the org instances of that name in every namespace, and any other
-// template the instances of that name and scope in its own namespace: an org
-// template and a team template of the same name never share instances.
+// builder labels an instance with its template's name, scope and namespace,
+// and creates it in the Pipeline's namespace. An instance from an older
+// controller has no namespace label: then an org template matches the org
+// instances of that name in every namespace, and any other template the
+// instances of that name and scope in its own namespace.
 func instanceOf(inst, tmpl v1alpha1.PolicyGate) bool {
 	if inst.Labels["kardinal.io/gate-template"] != tmpl.Name || gateScope(inst) != gateScope(tmpl) {
 		return false
+	}
+	if ns := inst.Labels["kardinal.io/gate-template-namespace"]; ns != "" {
+		return ns == tmpl.Namespace
 	}
 	return gateScope(tmpl) == "org" || inst.Namespace == tmpl.Namespace
 }

@@ -703,17 +703,27 @@ func TestPolicyList(t *testing.T) {
 }
 
 // TestPolicyList_LastEvaluated: LAST-EVALUATED is the newest evaluation of a
-// template's instances, matched by the labels the Graph builder sets (name and
-// scope; the instance lives in the Pipeline's namespace), so an org template
-// and a team template of the same name never share instances.
+// template's instances, matched by the labels the Graph builder sets (name,
+// scope and template namespace; the instance lives in the Pipeline's
+// namespace), so an org template and a team template of the same name never
+// share instances. An instance without the namespace label (from an older
+// controller) is matched by scope: org in every namespace, team in its own.
 func TestPolicyList_LastEvaluated(t *testing.T) {
 	now := time.Now()
+	// instance is labelled as an older controller labelled it, without
+	// kardinal.io/gate-template-namespace.
 	instance := func(name, ns, pipeline, template, scope string, ago time.Duration) *v1alpha1.PolicyGate {
 		g := policyGate(name, ns, "test", "true", "kardinal.io/gate-template", template,
 			"kardinal.io/scope", scope, "kardinal.io/pipeline", pipeline, "kardinal.io/bundle", pipeline+"-b")
 		g.Spec.Generated = true
 		at := metav1.NewTime(now.Add(-ago))
 		g.Status.LastEvaluatedAt = &at
+		return g
+	}
+	// labelled is an instance as the Graph builder labels it now.
+	labelled := func(name, ns, pipeline, template, scope, templateNS string, ago time.Duration) *v1alpha1.PolicyGate {
+		g := instance(name, ns, pipeline, template, scope, ago)
+		g.Labels["kardinal.io/gate-template-namespace"] = templateNS
 		return g
 	}
 	c := policyClient(t,
@@ -732,6 +742,13 @@ func TestPolicyList_LastEvaluated(t *testing.T) {
 		instance("plain-platform-policies-test--demo-b", "default", "demo", "plain", "team", 150*time.Second),
 		// Another pipeline's instance of the org audit, evaluated last.
 		instance("audit-platform-policies-test--other-b", "team-c", "other", "audit", "org", 90*time.Second),
+		// A team template another namespace's Pipeline reads through
+		// spec.policyNamespaces: only the namespace label ties its instance
+		// to it. The label also keeps idle's namesake from another
+		// namespace off idle.
+		policyGate("shared", "team-policies", "test", "true"),
+		labelled("shared-team-policies-test--demo-b", "default", "demo", "shared", "team", "team-policies", 200*time.Second),
+		labelled("idle-elsewhere-test--demo-b", "default", "demo", "idle", "team", "elsewhere", 60*time.Second),
 	)
 
 	// lastEval maps name/namespace to LAST-EVALUATED, the last column (its
@@ -757,7 +774,8 @@ func TestPolicyList_LastEvaluated(t *testing.T) {
 		"entry/team-b":            "-",      // team: no instance in its namespace
 		"audit/platform-policies": "1m ago", // org: every namespace
 		"plain/platform-policies": "-",      // team, and its instances are in default
-		"idle/default":            "-",      // no instance
+		"idle/default":            "-",      // its namesake's instance is labelled elsewhere
+		"shared/team-policies":    "3m ago", // labelled with its namespace
 	}, lastEval(t, ""))
 	assert.Equal(t, map[string]string{
 		"entry/default":           "2m ago",

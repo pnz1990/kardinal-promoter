@@ -492,9 +492,9 @@ starts. A result from before an outage still counts for a step created before th
 The controller evaluates the per-Bundle instances of a gate, never the gate you wrote, so
 `kardinal policy list` shows in LAST-EVALUATED the newest evaluation of the gate's instances (with
 `--pipeline`, of that pipeline's instances), or `-` when none has been evaluated. An instance
-records its gate's name and `kardinal.io/scope`, not its namespace: a gate labelled
-`kardinal.io/scope: org` counts its instances in every namespace, any other gate only those in its
-own namespace. `kardinal status` shows when each gate holding a Bundle was last checked, and the UI
+records its gate's name and namespace (the `kardinal.io/gate-template` and
+`kardinal.io/gate-template-namespace` labels), so a gate in an org policy namespace or in
+`spec.policyNamespaces` counts its instances in every Pipeline's namespace. `kardinal status` shows when each gate holding a Bundle was last checked, and the UI
 when each gate of the Bundle on screen was last evaluated, so a stale result is visible.
 
 ### ScheduleClock setup

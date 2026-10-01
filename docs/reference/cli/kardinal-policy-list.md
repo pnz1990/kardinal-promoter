@@ -16,10 +16,9 @@ The controller evaluates the per-Bundle instances the Graph creates from a
 template, never the template, so LAST-EVALUATED is the newest evaluation of
 the template's instances (with --pipeline, of that pipeline's instances), or
 - when none has been evaluated. An instance records its template's name and
-scope, not its namespace: a gate labelled kardinal.io/scope: org counts its
-instances in every namespace, any other gate those in its own namespace. A
-gate without that label that Pipelines read from another namespace (an org
-policy namespace or spec.policyNamespaces) therefore shows -.
+namespace (kardinal.io/gate-template and kardinal.io/gate-template-namespace),
+so a template in an org policy namespace or in spec.policyNamespaces counts the
+instances in every Pipeline's namespace.
 
 ```
 kardinal policy list [flags]
