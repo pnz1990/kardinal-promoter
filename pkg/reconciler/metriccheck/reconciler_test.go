@@ -264,37 +264,68 @@ func (c *countingProvider) QueryScalar(ctx context.Context, url, query string) (
 
 // TestReconciler_StatusWriteFailureRequeuesAtInterval proves bug 10 of the
 // health spike fixed: when the status write fails (for example an admission
-// policy denies it), the MetricCheck is evaluated again at spec.interval,
-// not in controller-runtime's error backoff, which retries at once and then
-// doubles up to 1000s, querying Prometheus on every retry. The result the
-// PolicyGates read goes stale at status.validUntil, so a gate still fails
-// closed.
+// policy denies it), the MetricCheck is evaluated again soon, not in
+// controller-runtime's error backoff, which retries at once and then doubles
+// up to 1000s, querying Prometheus on every retry. The first failure after a
+// write that worked is retried after min(interval, 5s), since a conflict or
+// a brief API server outage is likely gone by then; while the write keeps
+// failing, it is retried at spec.interval. A write that works ends the run,
+// so the next failure is retried early again. Each reconcile starts when the
+// previous one asked to be requeued. The result the PolicyGates read goes
+// stale at status.validUntil, so a gate still fails closed.
 func TestReconciler_StatusWriteFailureRequeuesAtInterval(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		provider *countingProvider
+		written  bool // the MetricCheck has a result from a write that worked
 	}{
-		{name: "evaluated", provider: &countingProvider{fakeProvider: fakeProvider{value: 0.005}}},
-		{name: "query error", provider: &countingProvider{fakeProvider: fakeProvider{err: fmt.Errorf("connection refused")}}},
+		{name: "evaluated", provider: &countingProvider{fakeProvider: fakeProvider{value: 0.005}}, written: true},
+		{name: "query error", provider: &countingProvider{fakeProvider: fakeProvider{err: fmt.Errorf("connection refused")}}, written: true},
+		{name: "never written", provider: &countingProvider{fakeProvider: fakeProvider{value: 0.005}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			now := fixedNow
 			mc := newMetricCheck("error-rate", "lt", 0.01)
-			denied := 0
+			mc.CreationTimestamp = metav1.NewTime(now.Add(-time.Hour))
+			if tt.written {
+				last := metav1.NewTime(now.Add(-30 * time.Second)) // one interval ago
+				mc.Status = kardinalv1alpha1.MetricCheckStatus{Result: "Pass", LastEvaluatedAt: &last}
+			} else {
+				mc.CreationTimestamp = metav1.NewTime(now) // the first attempt runs as it is created
+			}
+			deny, denied := true, 0
 			c := fake.NewClientBuilder().WithScheme(buildScheme()).WithStatusSubresource(mc).WithObjects(mc).
 				WithInterceptorFuncs(interceptor.Funcs{
-					SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch,
-						...client.SubResourcePatchOption) error {
+					SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch,
+						opts ...client.SubResourcePatchOption) error {
+						if !deny {
+							return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+						}
 						denied++
 						return fmt.Errorf("admission webhook denied the request")
 					},
 				}).Build()
-			r := &metriccheck.Reconciler{Client: c, Provider: tt.provider, NowFn: func() time.Time { return fixedNow }}
+			r := &metriccheck.Reconciler{Client: c, Provider: tt.provider, NowFn: func() time.Time { return now }}
+			reconcile := func(want time.Duration, why string) {
+				t.Helper()
+				res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(mc)})
+				require.NoError(t, err, "an error would put the MetricCheck into the error backoff")
+				assert.Equal(t, want, res.RequeueAfter, why)
+				now = now.Add(res.RequeueAfter)
+			}
 
-			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(mc)})
-			require.NoError(t, err, "an error would put the MetricCheck into the error backoff")
-			assert.Equal(t, 30*time.Second, res.RequeueAfter, "evaluated again at spec.interval")
-			assert.Equal(t, 1, denied)
-			assert.Equal(t, 1, tt.provider.queries)
+			reconcile(5*time.Second, "the first failed write is retried after min(30s, 5s)")
+			reconcile(30*time.Second, "a write that failed again is retried at spec.interval")
+			reconcile(30*time.Second, "and so on while it keeps failing")
+			assert.Equal(t, 3, denied)
+			assert.Equal(t, 3, tt.provider.queries, "one query per evaluation")
+
+			deny = false
+			reconcile(30*time.Second, "a write that works is followed by the next evaluation at spec.interval")
+			deny = true
+			reconcile(5*time.Second, "after a write that worked, the first failure is retried early again")
+			reconcile(30*time.Second, "and the next one at spec.interval")
+			assert.Equal(t, 5, denied)
 		})
 	}
 }

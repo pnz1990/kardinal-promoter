@@ -153,11 +153,12 @@ func TestMetric_GateBlocksUntilMetricPasses(t *testing.T) {
 }
 
 // TestMetric_StaleResultFailsClosed makes the API server deny the
-// controller's status writes for a passing MetricCheck. The controller keeps
-// retrying at the MetricCheck's interval, not in a tight backoff loop. The
-// last result still reads Pass, but once its validUntil passes gates read it
-// as stale and block, with a note naming the metric. When writes are allowed
-// again the MetricCheck recovers within one interval, and the gates pass.
+// controller's status writes for a passing MetricCheck. The controller
+// retries once after 5s, then at the MetricCheck's interval, not in a tight
+// backoff loop. The last result still reads Pass, but once its validUntil
+// passes gates read it as stale and block, with a note naming the metric.
+// When writes are allowed again the MetricCheck recovers within one
+// interval, and the gates pass.
 //
 // Covers METRIC-03, METRIC-09.
 func TestMetric_StaleResultFailsClosed(t *testing.T) {
@@ -191,7 +192,7 @@ func TestMetric_StaleResultFailsClosed(t *testing.T) {
 		since = time.Now()
 		return n > base, fmt.Sprintf("%g denied writes", n-base)
 	})
-	framework.Consistently(t, 12*time.Second, "the controller to retry the denied write at its 10s interval", func(ctx context.Context) (bool, string) {
+	framework.Consistently(t, 12*time.Second, "the controller to retry the denied write after 5s, then at its 10s interval", func(ctx context.Context) (bool, string) {
 		n, err := e.AdmissionDenials(ctx, policy)
 		if err != nil {
 			return false, err.Error()
