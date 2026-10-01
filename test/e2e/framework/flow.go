@@ -103,20 +103,6 @@ func (e *Env) WaitStep(t *testing.T, ns, pipeline, bundle, env string, timeout t
 	return got
 }
 
-// WaitPipeline waits until check holds for the Pipeline and returns it.
-func (e *Env) WaitPipeline(t *testing.T, ns, name string, timeout time.Duration, what string,
-	check func(*v1alpha1.Pipeline) (bool, string)) *v1alpha1.Pipeline {
-	t.Helper()
-	var p v1alpha1.Pipeline
-	Eventually(t, timeout, fmt.Sprintf("pipeline %s: %s", name, what), func(ctx context.Context) (bool, string) {
-		if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &p); err != nil {
-			return false, err.Error()
-		}
-		return check(&p)
-	})
-	return &p
-}
-
 // CondIs reports whether conds has type typ with status and, when reason is
 // set, that reason. seen describes the condition for a failure message.
 func CondIs(conds []metav1.Condition, typ string, status metav1.ConditionStatus, reason string) (ok bool, seen string) {

@@ -40,7 +40,7 @@ func TestPipeline_ReadyAndPhase(t *testing.T) {
 	a := newArgoApp(t, e, "test", "prod")
 	require.NoError(t, e.Client.Create(context.Background(), holdGate(a.ns, "prod")))
 	a.apply(t, a.pipeline(nil))
-	p := e.WaitPipeline(t, a.ns, pipelineName, time.Minute, "Ready=True Valid", func(p *v1alpha1.Pipeline) (bool, string) {
+	p := waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=True Valid", func(p *v1alpha1.Pipeline) (bool, string) {
 		ok, seen := framework.CondIs(p.Status.Conditions, "Ready", metav1.ConditionTrue, "Valid")
 		return ok && p.Status.Phase != "", fmt.Sprintf("%s phase=%q", seen, p.Status.Phase)
 	})
@@ -105,7 +105,7 @@ func TestPipeline_ValidationFailed(t *testing.T) {
 	p.Spec.Git.SecretRef.Namespace = other
 	a.apply(t, p)
 	want := fmt.Sprintf("git.secretRef.namespace %q is not allowed: the Secret must be in the Pipeline's namespace %q", other, ns)
-	e.WaitPipeline(t, ns, pipelineName, time.Minute, "Ready=False ValidationFailed", func(p *v1alpha1.Pipeline) (bool, string) {
+	waitPipeline(t, e, ns, pipelineName, time.Minute, "Ready=False ValidationFailed", func(p *v1alpha1.Pipeline) (bool, string) {
 		ok, seen := framework.CondIs(p.Status.Conditions, "Ready", metav1.ConditionFalse, "ValidationFailed")
 		return ok && findCond(p.Status.Conditions, "Ready").Message == want, seen
 	})
@@ -191,7 +191,7 @@ func TestPipeline_NotImplemented(t *testing.T) {
 		p.Name = c.name
 		c.set(p, envSpec(t, p, "test"))
 		a.apply(t, p)
-		got := e.WaitPipeline(t, ns, c.name, time.Minute, "Ready=False NotImplemented", func(p *v1alpha1.Pipeline) (bool, string) {
+		got := waitPipeline(t, e, ns, c.name, time.Minute, "Ready=False NotImplemented", func(p *v1alpha1.Pipeline) (bool, string) {
 			return framework.CondIs(p.Status.Conditions, "Ready", metav1.ConditionFalse, "NotImplemented")
 		})
 		msg := findCond(got.Status.Conditions, "Ready").Message
@@ -390,7 +390,7 @@ func TestPipeline_DeploymentMetrics(t *testing.T) {
 	p := a.pipeline(nil)
 	envSpec(t, p, "prod").Bake = &v1alpha1.BakeConfig{Minutes: 1}
 	a.apply(t, p)
-	cur := e.WaitPipeline(t, a.ns, pipelineName, time.Minute, "Ready=True", func(p *v1alpha1.Pipeline) (bool, string) {
+	cur := waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=True", func(p *v1alpha1.Pipeline) (bool, string) {
 		return framework.CondIs(p.Status.Conditions, "Ready", metav1.ConditionTrue, "Valid")
 	})
 	assert.Nil(t, cur.Status.DeploymentMetrics, "no metrics before a Bundle is Verified in prod")
@@ -405,7 +405,7 @@ func TestPipeline_DeploymentMetrics(t *testing.T) {
 	check := func(interventions, rollbacks int) {
 		t.Helper()
 		n := len(bundles)
-		got := e.WaitPipeline(t, a.ns, pipelineName, 2*time.Minute, fmt.Sprintf("metrics of %d Bundles", n),
+		got := waitPipeline(t, e, a.ns, pipelineName, 2*time.Minute, fmt.Sprintf("metrics of %d Bundles", n),
 			func(p *v1alpha1.Pipeline) (bool, string) {
 				m := p.Status.DeploymentMetrics
 				return m != nil && m.SampleSize == n && m.OperatorInterventionRateMillis == interventions &&
@@ -472,7 +472,7 @@ func (a *app) overrideHold(t *testing.T, bundle, env string) {
 // waitPipelinePhase waits until the app's Pipeline has status.phase phase.
 func (a *app) waitPipelinePhase(t *testing.T, phase string) {
 	t.Helper()
-	a.e.WaitPipeline(t, a.ns, pipelineName, time.Minute, "phase "+phase, func(p *v1alpha1.Pipeline) (bool, string) {
+	waitPipeline(t, a.e, a.ns, pipelineName, time.Minute, "phase "+phase, func(p *v1alpha1.Pipeline) (bool, string) {
 		return p.Status.Phase == phase, "phase=" + p.Status.Phase
 	})
 }

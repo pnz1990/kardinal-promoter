@@ -156,7 +156,7 @@ func TestGraph_DependencyErrorsStopPromotion(t *testing.T) {
 			envSpec(t, p, env).DependsOn = deps
 		}
 		a.apply(t, p)
-		e.WaitPipeline(t, ns, c.name, time.Minute, "Ready=False ValidationFailed", func(p *v1alpha1.Pipeline) (bool, string) {
+		waitPipeline(t, e, ns, c.name, time.Minute, "Ready=False ValidationFailed", func(p *v1alpha1.Pipeline) (bool, string) {
 			ok, seen := framework.CondIs(p.Status.Conditions, "Ready", metav1.ConditionFalse, "ValidationFailed")
 			return ok && strings.Contains(findCond(p.Status.Conditions, "Ready").Message, c.ready), seen
 		})

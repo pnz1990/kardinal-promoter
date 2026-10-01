@@ -230,6 +230,21 @@ func failedWith(reason, substr string) func(*v1alpha1.Bundle) (bool, string) {
 	}
 }
 
+// waitPipeline is framework.Env.WaitPipeline with a check that also says what
+// it saw, for the failure message.
+func waitPipeline(t *testing.T, e *framework.Env, ns, name string, timeout time.Duration, what string,
+	check func(*v1alpha1.Pipeline) (bool, string)) *v1alpha1.Pipeline {
+	t.Helper()
+	var p v1alpha1.Pipeline
+	framework.Eventually(t, timeout, fmt.Sprintf("pipeline %s: %s", name, what), func(ctx context.Context) (bool, string) {
+		if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &p); err != nil {
+			return false, err.Error()
+		}
+		return check(&p)
+	})
+	return &p
+}
+
 // findCond returns the condition of type typ, or an empty one.
 func findCond(conds []metav1.Condition, typ string) metav1.Condition {
 	for _, c := range conds {
