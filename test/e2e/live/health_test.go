@@ -670,6 +670,85 @@ func TestHealth_ArgoIgnoresEarlierFailure(t *testing.T) {
 	e.WaitBundlePhase(t, ns, bundle, "Verified", time.Minute)
 }
 
+// TestHealth_ArgoIgnoresEarlierDegraded checks B52 for Degraded health, as
+// in a fix-forward after a broken release: the app runs fixtures.BrokenTag,
+// so Argo CD reports it Degraded once the rollout passes its progress
+// deadline. The step for V2 waits, with no health failure, while Argo CD
+// (auto-sync off) is OutOfSync on the pushed commit, and again while the
+// sync of that commit runs a PreSync hook that waits for a marker, the
+// Degraded Deployment still on BrokenTag. Once the test creates the marker,
+// Argo CD applies V2 and the step is Verified. Covers HEALTH-ARGO-06.
+func TestHealth_ArgoIgnoresEarlierDegraded(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ns := e.Namespace(t)
+	const release = "release-presync"
+	files := fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: []string{"test"}, Tag: fixtures.BrokenTag})
+	a := &app{e: e, ns: ns, envs: []string{"test"}, repo: e.Repo(t, ns, files)}
+	app := a.argoApp("test")
+	e.ArgoApp(t, app, a.repo, fixtures.Path("test"), ns)
+	old := e.WaitArgoOperation(t, app, "Succeeded", syncTimeout)
+	e.WaitArgoHealth(t, app, "Degraded", 3*time.Minute)
+
+	// The hook's image follows the overlay's tag, which Argo CD cannot pull
+	// on BrokenTag, so the hook is added with auto-sync off and first runs
+	// on the pushed commit.
+	e.SetArgoAutoSync(t, app, false)
+	fixtures.WithHook(files, "test", "hook", "PreSync", fmt.Sprintf("until %s; do sleep 1; done", fixtures.MarkerExists(ns, release)))
+	kust := fixtures.Path("test") + "/kustomization.yaml"
+	hook := fixtures.Path("test") + "/hook.yaml"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	_, err := gitserver.CommitFiles(ctx, e.Git, a.repo, a.repo.Branch, "", "Add a PreSync hook",
+		map[string][]byte{kust: files[kust], hook: files[hook]})
+	cancel()
+	require.NoError(t, err)
+	p := a.pipeline(nil)
+	envSpec(t, p, "test").Health.Timeout = "5m"
+	a.apply(t, p)
+
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStep(t, ns, pipelineName, bundle, "test", promoteTimeout, "the pushed commit",
+		func(ps *v1alpha1.PromotionStep) (bool, string) {
+			return ps.Status.State == "HealthChecking" && ps.Status.Outputs["commitSHA"] != "", framework.DescribeStep(ps)
+		})
+	commit := ps.Status.Outputs["commitSHA"]
+	// Waiting results do not reset the failure count, so each count checked
+	// below also covers the checks before it.
+	noFailure := func(what, message string) {
+		t.Helper()
+		e.WaitStep(t, ns, pipelineName, bundle, "test", time.Minute, what,
+			func(ps *v1alpha1.PromotionStep) (bool, string) {
+				return ps.Status.Message == message, framework.DescribeStep(ps)
+			})
+		framework.Consistently(t, 20*time.Second, what+" is not a health failure", func(ctx context.Context) (bool, string) {
+			ps, _, err := e.Step(ctx, ns, pipelineName, bundle, "test")
+			if err != nil || ps == nil {
+				return false, "step lookup failed"
+			}
+			return ps.Status.State == "HealthChecking" && ps.Status.Message == message &&
+				ps.Status.ConsecutiveHealthFailures == 0, framework.DescribeStep(ps)
+		})
+		assert.Equal(t, fixtures.Image+":"+fixtures.BrokenTag, e.DeploymentImage(t, ns, fixtures.Workload("test")), what)
+	}
+	noFailure("the Degraded Application OutOfSync on the pushed commit", fmt.Sprintf(
+		"waiting for argocd: health=Degraded, sync=OutOfSync, opPhase=Succeeded, revision=%s not synced yet", short(commit)))
+	assert.Equal(t, old, e.ArgoField(t, app, "status", "operationState", "syncResult", "revision"),
+		"the last operation ran on the BrokenTag commit")
+
+	e.SetArgoAutoSync(t, app, true)
+	noFailure("the PreSync hook of the pushed commit", fmt.Sprintf(
+		"waiting for argocd: health=Degraded, sync=OutOfSync, opPhase=Running, revision=%s not synced yet", short(commit)))
+	assert.Equal(t, commit, e.ArgoField(t, app, "status", "operationState", "operation", "sync", "revision"),
+		"the running operation is the pushed commit's")
+
+	e.CreateMarker(t, ns, release)
+	ps = e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, argoVerified, ps.Status.Message)
+	assert.Equal(t, commit, e.ArgoField(t, app, "status", "operationState", "syncResult", "revision"))
+	assert.Equal(t, imageV2, e.DeploymentImage(t, ns, fixtures.Workload("test")))
+	e.WaitBundlePhase(t, ns, bundle, "Verified", time.Minute)
+}
+
 // TestHealth_ArgoWaitsForRevision checks that the argocd adapter does not
 // pass an Application that is Healthy and Synced on an older commit (pinned
 // to it), nor one whose sync is still running (a PreSync hook that, on the
@@ -1025,8 +1104,11 @@ func TestHealth_ArgoStrategyRejectsConfigBundles(t *testing.T) {
 // The chart installed with defaults grants no patch on Applications, so the
 // step fails with the API server's forbidden error after its retries and
 // nothing changes. helm template shows rbac.argocdApplicationsWrite=true
-// adds patch to the chart's Applications rule; with that rule bound in the
-// Application namespace, for this Application only, the next Bundle promotes. Covers ARGOSTRAT-04,
+// adds patch to the chart's Applications rule. The test does not upgrade the
+// installed chart: it binds the rendered rule to the controller in a test
+// Role in the Application namespace, for this Application only, and the next
+// Bundle promotes. CHART-ARGOCDWRITE-01 is thus checked on the rules helm
+// template renders, not on an installed release's RBAC. Covers ARGOSTRAT-04,
 // CHART-ARGOCDWRITE-01.
 func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
 	t.Parallel()

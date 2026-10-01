@@ -95,6 +95,21 @@ func (e *Env) WaitArgoOperation(t *testing.T, name, phase string, timeout time.D
 	return rev
 }
 
+// WaitArgoHealth waits until the Application's status.health.status is
+// status.
+func (e *Env) WaitArgoHealth(t *testing.T, name, status string, timeout time.Duration) {
+	t.Helper()
+	Eventually(t, timeout, fmt.Sprintf("Argo CD Application %s health %s", name, status), func(ctx context.Context) (bool, string) {
+		app, err := e.Dynamic.Resource(ApplicationGVR).Namespace(ArgoCDNamespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, err.Error()
+		}
+		got, _, _ := unstructured.NestedString(app.Object, "status", "health", "status")
+		msg, _, _ := unstructured.NestedString(app.Object, "status", "health", "message")
+		return got == status, fmt.Sprintf("health=%s: %s", got, msg)
+	})
+}
+
 // CreateMarker creates a Service named name in ns, without endpoints, that a
 // hook script can wait for: its DNS name resolves once it exists
 // (fixtures.MarkerExists). It goes with the namespace.
