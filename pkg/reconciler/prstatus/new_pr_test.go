@@ -48,7 +48,7 @@ func TestNewPRClearsOldStatus(t *testing.T) {
 
 		res, err := r.Reconcile(context.Background(), req)
 		require.NoError(t, err)
-		assert.True(t, res.Requeue, "the cleared status is polled at once")
+		assert.Equal(t, ctrl.Result{Requeue: true}, res, "the cleared status is polled at once")
 		assert.Zero(t, f.calls, "the clear does not poll")
 		var got v1alpha1.PRStatus
 		require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
