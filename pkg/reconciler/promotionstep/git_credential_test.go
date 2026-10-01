@@ -389,7 +389,7 @@ func TestGitCredentialUnreadable_KeepsTheRetryLimit(t *testing.T) {
 // TestGitCredentialPresent_KeepsTheRetryLimit: a git failure gets no
 // credential note and still fails after 5 retries when git has a token, needs
 // none (ssh, a password in the URL), or failed for a reason other than
-// credentials.
+// credentials, even when the response body uses go-git's words for one.
 func TestGitCredentialPresent_KeepsTheRetryLimit(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -402,6 +402,13 @@ func TestGitCredentialPresent_KeepsTheRetryLimit(t *testing.T) {
 		{name: "ssh remote without secretRef", url: "ssh://git@github.com/test/repo.git"},
 		{name: "password in the URL", url: "https://bot:pw@git.example/test/repo"},
 		{name: "no secretRef, the remote is down", url: "https://github.com/test/repo"},
+		// The git client puts the body of an HTTP error other than 401, 403
+		// and 404 after its status; a body that quotes go-git's words is not
+		// the remote refusing git's credentials.
+		{name: "no secretRef, a proxy page says authentication required", url: "https://github.com/test/repo",
+			cloneErr: "git clone https://github.com/test/repo: HTTP 407 Proxy Authentication Required: Proxy authentication required"},
+		{name: "no secretRef, a 500 page says authorization failed", url: "https://github.com/test/repo",
+			cloneErr: "git clone https://github.com/test/repo: HTTP 500 Internal Server Error: upstream authorization failed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

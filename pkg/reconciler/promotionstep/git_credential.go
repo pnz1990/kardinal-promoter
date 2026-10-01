@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -117,17 +118,24 @@ func remoteNeedsToken(remote string) bool {
 	return !hasPassword
 }
 
+// gitAuthText matches go-git's words for a refusal where the git client puts
+// them, right after "git clone <url>: " or "git push <remote> <branch>: ".
+// The response body comes after them, or after the status of an HTTP error
+// other than 401, 403 and 404 ("HTTP 407 Proxy Authentication Required: "),
+// so a body that uses the same words does not match.
+var gitAuthText = regexp.MustCompile(`git (?:clone|push)(?: \S+){0,2}: (?:` +
+	regexp.QuoteMeta(transport.ErrAuthenticationRequired.Error()) + `|` +
+	regexp.QuoteMeta(transport.ErrAuthorizationFailed.Error()) + `)`)
+
 // isGitAuthError reports whether err is the remote refusing a clone or push
 // for lack of credentials: go-git's transport.ErrAuthenticationRequired (HTTP
 // 401) or ErrAuthorizationFailed (403). The git client formats its errors
-// with %s, so the text is matched as well.
+// with %s, so the text is matched as well (gitAuthText).
 func isGitAuthError(err error) bool {
 	if errors.Is(err, transport.ErrAuthenticationRequired) || errors.Is(err, transport.ErrAuthorizationFailed) {
 		return true
 	}
-	msg := err.Error()
-	return strings.Contains(msg, transport.ErrAuthenticationRequired.Error()) ||
-		strings.Contains(msg, transport.ErrAuthorizationFailed.Error())
+	return gitAuthText.MatchString(err.Error())
 }
 
 // note says what git is missing when step, which failed, is a step that uses
