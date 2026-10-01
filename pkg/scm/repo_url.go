@@ -223,3 +223,44 @@ func WebhookSignature(h http.Header) string {
 	}
 	return ""
 }
+
+// webhookEventHeaders lists the headers that name the event type of a
+// webhook. The first one present in a request is used. Gitea and Forgejo also
+// send X-GitHub-Event with the same value, so their own headers come first.
+var webhookEventHeaders = []string{
+	"X-Forgejo-Event", // Forgejo ("pull_request", "push", "issue_comment", ...)
+	"X-Gitea-Event",   // Gitea and Forgejo
+	"X-Gitlab-Event",  // GitLab ("Merge Request Hook", "Push Hook", ...)
+	"X-GitHub-Event",  // GitHub ("pull_request", "push", "ping", ...)
+}
+
+// webhookEventType returns the event type named by an SCM webhook request's
+// headers, or "" when it carries none.
+func webhookEventType(h http.Header) string {
+	for _, name := range webhookEventHeaders {
+		if v := h.Get(name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// eventTypeParser is implemented by providers that need the event header to
+// tell a pull request event from another event: the GitHub and Forgejo/Gitea
+// payloads do not say what kind of event they are, and GitLab's object_kind
+// can be missing. eventType is "" when the request has no event header.
+type eventTypeParser interface {
+	parseWebhookEvent(payload []byte, signature, eventType string) (WebhookEvent, error)
+}
+
+// ParseWebhookRequest validates and parses an SCM webhook request: it reads
+// the signature and the event type from the headers and passes them to the
+// provider. Providers that do not use an event header get
+// ParseWebhookEvent(payload, signature).
+func ParseWebhookRequest(p SCMProvider, payload []byte, h http.Header) (WebhookEvent, error) {
+	signature := WebhookSignature(h)
+	if tp, ok := p.(eventTypeParser); ok {
+		return tp.parseWebhookEvent(payload, signature, webhookEventType(h))
+	}
+	return p.ParseWebhookEvent(payload, signature)
+}

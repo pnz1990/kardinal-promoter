@@ -99,8 +99,14 @@ To verify webhook connectivity:
 ```bash
 kubectl port-forward svc/kardinal-promoter -n kardinal-system 8083:8083 &
 curl http://localhost:8083/webhook/scm/health
-# Returns: {"status":"ok","webhookConfigured":true,"eventsProcessed":N}
+# Returns: {"status":"ok","webhookConfigured":true,"eventsProcessed":N,"mergedPREvents":M}
 ```
+
+`eventsProcessed` counts every signed event since the controller started, whatever its
+type (push, comment, pull request), so any test delivery from your SCM raises it.
+`mergedPREvents` counts only merged pull request (merge request) events, the only events
+that move a promotion. The `webhook received` log line names each event's type in
+`event_type`.
 
 `webhookConfigured: false` means the `--webhook-secret` flag is not set. The controller
 then answers every `POST /webhook/scm` with `401` (it does not accept unsigned events)

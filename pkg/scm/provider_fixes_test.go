@@ -134,6 +134,101 @@ func TestParseWebhookEvent_MergedNormalised(t *testing.T) {
 	}
 }
 
+// TestParseWebhookRequest_EventType proves the event type comes from the
+// request's event header (X-Forgejo-Event, X-Gitea-Event, X-GitHub-Event) or
+// GitLab's object_kind, and that only a merged pull request event is reported
+// as a merge. A Gitea comment or label event on a merged PR also carries
+// pull_request.merged=true.
+func TestParseWebhookRequest_EventType(t *testing.T) {
+	const secret = "s3cret"
+	dynamic, err := scm.NewDynamicProvider("forgejo", "t", "", secret)
+	require.NoError(t, err)
+	merged := func(repo string, pr int) scm.WebhookEvent {
+		return scm.WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true, RepoFullName: repo, PRNumber: pr}
+	}
+	tests := []struct {
+		name     string
+		provider scm.SCMProvider
+		headers  map[string]string
+		payload  string
+		want     scm.WebhookEvent
+	}{
+		{name: "forgejo push", provider: scm.NewForgejoProvider("t", "", secret),
+			headers: map[string]string{"X-Forgejo-Event": "push"},
+			payload: `{"ref":"refs/heads/main","repository":{"full_name":"o/r"}}`,
+			want:    scm.WebhookEvent{EventType: "push", RepoFullName: "o/r"}},
+		{name: "gitea comment on a merged PR takes the PR number from pull_request",
+			provider: scm.NewForgejoProvider("t", "", secret),
+			headers:  map[string]string{"X-Gitea-Event": "issue_comment", "X-GitHub-Event": "issue_comment"},
+			payload:  `{"action":"created","issue":{"number":5},"pull_request":{"number":5,"merged":true},"is_pull":true,"repository":{"full_name":"o/r"}}`,
+			want:     scm.WebhookEvent{EventType: "issue_comment", Action: "created", PRNumber: 5, RepoFullName: "o/r"}},
+		{name: "gitea label change on a merged PR is not a merge",
+			provider: scm.NewForgejoProvider("t", "", secret),
+			headers:  map[string]string{"X-Gitea-Event": "pull_request"},
+			payload:  `{"action":"label_updated","number":5,"pull_request":{"number":5,"merged":true},"repository":{"full_name":"o/r"}}`,
+			want:     scm.WebhookEvent{EventType: "pull_request", Action: "label_updated", Merged: true, PRNumber: 5, RepoFullName: "o/r"}},
+		{name: "forgejo merge", provider: scm.NewForgejoProvider("t", "", secret),
+			headers: map[string]string{"X-Forgejo-Event": "pull_request", "X-Gitea-Event": "pull_request"},
+			payload: `{"action":"closed","number":5,"pull_request":{"merged":true},"repository":{"full_name":"o/r"}}`,
+			want:    merged("o/r", 5)},
+		{name: "forgejo without an event header reads a pull request event",
+			provider: scm.NewForgejoProvider("t", "", secret),
+			payload:  `{"action":"closed","number":5,"pull_request":{"merged":true},"repository":{"full_name":"o/r"}}`,
+			want:     merged("o/r", 5)},
+		{name: "dynamic provider passes the event type on", provider: dynamic,
+			headers: map[string]string{"X-Forgejo-Event": "push"},
+			payload: `{"ref":"refs/heads/main","repository":{"full_name":"o/r"}}`,
+			want:    scm.WebhookEvent{EventType: "push", RepoFullName: "o/r"}},
+		{name: "github ping", provider: scm.NewGitHubProvider("t", "", secret),
+			headers: map[string]string{"X-GitHub-Event": "ping"},
+			payload: `{"zen":"z","hook_id":1,"repository":{"full_name":"o/r"}}`,
+			want:    scm.WebhookEvent{EventType: "ping", RepoFullName: "o/r"}},
+		{name: "github review of a merged PR is not a merge", provider: scm.NewGitHubProvider("t", "", secret),
+			headers: map[string]string{"X-GitHub-Event": "pull_request_review"},
+			payload: `{"action":"submitted","pull_request":{"number":5,"merged":true,"merge_commit_sha":"abc"},"repository":{"full_name":"o/r"}}`,
+			want:    scm.WebhookEvent{EventType: "pull_request_review", Action: "submitted", PRNumber: 5, RepoFullName: "o/r"}},
+		{name: "github merge", provider: scm.NewGitHubProvider("t", "", secret),
+			headers: map[string]string{"X-GitHub-Event": "pull_request"},
+			payload: `{"action":"closed","pull_request":{"number":5,"merged":true,"merge_commit_sha":"abc"},"repository":{"full_name":"o/r"}}`,
+			want:    scm.WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true, MergeCommitSHA: "abc", PRNumber: 5, RepoFullName: "o/r"}},
+		{name: "gitlab note uses object_kind", provider: scm.NewGitLabProvider("t", "", secret),
+			headers: map[string]string{"X-Gitlab-Event": "Note Hook"},
+			payload: `{"object_kind":"note","object_attributes":{"note":"hi"},"project":{"path_with_namespace":"g/p"}}`,
+			want:    scm.WebhookEvent{EventType: "note", RepoFullName: "g/p"}},
+		{name: "gitlab without object_kind uses X-Gitlab-Event", provider: scm.NewGitLabProvider("t", "", secret),
+			headers: map[string]string{"X-Gitlab-Event": "System Hook"},
+			payload: `{"event_name":"repository_update","project":{"path_with_namespace":"g/p"}}`,
+			want:    scm.WebhookEvent{EventType: "System Hook", RepoFullName: "g/p"}},
+		{name: "bitbucket has no event parser and still reports a merge", provider: scm.NewBitbucketProvider("t", "", secret),
+			headers: map[string]string{"X-Event-Key": "pullrequest:fulfilled"},
+			payload: `{"pullrequest":{"id":9,"state":"MERGED","destination":{"repository":{"full_name":"ws/r"}}}}`,
+			want:    merged("ws/r", 9)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := []byte(tc.payload)
+			h := http.Header{}
+			for k, v := range tc.headers {
+				h.Set(k, v)
+			}
+			switch tc.provider.(type) {
+			case *scm.GitLabProvider:
+				h.Set("X-Gitlab-Token", secret)
+			default:
+				h.Set("X-Hub-Signature-256", "sha256="+hmacHex(secret, payload))
+			}
+			got, err := scm.ParseWebhookRequest(tc.provider, payload, h)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+
+			h.Set("X-Hub-Signature-256", "sha256="+hmacHex("wrong", payload))
+			h.Set("X-Gitlab-Token", "wrong")
+			_, err = scm.ParseWebhookRequest(tc.provider, payload, h)
+			require.Error(t, err, "a wrong signature must still be rejected")
+		})
+	}
+}
+
 // TestParseWebhookEvent_NotMerged proves events that are not a completed
 // merge are not reported as merged.
 func TestParseWebhookEvent_NotMerged(t *testing.T) {

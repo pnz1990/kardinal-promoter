@@ -217,6 +217,14 @@ func (g *GitHubProvider) GetPRReviewStatus(ctx context.Context, repo string, prN
 
 // ParseWebhookEvent parses a GitHub webhook payload and validates the HMAC-SHA256 signature.
 func (g *GitHubProvider) ParseWebhookEvent(payload []byte, signature string) (WebhookEvent, error) {
+	return g.parseWebhookEvent(payload, signature, "")
+}
+
+// parseWebhookEvent parses a GitHub webhook. eventType is the X-GitHub-Event
+// header ("pull_request", "push", "issue_comment", "ping", ...); the payload
+// does not name its event. Only a "pull_request" event reports Merged.
+// Without the header the payload is read as a pull_request event.
+func (g *GitHubProvider) parseWebhookEvent(payload []byte, signature, eventType string) (WebhookEvent, error) {
 	if g.WebhookSecret != "" {
 		if err := g.validateSignature(payload, signature); err != nil {
 			return WebhookEvent{}, fmt.Errorf("webhook signature invalid: %w", err)
@@ -239,11 +247,14 @@ func (g *GitHubProvider) ParseWebhookEvent(payload []byte, signature string) (We
 		return WebhookEvent{}, fmt.Errorf("parse webhook payload: %w", err)
 	}
 
+	if eventType == "" {
+		eventType = "pull_request"
+	}
 	event := WebhookEvent{
-		EventType:    "pull_request",
+		EventType:    eventType,
 		PRNumber:     raw.PullRequest.Number,
 		RepoFullName: raw.Repository.FullName,
-		Merged:       raw.PullRequest.Merged,
+		Merged:       eventType == "pull_request" && raw.PullRequest.Merged,
 		Action:       raw.Action,
 	}
 	if event.Merged {

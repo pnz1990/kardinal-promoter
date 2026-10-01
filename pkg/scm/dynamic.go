@@ -115,6 +115,16 @@ func (d *DynamicProvider) ParseWebhookEvent(payload []byte, signature string) (W
 	return d.current().ParseWebhookEvent(payload, signature)
 }
 
+// parseWebhookEvent passes the event type on to the current provider, so
+// ParseWebhookRequest works the same with or without a DynamicProvider.
+func (d *DynamicProvider) parseWebhookEvent(payload []byte, signature, eventType string) (WebhookEvent, error) {
+	p := d.current()
+	if tp, ok := p.(eventTypeParser); ok {
+		return tp.parseWebhookEvent(payload, signature, eventType)
+	}
+	return p.ParseWebhookEvent(payload, signature)
+}
+
 // AddLabelsToPR implements SCMProvider.
 func (d *DynamicProvider) AddLabelsToPR(ctx context.Context, repo string, prNumber int, labels []string) error {
 	return d.current().AddLabelsToPR(ctx, repo, prNumber, labels)

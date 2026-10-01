@@ -17,6 +17,10 @@ controller at startup.
 
 All providers send webhooks to the same endpoint, `http://<controller-host>:8083/webhook/scm`.
 Webhooks only speed things up: without them, the controller still sees merges by polling.
+Only a merged pull request (merge request) event moves a promotion. The controller reads
+the event type from `X-GitHub-Event`, `X-Forgejo-Event` or `X-Gitea-Event`, or from
+GitLab's `object_kind` (`X-Gitlab-Event` when that is missing), and logs and ignores
+other events such as pushes and comments.
 
 Bitbucket Cloud and Azure DevOps are newer and less tested than GitHub and GitLab.
 On Bitbucket, PRs carry no `kardinal` or `kardinal/rollback` labels, so find rollback
