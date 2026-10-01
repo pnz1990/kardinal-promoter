@@ -39,14 +39,15 @@ const tokenCheckTimeout = 10 * time.Second
 // The client has a Transport of its own, cloned from http.DefaultTransport so
 // that the proxy and TLS settings stay the same, with keep-alives disabled.
 // go-git's HTTP transport, like every *http.Client without a Transport, pools
-// its connections in http.DefaultTransport. A check through that pool could
-// leave its connection idle there, and the controller's first clone or push
-// to the same host would reuse it: since Go 1.27 net/http drains an unread
-// response body of up to 256 KiB on Close and keeps the connection (Go 1.26
-// closed it), and a bodiless 401, 403 or 404 was kept by every Go version. A
-// CNI that never re-checks an established connection (kindnet) then let git
-// traffic through a NetworkPolicy without git egress until the pod restarted,
-// because the check runs before the policy is enforced for the new pod (B78).
+// its connections in http.DefaultTransport. A check through that pool left its
+// connection idle there whenever net/http could reuse it, and the controller's
+// first clone or push to the same host reused it: after a response read to its
+// end or a bodiless 401, 403 or 404 on every Go version, and since Go 1.27
+// after any response body of up to 256 KiB, which Close now drains (Go 1.26
+// closed the connection). A CNI that never re-checks an established
+// connection (kindnet) then let git traffic through a NetworkPolicy without
+// git egress until the pod restarted, because the check runs before the
+// policy is enforced for the new pod (B78).
 //
 // DisableKeepAlives makes the request carry Connection: close, so the
 // connection never enters a pool and the server closes it after the response.
@@ -62,15 +63,6 @@ func newTokenCheckClient() (client *http.Client, release func()) {
 	}
 	tr.DisableKeepAlives = true
 	return &http.Client{Timeout: tokenCheckTimeout, Transport: tr}, tr.CloseIdleConnections
-}
-
-// drainAndClose reads what is left of a token check response body, up to
-// maxTokenInfoBytes, and closes it. The validators read at most the headers
-// or one JSON document, so without this what happens to the connection would
-// depend on the Go version's rules for a body closed before its end.
-func drainAndClose(body io.ReadCloser) {
-	_, _ = io.Copy(io.Discard, io.LimitReader(body, maxTokenInfoBytes))
-	_ = body.Close()
 }
 
 // TokenScopeWarning describes a missing or insufficient token scope found during
@@ -123,7 +115,7 @@ func ValidateGitHubTokenScopes(ctx context.Context, token, apiURL string) ([]Tok
 	if err != nil {
 		return nil, fmt.Errorf("call GitHub /user: %w", err)
 	}
-	defer drainAndClose(resp.Body)
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return []TokenScopeWarning{
@@ -205,7 +197,7 @@ func ValidateGitLabTokenScopes(ctx context.Context, token, apiURL string) ([]Tok
 	if err != nil {
 		return nil, fmt.Errorf("call GitLab token introspection: %w", err)
 	}
-	defer drainAndClose(resp.Body)
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return []TokenScopeWarning{
@@ -294,7 +286,7 @@ func validateGiteaFamilyTokenScopes(ctx context.Context, name, token, apiURL str
 	if err != nil {
 		return nil, fmt.Errorf("call %s /user: %w", name, err)
 	}
-	defer drainAndClose(resp.Body)
+	defer func() { _ = resp.Body.Close() }()
 
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
