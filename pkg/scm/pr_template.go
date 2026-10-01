@@ -16,6 +16,7 @@ package scm
 import (
 	"bytes"
 	"fmt"
+	"path"
 	"strings"
 	"text/template"
 	"time"
@@ -83,6 +84,22 @@ type PRBody struct {
 	// When non-empty, the PR body includes a rollback notice section (#402).
 	RollbackOf string
 
+	// RestoredVersion is the version the rollback deploys, BundleVersion of
+	// Bundle. Empty when the Bundle has no artifacts.
+	RestoredVersion string
+
+	// RollbackFrom names the Bundle the rollback replaces. Empty when it is
+	// not recorded: the note then says "the bundle deployed in <env> now".
+	RollbackFrom string
+
+	// RollbackFromVersion is the version RollbackFrom deploys. Empty when it
+	// is unknown.
+	RollbackFromVersion string
+
+	// RolledBackBy is who asked for the rollback. Empty when it is not
+	// recorded.
+	RolledBackBy string
+
 	// GateResults holds PolicyGate evaluation results for this environment.
 	GateResults []v1alpha1.GateResult
 
@@ -129,8 +146,11 @@ var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMa
 ## ROLLBACK: {{.BundleName}} -> {{.PipelineName}}/{{.Environment}}
 
 > **This is a rollback PR.** It reverts environment {{.Environment}} to the state of bundle {{.RollbackOf}}.
-> Rolling back FROM: the bundle deployed in {{.Environment}} now
-> Rolling back TO: {{.BundleName}} (copy of {{.RollbackOf}})
+> Rolling back FROM: {{if .RollbackFrom}}{{.RollbackFrom}}{{with .RollbackFromVersion}} ({{mdcell .}}){{end}}{{else}}the bundle deployed in {{.Environment}} now{{end}}
+> Rolling back TO: {{.RollbackOf}}{{with .RestoredVersion}} ({{mdcell .}}){{end}}
+{{- with .RolledBackBy}}
+> Rolled back by: {{mdcell .}}
+{{- end}}
 
 {{- else}}
 ## Promotion: {{.BundleName}} -> {{.PipelineName}}/{{.Environment}}
@@ -177,4 +197,68 @@ func RenderPRBody(data PRBody) (string, error) {
 		return "", fmt.Errorf("render PR body: %w", err)
 	}
 	return buf.String(), nil
+}
+
+// maxVersionImages is how many images BundleVersion lists before it says
+// "and N more".
+const maxVersionImages = 3
+
+// BundleVersion names the version a Bundle deploys, for the rollback PR title
+// and note: the tag of a one-image Bundle (its short digest, or the image name,
+// when it has no tag), "<image>:<tag>" for each of several images, or
+// "config <short commit>" for a config Bundle. A mixed Bundle deploys its
+// images. It returns "" when the Bundle has no artifacts.
+func BundleVersion(spec v1alpha1.BundleSpec) string {
+	if spec.Type == "config" || len(spec.Images) == 0 {
+		if spec.ConfigRef == nil || spec.ConfigRef.CommitSHA == "" {
+			return ""
+		}
+		return "config " + truncate(spec.ConfigRef.CommitSHA, 7)
+	}
+	if len(spec.Images) == 1 {
+		img := spec.Images[0]
+		switch {
+		case img.Tag != "":
+			return img.Tag
+		case img.Digest != "":
+			return shortDigest(img.Digest)
+		default:
+			return path.Base(img.Repository)
+		}
+	}
+	parts := make([]string, 0, maxVersionImages)
+	for i, img := range spec.Images {
+		if i == maxVersionImages {
+			break
+		}
+		name := path.Base(img.Repository)
+		switch {
+		case img.Tag != "":
+			name += ":" + img.Tag
+		case img.Digest != "":
+			name += "@" + shortDigest(img.Digest)
+		}
+		parts = append(parts, name)
+	}
+	v := strings.Join(parts, ", ")
+	if more := len(spec.Images) - maxVersionImages; more > 0 {
+		v += fmt.Sprintf(" and %d more", more)
+	}
+	return v
+}
+
+// shortDigest cuts "sha256:<64 hex>" to "sha256:<12 hex>".
+func shortDigest(d string) string {
+	if algo, hex, ok := strings.Cut(d, ":"); ok {
+		return algo + ":" + truncate(hex, 12)
+	}
+	return truncate(d, 12)
+}
+
+// truncate returns the first n bytes of s.
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }

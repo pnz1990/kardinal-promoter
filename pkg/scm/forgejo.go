@@ -253,6 +253,16 @@ func (f *ForgejoProvider) GetPRReviewStatus(ctx context.Context, repo string, pr
 // X-Gitea-Signature / X-Forgejo-Signature headers, and the same digest with a
 // "sha256=" prefix in X-Hub-Signature-256. Both forms are accepted.
 func (f *ForgejoProvider) ParseWebhookEvent(payload []byte, signature string) (WebhookEvent, error) {
+	return f.parseWebhookEvent(payload, signature, "")
+}
+
+// parseWebhookEvent parses a Forgejo/Gitea webhook. eventType is the
+// X-Forgejo-Event / X-Gitea-Event header ("pull_request", "push",
+// "issue_comment", ...). The payload does not name its event, and a comment
+// or label event on a merged PR carries pull_request.merged=true too, so only
+// a "pull_request" event with action "closed" is a merge. Without the header
+// the payload is read as a pull_request event.
+func (f *ForgejoProvider) parseWebhookEvent(payload []byte, signature, eventType string) (WebhookEvent, error) {
 	if f.WebhookSecret != "" {
 		mac := hmac.New(sha256.New, []byte(f.WebhookSecret))
 		mac.Write(payload)
@@ -267,6 +277,7 @@ func (f *ForgejoProvider) ParseWebhookEvent(payload []byte, signature string) (W
 		Action      string `json:"action"`
 		Number      int    `json:"number"`
 		PullRequest struct {
+			Number  int    `json:"number"`
 			HTMLURL string `json:"html_url"`
 			Merged  bool   `json:"merged"`
 			State   string `json:"state"`
@@ -279,13 +290,22 @@ func (f *ForgejoProvider) ParseWebhookEvent(payload []byte, signature string) (W
 		return WebhookEvent{}, fmt.Errorf("parse Forgejo webhook payload: %w", err)
 	}
 
-	if raw.PullRequest.Merged {
-		return mergedPREvent(raw.Repository.FullName, raw.Number), nil
+	if eventType == "" {
+		eventType = "pull_request"
+	}
+	number := raw.Number
+	if number == 0 {
+		// Comment payloads have no top-level number.
+		number = raw.PullRequest.Number
+	}
+	if eventType == "pull_request" && raw.PullRequest.Merged && raw.Action == "closed" {
+		return mergedPREvent(raw.Repository.FullName, number), nil
 	}
 	return WebhookEvent{
-		EventType:    "pull_request",
-		PRNumber:     raw.Number,
+		EventType:    eventType,
+		PRNumber:     number,
 		RepoFullName: raw.Repository.FullName,
+		Merged:       eventType == "pull_request" && raw.PullRequest.Merged,
 		Action:       raw.Action,
 	}, nil
 }

@@ -39,7 +39,9 @@ const (
 // "closed" and Merged true, so the webhook handler needs a single check.
 // Other events keep the provider's own event type and action.
 type WebhookEvent struct {
-	// EventType is the SCM event type (e.g., "pull_request").
+	// EventType is the SCM's event type, from the event header or the
+	// payload: "pull_request", "push", "issue_comment", GitLab's
+	// "merge_request" or "note", and so on.
 	EventType string
 
 	// PRNumber is the pull request number, if applicable.
@@ -90,6 +92,8 @@ type SCMProvider interface {
 	GetPRReviewStatus(ctx context.Context, repo string, prNumber int) (approved bool, approvalCount int, err error)
 
 	// ParseWebhookEvent parses a raw webhook payload and validates the HMAC signature.
+	// The webhook handler calls ParseWebhookRequest instead, which also passes
+	// the event header to the providers that need it.
 	ParseWebhookEvent(payload []byte, signature string) (WebhookEvent, error)
 
 	// AddLabelsToPR applies labels to a pull request.

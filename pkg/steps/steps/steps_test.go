@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -118,14 +119,17 @@ type mockSCMProvider struct {
 	// repos records the repository argument of every OpenPR, GetPRStatus
 	// and AddLabelsToPR call.
 	repos []string
-	// titles records the title argument of every OpenPR call.
+	// titles and bodies record the title and body arguments of every OpenPR
+	// call.
 	titles []string
+	bodies []string
 }
 
-func (m *mockSCMProvider) OpenPR(_ context.Context, repo, title, _, _, _ string) (string, int, error) {
+func (m *mockSCMProvider) OpenPR(_ context.Context, repo, title, body, _, _ string) (string, int, error) {
 	m.openPRCalls++
 	m.repos = append(m.repos, repo)
 	m.titles = append(m.titles, title)
+	m.bodies = append(m.bodies, body)
 	return m.prURL, m.prNumber, m.openPRErr
 }
 
@@ -542,26 +546,40 @@ func TestOpenPRStep_NormalBundleDoesNotHaveRollbackLabel(t *testing.T) {
 		"normal promotion PR must have kardinal/promotion label")
 }
 
-// TestOpenPRStep_RollbackTitleAndLabels verifies the rollback PR title names
-// the Bundle whose state is restored (spec.provenance.rollbackOf) as restored,
-// not reverted, and that rollback PRs carry kardinal/rollback in addition to
-// kardinal/promotion, as docs/rollback.md and docs/pr-evidence.md say (E2E-R06).
+// TestOpenPRStep_RollbackTitleAndLabels verifies the rollback PR title keeps
+// the documented shape "[kardinal] Rollback <environment> to <rollback
+// bundle> (restores <target>)", where <target> is the version the rollback
+// deploys (the restored tag), not a Bundle name. Only a rollback without
+// artifacts falls back to the restored Bundle's name. Rollback PRs carry
+// kardinal/rollback in addition to kardinal/promotion, as docs/rollback.md and
+// docs/pr-evidence.md say (E2E-R06).
 func TestOpenPRStep_RollbackTitleAndLabels(t *testing.T) {
+	nginx := []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.29.0"}}
 	tests := []struct {
 		name       string
 		bundle     string
 		rollbackOf string
+		images     []v1alpha1.ImageRef
 		wantTitle  string
 		wantLabels []string
 	}{
 		{
 			name:       "promotion",
 			bundle:     "kardinal-test-app-b5mt9",
+			images:     nginx,
 			wantTitle:  "[kardinal] Promote kardinal-test-app-b5mt9 to prod",
 			wantLabels: []string{"kardinal", "kardinal/promotion"},
 		},
 		{
-			name:       "rollback names the restored bundle",
+			name:       "rollback names the restored tag",
+			bundle:     "kardinal-test-app-rollback-bkgwk",
+			rollbackOf: "kardinal-test-app-dq92z",
+			images:     nginx,
+			wantTitle:  "[kardinal] Rollback prod to kardinal-test-app-rollback-bkgwk (restores 1.29.0)",
+			wantLabels: []string{"kardinal", "kardinal/promotion", "kardinal/rollback"},
+		},
+		{
+			name:       "rollback without artifacts names the restored bundle",
 			bundle:     "kardinal-test-app-rollback-bkgwk",
 			rollbackOf: "kardinal-test-app-dq92z",
 			wantTitle:  "[kardinal] Rollback prod to kardinal-test-app-rollback-bkgwk (restores kardinal-test-app-dq92z)",
@@ -574,6 +592,7 @@ func TestOpenPRStep_RollbackTitleAndLabels(t *testing.T) {
 			state := makeState(t, &mockGitClient{}, mockSCM)
 			state.BundleName = tt.bundle
 			state.Outputs["branch"] = "kardinal/" + tt.bundle + "/prod"
+			state.Bundle.Images = tt.images
 			state.Bundle.Provenance = &v1alpha1.BundleProvenance{RollbackOf: tt.rollbackOf, Author: "ci"}
 
 			step, err := parentsteps.Lookup("open-pr")
@@ -586,6 +605,76 @@ func TestOpenPRStep_RollbackTitleAndLabels(t *testing.T) {
 			assert.Equal(t, tt.wantTitle, mockSCM.titles[0])
 			assert.NotContains(t, mockSCM.titles[0], "reverts")
 			assert.ElementsMatch(t, tt.wantLabels, mockSCM.addedLabels)
+		})
+	}
+}
+
+// TestOpenPRStep_RollbackBody checks that the rollback PR body names the
+// Bundle and version the rollback replaces (FROM), the Bundle and version it
+// restores (TO) and who asked for it (Rolled back by), from the StepState the
+// reconciler fills in, and that the provenance Author is the restored build's
+// author (spike bug 6).
+func TestOpenPRStep_RollbackBody(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(*parentsteps.StepState)
+		wantNote string
+	}{
+		{
+			name: "replaced bundle, versions and actor",
+			setup: func(s *parentsteps.StepState) {
+				s.RollbackFrom = "nginx-demo-v1-30-0"
+				s.RollbackFromBundle = &v1alpha1.BundleSpec{Type: "image",
+					Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.30.0"}}}
+				s.RequestedBy = "alice"
+			},
+			wantNote: "> **This is a rollback PR.** It reverts environment prod to the state of bundle nginx-demo-v1-29-0.\n" +
+				"> Rolling back FROM: nginx-demo-v1-30-0 (1.30.0)\n" +
+				"> Rolling back TO: nginx-demo-v1-29-0 (1.29.0)\n" +
+				"> Rolled back by: alice\n",
+		},
+		{
+			name: "replaced bundle deleted",
+			setup: func(s *parentsteps.StepState) {
+				s.RollbackFrom = "nginx-demo-v1-30-0"
+				s.RequestedBy = "kardinal-controller (auto-rollback via RollbackPolicy)"
+			},
+			wantNote: "> Rolling back FROM: nginx-demo-v1-30-0\n" +
+				"> Rolling back TO: nginx-demo-v1-29-0 (1.29.0)\n" +
+				"> Rolled back by: kardinal-controller (auto-rollback via RollbackPolicy)\n",
+		},
+		{
+			name:  "nothing recorded",
+			setup: func(*parentsteps.StepState) {},
+			wantNote: "> Rolling back FROM: the bundle deployed in prod now\n" +
+				"> Rolling back TO: nginx-demo-v1-29-0 (1.29.0)\n\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSCM := &mockSCMProvider{prURL: "https://github.com/owner/repo/pull/29", prNumber: 29}
+			state := makeState(t, &mockGitClient{}, mockSCM)
+			state.BundleName = "nginx-demo-rollback-bkgwk"
+			state.Outputs["branch"] = "kardinal/nginx-demo-rollback-bkgwk/prod"
+			state.Bundle.Provenance = &v1alpha1.BundleProvenance{
+				RollbackOf: "nginx-demo-v1-29-0", Author: "ci-bot", CommitSHA: "abc1234",
+			}
+			tt.setup(state)
+
+			step, err := parentsteps.Lookup("open-pr")
+			require.NoError(t, err)
+			result, err := step.Execute(context.Background(), state)
+			require.NoError(t, err)
+			require.Equal(t, parentsteps.StepSuccess, result.Status)
+
+			require.Len(t, mockSCM.bodies, 1)
+			body := mockSCM.bodies[0]
+			assert.Contains(t, body, "## ROLLBACK: nginx-demo-rollback-bkgwk -> nginx-demo/prod\n")
+			assert.Contains(t, body, tt.wantNote)
+			assert.NotContains(t, body, "copy of")
+			assert.Equal(t, strings.Contains(tt.wantNote, "Rolled back by"), strings.Contains(body, "Rolled back by"))
+			assert.Contains(t, body, "| ghcr.io/nginx/nginx | 1.29.0 | — | — | abc1234 | ci-bot |",
+				"the provenance Author is the restored build's author")
 		})
 	}
 }

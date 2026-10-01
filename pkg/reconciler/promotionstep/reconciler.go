@@ -500,6 +500,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		GateResults:          r.collectGateResults(ctx, log, ps),
 		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
 	}
+	r.setRollbackState(ctx, log, state, bundle)
 
 	prevIdx := ps.Status.CurrentStepIndex
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, prevIdx)
@@ -1701,4 +1702,26 @@ func upstreamEnvironments(bundle *v1alpha1.Bundle, env string) []v1alpha1.Enviro
 		}
 	}
 	return out
+}
+
+// setRollbackState tells the steps who asked for the Bundle and, for a
+// rollback Bundle, which Bundle it replaces, so the rollback PR can name both
+// sides and the person who rolled back. The replaced Bundle may be gone; the PR
+// then names it without its version.
+func (r *Reconciler) setRollbackState(ctx context.Context, log zerolog.Logger, state *steps.StepState, bundle *v1alpha1.Bundle) {
+	if bundle == nil {
+		return
+	}
+	state.RequestedBy = bundle.Annotations[lifecycle.AnnotationRequestedBy]
+	name := bundle.Annotations[lifecycle.AnnotationRollbackFrom]
+	if name == "" {
+		return
+	}
+	state.RollbackFrom = name
+	var from v1alpha1.Bundle
+	if err := r.Get(ctx, types.NamespacedName{Namespace: bundle.Namespace, Name: name}, &from); err != nil {
+		log.Debug().Err(err).Str("rollbackFrom", name).Msg("replaced bundle not readable; the rollback PR names it without its version")
+		return
+	}
+	state.RollbackFromBundle = &from.Spec
 }

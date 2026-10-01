@@ -21,6 +21,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -398,6 +399,157 @@ func TestWebhook_MergeEventScoping(t *testing.T) {
 			for name, want := range tt.wantMerged {
 				assert.Equal(t, want, webhookMerged(t, c, name, ns[name]), name)
 			}
+		})
+	}
+}
+
+// TestWebhook_EventTypeFromHeader sends signed deliveries the way GitHub,
+// Forgejo, Gitea and GitLab send them (event header plus payload) through the
+// handler with the real providers. Push and comment events must be logged
+// with their own type, and only a merged pull request may mark the PRStatus
+// merged or count in mergedPREvents on /webhook/scm/health.
+func TestWebhook_EventTypeFromHeader(t *testing.T) {
+	const secret = "s3cret"
+	hexMAC := func(body string) string {
+		m := hmac.New(sha256.New, []byte(secret))
+		m.Write([]byte(body))
+		return hex.EncodeToString(m.Sum(nil))
+	}
+	// Gitea sends X-Gitea-Event with the coarse event name, X-Gitea-Event-Type
+	// with the fine one, and X-GitHub-Event for compatibility. Forgejo also
+	// sends X-Forgejo-Event and X-Forgejo-Event-Type.
+	gitea := func(event, eventType string) func(string) http.Header {
+		return func(body string) http.Header {
+			h := http.Header{}
+			h.Set("X-Gitea-Event", event)
+			h.Set("X-Gitea-Event-Type", eventType)
+			h.Set("X-GitHub-Event", event)
+			h.Set("X-Gitea-Signature", hexMAC(body))
+			return h
+		}
+	}
+	forgejo := func(event, eventType string) func(string) http.Header {
+		return func(body string) http.Header {
+			h := gitea(event, eventType)(body)
+			h.Set("X-Forgejo-Event", event)
+			h.Set("X-Forgejo-Event-Type", eventType)
+			h.Set("X-Forgejo-Signature", hexMAC(body))
+			return h
+		}
+	}
+	github := func(event string) func(string) http.Header {
+		return func(body string) http.Header {
+			h := http.Header{}
+			h.Set("X-GitHub-Event", event)
+			h.Set("X-Hub-Signature-256", "sha256="+hexMAC(body))
+			return h
+		}
+	}
+	gitlab := func(event string) func(string) http.Header {
+		return func(string) http.Header {
+			h := http.Header{}
+			h.Set("X-Gitlab-Event", event)
+			h.Set("X-Gitlab-Token", secret)
+			return h
+		}
+	}
+	const (
+		giteaPush  = `{"ref":"refs/heads/main","before":"a1","after":"b2","repository":{"full_name":"o/r"}}`
+		giteaMerge = `{"action":"closed","number":5,"pull_request":{"number":5,"merged":true},"repository":{"full_name":"o/r"}}`
+	)
+	tests := []struct {
+		name       string
+		provider   string
+		header     func(body string) http.Header
+		body       string
+		wantType   string
+		wantAction string
+		// wantMerged: the PRStatus is marked merged and the event counts in
+		// mergedPREvents.
+		wantMerged bool
+	}{
+		{name: "forgejo push", provider: "forgejo", header: forgejo("push", "push"), body: giteaPush,
+			wantType: "push"},
+		{name: "gitea push", provider: "gitea", header: gitea("push", "push"), body: giteaPush,
+			wantType: "push"},
+		{name: "gitea comment on a merged PR", provider: "gitea",
+			header:   gitea("issue_comment", "pull_request_comment"),
+			body:     `{"action":"created","issue":{"number":5},"pull_request":{"number":5,"merged":true},"is_pull":true,"comment":{"body":"verified"},"repository":{"full_name":"o/r"}}`,
+			wantType: "issue_comment", wantAction: "created"},
+		{name: "forgejo label change on a merged PR", provider: "forgejo",
+			header:   forgejo("pull_request", "pull_request_label"),
+			body:     `{"action":"label_updated","number":5,"pull_request":{"number":5,"merged":true},"repository":{"full_name":"o/r"}}`,
+			wantType: "pull_request", wantAction: "label_updated"},
+		{name: "forgejo merge", provider: "forgejo", header: forgejo("pull_request", "pull_request"), body: giteaMerge,
+			wantType: "pull_request", wantAction: "closed", wantMerged: true},
+		{name: "gitea merge", provider: "gitea", header: gitea("pull_request", "pull_request"), body: giteaMerge,
+			wantType: "pull_request", wantAction: "closed", wantMerged: true},
+		{name: "github ping", provider: "github", header: github("ping"),
+			body:     `{"zen":"Keep it logically awesome.","hook_id":1,"repository":{"full_name":"o/r"}}`,
+			wantType: "ping"},
+		{name: "github push", provider: "github", header: github("push"),
+			body:     `{"ref":"refs/heads/main","repository":{"full_name":"o/r"}}`,
+			wantType: "push"},
+		{name: "github comment on a PR", provider: "github", header: github("issue_comment"),
+			body:     `{"action":"created","issue":{"number":5,"pull_request":{}},"comment":{"body":"verified"},"repository":{"full_name":"o/r"}}`,
+			wantType: "issue_comment", wantAction: "created"},
+		{name: "github review of a merged PR", provider: "github", header: github("pull_request_review"),
+			body:     `{"action":"submitted","pull_request":{"number":5,"merged":true},"repository":{"full_name":"o/r"}}`,
+			wantType: "pull_request_review", wantAction: "submitted"},
+		{name: "github merge", provider: "github", header: github("pull_request"),
+			body:     `{"action":"closed","pull_request":{"number":5,"merged":true},"repository":{"full_name":"o/r"}}`,
+			wantType: "pull_request", wantAction: "closed", wantMerged: true},
+		{name: "gitlab push", provider: "gitlab", header: gitlab("Push Hook"),
+			body:     `{"object_kind":"push","ref":"refs/heads/main","project":{"path_with_namespace":"o/r"}}`,
+			wantType: "push"},
+		{name: "gitlab comment on a merged MR", provider: "gitlab", header: gitlab("Note Hook"),
+			body:     `{"object_kind":"note","object_attributes":{"note":"verified"},"merge_request":{"iid":5,"state":"merged"},"project":{"path_with_namespace":"o/r"}}`,
+			wantType: "note"},
+		{name: "gitlab MR opened", provider: "gitlab", header: gitlab("Merge Request Hook"),
+			body:     `{"object_kind":"merge_request","object_attributes":{"iid":5,"state":"opened","action":"open"},"project":{"path_with_namespace":"o/r"}}`,
+			wantType: "merge_request", wantAction: "open"},
+		{name: "gitlab merge", provider: "gitlab", header: gitlab("Merge Request Hook"),
+			body:     `{"object_kind":"merge_request","object_attributes":{"iid":5,"state":"merged","action":"merge"},"project":{"path_with_namespace":"o/r"}}`,
+			wantType: "pull_request", wantAction: "closed", wantMerged: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := scm.NewProvider(tc.provider, "", "", secret)
+			require.NoError(t, err)
+			c := fake.NewClientBuilder().WithScheme(webhookScheme()).
+				WithObjects(webhookPRS("prs", "default", "o/r", 5)).
+				WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+			var logs bytes.Buffer
+			srv := newWebhookServerWithConfig(p, c, zerolog.New(&logs), true)
+
+			req := httptest.NewRequest(http.MethodPost, "/webhook/scm", strings.NewReader(tc.body))
+			req.Header = tc.header(tc.body)
+			w := httptest.NewRecorder()
+			srv.Handler()(w, req)
+			require.Equal(t, http.StatusNoContent, w.Code, logs.String())
+
+			var received map[string]any
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				if strings.Contains(line, `"message":"webhook received"`) {
+					require.NoError(t, json.Unmarshal([]byte(line), &received))
+				}
+			}
+			require.NotNil(t, received, "no \"webhook received\" line in:\n%s", logs.String())
+			assert.Equal(t, tc.wantType, received["event_type"], "logged event_type")
+			assert.Equal(t, tc.wantAction, received["action"], "logged action")
+
+			assert.Equal(t, tc.wantMerged, webhookMerged(t, c, "prs", "default"), "PRStatus merged")
+
+			hw := httptest.NewRecorder()
+			srv.HealthHandler()(hw, httptest.NewRequest(http.MethodGet, "/webhook/scm/health", nil))
+			var health map[string]any
+			require.NoError(t, json.Unmarshal(hw.Body.Bytes(), &health))
+			assert.Equal(t, float64(1), health["eventsProcessed"], "every signed event is counted: %s", hw.Body.String())
+			wantMerges := float64(0)
+			if tc.wantMerged {
+				wantMerges = 1
+			}
+			assert.Equal(t, wantMerges, health["mergedPREvents"], "only a merge counts as a merge: %s", hw.Body.String())
 		})
 	}
 }

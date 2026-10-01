@@ -55,7 +55,8 @@ func fakeSCMAPI(t *testing.T, handle func(r *http.Request) (int, string)) (*http
 }
 
 // openPRState is the open-pr step state for a Pipeline whose spec.git.url is
-// gitURL, with provider p. rollbackOf != "" makes it a rollback.
+// gitURL, with provider p. rollbackOf != "" makes it a rollback that deploys
+// the restored image, nginx 1.28.0.
 func openPRState(t *testing.T, gitURL string, p scm.SCMProvider, rollbackOf string) *parentsteps.StepState {
 	t.Helper()
 	state := makeState(t, &mockGitClient{}, nil)
@@ -64,6 +65,7 @@ func openPRState(t *testing.T, gitURL string, p scm.SCMProvider, rollbackOf stri
 	state.Git.URL = gitURL
 	if rollbackOf != "" {
 		state.Bundle.Provenance = &v1alpha1.BundleProvenance{RollbackOf: rollbackOf, Author: "ci"}
+		state.Bundle.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.28.0"}}
 	}
 	return state
 }
@@ -80,7 +82,7 @@ func TestOpenPRStep_BitbucketCloud(t *testing.T) {
 	}{
 		{name: "promotion", wantTitle: "[kardinal] Promote nginx-demo-v1-29-0 to prod"},
 		{name: "rollback", rollbackOf: "nginx-demo-v1-28-0",
-			wantTitle: "[kardinal] Rollback prod to nginx-demo-v1-29-0 (restores nginx-demo-v1-28-0)"},
+			wantTitle: "[kardinal] Rollback prod to nginx-demo-v1-29-0 (restores 1.28.0)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -151,7 +153,7 @@ func TestOpenPRStep_AzureDevOps(t *testing.T) {
 		{name: "promotion", wantTitle: "[kardinal] Promote nginx-demo-v1-29-0 to prod",
 			wantLabels: []string{"kardinal", "kardinal/promotion"}},
 		{name: "rollback", rollbackOf: "nginx-demo-v1-28-0",
-			wantTitle:  "[kardinal] Rollback prod to nginx-demo-v1-29-0 (restores nginx-demo-v1-28-0)",
+			wantTitle:  "[kardinal] Rollback prod to nginx-demo-v1-29-0 (restores 1.28.0)",
 			wantLabels: []string{"kardinal", "kardinal/promotion", "kardinal/rollback"}},
 	}
 	for _, tt := range tests {

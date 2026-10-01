@@ -30,7 +30,10 @@ type RollbackRequest struct {
 	// change was deployed last in the environment. Automatic rollbacks set it
 	// to the failing Bundle.
 	FromBundle string
-	// Actor is recorded as spec.provenance.author of the rollback Bundle.
+	// Actor is who asked for the rollback. It is recorded in the
+	// kardinal.io/requested-by annotation of the rollback Bundle;
+	// spec.provenance keeps the target's, so its author is the author of the
+	// restored build.
 	Actor string
 	// Name fixes the rollback Bundle name (used by automatic rollbacks for
 	// idempotency). Empty means GenerateName "<pipeline>-rollback-".
@@ -379,8 +382,15 @@ func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *Rollbac
 	} else {
 		b.GenerateName = req.Pipeline + "-rollback-"
 	}
+	ann := map[string]string{}
 	if plan.CurrentName != "" {
-		b.Annotations = map[string]string{AnnotationRollbackFrom: plan.CurrentName}
+		ann[AnnotationRollbackFrom] = plan.CurrentName
+	}
+	if req.Actor != "" {
+		ann[AnnotationRequestedBy] = req.Actor
+	}
+	if len(ann) > 0 {
+		b.Annotations = ann
 	}
 	StampCreatedAt(b, req.Now)
 
@@ -391,9 +401,6 @@ func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *Rollbac
 		prov.CIRunURL = copyableCIRunURL(ctx, plan.Target)
 		prov.Author = plan.Target.Spec.Provenance.Author
 		prov.Timestamp = plan.Target.Spec.Provenance.Timestamp
-	}
-	if req.Actor != "" {
-		prov.Author = req.Actor
 	}
 	prov.RollbackOf = plan.Target.Name
 	b.Spec.Provenance = prov

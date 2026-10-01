@@ -198,6 +198,14 @@ func (g *GitLabProvider) GetPRReviewStatus(ctx context.Context, repo string, prN
 // the X-Gitlab-Token header using constant-time comparison.
 // The caller must pass the value of the X-Gitlab-Token header as signature.
 func (g *GitLabProvider) ParseWebhookEvent(payload []byte, signature string) (WebhookEvent, error) {
+	return g.parseWebhookEvent(payload, signature, "")
+}
+
+// parseWebhookEvent parses a GitLab webhook. The event type is the payload's
+// object_kind ("merge_request", "push", "note", ...); eventType, the
+// X-Gitlab-Event header ("Push Hook", ...), names it when object_kind is
+// missing.
+func (g *GitLabProvider) parseWebhookEvent(payload []byte, signature, eventType string) (WebhookEvent, error) {
 	if g.WebhookSecret != "" {
 		// GitLab uses a plaintext token, not HMAC. Constant-time comparison prevents timing attacks.
 		if subtle.ConstantTimeCompare([]byte(signature), []byte(g.WebhookSecret)) != 1 {
@@ -227,8 +235,11 @@ func (g *GitLabProvider) ParseWebhookEvent(payload []byte, signature string) (We
 		event.MergeCommitSHA = raw.ObjectAttr.MergeCommitSHA
 		return event, nil
 	}
+	if raw.ObjectKind != "" {
+		eventType = raw.ObjectKind
+	}
 	return WebhookEvent{
-		EventType:    raw.ObjectKind,
+		EventType:    eventType,
 		PRNumber:     raw.ObjectAttr.IID,
 		RepoFullName: raw.Project.PathWithNamespace,
 		Action:       raw.ObjectAttr.Action,

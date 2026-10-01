@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -330,9 +331,63 @@ func TestReconciler_EmptySpec_NoSCMCall(t *testing.T) {
 
 	require.NoError(t, err, "empty-spec PRStatus must not error (#276 regression)")
 	assert.Equal(t, 0, scm.calls, "GetPRStatus must NOT be called for placeholder PRStatus with empty spec (#276 regression)")
-	// Reconciler should requeue to poll later when the spec might be filled in
-	assert.Greater(t, result.RequeueAfter.Milliseconds(), int64(0),
-		"placeholder PRStatus should requeue for later polling")
+	// The spec patch that sets the PR triggers the next reconcile; see
+	// TestReconciler_PlaceholderNotRequeued.
+	assert.Equal(t, ctrl.Result{}, result, "placeholder PRStatus is not requeued")
+}
+
+// TestReconciler_PlaceholderNotRequeued checks that a PRStatus with no PR
+// number is neither polled nor requeued, with or without an SCM provider: it
+// was requeued every 30 seconds for as long as its Bundle lived (spike bug 7).
+// Once the PromotionStep reconciler patches the spec (patchPRStatusSpec), the
+// update event reconciles it again and the PR is polled.
+func TestReconciler_PlaceholderNotRequeued(t *testing.T) {
+	tests := []struct {
+		name string
+		spec v1alpha1.PRStatusSpec
+		scm  bool
+	}{
+		{name: "empty spec", scm: true},
+		{name: "URL without a PR number", spec: v1alpha1.PRStatusSpec{PRURL: "https://github.com/owner/repo/pull/x", Repo: "owner/repo"}, scm: true},
+		{name: "no SCM configured", scm: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prs := &v1alpha1.PRStatus{
+				ObjectMeta: metav1.ObjectMeta{Name: "app-prod-pr", Namespace: "default"},
+				Spec:       tt.spec,
+			}
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithObjects(prs).WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+			fs := &fakeSCM{open: true}
+			r := &prstatus.Reconciler{Client: c}
+			if tt.scm {
+				r.SCM = fs
+			}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app-prod-pr", Namespace: "default"}}
+
+			result, err := r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+			assert.Equal(t, ctrl.Result{}, result, "a placeholder has no PR to poll and is not requeued")
+			assert.Zero(t, fs.calls, "no SCM call for a placeholder")
+			var got v1alpha1.PRStatus
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.Nil(t, got.Status.LastCheckedAt, "a placeholder's status is not written")
+
+			if !tt.scm {
+				return
+			}
+			// What patchPRStatusSpec does once the open-pr step opened the PR.
+			patch := client.MergeFrom(got.DeepCopy())
+			got.Spec = v1alpha1.PRStatusSpec{PRURL: "https://github.com/owner/repo/pull/42", PRNumber: 42, Repo: "owner/repo"}
+			require.NoError(t, c.Patch(context.Background(), &got, patch))
+
+			result, err = r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+			assert.Equal(t, 1, fs.calls, "the PR is polled once the spec names it")
+			assert.Positive(t, result.RequeueAfter, "an open PR is polled again")
+		})
+	}
 }
 
 // TestReconciler_ZeroPRNumber_NoSCMCall is a regression test for issue #276.

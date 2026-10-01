@@ -14,11 +14,14 @@
 package scm_test
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -286,4 +289,96 @@ func TestSCMToken_TrailingNewlineTrimmed(t *testing.T) {
 		_, _, _ = dp.GetPRStatus(context.Background(), "o/r", 1)
 		assert.Equal(t, "Bearer token-v2", last())
 	})
+}
+
+// TestSecretWatcher_StartupLogsLoadedNotRotated proves the first read of the
+// Secret logs "SCM credentials loaded" and never "SCM credentials rotated".
+// docs/scm-providers.md tells users to grep for "rotated" before revoking the
+// old token, so a "rotated" line at startup could make them revoke too early.
+func TestSecretWatcher_StartupLogsLoadedNotRotated(t *testing.T) {
+	const rotated = "SCM credentials rotated"
+	const loaded = "SCM credentials loaded"
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	newSecret := func() *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "scm-token", Namespace: "kardinal-system"},
+			Data:       map[string][]byte{"token": []byte("token-v1")},
+		}
+	}
+
+	t.Run("first read seeds, later change rotates", func(t *testing.T) {
+		secret := newSecret()
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+		dp, err := scm.NewDynamicProvider("github", "token-v1", "", "")
+		require.NoError(t, err)
+		var buf bytes.Buffer
+		w := scm.NewSecretWatcher(c, dp, "scm-token", "kardinal-system", "token", zerolog.New(&buf))
+
+		w.CheckAndReloadForTest(context.Background())
+		assert.NotContains(t, buf.String(), rotated, "the first read is not a rotation")
+		assert.Equal(t, 1, strings.Count(buf.String(), loaded))
+
+		w.CheckAndReloadForTest(context.Background())
+		assert.NotContains(t, buf.String(), rotated, "an unchanged token is not a rotation")
+		assert.Equal(t, 1, strings.Count(buf.String(), loaded), "loaded is logged once")
+
+		secret.Data["token"] = []byte("token-v2")
+		require.NoError(t, c.Update(context.Background(), secret))
+		w.CheckAndReloadForTest(context.Background())
+		assert.Equal(t, 1, strings.Count(buf.String(), rotated), "a real change is a rotation")
+		assert.Equal(t, 1, strings.Count(buf.String(), loaded))
+	})
+
+	t.Run("first read fails, next read seeds", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithScheme(scheme).Build()
+		dp, err := scm.NewDynamicProvider("github", "token-v1", "", "")
+		require.NoError(t, err)
+		var buf bytes.Buffer
+		w := scm.NewSecretWatcher(c, dp, "scm-token", "kardinal-system", "token", zerolog.New(&buf))
+
+		w.CheckAndReloadForTest(context.Background())
+		require.NoError(t, c.Create(context.Background(), newSecret()))
+		w.CheckAndReloadForTest(context.Background())
+		assert.NotContains(t, buf.String(), rotated)
+		assert.Equal(t, 1, strings.Count(buf.String(), loaded))
+	})
+
+	t.Run("Start logs loaded, not rotated", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(newSecret()).Build()
+		dp, err := scm.NewDynamicProvider("github", "token-v1", "", "")
+		require.NoError(t, err)
+		var buf syncBuffer
+		w := scm.NewSecretWatcher(c, dp, "scm-token", "kardinal-system", "token", zerolog.New(&buf))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- w.Start(ctx) }()
+		// Wait for the startup read, whichever line it logs.
+		require.Eventually(t, func() bool { return strings.Contains(buf.String(), "SCM credentials ") },
+			5*time.Second, 10*time.Millisecond)
+		cancel()
+		require.NoError(t, <-done)
+		assert.NotContains(t, buf.String(), rotated)
+		assert.Equal(t, 1, strings.Count(buf.String(), loaded))
+	})
+}
+
+// syncBuffer is a bytes.Buffer safe for one writer goroutine and one reader.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

@@ -17,6 +17,10 @@ controller at startup.
 
 All providers send webhooks to the same endpoint, `http://<controller-host>:8083/webhook/scm`.
 Webhooks only speed things up: without them, the controller still sees merges by polling.
+Only a merged pull request (merge request) event moves a promotion. The controller reads
+the event type from `X-GitHub-Event`, `X-Forgejo-Event` or `X-Gitea-Event`, or from
+GitLab's `object_kind` (`X-Gitlab-Event` when that is missing), and logs and ignores
+other events such as pushes and comments.
 
 Bitbucket Cloud and Azure DevOps are newer and less tested than GitHub and GitLab.
 On Bitbucket, PRs carry no `kardinal` or `kardinal/rollback` labels, so find rollback
@@ -164,6 +168,7 @@ export KARDINAL_SCM_API_URL=https://codeberg.org   # or your self-hosted Forgejo
 | `write:repository` | Create and close pull requests, add labels |
 
 Create an API token in your Forgejo/Gitea instance under **Settings → Applications → Access Tokens**.
+The startup token check cannot see these scopes; see [Token check at startup](#token-check-at-startup).
 
 ### Webhook configuration
 
@@ -262,7 +267,7 @@ watched Secret. The check never stops the controller from starting.
 |---|---|---|
 | GitHub / GitHub Enterprise | `GET /user` | token rejected (401); a classic PAT without `repo` or `public_repo`; a fine-grained PAT or GitHub App token, whose permissions the call cannot show |
 | GitLab | `GET /api/v4/personal_access_tokens/self` | token rejected; no `api` scope |
-| Forgejo / Gitea | `GET /api/v1/user` | token rejected |
+| Forgejo / Gitea | `GET /api/v1/user` | token rejected (401). The API does not show a token's scopes, so a missing scope is not reported. `/user` needs `read:user`, which the documented scopes leave out, so it usually returns 403; an info line then says "SCM token scopes not checked" with the provider name |
 | Bitbucket Cloud, Azure DevOps | none | not checked; an info line says so, and token problems show on the first promotion step |
 
 Find the warnings with:
@@ -272,9 +277,9 @@ kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter \
   | grep "SCM TOKEN SCOPE WARNING"
 ```
 
-A network or HTTP error from the check is logged at debug level only. The token itself is
-never logged. A token loaded later by the Secret watcher (after a rotation) is not
-checked.
+A network or HTTP error from the check is logged at debug level only (a Forgejo or Gitea
+403 is the info line above). The token itself is never logged. A token loaded later by the
+Secret watcher (after a rotation) is not checked.
 
 ---
 
@@ -326,6 +331,11 @@ the `helm upgrade` in [Upgrade](installation.md#upgrade) with `--set github.toke
    kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=20 \
      | grep "SCM credentials rotated"
    ```
+   The watcher logs this line only when it sees the token change after startup, so a line
+   with a `time` later than your Secret update means the controller now uses the new token.
+   When the controller starts, it logs "SCM credentials loaded" for its first read of the
+   Secret instead. That line confirms the new token only if the Pod started after you
+   updated the Secret. Revoke the old token only after one of these checks passes.
 
 ### Static mode (development / CI)
 

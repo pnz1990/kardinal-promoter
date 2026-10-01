@@ -39,16 +39,18 @@ const (
 	maxWebhookBody = 1 << 20
 )
 
-// webhookEventsTotal counts the number of webhook events processed since startup.
-// Uses sync/atomic for lock-free increment; full Prometheus metrics are in Stage 19.
-var webhookEventsTotal int64
-
 // webhookServer is an HTTP server that handles incoming SCM webhook events.
 type webhookServer struct {
 	scm               scm.SCMProvider
 	client            client.Client
 	log               zerolog.Logger
 	webhookConfigured bool
+
+	// eventsTotal counts every signed event since startup, whatever its type
+	// (push, comment, PR). mergedPREventsTotal counts only the merged pull
+	// request (merge request) events, the only ones the handler acts on.
+	eventsTotal         atomic.Int64
+	mergedPREventsTotal atomic.Int64
 }
 
 // newWebhookServerWithConfig constructs a webhookServer and records whether a webhook
@@ -95,17 +97,16 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 			return
 		}
 
-		// Each provider signs with its own header; the provider validates the value.
-		signature := scm.WebhookSignature(r.Header)
-		event, err := s.scm.ParseWebhookEvent(body, signature)
+		// Each provider signs with its own header and names the event in its
+		// own header (or the payload); the provider validates and reads them.
+		event, err := scm.ParseWebhookRequest(s.scm, body, r.Header)
 		if err != nil {
 			s.log.Warn().Err(err).Msg("webhook signature invalid or parse error")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		// Count every successfully parsed event.
-		atomic.AddInt64(&webhookEventsTotal, 1)
+		s.eventsTotal.Add(1)
 
 		s.log.Info().
 			Str("event_type", event.EventType).
@@ -131,14 +132,17 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		s.mergedPREventsTotal.Add(1)
 
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
 // HealthHandler returns an http.HandlerFunc for GET /webhook/scm/health.
-// Responds with 200 OK and a JSON body indicating webhook configuration status
-// and the number of webhook events processed since startup.
+// Responds with 200 OK and a JSON body indicating webhook configuration status,
+// the number of signed webhook events of any type since startup
+// (eventsProcessed) and the number of merged pull request events among them
+// (mergedPREvents).
 func (s *webhookServer) HealthHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -146,7 +150,8 @@ func (s *webhookServer) HealthHandler() http.HandlerFunc {
 		resp := map[string]interface{}{
 			"status":            "ok",
 			"webhookConfigured": s.webhookConfigured,
-			"eventsProcessed":   atomic.LoadInt64(&webhookEventsTotal),
+			"eventsProcessed":   s.eventsTotal.Load(),
+			"mergedPREvents":    s.mergedPREventsTotal.Load(),
 		}
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			s.log.Error().Err(err).Msg("failed to encode health response")
