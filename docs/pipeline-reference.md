@@ -323,7 +323,7 @@ Checks that must hold for the running workload belong where it runs, not in the 
   marks it failed when a PostSync hook fails. The argocd adapter is healthy only when the
   Application is Healthy and Synced on the promoted revision and its last operation is
   `Succeeded` (or there is none), so the step waits for the tests; a `Failed` or `Error`
-  operation is a health failure and applies `onHealthFailure`.
+  operation on that revision is a health failure and applies `onHealthFailure`.
 - **Metric checks.** Create a `MetricCheck` and read it from a PolicyGate on the next
   environment, for example `metrics["error-rate"].result == "Pass"`. See
   [Policy Gates: Metric-based](policy-gates.md#metric-based).

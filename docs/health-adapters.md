@@ -95,10 +95,12 @@ health:
 **Healthy when:** all of these are met:
 - `status.health.status` = `Healthy`
 - `status.sync.status` = `Synced`
-- `status.operationState.phase` = `Succeeded` (or no operation recorded)
+- `status.operationState.phase` = `Succeeded` (or no operation recorded, or a finished operation on another commit)
 - the Application synced the promoted commit: it appears in `status.sync.revision(s)`, `status.operationState.syncResult.revision(s)` or `status.history`. `Synced` alone only means the cluster matches whatever commit Argo CD last fetched, which can be the previous one.
 
 On a branch shared with other environments, a later commit can reach Argo CD before ours does. The adapter accepts a revision other than the promoted one only when `status.summary.images` shows the Bundle images; it does not check that the revision is later. With `update.strategy: argocd` there is no commit to compare, so `status.summary.images` must show the Bundle images.
+
+**Unhealthy only once the promoted change is deployed.** Until Argo CD has deployed the promoted commit, `Degraded` health and a failed operation describe the version before it, so the check waits instead of counting a failure. The commit is deployed once the Application is `Synced` on it, an operation ran on it, or it is in `status.history`. `status.sync.revision` alone does not count: Argo CD sets it to the newest commit it fetched, also while the Application is `OutOfSync` with auto-sync off. An operation counts only when it ran on the promoted commit: `status.operationState.syncResult.revision(s)`, or the requested `operation.sync.revision(s)` before Argo CD records a result. The message then names the operation it ignores, for example `waiting for argocd: health=Healthy, sync=OutOfSync, opPhase=Failed, revision=<new> not synced yet, ignoring the operation on <old>`. With `update.strategy: argocd`, the change is deployed once `status.summary.images` shows the Bundle images.
 
 **When to use:** Any cluster managed by Argo CD. This is the recommended adapter for Argo CD users because it verifies that Argo CD successfully synced the promoted manifests, not just that the Deployment is running.
 
@@ -110,8 +112,12 @@ On a branch shared with other environments, a later commit can reach Argo CD bef
 | `health.status = Progressing`, `Missing` or `Suspended` | Wait |
 | `sync.status = OutOfSync` | Wait (may be mid-sync-wave) |
 | Synced to an older revision | Wait (`revision=<old>, waiting for <new>`) |
-| `health.status = Degraded` | Unhealthy (counts as a health failure) |
-| `operationState.phase = Failed` or `Error` | Unhealthy (counts as a health failure) |
+| The promoted commit fetched but not synced (auto-sync off) | Wait (`revision=<new> not synced yet`) |
+| `health.status = Degraded` once the promoted change is deployed | Unhealthy (counts as a health failure) |
+| `health.status = Degraded` before that | Wait: it is the previous version's health |
+| `operationState.phase = Failed` or `Error` on the promoted commit | Unhealthy (counts as a health failure) |
+| `operationState.phase = Failed` or `Error` on another commit | Wait until the promoted commit is synced (`ignoring the operation on <old>`); does not hold a Healthy, Synced promoted commit |
+| An operation running on any commit | Wait |
 | Application not found | Unhealthy (counts as a health failure) |
 
 Unhealthy results count toward `status.consecutiveHealthFailures`; waiting results do not. When `health.timeout` expires without a Healthy result, whichever of the two the last check returned, the timeout counts as one more health failure and applies `onHealthFailure`. See [Timings and failures](#timings-and-failures).
