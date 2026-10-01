@@ -44,6 +44,7 @@ Bundle would supersede it). The first environment of a pipeline has nothing
 upstream; use kardinal create bundle for it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// MarkFlagRequired refuses a missing --env, not --env "".
 			env, _ := cmd.Flags().GetString("env")
 			if env == "" {
 				return fmt.Errorf("--env is required")

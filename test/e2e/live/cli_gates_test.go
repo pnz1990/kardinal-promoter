@@ -158,9 +158,9 @@ func policyRows(t *testing.T, out string, nss ...string) []map[string]string {
 // Waiting with the gate's message and the expression's result. explain
 // --watch redraws until Ctrl-C, and shows the test gate pass once kardinal
 // override records an override on that Bundle's instance (not the
-// template), with who, why and the expiry; override rejects missing flags, a
-// bad duration, an unknown gate and an instance of another stage or
-// pipeline. With test Verified, prod's gate is Block and status shows its
+// template), with who, why and the expiry; override rejects missing or empty
+// flags, a bad duration, a pipeline that does not exist, an unknown gate and
+// an instance of another stage or pipeline. With test Verified, prod's gate is Block and status shows its
 // message whole; --color colors only the STATE cell and NO_COLOR turns it
 // off. Once prod's step waits for its PR, status marks it active with the
 // PR, and prod's gate, closed again, is Waiting. A newer Bundle supersedes
@@ -295,8 +295,14 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 		`policygates.kardinal.io "nope" not found`, ns), "override", pipelineName, "--gate", "nope", "--reason", "r")
 	refuses(t, c, ns, fmt.Sprintf("policygate %s/%s is the instance for stage test, not prod", ns, entry.Name),
 		"override", pipelineName, "--stage", "prod", "--gate", entry.Name, "--reason", "r")
+	refuses(t, c, ns, `--reason is required for override (audit record)`, "override", pipelineName, "--gate", "entry", "--reason", "")
+	refuses(t, c, ns, `--gate is required`, "override", pipelineName, "--gate", "", "--reason", "r")
+	refuses(t, c, ns, fmt.Sprintf("pipeline \"other\" not found in namespace %q", ns),
+		"override", "other", "--gate", entry.Name, "--reason", "r")
+	other := barePipeline(t, e, ns, "other")
 	refuses(t, c, ns, fmt.Sprintf("policygate %s/%s is an instance of pipeline podinfo, not other", ns, entry.Name),
 		"override", "other", "--gate", entry.Name, "--reason", "r")
+	require.NoError(t, e.Client.Delete(ctx, other))
 	refuses(t, c, ns, fmt.Sprintf("no in-progress Bundle of pipeline podinfo has an instance of gate entry in namespace %s "+
 		`(stage "prod"; 0 instance(s) of finished Bundles); an override applies to the instances a promoting Bundle creates, `+
 		"so run it while the Bundle waits on the gate", ns), "override", pipelineName, "--stage", "prod", "--gate", "entry", "--reason", "r")

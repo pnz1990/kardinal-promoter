@@ -18,6 +18,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -60,6 +61,27 @@ func TestGroupCommands_UnknownSubcommandFails(t *testing.T) {
 			_, err := executeRoot(t, tc.args...)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// cobra's MarkFlagRequired refuses a missing flag but not an empty value, so
+// the commands check the value too, before they connect to a cluster.
+func TestRequiredFlags_EmptyValueRefused(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/dev/null")
+	cases := []struct {
+		args    []string
+		wantErr string
+	}{
+		{[]string{"override", "p", "--gate", "g", "--reason", ""}, "--reason is required for override (audit record)"},
+		{[]string{"override", "p", "--gate", "", "--reason", "r"}, "--gate is required"},
+		{[]string{"promote", "p", "--env", ""}, "--env is required"},
+	}
+	for _, tc := range cases {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			_, err := executeRoot(t, tc.args...)
+			require.Error(t, err)
+			assert.Equal(t, tc.wantErr, err.Error())
 		})
 	}
 }

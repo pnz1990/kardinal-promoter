@@ -238,6 +238,7 @@ func TestCLI_Promote(t *testing.T) {
 	refuses(t, c, a.ns, `promote: pipeline podinfo has no environment "staging": invalid request`, "promote", pipelineName, "--env", "staging")
 	refuses(t, c, a.ns, "promote: pipeline "+a.ns+"/nope: not found", "promote", "nope", "-e", "prod")
 	refuses(t, c, a.ns, `required flag(s) "env" not set`, "promote", pipelineName)
+	refuses(t, c, a.ns, "--env is required", "promote", pipelineName, "--env", "")
 	assert.Empty(t, bundles(t, e, a.ns), "a refused promote creates nothing")
 
 	// A is Verified in test only; B, newer, is held at test's gate.

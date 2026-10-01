@@ -56,13 +56,19 @@ func makeTestGate(name, ns string) *v1alpha1.PolicyGate {
 	}
 }
 
+// overridePipeline returns the Pipeline an override names; override refuses
+// a pipeline that does not exist.
+func overridePipeline(name string) *v1alpha1.Pipeline {
+	return &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+}
+
 // TestOverrideFn_BasicOverride verifies that the override CLI function
 // appends an override to PolicyGate.spec.overrides[].
 func TestOverrideFn_BasicOverride(t *testing.T) {
 	gate := makeTestGate("no-weekend-deploy", "default")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
-		WithObjects(gate).
+		WithObjects(gate, overridePipeline("my-app")).
 		Build()
 
 	var buf bytes.Buffer
@@ -108,6 +114,7 @@ func TestOverrideFn_InvalidExpiry(t *testing.T) {
 func TestOverrideFn_GateNotFound(t *testing.T) {
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
+		WithObjects(overridePipeline("my-app")).
 		Build()
 
 	var buf bytes.Buffer
@@ -117,12 +124,49 @@ func TestOverrideFn_GateNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "get policygate")
 }
 
+// An override names its pipeline: one that does not exist is refused as such,
+// whatever --gate names, and nothing is written. An instance of another,
+// existing pipeline is refused too.
+func TestOverrideFn_Pipeline(t *testing.T) {
+	template := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "no-weekend-deploy", Namespace: "default"}}
+	inst := gateInstance("no-weekend-deploy-prod-b1", "no-weekend-deploy", "my-app", "prod")
+	tests := []struct {
+		name, pipeline, gate, wantErr string
+	}{
+		{name: "missing pipeline, template name", pipeline: "nope", gate: "no-weekend-deploy",
+			wantErr: `pipeline "nope" not found in namespace "default"`},
+		{name: "missing pipeline, instance name", pipeline: "nope", gate: inst.Name,
+			wantErr: `pipeline "nope" not found in namespace "default"`},
+		{name: "missing pipeline, unknown gate", pipeline: "nope", gate: "nosuch",
+			wantErr: `pipeline "nope" not found in namespace "default"`},
+		{name: "instance of another pipeline", pipeline: "other-app", gate: inst.Name,
+			wantErr: "policygate default/no-weekend-deploy-prod-b1 is an instance of pipeline my-app, not other-app"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fc := fake.NewClientBuilder().WithScheme(newOverrideTestScheme()).WithObjects(
+				template.DeepCopy(), inst.DeepCopy(), overridePipeline("my-app"), overridePipeline("other-app"),
+				overrideBundle("my-app-x7k2m", "my-app", "Promoting")).Build()
+			var buf bytes.Buffer
+			err := cmd.ExportedOverrideFn(&buf, fc, "default", tt.pipeline, "prod", tt.gate, "hotfix", "1h")
+			require.Error(t, err)
+			assert.Equal(t, tt.wantErr, err.Error())
+			assert.Empty(t, buf.String())
+			var list v1alpha1.PolicyGateList
+			require.NoError(t, fc.List(context.Background(), &list))
+			for _, g := range list.Items {
+				assert.Empty(t, g.Spec.Overrides, g.Name)
+			}
+		})
+	}
+}
+
 // TestOverrideFn_MultipleOverrides verifies that multiple overrides accumulate.
 func TestOverrideFn_MultipleOverrides(t *testing.T) {
 	gate := makeTestGate("rate-limit-gate", "default")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
-		WithObjects(gate).
+		WithObjects(gate, overridePipeline("my-app")).
 		Build()
 
 	var buf bytes.Buffer
@@ -148,7 +192,7 @@ func TestOverrideFn_EmptyStageAppliesGlobally(t *testing.T) {
 	gate := makeTestGate("global-gate", "default")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
-		WithObjects(gate).
+		WithObjects(gate, overridePipeline("my-app")).
 		Build()
 
 	var buf bytes.Buffer
@@ -217,7 +261,7 @@ func TestOverrideFn_TemplateName(t *testing.T) {
 					Labels: map[string]string{"kardinal.io/applies-to": "prod,uat"}},
 				Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
 			}
-			objs := []sigs_client.Object{template,
+			objs := []sigs_client.Object{template, overridePipeline("my-app"), overridePipeline("other-app"),
 				overrideBundle("my-app-x7k2m", "my-app", tt.phase),
 				overrideBundle("other-x7k2m", "other-app", "Promoting"),
 				// Another pipeline's instance of the same template.
@@ -261,7 +305,7 @@ func TestOverrideFn_TemplateName(t *testing.T) {
 func TestOverrideFn_ConcurrentOverridesBothKept(t *testing.T) {
 	calls := 0
 	c := fake.NewClientBuilder().WithScheme(newOverrideTestScheme()).
-		WithObjects(makeTestGate("g", "default")).
+		WithObjects(makeTestGate("g", "default"), overridePipeline("demo")).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Patch: func(ctx context.Context, cl sigs_client.WithWatch, obj sigs_client.Object,
 				patch sigs_client.Patch, opts ...sigs_client.PatchOption) error {
@@ -355,7 +399,7 @@ func TestOverrideFn_LongInstanceNames(t *testing.T) {
 			if phase == "" {
 				phase = "Promoting"
 			}
-			c := selectorCheckingClient(t, template,
+			c := selectorCheckingClient(t, template, overridePipeline("kardinal-test-app"),
 				overrideBundle(current, "kardinal-test-app", phase),
 				overrideBundle(verified, "kardinal-test-app", "Verified"),
 				long(current, "prod"), long(verified, "prod"))
