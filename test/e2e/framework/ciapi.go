@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -128,6 +129,9 @@ func clip(s string) string {
 	return s
 }
 
+// variants numbers the controller variants, so one test can run several.
+var variants int32
+
 // Variant is a second controller Deployment made by ControllerVariant.
 type Variant struct {
 	Name string
@@ -171,7 +175,7 @@ func (e *Env) ControllerVariant(t *testing.T, ns string, args []string, dropEnv 
 	}
 	c.Env = env
 
-	name := "variant-" + ns[len(ns)-8:]
+	name := fmt.Sprintf("variant-%s-%d", ns[len(ns)-8:], atomic.AddInt32(&variants, 1))
 	labels := map[string]string{"app.kubernetes.io/name": "kardinal-e2e-variant", "kardinal.io/e2e-variant": name}
 	tmpl.Labels = labels
 	tmpl.Annotations = nil
