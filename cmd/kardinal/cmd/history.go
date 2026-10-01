@@ -126,11 +126,17 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 // buildHistoryRows converts PromotionSteps into history rows, newest first.
 // rollbacks holds the names of rollback Bundles.
 func buildHistoryRows(steps []v1alpha1.PromotionStep, rollbacks map[string]bool, envFilter string, limit int) []HistoryRow {
-	// Sort steps newest first by creation timestamp.
+	// Sort steps newest first by creation timestamp. Timestamps have whole
+	// seconds, so steps created in the same second are ordered by name, and
+	// the order does not change between runs.
 	sorted := make([]v1alpha1.PromotionStep, len(steps))
 	copy(sorted, steps)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].CreationTimestamp.After(sorted[j].CreationTimestamp.Time)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ti, tj := sorted[i].CreationTimestamp.Time, sorted[j].CreationTimestamp.Time
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return sorted[i].Name < sorted[j].Name
 	})
 
 	var rows []HistoryRow

@@ -302,6 +302,9 @@ as the override's `createdBy`, which the gate's reason shows as
   local username on the machine that ran it. Nothing verifies it.
 - **Automatic rollback**: `kardinal-controller (...)`, naming what triggered it.
 
+A rollback Bundle keeps the restored build's provenance, so its
+`spec.provenance.author` is that build's author, not who rolled back.
+
 Anyone who may create Bundles can also set the annotation, and anyone who may
 update PolicyGates can set `createdBy`, so for a verified identity read the
 Kubernetes API server audit log. It names the kubeconfig user who created a

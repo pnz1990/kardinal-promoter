@@ -394,9 +394,19 @@ var argoCDApplicationGVR = schema.GroupVersionResource{
 // (E2E-01). Without a revision (the argocd-set-image strategy pushes no
 // commit), status.summary.images must carry the Bundle images instead.
 //
-// Degraded health and a Failed or Error operation are health failures; every
+// Degraded health and a Failed or Error operation are health failures only
+// when they are about the promoted change (B52): until the Application has
+// deployed it, Degraded health describes the version before it, and an
+// operation counts only when it ran on the promoted commit. An operation
+// still running on the promoted commit has not deployed it (a PreSync hook
+// can run for minutes), so while it runs Degraded counts only once the
+// Application is Synced on the commit or has it in status.history. Without a
+// revision, a status.summary.images with none of the Bundle repositories
+// shows neither version: Healthy and Synced still pass, unverified, but
+// Degraded and a failed operation wait for health.timeout (B67). Every
 // other not-yet-healthy state (OutOfSync, Progressing, Missing, a running
-// operation, an older revision) is Progressing.
+// operation, an older revision, a failure from before the change) is
+// Progressing, so it never adds to status.consecutiveHealthFailures.
 func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatus, error) {
 	cfg := opts.ArgoCD
 	if cfg.Namespace == "" {
@@ -418,18 +428,25 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	opPhase, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
 	state := fmt.Sprintf("health=%s, sync=%s, opPhase=%s", healthStatus, syncStatus, opPhase)
 
-	revisionOK, revNote := argoCDRevision(app, opts)
-	if !revisionOK {
-		state += ", " + revNote
+	target := argoCDRevision(app, syncStatus, opPhase, opts)
+	if !target.deployed || target.unverified {
+		state += ", " + target.note
 	}
+	opFailed := opPhase == "Failed" || opPhase == "Error"
+	if opFailed && !target.operated && target.opNote != "" {
+		state += ", " + target.opNote
+	}
+	// An operation on another revision says nothing about the promoted
+	// change once it has finished; a running one still changes the cluster.
+	opOK := opPhase == "Succeeded" || opPhase == "" || (!target.operated && opFailed)
 
 	switch {
-	case healthStatus == "Degraded", opPhase == "Failed", opPhase == "Error":
+	case !target.unverified && ((healthStatus == "Degraded" && target.deployed) || (opFailed && target.operated)):
 		return unhealthy(state), nil
-	case healthStatus == "Healthy" && syncStatus == "Synced" && (opPhase == "Succeeded" || opPhase == "") && revisionOK:
+	case healthStatus == "Healthy" && syncStatus == "Synced" && opOK && target.deployed:
 		reason := fmt.Sprintf("Healthy+Synced (opPhase=%q)", opPhase)
-		if revNote != "" {
-			reason += " " + revNote
+		if target.note != "" {
+			reason += " " + target.note
 		}
 		return healthy(reason), nil
 	default:
@@ -437,60 +454,130 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	}
 }
 
+// argoCDTarget is how far an Application has got with the promoted change.
+type argoCDTarget struct {
+	// deployed: the Application has applied the promoted change, so its
+	// health is about it.
+	deployed bool
+	// operated: status.operationState ran on the promoted change, so its
+	// phase counts.
+	operated bool
+	// unverified: deployed is assumed, not shown (update.strategy argocd,
+	// with none of the Bundle repositories in status.summary.images).
+	// Healthy passes the change, but Degraded health and a failed operation
+	// can be the previous version's, so they do not count (B67).
+	unverified bool
+	// note is for the status message: why the change is not deployed yet,
+	// or how it was verified.
+	note string
+	// opNote names the revision of an operation that does not count.
+	opNote string
+}
+
 // argoCDRevision reports whether the Application has deployed the promoted
-// revision, with a note for the status message.
-func argoCDRevision(app *unstructured.Unstructured, opts CheckOptions) (bool, string) {
-	if want := opts.ExpectedRevision; want != "" {
-		var seen []string
-		add := func(fields ...string) {
-			if v, ok, _ := unstructured.NestedString(app.Object, fields...); ok && v != "" {
-				seen = append(seen, v)
-			}
+// revision and whether its last operation ran on it.
+//
+// With ExpectedRevision set, the change is deployed once the Application is
+// Synced on that commit, a finished operation ran on it, or it is in
+// status.history.
+// status.sync.revision alone is not enough: Argo CD sets it to the newest
+// commit it fetched, also while the Application is OutOfSync with auto-sync
+// off. The operation's revision is status.operationState.syncResult.
+// revision(s), or the requested operation.sync.revision(s) before Argo CD
+// records a result.
+func argoCDRevision(app *unstructured.Unstructured, syncStatus, opPhase string, opts CheckOptions) argoCDTarget {
+	want := opts.ExpectedRevision
+	if want == "" {
+		if len(opts.ExpectedImages) > 0 {
+			// No commit to compare (update.strategy argocd): an operation or
+			// health from before the Application runs the Bundle images is
+			// about the previous version. A summary with none of the Bundle
+			// repositories shows neither version, so only Healthy counts.
+			ok, note := argoCDImages(app, opts.ExpectedImages)
+			return argoCDTarget{deployed: ok, operated: ok, unverified: ok && note != "", note: note}
 		}
-		add("status", "sync", "revision")
-		add("status", "operationState", "syncResult", "revision")
-		for _, path := range [][]string{
-			{"status", "sync", "revisions"},
-			{"status", "operationState", "syncResult", "revisions"},
-		} {
-			if vs, ok, _ := unstructured.NestedStringSlice(app.Object, path...); ok {
-				seen = append(seen, vs...)
-			}
-		}
-		if history, ok, _ := unstructured.NestedSlice(app.Object, "status", "history"); ok {
-			for _, h := range history {
-				entry, _ := h.(map[string]interface{})
-				if v, _ := entry["revision"].(string); v != "" {
-					seen = append(seen, v)
-				}
-				if vs, _ := entry["revisions"].([]interface{}); vs != nil {
-					for _, x := range vs {
-						if v, _ := x.(string); v != "" {
-							seen = append(seen, v)
-						}
-					}
-				}
-			}
-		}
-		for _, rev := range seen {
-			if SameRevision(rev, want) {
-				return true, ""
-			}
-		}
-		current, _, _ := unstructured.NestedString(app.Object, "status", "sync", "revision")
-		// A later commit on a shared branch (another environment's push) can
-		// supersede ours before Argo CD fetches it. Accept that revision only
-		// when the Application demonstrably runs the Bundle images.
-		if ok, note := argoCDImages(app, opts.ExpectedImages); ok && note == "" && len(opts.ExpectedImages) > 0 {
-			return true, fmt.Sprintf("(synced revision %s is not %s, but the Application runs the Bundle images)",
-				shortRev(current), shortRev(want))
-		}
-		return false, fmt.Sprintf("revision=%s, waiting for %s", shortRev(current), shortRev(want))
+		return argoCDTarget{deployed: true, operated: true, note: "(revision not verified)"}
 	}
-	if len(opts.ExpectedImages) > 0 {
-		return argoCDImages(app, opts.ExpectedImages)
+
+	syncRevs := revisions(app, "status", "sync")
+	opRevs := revisions(app, "status", "operationState", "syncResult")
+	if len(opRevs) == 0 {
+		opRevs = revisions(app, "status", "operationState", "operation", "sync")
 	}
-	return true, "(revision not verified)"
+	var historyRevs []string
+	if history, ok, _ := unstructured.NestedSlice(app.Object, "status", "history"); ok {
+		for _, h := range history {
+			entry, _ := h.(map[string]interface{})
+			historyRevs = append(historyRevs, revisionsOf(entry)...)
+		}
+	}
+
+	// An operation on the promoted commit deploys it only once it has
+	// finished: while it runs, a PreSync hook or an earlier sync wave can
+	// still hold the previous version, so only Synced or history count.
+	finished := opPhase == "Succeeded" || opPhase == "Failed" || opPhase == "Error"
+	t := argoCDTarget{operated: hasRevision(opRevs, want)}
+	t.deployed = (t.operated && finished) || (syncStatus == "Synced" && hasRevision(syncRevs, want)) || hasRevision(historyRevs, want)
+	current, _, _ := unstructured.NestedString(app.Object, "status", "sync", "revision")
+	t.opNote = "ignoring an operation with no revision"
+	if len(opRevs) > 0 {
+		t.opNote = "ignoring the operation on " + shortRev(opRevs[0])
+	}
+	if t.deployed {
+		return t
+	}
+	// A later commit on a shared branch (another environment's push) can
+	// supersede ours before Argo CD fetches it. Accept that revision only
+	// when the Application demonstrably runs the Bundle images; an
+	// operation on that revision then counts. An operation still running on
+	// the promoted commit means ours is the change in flight, not a
+	// superseded one, so it waits for Synced or history as above.
+	if ok, note := argoCDImages(app, opts.ExpectedImages); ok && note == "" && len(opts.ExpectedImages) > 0 && !t.operated {
+		t.deployed = true
+		t.operated = len(syncRevs) > 0 && hasRevision(opRevs, syncRevs...)
+		t.note = fmt.Sprintf("(synced revision %s is not %s, but the Application runs the Bundle images)",
+			shortRev(current), shortRev(want))
+		return t
+	}
+	if hasRevision(syncRevs, want) {
+		t.note = fmt.Sprintf("revision=%s not synced yet", shortRev(current))
+	} else {
+		t.note = fmt.Sprintf("revision=%s, waiting for %s", shortRev(current), shortRev(want))
+	}
+	return t
+}
+
+// revisions reads revision and revisions under fields of the Application.
+func revisions(app *unstructured.Unstructured, fields ...string) []string {
+	m, _, _ := unstructured.NestedMap(app.Object, fields...)
+	return revisionsOf(m)
+}
+
+// revisionsOf reads the revision and revisions keys of m.
+func revisionsOf(m map[string]interface{}) []string {
+	var out []string
+	if v, _ := m["revision"].(string); v != "" {
+		out = append(out, v)
+	}
+	vs, _ := m["revisions"].([]interface{})
+	for _, x := range vs {
+		if v, _ := x.(string); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// hasRevision reports whether any of revs is the same commit as any of want.
+func hasRevision(revs []string, want ...string) bool {
+	for _, rev := range revs {
+		for _, w := range want {
+			if SameRevision(rev, w) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func argoCDImages(app *unstructured.Unstructured, expected []ImageExpectation) (bool, string) {

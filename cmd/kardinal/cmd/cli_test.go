@@ -353,6 +353,36 @@ func TestHistory_Duration(t *testing.T) {
 	}
 }
 
+// TestHistory_Order: rows are newest first, and steps created in the same
+// second are ordered by name, whatever order the API returns them in. The
+// limit keeps the first rows of that order.
+func TestHistory_Order(t *testing.T) {
+	created := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	step := func(name string, age time.Duration) v1alpha1.PromotionStep {
+		return v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: metav1.NewTime(created.Add(-age))},
+			Spec:       v1alpha1.PromotionStepSpec{BundleName: name, Environment: "prod"},
+		}
+	}
+	steps := []v1alpha1.PromotionStep{
+		step("b-old", time.Minute), step("c-new", 0), step("a-new", 0), step("b-new", 0), step("a-old", time.Minute),
+	}
+	bundles := func(rows []HistoryRow) []string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.Bundle)
+		}
+		return out
+	}
+	want := []string{"a-new", "b-new", "c-new", "a-old", "b-old"}
+	for i := range steps {
+		// Every rotation of the input gives the same order.
+		rotated := append(append([]v1alpha1.PromotionStep{}, steps[i:]...), steps[:i]...)
+		assert.Equal(t, want, bundles(buildHistoryRows(rotated, nil, "", 0)), "input rotated by %d", i)
+	}
+	assert.Equal(t, want[:2], bundles(buildHistoryRows(steps, nil, "", 2)))
+}
+
 // TestSplitImageRef verifies image reference parsing. A digest is returned as
 // the digest, never as the tag (C09a-cli-02).
 func TestSplitImageRef(t *testing.T) {

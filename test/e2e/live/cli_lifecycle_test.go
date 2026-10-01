@@ -102,7 +102,7 @@ func waitBundleGone(t *testing.T, e *framework.Env, ns, name string) {
 // version in both environments. history marks its rows as rollbacks. A
 // second rollback has nothing older to restore, and --to restores a newer
 // Bundle. --emergency prints a deprecation notice and changes nothing.
-// Covers CLI-ROLLBACK-01, CLI-EMERGENCY-01.
+// Covers CLI-ROLLBACK-01, CLI-EMERGENCY-01, RB-PREV-01, RB-TO-01.
 func TestCLI_Rollback(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)

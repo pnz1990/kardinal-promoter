@@ -438,10 +438,9 @@ func (c *CLI) PortForward(ns, target string, port int) string {
 	return ""
 }
 
-// BuildCLI builds ./cmd/kardinal from this checkout with ldflags into a
-// temporary directory and returns the binary's path. VCS stamping is off, so
-// the version comes from ldflags as in a release build.
-func BuildCLI(t *testing.T, ldflags string) string {
+// repoRoot is the directory of the repo's go.mod, above the test's working
+// directory.
+func repoRoot(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.Abs(".")
 	if err != nil {
@@ -449,17 +448,24 @@ func BuildCLI(t *testing.T, ldflags string) string {
 	}
 	for {
 		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
-			break
+			return root
 		}
 		parent := filepath.Dir(root)
 		if parent == root {
-			t.Fatal("BuildCLI: no go.mod above the test directory")
+			t.Fatal("no go.mod above the test directory")
 		}
 		root = parent
 	}
+}
+
+// BuildCLI builds ./cmd/kardinal from this checkout with ldflags into a
+// temporary directory and returns the binary's path. VCS stamping is off, so
+// the version comes from ldflags as in a release build.
+func BuildCLI(t *testing.T, ldflags string) string {
+	t.Helper()
 	bin := filepath.Join(t.TempDir(), "kardinal")
 	cmd := exec.Command("go", "build", "-buildvcs=false", "-ldflags", ldflags, "-o", bin, "./cmd/kardinal")
-	cmd.Dir = root
+	cmd.Dir = repoRoot(t)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build ./cmd/kardinal: %v\n%s", err, out)
 	}
