@@ -117,9 +117,10 @@ const SlowGitPath = "/swagger/"
 // SlowGitServer is a podinfo Deployment and Service named name, port 9898,
 // that answer requests under SlowGitPath after 30 seconds. A Pipeline whose
 // git.url is http://<name>.<ns>.svc.cluster.local:9898/swagger/<repo>.git
-// gets a git server that hangs, which drives step timeouts. It has no
-// readiness probe: a probe would time out too, and the Service would have no
-// endpoints.
+// gets a git server that hangs, which drives step timeouts. Its readiness
+// probe is a TCP connect, which the delay doesn't slow: once the Deployment is
+// available the server accepts connections, so a clone hangs instead of being
+// refused.
 func SlowGitServer(name string) (deploymentYAML, serviceYAML string) {
 	d := strings.NewReplacer("NAME", name, "IMAGE", Image+":"+V1).Replace(`apiVersion: apps/v1
 kind: Deployment
@@ -145,6 +146,10 @@ spec:
           ports:
             - name: http
               containerPort: 9898
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 1
           resources:
             requests:
               cpu: 10m
