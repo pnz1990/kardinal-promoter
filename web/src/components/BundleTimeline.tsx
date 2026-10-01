@@ -144,13 +144,14 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
               key={b.name}
               onClick={(e) => {
                 if (e.shiftKey) {
-                  // #338: shift-click selects for comparison
-                  if (onCompareBundle) onCompareBundle(isCompare ? null : b.name)
+                  // #338: shift-click selects for comparison. The selected
+                  // bundle is the one compared against, so it is ignored.
+                  if (onCompareBundle && !isSelected) onCompareBundle(isCompare ? null : b.name)
                 } else {
                   onSelectBundle?.(b.name)
                 }
               }}
-              title={`${b.name}: ${b.phase || 'Unknown'}${isCompare ? ' (comparison target)' : ''}${'\nShift-click to compare'}`}
+              title={`${b.name}: ${b.phase || 'Unknown'}${isCompare ? ' (comparison target)' : ''}${isSelected ? '' : '\nShift-click to compare'}`}
               aria-pressed={isSelected}
               className={chipClass}
               data-bundle-phase={b.phase}

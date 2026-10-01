@@ -121,6 +121,33 @@ describe('BundleTimeline — selection', () => {
     )
     expect(screen.getByText(/× clear/i)).toBeInTheDocument()
   })
+
+  // The shown Bundle is Bundle A; it cannot also be Bundle B.
+  it('ignores a shift-click on the selected bundle', async () => {
+    const user = userEvent.setup()
+    const onCompareBundle = vi.fn()
+    const onSelectBundle = vi.fn()
+    const bundles = [makeBundle({ name: 'bundle-a' }), makeBundle({ name: 'bundle-b' })]
+    render(
+      <BundleTimeline
+        bundles={bundles}
+        selectedBundle="bundle-a"
+        onSelectBundle={onSelectBundle}
+        onCompareBundle={onCompareBundle}
+      />
+    )
+    const chipOf = (name: string) => screen.getAllByRole('button').find(b => b.title.startsWith(`${name}: `))!
+    expect(chipOf('bundle-a').title).toBe('bundle-a: Promoting')
+    expect(chipOf('bundle-b').title).toBe('bundle-b: Promoting\nShift-click to compare')
+
+    await user.keyboard('{Shift>}')
+    await user.click(chipOf('bundle-a'))
+    expect(onCompareBundle).not.toHaveBeenCalled()
+    expect(onSelectBundle).not.toHaveBeenCalled()
+    await user.click(chipOf('bundle-b'))
+    await user.keyboard('{/Shift}')
+    expect(onCompareBundle).toHaveBeenCalledExactlyOnceWith('bundle-b')
+  })
 })
 
 describe('BundleTimeline — skeleton loading state (#784)', () => {

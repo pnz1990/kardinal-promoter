@@ -339,6 +339,43 @@ describe('App bundle comparison', () => {
     expect(oldChip().className).toContain('bundle-chip--compare')
     expect(screen.getByRole('button', { name: 'Compare ↔' })).toBeInTheDocument()
   })
+
+  // The shown bundle is Bundle A: it is never also Bundle B.
+  it('does not compare the shown bundle with itself', async () => {
+    const newChip = () => screen.getByTitle(/^b-new: Promoting/)
+    const picked = () => screen.queryAllByTitle(/^b-(new|old): /).filter(c => c.className.includes('bundle-chip--compare'))
+    render(<App />)
+    await flush()
+
+    // A shift-click on the shown bundle does nothing.
+    fireEvent.click(newChip(), { shiftKey: true })
+    await flush()
+    expect(picked()).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: '× clear' })).not.toBeInTheDocument()
+    expect(screen.getByText('Shift-click to compare')).toBeInTheDocument()
+    expect(newChip().getAttribute('title')).toBe('b-new: Promoting')
+
+    // Showing Bundle B makes it Bundle A, and drops it as B.
+    fireEvent.click(oldChip(), { shiftKey: true })
+    await flush()
+    expect(picked()).toEqual([oldChip()])
+    fireEvent.click(oldChip())
+    await flush()
+    expect(oldChip().className).toContain('bundle-chip--selected')
+    expect(picked()).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: '× clear' })).not.toBeInTheDocument()
+    fireEvent.click(newChip())
+    await flush()
+    expect(picked()).toHaveLength(0)
+  })
+
+  it('does not open a comparison of the shown bundle with itself from a link', async () => {
+    window.history.replaceState(null, '', '/ui/#pipeline=app&bundle=b-new')
+    render(<App />)
+    await flush()
+    expect(screen.getByTitle(/^b-new: Promoting/).className).toContain('bundle-chip--selected')
+    expect(dialog()).not.toBeInTheDocument()
+  })
 })
 
 // docs/installation.md: a NodePort without TLS shows a security warning. The

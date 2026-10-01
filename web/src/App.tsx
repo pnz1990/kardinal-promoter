@@ -314,8 +314,11 @@ export function App() {
     : undefined
   const selectedNamespace = urlState.ns ?? activePipeline?.namespace
   const activeBundle = shownBundleName ? bundles.find(b => b.name === shownBundleName) : undefined
-  // The picked comparison bundle, while the pipeline still has it.
-  const compareBundle = compareTarget && bundles.some(b => b.name === compareTarget) ? compareTarget : undefined
+  // The picked comparison bundle, while the pipeline still has it and it is
+  // not the bundle on screen (which is the one it is compared against).
+  const compareBundle = compareTarget && compareTarget !== activeBundle?.name && bundles.some(b => b.name === compareTarget)
+    ? compareTarget
+    : undefined
 
   // Handler for timeline bundle selection — shows that bundle until the user
   // picks another one or it disappears.
@@ -327,6 +330,8 @@ export function App() {
     const namespace = bundles.find(b => b.name === bundleName)?.namespace ?? selectedNamespace
     userBundleRef.current = bundleName
     setShownBundleName(bundleName)
+    // Showing the comparison bundle makes it the one compared against.
+    setCompareTarget(t => t === bundleName ? undefined : t)
     setGraphLoading(true)
     setGraphError(undefined)
     setSelectedNode(null) // close detail panel when switching bundles
@@ -780,7 +785,7 @@ export function App() {
             </div>
 
             {/* #338: Bundle diff panel — shows when two bundles are selected for comparison */}
-            {showDiffPanel && activeBundle && (
+            {showDiffPanel && activeBundle && urlState.bundle !== activeBundle.name && (
               (() => {
                 const compareBundleObj = bundles.find(b => b.name === urlState.bundle)
                 if (!compareBundleObj) return null

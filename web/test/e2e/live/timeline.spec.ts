@@ -72,11 +72,12 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   await expect(page.getByText('Bundle History (newest → oldest)')).toBeVisible()
   await expect(page.getByText('Shift-click to compare', { exact: true })).toBeVisible()
 
-  // Newest first, each with its phase; the newest is on screen.
+  // Newest first, each with its phase; the newest is on screen, so only the
+  // other one offers a shift-click.
   await expect(chips(page)).toHaveCount(2)
   for (const [i, b] of [newer, older].entries()) {
     const c = chips(page).nth(i)
-    await expect(c).toHaveAttribute('title', `${b.name}: ${b.phase}\nShift-click to compare`)
+    await expect(c).toHaveAttribute('title', `${b.name}: ${b.phase}${b === newer ? '' : '\nShift-click to compare'}`)
     await expect(c).toHaveAttribute('data-bundle-phase', b.phase)
     await expect(c).toHaveClass(new RegExp(`bundle-chip--${b.phase.toLowerCase()}`))
     await expect(c.locator('.bundle-chip__name')).toHaveText(b.name.split('-').pop()!)
@@ -89,6 +90,12 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
   await page.waitForResponse(r => r.url().includes(`/api/v1/ui/pipelines/${PIPELINE}/bundles`) && r.ok())
   await page.waitForResponse(r => r.url().includes(`/api/v1/ui/pipelines/${PIPELINE}/bundles`) && r.ok())
   await expectShown(page, older, newer)
+
+  // A shift-click on the Bundle on screen does nothing: it is Bundle A.
+  await chip(page, older).click({ modifiers: ['Shift'] })
+  await expect(chip(page, older)).not.toHaveClass(/bundle-chip--compare/)
+  await expect(page.getByRole('button', { name: '× clear' })).toHaveCount(0)
+  await expect(page.getByText('Shift-click to compare', { exact: true })).toBeVisible()
 
   // Shift-click the newer one: it becomes Bundle B, and Compare and clear
   // show. Compare opens the comparison, the shown Bundle as A.
