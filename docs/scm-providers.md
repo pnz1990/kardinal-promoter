@@ -111,6 +111,12 @@ export KARDINAL_SCM_API_URL=https://gitlab.com  # or your self-managed URL
 A **project access token** with `api` scope is recommended over a personal access token
 for production deployments.
 
+The token's user (or the project access token's role) needs the **Maintainer** role on the
+project. Environments without `pr-review` push straight to the Pipeline's `spec.git.branch`,
+and GitLab protects the default branch so that only Maintainers may push to it. With Developer, every
+such environment fails at git-push with "pre-receive hook declined". Developer is enough
+only if the branch's protection allows Developers to push.
+
 ### Webhook configuration
 
 1. In your GitLab project, go to **Settings → Webhooks**.
