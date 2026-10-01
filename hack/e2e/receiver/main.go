@@ -115,7 +115,8 @@ func (r *receiver) record(w http.ResponseWriter, req *http.Request, bucket strin
 			}
 		}
 	}
-	recs := append(r.records[bucket], record{
+	recs := r.records[bucket]
+	recs = append(recs, record{
 		Time: time.Now().UTC(), Method: req.Method, Path: req.URL.Path, Query: req.URL.RawQuery,
 		Headers: req.Header.Clone(), Body: string(body), Status: status,
 	})

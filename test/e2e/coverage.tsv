@@ -190,7 +190,7 @@ METRIC-02	live	prometheus	todo	metriccheck	metrics.<name> in a gate expression b
 METRIC-03	live	prometheus	todo	metriccheck	result older than validUntil (max(3x interval, 30s)) reads Stale and the gate fails closed	pkg/reconciler/metriccheck
 METRIC-04	live	prometheus	todo	metriccheck	query error, empty result or multi-element vector gives Fail (fail closed)	pkg/reconciler/metriccheck/prometheus.go:47-115
 METRIC-05	live	prometheus	todo	metriccheck	interval default 1m, minimum 10s; re-query on interval	api/v1alpha1/metriccheck_types.go
-METRIC-06	live	prometheus	todo	metriccheck	prometheusURL to loopback, link-local or metadata addresses is refused by the egress guard	docs/guides/security.md:371-405; pkg/egress/guard.go:65-88
+METRIC-06	live	prometheus	todo	metriccheck	prometheusURL to loopback, link-local or metadata addresses is refused by the egress guard	docs/guides/security.md:371-408; pkg/egress/guard.go:66-89
 METRIC-07	live	prometheus	todo	metriccheck	MetricCheck supports custom query providers beyond Prometheus	docs/guides/migrating-from-kargo.md:17; api/v1alpha1/metriccheck_types.go:13-16
 CW-01	live	core	covered	changewindow	blackout ChangeWindow blocks via changewindow.isBlocked()/isAllowed() in gate CEL	docs/policy-gates.md:342-383; pkg/reconciler/policygate/reconciler.go:390-397; pkg/reconciler/policygate/cel_evaluator.go:124-156
 CW-02	live	core	covered	changewindow	recurring ChangeWindow (allowedDays, allowedHours, timezone with embedded tzdata)	api/v1alpha1/changewindow_types.go:20-62; pkg/reconciler/changewindow/window.go:92-201
@@ -283,24 +283,24 @@ UIAPI-APPROVE-01	live	ui	covered	ui-api	POST gates/[{ns}/]{name}/approve writes 
 UIAPI-VALIDATECEL-01	live	ui	covered	ui-api	POST validate-cel returns compile errors	cmd/kardinal-controller/ui_api.go:1004
 UIAPI-CREATE-01	live	ui	covered	ui-api	POST bundles creates a Bundle from the UI	cmd/kardinal-controller/ui_api.go:1366-1441
 UIAPI-LOCAL-01	live	ui	covered	ui-api	with no UI auth mode, non-loopback clients or requests with proxy headers get 403	cmd/kardinal-controller/ui_peer.go:33-71; docs/installation.md:161-200; docs/changelog.md:24
-UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:571-614; cmd/kardinal-controller/ui_hosts.go
-UIAPI-TOKEN-01	live	ui	covered	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:457-480
-UIAPI-TR-01	live	ui	covered	ui-api	TokenReview mode: 401 invalid token, 403 when SubjectAccessReview denies, 503 when review fails; 30s cache	docs/guides/security.md:481-555; pkg/uiauth/tokenreview.go
-UIAPI-CORS-01	live	ui	covered	ui-api	CORS: allowed origin reflected, others 403, OPTIONS preflight 200	docs/guides/security.md:564-570
-UIAPI-TLS-01	live	ui	covered	ui-api	TLS on UI and webhook servers; cert without key is a startup error	docs/guides/security.md:644-707
-UIAPI-HEADERS-01	live	ui	covered	ui-api	browser security headers (CSP, nosniff, frame deny)	docs/guides/security.md:629-643; cmd/kardinal-controller/ui_security_headers.go:31-60
+UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:574-617; cmd/kardinal-controller/ui_hosts.go
+UIAPI-TOKEN-01	live	ui	covered	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:460-483
+UIAPI-TR-01	live	ui	covered	ui-api	TokenReview mode: 401 invalid token, 403 when SubjectAccessReview denies, 503 when review fails; 30s cache	docs/guides/security.md:484-558; pkg/uiauth/tokenreview.go
+UIAPI-CORS-01	live	ui	covered	ui-api	CORS: allowed origin reflected, others 403, OPTIONS preflight 200	docs/guides/security.md:567-573
+UIAPI-TLS-01	live	ui	covered	ui-api	TLS on UI and webhook servers; cert without key is a startup error	docs/guides/security.md:647-710
+UIAPI-HEADERS-01	live	ui	covered	ui-api	browser security headers (CSP, nosniff, frame deny)	docs/guides/security.md:632-646; cmd/kardinal-controller/ui_security_headers.go:31-60
 UIAPI-BODY-01	live	ui	covered	ui-api	request body over 1 MiB rejected	cmd/kardinal-controller/ui_auth.go:67-103
 UI-STATIC-01	live	ui	covered	ui	/ui/ serves the embedded web app	docs/installation.md:161-200
 UI-LIST-01	live	ui	covered	ui	pipeline sidebar (PAUSED/Blocked/Degraded) and fleet health bar with filters	docs/roadmap.md:133
 UI-DAG-01	live	ui	covered	ui	promotion DAG with per-env state, PR badge and tooltip	docs/roadmap.md:133
 UI-GATES-01	live	ui	covered	ui	Policy Gates panel, blocking banner and Promotion Errors panel	docs/roadmap.md:133
 UI-NODE-01	live	ui	covered	ui	node detail: step progress, events, CEL validate	docs/roadmap.md:133
-UI-ACTIONS-01	live	ui	covered	ui	promote, rollback, pause and resume from the UI	docs/roadmap.md:133; docs/guides/security.md:541-542
+UI-ACTIONS-01	live	ui	covered	ui	promote, rollback, pause and resume from the UI	docs/roadmap.md:133; docs/guides/security.md:544-545
 UI-CREATE-01	live	ui	covered	ui	Create Bundle dialog	docs/roadmap.md:133
 UI-TIMELINE-01	live	ui	covered	ui	bundle timeline select/compare and diff panel	docs/roadmap.md:133
-UI-INSECURE-01	live	ui	covered	ui	insecure-connection banner and port-forward hint	docs/guides/security.md:615-628
+UI-INSECURE-01	live	ui	covered	ui	insecure-connection banner and port-forward hint	docs/guides/security.md:618-631
 UI-SHELL-01	live	ui	covered	ui	keyboard shortcuts, theme, URL deep links, refreshed-ago polling	docs/roadmap.md:133
-UI-OVERRIDE-01	live	ui	todo	ui	approve or override a gate from the UI	docs/roadmap.md:83-85; docs/guides/security.md:541-542
+UI-OVERRIDE-01	live	ui	todo	ui	approve or override a gate from the UI	docs/roadmap.md:83-85; docs/guides/security.md:544-545
 CIAPI-OFF-01	live	core	covered	ci-api	without --bundle-api-token / KARDINAL_BUNDLE_TOKEN, POST /api/v1/bundles is not mounted (404)	docs/ci-integration.md:228-254; cmd/kardinal-controller/bundle_api.go
 CIAPI-AUTH-01	live	core	covered	ci-api	wrong bearer gets 401; non-POST gets 405	cmd/kardinal-controller/bundle_api.go:136-151
 CIAPI-CREATE-01	live	core	covered	ci-api	valid POST returns 201 {name,namespace}; the Bundle promotes with provenance	docs/ci-integration.md:7-36; docs/ci-integration.md:285-314; docs/ci-integration.md:388
@@ -321,7 +321,7 @@ CHART-PORTS-01	live	chart	todo	chart	metricsBindAddress, healthProbeBindAddress 
 CHART-WATCHNS-01	live	chart	todo	chart	controller.watchNamespace: namespace-scoped install with Role instead of ClusterRole	chart/kardinal-promoter/values.yaml:80; docs/guides/security.md:165-213
 CHART-POLNS-01	live	chart	todo	chart	controller.policyNamespaces	chart/kardinal-promoter/values.yaml:84
 CHART-EXTRA-01	live	chart	todo	chart	extraArgs, extraEnv, volumes, volumeMounts	chart/kardinal-promoter/values.yaml:86-92
-CHART-TLS-01	live	chart	todo	chart	controller.tlsCertFile/tlsKeyFile with a mounted cert-manager Secret	chart/kardinal-promoter/values.yaml:70-72; docs/guides/security.md:650-690
+CHART-TLS-01	live	chart	todo	chart	controller.tlsCertFile/tlsKeyFile with a mounted cert-manager Secret	chart/kardinal-promoter/values.yaml:70-72; docs/guides/security.md:653-693
 CHART-SCM-01	live	chart	todo	chart	github.token, github.secretRef, scm.provider, scm.apiURL	chart/kardinal-promoter/values.yaml:143-157
 CHART-WEBHOOK-01	live	chart	todo	chart	webhook.secretRef	chart/kardinal-promoter/values.yaml:160-163
 CHART-BUNDLEAPI-01	live	chart	todo	chart	bundleAPI.tokenSecretRef mounts POST /api/v1/bundles	chart/kardinal-promoter/values.yaml:167-170

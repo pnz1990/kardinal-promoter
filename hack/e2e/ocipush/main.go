@@ -97,7 +97,7 @@ func readArchive(path string) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	files := map[string][]byte{}
 	tr := tar.NewReader(f)
 	for {
@@ -158,7 +158,7 @@ func imageManifest(files map[string][]byte) (string, string, []byte, error) {
 // pushBlob uploads a blob the repository does not have yet (monolithic upload).
 func pushBlob(base, digest string, blob []byte) error {
 	if resp, err := httpc.Head(base + "/blobs/" + digest); err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
 			return nil
 		}
@@ -167,7 +167,7 @@ func pushBlob(base, digest string, blob []byte) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("start upload of %s: HTTP %d", digest, resp.StatusCode)
 	}
@@ -195,7 +195,7 @@ func expect(req *http.Request, status int) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != status {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, b)
