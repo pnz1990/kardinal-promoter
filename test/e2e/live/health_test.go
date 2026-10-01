@@ -766,8 +766,14 @@ func TestHealth_ArgoSharedBranch(t *testing.T) {
 	later := e.WaitStepState(t, a.ns, uat.Name, second, "uat", "Verified", promoteTimeout).Status.Outputs["commitSHA"]
 	require.NotEmpty(t, later)
 	require.NotEqual(t, own, later)
-	assert.Equal(t, "HealthChecking", e.MustStep(t, a.ns, pipelineName, first, "test").Status.State,
-		"test waits while Argo CD does not sync it")
+	framework.Consistently(t, 15*time.Second, "test waits while Argo CD does not sync it", func(ctx context.Context) (bool, string) {
+		ps, _, err := e.Step(ctx, a.ns, pipelineName, first, "test")
+		if err != nil || ps == nil {
+			return false, fmt.Sprintf("step lookup: %v", err)
+		}
+		return ps.Status.State == "HealthChecking" && ps.Status.ConsecutiveHealthFailures == 0, framework.DescribeStep(ps)
+	})
+	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
 
 	e.SetArgoAutoSync(t, a.argoApp("test"), true)
 	ps = e.WaitStepState(t, a.ns, pipelineName, first, "test", "Verified", promoteTimeout)
