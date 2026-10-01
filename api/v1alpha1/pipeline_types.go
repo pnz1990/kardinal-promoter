@@ -252,9 +252,12 @@ type EnvironmentSpec struct {
 	WaitForMergeTimeout string `json:"waitForMergeTimeout,omitempty"`
 
 	// StepTimeoutSeconds is the maximum number of seconds a single promotion
-	// step (git-clone, kustomize-set-image, open-pr, etc.) may run before the
-	// reconciler cancels it via context.WithTimeout and marks the PromotionStep
-	// as Failed. When not set or 0 (default), no per-step timeout is applied.
+	// step (git-clone, kustomize-set-image, open-pr, etc.) may run. The
+	// reconciler cancels a step that runs longer via context.WithTimeout and
+	// handles the timeout like any other step error: the step is retried with
+	// backoff (10s, 20s, 40s, 80s, then 2m), and the PromotionStep is marked
+	// Failed when the 5 retries are used up. When not set or 0 (default), no
+	// per-step timeout is applied.
 	// Useful for restricting execution in restricted-egress environments where
 	// git-clone against a slow SCM host can block the reconciler indefinitely.
 	// +kubebuilder:validation:Minimum=1
