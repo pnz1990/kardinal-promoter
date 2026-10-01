@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -248,27 +249,47 @@ var httpBodyErrors = []error{
 }
 
 // gitErrorText returns the text of a go-git error on one line, without URL
-// credentials and without what go-git leaves at its end when it appends an
-// HTTP response body: the body's trailing newline ("authentication required:
-// Unauthorized\n"), or ": " when the body is empty. Runs of whitespace become
-// one space, and a body longer than maxErrorBody characters, such as a proxy's
-// HTML error page, is cut with "…".
+// credentials. An HTTP error ends with the status and the response body, if
+// any. go-git appends the body to its 401, 403 and 404 errors
+// ("authentication required: Unauthorized\n", or ": " when the body is
+// empty). It reports other codes as "unexpected client error: unexpected
+// requesting "<url>" status code: 500", without the body; the caller's text
+// already names the URL, so that part becomes "HTTP 500 Internal Server
+// Error" and the body follows it. Runs of whitespace become one space, and a
+// body longer than maxErrorBody characters, such as a proxy's HTML error
+// page, is cut with "…". Credentials are removed before the cut, so a URL the
+// cut runs through keeps none of them.
 func gitErrorText(err error) string {
-	text := strings.Join(strings.Fields(RedactURL(err.Error())), " ")
-	text = strings.TrimSpace(strings.TrimSuffix(text, ":"))
-	for _, bodyErr := range httpBodyErrors {
-		prefix := bodyErr.Error() + ": "
-		i := strings.Index(text, prefix)
-		if i < 0 || !errors.Is(err, bodyErr) {
-			continue
+	head, body := err.Error(), ""
+	var unexpected *plumbing.UnexpectedError
+	var httpErr *gogithttp.Err
+	if errors.As(err, &unexpected) && errors.As(unexpected.Err, &httpErr) && httpErr.Response != nil {
+		code := httpErr.Response.StatusCode
+		status := strings.TrimSpace(fmt.Sprintf("HTTP %d %s", code, http.StatusText(code)))
+		head, body = strings.Replace(head, unexpected.Error(), status, 1), httpErr.Reason
+	} else {
+		for _, bodyErr := range httpBodyErrors {
+			prefix := bodyErr.Error() + ": "
+			if i := strings.Index(head, prefix); i >= 0 && errors.Is(err, bodyErr) {
+				head, body = head[:i+len(bodyErr.Error())], head[i+len(prefix):]
+				break
+			}
 		}
-		head, body := text[:i+len(prefix)], []rune(text[i+len(prefix):])
-		if len(body) <= maxErrorBody {
-			return text
-		}
-		return head + strings.TrimSpace(string(body[:maxErrorBody])) + "…"
 	}
-	return text
+	head, body = oneLine(head), oneLine(body)
+	if body == "" {
+		return strings.TrimSpace(strings.TrimSuffix(head, ":"))
+	}
+	if runes := []rune(body); len(runes) > maxErrorBody {
+		body = strings.TrimSpace(string(runes[:maxErrorBody])) + "…"
+	}
+	return head + ": " + body
+}
+
+// oneLine returns s without URL credentials, with each run of whitespace as
+// one space.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(RedactURL(s)), " ")
 }
 
 // remoteBranchHash returns the hash the remote advertises for ref.
