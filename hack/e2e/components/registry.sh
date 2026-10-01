@@ -96,7 +96,14 @@ IP=$(node_ip)
 BASE="http://$IP:$(nodeport "$NS" registry http)"
 PRIVATE="http://$IP:$(nodeport "$NS" registry-private http)"
 wait_http "$BASE/v2/" 60 || die "registry not reachable at $BASE"
-code=$(curl -sS -o /dev/null -w '%{http_code}' "$PRIVATE/v2/")
+# A NodePort can refuse connections for a moment after the rollout (kube-proxy
+# has not programmed it yet): retry until the private registry answers at all.
+code=000
+for _ in $(seq 30); do
+  code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "$PRIVATE/v2/") || code=000
+  [ "$code" != 000 ] && break
+  sleep 2
+done
 [ "$code" = 401 ] || die "registry-private at $PRIVATE answered $code to an anonymous request, want 401"
 
 work=$(mktemp -d)
