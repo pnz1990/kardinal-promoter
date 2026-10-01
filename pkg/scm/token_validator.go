@@ -28,6 +28,43 @@ import (
 // maxTokenInfoBytes caps how much of a token introspection response is read.
 const maxTokenInfoBytes = 1 << 20
 
+// tokenCheckTimeout bounds one token check request. cmd/kardinal-controller
+// also bounds the whole check through its context.
+const tokenCheckTimeout = 10 * time.Second
+
+// newTokenCheckClient returns the HTTP client for one startup token check and
+// the function that releases what the check opened, to call once the response
+// body is closed.
+//
+// The client has a Transport of its own, cloned from http.DefaultTransport so
+// that the proxy and TLS settings stay the same, with keep-alives disabled.
+// go-git's HTTP transport, like every *http.Client without a Transport, pools
+// its connections in http.DefaultTransport. A check through that pool left its
+// connection idle there whenever net/http could reuse it, and the controller's
+// first clone or push to the same host reused it: after a response read to its
+// end or a bodiless 401, 403 or 404 on every Go version, and since Go 1.27
+// after any response body of up to 256 KiB, which Close now drains (Go 1.26
+// closed the connection). A CNI that never re-checks an established
+// connection (kindnet) then let git traffic through a NetworkPolicy without
+// git egress until the pod restarted, because the check runs before the
+// policy is enforced for the new pod (B78).
+//
+// DisableKeepAlives makes the request carry Connection: close, so the
+// connection never enters a pool and the server closes it after the response.
+// CloseIdleConnections then drops anything the transport could still hold,
+// such as an HTTP/2 connection the server has not closed yet. Both are cheap:
+// the check sends one request.
+func newTokenCheckClient() (client *http.Client, release func()) {
+	tr, ok := http.DefaultTransport.(*http.Transport)
+	if ok {
+		tr = tr.Clone()
+	} else {
+		tr = &http.Transport{Proxy: http.ProxyFromEnvironment}
+	}
+	tr.DisableKeepAlives = true
+	return &http.Client{Timeout: tokenCheckTimeout, Transport: tr}, tr.CloseIdleConnections
+}
+
 // TokenScopeWarning describes a missing or insufficient token scope found during
 // startup validation. It is a warning, not an error — the controller continues
 // to run but will likely fail when it attempts the operation that needs the scope.
@@ -64,7 +101,8 @@ func ValidateGitHubTokenScopes(ctx context.Context, token, apiURL string) ([]Tok
 	}
 	apiURL = strings.TrimRight(apiURL, "/")
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient, release := newTokenCheckClient()
+	defer release()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"/user", nil)
 	if err != nil {
 		return nil, fmt.Errorf("construct /user request: %w", err)
@@ -147,7 +185,8 @@ func ValidateGitLabTokenScopes(ctx context.Context, token, apiURL string) ([]Tok
 	}
 	apiURL = strings.TrimRight(apiURL, "/")
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient, release := newTokenCheckClient()
+	defer release()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"/api/v4/personal_access_tokens/self", nil)
 	if err != nil {
 		return nil, fmt.Errorf("construct GitLab token introspection request: %w", err)
@@ -235,7 +274,8 @@ func validateGiteaFamilyTokenScopes(ctx context.Context, name, token, apiURL str
 	}
 	apiURL = strings.TrimRight(apiURL, "/")
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient, release := newTokenCheckClient()
+	defer release()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"/api/v1/user", nil)
 	if err != nil {
 		return nil, fmt.Errorf("construct %s /user request: %w", name, err)
