@@ -246,8 +246,10 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 // TestE2EMatrixRunsEverySuite checks hack/e2e/matrix.txt, the jobs
 // hack/e2e/all.sh runs locally and e2e-live.yml in CI: every suite in
 // hack/e2e/up.sh has a job and no other suite does, every job boots a
-// KIND_NODE_* minor of hack/tool-versions.env, and the core suite runs on
-// every one of those minors with a complete set of shards.
+// KIND_NODE_* minor of hack/tool-versions.env, each suite runs on a minor
+// once, as a whole or with a complete set of shards, and the core suite runs
+// on every one of those minors. e2e-live.yml must take its matrix from
+// all.sh -matrix.
 func TestE2EMatrixRunsEverySuite(t *testing.T) {
 	root := repoRoot(t)
 	runs, err := coverage.SuiteRuns(root)
@@ -257,7 +259,8 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 	require.NoError(t, err)
 
 	suites := map[string]bool{}
-	coreShards := map[string]map[string]bool{}
+	// shards["core 1.37"] is the set of core's shards on 1.37 ("-" for none).
+	shards := map[string]map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
 		f := strings.Fields(line)
 		if len(f) == 0 || strings.HasPrefix(f[0], "#") {
@@ -275,42 +278,66 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 			assert.Regexp(t, `^[1-9][0-9]*/[1-9][0-9]*$`, shard, "matrix.txt %q", line)
 		}
 		suites[suite] = true
-		if suite == "core" {
-			if coreShards[minor] == nil {
-				coreShards[minor] = map[string]bool{}
-			}
-			assert.False(t, coreShards[minor][shard], "matrix.txt %q: duplicate job", line)
-			coreShards[minor][shard] = true
+		key := suite + " " + minor
+		if shards[key] == nil {
+			shards[key] = map[string]bool{}
 		}
+		assert.False(t, shards[key][shard], "matrix.txt %q: duplicate job", line)
+		shards[key][shard] = true
 	}
 	for s := range runs {
 		assert.True(t, suites[s], "hack/e2e/up.sh suite %s has no job in hack/e2e/matrix.txt", s)
 	}
 	for k := range tv {
 		if m := kindNodeKey.FindStringSubmatch(k); m != nil {
-			assert.NotEmpty(t, coreShards["1."+m[1]], "the core suite has no job on Kubernetes 1.%s (%s)", m[1], k)
+			assert.NotEmpty(t, shards["core 1."+m[1]], "the core suite has no job on Kubernetes 1.%s (%s)", m[1], k)
 		}
 	}
-	for minor, shards := range coreShards {
+	for key, got := range shards {
 		n := 1
-		for sh := range shards {
+		for sh := range got {
 			if _, of, ok := strings.Cut(sh, "/"); ok {
 				n, _ = strconv.Atoi(of)
 			}
 		}
 		want := map[string]bool{"-": true}
-		if n > 1 || !shards["-"] {
+		if n > 1 || !got["-"] {
 			want = map[string]bool{}
 			for i := 1; i <= n; i++ {
 				want[fmt.Sprintf("%d/%d", i, n)] = true
 			}
 		}
-		assert.Equal(t, want, shards, "core on Kubernetes %s: every shard 1/n to n/n, once", minor)
+		assert.Equal(t, want, got, "%s: the whole suite, or every shard 1/n to n/n, once", key)
 	}
 
-	wf, err := os.ReadFile(filepath.Join(root, ".github/workflows/e2e-live.yml"))
+	const rel = ".github/workflows/e2e-live.yml"
+	data, err = os.ReadFile(filepath.Join(root, rel))
 	require.NoError(t, err)
-	assert.Contains(t, string(wf), "hack/e2e/all.sh -matrix", "e2e-live.yml must take its matrix from hack/e2e/matrix.txt")
+	var wf struct {
+		Jobs struct {
+			Image struct {
+				Outputs map[string]string `json:"outputs"`
+				Steps   []workflowStep    `json:"steps"`
+			} `json:"image"`
+			Suite struct {
+				Strategy struct {
+					Matrix any `json:"matrix"`
+				} `json:"strategy"`
+			} `json:"suite"`
+		} `json:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(data, &wf), rel)
+	assert.Equal(t, "${{ fromJSON(needs.image.outputs.matrix) }}", wf.Jobs.Suite.Strategy.Matrix,
+		"%s: the suite job's matrix must be the image job's matrix output", rel)
+	assert.Equal(t, "${{ steps.matrix.outputs.matrix }}", wf.Jobs.Image.Outputs["matrix"], rel)
+	var run string
+	for _, st := range wf.Jobs.Image.Steps {
+		if st.ID == "matrix" {
+			run = st.Run
+		}
+	}
+	assert.Regexp(t, `(?m)^m=\$\(bash hack/e2e/all\.sh -matrix\)$`, run,
+		"%s: the image job's matrix step must print the matrix with hack/e2e/all.sh -matrix", rel)
 }
 
 func abs(n int) int {

@@ -49,7 +49,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: List the jobs (hack/e2e/matrix.txt)
         id: matrix
-        run: echo "matrix=$(bash hack/e2e/all.sh -matrix)" >> "$GITHUB_OUTPUT"
+        run: |
+          m=$(bash hack/e2e/all.sh -matrix)
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
       - name: Build the controller image from this commit
         run: |
           docker build -t "$KARDINAL_E2E_IMAGE" .

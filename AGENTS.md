@@ -188,8 +188,8 @@ make e2e-down SUITE=core        # delete the kind cluster
   cluster, then `go run ./test/e2e/proof` on the results), or the suites the change touches,
   and put the result in the PR body. `.github/workflows/e2e-live.yml` runs the same jobs weekly
   (each test three times) and on dispatch; core runs on three Kubernetes minors. Its
-  `e2e live` job runs the proof and fails when a coverage row's test failed or skipped. Only
-  its github job gets a secret (DEMO_GITHUB_TOKEN).
+  `e2e live` job runs the proof and fails when a coverage row's test failed, skipped or didn't
+  run. Only its github job gets a secret (DEMO_GITHUB_TOKEN).
 - test/e2e/coverage.tsv has one row per documented behavior. A live test claims rows with one
   sentence in its doc comment, `Covers STEP-AUTO-01, SCM-CLOSED-01.`, only for what it fully
   asserts. `go test ./test/hack -run TestE2ECoverage` fails when a row's status and the tests

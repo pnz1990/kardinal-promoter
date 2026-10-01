@@ -45,7 +45,8 @@ make e2e-down SUITE=core
 
 `make e2e-up` wraps `hack/e2e/up.sh SUITE` and `make test-e2e-live` wraps
 `hack/e2e/run.sh SUITE`. `make e2e-all` runs every suite, each on a kind
-cluster of its own, JOBS (default 4) at a time. Pull requests don't run the
+cluster of its own, JOBS (default 4) at a time, and fails when a test
+failed or a coverage row's test did not run. Pull requests don't run the
 live suites in CI, so run the ones your change touches and put the result in
 the PR. [test/e2e/README.md](test/e2e/README.md) lists the suites.
 

@@ -41,10 +41,10 @@ SUITES='gitea flux' make e2e-all   # only these suites
 the three Kubernetes minors split across two jobs per minor with `SHARD`.
 `make e2e-all` runs them on this host, each on a kind cluster of its own
 (`kardinal-e2e-all-<job>`), deletes the clusters (`KEEP=1` keeps them), and
-runs `go run ./test/e2e/proof` over all the results. It fails when a job or
-the proof fails. Each cluster takes 2-3 GB of memory, GitLab's about 7 GB.
-The results, each job's log and the proof are in
-`test/e2e/results/all-<UTC time>/`. The `github` job runs only when
+runs `go run ./test/e2e/proof` over all the results. It fails when a job
+fails, or when a covered row's test failed, skipped or did not run. Each
+cluster takes 2-3 GB of memory, GitLab's about 7 GB. The results, each
+job's log and the proof are in `test/e2e/results/all-<UTC time>/`. The `github` job runs only when
 `KARDINAL_E2E_GITHUB_TOKEN_FILE` or `DEMO_GITHUB_TOKEN` is set; otherwise it
 is listed as not run.
 

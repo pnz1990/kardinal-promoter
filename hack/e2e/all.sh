@@ -10,6 +10,7 @@
 # The github job runs only when KARDINAL_E2E_GITHUB_TOKEN_FILE or
 # DEMO_GITHUB_TOKEN is set (components/github.sh); without one it is listed
 # as not run, and your gh login is never used. The weekly CI run covers it.
+# No other job sees the token.
 #
 #   -list    print the jobs this run would start and exit
 #   -matrix  print every job as the GitHub Actions matrix of e2e-live.yml
@@ -18,17 +19,20 @@
 #   JOBS        clusters at once (default 4; each takes 2-3 GB of memory,
 #               gitlab's about 7 GB)
 #   SUITES      only these suites, e.g. 'core gitea' (default every suite)
-#   COUNT       go test -count (default 1)
+#   COUNT       go test -count (default 1). RUN is ignored: every job runs
+#               its whole suite (for some tests, use make test-e2e-live RUN=)
 #   KEEP        set to keep the clusters (default: each is deleted when its
 #               job ends)
 #   ALL_PREFIX  cluster name prefix (default kardinal-e2e-all); two runs on
 #               one host need different prefixes
-#   COMPLETE    set to also fail when a coverage row did not run (proof
-#               -complete)
+#   COMPLETE    set to also fail when a coverage row is todo or did not run
+#               (proof -complete); it fails until every todo row in
+#               test/e2e/coverage.tsv has a live test
 #   plus up.sh's and components/kardinal.sh's, e.g. KARDINAL_E2E_BUILD=host
 #   where docker build can't download Go modules
 #
-# Results in test/e2e/results/all-<UTC time>/: <job>.log, <job>/ (the job's
+# Results in test/e2e/results/all-<UTC time>/ (with ALL_PREFIX, the prefix
+# without kardinal-e2e- instead of all): <job>.log, <job>/ (the job's
 # E2E_OUT: env, kubeconfig, test.json, summary.json, diagnostics/) and
 # coverage-proof.json.
 #
@@ -56,7 +60,7 @@ die() {
 # One "id suite k8s shard" entry per matrix.txt line; the id names the job's
 # cluster, results and CI artifact (core-135-1of2).
 matrix=()
-while read -r suite k8s shard _; do
+while read -r suite k8s shard _ || [ -n "$suite" ]; do
   case "$suite" in '' | '#'*) continue ;; esac
   [ -n "$k8s" ] && [ -n "$shard" ] || die "matrix.txt: '$suite $k8s $shard': want suite, Kubernetes minor and shard"
   [ "$shard" != - ] || shard=
@@ -77,21 +81,25 @@ if [ "$MODE" = -matrix ]; then
   exit 0
 fi
 
+read -ra suites <<<"${SUITES:-}"
+token=${KARDINAL_E2E_GITHUB_TOKEN_FILE:-}${DEMO_GITHUB_TOKEN:-}
+for s in "${suites[@]}"; do
+  printf '%s\n' "${matrix[@]}" | awk -v s="$s" '$2 == s { found = 1 } END { exit !found }' ||
+    die "SUITES: no suite $s in matrix.txt"
+  [ "$s" != github ] || [ -n "$token" ] ||
+    die "SUITES: the github suite needs KARDINAL_E2E_GITHUB_TOKEN_FILE or DEMO_GITHUB_TOKEN"
+done
 run=() skipped=()
 for j in "${matrix[@]}"; do
   read -r id suite _ <<<"$j"
-  if [ -n "${SUITES:-}" ] && ! [[ " $SUITES " == *" $suite "* ]]; then
+  if [ "${#suites[@]}" -gt 0 ] && ! [[ " ${suites[*]} " == *" $suite "* ]]; then
     continue
   fi
-  if [ "$suite" = github ] && [ -z "${KARDINAL_E2E_GITHUB_TOKEN_FILE:-}${DEMO_GITHUB_TOKEN:-}" ]; then
+  if [ "$suite" = github ] && [ -z "$token" ]; then
     skipped+=("$id")
     continue
   fi
   run+=("$j")
-done
-for s in ${SUITES:-}; do
-  printf '%s\n' "${matrix[@]}" | awk -v s="$s" '$2 == s { found = 1 } END { exit !found }' ||
-    die "SUITES: no suite $s in matrix.txt"
 done
 [ "${#run[@]}" -gt 0 ] || die "no job to run"
 if [ "$MODE" = -list ]; then
@@ -114,8 +122,13 @@ if printf '%s\n' "${run[@]}" | grep -q ' core '; then
   command -v zsh >/dev/null || die "the core suite needs zsh on PATH (TestCLI_Completion)"
 fi
 
-OUT="$REPO_ROOT/test/e2e/results/all-$(date -u +%Y%m%dT%H%M%SZ)"
+OUT="$REPO_ROOT/test/e2e/results/${PREFIX#kardinal-e2e-}-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$OUT"
+
+delete_cluster() {
+  kind delete cluster --name "$PREFIX-$1" --kubeconfig "$OUT/$1/kubeconfig" >>"$OUT/$1.log" 2>&1 ||
+    log "deleting kind cluster $PREFIX-$1 failed; see $OUT/$1.log"
+}
 
 # run_job ID SUITE K8S SHARD writes ID.log and ID.rc ("<exit code> <seconds>").
 run_job() {
@@ -123,46 +136,50 @@ run_job() {
   [ "$shard" != - ] || shard=
   start=$(date +%s)
   (
+    unset RUN
+    [ "$suite" = github ] || unset KARDINAL_E2E_GITHUB_TOKEN_FILE DEMO_GITHUB_TOKEN
     export KIND_CLUSTER="$PREFIX-$id" KIND_K8S="$k8s" SHARD="$shard" COUNT="${COUNT:-1}"
     export E2E_OUT="$OUT/$id" KUBECONFIG="$OUT/$id/kubeconfig"
     mkdir -p "$E2E_OUT"
     bash "$E2E_DIR/up.sh" "$suite" && bash "$E2E_DIR/run.sh" "$suite"
   ) >"$OUT/$id.log" 2>&1 || rc=$?
-  if [ -z "${KEEP:-}" ]; then
-    kind delete cluster --name "$PREFIX-$id" --kubeconfig "$OUT/$id/kubeconfig" >/dev/null 2>&1 || true
-  fi
+  [ -n "${KEEP:-}" ] || delete_cluster "$id"
   echo "$rc $(($(date +%s) - start))" >"$OUT/$id.rc"
 }
 
 # Each job is a process group of its own (set -m), so an interrupt stops
-# every job's up.sh, kind and go test, then deletes the clusters.
+# every job's up.sh, kind and go test, then deletes the clusters. The loops
+# below wait with the wait builtin, not sleep: under set -m a foreground
+# sleep would take the terminal's Ctrl-C, and the trap would never run.
 set -m
 pids=()
 stop() {
+  trap - INT TERM
   log "interrupted; stopping the jobs"
-  for p in "${pids[@]}"; do kill -TERM -- "-$p" 2>/dev/null || true; done
+  for p in "${pids[@]}" $(jobs -p); do kill -TERM -- "-$p" 2>/dev/null || true; done
   wait || true
   if [ -z "${KEEP:-}" ]; then
     for j in "${run[@]}"; do
       read -r id _ <<<"$j"
-      kind delete cluster --name "$PREFIX-$id" --kubeconfig "$OUT/$id/kubeconfig" >/dev/null 2>&1 || true
+      [ ! -d "$OUT/$id" ] || delete_cluster "$id"
     done
   fi
-  exit 130
+  exit "$1"
 }
-trap stop INT TERM
+trap 'stop 130' INT
+trap 'stop 143' TERM
 
 start=$(date +%s)
 log "${#run[@]} jobs, $JOBS at a time; results in $OUT"
 for j in "${run[@]}"; do
-  while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do sleep 5; done
+  while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n || true; done
   read -r id suite k8s shard <<<"$j"
   log "start $id (cluster $PREFIX-$id, log $OUT/$id.log)"
   # shellcheck disable=SC2086
   run_job $j &
   pids+=("$!")
 done
-while [ "$(jobs -rp | wc -l)" -gt 0 ]; do sleep 5; done
+while [ "$(jobs -rp | wc -l)" -gt 0 ]; do wait -n || true; done
 wait || true
 trap - INT TERM
 set +m
