@@ -165,7 +165,10 @@ held steps continue where they stopped. See [Pause and Resume](rollback.md#pause
 
 Rollbacks are triggered:
 
-1. **Manual**: `kardinal rollback <pipeline> --env prod` — opens a rollback PR
+1. **Manual**: `kardinal rollback <pipeline> --env prod` — creates a rollback Bundle. In a
+   `pr-review` environment it opens a PR labelled `kardinal/rollback`; in an `auto` environment
+   it commits and pushes straight to the branch, the same as any promotion there, with no PR
+   (with `update.strategy: argocd` it sets the image on the Argo CD Application instead)
 2. **Automatic**: If the environment sets `onHealthFailure: rollback` and a health check
    fails during a `bake` window with `policy: fail-on-alarm`. See [Rollback](rollback.md#automatic-rollback).
    (`environments[].autoRollback` is not implemented and is rejected by the API server.)
