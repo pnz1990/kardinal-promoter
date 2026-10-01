@@ -134,6 +134,14 @@ spec:
               containerPort: {{ index $ports $name }}
               protocol: TCP
             {{- end }}
+          {{- $shutdownDelay := ternary 5 .Values.shutdownDelaySeconds (kindIs "invalid" .Values.shutdownDelaySeconds) }}
+          {{- if gt (int $shutdownDelay) 0 }}
+          lifecycle:
+            preStop:
+              exec:
+                # The Pod keeps serving while Services stop routing to it.
+                command: ["sleep", "{{ int $shutdownDelay }}"]
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

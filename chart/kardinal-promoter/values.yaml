@@ -5,9 +5,16 @@
 replicaCount: 1
 
 # -- Pod termination grace period in seconds.
-# Keep it above the controller's 30s shutdown timeout: on SIGTERM the controller gives
-# in-flight HTTP requests up to 20s, then cancels in-flight reconciles, and exits within 30s. (#574)
+# Keep it above shutdownDelaySeconds plus the controller's 30s shutdown timeout: on SIGTERM the
+# controller gives in-flight HTTP requests up to 20s, then cancels in-flight reconciles, and exits
+# within 30s. (#574)
 terminationGracePeriodSeconds: 60
+
+# -- Seconds a controller Pod being deleted keeps serving before it gets SIGTERM (a preStop
+# sleep). Services stop sending it new connections meanwhile, so a rollout or a node drain does
+# not refuse or drop UI, webhook and Bundle API requests. It counts against
+# terminationGracePeriodSeconds. 0 sends SIGTERM at once.
+shutdownDelaySeconds: 5
 
 image:
   # -- Container image repository

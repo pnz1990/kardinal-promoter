@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"strconv"
@@ -1187,9 +1188,17 @@ func hostRequest(t *testing.T, method, target string, header map[string]string) 
 		}
 		req.Header.Set(k, v)
 	}
+	// A request that fails says how far it got: a NodePort that sends the
+	// connection to a gone Pod never connects, a server that hangs never
+	// answers.
+	var connected, wrote bool
+	req = req.WithContext(httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn:      func(httptrace.GotConnInfo) { connected = true },
+		WroteRequest: func(httptrace.WroteRequestInfo) { wrote = true },
+	}))
 	resp, err := (&http.Client{Transport: &http.Transport{}}).Do(req)
 	if err != nil {
-		res.Err = err.Error()
+		res.Err = fmt.Sprintf("%v (connected %t, request sent %t)", err, connected, wrote)
 	} else {
 		defer func() { _ = resp.Body.Close() }()
 		body, err := io.ReadAll(resp.Body)
@@ -1688,6 +1697,119 @@ func TestChart_UIExpose(t *testing.T) {
 	assert.Empty(t, res.Headers["access-control-allow-origin"])
 }
 
+// TestChart_RolloutKeepsServing opens a new connection to the UI through a
+// NodePort every 100ms while a helm upgrade rolls the controller out. A
+// controller Pod marked for deletion keeps serving for the chart's
+// shutdownDelaySeconds (a preStop sleep) while kube-proxy, which can lag the
+// EndpointSlice by a second or more, stops routing to it, and only then gets
+// SIGTERM; so every request is answered. shutdownDelaySeconds 0 removes the
+// hook.
+//
+// Covers INST-SHUTDOWN-04, CHART-SHUTDOWN-DELAY-01.
+func TestChart_RolloutKeepsServing(t *testing.T) {
+	t.Parallel()
+	namespaceScoped(t)
+	e := framework.New(t)
+	ctx := context.Background()
+	ns := e.Namespace(t)
+	values := func(rollout string, extra framework.Values) framework.Values {
+		v := framework.Values{"podAnnotations": framework.Values{"e2e.kardinal.io/rollout": rollout}}
+		for k, x := range extra {
+			v[k] = x
+		}
+		return nsValues(ns, v)
+	}
+	r := e.InstallChart(t, releaseName(ns), ns, values("1", nil))
+	old := runningPod(t, r)
+	assert.Equal(t, []string{"sleep", "5"}, preStopCommand(t, old), "the chart's default shutdown delay")
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "ui-nodeport"},
+		Spec: corev1.ServiceSpec{
+			Type:     corev1.ServiceTypeNodePort,
+			Selector: releaseLabels(r),
+			Ports:    []corev1.ServicePort{{Name: "ui", Port: 8082, TargetPort: intstr.FromString("ui")}},
+		},
+	}
+	require.NoError(t, e.Client.Create(ctx, svc))
+	page := fmt.Sprintf("http://%s:%d/ui/", nodeInternalIP(t, e), svc.Spec.Ports[0].NodePort)
+	framework.Eventually(t, time.Minute, "the NodePort serves the UI", func(context.Context) (bool, string) {
+		res := hostRequest(t, http.MethodGet, page, nil)
+		return res.Code == 200, brief(res)
+	})
+
+	// One request at a time, each on a new connection, so each one goes
+	// wherever kube-proxy routes it at that moment.
+	var (
+		mu     sync.Mutex
+		sent   int
+		failed []string
+	)
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		c := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+			}
+			at := time.Now()
+			why := ""
+			resp, err := c.Get(page)
+			if err != nil {
+				why = err.Error()
+			} else {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					why = resp.Status
+				}
+			}
+			mu.Lock()
+			sent++
+			if why != "" {
+				failed = append(failed, at.UTC().Format("15:04:05.000")+" "+why)
+			}
+			mu.Unlock()
+		}
+	}()
+	r.Upgrade(t, values("2", nil))
+	pod := runningPod(t, r)
+	time.Sleep(2 * time.Second)
+	close(stop)
+	<-done
+	require.NotEqual(t, old.Name, pod.Name, "the upgrade replaced the controller Pod")
+	t.Logf("%d requests during the rollout, %d failed", sent, len(failed))
+	assert.GreaterOrEqual(t, sent, 50, "the requests span the rollout")
+	assert.Empty(t, failed, "every request during the rollout is answered")
+
+	r.Upgrade(t, values("3", framework.Values{"shutdownDelaySeconds": 0}))
+	pod = runningPod(t, r)
+	assert.Nil(t, preStopCommand(t, pod), "shutdownDelaySeconds 0 removes the preStop hook")
+}
+
+// preStopCommand is the command of the controller container's preStop hook
+// in pod, or nil when it has none.
+func preStopCommand(t *testing.T, pod corev1.Pod) []string {
+	t.Helper()
+	for _, c := range pod.Spec.Containers {
+		if c.Name != "controller" {
+			continue
+		}
+		if c.Lifecycle == nil || c.Lifecycle.PreStop == nil {
+			return nil
+		}
+		require.NotNil(t, c.Lifecycle.PreStop.Exec, "the preStop hook runs a command")
+		return c.Lifecycle.PreStop.Exec.Command
+	}
+	t.Fatalf("Pod %s has no controller container", pod.Name)
+	return nil
+}
+
 // TestChart_GraphIdentity checks the graph values. aggregateToKro grants
 // kro's controller watch on the kinds kro creates, and without it kro has
 // none. serviceAccountName is the identity the controller provisions and
@@ -2072,9 +2194,10 @@ func logLine(logs *framework.LogStream, substrs ...string) (framework.StreamLine
 // TestChart_RestartMidStep stops the controller with SIGTERM (a scale-down,
 // as in a rolling update or a node drain) while a pr-review step, its branch
 // already pushed, waits on the SCM API to open its PR, then starts it again.
-// The Pod keeps the chart's 60s grace period. With no HTTP request in
-// flight, the shutdown cancels the SCM call rather than waiting for it, the
-// workers finish and the controller exits within seconds. After the restart
+// The Pod keeps the chart's 60s grace period and gets SIGTERM after its 5s
+// shutdown delay. With no HTTP request in flight, the shutdown cancels the
+// SCM call rather than waiting for it, the workers finish and the controller
+// exits within seconds of the SIGTERM. After the restart
 // the step runs again and opens one PR with one commit; the base branch is
 // untouched until the merge, and the Bundle is Verified.
 //
@@ -2136,7 +2259,7 @@ func TestChart_RestartMidStep(t *testing.T) {
 	scaleDown := client.MergeFrom(d.DeepCopy())
 	zero := int32(0)
 	d.Spec.Replicas = &zero
-	sigterm := time.Now()
+	scaledDown := time.Now()
 	require.NoError(t, e.Client.Patch(ctx, d, scaleDown))
 	select {
 	case <-logs.Done():
@@ -2147,13 +2270,16 @@ func TestChart_RestartMidStep(t *testing.T) {
 	// lag the process's exit by seconds on a busy node (the container
 	// runtime handles exit events in turn); the last line the controller
 	// wrote dates its exit.
-	stopped := time.Since(sigterm)
+	stopped := time.Since(scaledDown)
 	lines := logs.Lines()
 	require.NotEmpty(t, lines, "the controller logged")
-	exited := lines[len(lines)-1].At.Sub(sigterm)
-	t.Logf("the controller wrote its last line %s after the scale-down; the kubelet reported it stopped after %s",
-		exited.Round(time.Millisecond), stopped.Round(time.Millisecond))
-	assert.True(t, lines[len(lines)-1].At.After(sigterm), "the controller's last line comes after the scale-down")
+	sigterm, ok := logLine(logs, "Stopping and waiting for non leader election runnables")
+	require.True(t, ok, "the controller logs the SIGTERM")
+	exited := lines[len(lines)-1].At.Sub(sigterm.At)
+	t.Logf("the controller got SIGTERM %s after the scale-down and wrote its last line %s later; the kubelet reported it stopped %s after the scale-down",
+		sigterm.At.Sub(scaledDown).Round(time.Millisecond), exited.Round(time.Millisecond), stopped.Round(time.Millisecond))
+	assert.GreaterOrEqual(t, sigterm.At.Sub(scaledDown), 5*time.Second, "the Pod serves for the chart's 5s shutdown delay before SIGTERM")
+	assert.True(t, lines[len(lines)-1].At.After(sigterm.At), "the controller's last line comes after the SIGTERM")
 	finished, ok := logLine(logs, "Wait completed, proceeding to shutdown the manager")
 	assert.True(t, ok, "the manager finishes its shutdown, so the controller exits rather than being killed")
 
@@ -2161,15 +2287,15 @@ func TestChart_RestartMidStep(t *testing.T) {
 	assert.True(t, ok, "the controller logs the SIGTERM and waits for its workers")
 	workers, ok := logLine(logs, "All workers finished")
 	assert.True(t, ok, "the workers finish before the controller exits")
-	assert.True(t, received.At.After(sigterm) && !workers.At.Before(received.At) && !finished.At.Before(workers.At),
-		"the shutdown runs in order after the scale-down: signal %s, workers finished %s, manager done %s",
-		received.At.Sub(sigterm).Round(time.Millisecond), workers.At.Sub(sigterm).Round(time.Millisecond), finished.At.Sub(sigterm).Round(time.Millisecond))
+	assert.True(t, !received.At.Before(sigterm.At) && !workers.At.Before(received.At) && !finished.At.Before(workers.At),
+		"the shutdown runs in order after the SIGTERM: signal %s, workers finished %s, manager done %s",
+		received.At.Sub(sigterm.At).Round(time.Millisecond), workers.At.Sub(sigterm.At).Round(time.Millisecond), finished.At.Sub(sigterm.At).Round(time.Millisecond))
 	cancelled, ok := logLine(logs, `"message":"step failed, will retry"`, "context canceled")
 	if assert.True(t, ok, "the shutdown cancels the open-pr call in flight") {
-		assert.True(t, cancelled.At.After(sigterm), "the call ends after the SIGTERM")
+		assert.False(t, cancelled.At.Before(sigterm.At), "the call ends after the SIGTERM")
 		assert.Less(t, cancelled.At.Sub(opening.At), 30*time.Second, "the call is cancelled, not timed out")
 	}
-	assert.Less(t, exited, 10*time.Second, "with no request in flight the controller exits within seconds, long before the 60s SIGKILL")
+	assert.Less(t, exited, 10*time.Second, "with no request in flight the controller exits within seconds of the SIGTERM, long before the 60s SIGKILL")
 
 	promotion := fmt.Sprintf("kardinal/%s/prod", bundle)
 	kustomization, err := e.Git.ReadFile(ctx, a.repo, promotion, fixtures.Path("prod")+"/kustomization.yaml")

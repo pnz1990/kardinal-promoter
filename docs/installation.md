@@ -494,8 +494,11 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 ## Graceful shutdown
 
-On `SIGTERM` (a rolling update, a scale-down or a node drain) the controller shuts down in
-this order:
+When Kubernetes deletes the controller Pod (a rolling update, a scale-down or a node drain),
+the Pod first keeps serving for `shutdownDelaySeconds` (default **5**). Services stop sending
+it new connections in that time, so the UI, SCM webhooks and the Bundle API keep answering
+through a rollout instead of refusing or dropping requests on a node whose routes still point
+at the old Pod. Then the controller gets `SIGTERM` and shuts down in this order:
 
 1. The webhook and UI servers stop accepting connections and give the requests in flight up
    to **20 seconds** to finish. Reconciles keep running meanwhile.
@@ -513,8 +516,16 @@ step. A `pr-review` step force-pushes its branch `kardinal/<bundle>/<env>`, so a
 after its push and before its PR opens one PR with one commit, and the base branch changes
 only when the PR is merged.
 
-The Helm chart sets `terminationGracePeriodSeconds: 60` (double the shutdown timeout)
-so Kubernetes sends `SIGKILL` only after the controller has had its full 30 seconds to shut down.
+The Helm chart sets `terminationGracePeriodSeconds: 60` so Kubernetes sends `SIGKILL` only
+after the shutdown delay and the controller's full 30 seconds to shut down. The delay counts
+against the grace period: keep `terminationGracePeriodSeconds` above `shutdownDelaySeconds`
+plus 30. A leader keeps its lease while it waits, so the delay also postpones the new
+leader's takeover by as much.
+
+```yaml
+# values.yaml
+shutdownDelaySeconds: 0  # SIGTERM at once: new connections can still reach the Pod as it stops
+```
 
 The 30-second shutdown timeout is fixed in the controller. `terminationGracePeriodSeconds` only sets
 when Kubernetes sends `SIGKILL`, so a value above 30 does not give reconciles more time.

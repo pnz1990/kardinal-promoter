@@ -756,6 +756,34 @@ func TestChartTerminationGracePeriod(t *testing.T) {
 	}
 }
 
+// shutdownDelaySeconds is a preStop sleep, so a Pod being deleted serves
+// until Services stop routing to it; 0 removes the hook, and null is the
+// default.
+func TestChartShutdownDelay(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want []string
+	}{
+		{nil, []string{"sleep", "5"}},
+		{[]string{"--set", "shutdownDelaySeconds=0"}, nil},
+		{[]string{"--set", "shutdownDelaySeconds=12"}, []string{"sleep", "12"}},
+		{[]string{"--set", "shutdownDelaySeconds=null"}, []string{"sleep", "5"}},
+	} {
+		c := controllerContainer(t, render(t, "kardinal-promoter", tc.args...))
+		if tc.want == nil {
+			assert.Nil(t, c.Lifecycle, "%v", tc.args)
+			continue
+		}
+		if assert.NotNil(t, c.Lifecycle, "%v", tc.args) && assert.NotNil(t, c.Lifecycle.PreStop, "%v", tc.args) &&
+			assert.NotNil(t, c.Lifecycle.PreStop.Exec, "%v", tc.args) {
+			assert.Equal(t, tc.want, c.Lifecycle.PreStop.Exec.Command, "%v", tc.args)
+		}
+	}
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "shutdownDelaySeconds=-1")
+	require.Error(t, err)
+	assert.Contains(t, out, "shutdownDelaySeconds: Must be greater than or equal to 0")
+}
+
 // ── C08-api-config-11: values wired to real controller flags ─────────────────
 
 var flagDef = regexp.MustCompile(`flag\.\w+Var\(\s*&[\w.]+,\s*"([a-z0-9-]+)"`)
