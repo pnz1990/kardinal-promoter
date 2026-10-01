@@ -24,15 +24,18 @@ import (
 // caller is: with the static UI token (--ui-auth-token) or with no UI auth.
 const uiActor = "kardinal-ui"
 
-// uiRequester is who asked for a UI promote, rollback, pause or resume. With
-// --ui-tokenreview-auth it is the username the TokenReview middleware stored in
-// the request context, as the API server returned it (for example
+// uiRequester is who asked for a UI action: a promote, a rollback, a gate
+// approval, a pause or a resume. With --ui-tokenreview-auth it is the username
+// the TokenReview middleware stored in the request context, as the API server
+// returned it (for example
 // system:serviceaccount:team-a:deployer); otherwise it is uiActor.
 //
 // The username is recorded as is. It only goes into the kardinal.io/requested-by
 // annotation (never a label, so the 63-character label limit does not apply),
-// the PR body (escaped by mdcell) and JSON log fields, and the API server
-// already bounds it: it refuses objects whose annotations exceed 256 KiB.
+// a gate override's createdBy and the gate reason built from it, the PR body
+// (escaped by mdcell) and JSON log fields, and the API server already bounds
+// it: by default it refuses objects whose annotations exceed 256 KiB and
+// request bodies over 3 MiB.
 func uiRequester(ctx context.Context) string {
 	if u, ok := uiauth.UserFrom(ctx); ok && u.Username != "" {
 		return u.Username

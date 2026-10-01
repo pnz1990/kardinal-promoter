@@ -39,7 +39,6 @@ import (
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
 
 // maxGateOverrideMinutes bounds a UI gate override to one day.
@@ -1047,6 +1046,7 @@ func (s *uiAPIServer) handleValidateCEL(w http.ResponseWriter, r *http.Request) 
 //
 // The namespace in the path wins; the body namespace is used only with the
 // {name}/approve form. expiresInMinutes defaults to 60 and must be 1..1440.
+// The override's createdBy is the requester (uiRequester).
 //
 // Response (JSON on success):
 //
@@ -1105,10 +1105,7 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		http.Error(w, fmt.Sprintf("expiresInMinutes must be between 1 and %d", maxGateOverrideMinutes), http.StatusBadRequest)
 		return
 	}
-	createdBy := "ui-action"
-	if u, ok := uiauth.UserFrom(r.Context()); ok && u.Username != "" {
-		createdBy = u.Username
-	}
+	createdBy := uiRequester(r.Context())
 
 	now := time.Now().UTC()
 	expiresAt := metav1.Time{Time: now.Add(time.Duration(expiresMins) * time.Minute)}

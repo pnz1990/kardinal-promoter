@@ -230,40 +230,49 @@ func TestUIRequester(t *testing.T) {
 	}
 }
 
-// TestUIHandler_LifecycleRecordsRequester covers B53 through the real UI
-// handler: with --ui-tokenreview-auth, UI promote and rollback record the
+// TestUIHandler_ActionsRecordRequester covers B53 and B56 through the real UI
+// handler: with --ui-tokenreview-auth, a UI promote and rollback record the
 // TokenReview username as kardinal.io/requested-by, exactly as the API server
-// returned it, and the promote, rollback and pause log lines name it. The
-// handler reads the user the middleware stored in the request context, so
-// each request is reviewed once. The static-token and no-auth modes know no
-// user and record kardinal-ui.
-func TestUIHandler_LifecycleRecordsRequester(t *testing.T) {
+// returned it, a gate approval records it as the override's
+// createdBy, and each action's log line names it. The handler reads the user
+// the middleware stored in the request context, so each request is reviewed
+// once. The static-token and no-auth modes know no user and record
+// kardinal-ui, for gate approvals too (they recorded ui-action, B56).
+func TestUIHandler_ActionsRecordRequester(t *testing.T) {
 	const deployer = "system:serviceaccount:default:deployer"
 	const oidcUser = "oidc:Jane Doe | ops"
 	users := map[string]string{"deployer-token": deployer, "oidc-token": oidcUser}
 	verbs := []string{"get", "list", "create", "update"}
 	rbac := map[string]map[string][]string{deployer: {"default": verbs}, oidcUser: {"default": verbs}}
+	gate := func() client.Object {
+		return &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "no-weekend", Namespace: "default"}}
+	}
 
 	actions := []struct {
 		name, path, body string
 		objs             func() []client.Object
 		wantCode         int
 		createsBundle    bool
+		approvesGate     bool
+		logField         string
 	}{
 		{name: "promote", path: "/api/v1/ui/promote", body: `{"pipeline":"app","environment":"prod"}`,
 			objs: func() []client.Object {
 				return []client.Object{uiLcPipeline(), uiLcBundle("app-v1", "1", 0), uiLcStep("app-v1", "uat", "Verified", 5)}
 			},
-			wantCode: http.StatusCreated, createsBundle: true},
+			wantCode: http.StatusCreated, createsBundle: true, logField: "requestedBy"},
 		{name: "rollback", path: "/api/v1/ui/rollback", body: `{"pipeline":"app","environment":"prod"}`,
 			objs: func() []client.Object {
 				return []client.Object{uiLcPipeline(), uiLcBundle("app-v1", "1", 0), uiLcBundle("app-v2", "2", 10),
 					uiLcStep("app-v1", "prod", "Verified", 5), uiLcStep("app-v2", "prod", "Verified", 15)}
 			},
-			wantCode: http.StatusCreated, createsBundle: true},
+			wantCode: http.StatusCreated, createsBundle: true, logField: "requestedBy"},
+		{name: "approve gate", path: "/api/v1/ui/gates/default/no-weekend/approve", body: `{"reason":"hotfix"}`,
+			objs:     func() []client.Object { return []client.Object{gate()} },
+			wantCode: http.StatusOK, approvesGate: true, logField: "createdBy"},
 		{name: "pause", path: "/api/v1/ui/pause", body: `{"pipeline":"app"}`,
 			objs:     func() []client.Object { return []client.Object{uiLcPipeline()} },
-			wantCode: http.StatusOK},
+			wantCode: http.StatusOK, logField: "requestedBy"},
 	}
 	modes := []struct {
 		name        string
@@ -299,6 +308,12 @@ func TestUIHandler_LifecycleRecordsRequester(t *testing.T) {
 					require.Len(t, created, 1)
 					assert.Equal(t, m.want, created[0].Annotations[lifecycle.AnnotationRequestedBy])
 				}
+				if a.approvesGate {
+					var g v1alpha1.PolicyGate
+					require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(gate()), &g))
+					require.Len(t, g.Spec.Overrides, 1)
+					assert.Equal(t, m.want, g.Spec.Overrides[0].CreatedBy)
+				}
 				var logged []string
 				for _, line := range strings.Split(logs.String(), "\n") {
 					if line == "" {
@@ -306,11 +321,11 @@ func TestUIHandler_LifecycleRecordsRequester(t *testing.T) {
 					}
 					var entry map[string]any
 					require.NoError(t, json.Unmarshal([]byte(line), &entry), line)
-					if v, ok := entry["requestedBy"].(string); ok {
+					if v, ok := entry[a.logField].(string); ok {
 						logged = append(logged, v)
 					}
 				}
-				assert.Equal(t, []string{m.want}, logged, "the %s log line names the requester", a.name)
+				assert.Equal(t, []string{m.want}, logged, "the %s log line names the requester in %s", a.name, a.logField)
 			})
 		}
 	}
