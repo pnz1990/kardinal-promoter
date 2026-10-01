@@ -131,29 +131,40 @@ func TestAuditSummary_CountsRollbackBundles(t *testing.T) {
 		objs     []sigs_client.Object
 		want     string
 	}{
-		{name: "manual rollback", want: "Rollbacks:    1 triggered\n", objs: []sigs_client.Object{started,
+		{name: "manual rollback", want: "Rollbacks:    1 triggered, 0 succeeded\n", objs: []sigs_client.Object{started,
 			rollback("kardinal-test-app-rollback-bkgwk", "kardinal-test-app", "kardinal-test-app-4cqnl", 30*time.Minute)}},
-		{name: "manual rollback without other events", want: "Rollbacks:    1 triggered\n", objs: []sigs_client.Object{
+		{name: "manual rollback without other events", want: "Rollbacks:    1 triggered, 0 succeeded\n", objs: []sigs_client.Object{
 			rollback("kardinal-test-app-rollback-bkgwk", "kardinal-test-app", "kardinal-test-app-4cqnl", 30*time.Minute)}},
-		{name: "rollback marked by the label only", want: "Rollbacks:    1 triggered\n",
+		{name: "rollback marked by the label only", want: "Rollbacks:    1 triggered, 0 succeeded\n",
 			objs: []sigs_client.Object{started, labelOnly}},
-		{name: "automatic rollback in two regions", want: "Rollbacks:    1 triggered\n", objs: []sigs_client.Object{
+		{name: "automatic rollback in two regions", want: "Rollbacks:    1 triggered, 0 succeeded\n", objs: []sigs_client.Object{
 			rollback("kardinal-test-app-9smn4-rollback-alarm", "kardinal-test-app", "kardinal-test-app-9smn4", time.Hour),
 			event("rb-east", "kardinal-test-app", "kardinal-test-app-9smn4", "RollbackStarted"),
 			event("rb-west", "kardinal-test-app", "kardinal-test-app-9smn4", "RollbackStarted")}},
-		{name: "automatic rollback whose bundle was deleted", want: "Rollbacks:    1 triggered\n",
+		{name: "automatic rollback whose bundle was deleted", want: "Rollbacks:    1 triggered, 0 succeeded\n",
 			objs: []sigs_client.Object{event("rb-east", "kardinal-test-app", "kardinal-test-app-9smn4", "RollbackStarted")}},
-		{name: "rollback before the window", want: "Rollbacks:    0 triggered\n", objs: []sigs_client.Object{started,
+		{name: "rollback before the window", want: "Rollbacks:    0 triggered, 0 succeeded\n", objs: []sigs_client.Object{started,
 			rollback("kardinal-test-app-rollback-old", "kardinal-test-app", "kardinal-test-app-4cqnl", 48*time.Hour)}},
-		{name: "rollback of another pipeline", pipeline: "kardinal-test-app", want: "Rollbacks:    0 triggered\n",
+		{name: "rollback of another pipeline", pipeline: "kardinal-test-app", want: "Rollbacks:    0 triggered, 0 succeeded\n",
 			objs: []sigs_client.Object{started, rollback("other-rollback-x", "other", "other-1", time.Hour)}},
 		// B50: a rollback Bundle Verified in prod writes PromotionSucceeded
 		// and RollbackSucceeded; the second counts neither as a promotion
 		// nor as another rollback.
 		{name: "succeeded rollback: one promotion", want: "Promotions:   1 started, 1 succeeded, 0 failed, 0 superseded\n",
 			objs: succeededRollback},
-		{name: "succeeded rollback: one rollback", want: "Rollbacks:    1 triggered\n", objs: succeededRollback},
-		{name: "not a rollback", want: "Rollbacks:    0 triggered\n", objs: []sigs_client.Object{started,
+		{name: "succeeded rollback: one rollback, succeeded", want: "Rollbacks:    1 triggered, 1 succeeded\n", objs: succeededRollback},
+		{name: "rollback verified upstream only: not succeeded", want: "Rollbacks:    1 triggered, 0 succeeded\n",
+			objs: []sigs_client.Object{rollback(rb, "kardinal-test-app", "kardinal-test-app-4cqnl", 30*time.Minute),
+				func() *v1alpha1.AuditEvent {
+					ae := event("rb-test-rollback-succeeded", "kardinal-test-app", rb, "RollbackSucceeded")
+					ae.Spec.Environment = "test"
+					return ae
+				}()}},
+		{name: "rollback whose bundle was deleted: one per bundle", want: "Rollbacks:    0 triggered, 1 succeeded\n",
+			objs: []sigs_client.Object{started,
+				event("rb-test-rollback-succeeded", "kardinal-test-app", rb, "RollbackSucceeded"),
+				event("rb-prod-rollback-succeeded", "kardinal-test-app", rb, "RollbackSucceeded")}},
+		{name: "not a rollback", want: "Rollbacks:    0 triggered, 0 succeeded\n", objs: []sigs_client.Object{started,
 			&v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-test-app-9smn4", Namespace: "default",
 				CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
 				Spec: v1alpha1.BundleSpec{Pipeline: "kardinal-test-app", Type: "image"}}}},
