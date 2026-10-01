@@ -1002,12 +1002,13 @@ func TestHealth_ArgoStrategyRejectsConfigBundles(t *testing.T) {
 		require.NotNil(t, c, "%s Bundle: InvalidSpec condition: %v", typ, b.Status.Conditions)
 		assert.Equal(t, metav1.ConditionTrue, c.Status)
 		assert.Equal(t, "GraphBuildFailed", c.Reason)
-		// The "translator.Translate: build: build:" prefix is what the
-		// controller writes today for every GraphBuildFailed message.
-		assert.Equal(t, fmt.Sprintf(`translator.Translate: build: build: environment "prod" uses update.strategy argocd, which does not support %s Bundles: `+
+		// The layer prefix is "translator.Translate: build: ", doubled
+		// ("build: build: ") until B47, so the check is on its two ends.
+		assert.True(t, strings.HasPrefix(c.Message, "translator.Translate: build: "), c.Message)
+		assert.True(t, strings.HasSuffix(c.Message, fmt.Sprintf(`environment "prod" uses update.strategy argocd, which does not support %s Bundles: `+
 			"it sets only the image in the Argo CD Application and would skip the config change; use a git-based strategy "+
 			"(kustomize or helm) for that environment, or skip it with intent.skipEnvironments — fix the Pipeline, Bundle "+
-			"or PolicyGate it names; a Pipeline change retries this Bundle", typ), c.Message)
+			"or PolicyGate it names; a Pipeline change retries this Bundle", typ)), c.Message)
 		var steps v1alpha1.PromotionStepList
 		require.NoError(t, e.Client.List(context.Background(), &steps, client.InNamespace(a.ns)))
 		assert.Empty(t, steps.Items, "%s Bundle: no environment started", typ)
@@ -1037,16 +1038,25 @@ func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
 	require.NoError(t, e.Client.Create(context.Background(), argoStrategyPipeline(ns, repo, argoStrategyEnv("test", app, argoImageKey))))
 
 	denied := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
-	forbidden := fmt.Sprintf(`step argocd-set-image: argocd-set-image: patch Application: applications.argoproj.io %q is forbidden: `+
+	// The message is "step argocd-set-image: <what failed>: <API error>".
+	// What failed reads "argocd-set-image: patch Application" until B47 and
+	// "patch Application <namespace>/<name>" after, so the check is on the
+	// step, the action and the API server's error.
+	forbidden := fmt.Sprintf(`applications.argoproj.io %q is forbidden: `+
 		`User "system:serviceaccount:%s:%s" cannot patch resource "applications" in API group "argoproj.io" in the namespace %q`,
 		app, framework.ControllerNamespace, framework.ControllerServiceAccount, framework.ArgoCDNamespace)
+	isForbidden := func(msg, prefix, suffix string) bool {
+		return strings.HasPrefix(msg, prefix+"step argocd-set-image: ") && strings.Contains(msg, "patch Application") &&
+			strings.HasSuffix(msg, forbidden+suffix)
+	}
 	e.WaitStep(t, ns, pipelineName, denied, "test", promoteTimeout, "the forbidden patch to be retried",
 		func(ps *v1alpha1.PromotionStep) (bool, string) {
-			return ps.Status.State == "Promoting" && ps.Status.Message == "retrying in 10s (1/5) after error: "+forbidden, framework.DescribeStep(ps)
+			return ps.Status.State == "Promoting" && isForbidden(ps.Status.Message, "retrying in 10s (1/5) after error: ", ""),
+				framework.DescribeStep(ps)
 		})
 	// Retries back off 10s, 20s, 40s, 80s and 120s.
 	ps := e.WaitStepState(t, ns, pipelineName, denied, "test", "Failed", 7*time.Minute)
-	assert.Equal(t, forbidden+" (gave up after 5 retries)", ps.Status.Message)
+	assert.True(t, isForbidden(ps.Status.Message, "", " (gave up after 5 retries)"), ps.Status.Message)
 	e.WaitBundlePhase(t, ns, denied, "Failed", time.Minute)
 	assert.Equal(t, fixtures.V1, valuesKey(t, e, app, argoImageKey))
 	assert.Equal(t, imageV1, e.DeploymentImage(t, ns, fixtures.Workload("test")))
