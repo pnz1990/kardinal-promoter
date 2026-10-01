@@ -6,9 +6,9 @@ metadata:
 spec:
   # GitHub SCM provider — uses the full GitHub feature set:
   # - PR review gate (prod requires human approval)
-  # - Structured PR evidence body (image digest, CI run URL, gate results, soak time)
-  # - Emergency override comment (kardinal override command writes to PR)
-  # - Rollback PR (kardinal/rollback label, evidence body with previous SHA)
+  # - Structured PR evidence body (image provenance, gate results, upstream verification)
+  # - Emergency override (kardinal override; the PR body shows it as the gate's reason)
+  # - Rollback PR (kardinal/rollback label, a note naming the replaced and restored Bundles)
   git:
     url: https://github.com/pnz1990/kardinal-demo
     branch: main
