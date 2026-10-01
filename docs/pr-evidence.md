@@ -18,8 +18,9 @@ For rollbacks:
 `<bundle>` is the Bundle name, for example `my-app-x7k2p` (`kardinal create bundle` names
 Bundles `<pipeline>-<random suffix>`). On a rollback it is the rollback Bundle. `<version>`
 is what the rollback deploys: the image tag (or short digest), `<image>:<tag>` for each of
-several images (three at most, then "and N more"), or `config <commit>` for a config Bundle.
-When the Bundle has no images or config commit, it is the name of the Bundle whose state the
+several images (three at most, then "and N more"), `config <commit>` for a config Bundle, or
+both for a mixed Bundle (`1.28.0 with config 0123abc`). `<commit>` is the short (7-character)
+config commit. When the Bundle has no images or config commit, it is the name of the Bundle whose state the
 rollback restores (`spec.provenance.rollbackOf`).
 
 ### Labels

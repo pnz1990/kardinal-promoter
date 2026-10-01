@@ -613,11 +613,14 @@ func TestOpenPRStep_NormalBundleDoesNotHaveRollbackLabel(t *testing.T) {
 // docs/pr-evidence.md say (E2E-R06).
 func TestOpenPRStep_RollbackTitleAndLabels(t *testing.T) {
 	nginx := []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.29.0"}}
+	configRef := &v1alpha1.ConfigRef{GitRepo: "https://github.com/owner/config", CommitSHA: "c0ffee1234567890"}
 	tests := []struct {
 		name       string
 		bundle     string
 		rollbackOf string
+		bundleType string
 		images     []v1alpha1.ImageRef
+		configRef  *v1alpha1.ConfigRef
 		wantTitle  string
 		wantLabels []string
 	}{
@@ -637,6 +640,25 @@ func TestOpenPRStep_RollbackTitleAndLabels(t *testing.T) {
 			wantLabels: []string{"kardinal", "kardinal/promotion", "kardinal/rollback"},
 		},
 		{
+			name:       "config rollback names the config commit",
+			bundle:     "kardinal-test-app-rollback-bkgwk",
+			rollbackOf: "kardinal-test-app-dq92z",
+			bundleType: "config",
+			configRef:  configRef,
+			wantTitle:  "[kardinal] Rollback prod to kardinal-test-app-rollback-bkgwk (restores config c0ffee1)",
+			wantLabels: []string{"kardinal", "kardinal/promotion", "kardinal/rollback"},
+		},
+		{
+			name:       "mixed rollback names the tag and the config commit (B60)",
+			bundle:     "kardinal-test-app-rollback-bkgwk",
+			rollbackOf: "kardinal-test-app-dq92z",
+			bundleType: "mixed",
+			images:     nginx,
+			configRef:  configRef,
+			wantTitle:  "[kardinal] Rollback prod to kardinal-test-app-rollback-bkgwk (restores 1.29.0 with config c0ffee1)",
+			wantLabels: []string{"kardinal", "kardinal/promotion", "kardinal/rollback"},
+		},
+		{
 			name:       "rollback without artifacts names the restored bundle",
 			bundle:     "kardinal-test-app-rollback-bkgwk",
 			rollbackOf: "kardinal-test-app-dq92z",
@@ -650,7 +672,11 @@ func TestOpenPRStep_RollbackTitleAndLabels(t *testing.T) {
 			state := makeState(t, &mockGitClient{}, mockSCM)
 			state.BundleName = tt.bundle
 			state.Outputs["branch"] = "kardinal/" + tt.bundle + "/prod"
+			if tt.bundleType != "" {
+				state.Bundle.Type = tt.bundleType
+			}
 			state.Bundle.Images = tt.images
+			state.Bundle.ConfigRef = tt.configRef
 			state.Bundle.Provenance = &v1alpha1.BundleProvenance{RollbackOf: tt.rollbackOf, Author: "ci"}
 
 			step, err := parentsteps.Lookup("open-pr")

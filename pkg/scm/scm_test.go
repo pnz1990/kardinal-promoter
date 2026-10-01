@@ -1030,9 +1030,20 @@ func TestBundleVersion(t *testing.T) {
 		{name: "config bundle", spec: v1alpha1.BundleSpec{Type: "config",
 			ConfigRef: &v1alpha1.ConfigRef{GitRepo: "https://github.com/o/cfg", CommitSHA: "0123456789abcdef"}},
 			want: "config 0123456"},
-		{name: "mixed bundle deploys its images", spec: v1alpha1.BundleSpec{Type: "mixed",
+		{name: "config bundle with images names only the config commit", spec: v1alpha1.BundleSpec{Type: "config",
 			Images:    []v1alpha1.ImageRef{img("ghcr.io/o/app", "1.2.3", "")},
-			ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "0123456789abcdef"}}, want: "1.2.3"},
+			ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "0123456789abcdef"}}, want: "config 0123456"},
+		// B60: a mixed Bundle deploys its config commit and its images.
+		{name: "mixed bundle names its image and its config commit", spec: v1alpha1.BundleSpec{Type: "mixed",
+			Images:    []v1alpha1.ImageRef{img("ghcr.io/o/app", "1.2.3", "")},
+			ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "0123456789abcdef"}}, want: "1.2.3 with config 0123456"},
+		{name: "mixed bundle with several images", spec: v1alpha1.BundleSpec{Type: "mixed",
+			Images:    []v1alpha1.ImageRef{img("r/a", "1", ""), img("r/b", "2", ""), img("r/c", "3", ""), img("r/d", "4", "")},
+			ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "0123456789abcdef"}}, want: "a:1, b:2, c:3 and 1 more with config 0123456"},
+		{name: "mixed bundle without a config commit", spec: v1alpha1.BundleSpec{Type: "mixed",
+			Images: []v1alpha1.ImageRef{img("ghcr.io/o/app", "1.2.3", "")}}, want: "1.2.3"},
+		{name: "mixed bundle without images", spec: v1alpha1.BundleSpec{Type: "mixed",
+			ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "0123456789abcdef"}}, want: "config 0123456"},
 		{name: "no artifacts", spec: v1alpha1.BundleSpec{Type: "image"}, want: ""},
 	}
 	for _, tt := range tests {
