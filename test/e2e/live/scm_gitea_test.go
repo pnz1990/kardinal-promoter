@@ -40,9 +40,12 @@ func TestGitea_MergeByPolling(t *testing.T) {
 	scmMergeByPolling(t, e, nil)
 }
 
-// TestGitea_MergeWebhook checks a merge event signed in X-Gitea-Signature:
-// it marks the PRStatus merged before a poll would, and the reconciler
-// fetches the merge commit, which Gitea's event does not carry.
+// TestGitea_MergeWebhook posts the merge event itself, on a repo without a
+// webhook, signed only in X-Gitea-Signature. Gitea's own delivery also sends
+// X-Hub-Signature-256, which the controller checks first, so only a posted
+// event reaches X-Gitea-Signature. The event marks the PRStatus merged
+// before a poll would, and the reconciler fetches the merge commit, which
+// the controller does not read from the event.
 //
 // Covers SCM-GT-04.
 func TestGitea_MergeWebhook(t *testing.T) {
@@ -53,6 +56,25 @@ func TestGitea_MergeWebhook(t *testing.T) {
 	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	a.mergeByWebhook(t, bundle, "prod", giteaSignature, false)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// TestGitea_MergeWebhookDelivery merges a PR on a repo whose webhook Gitea
+// itself delivers: the event marks the PRStatus merged before a poll would,
+// and the reconciler fetches the merge commit, which the controller does not
+// read from the event. It fails when Gitea cannot deliver to the
+// controller's Service, for example when Gitea's [security]
+// ALLOWED_HOST_LIST blocks it (Gitea's default allows only external hosts).
+//
+// Covers SCM-GT-11.
+func TestGitea_MergeWebhookDelivery(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireKind(t, e, "gitea")
+	a := newArgoApp(t, e, "prod")
+	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	a.mergeByWebhook(t, bundle, "prod", "", false)
 	assertEnvAt(t, a, "prod", fixtures.V2)
 }
 
