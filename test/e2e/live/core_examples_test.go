@@ -29,9 +29,14 @@ import (
 )
 
 // The examples suite applies examples/ as their READMEs say, changing only
-// what a user must: the namespace, the Git URL (the test's Forgejo repo) and
-// the token Secret (the README's github-token, holding the suite's Forgejo
-// token). Every other change is named where the test makes it.
+// what a user must: the namespace, the Git URL and branch (the test's repo
+// and branch: main of a new repo, or on the github suite the test's e2e/
+// branch of the shared pnz1990/kardinal-demo instead of its main) and the
+// token Secret (the README's github-token, holding the suite's Git token).
+// Every other change is named where the test makes it.
+
+// exampleBranch is the branch every example promotes: the repo's main.
+const exampleBranch = "main"
 
 // exampleTokenSecret is the Secret the examples' Pipelines read the Git token
 // from (spec.git.secretRef).
@@ -68,8 +73,9 @@ func createExampleToken(t *testing.T, e *framework.Env, ns string) {
 }
 
 // applyExamplePipeline applies the example Pipeline p in ns over repo: the
-// namespace and spec.git.url are the test's, the rest is the example's. tune,
-// when set, edits the object first. It returns the Pipeline as stored.
+// namespace, spec.git.url and spec.git.branch are the test's, the rest is the
+// example's. tune, when set, edits the object first. It returns the Pipeline
+// as stored.
 func applyExamplePipeline(t *testing.T, e *framework.Env, p *unstructured.Unstructured, ns string, repo gitserver.Repo,
 	tune func(*unstructured.Unstructured)) *v1alpha1.Pipeline {
 	t.Helper()
@@ -77,9 +83,10 @@ func applyExamplePipeline(t *testing.T, e *framework.Env, p *unstructured.Unstru
 	secret, _, _ := unstructured.NestedString(p.Object, "spec", "git", "secretRef", "name")
 	require.Equal(t, exampleTokenSecret, secret, "the example reads the README's token Secret")
 	branch, _, _ := unstructured.NestedString(p.Object, "spec", "git", "branch")
-	require.Equal(t, repo.Branch, branch, "the example's branch is the repo's default branch")
+	require.Equal(t, exampleBranch, branch, "the example promotes the repo's main")
 	p.SetNamespace(ns)
 	require.NoError(t, unstructured.SetNestedField(p.Object, repo.CloneURL, "spec", "git", "url"))
+	require.NoError(t, unstructured.SetNestedField(p.Object, repo.Branch, "spec", "git", "branch"))
 	if tune != nil {
 		tune(p)
 	}
@@ -182,10 +189,11 @@ images:
 // promotion PR, and after the merge every environment runs the second
 // Bundle's image.
 //
-// Changes to the example: the namespace and Git URL; the gates are in the
-// Pipeline's namespace, not platform-policies, where every other test's prod
-// would pick them up; the soak is shortened for the second Bundle; the image
-// is podinfo, not kardinal-test-app.
+// Changes to the example: the namespace, Git URL and branch (the Pipeline's
+// and the ApplicationSet's); the gates are in the Pipeline's namespace, not
+// platform-policies, where every other test's prod would pick them up; the
+// soak is shortened for the second Bundle; the image is podinfo, not
+// kardinal-test-app.
 //
 // Covers EX-QUICKSTART-01.
 func TestCore_QuickstartExample(t *testing.T) {
@@ -208,7 +216,11 @@ func TestCore_QuickstartExample(t *testing.T) {
 	}
 	appSet := exampleManifest(t, "quickstart/argocd-applications.yaml")
 	require.Equal(t, "ApplicationSet", appSet.GetKind())
-	require.NoError(t, unstructured.SetNestedField(appSet.Object, a.repo.CloneURL, "spec", "template", "spec", "source", "repoURL"))
+	source := []string{"spec", "template", "spec", "source"}
+	rev, _, _ := unstructured.NestedString(appSet.Object, append(source, "targetRevision")...)
+	require.Equal(t, exampleBranch, rev, "the ApplicationSet deploys the repo's main")
+	require.NoError(t, unstructured.SetNestedField(appSet.Object, a.repo.CloneURL, append(source, "repoURL")...))
+	require.NoError(t, unstructured.SetNestedField(appSet.Object, a.repo.Branch, append(source, "targetRevision")...))
 	e.DeleteOnCleanup(t, appSet, true)
 	_, err := e.Apply(ctx, appSet)
 	require.NoError(t, err, "apply the ApplicationSet")
@@ -331,10 +343,10 @@ func weekendGate(t *testing.T, e *framework.Env, ns, bundle, message string) boo
 // config commit. Every Deployment gets the change and keeps its image, and
 // the Bundle is Verified.
 //
-// Changes to the example: the namespace and Git URL, configRef.gitRepo (the
-// same repo) and configRef.commitSHA (the config commit). The prod workload
-// runs in the test's namespace; dev and staging are the namespaces the
-// resource health check reads.
+// Changes to the example: the namespace, Git URL and branch,
+// configRef.gitRepo (the same repo) and configRef.commitSHA (the config
+// commit). The prod workload runs in the test's namespace; dev and staging
+// are the namespaces the resource health check reads.
 //
 // Covers EX-CONFIG-01.
 func TestCore_ConfigPromotionExample(t *testing.T) {
@@ -381,7 +393,7 @@ func TestCore_ConfigPromotionExample(t *testing.T) {
 	require.NoError(t, err, "commit the config change")
 	for _, env := range envs {
 		require.NotContains(t, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path(env)+"/deployment.yaml"), configValue,
-			"%s on main has no config change yet", env)
+			"%s on the branch has no config change yet", env)
 	}
 
 	createExampleToken(t, e, ns)
@@ -414,7 +426,7 @@ func TestCore_ConfigPromotionExample(t *testing.T) {
 	waitUIMessage(t, e, ns, pipeline)
 	for _, env := range envs {
 		assert.Contains(t, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path(env)+"/deployment.yaml"), configValue,
-			"%s on main has the config change", env)
+			"%s on the branch has the config change", env)
 		a.fileHas(t, env, fixtures.V1, "a config Bundle leaves the image pin alone")
 		assert.Equal(t, imageV1, e.DeploymentImage(t, workloadNS(env), pipeline), "%s keeps its image", env)
 	}
@@ -447,11 +459,11 @@ func waitUIMessage(t *testing.T, e *framework.Env, ns, name string) {
 // is Verified only after its own bake, and every environment runs the
 // Bundle's image.
 //
-// Changes to the example: the namespace and Git URL, and every bake is one
-// minute (the example bakes 30 minutes to 12 hours). test and staging run in
-// the test and staging namespaces the resource health check reads, the prod
-// environments in the test's namespace, each deployed by Argo CD Application
-// wave-demo-<env>, the argocd health check's default.
+// Changes to the example: the namespace, Git URL and branch, and every bake
+// is one minute (the example bakes 30 minutes to 12 hours). test and staging
+// run in the test and staging namespaces the resource health check reads, the
+// prod environments in the test's namespace, each deployed by Argo CD
+// Application wave-demo-<env>, the argocd health check's default.
 //
 // Covers EX-WAVE-01.
 func TestCore_WaveTopologyExample(t *testing.T) {
