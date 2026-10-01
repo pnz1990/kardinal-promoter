@@ -5,8 +5,8 @@
 replicaCount: 1
 
 # -- Pod termination grace period in seconds.
-# Keep it above the controller's 30s shutdown timeout: on SIGTERM the controller cancels
-# in-flight reconciles and waits up to 30s for them and its HTTP servers to return. (#574)
+# Keep it above the controller's 30s shutdown timeout: on SIGTERM the controller gives
+# in-flight HTTP requests up to 20s, then cancels in-flight reconciles, and exits within 30s. (#574)
 terminationGracePeriodSeconds: 60
 
 image:

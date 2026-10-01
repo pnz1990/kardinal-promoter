@@ -494,11 +494,19 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 ## Graceful shutdown
 
-On `SIGTERM` (a rolling update, a scale-down or a node drain) the controller stops starting
-reconciles and cancels the ones in flight, then waits up to **30 seconds** for them and for
-in-flight HTTP requests to return before it exits. A git push or SCM API call in progress is
-cancelled, not finished: the step logs `step failed, will retry` with `context canceled`, and
-the controller usually exits within a second.
+On `SIGTERM` (a rolling update, a scale-down or a node drain) the controller shuts down in
+this order:
+
+1. The webhook and UI servers stop accepting connections and give the requests in flight up
+   to **20 seconds** to finish. Reconciles keep running meanwhile.
+2. The controller stops starting reconciles and cancels the ones in flight. A git push or SCM
+   API call in progress is cancelled, not finished: the step logs `step failed, will retry`
+   with `context canceled`.
+3. The metrics and health probe servers stop, waiting for the requests in flight.
+
+With no request in flight the controller usually exits within a second. The whole shutdown
+is bounded at **30 seconds**: when a request is still open then, the controller logs
+`failed waiting for all runnables to end within grace period of 30s` and exits.
 
 This leaves no inconsistent state. After the restart the step runs again from its last saved
 step. A `pr-review` step force-pushes its branch `kardinal/<bundle>/<env>`, so a step stopped
