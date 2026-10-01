@@ -78,7 +78,7 @@ func UnimplementedFields(p *kardinalv1alpha1.Pipeline) []string {
 			msgs = append(msgs, fmt.Sprintf("environment %q: %s", e.Name, HealthClusterNotSupported))
 		}
 		// As the PromotionStep reconciler checks it: only the resource adapter
-		// reads health.resource, and it fails the step after the change merged.
+		// reads health.resource, and it fails the step before any git change.
 		if res := e.Health.Resource; res != nil && res.Kind != "" && res.Kind != "Deployment" &&
 			health.EffectiveType(*e) == health.DefaultType {
 			msgs = append(msgs, fmt.Sprintf("environment %q: health.resource.kind %q is not supported: "+

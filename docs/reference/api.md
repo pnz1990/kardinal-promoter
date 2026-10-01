@@ -283,14 +283,14 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.deploymentMetrics` | object |  | DeploymentMetrics holds aggregate DORA-style metrics computed from the last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler. |
-| `status.deploymentMetrics.autoRollbackRateMillis` | integer |  | AutoRollbackRateMillis is the fraction of sampled Bundles that triggered an automatic rollback, expressed as integer thousandths (e.g. 83 = 8.3%). Stored as integer to avoid floating-point in CRD YAML. |
+| `status.deploymentMetrics.autoRollbackRateMillis` | integer |  | AutoRollbackRateMillis is the fraction of sampled Bundles that are rollbacks (spec.provenance.rollbackOf is set), manual (`kardinal rollback`, the UI) or automatic, expressed as integer thousandths (e.g. 83 = 8.3%). Stored as integer to avoid floating-point in CRD YAML. |
 | `status.deploymentMetrics.computedAt` | string (date-time) |  | ComputedAt is when these metrics were last written by the PipelineReconciler. |
 | `status.deploymentMetrics.operatorInterventionRateMillis` | integer |  | OperatorInterventionRateMillis is the fraction of sampled Bundles that had at least one PolicyGate override applied, expressed as integer thousandths. |
 | `status.deploymentMetrics.p50CommitToProdMinutes` | integer (int64) |  | P50CommitToProdMinutes is the median time (minutes) from Bundle creation to the final environment reaching Verified, over the sample window. |
 | `status.deploymentMetrics.p90CommitToProdMinutes` | integer (int64) |  | P90CommitToProdMinutes is the 90th-percentile time (minutes) from Bundle creation to the final environment reaching Verified, over the sample window. |
 | `status.deploymentMetrics.rolloutsLast30Days` | integer |  | RolloutsLast30Days is the number of successful (Verified) promotions to the final pipeline environment in the last 30 calendar days. |
 | `status.deploymentMetrics.sampleSize` | integer |  | SampleSize is the number of Bundles included in this computation. |
-| `status.deploymentMetrics.staleProdDays` | integer |  | StaleProdDays is the number of days since the last successful promotion to the final pipeline environment. 0 means a promotion completed today. -1 means no promotion has ever completed. |
+| `status.deploymentMetrics.staleProdDays` | integer |  | StaleProdDays is the number of days since the last successful promotion to the final pipeline environment. 0 means a promotion completed today. Until a Bundle is Verified there, deploymentMetrics is not set at all. |
 | `status.phase` | string |  | Phase is the overall pipeline phase: Promoting while a Bundle is in flight (also when a PolicyGate holds it), Degraded when the newest Bundle failed, Ready when the newest Bundle is Verified in every environment it reached, and Unknown before the first Bundle. One of: `Ready`, `Degraded`, `Promoting`, `Unknown`. Default: `Unknown`. |
 
 ## PolicyGate

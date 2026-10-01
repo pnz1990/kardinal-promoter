@@ -117,9 +117,8 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 a `health.resource.kind` other than `Deployment` are not implemented; `regions` with two or
 more entries, `shard` and `health.cluster` are deprecated and not supported. A Bundle fails
 when it reaches an environment that uses one (two or more `regions` fail it when its Graph is
-built; a `health.resource.kind` fails the step after the change merged, during the health
-check). `kardinal validate` reports each of them, and the controller sets the Pipeline's
-`Ready` condition to `False` with reason `NotImplemented` and the same messages
+built; the others fail the environment's step before it changes anything in git).
+`kardinal validate` reports each of them, and the controller sets the Pipeline's `Ready` condition to `False` with reason `NotImplemented` and the same messages
 (`kubectl get pipeline <name> -o jsonpath='{.status.conditions}'`). The API server rejects
 `autoRollback` and the deprecated `steps` and `promotionTemplate` outright. A Pipeline stored
 before those rules existed is still reported the same way, and its Bundles fail when their

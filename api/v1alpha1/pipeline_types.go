@@ -574,8 +574,10 @@ type PipelineDeploymentMetrics struct {
 	// +optional
 	P90CommitToProdMinutes int64 `json:"p90CommitToProdMinutes,omitempty"`
 
-	// AutoRollbackRateMillis is the fraction of sampled Bundles that triggered an
-	// automatic rollback, expressed as integer thousandths (e.g. 83 = 8.3%).
+	// AutoRollbackRateMillis is the fraction of sampled Bundles that are
+	// rollbacks (spec.provenance.rollbackOf is set), manual (`kardinal
+	// rollback`, the UI) or automatic, expressed as integer thousandths
+	// (e.g. 83 = 8.3%).
 	// Stored as integer to avoid floating-point in CRD YAML.
 	// +optional
 	AutoRollbackRateMillis int `json:"autoRollbackRateMillis,omitempty"`
@@ -587,7 +589,7 @@ type PipelineDeploymentMetrics struct {
 
 	// StaleProdDays is the number of days since the last successful promotion to
 	// the final pipeline environment. 0 means a promotion completed today.
-	// -1 means no promotion has ever completed.
+	// Until a Bundle is Verified there, deploymentMetrics is not set at all.
 	// +optional
 	StaleProdDays int `json:"staleProdDays,omitempty"`
 
