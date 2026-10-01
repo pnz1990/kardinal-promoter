@@ -436,15 +436,11 @@ kardinal get pipelines --all-namespaces
 
 ## Journey Status
 
-**Rule (Issue #418):** A journey is only marked ✅ when:
-1. A PDCA workflow run (`.github/workflows/pdca.yml`; the result is in the run's job summary)
-   reports the journey's scenario as passed on a live kind cluster with a real
-   `kardinal-test-app` image, OR
-2. A `[LIVE CLUSTER VALIDATED]` comment on the PR or release issue gives the commands, their
-   output, the cluster version and the image SHA (AGENTS.md §Journey validation)
-
-and every code example in the relevant doc page runs without error. Put the run or comment link
-in the Notes column.
+**Rule (Issue #418):** A journey is only marked ✅ when an e2e-live run
+(`.github/workflows/e2e-live.yml`) on the commit passed the live tests that cover the journey's
+steps, and every code example in the relevant doc page runs without error. The `e2e live` job
+summary lists each test/e2e/coverage.tsv row's result. Put the run link in the Notes column
+(AGENTS.md §Journey validation).
 
 A passing `TestJourneyN` test is not evidence: those tests run the reconcilers against a fake
 Kubernetes client, without the translator, the kro Graph or a cluster. A comment that only says
@@ -452,33 +448,40 @@ the tests pass does not count either.
 
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
-| 1: Quickstart | unverified | 2026-09-29 | Fake-client test only (`TestJourney1Quickstart`). The PDCA workflow has not reported scenario 1 as passed. |
+| 1: Quickstart | unverified | 2026-10-01 | Fake-client test only (`TestJourney1Quickstart`). No e2e-live run is recorded as evidence. |
 | 2: Multi-cluster fleet | unverified | 2026-09-29 | Fake-client test only (`TestJourney2MultiClusterFleet`). No multi-cluster run on record; live J2 evidence is tracked in #1293. |
 | 3: Policy governance | unverified | 2026-09-29 | Fake-client test only (`TestJourney3PolicyGovernance`). |
 | 4: Rollback | unverified | 2026-09-29 | Fake-client test only (`TestJourney4Rollback`). |
 | 5: CLI workflow | unverified | 2026-09-29 | `TestJourney5CLI` runs `version`, `policy simulate` and `policy test` from the built CLI with no cluster, and skips if the binary is missing. |
-| 6: Rendered manifests | unverified | 2026-09-29 | `TestJourney6RenderedManifests` only checks `DefaultSequenceForBundle`; it builds no Graph and no Bundle. |
+| 6: Rendered manifests | unverified | 2026-10-01 | `layout: branch` is not implemented (PIPE-NOTIMPL-01). `TestJourney6RenderedManifests` checks that the Pipeline reports it NotImplemented and that a promotion in that environment fails. |
 | 7: Multi-tenant self-service | unverified | 2026-09-29 | Fake-client test only (`TestJourney7MultiTenantSelfService`); a fake client enforces no RBAC. |
 
 ---
 
 ## The Acceptance Test Suite
 
-A journey is ✅ only with live-cluster evidence (see Journey Status). The Makefile targets
-below run without a cluster: they prove reconciler logic, not that the product works on a cluster.
+A journey is ✅ only with live-cluster evidence (see Journey Status). It comes from the live e2e
+suites (test/e2e/live; test/e2e/README.md), which run on kind clusters with a real git server, a
+GitOps engine and podinfo as the test app:
 
 ```bash
-make test-e2e-journey-1    # TestJourney1Quickstart (fake client)
-make test-e2e-journey-2    # TestJourney2MultiClusterFleet (fake client)
-make test-e2e-journey-3    # TestJourney3PolicyGovernance (fake client)
-make test-e2e-journey-4    # TestJourney4Rollback (fake client)
-make test-e2e-journey-5    # TestJourney5CLI (built CLI, no cluster)
-make test-e2e              # all five of the above
+make e2e-up SUITE=core          # hack/e2e/up.sh core
+make test-e2e-live SUITE=core   # hack/e2e/run.sh core; fails when a test fails or skips, or none ran
+make e2e-down SUITE=core
 ```
 
-Journeys 6 and 7 have no Makefile target (`go test ./test/e2e/... -run 'TestJourney6|TestJourney7'`).
-Live-cluster evidence comes from the PDCA workflow (`.github/workflows/pdca.yml`) or from
-`make e2e-setup` followed by `make test-e2e-kind`.
+test/e2e/coverage.tsv lists every documented behavior and whether a live test covers it. A test
+claims rows with `Covers ID, ID.` in its doc comment, and `go test ./test/hack -run TestE2ECoverage`
+fails when the file and the tests disagree. `.github/workflows/e2e-live.yml` runs every suite on
+every PR; its `e2e live` job (`go run ./test/e2e/proof`) fails when a claimed row's test failed,
+skipped or did not run.
+
+The journey tests below run without a cluster: they prove reconciler logic, not that the product
+works on a cluster.
+
+```bash
+go test ./test/e2e/ -run TestJourney   # TestJourney1..7; TestJourney5CLI needs make build first
+```
 
 Unit tests are necessary but not sufficient.
 A feature is done when its journey has live-cluster evidence.
