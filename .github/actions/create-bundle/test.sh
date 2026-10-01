@@ -36,16 +36,21 @@ check "repo@digest" "$(parse_image "ghcr.io/myorg/app@sha256:abcdef0123456789")"
   '{"repository":"ghcr.io/myorg/app","digest":"sha256:abcdef0123456789"}'
 check "bare repo" "$(parse_image "ghcr.io/myorg/app")" \
   '{"repository":"ghcr.io/myorg/app"}'
-check "image + digest override" "$(parse_image "ghcr.io/myorg/app:v1.2.3" "sha256:abc123")" \
-  '{"repository":"ghcr.io/myorg/app","digest":"sha256:abc123"}'
+check "image tag + digest input: both sent" "$(parse_image "ghcr.io/myorg/app:v1.2.3" "sha256:abc123")" \
+  '{"repository":"ghcr.io/myorg/app","tag":"v1.2.3","digest":"sha256:abc123"}'
+check "digest input replaces the ref's digest" "$(parse_image "ghcr.io/myorg/app@sha256:old" "sha256:new")" \
+  '{"repository":"ghcr.io/myorg/app","digest":"sha256:new"}'
+check "digest input replaces the ref's digest, keeps its tag" \
+  "$(parse_image "ghcr.io/myorg/app:v1@sha256:old" "sha256:new")" \
+  '{"repository":"ghcr.io/myorg/app","tag":"v1","digest":"sha256:new"}'
 check "registry port, tag" "$(parse_image "registry.local:5000/team/app:v1")" \
   '{"repository":"registry.local:5000/team/app","tag":"v1"}'
-check "registry port, digest override" "$(parse_image "registry.local:5000/team/app:v1" "sha256:abc")" \
-  '{"repository":"registry.local:5000/team/app","digest":"sha256:abc"}'
+check "registry port, tag + digest input" "$(parse_image "registry.local:5000/team/app:v1" "sha256:abc")" \
+  '{"repository":"registry.local:5000/team/app","tag":"v1","digest":"sha256:abc"}'
 check "registry port, no tag" "$(parse_image "registry.local:5000/team/app")" \
   '{"repository":"registry.local:5000/team/app"}'
 check "tag and digest" "$(parse_image "ghcr.io/myorg/app:v1@sha256:abc")" \
-  '{"repository":"ghcr.io/myorg/app","digest":"sha256:abc"}'
+  '{"repository":"ghcr.io/myorg/app","tag":"v1","digest":"sha256:abc"}'
 check "quotes are JSON-escaped" "$(parse_image 'ghcr.io/a"b:v1')" \
   '{"repository":"ghcr.io/a\"b","tag":"v1"}'
 
@@ -54,9 +59,10 @@ echo "--- Image list ---"
 check "multi-image list, whitespace trimmed" \
   "$(build_images_json "" "" "  ghcr.io/myorg/app:v1.2.3
 ghcr.io/myorg/sidecar@sha256:deadbeef  
+ghcr.io/myorg/proxy:v2@sha256:cafe
 
 ")" \
-  '[{"repository":"ghcr.io/myorg/app","tag":"v1.2.3"},{"repository":"ghcr.io/myorg/sidecar","digest":"sha256:deadbeef"}]'
+  '[{"repository":"ghcr.io/myorg/app","tag":"v1.2.3"},{"repository":"ghcr.io/myorg/sidecar","digest":"sha256:deadbeef"},{"repository":"ghcr.io/myorg/proxy","tag":"v2","digest":"sha256:cafe"}]'
 check "image wins over images" "$(build_images_json "ghcr.io/a:v1" "" "ghcr.io/b:v2")" \
   '[{"repository":"ghcr.io/a","tag":"v1"}]'
 check "no images" "$(build_images_json "" "" "")" "[]"

@@ -15,8 +15,10 @@ print(json.dumps(dict(zip(a[::2], a[1::2])), separators=(",", ":")))' "$@"
 }
 
 # parse_image <ref> [override_digest] — prints one ImageRef JSON object.
-# A ':' in the last path segment is a tag; a ':' before a '/' is a registry port.
-# override_digest replaces any tag or digest in the ref.
+# A ':' in the last path segment is a tag; a ':' before a '/' is a registry port;
+# '@' starts a digest. A tag and a digest are both sent: the Bundle records an
+# image with both, as `kardinal create bundle` does for repo:tag@digest.
+# override_digest replaces a digest in the ref; the ref's tag is kept.
 parse_image() {
   local img="$1" override_digest="${2:-}" repo digest="" tag="" last
   repo="$img"
@@ -32,13 +34,14 @@ parse_image() {
   if [ -n "$override_digest" ]; then
     digest="$override_digest"
   fi
-  if [ -n "$digest" ]; then
-    json_object repository "$repo" digest "$digest"
-  elif [ -n "$tag" ]; then
-    json_object repository "$repo" tag "$tag"
-  else
-    json_object repository "$repo"
+  local fields=(repository "$repo")
+  if [ -n "$tag" ]; then
+    fields+=(tag "$tag")
   fi
+  if [ -n "$digest" ]; then
+    fields+=(digest "$digest")
+  fi
+  json_object "${fields[@]}"
 }
 
 # build_images_json <image> <digest> <images> — prints the images JSON array.

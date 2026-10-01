@@ -14,7 +14,7 @@ inputs:
     description: 'Single image reference (repository:tag or repository@sha256:digest). Use this for the common single-image case. Takes precedence over images when both are set.'
     required: false
   digest:
-    description: 'Image digest (sha256:...) to associate with the image input. Only used when image is set.'
+    description: 'Image digest (sha256:...) of the image input. It is sent together with the tag from image and replaces a digest given in image. Only used when image is set.'
     required: false
   images:
     description: 'Newline-separated list of image references (repository:tag or repository@digest). Use this for multi-image bundles.'

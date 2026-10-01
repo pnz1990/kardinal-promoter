@@ -97,7 +97,7 @@ jobs:
 |---|---|---|---|
 | `pipeline` | Yes | — | Pipeline name |
 | `image` | No | — | Single image (`repo:tag` or `repo@sha256:digest`) |
-| `digest` | No | — | Override digest for the `image` input |
+| `digest` | No | — | Digest (`sha256:...`) of the `image` input. It is sent with the tag from `image` (the Bundle records both) and replaces a digest given in `image` |
 | `images` | No | — | Newline-separated list of images (multi-image case) |
 | `namespace` | No | `default` | Kubernetes namespace |
 | `kardinal-url` | Yes | — | Base URL of the Bundle API (the controller's webhook listener, `:8083` by default) |

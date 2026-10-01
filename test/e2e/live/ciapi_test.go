@@ -508,9 +508,10 @@ func githubEnv(t *testing.T) map[string]string {
 // TestCIAPI_GitHubAction runs the create-bundle composite action (its
 // action.yml and scripts, unchanged) on this host against the chart's
 // controller, with the inputs of the single-image example in
-// docs/ci-integration.md. The Bundle carries the image and provenance from
-// GITHUB_SHA, the run URL and GITHUB_ACTOR; the action's outputs name it and
-// link the UI; the token is not in the log.
+// docs/ci-integration.md: an image with a tag plus the digest input. The
+// Bundle carries the image with both its tag and its digest, and provenance
+// from GITHUB_SHA, the run URL and GITHUB_ACTOR; the action's outputs name it
+// and link the UI; the token is not in the log.
 //
 // Covers CIAPI-ACTION-01.
 func TestCIAPI_GitHubAction(t *testing.T) {
@@ -519,9 +520,12 @@ func TestCIAPI_GitHubAction(t *testing.T) {
 	a := pausedApp(t, e, e.Namespace(t), "test")
 	env := githubEnv(t)
 
+	digest := "sha256:" + strings.Repeat("cd", 32)
+
 	run := framework.RunAction(t, actionDir, map[string]string{
 		"pipeline":     pipelineName,
 		"image":        fixtures.Image + ":" + fixtures.V2,
+		"digest":       digest,
 		"namespace":    a.ns,
 		"kardinal-url": framework.ControllerURL(t),
 		"ui-url":       "https://kardinal-ui.example.com",
@@ -534,7 +538,8 @@ func TestCIAPI_GitHubAction(t *testing.T) {
 	b := getBundle(t, e, a.ns, run.Outputs["bundle-name"])
 	assert.Equal(t, pipelineName, b.Labels["kardinal.io/pipeline"])
 	assert.Equal(t, "image", b.Spec.Type)
-	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, b.Spec.Images)
+	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2, Digest: digest}}, b.Spec.Images,
+		"the digest input is sent with the image's tag")
 	require.NotNil(t, b.Spec.Provenance)
 	assert.Equal(t, ciCommit, b.Spec.Provenance.CommitSHA)
 	assert.Equal(t, "https://github.com/myorg/my-app/actions/runs/987654", b.Spec.Provenance.CIRunURL)
