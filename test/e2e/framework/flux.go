@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,6 +153,79 @@ func (e *Env) ReconcileFlux(t *testing.T, gvr schema.GroupVersionResource, ns, n
 	e.PatchFlux(t, gvr, ns, name, map[string]interface{}{"metadata": map[string]interface{}{
 		"annotations": map[string]interface{}{"reconcile.fluxcd.io/requestedAt": time.Now().UTC().Format(time.RFC3339Nano)},
 	}})
+}
+
+// KeepFluxReconciling asks Flux to reconcile the object again each time it
+// handled the previous request, as `flux reconcile` in a loop or a busy
+// webhook receiver does, until stop is called or the test ends. Flux marks
+// the object Ready=Unknown during each reconcile, so it is reconciling most
+// of the time. stop returns how many requests Flux handled.
+func (e *Env) KeepFluxReconciling(t *testing.T, gvr schema.GroupVersionResource, ns, name string) (stop func() int) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	handled := 0
+	var lastErr error
+	res := e.Dynamic.Resource(gvr).Namespace(ns)
+	wait := func() {
+		select {
+		case <-ctx.Done():
+		case <-time.After(Poll):
+		}
+	}
+	go func() {
+		defer close(done)
+		token := ""
+		request := func() {
+			for ctx.Err() == nil {
+				token = time.Now().UTC().Format(time.RFC3339Nano)
+				body := fmt.Sprintf(`{"metadata":{"annotations":{"reconcile.fluxcd.io/requestedAt":%q}}}`, token)
+				_, err := res.Patch(ctx, name, types.MergePatchType, []byte(body), metav1.PatchOptions{})
+				if err == nil || ctx.Err() != nil {
+					return
+				}
+				lastErr = err
+				wait()
+			}
+		}
+		request()
+		for ctx.Err() == nil {
+			// A watch without a resourceVersion starts with the object as it
+			// is, so a request handled while no watch ran is not missed.
+			w, err := res.Watch(ctx, metav1.ListOptions{FieldSelector: "metadata.name=" + name})
+			if err != nil {
+				if ctx.Err() == nil {
+					lastErr = err
+				}
+				wait()
+				continue
+			}
+			for ev := range w.ResultChan() {
+				obj, ok := ev.Object.(*unstructured.Unstructured)
+				if !ok {
+					continue
+				}
+				if got, _, _ := unstructured.NestedString(obj.Object, "status", "lastHandledReconcileAt"); got == token {
+					handled++
+					request()
+				}
+			}
+			w.Stop()
+		}
+	}()
+	var once sync.Once
+	stop = func() int {
+		once.Do(func() {
+			cancel()
+			<-done
+			if lastErr != nil {
+				t.Logf("asking Flux to reconcile %s %s/%s: last error: %v", gvr.Resource, ns, name, lastErr)
+			}
+		})
+		return handled
+	}
+	t.Cleanup(func() { stop() })
+	return stop
 }
 
 // FluxAppliedRevision is a Kustomization's status.lastAppliedRevision, for

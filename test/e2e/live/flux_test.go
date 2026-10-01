@@ -409,9 +409,10 @@ func TestFlux_SiblingEnvsShareBranch(t *testing.T) {
 
 // TestFlux_BakeSurvivesFluxReconcile bakes an environment with
 // fail-on-alarm while Flux reconciles its Kustomization again and again
-// (as `flux reconcile`, a webhook receiver or a short interval does). Flux
-// marks the Kustomization Ready=Unknown during each reconcile; the bake must
-// not count that as a health alarm while the Deployment stays healthy.
+// (as `flux reconcile` in a loop, a busy webhook receiver or a short interval
+// does). Flux marks the Kustomization Ready=Unknown during each reconcile,
+// so it is Ready=Unknown at most health checks; while the Deployment stays
+// healthy the bake window must neither alarm nor stop and start over.
 //
 // Covers HEALTH-FLUX-07.
 func TestFlux_BakeSurvivesFluxReconcile(t *testing.T) {
@@ -424,6 +425,7 @@ func TestFlux_BakeSurvivesFluxReconcile(t *testing.T) {
 
 	newImage := fixtures.Image + ":" + fixtures.V2
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", newImage)
+	var started metav1.Time
 	framework.Eventually(t, promoteTimeout, "the bake to start", func(ctx context.Context) (bool, string) {
 		ps, _, err := e.Step(ctx, a.ns, pipelineName, bundle, "prod")
 		if err != nil || ps == nil {
@@ -432,25 +434,32 @@ func TestFlux_BakeSurvivesFluxReconcile(t *testing.T) {
 		if ps.Status.State == "Failed" {
 			t.Fatalf("step failed before the bake: %s", ps.Status.Message)
 		}
+		if ps.Status.BakeStartedAt != nil {
+			started = *ps.Status.BakeStartedAt
+		}
 		return ps.Status.BakeStartedAt != nil, fmt.Sprintf("state=%q message=%q", ps.Status.State, ps.Status.Message)
 	})
 
+	stop := e.KeepFluxReconciling(t, framework.KustomizationGVR, a.ns, fixtures.Workload("prod"))
 	var final *v1alpha1.PromotionStep
-	reconciles := 0
 	framework.Eventually(t, 3*time.Minute, "the bake to complete while Flux reconciles", func(ctx context.Context) (bool, string) {
-		e.ReconcileFlux(t, framework.KustomizationGVR, a.ns, fixtures.Workload("prod"))
-		reconciles++
 		ps, _, err := e.Step(ctx, a.ns, pipelineName, bundle, "prod")
 		if err != nil || ps == nil {
 			return false, "step lookup failed"
 		}
-		if ps.Status.State == "Failed" {
+		switch {
+		case ps.Status.State == "Failed":
 			t.Fatalf("the bake failed during a Flux reconcile: %s", ps.Status.Message)
+		case ps.Status.State != "Verified" && (ps.Status.BakeStartedAt == nil || !ps.Status.BakeStartedAt.Equal(&started)):
+			t.Fatalf("the bake window stopped during a Flux reconcile (started %s, now %v): %s",
+				started.Format(time.RFC3339), ps.Status.BakeStartedAt, ps.Status.Message)
 		}
 		final = ps
 		return ps.Status.State == "Verified", fmt.Sprintf("state=%q message=%q", ps.Status.State, ps.Status.Message)
 	})
-	t.Logf("requested %d Flux reconciles during the bake", reconciles)
+	handled := stop()
+	t.Logf("Flux handled %d reconcile requests during the bake", handled)
+	assert.Greater(t, handled, 10, "Flux reconciled the Kustomization again and again during the bake")
 	assert.Equal(t, "bake complete: 1m contiguous healthy via flux (resets=0)", final.Status.Message)
 	assert.Equal(t, newImage, e.DeploymentImage(t, a.ns, fixtures.Workload("prod")))
 }
