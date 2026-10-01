@@ -672,7 +672,7 @@ Because of `frame-ancestors 'none'`, the UI cannot be embedded in another dashbo
 
 Both the UI server (`:8082`) and the webhook/bundle-API server (`:8083`) support TLS via the `--tls-cert-file` and `--tls-key-file` flags (environment variables `KARDINAL_TLS_CERT_FILE` / `KARDINAL_TLS_KEY_FILE`).
 
-When both flags are set, both servers serve HTTPS. When neither is set, both serve plain HTTP. Setting only one of the two flags is a startup error: the controller exits instead of silently serving plain HTTP.
+When both flags are set, both servers serve HTTPS. When neither is set, both serve plain HTTP. Setting only one of the two flags is a startup error: the controller exits instead of silently serving plain HTTP. The Helm chart refuses `controller.tlsCertFile` without `controller.tlsKeyFile` (or the reverse) at install time.
 
 ### Helm: cert-manager integration (recommended)
 

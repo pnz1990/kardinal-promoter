@@ -106,6 +106,11 @@ Install-mode checks. Rendered from deployment.yaml so a bad combination fails
 {{- if and .Values.github.token .Values.github.secretRef.name -}}
 {{- fail "set github.token or github.secretRef.name, not both" -}}
 {{- end -}}
+{{- $cert := .Values.controller.tlsCertFile -}}
+{{- $key := .Values.controller.tlsKeyFile -}}
+{{- if or (and $cert (not $key)) (and $key (not $cert)) -}}
+{{- fail (printf "controller.tlsCertFile and controller.tlsKeyFile must be set together (only %s is set): the UI and webhook servers use TLS only with both, and the controller does not start with one." (ternary "tlsCertFile" "tlsKeyFile" (not (empty $cert)))) -}}
+{{- end -}}
 {{- with .Values.github.secretRef.namespace -}}
 {{- if ne . $.Release.Namespace -}}
 {{- fail (printf "github.secretRef.namespace (%s) must be empty or the release namespace (%s): GITHUB_TOKEN is read with a secretKeyRef, which only reads the Pod's namespace, so the startup token and the rotation watcher would read different Secrets." . $.Release.Namespace) -}}

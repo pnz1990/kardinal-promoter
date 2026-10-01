@@ -888,6 +888,24 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 	assert.Equal(t, "/tls", mounts["tls"])
 }
 
+// TestChartTLSFilesSetTogether: the controller exits at startup when only one
+// of --tls-cert-file and --tls-key-file is set, so the chart refuses a
+// controller.tlsCertFile without controller.tlsKeyFile (and the reverse)
+// before anything is applied, naming the value that is missing its pair.
+func TestChartTLSFilesSetTogether(t *testing.T) {
+	for set, only := range map[string]string{
+		"controller.tlsCertFile=/tls/tls.crt": "tlsCertFile",
+		"controller.tlsKeyFile=/tls/tls.key":  "tlsKeyFile",
+	} {
+		out, err := helmTemplate(t, "kardinal-promoter", "--set", set)
+		require.Error(t, err, "--set %s alone must fail:\n%s", set, out)
+		assert.Contains(t, out, "controller.tlsCertFile and controller.tlsKeyFile must be set together (only "+only+" is set)")
+	}
+	env := envByName(controllerContainer(t, render(t, "kardinal-promoter")))
+	assert.NotContains(t, env, "KARDINAL_TLS_CERT_FILE", "no TLS by default")
+	assert.NotContains(t, env, "KARDINAL_TLS_KEY_FILE", "no TLS by default")
+}
+
 // TestChartRejectsUnknownValues: values.schema.json fails unknown keys, so the
 // value names the docs used to give can no longer be silently ignored.
 // controller.shard was removed with distributed mode (#1321).
@@ -917,8 +935,9 @@ func TestChartAcceptsRepoSetKeys(t *testing.T) {
 		"networkPolicy.enabled=true",
 		"demo.enabled=true",
 		"controller.watchNamespace=" + releaseNS,
-		"controller.tlsCertFile=/tls/tls.crt",
-		"controller.tlsKeyFile=/tls/tls.key",
+		// Set together, as hack/e2e/components/ui.sh does; one alone fails
+		// (TestChartTLSFilesSetTogether).
+		"controller.tlsCertFile=/tls/tls.crt,controller.tlsKeyFile=/tls/tls.key",
 		"prometheusRule.enabled=true",
 		"prometheusRule.additionalLabels.release=kube-prometheus-stack",
 		"grafanaDashboard.enabled=true",

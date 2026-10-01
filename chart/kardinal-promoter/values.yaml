@@ -61,7 +61,7 @@ leaderElect: true
 
 controller:
   # TLS for the UI (:8082) and webhook/Bundle API (:8083) servers.
-  # When both tlsCertFile and tlsKeyFile are set, both servers use HTTPS.
+  # When both tlsCertFile and tlsKeyFile are set, both servers use HTTPS; one alone fails the install.
   # Typically used with cert-manager: mount the certificate Secret with
   # extraVolumes/extraVolumeMounts, then set the paths to the mounted files.
   # See docs/guides/security.md for the recommended cert-manager setup.
