@@ -357,6 +357,10 @@ func TestGraph_DeletedGraphIsRecreated(t *testing.T) {
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "WaitingForMerge", promoteTimeout)
 	pr := a.openPR(t, bundle, "prod")
+	// Without the finalizer nothing would decide about the PR, and the rest of
+	// the test would pass for the wrong reason.
+	require.Contains(t, stepFinalizers(t, e, a.ns, bundle, "prod"), closePRFinalizer,
+		"the prod step holds the close-pr finalizer before the Graph is deleted")
 	graphName := a.bundle(t, bundle).Status.GraphRef
 	require.NotEmpty(t, graphName)
 	old := getGraph(t, e, a.ns, graphName)
