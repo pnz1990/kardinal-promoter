@@ -397,8 +397,11 @@ var argoCDApplicationGVR = schema.GroupVersionResource{
 // Degraded health and a Failed or Error operation are health failures only
 // when they are about the promoted change (B52): until the Application has
 // deployed it, Degraded health describes the version before it, and an
-// operation counts only when it ran on the promoted commit. Every other
-// not-yet-healthy state (OutOfSync, Progressing, Missing, a running
+// operation counts only when it ran on the promoted commit. An operation
+// still running on the promoted commit has not deployed it (a PreSync hook
+// can run for minutes), so while it runs Degraded counts only once the
+// Application is Synced on the commit or has it in status.history. Every
+// other not-yet-healthy state (OutOfSync, Progressing, Missing, a running
 // operation, an older revision, a failure from before the change) is
 // Progressing, so it never adds to status.consecutiveHealthFailures.
 func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatus, error) {
@@ -422,7 +425,7 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	opPhase, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
 	state := fmt.Sprintf("health=%s, sync=%s, opPhase=%s", healthStatus, syncStatus, opPhase)
 
-	target := argoCDRevision(app, syncStatus, opts)
+	target := argoCDRevision(app, syncStatus, opPhase, opts)
 	if !target.deployed {
 		state += ", " + target.note
 	}
@@ -467,13 +470,14 @@ type argoCDTarget struct {
 // revision and whether its last operation ran on it.
 //
 // With ExpectedRevision set, the change is deployed once the Application is
-// Synced on that commit, an operation ran on it, or it is in status.history.
+// Synced on that commit, a finished operation ran on it, or it is in
+// status.history.
 // status.sync.revision alone is not enough: Argo CD sets it to the newest
 // commit it fetched, also while the Application is OutOfSync with auto-sync
 // off. The operation's revision is status.operationState.syncResult.
 // revision(s), or the requested operation.sync.revision(s) before Argo CD
 // records a result.
-func argoCDRevision(app *unstructured.Unstructured, syncStatus string, opts CheckOptions) argoCDTarget {
+func argoCDRevision(app *unstructured.Unstructured, syncStatus, opPhase string, opts CheckOptions) argoCDTarget {
 	want := opts.ExpectedRevision
 	if want == "" {
 		if len(opts.ExpectedImages) > 0 {
@@ -499,8 +503,12 @@ func argoCDRevision(app *unstructured.Unstructured, syncStatus string, opts Chec
 		}
 	}
 
+	// An operation on the promoted commit deploys it only once it has
+	// finished: while it runs, a PreSync hook or an earlier sync wave can
+	// still hold the previous version, so only Synced or history count.
+	finished := opPhase == "Succeeded" || opPhase == "Failed" || opPhase == "Error"
 	t := argoCDTarget{operated: hasRevision(opRevs, want)}
-	t.deployed = t.operated || (syncStatus == "Synced" && hasRevision(syncRevs, want)) || hasRevision(historyRevs, want)
+	t.deployed = (t.operated && finished) || (syncStatus == "Synced" && hasRevision(syncRevs, want)) || hasRevision(historyRevs, want)
 	current, _, _ := unstructured.NestedString(app.Object, "status", "sync", "revision")
 	t.opNote = "ignoring an operation with no revision"
 	if len(opRevs) > 0 {
@@ -512,8 +520,10 @@ func argoCDRevision(app *unstructured.Unstructured, syncStatus string, opts Chec
 	// A later commit on a shared branch (another environment's push) can
 	// supersede ours before Argo CD fetches it. Accept that revision only
 	// when the Application demonstrably runs the Bundle images; an
-	// operation on that revision then counts.
-	if ok, note := argoCDImages(app, opts.ExpectedImages); ok && note == "" && len(opts.ExpectedImages) > 0 {
+	// operation on that revision then counts. An operation still running on
+	// the promoted commit means ours is the change in flight, not a
+	// superseded one, so it waits for Synced or history as above.
+	if ok, note := argoCDImages(app, opts.ExpectedImages); ok && note == "" && len(opts.ExpectedImages) > 0 && !t.operated {
 		t.deployed = true
 		t.operated = len(syncRevs) > 0 && hasRevision(opRevs, syncRevs...)
 		t.note = fmt.Sprintf("(synced revision %s is not %s, but the Application runs the Bundle images)",
