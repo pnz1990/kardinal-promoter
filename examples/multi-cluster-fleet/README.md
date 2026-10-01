@@ -154,5 +154,5 @@ kardinal history rollouts-demo
 |---|---|
 | `pipeline.yaml` | Pipeline CRD (4 environments, parallel prod fan-out, argocd health from the hub) |
 | `policy-gates.yaml` | Org-level PolicyGates (no-weekend-deploys, pre-prod-soak), one per prod region |
-| `bundle.yaml` | Sample Bundle for manual creation |
+| `bundle.yaml` | Sample Bundle for manual creation. Its `intent.targetEnvironment: prod-us` promotes to prod-us only and skips prod-eu |
 | `argocd-applications.yaml` | Argo CD ApplicationSet for 4 environments across 4 clusters |
