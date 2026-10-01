@@ -88,7 +88,10 @@ spec:
                       (every new commit on the branch creates a Bundle).
                     type: string
                   repoURL:
-                    description: RepoURL is the HTTPS Git repository URL.
+                    description: |-
+                      RepoURL is the HTTPS Git repository URL. Loopback (the controller's own
+                      pod), link-local, cloud metadata, unspecified and multicast addresses are
+                      refused.
                     minLength: 1
                     type: string
                 required:
@@ -110,9 +113,11 @@ spec:
                     description: |-
                       Registry is the image repository to poll, without a tag or digest
                       (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or
-                      "http://localhost:5000/myapp" for a plain-HTTP registry). Only public
-                      repositories are supported: the watcher uses the registry's anonymous
-                      token flow and sends no credentials.
+                      "http://registry.registry.svc.cluster.local:5000/myapp" for a plain-HTTP
+                      in-cluster registry). Only public repositories are supported: the watcher
+                      uses the registry's anonymous token flow and sends no credentials.
+                      Loopback (the controller's own pod), link-local, cloud metadata,
+                      unspecified and multicast addresses are refused.
                     minLength: 1
                     type: string
                   tagFilter:

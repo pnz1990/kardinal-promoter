@@ -50,9 +50,11 @@ type SubscriptionSpec struct {
 type ImageSubscriptionSpec struct {
 	// Registry is the image repository to poll, without a tag or digest
 	// (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or
-	// "http://localhost:5000/myapp" for a plain-HTTP registry). Only public
-	// repositories are supported: the watcher uses the registry's anonymous
-	// token flow and sends no credentials.
+	// "http://registry.registry.svc.cluster.local:5000/myapp" for a plain-HTTP
+	// in-cluster registry). Only public repositories are supported: the watcher
+	// uses the registry's anonymous token flow and sends no credentials.
+	// Loopback (the controller's own pod), link-local, cloud metadata,
+	// unspecified and multicast addresses are refused.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Registry string `json:"registry"`
@@ -76,7 +78,9 @@ type ImageSubscriptionSpec struct {
 
 // GitSubscriptionSpec configures Git repository watching.
 type GitSubscriptionSpec struct {
-	// RepoURL is the HTTPS Git repository URL.
+	// RepoURL is the HTTPS Git repository URL. Loopback (the controller's own
+	// pod), link-local, cloud metadata, unspecified and multicast addresses are
+	// refused.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	RepoURL string `json:"repoURL"`

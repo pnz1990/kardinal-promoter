@@ -46,11 +46,12 @@ type GitWatcher struct {
 	// non-empty value.
 	PathGlob string
 	// httpClient is the HTTP client used for requests. NewGitWatcher sets a
-	// client with a timeout.
+	// client with a timeout and the egress guard.
 	httpClient *http.Client
 }
 
-// NewGitWatcher creates a GitWatcher with an HTTP client that times out.
+// NewGitWatcher creates a GitWatcher with an HTTP client that times out and
+// refuses loopback, link-local and cloud metadata addresses (pkg/egress).
 func NewGitWatcher(repoURL, branch, pathGlob string) *GitWatcher {
 	b := branch
 	if b == "" {
@@ -62,6 +63,15 @@ func NewGitWatcher(repoURL, branch, pathGlob string) *GitWatcher {
 		PathGlob:   pathGlob,
 		httpClient: newHTTPClient(),
 	}
+}
+
+// WithHTTPClient makes w send its requests with c instead of the
+// egress-guarded default, and returns w. It is for tests: an httptest server
+// listens on loopback, which the guard refuses. The controller keeps the
+// default.
+func (w *GitWatcher) WithHTTPClient(c *http.Client) *GitWatcher {
+	w.httpClient = c
+	return w
 }
 
 // Watch polls the Git repository for the latest commit SHA on the watched branch.

@@ -210,24 +210,24 @@ PAUSE-01	live	core	covered	pause	paused Pipeline holds new steps via freeze-<pip
 PAUSE-02	live	core	covered	pause	in-flight WaitingForMerge/HealthChecking steps finish; others hold at the next safe point	docs/rollback.md:197
 PAUSE-03	live	core	covered	pause	resume deletes the freeze gate and held steps continue	docs/rollback.md:200
 PAUSE-04	live	core	covered	pause	setting spec.paused directly (kubectl) has the same effect as kardinal pause	docs/pipeline-reference.md:134-138
-SUB-OCI-01	live	core	covered	subscription	image Subscription polls a public OCI registry; a new matching tag creates Bundle <sub>-<tag>-<digest8>	docs/subscription.md:33-77; pkg/source/oci.go
-SUB-OCI-02	live	core	covered	subscription	tagFilter semver/regex picks the tag; no match (or over 50 non-semver tags) gives phase Error	docs/subscription.md:78-100; pkg/source/oci.go
-SUB-OCI-03	live	core	covered	subscription	digest-tracked tag (^main$): a new digest on the same tag creates a new Bundle	docs/subscription.md:78-100
-SUB-OCI-04	live	core	covered	subscription	private registry gives phase Error; only public registries are supported	api/v1alpha1/subscription_types.go:54-58; pkg/source/oci.go:357-400
-SUB-GIT-01	live	core	covered	subscription	git Subscription polls a branch (default main); a new commit creates a Bundle	docs/subscription.md:101-133; pkg/source/git.go:121-166
-SUB-GIT-02	live	core	covered	subscription	git pathGlob filters commits by path	docs/subscription.md:101-133; pkg/source/git.go:85-88
-SUB-DEDUPE-01	live	core	covered	subscription	first poll only records the digest; the same digest never creates a second Bundle (kardinal.io/source-digest label)	docs/subscription.md:144-167
-SUB-INTERVAL-01	live	core	covered	subscription	interval minimum 30s	docs/subscription.md:47; pkg/reconciler/subscription/reconciler.go:349
-SUB-STATUS-01	live	core	covered	subscription	status phase Watching/Error, lastBundle and lastCheckedAt; printer columns	docs/subscription.md:134-143; docs/subscription.md:168-177
+SUB-OCI-01	live	core	covered	subscription	image Subscription polls a public OCI registry; a new matching tag creates Bundle <sub>-<tag>-<digest8>	docs/subscription.md:40-85; pkg/source/oci.go
+SUB-OCI-02	live	core	covered	subscription	tagFilter semver/regex picks the tag; no match (or over 50 non-semver tags) gives phase Error	docs/subscription.md:86-108; pkg/source/oci.go
+SUB-OCI-03	live	core	covered	subscription	digest-tracked tag (^main$): a new digest on the same tag creates a new Bundle	docs/subscription.md:86-108
+SUB-OCI-04	live	core	covered	subscription	private registry gives phase Error; only public registries are supported	api/v1alpha1/subscription_types.go:54-60; pkg/source/oci.go:367-410
+SUB-GIT-01	live	core	covered	subscription	git Subscription polls a branch (default main); a new commit creates a Bundle	docs/subscription.md:109-141; pkg/source/git.go:131-176
+SUB-GIT-02	live	core	covered	subscription	git pathGlob filters commits by path	docs/subscription.md:109-141; pkg/source/git.go:95-98
+SUB-DEDUPE-01	live	core	covered	subscription	first poll only records the digest; the same digest never creates a second Bundle (kardinal.io/source-digest label)	docs/subscription.md:152-175
+SUB-INTERVAL-01	live	core	covered	subscription	interval minimum 30s	docs/subscription.md:54; pkg/reconciler/subscription/reconciler.go:349
+SUB-STATUS-01	live	core	covered	subscription	status phase Watching/Error, lastBundle and lastCheckedAt; printer columns	docs/subscription.md:142-151; docs/subscription.md:176-185
 SUB-NS-01	live	core	covered	subscription	spec.namespace different from the Subscription namespace gives phase Error	api/v1alpha1/subscription_types.go:41-46
-SUB-EGRESS-01	live	core	covered	subscription	Subscription OCI/git clients to internal addresses	pkg/source/oci.go; pkg/source/git.go; docs/guides/security.md:371-405
+SUB-EGRESS-01	live	core	covered	subscription	Subscription registry, token realm and git requests to loopback, link-local or metadata addresses are refused	pkg/source/watcher.go; docs/subscription.md; docs/guides/security.md:371-408; pkg/egress/guard.go
 NOTIF-01	live	core	covered	notifications	NotificationHook delivers Bundle.Verified with the documented JSON payload	docs/notifications.md:39-80; api/v1alpha1/notificationhook_types.go:11
 NOTIF-02	live	core	covered	notifications	NotificationHook delivers Bundle.Failed	docs/notifications.md:65-80
 NOTIF-03	live	core	covered	notifications	NotificationHook delivers PolicyGate.Blocked	docs/notifications.md:65-80
 NOTIF-04	live	core	covered	notifications	NotificationHook delivers PromotionStep.Failed	docs/notifications.md:65-80
 NOTIF-AUTH-01	live	core	covered	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:112-160; pkg/reconciler/notificationhook/reconciler.go:429-431
 NOTIF-SEL-01	live	core	covered	notifications	pipelineSelector limits which Pipelines a hook reports on	docs/notifications.md:190
-NOTIF-EGRESS-01	live	core	covered	notifications	hook URL to loopback, link-local or metadata address is refused	docs/guides/security.md:371-405; pkg/egress/guard.go:65-88
+NOTIF-EGRESS-01	live	core	covered	notifications	hook URL to loopback, link-local or metadata address is refused	docs/guides/security.md:371-408; pkg/egress/guard.go:66-89
 NOTIF-RETRY-01	live	core	covered	notifications	failed deliveries retried with backoff	docs/notifications.md:95-97; pkg/reconciler/notificationhook/reconciler.go:208-231
 NOTIF-GIVEUP-01	live	core	covered	notifications	delivery gives up after 10 attempts; a spec edit resets the count	docs/notifications.md:84-111
 NOTIF-NEW-01	live	core	covered	notifications	a new hook delivers only the newest existing event, not the backlog	docs/notifications.md:84-111

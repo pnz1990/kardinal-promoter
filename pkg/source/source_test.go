@@ -29,12 +29,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 )
 
@@ -86,7 +88,7 @@ func TestGitWatcher_DetectsNewCommit(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watcher := source.NewGitWatcher(srv.URL, "main", "")
+	watcher := source.NewGitWatcher(srv.URL, "main", "").WithHTTPClient(srv.Client())
 	result, err := watcher.Watch(context.Background(), oldSHA)
 	require.NoError(t, err)
 
@@ -109,7 +111,7 @@ func TestGitWatcher_NoChangeWhenSHAUnchanged(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watcher := source.NewGitWatcher(srv.URL, "main", "")
+	watcher := source.NewGitWatcher(srv.URL, "main", "").WithHTTPClient(srv.Client())
 	result, err := watcher.Watch(context.Background(), sha)
 	require.NoError(t, err)
 
@@ -131,7 +133,7 @@ func TestGitWatcher_FirstRunNotChanged(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watcher := source.NewGitWatcher(srv.URL, "main", "")
+	watcher := source.NewGitWatcher(srv.URL, "main", "").WithHTTPClient(srv.Client())
 	result, err := watcher.Watch(context.Background(), "") // first run
 	require.NoError(t, err)
 
@@ -154,7 +156,7 @@ func TestGitWatcher_BranchNotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watcher := source.NewGitWatcher(srv.URL, "main", "")
+	watcher := source.NewGitWatcher(srv.URL, "main", "").WithHTTPClient(srv.Client())
 	_, err := watcher.Watch(context.Background(), oldSHA)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `branch "main" not found`)
@@ -171,7 +173,7 @@ func TestGitWatcher_EmptyAdvertisementIsAnError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := source.NewGitWatcher(srv.URL, "main", "").Watch(context.Background(), "")
+	_, err := source.NewGitWatcher(srv.URL, "main", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "advertises no refs")
 }
@@ -185,7 +187,7 @@ func TestGitWatcher_TruncatedPacketIsAnError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := source.NewGitWatcher(srv.URL, "main", "").Watch(context.Background(), "")
+	_, err := source.NewGitWatcher(srv.URL, "main", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read pkt-line payload")
 }
@@ -210,7 +212,7 @@ func TestGitWatcher_ShortReads(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r, err := source.NewGitWatcher(srv.URL, "main", "").Watch(context.Background(), "")
+	r, err := source.NewGitWatcher(srv.URL, "main", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "")
 	require.NoError(t, err)
 	assert.Equal(t, sha, r.Digest)
 }
@@ -267,7 +269,7 @@ func TestGitWatcher_RealGitHTTPBackend(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watcher := source.NewGitWatcher(srv.URL+"/repo.git", "main", "")
+	watcher := source.NewGitWatcher(srv.URL+"/repo.git", "main", "").WithHTTPClient(srv.Client())
 	first := runGit(t, work, "rev-parse", "HEAD")
 	r1, err := watcher.Watch(context.Background(), "")
 	require.NoError(t, err)
@@ -284,7 +286,7 @@ func TestGitWatcher_RealGitHTTPBackend(t *testing.T) {
 	assert.True(t, r2.Changed)
 	assert.Equal(t, second, r2.Digest)
 
-	_, err = source.NewGitWatcher(srv.URL+"/repo.git", "nope", "").Watch(context.Background(), "")
+	_, err = source.NewGitWatcher(srv.URL+"/repo.git", "nope", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `branch "nope" not found`)
 
@@ -302,7 +304,7 @@ func TestGitWatcher_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watcher := source.NewGitWatcher(srv.URL, "main", "")
+	watcher := source.NewGitWatcher(srv.URL, "main", "").WithHTTPClient(srv.Client())
 	_, err := watcher.Watch(context.Background(), "")
 	assert.Error(t, err, "Watch must return error on server error")
 	assert.Contains(t, err.Error(), "500")
@@ -553,7 +555,7 @@ func TestOCIWatcher_SelectsNewestTag(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := &testRegistry{name: "myorg/myapp", tags: tt.tags, images: tt.images}
 			srv := reg.start(t)
-			result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", tt.filter).Watch(context.Background(), "sha256:prev")
+			result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", tt.filter).WithHTTPClient(srv.Client()).Watch(context.Background(), "sha256:prev")
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -585,7 +587,7 @@ func TestOCIWatcher_AnonymousBearerToken(t *testing.T) {
 	}
 	srv := reg.start(t)
 
-	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").Watch(context.Background(), "sha256:aaa")
+	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "sha256:aaa")
 	require.NoError(t, err)
 	assert.Equal(t, "sha-bbb", result.Tag)
 	assert.True(t, result.Changed)
@@ -605,7 +607,7 @@ func TestOCIWatcher_CredentialsRequiredIsReported(t *testing.T) {
 	reg := &testRegistry{name: "myorg/myapp", auth: "basic", tags: []string{"v1.0.0"}, images: imagesWithDigests("v1.0.0")}
 	srv := reg.start(t)
 
-	_, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").Watch(context.Background(), "")
+	_, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requires credentials")
 	assert.Contains(t, err.Error(), "public repositories")
@@ -621,7 +623,7 @@ func TestOCIWatcher_FollowsPagination(t *testing.T) {
 	}
 	srv := reg.start(t)
 
-	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").Watch(context.Background(), "")
+	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "")
 	require.NoError(t, err)
 	assert.Equal(t, "v2.0.0", result.Tag)
 }
@@ -635,7 +637,7 @@ func TestOCIWatcher_MultiArchIndexDigest(t *testing.T) {
 	}
 	srv := reg.start(t)
 
-	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").Watch(context.Background(), "")
+	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "")
 	require.NoError(t, err)
 	assert.Equal(t, "sha256:index", result.Digest)
 }
@@ -646,7 +648,7 @@ func TestOCIWatcher_DigestWithoutHeader(t *testing.T) {
 	reg := &testRegistry{name: "myorg/myapp", noDigestHeader: true, tags: []string{"v1.0.0"}, images: imagesWithDigests("v1.0.0")}
 	srv := reg.start(t)
 
-	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").Watch(context.Background(), "")
+	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "")
 	require.NoError(t, err)
 	sum := sha256.Sum256([]byte(`{"schemaVersion":2,"config":{"digest":"sha256:cfg-v1.0.0"}}`))
 	assert.Equal(t, "sha256:"+hex.EncodeToString(sum[:]), result.Digest)
@@ -658,7 +660,7 @@ func TestOCIWatcher_NoChangeWhenDigestUnchanged(t *testing.T) {
 	reg := &testRegistry{name: "myorg/myapp", tags: []string{"sha-aaa111"}, images: imagesWithDigests("sha-aaa111")}
 	srv := reg.start(t)
 
-	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").Watch(context.Background(), "sha256:sha-aaa111")
+	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "sha256:sha-aaa111")
 	require.NoError(t, err)
 	assert.False(t, result.Changed)
 	assert.Equal(t, "sha256:sha-aaa111", result.Digest)
@@ -670,7 +672,7 @@ func TestOCIWatcher_FirstRunNotChanged(t *testing.T) {
 	reg := &testRegistry{name: "myorg/myapp", tags: []string{"latest"}, images: imagesWithDigests("latest")}
 	srv := reg.start(t)
 
-	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").Watch(context.Background(), "")
+	result, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "")
 	require.NoError(t, err)
 	assert.False(t, result.Changed, "First run must not return Changed=true")
 	assert.Equal(t, "sha256:latest", result.Digest)
@@ -681,7 +683,7 @@ func TestOCIWatcher_InvalidTagFilterReturnsError(t *testing.T) {
 	reg := &testRegistry{name: "myorg/myapp", tags: []string{"v1.0.0"}, images: imagesWithDigests("v1.0.0")}
 	srv := reg.start(t)
 
-	_, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "[invalid").Watch(context.Background(), "")
+	_, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "[invalid").WithHTTPClient(srv.Client()).Watch(context.Background(), "")
 	assert.Error(t, err, "invalid regex must return error")
 }
 
@@ -690,4 +692,27 @@ func TestOCIWatcher_EmptyRegistryReturnsError(t *testing.T) {
 	watcher := source.NewOCIWatcher("", "")
 	_, err := watcher.Watch(context.Background(), "")
 	assert.Error(t, err)
+}
+
+// TestWatchers_RefuseLoopback verifies that the watchers the controller builds
+// apply the egress guard: a registry or git server on 127.0.0.1 (an httptest
+// server) is refused with egress.ErrBlockedAddress before any request reaches
+// it. Private ranges stay allowed; pkg/egress tests the address list.
+func TestWatchers_RefuseLoopback(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	_, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").Watch(context.Background(), "")
+	require.ErrorIs(t, err, egress.ErrBlockedAddress)
+	assert.Contains(t, err.Error(), "is loopback")
+
+	_, err = source.NewGitWatcher(srv.URL+"/repo.git", "main", "").Watch(context.Background(), "")
+	require.ErrorIs(t, err, egress.ErrBlockedAddress)
+	assert.Contains(t, err.Error(), "is loopback")
+
+	assert.Zero(t, hits.Load(), "no request reaches the loopback server")
 }

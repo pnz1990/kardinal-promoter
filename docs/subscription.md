@@ -13,7 +13,7 @@ an artifact source on a configurable interval.
 
 | Type | Source | Trigger |
 |---|---|---|
-| `image` | Public OCI registry repository (ghcr.io, Docker Hub, Quay, a plain-HTTP local registry) | A new artifact among the tags matching `tagFilter` (see [Tag selection](#tag-selection)) |
+| `image` | Public OCI registry repository (ghcr.io, Docker Hub, Quay, a plain-HTTP in-cluster registry) | A new artifact among the tags matching `tagFilter` (see [Tag selection](#tag-selection)) |
 | `git` | Public Git repository over smart HTTP(S) | New commit on the watched branch |
 
 Only **public** repositories are supported. The OCI watcher uses the registry's
@@ -24,6 +24,13 @@ message. For private artifacts, create Bundles from CI with the Bundle webhook
 instead.
 
 Every request has a 30-second timeout.
+
+The controller refuses to poll a registry, token realm or Git server on a loopback
+(`localhost` is the controller's own pod), link-local, cloud metadata, unspecified or
+multicast address: the Subscription goes to phase `Error` with `destination address is not
+allowed` in its message (see
+[Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls)).
+Private addresses, such as in-cluster Services, are allowed.
 
 A Subscription creates Bundles only in its **own namespace**, for the Pipeline named
 in `spec.pipeline` in that namespace. `spec.namespace` is deprecated: leave it empty.
@@ -49,7 +56,8 @@ spec:
 
 `registry` is a repository reference: `host/path`, a Docker Hub short name
 (`nginx`, `myorg/app`, `docker.io/library/nginx`), or a URL with an explicit
-`http://` or `https://` scheme for a local registry (`http://localhost:5000/my-app`).
+`http://` or `https://` scheme for a registry such as an in-cluster one
+(`http://registry.registry.svc.cluster.local:5000/my-app`).
 
 When `v1.4.0` is pushed after `v1.3.2`, the controller creates:
 

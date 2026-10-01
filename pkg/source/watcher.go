@@ -18,6 +18,7 @@
 // The Watcher interface is the pluggable integration point for artifact discovery.
 // OCIWatcher uses the OCI Distribution Specification API to list tags and read digests.
 // GitWatcher uses the Git Smart HTTP protocol to read branch HEAD SHAs without cloning.
+// Both send their requests through the egress guard (pkg/egress).
 package source
 
 import (
@@ -26,6 +27,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 )
 
 const (
@@ -42,9 +45,19 @@ const (
 	userAgent    = "kardinal-promoter/subscription-watcher"
 )
 
-// newHTTPClient returns the client the watchers use by default.
+// guardedTransport refuses loopback, link-local, cloud metadata, unspecified
+// and multicast destinations at dial time (pkg/egress), on every connection:
+// registry and git requests, redirects and token realm fetches. A
+// Subscription's registry or repoURL therefore cannot reach the controller's
+// own UI API or the node's credential endpoints. Private ranges stay allowed
+// for in-cluster registries and git servers. It honours HTTP(S)_PROXY, as the
+// default transport did.
+var guardedTransport = egress.NewTransport(http.ProxyFromEnvironment)
+
+// newHTTPClient returns the client the watchers use by default: it times out,
+// and its transport applies the egress guard.
 func newHTTPClient() *http.Client {
-	return &http.Client{Timeout: defaultHTTPTimeout}
+	return &http.Client{Timeout: defaultHTTPTimeout, Transport: guardedTransport}
 }
 
 // readLimited reads r fully and fails when it is longer than limit bytes.

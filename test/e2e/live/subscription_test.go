@@ -542,11 +542,12 @@ func TestSub_Namespace(t *testing.T) {
 	assert.Empty(t, getSub(t, e, a.ns, "elsewhere").Status.LastSeenDigest, "the source is never polled")
 }
 
-// TestSub_Egress records that the Subscription watchers have no egress guard
-// (docs/guides/security.md guards only NotificationHook and MetricCheck
-// requests): an image and a git Subscription on the controller's own
-// loopback health port (127.0.0.1:8081) reach it and report its 404. If a
-// guard is added, this test must change to expect its refusal.
+// TestSub_Egress checks that the Subscription watchers apply the egress guard
+// (docs/guides/security.md, Outbound requests to user URLs): an image and a
+// git Subscription on the controller's own loopback health port
+// (127.0.0.1:8081) go to phase Error saying the destination address is not
+// allowed, and create no Bundle. The in-cluster registry and Forgejo, on
+// private addresses, still work: the other TestSub_ tests poll them.
 //
 // Covers SUB-EGRESS-01.
 func TestSub_Egress(t *testing.T) {
@@ -559,14 +560,15 @@ func TestSub_Egress(t *testing.T) {
 		Git: &v1alpha1.GitSubscriptionSpec{RepoURL: "http://127.0.0.1:8081/kardinal/podinfo.git", Interval: "30s"}})
 	img := waitSubError(t, e, a.ns, "loopback-image")
 	assert.Equal(t, `OCIWatcher: list tags for "http://127.0.0.1:8081/e2e/podinfo": `+
-		`not found: http://127.0.0.1:8081/v2/e2e/podinfo/tags/list (HTTP 404)`, img,
-		"the request reached the controller's own health server")
+		`HTTP GET http://127.0.0.1:8081/v2/e2e/podinfo/tags/list: `+
+		`Get "http://127.0.0.1:8081/v2/e2e/podinfo/tags/list": `+
+		`dial tcp 127.0.0.1:8081: destination address is not allowed: 127.0.0.1 is loopback`, img)
 	gitMsg := waitSubError(t, e, a.ns, "loopback-git")
 	assert.Equal(t, "GitWatcher: fetch latest SHA for http://127.0.0.1:8081/kardinal/podinfo.git@main: "+
-		"repository not found: http://127.0.0.1:8081/kardinal/podinfo.git (HTTP 404)", gitMsg,
-		"the request reached the controller's own health server")
-	for _, m := range []string{img, gitMsg} {
-		assert.NotContains(t, m, "destination address is not allowed")
+		`GET info/refs: Get "http://127.0.0.1:8081/kardinal/podinfo.git/info/refs?service=git-upload-pack": `+
+		"dial tcp 127.0.0.1:8081: destination address is not allowed: 127.0.0.1 is loopback", gitMsg)
+	for _, name := range []string{"loopback-image", "loopback-git"} {
+		assert.Empty(t, getSub(t, e, a.ns, name).Status.LastSeenDigest, "%s never reached the source", name)
 	}
 	assert.Empty(t, bundles(t, e, a.ns))
 }

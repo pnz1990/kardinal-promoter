@@ -216,7 +216,8 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 	if sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeImage && sub.Spec.Image != nil {
 		bundle.Spec.Images = []kardinalv1alpha1.ImageRef{
 			{
-				// The watcher accepts an explicit scheme ("http://localhost:5000/app");
+				// The watcher accepts an explicit scheme
+				// ("http://registry.registry.svc.cluster.local:5000/app");
 				// an image reference does not carry one.
 				Repository: strings.TrimPrefix(strings.TrimPrefix(sub.Spec.Image.Registry, "https://"), "http://"),
 				Tag:        result.Tag,

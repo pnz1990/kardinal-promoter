@@ -4,10 +4,15 @@
 package source
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 )
 
 // TestParseRegistryRef covers Docker Hub normalisation and short references (C05-steps-40).
@@ -74,15 +79,37 @@ func TestNextLink(t *testing.T) {
 }
 
 // TestWatchersHaveTimeouts verifies that neither watcher uses a client without
-// a timeout, which would let a hung host block the reconcile worker (C05-steps-28).
+// a timeout, which would let a hung host block the reconcile worker (C05-steps-28),
+// and that both use the egress-guarded transport.
 func TestWatchersHaveTimeouts(t *testing.T) {
 	oci := NewOCIWatcher("ghcr.io/a/b", "")
 	require.NotNil(t, oci.httpClient)
 	assert.Equal(t, defaultHTTPTimeout, oci.httpClient.Timeout)
+	assert.Same(t, guardedTransport, oci.httpClient.Transport)
+	assert.Same(t, guardedTransport, (&OCIWatcher{}).client().Transport)
 
 	git := NewGitWatcher("https://example.com/a", "main", "")
 	require.NotNil(t, git.httpClient)
 	assert.Equal(t, defaultHTTPTimeout, git.httpClient.Timeout)
+	assert.Same(t, guardedTransport, git.httpClient.Transport)
+}
+
+// TestTokenRealmIsGuarded verifies that the anonymous token request goes
+// through the egress guard too: a realm on loopback is refused before any
+// request reaches it.
+func TestTokenRealmIsGuarded(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer srv.Close()
+
+	base, name, err := parseRegistryRef("ghcr.io/a/b")
+	require.NoError(t, err)
+	s := &registrySession{client: newHTTPClient(), base: base, name: name}
+	err = s.fetchAnonymousToken(t.Context(), `Bearer realm="`+srv.URL+`/token",service="ghcr.io"`)
+	require.ErrorIs(t, err, egress.ErrBlockedAddress)
+	assert.Contains(t, err.Error(), "is loopback")
+	assert.Zero(t, hits.Load(), "no request reaches the loopback realm")
+	assert.Empty(t, s.token)
 }
 
 func TestRealmMustBeHTTPS(t *testing.T) {
