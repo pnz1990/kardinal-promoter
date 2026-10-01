@@ -105,14 +105,15 @@ func TestCore_ReadyzWaitsForCaches(t *testing.T) {
 		if err != nil {
 			return false, err.Error()
 		}
-		for _, cs := range p.Status.ContainerStatuses {
-			if cs.State.Running != nil {
-				started = cs.State.Running.StartedAt.Time
-				return true, ""
-			}
+		if len(p.Status.ContainerStatuses) == 0 {
+			return false, "phase " + string(p.Status.Phase)
+		}
+		cs := p.Status.ContainerStatuses[0]
+		if cs.State.Running == nil {
 			return false, fmt.Sprintf("container state %+v", cs.State)
 		}
-		return false, "phase " + string(p.Status.Phase)
+		started = cs.State.Running.StartedAt.Time
+		return true, ""
 	})
 
 	framework.Eventually(t, time.Minute, "the kubelet to report the readiness probe failing", func(ctx context.Context) (bool, string) {
