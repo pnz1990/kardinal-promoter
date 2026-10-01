@@ -225,10 +225,10 @@ NOTIF-01	live	core	covered	notifications	NotificationHook delivers Bundle.Verifi
 NOTIF-02	live	core	covered	notifications	NotificationHook delivers Bundle.Failed	docs/notifications.md:65-80
 NOTIF-03	live	core	covered	notifications	NotificationHook delivers PolicyGate.Blocked	docs/notifications.md:65-80
 NOTIF-04	live	core	covered	notifications	NotificationHook delivers PromotionStep.Failed	docs/notifications.md:65-80
-NOTIF-AUTH-01	live	core	covered	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:112-160; pkg/reconciler/notificationhook/reconciler.go:429-431
+NOTIF-AUTH-01	live	core	covered	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:112-160; pkg/reconciler/notificationhook/reconciler.go:441-443
 NOTIF-SEL-01	live	core	covered	notifications	pipelineSelector limits which Pipelines a hook reports on	docs/notifications.md:190
 NOTIF-EGRESS-01	live	core	covered	notifications	hook URL to loopback, link-local or metadata address is refused	docs/guides/security.md:371-408; pkg/egress/guard.go:66-89
-NOTIF-RETRY-01	live	core	covered	notifications	failed deliveries retried with backoff	docs/notifications.md:95-97; pkg/reconciler/notificationhook/reconciler.go:208-231
+NOTIF-RETRY-01	live	core	covered	notifications	failed deliveries retried with backoff	docs/notifications.md:95-97; pkg/reconciler/notificationhook/reconciler.go:220-243
 NOTIF-GIVEUP-01	live	core	covered	notifications	delivery gives up after 10 attempts; a spec edit resets the count	docs/notifications.md:84-111
 NOTIF-NEW-01	live	core	covered	notifications	a new hook delivers only the newest existing event, not the backlog	docs/notifications.md:84-111
 NOTIF-STATUS-01	live	core	covered	notifications	status records last delivery, result and failure count	docs/notifications.md:161-189
