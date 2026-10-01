@@ -6,11 +6,13 @@ package promotionstep
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -18,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 )
 
@@ -112,6 +115,11 @@ func prFinalizerSyncFailed(log zerolog.Logger, err error) (ctrl.Result, error) {
 // after the delete request; then the finalizer is removed anyway and a Warning
 // Event and an error log say the PR must be closed by hand.
 //
+// The PR is left open when the step comes back (stepRecreated): it went with
+// its Graph while the Bundle goes on promoting, so the Bundle reconciler
+// recreates the Graph and the new step reuses the PR. Closing it there made
+// the new step open a second PR.
+//
 // The step is read again from the API server first: the cached step can still
 // hold the finalizer the previous reconcile removed, and closing from it
 // closed and commented on the PR a second time.
@@ -123,7 +131,14 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 	if err != nil || ps == nil || !controllerutil.ContainsFinalizer(ps, FinalizerClosePR) {
 		return ctrl.Result{}, err
 	}
-	if holdsPR(ps.Status.State) {
+	switch {
+	case !holdsPR(ps.Status.State):
+		// Past its PR: there is nothing to close.
+	case r.stepRecreated(ctx, ps):
+		log.Info().Str("env", ps.Spec.Environment).Str("prURL", ps.Status.PRURL).
+			Msg("left the PR of a step deleted with its Graph open: the Bundle recreates the Graph, " +
+				"and the new step reuses the PR")
+	default:
 		if err := r.closeStepPR(ctx, ps, r.deleteReason(ctx, ps)); err != nil {
 			elapsed := time.Since(ps.DeletionTimestamp.Time)
 			if elapsed < closePRDeadline {
@@ -142,6 +157,58 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 	}
 	return ctrl.Result{}, r.removePRFinalizer(ctx, ps)
 }
+
+// stepRecreated reports whether the deleted step ps comes back. That is when
+// ps went with its Graph (deleted by hand, for instance) while the Bundle goes
+// on promoting: the Bundle reconciler recreates the Graph, and kro creates a
+// new step for ps's environment, which finds and reuses ps's open PR
+// (GRAPH-HEAL-01). All of these must hold, read from the API server:
+//
+//   - the Bundle exists, is not being deleted, and is Promoting;
+//   - its namespace is not being deleted;
+//   - its Pipeline exists and still has ps's environment;
+//   - its Graph is gone, is being deleted, or was created at or after ps's
+//     delete request (it was recreated before ps was reconciled).
+//
+// A step deleted on its own, or because a Pipeline edit dropped its
+// environment (kro updates the Graph in place), does not come back, nor does
+// one whose Bundle or namespace is being deleted. A failed read counts as
+// false, so the PR is closed as for any other deleted step.
+func (r *Reconciler) stepRecreated(ctx context.Context, ps *v1alpha1.PromotionStep) bool {
+	reader := r.apiReader()
+	key := func(name string) client.ObjectKey { return client.ObjectKey{Namespace: ps.Namespace, Name: name} }
+	var b v1alpha1.Bundle
+	if ps.Spec.BundleName == "" || reader.Get(ctx, key(ps.Spec.BundleName), &b) != nil ||
+		!b.DeletionTimestamp.IsZero() || b.Status.Phase != bundlePhasePromoting {
+		return false
+	}
+	var ns corev1.Namespace
+	if reader.Get(ctx, client.ObjectKey{Name: ps.Namespace}, &ns) != nil ||
+		!ns.DeletionTimestamp.IsZero() || ns.Status.Phase == corev1.NamespaceTerminating {
+		return false
+	}
+	var pl v1alpha1.Pipeline
+	if reader.Get(ctx, key(b.Spec.Pipeline), &pl) != nil ||
+		!slices.ContainsFunc(pl.Spec.Environments, func(e v1alpha1.EnvironmentSpec) bool {
+			return e.Name == ps.Spec.Environment
+		}) {
+		return false
+	}
+	name := b.Status.GraphRef
+	if name == "" {
+		name = graph.GraphNameFrom(b.Spec.Pipeline, b.Name)
+	}
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(graph.GraphGVK)
+	if err := reader.Get(ctx, key(name), g); err != nil {
+		return apierrors.IsNotFound(err)
+	}
+	created := g.GetCreationTimestamp()
+	return g.GetDeletionTimestamp() != nil || !created.Before(ps.DeletionTimestamp)
+}
+
+// bundlePhasePromoting is the phase of a Bundle whose Graph is promoting it.
+const bundlePhasePromoting = "Promoting"
 
 // removePRFinalizer removes FinalizerClosePR from the deleted step ps. A
 // conflict is retried at once against the step read again from the API server,
@@ -173,18 +240,22 @@ func (r *Reconciler) removePRFinalizer(ctx context.Context, ps *v1alpha1.Promoti
 // readStep reads the step key from the API server (APIReader, or Client when
 // it is nil). A step that is gone is nil.
 func (r *Reconciler) readStep(ctx context.Context, key client.ObjectKey) (*v1alpha1.PromotionStep, error) {
-	var reader client.Reader = r.Client
-	if r.APIReader != nil {
-		reader = r.APIReader
-	}
 	var ps v1alpha1.PromotionStep
-	if err := reader.Get(ctx, key, &ps); err != nil {
+	if err := r.apiReader().Get(ctx, key, &ps); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get promotionstep %s: %w", key, err)
 	}
 	return &ps, nil
+}
+
+// apiReader is APIReader, or Client when it is nil.
+func (r *Reconciler) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 // deleteReason is the reason the PR comment gives for closing it: the Bundle

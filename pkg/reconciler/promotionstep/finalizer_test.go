@@ -13,14 +13,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 )
 
@@ -243,6 +246,135 @@ func TestPRFinalizer_DeleteClosesPR(t *testing.T) {
 			default:
 				assert.Empty(t, tt.wantEvent, "no event emitted")
 			}
+		})
+	}
+}
+
+// TestPRFinalizer_GraphRecreatedKeepsPR covers B40 with GRAPH-HEAL-01: a step
+// deleted with its Graph while the Bundle goes on promoting comes back (the
+// Bundle reconciler recreates the Graph), and the new step reuses its PR, so
+// the PR is left open and uncommented. In every other case the PR is closed:
+// the step was deleted on its own (its Graph is still there), its Bundle or
+// namespace is being deleted, the Bundle is past Promoting, or the Pipeline no
+// longer has the step's environment.
+func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
+	deleted := metav1.NewTime(time.Now().Add(-time.Second).Truncate(time.Second))
+	type graphState int
+	const (
+		graphGone graphState = iota
+		graphDeleting
+		graphOld        // the Graph the step was in
+		graphSameSecond // recreated in the second the step was deleted
+		graphNew        // recreated after the step was deleted
+	)
+	tests := []struct {
+		name        string
+		graph       graphState
+		nsDeleting  bool
+		bundle      func(*v1alpha1.Bundle) // nil: the Bundle is gone
+		dropEnv     bool                   // the Pipeline no longer has prod
+		noPipeline  bool
+		graphErr    bool // reading the Graph fails
+		wantClosed  bool
+		wantComment string
+	}{
+		{name: "the Graph is being deleted: the PR is kept", graph: graphDeleting, bundle: func(*v1alpha1.Bundle) {}},
+		{name: "the Graph is gone: the PR is kept", graph: graphGone, bundle: func(*v1alpha1.Bundle) {}},
+		{name: "the Graph was recreated: the PR is kept", graph: graphNew, bundle: func(*v1alpha1.Bundle) {}},
+		{name: "the Graph was recreated in the same second: the PR is kept", graph: graphSameSecond,
+			bundle: func(*v1alpha1.Bundle) {}},
+		{name: "only the step was deleted: the PR is closed", graph: graphOld, bundle: func(*v1alpha1.Bundle) {},
+			wantClosed: true, wantComment: "PromotionStep step was deleted"},
+		{name: "the namespace is being deleted: the PR is closed", graph: graphDeleting, nsDeleting: true,
+			bundle: func(*v1alpha1.Bundle) {}, wantClosed: true},
+		{name: "the Bundle is being deleted: the PR is closed", graph: graphDeleting,
+			bundle: func(b *v1alpha1.Bundle) {
+				b.Finalizers = []string{"test/hold"}
+				b.DeletionTimestamp = &deleted
+			}, wantClosed: true, wantComment: "bundle bundle-1 was deleted"},
+		{name: "the Bundle is gone: the PR is closed", graph: graphGone,
+			wantClosed: true, wantComment: "bundle bundle-1 was deleted"},
+		{name: "the Bundle is past Promoting: the PR is closed", graph: graphDeleting,
+			bundle: func(b *v1alpha1.Bundle) { b.Status.Phase = "Failed" }, wantClosed: true},
+		{name: "the Pipeline dropped the environment: the PR is closed", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, dropEnv: true, wantClosed: true},
+		{name: "the Pipeline is gone: the PR is closed", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, noPipeline: true, wantClosed: true},
+		{name: "the Graph cannot be read: the PR is closed", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, graphErr: true, wantClosed: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			step := prStep("WaitingForMerge", 5)
+			step.Finalizers = []string{promotionstep.FinalizerClosePR}
+			step.DeletionTimestamp = &deleted
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default", Finalizers: []string{"kubernetes"}}}
+			if tt.nsDeleting {
+				ns.DeletionTimestamp = &deleted
+				ns.Status.Phase = corev1.NamespaceTerminating
+			}
+			objs := []client.Object{step, ns, openPRStatus("prs-step", "test/repo", 5)}
+			if !tt.noPipeline {
+				pl := makePipeline("nginx-demo")
+				if tt.dropEnv {
+					pl.Spec.Environments = pl.Spec.Environments[:1]
+				}
+				objs = append(objs, pl)
+			}
+			if tt.bundle != nil {
+				b := makeBundle("bundle-1", "nginx-demo")
+				b.Status.GraphRef = "nginx-demo-bundle-1"
+				tt.bundle(b)
+				objs = append(objs, b)
+			}
+			if tt.graph != graphGone {
+				g := &unstructured.Unstructured{}
+				g.SetGroupVersionKind(graph.GraphGVK)
+				g.SetNamespace("default")
+				g.SetName("nginx-demo-bundle-1")
+				switch tt.graph {
+				case graphDeleting:
+					g.SetCreationTimestamp(metav1.NewTime(deleted.Add(-time.Hour)))
+					g.SetFinalizers([]string{"kro.run/graph-finalizer"})
+					g.SetDeletionTimestamp(&deleted)
+				case graphOld:
+					g.SetCreationTimestamp(metav1.NewTime(deleted.Add(-time.Hour)))
+				case graphSameSecond:
+					g.SetCreationTimestamp(deleted)
+				case graphNew:
+					g.SetCreationTimestamp(metav1.NewTime(deleted.Add(time.Second)))
+				}
+				objs = append(objs, g)
+			}
+			api := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}, &v1alpha1.Bundle{}).
+				WithObjects(objs...).Build()
+			reader := interceptor.NewClient(api, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*unstructured.Unstructured); ok && tt.graphErr {
+						return apierrors.NewInternalError(errors.New("etcdserver: request timed out"))
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+			m := &mockSCM{}
+			r := &promotionstep.Reconciler{Client: api, APIReader: reader, SCM: m, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+			res, err := r.Reconcile(context.Background(), reqFor("step"))
+			require.NoError(t, err)
+			assert.Zero(t, res.RequeueAfter)
+			if tt.wantClosed {
+				assert.Equal(t, []string{"test/repo#5"}, m.closed)
+				require.Len(t, m.comments, 1)
+				assert.Contains(t, m.comments[0], tt.wantComment)
+			} else {
+				assert.Empty(t, m.closed, "the PR is left open")
+				assert.Empty(t, m.comments, "the PR is not commented on")
+			}
+			var gone v1alpha1.PromotionStep
+			assert.True(t, apierrors.IsNotFound(api.Get(context.Background(), client.ObjectKeyFromObject(step), &gone)),
+				"the step is gone")
 		})
 	}
 }

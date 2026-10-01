@@ -545,7 +545,8 @@ Two finalizers can hold a delete, and the controller removes both itself while i
 **`kardinal.io/close-pr` on a PromotionStep.** A step that opens or has opened a promotion PR
 carries it while it is `Promoting` or `WaitingForMerge`. When the step is deleted (its Bundle or
 its namespace was deleted) the controller closes the PR with a comment, then removes the
-finalizer. If the SCM call keeps failing, it retries with backoff for about 5 minutes, then
+finalizer. A step deleted with its Graph while its Bundle is still `Promoting` keeps the PR open:
+the controller recreates the Graph, and the new step reuses the PR. If the SCM call keeps failing, it retries with backoff for about 5 minutes, then
 removes the finalizer anyway and emits a `ClosePRFailed` Warning Event on the step: close that PR
 by hand, since merging it would change the environment with no PromotionStep tracking it.
 
