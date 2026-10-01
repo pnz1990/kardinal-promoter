@@ -24,6 +24,9 @@ import (
 )
 
 // Environment variables hack/e2e/components/ui.sh writes for the ui suite.
+// The releases other than the main one are standbys: they serve their UI and
+// webhook ports and reconcile nothing, so the main release reconciles their
+// namespaces.
 const (
 	// EnvUINodePortURL is the main release's UI port on a NodePort Service:
 	// reached from off the pod, so not a loopback peer.
