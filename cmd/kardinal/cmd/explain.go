@@ -19,9 +19,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -98,13 +101,17 @@ Use --color to force ANSI color output (auto-detected when writing to a TTY).`,
 	return cmd
 }
 
-// explainWatch re-renders explain every interval until ctx is done. Errors
-// are printed and polling continues. The screen is cleared only on a TTY.
+// explainWatch re-renders explain every interval until ctx is done or the
+// process gets SIGINT (Ctrl-C) or SIGTERM, then returns nil, as the other
+// --watch commands do. Errors are printed and polling continues. The screen is
+// cleared only on a TTY.
 func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 	ns, pipeline, envFilter string, forceColor bool, interval time.Duration) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	tty := isTerminal(w)
 	for {
 		if tty {
