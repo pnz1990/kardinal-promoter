@@ -201,10 +201,13 @@ Flagger keeps the phase of its last analysis until an analysis tick notices that
 
 - Until the Canary's target Deployment (`spec.targetRef`) runs the Bundle images, the check waits (`Canary <ns>/<name>: target Deployment <ns>/<name> not updated yet: ...`).
 - `Succeeded` with a primary on other images is from an earlier release: Wait.
-- `Failed` that Flagger set before this health check started is from an earlier release: Wait. A `Failed` Canary whose primary runs the Bundle images (the Bundle is the revision Flagger last promoted) is checked like `Succeeded`.
+- `Failed` counts only when Flagger set it after the target ran the Bundle images; an earlier `Failed` is from an earlier release: Wait. The previous release's analysis can fail after this health check started but before the GitOps tool applied the Bundle, so the start of the health check is not enough. The first check that finds the target on the Bundle images records the time in the PromotionStep's `status.targetUpdatedAt`; that check, and every later one, waits on a `Failed` set at or before it (in the same second counts as before). Flagger notices a new target before it rolls back, so a `Failed` set later is about the Bundle.
+- A `Failed` Canary whose primary runs the Bundle images (the Bundle is the revision Flagger last promoted) is checked like `Succeeded`.
 - When the images cannot be compared (a Bundle without images, a target that is not a Deployment), `Succeeded` and `Failed` count only when Flagger set them at or after the start of this health check.
 
 When Flagger set the phase is the `lastUpdateTime` of the Canary's `Promoted` condition, whose reason is the phase. `status.lastTransitionTime` is not used for this when that condition is there: Flagger rewrites it at every analysis tick of a `Failed` Canary.
+
+`status.targetUpdatedAt` is when kardinal first saw the target updated, not when the GitOps tool updated it. Checks run every 10 seconds, and an analysis takes at least one Flagger interval, so kardinal sees the update first. If it does not (the controller was down from before the GitOps tool applied the Bundle until after Flagger failed it), the `Failed` looks like the previous release's: the step waits and fails at `health.timeout` instead of at once.
 
 | Canary phase | Adapter behavior |
 |---|---|

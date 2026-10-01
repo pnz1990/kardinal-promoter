@@ -318,6 +318,16 @@ spec:
                   - state
                   type: object
                 type: array
+              targetUpdatedAt:
+                description: |-
+                  TargetUpdatedAt is when a health check of this step first found the
+                  workload's target running the Bundle images (health.type flagger: the
+                  Canary's target Deployment). Set once. The flagger check counts a
+                  Failed phase only when Flagger set it after this time: the previous
+                  release can fail after the health check started but before the GitOps
+                  tool applied the Bundle.
+                format: date-time
+                type: string
               waitForMergeExpiry:
                 description: |-
                   WaitForMergeExpiry is the deadline for the PR merge, computed as

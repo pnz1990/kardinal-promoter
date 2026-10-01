@@ -61,6 +61,11 @@ type HealthStatus struct {
 	Reason string
 	// CheckedAt records when the check was performed.
 	CheckedAt time.Time
+	// TargetUpdated is true when the check found the workload's target running
+	// the Bundle images (ExpectedImages). Only the flagger adapter sets it; the
+	// reconciler records the first such check in
+	// status.targetUpdatedAt and passes it back as CheckOptions.TargetUpdatedAt.
+	TargetUpdated bool
 }
 
 func healthy(reason string) HealthStatus {
@@ -121,6 +126,12 @@ type CheckOptions struct {
 	// adapter ignores a Succeeded or Failed phase that Flagger set before it
 	// when it cannot compare images. Zero skips that check.
 	Since time.Time
+
+	// TargetUpdatedAt is when a check of this promotion first found the
+	// Canary target running the Bundle images (HealthStatus.TargetUpdated);
+	// zero when no check has yet. With Since set, the flagger adapter counts
+	// a Failed phase only when Flagger set it after this time.
+	TargetUpdatedAt time.Time
 }
 
 // ResourceConfig is the health check configuration for a Kubernetes Deployment.
@@ -825,7 +836,11 @@ var flaggerGVR = schema.GroupVersionResource{
 //     an earlier release: Healthy when the primary runs the Bundle images (the
 //     Bundle is the revision Flagger last promoted, which it does not analyze
 //     again), Progressing when Flagger set the phase before Since (see
-//     phaseSetAt).
+//     phaseSetAt) or, with Since set, not after TargetUpdatedAt. The previous
+//     release can fail after this health check started but before the GitOps
+//     tool applied the Bundle; Flagger notices a new target before it rolls
+//     back, so a Failed set once the target ran the Bundle is about the
+//     Bundle. Until a check records TargetUpdatedAt, a Failed is Progressing.
 //  4. When the images cannot be compared (a Bundle without images, a Bundle
 //     image renamed by kustomize, a target that is not a Deployment),
 //     Succeeded and Failed count only when Flagger set the phase at or after
@@ -876,9 +891,19 @@ func (a *FlaggerAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSt
 	if rev.status != nil {
 		return *rev.status, nil
 	}
+	st := flaggerPhaseHealth(canary, phase, reason, rev, opts)
+	st.TargetUpdated = rev.targetUpdated
+	return st, nil
+}
 
-	// stale explains why a Succeeded or Failed phase predates this health check.
-	stale := ""
+// flaggerPhaseHealth is steps 2 to 5 of FlaggerAdapter.Check, for a Canary
+// whose target is not known to run other images than the Bundle's.
+func flaggerPhaseHealth(canary *unstructured.Unstructured, phase, reason string,
+	rev canaryRevision, opts CheckOptions) HealthStatus {
+	conditions, _, _ := unstructured.NestedSlice(canary.Object, "status", "conditions")
+	// stale explains why a Succeeded or Failed phase predates this health
+	// check; staleFailed why a Failed phase predates the Bundle on the target.
+	stale, staleFailed := "", ""
 	if !opts.Since.IsZero() {
 		since := opts.Since.Truncate(time.Second)
 		lt, field := phaseSetAt(canary, phase, findCondition(conditions, "Promoted"))
@@ -889,6 +914,13 @@ func (a *FlaggerAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSt
 		case at.Before(since):
 			stale = fmt.Sprintf("its %s %s is before this health check started (%s)",
 				field, at.UTC().Format(time.RFC3339), since.UTC().Format(time.RFC3339))
+		case rev.targetUpdated && opts.TargetUpdatedAt.IsZero():
+			staleFailed = "this check is the first to find the target running the Bundle images"
+		case rev.targetUpdated && !at.After(opts.TargetUpdatedAt.Truncate(time.Second)):
+			// Both times have whole seconds: one in the same second as the
+			// target update may be the previous release's.
+			staleFailed = fmt.Sprintf("its %s %s is not after the health check first found the target running the Bundle images (%s)",
+				field, at.UTC().Format(time.RFC3339), opts.TargetUpdatedAt.UTC().Format(time.RFC3339))
 		}
 	}
 	const wait = "waiting for Flagger to analyze the new revision"
@@ -897,28 +929,31 @@ func (a *FlaggerAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSt
 	case "Succeeded":
 		if rev.primary != nil {
 			if !rev.primaryRunsBundle {
-				return progressing(fmt.Sprintf("Canary phase: Succeeded is for an earlier release: %s; %s", rev.primaryNote, wait)), nil
+				return progressing(fmt.Sprintf("Canary phase: Succeeded is for an earlier release: %s; %s", rev.primaryNote, wait))
 			}
-			return rev.primaryHealth("Canary phase: Succeeded"), nil
+			return rev.primaryHealth("Canary phase: Succeeded")
 		}
 		if stale != "" {
-			return progressing(fmt.Sprintf("Canary phase: Succeeded is for an earlier release: %s; %s", stale, wait)), nil
+			return progressing(fmt.Sprintf("Canary phase: Succeeded is for an earlier release: %s; %s", stale, wait))
 		}
 		if rev.note != "" {
-			return healthy("Canary phase: Succeeded " + rev.note), nil
+			return healthy("Canary phase: Succeeded " + rev.note)
 		}
-		return healthy("Canary phase: Succeeded"), nil
+		return healthy("Canary phase: Succeeded")
 	case "Failed":
 		if rev.primary != nil && rev.primaryRunsBundle {
-			return rev.primaryHealth("Canary phase: Failed is for an earlier release: the Bundle is the revision Flagger last promoted"), nil
+			return rev.primaryHealth("Canary phase: Failed is for an earlier release: the Bundle is the revision Flagger last promoted")
+		}
+		if stale == "" {
+			stale = staleFailed
 		}
 		if stale != "" {
-			return progressing(fmt.Sprintf("Canary phase: Failed is for an earlier release: %s; %s", stale, wait)), nil
+			return progressing(fmt.Sprintf("Canary phase: Failed is for an earlier release: %s; %s", stale, wait))
 		}
 		// Flagger rolled the canary back; waiting will not make it succeed.
-		return terminal(reason), nil
+		return terminal(reason)
 	default: // Initializing, Initialized, Waiting, Progressing, WaitingPromotion, Promoting, Finalising
-		return progressing(reason), nil
+		return progressing(reason)
 	}
 }
 
@@ -954,6 +989,9 @@ type canaryRevision struct {
 	primaryNote       string
 	// note says why the images could not be compared.
 	note string
+	// targetUpdated reports whether the images of the target were compared
+	// with the Bundle's and the target runs them.
+	targetUpdated bool
 }
 
 // primaryHealth is the health of a primary Deployment that runs the Bundle
@@ -1008,7 +1046,8 @@ func (a *FlaggerAdapter) canaryRevision(ctx context.Context, canary *unstructure
 	primary, err := getDeployment(ctx, a.dynamic, ns, name+"-primary")
 	if apierrors.IsNotFound(err) {
 		// Flagger has not initialized the Canary yet.
-		return canaryRevision{note: fmt.Sprintf("(image not verified: no primary Deployment %s/%s-primary)", ns, name)}, nil
+		return canaryRevision{targetUpdated: true,
+			note: fmt.Sprintf("(image not verified: no primary Deployment %s/%s-primary)", ns, name)}, nil
 	}
 	if err != nil {
 		return canaryRevision{}, err
@@ -1018,7 +1057,7 @@ func (a *FlaggerAdapter) canaryRevision(ctx context.Context, canary *unstructure
 		images = append(images, c.Image)
 	}
 	ok, note = checkImages(expected, images)
-	rev := canaryRevision{primary: primary, primaryRunsBundle: ok && note == ""}
+	rev := canaryRevision{targetUpdated: true, primary: primary, primaryRunsBundle: ok && note == ""}
 	if !ok {
 		rev.primaryNote = fmt.Sprintf("primary Deployment %s/%s %s", ns, primary.Name, note)
 	} else if note != "" {
