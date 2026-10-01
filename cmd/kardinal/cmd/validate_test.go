@@ -196,11 +196,19 @@ func TestValidate_Documents(t *testing.T) {
 			wantOut: []string{"✓ f.yaml is valid"},
 		},
 		{
-			name: "long gate instance and freeze gate names are allowed",
+			name: "a long generated gate is allowed",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: " + strings.Repeat("g", 60) +
+				"--prod-abc\nspec:\n  expression: \"true\"\n  generated: true\n",
+			wantOut: []string{"✓ f.yaml is valid"},
+		},
+		{
+			// The CRD rule looks only at spec.generated, not at the name's shape.
+			name: "a long instance-shaped or freeze- name without spec.generated is rejected",
 			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: " + strings.Repeat("g", 60) +
 				"--prod-abc\nspec:\n  expression: \"true\"\n---\napiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\n" +
 				"metadata:\n  name: freeze-" + strings.Repeat("p", 60) + "\nspec:\n  expression: \"false\"\n",
-			wantOut: []string{"✓ f.yaml is valid"},
+			wantOut: []string{"✗ f.yaml is invalid:", "has 70 characters", "has 67 characters"},
+			wantErr: true,
 		},
 		{
 			name: "git.provider warns",

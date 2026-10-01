@@ -253,7 +253,7 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 	if gate.Spec.Selector != nil { //nolint:staticcheck // SA1019: read the deprecated field to reject it
 		errs = append(errs, "spec.selector is not implemented; use the kardinal.io/applies-to label")
 	}
-	if !policyGateNameAllowed(gate.Name) {
+	if !policyGateNameAllowed(&gate) {
 		errs = append(errs, fmt.Sprintf("metadata.name %q has %d characters: PolicyGate names are at most %d "+
 			"characters, because the name is copied into the kardinal.io/gate-template label of every gate instance",
 			gate.Name, len(gate.Name), maxPolicyGateNameLength))
@@ -284,10 +284,10 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 const maxPolicyGateNameLength = 63
 
 // policyGateNameAllowed mirrors the PolicyGate CRD rule: a name is at most 63
-// characters, except gate instances (their names contain "--") and pause
-// freeze gates ("freeze-" prefix), which the controller creates.
-func policyGateNameAllowed(name string) bool {
-	return len(name) <= maxPolicyGateNameLength || strings.Contains(name, "--") || strings.HasPrefix(name, "freeze-")
+// characters unless spec.generated is set, as kardinal sets it on the gate
+// instances and pause freeze gates it creates.
+func policyGateNameAllowed(gate *kardinalv1alpha1.PolicyGate) bool {
+	return len(gate.Name) <= maxPolicyGateNameLength || gate.Spec.Generated
 }
 
 // printValidateWarnings prints each warning under a file's result line.
