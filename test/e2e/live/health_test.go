@@ -8,6 +8,8 @@ package live
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,10 +18,14 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -923,4 +929,97 @@ func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
 	assert.Equal(t, argoVerified, ps.Status.Message)
 	assert.Equal(t, fixtures.V2, valuesKey(t, e, app, "image.tag"))
 	assert.Equal(t, imageV2, e.DeploymentImage(t, ns, fixtures.Workload("test")))
+}
+
+// appSetGVR is Argo CD's ApplicationSet.
+var appSetGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"}
+
+// TestHealth_MultiTenantExample runs examples/multi-tenant as a platform team
+// would: a platform repo with the example's team-pipeline chart and one
+// folder per team, and the example's root ApplicationSet pointed at it. Argo
+// CD renders each team's Pipeline into the team's namespace, with the team's
+// GitOps repo and git Secret, and each team's Bundle promotes through it. The
+// chart sets no health, so the default resource health reads the Deployment
+// named after the Pipeline in the namespace named after the environment: each
+// team names its app podinfo-<namespace> and its one environment after its
+// namespace.
+//
+// Covers EX-TENANT-01.
+func TestHealth_MultiTenantExample(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	example := filepath.Join("..", "..", "..", "examples", "multi-tenant")
+	const dir = "examples/multi-tenant/"
+	files := map[string][]byte{}
+	for _, f := range []string{"chart/Chart.yaml", "chart/values.yaml", "chart/templates/pipeline.yaml"} {
+		raw, err := os.ReadFile(filepath.Join(example, f))
+		require.NoError(t, err)
+		files[dir+f] = raw
+	}
+	type team struct {
+		ns   string
+		repo gitserver.Repo
+	}
+	var teams []team
+	for range 2 {
+		ns := e.Namespace(t)
+		repo := e.Repo(t, ns, fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: []string{ns}}))
+		e.ArgoApp(t, ns, repo, fixtures.Path(ns), ns)
+		files[dir+"teams/"+ns+"/pipeline-values.yaml"] = []byte(fmt.Sprintf(
+			"appName: %s\ngitRepo: %s\ngitBranch: %s\ngitSecretName: %s\nenvironments:\n  - name: %s\n",
+			fixtures.Workload(ns), repo.CloneURL, repo.Branch, framework.GitSecretName, ns))
+		teams = append(teams, team{ns: ns, repo: repo})
+	}
+	platform := e.Repo(t, teams[0].ns+"-platform", files)
+
+	raw, err := os.ReadFile(filepath.Join(example, "root-appset.yaml"))
+	require.NoError(t, err)
+	name := teams[0].ns + "-teams"
+	set := strings.NewReplacer(
+		"https://github.com/pnz1990/kardinal-promoter", platform.CloneURL,
+		"revision: main", "revision: "+platform.Branch,
+		"name: team-pipelines", "name: "+name,
+	).Replace(string(raw))
+	var obj unstructured.Unstructured
+	require.NoError(t, yaml.Unmarshal([]byte(set), &obj.Object))
+	obj.SetLabels(map[string]string{"kardinal.io/e2e": "true"})
+	ctx := context.Background()
+	appSets := e.Dynamic.Resource(appSetGVR).Namespace(framework.ArgoCDNamespace)
+	_, err = appSets.Create(ctx, &obj, metav1.CreateOptions{})
+	require.NoError(t, err, "create ApplicationSet %s", name)
+	t.Cleanup(func() {
+		if err := appSets.Delete(context.Background(), name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			t.Errorf("delete ApplicationSet %s: %v", name, err)
+		}
+	})
+
+	bundles := map[string]string{}
+	for _, tm := range teams {
+		e.WaitArgoApp(t, tm.ns+"-pipeline", syncTimeout)
+		pipeline := fixtures.Workload(tm.ns)
+		var p v1alpha1.Pipeline
+		require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: tm.ns, Name: pipeline}, &p))
+		assert.Equal(t, map[string]string{"kardinal.io/managed-by": "appset", "kardinal.io/team": tm.ns},
+			map[string]string{"kardinal.io/managed-by": p.Labels["kardinal.io/managed-by"], "kardinal.io/team": p.Labels["kardinal.io/team"]})
+		assert.Equal(t, v1alpha1.PipelineGit{URL: tm.repo.CloneURL, Branch: tm.repo.Branch, Layout: "directory",
+			SecretRef: &v1alpha1.SecretRef{Name: framework.GitSecretName}}, p.Spec.Git, "the team's repo and Secret")
+		assert.Equal(t, []string{framework.PolicyNamespace, tm.ns}, p.Spec.PolicyNamespaces)
+		assert.Equal(t, 10, p.Spec.HistoryLimit)
+		require.Len(t, p.Spec.Environments, 1)
+		env := p.Spec.Environments[0]
+		assert.Equal(t, []string{tm.ns, fixtures.Path(tm.ns), "auto"}, []string{env.Name, env.Path, env.Approval})
+
+		e.WaitArgoApp(t, tm.ns, syncTimeout)
+		e.WaitDeploymentImage(t, tm.ns, pipeline, fixtures.Image+":"+fixtures.V1, syncTimeout)
+		bundles[tm.ns] = e.CreateBundle(t, tm.ns, pipeline, "--image", imageV2)
+	}
+	for _, tm := range teams {
+		pipeline := fixtures.Workload(tm.ns)
+		ps := e.WaitStepState(t, tm.ns, pipeline, bundles[tm.ns], tm.ns, "Verified", promoteTimeout)
+		assert.Equal(t, "health check passed via resource: Available=True: Deployment has minimum availability., "+
+			"1/1 replicas updated and available", ps.Status.Message)
+		e.WaitBundlePhase(t, tm.ns, bundles[tm.ns], "Verified", time.Minute)
+		assert.Contains(t, e.ReadFile(t, tm.repo, tm.repo.Branch, fixtures.Path(tm.ns)+"/kustomization.yaml"), "newTag: "+fixtures.V2)
+		e.WaitDeploymentImage(t, tm.ns, pipeline, imageV2, syncTimeout)
+	}
 }
