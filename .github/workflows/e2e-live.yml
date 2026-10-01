@@ -75,6 +75,7 @@ jobs:
           - {suite: gitea, k8s: '1.37'}
           - {suite: delivery, k8s: '1.37'}
           - {suite: ui, k8s: '1.37'}
+          - {suite: flux, k8s: '1.37'}
     env:
       SUITE: ${{ matrix.suite }}
       KIND_K8S: ${{ matrix.k8s }}
