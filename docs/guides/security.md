@@ -273,6 +273,7 @@ ISO 27001, and FedRAMP audit trail requirements.
 | `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
+| `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
 
 ### Fields on every event
 

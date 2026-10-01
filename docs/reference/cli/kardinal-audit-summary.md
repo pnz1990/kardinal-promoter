@@ -10,7 +10,9 @@ Includes: promotion counts, success rate, average duration, gate block rate, and
 Rollbacks counts the rollback Bundles created in the window, from kardinal
 rollback, the UI, a RollbackPolicy or onHealthFailure=rollback.
 The success rate is succeeded / (succeeded + failed + superseded) among the
-promotions that finished inside the window.
+promotions that finished inside the window. A rollback Bundle that reaches
+Verified in an environment writes PromotionSucceeded, counted as a succeeded
+promotion, and RollbackSucceeded, which is not counted again.
 
 ```
 kardinal audit summary [flags]

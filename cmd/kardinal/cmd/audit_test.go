@@ -119,6 +119,12 @@ func TestAuditSummary_CountsRollbackBundles(t *testing.T) {
 	labelOnly := rollback("kardinal-test-app-rollback-label", "kardinal-test-app", "kardinal-test-app-x", time.Hour)
 	labelOnly.Spec.Provenance = nil
 	started := event("started", "kardinal-test-app", "kardinal-test-app-9smn4", "PromotionStarted")
+	rb := "kardinal-test-app-4cqnl-rollback-policy"
+	succeededRollback := []sigs_client.Object{
+		rollback(rb, "kardinal-test-app", "kardinal-test-app-4cqnl", 30*time.Minute),
+		event("rb-started", "kardinal-test-app", rb, "PromotionStarted"),
+		event("rb-succeeded", "kardinal-test-app", rb, "PromotionSucceeded"),
+		event("rb-rollback-succeeded", "kardinal-test-app", rb, "RollbackSucceeded")}
 	cases := []struct {
 		name     string
 		pipeline string
@@ -141,6 +147,12 @@ func TestAuditSummary_CountsRollbackBundles(t *testing.T) {
 			rollback("kardinal-test-app-rollback-old", "kardinal-test-app", "kardinal-test-app-4cqnl", 48*time.Hour)}},
 		{name: "rollback of another pipeline", pipeline: "kardinal-test-app", want: "Rollbacks:    0 triggered\n",
 			objs: []sigs_client.Object{started, rollback("other-rollback-x", "other", "other-1", time.Hour)}},
+		// B50: a rollback Bundle Verified in prod writes PromotionSucceeded
+		// and RollbackSucceeded; the second counts neither as a promotion
+		// nor as another rollback.
+		{name: "succeeded rollback: one promotion", want: "Promotions:   1 started, 1 succeeded, 0 failed, 0 superseded\n",
+			objs: succeededRollback},
+		{name: "succeeded rollback: one rollback", want: "Rollbacks:    1 triggered\n", objs: succeededRollback},
 		{name: "not a rollback", want: "Rollbacks:    0 triggered\n", objs: []sigs_client.Object{started,
 			&v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-test-app-9smn4", Namespace: "default",
 				CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
