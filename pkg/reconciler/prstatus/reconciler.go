@@ -20,7 +20,9 @@
 //     next to the PromotionStep it belongs to. Once the open-pr step has
 //     opened the PR, the PromotionStep reconciler fills in spec.prURL,
 //     spec.prNumber and spec.repo (patchPRStatusSpec), and retries that until
-//     it lands.
+//     it lands. A placeholder is not requeued: there is no PR to poll, and the
+//     spec patch is an update event that this controller's watch (For, with no
+//     predicates) turns into a reconcile.
 //   - This reconciler polls the SCM provider (GetPRStatus, GetPRReviewStatus)
 //     and writes status.merged, status.open, status.approved,
 //     status.approvalCount and status.lastCheckedAt. When the PR is merged it
@@ -148,16 +150,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
-	if r.SCM == nil {
-		log.Warn().Msg("no SCM configured, cannot poll PR status")
-		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
-	}
-
 	// Placeholder guard: PRNumber=0 means the open-pr step has not yet run.
 	// The Graph creates a PRStatus Watch node as a placeholder before the PR exists.
 	// Do not call SCM with prNumber=0 — that would cause a 404 from GitHub (#276).
+	// Do not requeue either: only the spec patch that sets the PR number can
+	// change this, and that patch triggers a reconcile through the watch. A
+	// timed requeue polled every placeholder of every Bundle every 30 seconds.
 	if prs.Spec.PRNumber == 0 {
-		log.Debug().Msg("PRStatus placeholder (prNumber=0), waiting for open-pr step")
+		log.Debug().Msg("PRStatus placeholder (prNumber=0), waiting for the PromotionStep to set the PR")
+		return ctrl.Result{}, nil
+	}
+
+	if r.SCM == nil {
+		log.Warn().Msg("no SCM configured, cannot poll PR status")
 		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 	}
 
