@@ -113,14 +113,17 @@ Install-mode checks. Rendered from deployment.yaml so a bad combination fails
 {{- end -}}
 {{- /* Each TLS path must be in a Secret (secret, projected or CSI volume)
 mounted with controller.extraVolumes and extraVolumeMounts: in a directory
-mount, or the file a subPath mount puts there. Else the controller cannot
-open it and crash-loops. */ -}}
+mount, or the file a subPath (or subPathExpr) mount puts there. Else the
+controller cannot open it and crash-loops. Certificates that come another way
+(a hostPath, the image, an injected volume) are set with controller.extraEnv
+instead, which this check does not see. */ -}}
 {{- if and $cert $key -}}
 {{- range $value, $path := dict "tlsCertFile" $cert "tlsKeyFile" $key -}}
 {{- $mount := "" -}}
 {{- range $.Values.controller.extraVolumeMounts -}}
 {{- $at := default "" .mountPath -}}
-{{- if or (and .subPath (eq $path $at)) (and (not .subPath) (hasPrefix (printf "%s/" (trimSuffix "/" $at)) $path)) -}}
+{{- $file := or .subPath .subPathExpr -}}
+{{- if or (and $file (eq $path $at)) (and (not $file) (hasPrefix (printf "%s/" (trimSuffix "/" $at)) $path)) -}}
 {{- $mount = default "" .name -}}
 {{- end -}}
 {{- end -}}
@@ -132,6 +135,9 @@ open it and crash-loops. */ -}}
 {{- if eq (default "" .name) $mount -}}
 {{- $volume = . -}}
 {{- end -}}
+{{- end -}}
+{{- if not $volume -}}
+{{- fail (printf "controller.%s (%s) is mounted from volume %q, which controller.extraVolumes does not define: add the certificate Secret there (docs/guides/security.md, TLS Configuration)." $value $path $mount) -}}
 {{- end -}}
 {{- if not (or $volume.secret $volume.projected $volume.csi) -}}
 {{- fail (printf "controller.%s (%s) is in volume %q, which is not a secret, projected or csi volume in controller.extraVolumes: mount the certificate Secret there (docs/guides/security.md, TLS Configuration)." $value $path $mount) -}}

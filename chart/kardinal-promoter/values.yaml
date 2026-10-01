@@ -65,6 +65,8 @@ controller:
   # Typically used with cert-manager: mount the certificate Secret with
   # extraVolumes/extraVolumeMounts, then set the paths to the mounted files.
   # A path that is not in a secret, projected or csi volume mounted that way fails the install.
+  # For certificates that reach the container another way (hostPath, the image, an injected
+  # volume), set KARDINAL_TLS_CERT_FILE and KARDINAL_TLS_KEY_FILE with extraEnv instead.
   # See docs/guides/security.md for the recommended cert-manager setup.
   #
   # -- Path to the TLS certificate file (PEM). Set together with tlsKeyFile to enable TLS.

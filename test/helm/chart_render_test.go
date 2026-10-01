@@ -931,6 +931,10 @@ func TestChartTLSFilesInASecret(t *testing.T) {
 		}
 		return args
 	}
+	mountExpr := func(i int, at, subPathExpr string) []string {
+		m := fmt.Sprintf("controller.extraVolumeMounts[%d].", i)
+		return []string{"--set", m + "name=tls", "--set", m + "mountPath=" + at, "--set", m + "subPathExpr=" + subPathExpr}
+	}
 	join := func(parts ...[]string) []string {
 		var out []string
 		for _, p := range parts {
@@ -951,17 +955,18 @@ func TestChartTLSFilesInASecret(t *testing.T) {
 		"sibling directory":  {join(tls("/tlsx/tls.crt", "/tlsx/tls.key"), secret, mount(0, "/tls", "")), notInSecret("tlsCertFile", "/tlsx/tls.crt")},
 		"path is the mount":  {join(tls("/tls", "/tls/tls.key"), secret, mount(0, "/tls", "")), notInSecret("tlsCertFile", "/tls")},
 		"configMap volume":   {join(tls("/tls/tls.crt", "/tls/tls.key"), volume("configMap.name=tls"), mount(0, "/tls", "")), `controller.tlsCertFile (/tls/tls.crt) is in volume "tls", which is not a secret, projected or csi volume`},
-		"mount of no volume": {join(tls("/tls/tls.crt", "/tls/tls.key"), mount(0, "/tls", "")), `controller.tlsCertFile (/tls/tls.crt) is in volume "tls", which is not a secret`},
+		"mount of no volume": {join(tls("/tls/tls.crt", "/tls/tls.key"), mount(0, "/tls", "")), `controller.tlsCertFile (/tls/tls.crt) is mounted from volume "tls", which controller.extraVolumes does not define`},
 	} {
 		out, err := helmTemplate(t, "kardinal-promoter", c.args...)
 		require.Error(t, err, "%s must fail:\n%s", name, out)
 		assert.Contains(t, out, c.want, name)
 	}
 	for name, args := range map[string][]string{
-		"secret directory": join(tls("/tls/tls.crt", "/tls/tls.key"), secret, mount(0, "/tls/", "")),
-		"subPath files":    join(tls("/etc/c.crt", "/etc/c.key"), secret, mount(0, "/etc/c.crt", "tls.crt"), mount(1, "/etc/c.key", "tls.key")),
-		"projected":        join(tls("/tls/tls.crt", "/tls/tls.key"), volume("projected.sources[0].secret.name=kardinal-tls"), mount(0, "/tls", "")),
-		"csi":              join(tls("/tls/tls.crt", "/tls/tls.key"), volume("csi.driver=csi.cert-manager.io"), mount(0, "/tls", "")),
+		"secret directory":  join(tls("/tls/tls.crt", "/tls/tls.key"), secret, mount(0, "/tls/", "")),
+		"subPath files":     join(tls("/etc/c.crt", "/etc/c.key"), secret, mount(0, "/etc/c.crt", "tls.crt"), mount(1, "/etc/c.key", "tls.key")),
+		"subPathExpr files": join(tls("/etc/c.crt", "/etc/c.key"), secret, mountExpr(0, "/etc/c.crt", "$(POD_NAME)/tls.crt"), mountExpr(1, "/etc/c.key", "$(POD_NAME)/tls.key")),
+		"projected":         join(tls("/tls/tls.crt", "/tls/tls.key"), volume("projected.sources[0].secret.name=kardinal-tls"), mount(0, "/tls", "")),
+		"csi":               join(tls("/tls/tls.crt", "/tls/tls.key"), volume("csi.driver=csi.cert-manager.io"), mount(0, "/tls", "")),
 	} {
 		env := envByName(controllerContainer(t, render(t, "kardinal-promoter", args...)))
 		assert.NotEmpty(t, env["KARDINAL_TLS_CERT_FILE"].Value, name)

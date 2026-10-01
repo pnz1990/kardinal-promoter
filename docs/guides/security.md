@@ -724,6 +724,21 @@ The paths must point at a mounted certificate. The chart refuses a path that is 
 there). If the files still cannot be read, for example a wrong file name in the Secret, the
 controller exits at startup instead of serving plain HTTP.
 
+Certificates that reach the container another way (a `hostPath` volume, files in a custom
+image, or a volume a mutating webhook injects, such as the Vault Agent Injector's
+`/vault/secrets`) do not pass that check. Set the paths with `controller.extraEnv` instead:
+
+```yaml
+controller:
+  extraEnv:
+    - name: KARDINAL_TLS_CERT_FILE
+      value: /vault/secrets/tls.crt
+    - name: KARDINAL_TLS_KEY_FILE
+      value: /vault/secrets/tls.key
+```
+
+The chart does not check those paths; the controller exits at startup if it cannot open them.
+
 ### Self-signed certificates (development only)
 
 Generate a self-signed cert for local testing:
