@@ -28,10 +28,11 @@ import (
 // PromotionStep reconciler deletes the head branch of a PR it closed, so the
 // closed PR cannot be merged later: GitHub's merge API merges a closed,
 // unmerged PR without reopening it, but not one whose head branch is gone.
-// It keeps the branch of a step deleted on its own, which kro applies again
-// and which pushes the branch again at once: Forgejo and Gitea close the open
-// PRs of a deleted branch from a queue, after DeleteBranch returns, and closed
-// the new step's PR too.
+// It also deletes the branch of a step that ended before it opened a PR. It
+// keeps the branch of a step deleted on its own when kro applies the step
+// again and the new step pushes the branch again at once: Forgejo and Gitea
+// close the open PRs of a deleted branch from a queue, after DeleteBranch
+// returns, and closed the new step's PR too.
 //
 // DeleteBranch returns nil when the branch does not exist, so a retry after a
 // delete whose response was lost succeeds.

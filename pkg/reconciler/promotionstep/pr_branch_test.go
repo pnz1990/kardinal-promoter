@@ -141,6 +141,124 @@ func TestClosedPRBranchIsDeleted(t *testing.T) {
 	}
 }
 
+// TestBranchWithoutPRIsDeleted covers the B79 review: a step that opens a PR
+// but ends before it opened one has its head branch deleted. git-push may have
+// pushed it, or a deleted step may have kept it for this one, and nothing else
+// deletes it. Only a step whose sequence has open-pr (recorded, or, not
+// started yet, its environment's) deletes it, and only a branch under
+// kardinal/. With the Pipeline gone nothing names the repository, so the
+// branch is left. A failed delete is retried, as for a closed PR.
+func TestBranchWithoutPRIsDeleted(t *testing.T) {
+	const branch = "test/repo:kardinal/b1/prod"
+	type againWant struct {
+		state   string
+		deleted []string
+	}
+	tests := []struct {
+		name        string
+		env         string // "prod" (pr-review) by default
+		started     bool   // the step recorded its sequence (asPromoting)
+		outputs     map[string]string
+		prStatus    *v1alpha1.PRStatus // the step's PRStatus (nil: none)
+		noPipeline  bool
+		retryCount  int
+		scm         mockSCM
+		wantState   string
+		wantMsg     string
+		wantDeleted []string
+		again       *againWant // reconciles once more and checks the totals after it
+	}{
+		{name: "a step superseded before its open-pr ran loses its branch", started: true,
+			wantState: "Failed", wantMsg: "was superseded", wantDeleted: []string{branch}},
+		{name: "a step superseded before it started loses its branch",
+			wantState: "Failed", wantMsg: "before this step started", wantDeleted: []string{branch}},
+		{name: "a PRStatus not filled in yet does not stop the delete", started: true,
+			prStatus: openPRStatus("prs", "", 0), wantState: "Failed", wantDeleted: []string{branch}},
+		{name: "the branch git-push reported is deleted", started: true,
+			outputs:   map[string]string{"branch": "kardinal/b1/prod"},
+			wantState: "Failed", wantDeleted: []string{branch}},
+		{name: "a branch kardinal does not own is not deleted", started: true,
+			outputs: map[string]string{"branch": "main"}, wantState: "Failed"},
+		{name: "an auto step has no branch to delete", env: "test", started: true, wantState: "Failed"},
+		{name: "an auto step that did not start has no branch to delete", env: "test", wantState: "Failed"},
+		{name: "with its Pipeline gone the branch is left", started: true, noPipeline: true, wantState: "Failed"},
+		{name: "a failed delete is retried", started: true,
+			scm:         mockSCM{deleteErrs: []error{errors.New("HTTP 502")}},
+			wantState:   "Promoting",
+			wantMsg:     "the step opened no PR, but deleting its branch kardinal/b1/prod failed: HTTP 502",
+			wantDeleted: []string{branch},
+			again:       &againWant{"Failed", []string{branch, branch}}},
+		{name: "a delete that keeps failing says to delete the branch by hand", started: true, retryCount: 5,
+			scm:       mockSCM{deleteErrs: []error{errors.New("HTTP 403")}},
+			wantState: "Failed", wantMsg: "— delete branch kardinal/b1/prod by hand", wantDeleted: []string{branch}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := tt.env
+			if env == "" {
+				env = "prod"
+			}
+			pipeline := makePipeline("p")
+			ps := labelled(makeStep("step", "p", "b1", env))
+			if tt.started {
+				ps = asPromoting(ps, pipeline)
+			}
+			ps.Status.RetryCount = tt.retryCount
+			ps.Status.Outputs = tt.outputs
+			bundle := makeBundle("b1", "p")
+			bundle.Status.Phase = "Superseded"
+			objs := []client.Object{ps, bundle}
+			if tt.prStatus != nil {
+				ps.Spec.PRStatusRef = tt.prStatus.Name
+				objs = append(objs, tt.prStatus)
+			}
+			if !tt.noPipeline {
+				objs = append(objs, pipeline)
+			}
+			c := newClient(t, objs...)
+			m := tt.scm
+			r := &promotionstep.Reconciler{Client: c, SCM: &m, GitClient: &mockGit{}}
+
+			_, err := r.Reconcile(context.Background(), reqFor("step"))
+			require.NoError(t, err)
+			got := getStep(t, c, "step")
+			assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
+			assert.Contains(t, got.Status.Message, tt.wantMsg)
+			assert.Zero(t, m.getPRCalled, "there is no PR to ask about")
+			assert.Empty(t, m.closed)
+			assert.Empty(t, m.comments)
+			assert.Equal(t, tt.wantDeleted, m.deleted)
+			if tt.again == nil {
+				return
+			}
+			_, err = r.Reconcile(context.Background(), reqFor("step"))
+			require.NoError(t, err)
+			got = getStep(t, c, "step")
+			assert.Equal(t, tt.again.state, got.Status.State, got.Status.Message)
+			assert.Equal(t, tt.again.deleted, m.deleted)
+		})
+	}
+
+	// handleStepError: the step failed for good before open-pr ran.
+	t.Run("a step that failed for good before its open-pr ran loses its branch", func(t *testing.T) {
+		ps := asPromoting(labelled(makeStep("step", "p", "b1", "prod")), makePipeline("p"))
+		ps.Status.RetryCount = 5
+		c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+		m := &mockSCM{}
+		r := &promotionstep.Reconciler{Client: c, SCM: m, Recorder: events.NewFakeRecorder(20),
+			GitClient: &mockGit{cloneErr: errors.New("connection reset by peer")},
+			WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+
+		_, err := r.Reconcile(context.Background(), reqFor("step"))
+		require.NoError(t, err)
+		got := getStep(t, c, "step")
+		assert.Equal(t, "Failed", got.Status.State)
+		assert.NotContains(t, got.Status.Message, "by hand")
+		assert.Empty(t, m.closed)
+		assert.Equal(t, []string{branch}, m.deleted)
+	})
+}
+
 // TestClosedPRBranchIsDeleted_EveryClose covers B70 for the other ways
 // kardinal closes its PR: waitForMergeTimeout, a step that failed for good,
 // and a deleted step (FinalizerClosePR). A PR a human closed inside the grace

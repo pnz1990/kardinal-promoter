@@ -207,9 +207,12 @@ Create an API token in your Forgejo/Gitea instance under **Settings → Applicat
 The startup token check cannot see these scopes; see [Token check at startup](#token-check-at-startup).
 
 Deleting a branch on Forgejo and Gitea also closes every open pull request from it, from a queue,
-shortly after the delete call returns. kardinal deletes the head branch of a PR it closed, but not
-for a PromotionStep deleted on its own: kro creates that step again, and the new step opens its
-PR from the same branch name about a second later, so deleting the branch would close that PR too.
+shortly after the delete call returns. kardinal deletes the head branch of a PR it closed. It keeps
+the branch of a PromotionStep deleted on its own while its Bundle is `Promoting` or `Failed`, its
+Graph is still there, and the new step pushes at once. kro creates that step again, and the new
+step opens its PR from the same branch name about a second later, so deleting the branch would
+close that PR too. When the new step would wait (a gate is not ready, the Pipeline is paused, or an
+upstream step is not `Verified`) or would not come, kardinal deletes the branch.
 
 ### Webhook configuration
 

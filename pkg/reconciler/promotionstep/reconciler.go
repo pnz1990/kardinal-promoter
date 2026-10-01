@@ -376,7 +376,9 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 // back to the step outputs when the PRStatus is gone, was never filled in (a
 // crash between opening the PR and patching the PRStatus), or still names or
 // reports the PR from before the step was recreated (prStatusOfStepPR). A
-// step that never opened a PR returns nil.
+// step that never opened a PR has its head branch deleted, unless keepBranch
+// (deleteBranchWithoutPR): git-push may have pushed it, or an earlier step may
+// have left it for this one.
 //
 // The SCM is asked first whether the PR is still open: the PRStatus can lag
 // (it is polled), or be gone with its Graph. A PR that is merged or closed
@@ -429,7 +431,12 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		repo = extractRepo(prURL)
 	}
 	if num <= 0 {
-		return nil
+		if keepBranch {
+			zerolog.Ctx(ctx).Info().Str("step", ps.Name).Str("branch", prHeadBranch(ps)).
+				Msg("kept the head branch of a step that opened no PR: the step comes back and pushes it again")
+			return nil
+		}
+		return r.deleteBranchWithoutPR(ctx, ps)
 	}
 	if r.SCM == nil {
 		return fmt.Errorf("no SCM provider configured to close PR #%d", num)

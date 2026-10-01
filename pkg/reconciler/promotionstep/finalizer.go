@@ -12,7 +12,10 @@ import (
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -21,6 +24,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
@@ -145,13 +149,17 @@ func prFinalizerSyncFailed(log zerolog.Logger, err error) (ctrl.Result, error) {
 // recreated step may own.
 //
 // The PR is closed but its head branch kept when a new step pushes that
-// branch again (comebackPushesBranch): the step was deleted on its own, and
-// kro applies it again as soon as the finalizer is gone. Forgejo and Gitea
-// delete a branch at once but close its open PRs later, from a queue, and
-// they close every open PR of that branch name, so the new step's PR, opened
-// about a second later, was closed too (B79). The new step force-pushes the
-// branch with the same Bundle's change, so a late merge of the closed PR
-// through GitHub's API delivers what the new step promotes, untracked.
+// branch again at once (comebackPushesBranch): the step was deleted on its
+// own, and kro applies it again as soon as the finalizer is gone. Forgejo and
+// Gitea delete a branch at once but close its open PRs later, from a queue,
+// and they close every open PR of that branch name, so the new step's PR,
+// opened about a second later, was closed too (B79). The new step force-pushes
+// the branch with the same Bundle's change, so a late merge of the closed PR
+// through GitHub's API delivers what the new step promotes, untracked. When
+// the new step would wait (a gate is not ready, the Pipeline is paused, an
+// upstream is not Verified) or never come (kro rejected the Graph), the branch
+// is deleted: nothing else would delete it. A step with no PR yet gets the same
+// choice for the branch it may have pushed (closeStepPR).
 //
 // In a namespace being deleted the API server refuses the ClosePRFailed
 // Event, so the error log is the only record of a PR left open there.
@@ -229,8 +237,8 @@ const (
 	// reuses its open PR.
 	comebackReusesPR
 	// comebackPushesBranch: the step was deleted on its own; kro applies it
-	// again once it is gone, and the new step pushes the same branch and
-	// opens a new PR.
+	// again once it is gone, and the new step pushes the same branch at once
+	// and opens a new PR (newStepPushesAtOnce).
 	comebackPushesBranch
 )
 
@@ -251,15 +259,21 @@ const (
 // applies it again under the same name, but only once it is gone, so after
 // handleDeleted closed its PR, and the new step pushes the same branch and
 // opens a new PR (checked on kind). That is when the Bundle is Promoting or
-// Failed (a Failed Bundle's new step runs again), and the rest holds, with a
-// Graph that is there, not being deleted, and older than the delete request.
-// A superseded Bundle's new step is cancelled before it pushes.
+// Failed (a Failed Bundle's new step runs again), the rest holds, the Graph is
+// there and not being deleted, and the new step pushes at once
+// (newStepPushesAtOnce). A Promoting Bundle's Graph must be older than the
+// delete request (a newer one was recreated, so the new step reuses the PR);
+// a Failed Bundle's Graph can be of any age, since nothing recreates it. A
+// superseded Bundle's new step is cancelled before it pushes.
 //
 // A step whose environment a Pipeline edit dropped (kro updates the Graph in
 // place) does not come back, nor does one whose Bundle or namespace is being
 // deleted or gone, nor one of a Failed Bundle whose Graph went (it is not
-// recreated). A read that fails for another reason than NotFound is an error:
-// handleDeleted retries it rather than close a PR the new step would reuse.
+// recreated). Nor, for this purpose, does a step kro would not apply again at
+// once, or that would not push at once: its PR is closed and its branch
+// deleted, so the branch is not left with no PR. A read that fails for
+// another reason than NotFound is an error: handleDeleted retries it rather
+// than close a PR the new step would reuse.
 func (r *Reconciler) stepComeback(ctx context.Context, ps *v1alpha1.PromotionStep) (comeback, error) {
 	if ps.Spec.BundleName == "" {
 		return noComeback, nil
@@ -313,13 +327,86 @@ func (r *Reconciler) stepComeback(ctx context.Context, ps *v1alpha1.PromotionSte
 		return noComeback, err
 	}
 	created := g.GetCreationTimestamp()
-	if ok && g.GetDeletionTimestamp() == nil && created.Before(ps.DeletionTimestamp) {
-		return comebackPushesBranch, nil // the step's own Graph applies it again
+	switch {
+	case !ok || g.GetDeletionTimestamp() != nil:
+		if promoting {
+			return comebackReusesPR, nil // the Bundle reconciler recreates the Graph
+		}
+		return noComeback, nil // nothing recreates a Failed Bundle's Graph
+	case promoting && !created.Before(ps.DeletionTimestamp):
+		return comebackReusesPR, nil // the Graph was recreated before ps was reconciled
 	}
-	if promoting {
-		return comebackReusesPR, nil // the Bundle reconciler recreates the Graph
+	// The Graph is there, so kro applies the step again once ps is gone.
+	pushes, err := newStepPushesAtOnce(ctx, reader, ps, &b, &pl, g)
+	if err != nil || !pushes {
+		return noComeback, err
 	}
-	return noComeback, nil
+	return comebackPushesBranch, nil
+}
+
+// newStepPushesAtOnce reports whether the step kro applies again for ps, once
+// ps is gone, pushes ps's branch at once. Keeping the branch is safe only
+// then: a new step that waits, or never comes, never deletes it, and the
+// branch stayed with no PR. kro creates the new step only while the Graph is
+// accepted, each upstream environment has the Bundle's step Verified, and
+// each required gate is ready (the Graph builder's resolvableWhen). The new
+// step then waits while the Pipeline is paused (holdIfPaused), and fails at
+// once on a configuration it does not support (unsupportedConfig). A required
+// gate that is gone counts as not ready. A read that fails is an error.
+//
+// It is a prediction: a gate or a pause that changes in the second before kro
+// applies the step again can still make the new step wait with the kept
+// branch. docs/troubleshooting.md says how to find such a branch.
+func newStepPushesAtOnce(ctx context.Context, reader client.Reader, ps *v1alpha1.PromotionStep,
+	b *v1alpha1.Bundle, pl *v1alpha1.Pipeline, g *unstructured.Unstructured) (bool, error) {
+	if unsupportedConfig(pl, findEnv(pl, ps.Spec.Environment), ps) != "" {
+		return false, nil
+	}
+	rejected, err := graphRejected(g, b)
+	if err != nil || rejected {
+		return false, err
+	}
+	for _, name := range ps.Spec.RequiredGates {
+		var gate v1alpha1.PolicyGate
+		if err := reader.Get(ctx, client.ObjectKey{Namespace: ps.Namespace, Name: name}, &gate); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("get policygate %s: %w", name, err)
+		}
+		if !gate.Status.Ready {
+			return false, nil
+		}
+	}
+	paused, err := lifecycle.IsPaused(ctx, reader, ps.Namespace, ps.Spec.PipelineName)
+	if err != nil || paused {
+		return false, err
+	}
+	var list v1alpha1.PromotionStepList
+	if err := reader.List(ctx, &list, client.InNamespace(ps.Namespace),
+		client.MatchingLabels{"kardinal.io/bundle": b.Name}); err != nil {
+		return false, fmt.Errorf("list promotionsteps of bundle %s: %w", b.Name, err)
+	}
+	// A step being deleted is not one kro reads: it applies it again too.
+	live := slices.DeleteFunc(list.Items, func(s v1alpha1.PromotionStep) bool { return !s.DeletionTimestamp.IsZero() })
+	return graph.UpstreamsVerified(pl, b, ps.Spec.Environment, live), nil
+}
+
+// graphRejected reports whether kro rejected the Graph g and so applies none
+// of its nodes: its Accepted condition for the current generation is False.
+// When kro has not judged the current generation yet, the Bundle's copy of
+// that condition (GraphAccepted, which the Bundle reconciler keeps) decides.
+func graphRejected(g *unstructured.Unstructured, b *v1alpha1.Bundle) (bool, error) {
+	var typed graph.Graph
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(g.Object, &typed); err != nil {
+		return false, fmt.Errorf("read graph %s: %w", g.GetName(), err)
+	}
+	if c := meta.FindStatusCondition(typed.Status.Conditions, "Accepted"); c != nil &&
+		(c.ObservedGeneration == 0 || c.ObservedGeneration >= typed.Generation) {
+		return c.Status == metav1.ConditionFalse, nil
+	}
+	c := meta.FindStatusCondition(b.Status.Conditions, "GraphAccepted")
+	return c != nil && c.Status == metav1.ConditionFalse, nil
 }
 
 // Phases of a Bundle whose deleted step kro applies again.

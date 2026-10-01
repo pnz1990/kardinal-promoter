@@ -598,7 +598,7 @@ from before it opens the PR; an `auto` step never carries it. When the step is d
 the PR is still open, closes it with a comment if it is, and deletes its head branch
 (`kardinal/<bundle>/<env>`) so the closed PR cannot be merged later; a merged PR is left alone,
 and a closed one only loses its branch. The branch is kept when the step comes back and pushes it
-again (the PromotionStep alone, below). Then it removes the finalizer. What happens to the PR depends on what was deleted:
+again at once (the PromotionStep alone, below). Then it removes the finalizer. What happens to the PR depends on what was deleted:
 
 - **The Bundle.** The PR is closed with the comment `kardinal closed this PR: bundle <bundle>
   was deleted. ...`.
@@ -608,13 +608,19 @@ again (the PromotionStep alone, below). Then it removes the finalizer. What happ
   the same name, once the old one is gone. The old PR is closed first (`kardinal closed this PR:
   PromotionStep <name> was deleted. ...`), and the new step opens a new PR. The step's PRStatus
   then names the new PR (`spec.prNumber`), and the old PR's status is cleared before the new PR
-  is polled (`status.observedGeneration` catches up with `metadata.generation`). When the Bundle
-  is `Promoting` or `Failed`, the old PR keeps its branch, and the controller logs `kept the head
-  branch of the closed PR`: the new step pushes the same branch about a second later, and
-  Forgejo and Gitea close every open PR of a deleted branch from a queue after the delete
-  returns, so deleting it closed the new PR too. On GitHub the closed old PR can then still be
-  merged through the API, with the same Bundle's change for the same environment; the branch goes
-  when the controller closes the new step's PR.
+  is polled (`status.observedGeneration` catches up with `metadata.generation`).
+  The old PR keeps its branch while the Bundle is `Promoting` or `Failed`, its Graph is still
+  there, and the new step pushes at once. The controller logs `kept the head branch of the
+  closed PR`. The new step pushes the same branch about a second later. Forgejo and Gitea close
+  every open PR of a deleted branch from a queue after the delete returns, so deleting the
+  branch closed the new PR too. The new step pushes at once when kro accepted the Graph, every
+  required gate of the step is ready, the Pipeline is not paused, the upstream steps are
+  `Verified`, and the controller supports the step's configuration. Otherwise the new step would
+  wait or not come, so the controller deletes the branch. On GitHub the closed old PR can still
+  be merged through the API while its branch is kept, with the same Bundle's change for the same
+  environment. The branch goes when the controller closes the new step's PR. If the new step ends
+  before it opens a PR (its Bundle is superseded, or the step fails or is deleted), the
+  controller deletes the branch then.
 - **The Graph, while the Bundle is `Promoting`.** The PR stays open: the controller recreates the
   Graph, and the new step reuses the PR. The controller logs `left the PR of a step deleted with
   its Graph open` with the `env` and `prURL`.
@@ -624,7 +630,8 @@ removes the finalizer anyway and logs the error `gave up closing the PR of a del
 PromotionStep; removing its finalizer` with the `env` and `prURL`: close that PR by hand, since
 merging it would change the environment with no PromotionStep tracking it. When the PR was closed
 but its branch could not be deleted, the error says `PR #<n> is closed, but deleting its branch
-kardinal/<bundle>/<env> failed`: delete that branch by hand. It also emits a
+kardinal/<bundle>/<env> failed` (for a step with no PR, `the step opened no PR, but deleting its
+branch kardinal/<bundle>/<env> failed`): delete that branch by hand. It also emits a
 `ClosePRFailed` Warning Event on the step, except in a namespace being deleted: the API server
 refuses new Events there, and the step is gone, so the controller log is the only record.
 
@@ -649,6 +656,22 @@ kubectl get promotionsteps -n <namespace> -l kardinal.io/bundle=<bundle>,kardina
 ```
 
 Close it by hand. The `left the PR of a step deleted with its Graph open` log line names it.
+
+**A branch left with no PR.** A step that opens a PR but ends before it opens one (it is
+superseded, fails, or is deleted) deletes its `kardinal/<bundle>/<environment>` branch, because
+`git-push` may have pushed it, or a deleted step may have kept it for this one. The branch can
+still be left in a few cases:
+
+- The Pipeline is gone, so nothing names the repository.
+- A gate stopped being ready, or the Pipeline was paused, in the second between the delete of a
+  step that kept the branch and kro creating the step again. The new step then waits in
+  `Pending`, and a `Pending` step holds no finalizer, so deleting it (or its Bundle) leaves the
+  branch.
+- The environment changed from `pr-review` to `auto` before that new step started.
+
+Such a branch has no open PR, and no PromotionStep for its Bundle and environment is
+`Promoting` or `WaitingForMerge` (use the `kubectl get promotionsteps` command above). It holds
+only that Bundle's change for that environment, so deleting it by hand changes nothing deployed.
 
 The step stays only while the controller is not running, for example after `helm uninstall`
 without deleting the Bundles first. The controller did not close its PR: close the PR by hand,

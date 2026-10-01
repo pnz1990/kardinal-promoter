@@ -17,12 +17,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/rs/zerolog"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 	builtinsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
@@ -42,8 +45,9 @@ func prHeadBranch(ps *v1alpha1.PromotionStep) string {
 	return branch
 }
 
-// branchDeleteError is a closeStepPR error that came after the PR was closed:
-// only its head branch is left to delete.
+// branchDeleteError is a closeStepPR error that came after the PR was closed,
+// or for a step that opened no PR (pr 0): only its head branch is left to
+// delete.
 type branchDeleteError struct {
 	pr     int
 	branch string
@@ -51,14 +55,17 @@ type branchDeleteError struct {
 }
 
 func (e *branchDeleteError) Error() string {
+	if e.pr <= 0 {
+		return fmt.Sprintf("the step opened no PR, but deleting its branch %s failed: %v", e.branch, e.err)
+	}
 	return fmt.Sprintf("PR #%d is closed, but deleting its branch %s failed: %v", e.pr, e.branch, e.err)
 }
 
 func (e *branchDeleteError) Unwrap() error { return e.err }
 
 // closeByHand is what to do by hand when closeStepPR failed for good: close
-// the PR, or, when the PR is closed and only its branch is left, delete the
-// branch.
+// the PR, or, when the PR is closed (or there is none) and only its branch is
+// left, delete the branch.
 func closeByHand(err error) string {
 	var be *branchDeleteError
 	if errors.As(err, &be) {
@@ -96,5 +103,48 @@ func (r *Reconciler) deletePRBranch(ctx context.Context, ps *v1alpha1.PromotionS
 	}
 	zerolog.Ctx(ctx).Info().Int("pr", num).Str("step", ps.Name).Str("branch", branch).
 		Msg("deleted the head branch of the closed PR")
+	return nil
+}
+
+// deleteBranchWithoutPR deletes the head branch of a step that opened no PR
+// and is ending: it failed, was superseded, or was deleted while no new step
+// pushes the branch at once (handleDeleted). The branch can be there with no
+// PR: git-push ran and open-pr did not, or an earlier step for the same Bundle
+// and environment was deleted on its own and kept the branch for a new step
+// that then opened no PR. Nothing else deletes it. Only a step that opens a PR
+// pushes such a branch: its recorded sequence has open-pr, or, not started
+// yet, its environment's sequence does. The repository is the Pipeline's, as
+// for open-pr; when the Pipeline is gone nothing names it, and the branch is
+// left. A provider that cannot delete branches leaves it too. A branch that
+// is already gone is not an error.
+func (r *Reconciler) deleteBranchWithoutPR(ctx context.Context, ps *v1alpha1.PromotionStep) error {
+	branch := prHeadBranch(ps)
+	deleter, ok := r.SCM.(scm.BranchDeleter)
+	started := len(ps.Status.Steps) > 0
+	if branch == "" || !ok || (started && !opensPR(ps)) {
+		return nil
+	}
+	log := zerolog.Ctx(ctx).With().Str("step", ps.Name).Str("branch", branch).Logger()
+	pipeline, err := r.loadPipeline(ctx, ps)
+	if apierrors.IsNotFound(err) {
+		log.Info().Msg("left the branch of a step that opened no PR: its Pipeline is gone")
+		return nil
+	}
+	if err != nil {
+		return &branchDeleteError{branch: branch, err: err}
+	}
+	// The Bundle type does not change whether the sequence opens a PR.
+	env := findEnv(pipeline, ps.Spec.Environment)
+	if !started && !slices.Contains(steps.DefaultSequenceForBundle(env.Approval, "", env.Update.Strategy, env.Layout), openPRStep) {
+		return nil
+	}
+	repo, err := scm.RepoFromURL(pipeline.Spec.Git.URL)
+	if err == nil {
+		err = deleter.DeleteBranch(ctx, repo, branch)
+	}
+	if err != nil {
+		return &branchDeleteError{branch: branch, err: err}
+	}
+	log.Info().Msg("deleted the head branch of a step that opened no PR")
 	return nil
 }

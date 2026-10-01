@@ -31,6 +31,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -397,9 +398,12 @@ func TestPRFinalizer_DeleteDeadlineUsesClock(t *testing.T) {
 }
 
 // TestPRFinalizer_DeleteWithoutPR covers the #1387 review: a step that has no
-// PR is deleted at once, whatever its state, and the SCM is not asked about
-// anything. That is an auto step (it never holds kardinal.io/close-pr), and a
-// pr-review step deleted before it opened its PR or after it ended.
+// PR is deleted at once, whatever its state, and the SCM is not asked about a
+// PR. That is an auto step (it never holds kardinal.io/close-pr), and a
+// pr-review step deleted before it opened its PR or after it ended. A
+// pr-review step deleted in Promoting, before it opened its PR, has its head
+// branch deleted (its Bundle is not promoting it again here): git-push may
+// have pushed it, and nothing else would delete it.
 func TestPRFinalizer_DeleteWithoutPR(t *testing.T) {
 	auto := func(state string) *v1alpha1.PromotionStep {
 		ps := makeStep("step", "nginx-demo", "bundle-1", "test")
@@ -408,15 +412,17 @@ func TestPRFinalizer_DeleteWithoutPR(t *testing.T) {
 		return ps
 	}
 	tests := []struct {
-		name string
-		step *v1alpha1.PromotionStep
+		name        string
+		step        *v1alpha1.PromotionStep
+		wantDeleted []string
 	}{
 		{name: "an auto step in Pending", step: auto("Pending")},
 		{name: "an auto step in Promoting", step: auto("Promoting")},
 		{name: "an auto step in HealthChecking", step: auto("HealthChecking")},
 		{name: "an auto step in Failed", step: auto("Failed")},
 		{name: "a pr-review step in Pending", step: prStep("Pending", 0)},
-		{name: "a pr-review step in Promoting, before it opened its PR", step: prStep("Promoting", 0)},
+		{name: "a pr-review step in Promoting, before it opened its PR", step: prStep("Promoting", 0),
+			wantDeleted: []string{"test/repo:kardinal/bundle-1/prod"}},
 		{name: "a pr-review step in Failed", step: prStep("Failed", 0)},
 	}
 	for _, tt := range tests {
@@ -441,9 +447,10 @@ func TestPRFinalizer_DeleteWithoutPR(t *testing.T) {
 			var gone v1alpha1.PromotionStep
 			assert.True(t, apierrors.IsNotFound(c.Get(ctx, client.ObjectKeyFromObject(tt.step), &gone)),
 				"the step is gone after one reconcile")
-			assert.Zero(t, m.getPRCalled, "the SCM is not asked")
+			assert.Zero(t, m.getPRCalled, "the SCM is not asked about a PR")
 			assert.Empty(t, m.closed)
 			assert.Empty(t, m.comments)
+			assert.Equal(t, tt.wantDeleted, m.deleted)
 		})
 	}
 }
@@ -655,18 +662,24 @@ func TestPRFinalizer_DeleteRestartAfterClose(t *testing.T) {
 // deleted with its Graph while the Bundle goes on promoting comes back (the
 // Bundle reconciler recreates the Graph), and the new step reuses its PR, so
 // the PR is left open and uncommented. In every other case the PR is closed:
-// the step was deleted on its own (its Graph is still there), its Bundle or
-// namespace is being deleted, the Bundle is past Promoting, or the Pipeline no
-// longer has the step's environment. A read that keeps failing is retried; past
-// the five-minute deadline the finalizer goes and the PR is left open and
-// uncommented, with one error log and one PRLeftOpen Warning Event, since the
-// step may still come back and own the PR.
+// only the step was deleted (its Graph is still there), its Bundle or
+// namespace is being deleted, the Bundle failed and its Graph went, the Bundle
+// is Verified or superseded, or the Pipeline no longer has the step's
+// environment. A read that keeps failing is retried; past the five-minute
+// deadline the finalizer goes and the PR is left open and uncommented, with
+// one error log and one PRLeftOpen Warning Event, since the step may still
+// come back and own the PR.
 //
 // It covers B79 too: a closed PR's head branch is deleted (B70), except when
-// only the step was deleted from a Promoting or Failed Bundle's Graph. kro
-// applies that step again, and it pushes the same branch at once; Forgejo and
-// Gitea close every open PR of a deleted branch from a queue, after the delete
-// call returns, and closed the new step's PR.
+// kro applies the step again and the new step pushes the same branch at once.
+// That is when only the step was deleted, the Bundle is Promoting or Failed,
+// and the new step does not wait: its required gate is ready, the Pipeline is
+// not paused, its upstream step is Verified, kro accepted the Graph, and the
+// new step supports the configuration. A failed Bundle's Graph keeps the
+// branch whatever its age. Forgejo and Gitea close every open PR of a deleted
+// branch from a queue, after the delete call returns, and closed the new
+// step's PR. When the new step would wait or never come, the branch is
+// deleted, so it is not left with no PR.
 func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 	deleted := metav1.NewTime(time.Now().Add(-time.Second).Truncate(time.Second))
 	type graphState int
@@ -684,11 +697,18 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 		bundle       func(*v1alpha1.Bundle) // nil: the Bundle is gone
 		dropEnv      bool                   // the Pipeline no longer has prod
 		noPipeline   bool
-		readErr      string        // the kind whose read fails with an error other than NotFound
-		later        time.Duration // how long after the delete the reconcile runs (default 1s)
-		wantClosed   bool
-		keepsBranch  bool // a closed PR keeps its head branch: the step comes back and pushes it again
-		wantRetry    bool // the step stays and is reconciled again
+		readErr      string                 // the kind whose read fails with an error other than NotFound
+		later        time.Duration          // how long after the delete the reconcile runs (default 1s)
+		upstream     string                 // the Bundle's step in test, prod's upstream: "" Verified, "none", "deleting", or a state
+		gate         string                 // prod's required gate: "" none, "ready", "notReady", or "gone"
+		paused       bool                   // the Pipeline's freeze gate exists
+		accepted     metav1.ConditionStatus // the Graph's Accepted condition ("" none)
+		acceptedOld  bool                   // that condition is for an older Graph generation
+		unsupported  bool                   // the Pipeline has a configuration the new step fails on
+		pr           string                 // the step's PR: "" open, "closed" (the SCM says so already), "none" (not opened yet)
+		wantClosed   bool                   // closeStepPR runs: an open PR is closed and commented on
+		keepsBranch  bool                   // the head branch is kept: the step comes back and pushes it again
+		wantRetry    bool                   // the step stays and is reconciled again
 		wantComment  string
 		wantLeftOpen bool // the PRLeftOpen Event and error log
 	}{
@@ -700,14 +720,99 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 		{name: "only the step was deleted: the PR is closed, its branch kept", graph: graphOld,
 			bundle: func(*v1alpha1.Bundle) {}, wantClosed: true, keepsBranch: true,
 			wantComment: "PromotionStep step was deleted"},
+		// The PR an earlier attempt or a human closed is not closed or
+		// commented on again; only its branch is kept or deleted.
+		{name: "only the step was deleted and its PR is closed already: its branch kept", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, pr: "closed", wantClosed: true, keepsBranch: true},
+		{name: "its PR is closed already but its gate is not ready: its branch deleted", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, pr: "closed", gate: "notReady", wantClosed: true},
+		{name: "the Bundle is gone and the PR is closed already: its branch deleted", graph: graphGone,
+			pr: "closed", wantClosed: true},
+		// A step deleted before it opened its PR may have pushed its branch.
+		{name: "only the step was deleted before it opened its PR: its branch kept", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, pr: "none", wantClosed: true, keepsBranch: true},
+		{name: "deleted before it opened its PR, and its gate is not ready: its branch deleted", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, pr: "none", gate: "notReady", wantClosed: true},
+		{name: "the Bundle is gone and the step opened no PR: its branch deleted", graph: graphGone,
+			pr: "none", wantClosed: true},
+		{name: "deleted before it opened its PR with its Graph: nothing is deleted", graph: graphGone,
+			bundle: func(*v1alpha1.Bundle) {}, pr: "none"},
+		{name: "only the step was deleted and its gate is ready: the branch is kept", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, gate: "ready", wantClosed: true, keepsBranch: true,
+			wantComment: "PromotionStep step was deleted"},
+		// The new step would wait, or never come, so nothing would delete
+		// the branch later.
+		{name: "only the step was deleted but its gate is not ready: the branch is deleted", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, gate: "notReady", wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
+		{name: "only the step was deleted but its gate is gone: the branch is deleted", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, gate: "gone", wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
+		{name: "only the step was deleted but the Pipeline is paused: the branch is deleted", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, paused: true, wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
+		{name: "only the step was deleted but its upstream is not Verified: the branch is deleted", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, upstream: "Promoting", wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
+		{name: "only the step was deleted but its upstream is being deleted: the branch is deleted", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, upstream: "deleting", wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
+		{name: "only the step was deleted but it has no upstream step: the branch is deleted", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, upstream: "none", wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
+		{name: "only the step was deleted but kro rejected the Graph: the branch is deleted", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, accepted: metav1.ConditionFalse, wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
+		{name: "only the step was deleted and kro accepted the Graph: the branch is kept", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, accepted: metav1.ConditionTrue, wantClosed: true, keepsBranch: true,
+			wantComment: "PromotionStep step was deleted"},
+		// kro has not judged the current Graph generation: the Bundle's copy
+		// of the condition decides.
+		{name: "kro rejected only an older Graph generation: the branch is kept", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, accepted: metav1.ConditionFalse, acceptedOld: true,
+			wantClosed: true, keepsBranch: true, wantComment: "PromotionStep step was deleted"},
+		{name: "the Bundle failed because kro rejected the Graph: the branch is deleted", graph: graphOld,
+			bundle: func(b *v1alpha1.Bundle) {
+				b.Status.Phase = "Failed"
+				b.Status.Conditions = []metav1.Condition{
+					{Type: "GraphAccepted", Status: metav1.ConditionFalse, Reason: "InvalidGraph"},
+					{Type: "Failed", Status: metav1.ConditionTrue, Reason: "GraphRejected"},
+				}
+			}, wantClosed: true, wantComment: "PromotionStep step was deleted"},
+		// The Graph's own condition for its current generation comes first.
+		{name: "kro accepted the Graph again though the Bundle still says rejected: the branch is kept",
+			graph: graphOld, accepted: metav1.ConditionTrue,
+			bundle: func(b *v1alpha1.Bundle) {
+				b.Status.Phase = "Failed"
+				b.Status.Conditions = []metav1.Condition{
+					{Type: "GraphAccepted", Status: metav1.ConditionFalse, Reason: "InvalidGraph"},
+				}
+			}, wantClosed: true, keepsBranch: true, wantComment: "PromotionStep step was deleted"},
+		{name: "only the step was deleted but the new step fails on its configuration: the branch is deleted",
+			graph: graphOld, bundle: func(*v1alpha1.Bundle) {}, unsupported: true, wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
 		// A Failed Bundle's step that kro applies again runs again.
 		{name: "only the step of a failed Bundle was deleted: the PR is closed, its branch kept", graph: graphOld,
 			bundle: func(b *v1alpha1.Bundle) { b.Status.Phase = "Failed" }, wantClosed: true, keepsBranch: true,
+			wantComment: "PromotionStep step was deleted"},
+		// Nothing recreates a failed Bundle's Graph, so a newer one is the one
+		// kro applies the step from again.
+		{name: "a failed Bundle's Graph is newer than the delete: the PR is closed, its branch kept", graph: graphNew,
+			bundle: func(b *v1alpha1.Bundle) { b.Status.Phase = "Failed" }, wantClosed: true, keepsBranch: true,
+			wantComment: "PromotionStep step was deleted"},
+		{name: "a failed Bundle's Graph is gone: the PR is closed, its branch deleted", graph: graphGone,
+			bundle: func(b *v1alpha1.Bundle) { b.Status.Phase = "Failed" }, wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
+		{name: "a failed Bundle's step was deleted but its gate is not ready: the branch is deleted", graph: graphOld,
+			bundle: func(b *v1alpha1.Bundle) { b.Status.Phase = "Failed" }, gate: "notReady", wantClosed: true,
 			wantComment: "PromotionStep step was deleted"},
 		// A superseded Bundle's step that kro applies again is cancelled
 		// before it pushes.
 		{name: "only the step of a superseded Bundle was deleted: the PR is closed", graph: graphOld,
 			bundle: func(b *v1alpha1.Bundle) { b.Status.Phase = "Superseded" }, wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
+		{name: "only the step of a verified Bundle was deleted: the PR is closed, its branch deleted", graph: graphOld,
+			bundle: func(b *v1alpha1.Bundle) { b.Status.Phase = "Verified" }, wantClosed: true,
 			wantComment: "PromotionStep step was deleted"},
 		{name: "the namespace is being deleted: the PR is closed", graph: graphDeleting, nsDeleting: true,
 			bundle: func(*v1alpha1.Bundle) {}, wantClosed: true,
@@ -724,8 +829,27 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 			}, wantClosed: true, wantComment: "bundle bundle-1 was deleted"},
 		{name: "the Bundle is gone: the PR is closed", graph: graphGone,
 			wantClosed: true, wantComment: "bundle bundle-1 was deleted"},
-		{name: "the Bundle is past Promoting: the PR is closed", graph: graphDeleting,
-			bundle: func(b *v1alpha1.Bundle) { b.Status.Phase = "Failed" }, wantClosed: true},
+		// The Graph is still there, but the step does not come back: its
+		// branch is deleted.
+		{name: "the namespace is being deleted but the Graph is still there: the branch is deleted", graph: graphOld,
+			nsDeleting: true, bundle: func(*v1alpha1.Bundle) {}, wantClosed: true,
+			wantComment: "kardinal closed this PR: namespace default was deleted."},
+		{name: "the Bundle is being deleted but its Graph is still there: the branch is deleted", graph: graphOld,
+			bundle: func(b *v1alpha1.Bundle) {
+				b.Finalizers = []string{"test/hold"}
+				b.DeletionTimestamp = &deleted
+			}, wantClosed: true, wantComment: "bundle bundle-1 was deleted"},
+		{name: "the Bundle is gone but its Graph is still there: the branch is deleted", graph: graphOld,
+			wantClosed: true, wantComment: "bundle bundle-1 was deleted"},
+		{name: "the Pipeline dropped the environment but the Graph is still there: the branch is deleted",
+			graph: graphOld, bundle: func(*v1alpha1.Bundle) {}, dropEnv: true, wantClosed: true},
+		{name: "the Pipeline is gone but the Graph is still there: the branch is deleted", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, noPipeline: true, wantClosed: true},
+		// Nothing recreates a failed Bundle's Graph, so the step does not come
+		// back.
+		{name: "a failed Bundle's Graph is being deleted: the PR is closed, its branch deleted", graph: graphDeleting,
+			bundle: func(b *v1alpha1.Bundle) { b.Status.Phase = "Failed" }, wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
 		{name: "the Pipeline dropped the environment: the PR is closed", graph: graphDeleting,
 			bundle: func(*v1alpha1.Bundle) {}, dropEnv: true, wantClosed: true},
 		{name: "the Pipeline is gone: the PR is closed", graph: graphDeleting,
@@ -738,6 +862,12 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 			bundle: func(*v1alpha1.Bundle) {}, readErr: "Namespace", wantRetry: true},
 		{name: "the Pipeline cannot be read: retried, the PR is kept", graph: graphDeleting,
 			bundle: func(*v1alpha1.Bundle) {}, readErr: "Pipeline", wantRetry: true},
+		{name: "the gate cannot be read: retried, the PR is kept", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, gate: "ready", readErr: "PolicyGate", wantRetry: true},
+		{name: "the freeze gate cannot be read: retried, the PR is kept", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, readErr: "PolicyGate", wantRetry: true},
+		{name: "the Bundle's steps cannot be listed: retried, the PR is kept", graph: graphOld,
+			bundle: func(*v1alpha1.Bundle) {}, readErr: "PromotionStepList", wantRetry: true},
 		{name: "the Graph still cannot be read after five minutes: the PR is left open", graph: graphDeleting,
 			bundle: func(*v1alpha1.Bundle) {}, readErr: "Graph", later: 6 * time.Minute, wantLeftOpen: true},
 		{name: "the Bundle still cannot be read after five minutes: the PR is left open", graph: graphDeleting,
@@ -749,7 +879,10 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			step := prStep("WaitingForMerge", 5)
+			step, prs := prStep("WaitingForMerge", 5), openPRStatus("prs-step", "test/repo", 5)
+			if tt.pr == "none" {
+				step, prs = prStep("Promoting", 0), openPRStatus("prs-step", "", 0)
+			}
 			step.Finalizers = []string{promotionstep.FinalizerClosePR}
 			step.DeletionTimestamp = &deleted
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default", Finalizers: []string{"kubernetes"}}}
@@ -757,13 +890,42 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 				ns.DeletionTimestamp = &deleted
 				ns.Status.Phase = corev1.NamespaceTerminating
 			}
-			objs := []client.Object{step, ns, openPRStatus("prs-step", "test/repo", 5)}
+			objs := []client.Object{step, ns, prs}
 			if !tt.noPipeline {
 				pl := makePipeline("nginx-demo")
 				if tt.dropEnv {
 					pl.Spec.Environments = pl.Spec.Environments[:1]
 				}
+				if tt.unsupported {
+					pl.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-token", Namespace: "other"}
+				}
 				objs = append(objs, pl)
+			}
+			if tt.upstream != "none" {
+				up := makeStep("step-test", "nginx-demo", "bundle-1", "test")
+				up.Labels = map[string]string{"kardinal.io/bundle": "bundle-1"}
+				up.Status.State = "Verified"
+				switch tt.upstream {
+				case "", "Verified":
+				case "deleting":
+					up.Finalizers = []string{"test/hold"}
+					up.DeletionTimestamp = &deleted
+				default:
+					up.Status.State = tt.upstream
+				}
+				objs = append(objs, up)
+			}
+			if tt.gate != "" {
+				step.Spec.RequiredGates = []string{"prod-gate"}
+				if tt.gate != "gone" {
+					objs = append(objs, &v1alpha1.PolicyGate{
+						ObjectMeta: metav1.ObjectMeta{Name: "prod-gate", Namespace: "default"},
+						Status:     v1alpha1.PolicyGateStatus{Ready: tt.gate == "ready"},
+					})
+				}
+			}
+			if tt.paused {
+				objs = append(objs, lifecycle.DesiredFreezeGate(makePipeline("nginx-demo")))
 			}
 			if tt.bundle != nil {
 				b := makeBundle("bundle-1", "nginx-demo")
@@ -788,6 +950,17 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 				case graphNew:
 					g.SetCreationTimestamp(metav1.NewTime(deleted.Add(time.Second)))
 				}
+				g.SetGeneration(2)
+				if tt.accepted != "" {
+					gen := int64(2)
+					if tt.acceptedOld {
+						gen = 1
+					}
+					require.NoError(t, unstructured.SetNestedSlice(g.Object, []any{map[string]any{
+						"type": "Accepted", "status": string(tt.accepted), "reason": "InvalidGraph",
+						"observedGeneration": gen,
+					}}, "status", "conditions"))
+				}
 				objs = append(objs, g)
 			}
 			api := fake.NewClientBuilder().WithScheme(buildScheme(t)).
@@ -805,6 +978,8 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 						kind = "Namespace"
 					case *v1alpha1.Pipeline:
 						kind = "Pipeline"
+					case *v1alpha1.PolicyGate:
+						kind = "PolicyGate"
 					}
 					switch {
 					case kind == "" || kind != tt.readErr:
@@ -815,12 +990,18 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 					}
 					return c.Get(ctx, key, obj, opts...)
 				},
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					if _, ok := list.(*v1alpha1.PromotionStepList); ok && tt.readErr == "PromotionStepList" {
+						return apierrors.NewInternalError(errors.New("etcdserver: request timed out"))
+					}
+					return c.List(ctx, list, opts...)
+				},
 			})
 			later := tt.later
 			if later == 0 {
 				later = time.Second
 			}
-			m := &mockSCM{open: true}
+			m := &mockSCM{open: tt.pr != "closed"}
 			rec := events.NewFakeRecorder(5)
 			r := &promotionstep.Reconciler{Client: api, APIReader: reader, SCM: m, GitClient: &mockGit{},
 				Recorder:  rec,
@@ -850,13 +1031,16 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 				return
 			}
 			assert.Zero(t, res.RequeueAfter)
-			if tt.wantClosed {
+			if tt.wantClosed && tt.pr == "" {
 				assert.Equal(t, []string{"test/repo#5"}, m.closed)
 				require.Len(t, m.comments, 1)
 				assert.Contains(t, m.comments[0], tt.wantComment)
 			} else {
-				assert.Empty(t, m.closed, "the PR is left open")
-				assert.Empty(t, m.comments, "the PR is not commented on")
+				assert.Empty(t, m.closed, "no PR is closed")
+				assert.Empty(t, m.comments, "no PR is commented on")
+			}
+			if tt.pr == "closed" {
+				assert.Equal(t, 1, m.getPRCalled, "the SCM is asked whether the PR is open")
 			}
 			if tt.wantClosed && !tt.keepsBranch {
 				assert.Equal(t, []string{"test/repo:kardinal/bundle-1/prod"}, m.deleted, "the closed PR's branch is deleted")
