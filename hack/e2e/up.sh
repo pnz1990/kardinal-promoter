@@ -59,7 +59,7 @@ case "$SUITE" in
   # ServiceMonitor, PrometheusRule and Grafana dashboard.
   flux) COMPONENTS=("giteafamily.sh forgejo" flux.sh prometheus.sh grafana.sh) RUN='^Test(Flux|Metric|Obs)_'
     HELM_ARGS='--set serviceMonitor.enabled=true --set prometheusRule.enabled=true --set grafanaDashboard.enabled=true' ;;
-  chart) COMPONENTS=("giteafamily.sh forgejo" argocd.sh cert-manager.sh) RUN='^TestChart_'
+  chart) COMPONENTS=("giteafamily.sh forgejo" argocd.sh cert-manager.sh) RUN='^Test(Chart|Deprecated)_'
     export KARDINAL_E2E_INSTALL=0 ;;
   *)
     echo "unknown suite $SUITE" >&2
