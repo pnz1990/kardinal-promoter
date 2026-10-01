@@ -63,8 +63,9 @@ func KustomizeRepoFor(envs []string, name, namespace func(env string) string) ma
 func SidecarRepo(app App) map[string][]byte {
 	files := KustomizeRepo(app)
 	for _, env := range app.Envs {
+		// Quoted: unquoted, YAML reads 3.9 as a number.
 		files[Path(env)+"/kustomization.yaml"] = []byte(Kustomization(app.Namespace, V1,
-			fmt.Sprintf("  - name: %s\n    newTag: %s\n", Pause, PauseV1)))
+			fmt.Sprintf("  - name: %s\n    newTag: %q\n", Pause, PauseV1)))
 		// deployment ends with the podinfo container, so the sidecar is the
 		// next item of the containers list.
 		files[Path(env)+"/deployment.yaml"] = []byte(deployment(Workload(env), Image+":"+V1) + fmt.Sprintf(`        - name: sidecar
