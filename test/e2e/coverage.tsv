@@ -369,7 +369,7 @@ MC-ARGO-01	live	multi-cluster	todo	multi-cluster	Argo CD hub: argocd health on a
 MC-FLUX-01	live	multi-cluster	todo	multi-cluster	Flux hub: Kustomization with spec.kubeConfig.secretRef targets a remote cluster	docs/distributed-mode.md:10; docs/health-adapters.md:228
 MC-ROLLOUTS-01	live	multi-cluster	todo	multi-cluster	argoRollouts health reads the Rollout in the controller's cluster only	docs/pipeline-reference.md:349-389
 EX-QUICKSTART-01	live	core	covered	examples	quickstart promotes test to uat to prod with weekend and soak org gates	examples/quickstart; docs/quickstart.md
-EX-GITHUB-DEMO-01	live	scm-github	todo	examples	github-demo: pr-review, bake, onHealthFailure rollback, team gates	examples/github-demo/README.md:10; examples/github-demo/README.md:79-84; examples/github-demo/README.md:124-128; examples/github-demo/README.md:140-175
+EX-GITHUB-DEMO-01	live	scm-github	todo	examples	github-demo: pr-review, bake, onHealthFailure rollback, team gates	examples/github-demo/README.md:10; examples/github-demo/README.md:78-84; examples/github-demo/README.md:125-133; examples/github-demo/README.md:135-170
 EX-FLUX-01	live	flux	covered	examples	flux-demo: flux health and bake fail-on-alarm	examples/flux-demo
 EX-ROLLOUTS-01	live	delivery	covered	examples	argo-rollouts-demo: Degraded rollout opens a rollback PR	examples/argo-rollouts-demo/README.md:21; examples/argo-rollouts-demo/README.md:150
 EX-FLAGGER-01	live	delivery	covered	examples	flagger-demo: failed canary opens a rollback PR	examples/flagger-demo/README.md:23; examples/flagger-demo/README.md:126
