@@ -268,8 +268,12 @@ kubectl get pipelines -A -o json | jq -r '
         (select(.name as $n | ($reserved | index($n)) != null or ($n | test("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$") | not) or ($n | length) > 63) | "\($p) env \(.name): invalid or reserved name")) )'
 kubectl get policygates -A -o json | jq -r '.items[] | "policygate \(.metadata.namespace)/\(.metadata.name)" as $g
   | (select(.spec.selector != null) | "\($g): spec.selector"),
-    (select((.metadata.name | length) > 63 and (.metadata.name | contains("--") | not) and (.metadata.name | startswith("freeze-") | not)) | "\($g): name longer than 63 characters")'
+    (select((.metadata.name | length) > 63 and .spec.generated != true
+      and ((.metadata.labels // {}) | (has("kardinal.io/bundle") or has("kardinal.io/gate-template") or .["kardinal.io/freeze"] == "true") | not))
+      | "\($g): name longer than 63 characters")'
 ```
+
+Gate instances and pause freeze gates can have longer names. Kardinal created them, and the new controller sets `spec.generated` on them, the field that exempts them from the name limit, before it writes their status. The finder skips them.
 
 Fix each line it prints. In the commands below, `<i>` is the environment's position in `spec.environments`, counting from 0.
 

@@ -16,7 +16,7 @@ PolicyGates are CEL-powered policy checks that block promotions until their cond
 apiVersion: kardinal.io/v1alpha1
 kind: PolicyGate
 metadata:
-  name: <string>
+  name: <string>                        # at most 63 characters
   namespace: <string>                   # platform-policies (org) or team namespace
   labels:
     kardinal.io/scope: <string>         # "org" or "team"
@@ -24,10 +24,34 @@ metadata:
     kardinal.io/type: <string>          # "gate" (default) or "skip-permission"
 spec:
   expression: <string>                  # CEL expression
-  message: <string>                     # human-readable explanation shown when gate blocks
+  message: <string>                     # why the gate blocks, shown when its expression is false
   recheckInterval: <duration>           # how often to re-evaluate (default: "5m", minimum: "10s")
   when: <string>                        # deprecated, has no effect (see below)
 ```
+
+A gate's name is at most 63 characters, because kardinal copies it into the
+`kardinal.io/gate-template` label of every gate instance. The API server rejects a longer name.
+Only the PolicyGates kardinal creates can have longer names: the per-Bundle gate instances and the
+`freeze-<pipeline>` gate of a paused Pipeline. Kardinal sets `spec.generated: true` on them. Do not
+set it on a gate you write: kardinal never uses a gate with `spec.generated` as a template, so the
+gate would not apply to any environment.
+
+### What users see when a gate blocks
+
+When a gate's expression is false, its `status.reason` starts with `spec.message` and ends with the
+evaluated result in parentheses:
+
+```
+Production deployments are blocked on weekends (bundle.version=1.29.0: !schedule.isWeekend = false)
+```
+
+The gate's `Ready` condition, `kardinal explain` and the UI show this reason. `kardinal status
+<pipeline>` shows the message alone under Blocking Policy Gates. The Pending step's message names
+the gate and its message: `waiting for gate no-weekend-deploys: Production deployments are blocked
+on weekends`. A gate without a message shows only the result (`bundle.version=1.29.0:
+!schedule.isWeekend = false`). The message is not shown when the gate blocks for another reason: an
+evaluation error (`CEL evaluation error: ...`) or a context error (`context error: ...`) keeps its
+own reason, because the message does not explain it.
 
 ### When a gate holds a step
 
@@ -38,8 +62,9 @@ Every gate on an environment holds that environment back, twice:
    every gate in the step's `spec.requiredGates`. The step starts only when each gate exists, is
    ready, and was evaluated at or after the step was created (its `status.lastEvaluatedAt` is not
    earlier than the step's `creationTimestamp`). Otherwise the step stays in `Pending` with the
-   message `waiting for gate <name>` or `waiting for gate <name> to be re-evaluated`. Nothing is
-   pushed and no PR is opened.
+   message `waiting for gate <name>` (`waiting for gate <name>: <message>` when the gate's
+   expression is false and it has a message) or `waiting for gate <name> to be re-evaluated`.
+   Nothing is pushed and no PR is opened.
 
 The Graph acts on the gate's last result, which can be older than the step: it can predate a
 metric, change window or schedule change. So the controller re-evaluates a new step's gates as soon
@@ -187,8 +212,9 @@ outage or while the MetricCheck's status write keeps failing. A stale result is 
 `result: "Stale"`, `value: ""` and `stale: true`, so both `metrics["x"].result == "Pass"` and
 `double(metrics["x"].value) < 0.01` block (the second with an evaluation error, since `""` is not a
 number). Compare with `== "Pass"`, not `!= "Fail"`: a stale result is neither. The gate's
-`status.reason` then ends with `metric "x" result is stale`. `kubectl get
-metriccheck x -o yaml` shows `lastEvaluatedAt` and `validUntil`.
+`status.reason` then includes `metric "x" result is stale`, after the evaluated result (inside the
+parentheses when the gate has a message). `kubectl get metriccheck x -o yaml` shows
+`lastEvaluatedAt` and `validUntil`.
 
 A stale result is noticed at the gate's next evaluation (the next ScheduleClock tick or
 `recheckInterval`), and the first evaluation that refreshes it re-evaluates the gate at once.

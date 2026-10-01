@@ -63,7 +63,9 @@ If the output shows a PolicyGate in FAIL state, the gate's CEL expression has no
 - CEL error: the expression references an attribute from a later phase. Check `kardinal policy test <file>`.
 
 If the step exists and its message is `waiting for gate <name>`, that gate holds it before it starts
-(see [When a gate holds a step](policy-gates.md#when-a-gate-holds-a-step)). `waiting for gate <name>
+(see [When a gate holds a step](policy-gates.md#when-a-gate-holds-a-step)). When the gate's
+expression is false and the gate has a `message`, the step's message adds it:
+`waiting for gate <name>: <message>`. `waiting for gate <name>
 to be re-evaluated` means the gate's last result is older than the step; the controller re-evaluates
 it when the step is created, so this clears within seconds. If it does not, check that the
 controller is running and that its clock is in sync with the API server.
