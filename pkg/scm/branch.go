@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/rs/zerolog"
 )
 
 // BranchDeleter is implemented by SCM providers that can delete a branch. The
@@ -58,13 +60,21 @@ func statusIs(err error, codes ...int) (*APIError, bool) {
 }
 
 // DeleteBranch deletes refs/heads/<branch>. GitHub answers 422 "Reference
-// does not exist" for a ref that is gone; a 404 also means there is no such
-// ref, since the caller has just closed a PR in the same repository with the
-// same token.
+// does not exist" for a ref that is gone. A 404 is taken as gone too, since
+// the caller has just closed a PR in the same repository with the same token,
+// but GitHub also answers 404 when the token cannot see the ref or the
+// repository (a classic token without `repo`, say), so the 404 is logged as a
+// warning with the repo and branch, through the context's logger: if the
+// branch is still there, the closed PR can still be merged.
 func (g *GitHubProvider) DeleteBranch(ctx context.Context, repo, branch string) error {
 	err := g.do(ctx, http.MethodDelete, fmt.Sprintf("/repos/%s/git/refs/heads/%s", repo, branchPath(branch)), nil, nil)
-	if apiErr, ok := statusIs(err, http.StatusNotFound, http.StatusUnprocessableEntity); ok &&
-		(apiErr.StatusCode == http.StatusNotFound || strings.Contains(apiErr.Body, "Reference does not exist")) {
+	if apiErr, ok := statusIs(err, http.StatusNotFound); ok {
+		zerolog.Ctx(ctx).Warn().Err(apiErr).Str("repo", repo).Str("branch", branch).
+			Msg("GitHub answered 404 to the branch delete; taking the branch as gone, but a token that " +
+				"cannot see the repository gets the same answer: check that the branch is deleted")
+		return nil
+	}
+	if apiErr, ok := statusIs(err, http.StatusUnprocessableEntity); ok && strings.Contains(apiErr.Body, "Reference does not exist") {
 		return nil
 	}
 	if err != nil {

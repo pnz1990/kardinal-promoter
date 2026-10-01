@@ -14,6 +14,7 @@
 package scm_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -22,6 +23,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -154,6 +156,45 @@ func TestDeleteBranch(t *testing.T) {
 		srv, _ := branchAPI(t, http.StatusUnprocessableEntity, `{"message":"Cannot delete a protected branch"}`)
 		assert.Error(t, scm.NewGitHubProvider("t", srv.URL, "s").DeleteBranch(context.Background(), "o/r", branch))
 	})
+}
+
+// TestDeleteBranch_GitHub404Warns covers the B70 review note: GitHub reports a
+// ref that is gone with 422 "Reference does not exist", so a 404 on the delete
+// more likely means the token cannot see the ref or the repository (a classic
+// token without `repo`, say). The 404 stays non-fatal, since the caller has
+// just closed a PR there with the same token, but it is logged at warn with
+// the repo and branch, through the logger of the context; a 422 for a missing
+// ref and a successful delete log nothing.
+func TestDeleteBranch_GitHub404Warns(t *testing.T) {
+	const branch = "kardinal/my-app-v2/prod"
+	tests := []struct {
+		name     string
+		status   int
+		body     string
+		wantWarn bool
+	}{
+		{name: "404 is taken as gone, with a warning", status: http.StatusNotFound, body: `{"message":"Not Found"}`, wantWarn: true},
+		{name: "422 for a missing ref is gone, no warning", status: http.StatusUnprocessableEntity, body: `{"message":"Reference does not exist"}`},
+		{name: "deleted, no warning", status: http.StatusNoContent},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := branchAPI(t, tc.status, tc.body)
+			var logs bytes.Buffer
+			ctx := zerolog.New(&logs).WithContext(context.Background())
+			require.NoError(t, scm.NewGitHubProvider("t", srv.URL, "s").DeleteBranch(ctx, "o/r", branch))
+			if !tc.wantWarn {
+				assert.Empty(t, logs.String())
+				return
+			}
+			var line map[string]any
+			require.NoError(t, json.Unmarshal(logs.Bytes(), &line), "one JSON log line, got %q", logs.String())
+			assert.Equal(t, "warn", line["level"])
+			assert.Equal(t, "o/r", line["repo"])
+			assert.Equal(t, branch, line["branch"])
+			assert.Contains(t, line["message"], "404")
+		})
+	}
 }
 
 // TestDeleteBranch_AzureDevOps checks that the Azure DevOps provider reads the
