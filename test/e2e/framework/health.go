@@ -84,6 +84,54 @@ func (e *Env) SetArgoTargetRevision(t *testing.T, name, rev string) {
 	}
 }
 
+// SyncArgoApp starts a sync of the Argo CD Application's target revision, as
+// `argocd app sync` does, with no retry. The Application must have no
+// operation running.
+func (e *Env) SyncArgoApp(t *testing.T, name string) {
+	t.Helper()
+	patch := `{"operation":{"initiatedBy":{"username":"kardinal-e2e"},"sync":{"syncStrategy":{"hook":{}}},"retry":{"limit":0}}}`
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := e.Dynamic.Resource(ApplicationGVR).Namespace(ArgoCDNamespace).Patch(ctx, name,
+		types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		t.Fatalf("sync Argo CD Application %s: %v", name, err)
+	}
+}
+
+// WaitArgoOperation waits until the Application's last operation is in phase
+// and returns the revision it ran on (status.operationState.syncResult.revision).
+func (e *Env) WaitArgoOperation(t *testing.T, name, phase string, timeout time.Duration) string {
+	t.Helper()
+	var rev string
+	Eventually(t, timeout, fmt.Sprintf("Argo CD Application %s operation %s", name, phase), func(ctx context.Context) (bool, string) {
+		app, err := e.Dynamic.Resource(ApplicationGVR).Namespace(ArgoCDNamespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, err.Error()
+		}
+		got, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
+		msg, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "message")
+		rev, _, _ = unstructured.NestedString(app.Object, "status", "operationState", "syncResult", "revision")
+		return got == phase && rev != "", fmt.Sprintf("phase=%s revision=%s: %s", got, rev, msg)
+	})
+	return rev
+}
+
+// CreateMarker creates a Service named name in ns, without endpoints, that a
+// hook script can wait for: its DNS name resolves once it exists
+// (fixtures.MarkerExists). It goes with the namespace.
+func (e *Env) CreateMarker(t *testing.T, ns, name string) {
+	t.Helper()
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "marker", Port: 80}}},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := e.Client.Create(ctx, svc); err != nil {
+		t.Fatalf("create marker Service %s/%s: %v", ns, name, err)
+	}
+}
+
 // ArgoField returns a string field of the Argo CD Application, "" when unset.
 func (e *Env) ArgoField(t *testing.T, name string, fields ...string) string {
 	t.Helper()

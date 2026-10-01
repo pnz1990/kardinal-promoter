@@ -30,6 +30,14 @@ version: 0.1.0
 	}
 }
 
+// MarkerExists is a hook script condition that is true once the marker
+// Service name exists in ns (framework.Env.CreateMarker): its cluster DNS
+// name resolves. A script waits for the test with
+// "until <MarkerExists>; do sleep 1; done".
+func MarkerExists(ns, name string) string {
+	return fmt.Sprintf("nslookup %s.%s.svc.cluster.local >/dev/null 2>&1", name, ns)
+}
+
 // WithHook adds an Argo CD hook Job named name to env's overlay in files (a
 // KustomizeRepo). The Job runs script with sh in the podinfo image, which the
 // overlay's images entry retags with every promotion, so a script can tell

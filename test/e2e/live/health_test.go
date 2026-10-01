@@ -601,15 +601,87 @@ func TestHealth_ArgoFailures(t *testing.T) {
 		"the Deployment runs the new version; only the PostSync hook failed")
 }
 
+// TestHealth_ArgoIgnoresEarlierFailure checks B52: a failure left by the
+// version before the promotion does not count against it. A PostSync hook
+// fails on fixtures.V1 once the test creates a marker, and a sync of V1
+// fails. With auto-sync off, the step for V2 waits, with no health failure,
+// while Argo CD still shows that Failed operation: first Synced on the old
+// commit, then OutOfSync on the pushed one. With auto-sync back on, Argo CD
+// syncs the pushed commit, the hook passes on V2, and the step is Verified.
+// Covers HEALTH-ARGO-06.
+func TestHealth_ArgoIgnoresEarlierFailure(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ns := e.Namespace(t)
+	const marker = "fail-on-v1"
+	script := fmt.Sprintf(`! %s || test "$(./podinfo --version)" != %q`, fixtures.MarkerExists(ns, marker), fixtures.V1)
+	files := fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: []string{"test"}})
+	fixtures.WithHook(files, "test", "hook", "PostSync", script)
+	a := &app{e: e, ns: ns, envs: []string{"test"}, repo: e.Repo(t, ns, files)}
+	app := a.argoApp("test")
+	e.ArgoApp(t, app, a.repo, fixtures.Path("test"), ns)
+	old := e.WaitArgoOperation(t, app, "Succeeded", syncTimeout)
+	e.WaitDeploymentImage(t, ns, fixtures.Workload("test"), fixtures.Image+":"+fixtures.V1, syncTimeout)
+
+	e.CreateMarker(t, ns, marker)
+	e.SetArgoAutoSync(t, app, false)
+	e.SyncArgoApp(t, app)
+	require.Equal(t, old, e.WaitArgoOperation(t, app, "Failed", 2*time.Minute), "the failed sync ran on the old commit")
+	p := a.pipeline(nil)
+	envSpec(t, p, "test").Health.Timeout = "5m"
+	a.apply(t, p)
+
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStep(t, ns, pipelineName, bundle, "test", promoteTimeout, "the pushed commit",
+		func(ps *v1alpha1.PromotionStep) bool {
+			return ps.Status.State == "HealthChecking" && ps.Status.Outputs["commitSHA"] != ""
+		})
+	commit := ps.Status.Outputs["commitSHA"]
+	// Argo CD polls git every 10s; until then it is Synced on the old commit.
+	// Waiting results do not reset the failure count, so the count checked
+	// below also covers the checks before it.
+	waiting := fmt.Sprintf("waiting for argocd: health=Healthy, sync=OutOfSync, opPhase=Failed, revision=%s not synced yet, "+
+		"ignoring the operation on %s", short(commit), short(old))
+	e.WaitStep(t, ns, pipelineName, bundle, "test", time.Minute, "the check to see the pushed commit OutOfSync",
+		func(ps *v1alpha1.PromotionStep) bool { return ps.Status.Message == waiting })
+	assert.Equal(t, commit, e.ArgoField(t, app, "status", "sync", "revision"), "Argo CD fetched the pushed commit")
+	framework.Consistently(t, 20*time.Second, "a failure on the old commit does not count", func(ctx context.Context) (bool, string) {
+		ps, _, err := e.Step(ctx, ns, pipelineName, bundle, "test")
+		if err != nil || ps == nil {
+			return false, "step lookup failed"
+		}
+		return ps.Status.State == "HealthChecking" && ps.Status.Message == waiting &&
+			ps.Status.ConsecutiveHealthFailures == 0, framework.DescribeStep(ps)
+	})
+	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, ns, fixtures.Workload("test")))
+
+	e.SetArgoAutoSync(t, app, true)
+	ps = e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, argoVerified, ps.Status.Message)
+	assert.Equal(t, 0, ps.Status.ConsecutiveHealthFailures)
+	assert.Equal(t, commit, e.ArgoField(t, app, "status", "operationState", "syncResult", "revision"))
+	assert.Equal(t, imageV2, e.DeploymentImage(t, ns, fixtures.Workload("test")))
+	e.WaitBundlePhase(t, ns, bundle, "Verified", time.Minute)
+}
+
 // TestHealth_ArgoWaitsForRevision checks that the argocd adapter does not
 // pass an Application that is Healthy and Synced on an older commit (pinned
-// to it), nor one whose sync is still running (a PreSync hook that takes 40s
-// on the new version). Both are waiting, not failures. Covers HEALTH-ARGO-03.
+// to it), nor one whose sync is still running (a PreSync hook that, on the
+// new version, waits for a marker the test creates). Both are waiting, not
+// failures. Covers HEALTH-ARGO-03.
 func TestHealth_ArgoWaitsForRevision(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
-	a := newHookedArgoApp(t, e, "test", "PreSync", onlyV1+" || sleep 40")
+	ns := e.Namespace(t)
+	const release = "release-presync"
+	files := fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: []string{"test"}})
+	fixtures.WithHook(files, "test", "hook", "PreSync",
+		fmt.Sprintf("%s || until %s; do sleep 1; done", onlyV1, fixtures.MarkerExists(ns, release)))
+	a := &app{e: e, ns: ns, envs: []string{"test"}, repo: e.Repo(t, ns, files)}
 	app := a.argoApp("test")
+	e.ArgoApp(t, app, a.repo, fixtures.Path("test"), ns)
+	e.WaitArgoApp(t, app, syncTimeout)
+	e.WaitDeploymentImage(t, ns, fixtures.Workload("test"), fixtures.Image+":"+fixtures.V1, syncTimeout)
 	old := e.ArgoField(t, app, "status", "sync", "revision")
 	require.NotEmpty(t, old)
 	e.SetArgoTargetRevision(t, app, old)
@@ -643,10 +715,18 @@ func TestHealth_ArgoWaitsForRevision(t *testing.T) {
 			return ps.Status.State == "HealthChecking" && strings.Contains(ps.Status.Message, "opPhase=Running")
 		})
 	assert.True(t, strings.HasPrefix(ps.Status.Message, "waiting for argocd: "), ps.Status.Message)
-	assert.Equal(t, 0, ps.Status.ConsecutiveHealthFailures, "a running sync is not a failure")
+	framework.Consistently(t, 15*time.Second, "a running sync does not pass or fail", func(ctx context.Context) (bool, string) {
+		ps, _, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+		if err != nil || ps == nil {
+			return false, "step lookup failed"
+		}
+		return ps.Status.State == "HealthChecking" && strings.Contains(ps.Status.Message, "opPhase=Running") &&
+			ps.Status.ConsecutiveHealthFailures == 0, framework.DescribeStep(ps)
+	})
 	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, a.ns, fixtures.Workload("test")),
 		"the PreSync hook still runs")
 
+	e.CreateMarker(t, a.ns, release)
 	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	assert.Equal(t, argoVerified, ps.Status.Message)
 	assert.Equal(t, commit, e.ArgoField(t, app, "status", "sync", "revision"))
