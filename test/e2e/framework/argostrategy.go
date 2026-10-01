@@ -19,66 +19,12 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
-
-	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 )
 
 // ControllerServiceAccount is the controller's ServiceAccount in
 // ControllerNamespace (the chart's release name in hack/e2e).
 const ControllerServiceAccount = "kardinal-promoter"
-
-// ArgoHelmApp creates an auto-syncing Argo CD Application that renders the
-// Helm chart at path of repo into destNS with spec.source.helm.valuesObject
-// values, and deletes it when the test ends. update.strategy argocd patches
-// those values.
-func (e *Env) ArgoHelmApp(t *testing.T, name string, repo gitserver.Repo, path, destNS string, values map[string]interface{}) {
-	t.Helper()
-	app := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "argoproj.io/v1alpha1",
-		"kind":       "Application",
-		"metadata": map[string]interface{}{
-			"name":      name,
-			"namespace": ArgoCDNamespace,
-			"labels":    map[string]interface{}{"kardinal.io/e2e": "true"},
-		},
-		"spec": map[string]interface{}{
-			"project": "default",
-			"source": map[string]interface{}{
-				"repoURL":        repo.CloneURL,
-				"targetRevision": repo.Branch,
-				"path":           path,
-				// Helm release names are at most 53 characters; the
-				// Application name (namespace-env) can be longer.
-				"helm": map[string]interface{}{"releaseName": "podinfo", "valuesObject": values},
-			},
-			"destination": map[string]interface{}{
-				"server":    "https://kubernetes.default.svc",
-				"namespace": destNS,
-			},
-			"syncPolicy": map[string]interface{}{
-				"automated": map[string]interface{}{"prune": true, "selfHeal": true},
-			},
-		},
-	}}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if _, err := e.Dynamic.Resource(ApplicationGVR).Namespace(ArgoCDNamespace).Create(ctx, app, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create Argo CD Application %s: %v", name, err)
-	}
-	t.Cleanup(func() {
-		if os.Getenv(EnvKeep) == "1" {
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		err := e.Dynamic.Resource(ApplicationGVR).Namespace(ArgoCDNamespace).Delete(ctx, name, metav1.DeleteOptions{})
-		if err != nil && !apierrors.IsNotFound(err) {
-			t.Errorf("delete Argo CD Application %s: %v", name, err)
-		}
-	})
-}
 
 // GrantArgoPatch lets the controller patch only the named Argo CD
 // Applications, the RBAC the argocd update strategy needs (the chart grants

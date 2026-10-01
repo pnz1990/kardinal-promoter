@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -115,17 +116,6 @@ func rbAssertBundle(t *testing.T, e *framework.Env, ns, rb, env, from, target, a
 	return b
 }
 
-// rbAudit lists the Bundle's AuditEvents with action.
-func rbAudit(ctx context.Context, e *framework.Env, ns, bundle, action string) ([]v1alpha1.AuditEvent, error) {
-	var list v1alpha1.AuditEventList
-	if err := e.Client.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{
-		"kardinal.io/bundle": bundle, "kardinal.io/action": action,
-	}); err != nil {
-		return nil, err
-	}
-	return list.Items, nil
-}
-
 // rbNoAudit checks that no AuditEvent in ns has action.
 func rbNoAudit(t *testing.T, e *framework.Env, ns, action string) {
 	t.Helper()
@@ -135,19 +125,16 @@ func rbNoAudit(t *testing.T, e *framework.Env, ns, action string) {
 	assert.Empty(t, list.Items, "no %s AuditEvent in %s", action, ns)
 }
 
-// rbEvents lists the Kubernetes Events with reason about the kind/name object.
-func rbEvents(ctx context.Context, e *framework.Env, ns, kind, name, reason string) ([]corev1.Event, error) {
-	var list corev1.EventList
-	if err := e.Client.List(ctx, &list, client.InNamespace(ns)); err != nil {
-		return nil, err
-	}
-	var out []corev1.Event
-	for _, ev := range list.Items {
-		if ev.InvolvedObject.Kind == kind && ev.InvolvedObject.Name == name && ev.Reason == reason {
+// rbReason is the events with reason. A repeated Event is one object with a
+// series, so each is a distinct occurrence.
+func rbReason(events []eventsv1.Event, reason string) []eventsv1.Event {
+	var out []eventsv1.Event
+	for _, ev := range events {
+		if ev.Reason == reason {
 			out = append(out, ev)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // rbHistory is kardinal history's rows, keyed by its columns BUNDLE, ACTION,
@@ -447,9 +434,7 @@ func TestRollback_History(t *testing.T) {
 	assert.Equal(t, argoVerified, ps.Status.Message)
 	e.WaitBundlePhase(t, a.ns, rb, "Verified", time.Minute)
 	assertEnvAt(t, a, "test", fixtures.V2)
-	succeeded, err := rbAudit(context.Background(), e, a.ns, rb, "PromotionSucceeded")
-	require.NoError(t, err)
-	assert.Len(t, succeeded, 1, "the rollback's promotion is audited like any other")
+	assert.Len(t, auditActions(t, e, a.ns, rb, "test", "PromotionSucceeded"), 1, "the rollback's promotion is audited like any other")
 	rbNoAudit(t, e, a.ns, "RollbackStarted")
 
 	rows := rbHistory(t, a)
@@ -602,20 +587,20 @@ func TestRollback_PolicyRefused(t *testing.T) {
 	assert.Nil(t, rp.Status.RollbackBundleName)
 	assert.Equal(t, 1, rp.Status.ConsecutiveFailures)
 
-	var events []corev1.Event
+	var events []eventsv1.Event
 	framework.Eventually(t, time.Minute, "a RollbackRefused Event", func(ctx context.Context) (bool, string) {
-		var err error
-		events, err = rbEvents(ctx, e, a.ns, "RollbackPolicy", "rp", "RollbackRefused")
+		evs, err := e.Events(ctx, a.ns, "RollbackPolicy", "rp")
 		if err != nil {
 			return false, err.Error()
 		}
-		return len(events) > 0, fmt.Sprintf("%d Events", len(events))
+		events = rbReason(evs, "RollbackRefused")
+		return len(events) > 0, fmt.Sprintf("reasons %v", eventReasons(evs))
 	})
 	require.Len(t, events, 1)
 	assert.Equal(t, corev1.EventTypeWarning, events[0].Type)
 	assert.Equal(t, "Rollback", events[0].Action)
 	assert.Equal(t, fmt.Sprintf("env test: no rollback Bundle created for %s after 1 consecutive health failures: %s", b1, want),
-		events[0].Message)
+		events[0].Note)
 
 	evaluated := rp.Status.LastEvaluatedAt
 	require.NotNil(t, evaluated)
@@ -628,13 +613,14 @@ func TestRollback_PolicyRefused(t *testing.T) {
 		if err != nil {
 			return false, err.Error()
 		}
-		evs, err := rbEvents(ctx, e, a.ns, "RollbackPolicy", "rp", "RollbackRefused")
+		evs, err := e.Events(ctx, a.ns, "RollbackPolicy", "rp")
 		if err != nil {
 			return false, err.Error()
 		}
+		refused := rbReason(evs, "RollbackRefused")
 		same := cur.Status.LastEvaluatedAt != nil && cur.Status.LastEvaluatedAt.Equal(evaluated)
-		return same && n == 1 && len(evs) == 1 && evs[0].Series == nil,
-			fmt.Sprintf("%s; %d Bundles; %d Events", rbDescribePolicy(&cur), n, len(evs))
+		return same && n == 1 && len(refused) == 1 && refused[0].Series == nil,
+			fmt.Sprintf("%s; %d Bundles; %d RollbackRefused Events", rbDescribePolicy(&cur), n, len(refused))
 	})
 }
 
@@ -691,19 +677,19 @@ func TestRollback_OnHealthFailure(t *testing.T) {
 	assert.Equal(t, map[string]string{"kardinal.io/pipeline": pipelineName, "kardinal.io/bundle": b2,
 		"kardinal.io/environment": "test", "kardinal.io/action": "RollbackStarted"}, audit.Labels)
 
-	var events []corev1.Event
+	var events []eventsv1.Event
 	framework.Eventually(t, time.Minute, "the RollingBack Event", func(ctx context.Context) (bool, string) {
-		var err error
-		events, err = rbEvents(ctx, e, a.ns, "PromotionStep", ps.Name, "RollingBack")
+		evs, err := e.Events(ctx, a.ns, "PromotionStep", ps.Name)
 		if err != nil {
 			return false, err.Error()
 		}
-		return len(events) > 0, fmt.Sprintf("%d Events", len(events))
+		events = rbReason(evs, "RollingBack")
+		return len(events) > 0, fmt.Sprintf("reasons %v", eventReasons(evs))
 	})
 	require.Len(t, events, 1)
 	assert.Equal(t, corev1.EventTypeWarning, events[0].Type)
 	assert.Equal(t, "Rollback", events[0].Action)
-	assert.Equal(t, "env test: "+msg, events[0].Message)
+	assert.Equal(t, "env test: "+msg, events[0].Note)
 
 	out := e.MustKardinal(t, a.ns, "get", "auditevents", "--pipeline", pipelineName, "--bundle", b2, "--env", "test")
 	var actions []string
@@ -719,9 +705,7 @@ func TestRollback_OnHealthFailure(t *testing.T) {
 	assertEnvAt(t, a, "test", fixtures.V2)
 	assert.Equal(t, "RollingBack", e.MustStep(t, a.ns, pipelineName, b2, "test").Status.State,
 		"the failed step stays RollingBack; the rollback Bundle carries on")
-	started, err := rbAudit(context.Background(), e, a.ns, rb, "RollbackStarted")
-	require.NoError(t, err)
-	assert.Empty(t, started, "the rollback Bundle's own promotion is not a RollbackStarted")
+	assert.Empty(t, auditActions(t, e, a.ns, rb, "test", "RollbackStarted"), "the rollback Bundle's own promotion is not a RollbackStarted")
 	e.WaitBundlePhase(t, a.ns, b2, "Superseded", time.Minute)
 }
 
@@ -806,7 +790,7 @@ func TestRollback_MultiEnvironment(t *testing.T) {
 	rbAssertBundle(t, e, a.ns, rb, "prod-us", b2, b1, cliUser(t), "")
 	test := e.WaitStepState(t, a.ns, pipelineName, rb, "test", "Verified", promoteTimeout)
 	prodUS := e.WaitStepState(t, a.ns, pipelineName, rb, "prod-us", "Verified", promoteTimeout)
-	at, _ := verifiedAt(t, test)
+	at, _ := verifiedCondition(t, test)
 	assert.False(t, prodUS.CreationTimestamp.Time.Before(at.Truncate(time.Second)),
 		"prod-us starts after test is Verified (test %s, prod-us created %s)", at, prodUS.CreationTimestamp)
 	e.WaitBundlePhase(t, a.ns, rb, "Verified", time.Minute)

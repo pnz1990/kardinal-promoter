@@ -8,28 +8,6 @@ import (
 	"strings"
 )
 
-// ChartPath is the podinfo Helm chart's directory in a HelmChartRepo.
-const ChartPath = "charts/podinfo"
-
-// HelmChartRepo is a repo with one podinfo Helm chart at ChartPath, for
-// Argo CD Applications that set the image through
-// spec.source.helm.valuesObject (update.strategy argocd). The chart renders
-// one Deployment named name. Its tag is .Values.image.tag (default V1), or
-// .Values.podinfo.image.tag when the podinfo key is set, so a test can
-// point update.argocd.imageKey at a nested key.
-func HelmChartRepo(name string) map[string][]byte {
-	deploy := strings.Replace(deployment(name, Image+":TAG"), Image+":TAG",
-		Image+`:{{ (.Values.podinfo | default .Values).image.tag }}`, 1)
-	return map[string][]byte{
-		ChartPath + "/Chart.yaml": []byte(`apiVersion: v2
-name: podinfo
-version: 0.1.0
-`),
-		ChartPath + "/values.yaml":               []byte("image:\n  tag: " + V1 + "\n"),
-		ChartPath + "/templates/deployment.yaml": []byte(deploy),
-	}
-}
-
 // MarkerExists is a hook script condition that is true once the marker
 // Service name exists in ns (framework.Env.CreateMarker): its cluster DNS
 // name resolves. A script waits for the test with

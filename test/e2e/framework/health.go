@@ -18,27 +18,6 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
-// WaitStep waits until match accepts the Bundle's PromotionStep for env and
-// returns the step. Unlike WaitStepState it does not fail on other terminal
-// states, so it can wait for RollingBack, a message or a counter.
-func (e *Env) WaitStep(t *testing.T, ns, pipeline, bundle, env string, timeout time.Duration, what string,
-	match func(*v1alpha1.PromotionStep) bool) *v1alpha1.PromotionStep {
-	t.Helper()
-	var got *v1alpha1.PromotionStep
-	Eventually(t, timeout, fmt.Sprintf("step %s/%s/%s: %s", pipeline, bundle, env, what), func(ctx context.Context) (bool, string) {
-		ps, ok, err := e.Step(ctx, ns, pipeline, bundle, env)
-		if err != nil {
-			return false, err.Error()
-		}
-		if !ok {
-			return false, "no PromotionStep yet"
-		}
-		got = ps
-		return match(ps), DescribeStep(ps)
-	})
-	return got
-}
-
 // MustStep returns the Bundle's PromotionStep for env, failing the test when
 // it does not exist.
 func (e *Env) MustStep(t *testing.T, ns, pipeline, bundle, env string) *v1alpha1.PromotionStep {
