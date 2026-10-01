@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -373,6 +374,7 @@ func TestStep_Timeout(t *testing.T) {
 		}
 	}
 	e.WaitDeploymentImage(t, a.ns, "slow-git", fixtures.Image+":"+fixtures.V1, 2*time.Minute)
+	waitServiceEndpoint(t, e, a.ns, "slow-git", time.Minute)
 
 	p := a.pipeline(nil)
 	p.Spec.Git.URL = fmt.Sprintf("http://slow-git.%s.svc.cluster.local:9898%s%s/%s.git",
@@ -386,13 +388,19 @@ func TestStep_Timeout(t *testing.T) {
 	created := ps.CreationTimestamp.Time
 	firstRetry := time.Since(created)
 	assert.Less(t, firstRetry, 20*time.Second, "the first attempt is cut at 2s, not after the server's 30s")
-	assert.Contains(t, ps.Status.Message, "context deadline exceeded")
+	if !strings.Contains(ps.Status.Message, "context deadline exceeded") {
+		// kube-proxy can route the Service a few seconds after its endpoint
+		// is ready; until then a connection is refused. Later attempts hang.
+		assert.Contains(t, ps.Status.Message, "connection refused")
+		t.Logf("the first attempt was refused before the Service was routed: %s", ps.Status.Message)
+	}
 
 	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", 8*time.Minute)
 	gaveUp := time.Since(created)
 	assert.True(t, strings.HasSuffix(ps.Status.Message, "(gave up after 5 retries)"), "message: %s", ps.Status.Message)
 	assert.Contains(t, ps.Status.Message, "context deadline exceeded")
 	assert.GreaterOrEqual(t, gaveUp, 270*time.Second, "five retries back off 10s+20s+40s+80s+2m")
+	assert.Less(t, gaveUp, 6*time.Minute, "each attempt is cut at 2s: six 30s attempts would take at least 7m30s")
 	clone, ok := stepEntry(ps, "git-clone")
 	assert.True(t, ok && clone.State == v1alpha1.StepExecutionFailed, "git-clone entry: %+v", clone)
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
@@ -447,6 +455,27 @@ func TestStep_OrphansCleanedUp(t *testing.T) {
 		return false, fmt.Sprintf("err=%v state=%q message=%q", err, ps.Status.State, ps.Status.Message)
 	})
 	assert.Equal(t, head, a.headSHA(t, a.repo.Branch), "the orphan pushes nothing")
+}
+
+// waitServiceEndpoint waits until the EndpointSlices of Service svc in ns list
+// a ready endpoint.
+func waitServiceEndpoint(t *testing.T, e *framework.Env, ns, svc string, timeout time.Duration) {
+	t.Helper()
+	framework.Eventually(t, timeout, fmt.Sprintf("Service %s/%s has a ready endpoint", ns, svc), func(ctx context.Context) (bool, string) {
+		list, err := e.Kube.DiscoveryV1().EndpointSlices(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: discoveryv1.LabelServiceName + "=" + svc})
+		if err != nil {
+			return false, err.Error()
+		}
+		for _, sl := range list.Items {
+			for _, ep := range sl.Endpoints {
+				if ep.Conditions.Ready != nil && *ep.Conditions.Ready {
+					return true, ""
+				}
+			}
+		}
+		return false, fmt.Sprintf("%d EndpointSlices, no ready endpoint", len(list.Items))
+	})
 }
 
 // children counts the objects a Bundle's Graph creates: PromotionSteps,
