@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -1259,6 +1260,17 @@ func notReady(p *corev1.Pod) {
 	}
 }
 
+// controllerRestarts is how many times the controller container of a
+// release's Pod has restarted.
+func controllerRestarts(p *corev1.Pod) int32 {
+	for _, cs := range p.Status.ContainerStatuses {
+		if cs.Name == framework.ControllerContainer {
+			return cs.RestartCount
+		}
+	}
+	return 0
+}
+
 // mountSecret mounts Secret name read-only at path in a probe Pod.
 func mountSecret(name, path string) func(*corev1.Pod) {
 	return func(p *corev1.Pod) {
@@ -1802,6 +1814,17 @@ func TestChart_GraphIdentity(t *testing.T) {
 // the extraEgress destinations, and nothing else: its clone times out, and
 // it cannot promote until extraEgress lets it reach the git server.
 //
+// kindnet enforces a policy for a new Pod only once it has added the Pod's
+// IP to its nftables set, about a second after the Pod gets the IP, and it
+// never re-checks a connection it let through (ct label 28). The controller
+// checks its SCM token as it starts, inside that window. Since Go 1.27,
+// net/http drains the unread 403 and keeps the connection in
+// http.DefaultTransport's pool, and go-git's clone reuses it, so the clone
+// would get through. The test therefore restarts the controller in its Pod
+// once the policy is enforced for the Pod's IP, before it creates the
+// Bundle: the Pod keeps its IP, and kindnet checks every connection the new
+// process opens.
+//
 // Covers CHART-NETPOL-01.
 func TestChart_NetworkPolicy(t *testing.T) {
 	t.Parallel()
@@ -1851,7 +1874,7 @@ func TestChart_NetworkPolicy(t *testing.T) {
 	})
 	framework.Eventually(t, time.Minute, "ingressFrom.metrics refuses other pods", func(context.Context) (bool, string) {
 		res := other.Curl(t, 3*time.Second, metrics)
-		return res.Code == 0, brief(res)
+		return res.TimedOut(), brief(res)
 	})
 	res := other.Curl(t, 5*time.Second, serviceURL(r, 8082, "/ui/"))
 	assert.Equal(t, 200, res.Code, "a port with no ingressFrom admits any pod: %s", brief(res))
@@ -1868,40 +1891,37 @@ func TestChart_NetworkPolicy(t *testing.T) {
 	require.Equal(t, 200, res.Code, brief(res))
 	framework.Eventually(t, time.Minute, "the controller may not reach the git server", func(context.Context) (bool, string) {
 		res := asController.Curl(t, 3*time.Second, gitURL)
-		return res.Code == 0, brief(res)
+		return res.TimedOut(), brief(res)
 	})
 	res = asController.Curl(t, 5*time.Second, "-k", "https://kubernetes.default.svc.cluster.local/version")
 	assert.NotEqual(t, 0, res.Code, "the controller may reach the API server: %s", brief(res))
 	res = asController.Curl(t, 3*time.Second, podinfo)
-	assert.Equal(t, 0, res.Code, "the controller may not reach other pods: %s", brief(res))
+	assert.True(t, res.TimedOut(), "the controller may not reach other pods: %s", brief(res))
 
-	// kindnet checks a connection only when it opens, so one the controller
-	// opened before kindnet enforced the policy for its Pod would outlive
-	// it. Replace the Pod now that the policy is enforced, and see that it is
-	// enforced for the new Pod too, so no connection predates the policy.
+	// Restart the controller in its Pod once kindnet enforces the policy for
+	// the Pod's IP (see above): no connection the new process opens can
+	// predate the policy.
 	since := time.Now()
 	t.Cleanup(func() {
 		if t.Failed() {
 			e.DiagnoseCNI(t, ns, since)
 		}
 	})
-	old := runningPod(t, r)
-	require.NoError(t, e.Client.Delete(ctx, &old))
-	framework.Eventually(t, 3*time.Minute, "a new controller Pod replaces "+old.Name, func(ctx context.Context) (bool, string) {
-		var running []string
-		for _, p := range r.Pods(t) {
-			if p.Name == old.Name || p.DeletionTimestamp != nil {
-				return false, p.Name + " is still there"
-			}
-			if p.Status.Phase == corev1.PodRunning && podReady(&p) {
-				running = append(running, p.Name)
-			}
-		}
-		return len(running) == 1, fmt.Sprintf("ready: %v", running)
+	pod := runningPod(t, r)
+	framework.Eventually(t, time.Minute, "the policy is enforced for "+pod.Name+"'s IP", func(context.Context) (bool, string) {
+		res := other.Curl(t, 3*time.Second, "http://"+net.JoinHostPort(pod.Status.PodIP, "8080")+"/metrics")
+		return res.TimedOut(), brief(res)
 	})
-	framework.Eventually(t, time.Minute, "ingressFrom.metrics refuses other pods at the new controller Pod", func(context.Context) (bool, string) {
-		res := other.Curl(t, 3*time.Second, metrics)
-		return res.Code == 0, brief(res)
+	restarts := controllerRestarts(&pod)
+	e.Kubectl(t, ns, "", "exec", pod.Name, "-c", framework.ControllerContainer, "--", "kill", "1")
+	framework.Eventually(t, 3*time.Minute, "the controller restarts in "+pod.Name, func(ctx context.Context) (bool, string) {
+		var p corev1.Pod
+		if err := e.Client.Get(ctx, client.ObjectKeyFromObject(&pod), &p); err != nil {
+			return false, err.Error()
+		}
+		require.Equal(t, pod.Status.PodIP, p.Status.PodIP, "the Pod keeps its IP")
+		return controllerRestarts(&p) > restarts && podReady(&p),
+			fmt.Sprintf("%d restarts, ready %t", controllerRestarts(&p), podReady(&p))
 	})
 
 	a.apply(t, a.resourcePipeline(nil))

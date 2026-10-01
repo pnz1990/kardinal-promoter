@@ -93,6 +93,14 @@ type CurlResult struct {
 	Err string
 }
 
+// TimedOut reports whether the request got no answer in time (curl exit 28).
+// A NetworkPolicy drops the packets, so the connection times out; a refused
+// or unroutable connection (curl exit 7) fails at once and proves nothing
+// about a policy.
+func (r CurlResult) TimedOut() bool {
+	return r.Code == 0 && strings.Contains(r.Err, "curl: (28)")
+}
+
 var curlStatus = regexp.MustCompile(`(?m)^HTTP/[0-9.]+ ([0-9]{3})`)
 
 // Curl runs curl in the probe Pod with args (method, headers, URL...) and a
