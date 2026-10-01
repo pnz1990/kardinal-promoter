@@ -22,6 +22,9 @@
 #   upgrade Forgejo + Argo CD + kardinal-promoter v0.8.1 (kardinal-v081.sh) and
 #           no kro: the TestUpgrade_ test upgrades v0.8.1 to this checkout,
 #           so the cluster serves one run; delete it before the next
+#   multi-cluster  the hub (Forgejo, Argo CD, Flux, Argo Rollouts, kardinal)
+#           and a second kind cluster, <cluster>-spoke, with Argo Rollouts,
+#           which the hub's Argo CD and Flux manage (spoke.sh)
 #
 # Env:
 #   KIND_CLUSTER     cluster name (default kardinal-e2e-SUITE)
@@ -70,6 +73,10 @@ case "$SUITE" in
   # loads the image and the CLI; the test applies the CRDs and upgrades.
   upgrade) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v081.sh) RUN='^TestUpgrade_'
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
+  # Argo Rollouts runs in the hub too, so a Rollout the hub's argoRollouts
+  # check cannot find is missing from the hub, not from its API.
+  multi-cluster) COMPONENTS=("giteafamily.sh forgejo" argocd.sh flux.sh rollouts.sh spoke.sh)
+    RUN='^TestMultiCluster_' ;;
   *)
     echo "unknown suite $SUITE" >&2
     exit 1
@@ -82,7 +89,8 @@ export E2E_OUT
 
 NODE_IMAGE=
 if [ -n "${KIND_K8S:-}" ]; then
-  var="KIND_NODE_${KIND_K8S//./_}" suitevar="KIND_NODE_${SUITE^^}_${KIND_K8S//./_}"
+  suitevar=${SUITE^^}
+  var="KIND_NODE_${KIND_K8S//./_}" suitevar="KIND_NODE_${suitevar//-/_}_${KIND_K8S//./_}"
   # shellcheck disable=SC1091
   NODE_IMAGE=$(source "$REPO_ROOT/hack/tool-versions.env" && echo "${!var:-}")
   [ -n "$NODE_IMAGE" ] || NODE_IMAGE=${!suitevar:-}

@@ -144,8 +144,9 @@ e2e-up: ## Create or update the kind cluster for live suite SUITE (default core)
 test-e2e-live: ## Run live suite SUITE against the cluster from make e2e-up; fails on any skip
 	KIND_CLUSTER=kardinal-e2e-$(SUITE) COUNT=$(COUNT) RUN='$(RUN)' SHARD=$(SHARD) bash hack/e2e/run.sh $(SUITE)
 
-e2e-down: ## Delete the kind cluster of live suite SUITE
+e2e-down: ## Delete the kind cluster of live suite SUITE (and the multi-cluster suite's spoke)
 	kind delete cluster --name kardinal-e2e-$(SUITE)
+	if kind get clusters 2>/dev/null | grep -qx kardinal-e2e-$(SUITE)-spoke; then kind delete cluster --name kardinal-e2e-$(SUITE)-spoke; fi
 
 ## Tools
 $(LOCALBIN):
