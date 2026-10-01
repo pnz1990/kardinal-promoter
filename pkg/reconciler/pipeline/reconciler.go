@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -78,6 +79,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// reconciler reads. Converging here makes a plain spec edit pause too, and
 	// recreates a freeze gate deleted by hand while the pipeline is paused.
 	desiredPaused, err := r.convergeFreezeGate(ctx, &p)
+	if apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause) {
+		// The namespace is being deleted: it refuses the freeze gate, and its
+		// deletion deletes the Pipeline next.
+		log.Debug().Err(err).Msg("namespace is being deleted — freeze gate not created")
+		return ctrl.Result{}, nil
+	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}

@@ -12,9 +12,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -394,6 +396,54 @@ func TestPipelineLifecycle_FreezeGateFollowsSpecPaused(t *testing.T) {
 	_, err = reconcilePipeline(t, c, "app")
 	require.NoError(t, err)
 	require.NoError(t, c.Get(ctx, gateKey, &gate), "a user gate without the freeze label is not deleted")
+}
+
+// B54: a paused Pipeline whose freeze gate went with its namespace being
+// deleted cannot get it back, since the namespace refuses new objects. That is
+// not a reconcile error, retried with backoff until the Pipeline goes.
+func TestPipelineLifecycle_FreezeGateInTerminatingNamespace(t *testing.T) {
+	p := makePipelineWithEnvs("app", "default", "test")
+	p.UID = "uid-app"
+	p.Spec.Paused = true
+	nsErr := apierrors.NewForbidden(schema.GroupResource{Group: "kardinal.io", Resource: "policygates"}, "freeze-app",
+		errors.New("unable to create new content in namespace default because it is being terminated"))
+	nsErr.ErrStatus.Details.Causes = append(nsErr.ErrStatus.Details.Causes, metav1.StatusCause{
+		Type: corev1.NamespaceTerminatingCause, Field: "metadata.namespace",
+		Message: "namespace default is being terminated"})
+	for _, tc := range []struct {
+		name    string
+		err     error
+		wantErr bool
+	}{
+		{name: "the namespace is being deleted", err: nsErr},
+		{name: "another create error is retried", err: errors.New("etcdserver: request timed out"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			creates := 0
+			c := fake.NewClientBuilder().WithScheme(newPipelineScheme()).WithObjects(p.DeepCopy()).
+				WithStatusSubresource(&kardinalv1alpha1.Pipeline{}).
+				WithIndex(&kardinalv1alpha1.PromotionStep{}, "spec.pipelineName", func(obj client.Object) []string {
+					return []string{obj.(*kardinalv1alpha1.PromotionStep).Spec.PipelineName}
+				}).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+						if _, ok := obj.(*kardinalv1alpha1.PolicyGate); ok {
+							creates++
+							return tc.err
+						}
+						return cl.Create(ctx, obj, opts...)
+					},
+				}).Build()
+
+			_, err := reconcilePipeline(t, c, "app")
+			assert.Equal(t, 1, creates, "the freeze gate create was tried")
+			if tc.wantErr {
+				require.ErrorContains(t, err, "request timed out")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
 
 // TestPipelineLifecycle_PausedCondition: a paused Pipeline reports Paused=True
