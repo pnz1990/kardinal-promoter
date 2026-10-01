@@ -161,7 +161,7 @@ SCM-PRBODY-01	live	scm-forgejo	todo	scm	PR body is a one-time snapshot: artifact
 SCM-PROVIDERFLAG-01	live	scm-forgejo	todo	scm	controller-wide --scm-provider selects the provider; spec.git.provider is ignored	docs/scm-providers.md:231-236; pkg/scm/factory.go:28
 WEBHOOK-NOSECRET-01	live	scm-forgejo	todo	webhook	without --webhook-secret, POST /webhook/scm returns 401 for every event and merges come from polling	docs/scm-providers.md:25-27; cmd/kardinal-controller/webhook.go:79-81
 WEBHOOK-NONMERGE-01	live	scm-forgejo	todo	webhook	non-merge events (opened, closed without merge, push) return 204 and change nothing	cmd/kardinal-controller/webhook.go:118-121
-WEBHOOK-HEALTH-01	live	core	todo	webhook	GET /webhook/scm/health reports webhookConfigured and eventsProcessed	cmd/kardinal-controller/webhook.go:142
+WEBHOOK-HEALTH-01	live	core	covered	webhook	GET /webhook/scm/health reports webhookConfigured and eventsProcessed	cmd/kardinal-controller/webhook.go:142
 WEBHOOK-SECRET-01	live	scm-forgejo	todo	webhook	webhook secret is read once at startup; changing it needs a restart	cmd/kardinal-controller/main.go:117; pkg/scm/dynamic.go:35-48
 GATE-CEL-01	live	core	covered	gates	team PolicyGate CEL expression blocks the env step while false and releases it when true	docs/policy-gates.md:13-66; pkg/reconciler/policygate/reconciler.go:292-414
 GATE-CEL-02	live	core	covered	gates	invalid or non-bool CEL expression fails closed with a reason in status	docs/policy-gates.md:149-168; pkg/reconciler/policygate/cel_evaluator.go
@@ -210,29 +210,29 @@ PAUSE-01	live	core	covered	pause	paused Pipeline holds new steps via freeze-<pip
 PAUSE-02	live	core	covered	pause	in-flight WaitingForMerge/HealthChecking steps finish; others hold at the next safe point	docs/rollback.md:197
 PAUSE-03	live	core	covered	pause	resume deletes the freeze gate and held steps continue	docs/rollback.md:200
 PAUSE-04	live	core	covered	pause	setting spec.paused directly (kubectl) has the same effect as kardinal pause	docs/pipeline-reference.md:134-138
-SUB-OCI-01	live	subscriptions	todo	subscription	image Subscription polls a public OCI registry; a new matching tag creates Bundle <sub>-<tag>-<digest8>	docs/subscription.md:33-77; pkg/source/oci.go
-SUB-OCI-02	live	subscriptions	todo	subscription	tagFilter semver/regex picks the tag; no match (or over 50 non-semver tags) gives phase Error	docs/subscription.md:78-100; pkg/source/oci.go
-SUB-OCI-03	live	subscriptions	todo	subscription	digest-tracked tag (^main$): a new digest on the same tag creates a new Bundle	docs/subscription.md:78-100
-SUB-OCI-04	live	subscriptions	todo	subscription	private registry gives phase Error; only public registries are supported	api/v1alpha1/subscription_types.go:54-58; pkg/source/oci.go:357-400
-SUB-GIT-01	live	subscriptions	todo	subscription	git Subscription polls a branch (default main); a new commit creates a Bundle	docs/subscription.md:101-133; pkg/source/git.go:121-166
-SUB-GIT-02	live	subscriptions	todo	subscription	git pathGlob filters commits by path	docs/subscription.md:101-133; pkg/source/git.go:85-88
-SUB-DEDUPE-01	live	subscriptions	todo	subscription	first poll only records the digest; the same digest never creates a second Bundle (kardinal.io/source-digest label)	docs/subscription.md:144-167
-SUB-INTERVAL-01	live	subscriptions	todo	subscription	interval minimum 30s	docs/subscription.md:47; pkg/reconciler/subscription/reconciler.go:349
-SUB-STATUS-01	live	subscriptions	todo	subscription	status phase Watching/Error, lastBundle and lastCheckedAt; printer columns	docs/subscription.md:134-143; docs/subscription.md:168-177
-SUB-NS-01	live	subscriptions	todo	subscription	spec.namespace different from the Subscription namespace gives phase Error	api/v1alpha1/subscription_types.go:41-46
-SUB-EGRESS-01	live	subscriptions	todo	subscription	Subscription OCI/git clients to internal addresses	pkg/source/oci.go; pkg/source/git.go; docs/guides/security.md:371-405
-NOTIF-01	live	notifications	todo	notifications	NotificationHook delivers Bundle.Verified with the documented JSON payload	docs/notifications.md:39-80; api/v1alpha1/notificationhook_types.go:11
-NOTIF-02	live	notifications	todo	notifications	NotificationHook delivers Bundle.Failed	docs/notifications.md:65-80
-NOTIF-03	live	notifications	todo	notifications	NotificationHook delivers PolicyGate.Blocked	docs/notifications.md:65-80
-NOTIF-04	live	notifications	todo	notifications	NotificationHook delivers PromotionStep.Failed	docs/notifications.md:65-80
-NOTIF-AUTH-01	live	notifications	todo	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:112-160; pkg/reconciler/notificationhook/reconciler.go:429-431
-NOTIF-SEL-01	live	notifications	todo	notifications	pipelineSelector limits which Pipelines a hook reports on	docs/notifications.md:190
-NOTIF-EGRESS-01	live	notifications	todo	notifications	hook URL to loopback, link-local or metadata address is refused	docs/guides/security.md:371-405; pkg/egress/guard.go:65-88
-NOTIF-RETRY-01	live	notifications	todo	notifications	failed deliveries retried with backoff	docs/notifications.md:95-97; pkg/reconciler/notificationhook/reconciler.go:208-231
-NOTIF-GIVEUP-01	live	notifications	todo	notifications	delivery gives up after 10 attempts; a spec edit resets the count	docs/notifications.md:84-111
-NOTIF-NEW-01	live	notifications	todo	notifications	a new hook delivers only the newest existing event, not the backlog	docs/notifications.md:84-111
-NOTIF-STATUS-01	live	notifications	todo	notifications	status records last delivery, result and failure count	docs/notifications.md:161-189
-NOTIF-PAYLOAD-01	live	notifications	todo	notifications	Bundle event payload carries environment	docs/notifications.md:48
+SUB-OCI-01	live	core	covered	subscription	image Subscription polls a public OCI registry; a new matching tag creates Bundle <sub>-<tag>-<digest8>	docs/subscription.md:33-77; pkg/source/oci.go
+SUB-OCI-02	live	core	covered	subscription	tagFilter semver/regex picks the tag; no match (or over 50 non-semver tags) gives phase Error	docs/subscription.md:78-100; pkg/source/oci.go
+SUB-OCI-03	live	core	covered	subscription	digest-tracked tag (^main$): a new digest on the same tag creates a new Bundle	docs/subscription.md:78-100
+SUB-OCI-04	live	core	covered	subscription	private registry gives phase Error; only public registries are supported	api/v1alpha1/subscription_types.go:54-58; pkg/source/oci.go:357-400
+SUB-GIT-01	live	core	covered	subscription	git Subscription polls a branch (default main); a new commit creates a Bundle	docs/subscription.md:101-133; pkg/source/git.go:121-166
+SUB-GIT-02	live	core	covered	subscription	git pathGlob filters commits by path	docs/subscription.md:101-133; pkg/source/git.go:85-88
+SUB-DEDUPE-01	live	core	covered	subscription	first poll only records the digest; the same digest never creates a second Bundle (kardinal.io/source-digest label)	docs/subscription.md:144-167
+SUB-INTERVAL-01	live	core	covered	subscription	interval minimum 30s	docs/subscription.md:47; pkg/reconciler/subscription/reconciler.go:349
+SUB-STATUS-01	live	core	covered	subscription	status phase Watching/Error, lastBundle and lastCheckedAt; printer columns	docs/subscription.md:134-143; docs/subscription.md:168-177
+SUB-NS-01	live	core	covered	subscription	spec.namespace different from the Subscription namespace gives phase Error	api/v1alpha1/subscription_types.go:41-46
+SUB-EGRESS-01	live	core	covered	subscription	Subscription OCI/git clients to internal addresses	pkg/source/oci.go; pkg/source/git.go; docs/guides/security.md:371-405
+NOTIF-01	live	core	covered	notifications	NotificationHook delivers Bundle.Verified with the documented JSON payload	docs/notifications.md:39-80; api/v1alpha1/notificationhook_types.go:11
+NOTIF-02	live	core	covered	notifications	NotificationHook delivers Bundle.Failed	docs/notifications.md:65-80
+NOTIF-03	live	core	covered	notifications	NotificationHook delivers PolicyGate.Blocked	docs/notifications.md:65-80
+NOTIF-04	live	core	covered	notifications	NotificationHook delivers PromotionStep.Failed	docs/notifications.md:65-80
+NOTIF-AUTH-01	live	core	covered	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:112-160; pkg/reconciler/notificationhook/reconciler.go:429-431
+NOTIF-SEL-01	live	core	covered	notifications	pipelineSelector limits which Pipelines a hook reports on	docs/notifications.md:190
+NOTIF-EGRESS-01	live	core	covered	notifications	hook URL to loopback, link-local or metadata address is refused	docs/guides/security.md:371-405; pkg/egress/guard.go:65-88
+NOTIF-RETRY-01	live	core	covered	notifications	failed deliveries retried with backoff	docs/notifications.md:95-97; pkg/reconciler/notificationhook/reconciler.go:208-231
+NOTIF-GIVEUP-01	live	core	covered	notifications	delivery gives up after 10 attempts; a spec edit resets the count	docs/notifications.md:84-111
+NOTIF-NEW-01	live	core	covered	notifications	a new hook delivers only the newest existing event, not the backlog	docs/notifications.md:84-111
+NOTIF-STATUS-01	live	core	covered	notifications	status records last delivery, result and failure count	docs/notifications.md:161-189
+NOTIF-PAYLOAD-01	live	core	covered	notifications	documented payload fields; Bundle events carry no environment	docs/notifications.md:53-72
 CLI-VERSION-01	live	cli	todo	cli	kardinal version prints the CLI version line	cmd/kardinal/cmd/version.go:33; docs/reference/cli/kardinal-version.md
 CLI-VERSION-02	live	cli	todo	cli	kardinal version shows the controller version from the kardinal-version ConfigMap (--controller-namespace)	cmd/kardinal/cmd/version.go:33
 CLI-GLOBAL-01	live	cli	todo	cli	global flags -n, --kubeconfig, --context select the target	cmd/kardinal/cmd/root.go:61-65
@@ -241,7 +241,7 @@ CLI-GET-PIPELINES-01	live	cli	todo	cli	get pipelines table per env (-A, -w) and 
 CLI-GET-BUNDLES-01	live	cli	todo	cli	get bundles (--active)	docs/reference/cli/kardinal-get-bundles.md
 CLI-GET-STEPS-01	live	cli	todo	cli	get steps (-w) one row per env	docs/reference/cli/kardinal-get-steps.md
 CLI-GET-AUDIT-01	live	cli	todo	cli	get auditevents --pipeline --bundle --env --limit	docs/reference/cli/kardinal-get-auditevents.md; docs/guides/security.md:290-310
-CLI-GET-SUBS-01	live	subscriptions	todo	cli	get subscriptions -A	docs/reference/cli/kardinal-get-subscriptions.md
+CLI-GET-SUBS-01	live	core	covered	cli	get subscriptions -A	docs/reference/cli/kardinal-get-subscriptions.md
 CLI-EXPLAIN-01	live	cli	todo	cli	explain <pipeline> --env shows each gate STATE (Waiting/Block/Superseded), expression and reason	cmd/kardinal/cmd/explain.go:43; docs/reference/cli/kardinal-explain.md
 CLI-EXPLAIN-02	live	cli	todo	cli	explain --watch and --color	cmd/kardinal/cmd/explain.go:43
 CLI-STATUS-01	live	cli	todo	cli	status [pipeline] shows controller health, version and blocking gates	cmd/kardinal/cmd/status.go:37
@@ -301,17 +301,17 @@ UI-TIMELINE-01	live	ui	covered	ui	bundle timeline select/compare and diff panel	
 UI-INSECURE-01	live	ui	covered	ui	insecure-connection banner and port-forward hint	docs/guides/security.md:615-628
 UI-SHELL-01	live	ui	covered	ui	keyboard shortcuts, theme, URL deep links, refreshed-ago polling	docs/roadmap.md:133
 UI-OVERRIDE-01	live	ui	todo	ui	approve or override a gate from the UI	docs/roadmap.md:83-85; docs/guides/security.md:541-542
-CIAPI-OFF-01	live	core	todo	ci-api	without --bundle-api-token / KARDINAL_BUNDLE_TOKEN, POST /api/v1/bundles is not mounted (404)	docs/ci-integration.md:228-254; cmd/kardinal-controller/bundle_api.go
-CIAPI-AUTH-01	live	core	todo	ci-api	wrong bearer gets 401; non-POST gets 405	cmd/kardinal-controller/bundle_api.go:136-151
-CIAPI-CREATE-01	live	core	todo	ci-api	valid POST returns 201 {name,namespace}; the Bundle promotes with provenance	docs/ci-integration.md:7-36; docs/ci-integration.md:285-314; docs/ci-integration.md:388
-CIAPI-VALIDATE-01	live	core	todo	ci-api	unknown fields, invalid Bundle, body over 1 MiB or bad ciRunURL gets 400 without echoing the URL	cmd/kardinal-controller/bundle_api.go:160-187; pkg/graph/validate.go:325-345
-CIAPI-NS-01	live	core	todo	ci-api	namespace outside --watch-namespace gets 403	cmd/kardinal-controller/bundle_api.go:194-197
-CIAPI-RATE-01	live	core	todo	ci-api	over the rate limit gets 429	docs/troubleshooting.md:238; cmd/kardinal-controller/bundle_api.go:43-46; cmd/kardinal-controller/bundle_api.go:154-157
-CIAPI-INTENT-01	live	core	todo	ci-api	Bundle intent (targetEnvironment, skipEnvironments) via the API	docs/ci-integration.md:365-387; cmd/kardinal-controller/bundle_api.go:63
-CIAPI-KUBECTL-01	live	core	todo	ci-api	Bundle applied with kubectl (spec.provenance) promotes like one from the API	docs/ci-integration.md:189-225
-CIAPI-ACTION-01	live	scm-github	todo	ci-api	GitHub Action create-bundle posts an image Bundle with provenance from GITHUB_SHA/RUN/ACTOR	docs/ci-integration.md:37-125; .github/actions/create-bundle/action.yml:5-33
-CIAPI-ACTION-02	live	scm-github	todo	ci-api	GitHub Action type config or mixed	docs/ci-integration.md:105; .github/actions/create-bundle/action.yml:9-12; .github/actions/create-bundle/parse.sh:65-82; pkg/lifecycle/newbundle.go:42
-CIAPI-GITLAB-01	live	scm-gitlab	todo	ci-api	GitLab CI example payload creates a Bundle	docs/ci-integration.md:126-165; cmd/kardinal-controller/bundle_api.go:168-174
+CIAPI-OFF-01	live	core	covered	ci-api	without --bundle-api-token / KARDINAL_BUNDLE_TOKEN, POST /api/v1/bundles is not mounted (404)	docs/ci-integration.md:228-254; cmd/kardinal-controller/bundle_api.go
+CIAPI-AUTH-01	live	core	covered	ci-api	wrong bearer gets 401; non-POST gets 405	cmd/kardinal-controller/bundle_api.go:136-151
+CIAPI-CREATE-01	live	core	covered	ci-api	valid POST returns 201 {name,namespace}; the Bundle promotes with provenance	docs/ci-integration.md:7-36; docs/ci-integration.md:285-314; docs/ci-integration.md:388
+CIAPI-VALIDATE-01	live	core	covered	ci-api	unknown fields, invalid Bundle, body over 1 MiB or bad ciRunURL gets 400 without echoing the URL	cmd/kardinal-controller/bundle_api.go:160-187; pkg/graph/validate.go:325-345
+CIAPI-NS-01	live	core	covered	ci-api	namespace outside --watch-namespace gets 403	cmd/kardinal-controller/bundle_api.go:194-197
+CIAPI-RATE-01	live	core	covered	ci-api	over the rate limit gets 429	docs/troubleshooting.md:238; cmd/kardinal-controller/bundle_api.go:43-46; cmd/kardinal-controller/bundle_api.go:154-157
+CIAPI-INTENT-01	live	core	covered	ci-api	Bundle intent (targetEnvironment, skipEnvironments) via the API	docs/ci-integration.md:365-387; cmd/kardinal-controller/bundle_api.go:63
+CIAPI-KUBECTL-01	live	core	covered	ci-api	Bundle applied with kubectl (spec.provenance) promotes like one from the API	docs/ci-integration.md:189-225
+CIAPI-ACTION-01	live	core	covered	ci-api	GitHub Action create-bundle posts an image Bundle with provenance from GITHUB_SHA/RUN/ACTOR	docs/ci-integration.md:37-125; .github/actions/create-bundle/action.yml:5-33
+CIAPI-ACTION-02	live	core	covered	ci-api	GitHub Action type config or mixed	docs/ci-integration.md:105; .github/actions/create-bundle/action.yml:9-12; .github/actions/create-bundle/parse.sh:65-82; pkg/lifecycle/newbundle.go:42
+CIAPI-GITLAB-01	live	core	covered	ci-api	GitLab CI example payload creates a Bundle	docs/ci-integration.md:126-165; cmd/kardinal-controller/bundle_api.go:168-174
 CHART-DEFAULT-01	live	chart	todo	chart	default helm install: controller Deployment becomes Ready	docs/installation.md:72-110; hack/e2e-setup.sh:30-62
 CHART-IMAGE-01	live	chart	todo	chart	image.repository/tag/pullPolicy	chart/kardinal-promoter/values.yaml:12-18
 CHART-HA-01	live	chart	todo	chart	replicaCount > 1 with leaderElect, pdb and topologySpread: one leader reconciles, failover works	chart/kardinal-promoter/values.yaml:5; chart/kardinal-promoter/values.yaml:60; chart/kardinal-promoter/values.yaml:268-277
@@ -355,7 +355,7 @@ EX-GITHUB-DEMO-01	live	scm-github	todo	examples	github-demo: pr-review, bake, on
 EX-FLUX-01	live	health-flux	todo	examples	flux-demo: flux health and bake fail-on-alarm	examples/flux-demo
 EX-ROLLOUTS-01	live	delivery	covered	examples	argo-rollouts-demo: Degraded rollout opens a rollback PR	examples/argo-rollouts-demo/README.md:21; examples/argo-rollouts-demo/README.md:150
 EX-FLAGGER-01	live	delivery	covered	examples	flagger-demo: failed canary opens a rollback PR	examples/flagger-demo/README.md:23; examples/flagger-demo/README.md:126
-EX-SUB-01	live	subscriptions	todo	examples	subscription example (OCI and git watchers)	examples/subscription
+EX-SUB-01	live	core	covered	examples	subscription example (OCI and git watchers)	examples/subscription
 EX-CONFIG-01	live	core	todo	examples	config-promotion example (config Bundle)	examples/config-promotion
 EX-WAVE-01	live	core	todo	examples	wave-topology example	examples/wave-topology
 EX-FLEET-01	live	multi-cluster	todo	examples	multi-cluster-fleet: fan-out to both prod regions	examples/multi-cluster-fleet/README.md:109; examples/multi-cluster-fleet/bundle.yaml:20-21
