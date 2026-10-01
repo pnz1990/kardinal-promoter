@@ -9,7 +9,7 @@
 // Requests are grouped in buckets, the first path segment; each test uses its
 // own (its namespace name):
 //
-//	ANY  /<bucket>/...      recorded; answered 200 "ok" unless a mode is set
+//	ANY  /<bucket>/...      recorded; answered 200 "OK" unless a mode is set
 //	GET  /_records/<bucket> the bucket's records, oldest first, as JSON
 //	POST /_mode/<bucket>    {"status":503,"times":2,"location":"...",
 //	                        "retryAfter":"600"}: answer the next times

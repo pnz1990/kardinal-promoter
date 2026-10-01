@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 )
 
 // The GitHub tests run in the github suite, whose controller runs with
@@ -118,8 +120,9 @@ func TestGitHub_TokenCheck(t *testing.T) {
 // suite's webhook receiver, which records every request and answers 200
 // "OK": the startup token check asks it for /user and the PRStatus poll for
 // /repos/<repo>/pulls/<n>, each with the token as a Bearer and GitHub's
-// Accept header. "OK" is not GitHub's JSON, so the check reports the scopes
-// unverified, the poll fails and retries, and the step keeps waiting. Back
+// Accept header. The answer has no X-OAuth-Scopes header, so the check
+// reports the scopes unverified; "OK" is not GitHub's JSON, so the poll
+// fails to decode it and retries, and the step keeps waiting. Back
 // on the suite's controller, the merge is seen and the step is Verified.
 // The PR is opened before the host changes, so no branch is pushed without
 // a PR that cleanup closes. Not parallel: it changes the controller's flags.
@@ -159,7 +162,7 @@ func TestGitHub_SCMAPIURL(t *testing.T) {
 	})
 	for path, r := range got {
 		// The header's value is the token; it is not logged.
-		assert.True(t, strings.HasPrefix(r.Header("Authorization"), "Bearer "), "%s: the token goes as a Bearer", path)
+		assert.True(t, r.Header("Authorization") == "Bearer "+os.Getenv(gitserver.EnvToken), "%s: the suite's token goes as a Bearer", path)
 		assert.Equal(t, "application/vnd.github+json", r.Header("Accept"), path)
 	}
 	e.WaitControllerLog(t, since, time.Minute, "the token check to read the receiver's answer",

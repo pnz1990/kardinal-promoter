@@ -258,7 +258,7 @@ Common causes:
 - The git server refuses to deliver to the controller's address: on Forgejo and Gitea it is
   not in `ALLOWED_HOST_LIST`, whose default allows only external hosts; on GitLab
   `allow_local_requests_from_web_hooks_and_services` is off. The controller never sees the
-  event. The settings are in [SCM Providers](scm-providers.md#webhook-configuration-2).
+  event. The settings are in SCM Providers for [Forgejo and Gitea](scm-providers.md#webhook-configuration_2) and [GitLab](scm-providers.md#webhook-configuration_1).
 - Webhook secret mismatch (`X-Hub-Signature-256` validation failing)
 - The SCM API did not confirm the merge. The controller asks it before it marks a PR
   merged, and logs `SCM provider reports the PR of the merge event not merged` or `could not
