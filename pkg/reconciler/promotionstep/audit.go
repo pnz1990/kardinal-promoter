@@ -20,6 +20,8 @@ import (
 	"fmt"
 
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -102,7 +104,16 @@ func writeAuditEvent(
 	}
 
 	// Idempotent: if the event already exists (re-reconcile), ignore the conflict.
-	if err := c.Create(ctx, ae); client.IgnoreAlreadyExists(err) != nil {
+	err := c.Create(ctx, ae)
+	switch {
+	case client.IgnoreAlreadyExists(err) == nil:
+	case apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause):
+		// The namespace is being deleted: it refuses new objects, and its
+		// deletion removes the step and its records next.
+		zerolog.Ctx(ctx).Debug().Err(err).
+			Str("auditEvent", name).Str("action", action).
+			Msg("namespace is being deleted — AuditEvent not written")
+	default:
 		// RBAC or quota failures must be visible, but never block promotion.
 		zerolog.Ctx(ctx).Error().Err(err).
 			Str("auditEvent", name).Str("action", action).

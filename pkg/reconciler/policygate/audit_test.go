@@ -6,6 +6,7 @@ package policygate_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -141,6 +143,39 @@ func TestPolicyGateReconciler_AuditWriteErrorIsLogged(t *testing.T) {
 	assert.True(t, got.Status.Ready)
 	assert.Contains(t, logs.String(), "failed to write PolicyGate AuditEvent")
 	assert.Contains(t, logs.String(), "forbidden")
+}
+
+// TestPolicyGateReconciler_AuditInTerminatingNamespace: a namespace being
+// deleted refuses the AuditEvent, and its deletion removes the gate next. The
+// refusal is logged at debug, not as a failed write.
+func TestPolicyGateReconciler_AuditInTerminatingNamespace(t *testing.T) {
+	gate := makeGateInstance("prod-no-weekend", "default", "nginx-demo-v1", "true", "5m")
+	terminating := apierrors.NewForbidden(schema.GroupResource{Group: "kardinal.io", Resource: "auditevents"}, "x",
+		errors.New("unable to create new content in namespace default because it is being terminated"))
+	terminating.ErrStatus.Details.Causes = append(terminating.ErrStatus.Details.Causes, metav1.StatusCause{
+		Type: corev1.NamespaceTerminatingCause, Field: "metadata.namespace",
+		Message: "namespace default is being terminated"})
+	c := fake.NewClientBuilder().WithScheme(newScheme()).
+		WithObjects(gate, makeBundle("nginx-demo-v1", "default")).
+		WithStatusSubresource(gate).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*kardinalv1alpha1.AuditEvent); ok {
+					return terminating
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+
+	var logs bytes.Buffer
+	ctx := zerolog.New(&logs).WithContext(context.Background())
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: gate.Name}})
+	require.NoError(t, err)
+	assert.Contains(t, logs.String(), "being terminated")
+	assert.NotContains(t, logs.String(), `"level":"warn"`)
+	assert.NotContains(t, logs.String(), `"level":"error"`)
 }
 
 // TestReconciler_OverrideRequeuesAtExpiry covers C04-gates-21: while an
