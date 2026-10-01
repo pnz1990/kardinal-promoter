@@ -160,12 +160,13 @@ SUITE ?= core
 KIND_K8S ?=
 COUNT ?= 1
 RUN ?=
+SHARD ?=
 
 e2e-up: ## Create or update the kind cluster for live suite SUITE (default core)
 	KIND_CLUSTER=kardinal-e2e-$(SUITE) KIND_K8S=$(KIND_K8S) bash hack/e2e/up.sh $(SUITE)
 
 test-e2e-live: ## Run live suite SUITE against the cluster from make e2e-up; fails on any skip
-	KIND_CLUSTER=kardinal-e2e-$(SUITE) COUNT=$(COUNT) RUN='$(RUN)' bash hack/e2e/run.sh $(SUITE)
+	KIND_CLUSTER=kardinal-e2e-$(SUITE) COUNT=$(COUNT) RUN='$(RUN)' SHARD=$(SHARD) bash hack/e2e/run.sh $(SUITE)
 
 e2e-down: ## Delete the kind cluster of live suite SUITE
 	kind delete cluster --name kardinal-e2e-$(SUITE)
