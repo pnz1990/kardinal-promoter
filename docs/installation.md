@@ -515,10 +515,11 @@ terminationGracePeriodSeconds: 120  # increase if reconcile loops routinely take
 ## Uninstall
 
 Delete your Bundles, and wait for their PromotionSteps to go, before you uninstall the
-controller. A step of a `pr-review` environment carries the `kardinal.io/close-pr` finalizer
-while it is `Promoting` or `WaitingForMerge`, and on delete the controller closes its PR with a
-comment before it lets the step go. Without the controller the finalizer stays, and the step,
-its Graph, its namespace and the PromotionStep CRD never finish deleting.
+controller. A step whose environment was `pr-review` when the step started carries the
+`kardinal.io/close-pr` finalizer while it is `Promoting` or `WaitingForMerge`, and on delete the
+controller closes its PR with a comment before it lets the step go. Without the controller the
+finalizer stays, and the step, its Graph, its namespace and the PromotionStep CRD never finish
+deleting.
 
 In namespace mode (`controller.watchNamespace`), deleting the release namespace is the same as
 uninstalling first: the controller goes with the Bundles, so the finalizers stay and the

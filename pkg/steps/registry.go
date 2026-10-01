@@ -28,9 +28,9 @@ func Register(s Step) {
 
 // Lookup returns the registered Step for the given name.
 //
-// An empty or unregistered name is a permanent error: the step sequence comes
-// from DefaultSequenceForBundle, which names only built-in steps, so an
-// unknown name is a bug that no retry can fix.
+// An empty or unregistered name is a permanent error: a step runs the list
+// recorded in its status.steps when it started, which DefaultSequenceForBundle
+// built from built-in steps only, so an unknown name is one no retry can fix.
 func Lookup(name string) (Step, error) {
 	if name == "" {
 		return nil, Permanent(errors.New("empty step name"))
