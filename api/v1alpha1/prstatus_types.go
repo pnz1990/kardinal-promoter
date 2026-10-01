@@ -66,6 +66,17 @@ type PRStatusStatus struct {
 	// +optional
 	MergeCommitSHA string `json:"mergeCommitSHA,omitempty"`
 
+	// MergeCommitUnavailable is true once the PR is merged and the
+	// PRStatusReconciler stopped trying to learn mergeCommitSHA: the SCM
+	// provider cannot report merge commits, reported none for this PR,
+	// failed with an error a retry cannot fix (401, 403 that is not a rate
+	// limit, 404, 410), or still failed 5 minutes after the merge was
+	// recorded. Until then an
+	// argocd health check of the PromotionStep waits for the merge commit
+	// instead of checking the Bundle images only.
+	// +optional
+	MergeCommitUnavailable bool `json:"mergeCommitUnavailable,omitempty"`
+
 	// PollError is the SCM API error of the last poll when a retry cannot fix
 	// it: HTTP 401, 403 (not a rate limit), 404 or 410. The PromotionStep
 	// waiting for this PR fails with it. Cleared by the next successful poll.

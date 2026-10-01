@@ -1012,7 +1012,9 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 // ref nodes (C03-promotionstep-04, -19). The expected revision is the pushed
 // or merged commit (expectedRevision) and the expected images are the Bundle
 // images (C03-promotionstep-11, E2E-01). A flux check of a pr-review step
-// that opened a PR is Progressing until the merge commit is known (#1307).
+// that opened a PR is Progressing until the merge commit is known (#1307),
+// and an argocd one until it is known or the PRStatus records that it will
+// not be (status.mergeCommitUnavailable, B80).
 //
 // health.timeout bounds the time until the first Healthy result. Reaching it
 // is a health failure: it counts in status.consecutiveHealthFailures and
@@ -1097,7 +1099,8 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 
 	opts := health.OptionsForEnv(pipeline.Name, env)
 	opts.Timeout = timeout
-	opts.ExpectedRevision = r.expectedRevision(ctx, ps)
+	var mergeCommitPending bool
+	opts.ExpectedRevision, mergeCommitPending = r.expectedRevision(ctx, log, ps)
 	recordMergeCommit(ps, opts.ExpectedRevision)
 	for _, img := range bundle.Spec.Images {
 		opts.ExpectedImages = append(opts.ExpectedImages,
@@ -1114,20 +1117,31 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, err.Error())
 	}
 
+	// With no changes there is no PR and no merge commit, and the previous
+	// commit already is the target. Whether there is a PR follows from the
+	// recorded sequence, not the live approval: a step that pushed straight
+	// to the base branch has no merge commit to wait for.
+	noMergeCommit := opts.ExpectedRevision == "" && opensPR(ps) && ps.Status.Outputs["noChanges"] != "true"
 	var result health.HealthStatus
 	var checkErr error
-	if adapter.Name() == "flux" && opensPR(ps) && opts.ExpectedRevision == "" &&
-		ps.Status.Outputs["noChanges"] != "true" {
+	switch {
+	case noMergeCommit && adapter.Name() == "flux":
 		// The flux adapter has no image check to fall back on: without the
 		// merge commit, a Kustomization Ready on the previous commit would
-		// pass. Wait for it; health.timeout ends the wait (#1307). With no
-		// changes there is no PR and no merge commit, and the previous
-		// commit already is the target. Whether there is a PR follows from
-		// the recorded sequence, not the live approval: a step that pushed
-		// straight to the base branch has no merge commit to wait for.
+		// pass. Wait for it; health.timeout ends the wait (#1307).
 		result = health.HealthStatus{Progressing: true,
 			Reason: "merge commit of the PR not known yet (needed to check lastAppliedRevision)"}
-	} else {
+	case noMergeCommit && mergeCommitPending && adapter.Name() == "argocd":
+		// The argocd adapter falls back to status.summary.images without a
+		// commit, which does not show that Argo CD synced the merge. A
+		// webhook can mark the PR merged before the merge commit is known
+		// (B80), so wait while the PRStatus can still record it; it sets
+		// status.mergeCommitUnavailable when it stops trying, and the images
+		// decide from then on. health.timeout ends the wait. The resource,
+		// argoRollouts and flagger adapters check images only and do not wait.
+		result = health.HealthStatus{Progressing: true,
+			Reason: "merge commit of the PR not known yet (needed to check the synced revision)"}
+	default:
 		result, checkErr = adapter.Check(ctx, opts)
 	}
 	if checkErr != nil {
@@ -1183,25 +1197,39 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 // deployed: the commit pushed straight to the tracked branch, or the PR merge
 // commit. "" means it is not known, and the adapters fall back to checking
 // the Bundle images.
-func (r *Reconciler) expectedRevision(ctx context.Context, ps *v1alpha1.PromotionStep) string {
+//
+// pending reports that the revision is not known yet but may still be: the
+// PRStatus is merged with neither status.mergeCommitSHA nor
+// status.mergeCommitUnavailable set, so the PRStatusReconciler is still
+// asking the SCM provider. A PRStatus that cannot be read (other than not
+// found) counts as pending too, so a cache error never turns into an image
+// fallback. A deleted PRStatus records nothing more.
+func (r *Reconciler) expectedRevision(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (rev string, pending bool) {
 	if sha := ps.Status.Outputs["commitSHA"]; sha != "" {
-		return sha
+		return sha, false
 	}
 	if sha := ps.Status.Outputs["mergeCommitSHA"]; sha != "" {
-		return sha
+		return sha, false
 	}
 	if ps.Spec.PRStatusRef == "" {
-		return ""
+		return "", false
 	}
 	// The PRStatusReconciler may record the merge commit shortly after the merge.
 	var prs v1alpha1.PRStatus
 	if err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs); err != nil {
-		return ""
+		if apierrors.IsNotFound(err) {
+			return "", false
+		}
+		log.Warn().Err(err).Str("prStatusRef", ps.Spec.PRStatusRef).Msg("could not read the PRStatus for the merge commit")
+		return "", true
 	}
-	if prs.Status.Merged {
-		return prs.Status.MergeCommitSHA
+	if !prs.Status.Merged {
+		return "", false
 	}
-	return ""
+	if prs.Status.MergeCommitSHA != "" {
+		return prs.Status.MergeCommitSHA, false
+	}
+	return "", !prs.Status.MergeCommitUnavailable
 }
 
 // recordMergeCommit sets status.outputs.mergeCommitSHA to rev, the revision
