@@ -9,8 +9,8 @@ Show a summary of promotion activity from the AuditEvent log.
 Includes: promotion counts, success rate, average duration, gate block rate, and rollbacks.
 Rollbacks counts the rollback Bundles created in the window, from kardinal
 rollback, the UI, a RollbackPolicy or onHealthFailure=rollback, and how many
-rollback Bundles succeeded: wrote RollbackSucceeded in the window in the
-environment they roll back.
+of them succeeded: wrote RollbackSucceeded in the window in the environment
+they roll back.
 The success rate is succeeded / (succeeded + failed + superseded) among the
 promotions that finished inside the window. A rollback Bundle that reaches
 Verified in an environment writes PromotionSucceeded, counted as a succeeded

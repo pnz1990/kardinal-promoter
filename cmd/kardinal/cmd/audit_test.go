@@ -160,10 +160,16 @@ func TestAuditSummary_CountsRollbackBundles(t *testing.T) {
 					ae.Spec.Environment = "test"
 					return ae
 				}()}},
-		{name: "rollback whose bundle was deleted: one per bundle", want: "Rollbacks:    0 triggered, 1 succeeded\n",
+		// succeeded counts only the rollbacks triggered counts, so it is
+		// never more than triggered.
+		{name: "rollback whose bundle was deleted: not counted", want: "Rollbacks:    0 triggered, 0 succeeded\n",
 			objs: []sigs_client.Object{started,
 				event("rb-test-rollback-succeeded", "kardinal-test-app", rb, "RollbackSucceeded"),
 				event("rb-prod-rollback-succeeded", "kardinal-test-app", rb, "RollbackSucceeded")}},
+		{name: "rollback created before the window that succeeds in it: not counted",
+			want: "Rollbacks:    0 triggered, 0 succeeded\n", objs: []sigs_client.Object{
+				rollback(rb, "kardinal-test-app", "kardinal-test-app-4cqnl", 25*time.Hour),
+				event("rb-rollback-succeeded", "kardinal-test-app", rb, "RollbackSucceeded")}},
 		{name: "not a rollback", want: "Rollbacks:    0 triggered, 0 succeeded\n", objs: []sigs_client.Object{started,
 			&v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-test-app-9smn4", Namespace: "default",
 				CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
