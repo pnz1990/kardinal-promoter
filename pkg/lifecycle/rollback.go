@@ -244,9 +244,9 @@ type restoreSources struct {
 }
 
 // deploysConfig reports whether promoting b deploys its config commit rather
-// than its images. Only config Bundles do: no step reads spec.configRef of an
-// image or mixed Bundle, which are promoted like image Bundles
-// (docs/design/09-config-only-promotions.md).
+// than its images. Only config Bundles count: a mixed Bundle deploys its config
+// commit and then its images, but rollback restores it like an image Bundle
+// (docs/rollback.md).
 func deploysConfig(b *v1alpha1.Bundle) bool {
 	return b.Spec.Type == "config"
 }

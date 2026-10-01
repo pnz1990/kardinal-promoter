@@ -252,9 +252,12 @@ type EnvironmentSpec struct {
 	WaitForMergeTimeout string `json:"waitForMergeTimeout,omitempty"`
 
 	// StepTimeoutSeconds is the maximum number of seconds a single promotion
-	// step (git-clone, kustomize-set-image, open-pr, etc.) may run before the
-	// reconciler cancels it via context.WithTimeout and marks the PromotionStep
-	// as Failed. When not set or 0 (default), no per-step timeout is applied.
+	// step (git-clone, kustomize-set-image, open-pr, etc.) may run. The
+	// reconciler cancels a step that runs longer via context.WithTimeout and
+	// handles the timeout like any other step error: the step is retried with
+	// backoff (10s, 20s, 40s, 80s, then 2m), and the PromotionStep is marked
+	// Failed when the 5 retries are used up. When not set or 0 (default), no
+	// per-step timeout is applied.
 	// Useful for restricting execution in restricted-egress environments where
 	// git-clone against a slow SCM host can block the reconciler indefinitely.
 	// +kubebuilder:validation:Minimum=1
@@ -574,8 +577,10 @@ type PipelineDeploymentMetrics struct {
 	// +optional
 	P90CommitToProdMinutes int64 `json:"p90CommitToProdMinutes,omitempty"`
 
-	// AutoRollbackRateMillis is the fraction of sampled Bundles that triggered an
-	// automatic rollback, expressed as integer thousandths (e.g. 83 = 8.3%).
+	// AutoRollbackRateMillis is the fraction of sampled Bundles that are
+	// rollbacks (spec.provenance.rollbackOf is set), manual (`kardinal
+	// rollback`, the UI) or automatic, expressed as integer thousandths
+	// (e.g. 83 = 8.3%).
 	// Stored as integer to avoid floating-point in CRD YAML.
 	// +optional
 	AutoRollbackRateMillis int `json:"autoRollbackRateMillis,omitempty"`
@@ -587,7 +592,7 @@ type PipelineDeploymentMetrics struct {
 
 	// StaleProdDays is the number of days since the last successful promotion to
 	// the final pipeline environment. 0 means a promotion completed today.
-	// -1 means no promotion has ever completed.
+	// Until a Bundle is Verified there, deploymentMetrics is not set at all.
 	// +optional
 	StaleProdDays int `json:"staleProdDays,omitempty"`
 

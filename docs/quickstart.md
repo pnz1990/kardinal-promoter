@@ -158,11 +158,14 @@ The repository structure:
 ```
 environments/
   test/
-    kustomization.yaml      # patches for test
+    kustomization.yaml      # pins the image tag kardinal updates
+    deployment.yaml         # the kardinal-test-app Deployment, in namespace default
   uat/
-    kustomization.yaml      # patches for uat
+    kustomization.yaml
+    deployment.yaml
   prod/
-    kustomization.yaml      # patches for prod
+    kustomization.yaml
+    deployment.yaml
 ```
 
 ## Create Argo CD Applications
@@ -192,6 +195,10 @@ spec:
         repoURL: https://github.com/pnz1990/kardinal-demo   # your fork
         targetRevision: main
         path: environments/{{env}}
+        # The kardinal-demo overlays set namespace "default"; move each
+        # environment into its own namespace so they do not collide.
+        kustomize:
+          namespace: kardinal-test-app-{{env}}
       destination:
         server: https://kubernetes.default.svc
         namespace: kardinal-test-app-{{env}}
@@ -276,6 +283,8 @@ spec:
         type: argocd
         argocd:
           name: kardinal-test-app-prod
+        timeout: 15m
+  historyLimit: 20
 EOF
 ```
 

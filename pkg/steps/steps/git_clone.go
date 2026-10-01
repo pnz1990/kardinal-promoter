@@ -36,9 +36,9 @@ func init() {
 // first, so the promotion never commits changes it did not make. WorkDir is
 // private to one PromotionStep (see parentsteps.WorkDirFor).
 //
-// For a config Bundle it also checks out ConfigRef.GitRepo at ConfigRef.CommitSHA
-// into parentsteps.ConfigSourceDir(WorkDir) and sets Outputs["configSourceDir"]
-// for config-merge.
+// For a config or mixed Bundle it also checks out ConfigRef.GitRepo at
+// ConfigRef.CommitSHA into parentsteps.ConfigSourceDir(WorkDir) and sets
+// Outputs["configSourceDir"] for config-merge.
 //
 // layout: branch is rejected here, before anything is cloned (C05-steps-10).
 type gitCloneStep struct{}
@@ -81,7 +81,7 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 
 	result := parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "cloned " + repoURL}
 
-	if ref := state.Bundle.ConfigRef; state.Bundle.Type == "config" && ref != nil && ref.CommitSHA != "" {
+	if ref := state.Bundle.ConfigRef; deploysConfig(state.Bundle.Type) && ref != nil && ref.CommitSHA != "" {
 		srcURL := ref.GitRepo
 		if srcURL == "" {
 			srcURL = state.Git.URL
@@ -107,4 +107,10 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 	}
 
 	return result, nil
+}
+
+// deploysConfig reports whether a Bundle of bundleType deploys its configRef
+// commit: config Bundles do, and mixed Bundles do before their images.
+func deploysConfig(bundleType string) bool {
+	return bundleType == "config" || bundleType == "mixed"
 }

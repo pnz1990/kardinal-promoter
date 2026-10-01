@@ -39,8 +39,8 @@ func runStep(t *testing.T, name string, state *parentsteps.StepState) (parentste
 
 // TestGitCloneStep_Hardening covers the clone fixes: a fresh clone every run
 // (C05-steps-12), the token passed to the client and never in a message
-// (C05-steps-08, C05-steps-26), the config source clone for config Bundles
-// (C05-steps-03) and the loud layout: branch rejection (C05-steps-10).
+// (C05-steps-08, C05-steps-26), the config source clone for config and mixed
+// Bundles (C05-steps-03) and the loud layout: branch rejection (C05-steps-10).
 func TestGitCloneStep_Hardening(t *testing.T) {
 	const secretURL = "https://x-access-token:ghp_SECRET@github.com/owner/repo"
 	tests := []struct {
@@ -98,6 +98,31 @@ func TestGitCloneStep_Hardening(t *testing.T) {
 				assert.Equal(t, parentsteps.ConfigSourceDir(state.WorkDir), git.cloneAtDir)
 				assert.Equal(t, "tok", git.cloneAtToken, "same origin: the pipeline token is used")
 				assert.Equal(t, git.cloneAtDir, res.Outputs["configSourceDir"])
+			},
+		},
+		{
+			name: "mixed bundle checks out configRef too",
+			setup: func(state *parentsteps.StepState, _ *mockGitClient) {
+				state.Bundle.Type = "mixed"
+				state.Bundle.ConfigRef = &v1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "abc123"}
+			},
+			check: func(t *testing.T, state *parentsteps.StepState, git *mockGitClient, res parentsteps.StepResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, 1, git.cloneAtCalls)
+				assert.Equal(t, "abc123", git.cloneAtSHA)
+				assert.Equal(t, parentsteps.ConfigSourceDir(state.WorkDir), git.cloneAtDir)
+				assert.Equal(t, git.cloneAtDir, res.Outputs["configSourceDir"])
+			},
+		},
+		{
+			name: "image bundle never checks out a configRef",
+			setup: func(state *parentsteps.StepState, _ *mockGitClient) {
+				state.Bundle.ConfigRef = &v1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "abc123"}
+			},
+			check: func(t *testing.T, _ *parentsteps.StepState, git *mockGitClient, res parentsteps.StepResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, 0, git.cloneAtCalls)
+				assert.Empty(t, res.Outputs["configSourceDir"])
 			},
 		},
 		{

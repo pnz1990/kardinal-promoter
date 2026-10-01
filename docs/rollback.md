@@ -19,7 +19,7 @@ For example, with `v0 = {a:0, b:0}`, `v1 = {a:1}` and `v2 = {b:2}` all promoted 
 
 If no such Bundle names the image, the rollback is refused, and the error names the image. `onHealthFailure: rollback` then stops the step at `AbortedByAlarm` for a human. Roll back with `--to` a Bundle that names the image, or promote a fixed version.
 
-The same rule applies to config commits. When the deployed Bundle is a config Bundle, the rollback carries the target's config commit, or, if the target has none, the newest earlier Verified one. A rollback Bundle deploys either images or a config commit, never both: `--to` a config Bundle when the deployed Bundle is an image Bundle, or the other way round, is refused. Only `config` Bundles deploy their config commit. An `image` or `mixed` Bundle is promoted like an image Bundle (see [config-only promotions](design/09-config-only-promotions.md)).
+The same rule applies to config commits. When the deployed Bundle is a config Bundle, the rollback carries the target's config commit, or, if the target has none, the newest earlier Verified one. A rollback Bundle deploys either images or a config commit, never both: `--to` a config Bundle when the deployed Bundle is an image Bundle, or the other way round, is refused. A `mixed` Bundle deploys its config commit and then its images (see [config-only promotions](design/09-config-only-promotions.md)), but rollback treats it like an image Bundle: rolling a deployed mixed Bundle back to an image Bundle restores only the images, and the mixed Bundle's config change stays.
 
 A target that, with the added images, deploys the same artifacts as the deployed Bundle is skipped, and `--to` such a target fails.
 

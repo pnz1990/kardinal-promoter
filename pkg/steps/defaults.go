@@ -22,6 +22,8 @@ package steps
 //
 // Routing rules:
 //   - config bundle → git-clone, config-merge, git-commit, git-push, [open-pr, wait-for-merge,] health-check
+//   - mixed bundle → git-clone, config-merge, then the image update steps below, git-commit, git-push, ...:
+//     the config commit is merged first, so the Bundle's images win over the image pins it carries
 //   - image + argocd → argocd-set-image, health-check (no git operations)
 //   - image + helm  → git-clone, helm-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 //   - layout:branch → git-clone, kustomize-set-image, kustomize-build, git-commit, git-push, [open-pr, wait-for-merge,] health-check
@@ -37,17 +39,20 @@ func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, layout s
 	}
 
 	var updateSteps []string
+	if bundleType == "config" || bundleType == "mixed" {
+		updateSteps = []string{"config-merge"}
+	}
 	switch {
 	case bundleType == "config":
-		updateSteps = []string{"config-merge"}
+		// No image to update.
 	case updateStrategy == "helm":
-		updateSteps = []string{"helm-set-image"}
+		updateSteps = append(updateSteps, "helm-set-image")
 	case layout == "branch":
 		// Rendered manifests: run kustomize-set-image then kustomize-build.
 		// kustomize-build renders the overlay to a file; git-commit picks it up.
-		updateSteps = []string{"kustomize-set-image", "kustomize-build"}
+		updateSteps = append(updateSteps, "kustomize-set-image", "kustomize-build")
 	default:
-		updateSteps = []string{"kustomize-set-image"}
+		updateSteps = append(updateSteps, "kustomize-set-image")
 	}
 
 	base := append([]string{"git-clone"}, updateSteps...)

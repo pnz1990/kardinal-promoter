@@ -29,7 +29,7 @@ func init() {
 	parentsteps.Register(&configMergeStep{})
 }
 
-// configMergeStep applies a config Bundle's configRef commit to the
+// configMergeStep applies a config or mixed Bundle's configRef commit to the
 // environment directory.
 //
 // git-clone checks the configRef commit out into

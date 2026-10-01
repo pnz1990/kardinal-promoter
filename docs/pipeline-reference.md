@@ -117,9 +117,8 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 a `health.resource.kind` other than `Deployment` are not implemented; `regions` with two or
 more entries, `shard` and `health.cluster` are deprecated and not supported. A Bundle fails
 when it reaches an environment that uses one (two or more `regions` fail it when its Graph is
-built; a `health.resource.kind` fails the step after the change merged, during the health
-check). `kardinal validate` reports each of them, and the controller sets the Pipeline's
-`Ready` condition to `False` with reason `NotImplemented` and the same messages
+built; the others fail the environment's step before it changes anything in git).
+`kardinal validate` reports each of them, and the controller sets the Pipeline's `Ready` condition to `False` with reason `NotImplemented` and the same messages
 (`kubectl get pipeline <name> -o jsonpath='{.status.conditions}'`). The API server rejects
 `autoRollback` and the deprecated `steps` and `promotionTemplate` outright. A Pipeline stored
 before those rules existed is still reported the same way, and its Bundles fail when their
@@ -279,6 +278,7 @@ Every environment runs a fixed step sequence. The controller picks it from the B
 | Image Bundle, `update.strategy: kustomize` (default) | `git-clone`, `kustomize-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Image Bundle, `update.strategy: helm` | `git-clone`, `helm-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Config Bundle | `git-clone`, `config-merge`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Mixed Bundle | `git-clone`, `config-merge`, then the image Bundle's update step (`kustomize-set-image` or `helm-set-image`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | `update.strategy: argocd` | `argocd-set-image`, `health-check` |
 
 `open-pr` and `wait-for-merge` run only with `approval: pr-review`. `layout: branch` is not
