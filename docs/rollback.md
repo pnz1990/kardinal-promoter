@@ -112,6 +112,8 @@ spec:
 
 A rollback Bundle (label `kardinal.io/rollback: "true"` or `spec.provenance.rollbackOf` set) is not rolled back again: when its own health check fails with `rollback` set, the step is `AbortedByAlarm` instead, so rollbacks do not chain.
 
+The rollback Bundle is a newer Bundle of the same pipeline and type, so the failing Bundle ends `Superseded`. The step that raised the alarm stays `RollingBack`, with the message naming the rollback Bundle: it is not cancelled as superseded, whichever order the two status updates land in.
+
 ### What counts as a failed health check
 
 Each health check has one of four results (see [Timings and failures](health-adapters.md#timings-and-failures)):

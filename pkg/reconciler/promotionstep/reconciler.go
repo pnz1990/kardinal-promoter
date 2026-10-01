@@ -128,8 +128,9 @@ type Reconciler struct {
 	// deleted step is read through it before its PR is closed, because the
 	// informer cache can lag the finalizer removal of the previous reconcile
 	// (handleDeleted), and so are the Bundle, namespace, Pipeline and Graph
-	// that tell whether the step comes back (stepRecreated). When nil, Client
-	// is used (tests).
+	// that tell whether the step comes back (stepRecreated). The supersession
+	// guard reads a step through it too, before cancelling it (supersededStep).
+	// When nil, Client is used (tests).
 	APIReader client.Reader
 
 	// SCM is the SCM provider for PR operations.
@@ -240,7 +241,19 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 		// step could still turn Verified and, with onHealthFailure=rollback,
 		// open a rollback of a version nobody promotes any more.
 		if parentBundle.Status.Phase == "Superseded" && isCancellable(ps.Status.State) {
-			return r.handleSuperseded(ctx, log, ps)
+			fresh, err := r.supersededStep(ctx, log, ps)
+			if err != nil || fresh == nil {
+				return ctrl.Result{}, err
+			}
+			*ps = *fresh
+			switch {
+			case !ps.DeletionTimestamp.IsZero():
+				return ctrl.Result{}, nil // handleDeleted closes its PR
+			case isCancellable(ps.Status.State):
+				return r.handleSuperseded(ctx, log, ps)
+			}
+			// The cache lagged a transition out of a cancellable state: the
+			// fresh state's handler runs below (RollingBack cleans the workdir).
 		}
 	}
 
@@ -285,6 +298,34 @@ func isCancellable(state string) bool {
 		return true
 	}
 	return false
+}
+
+// supersededStep reads ps, whose Bundle is Superseded and whose cached state
+// is cancellable, from the API server, so that the supersession guard cancels
+// it from the status the server has, not the cached one. The cache can lag
+// this reconciler's own status patch: the rollback Bundle that
+// applyHealthFailurePolicy creates is a newer Bundle of the same pipeline and
+// type, so the Bundle reconciler supersedes the parent at once, and that
+// Bundle event wakes the step (bundleMapper) before the cache has its
+// RollingBack transition. Cancelling from the cached HealthChecking overwrote
+// RollingBack with Failed, "bundle ... was superseded — promotion cancelled"
+// (ONFAIL-ROLLBACK-03). The guard then acts on the fresh copy: a step still
+// in flight is cancelled from it, so a PR recorded since the cached read is
+// closed too; one that moved on runs its state's handler. It returns nil when
+// the step is gone.
+func (r *Reconciler) supersededStep(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (*v1alpha1.PromotionStep, error) {
+	fresh, err := r.readStep(ctx, client.ObjectKeyFromObject(ps))
+	if err != nil || fresh == nil {
+		return nil, err
+	}
+	if fresh.Status.State != ps.Status.State {
+		log.Debug().
+			Str("bundle", ps.Spec.BundleName).
+			Str("cached", ps.Status.State).
+			Str("state", fresh.Status.State).
+			Msg("parent bundle superseded; the cached step lags its last status patch, using the API server's copy")
+	}
+	return fresh, nil
 }
 
 // handleSuperseded closes the step's PR, if it opened one that is still open,

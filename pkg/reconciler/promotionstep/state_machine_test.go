@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
@@ -289,6 +290,111 @@ func TestSupersession(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, got.Status, getStep(t, c, "step").Status)
 				assert.Equal(t, tt.wantAudit, auditActions(t, c))
+			}
+		})
+	}
+}
+
+// TestSupersession_CacheLagsOwnWrite proves that the supersession guard
+// cancels a step from the status the API server has, not the cached one. The
+// cache can lag this reconciler's own status patch: the rollback Bundle that a
+// health failure creates (applyHealthFailurePolicy) supersedes the step's
+// Bundle at once, and that Bundle event wakes the step (bundleMapper) before
+// the cache has its RollingBack transition. Cancelling from the cached
+// HealthChecking overwrote RollingBack with Failed, "superseded — promotion
+// cancelled". A step that already finished is left as it is, with no
+// PromotionSuperseded AuditEvent and no Event; a step still in flight is
+// cancelled from its fresh status, so the PR it recorded since the cached
+// read is closed.
+//
+// Covers ONFAIL-ROLLBACK-03.
+func TestSupersession_CacheLagsOwnWrite(t *testing.T) {
+	const alarm = "health alarm via resource (onHealthFailure=rollback): Deployment default/app rollout failed: " +
+		"ProgressDeadlineExceeded: ReplicaSet \"app-7f94745cdf\" has timed out progressing. — rollback Bundle b1-rollback-alarm created"
+	tests := []struct {
+		name       string
+		server     func(ps *v1alpha1.PromotionStep) // the status the API server has
+		cached     func(ps *v1alpha1.PromotionStep) // the status the informer cache still has
+		prStatus   *v1alpha1.PRStatus
+		wantState  string
+		wantMsg    string
+		wantClosed []string
+		wantAudit  []string
+		wantEvent  string
+	}{
+		{name: "a step that already finished is left as it is",
+			server: func(ps *v1alpha1.PromotionStep) {
+				ps.Status.State, ps.Status.Message = "RollingBack", alarm
+				ps.Status.Steps = []v1alpha1.StepStatus{
+					{Name: "git-clone", State: v1alpha1.StepExecutionCompleted},
+					{Name: "health-check", State: v1alpha1.StepExecutionFailed, Message: alarm},
+				}
+			},
+			cached: func(ps *v1alpha1.PromotionStep) {
+				ps.Status.State, ps.Status.Message = "HealthChecking", "waiting for resource: Deployment default/app not updated yet"
+				ps.Status.Steps[1] = v1alpha1.StepStatus{Name: "health-check", State: v1alpha1.StepExecutionInProgress}
+			},
+			wantState: "RollingBack", wantMsg: alarm, wantAudit: []string{}},
+		{name: "a step still in flight is cancelled from its fresh status",
+			server: func(ps *v1alpha1.PromotionStep) {
+				ps.Status.State = "WaitingForMerge"
+				ps.Status.Outputs = map[string]string{"prURL": "https://github.com/org/repo/pull/9", "prNumber": "9"}
+			},
+			cached: func(ps *v1alpha1.PromotionStep) {
+				ps.Status.State, ps.Status.Outputs = "Promoting", nil
+			},
+			prStatus:  openPRStatus("prs", "", 0),
+			wantState: "Failed", wantMsg: "was superseded", wantClosed: []string{"org/repo#9"},
+			wantAudit: []string{"PromotionSuperseded"}, wantEvent: "Warning Failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ps := labelled(makeStep("step", "p", "b1", "prod"))
+			tt.server(ps)
+			bundle := makeBundle("b1", "p")
+			bundle.Status.Phase = "Superseded"
+			objs := []client.Object{ps, makePipeline("p"), bundle}
+			if tt.prStatus != nil {
+				ps.Spec.PRStatusRef = tt.prStatus.Name
+				objs = append(objs, tt.prStatus)
+			}
+			api := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}, &v1alpha1.Bundle{}).
+				WithObjects(objs...).Build()
+			before := getStep(t, api, "step").Status
+			// The cached client serves the step as the cache had it before the
+			// previous reconcile's status patch; every write goes to api.
+			cache := interceptor.NewClient(api, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if err := c.Get(ctx, key, obj, opts...); err != nil {
+						return err
+					}
+					if step, ok := obj.(*v1alpha1.PromotionStep); ok {
+						tt.cached(step)
+					}
+					return nil
+				},
+			})
+			m := &mockSCM{open: true}
+			rec := events.NewFakeRecorder(20)
+			r := &promotionstep.Reconciler{Client: cache, APIReader: api, SCM: m, GitClient: &mockGit{}, Recorder: rec}
+
+			res, err := r.Reconcile(context.Background(), reqFor("step"))
+			require.NoError(t, err)
+			assert.Zero(t, res.RequeueAfter)
+
+			got := getStep(t, api, "step")
+			assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
+			assert.Contains(t, got.Status.Message, tt.wantMsg)
+			if tt.wantState == before.State {
+				assert.Equal(t, before, got.Status, "the finished step is left as it is")
+			}
+			assert.Equal(t, tt.wantClosed, m.closed)
+			assert.Equal(t, tt.wantAudit, auditActions(t, api))
+			if tt.wantEvent != "" {
+				assert.Contains(t, strings.Join(drain(rec), "\n"), tt.wantEvent)
+			} else {
+				assert.Empty(t, drain(rec))
 			}
 		})
 	}
