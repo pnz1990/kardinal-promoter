@@ -234,6 +234,16 @@ jobs:
           echo "${KUBECTL_SHA256}  kubectl" | sha256sum -c -
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/
 
+      # The suite installs the chart with helm; the runner image's helm floats.
+      - name: Install helm
+        run: |
+          source hack/tool-versions.env
+          curl -fsSLO "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm-${HELM_VERSION}-linux-amd64.tar.gz" | sha256sum -c -
+          tar -xzf "helm-${HELM_VERSION}-linux-amd64.tar.gz" --strip-components=1 linux-amd64/helm
+          rm "helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          sudo mv helm /usr/local/bin/ && helm version
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: controller-image
