@@ -26,10 +26,12 @@ type fakeAPI struct {
 	seen   []string
 	bodies map[string]map[string]interface{}
 	header http.Header
+	// fail holds, per route, status codes to answer before the canned body.
+	fail map[string][]int
 }
 
 func newFake(t *testing.T, routes map[string]string) (*fakeAPI, *httptest.Server) {
-	f := &fakeAPI{t: t, routes: routes, bodies: map[string]map[string]interface{}{}}
+	f := &fakeAPI{t: t, routes: routes, bodies: map[string]map[string]interface{}{}, fail: map[string][]int{}}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -46,6 +48,11 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var m map[string]interface{}
 		_ = json.Unmarshal(raw, &m)
 		f.bodies[key] = m
+	}
+	if codes := f.fail[key]; len(codes) > 0 {
+		f.fail[key] = codes[1:]
+		http.Error(w, `{"message":"not yet"}`, codes[0])
+		return
 	}
 	body, ok := f.routes[key]
 	if !ok {
