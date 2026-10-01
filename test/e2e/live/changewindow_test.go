@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	eventsv1 "k8s.io/api/events/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -184,8 +185,10 @@ func TestGate_RecurringWindowSchedule(t *testing.T) {
 // TestGate_InvalidWindowBlocks checks that a ChangeWindow the controller
 // cannot evaluate fails closed: its Valid condition is False with reason
 // InvalidSpec and a message naming the problem, it is active, and a gate that
-// allows promotions only outside it blocks. Fixing each spec makes it Valid
-// and inactive, and prod promotes.
+// allows promotions only outside it blocks. The controller reports each
+// invalid spec once, with one InvalidSpec Warning Event, however often the
+// gates are evaluated. Fixing each spec makes it Valid and inactive, and prod
+// promotes.
 //
 // Covers CW-03.
 func TestGate_InvalidWindowBlocks(t *testing.T) {
@@ -232,6 +235,28 @@ func TestGate_InvalidWindowBlocks(t *testing.T) {
 	}
 	e.NoStep(t, a.ns, pipelineName, bundle, "prod", holdFor)
 	assertEnvAt(t, a, "prod", fixtures.V1)
+	// A ChangeWindow is cluster-scoped, so its Events are in default.
+	for _, w := range windows {
+		var evs []eventsv1.Event
+		framework.Eventually(t, time.Minute, w.cw.Name+"'s InvalidSpec Event", func(ctx context.Context) (bool, string) {
+			all, err := e.Events(ctx, metav1.NamespaceDefault, "ChangeWindow", w.cw.Name)
+			if err != nil {
+				return false, err.Error()
+			}
+			evs = nil
+			for _, ev := range all {
+				if ev.Reason == "InvalidSpec" {
+					evs = append(evs, ev)
+				}
+			}
+			return len(evs) > 0, fmt.Sprintf("reasons %v", eventReasons(all))
+		})
+		require.Len(t, evs, 1, w.cw.Name)
+		assert.Nil(t, evs[0].Series, "%s: reported once, not as a series", w.cw.Name)
+		assert.Equal(t, "Warning", evs[0].Type, w.cw.Name)
+		assert.Equal(t, "Evaluate", evs[0].Action, w.cw.Name)
+		assert.Contains(t, evs[0].Note, w.error, w.cw.Name)
+	}
 
 	for _, w := range windows {
 		editWindow(t, e, w.cw.Name, w.fix)

@@ -6,6 +6,7 @@ package changewindow_test
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -153,6 +155,103 @@ func TestReconciler_ValidCondition(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, rv, get().ResourceVersion, "%s: an unchanged condition is not rewritten", st.name)
 	}
+}
+
+// TestReconciler_InvalidSpecReportedOncePerGeneration: an invalid spec gets
+// one Warning log line and one Warning Event per generation, however often
+// the window is reconciled (boundary requeues, resyncs, annotation edits, a
+// controller restart). A new generation that is still invalid is reported
+// once more; a fixed spec reports nothing.
+func TestReconciler_InvalidSpecReportedOncePerGeneration(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
+	weekdays := []string{"Mon", "Tue", "Wed", "Thu", "Fri"}
+	cw := &kardinalv1alpha1.ChangeWindow{
+		ObjectMeta: metav1.ObjectMeta{Name: "business-hours", Generation: 1},
+		Spec:       recurring("America/Los_Angles", weekdays, "09:00-17:00"),
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cw).WithStatusSubresource(cw).Build()
+	now := at("2026-10-02T16:30:00Z")
+	rec := events.NewFakeRecorder(20)
+	var logs bytes.Buffer
+	ctx := objectgonetest.Context(&logs)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "business-hours"}}
+	newReconciler := func() *changewindow.Reconciler {
+		return &changewindow.Reconciler{Client: c, Recorder: rec, NowFn: func() time.Time { return now }}
+	}
+	r := newReconciler()
+
+	reported := func() (warnings int, evts []string) {
+		t.Helper()
+		for _, line := range strings.Split(logs.String(), "\n") {
+			if strings.Contains(line, `"level":"warn"`) && strings.Contains(line, "invalid ChangeWindow") {
+				warnings++
+			}
+		}
+		logs.Reset()
+		for {
+			select {
+			case e := <-rec.Events:
+				evts = append(evts, e)
+			default:
+				return warnings, evts
+			}
+		}
+	}
+	reconcile := func(times int) {
+		t.Helper()
+		for range times {
+			_, err := r.Reconcile(ctx, req)
+			require.NoError(t, err)
+			now = now.Add(time.Minute)
+		}
+	}
+	edit := func(timezone string, bump bool) {
+		t.Helper()
+		var cur kardinalv1alpha1.ChangeWindow
+		require.NoError(t, c.Get(ctx, req.NamespacedName, &cur))
+		cur.Spec.Schedule.Timezone = timezone
+		if bump {
+			cur.Generation++
+		} else {
+			cur.Annotations = map[string]string{"edited": now.String()}
+		}
+		require.NoError(t, c.Update(ctx, &cur))
+	}
+
+	reconcile(5)
+	warnings, evts := reported()
+	assert.Equal(t, 1, warnings, "generation 1: one warning")
+	require.Len(t, evts, 1, "generation 1: one Event")
+	assert.Contains(t, evts[0], "Warning InvalidSpec")
+	assert.Contains(t, evts[0], `"America/Los_Angles" is not a known IANA timezone name`)
+
+	edit("America/Los_Angles", false) // an annotation edit keeps the generation
+	reconcile(2)
+	r = newReconciler() // a controller restart
+	reconcile(2)
+	warnings, evts = reported()
+	assert.Zero(t, warnings, "same generation: no warning")
+	assert.Empty(t, evts, "same generation: no Event")
+
+	edit("Local", true) // generation 2, still invalid
+	reconcile(3)
+	warnings, evts = reported()
+	assert.Equal(t, 1, warnings, "generation 2: one more warning")
+	require.Len(t, evts, 1, "generation 2: one more Event")
+	assert.Contains(t, evts[0], "controller's local time")
+
+	edit("America/Los_Angeles", true) // generation 3 is valid
+	reconcile(2)
+	warnings, evts = reported()
+	assert.Zero(t, warnings, "a valid spec: no warning")
+	assert.Empty(t, evts, "a valid spec: no Event")
+
+	edit("America/Los_Angles", true) // generation 4 is invalid again
+	reconcile(2)
+	warnings, evts = reported()
+	assert.Equal(t, 1, warnings, "generation 4: one warning")
+	assert.Len(t, evts, 1, "generation 4: one Event")
 }
 
 func TestReconciler_NotFound(t *testing.T) {

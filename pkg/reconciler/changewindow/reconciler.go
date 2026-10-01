@@ -22,15 +22,18 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 )
 
@@ -45,6 +48,8 @@ const boundarySlack = time.Second
 // It is idempotent and safe to re-run after a crash.
 type Reconciler struct {
 	client.Client
+	// Recorder emits the Warning Event for an invalid spec. Nil records none.
+	Recorder events.EventRecorder
 	// NowFn returns the current time. Overridable for testing.
 	NowFn func() time.Time
 }
@@ -72,9 +77,10 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	now := r.now()
 	res := Evaluate(cw.Spec, now)
-	if res.Err != nil {
-		log.Warn().Err(res.Err).Msg("invalid ChangeWindow; reported as active (blocking)")
-	}
+	// The invalid spec is reported once per generation: the Valid condition
+	// records the generation it was found invalid at, so a boundary requeue, a
+	// resync, an annotation edit or a controller restart reports nothing new.
+	newlyInvalid := res.Err != nil && !invalidAt(cw, cw.Generation)
 
 	patch := client.MergeFrom(cw.DeepCopy())
 	changed := cw.Status.Active != res.Active || cw.Status.Reason != res.Reason
@@ -88,6 +94,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, fmt.Errorf("patch changewindow status: %w", err)
 		}
 		log.Info().Bool("active", res.Active).Str("reason", res.Reason).Msg("changewindow status updated")
+	}
+	if newlyInvalid {
+		log.Warn().Err(res.Err).Int64("generation", cw.Generation).
+			Msg("invalid ChangeWindow; reported as active (blocking)")
+		kubeevent.Emit(r.Recorder, &cw, corev1.EventTypeWarning, ReasonInvalidSpec, "Evaluate",
+			res.Err.Error()+"; the window is active (blocking) until the spec is fixed")
 	}
 
 	if res.Next.IsZero() {
@@ -113,6 +125,17 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 // can be evaluated.
 const ConditionValid = "Valid"
 
+// ReasonInvalidSpec is the reason of the Valid=False condition and of the
+// Warning Event for a spec that cannot be evaluated.
+const ReasonInvalidSpec = "InvalidSpec"
+
+// invalidAt reports whether the Valid condition of cw already says its spec
+// was invalid at generation.
+func invalidAt(cw kardinalv1alpha1.ChangeWindow, generation int64) bool {
+	c := meta.FindStatusCondition(cw.Status.Conditions, ConditionValid)
+	return c != nil && c.Status == metav1.ConditionFalse && c.ObservedGeneration == generation
+}
+
 // validCondition is Valid=True, or Valid=False with the spec error, for
 // example an unknown timezone. An invalid window is active (blocking), so the
 // condition is what tells the operator why every gate that uses it blocks.
@@ -127,7 +150,7 @@ func validCondition(res Result, generation int64, now time.Time) metav1.Conditio
 	}
 	if res.Err != nil {
 		cond.Status = metav1.ConditionFalse
-		cond.Reason = "InvalidSpec"
+		cond.Reason = ReasonInvalidSpec
 		cond.Message = res.Err.Error() + "; the window is active (blocking) until the spec is fixed"
 	}
 	return cond

@@ -447,9 +447,14 @@ func main() {
 	// ChangeWindowReconciler: evaluates each ChangeWindow (blackout or recurring),
 	// writes status.active/reason and requeues at the next boundary. The status write
 	// re-evaluates the PolicyGates that reference the window.
-	if err := (&changewindowrecon.Reconciler{
-		Client: mgr.GetClient(),
-	}).SetupWithManager(mgr); err != nil {
+	cwReconciler := &changewindowrecon.Reconciler{Client: mgr.GetClient()}
+	// An Event on a ChangeWindow, a cluster-scoped kind, is written in the
+	// default namespace, where namespace mode grants no Event writes. There the
+	// Valid condition and the log report an invalid spec.
+	if watchNamespace == "" {
+		cwReconciler.Recorder = eventRecorder
+	}
+	if err := cwReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up ChangeWindowReconciler")
 	}
 

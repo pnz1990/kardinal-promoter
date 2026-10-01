@@ -1111,7 +1111,9 @@ func TestPolicyGateReconciler_ChangeWindowFailsClosed(t *testing.T) {
 
 // TestPolicyGateReconciler_RecurringChangeWindow verifies that a recurring
 // ChangeWindow is evaluated from its schedule at the gate's evaluation time
-// (C04-gates-03): before this fix a recurring window was never active.
+// (C04-gates-03): before this fix a recurring window was never active. Every
+// gate evaluation sees the invalid window; the ChangeWindow reconciler reports
+// it, so the evaluation logs it at debug only.
 func TestPolicyGateReconciler_RecurringChangeWindow(t *testing.T) {
 	businessHours := &kardinalv1alpha1.ChangeWindow{
 		ObjectMeta: metav1.ObjectMeta{Name: "business-hours"},
@@ -1160,12 +1162,21 @@ func TestPolicyGateReconciler_RecurringChangeWindow(t *testing.T) {
 			require.NoError(t, err)
 			r.NowFn = func() time.Time { return tt.now }
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-gate", Namespace: "default"}}
-			_, err = r.Reconcile(context.Background(), req)
+			var logs bytes.Buffer
+			_, err = r.Reconcile(objectgonetest.Context(&logs), req)
 			require.NoError(t, err)
 
 			var got kardinalv1alpha1.PolicyGate
 			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
 			assert.Equal(t, tt.wantReady, got.Status.Ready, "reason: %s", got.Status.Reason)
+			reported := 0
+			for _, line := range strings.Split(logs.String(), "\n") {
+				if strings.Contains(line, "invalid ChangeWindow") {
+					reported++
+					assert.Contains(t, line, `"level":"debug"`)
+				}
+			}
+			assert.Equal(t, 1, reported, "the broken window is evaluated once")
 		})
 	}
 }

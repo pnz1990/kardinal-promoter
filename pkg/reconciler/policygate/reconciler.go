@@ -797,8 +797,11 @@ func (r *Reconciler) buildChangeWindowContext(ctx context.Context, now time.Time
 	result := make(map[string]interface{}, len(list.Items))
 	for _, cw := range list.Items {
 		res := changewindow.Evaluate(cw.Spec, now)
+		// The ChangeWindow reconciler reports an invalid spec once per
+		// generation (a Warning log and Event, and the Valid condition); every
+		// gate evaluation sees it again, so it is only a debug line here.
 		if res.Err != nil {
-			zerolog.Ctx(ctx).Warn().Err(res.Err).Str("changewindow", cw.Name).
+			zerolog.Ctx(ctx).Debug().Err(res.Err).Str("changewindow", cw.Name).
 				Msg("invalid ChangeWindow spec, treating it as active (blocking)")
 		}
 		result[cw.Name] = res.Active
