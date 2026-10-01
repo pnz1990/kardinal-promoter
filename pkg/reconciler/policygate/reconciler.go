@@ -85,6 +85,12 @@ type Reconciler struct {
 	// Recorder emits Kubernetes Events when a PolicyGate first blocks.
 	// When nil, event emission is skipped (backward-compatible).
 	Recorder events.EventRecorder
+	// PolicyNamespaces are the org policy namespaces (the controller's
+	// --policy-namespaces; graph.DefaultPolicyNamespace when empty). An
+	// instance made from a template in one of them reads metrics.* from the
+	// template's namespace (label graph.LabelGateTemplateNamespace), so the
+	// org's MetricChecks decide an org gate, not the team's.
+	PolicyNamespaces []string
 }
 
 // NewReconciler creates a Reconciler with an initialized CEL evaluator.
@@ -194,8 +200,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			reason = reason + "; " + notes
 		}
 	}
+	// Prefix reason with bundle version so it is CRD-observable without a
+	// separate status field (PG-6 partial fix — full fix requires api/v1alpha1
+	// field addition for a dedicated status.bundleVersion field). An
+	// evaluation error carries it too.
+	if bundleVersion != "" {
+		reason = fmt.Sprintf("bundle.version=%s: %s", bundleVersion, reason)
+	}
 	if evalErr != nil {
-		// Fail-closed on evaluation error
+		// Fail-closed on evaluation error. spec.message explains a false
+		// expression, not an error, so the reason does not lead with it.
 		log.Warn().Err(evalErr).Str("expr", gate.Spec.Expression).
 			Msg("CEL evaluation error, setting gate to blocked")
 		if patchErr := r.patchStatus(ctx, &gate, false, reason); patchErr != nil {
@@ -204,12 +218,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
 	}
 
-	// Prefix reason with bundle version so it is CRD-observable without a
-	// separate status field (PG-6 partial fix — full fix requires api/v1alpha1
-	// field addition for a dedicated status.bundleVersion field).
-	if bundleVersion != "" {
-		reason = fmt.Sprintf("bundle.version=%s: %s", bundleVersion, reason)
-	}
 	// A false expression is what spec.message explains: lead with it, so the
 	// Ready condition, kardinal explain/status, the UI, PR evidence and
 	// notifications show it (GATE-MESSAGE-01).
@@ -391,13 +399,17 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		}
 	}
 
-	// Build metrics context: list all MetricChecks in the gate's namespace
-	// and expose them as metrics.<name>.value, .result and .stale.
+	// Build metrics context: list the MetricChecks in the gate's metrics
+	// namespace and expose them as metrics.<name>.value, .result and .stale.
 	metricsNow := now
 	if r.MetricsNowFn != nil {
 		metricsNow = r.MetricsNowFn()
 	}
-	metricsCtx, err := r.buildMetricsContext(ctx, gate.Namespace, metricsNow)
+	metricsNS, err := r.metricsNamespace(ctx, gate)
+	var metricsCtx map[string]interface{}
+	if err == nil {
+		metricsCtx, err = r.buildMetricsContext(ctx, metricsNS, metricsNow)
+	}
 	if err != nil {
 		// Non-fatal: log and continue with empty metrics context so the gate
 		// evaluates with whatever data is available (fail-closed if expr references metrics).
@@ -512,10 +524,40 @@ func (r *Reconciler) directUpstreamSoakMinutes(ctx context.Context, gate *kardin
 	return minSoak, nil
 }
 
+// metricsNamespace is the namespace whose MetricChecks a gate reads as
+// metrics.*: the namespace of its template when the template is in an org
+// policy namespace (an org gate), otherwise the gate's own namespace. A team
+// gate, and an org gate's instance, both live in the Pipeline namespace; only
+// the org gate reads the org's MetricChecks, so a team MetricCheck of the same
+// name cannot decide it.
+//
+// A team can edit the labels of the instances in its own namespace, so the
+// kardinal.io/gate-template-namespace label is honored only when it names an
+// org policy namespace that holds a PolicyGate named by the instance's
+// kardinal.io/gate-template label. Otherwise the gate reads its own
+// namespace, where a metric it names but cannot find still blocks it. An
+// error reading the template is returned, and the gate then evaluates with no
+// metrics, so an expression that reads metrics blocks.
+func (r *Reconciler) metricsNamespace(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) (string, error) {
+	ns, name := gate.Labels[graph.LabelGateTemplateNamespace], gate.Labels[labelGateTemplate]
+	if ns == gate.Namespace || name == "" || !graph.IsPolicyNamespace(ns, r.PolicyNamespaces) {
+		return gate.Namespace, nil
+	}
+	var template kardinalv1alpha1.PolicyGate
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &template); err != nil {
+		if apierrors.IsNotFound(err) {
+			return gate.Namespace, nil
+		}
+		return "", fmt.Errorf("get gate template %s/%s: %w", ns, name, err)
+	}
+	return ns, nil
+}
+
 // buildMetricsContext lists all MetricCheck objects in the given namespace and
 // returns a map suitable for CEL:
 // {"<name>": {"value": <string>, "result": <string>, "stale": <bool>}}.
-// Only MetricCheck objects in the gate's own namespace are included.
+// Only MetricCheck objects in that one namespace (metricsNamespace) are
+// included.
 //
 // A result whose status.validUntil is unset or before now is stale (#1302):
 // nothing has refreshed it for three MetricCheck intervals, for example after
@@ -888,11 +930,29 @@ func (r *Reconciler) now() time.Time {
 	return time.Now().UTC()
 }
 
-// metricCheckRequests enqueues the PolicyGate instances in the MetricCheck's
-// namespace whose expression reads metrics, so they are re-evaluated as soon
-// as a MetricCheck result changes.
+// metricCheckRequests enqueues the PolicyGate instances that read the
+// MetricCheck's namespace as metrics.* and whose expression reads metrics, so
+// they are re-evaluated as soon as a MetricCheck result changes: the instances
+// in that namespace and, for an org policy namespace, the instances in every
+// namespace made from an org gate there.
 func (r *Reconciler) metricCheckRequests(ctx context.Context, obj client.Object) []reconcile.Request {
-	return r.instanceGateRequests(ctx, "MetricCheck", "metrics", client.InNamespace(obj.GetNamespace()))
+	ns := obj.GetNamespace()
+	reqs := r.instanceGateRequests(ctx, "MetricCheck", "metrics", client.InNamespace(ns))
+	if !graph.IsPolicyNamespace(ns, r.PolicyNamespaces) {
+		return reqs
+	}
+	seen := make(map[types.NamespacedName]bool, len(reqs))
+	for _, req := range reqs {
+		seen[req.NamespacedName] = true
+	}
+	for _, req := range r.instanceGateRequests(ctx, "MetricCheck", "metrics",
+		client.MatchingLabels{graph.LabelGateTemplateNamespace: ns}) {
+		if !seen[req.NamespacedName] {
+			seen[req.NamespacedName] = true
+			reqs = append(reqs, req)
+		}
+	}
+	return reqs
 }
 
 // metricCheckResultChanged passes MetricCheck updates that change what a gate
@@ -965,9 +1025,10 @@ var unstartedStepCreated = predicate.Funcs{
 }
 
 // SetupWithManager registers the PolicyGateReconciler with the controller-runtime Manager.
-// It adds a Watch on MetricCheck objects so that when any MetricCheck in a namespace
-// changes (status updated by the MetricCheckReconciler), all PolicyGates in that
-// same namespace are queued for re-evaluation. This is the controller-runtime
+// It adds a Watch on MetricCheck objects so that when any MetricCheck in a
+// namespace changes (status updated by the MetricCheckReconciler), the
+// PolicyGates that read that namespace as metrics.* are queued for
+// re-evaluation (metricCheckRequests). This is the controller-runtime
 // equivalent of a "Watch node" — the PolicyGate reconciler reacts to MetricCheck
 // status changes rather than waiting for recheckInterval alone.
 //
@@ -1009,7 +1070,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		// Watch MetricCheck objects: when a MetricCheck's result or value changes,
-		// the gates in the same namespace that read metrics are re-evaluated
+		// the gates that read its namespace as metrics.* are re-evaluated
 		// immediately.
 		Watches(&kardinalv1alpha1.MetricCheck{}, handler.EnqueueRequestsFromMapFunc(r.metricCheckRequests),
 			builder.WithPredicates(metricCheckResultChanged)).

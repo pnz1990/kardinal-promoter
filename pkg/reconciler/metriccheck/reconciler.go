@@ -40,6 +40,10 @@ const (
 	// least minValidFor. PolicyGates treat a result past validUntil as stale.
 	staleAfterIntervals = 3
 	minValidFor         = 30 * time.Second
+	// firstWriteRetry caps the delay before the first retry of a failed
+	// status write: a write that failed once, for example on a conflict or
+	// a brief API server outage, is likely to work at once.
+	firstWriteRetry = 5 * time.Second
 )
 
 // MetricsProvider queries a metrics backend and returns a scalar value for the given query.
@@ -67,7 +71,9 @@ type Reconciler struct {
 //  3. Evaluate threshold → Pass or Fail.
 //  4. Patch status.lastValue, status.result, status.lastEvaluatedAt, status.reason
 //     and status.validUntil.
-//  5. Requeue after spec.interval (default 1m, minimum 10s).
+//  5. Requeue after spec.interval (default 1m, minimum 10s). When the status
+//     patch fails, requeue after min(interval, 5s) the first time and after
+//     the interval while it keeps failing.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("metriccheck", req.Name).
@@ -88,11 +94,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	value, queryErr := r.Provider.QueryScalar(ctx, mc.Spec.PrometheusURL, mc.Spec.Query)
 	if queryErr != nil {
 		log.Warn().Err(queryErr).Str("query", mc.Spec.Query).Msg("prometheus query failed")
-		if patchErr := r.patchStatus(ctx, &mc, "", "Fail",
-			fmt.Sprintf("prometheus query error: %s", queryErr)); patchErr != nil {
-			return ctrl.Result{}, fmt.Errorf("patch metriccheck status: %w", patchErr)
-		}
-		return ctrl.Result{RequeueAfter: interval}, nil
+		return r.record(ctx, log, &mc, interval, "", "Fail", fmt.Sprintf("prometheus query error: %s", queryErr))
 	}
 
 	// Evaluate threshold.
@@ -104,11 +106,52 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		Str("reason", reason).
 		Msg("metriccheck evaluated")
 
-	if patchErr := r.patchStatus(ctx, &mc, fmt.Sprintf("%g", value), result, reason); patchErr != nil {
-		return ctrl.Result{}, fmt.Errorf("patch metriccheck status: %w", patchErr)
-	}
+	return r.record(ctx, log, &mc, interval, fmt.Sprintf("%g", value), result, reason)
+}
 
+// record writes an evaluation to the status and requeues after interval.
+// A failed write is retried after writeRetry: soon the first time, then at
+// interval. It requeues, not with an error: the error backoff would retry at
+// once and then ever later (up to 1000s), querying Prometheus on every
+// retry, and the next evaluation would come long after the write works
+// again. Until a write succeeds, the result PolicyGates read goes stale at
+// its status.validUntil, so they fail closed.
+func (r *Reconciler) record(ctx context.Context, log zerolog.Logger, mc *kardinalv1alpha1.MetricCheck,
+	interval time.Duration, lastValue, result, reason string) (ctrl.Result, error) {
+	lastWrite := mc.Status.LastEvaluatedAt.DeepCopy()
+	if err := r.patchStatus(ctx, mc, lastValue, result, reason); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		// patchStatus set lastEvaluatedAt to the time of the write that failed.
+		retryIn := writeRetry(lastWrite, mc.CreationTimestamp.Time, mc.Status.LastEvaluatedAt.Time, interval)
+		log.Error().Err(err).Dur("retryIn", retryIn).Msg("metriccheck status write failed")
+		return ctrl.Result{RequeueAfter: retryIn}, nil
+	}
 	return ctrl.Result{RequeueAfter: interval}, nil
+}
+
+// writeRetry is how long to wait before retrying a status write that failed
+// at attempted. The first failure after a write that worked is retried after
+// min(interval, 5s), since a conflict or a brief API server outage is likely
+// gone by then; while the write keeps failing it is retried at interval.
+//
+// Which failure this is follows from the stored object, not from memory
+// (nothing is kept between reconciles): lastWrite is status.lastEvaluatedAt
+// as read, the time of the last write that worked. The first failure comes
+// about one interval after it, and the retry of that failure comes
+// min(interval, 5s) later, past the window. A MetricCheck never written is
+// retried early only on its first attempt, right after it is created.
+func writeRetry(lastWrite *metav1.Time, created, attempted time.Time, interval time.Duration) time.Duration {
+	early := min(interval, firstWriteRetry)
+	since, window := attempted.Sub(created), early
+	if lastWrite != nil {
+		since, window = attempted.Sub(lastWrite.Time), interval+early
+	}
+	if since < window {
+		return early
+	}
+	return interval
 }
 
 // patchStatus patches MetricCheck.status with the latest evaluation result,

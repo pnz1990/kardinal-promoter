@@ -31,19 +31,32 @@ import (
 // The side effects run only when the state actually changes, so re-running a
 // reconcile that already transitioned is a plain status patch.
 func (r *Reconciler) transition(ctx context.Context, base, ps *v1alpha1.PromotionStep, state, message string) error {
-	return r.transitionAudit(ctx, base, ps, state, message, "")
+	_, err := r.transitionClosing(ctx, base, ps, state, message, "", nil)
+	return err
 }
 
 // transitionAudit is transition with an explicit audit action for the new
 // state, for example PromotionSuperseded instead of PromotionFailed.
 func (r *Reconciler) transitionAudit(ctx context.Context, base, ps *v1alpha1.PromotionStep,
 	state, message, auditAction string) error {
-	changed, err := r.patchState(ctx, base, ps, state, message)
+	_, err := r.transitionClosing(ctx, base, ps, state, message, auditAction, nil)
+	return err
+}
+
+// transitionClosing is transitionAudit for a reconcile that closed steps
+// before the transition (the step engine's): closed is observed with the
+// steps the transition closes, once the status patch succeeds. An empty
+// auditAction is the default for the state. It reports whether the state
+// changed, so a caller records its own metrics only for a transition that
+// was patched.
+func (r *Reconciler) transitionClosing(ctx context.Context, base, ps *v1alpha1.PromotionStep,
+	state, message, auditAction string, closed stepObservations) (bool, error) {
+	changed, err := r.patchState(ctx, base, ps, state, message, closed)
 	if err != nil || !changed {
-		return err
+		return false, err
 	}
 	r.recordTransition(ctx, ps, state, message, auditAction)
-	return nil
+	return true, nil
 }
 
 // cancelUnstarted fails a step that never left Pending because its Bundle was
@@ -52,7 +65,7 @@ func (r *Reconciler) transitionAudit(ctx context.Context, base, ps *v1alpha1.Pro
 // neither a started nor a superseded promotion (E2E-R20). Only the Kubernetes
 // Event is emitted.
 func (r *Reconciler) cancelUnstarted(ctx context.Context, base, ps *v1alpha1.PromotionStep, message string) error {
-	changed, err := r.patchState(ctx, base, ps, StateFailed, message)
+	changed, err := r.patchState(ctx, base, ps, StateFailed, message, nil)
 	if err != nil || !changed {
 		return err
 	}
@@ -63,14 +76,16 @@ func (r *Reconciler) cancelUnstarted(ctx context.Context, base, ps *v1alpha1.Pro
 
 // patchState sets state and message on ps and patches its status against
 // base. It reports whether the state changed; a step deleted while
-// reconciling reports no change and no error.
+// reconciling reports no change and no error. The steps closed before the
+// call (closed) and by the state change are observed in
+// kardinal_step_duration_seconds only after the patch succeeds.
 func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.PromotionStep,
-	state, message string) (bool, error) {
+	state, message string, closed stepObservations) (bool, error) {
 	ps.Status.State = state
 	ps.Status.Message = message
 	changed := base.Status.State != state
 	if changed {
-		closeStepStatuses(ps, state)
+		closed = append(closed, closeStepStatuses(ps, state)...)
 		ps.Status.RetryCount = 0
 	}
 	if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
@@ -80,6 +95,7 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 		}
 		return false, fmt.Errorf("patch state %s: %w", state, err)
 	}
+	closed.record()
 	return changed, nil
 }
 
@@ -133,33 +149,34 @@ func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.Promotio
 //   - Entering Verified: every entry that is not Completed becomes Completed.
 //   - Entering a failure state: the first entry that is not Completed is Failed
 //     with the message, unless one already failed.
-func closeStepStatuses(ps *v1alpha1.PromotionStep, state string) {
-	now := metav1.Now()
+//
+// Each entry closed here goes through closeStep, so wait-for-merge and the
+// health check are observed in kardinal_step_duration_seconds like the
+// engine's steps; the samples are returned for the caller to record after
+// its status patch.
+func closeStepStatuses(ps *v1alpha1.PromotionStep, state string) stepObservations {
+	now := time.Now()
 	steps := ps.Status.Steps
+	var closed stepObservations
 	complete := func(s *v1alpha1.StepStatus) {
-		if s.State == v1alpha1.StepExecutionCompleted {
-			return
+		if s.State != v1alpha1.StepExecutionCompleted {
+			closed = append(closed, closeStep(s, v1alpha1.StepExecutionCompleted, time.Time{}, now, true)...)
 		}
-		s.State = v1alpha1.StepExecutionCompleted
-		if s.StartedAt == nil {
-			s.StartedAt = &now
-		}
-		s.CompletedAt = &now
-		s.DurationMs = s.CompletedAt.Sub(s.StartedAt.Time).Milliseconds()
 	}
 	switch state {
 	case StateHealthChecking:
 		for i := range steps {
-			if steps[i].Name == "health-check" {
+			if steps[i].Name == healthCheckStep {
 				// The step engine runs a placeholder health-check step and marks
 				// it Completed; the real check only starts now.
 				if steps[i].State != v1alpha1.StepExecutionInProgress {
+					started := metav1.NewTime(now)
 					steps[i].State = v1alpha1.StepExecutionInProgress
-					steps[i].StartedAt = &now
+					steps[i].StartedAt = &started
 					steps[i].CompletedAt = nil
 					steps[i].DurationMs = 0
 				}
-				return
+				return closed
 			}
 			complete(&steps[i])
 		}
@@ -171,17 +188,14 @@ func closeStepStatuses(ps *v1alpha1.PromotionStep, state string) {
 		for i := range steps {
 			switch steps[i].State {
 			case v1alpha1.StepExecutionFailed:
-				return
+				return closed
 			case v1alpha1.StepExecutionCompleted:
 				continue
 			}
-			steps[i].State = v1alpha1.StepExecutionFailed
-			if steps[i].StartedAt == nil {
-				steps[i].StartedAt = &now
-			}
-			steps[i].CompletedAt = &now
+			closed = closeStep(&steps[i], v1alpha1.StepExecutionFailed, time.Time{}, now, true)
 			steps[i].Message = ps.Status.Message
-			return
+			return closed
 		}
 	}
+	return closed
 }

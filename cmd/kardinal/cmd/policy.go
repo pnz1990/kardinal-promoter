@@ -406,6 +406,9 @@ func policySimulateFn(w io.Writer, c sigs_client.Client, ns string, opts simulat
 	if err != nil {
 		return err
 	}
+	// An org gate reads metrics.* from its org policy namespace, as in the
+	// controller.
+	ev.r.PolicyNamespaces = opts.PolicyNamespaces
 	// Metric results are the cluster's current ones at every simulated time:
 	// a result is stale only if it is stale now.
 	ev.metricsAt = opts.Now.UTC()

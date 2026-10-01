@@ -670,8 +670,8 @@ func TestBuilder_PolicyGateScopeLabelsPropagate(t *testing.T) {
 		"scope label must be propagated from the original gate template")
 	assert.Equal(t, "prod", labels["kardinal.io/applies-to"],
 		"applies-to label must be propagated from the original gate template")
-	assert.Equal(t, "platform-policies", labels["kardinal.io/gate-template-namespace"],
-		"the instance records its template's namespace, which differs from the Pipeline's")
+	assert.Equal(t, "platform-policies", labels[graph.LabelGateTemplateNamespace],
+		"the instance names its template's namespace, where an org gate reads metrics.*")
 }
 
 // TestBuilder_PolicyGateScopeDefault verifies that a gate without scope label

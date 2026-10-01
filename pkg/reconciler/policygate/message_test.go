@@ -82,7 +82,7 @@ func TestPolicyGateReconciler_ReasonWithoutMessageUnchanged(t *testing.T) {
 
 	got = evaluateGate(t, gate(`bundle.labels["missing"] == "x"`, msg), bundle())
 	assert.False(t, got.Status.Ready)
-	assert.True(t, strings.HasPrefix(got.Status.Reason, "CEL evaluation error: "), got.Status.Reason)
+	assert.True(t, strings.HasPrefix(got.Status.Reason, "bundle.version=1.29.0: CEL evaluation error: "), got.Status.Reason)
 	assert.NotContains(t, got.Status.Reason, msg, "evaluation error")
 
 	got = evaluateGate(t, gate("!schedule.isWeekend", msg))

@@ -31,7 +31,8 @@ type MetricCheckSpec struct {
 	Threshold MetricThreshold `json:"threshold"`
 
 	// Interval is how often to re-evaluate the metric (e.g. "1m", "5m").
-	// Defaults to "1m" if empty. Values below "10s" are raised to "10s".
+	// Defaults to "1m" if empty or "0". Other values below "10s" are raised
+	// to "10s".
 	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	Interval string `json:"interval,omitempty"`
@@ -89,8 +90,9 @@ type MetricCheckStatus struct {
 // `metrics.<name>.stale`.
 //
 // MetricCheck objects are typically created alongside PolicyGates that
-// reference them. MetricCheck is namespaced and must be in the same
-// namespace as the PolicyGate that uses it.
+// reference them. MetricCheck is namespaced and must be in the namespace of
+// the PolicyGate template that uses it: an org policy namespace for an org
+// gate, the Pipeline namespace for a team gate.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

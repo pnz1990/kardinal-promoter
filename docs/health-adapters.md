@@ -24,9 +24,9 @@ An unknown `health.type` is rejected by the CRD schema when the Pipeline is appl
 The PromotionStep records the git commit its promotion delivered:
 
 - `status.outputs.commitSHA` — the commit pushed straight to the environment branch (`approval: auto`);
-- `status.outputs.mergeCommitSHA` — the merge commit of the promotion PR (`approval: pr-review`), copied from `PRStatus.status.mergeCommitSHA`.
+- `status.outputs.mergeCommitSHA` — the merge commit of the promotion PR (`approval: pr-review`), copied from `PRStatus.status.mergeCommitSHA` when the step sees the merge, or at the next health check when the PRStatus records it later (a webhook can report the merge before the merge commit is known).
 
-The `argocd` and `flux` adapters require that commit. The `argocd` adapter also accepts a later commit on a shared branch when the Application runs the Bundle images; the `flux` adapter does not (see below). The `resource` adapter requires the Bundle images in the Deployment's pod template, `argoRollouts` in the Rollout's, and `flagger` in the Canary's target Deployment and, for `Succeeded`, its primary Deployment. `kubectl get promotionstep <name> -o yaml` shows the recorded commit in `status.outputs` and the last health result in `status.message`.
+The `argocd` and `flux` adapters require that commit. On a branch shared with other environments, both also accept another commit when the Bundle images run: for `argocd` in the Application, for `flux` in the Kustomization's Deployments (see below). They compare images, not git history, so they do not check that the other commit is later than the promoted one. The `resource` adapter requires the Bundle images in the Deployment's pod template, `argoRollouts` in the Rollout's, and `flagger` in the Canary's target Deployment and, for `Succeeded`, its primary Deployment. `kubectl get promotionstep <name> -o yaml` shows the recorded commit in `status.outputs` and the last health result in `status.message`.
 
 ## Adapter: resource (default)
 
@@ -98,7 +98,7 @@ health:
 - `status.operationState.phase` = `Succeeded` (or no operation recorded)
 - the Application synced the promoted commit: it appears in `status.sync.revision(s)`, `status.operationState.syncResult.revision(s)` or `status.history`. `Synced` alone only means the cluster matches whatever commit Argo CD last fetched, which can be the previous one.
 
-On a branch shared with other environments, a later commit can reach Argo CD before ours does. The adapter accepts that later revision only when `status.summary.images` shows the Bundle images. With `update.strategy: argocd-set-image` there is no commit to compare, so `status.summary.images` must show the Bundle images.
+On a branch shared with other environments, a later commit can reach Argo CD before ours does. The adapter accepts a revision other than the promoted one only when `status.summary.images` shows the Bundle images; it does not check that the revision is later. With `update.strategy: argocd-set-image` there is no commit to compare, so `status.summary.images` must show the Bundle images.
 
 **When to use:** Any cluster managed by Argo CD. This is the recommended adapter for Argo CD users because it verifies that Argo CD successfully synced the promoted manifests, not just that the Deployment is running.
 
@@ -132,7 +132,7 @@ health:
 **Healthy when:** all of these are met:
 - `Ready=True` in `status.conditions`
 - `status.observedGeneration` equals `metadata.generation` (the controller has reconciled the latest spec). A Kustomization missing either field waits.
-- `status.lastAppliedRevision` is the promoted commit (Flux reports `<branch>@sha1:<commit>`, or `<branch>/<commit>` before Flux 2.0). A revision that is not a git commit (an OCI or Helm source) cannot be compared: the check passes with "(revision not verified)" in the message.
+- `status.lastAppliedRevision` is the promoted commit (Flux reports `<branch>@sha1:<commit>`, or `<branch>/<commit>` before Flux 2.0), or another commit while the Kustomization's Deployments run the Bundle images (see the table below). A revision that is not a git commit (an OCI or Helm source) cannot be compared: the check passes with "(revision not verified)" in the message.
 
 **When to use:** Any cluster managed by Flux.
 
@@ -143,10 +143,14 @@ health:
 |---|---|
 | `Ready=True`, generation matches, promoted commit applied | Healthy |
 | `Ready=True`, older commit applied | Wait |
-| `Ready=True`, a later commit applied (another push to the same branch reached Flux before it fetched ours) | Wait, then `onHealthFailure` at `health.timeout`: unlike `argocd`, this adapter has no image check to fall back on. Give each environment its own branch, or use the `resource` adapter |
-| `Ready=Unknown` (reconciling) or generation not observed yet | Wait |
+| `Ready=True`, another commit applied (a sibling environment pushed to the same branch before Flux fetched ours) | Healthy when the Kustomization's Deployments (in `status.inventory` or `spec.healthChecks`) run the Bundle images and are rolled out; the message says `(not <commit>, but the Kustomization's Deployments run the Bundle images)`. Otherwise Wait, then `onHealthFailure` at `health.timeout`. A Kustomization with `spec.kubeConfig` (another cluster) has no Deployments kardinal can read, so it waits |
+| `Ready=Unknown` while Flux reconciles again the commit it applied (generation observed, `lastAttemptedRevision` equals `lastAppliedRevision`) | Flux sets this at the start of every reconcile, including its interval and a `reconcile.fluxcd.io/requestedAt` request. The result is the result of the Kustomization's Deployments (in `status.inventory` or `spec.healthChecks`) that run a Bundle image repository, with the revision rules above: Healthy keeps a running bake going, and one of them that lost its replicas or stalled is a health failure. A Deployment that runs none of the Bundle's repositories (a cache, say) and is not healthy makes the check wait, never fail; Flux's own result decides once the reconcile ends. Without Deployments that run a Bundle repository it waits |
+| `Ready=Unknown` while Flux applies another commit, or generation not observed yet | Wait |
+| `spec.suspend: true` and the promoted commit not applied | Wait; the message starts with `Kustomization <namespace>/<name> is suspended; Flux applies nothing until it is resumed`. `onHealthFailure` at `health.timeout`. A suspended Kustomization that already applied the commit is Healthy |
 | `approval: pr-review` and the merge commit is not known yet | Wait, then `onHealthFailure` at `health.timeout` (see below) |
-| `Ready=False` (reconciliation failed or stalled) | Unhealthy (counts as a health failure) |
+| `Ready=False` because Flux gave up on the promoted commit: its resources stalled (`HealthCheckFailed`, "failed early due to stalled resources", for example a Deployment past its `progressDeadlineSeconds`) | **Failed at once**: `onHealthFailure` applies without waiting for the timeout |
+| The same stall on another commit (a sibling environment pushed to the same branch before Flux fetched ours) when a Deployment that runs the Bundle images in its pod template is itself past its progress deadline | **Failed at once**; the message says `(lastAttemptedRevision=<other>, not <commit>, but Deployment <namespace>/<name>, which runs the Bundle images, stalled)` |
+| `Ready=False` otherwise (build or apply failed, a health check timed out, or a stall of another commit where no Deployment that runs the Bundle images stalled, for example a cache Deployment stalled while ours is rolled out) | Unhealthy (counts as a health failure) |
 | Not found | Unhealthy (counts as a health failure) |
 
 **The promoted commit must be known.** For a direct push it is the pushed commit. For a PR (`approval: pr-review`) it is the merge commit: the SCM webhook records it with the merge for GitHub and GitLab, and otherwise the controller asks the SCM provider for it after the merge. Until it is known, the check waits with `merge commit of the PR not known yet`, because a Kustomization that is `Ready=True` on the **previous** commit would otherwise pass: there is no image check to fall back on, unlike `argocd` and `resource`. If the commit never becomes known, `health.timeout` applies `onHealthFailure` with that reason. That happens when:
@@ -264,7 +268,7 @@ Each health check has one of four results:
 - **Healthy** — Verified (or the bake window starts or advances).
 - **Waiting** — the promoted revision is still rolling out or syncing. It does not count as a failure.
 - **Unhealthy** — for example Degraded, `Ready=False`, not found, or replicas unavailable after the rollout finished. Each check increments `status.consecutiveHealthFailures`, which a `RollbackPolicy` you create reads (see [Rollback](rollback.md)).
-- **Failed** — Deployment `ProgressDeadlineExceeded` or Flagger canary `Failed` on the promoted revision. `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack) applies at once.
+- **Failed** — Deployment `ProgressDeadlineExceeded`, Flagger canary `Failed` or a Flux Kustomization whose resources stalled, on the promoted revision (for Flux, also on another commit when the stalled Deployment runs the Bundle images). `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack) applies at once.
 
 Reaching `health.timeout` without a Healthy result is treated like a Failed result: it is counted and applies `onHealthFailure`. A new image that crash-loops is **Waiting**, not Unhealthy: Kubernetes reports the rollout as still progressing (`Progressing=True`, reason `ReplicaSetUpdated`) until the Deployment's `progressDeadlineSeconds` (default 600s) passes. Set `progressDeadlineSeconds` below `health.timeout` to fail such a rollout sooner; otherwise the timeout fails it.
 

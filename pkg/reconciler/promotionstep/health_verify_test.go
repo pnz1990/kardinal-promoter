@@ -309,6 +309,43 @@ func TestFluxWaitsForTheMergeCommit(t *testing.T) {
 	}
 }
 
+// TestMergeCommitRecordedLate: a webhook can mark the PR merged before the
+// merge commit is known, so the step leaves WaitingForMerge without it. Once
+// the PRStatus records it, the health check copies it into
+// status.outputs.mergeCommitSHA, as docs/health-adapters.md says. Outputs
+// that already name a commit are kept.
+func TestMergeCommitRecordedLate(t *testing.T) {
+	prReview := v1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review", Health: v1alpha1.HealthConfig{Type: "flux"}}
+	merged := func(sha string) *v1alpha1.PRStatus {
+		prs := openPRStatus("prs", "org/repo", 42)
+		prs.Status.Open, prs.Status.Merged, prs.Status.MergeCommitSHA = false, true, sha
+		return prs
+	}
+	tests := []struct {
+		name    string
+		prs     *v1alpha1.PRStatus
+		outputs map[string]string
+		applied string
+		want    map[string]string
+	}{
+		{name: "recorded while Flux is on the previous commit", prs: merged(newSHA), applied: oldSHA,
+			want: map[string]string{"mergeCommitSHA": newSHA}},
+		{name: "recorded when the step is verified", prs: merged(newSHA), applied: newSHA,
+			want: map[string]string{"mergeCommitSHA": newSHA}},
+		{name: "not known yet", prs: merged(""), applied: oldSHA, want: nil},
+		{name: "already recorded", prs: merged(newSHA), applied: oldSHA,
+			outputs: map[string]string{"mergeCommitSHA": oldSHA}, want: map[string]string{"mergeCommitSHA": oldSHA}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, got, _ := healthCase{env: prReview, prsRef: "prs", objs: []client.Object{tt.prs},
+				status:  v1alpha1.PromotionStepStatus{Outputs: tt.outputs},
+				dynObjs: []runtime.Object{fluxKustomization("p-prod", tt.applied)}}.run(t)
+			assert.Equal(t, tt.want, got.Status.Outputs, got.Status.Message)
+		})
+	}
+}
+
 // headGit is a GitClient that reports the commit it pushed.
 type headGit struct {
 	noopGit

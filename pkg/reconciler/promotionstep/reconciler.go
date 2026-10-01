@@ -517,16 +517,16 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 
 	if execErr != nil {
-		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), execErr)
+		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr, nil)
 	}
-	updateStepStatuses(ps, eng.StepNames(), nextIdx, false, "")
+	closed := updateStepStatuses(ps, eng.StepNames(), nextIdx, false, "", eng.Timings())
 
 	switch result.Status {
 	case steps.StepPending:
 		if prURL := state.Outputs["prURL"]; prURL != "" {
 			// The open-pr step (or similar) has opened a PR and is waiting for merge.
 			// Transition to WaitingForMerge so the PRStatusReconciler can take over.
-			if err := r.transition(ctx, base, ps, StateWaitingForMerge, result.Message); err != nil {
+			if _, err := r.transitionClosing(ctx, base, ps, StateWaitingForMerge, result.Message, "", closed); err != nil {
 				return ctrl.Result{}, err
 			}
 			// Fill in the PRStatus spec so the PRStatusReconciler can poll it.
@@ -545,6 +545,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch promoting retry: %w", patchErr)
 		}
+		closed.record()
 		requeue := result.RequeueAfter
 		if requeue == 0 {
 			return ctrl.Result{Requeue: true}, nil
@@ -561,7 +562,8 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 					log.Warn().Err(prErr).Msg("failed to patch PRStatus spec (non-fatal)")
 				}
 			}
-			if err := r.transition(ctx, base, ps, StateHealthChecking, "all steps complete, running health check"); err != nil {
+			if _, err := r.transitionClosing(ctx, base, ps, StateHealthChecking,
+				"all steps complete, running health check", "", closed); err != nil {
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{Requeue: true}, nil
@@ -571,14 +573,32 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch step progress: %w", patchErr)
 		}
+		closed.record()
 		return ctrl.Result{Requeue: true}, nil
 
 	default:
 		// ExecuteFrom reports StepFailed with an error, so this is unreachable
 		// unless a step returns an unknown status.
-		return r.handleStepError(ctx, log, base, ps, eng.StepNames(),
-			fmt.Errorf("step %d returned status %q: %s", nextIdx, result.Status, result.Message))
+		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(),
+			fmt.Errorf("step %d returned status %q: %s", nextIdx, result.Status, result.Message), closed)
 	}
+}
+
+// prOpenedAt is when the promotion PR was opened: when the open-pr step
+// completed, else when wait-for-merge started. ok is false when the step
+// statuses record neither.
+func prOpenedAt(ps *v1alpha1.PromotionStep) (opened time.Time, ok bool) {
+	for _, s := range ps.Status.Steps {
+		if s.Name == "open-pr" && s.CompletedAt != nil {
+			return s.CompletedAt.Time, true
+		}
+	}
+	for _, s := range ps.Status.Steps {
+		if s.Name == "wait-for-merge" && s.StartedAt != nil {
+			return s.StartedAt.Time, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // handleStepError decides what a step engine error means for the PromotionStep.
@@ -589,9 +609,11 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 // maxStepRetries times, unless the step marked it with steps.Permanent; the
 // second, a permanent error, and a retried error once the retries are used up
 // fail the step (C03-promotionstep-06). A failed step closes the PR it opened,
-// so a later merge cannot deliver a change whose step is Failed.
+// so a later merge cannot deliver a change whose step is Failed. closed holds
+// the steps this reconcile already closed; they are observed with the ones
+// closed here once the status patch succeeds.
 func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
-	stepNames []string, execErr error) (ctrl.Result, error) {
+	stepNames []string, timings map[int]steps.StepTiming, execErr error, closed stepObservations) (ctrl.Result, error) {
 	retryable := errors.Unwrap(execErr) != nil && !errors.Is(execErr, steps.ErrPermanent)
 	idx := ps.Status.CurrentStepIndex
 	if retryable && ps.Status.RetryCount < maxStepRetries {
@@ -599,7 +621,7 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		delay := retryDelay(ps.Status.RetryCount)
 		ps.Status.Message = fmt.Sprintf("retrying in %s (%d/%d) after error: %v",
 			delay, ps.Status.RetryCount, maxStepRetries, execErr)
-		updateStepStatuses(ps, stepNames, idx, false, "")
+		closed = append(closed, updateStepStatuses(ps, stepNames, idx, false, "", timings)...)
 		log.Warn().Err(execErr).Str("env", ps.Spec.Environment).
 			Int("retry", ps.Status.RetryCount).Dur("delay", delay).Msg("step failed, will retry")
 		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
@@ -608,6 +630,7 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 			}
 			return ctrl.Result{}, fmt.Errorf("patch step retry: %w", patchErr)
 		}
+		closed.record()
 		return ctrl.Result{RequeueAfter: delay}, nil
 	}
 
@@ -616,11 +639,12 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		msg = fmt.Sprintf("%s (gave up after %d retries)", msg, maxStepRetries)
 	}
 	log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
-	updateStepStatuses(ps, stepNames, idx, true, msg)
+	closed = append(closed, updateStepStatuses(ps, stepNames, idx, true, msg, timings)...)
 	if closeErr := r.closeStepPR(ctx, ps, "the promotion failed: "+msg); closeErr != nil {
 		msg += fmt.Sprintf("; closing the PR it opened failed (%v) — close it by hand", closeErr)
 	}
-	return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	_, err := r.transitionClosing(ctx, base, ps, StateFailed, msg, "", closed)
+	return ctrl.Result{}, err
 }
 
 // recordPushedCommit stores, as outputs.commitSHA, the commit the health check
@@ -746,13 +770,20 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 			ps.Status.Outputs["mergeCommitSHA"] = prs.Status.MergeCommitSHA
 		}
 		ps.Status.WaitForMergeExpiry = nil // clear expiry on successful transition
-		if err := r.transition(ctx, base, ps, StateHealthChecking,
-			fmt.Sprintf("PR #%d merged", prs.Spec.PRNumber)); err != nil {
+		// PR duration: from the PR opening to the merge seen here. Not from
+		// the PRStatus creationTimestamp: the Graph creates the PRStatus with
+		// the Bundle, before the upstream environments and the gates. Read
+		// before the transition, which closes the step statuses, and observed
+		// only once the transition is patched: a failed patch is retried by
+		// a later reconcile, and a deleted step does not transition.
+		opened, openedKnown := prOpenedAt(ps)
+		moved, err := r.transitionClosing(ctx, base, ps, StateHealthChecking,
+			fmt.Sprintf("PR #%d merged", prs.Spec.PRNumber), "", nil)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
-		// Emit PR duration histogram: time from PRStatus creation (PR opened) to now (PR merged).
-		if prDuration := time.Since(prs.CreationTimestamp.Time).Seconds(); prDuration > 0 {
-			observability.PRDurationSeconds.Observe(prDuration)
+		if moved && openedKnown {
+			observability.PRDurationSeconds.Observe(max(time.Since(opened), 0).Seconds())
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -904,6 +935,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	opts := health.OptionsForEnv(pipeline.Name, env)
 	opts.Timeout = timeout
 	opts.ExpectedRevision = r.expectedRevision(ctx, ps)
+	recordMergeCommit(ps, opts.ExpectedRevision)
 	for _, img := range bundle.Spec.Images {
 		opts.ExpectedImages = append(opts.ExpectedImages,
 			health.ImageExpectation{Repository: img.Repository, Tag: img.Tag, Digest: img.Digest})
@@ -1005,6 +1037,25 @@ func (r *Reconciler) expectedRevision(ctx context.Context, ps *v1alpha1.Promotio
 		return prs.Status.MergeCommitSHA
 	}
 	return ""
+}
+
+// recordMergeCommit sets status.outputs.mergeCommitSHA to rev, the revision
+// expectedRevision returned, when the outputs have neither a pushed commit
+// nor a merge commit: rev then came from the PRStatus. The step copies the
+// merge commit when it leaves WaitingForMerge, but a webhook can mark the PR
+// merged before the merge commit is known (the parsed Forgejo event has none),
+// and the PRStatus reconciler records it later. The health-check paths that
+// follow patch the status, except an adapter error, which requeues without a
+// patch: the merge commit is then recorded by the next check that reaches a
+// result.
+func recordMergeCommit(ps *v1alpha1.PromotionStep, rev string) {
+	if rev == "" || ps.Status.Outputs["commitSHA"] != "" || ps.Status.Outputs["mergeCommitSHA"] != "" {
+		return
+	}
+	if ps.Status.Outputs == nil {
+		ps.Status.Outputs = map[string]string{}
+	}
+	ps.Status.Outputs["mergeCommitSHA"] = rev
 }
 
 // verify moves ps to Verified with a Verified condition.
@@ -1572,91 +1623,121 @@ func initStepStatuses(seq []string) []v1alpha1.StepStatus {
 //   - currentIdx is the index returned by ExecuteFrom (next step to execute on
 //     the next reconcile, or len(stepNames) if all steps completed successfully).
 //   - failed == true means ExecuteFrom returned an error at currentIdx.
+//   - timings is Engine.Timings() of that call: when each step it executed
+//     started and returned. A step without a timing gets time.Now().
 //
-// The reconciler writes to ps.Status before calling Status().Patch, so timing
-// (startedAt/completedAt) is derived from time.Now() here — consistent with
-// the pattern used by HealthCheckExpiry and BakeStartedAt elsewhere in the
-// reconciler.
-func updateStepStatuses(ps *v1alpha1.PromotionStep, stepNames []string, currentIdx int, failed bool, failMessage string) {
+// A step keeps the startedAt of the reconcile it started in (wait-for-merge
+// runs over many reconciles). Most steps start and finish within one
+// reconcile, so their times come from timings; otherwise every such step
+// would get startedAt == completedAt and no duration. Each step that becomes
+// Completed or Failed sets durationMs and is returned, to be observed once in
+// kardinal_step_duration_seconds after the status patch, except the engine's
+// placeholder health-check step (see closeStepStatuses).
+func updateStepStatuses(ps *v1alpha1.PromotionStep, stepNames []string, currentIdx int, failed bool,
+	failMessage string, timings map[int]steps.StepTiming) stepObservations {
 	if len(ps.Status.Steps) == 0 {
 		// Steps not yet initialized (e.g. crash before initStepStatuses ran).
 		// Reconstruct the Pending slice so updates have something to apply to.
 		ps.Status.Steps = initStepStatuses(stepNames)
 	}
 
-	now := metav1.Now()
-
+	now := time.Now()
+	var closed stepObservations
+	// finish closes step i in state.
+	finish := func(i int, step *v1alpha1.StepStatus, state v1alpha1.StepExecutionState) {
+		t, ran := timings[i]
+		finished := t.Finished
+		if !ran {
+			finished = now
+			if step.CompletedAt != nil {
+				finished = step.CompletedAt.Time
+			}
+		}
+		// The engine's placeholder health-check step: closeStepStatuses
+		// reopens it when the health check starts and records that duration.
+		closed = append(closed, closeStep(step, state, t.Started, finished, step.Name != healthCheckStep)...)
+	}
 	for i := range ps.Status.Steps {
 		step := &ps.Status.Steps[i]
 		switch {
 		case i < currentIdx:
-			// Steps before the current index completed in a previous reconcile.
-			// Only update if not already marked Completed (idempotent).
+			// Steps before the current index have completed, in this
+			// reconcile or a previous one. Only update a step not already
+			// marked Completed (idempotent), so each is observed once.
 			if step.State != v1alpha1.StepExecutionCompleted {
-				step.State = v1alpha1.StepExecutionCompleted
-				if step.StartedAt == nil {
-					step.StartedAt = &now
-				}
-				if step.CompletedAt == nil {
-					step.CompletedAt = &now
-				}
-				if step.StartedAt != nil && step.CompletedAt != nil {
-					d := step.CompletedAt.Sub(step.StartedAt.Time)
-					if d > 0 {
-						step.DurationMs = d.Milliseconds()
-						// Emit per-step execution duration metric.
-						observability.StepDurationSeconds.WithLabelValues(step.Name).Observe(d.Seconds())
-					}
-				}
+				finish(i, step, v1alpha1.StepExecutionCompleted)
+			}
+		case i == currentIdx && failed:
+			if step.State != v1alpha1.StepExecutionFailed {
+				finish(i, step, v1alpha1.StepExecutionFailed)
+				step.Message = failMessage
 			}
 		case i == currentIdx:
-			if failed {
-				// This step failed.
-				if step.State != v1alpha1.StepExecutionFailed {
-					step.State = v1alpha1.StepExecutionFailed
-					if step.StartedAt == nil {
-						step.StartedAt = &now
-					}
-					step.CompletedAt = &now
-					if step.StartedAt != nil {
-						d := step.CompletedAt.Sub(step.StartedAt.Time)
-						if d > 0 {
-							step.DurationMs = d.Milliseconds()
-							// Emit per-step execution duration metric for failed steps.
-							observability.StepDurationSeconds.WithLabelValues(step.Name).Observe(d.Seconds())
-						}
-					}
-					step.Message = failMessage
+			// This step is in progress (StepPending result means "still running").
+			if step.State == v1alpha1.StepExecutionPending {
+				step.State = v1alpha1.StepExecutionInProgress
+				started := timings[i].Started
+				if started.IsZero() {
+					started = now
 				}
-			} else if currentIdx < len(ps.Status.Steps) {
-				// This step is in progress (StepPending result means "still running").
-				if step.State == v1alpha1.StepExecutionPending {
-					step.State = v1alpha1.StepExecutionInProgress
-					step.StartedAt = &now
-				}
+				mt := metav1.NewTime(started)
+				step.StartedAt = &mt
 			}
-			// currentIdx == len(stepNames): all steps done; nothing to update here.
-		case i > currentIdx:
-			// Future steps: leave as Pending.
+		default:
+			// Future steps: leave as Pending. When currentIdx ==
+			// len(stepNames) every step is handled by the first case.
 		}
 	}
+	return closed
+}
 
-	// If currentIdx == len(stepNames) (all done), mark the last step Completed
-	// if it isn't already.
-	if !failed && currentIdx > 0 && currentIdx == len(ps.Status.Steps) {
-		last := &ps.Status.Steps[currentIdx-1]
-		if last.State != v1alpha1.StepExecutionCompleted {
-			last.State = v1alpha1.StepExecutionCompleted
-			if last.CompletedAt == nil {
-				last.CompletedAt = &now
-			}
-			if last.StartedAt != nil && last.CompletedAt != nil {
-				d := last.CompletedAt.Sub(last.StartedAt.Time)
-				if d > 0 {
-					last.DurationMs = d.Milliseconds()
-				}
-			}
+// healthCheckStep is the last step of every sequence. The engine runs a
+// placeholder of it; the health check itself is the HealthChecking state.
+const healthCheckStep = "health-check"
+
+// closeStep moves a step to Completed or Failed at finished and sets its
+// durationMs. started is the start to use when the step has no startedAt; a
+// zero started means the start is unknown (the step never ran, or ran in a
+// reconcile whose status was lost), so the step starts at finished. Unless
+// observe is false or the start is unknown, it returns the duration to
+// observe in kardinal_step_duration_seconds once the status patch succeeds.
+// Callers close a step once, so each step is observed once.
+func closeStep(s *v1alpha1.StepStatus, state v1alpha1.StepExecutionState, started, finished time.Time, observe bool) stepObservations {
+	s.State = state
+	known := s.StartedAt != nil || !started.IsZero()
+	if s.StartedAt == nil {
+		if started.IsZero() {
+			started = finished
 		}
+		st := metav1.NewTime(started)
+		s.StartedAt = &st
+	}
+	ct := metav1.NewTime(finished)
+	s.CompletedAt = &ct
+	d := max(finished.Sub(s.StartedAt.Time), 0)
+	s.DurationMs = d.Milliseconds()
+	if observe && known {
+		return stepObservations{{step: s.Name, duration: d}}
+	}
+	return nil
+}
+
+// stepObservations are kardinal_step_duration_seconds samples of the steps a
+// reconcile closed in memory. They are recorded only after the status patch
+// that closes the steps succeeds: a failed patch is retried by a later
+// reconcile, which closes the same steps again, so observing them before the
+// patch counted them twice.
+type stepObservations []stepObservation
+
+type stepObservation struct {
+	step     string
+	duration time.Duration
+}
+
+// record observes each sample.
+func (o stepObservations) record() {
+	for _, s := range o {
+		observability.StepDurationSeconds.WithLabelValues(s.step).Observe(s.duration.Seconds())
 	}
 }
 

@@ -96,6 +96,20 @@ func checkImages(expected []ImageExpectation, running []string) (bool, string) {
 	return true, ""
 }
 
+// runsRepository reports whether one of the running images is of a Bundle
+// repository, whatever its tag or digest.
+func runsRepository(expected []ImageExpectation, running []string) bool {
+	for _, want := range expected {
+		repo := normalizeRepository(want.Repository)
+		for _, ref := range running {
+			if normalizeRepository(ParseImage(ref).Repository) == repo {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func formatImage(img ImageExpectation) string {
 	s := img.Repository
 	if img.Tag != "" {

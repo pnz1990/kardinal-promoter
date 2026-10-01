@@ -19,12 +19,14 @@ import (
 )
 
 // diagnosedGroups are the API groups whose objects Diagnose dumps: kardinal,
-// kro, the workloads (Deployments, ReplicaSets), Argo Rollouts and Flagger.
-var diagnosedGroups = []string{"kardinal.io", "kro.run", "apps", "argoproj.io", "flagger.app"}
+// kro, the workloads (Deployments, ReplicaSets), Argo Rollouts, Flagger and
+// Flux.
+var diagnosedGroups = []string{"kardinal.io", "kro.run", "apps", "argoproj.io", "flagger.app",
+	"source.toolkit.fluxcd.io", "kustomize.toolkit.fluxcd.io"}
 
 // logNamespaces are the namespaces whose pod logs Diagnose saves. A suite
-// without Argo Rollouts or Flagger has no pods in theirs.
-var logNamespaces = []string{ControllerNamespace, "kro-system", "argo-rollouts", "flagger-system"}
+// without Argo Rollouts, Flagger or Flux has no pods in theirs.
+var logNamespaces = []string{ControllerNamespace, "kro-system", "argo-rollouts", "flagger-system", FluxNamespace}
 
 // Diagnose writes the state a failed test needs for debugging to
 // $KARDINAL_E2E_ARTIFACTS/<ns>/: every object of diagnosedGroups in ns,

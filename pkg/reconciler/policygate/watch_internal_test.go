@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // TestMetricCheckResultChanged covers C04-gates-36: the MetricCheck reconciler
@@ -105,6 +106,49 @@ func TestMetricCheckRequests(t *testing.T) {
 	require.Len(t, reqs, 1)
 	assert.Equal(t, "default", reqs[0].Namespace)
 	assert.Equal(t, "app-v1-prod-error-rate", reqs[0].Name)
+}
+
+// TestMetricCheckRequests_OrgGates covers bug 5 of the health spike: an org
+// MetricCheck re-evaluates the org gate instances that read it, which live in
+// the Pipeline namespaces, once each. A team MetricCheck does not reach
+// instances in other namespaces.
+func TestMetricCheckRequests_OrgGates(t *testing.T) {
+	const expr = `metrics["error-rate"].result == "Pass"`
+	gate := func(name, ns, templateNS string) client.Object {
+		g := &kardinalv1alpha1.PolicyGate{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: map[string]string{labelBundle: "app-v1"}},
+			Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: expr},
+		}
+		if templateNS != "" {
+			g.Labels[graph.LabelGateTemplateNamespace] = templateNS
+		}
+		return g
+	}
+	scheme := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(scheme))
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		gate("app-v1-prod-org", "team-a", "platform-policies"),
+		gate("app-v1-prod-org", "team-b", "platform-policies"),
+		gate("app-v1-prod-team", "team-a", "team-a"),
+		gate("app-v1-prod-local", "platform-policies", "platform-policies"),
+	).Build()
+	r := &Reconciler{Client: c}
+	names := func(ns string) []string {
+		mc := &kardinalv1alpha1.MetricCheck{ObjectMeta: metav1.ObjectMeta{Name: "error-rate", Namespace: ns}}
+		var out []string
+		for _, req := range r.metricCheckRequests(context.Background(), mc) {
+			out = append(out, req.Namespace+"/"+req.Name)
+		}
+		return out
+	}
+	assert.ElementsMatch(t, []string{
+		"platform-policies/app-v1-prod-local", "team-a/app-v1-prod-org", "team-b/app-v1-prod-org",
+	}, names("platform-policies"))
+	assert.ElementsMatch(t, []string{"team-a/app-v1-prod-org", "team-a/app-v1-prod-team"}, names("team-a"))
+
+	r.PolicyNamespaces = []string{"org-a"}
+	assert.ElementsMatch(t, []string{"platform-policies/app-v1-prod-local"}, names("platform-policies"),
+		"platform-policies is not an org policy namespace here")
 }
 
 // TestExprRefersToMetric covers the stale-metric note in status.reason (#1302):

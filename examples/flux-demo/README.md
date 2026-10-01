@@ -64,13 +64,21 @@ The `flux` health adapter checks:
 
 1. **`Ready` condition is `True`** on the Kustomization resource
 2. **`observedGeneration == metadata.generation`** — the controller has reconciled the *current* spec, not a previous version
+3. **`lastAppliedRevision` is the commit kardinal promoted** — or another commit while the Kustomization's Deployments run the Bundle images (a sibling environment pushed to the same branch). The adapter checks the images, not the git history, so it does not check that the other commit is later
 
-This two-part check prevents a false positive where Flux reconciled the previous manifest successfully but hasn't yet picked up the new commit kardinal pushed.
+Together these prevent a false positive where Flux reconciled the previous commit successfully but hasn't yet applied the one kardinal pushed.
 
-**Unhealthy states that cause the adapter to wait:**
-- `Ready=False` (reconciliation failed or in progress)
-- `Ready=True` but `observedGeneration` lags `generation` (Flux hasn't reconciled the new commit yet)
-- Kustomization not found (Flux hasn't created it yet)
+**States that make the adapter wait:**
+- `Ready=Unknown` while Flux applies a commit, or `observedGeneration` lags `generation`
+- `Ready=True` on an older commit (Flux hasn't fetched or applied the new commit yet)
+- `Ready=Unknown` while Flux reconciles again the commit it already applied (every interval): the result is that of the Kustomization's Deployments that run the Bundle's images, so a running bake continues; another Deployment that is not healthy makes it wait
+- `spec.suspend: true` before the commit is applied: the message says the Kustomization is suspended; Flux applies nothing until it is resumed
+
+**States that count as a health failure:**
+- `Ready=False` (build or apply failed, or a health check timed out). When Flux gave up because the promoted commit's resources stalled (`HealthCheckFailed`), or another commit's when the stalled Deployment runs the Bundle images, `onHealthFailure` applies at once
+- Kustomization not found
+
+Waiting ends at `health.timeout`, which then applies `onHealthFailure`. See [docs/health-adapters.md](../../docs/health-adapters.md) for every case.
 
 **Configuration reference:**
 
@@ -97,8 +105,8 @@ bash scripts/demo-validate.sh
 ## Expected Output
 
 ```
-test  | Flux Kustomization flux-demo-test  | Ready=True, generation=2 matches
-uat   | Flux Kustomization flux-demo-uat   | Ready=True, generation=2 matches
+test  | Flux Kustomization flux-demo-test  | Ready=True, generation=2 matches, lastAppliedRevision=1f0c2a9b7d3e
+uat   | Flux Kustomization flux-demo-uat   | Ready=True, generation=2 matches, lastAppliedRevision=8b41d7e05c2a
 prod  | PR #42 open — waiting for merge
 ```
 

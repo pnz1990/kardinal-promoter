@@ -123,12 +123,12 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 
 `kardinal.io/v1alpha1`
 
-MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the same namespace as the PolicyGate that uses it.
+MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the namespace of the PolicyGate template that uses it: an org policy namespace for an org gate, the Pipeline namespace for a team gate.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | MetricCheckSpec defines a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus at spec.interval, evaluates the threshold, and writes results to status. PolicyGate CEL expressions can reference these results via the metrics.* context variable. |
-| `spec.interval` | string |  | Interval is how often to re-evaluate the metric (e.g. "1m", "5m"). Defaults to "1m" if empty. Values below "10s" are raised to "10s". |
+| `spec.interval` | string |  | Interval is how often to re-evaluate the metric (e.g. "1m", "5m"). Defaults to "1m" if empty or "0". Other values below "10s" are raised to "10s". |
 | `spec.prometheusURL` | string | yes | PrometheusURL is the base URL of the Prometheus HTTP API (http or https). A path is kept as a prefix: the query goes to &lt;prometheusURL&gt;/api/v1/query. Example: http://prometheus.monitoring.svc:9090 |
 | `spec.provider` | string | yes | Provider is the metrics backend. Currently only "prometheus" is supported. One of: `prometheus`. Default: `prometheus`. |
 | `spec.query` | string | yes | Query is the PromQL query string to evaluate. The query must return a scalar or a single-element vector. |

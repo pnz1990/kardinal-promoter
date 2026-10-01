@@ -51,13 +51,13 @@ kardinal-promoter uses [controller-runtime](https://github.com/kubernetes-sigs/c
 
 | Metric | Type | Description |
 |---|---|---|
-| `controller_runtime_reconcile_total` | Counter | Total reconcile operations, labelled by `controller` and `result` (`success`, `error`, `requeue`) |
+| `controller_runtime_reconcile_total` | Counter | Total reconcile operations, labelled by `controller` and `result` (`success`, `error`, `requeue`, `requeue_after`) |
 | `controller_runtime_reconcile_errors_total` | Counter | Total reconcile errors, labelled by `controller` |
 | `controller_runtime_reconcile_time_seconds` | Histogram | Time spent per reconcile loop, labelled by `controller` |
 | `controller_runtime_max_concurrent_reconciles` | Gauge | Configured max concurrent reconciles per controller |
 | `controller_runtime_active_workers` | Gauge | Active reconcile goroutines per controller |
 
-**Controller labels**: `bundle`, `promotionstep`, `policygate`, `metriccheck`
+**Controller labels**: `bundle`, `changewindow`, `metriccheck`, `notificationhook`, `pipeline`, `policygate`, `promotionstep`, `prstatus`, `rollbackpolicy`, `scheduleclock`, `subscription`
 
 ### Work queue metrics
 
@@ -81,8 +81,8 @@ The controller registers these on the same `/metrics` endpoint
 | `kardinal_bundles_total` | Counter | `phase` | Bundle phase transitions, labelled by the phase entered |
 | `kardinal_steps_total` | Counter | `type` (always `PromotionStep`), `result` (`succeeded`, `failed`) | PromotionSteps reaching a terminal state |
 | `kardinal_gate_evaluations_total` | Counter | `result` (`allowed`, `blocked`) | PolicyGate evaluations |
-| `kardinal_pr_duration_seconds` | Histogram | — | Time from PR open (WaitingForMerge) to merge |
-| `kardinal_step_duration_seconds` | Histogram | `step` (step name, e.g. `git-clone`) | Duration of each promotion step |
+| `kardinal_pr_duration_seconds` | Histogram | — | Time from the PR opening (the `open-pr` step completing) to the merge the controller sees, observed once, when the step's move to `HealthChecking` is written |
+| `kardinal_step_duration_seconds` | Histogram | `step` (step name, e.g. `git-clone`) | Duration of each promotion step, observed once, when the status that records it Completed or Failed is written. `wait-for-merge` lasts until the merge; `health-check` covers the health check and the bake |
 | `kardinal_gate_blocking_duration_seconds` | Histogram | — | How long a PolicyGate was blocked before it allowed |
 | `kardinal_promotionstep_age_seconds` | Histogram | — | PromotionStep age when it reaches a terminal state |
 
@@ -319,9 +319,13 @@ Download the dashboard JSON from the repository:
 config/monitoring/kardinal-promoter-dashboard.json
 ```
 
-In Grafana: **Dashboards → Import → Upload JSON file**. Select your Prometheus datasource when prompted.
+In Grafana: **Dashboards → Import → Upload JSON file**.
 
 The dashboard UID is `kardinal-promoter-v1`. Importing a second time will overwrite the existing dashboard.
+
+With either option, the panels query the Prometheus datasource chosen in the
+dashboard's **Prometheus** selector, which starts at your default Prometheus
+datasource.
 
 ---
 

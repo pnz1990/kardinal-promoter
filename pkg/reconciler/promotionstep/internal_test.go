@@ -235,7 +235,7 @@ func TestUpdateStepStatuses_CurrentStepInProgress(t *testing.T) {
 	}
 
 	// ExecuteFrom returns nextIdx=1 (step 0 ran, step 1 is now in progress)
-	updateStepStatuses(ps, seq, 1, false, "")
+	updateStepStatuses(ps, seq, 1, false, "", nil)
 
 	assert.Equal(t, v1alpha1.StepExecutionCompleted, ps.Status.Steps[0].State, "step 0 must be Completed")
 	assert.Equal(t, v1alpha1.StepExecutionInProgress, ps.Status.Steps[1].State, "step 1 must be InProgress")
@@ -253,7 +253,7 @@ func TestUpdateStepStatuses_Failed(t *testing.T) {
 	}
 
 	// ExecuteFrom returned nextIdx=1, failed=true (step 1 failed)
-	updateStepStatuses(ps, seq, 1, true, "push rejected")
+	updateStepStatuses(ps, seq, 1, true, "push rejected", nil)
 
 	assert.Equal(t, v1alpha1.StepExecutionCompleted, ps.Status.Steps[0].State, "step 0 must be Completed")
 	assert.Equal(t, v1alpha1.StepExecutionFailed, ps.Status.Steps[1].State, "step 1 must be Failed")
@@ -271,7 +271,7 @@ func TestUpdateStepStatuses_AllComplete(t *testing.T) {
 	}
 
 	// ExecuteFrom returned nextIdx=2 (all complete)
-	updateStepStatuses(ps, seq, 2, false, "")
+	updateStepStatuses(ps, seq, 2, false, "", nil)
 
 	for i, s := range ps.Status.Steps {
 		assert.Equal(t, v1alpha1.StepExecutionCompleted, s.State, "step %d must be Completed", i)
@@ -289,11 +289,11 @@ func TestUpdateStepStatuses_Idempotent(t *testing.T) {
 	}
 
 	// First call: step 0 completed, step 1 in progress.
-	updateStepStatuses(ps, seq, 1, false, "")
+	updateStepStatuses(ps, seq, 1, false, "", nil)
 	firstCompletedAt := ps.Status.Steps[0].CompletedAt
 
 	// Second call with same index: step 0 must stay Completed with same timestamp.
-	updateStepStatuses(ps, seq, 1, false, "")
+	updateStepStatuses(ps, seq, 1, false, "", nil)
 	assert.Equal(t, v1alpha1.StepExecutionCompleted, ps.Status.Steps[0].State, "idempotent: step 0 stays Completed")
 	assert.Equal(t, firstCompletedAt, ps.Status.Steps[0].CompletedAt, "idempotent: completedAt unchanged")
 }

@@ -44,6 +44,7 @@ pattern of its tests.
 | `gitea` | Gitea, Argo CD | `TestCore_*`, `TestSCM_*` |
 | `delivery` | Forgejo, Argo CD, Argo Rollouts, Flagger | `TestRollouts_*`, `TestFlagger_*`, `TestDelivery_*` |
 | `ui` | Forgejo, Argo CD, four more chart releases (static token and CORS, TokenReview, TokenReview without its RBAC, TLS), Playwright's Chromium | `TestUI_*` |
+| `flux` | Forgejo, Flux, Prometheus Operator, Prometheus, Pushgateway, Grafana | `TestFlux_*`, `TestMetric_*`, `TestObs_*` |
 
 ## Coverage
 

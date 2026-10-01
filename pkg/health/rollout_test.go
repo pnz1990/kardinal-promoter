@@ -110,7 +110,26 @@ func TestDeploymentAdapter_RolloutAndImage(t *testing.T) {
 			want: isProgressing, reason: "1 of 2 replicas updated"},
 		{name: "old replicas still running",
 			deploy: deployment("web", "ghcr.io/org/app:v2", func(d *appsv1.Deployment) { d.Status.Replicas = 3 }),
-			want:   isProgressing, reason: "1 old replicas pending termination"},
+			want:   isProgressing, reason: "1 old replicas pending termination (Available=True)"},
+		{name: "the new pod of a one-replica rollout never becomes available",
+			deploy: deployment("web", "ghcr.io/org/app:v2", func(d *appsv1.Deployment) {
+				*d.Spec.Replicas = 1
+				d.Status.Replicas, d.Status.UpdatedReplicas, d.Status.ReadyReplicas = 2, 1, 1
+				d.Status.AvailableReplicas, d.Status.UnavailableReplicas = 1, 1
+				setProgressing(d, corev1.ConditionTrue, "ReplicaSetUpdated")
+			}),
+			want: isProgressing,
+			reason: "rolling out: 1 old replicas pending termination; 1 of 2 replicas unavailable: the rollout waits " +
+				"for new pods to become available (if this lasts, check the new pods, for example for an image " +
+				"that cannot be pulled) (Available=True)"},
+		{name: "the new pod of a two-replica rollout never becomes available",
+			deploy: deployment("web", "ghcr.io/org/app:v2", func(d *appsv1.Deployment) {
+				d.Status.Replicas, d.Status.UpdatedReplicas, d.Status.ReadyReplicas = 3, 1, 2
+				d.Status.AvailableReplicas, d.Status.UnavailableReplicas = 2, 1
+				setProgressing(d, corev1.ConditionTrue, "ReplicaSetUpdated")
+			}),
+			want:   isProgressing,
+			reason: "rolling out: 1 of 2 replicas updated; 1 of 3 replicas unavailable: the rollout waits for new pods"},
 		{name: "updated replicas starting during the rollout",
 			deploy: deployment("web", "ghcr.io/org/app:v2", func(d *appsv1.Deployment) {
 				d.Status.AvailableReplicas = 1
@@ -311,8 +330,10 @@ func TestFluxAdapter_Revision(t *testing.T) {
 	}{
 		{name: "previous commit applied", obj: ks("True", "main@sha1:d7d4d8a000000000000000000000000000000000"),
 			want: isProgressing, reason: "waiting for 034ce92a1b2c"},
-		{name: "pushed commit applied", obj: ks("True", "main@sha1:"+pushed), want: isHealthy},
-		{name: "legacy revision format", obj: ks("True", "main/"+pushed), want: isHealthy},
+		{name: "pushed commit applied", obj: ks("True", "main@sha1:"+pushed), want: isHealthy,
+			reason: "Ready=True, generation=3 matches, lastAppliedRevision=034ce92a1b2c"},
+		{name: "legacy revision format", obj: ks("True", "main/"+pushed), want: isHealthy,
+			reason: "lastAppliedRevision=034ce92a1b2c"},
 		{name: "OCI source cannot be compared", obj: ks("True", "latest@sha256:abc"), want: isHealthy,
 			reason: "revision not verified"},
 		{name: "Ready=Unknown is progressing", obj: ks("Unknown", "main@sha1:"+pushed), want: isProgressing},
