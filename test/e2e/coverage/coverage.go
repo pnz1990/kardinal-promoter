@@ -143,7 +143,10 @@ func claims(doc string) []string {
 	return ids
 }
 
-var suiteRun = regexp.MustCompile(`(?m)^\s+([a-z0-9-]+)\)[^\n]*\n?[^\n]*?RUN='([^']+)'`)
+// suiteRun finds a suite's RUN on the line of its case label or the next one.
+// The first [^\n]*? is lazy so a RUN on the label's line wins over the next
+// suite's RUN on the line below.
+var suiteRun = regexp.MustCompile(`(?m)^\s+([a-z0-9-]+)\)[^\n]*?(?:\n[^\n]*?)?RUN='([^']+)'`)
 
 // SuiteRuns returns each suite's go test -run pattern from hack/e2e/up.sh.
 func SuiteRuns(root string) (map[string]*regexp.Regexp, error) {
