@@ -401,6 +401,7 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 | `PromotionSucceeded` | Health check passes and the step reaches Verified |
 | `PromotionFailed` | The step reaches Failed or AbortedByAlarm |
 | `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion (a step that had not started writes none) |
+| `GateEvaluated` | A PolicyGate instance is first evaluated, and each later change of readiness (outcome `Failure` when blocked, `Success` when allowed) |
 | `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
 
 ```bash
@@ -408,10 +409,10 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 kubectl get auditevent --all-namespaces
 
 # Filter by pipeline
-kubectl get auditevent -l kardinal.io/pipeline=nginx-demo
+kubectl get auditevent -A -l kardinal.io/pipeline=nginx-demo
 
-# Filter by outcome
-kubectl get auditevent -l kardinal.io/action=PromotionFailed
+# Filter by action
+kubectl get auditevent -A -l kardinal.io/action=PromotionFailed
 ```
 
-AuditEvents are immutable — they are written once at the transition and never updated. Use `kubectl get auditevent -o yaml` to inspect the full record including timestamp, bundle image, and message.
+AuditEvents are written to the Pipeline's namespace. They are immutable: they are written once at the transition, and the API server rejects any change to their spec. Use `kubectl get auditevent -o yaml` to inspect the full record: timestamp, pipeline, bundle, environment, action, outcome and message.
