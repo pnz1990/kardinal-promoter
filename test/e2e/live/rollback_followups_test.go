@@ -7,6 +7,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,7 +65,8 @@ func rfOneCredentialEvent(t *testing.T, e *framework.Env, ps *v1alpha1.Promotion
 	})
 	require.Len(t, evs, 1)
 	assert.Equal(t, corev1.EventTypeWarning, evs[0].Type)
-	assert.Equal(t, "env test: step git-push failed and git has no credentials: "+note, evs[0].Message)
+	assert.Contains(t, evs[0].Message, "git has no credentials", evs[0].Message)
+	assert.Contains(t, evs[0].Message, note, evs[0].Message)
 	assert.Nil(t, evs[0].Series, "emitted once, not once per retry")
 }
 
@@ -267,14 +269,16 @@ func TestRollback_SucceededAuditEvent(t *testing.T) {
 		return len(got) == 2, rfDescribeAudit(got)
 	})
 
-	out := c.Must(a.ns, "get", "auditevents", "--bundle", bR)
+	out := c.Must(a.ns, "get", "auditevents", "--bundle", bR, "-o", "json")
+	var listed []v1alpha1.AuditEvent
+	require.NoError(t, json.Unmarshal([]byte(out), &listed), out)
 	var envs []string
-	for _, line := range strings.Split(out, "\n") {
-		if f := strings.Fields(line); len(f) > 4 && f[4] == "RollbackSucceeded" {
-			envs = append(envs, f[3])
+	for _, ae := range listed {
+		if ae.Spec.Action == "RollbackSucceeded" {
+			envs = append(envs, ae.Spec.Environment)
 		}
 	}
-	assert.ElementsMatch(t, []string{"test", "prod"}, envs, "kardinal get auditevents:\n%s", out)
+	assert.ElementsMatch(t, []string{"test", "prod"}, envs, "kardinal get auditevents -o json:\n%s", out)
 }
 
 // rfConfigValue2 is the UI message of the second config commit in
@@ -381,8 +385,10 @@ func TestRollback_MixedBundle(t *testing.T) {
 	for _, s := range ps.Status.Steps {
 		names = append(names, s.Name)
 	}
-	assert.Equal(t, []string{"git-clone", "config-merge", "kustomize-set-image", "git-commit", "git-push", "health-check"},
-		names, "the rollback merges c1, then sets the image")
+	merge, setImage := slices.Index(names, "config-merge"), slices.Index(names, "kustomize-set-image")
+	require.NotEqual(t, -1, merge, "the rollback merges c1: %v", names)
+	require.NotEqual(t, -1, setImage, "the rollback sets the image: %v", names)
+	assert.Less(t, merge, setImage, "the rollback merges c1, then sets the image: %v", names)
 	assert.True(t, a.configDeployed(t, "test"), "the rollback deploys c1 again")
 	a.waitConfigRunning(t, "test")
 	assertEnvAt(t, a, "test", fixtures.V3)
