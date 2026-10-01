@@ -255,6 +255,10 @@ kubectl logs -n kardinal-system deploy/kardinal-promoter | grep webhook
 Common causes:
 - Webhook not configured in GitHub (Settings > Webhooks)
 - Webhook URL is not accessible from GitHub (firewall, private cluster)
+- The git server refuses to deliver to the controller's address: on Forgejo and Gitea it is
+  not in `ALLOWED_HOST_LIST`, whose default allows only external hosts; on GitLab
+  `allow_local_requests_from_web_hooks_and_services` is off. The controller never sees the
+  event. The settings are in [SCM Providers](scm-providers.md#webhook-configuration-2).
 - Webhook secret mismatch (`X-Hub-Signature-256` validation failing)
 - The SCM API did not confirm the merge. The controller asks it before it marks a PR
   merged, and logs `SCM provider reports the PR of the merge event not merged` or `could not

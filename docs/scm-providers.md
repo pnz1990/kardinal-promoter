@@ -226,6 +226,17 @@ upstream step is not `Verified`) or would not come, kardinal deletes the branch.
 > sends the signature in `X-Forgejo-Signature` and `X-Gitea-Signature`; Gitea sends
 > `X-Gitea-Signature`. The controller accepts any of them.
 
+Forgejo and Gitea deliver webhooks only to hosts their `ALLOWED_HOST_LIST` setting allows,
+and its default, `external`, excludes private and loopback addresses. When the controller's
+webhook URL is one (an in-cluster Service, a private load balancer), the server blocks the
+delivery: the controller never receives the event, logs no `webhook received`, and merges are
+seen only by polling. An administrator must allow the controller's host (a name, IP or CIDR;
+`private` allows every private address) in `app.ini` or the container's environment. Forgejo
+reads the list from `[webhook]` (`FORGEJO__webhook__ALLOWED_HOST_LIST`), where `*` allows every
+host. Gitea 28 reads it from `[security]` (`GITEA__security__ALLOWED_HOST_LIST`); it rejects
+`*`, and the `[webhook]` key only logs a deprecation error, so list the hosts, for example
+`*.svc.cluster.local`. The live suites set both this way (`hack/e2e/components/giteafamily.sh`).
+
 ### Codeberg.org (public Forgejo instance)
 
 Codeberg is the primary public Forgejo instance. Use `--scm-api-url https://codeberg.org`:
