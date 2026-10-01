@@ -371,6 +371,29 @@ func TestPRFinalizer_DeleteClosesPR(t *testing.T) {
 	}
 }
 
+// TestPRFinalizer_DeleteDeadlineUsesClock covers the #1387 review: the
+// close-PR deadline is measured with the reconciler's clock, not the wall
+// clock. A step deleted ten minutes ago by the wall clock but one minute ago
+// by the reconciler's clock is retried, not given up on.
+func TestPRFinalizer_DeleteDeadlineUsesClock(t *testing.T) {
+	step := prStep("WaitingForMerge", 5)
+	step.Finalizers = []string{promotionstep.FinalizerClosePR}
+	deleted := metav1.NewTime(time.Now().Add(-10 * time.Minute).Truncate(time.Second)) // as stored
+	step.DeletionTimestamp = &deleted
+	c := newClient(t, step, openPRStatus("prs-step", "test/repo", 5), makePipeline("nginx-demo"))
+	m := &mockSCM{open: true, closeErrs: []error{errors.New("HTTP 502")}}
+	rec := events.NewFakeRecorder(5)
+	r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{}, Recorder: rec,
+		NowFn:     func() time.Time { return deleted.Add(time.Minute) },
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+	res, err := r.Reconcile(context.Background(), reqFor("step"))
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Second, res.RequeueAfter, "half the minute spent so far")
+	assert.Contains(t, getStep(t, c, "step").Finalizers, promotionstep.FinalizerClosePR, "the step stays")
+	assert.Empty(t, rec.Events, "no ClosePRFailed Event before the deadline")
+}
+
 // TestPRFinalizer_DeleteAsksSCM covers the #1387 review: a deleted step asks
 // the SCM whether its PR is still open before it closes it. A PR merged or
 // closed outside the controller's view (the PRStatus lags or is gone), or
@@ -577,8 +600,10 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 		bundle      func(*v1alpha1.Bundle) // nil: the Bundle is gone
 		dropEnv     bool                   // the Pipeline no longer has prod
 		noPipeline  bool
-		graphErr    bool // reading the Graph fails
+		readErr     string        // the kind whose read fails with an error other than NotFound
+		later       time.Duration // how long after the delete the reconcile runs (default 1s)
 		wantClosed  bool
+		wantRetry   bool // the step stays and is reconciled again
 		wantComment string
 	}{
 		{name: "the Graph is being deleted: the PR is kept", graph: graphDeleting, bundle: func(*v1alpha1.Bundle) {}},
@@ -603,8 +628,17 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 			bundle: func(*v1alpha1.Bundle) {}, dropEnv: true, wantClosed: true},
 		{name: "the Pipeline is gone: the PR is closed", graph: graphDeleting,
 			bundle: func(*v1alpha1.Bundle) {}, noPipeline: true, wantClosed: true},
-		{name: "the Graph cannot be read: the PR is closed", graph: graphDeleting,
-			bundle: func(*v1alpha1.Bundle) {}, graphErr: true, wantClosed: true},
+		{name: "the Graph cannot be read: retried, the PR is kept", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, readErr: "Graph", wantRetry: true},
+		{name: "the Bundle cannot be read: retried, the PR is kept", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, readErr: "Bundle", wantRetry: true},
+		{name: "the namespace cannot be read: retried, the PR is kept", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, readErr: "Namespace", wantRetry: true},
+		{name: "the Pipeline cannot be read: retried, the PR is kept", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, readErr: "Pipeline", wantRetry: true},
+		{name: "the Graph still cannot be read after five minutes: the PR is closed", graph: graphDeleting,
+			bundle: func(*v1alpha1.Bundle) {}, readErr: "Graph", later: 6 * time.Minute, wantClosed: true,
+			wantComment: "PromotionStep step was deleted"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -654,18 +688,45 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 				WithObjects(objs...).Build()
 			reader := interceptor.NewClient(api, interceptor.Funcs{
 				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-					if _, ok := obj.(*unstructured.Unstructured); ok && tt.graphErr {
+					kind := ""
+					switch obj.(type) {
+					case *unstructured.Unstructured:
+						kind = "Graph"
+					case *v1alpha1.Bundle:
+						kind = "Bundle"
+					case *corev1.Namespace:
+						kind = "Namespace"
+					case *v1alpha1.Pipeline:
+						kind = "Pipeline"
+					}
+					switch {
+					case kind == "" || kind != tt.readErr:
+					case kind == "Namespace":
+						return apierrors.NewForbidden(corev1.Resource("namespaces"), key.Name, errors.New("RBAC: access denied"))
+					default:
 						return apierrors.NewInternalError(errors.New("etcdserver: request timed out"))
 					}
 					return c.Get(ctx, key, obj, opts...)
 				},
 			})
+			later := tt.later
+			if later == 0 {
+				later = time.Second
+			}
 			m := &mockSCM{open: true}
 			r := &promotionstep.Reconciler{Client: api, APIReader: reader, SCM: m, GitClient: &mockGit{},
+				NowFn:     func() time.Time { return deleted.Add(later) },
 				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
 
 			res, err := r.Reconcile(context.Background(), reqFor("step"))
 			require.NoError(t, err)
+			if tt.wantRetry {
+				assert.Positive(t, res.RequeueAfter)
+				assert.Empty(t, m.closed, "the PR is not closed yet")
+				assert.Empty(t, m.comments)
+				assert.Contains(t, getStep(t, api, "step").Finalizers, promotionstep.FinalizerClosePR)
+				return
+			}
 			assert.Zero(t, res.RequeueAfter)
 			if tt.wantClosed {
 				assert.Equal(t, []string{"test/repo#5"}, m.closed)

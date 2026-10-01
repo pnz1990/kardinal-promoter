@@ -150,6 +150,18 @@ type Reconciler struct {
 	// Recorder emits Kubernetes Events for PromotionStep state transitions.
 	// When nil, event emission is skipped (backward-compatible).
 	Recorder events.EventRecorder
+
+	// NowFn returns the current time. When nil, time.Now is used. Tests set
+	// it. It drives the deadline for closing a deleted step's PR.
+	NowFn func() time.Time
+}
+
+// now returns the current time from NowFn, or time.Now when it is nil.
+func (r *Reconciler) now() time.Time {
+	if r.NowFn != nil {
+		return r.NowFn()
+	}
+	return time.Now()
 }
 
 // Reconcile processes one PromotionStep event.

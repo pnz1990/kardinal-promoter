@@ -126,7 +126,8 @@ func prFinalizerSyncFailed(log zerolog.Logger, err error) (ctrl.Result, error) {
 // The PR is left open when the step comes back (stepRecreated): it went with
 // its Graph while the Bundle goes on promoting, so the Bundle reconciler
 // recreates the Graph and the new step reuses the PR. Closing it there made
-// the new step open a second PR.
+// the new step open a second PR. A failed read in stepRecreated is retried
+// like a failed close; past closePRDeadline the PR is closed.
 //
 // The step is read again from the API server first: the cached step can still
 // hold the finalizer the previous reconcile removed, and closing from it
@@ -139,16 +140,31 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 	if err != nil || ps == nil || !controllerutil.ContainsFinalizer(ps, FinalizerClosePR) {
 		return ctrl.Result{}, err
 	}
-	switch {
-	case !holdsPR(ps.Status.State):
+	if !holdsPR(ps.Status.State) {
 		// Past its PR: there is nothing to close.
-	case r.stepRecreated(ctx, ps):
+		return ctrl.Result{}, r.removePRFinalizer(ctx, ps)
+	}
+	elapsed := r.now().Sub(ps.DeletionTimestamp.Time)
+	recreated, err := r.stepRecreated(ctx, ps)
+	switch {
+	case err != nil && elapsed < closePRDeadline:
+		// Closing the PR of a step that comes back would make the new step
+		// open a second one, so a failed read is retried, not taken as "no".
+		delay := closePRRetryDelay(elapsed)
+		log.Warn().Err(err).Dur("retryIn", delay).
+			Msg("could not tell whether a deleted PromotionStep comes back; retrying before closing its PR")
+		return ctrl.Result{RequeueAfter: delay}, nil
+	case err == nil && recreated:
 		log.Info().Str("env", ps.Spec.Environment).Str("prURL", ps.Status.PRURL).
 			Msg("left the PR of a step deleted with its Graph open: the Bundle recreates the Graph, " +
 				"and the new step reuses the PR")
 	default:
+		// Past the deadline a read that still fails counts as "does not come
+		// back": a second PR is better than an open one nothing tracks.
+		if err != nil {
+			log.Warn().Err(err).Msg("still cannot tell whether a deleted PromotionStep comes back; closing its PR")
+		}
 		if err := r.closeStepPR(ctx, ps, r.deleteReason(ctx, ps)); err != nil {
-			elapsed := time.Since(ps.DeletionTimestamp.Time)
 			if elapsed < closePRDeadline {
 				delay := closePRRetryDelay(elapsed)
 				log.Warn().Err(err).Dur("retryIn", delay).
@@ -180,27 +196,49 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 //
 // A step deleted on its own, or because a Pipeline edit dropped its
 // environment (kro updates the Graph in place), does not come back, nor does
-// one whose Bundle or namespace is being deleted. A failed read counts as
-// false, so the PR is closed as for any other deleted step.
-func (r *Reconciler) stepRecreated(ctx context.Context, ps *v1alpha1.PromotionStep) bool {
+// one whose Bundle or namespace is being deleted or gone. A read that fails
+// for another reason than NotFound is an error: handleDeleted retries it
+// rather than close a PR the new step would reuse.
+func (r *Reconciler) stepRecreated(ctx context.Context, ps *v1alpha1.PromotionStep) (bool, error) {
+	if ps.Spec.BundleName == "" {
+		return false, nil
+	}
 	reader := r.apiReader()
 	key := func(name string) client.ObjectKey { return client.ObjectKey{Namespace: ps.Namespace, Name: name} }
+	// read reports whether obj exists; an error other than NotFound fails.
+	read := func(k client.ObjectKey, obj client.Object, what string) (bool, error) {
+		err := reader.Get(ctx, k, obj)
+		switch {
+		case err == nil:
+			return true, nil
+		case apierrors.IsNotFound(err):
+			return false, nil
+		default:
+			return false, fmt.Errorf("get %s %s: %w", what, k.Name, err)
+		}
+	}
 	var b v1alpha1.Bundle
-	if ps.Spec.BundleName == "" || reader.Get(ctx, key(ps.Spec.BundleName), &b) != nil ||
-		!b.DeletionTimestamp.IsZero() || b.Status.Phase != bundlePhasePromoting {
-		return false
+	if ok, err := read(key(ps.Spec.BundleName), &b, "bundle"); !ok || err != nil {
+		return false, err
+	}
+	if !b.DeletionTimestamp.IsZero() || b.Status.Phase != bundlePhasePromoting {
+		return false, nil
 	}
 	var ns corev1.Namespace
-	if reader.Get(ctx, client.ObjectKey{Name: ps.Namespace}, &ns) != nil ||
-		!ns.DeletionTimestamp.IsZero() || ns.Status.Phase == corev1.NamespaceTerminating {
-		return false
+	if ok, err := read(client.ObjectKey{Name: ps.Namespace}, &ns, "namespace"); !ok || err != nil {
+		return false, err
+	}
+	if !ns.DeletionTimestamp.IsZero() || ns.Status.Phase == corev1.NamespaceTerminating {
+		return false, nil
 	}
 	var pl v1alpha1.Pipeline
-	if reader.Get(ctx, key(b.Spec.Pipeline), &pl) != nil ||
-		!slices.ContainsFunc(pl.Spec.Environments, func(e v1alpha1.EnvironmentSpec) bool {
-			return e.Name == ps.Spec.Environment
-		}) {
-		return false
+	if ok, err := read(key(b.Spec.Pipeline), &pl, "pipeline"); !ok || err != nil {
+		return false, err
+	}
+	if !slices.ContainsFunc(pl.Spec.Environments, func(e v1alpha1.EnvironmentSpec) bool {
+		return e.Name == ps.Spec.Environment
+	}) {
+		return false, nil
 	}
 	name := b.Status.GraphRef
 	if name == "" {
@@ -208,11 +246,11 @@ func (r *Reconciler) stepRecreated(ctx context.Context, ps *v1alpha1.PromotionSt
 	}
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(graph.GraphGVK)
-	if err := reader.Get(ctx, key(name), g); err != nil {
-		return apierrors.IsNotFound(err)
+	if ok, err := read(key(name), g, "graph"); !ok || err != nil {
+		return err == nil, err // a Graph that is gone is recreated
 	}
 	created := g.GetCreationTimestamp()
-	return g.GetDeletionTimestamp() != nil || !created.Before(ps.DeletionTimestamp)
+	return g.GetDeletionTimestamp() != nil || !created.Before(ps.DeletionTimestamp), nil
 }
 
 // bundlePhasePromoting is the phase of a Bundle whose Graph is promoting it.
