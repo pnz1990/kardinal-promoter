@@ -55,9 +55,10 @@ type mockGitClient struct {
 	failPush     bool
 	// cloneErr, commitErr and pushErrs override the fail* flags. pushErrs is
 	// consumed one element per Push call.
-	cloneErr  error
-	commitErr error
-	pushErrs  []error
+	cloneErr   error
+	cloneAtErr error
+	commitErr  error
+	pushErrs   []error
 }
 
 func (m *mockGitClient) Clone(_ context.Context, url, _, dir, token string) error {
@@ -75,6 +76,9 @@ func (m *mockGitClient) Clone(_ context.Context, url, _, dir, token string) erro
 func (m *mockGitClient) CloneAt(_ context.Context, url, sha, dir, token string) error {
 	m.cloneAtCalls++
 	m.cloneAtURL, m.cloneAtSHA, m.cloneAtDir, m.cloneAtToken = url, sha, dir, token
+	if m.cloneAtErr != nil {
+		return m.cloneAtErr
+	}
 	return os.MkdirAll(dir, 0o755)
 }
 

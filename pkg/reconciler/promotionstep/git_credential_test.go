@@ -85,7 +85,7 @@ func TestGitCredentialMissing(t *testing.T) {
 			wantMsg:  "step git-push: git push origin main: authentication required: Unauthorized (spec.git.secretRef is not set, so the push has no credentials)",
 			wantCond: "SecretRefNotSet"},
 		{name: "secretRef not set, clone fails",
-			wantMsg:  "step git-clone: clone https://github.com/test/repo failed: git clone https://github.com/test/repo: authentication required: Unauthorized (spec.git.secretRef is not set, so the clone has no credentials)",
+			wantMsg:  "step git-clone: git clone https://github.com/test/repo: authentication required: Unauthorized (spec.git.secretRef is not set, so the clone has no credentials)",
 			wantCond: "SecretRefNotSet"},
 		{name: "Secret not found, push fails", secretRef: &v1alpha1.SecretRef{Name: "git-creds"}, failPush: true,
 			wantMsg:  "step git-push: git push origin main: authentication required: Unauthorized (git Secret default/git-creds not found)",

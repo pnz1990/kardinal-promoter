@@ -78,8 +78,9 @@ func rfCredentialCondition(t *testing.T, ps *v1alpha1.PromotionStep) *metav1.Con
 
 // TestStep_GitSecretMissing checks a Pipeline whose spec.git.secretRef names
 // a Secret that does not exist. The repo is public, so the clone works and
-// the push is refused. The step message names the missing Secret after the
-// git error, the step is GitCredentialMissing=True with one Warning Event, and
+// the push is refused. The step message names the missing Secret right after
+// the git error, with no newline from the git server's response between them,
+// the step is GitCredentialMissing=True with one Warning Event, and
 // it keeps retrying past the retry limit (5). Creating the Secret is enough:
 // the next retry pushes and the step is Verified.
 //
@@ -98,6 +99,9 @@ func TestStep_GitSecretMissing(t *testing.T) {
 	ps := e.WaitStepMessage(t, a.ns, pipelineName, bundle, "test", "Promoting", "("+note+")", promoteTimeout)
 	assert.Contains(t, ps.Status.Message, "step git-push: ")
 	assert.Equal(t, 1, strings.Count(ps.Status.Message, "authentication required"), ps.Status.Message)
+	// Gitea answers 401 with "Unauthorized\n"; the newline is trimmed.
+	assert.Contains(t, ps.Status.Message, ": authentication required: Unauthorized ("+note+")")
+	assert.NotContains(t, ps.Status.Message, "\n")
 	cond := rfCredentialCondition(t, ps)
 	assert.Equal(t, metav1.ConditionTrue, cond.Status)
 	assert.Equal(t, "SecretNotFound", cond.Reason)
@@ -155,6 +159,8 @@ func TestStep_GitSecretRefNotSet(t *testing.T) {
 	note := "spec.git.secretRef is not set, so the push has no credentials"
 	ps := e.WaitStepMessage(t, a.ns, pipelineName, bundle, "test", "Promoting", "("+note+")", promoteTimeout)
 	assert.Contains(t, ps.Status.Message, "step git-push: ")
+	assert.Contains(t, ps.Status.Message, ": authentication required: Unauthorized ("+note+")")
+	assert.NotContains(t, ps.Status.Message, "\n")
 	cond := rfCredentialCondition(t, ps)
 	assert.Equal(t, metav1.ConditionTrue, cond.Status)
 	assert.Equal(t, "SecretRefNotSet", cond.Reason)

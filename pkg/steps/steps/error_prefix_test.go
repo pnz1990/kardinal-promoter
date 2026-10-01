@@ -65,6 +65,7 @@ func TestStepErrors_NameTheStepOnce(t *testing.T) {
 		step  string
 		state func(t *testing.T) *parentsteps.StepState
 		want  string
+		once  string // a string the message names once, besides the step
 	}{
 		{name: "argocd-set-image patch fails", step: "argocd-set-image",
 			state: func(t *testing.T) *parentsteps.StepState {
@@ -81,9 +82,25 @@ func TestStepErrors_NameTheStepOnce(t *testing.T) {
 				return s
 			},
 			want: "step argocd-set-image: config Bundles are not supported by update.strategy argocd"},
+		// The GitClient names the operation and the URL, as scm.GoGitClient
+		// does; the step adds neither again.
 		{name: "git-clone clone fails", step: "git-clone",
-			state: func(t *testing.T) *parentsteps.StepState { return gitState(t, &mockGitClient{failClone: true}, nil) },
-			want:  "step git-clone: clone https://github.com/owner/repo failed: mock clone error"},
+			state: func(t *testing.T) *parentsteps.StepState {
+				return gitState(t, &mockGitClient{cloneErr: errors.New(
+					"git clone https://github.com/owner/repo: authentication required: Unauthorized")}, nil)
+			},
+			want: "step git-clone: git clone https://github.com/owner/repo: authentication required: Unauthorized",
+			once: "https://github.com/owner/repo"},
+		{name: "git-clone config source clone fails", step: "git-clone",
+			state: func(t *testing.T) *parentsteps.StepState {
+				s := gitState(t, &mockGitClient{cloneAtErr: errors.New(
+					"resolve commit abc123 in https://github.com/org/config: reference not found")}, nil)
+				s.Bundle.Type = "config"
+				s.Bundle.ConfigRef = &v1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "abc123"}
+				return s
+			},
+			want: "step git-clone: config source: resolve commit abc123 in https://github.com/org/config: reference not found",
+			once: "https://github.com/org/config"},
 		{name: "git-commit commit fails", step: "git-commit",
 			state: func(t *testing.T) *parentsteps.StepState { return gitState(t, &mockGitClient{failCommit: true}, nil) },
 			want:  "step git-commit: mock commit error"},
@@ -103,6 +120,9 @@ func TestStepErrors_NameTheStepOnce(t *testing.T) {
 			require.Error(t, err)
 			assert.Equal(t, tc.want, err.Error())
 			assert.Equal(t, 1, strings.Count(err.Error(), tc.step+":"), "the step is named once: %v", err)
+			if tc.once != "" {
+				assert.Equal(t, 1, strings.Count(err.Error(), tc.once), "%s is named once: %v", tc.once, err)
+			}
 		})
 	}
 }

@@ -16,6 +16,7 @@ package scm_test
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"testing"
 
 	gogit "github.com/go-git/go-git/v5"
+	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,6 +129,71 @@ func TestGoGitClient_CloneSendsToken(t *testing.T) {
 	err = c.Clone(context.Background(), u, "main", filepath.Join(t.TempDir(), "w2"), "")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "ghp_SECRET")
+}
+
+// TestGoGitClient_HTTPErrorsEndWithTheReason covers the B47 family: go-git
+// appends the HTTP response body to the error ("authentication required:
+// Unauthorized\n"), so step messages ended with a newline, or with ": " when
+// the body was empty. The error names the URL once and ends with the reason.
+func TestGoGitClient_HTTPErrorsEndWithTheReason(t *testing.T) {
+	serve := func(status int, body string) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		run    func(t *testing.T, url string) error
+		want   string // %s is the URL
+	}{
+		{name: "clone, body with a newline", status: http.StatusUnauthorized, body: "Unauthorized\n",
+			run: func(t *testing.T, url string) error {
+				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+			},
+			want: "git clone %s: authentication required: Unauthorized"},
+		{name: "clone, empty body", status: http.StatusUnauthorized,
+			run: func(t *testing.T, url string) error {
+				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+			},
+			want: "git clone %s: authentication required"},
+		{name: "clone at a commit", status: http.StatusForbidden, body: "Forbidden\r\n",
+			run: func(t *testing.T, url string) error {
+				return c.CloneAt(ctx, url, "abc123", filepath.Join(t.TempDir(), "w"), "tok")
+			},
+			want: "git clone %s: authorization failed: Forbidden"},
+		{name: "push", status: http.StatusUnauthorized, body: "Unauthorized\n",
+			run: func(t *testing.T, url string) error {
+				work := filepath.Join(t.TempDir(), "w")
+				require.NoError(t, c.Clone(ctx, "file://"+seedBareRemote(t, map[string]string{"a.txt": "a\n"}), "main", work, ""))
+				repo, err := gogit.PlainOpen(work)
+				require.NoError(t, err)
+				require.NoError(t, repo.DeleteRemote("origin"))
+				_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{Name: "origin", URLs: []string{url}})
+				require.NoError(t, err)
+				return c.Push(ctx, work, "origin", "main", "tok", true)
+			},
+			want: "git push origin main: authentication required: Unauthorized"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			url := serve(tc.status, tc.body).URL + "/org/repo.git"
+			err := tc.run(t, url)
+			require.Error(t, err)
+			want := tc.want
+			if strings.Contains(want, "%s") {
+				want = fmt.Sprintf(want, url)
+				assert.Equal(t, 1, strings.Count(err.Error(), url), "the URL is named once: %q", err)
+			}
+			assert.Equal(t, want, err.Error())
+		})
+	}
 }
 
 // TestHTTPAuthUsername verifies the push/clone username per provider (C06-scm-health-31).

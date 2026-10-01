@@ -74,7 +74,9 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 			fmt.Errorf("clean work dir: %w", err)
 	}
 	if err := state.GitClient.Clone(ctx, state.Git.URL, state.Git.Branch, state.WorkDir, state.Git.Token); err != nil {
-		msg := scm.RedactURL(fmt.Sprintf("clone %s failed: %v", repoURL, err))
+		// The GitClient names the operation and the URL ("git clone <url>:
+		// <reason>"), as for git-push; adding them here named the URL twice.
+		msg := scm.RedactURL(err.Error())
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg},
 			errors.New(msg)
 	}
@@ -98,7 +100,7 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 			srcToken = state.Git.Token
 		}
 		if err := state.GitClient.CloneAt(ctx, srcURL, ref.CommitSHA, srcDir, srcToken); err != nil {
-			msg := scm.RedactURL(fmt.Sprintf("clone config source %s@%s failed: %v", scm.RedactURL(srcURL), ref.CommitSHA, err))
+			msg := "config source: " + scm.RedactURL(err.Error())
 			return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg},
 				errors.New(msg)
 		}
