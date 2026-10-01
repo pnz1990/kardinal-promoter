@@ -126,9 +126,9 @@ kubectl get rollbackpolicy
 kubectl get rollbackpolicy rp-1 -o jsonpath='{.status.conditions[?(@.type=="RollbackRefused")].message}'
 ```
 
-Roll back by hand (see [CLI](#cli)) or fix the policy. The RollbackPolicy is evaluated again when its PromotionSteps or its own spec change; when that evaluation creates the rollback Bundle, the condition becomes `False` with reason `RollbackCreated`.
+Roll back by hand (see [CLI](#cli)) or fix the policy. The RollbackPolicy is evaluated again when its PromotionSteps or its own spec change; when that evaluation creates the rollback Bundle, the condition becomes `False` with reason `RollbackCreated`. When the failures drop below the threshold first, it becomes `False` with reason `BelowThreshold`.
 
-`SHOULDROLLBACK` follows the failures until a rollback Bundle exists: when they drop below the threshold first (the health check passed again after a refusal), it is `false` again and nothing is created. Once a rollback Bundle exists it stays `true`, and the policy does nothing more. `THRESHOLD` shows `3` when `spec.failureThreshold` is not set.
+`SHOULDROLLBACK` follows the failures until a rollback Bundle exists: when they drop below the threshold first (the health check passed again after a refusal), it is `false` again and nothing is created. Once the policy has created a rollback Bundle it stays `true`, and the policy does nothing more. That holds also when the controller stopped between creating the Bundle and writing `status.rollbackBundleName`: the next evaluation finds the Bundle and writes it, whatever the failures are then. `THRESHOLD` shows `3` when `spec.failureThreshold` is not set.
 
 ## What Happens in Git
 

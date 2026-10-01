@@ -39,9 +39,11 @@ type RollbackPolicySpec struct {
 // Written exclusively by the RollbackPolicyReconciler.
 type RollbackPolicyStatus struct {
 	// ShouldRollback is true while the failure threshold is reached, and
-	// stays true once a rollback Bundle has been created. It is false again
-	// when the failures drop below the threshold before a rollback Bundle
-	// exists (for example after RollbackRefused).
+	// stays true once the policy has created a rollback Bundle, also when
+	// the controller stopped before writing rollbackBundleName (the next
+	// evaluation writes it). It is false again when the failures drop below
+	// the threshold before a rollback Bundle exists (for example after
+	// RollbackRefused).
 	// The Graph can read this field via a Watch node expression.
 	// +optional
 	ShouldRollback bool `json:"shouldRollback,omitempty"`
@@ -64,7 +66,9 @@ type RollbackPolicyStatus struct {
 	// failure threshold was reached but no rollback Bundle was created because
 	// the rollback planner refused (the message says why, for example when no
 	// earlier Bundle was Verified in the environment). It is False once a
-	// rollback Bundle is created. Roll back by hand with kardinal rollback.
+	// rollback Bundle is created (reason RollbackCreated), or when the
+	// failures drop below the threshold (reason BelowThreshold). Roll back
+	// by hand with kardinal rollback.
 	// +optional
 	// +listType=map
 	// +listMapKey=type

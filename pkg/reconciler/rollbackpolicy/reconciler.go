@@ -77,6 +77,9 @@ const (
 	ReasonInvalidPolicy = "InvalidPolicy"
 	// ReasonRollbackCreated: a rollback Bundle was created or found.
 	ReasonRollbackCreated = "RollbackCreated"
+	// ReasonBelowThreshold: the failures dropped below the threshold after a
+	// refusal, so the refusal no longer applies.
+	ReasonBelowThreshold = "BelowThreshold"
 )
 
 // Reconciler monitors a RollbackPolicy and triggers auto-rollback when the
@@ -140,18 +143,35 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		threshold = defaultFailureThreshold
 	}
 
-	// Write status: always update consecutiveFailures and lastEvaluatedAt.
-	now := metav1.NewTime(r.now())
-	patch := client.MergeFrom(rp.DeepCopy())
-	rp.Status.ConsecutiveFailures = failures
-	rp.Status.LastEvaluatedAt = &now
-
+	triggered := failures >= threshold
 	// Below the threshold, ShouldRollback is false again: it can only be
 	// true here when no rollback Bundle was recorded (the terminal case
 	// returned above), e.g. after RollbackRefused. Clearing it creates
 	// nothing, and a later crossing reuses any rollback Bundle that exists
 	// (ensureRollbackBundle), so it cannot start a second rollback.
-	rp.Status.ShouldRollback = failures >= threshold
+	// Unless the rollback Bundle exists: an evaluation that created it and
+	// stopped before recording it (a crash between the Create and the status
+	// patch) left ShouldRollback true. The policy stays triggered and records
+	// the Bundle below, whatever the failures are now; the rollback itself may
+	// have made them drop. The lookup runs only in that case, so a policy that
+	// was never triggered reads no Bundles.
+	if !triggered && rp.Status.ShouldRollback {
+		existing, err := r.existingRollback(ctx, &rp)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		triggered = existing != ""
+	}
+
+	// Write status: always update consecutiveFailures and lastEvaluatedAt.
+	now := metav1.NewTime(r.now())
+	patch := client.MergeFrom(rp.DeepCopy())
+	rp.Status.ConsecutiveFailures = failures
+	rp.Status.LastEvaluatedAt = &now
+	rp.Status.ShouldRollback = triggered
+	if !triggered {
+		clearRefusal(&rp, failures, threshold, now)
+	}
 
 	if err := r.Status().Patch(ctx, &rp, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch rollbackpolicy status %s: %w", req.Name, err)
@@ -257,6 +277,23 @@ func (r *Reconciler) recordOutcome(ctx context.Context, rp *v1alpha1.RollbackPol
 	return nil
 }
 
+// clearRefusal sets RollbackRefused to False when it is True and the failures
+// are below the threshold: the refusal was for a rollback that is no longer
+// due. The caller writes the status.
+func clearRefusal(rp *v1alpha1.RollbackPolicy, failures, threshold int, now metav1.Time) {
+	if !meta.IsStatusConditionTrue(rp.Status.Conditions, ConditionRollbackRefused) {
+		return
+	}
+	meta.SetStatusCondition(&rp.Status.Conditions, metav1.Condition{
+		Type:               ConditionRollbackRefused,
+		Status:             metav1.ConditionFalse,
+		Reason:             ReasonBelowThreshold,
+		Message:            fmt.Sprintf("%d consecutive health failures, below the threshold of %d", failures, threshold),
+		ObservedGeneration: rp.Generation,
+		LastTransitionTime: now,
+	})
+}
+
 // refusal is why the rollback planner did not plan a rollback.
 type refusal struct {
 	reason  string
@@ -276,30 +313,9 @@ type refusal struct {
 // (C04-gates-06).
 func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logger,
 	rp *v1alpha1.RollbackPolicy) (string, *refusal, error) {
-	// Reuse a rollback of this Bundle created before this planner existed:
-	// those have no kardinal.io/rollback-from annotation and recorded the
-	// failing Bundle in provenance.rollbackOf.
-	var existingBundles v1alpha1.BundleList
-	if err := r.List(ctx, &existingBundles, client.InNamespace(rp.Namespace)); err != nil {
-		return "", nil, fmt.Errorf("list bundles: %w", err)
-	}
-	for _, b := range existingBundles.Items {
-		if b.Labels[lifecycle.LabelRollback] == "true" &&
-			b.Annotations[lifecycle.AnnotationRollbackFrom] == "" &&
-			b.Spec.Provenance != nil &&
-			b.Spec.Provenance.RollbackOf == rp.Spec.BundleRef {
-			log.Debug().
-				Str("existing_rollback", b.Name).
-				Msg("rollback bundle already exists, reusing")
-			return b.Name, nil, nil
-		}
-	}
-	// Reuse a rollback of this Bundle in this environment from either
-	// automatic path (this one or onHealthFailure=rollback).
-	existing, err := lifecycle.FindRollback(ctx, r.Client, rp.Namespace,
-		rp.Spec.PipelineName, rp.Spec.Environment, rp.Spec.BundleRef)
+	existing, err := r.existingRollback(ctx, rp)
 	if err != nil {
-		return "", nil, fmt.Errorf("find rollback of bundle %s: %w", rp.Spec.BundleRef, err)
+		return "", nil, err
 	}
 	if existing != "" {
 		log.Debug().Str("existing_rollback", existing).Msg("rollback bundle already exists, reusing")
@@ -348,6 +364,32 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 		Msg("auto-rollback: created rollback bundle via RollbackPolicy")
 
 	return rollbackName, nil, nil
+}
+
+// existingRollback returns the name of the rollback Bundle that rolls back
+// spec.bundleRef in spec.environment, or "": one created by either automatic
+// path (this one or onHealthFailure=rollback), or a rollback of the Bundle
+// created before the shared planner existed (no kardinal.io/rollback-from
+// annotation, the failing Bundle in provenance.rollbackOf).
+func (r *Reconciler) existingRollback(ctx context.Context, rp *v1alpha1.RollbackPolicy) (string, error) {
+	var bundles v1alpha1.BundleList
+	if err := r.List(ctx, &bundles, client.InNamespace(rp.Namespace)); err != nil {
+		return "", fmt.Errorf("list bundles: %w", err)
+	}
+	for _, b := range bundles.Items {
+		if b.Labels[lifecycle.LabelRollback] == "true" &&
+			b.Annotations[lifecycle.AnnotationRollbackFrom] == "" &&
+			b.Spec.Provenance != nil &&
+			b.Spec.Provenance.RollbackOf == rp.Spec.BundleRef {
+			return b.Name, nil
+		}
+	}
+	existing, err := lifecycle.FindRollback(ctx, r.Client, rp.Namespace,
+		rp.Spec.PipelineName, rp.Spec.Environment, rp.Spec.BundleRef)
+	if err != nil {
+		return "", fmt.Errorf("find rollback of bundle %s: %w", rp.Spec.BundleRef, err)
+	}
+	return existing, nil
 }
 
 // now returns the current time via NowFn if set (for testing), otherwise time.Now().UTC().
