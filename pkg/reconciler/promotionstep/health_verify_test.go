@@ -53,6 +53,9 @@ func (hc healthCase) run(t *testing.T) (client.Client, v1alpha1.PromotionStep, t
 	ps := labelled(makeStep("step", "p", "b1", hc.env.Name))
 	ps.Spec.PRStatusRef = hc.prsRef
 	ps.Status = hc.status
+	if ps.Status.Steps == nil {
+		ps.Status.Steps = recordedSteps(hc.env.Approval)
+	}
 	ps.Status.State = "HealthChecking"
 	c := newClient(t, append([]client.Object{pipeline, bundle, ps}, hc.objs...)...)
 	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
@@ -254,7 +257,8 @@ func fluxKustomization(name, commit string) *unstructured.Unstructured {
 // step waits while the merge commit is unknown, instead of passing on a
 // Kustomization Ready on the previous commit, and health.timeout then applies
 // onHealthFailure with that reason. A step with no changes opened no PR, so
-// it does not wait.
+// it does not wait. Whether there is a PR follows from the step list recorded
+// when the step started, not the live approval.
 func TestFluxWaitsForTheMergeCommit(t *testing.T) {
 	flux := v1alpha1.HealthConfig{Type: "flux", Timeout: "1m"}
 	prReview := v1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review", Health: flux}
@@ -296,6 +300,17 @@ func TestFluxWaitsForTheMergeCommit(t *testing.T) {
 			wantState: "Verified", wantMsg: "via flux"},
 		{name: "auto approval is unchanged",
 			hc: healthCase{env: v1alpha1.EnvironmentSpec{Name: "prod", Health: flux},
+				dynObjs: []runtime.Object{fluxKustomization("p-prod", oldSHA)}},
+			wantState: "Verified", wantMsg: "via flux"},
+		{name: "pr-review step, approval edited to auto: still waits",
+			hc: healthCase{env: v1alpha1.EnvironmentSpec{Name: "prod", Approval: "auto", Health: flux},
+				prsRef: "prs", objs: []client.Object{merged("")},
+				status:  v1alpha1.PromotionStepStatus{Steps: recordedSteps("pr-review")},
+				dynObjs: []runtime.Object{fluxKustomization("p-prod", oldSHA)}},
+			wantState: "HealthChecking", wantMsg: waiting},
+		{name: "auto step, approval edited to pr-review: no PR to wait for",
+			hc: healthCase{env: prReview, prsRef: "prs", objs: []client.Object{openPRStatus("prs", "", 0)},
+				status:  v1alpha1.PromotionStepStatus{Steps: recordedSteps("auto")},
 				dynObjs: []runtime.Object{fluxKustomization("p-prod", oldSHA)}},
 			wantState: "Verified", wantMsg: "via flux"},
 	}

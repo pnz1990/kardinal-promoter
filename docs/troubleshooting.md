@@ -571,9 +571,9 @@ If a PolicyGate node is not ready, downstream PromotionSteps will not be created
 
 Two finalizers can hold a delete, and the controller removes both itself while it runs.
 
-**`kardinal.io/close-pr` on a PromotionStep.** A step that opens a promotion PR (a `pr-review`
-environment) carries it while it is `Promoting` or `WaitingForMerge`, from before it opens the
-PR; an `auto` step never carries it. When the step is deleted, the controller asks the SCM whether
+**`kardinal.io/close-pr` on a PromotionStep.** A step that opens a promotion PR (its environment
+was `pr-review` when the step started) carries it while it is `Promoting` or `WaitingForMerge`,
+from before it opens the PR; an `auto` step never carries it. When the step is deleted, the controller asks the SCM whether
 the PR is still open, closes it with a comment if it is (a merged or closed PR is left alone), then
 removes the finalizer. What happens to the PR depends on what was deleted:
 

@@ -320,14 +320,9 @@ func TestStep_GitAuth(t *testing.T) {
 func TestStep_RetriesTransientGitErrors(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
-	ctx := context.Background()
 	a := newArgoApp(t, e, "test")
-	u, err := url.Parse(a.repo.CloneURL)
-	require.NoError(t, err)
-	gitHost, gitPort := u.Hostname(), u.Port()
-	u.Host = "git-proxy." + a.ns + ".svc.cluster.local:" + gitPort
 	p := a.pipeline(nil)
-	p.Spec.Git.URL = u.String()
+	resolve := a.unresolvedGit(t, p)
 	base := a.headSHA(t, a.repo.Branch)
 	a.apply(t, p)
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
@@ -336,19 +331,97 @@ func TestStep_RetriesTransientGitErrors(t *testing.T) {
 	assert.Contains(t, ps.Status.Message, "no such host")
 	assert.GreaterOrEqual(t, ps.Status.RetryCount, 1, "status.retryCount")
 
-	port, err := strconv.Atoi(gitPort)
-	require.NoError(t, err)
-	require.NoError(t, e.Client.Create(ctx, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "git-proxy", Namespace: a.ns},
-		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeExternalName, ExternalName: gitHost,
-			Ports: []corev1.ServicePort{{Name: "http", Port: int32(port)}}},
-	}))
+	resolve()
 	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	checkSteps(t, ps, imageSteps("kustomize-set-image", false))
 	pushed := a.commitsSince(t, a.repo.Branch, base)
 	require.Len(t, pushed, 1, "the retried promotion pushes once")
 	checkPromoteCommit(t, pushed[0], bundle, "test")
 	a.running(t, "test", imageV2, "test after the retries")
+}
+
+// TestStep_ApprovalEditMidPromotion edits an environment's approval while its
+// step retries git-clone (git.url points at a host that does not resolve yet),
+// then lets the clone through. The step runs the step list it recorded when it
+// started, so the edit applies from the next Bundle (docs/pipeline-reference.md,
+// approval):
+//   - pr-review edited to auto: the change is pushed to kardinal/<bundle>/<env>
+//     only, the PR opens, and the step holds the close-pr finalizer while it
+//     waits for the merge; after the merge it is Verified with the pr-review
+//     steps;
+//   - auto edited to pr-review: the change is pushed straight to the base
+//     branch, no PR is opened, and the step and the Bundle are Verified with
+//     the auto steps.
+//
+// The edit lands while git-clone retries, not open-pr: an SCM API fault would
+// need the controller's SCM endpoint, which every test of the suite shares.
+//
+// Covers STEP-APPROVAL-EDIT-01.
+func TestStep_ApprovalEditMidPromotion(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, from, to string }{
+		{"pr-review-to-auto", "pr-review", "auto"},
+		{"auto-to-pr-review", "auto", "pr-review"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			e := framework.New(t)
+			a := newArgoApp(t, e, "test")
+			p := a.pipeline(map[string]string{"test": c.from})
+			resolve := a.unresolvedGit(t, p)
+			base := a.headSHA(t, a.repo.Branch)
+			a.apply(t, p)
+			bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+			e.WaitStep(t, a.ns, pipelineName, bundle, "test", promoteTimeout, "a git-clone retry", retrying(t, "git-clone", nil))
+
+			a.updatePipeline(t, pipelineName, func(p *v1alpha1.Pipeline) { envSpec(t, p, "test").Approval = c.to })
+			resolve()
+
+			prReview := c.from == "pr-review"
+			if prReview {
+				e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "WaitingForMerge", promoteTimeout)
+				pr := a.openPR(t, bundle, "test")
+				assert.Contains(t, stepFinalizers(t, e, a.ns, bundle, "test"), closePRFinalizer, "the step with the open PR")
+				assert.Empty(t, a.commitsSince(t, a.repo.Branch, base), "nothing is pushed to %s before the merge", a.repo.Branch)
+				a.merge(t, pr)
+			}
+			ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+			checkSteps(t, ps, imageSteps("kustomize-set-image", prReview))
+			e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+			a.running(t, "test", imageV2, "test after the promotion")
+			if !prReview {
+				pushed := a.commitsSince(t, a.repo.Branch, base)
+				require.Len(t, pushed, 1, "auto pushes one commit to %s", a.repo.Branch)
+				checkPromoteCommit(t, pushed[0], bundle, "test")
+				prs, err := e.Git.PullRequests(context.Background(), a.repo)
+				require.NoError(t, err)
+				assert.Empty(t, prs, "no PR is opened")
+			}
+		})
+	}
+}
+
+// unresolvedGit points p's git.url at git-proxy.<ns>.svc.cluster.local, a host
+// that does not resolve yet, so git-clone fails with "no such host" and
+// retries. The returned func creates the host: an ExternalName Service to the
+// git server.
+func (a *app) unresolvedGit(t *testing.T, p *v1alpha1.Pipeline) func() {
+	t.Helper()
+	u, err := url.Parse(a.repo.CloneURL)
+	require.NoError(t, err)
+	gitHost, gitPort := u.Hostname(), u.Port()
+	port, err := strconv.Atoi(gitPort)
+	require.NoError(t, err)
+	u.Host = "git-proxy." + a.ns + ".svc.cluster.local:" + gitPort
+	p.Spec.Git.URL = u.String()
+	return func() {
+		t.Helper()
+		require.NoError(t, a.e.Client.Create(context.Background(), &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "git-proxy", Namespace: a.ns},
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeExternalName, ExternalName: gitHost,
+				Ports: []corev1.ServicePort{{Name: "http", Port: int32(port)}}},
+		}))
+	}
 }
 
 // TestStep_Timeout points the Pipeline's git.url at a server that answers

@@ -519,16 +519,25 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	if msg := unsupportedConfig(pipeline, env, ps); msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
-	approvalMode := env.Approval
-	if approvalMode == "" {
-		approvalMode = "auto"
+	// Run the step list recorded when the step left Pending, never one rebuilt
+	// from the live Pipeline: an approval edit made while the step runs would
+	// otherwise move the current index into another sequence (skipping open-pr,
+	// or opening a PR the finalizer was not added for). The edit applies from
+	// the next Bundle.
+	seq := recordedSequence(ps)
+	if len(seq) == 0 {
+		// Entered Promoting before status.steps was recorded: build the list
+		// once; updateStepStatuses records it with this reconcile's patch.
+		approvalMode := env.Approval
+		if approvalMode == "" {
+			approvalMode = "auto"
+		}
+		bundleType := ""
+		if bundle != nil {
+			bundleType = bundle.Spec.Type
+		}
+		seq = steps.DefaultSequenceForBundle(approvalMode, bundleType, env.Update.Strategy, env.Layout)
 	}
-	updateStrategy := env.Update.Strategy
-	bundleType := ""
-	if bundle != nil {
-		bundleType = bundle.Spec.Type
-	}
-	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, env.Layout)
 	eng := steps.NewEngine(seq)
 
 	// The working directory is always recomputed from the PromotionStep's
@@ -561,6 +570,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		StepTimeoutSeconds:   env.StepTimeoutSeconds,
 		GateResults:          r.collectGateResults(ctx, log, ps),
 		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
+		Sequence:             seq,
 	}
 	r.setRollbackState(ctx, log, state, bundle)
 
@@ -621,7 +631,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if nextIdx >= len(seq) {
 			// All steps completed — move to HealthChecking. Record the commit
 			// the health check must see deployed (E2E-01).
-			r.recordPushedCommit(ctx, log, ps, pipeline, env, workDir)
+			r.recordPushedCommit(ctx, log, ps, pipeline, workDir)
 			if ps.Spec.PRStatusRef != "" && state.Outputs["prURL"] != "" {
 				if prErr := r.patchPRStatusSpec(ctx, ps, state.Outputs); prErr != nil {
 					log.Warn().Err(prErr).Msg("failed to patch PRStatus spec (non-fatal)")
@@ -759,11 +769,11 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 
 // recordPushedCommit stores, as outputs.commitSHA, the commit the health check
 // must find deployed (E2E-01). It is known here only when the step pushed
-// straight to the branch the GitOps tool tracks; for pr-review the merge
-// commit comes from the PRStatus instead.
+// straight to the branch the GitOps tool tracks; when the recorded sequence
+// opens a PR the merge commit comes from the PRStatus instead.
 func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
-	pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, workDir string) {
-	if env.Approval == "pr-review" {
+	pipeline *v1alpha1.Pipeline, workDir string) {
+	if opensPR(ps) {
 		return
 	}
 	target := pipeline.Spec.Git.Branch
@@ -1063,13 +1073,15 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 
 	var result health.HealthStatus
 	var checkErr error
-	if adapter.Name() == "flux" && env.Approval == "pr-review" && opts.ExpectedRevision == "" &&
+	if adapter.Name() == "flux" && opensPR(ps) && opts.ExpectedRevision == "" &&
 		ps.Status.Outputs["noChanges"] != "true" {
 		// The flux adapter has no image check to fall back on: without the
 		// merge commit, a Kustomization Ready on the previous commit would
 		// pass. Wait for it; health.timeout ends the wait (#1307). With no
 		// changes there is no PR and no merge commit, and the previous
-		// commit already is the target.
+		// commit already is the target. Whether there is a PR follows from
+		// the recorded sequence, not the live approval: a step that pushed
+		// straight to the base branch has no merge commit to wait for.
 		result = health.HealthStatus{Progressing: true,
 			Reason: "merge commit of the PR not known yet (needed to check lastAppliedRevision)"}
 	} else {
@@ -1723,6 +1735,17 @@ func initStepStatuses(seq []string) []v1alpha1.StepStatus {
 		}
 	}
 	return ss
+}
+
+// recordedSequence returns the step names in status.steps: the sequence
+// handlePending recorded on entering Promoting, which handlePromoting runs.
+// Only the controller writes the status.
+func recordedSequence(ps *v1alpha1.PromotionStep) []string {
+	names := make([]string, 0, len(ps.Status.Steps))
+	for _, s := range ps.Status.Steps {
+		names = append(names, s.Name)
+	}
+	return names
 }
 
 // updateStepStatuses updates ps.Status.Steps to reflect the result of the most

@@ -179,6 +179,7 @@ func makeState(t *testing.T, git *mockGitClient, scmProvider *mockSCMProvider) *
 			Type:   "image",
 			Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.29.0"}},
 		},
+		Sequence: parentsteps.DefaultSequenceForBundle("pr-review", "image", "", ""),
 		Git: parentsteps.GitConfig{
 			URL:    "https://github.com/owner/repo",
 			Branch: "main",
@@ -264,6 +265,7 @@ func TestGitPushStep_AutoPushesBaseBranch(t *testing.T) {
 	git := &mockGitClient{}
 	state := makeState(t, git, nil)
 	state.Environment.Approval = "auto"
+	state.Sequence = parentsteps.DefaultSequenceForBundle("auto", "image", "", "")
 
 	step, err := parentsteps.Lookup("git-push")
 	require.NoError(t, err)

@@ -15,6 +15,7 @@ package steps
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -137,6 +138,20 @@ type StepState struct {
 	// When > 0, ExecuteFrom wraps each step's context with context.WithTimeout.
 	// When 0, no per-step timeout is applied (default behaviour).
 	StepTimeoutSeconds int
+
+	// Sequence is the step list being run: the one the PromotionStep recorded
+	// when it left Pending. A step reads it, not Environment.Approval, to know
+	// whether the promotion goes through a PR, so an approval edit made while
+	// the step runs applies from the next Bundle.
+	Sequence []string
+}
+
+// OpenPRStepName is the name of the step that opens the promotion PR.
+const OpenPRStepName = "open-pr"
+
+// OpensPR reports whether the sequence being run opens a PR.
+func (s *StepState) OpensPR() bool {
+	return slices.Contains(s.Sequence, OpenPRStepName)
 }
 
 // Step is a single unit of promotion work.

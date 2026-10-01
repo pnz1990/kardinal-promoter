@@ -58,7 +58,7 @@ func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, layout s
 	base := append([]string{"git-clone"}, updateSteps...)
 	base = append(base, "git-commit", "git-push")
 	if approvalMode == "pr-review" {
-		base = append(base, "open-pr", "wait-for-merge")
+		base = append(base, OpenPRStepName, "wait-for-merge")
 	}
 	base = append(base, "health-check")
 	return base

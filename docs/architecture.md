@@ -90,7 +90,9 @@ git-clone  →  kustomize-set-image  →  git-commit  →  git-push  →  [open-
 uses `helm-set-image` instead of `kustomize-set-image`, config Bundles use `config-merge`,
 mixed Bundles run `config-merge` and then the image update step,
 and `update.strategy: argocd` runs only `argocd-set-image` and `health-check`
-(`pkg/steps/defaults.go`).
+(`pkg/steps/defaults.go`). The sequence is picked when the step leaves Pending and recorded in
+`status.steps`; every later reconcile runs the recorded list, not one rebuilt from the live
+Pipeline.
 
 Built-in step implementations:
 
@@ -103,7 +105,7 @@ Built-in step implementations:
 | `argocd-set-image` | Patches the Argo CD Application's image override directly, with no Git commit (`update.strategy: argocd`) |
 | `config-merge` | Copies the environment directory of the Bundle's `configRef` commit over the environment directory (config and mixed Bundles). Files deleted in the config commit are not deleted |
 | `git-commit` | Commits the working tree changes. When nothing changed it records that, and the later steps skip the push and the PR |
-| `git-push` | `pr-review`: force-pushes `kardinal/<bundle>/<env>`, so a re-run after a restart replaces the earlier push. `auto`: pushes the base branch; if it moved, the sequence restarts from a fresh clone (at most 3 times) |
+| `git-push` | A sequence with `open-pr` (`pr-review` when the step started): force-pushes `kardinal/<bundle>/<env>`, so a re-run after a restart replaces the earlier push. Otherwise (`auto`): pushes the base branch; if it moved, the sequence restarts from a fresh clone (at most 3 times) |
 | `open-pr` | Opens a pull request via the SCM provider with promotion evidence |
 | `wait-for-merge` | Polls `PRStatus` until the PR is merged or closed |
 | `health-check` | Queries Kubernetes Deployment readiness or ArgoCD/Flux/Rollouts/Flagger sync status |

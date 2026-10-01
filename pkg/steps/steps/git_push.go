@@ -26,16 +26,18 @@ func init() {
 	parentsteps.Register(&gitPushStep{})
 }
 
-// gitPushStep pushes the promotion commit.
+// gitPushStep pushes the promotion commit. Which branch follows from the step
+// sequence being run (StepState.Sequence), not from the live approval, so an
+// approval edit made while the step runs cannot strand the commit:
 //
-//   - approval: pr-review pushes to the kardinal-owned branch
-//     kardinal/<bundle>/<env> with force, so a re-run after a controller
-//     restart (which re-clones and re-commits) replaces the earlier push
-//     instead of failing non-fast-forward.
-//   - approval: auto pushes to the base branch without force. If the base
-//     branch moved since the clone (another environment pushed first), the
-//     step returns StepRestart and the engine re-runs the sequence from a
-//     fresh clone.
+//   - A sequence with open-pr (approval: pr-review) pushes to the
+//     kardinal-owned branch kardinal/<bundle>/<env> with force, so a re-run
+//     after a controller restart (which re-clones and re-commits) replaces
+//     the earlier push instead of failing non-fast-forward.
+//   - Any other sequence (approval: auto) pushes to the base branch without
+//     force. If the base branch moved since the clone (another environment
+//     pushed first), the step returns StepRestart and the engine re-runs the
+//     sequence from a fresh clone.
 //   - When git-commit found nothing to commit, nothing is pushed.
 type gitPushStep struct{}
 
@@ -56,7 +58,7 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	// Promotion branch name: kardinal/<bundle>/<env>
 	branch := fmt.Sprintf("kardinal/%s/%s", state.BundleName, state.Environment.Name)
 	force := true
-	if state.Environment.Approval != "pr-review" {
+	if !state.OpensPR() {
 		branch = state.Git.Branch
 		if branch == "" {
 			branch = "main"
