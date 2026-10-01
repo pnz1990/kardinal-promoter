@@ -91,6 +91,10 @@ const (
 var errGraphDeletedAfterFailure = errors.New("the Graph of this failed Bundle was deleted; it is not recreated, " +
 	"so the failed promotion does not run again. Create a new Bundle, or change the Pipeline to retry this one")
 
+// errNamespaceTerminating is returned by translate when the Bundle's namespace
+// is being deleted, so nothing was translated.
+var errNamespaceTerminating = errors.New("the namespace is being deleted")
+
 // indexPipeline is the Bundle field index on spec.pipeline.
 const indexPipeline = "spec.pipeline"
 
@@ -285,6 +289,9 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		return nil // no-op in test environments without a real translator
 	}
 	if err := r.ensurePipelineSpecCurrent(ctx, log, b, pipeline); err != nil {
+		if errors.Is(err, errNamespaceTerminating) {
+			return nil
+		}
 		return err
 	}
 
@@ -303,8 +310,10 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 			log.Info().Str("graph", name).Msg("graph of a failed bundle deleted — not recreating")
 			return errGraphDeletedAfterFailure
 		}
-		log.Info().Str("graph", name).Msg("graph deleted externally — recreating")
-		graphName, tErr := r.Translator.Translate(ctx, pipeline, b)
+		graphName, tErr := r.translate(ctx, log, pipeline, b)
+		if errors.Is(tErr, errNamespaceTerminating) {
+			return nil
+		}
 		if tErr != nil {
 			return fmt.Errorf("recreate graph %s: %w", name, tErr)
 		}
@@ -417,7 +426,7 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 		Str("oldHash", b.Status.PipelineSpecHash).
 		Str("newHash", currentHash).
 		Msg("pipeline spec changed — updating Graph in place")
-	if _, err := r.Translator.Translate(ctx, pipeline, b); err != nil {
+	if _, err := r.translate(ctx, log, pipeline, b); err != nil {
 		return fmt.Errorf("update graph for changed pipeline spec: %w", err)
 	}
 	b.Status.PipelineSpecHash = currentHash
@@ -679,7 +688,10 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// Pausing is enforced by the PromotionStep reconciler, which holds steps
 	// while the Pipeline's freeze gate exists (see pkg/lifecycle/pause.go), so
 	// a paused Pipeline still gets its Graph and resumes where it stopped.
-	graphName, err := r.Translator.Translate(ctx, &pipeline, b)
+	graphName, err := r.translate(ctx, log, &pipeline, b)
+	if errors.Is(err, errNamespaceTerminating) {
+		return ctrl.Result{}, nil
+	}
 	if errors.Is(err, graph.ErrInvalid) {
 		// The Graph cannot be built from this Pipeline, Bundle and gates (a
 		// denied skip, custom steps, an invalid name or node ID). A retry
@@ -748,6 +760,37 @@ func (r *Reconciler) countPromoting(ctx context.Context, b *kardinalv1alpha1.Bun
 		}
 	}
 	return n, nil
+}
+
+// translate translates b into its Graph unless b's namespace is being
+// deleted. A namespace being deleted refuses new objects, so translating would
+// only fail creating the Graph ServiceAccount, its RoleBindings or the Graph,
+// and the namespace deletion deletes the Bundle next. translate then returns
+// errNamespaceTerminating without trying, or when the API server refused an
+// object because the namespace started terminating meanwhile.
+//
+// The namespace is read from the API server (the controller has no Namespace
+// cache), only before a translation. When it cannot be read, translate goes on.
+func (r *Reconciler) translate(ctx context.Context, log zerolog.Logger,
+	pipeline *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) (string, error) {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	var ns corev1.Namespace
+	switch err := reader.Get(ctx, client.ObjectKey{Name: b.Namespace}, &ns); {
+	case err == nil && (ns.DeletionTimestamp != nil || ns.Status.Phase == corev1.NamespaceTerminating):
+		log.Debug().Msg("namespace is being deleted — not translating the bundle")
+		return "", errNamespaceTerminating
+	case err != nil && !apierrors.IsNotFound(err):
+		log.Debug().Err(err).Msg("failed to read the bundle's namespace (non-fatal), translating")
+	}
+	name, err := r.Translator.Translate(ctx, pipeline, b)
+	if apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause) {
+		log.Debug().Err(err).Msg("namespace is being deleted — bundle not translated")
+		return "", errNamespaceTerminating
+	}
+	return name, err
 }
 
 // markInvalid fails a Bundle that has no Graph yet because its Pipeline,

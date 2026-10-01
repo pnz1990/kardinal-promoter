@@ -5,6 +5,8 @@ package translator
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -18,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	clienttesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -274,4 +277,59 @@ func TestTranslate_PermanentErrors(t *testing.T) {
 		require.Error(t, err)
 		assert.NotErrorIs(t, err, graph.ErrInvalid)
 	})
+}
+
+// TestTranslate_ErrorPrefixes checks the exact Translate error for a failure
+// in each layer that names itself: the Graph builder ("build: "), the Graph
+// identity ("graph identity: ") and the Graph client ("graph.Create "). Each
+// context appears once (B47: "translator.Translate: build: build: ...").
+func TestTranslate_ErrorPrefixes(t *testing.T) {
+	ctx := zerolog.Nop().WithContext(context.Background())
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "serviceaccounts"}, "kardinal-graph", nil)
+	newTranslator := func(t *testing.T, saErr, graphErr error) *Translator {
+		c := fake.NewClientBuilder().WithScheme(translateScheme(t)).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, w client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if saErr != nil {
+						return saErr
+					}
+					return w.Create(ctx, obj, opts...)
+				},
+			}).Build()
+		dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+			map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
+		if graphErr != nil {
+			dyn.PrependReactor("create", "graphs", func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, graphErr
+			})
+		}
+		return New(graph.NewGraphClient(dyn, zerolog.Nop()), graph.NewBuilder(), c,
+			[]string{"platform-policies"}, zerolog.Nop()).
+			WithIdentity(&graph.IdentityProvisioner{Writer: c, Reader: c})
+	}
+	prod := kardinalv1alpha1.EnvironmentSpec{Name: "prod"}
+
+	tests := []struct {
+		name            string
+		pipeline        *kardinalv1alpha1.Pipeline
+		saErr, graphErr error
+		want            string
+		once            string
+	}{
+		{name: "builder", pipeline: teamPipeline(),
+			want: "translator.Translate: build: pipeline has no environments", once: "build:"},
+		{name: "graph identity", pipeline: teamPipeline(prod), saErr: forbidden,
+			want: "translator.Translate: graph identity: create serviceaccount team-a/" +
+				graph.DefaultGraphServiceAccount + ": " + forbidden.Error(), once: "graph identity:"},
+		{name: "graph client", pipeline: teamPipeline(prod), graphErr: errors.New("etcd unavailable"),
+			want: "translator.Translate: graph.Create team-a/payments-payments-x7k2m: etcd unavailable", once: "graph.Create"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := newTranslator(t, tc.saErr, tc.graphErr).Translate(ctx, tc.pipeline, teamBundle(nil))
+			require.Error(t, err)
+			assert.Equal(t, tc.want, err.Error())
+			assert.Equal(t, 1, strings.Count(err.Error(), tc.once), "%q appears once: %v", tc.once, err)
+		})
+	}
 }

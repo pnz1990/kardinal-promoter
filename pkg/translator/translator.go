@@ -100,6 +100,9 @@ func (t *Translator) Translate(ctx context.Context,
 	// returns the Graph spec. Only the controller's org namespaces count as
 	// org policy: a Pipeline's own spec.policyNamespaces adds gates but can
 	// never grant a skip.
+	// Build, identity.Ensure and graphClient.Create prefix their own errors
+	// ("build: ", "graph identity: ", "graph.Create "), so they are wrapped
+	// with the Translate context only.
 	result, err := t.builder.Build(graph.BuildInput{
 		Pipeline:         pipeline,
 		Bundle:           bundle,
@@ -107,7 +110,7 @@ func (t *Translator) Translate(ctx context.Context,
 		PolicyNamespaces: t.policyNS,
 	})
 	if err != nil {
-		return "", fmt.Errorf("translator.Translate: build: %w", err)
+		return "", fmt.Errorf("translator.Translate: %w", err)
 	}
 
 	log.Debug().
@@ -139,7 +142,7 @@ func (t *Translator) Translate(ctx context.Context,
 	defer t.identity.Unlock()
 	unbound, err := t.identity.Ensure(ctx, result.Graph)
 	if err != nil {
-		return "", fmt.Errorf("translator.Translate: graph identity: %w", err)
+		return "", fmt.Errorf("translator.Translate: %w", err)
 	}
 	if dropped := dropHealthNodes(result.Graph, injected, unbound); len(dropped) > 0 {
 		log.Warn().Strs("nodes", dropped).Strs("namespaces", unbound).
@@ -147,7 +150,7 @@ func (t *Translator) Translate(ctx context.Context,
 	}
 
 	if err := t.graphClient.Create(ctx, result.Graph); err != nil {
-		return "", fmt.Errorf("translator.Translate: create graph: %w", err)
+		return "", fmt.Errorf("translator.Translate: %w", err)
 	}
 
 	// Remove reader RoleBindings no Graph in the namespace reads through any

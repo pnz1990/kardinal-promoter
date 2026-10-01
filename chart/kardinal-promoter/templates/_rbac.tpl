@@ -131,9 +131,10 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["kardinal.io"]
   resources: ["changewindows/status"]
   verbs: ["get", "update", "patch"]
-# The Graph cleanup reconciler reads the namespace of a deleted Graph to tell
-# whether it is being deleted (pkg/reconciler/graphcleanup). Namespace mode:
-# only the watched namespace.
+# The Graph cleanup reconciler reads the namespace of a deleted Graph, and the
+# Bundle reconciler the namespace of a Bundle before translating it, to tell
+# whether it is being deleted (pkg/reconciler/graphcleanup,
+# pkg/reconciler/bundle). Namespace mode: only the watched namespace.
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get"]
