@@ -11,6 +11,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **A superseded Bundle's PR closes at once** — the controller closed it at the step's next merge poll, up to 30 seconds later, and the PR could be merged in that window, changing the environment with no PromotionStep tracking it
+- **Rollback PRs name what they replace** — the title names the restored version (`[kardinal] Rollback prod to <bundle> (restores 1.28.0)`), the body's FROM is the Bundle being replaced and TO the one restored, and a "Rolled back by" line names who ran it. The rollback Bundle keeps the restored build's `spec.provenance`, so a gate on `bundle.provenance.author` sees the build's author; who ran the rollback is in the `kardinal.io/requested-by` annotation, as for `kardinal promote`
+- **Webhook event types** — Forgejo, Gitea, GitHub and GitLab webhooks take the event type from the event header (GitLab: `object_kind`), so push, comment and review events are no longer counted as pull request events
+- **No false "SCM credentials rotated" log** — the token watcher's first read logs "loaded"; "rotated" means the token changed, as the rotation guide expects
+- **Forgejo/Gitea token check** — a 403 from `/user` with the documented scopes is logged at info as "token scopes not checked" with the configured provider, not as a network error at debug level
+- **PRStatus placeholders are not polled** — a PRStatus without a PR number was requeued every 30 seconds for every Bundle; it now waits for the PromotionStep to set the PR
 
 ---
 
