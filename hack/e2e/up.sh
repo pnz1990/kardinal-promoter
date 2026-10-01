@@ -32,7 +32,9 @@
 #                    hack/tool-versions.env, or KIND_NODE_<SUITE>_1_37 there
 #                    for a minor only SUITE runs on (default: the node image
 #                    in test/e2e/kind-config.yaml)
-#   KUBECONFIG       honoured; recorded in the env file
+#   KUBECONFIG       honoured; recorded in the env file. When unset, it is
+#                    test/e2e/results/<cluster>/kubeconfig, so kind does not
+#                    write the default ~/.kube/config
 #   plus the KARDINAL_E2E_* build settings of components/kardinal.sh
 #
 # Copyright 2026 The kardinal-promoter Authors.
@@ -97,10 +99,7 @@ if [ -n "${KIND_K8S:-}" ]; then
 fi
 
 start=$(date +%s)
-if ! kind get clusters 2>/dev/null | grep -qx "$KIND_CLUSTER"; then
-  kind create cluster --name "$KIND_CLUSTER" --config "$REPO_ROOT/test/e2e/kind-config.yaml" \
-    ${NODE_IMAGE:+--image "$NODE_IMAGE"} --wait 120s
-fi
+kind_cluster "$KIND_CLUSTER"
 target_cluster
 trap 'rc=$?; [ "$rc" -eq 0 ] || dump_setup_diagnostics; exit "$rc"' EXIT
 if [ -n "$NODE_IMAGE" ]; then
@@ -113,7 +112,7 @@ env_set KARDINAL_E2E_SUITE "$SUITE"
 env_set KARDINAL_E2E_CONTEXT "$CTX"
 env_set KARDINAL_E2E_RUN "$RUN"
 env_set KARDINAL_E2E_ARTIFACTS "$E2E_OUT/diagnostics"
-[ -n "${KUBECONFIG:-}" ] && env_set KUBECONFIG "$KUBECONFIG"
+env_set KUBECONFIG "$KUBECONFIG"
 
 if [ "${KARDINAL_E2E_KRO:-1}" = 1 ]; then
   KUBE_CONTEXT="$CTX" bash "$REPO_ROOT/hack/install-kro.sh" >/dev/null
@@ -133,4 +132,4 @@ for c in "${AFTER[@]}"; do
   # shellcheck disable=SC2086
   bash "$E2E_DIR/components/"$c
 done
-log "suite $SUITE up on $CTX in $(($(date +%s) - start))s; env: $E2E_OUT/env"
+log "suite $SUITE up on $CTX in $(($(date +%s) - start))s; env: $E2E_OUT/env; KUBECONFIG=$KUBECONFIG"

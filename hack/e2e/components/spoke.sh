@@ -34,9 +34,8 @@ SA=kardinal-e2e-hub
 ARGO_CLUSTER=spoke
 FLUX_SECRET=spoke-kubeconfig
 
-if ! kind get clusters 2>/dev/null | grep -qx "$SPOKE"; then
-  kind create cluster --name "$SPOKE" --config "$REPO_ROOT/test/e2e/kind-config.yaml" --wait 120s
-fi
+# In the hub's kubeconfig (up.sh's KUBECONFIG), with the default node image.
+NODE_IMAGE='' kind_cluster "$SPOKE"
 KIND_CLUSTER=$SPOKE bash "$E2E_DIR/components/rollouts.sh"
 
 use_kind_context "$SPOKE_CTX" >&2

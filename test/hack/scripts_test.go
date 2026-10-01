@@ -157,6 +157,92 @@ func TestKindContextGuard(t *testing.T) {
 	}
 }
 
+// TestKindClusterKeepsDefaultKubeconfig runs kind_cluster (hack/e2e/lib.sh),
+// which up.sh and components/spoke.sh create their clusters with, against a
+// fake kind. With KUBECONFIG unset it uses $E2E_OUT/kubeconfig, says so and
+// exports it, and kind always gets an explicit --kubeconfig, so kind never
+// writes the default ~/.kube/config. No other script in hack/e2e calls kind
+// create cluster without --kubeconfig.
+func TestKindClusterKeepsDefaultKubeconfig(t *testing.T) {
+	out := t.TempDir()
+	def := filepath.Join(out, "kubeconfig")
+	tests := []struct {
+		name, kubeconfig, clusters string
+		wantCall, wantLog          string
+		noCall                     []string
+	}{
+		{name: "unset, new cluster", wantLog: "KUBECONFIG is not set: using " + def,
+			wantCall: "kind create cluster --name kardinal-e2e-x --config " + filepath.Join(repoRoot(t), "test/e2e/kind-config.yaml") +
+				" --kubeconfig " + def + " --wait 120s"},
+		{name: "unset, existing cluster", clusters: "kardinal-e2e-x", wantLog: "KUBECONFIG is not set: using " + def,
+			wantCall: "kind export kubeconfig --name kardinal-e2e-x --kubeconfig " + def, noCall: []string{"kind create"}},
+		{name: "set to a list, new cluster", kubeconfig: "/e2e/a:/e2e/b",
+			wantCall: "--kubeconfig /e2e/a --wait 120s"},
+		{name: "set, existing cluster", kubeconfig: "/e2e/a", clusters: "kardinal-e2e-x",
+			noCall: []string{"kind create", "kind export"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bin := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "kind"), []byte(fakeKind), 0o755))
+			logPath := filepath.Join(t.TempDir(), "calls.log")
+			cmd := exec.Command("bash", "-c", `source hack/e2e/lib.sh && kind_cluster kardinal-e2e-x && echo "KUBECONFIG=$KUBECONFIG"`)
+			cmd.Dir = repoRoot(t)
+			cmd.Env = []string{
+				"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+				"HOME=" + t.TempDir(),
+				"FAKE_LOG=" + logPath,
+				"FAKE_KIND_CLUSTERS=" + tt.clusters,
+				"KIND_CLUSTER=kardinal-e2e-x",
+				"E2E_OUT=" + out,
+			}
+			if tt.kubeconfig != "" {
+				cmd.Env = append(cmd.Env, "KUBECONFIG="+tt.kubeconfig)
+			}
+			got, err := cmd.CombinedOutput()
+			require.NoError(t, err, string(got))
+			want := tt.kubeconfig
+			if want == "" {
+				want = def
+			}
+			assert.Contains(t, string(got), "KUBECONFIG="+want+"\n", "kind_cluster exports the kubeconfig it used")
+			if tt.wantLog != "" {
+				assert.Contains(t, string(got), tt.wantLog)
+			} else {
+				assert.NotContains(t, string(got), "KUBECONFIG is not set")
+			}
+			data, err := os.ReadFile(logPath)
+			require.NoError(t, err)
+			calls := string(data)
+			if tt.wantCall != "" {
+				assert.Contains(t, calls, tt.wantCall)
+			}
+			for _, c := range tt.noCall {
+				assert.NotContains(t, calls, c)
+			}
+		})
+	}
+
+	create := regexp.MustCompile(`kind create cluster\b.*`)
+	require.NoError(t, filepath.WalkDir(filepath.Join(repoRoot(t), "hack", "e2e"), func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".sh") {
+			return err
+		}
+		data, err := os.ReadFile(p)
+		require.NoError(t, err)
+		for i, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue
+			}
+			if m := create.FindString(line); m != "" {
+				assert.Contains(t, m, "--kubeconfig", "%s:%d: kind create cluster without --kubeconfig writes the default kubeconfig",
+					strings.TrimPrefix(p, repoRoot(t)+"/"), i+1)
+			}
+		}
+		return nil
+	}))
+}
+
 // TestE2EScriptsUseKindContext: every kubectl and helm call in hack/e2e goes
 // through the KUBECTL and HELM arrays of hack/kind-context.sh, so a live suite
 // never acts on the current kube context. A bare call is reported with its
