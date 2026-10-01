@@ -58,7 +58,8 @@ export interface Bundle {
   /** ISO 8601 creation timestamp for timeline sorting (#337). */
   createdAt?: string
   provenance?: Provenance
-  /** #503: Per-environment promotion statuses for the timeline view. */
+  /** #503: Per-environment promotion statuses. The bundle comparison shows
+   *  them and the release metrics bar reads healthCheckedAt. */
   environments?: BundleEnvStatus[]
   /** #563: Container images in this Bundle — used by NodeDetail diff preview. */
   images?: ImageRef[]
@@ -75,6 +76,7 @@ export interface ImageRef {
 export interface BundleEnvStatus {
   name: string
   phase?: string
+  /** Sent by the API; the UI takes PR links from the graph nodes instead. */
   prURL?: string
   /** RFC 3339 time the post-merge health check for this environment completed. */
   healthCheckedAt?: string
