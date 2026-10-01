@@ -271,8 +271,8 @@ func (r *Reconciler) recordOutcome(ctx context.Context, rp *v1alpha1.RollbackPol
 	}
 	if refusal != nil && !wasRefused {
 		kubeevent.Emit(r.Recorder, rp, corev1.EventTypeWarning, ConditionRollbackRefused, "Rollback",
-			fmt.Sprintf("env %s: no rollback Bundle created for %s after %d consecutive health failures: %s",
-				rp.Spec.Environment, rp.Spec.BundleRef, rp.Status.ConsecutiveFailures, refusal.message))
+			fmt.Sprintf("env %s: no rollback Bundle created for %s after %s: %s",
+				rp.Spec.Environment, rp.Spec.BundleRef, healthFailures(rp.Status.ConsecutiveFailures), refusal.message))
 	}
 	return nil
 }
@@ -288,10 +288,19 @@ func clearRefusal(rp *v1alpha1.RollbackPolicy, failures, threshold int, now meta
 		Type:               ConditionRollbackRefused,
 		Status:             metav1.ConditionFalse,
 		Reason:             ReasonBelowThreshold,
-		Message:            fmt.Sprintf("%d consecutive health failures, below the threshold of %d", failures, threshold),
+		Message:            fmt.Sprintf("%s, below the threshold of %d", healthFailures(failures), threshold),
 		ObservedGeneration: rp.Generation,
 		LastTransitionTime: now,
 	})
+}
+
+// healthFailures returns "1 consecutive health failure", or "<n> consecutive
+// health failures" for any other count n.
+func healthFailures(n int) string {
+	if n == 1 {
+		return "1 consecutive health failure"
+	}
+	return fmt.Sprintf("%d consecutive health failures", n)
 }
 
 // refusal is why the rollback planner did not plan a rollback.
@@ -432,7 +441,10 @@ func (r *Reconciler) policiesForStep(ctx context.Context, obj client.Object) []r
 	}
 	var list v1alpha1.RollbackPolicyList
 	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
-		zerolog.Ctx(ctx).Error().Err(err).Str("promotionstep", obj.GetName()).
+		// Policies are not polled: this event is lost, and the log is all
+		// that shows it.
+		zerolog.Ctx(ctx).Error().Err(err).
+			Str("namespace", obj.GetNamespace()).Str("promotionstep", obj.GetName()).
 			Msg("failed to list RollbackPolicies for PromotionStep event; the next event of the step re-evaluates them")
 		return nil
 	}

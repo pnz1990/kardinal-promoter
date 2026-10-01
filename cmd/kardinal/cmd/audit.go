@@ -52,8 +52,8 @@ func newAuditSummaryCmd() *cobra.Command {
 Includes: promotion counts, success rate, average duration, gate block rate, and rollbacks.
 Rollbacks counts the rollback Bundles created in the window, from kardinal
 rollback, the UI, a RollbackPolicy or onHealthFailure=rollback, and how many
-rollback Bundles succeeded: wrote RollbackSucceeded in the window in the
-environment they roll back.
+of them succeeded: wrote RollbackSucceeded in the window in the environment
+they roll back.
 The success rate is succeeded / (succeeded + failed + superseded) among the
 promotions that finished inside the window. A rollback Bundle that reaches
 Verified in an environment writes PromotionSucceeded, counted as a succeeded
@@ -114,8 +114,9 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 	type rollbackKey struct{ pipeline, from, env string }
 	type bundleKey struct{ pipeline, bundle string }
 	rolledBack := make(map[rollbackKey]bool)
-	// rollbackTarget is the environment each rollback Bundle rolls back.
-	rollbackTarget := make(map[bundleKey]string)
+	// triggered is the rollback Bundles created in the window, with the
+	// environment each rolls back.
+	triggered := make(map[bundleKey]string)
 	rollbacks := 0
 	var rollbackPipelines []string
 	for _, b := range bundleList.Items {
@@ -126,9 +127,9 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 		if b.Spec.Intent != nil {
 			env = b.Spec.Intent.TargetEnvironment
 		}
-		rollbackTarget[bundleKey{b.Spec.Pipeline, b.Name}] = env
 		rolledBack[rollbackKey{b.Spec.Pipeline, b.Annotations[lifecycle.AnnotationRollbackFrom], env}] = true
 		if !b.CreationTimestamp.Before(&cutoff) {
+			triggered[bundleKey{b.Spec.Pipeline, b.Name}] = env
 			rollbacks++
 			rollbackPipelines = append(rollbackPipelines, b.Spec.Pipeline)
 		}
@@ -195,9 +196,11 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 		case "RollbackSucceeded":
 			// One per step of the rollback Bundle: it succeeded when the
 			// step of the environment it rolls back did, or any step when
-			// the Bundle is gone or names no environment.
+			// the Bundle names no environment. Only the rollbacks counted
+			// as triggered count, so succeeded is never more than
+			// triggered: not a Bundle created before the window or deleted.
 			k := bundleKey{ae.Spec.PipelineName, ae.Spec.BundleName}
-			if target := rollbackTarget[k]; target == "" || target == ae.Spec.Environment {
+			if target, ok := triggered[k]; ok && (target == "" || target == ae.Spec.Environment) {
 				rollbackOK[k] = true
 			}
 		}

@@ -24,10 +24,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -180,6 +183,36 @@ func TestGoGitClient_HTTPErrorsEndWithTheReason(t *testing.T) {
 				return c.Push(ctx, work, "origin", "main", "tok", true)
 			},
 			want: "git push origin main: authentication required: Unauthorized"},
+		// go-git reports other codes as "unexpected client error: unexpected
+		// requesting "<url>/info/refs?service=git-upload-pack" status code: 500",
+		// which named the URL a second time and dropped the body.
+		{name: "clone, 500 with a body", status: http.StatusInternalServerError, body: "upstream\n  timed out\n",
+			run: func(t *testing.T, url string) error {
+				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+			},
+			want: "git clone %s: HTTP 500 Internal Server Error: upstream timed out"},
+		{name: "clone, 502 with an empty body", status: http.StatusBadGateway,
+			run: func(t *testing.T, url string) error {
+				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+			},
+			want: "git clone %s: HTTP 502 Bad Gateway"},
+		{name: "clone at a commit, 503", status: http.StatusServiceUnavailable, body: "maintenance\n",
+			run: func(t *testing.T, url string) error {
+				return c.CloneAt(ctx, url, "abc123", filepath.Join(t.TempDir(), "w"), "tok")
+			},
+			want: "git clone %s: HTTP 503 Service Unavailable: maintenance"},
+		{name: "push, 500", status: http.StatusInternalServerError, body: "hook failed\n",
+			run: func(t *testing.T, url string) error {
+				work := filepath.Join(t.TempDir(), "w")
+				require.NoError(t, c.Clone(ctx, "file://"+seedBareRemote(t, map[string]string{"a.txt": "a\n"}), "main", work, ""))
+				repo, err := gogit.PlainOpen(work)
+				require.NoError(t, err)
+				require.NoError(t, repo.DeleteRemote("origin"))
+				_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{Name: "origin", URLs: []string{url}})
+				require.NoError(t, err)
+				return c.Push(ctx, work, "origin", "main", "tok", true)
+			},
+			want: "git push origin main: HTTP 500 Internal Server Error: hook failed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -194,6 +227,223 @@ func TestGoGitClient_HTTPErrorsEndWithTheReason(t *testing.T) {
 			assert.Equal(t, want, err.Error())
 		})
 	}
+}
+
+// TestGoGitClient_HTMLErrorBodyIsOneLine covers a proxy's HTML error page,
+// for a 403 and for a code go-git reports as unexpected (502): the whole
+// response body goes into the error, so the step message
+// spanned many lines and ended in "</html>". The body's whitespace collapses
+// to single spaces and it is cut at 200 characters with "…", so the error is
+// one line that names the URL once and ends with the reason.
+func TestGoGitClient_HTMLErrorBodyIsOneLine(t *testing.T) {
+	page := "<!DOCTYPE html>\r\n<html>\n<head>\n\t<title>403 Forbidden – proxy</title>\n</head>\n<body>\n" +
+		"  <h1>Forbidden</h1>\n  <p>You don't have permission to access this repository through the proxy.</p>\n" +
+		"  <p>Ask your network administrator to allow git traffic to this host.</p>\n  <hr>\n  <address>proxy/2.4</address>\n" +
+		"</body>\n</html>\n"
+	collapsed := []rune(strings.Join(strings.Fields(page), " "))
+	require.Greater(t, len(collapsed), 200, "the page must be longer than the cap")
+	short := "<html>\n<body>\n  Forbidden\n</body>\n</html>\n"
+
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	cases := []struct {
+		name, body, want string // want: %s is the URL
+		status           int
+	}{
+		{name: "long page", body: page, status: http.StatusForbidden,
+			want: "git clone %s: authorization failed: " + strings.TrimSpace(string(collapsed[:200])) + "…"},
+		{name: "short page", body: short, status: http.StatusForbidden,
+			want: "git clone %s: authorization failed: <html> <body> Forbidden </body> </html>"},
+		{name: "long page, 502", body: page, status: http.StatusBadGateway,
+			want: "git clone %s: HTTP 502 Bad Gateway: " + strings.TrimSpace(string(collapsed[:200])) + "…"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(srv.Close)
+			url := srv.URL + "/org/repo.git"
+			err := c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+			require.Error(t, err)
+			assert.Equal(t, fmt.Sprintf(tc.want, url), err.Error())
+			assert.NotContains(t, err.Error(), "\n")
+			assert.Equal(t, 1, strings.Count(err.Error(), url), "the URL is named once: %q", err)
+		})
+	}
+}
+
+// TestGoGitClient_ErrorBodyCredentialsAreRemoved covers an HTTP error body
+// that holds URLs with credentials, such as a proxy page that echoes the URLs
+// it refused. The credentials are removed before the body is cut at 200
+// characters: one URL is before the cut, and the cut runs through the other's
+// credentials ("https://user:t"), so cutting first would keep part of them.
+func TestGoGitClient_ErrorBodyCredentialsAreRemoved(t *testing.T) {
+	lead := "Blocked by the proxy. Sign in at https://user:tok@host.example/login and retry, or use the mirror "
+	lead += strings.Repeat(".", 185-len(lead)) + " " // the second URL starts at character 186
+	body := lead + "https://user:tok@host.example/mirror instead.\n"
+	require.Equal(t, "https://user:t", body[186:200], "the cut must run through the second URL's credentials")
+
+	removed := strings.ReplaceAll(strings.TrimSpace(body), "user:tok@", "")
+	for _, tc := range []struct {
+		status int
+		reason string
+	}{
+		{http.StatusForbidden, "authorization failed"},
+		{http.StatusInternalServerError, "HTTP 500 Internal Server Error"},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(srv.Close)
+			url := srv.URL + "/org/repo.git"
+			err := scm.NewGoGitClient().Clone(context.Background(), url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+			require.Error(t, err)
+
+			assert.Equal(t, fmt.Sprintf("git clone %s: %s: %s…", url, tc.reason, removed[:200]), err.Error())
+			assert.Contains(t, err.Error(), "Sign in at https://host.example/login and retry")
+			assert.True(t, strings.HasSuffix(err.Error(), " https://host.example/mi…"), err.Error())
+			assert.NotContains(t, err.Error(), "user")
+			assert.NotContains(t, err.Error(), "tok@")
+		})
+	}
+}
+
+// TestGoGitClient_ErrorBodyIsRedactedAsText covers HTTP error bodies with no
+// newline. url.Parse takes such a body for a relative URL when no colon comes
+// before its first slash, and gives it back percent-encoded with the
+// credentials kept ("blocked;%20see%20https://user:tok@proxy.example/help"),
+// so the body must be redacted as text, never parsed as a URL.
+func TestGoGitClient_ErrorBodyIsRedactedAsText(t *testing.T) {
+	for _, body := range []struct{ name, body, want string }{
+		{"a sentence ending in a URL",
+			"Access to org/repo is blocked; see https://user:tok@proxy.example/help",
+			"Access to org/repo is blocked; see https://proxy.example/help"},
+		{"a bare URL",
+			"https://user:tok@proxy.example/help",
+			"https://proxy.example/help"},
+		{"two URLs",
+			"Access to org/repo is blocked; see https://user:tok@proxy.example/help or https://bot:tok@mirror.example/org/repo.git",
+			"Access to org/repo is blocked; see https://proxy.example/help or https://mirror.example/org/repo.git"},
+	} {
+		for _, tc := range []struct {
+			status int
+			reason string
+		}{
+			{http.StatusForbidden, "authorization failed"},
+			{http.StatusInternalServerError, "HTTP 500 Internal Server Error"},
+		} {
+			t.Run(body.name+", "+http.StatusText(tc.status), func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(tc.status)
+					_, _ = w.Write([]byte(body.body))
+				}))
+				t.Cleanup(srv.Close)
+				url := srv.URL + "/org/repo.git"
+				err := scm.NewGoGitClient().Clone(context.Background(), url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+				require.Error(t, err)
+
+				assert.Equal(t, fmt.Sprintf("git clone %s: %s: %s", url, tc.reason, body.want), err.Error())
+				assert.NotContains(t, err.Error(), "tok@")
+				assert.NotContains(t, err.Error(), "%20")
+			})
+		}
+	}
+}
+
+// seedUncheckoutable creates a bare repository whose main commit holds a file
+// with a 300-byte name, which no checkout can write (file names are at most
+// 255 bytes), and returns its path and the commit.
+func seedUncheckoutable(t *testing.T) (string, plumbing.Hash) {
+	t.Helper()
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, true)
+	require.NoError(t, err)
+	st := repo.Storer
+	store := func(o interface {
+		Encode(plumbing.EncodedObject) error
+	}) plumbing.Hash {
+		obj := st.NewEncodedObject()
+		require.NoError(t, o.Encode(obj))
+		h, err := st.SetEncodedObject(obj)
+		require.NoError(t, err)
+		return h
+	}
+	blob := st.NewEncodedObject()
+	blob.SetType(plumbing.BlobObject)
+	w, err := blob.Writer()
+	require.NoError(t, err)
+	_, err = w.Write([]byte("x\n"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	blobHash, err := st.SetEncodedObject(blob)
+	require.NoError(t, err)
+	tree := store(&object.Tree{Entries: []object.TreeEntry{
+		{Name: strings.Repeat("n", 300), Mode: filemode.Regular, Hash: blobHash}}})
+	sig := object.Signature{Name: "t", Email: "t@example.com", When: time.Now()}
+	commit := store(&object.Commit{Author: sig, Committer: sig, Message: "seed", TreeHash: tree})
+	main := plumbing.NewBranchReferenceName("main")
+	require.NoError(t, st.SetReference(plumbing.NewHashReference(main, commit)))
+	require.NoError(t, st.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, main)))
+	return dir, commit
+}
+
+// TestGoGitClient_LocalErrorsNameTheRepository verifies the errors of the
+// local steps of a clone and a commit name the repository URL once, without
+// credentials, as "resolve commit <sha> in <url>" does: the git-clone and
+// git-commit steps do not add it.
+func TestGoGitClient_LocalErrorsNameTheRepository(t *testing.T) {
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	const secretURL = "https://user:ghp_SECRET@example.com/org/repo.git"
+	const shown = "https://example.com/org/repo.git"
+	// underFile returns a directory path whose parent is a regular file, so
+	// it cannot be created.
+	underFile := func(t *testing.T) string {
+		f := filepath.Join(t.TempDir(), "file")
+		require.NoError(t, os.WriteFile(f, nil, 0o600))
+		return filepath.Join(f, "w")
+	}
+
+	t.Run("clone, create clone dir", func(t *testing.T) {
+		err := c.Clone(ctx, secretURL, "main", underFile(t), "")
+		require.Error(t, err)
+		assert.True(t, strings.HasPrefix(err.Error(), "create clone dir for "+shown+": "), err.Error())
+		assert.Equal(t, 1, strings.Count(err.Error(), shown), err.Error())
+		assert.NotContains(t, err.Error(), "ghp_SECRET")
+	})
+	t.Run("clone at a commit, create clone dir", func(t *testing.T) {
+		err := c.CloneAt(ctx, secretURL, "abc123", underFile(t), "")
+		require.Error(t, err)
+		assert.True(t, strings.HasPrefix(err.Error(), "create clone dir for "+shown+": "), err.Error())
+		assert.Equal(t, 1, strings.Count(err.Error(), shown), err.Error())
+		assert.NotContains(t, err.Error(), "ghp_SECRET")
+	})
+	t.Run("clone at a commit, checkout", func(t *testing.T) {
+		remote, commit := seedUncheckoutable(t)
+		url := "file://" + remote
+		err := c.CloneAt(ctx, url, commit.String(), filepath.Join(t.TempDir(), "w"), "")
+		require.Error(t, err)
+		assert.True(t, strings.HasPrefix(err.Error(), "checkout "+commit.String()+" in "+url+": "), err.Error())
+		assert.Equal(t, 1, strings.Count(err.Error(), url), err.Error())
+	})
+	t.Run("commit, get worktree", func(t *testing.T) {
+		dir := t.TempDir()
+		repo, err := gogit.PlainInit(dir, true) // bare: no worktree
+		require.NoError(t, err)
+		_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{Name: "origin", URLs: []string{secretURL}})
+		require.NoError(t, err)
+
+		err = c.CommitAll(ctx, dir, "m", "t", "t@example.com")
+		require.Error(t, err)
+		assert.True(t, strings.HasPrefix(err.Error(), "get worktree of "+shown+": "), err.Error())
+		assert.Equal(t, 1, strings.Count(err.Error(), shown), err.Error())
+		assert.NotContains(t, err.Error(), "ghp_SECRET")
+	})
 }
 
 // TestHTTPAuthUsername verifies the push/clone username per provider (C06-scm-health-31).

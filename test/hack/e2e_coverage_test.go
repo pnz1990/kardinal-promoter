@@ -4,7 +4,13 @@
 package hack
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -82,5 +88,45 @@ func TestE2ECoverage(t *testing.T) {
 	sort.Strings(tiers)
 	for _, tier := range tiers {
 		t.Logf("%s: %d of %d rows covered", tier, counts[tier][0], counts[tier][1])
+	}
+}
+
+// rollbackRef is a source ref that names lines: path:N or path:N-M.
+var rollbackRef = regexp.MustCompile(`^([^:\s]+):([0-9]+)(?:-([0-9]+))?$`)
+
+// TestE2ECoverage_RollbackRefsNameLines: every source ref of a covered
+// rollback row names the lines that document or implement the row, and those
+// lines exist, so a reader of the row finds them without reading the file.
+func TestE2ECoverage_RollbackRefsNameLines(t *testing.T) {
+	root := repoRoot(t)
+	rows, err := coverage.Rows(root)
+	require.NoError(t, err)
+	lineCount := map[string]int{}
+	for _, r := range rows {
+		if r.Area != "rollback" || r.Status != "covered" {
+			continue
+		}
+		for _, ref := range strings.Split(r.Source, "; ") {
+			m := rollbackRef.FindStringSubmatch(ref)
+			if !assert.NotNil(t, m, "%s: ref %q names no lines; write path:N or path:N-M", r.ID, ref) {
+				continue
+			}
+			n, ok := lineCount[m[1]]
+			if !ok {
+				b, err := os.ReadFile(filepath.Join(root, m[1]))
+				if !assert.NoError(t, err, "%s: ref %q", r.ID, ref) {
+					continue
+				}
+				n = bytes.Count(b, []byte("\n"))
+				lineCount[m[1]] = n
+			}
+			first, _ := strconv.Atoi(m[2])
+			last := first
+			if m[3] != "" {
+				last, _ = strconv.Atoi(m[3])
+			}
+			assert.True(t, first >= 1 && first <= last && last <= n,
+				"%s: ref %q is outside %s, which has %d lines", r.ID, ref, m[1], n)
+		}
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -78,11 +79,11 @@ func httpAuth(remoteURL, token string) transport.AuthMethod {
 
 // Clone performs a shallow (depth=1) clone of branch into dir, authenticating
 // with token over HTTP(S) when it is set. dir must not already contain a repo.
-// A clone error reads "git clone <url>: <reason>"; errors never contain URL
-// credentials.
+// A clone error reads "git clone <url>: <reason>". Every error names the URL
+// once and never contains URL credentials.
 func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create clone dir: %w", err)
+		return fmt.Errorf("create clone dir for %s: %w", RedactURL(url), err)
 	}
 
 	opts := &gogit.CloneOptions{
@@ -105,7 +106,7 @@ func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string)
 // to read the content of a specific commit, e.g. the source of a config Bundle.
 func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir, token string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create clone dir: %w", err)
+		return fmt.Errorf("create clone dir for %s: %w", RedactURL(url), err)
 	}
 	repo, err := gogit.PlainCloneContext(ctx, dir, false, &gogit.CloneOptions{
 		URL:        url,
@@ -121,10 +122,10 @@ func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir, token st
 	}
 	wt, err := repo.Worktree()
 	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
+		return fmt.Errorf("get worktree of %s: %w", RedactURL(url), err)
 	}
 	if err := wt.Checkout(&gogit.CheckoutOptions{Hash: *hash, Force: true}); err != nil {
-		return fmt.Errorf("checkout %s: %w", commitSHA, err)
+		return fmt.Errorf("checkout %s in %s: %w", commitSHA, RedactURL(url), err)
 	}
 	return nil
 }
@@ -139,7 +140,7 @@ func (c *GoGitClient) CommitAll(ctx context.Context, dir, message, authorName, a
 	}
 	wt, err := repo.Worktree()
 	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
+		return fmt.Errorf("get worktree of %s: %w", repoName(repo, dir), err)
 	}
 
 	// Stage all changes, including deletions (git add -A).
@@ -229,13 +230,66 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 	return nil
 }
 
-// gitErrorText returns the text of a go-git error without URL credentials and
-// without what go-git leaves at its end when it appends an HTTP response body:
-// the body's trailing newline ("authentication required: Unauthorized\n"),
-// or ": " when the body is empty.
+// repoName names the repository repo, opened at dir, in an error: its origin
+// URL without credentials, or dir when it has no origin.
+func repoName(repo *gogit.Repository, dir string) string {
+	if rem, err := repo.Remote("origin"); err == nil && len(rem.Config().URLs) > 0 {
+		return RedactURL(rem.Config().URLs[0])
+	}
+	return dir
+}
+
+// maxErrorBody is how many characters of an HTTP response body a git error
+// keeps.
+const maxErrorBody = 200
+
+// httpBodyErrors are the go-git errors that end with the HTTP response body.
+var httpBodyErrors = []error{
+	transport.ErrAuthenticationRequired, transport.ErrAuthorizationFailed, transport.ErrRepositoryNotFound,
+}
+
+// gitErrorText returns the text of a go-git error on one line, without URL
+// credentials. An HTTP error ends with the status and the response body, if
+// any. go-git appends the body to its 401, 403 and 404 errors
+// ("authentication required: Unauthorized\n", or ": " when the body is
+// empty). It reports other codes as "unexpected client error: unexpected
+// requesting "<url>" status code: 500", without the body; the caller's text
+// already names the URL, so that part becomes "HTTP 500 Internal Server
+// Error" and the body follows it. Runs of whitespace become one space, and a
+// body longer than maxErrorBody characters, such as a proxy's HTML error
+// page, is cut with "…". Credentials are removed before the cut, so a URL the
+// cut runs through keeps none of them.
 func gitErrorText(err error) string {
-	text := strings.TrimSpace(RedactURL(err.Error()))
-	return strings.TrimSpace(strings.TrimSuffix(text, ":"))
+	head, body := err.Error(), ""
+	var unexpected *plumbing.UnexpectedError
+	var httpErr *gogithttp.Err
+	if errors.As(err, &unexpected) && errors.As(unexpected.Err, &httpErr) && httpErr.Response != nil {
+		code := httpErr.Response.StatusCode
+		status := strings.TrimSpace(fmt.Sprintf("HTTP %d %s", code, http.StatusText(code)))
+		head, body = strings.Replace(head, unexpected.Error(), status, 1), httpErr.Reason
+	} else {
+		for _, bodyErr := range httpBodyErrors {
+			prefix := bodyErr.Error() + ": "
+			if i := strings.Index(head, prefix); i >= 0 && errors.Is(err, bodyErr) {
+				head, body = head[:i+len(bodyErr.Error())], head[i+len(prefix):]
+				break
+			}
+		}
+	}
+	head, body = oneLine(head), oneLine(body)
+	if body == "" {
+		return strings.TrimSpace(strings.TrimSuffix(head, ":"))
+	}
+	if runes := []rune(body); len(runes) > maxErrorBody {
+		body = strings.TrimSpace(string(runes[:maxErrorBody])) + "…"
+	}
+	return head + ": " + body
+}
+
+// oneLine returns s without URL credentials, with each run of whitespace as
+// one space.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(RedactText(s)), " ")
 }
 
 // remoteBranchHash returns the hash the remote advertises for ref.

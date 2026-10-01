@@ -25,7 +25,10 @@ import (
 // deployed Bundle changed: a config Bundle cannot deploy the images a mixed
 // Bundle changed, an image Bundle cannot deploy the config commit it changed.
 // Without --to, a mixed Bundle goes back to the newest earlier images and
-// config commit (B61), and an automatic rollback plans what a manual one does.
+// config commit (B61), an image or config Bundle to the newest earlier images
+// or config commit, also from a mixed Bundle (B66), and an automatic rollback,
+// asked for as RollbackPolicy and onHealthFailure=rollback ask (the failing
+// Bundle, each with its own rollback Bundle name), plans what a manual one does.
 func TestPlanRollback_BundleTypes(t *testing.T) {
 	// withImages adds images "repo:tag" under ghcr.io/x/ to b.
 	withImages := func(b *v1alpha1.Bundle, refs ...string) *v1alpha1.Bundle {
@@ -235,6 +238,24 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 			wantTarget: "v1", wantType: "image", wantImages: []string{"a:2", "b:1"},
 		},
 		{
+			// The only Bundle that names b, v1, was rolled back from, so the
+			// history does not know which b the environment runs: deploying
+			// b:1 counts as a change, not as the deployed image.
+			name: "image to image with a repository the history has no deployed version of is not a conflict",
+			objs: []client.Object{
+				img("v1", 10, "a:2", "b:1"), verified("v1", 10),
+				func() *v1alpha1.Bundle {
+					b := img("rb-v1", 15, "a:2")
+					b.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"}
+					b.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "v1"}
+					b.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
+					return b
+				}(),
+				img("v2", 20, "a:2"), deployed("v2", 20)},
+			to:         "v1",
+			wantTarget: "v1", wantType: "image", wantImages: []string{"a:2", "b:1"},
+		},
+		{
 			name: "without --to a candidate that changes nothing is skipped",
 			objs: []client.Object{
 				img("v0", 5, "a:1"), verified("v0", 5), img("v1", 10, "a:2", "b:1"), verified("v1", 10),
@@ -295,24 +316,94 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 			wantErr: lifecycle.ErrConflict,
 			errHas:  []string{"no Bundle other than m2 with a config commit of https://g/cfg was Verified in prod"},
 		},
+
+		// Deployed image or config Bundle, without --to (B66): an image Bundle
+		// goes back to the newest earlier images, from an image or mixed
+		// Bundle, and a config Bundle to the newest earlier config commit, from
+		// a config or mixed Bundle. A mixed target gives only what the
+		// deployed type deploys, so the rest stays as deployed. It used to
+		// consider only Bundles of the deployed type, so it skipped a newer
+		// mixed Bundle for an older one, or found nothing.
+		{
+			name: "without --to an image Bundle takes the images of a newer mixed Bundle",
+			objs: []client.Object{
+				img("i0", 5, "a:0"), verified("i0", 5), mix("m1", 10, "c1", "a:1"), verified("m1", 10),
+				img("i2", 20, "a:2"), deployed("i2", 20)},
+			wantTarget: "m1", wantType: "image", wantImages: []string{"a:1"},
+		},
+		{
+			name: "without --to an image Bundle with no earlier image Bundle goes back to a mixed one",
+			objs: []client.Object{
+				mix("m1", 10, "c1", "a:1"), verified("m1", 10), img("i2", 20, "a:2"), deployed("i2", 20)},
+			wantTarget: "m1", wantType: "image", wantImages: []string{"a:1"},
+		},
+		{
+			name: "without --to an image rollback to a mixed Bundle fills an image the target does not name",
+			objs: []client.Object{
+				img("i0", 5, "a:0", "b:0"), verified("i0", 5), mix("m1", 10, "c1", "a:1"), verified("m1", 10),
+				img("i2", 20, "a:2", "b:2"), deployed("i2", 20)},
+			wantTarget: "m1", wantType: "image", wantImages: []string{"a:1", "b:0"},
+		},
+		{
+			name: "without --to an image rollback compares only images: a mixed Bundle with the deployed images is skipped",
+			objs: []client.Object{
+				img("i0", 0, "a:0"), verified("i0", 0), mix("m0", 5, "c0", "a:1"), verified("m0", 5),
+				mix("m1", 10, "c1", "a:3"), verified("m1", 10), cfg("k2", 15, "c2"), verified("k2", 15),
+				img("i3", 20, "a:3"), deployed("i3", 20)},
+			wantTarget: "m0", wantType: "image", wantImages: []string{"a:1"},
+		},
+		{
+			name: "without --to a config Bundle takes the commit of a newer mixed Bundle",
+			objs: []client.Object{
+				cfg("k0", 5, "c0"), verified("k0", 5), mix("m1", 10, "c1", "a:1"), verified("m1", 10),
+				cfg("k2", 20, "c2"), deployed("k2", 20)},
+			wantTarget: "m1", wantType: "config", wantConfig: "c1",
+		},
+		{
+			name: "without --to a config rollback compares only the commit: a mixed Bundle with the deployed commit is skipped",
+			objs: []client.Object{
+				cfg("k0", 0, "c0"), verified("k0", 0), mix("m0", 5, "c1", "a:0"), verified("m0", 5),
+				mix("m1", 10, "c3", "a:1"), verified("m1", 10), img("i2", 15, "a:2"), verified("i2", 15),
+				cfg("k3", 20, "c3"), deployed("k3", 20)},
+			wantTarget: "m0", wantType: "config", wantConfig: "c1",
+		},
 	}
-	for _, tc := range tests {
-		// Without --to, an automatic rollback (RollbackPolicy,
-		// onHealthFailure=rollback) plans the same rollback.
-		modes := []bool{false}
-		if tc.to == "" {
-			modes = append(modes, true)
-		}
-		for _, automatic := range modes {
-			name := tc.name
-			if automatic {
-				name += " (automatic)"
+	// failing names the Bundle whose step is health checking in prod: the
+	// Bundle an automatic rollback rolls back.
+	failing := func(t *testing.T, objs []client.Object) string {
+		t.Helper()
+		var names []string
+		for _, o := range objs {
+			if s, ok := o.(*v1alpha1.PromotionStep); ok && s.Status.State == "HealthChecking" {
+				names = append(names, s.Spec.BundleName)
 			}
-			t.Run(name, func(t *testing.T) {
+		}
+		require.Len(t, names, 1, "one deployed Bundle")
+		return names[0]
+	}
+	// Without --to, an automatic rollback plans the same rollback. Each
+	// automatic caller names its rollback Bundle with its own source:
+	// RollbackPolicy "policy", onHealthFailure=rollback "alarm".
+	type mode struct{ name, source string }
+	for _, tc := range tests {
+		modes := []mode{{}}
+		if tc.to == "" {
+			modes = append(modes, mode{" (RollbackPolicy)", "policy"}, mode{" (onHealthFailure)", "alarm"})
+		}
+		for _, m := range modes {
+			automatic := m.source != ""
+			t.Run(tc.name+m.name, func(t *testing.T) {
 				c := newClient(t, append(tc.objs, pipeline("app", "test", "prod"))...)
-				plan, err := lifecycle.PlanRollback(context.Background(), c, lifecycle.RollbackRequest{
-					Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: tc.to, Automatic: automatic,
-				})
+				req := lifecycle.RollbackRequest{Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: tc.to}
+				from := ""
+				if automatic {
+					// As the automatic callers ask: the failing Bundle, the
+					// caller's fixed name and the reason.
+					from = failing(t, tc.objs)
+					req.FromBundle, req.Automatic = from, true
+					req.Name, req.Reason = lifecycle.AutoRollbackName(from, m.source), "AutoRollback"
+				}
+				plan, err := lifecycle.PlanRollback(context.Background(), c, req)
 				if tc.wantErr != nil {
 					require.ErrorIs(t, err, tc.wantErr)
 					for _, s := range tc.errHas {
@@ -321,6 +412,10 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 					return
 				}
 				require.NoError(t, err)
+				if automatic {
+					assert.Equal(t, from, plan.CurrentName)
+					assert.Equal(t, lifecycle.AutoRollbackName(from, m.source), plan.Bundle.Name)
+				}
 				assert.Equal(t, tc.wantTarget, plan.Target.Name)
 				assert.Equal(t, tc.wantTarget, plan.Bundle.Spec.Provenance.RollbackOf)
 				assert.Equal(t, tc.wantType, plan.Bundle.Spec.Type)

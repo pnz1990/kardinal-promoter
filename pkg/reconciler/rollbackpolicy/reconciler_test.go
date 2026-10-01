@@ -595,28 +595,38 @@ func policyRollbackBundle(name string) *v1alpha1.Bundle {
 // TestReconciler_RefusalClearsBelowTheThreshold covers B49: RollbackRefused
 // stayed True after the failures dropped below the threshold, because only a
 // rollback attempt wrote it. It is False again, with reason BelowThreshold,
-// whether shouldRollback is still true or was already cleared.
+// whether shouldRollback is still true or was already cleared. The message
+// says "1 consecutive health failure", and "failures" for any other count.
 func TestReconciler_RefusalClearsBelowTheThreshold(t *testing.T) {
-	for _, shouldRollback := range []bool{true, false} {
-		t.Run(fmt.Sprintf("shouldRollback %v", shouldRollback), func(t *testing.T) {
-			rp := makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3)
-			rp.Status.ShouldRollback = shouldRollback
-			rp.Status.Conditions = []metav1.Condition{{
-				Type: rollbackpolicy.ConditionRollbackRefused, Status: metav1.ConditionTrue,
-				Reason: rollbackpolicy.ReasonNoSafeTarget, Message: "nothing to roll back to",
-				LastTransitionTime: metav1.NewTime(fixedNow.Add(-time.Hour)),
-			}}
-			updated, result, err := reconcileOnce(t, rp,
-				makePromotionStep("step-1", "nginx-demo", "prod", 1), makeBundle("bundle-1", "nginx-demo"))
-			require.NoError(t, err)
-			assert.Zero(t, result.RequeueAfter)
-			assert.False(t, updated.Status.ShouldRollback)
-			assert.Nil(t, updated.Status.RollbackBundleName)
-			cond := meta.FindStatusCondition(updated.Status.Conditions, rollbackpolicy.ConditionRollbackRefused)
-			require.NotNil(t, cond)
-			assert.Equal(t, metav1.ConditionFalse, cond.Status)
-			assert.Equal(t, rollbackpolicy.ReasonBelowThreshold, cond.Reason)
-			assert.Equal(t, "1 consecutive health failures, below the threshold of 3", cond.Message)
-		})
+	for _, tc := range []struct {
+		failures int
+		want     string
+	}{
+		{failures: 0, want: "0 consecutive health failures, below the threshold of 3"},
+		{failures: 1, want: "1 consecutive health failure, below the threshold of 3"},
+		{failures: 2, want: "2 consecutive health failures, below the threshold of 3"},
+	} {
+		for _, shouldRollback := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%d failures, shouldRollback %v", tc.failures, shouldRollback), func(t *testing.T) {
+				rp := makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3)
+				rp.Status.ShouldRollback = shouldRollback
+				rp.Status.Conditions = []metav1.Condition{{
+					Type: rollbackpolicy.ConditionRollbackRefused, Status: metav1.ConditionTrue,
+					Reason: rollbackpolicy.ReasonNoSafeTarget, Message: "nothing to roll back to",
+					LastTransitionTime: metav1.NewTime(fixedNow.Add(-time.Hour)),
+				}}
+				updated, result, err := reconcileOnce(t, rp,
+					makePromotionStep("step-1", "nginx-demo", "prod", tc.failures), makeBundle("bundle-1", "nginx-demo"))
+				require.NoError(t, err)
+				assert.Zero(t, result.RequeueAfter)
+				assert.False(t, updated.Status.ShouldRollback)
+				assert.Nil(t, updated.Status.RollbackBundleName)
+				cond := meta.FindStatusCondition(updated.Status.Conditions, rollbackpolicy.ConditionRollbackRefused)
+				require.NotNil(t, cond)
+				assert.Equal(t, metav1.ConditionFalse, cond.Status)
+				assert.Equal(t, rollbackpolicy.ReasonBelowThreshold, cond.Reason)
+				assert.Equal(t, tc.want, cond.Message)
+			})
+		}
 	}
 }

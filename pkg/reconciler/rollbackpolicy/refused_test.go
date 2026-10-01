@@ -5,6 +5,7 @@ package rollbackpolicy_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -158,4 +159,34 @@ func TestRollbackPolicy_RefusalClearsOnSuccess(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, cond.Status)
 	assert.Equal(t, rollbackpolicy.ReasonRollbackCreated, cond.Reason)
 	assert.Empty(t, drain(rec), "a successful rollback emits no RollbackRefused Event")
+}
+
+// TestRollbackPolicy_RefusalEventCountsFailures: the RollbackRefused Event
+// says "1 consecutive health failure" with failureThreshold 1, and "failures"
+// for any other count.
+func TestRollbackPolicy_RefusalEventCountsFailures(t *testing.T) {
+	for _, tc := range []struct {
+		threshold int
+		want      string
+	}{
+		{threshold: 1, want: "no rollback Bundle created for bundle-1 after 1 consecutive health failure: "},
+		{threshold: 2, want: "no rollback Bundle created for bundle-1 after 2 consecutive health failures: "},
+	} {
+		t.Run(fmt.Sprintf("threshold %d", tc.threshold), func(t *testing.T) {
+			failing := makePromotionStep("a-bundle-1-prod", "nginx-demo", "prod", tc.threshold)
+			failing.Labels["kardinal.io/bundle"] = "bundle-1"
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithObjects(makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", tc.threshold), failing,
+					rtBundle("bundle-1", "1.25.0", 30), rtPipeline()).
+				WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).Build()
+			rec := events.NewFakeRecorder(10)
+			r := &rollbackpolicy.Reconciler{Client: c, Recorder: rec, NowFn: func() time.Time { return fixedNow }}
+
+			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}})
+			require.NoError(t, err)
+			evs := drain(rec)
+			require.Len(t, evs, 1)
+			assert.Contains(t, evs[0], tc.want)
+		})
+	}
 }

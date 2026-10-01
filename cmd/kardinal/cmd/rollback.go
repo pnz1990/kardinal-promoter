@@ -58,8 +58,10 @@ environment upstream of the target first.
 
 Config and mixed Bundles get back their config commit the same way. Without
 --to, a mixed Bundle goes back to the newest earlier images and config commit,
-whichever Bundles deployed them; --to a Bundle whose type cannot deploy what the
-deployed Bundle changed is refused. See docs/rollback.md.`,
+whichever Bundles deployed them. An image or config Bundle goes back to the
+newest earlier images or config commit, also when a mixed Bundle deployed them,
+and only those: the rest stays as deployed. --to a Bundle whose type cannot
+deploy what the deployed Bundle changed is refused. See docs/rollback.md.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()

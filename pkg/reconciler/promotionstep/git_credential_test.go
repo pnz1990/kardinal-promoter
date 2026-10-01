@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,10 +44,14 @@ import (
 // error of every push instead, as when the remote is down.
 type authGit struct {
 	failPush bool
+	cloneErr error
 	pushErr  error
 }
 
 func (g *authGit) Clone(_ context.Context, url, _, _, token string) error {
+	if g.cloneErr != nil {
+		return g.cloneErr
+	}
 	if token == "" && !g.failPush {
 		return fmt.Errorf("git clone %s: authentication required: Unauthorized", url)
 	}
@@ -239,6 +244,88 @@ func TestGitCredentialRetries_LeaveTheRetryLimit(t *testing.T) {
 	}
 }
 
+// TestGitCredentialRetries_ResetOnProgress covers the B48 reset on progress:
+// a step that gets past the step that retried starts the next one with no
+// retries of either kind. Here the clone failed once on the network and then
+// was refused while git had no credentials, then the repository could be
+// cloned without them, and the push is refused: its first retry is counted as
+// the first, and backs off 10s.
+func TestGitCredentialRetries_ResetOnProgress(t *testing.T) {
+	ps := makeStep("step-cred", "nginx-demo", "b1", "test")
+	ps.Status.State = "Promoting"
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		WithObjects(ps, makePipeline("nginx-demo"), makeBundle("b1", "nginx-demo")).Build()
+	git := &authGit{} // the clone needs a token
+	workDir := filepath.Join(t.TempDir(), "w")
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
+		Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir }}
+
+	git.cloneErr = errors.New("git clone https://github.com/test/repo: dial tcp: connection refused")
+	reconcileStep(t, r, "step-cred")
+	git.cloneErr = nil
+	for range 3 {
+		reconcileStep(t, r, "step-cred")
+	}
+	got := getStep(t, c, "step-cred")
+	require.Equal(t, 1, got.Status.RetryCount, got.Status.Message)
+	require.Equal(t, 3, got.Status.GitCredentialRetries, got.Status.Message)
+	require.Contains(t, got.Status.Message, "step git-clone: ")
+
+	git.failPush = true // the clone needs no token now; the push still does
+	res, err := r.Reconcile(context.Background(), reqFor("step-cred"))
+	require.NoError(t, err)
+	got = getStep(t, c, "step-cred")
+	require.Contains(t, got.Status.Message, "step git-push: ")
+	assert.Equal(t, 1, got.Status.GitCredentialRetries, got.Status.Message)
+	assert.Zero(t, got.Status.RetryCount)
+	assert.Contains(t, got.Status.Message, "retrying in 10s (1, no limit while git has no credentials)")
+	assert.Equal(t, 10*time.Second, res.RequeueAfter)
+}
+
+// TestGitCredentialRetries_BackOffTogether covers the B48 backoff: the delay
+// grows with the retries of both kinds, so a network error after credential
+// retries, with the Secret still missing, does not start the backoff over,
+// and neither does a credential retry after it.
+func TestGitCredentialRetries_BackOffTogether(t *testing.T) {
+	pipeline := makePipeline("nginx-demo")
+	pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-creds"}
+	ps := makeStep("step-cred", "nginx-demo", "b1", "test")
+	ps.Status.State = "Promoting"
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		WithObjects(ps, pipeline, makeBundle("b1", "nginx-demo")).Build()
+	git := &authGit{failPush: true}
+	workDir := filepath.Join(t.TempDir(), "w")
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
+		Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir }}
+
+	steps := []struct {
+		pushErr   error
+		wantRetry int
+		wantCred  int
+		wantDelay time.Duration
+		wantCount string
+	}{
+		{wantCred: 1, wantDelay: 10 * time.Second, wantCount: "(1, no limit while git has no credentials)"},
+		{wantCred: 2, wantDelay: 20 * time.Second, wantCount: "(2, no limit while git has no credentials)"},
+		{pushErr: errors.New("git push origin main: dial tcp: connection refused"),
+			wantRetry: 1, wantCred: 2, wantDelay: 40 * time.Second, wantCount: "(1/5)"},
+		{wantRetry: 1, wantCred: 3, wantDelay: 80 * time.Second, wantCount: "(3, no limit while git has no credentials)"},
+	}
+	for i, s := range steps {
+		git.pushErr = s.pushErr
+		res, err := r.Reconcile(context.Background(), reqFor("step-cred"))
+		require.NoError(t, err)
+		got := getStep(t, c, "step-cred")
+		require.Equal(t, "Promoting", got.Status.State, "reconcile %d: %s", i+1, got.Status.Message)
+		assert.Equal(t, s.wantRetry, got.Status.RetryCount, "reconcile %d", i+1)
+		assert.Equal(t, s.wantCred, got.Status.GitCredentialRetries, "reconcile %d", i+1)
+		assert.Equal(t, s.wantDelay, res.RequeueAfter, "reconcile %d", i+1)
+		assert.Contains(t, got.Status.Message, fmt.Sprintf("retrying in %s %s", s.wantDelay, s.wantCount), "reconcile %d", i+1)
+	}
+}
+
 // TestGitCredentialUnreadable_KeepsTheRetryLimit: a git Secret the controller
 // cannot read (Forbidden, a timeout) is not fixed by creating it, so its step
 // gets 5 retries, not unlimited ones. The message still names the Secret and
@@ -302,7 +389,7 @@ func TestGitCredentialUnreadable_KeepsTheRetryLimit(t *testing.T) {
 // TestGitCredentialPresent_KeepsTheRetryLimit: a git failure gets no
 // credential note and still fails after 5 retries when git has a token, needs
 // none (ssh, a password in the URL), or failed for a reason other than
-// credentials.
+// credentials, even when the response body uses go-git's words for one.
 func TestGitCredentialPresent_KeepsTheRetryLimit(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -315,6 +402,21 @@ func TestGitCredentialPresent_KeepsTheRetryLimit(t *testing.T) {
 		{name: "ssh remote without secretRef", url: "ssh://git@github.com/test/repo.git"},
 		{name: "password in the URL", url: "https://bot:pw@git.example/test/repo"},
 		{name: "no secretRef, the remote is down", url: "https://github.com/test/repo"},
+		// The git client puts the body of an HTTP error other than 401, 403
+		// and 404 after its status; a body that quotes go-git's words is not
+		// the remote refusing git's credentials.
+		{name: "no secretRef, a proxy page says authentication required", url: "https://github.com/test/repo",
+			cloneErr: "git clone https://github.com/test/repo: HTTP 407 Proxy Authentication Required: Proxy authentication required"},
+		{name: "no secretRef, a 500 page says authorization failed", url: "https://github.com/test/repo",
+			cloneErr: "git clone https://github.com/test/repo: HTTP 500 Internal Server Error: upstream authorization failed"},
+		// A body that starts with go-git's words follows ": " too; only
+		// right after "git clone <url>: " are they go-git's.
+		{name: "no secretRef, a 404 page starts with authentication required", url: "https://github.com/test/repo",
+			cloneErr: "git clone https://github.com/test/repo: repository not found: authentication required to see this repository"},
+		{name: "no secretRef, a proxy page starts with authentication required", url: "https://github.com/test/repo",
+			cloneErr: "git clone https://github.com/test/repo: HTTP 407 Proxy Authentication Required: authentication required by the proxy"},
+		{name: "no secretRef, a 503 page starts with authorization failed", url: "https://github.com/test/repo",
+			cloneErr: "git clone https://github.com/test/repo: HTTP 503 Service Unavailable: authorization failed for the upstream"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

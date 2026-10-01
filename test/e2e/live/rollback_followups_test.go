@@ -465,3 +465,62 @@ func TestRollback_MixedBundleNewestSources(t *testing.T) {
 	a.waitConfigRunning(t, "test")
 	assertEnvAt(t, a, "test", fixtures.V3)
 }
+
+// TestRollback_ImageBundleNewestImages checks that a rollback of an image
+// Bundle with no --to goes back to the newest earlier images, also when a
+// mixed Bundle deployed them, and leaves the config commit as deployed. In
+// env test:
+//
+//   - I0 (image V2), M1 (mixed: image V3 and config commit c1), then I2
+//     (image V1).
+//   - `kardinal rollback` with no --to rolls I2 back to M1's image V3, in an
+//     image rollback Bundle of M1 with no config commit: I2 did not change
+//     the config, so c1 stays deployed. It used to consider only image
+//     Bundles, so it went back to I0 and deployed V2, skipping M1.
+//
+// The automatic rollbacks (RollbackPolicy, onHealthFailure=rollback) use the
+// same planner, lifecycle.PlanRollback; its unit tests run each case both ways.
+//
+// Covers RB-MIXED-03.
+func TestRollback_ImageBundleNewestImages(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	c := e.CLI(t)
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(nil))
+
+	i0 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, i0, "test", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "test", fixtures.V2)
+	cfg, c1 := a.configRepo(t, "test")
+	m1 := e.CreateBundle(t, a.ns, pipelineName, "--type", "mixed", "--image", imageV3,
+		"--config-commit", c1, "--config-repo", cfg.CloneURL)
+	e.WaitStepState(t, a.ns, pipelineName, m1, "test", "Verified", promoteTimeout)
+	a.waitConfigRunning(t, "test")
+	assertEnvAt(t, a, "test", fixtures.V3)
+	i2 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV1)
+	e.WaitStepState(t, a.ns, pipelineName, i2, "test", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "test", fixtures.V1)
+	require.True(t, a.configDeployed(t, "test"), "I2 keeps c1")
+
+	r := c.Run(a.ns, "rollback", pipelineName, "--env", "test")
+	require.Equal(t, 0, r.Code, "a rollback of image Bundle %s:\n%s", i2, r.Output())
+	assert.Contains(t, r.Stdout, "from "+i2+" to "+m1+" (", "the target is M1, the newest Bundle with images before I2")
+	rb := rfRollbackBundle(t, e, a.ns, r)
+	assert.Equal(t, "image", rb.Spec.Type, "the rollback deploys only images")
+	require.Len(t, rb.Spec.Images, 1)
+	assert.Equal(t, fixtures.Image, rb.Spec.Images[0].Repository)
+	assert.Equal(t, fixtures.V3, rb.Spec.Images[0].Tag, "M1's image, the newest before I2, not I0's")
+	assert.Nil(t, rb.Spec.ConfigRef, "I2 did not change the config commit, so the rollback carries none")
+	require.NotNil(t, rb.Spec.Provenance)
+	assert.Equal(t, m1, rb.Spec.Provenance.RollbackOf)
+	assert.Equal(t, i2, rb.Annotations["kardinal.io/rollback-from"])
+
+	ps := e.WaitStepState(t, a.ns, pipelineName, rb.Name, "test", "Verified", promoteTimeout)
+	for _, s := range ps.Status.Steps {
+		assert.NotEqual(t, "config-merge", s.Name, "an image rollback merges no config commit")
+	}
+	assert.True(t, a.configDeployed(t, "test"), "c1 stays deployed")
+	a.waitConfigRunning(t, "test")
+	assertEnvAt(t, a, "test", fixtures.V3)
+}

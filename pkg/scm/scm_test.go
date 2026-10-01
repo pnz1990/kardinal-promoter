@@ -961,7 +961,7 @@ func TestRenderPRBody_RollbackNote(t *testing.T) {
 				d.RollbackFrom, d.RollbackFromVersion, d.RolledBackBy = "demo-gitea-x7k2p", "sha-a000002", "rrroizma"
 			},
 			wantNote: "## ROLLBACK: demo-gitea-rollback-9c5q2 -> demo-gitea/prod\n\n" +
-				"> **This is a rollback PR.** It reverts environment prod to the state of bundle demo-gitea-bx5l8.\n" +
+				"> **This is a rollback PR.** It restores the images of bundle demo-gitea-bx5l8 in environment prod.\n" +
 				"> Rolling back FROM: demo-gitea-x7k2p (sha-a000002)\n" +
 				"> Rolling back TO: demo-gitea-bx5l8 (sha-a000001)\n" +
 				"> Rolled back by: rrroizma",
@@ -972,7 +972,7 @@ func TestRenderPRBody_RollbackNote(t *testing.T) {
 				d.RollbackFrom, d.RolledBackBy = "demo-gitea-x7k2p", "mallory\n## Approved"
 			},
 			wantNote: "## ROLLBACK: demo-gitea-rollback-9c5q2 -> demo-gitea/prod\n\n" +
-				"> **This is a rollback PR.** It reverts environment prod to the state of bundle demo-gitea-bx5l8.\n" +
+				"> **This is a rollback PR.** It restores the images of bundle demo-gitea-bx5l8 in environment prod.\n" +
 				"> Rolling back FROM: demo-gitea-x7k2p\n" +
 				"> Rolling back TO: demo-gitea-bx5l8 (sha-a000001)\n" +
 				"> Rolled back by: mallory ## Approved",
@@ -981,7 +981,7 @@ func TestRenderPRBody_RollbackNote(t *testing.T) {
 			name: "nothing recorded",
 			edit: func(d *scm.PRBody) { d.RestoredVersion = "" },
 			wantNote: "## ROLLBACK: demo-gitea-rollback-9c5q2 -> demo-gitea/prod\n\n" +
-				"> **This is a rollback PR.** It reverts environment prod to the state of bundle demo-gitea-bx5l8.\n" +
+				"> **This is a rollback PR.** It restores the images of bundle demo-gitea-bx5l8 in environment prod.\n" +
 				"> Rolling back FROM: the bundle deployed in prod now\n" +
 				"> Rolling back TO: demo-gitea-bx5l8",
 		},
@@ -997,6 +997,41 @@ func TestRenderPRBody_RollbackNote(t *testing.T) {
 			require.True(t, start >= 0 && end > start, body)
 			assert.Equal(t, tt.wantNote, body[start:end])
 			assert.Contains(t, body, "| a000001 | spike-qa |", "the provenance Author is the restored build's author")
+		})
+	}
+}
+
+// TestRenderPRBody_RollbackNoteSaysWhatItRestores: an image or config
+// rollback deploys only images or only a config commit, and its target can be
+// a mixed Bundle whose other half stays as deployed (B66), so the note says
+// what it restores, not that it "reverts environment prod to the state of
+// bundle <target>". A mixed rollback deploys both.
+func TestRenderPRBody_RollbackNoteSaysWhatItRestores(t *testing.T) {
+	images := []v1alpha1.ImageRef{{Repository: "ghcr.io/pnz1990/kardinal-test-app", Tag: "sha-a000001"}}
+	config := &v1alpha1.ConfigRef{CommitSHA: "0123abcdef"}
+	tests := []struct {
+		name     string
+		bundle   v1alpha1.BundleSpec
+		wantLine string
+	}{
+		{name: "image", bundle: v1alpha1.BundleSpec{Type: "image", Images: images},
+			wantLine: "> **This is a rollback PR.** It restores the images of bundle demo-gitea-m1 in environment prod.\n"},
+		{name: "config", bundle: v1alpha1.BundleSpec{Type: "config", ConfigRef: config},
+			wantLine: "> **This is a rollback PR.** It restores the config commit of bundle demo-gitea-m1 in environment prod.\n"},
+		{name: "mixed", bundle: v1alpha1.BundleSpec{Type: "mixed", Images: images, ConfigRef: config},
+			wantLine: "> **This is a rollback PR.** It reverts environment prod to the state of bundle demo-gitea-m1.\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, err := scm.RenderPRBody(scm.PRBody{
+				PipelineName: "demo-gitea", Environment: "prod", BundleName: "demo-gitea-rollback-9c5q2",
+				RollbackOf: "demo-gitea-m1", RestoredVersion: scm.BundleVersion(tt.bundle), Bundle: tt.bundle,
+			})
+			require.NoError(t, err)
+			assert.Contains(t, body, "\n\n"+tt.wantLine+"> Rolling back FROM: ", body)
+			if tt.bundle.Type != "mixed" {
+				assert.NotContains(t, body, "state of bundle")
+			}
 		})
 	}
 }

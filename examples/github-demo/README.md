@@ -159,7 +159,7 @@ The prod PR has:
 <!-- kardinal-promoter auto-generated PR -->
 ## ROLLBACK: github-demo-rollback-x7k2p -> github-demo/prod
 
-> **This is a rollback PR.** It reverts environment prod to the state of bundle github-demo-4fq8m.
+> **This is a rollback PR.** It restores the images of bundle github-demo-4fq8m in environment prod.
 > Rolling back FROM: github-demo-9tptr (sha-abc1234)
 > Rolling back TO: github-demo-4fq8m (sha-1a2b3c4)
 > Rolled back by: your-alias

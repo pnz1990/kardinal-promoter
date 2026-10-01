@@ -20,8 +20,8 @@ Bundles `<pipeline>-<random suffix>`). On a rollback it is the rollback Bundle. 
 is what the rollback deploys: the image tag (or short digest), `<image>:<tag>` for each of
 several images (three at most, then "and N more"), `config <commit>` for a config Bundle, or
 both for a mixed Bundle (`1.28.0 with config 0123abc`). `<commit>` is the short (7-character)
-config commit. When the Bundle has no images or config commit, it is the name of the Bundle whose state the
-rollback restores (`spec.provenance.rollbackOf`).
+config commit. When the Bundle has no images or config commit, it is the name of the rollback's
+target (`spec.provenance.rollbackOf`).
 
 ### Labels
 
@@ -67,16 +67,22 @@ A rollback PR starts with `## ROLLBACK: <bundle> -> <pipeline>/<environment>` an
 ```markdown
 ## ROLLBACK: my-app-rollback-9c5q2 -> my-app/prod
 
-> **This is a rollback PR.** It reverts environment prod to the state of bundle my-app-bx5l8.
+> **This is a rollback PR.** It restores the images of bundle my-app-bx5l8 in environment prod.
 > Rolling back FROM: my-app-x7k2p (1.29.0)
 > Rolling back TO: my-app-bx5l8 (1.28.0)
 > Rolled back by: alice
 ```
 
+The "This is a rollback PR." line of the note says what the rollback restores, by the rollback
+Bundle's type: the images of the target for an image Bundle, its config commit for a config
+Bundle, and for a mixed Bundle "It reverts environment prod to the state of bundle <target>".
+An image or config rollback can target a mixed Bundle and leave its other half as deployed (see
+[Rollback](rollback.md#images-the-target-does-not-name)).
+
 FROM is the Bundle the rollback replaces (the `kardinal.io/rollback-from` annotation) and the
 version it deploys; the version is left out when that Bundle was deleted, and the line says
-"the bundle deployed in prod now" when the annotation is not set. TO is the Bundle whose
-state it restores (`spec.provenance.rollbackOf`) and the version the rollback deploys.
+"the bundle deployed in prod now" when the annotation is not set. TO is the rollback's target
+(`spec.provenance.rollbackOf`) and the version the rollback deploys.
 "Rolled back by" is the `kardinal.io/requested-by` annotation: the CLI or UI user, or the
 controller for an automatic rollback. The UI records the user only with TokenReview auth, and
 `kardinal-ui` otherwise (see [who asked](guides/security.md#fields-on-every-event)). The line is
