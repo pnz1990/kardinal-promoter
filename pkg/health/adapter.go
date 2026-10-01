@@ -511,7 +511,9 @@ var fluxKustomizationGVR = schema.GroupVersionResource{
 
 // Check verifies that the Flux Kustomization's Ready condition is True, that
 // observedGeneration == generation (fully reconciled) and, with
-// ExpectedRevision set, that status.lastAppliedRevision is that commit.
+// ExpectedRevision set, that status.lastAppliedRevision is that commit, or
+// another commit while the Kustomization's Deployments run the Bundle
+// images (a sibling environment pushed to the same branch).
 // Ready=False is a health failure, and Terminal when Flux gave up on the
 // promoted commit because its resources stalled. Ready=Unknown, a generation
 // not yet observed or an older applied revision is Progressing. While the
@@ -597,10 +599,118 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 		case !verifiable:
 			reason += fmt.Sprintf(" (revision not verified: lastAppliedRevision %q is not a git commit)", applied)
 		case !SameRevision(rev, want):
-			return progressing(fmt.Sprintf("%s, lastAppliedRevision=%s, waiting for %s", state, shortRev(rev), shortRev(want))), nil
+			waiting := progressing(fmt.Sprintf("%s, lastAppliedRevision=%s, waiting for %s", state, shortRev(rev), shortRev(want)))
+			// A later commit on the shared branch (another environment's
+			// push) can supersede ours before Flux fetches it. Accept that
+			// revision only when the Kustomization's Deployments
+			// demonstrably run the Bundle images.
+			if len(opts.ExpectedImages) == 0 {
+				return waiting, nil
+			}
+			w, err := a.workloads(ctx, ks, opts.ExpectedImages)
+			if err != nil || w.count == 0 || !w.bundle || !w.worst.Healthy {
+				return waiting, nil
+			}
+			return healthy(fmt.Sprintf("%s (not %s, but the Kustomization's Deployments run the Bundle images)",
+				reason, shortRev(want))), nil
 		}
 	}
 	return healthy(reason), nil
+}
+
+// fluxWorkloads is the result of checking a Kustomization's Deployments.
+type fluxWorkloads struct {
+	// count is how many Deployments were checked.
+	count int
+	// worst is the worst result (severity), or a healthy summary when every
+	// Deployment is healthy.
+	worst HealthStatus
+	// bundle is true when at least one Deployment runs a Bundle image and
+	// none runs another tag of a Bundle repository.
+	bundle bool
+}
+
+// workloads checks, with checkDeployment, the Deployments the Kustomization
+// applied (status.inventory) or health-checks (spec.healthChecks). A
+// Kustomization that applies to another cluster (spec.kubeConfig) has none
+// that can be read here.
+func (a *FluxAdapter) workloads(ctx context.Context, ks *unstructured.Unstructured, expected []ImageExpectation) (fluxWorkloads, error) {
+	var w fluxWorkloads
+	if _, remote, _ := unstructured.NestedMap(ks.Object, "spec", "kubeConfig"); remote {
+		return w, nil
+	}
+	for _, ref := range fluxDeploymentRefs(ks) {
+		var st HealthStatus
+		d, err := getDeployment(ctx, a.dynamic, ref.Namespace, ref.Name)
+		switch {
+		case apierrors.IsNotFound(err):
+			st = unhealthy(fmt.Sprintf("Deployment %s not found", ref))
+		case err != nil:
+			return fluxWorkloads{}, err
+		default:
+			st = checkDeployment(d, string(appsv1.DeploymentAvailable), expected)
+			if st.Healthy {
+				st.Reason = fmt.Sprintf("Deployment %s: %s", ref, st.Reason)
+			}
+			var images []string
+			for _, c := range d.Spec.Template.Spec.Containers {
+				images = append(images, c.Image)
+			}
+			if ok, note := checkImages(expected, images); ok && note == "" && len(expected) > 0 {
+				w.bundle = true
+			}
+		}
+		switch {
+		case w.count == 0:
+			w.worst = st
+		case st.Healthy:
+		case w.worst.Healthy || severity(st) > severity(w.worst):
+			w.worst = st
+		}
+		w.count++
+	}
+	if w.count > 1 && w.worst.Healthy {
+		w.worst = healthy(fmt.Sprintf("%d Deployments rolled out and Available", w.count))
+	}
+	return w, nil
+}
+
+// fluxDeploymentRefs lists the Deployments in the Kustomization's inventory
+// and spec.healthChecks, without duplicates.
+func fluxDeploymentRefs(ks *unstructured.Unstructured) []types.NamespacedName {
+	var refs []types.NamespacedName
+	seen := map[types.NamespacedName]bool{}
+	add := func(ns, name string) {
+		ref := types.NamespacedName{Namespace: ns, Name: name}
+		if name != "" && !seen[ref] {
+			seen[ref] = true
+			refs = append(refs, ref)
+		}
+	}
+	entries, _, _ := unstructured.NestedSlice(ks.Object, "status", "inventory", "entries")
+	for _, e := range entries {
+		m, _ := e.(map[string]interface{})
+		id, _ := m["id"].(string)
+		// <namespace>_<name>_<group>_<kind>; names never contain "_".
+		if parts := strings.Split(id, "_"); len(parts) == 4 && parts[2] == "apps" && parts[3] == "Deployment" {
+			add(parts[0], parts[1])
+		}
+	}
+	checks, _, _ := unstructured.NestedSlice(ks.Object, "spec", "healthChecks")
+	for _, c := range checks {
+		m, _ := c.(map[string]interface{})
+		apiVersion, _ := m["apiVersion"].(string)
+		kind, _ := m["kind"].(string)
+		name, _ := m["name"].(string)
+		ns, _ := m["namespace"].(string)
+		if ns == "" {
+			ns = ks.GetNamespace()
+		}
+		if kind == "Deployment" && (apiVersion == "" || apiVersion == "apps/v1") {
+			add(ns, name)
+		}
+	}
+	return refs
 }
 
 // fluxCommit extracts the commit from a Flux lastAppliedRevision

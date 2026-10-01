@@ -26,7 +26,7 @@ The PromotionStep records the git commit its promotion delivered:
 - `status.outputs.commitSHA` — the commit pushed straight to the environment branch (`approval: auto`);
 - `status.outputs.mergeCommitSHA` — the merge commit of the promotion PR (`approval: pr-review`), copied from `PRStatus.status.mergeCommitSHA`.
 
-The `argocd` and `flux` adapters require that commit. The `argocd` adapter also accepts a later commit on a shared branch when the Application runs the Bundle images; the `flux` adapter does not (see below). The `resource` adapter requires the Bundle images in the Deployment's pod template, `argoRollouts` in the Rollout's, and `flagger` in the Canary's target Deployment and, for `Succeeded`, its primary Deployment. `kubectl get promotionstep <name> -o yaml` shows the recorded commit in `status.outputs` and the last health result in `status.message`.
+The `argocd` and `flux` adapters require that commit. Both also accept a later commit on a shared branch when the Bundle images run: for `argocd` in the Application, for `flux` in the Kustomization's Deployments (see below). The `resource` adapter requires the Bundle images in the Deployment's pod template, `argoRollouts` in the Rollout's, and `flagger` in the Canary's target Deployment and, for `Succeeded`, its primary Deployment. `kubectl get promotionstep <name> -o yaml` shows the recorded commit in `status.outputs` and the last health result in `status.message`.
 
 ## Adapter: resource (default)
 
@@ -132,7 +132,7 @@ health:
 **Healthy when:** all of these are met:
 - `Ready=True` in `status.conditions`
 - `status.observedGeneration` equals `metadata.generation` (the controller has reconciled the latest spec). A Kustomization missing either field waits.
-- `status.lastAppliedRevision` is the promoted commit (Flux reports `<branch>@sha1:<commit>`, or `<branch>/<commit>` before Flux 2.0). A revision that is not a git commit (an OCI or Helm source) cannot be compared: the check passes with "(revision not verified)" in the message.
+- `status.lastAppliedRevision` is the promoted commit (Flux reports `<branch>@sha1:<commit>`, or `<branch>/<commit>` before Flux 2.0), or another commit while the Kustomization's Deployments run the Bundle images (see the table below). A revision that is not a git commit (an OCI or Helm source) cannot be compared: the check passes with "(revision not verified)" in the message.
 
 **When to use:** Any cluster managed by Flux.
 
@@ -143,7 +143,7 @@ health:
 |---|---|
 | `Ready=True`, generation matches, promoted commit applied | Healthy |
 | `Ready=True`, older commit applied | Wait |
-| `Ready=True`, a later commit applied (another push to the same branch reached Flux before it fetched ours) | Wait, then `onHealthFailure` at `health.timeout`: unlike `argocd`, this adapter has no image check to fall back on. Give each environment its own branch, or use the `resource` adapter |
+| `Ready=True`, another commit applied (a sibling environment pushed to the same branch before Flux fetched ours) | Healthy when the Kustomization's Deployments (in `status.inventory` or `spec.healthChecks`) run the Bundle images and are rolled out; the message says `(not <commit>, but the Kustomization's Deployments run the Bundle images)`. Otherwise Wait, then `onHealthFailure` at `health.timeout`. A Kustomization with `spec.kubeConfig` (another cluster) has no Deployments kardinal can read, so it waits |
 | `Ready=Unknown` (reconciling) or generation not observed yet | Wait |
 | `approval: pr-review` and the merge commit is not known yet | Wait, then `onHealthFailure` at `health.timeout` (see below) |
 | `Ready=False` because Flux gave up on the promoted commit: its resources stalled (`HealthCheckFailed`, "failed early due to stalled resources", for example a Deployment past its `progressDeadlineSeconds`) | **Failed at once**: `onHealthFailure` applies without waiting for the timeout |

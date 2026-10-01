@@ -145,3 +145,101 @@ func TestFluxAdapter_Stalled(t *testing.T) {
 		})
 	}
 }
+
+// fluxLater is a commit another environment pushed after fluxPushed.
+const fluxLater = "8e9966475a0b1c2d3e4f5061728394a5b6c7d8e9"
+
+// withInventory sets status.inventory to the Deployments names in namespace
+// prod, plus a Service that is never checked.
+func withInventory(names ...string) func(obj map[string]interface{}) {
+	return func(obj map[string]interface{}) {
+		entries := []interface{}{map[string]interface{}{"id": "prod_web__Service", "v": "v1"}}
+		for _, n := range names {
+			entries = append(entries, map[string]interface{}{"id": "prod_" + n + "_apps_Deployment", "v": "v1"})
+		}
+		obj["status"].(map[string]interface{})["inventory"] = map[string]interface{}{"entries": entries}
+	}
+}
+
+func withSpec(key string, value interface{}) func(obj map[string]interface{}) {
+	return func(obj map[string]interface{}) {
+		obj["spec"].(map[string]interface{})[key] = value
+	}
+}
+
+func both(fs ...func(obj map[string]interface{})) func(obj map[string]interface{}) {
+	return func(obj map[string]interface{}) {
+		for _, f := range fs {
+			f(obj)
+		}
+	}
+}
+
+// TestFluxAdapter_SharedBranch proves bug 6 of the health spike fixed: when
+// Flux applied a later commit of the shared branch (a sibling environment's
+// push), the environment is healthy only if the Kustomization's Deployments
+// run the Bundle images and are rolled out. Otherwise it waits for its commit.
+func TestFluxAdapter_SharedBranch(t *testing.T) {
+	bundle := []health.ImageExpectation{{Repository: podinfo, Tag: "6.15.0"}}
+	later := func(mutate func(obj map[string]interface{})) *unstructured.Unstructured {
+		return kustomization("True", "ReconciliationSucceeded", "Applied revision", "main@sha1:"+fluxLater, mutate)
+	}
+	unavailable := deploymentObj("web", 2, podinfo+":6.15.0", 1)
+	unavailable.Object["status"].(map[string]interface{})["availableReplicas"] = int64(0)
+	const waiting = "lastAppliedRevision=8e9966475a0b, waiting for 034ce92a1b2c"
+	const accepted = "Ready=True, generation=3 matches, lastAppliedRevision=8e9966475a0b " +
+		"(not 034ce92a1b2c, but the Kustomization's Deployments run the Bundle images)"
+	healthCheck := withSpec("healthChecks", []interface{}{map[string]interface{}{
+		"apiVersion": "apps/v1", "kind": "Deployment", "name": "web", "namespace": "prod"}})
+	tests := []struct {
+		name   string
+		objs   []runtime.Object
+		images []health.ImageExpectation
+		want   wantKind
+		reason string
+	}{
+		{name: "the inventory Deployment runs the Bundle image",
+			objs: []runtime.Object{later(withInventory("web")), deploymentObj("web", 2, podinfo+":6.15.0", 1)},
+			want: isHealthy, reason: accepted},
+		{name: "the health-checked Deployment runs the Bundle image",
+			objs: []runtime.Object{later(healthCheck), deploymentObj("web", 2, podinfo+":6.15.0", 1)},
+			want: isHealthy, reason: accepted},
+		{name: "a second Deployment runs an image the Bundle does not have",
+			objs: []runtime.Object{later(withInventory("web", "cache")), deploymentObj("web", 2, podinfo+":6.15.0", 1),
+				deploymentObj("cache", 1, "docker.io/library/redis:7", 1)},
+			want: isHealthy, reason: accepted},
+		{name: "the Deployment runs the previous image",
+			objs: []runtime.Object{later(withInventory("web")), deploymentObj("web", 2, podinfo+":6.14.0", 1)},
+			want: isProgressing, reason: waiting},
+		{name: "the Deployment runs no Bundle repository",
+			objs: []runtime.Object{later(withInventory("cache")), deploymentObj("cache", 1, "docker.io/library/redis:7", 1)},
+			want: isProgressing, reason: waiting},
+		{name: "the Deployment is not available",
+			objs: []runtime.Object{later(withInventory("web")), unavailable},
+			want: isProgressing, reason: waiting},
+		{name: "the inventory Deployment is gone",
+			objs: []runtime.Object{later(withInventory("web"))},
+			want: isProgressing, reason: waiting},
+		{name: "no Deployments", objs: []runtime.Object{later(nil)},
+			want: isProgressing, reason: waiting},
+		{name: "the Kustomization applies to another cluster",
+			objs: []runtime.Object{later(both(withInventory("web"),
+				withSpec("kubeConfig", map[string]interface{}{"secretRef": map[string]interface{}{"name": "remote"}}))),
+				deploymentObj("web", 2, podinfo+":6.15.0", 1)},
+			want: isProgressing, reason: waiting},
+		{name: "no Bundle images to compare",
+			objs:   []runtime.Object{later(withInventory("web")), deploymentObj("web", 2, podinfo+":6.15.0", 1)},
+			images: []health.ImageExpectation{}, want: isProgressing, reason: waiting},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			images := bundle
+			if tt.images != nil {
+				images = tt.images
+			}
+			got := checkFlux(t, health.CheckOptions{ExpectedRevision: fluxPushed, ExpectedImages: images}, tt.objs...)
+			assert.Equal(t, tt.want, kindOf(got), got.Reason)
+			assert.Contains(t, got.Reason, tt.reason)
+		})
+	}
+}
