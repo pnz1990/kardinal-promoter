@@ -74,9 +74,9 @@ spec:
 
 **When it applies.** The controller applies `onHealthFailure` when:
 
-- the PromotionStep has no Healthy check within `health.timeout` (default: 10m);
+- the PromotionStep has no Healthy check within `health.timeout` (default: 10m) of entering `HealthChecking`, or of a bake window stopping;
 - the health adapter reports a terminal result (Deployment `ProgressDeadlineExceeded`, Flagger canary `Failed`);
-- a health check fails during a bake window with `bake.policy: fail-on-alarm`.
+- a health check is Unhealthy during a bake window with `bake.policy: fail-on-alarm`.
 
 A rollback Bundle (label `kardinal.io/rollback: "true"` or `spec.provenance.rollbackOf` set) is not rolled back again: when its own health check fails with `rollback` set, the step is `AbortedByAlarm` instead, so rollbacks do not chain.
 
@@ -87,19 +87,19 @@ Each health check has one of four results (see [Timings and failures](health-ada
 | Result | Examples | Counts in `consecutiveHealthFailures` | Applies `onHealthFailure` |
 |---|---|---|---|
 | Healthy | The promoted revision runs and is available | No (resets it to 0) | No |
-| Waiting | A rollout in progress, including new pods that are not available yet; Argo CD or Flux not synced to the promoted commit yet; Argo Rollouts `Progressing` or `Paused`; Flagger `Progressing` | No | No |
-| Unhealthy | A Deployment whose rollout finished but whose pods became unavailable; Argo CD `Degraded`; Flux `Ready=False`; Argo Rollouts `Degraded`; target not found | Yes, once per check | Only during a bake window with `fail-on-alarm` |
-| Failed | Deployment `ProgressDeadlineExceeded`; Flagger canary `Failed` | Yes | Yes, at once |
+| Waiting | A rollout in progress, including new pods that are not available yet; Argo CD or Flux not synced to the promoted commit yet; a Rollout or Canary target not on the Bundle images yet, so a `Healthy`, `Degraded`, `Succeeded` or `Failed` phase left by the previous release; Argo Rollouts `Progressing` or `Paused`; Flagger `Progressing` | No | No |
+| Unhealthy | A Deployment whose rollout finished but whose pods became unavailable; Argo CD `Degraded`; Flux `Ready=False`; Argo Rollouts `Degraded` on the promoted revision; target not found | Yes, once per check | Only during a bake window with `fail-on-alarm` |
+| Failed | Deployment `ProgressDeadlineExceeded`; Flagger canary `Failed` on the promoted revision | Yes | Yes, at once |
 
 ### Health timeout
 
-If a PromotionStep has no Healthy check within `health.timeout` (default: 10m) of entering `HealthChecking`, the timeout is a health failure: it increments `status.consecutiveHealthFailures` and applies `onHealthFailure`, as a Failed result does. The step message is `health alarm via <adapter> (onHealthFailure=<action>): health check timeout after <timeout>; last result: <last check>`. The timeout does not apply once a `bake` window has started.
+If a PromotionStep has no Healthy check within `health.timeout` (default: 10m) of entering `HealthChecking`, the timeout is a health failure: it increments `status.consecutiveHealthFailures` and applies `onHealthFailure`, as a Failed result does. The step message is `health alarm via <adapter> (onHealthFailure=<action>): health check timeout after <timeout>; last result: <last check>`. The timeout does not apply while a `bake` window runs. When the window stops (an Unhealthy check, or a Waiting one), the timeout starts again from that moment: a release that does not become healthy again fails at the timeout under either `bake.policy`.
 
 A new image whose pods crash-loop is the common case. Kubernetes reports such a Deployment as still rolling out (`Progressing=True`, reason `ReplicaSetUpdated`) until its `progressDeadlineSeconds` (default: 600s) passes, so every check before that is Waiting. The step then fails at `health.timeout`, or earlier when `ProgressDeadlineExceeded` is reported first. To fail sooner, set the Deployment's `progressDeadlineSeconds` below `health.timeout`.
 
 ### Delegation failure
 
-A Flagger canary `Failed` is a Failed result: `onHealthFailure` applies at once. An Argo Rollouts `Degraded` phase is Unhealthy: each check counts, and `onHealthFailure` applies at the health timeout, or sooner under `bake.policy: fail-on-alarm`.
+A Flagger canary `Failed` on the promoted revision is a Failed result: `onHealthFailure` applies at once. An Argo Rollouts `Degraded` phase on the promoted revision is Unhealthy: each check counts, and `onHealthFailure` applies at the health timeout, or sooner under `bake.policy: fail-on-alarm`. A phase the previous release left (Flagger keeps it until its next analysis tick notices the change) is Waiting: it neither fails nor verifies the Bundle. See [argoRollouts](health-adapters.md#adapter-argorollouts) and [flagger](health-adapters.md#adapter-flagger).
 
 In all cases, the Graph stops all downstream nodes automatically (Graph does not advance past a Failed node). Use `kardinal rollback` to roll back manually.
 

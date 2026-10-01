@@ -40,7 +40,8 @@ spec:
 
     # prod: Argo Rollouts progressive delivery — canary analysis before full rollout
     # The Pipeline updates the Rollout's image; Argo Rollouts manages traffic splitting.
-    # kardinal waits for Rollout.status.phase == "Healthy" (full promotion complete).
+    # kardinal waits until the Rollout runs the Bundle's image and its
+    # status.phase is "Healthy" (full promotion complete).
     # Rollout name is derived: <pipeline> = argo-rollouts-demo, namespace = <env> = prod
     - name: prod
       path: environments/prod
@@ -50,5 +51,8 @@ spec:
       health:
         type: argoRollouts
         timeout: 30m
+      # A Rollout that stays Degraded (aborted) until health.timeout gets a
+      # rollback Bundle for the previous release, and so a rollback PR.
+      onHealthFailure: rollback
 
   historyLimit: 20

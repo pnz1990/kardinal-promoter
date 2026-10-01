@@ -335,7 +335,8 @@ func TestHistory_Duration(t *testing.T) {
 		{"failed", v1alpha1.PromotionStepStatus{State: "Failed", Steps: steps[:1]}, "10s"},
 		{"verified, no times", v1alpha1.PromotionStepStatus{State: "Verified"}, "--"},
 		{"running", v1alpha1.PromotionStepStatus{State: "WaitingForMerge", Steps: steps[:1]}, "..."},
-		{"rolling back", v1alpha1.PromotionStepStatus{State: "RollingBack"}, "..."},
+		{"rolling back ended at the alarm", v1alpha1.PromotionStepStatus{State: "RollingBack", Steps: steps}, "4m"},
+		{"rolling back, no times", v1alpha1.PromotionStepStatus{State: "RollingBack"}, "--"},
 		{"pending", v1alpha1.PromotionStepStatus{}, "..."},
 	}
 	for _, tc := range cases {

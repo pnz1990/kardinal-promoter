@@ -70,7 +70,9 @@ const (
 	// StateAbortedByAlarm — terminal: health alarm with onHealthFailure=abort (K-03).
 	// Requires human intervention to resume or rollback.
 	StateAbortedByAlarm = "AbortedByAlarm"
-	// StateRollingBack — rollback Bundle created; step waits for rollback to complete (K-03).
+	// StateRollingBack — terminal: health alarm with onHealthFailure=rollback
+	// created a rollback Bundle (K-03). The step takes no further action; the
+	// rollback Bundle's own step carries the promotion on.
 	StateRollingBack = "RollingBack"
 
 	// requeueWaitForMerge is how often to requeue while waiting for a PR merge.
@@ -821,9 +823,10 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 // applies onHealthFailure (Failed, AbortedByAlarm or a rollback Bundle), as a
 // terminal result does. A crash-looping new image keeps a Deployment rolling
 // out (Progressing) until its progressDeadlineSeconds, so without this the
-// step would fail with no rollback. Once a bake window has started the
-// timeout no longer applies, so a bake longer than the timeout can complete
-// (C03-promotionstep-03).
+// step would fail with no rollback. While a bake window runs the timeout does
+// not apply, so a bake longer than the timeout can complete
+// (C03-promotionstep-03). When the window stops (see handleBake) the timeout
+// starts again from that moment.
 //
 // Health checks are spaced at least requeueHealthCheck apart, whatever the
 // reconcile rate, and only Unhealthy or Terminal results (not Progressing
@@ -857,7 +860,8 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		}
 	}
 
-	// Set status.healthCheckExpiry on first entry (idempotent — only set once).
+	// Set status.healthCheckExpiry on first entry (idempotent). handleBake
+	// moves it when a bake window stops.
 	// This writes time-based state to the CRD so the Graph can observe it.
 	// Graph-purity: eliminates PS-5 (time.Since() in reconciler hot path).
 	if ps.Status.HealthCheckExpiry == nil {
@@ -869,8 +873,8 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		base = ps.DeepCopy()
 	}
 
-	// Time-to-healthy timeout, compared against the stored expiry. It stops
-	// applying once the bake window started (the environment was healthy).
+	// Time-to-healthy timeout, compared against the stored expiry. It does not
+	// apply while a bake window runs (the environment is healthy).
 	// Never becoming healthy is a health failure: count it and apply
 	// onHealthFailure.
 	if ps.Status.BakeStartedAt == nil && time.Now().After(ps.Status.HealthCheckExpiry.Time) {
@@ -902,6 +906,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		opts.ExpectedImages = append(opts.ExpectedImages,
 			health.ImageExpectation{Repository: img.Repository, Tag: img.Tag, Digest: img.Digest})
 	}
+	opts.Since = healthCheckStart(ps)
 
 	adapter, err := r.HealthDetector.Select(ctx, opts.Type)
 	if err != nil {
@@ -941,7 +946,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// When env.Bake is configured, health must be healthy for Bake.Minutes
 	// contiguously before transitioning to Verified.
 	if env.Bake != nil {
-		return r.handleBake(ctx, log, base, ps, env, result, adapter.Name())
+		return r.handleBake(ctx, log, base, ps, env, result, adapter.Name(), timeout)
 	}
 
 	switch {
@@ -1115,15 +1120,42 @@ func (r *Reconciler) checkRequiredGates(ctx context.Context, ps *v1alpha1.Promot
 	return "", nil
 }
 
+// healthCheckStart is when this promotion's health check started: the
+// startedAt of its health-check step, which closeStepStatuses sets when the
+// step enters HealthChecking. It is zero when the promotion changed nothing in
+// git (the environment already had the Bundle, so an earlier status of the
+// workload describes it) or the step sequence has no health-check step.
+func healthCheckStart(ps *v1alpha1.PromotionStep) time.Time {
+	if ps.Status.Outputs["noChanges"] == "true" {
+		return time.Time{}
+	}
+	for _, s := range ps.Status.Steps {
+		if s.Name == "health-check" && s.StartedAt != nil {
+			return s.StartedAt.Time
+		}
+	}
+	return time.Time{}
+}
+
 // handleBake implements the K-01 contiguous-healthy soak window.
 //
 // When env.Bake is configured, the step must be healthy for Bake.Minutes
 // contiguously before transitioning to Verified. The window starts at the
 // first Healthy result; until then a result that is not Healthy is just the
-// rollout still converging (bounded by health.timeout). Once the window runs,
-// any result that is not Healthy is an alarm: policy=reset-on-alarm restarts
-// the window and increments BakeResets, policy=fail-on-alarm applies
-// onHealthFailure.
+// rollout still converging, bounded by health.timeout.
+//
+// Once the window runs:
+//   - A Waiting (Progressing) result, such as a canary paused at a step or a
+//     spec not observed yet, stops the window without an alarm: it is not a
+//     health failure, and it neither resets nor fails the step.
+//   - An Unhealthy result is an alarm. policy=fail-on-alarm applies
+//     onHealthFailure. policy=reset-on-alarm stops the window and increments
+//     BakeResets.
+//
+// A stopped window starts again at the next Healthy result, and health.timeout
+// starts again when the window stops (HealthCheckExpiry = now + timeout): a
+// step that is not healthy again within the timeout applies onHealthFailure,
+// so reset-on-alarm on a broken release ends.
 //
 // All time values are written to CRD status fields — Graph-first compliant.
 func (r *Reconciler) handleBake(
@@ -1133,16 +1165,45 @@ func (r *Reconciler) handleBake(
 	env v1alpha1.EnvironmentSpec,
 	result health.HealthStatus,
 	adapterName string,
+	timeout time.Duration,
 ) (ctrl.Result, error) {
 	now := metav1.NewTime(time.Now().UTC())
 	if !result.Progressing && !result.Healthy {
 		ps.Status.ConsecutiveHealthFailures++
 	}
+	// stopWindow stops a running window; the time to the next Healthy result
+	// is bounded by health.timeout again.
+	stopWindow := func() {
+		expiry := metav1.NewTime(now.Add(timeout))
+		ps.Status.HealthCheckExpiry = &expiry
+		ps.Status.BakeStartedAt = nil
+		ps.Status.BakeElapsedMinutes = 0
+	}
 
 	switch {
 	case !result.Healthy && ps.Status.BakeStartedAt == nil:
-		// The bake window has not started: the environment was never healthy.
-		ps.Status.Message = fmt.Sprintf("bake: waiting for the first healthy check via %s: %s", adapterName, result.Reason)
+		// The bake window has not started: the environment was never healthy,
+		// or not since the window stopped.
+		verdict := "waiting for"
+		if !result.Progressing {
+			verdict = "unhealthy via"
+		}
+		ps.Status.Message = fmt.Sprintf("bake: waiting for the first healthy check (%s %s): %s",
+			verdict, adapterName, result.Reason)
+		if ps.Status.BakeResets > 0 {
+			ps.Status.Message = fmt.Sprintf("bake: waiting for a healthy check to restart the window (resets=%d, %s %s): %s",
+				ps.Status.BakeResets, verdict, adapterName, result.Reason)
+		}
+
+	case result.Progressing:
+		// Not an alarm: the workload is changing, not failing. The window
+		// needs contiguous healthy time, so it starts again.
+		stopWindow()
+		ps.Status.Message = fmt.Sprintf(
+			"bake: window stopped, waiting for %s: %s; the %dm window restarts at the next healthy check (resets=%d)",
+			adapterName, result.Reason, env.Bake.Minutes, ps.Status.BakeResets)
+		log.Info().Str("env", ps.Spec.Environment).Str("reason", result.Reason).
+			Msg("bake: waiting result, window stopped")
 
 	case !result.Healthy:
 		policy := env.Bake.Policy
@@ -1153,9 +1214,7 @@ func (r *Reconciler) handleBake(
 			// fail-on-alarm: apply onHealthFailure policy (K-03).
 			return r.applyHealthFailurePolicy(ctx, log, base, ps, env, adapterName, result.Reason)
 		}
-		// Reset the contiguous timer.
-		ps.Status.BakeElapsedMinutes = 0
-		ps.Status.BakeStartedAt = &now // restart the window
+		stopWindow()
 		ps.Status.BakeResets++
 		ps.Status.Message = fmt.Sprintf(
 			"bake: health alarm via %s — timer reset (resets=%d, need %dm contiguous): %s",

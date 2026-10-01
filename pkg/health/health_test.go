@@ -313,10 +313,11 @@ func TestArgoRolloutsAdapter_Healthy(t *testing.T) {
 		Object: map[string]interface{}{
 			"apiVersion": "argoproj.io/v1alpha1",
 			"kind":       "Rollout",
-			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod", "generation": int64(1)},
 			"status": map[string]interface{}{
-				"phase":   "Healthy",
-				"message": "all replicas up to date",
+				"phase":              "Healthy",
+				"message":            "all replicas up to date",
+				"observedGeneration": "1",
 			},
 		},
 	}
@@ -344,10 +345,11 @@ func TestArgoRolloutsAdapter_Degraded(t *testing.T) {
 		Object: map[string]interface{}{
 			"apiVersion": "argoproj.io/v1alpha1",
 			"kind":       "Rollout",
-			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod", "generation": int64(1)},
 			"status": map[string]interface{}{
-				"phase":   "Degraded",
-				"message": "image pull failed",
+				"phase":              "Degraded",
+				"message":            "image pull failed",
+				"observedGeneration": "1",
 			},
 		},
 	}
@@ -372,10 +374,11 @@ func TestArgoRolloutsAdapter_Progressing(t *testing.T) {
 		Object: map[string]interface{}{
 			"apiVersion": "argoproj.io/v1alpha1",
 			"kind":       "Rollout",
-			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod", "generation": int64(1)},
 			"status": map[string]interface{}{
-				"phase":   "Progressing",
-				"message": "canary step 2/5 — waiting for pause duration",
+				"phase":              "Progressing",
+				"message":            "canary step 2/5 — waiting for pause duration",
+				"observedGeneration": "1",
 			},
 		},
 	}

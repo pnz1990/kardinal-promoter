@@ -299,13 +299,19 @@ type AutoRollbackSpec struct {
 // The health check must pass continuously for Minutes before the step is Verified.
 type BakeConfig struct {
 	// Minutes is the required contiguous healthy duration in minutes.
-	// The timer resets on health failure when Policy is "reset-on-alarm".
+	// The window restarts at the next healthy check after a check that is not
+	// healthy (see Policy).
 	// +kubebuilder:validation:Minimum=1
 	Minutes int `json:"minutes"`
 
-	// Policy controls behavior when health fails during the bake window.
-	// "reset-on-alarm" (default): timer resets to 0, step stays in HealthChecking.
-	// "fail-on-alarm": step transitions to Failed immediately on first health failure.
+	// Policy controls what an unhealthy check during the bake window does.
+	// "reset-on-alarm" (default): the window stops, status.bakeResets increments
+	// and the step stays in HealthChecking.
+	// "fail-on-alarm": onHealthFailure applies at the first unhealthy check.
+	// A waiting check (the workload is changing, such as a canary paused at a
+	// step) stops the window under either policy but is not an alarm. A
+	// stopped window restarts at the next healthy check, and health.timeout
+	// bounds the wait for it.
 	// +kubebuilder:validation:Enum=reset-on-alarm;fail-on-alarm
 	// +kubebuilder:default=reset-on-alarm
 	// +optional
@@ -410,8 +416,10 @@ type HealthConfig struct {
 	// +optional
 	Type string `json:"type,omitempty"`
 
-	// Timeout is the maximum time to wait for health checks to pass.
-	// Uses Go duration format (e.g. "30m", "1h"). Defaults to "10m".
+	// Timeout is the maximum time to wait for a healthy check: from the start
+	// of health checking, and again whenever a bake window stops. When it
+	// expires, onHealthFailure applies. It does not cut a running bake window
+	// short. Uses Go duration format (e.g. "30m", "1h"). Defaults to "10m".
 	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	Timeout string `json:"timeout,omitempty"`

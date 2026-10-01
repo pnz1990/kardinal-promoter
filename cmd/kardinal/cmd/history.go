@@ -203,11 +203,12 @@ func shortenPRURL(url string) string {
 
 // deriveDuration is the time from step creation to its end: the Verified
 // condition's transition, else the last completed step. "..." while the step
-// is running, "--" when no end time is recorded.
+// is running, "--" when no end time is recorded. RollingBack is an end state:
+// the step stops there, and the rollback Bundle carries the promotion on.
 func deriveDuration(s v1alpha1.PromotionStep) string {
 	switch s.Status.State {
-	case "Verified", "Failed", "AbortedByAlarm":
-	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking", "RollingBack":
+	case "Verified", "Failed", "AbortedByAlarm", "RollingBack":
+	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking":
 		return "..."
 	default:
 		return "--"

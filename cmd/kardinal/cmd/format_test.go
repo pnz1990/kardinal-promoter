@@ -1010,6 +1010,32 @@ func TestStepStatePriority_AllStates(t *testing.T) {
 	}
 }
 
+// Bug 13 of the delivery spike: a step that applied onHealthFailure: rollback
+// stays RollingBack for good. Once the rollback Bundle's newer step is
+// Verified, that step is what the environment runs and what the views show.
+func TestStepStatePriority_RollingBackIsNotInFlight(t *testing.T) {
+	now := time.Now()
+	step := func(name, state string, age time.Duration) v1alpha1.PromotionStep {
+		return v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: metav1.NewTime(now.Add(-age))},
+			Spec:       v1alpha1.PromotionStepSpec{Environment: "prod", StepType: name + "-step"},
+			Status:     v1alpha1.PromotionStepStatus{State: state},
+		}
+	}
+	for _, tc := range []struct{ rollback, want string }{
+		{"Verified", "rollback-step"},
+		{"Promoting", "rollback-step"},
+	} {
+		t.Run(tc.rollback, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, cmd.FormatStepsTable(&buf, []v1alpha1.PromotionStep{
+				step("failed", "RollingBack", time.Hour), step("rollback", tc.rollback, time.Minute)}))
+			assert.Contains(t, buf.String(), tc.want, buf.String())
+			assert.NotContains(t, buf.String(), "RollingBack", buf.String())
+		})
+	}
+}
+
 // E2E-R16: a Failed bundle's error is shown only while no newer bundle of the
 // same pipeline that is not Superseded exists: a newer bundle that is
 // promoting or Verified makes the failure history, not the pipeline's state.

@@ -70,20 +70,23 @@ func truncateRunes(s string, n int) string {
 
 // stepStatePriority returns a sort priority for a PromotionStep state.
 // Higher priority = displayed first. Used by the pipeline, steps and explain views.
-// Active states (Promoting/WaitingForMerge/HealthChecking/RollingBack) take
-// precedence, then Pending (step queued but not started), then Verified and
-// AbortedByAlarm, then Failed. AbortedByAlarm ranks with Verified because the
-// alarm fires after merge: the environment runs that bundle, so the newer of
-// the two is what is deployed. Failed ranks lowest because most failures
-// happen before merge. This ensures in-flight promotions and rollbacks are
-// shown over older terminal-state bundles (#260).
+// Active states (Promoting/WaitingForMerge/HealthChecking) take precedence,
+// then Pending (step queued but not started), then Verified, AbortedByAlarm
+// and RollingBack, then Failed. AbortedByAlarm and RollingBack rank with
+// Verified because the alarm fires after merge: the environment runs that
+// bundle, so the newer of the two is what is deployed. A RollingBack step
+// stays RollingBack for good (the rollback Bundle's own step carries the
+// promotion on), so ranking it as active would hide that newer step once it
+// is Verified. Failed ranks lowest because most failures happen before merge.
+// This ensures in-flight promotions and rollbacks are shown over older
+// terminal-state bundles (#260).
 func stepStatePriority(state string) int {
 	switch state {
-	case "Promoting", "WaitingForMerge", "HealthChecking", "RollingBack":
+	case "Promoting", "WaitingForMerge", "HealthChecking":
 		return 4
 	case "Pending":
 		return 3
-	case "Verified", "AbortedByAlarm":
+	case "Verified", "AbortedByAlarm", "RollingBack":
 		return 2
 	case "Failed":
 		return 1

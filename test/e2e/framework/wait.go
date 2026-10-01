@@ -120,9 +120,11 @@ func (e *Env) WaitBundlePhase(t *testing.T, ns, bundle, phase string, timeout ti
 	return &b
 }
 
+// isTerminalStep reports whether a PromotionStep in state takes no further
+// action. RollingBack is one: the rollback Bundle carries on (K-03).
 func isTerminalStep(state string) bool {
 	switch state {
-	case "Verified", "Failed", "AbortedByAlarm":
+	case "Verified", "Failed", "AbortedByAlarm", "RollingBack":
 		return true
 	}
 	return false

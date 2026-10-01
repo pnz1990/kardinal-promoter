@@ -213,7 +213,7 @@ func (r *PromotionStepReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 3. Call `adapter.Check(ctx, opts)` with `opts.ExpectedRevision` (the pushed or merged commit) and the Bundle images, so a healthy environment still on the previous revision is not Verified.
 4. If Healthy: set `status.state = "Verified"` (or start/advance the bake window), record evidence, copy to Bundle.
 5. If progressing: requeue after 10 seconds. If unhealthy: increment `status.consecutiveHealthFailures` and requeue. If terminal (Deployment `ProgressDeadlineExceeded`, Flagger `Failed`): apply `onHealthFailure` at once.
-6. If `health.timeout` expired before the first healthy check: increment `status.consecutiveHealthFailures` and apply `onHealthFailure` with reason "health check timeout after <timeout>; last result: ...". A crash-looping image counts as progressing until the Deployment's `progressDeadlineSeconds`, so the timeout is what fails it (or rolls it back) when that deadline is longer. The timeout does not apply once the bake window has started.
+6. If `health.timeout` expired before the first healthy check: increment `status.consecutiveHealthFailures` and apply `onHealthFailure` with reason "health check timeout after <timeout>; last result: ...". A crash-looping image counts as progressing until the Deployment's `progressDeadlineSeconds`, so the timeout is what fails it (or rolls it back) when that deadline is longer. The timeout does not apply while the bake window runs; when the window stops (an unhealthy check, or a waiting one, which is not an alarm) `status.healthCheckExpiry` moves to now + timeout, so the next healthy check must come within the timeout.
 
 ## Evidence Collection
 
