@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -46,13 +47,20 @@ import (
 
 // mockSCMProvider is a test double that returns a fixed WebhookEvent. Its
 // GetPRStatus reports the PR merged when the event says so, unless notMerged
-// or statusErr is set, and counts the calls.
+// or statusErr is set, and counts the calls. With hang set it stands in for
+// an SCM that answers only when the caller gives up: it records the deadline
+// of the context it gets (statusDeadline, statusHasDeadline) and ends the
+// call with context.DeadlineExceeded at once, so a test does not wait for the
+// deadline; without one it waits for the context, as the real call would.
 type mockSCMProvider struct {
-	event       scm.WebhookEvent
-	err         error
-	notMerged   bool
-	statusErr   error
-	statusCalls int
+	event             scm.WebhookEvent
+	err               error
+	notMerged         bool
+	statusErr         error
+	statusCalls       int
+	hang              bool
+	statusDeadline    time.Time
+	statusHasDeadline bool
 }
 
 func (m *mockSCMProvider) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, error) {
@@ -62,8 +70,15 @@ func (m *mockSCMProvider) ClosePR(_ context.Context, _ string, _ int) error { re
 func (m *mockSCMProvider) CommentOnPR(_ context.Context, _ string, _ int, _ string) error {
 	return nil
 }
-func (m *mockSCMProvider) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, error) {
+func (m *mockSCMProvider) GetPRStatus(ctx context.Context, _ string, _ int) (bool, bool, error) {
 	m.statusCalls++
+	if m.hang {
+		m.statusDeadline, m.statusHasDeadline = ctx.Deadline()
+		if !m.statusHasDeadline {
+			<-ctx.Done()
+		}
+		return false, false, context.DeadlineExceeded
+	}
 	if m.statusErr != nil {
 		return false, false, m.statusErr
 	}
@@ -266,6 +281,50 @@ func TestWebhook_ConfirmsMergeWithSCM(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWebhook_MergeConfirmationIsBounded covers the B73 follow-up: the SCM
+// call that confirms a merge event runs under its own deadline, within the 10
+// seconds GitHub gives a delivery (mergeConfirmTimeout), not the handler's
+// 30-second context or the provider's 30-second HTTP timeout, which would
+// turn every slow confirmation into a failed delivery. An SCM that does not
+// answer in time gets the same treatment as a failed call: the event is
+// answered 204 and counted as received (eventsProcessed and mergedPREvents
+// count events, not confirmed merges), the PRStatus is left alone, and
+// polling records the merge.
+func TestWebhook_MergeConfirmationIsBounded(t *testing.T) {
+	open := v1alpha1.PRStatusStatus{Open: true}
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-bundle-1-prod", Namespace: "default"},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/owner/repo/pull/42", PRNumber: 42, Repo: "owner/repo"},
+		Status:     open,
+	}
+	c := fake.NewClientBuilder().WithScheme(webhookScheme()).WithObjects(prs).WithStatusSubresource(prs).Build()
+	mockSCM := &mockSCMProvider{event: scm.WebhookEvent{
+		EventType: "pull_request", Action: "closed", Merged: true, PRNumber: 42, RepoFullName: "owner/repo",
+	}, hang: true}
+	var logs bytes.Buffer
+	s := newWebhookServerWithConfig(mockSCM, c, zerolog.New(&logs), true)
+
+	w := httptest.NewRecorder()
+	before := time.Now()
+	s.Handler()(w, httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader([]byte(`{}`))))
+
+	assert.Equal(t, http.StatusNoContent, w.Code)
+	assert.Equal(t, 1, mockSCM.statusCalls, "GetPRStatus calls")
+	require.True(t, mockSCM.statusHasDeadline, "the confirmation call has no deadline of its own")
+	left := mockSCM.statusDeadline.Sub(before)
+	assert.Greater(t, left, time.Duration(0))
+	assert.LessOrEqual(t, left, 10*time.Second, "GitHub counts a delivery failed after 10 seconds")
+	assert.Equal(t, int64(1), s.eventsTotal.Load(), "the event is counted as received")
+	assert.Equal(t, int64(1), s.mergedPREventsTotal.Load(),
+		"mergedPREvents counts the merged-PR events received, confirmed or not")
+	assert.NotNil(t, webhookLogLine(t, &logs,
+		"could not confirm the merge event with the SCM provider; PRStatus not marked merged, polling will record the merge"))
+
+	var got v1alpha1.PRStatus
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
+	assert.Equal(t, open, got.Status, "the status is left to polling")
 }
 
 // TestWebhook_RejectsInvalidSignature verifies that a webhook with an invalid

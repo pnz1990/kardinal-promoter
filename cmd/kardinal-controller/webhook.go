@@ -39,6 +39,14 @@ import (
 const (
 	// maxWebhookBody is the maximum webhook payload size (1 MB).
 	maxWebhookBody = 1 << 20
+	// mergeConfirmTimeout bounds the SCM API call that confirms a merge event
+	// (mergeConfirmed). GitHub counts a webhook delivery failed when the
+	// endpoint has not answered within 10 seconds, and the handler's 30-second
+	// context and the provider's 30-second HTTP timeout would let one slow SCM
+	// call turn the delivery into a failure. A confirmation that runs out of
+	// time is treated as a failed one: 204, nothing marked, polling records
+	// the merge.
+	mergeConfirmTimeout = 8 * time.Second
 )
 
 // webhookServer is an HTTP server that handles incoming SCM webhook events.
@@ -267,8 +275,12 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 // reports, as a poll would. When the API says the PR is not merged, or the
 // call fails, nothing is marked and the event still gets 204: the PRStatus
 // poll records the merge when there is one, and a 5xx would only make the
-// SCM retry the delivery or disable the webhook.
+// SCM retry the delivery or disable the webhook. The call gets
+// mergeConfirmTimeout, under GitHub's delivery timeout, so a slow SCM API
+// does not make the delivery fail.
 func (s *webhookServer) mergeConfirmed(ctx context.Context, prs *v1alpha1.PRStatus) bool {
+	ctx, cancel := context.WithTimeout(ctx, mergeConfirmTimeout)
+	defer cancel()
 	merged, open, err := s.scm.GetPRStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
 	if err == nil && merged {
 		return true
