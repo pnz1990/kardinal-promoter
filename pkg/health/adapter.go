@@ -314,12 +314,22 @@ func checkDeployment(d *appsv1.Deployment, condition string, expected []ImageExp
 		want = *d.Spec.Replicas
 	}
 	st := d.Status
+	// A rolling update replaces old pods only as new ones become available,
+	// so a new pod that never starts (an image that cannot be pulled, a crash
+	// loop, a failing readiness probe) shows as old replicas that stay.
+	waitingFor := ""
+	if st.UnavailableReplicas > 0 {
+		waitingFor = fmt.Sprintf("; %d of %d replicas unavailable: the rollout waits for new pods to become available "+
+			"(if this lasts, check the new pods, for example for an image that cannot be pulled)",
+			st.UnavailableReplicas, st.Replicas)
+	}
 	switch {
 	case st.UpdatedReplicas < want:
-		return progressing(fmt.Sprintf("%s rolling out: %d of %d replicas updated (%s)", id, st.UpdatedReplicas, want, condText))
+		return progressing(fmt.Sprintf("%s rolling out: %d of %d replicas updated%s (%s)",
+			id, st.UpdatedReplicas, want, waitingFor, condText))
 	case st.Replicas > st.UpdatedReplicas:
-		return progressing(fmt.Sprintf("%s rolling out: %d old replicas pending termination (%s)",
-			id, st.Replicas-st.UpdatedReplicas, condText))
+		return progressing(fmt.Sprintf("%s rolling out: %d old replicas pending termination%s (%s)",
+			id, st.Replicas-st.UpdatedReplicas, waitingFor, condText))
 	case st.AvailableReplicas < st.UpdatedReplicas:
 		msg := fmt.Sprintf("%s: %d of %d updated replicas available (%s)", id, st.AvailableReplicas, st.UpdatedReplicas, condText)
 		// Only an active rollout makes unavailable replicas "progressing". Once
