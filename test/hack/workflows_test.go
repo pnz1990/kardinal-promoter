@@ -258,30 +258,40 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 	assert.True(t, images[node], "kind-config.yaml's node image %s must be one of the KIND_NODE_* images", node)
 }
 
-// TestLiveMatrixRunsEverySuite checks e2e-live's suite matrix: it runs every
+// TestLiveMatrixRunsEverySuite checks e2e-live's suite jobs: they run every
 // suite hack/e2e/up.sh defines (test/e2e/README.md says CI runs them all),
 // and each entry's Kubernetes minor is a node image hack/e2e/up.sh boots from
 // hack/tool-versions.env: KIND_NODE_1_<minor>, or KIND_NODE_<SUITE>_1_<minor>
-// for that suite. The upgrade suite must also run on a Kubernetes older than
+// for that suite. An entry is a row of the suite job's matrix, or a job of
+// its own that sets SUITE and KIND_K8S in its env (the github suite, which
+// needs a secret). The upgrade suite must also run on a Kubernetes older than
 // 1.30 (no CRD validation ratcheting), the cluster UPG-OLDK8S-01 needs.
 func TestLiveMatrixRunsEverySuite(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github/workflows/e2e-live.yml"))
 	require.NoError(t, err)
+	type entry struct {
+		Suite string `json:"suite"`
+		K8s   string `json:"k8s"`
+	}
 	var wf struct {
 		Jobs map[string]struct {
 			Strategy struct {
 				Matrix struct {
-					Include []struct {
-						Suite string `json:"suite"`
-						K8s   string `json:"k8s"`
-					} `json:"include"`
+					Include []entry `json:"include"`
 				} `json:"matrix"`
 			} `json:"strategy"`
+			Env map[string]string `json:"env"`
 		} `json:"jobs"`
 	}
 	require.NoError(t, yaml.Unmarshal(data, &wf))
 	include := wf.Jobs["suite"].Strategy.Matrix.Include
 	require.NotEmpty(t, include, "e2e-live.yml: jobs.suite.strategy.matrix.include")
+	for name, job := range wf.Jobs {
+		if suite, k8s := job.Env["SUITE"], job.Env["KIND_K8S"]; name != "suite" && suite != "" {
+			require.NotEmpty(t, k8s, "e2e-live.yml: job %s sets SUITE but not KIND_K8S", name)
+			include = append(include, entry{Suite: suite, K8s: k8s})
+		}
+	}
 
 	runs, err := coverage.SuiteRuns(repoRoot(t))
 	require.NoError(t, err)
