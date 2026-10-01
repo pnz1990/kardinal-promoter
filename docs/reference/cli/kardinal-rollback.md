@@ -21,6 +21,11 @@ when there is none, the rollback is refused and names the image. The rollback
 goes through the same PolicyGates and PR flow as any Bundle, and through every
 environment upstream of the target first.
 
+Config and mixed Bundles get back their config commit the same way. Without
+--to, a mixed Bundle goes back to the newest earlier images and config commit,
+whichever Bundles deployed them; --to a Bundle whose type cannot deploy what the
+deployed Bundle changed is refused. See docs/rollback.md.
+
 ```
 kardinal rollback <pipeline> [flags]
 ```
