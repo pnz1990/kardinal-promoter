@@ -799,7 +799,8 @@ func TestChart_Ports(t *testing.T) {
 // TestChart_WatchNamespace runs two namespace-scoped installs side by side,
 // as the security guide's two-team example does: each promotes its own
 // namespace through a Role, neither may touch the other's, and a namespace
-// with no install is left alone.
+// with no install is left alone. The only cluster-wide grants are ChangeWindows
+// and get on the install's own Namespace object.
 //
 // Covers CHART-WATCHNS-01.
 func TestChart_WatchNamespace(t *testing.T) {
@@ -832,8 +833,12 @@ func TestChart_WatchNamespace(t *testing.T) {
 		require.NoError(t, err)
 		for _, rule := range cs.Rules {
 			for _, res := range rule.Resources {
-				assert.Contains(t, []string{"changewindows", "changewindows/status"}, res,
+				assert.Contains(t, []string{"changewindows", "changewindows/status", "namespaces"}, res,
 					"the ClusterRole holds only cluster-scoped kinds")
+				if res == "namespaces" {
+					assert.Equal(t, []string{"get"}, rule.Verbs, "namespaces: get only")
+					assert.Equal(t, []string{x.a.ns}, rule.ResourceNames, "namespaces: only the watched one")
+				}
 			}
 		}
 	}
@@ -850,7 +855,10 @@ func TestChart_WatchNamespace(t *testing.T) {
 	checkAccess(t, e, controllerA, []framework.Access{
 		{Verb: "list", Group: "kardinal.io", Resource: "pipelines", Namespace: teamA.ns},
 		{Verb: "create", Group: "kro.run", Resource: "graphs", Namespace: teamA.ns},
+		{Verb: "get", Resource: "namespaces", Name: teamA.ns},
 	}, []framework.Access{
+		{Verb: "get", Resource: "namespaces", Name: teamB.ns},
+		{Verb: "list", Resource: "namespaces"},
 		{Verb: "list", Group: "kardinal.io", Resource: "pipelines"},
 		{Verb: "get", Group: "kardinal.io", Resource: "pipelines", Namespace: teamB.ns},
 		{Verb: "update", Group: "kardinal.io", Resource: "bundles", Subresource: "status", Namespace: teamB.ns},
