@@ -37,6 +37,22 @@ A target whose rollback Bundle, with the added images or config commit, would ch
 
 There is no separate rollback subsystem. The same code path handles promotions and rollbacks.
 
+### A config commit that pins images
+
+`config-merge` copies the environment's directory from the config commit over the same directory in the GitOps repo, file by file (see [config-only promotions](design/09-config-only-promotions.md#config-merge-step)). If that directory in the config commit has a kustomization file (`kustomization.yaml`, `kustomization.yml` or `Kustomization`), the copy replaces the GitOps repo's file, and with it the `images:` list where the image steps write each Bundle's tags. The environment then runs the images that the config commit's kustomization file pins, or, if it pins none, the images named in the manifests. This always happens when the config commit comes from the Pipeline's own repository (`configRef.gitRepo` not set): every commit there has the environment's kustomization file, with the images it had at that commit. With `update.strategy: helm`, the same applies to the values file.
+
+The rollback type model does not see this. It assumes a config Bundle deploys only its config commit, and that the images stay those of the newest earlier Bundle that deployed images. What you see:
+
+- The config Bundle's PR or commit changes the `images:` list, and the workload restarts with the pinned images. A config Bundle names no images, so its health check does not check which images run.
+- A rollback to an earlier config commit puts back that commit's pins, so it can change the images too, although it is a config Bundle. Rollback chooses its target from what Bundles deploy, not from the files. So it can skip or refuse a target as changing nothing, or accept `--to` a config Bundle under a mixed Bundle that kept the images, while the files change the images.
+- A mixed Bundle writes its images after the merge, so the images it names win over the pins. Only the images it does not name take the pinned versions.
+
+What to do:
+
+- Keep image pins out of config commits. Leave the kustomization file (or the Helm values file) out of the config repository's environment directory, and put the config in the files it references: manifests, patches, generator inputs. `config-merge` never deletes a file, so the GitOps repo's kustomization file stays. Use a config repository other than the Pipeline's own.
+- Or promote a config change as a mixed Bundle that names every image the environment runs. Its images are written after the merge.
+- If an environment already runs the pinned images, promote a new image Bundle with the images it should run (`kardinal create bundle <pipeline> --image <ref>`). Read the `images:` diff of a config Bundle's PR before you merge it.
+
 ## CLI
 
 ### Roll back to the previous version
