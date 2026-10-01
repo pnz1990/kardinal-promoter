@@ -20,6 +20,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **PRStatus placeholders are not polled** — a PRStatus without a PR number was requeued every 30 seconds for every Bundle; it now waits for the PromotionStep to set the PR
 - **The UI's Create Bundle checks the Bundle like the Bundle API** — `POST /api/v1/ui/bundles` created a Bundle for a Pipeline that does not exist, and answered every other error with 500 `failed to create bundle`. It now answers 404 for a missing Pipeline, 400 with the reason for an invalid pipeline name or a Bundle the API server refuses, and 403 when the caller may not create it, and the dialog shows the reason
 - **Bundle API right after a new Pipeline** — `POST /api/v1/bundles` read the Pipeline from the controller's cache and answered 404 for a Pipeline created moments before; it now reads the API server before answering 404
+- **UI bundle comparison opens from Compare** — a shift-click opened the comparison at once, so the Compare and clear buttons sat behind the dialog where nothing could reach them. A shift-click now picks the second Bundle, Compare opens the comparison, and closing it keeps the second Bundle. A shift-click on the shown Bundle, or a `bundle=` link naming it, no longer compares the Bundle with itself
+- **UI keeps the pipeline list while a poll fails** — the sidebar replaced the list and its filter with the error until a poll worked; it now shows the error above the list. The stale-data indicator turns red after 30 seconds of failed polls, as documented, instead of staying amber, and the fleet bar badges read "1 blocked pipeline" (not "pipelines") to a screen reader
 
 ---
 
