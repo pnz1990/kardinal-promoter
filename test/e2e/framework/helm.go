@@ -153,15 +153,11 @@ func valuesFile(t *testing.T, v Values) string {
 	if err != nil {
 		t.Fatalf("marshal values: %v", err)
 	}
-	f, err := os.CreateTemp(t.TempDir(), "values-*.yaml")
-	if err != nil {
+	path := filepath.Join(t.TempDir(), "values.yaml")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	if _, err := f.Write(data); err != nil {
-		t.Fatal(err)
-	}
-	return f.Name()
+	return path
 }
 
 // TryInstallChart runs helm install of the checkout's chart as release name
@@ -383,7 +379,7 @@ func (r *Release) FollowLogs(t *testing.T, pod string) *LogStream {
 	s := &LogStream{done: make(chan struct{})}
 	go func() {
 		defer close(s.done)
-		defer rc.Close()
+		defer func() { _ = rc.Close() }()
 		sc := bufio.NewScanner(rc)
 		sc.Buffer(make([]byte, 64*1024), 1024*1024)
 		for sc.Scan() {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -105,7 +106,7 @@ func (p *Probe) Curl(t *testing.T, connectTimeout time.Duration, args ...string)
 		head, body, _ = strings.Cut(body, "\n\n")
 	}
 	if m := curlStatus.FindStringSubmatch(head); m != nil {
-		fmt.Sscan(m[1], &res.Code)
+		res.Code, _ = strconv.Atoi(m[1])
 		for _, line := range strings.Split(head, "\n")[1:] {
 			if k, v, ok := strings.Cut(line, ":"); ok {
 				res.Headers[strings.ToLower(strings.TrimSpace(k))] = strings.TrimSpace(v)
