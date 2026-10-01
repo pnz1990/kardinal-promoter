@@ -397,6 +397,17 @@ export function App() {
   // Use the bundle graph when available; fall back to static topology (#525).
   const displayGraph = graph ?? staticGraph
 
+  // #913: Insecure connection warning — plain HTTP from a non-loopback address.
+  // It heads every main view, so it shows before any pipeline loads (the API
+  // may refuse the page's requests outright).
+  const insecureBanner = (
+    <InsecureConnectionBanner
+      dismissed={insecureBannerDismissed}
+      onDismiss={() => setInsecureBannerDismissed(true)}
+      margin="1rem 1.5rem 0"
+    />
+  )
+
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
       {/* #746: Keyboard shortcuts help panel — rendered at root level so it overlays all content. */}
@@ -550,6 +561,7 @@ export function App() {
       {/* Ops table mode — full-width table replaces the main content area */}
       {viewMode === 'ops-table' ? (
         <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg-deep)' }}>
+          {insecureBanner}
           <PipelineOpsTable
             pipelines={pipelines}
             selected={selectedPipeline}
@@ -562,6 +574,7 @@ export function App() {
       ) : (
         <>{/* Main area — column layout for header + content row */}
         <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg)' }}>
+        {insecureBanner}
         {!selectedPipeline ? (
           <div style={{ color: 'var(--color-text-faint)', padding: '3rem 2rem', textAlign: 'center' }}>
             {pipelines.length > 0 ? (
@@ -664,12 +677,6 @@ export function App() {
                   onRefresh={manualRefresh}
                 />
               )}
-
-              {/* #913: Insecure connection warning — shown when UI accessed over HTTP from non-localhost */}
-              <InsecureConnectionBanner
-                dismissed={insecureBannerDismissed}
-                onDismiss={() => setInsecureBannerDismissed(true)}
-              />
 
               {/* Blocked PolicyGate banner */}
               <BlockedBanner

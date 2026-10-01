@@ -25,13 +25,18 @@ const h = vi.hoisted(() => {
     graphDelay: undefined as undefined | ((bundle: string) => Promise<void>),
     // Optional graph returned instead of graphFor(bundle) (blocked-banner tests).
     graph: undefined as unknown,
+    // When set, listPipelines fails with this error (the API refuses the page).
+    pipelinesError: undefined as string | undefined,
   }
   const graphFor = (b: string) => ({
     nodes: [{ id: `${b}-step`, type: 'PromotionStep', label: `env-of-${b}`, environment: `env-of-${b}`, state: 'Verified' }],
     edges: [],
   })
   const api = {
-    listPipelines: vi.fn(async () => state.pipelines),
+    listPipelines: vi.fn(async () => {
+      if (state.pipelinesError) throw new Error(state.pipelinesError)
+      return state.pipelines
+    }),
     listGates: vi.fn(async () => state.gates),
     listBundles: vi.fn(async (p: string) => state.bundles[p] ?? []),
     getGraph: vi.fn(async (b: string) => {
@@ -77,6 +82,7 @@ beforeEach(() => {
   h.state.gates = []
   h.state.graphDelay = undefined
   h.state.graph = undefined
+  h.state.pipelinesError = undefined
   for (const fn of Object.values(h.api)) fn.mockClear()
   localStorage.clear()
   window.history.replaceState(null, '', '/ui/#pipeline=app')
@@ -249,6 +255,56 @@ describe('App pipeline selection', () => {
       expect(fn.mock.calls.length).toBeGreaterThanOrEqual(3)
       for (const call of fn.mock.calls) expect(call).toEqual(['app-v2', 'team-b'])
     }
+  })
+})
+
+// docs/installation.md: a NodePort without TLS shows a security warning. The
+// API refuses such a client outright unless ui.allowedHosts names the host, so
+// the warning cannot wait for a pipeline view: it heads every view.
+describe('App insecure connection banner', () => {
+  const original = window.location
+  const at = (href: string) => Object.defineProperty(window, 'location', { value: new URL(href), writable: true, configurable: true })
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { value: original, writable: true, configurable: true })
+  })
+  const banners = () => screen.queryAllByText(/^Insecure connection — kardinal UI is accessed over plain HTTP\./)
+
+  it('warns on the landing page', async () => {
+    at('http://10.0.0.1:30082/ui/')
+    render(<App />)
+    await flush()
+    expect(screen.getByText('Select a pipeline to view its promotion DAG.')).toBeInTheDocument()
+    expect(banners()).toHaveLength(1)
+  })
+
+  it('warns when the API refuses the page and no pipeline loads', async () => {
+    at('http://10.0.0.1:30082/ui/')
+    h.state.pipelinesError = 'API error 403: Forbidden'
+    render(<App />)
+    await flush()
+    expect(h.api.getGraph).not.toHaveBeenCalled()
+    expect(banners()).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss insecure connection warning' }))
+    expect(banners()).toHaveLength(0)
+  })
+
+  it('warns once in the pipeline view and in the operations table', async () => {
+    at('http://kardinal.internal:8082/ui/#pipeline=app')
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('heading', { level: 1, name: 'app' })).toBeInTheDocument()
+    expect(banners()).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Operations Table' }))
+    await flush()
+    expect(banners()).toHaveLength(1)
+  })
+
+  it('does not warn on the documented port-forward', async () => {
+    at('http://127.0.0.1:8082/ui/')
+    render(<App />)
+    await flush()
+    expect(screen.getByText('Select a pipeline to view its promotion DAG.')).toBeInTheDocument()
+    expect(banners()).toHaveLength(0)
   })
 })
 

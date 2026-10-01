@@ -11,6 +11,8 @@ interface InsecureConnectionBannerProps {
   dismissed: boolean
   /** Callback to dismiss the banner. */
   onDismiss: () => void
+  /** CSS margin around the banner (default: space below it only). */
+  margin?: string
 }
 
 /** The command that reaches the UI on a default install (release kardinal-promoter). */
@@ -33,8 +35,10 @@ export function isInsecureNonLocalConnection(): boolean {
 /**
  * InsecureConnectionBanner renders an amber warning banner when the UI is accessed
  * over plain HTTP from a non-localhost address. It is dismissible for the session.
+ * App shows it at the top of every view, including the empty and error states:
+ * the connection is insecure before any pipeline loads.
  */
-export function InsecureConnectionBanner({ dismissed, onDismiss }: InsecureConnectionBannerProps) {
+export function InsecureConnectionBanner({ dismissed, onDismiss, margin = '0 0 0.75rem' }: InsecureConnectionBannerProps) {
   if (dismissed) return null
   if (!isInsecureNonLocalConnection()) return null
 
@@ -49,8 +53,9 @@ export function InsecureConnectionBanner({ dismissed, onDismiss }: InsecureConne
         border: '1px solid var(--color-warning)',
         borderRadius: '6px',
         padding: '0.5rem 0.75rem',
-        marginBottom: '0.75rem',
+        margin,
         gap: '0.75rem',
+        flexShrink: 0,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

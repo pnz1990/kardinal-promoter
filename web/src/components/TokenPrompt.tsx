@@ -18,6 +18,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { setTokenPrompt, type TokenPromptReason } from '../api/client'
 import CopyButton from './CopyButton'
+import { isInsecureNonLocalConnection, PORT_FORWARD_COMMAND } from './InsecureConnectionBanner'
 
 interface PendingPrompt {
   id: number
@@ -68,6 +69,9 @@ function TokenForm({ reason, onSubmit }: TokenFormProps) {
   const [emptyError, setEmptyError] = useState(false)
   const rejected = reason === 'rejected'
   const errorId = rejected || emptyError ? 'ui-token-error' : undefined
+  // The page's insecure-connection banner is behind this dialog's backdrop,
+  // and the token is typed here: warn in the dialog itself.
+  const insecure = isInsecureNonLocalConnection()
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -84,7 +88,7 @@ function TokenForm({ reason, onSubmit }: TokenFormProps) {
       role="dialog"
       aria-modal="true"
       aria-labelledby="ui-token-title"
-      aria-describedby="ui-token-desc"
+      aria-describedby={insecure ? 'ui-token-desc ui-token-insecure' : 'ui-token-desc'}
       style={{
         position: 'fixed', inset: 0,
         background: 'rgba(0,0,0,0.7)',
@@ -112,6 +116,37 @@ function TokenForm({ reason, onSubmit }: TokenFormProps) {
           This controller requires a bearer token. Use the UI token from your administrator
           or a Kubernetes token for an account with access to kardinal resources.
         </p>
+
+        {insecure && (
+          <div
+            id="ui-token-insecure"
+            style={{
+              background: 'var(--color-warning-bg)',
+              border: '1px solid var(--color-warning)',
+              borderRadius: '6px',
+              padding: '0.5rem 0.6rem',
+              marginBottom: '1rem',
+              color: 'var(--color-warning)',
+              fontSize: '0.75rem',
+              lineHeight: 1.5,
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>
+              <span aria-hidden="true">⚠ </span>
+              This page is on plain HTTP, so the token is sent unencrypted.
+            </div>
+            <div>
+              Sign in over HTTPS, or run this and open{' '}
+              <a href="http://localhost:8082/ui/" style={{ color: 'var(--color-warning)' }}>http://localhost:8082/ui/</a>:
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
+              <code style={{ flex: 1, fontFamily: 'monospace', fontSize: '0.72rem', overflowWrap: 'anywhere' }}>
+                {PORT_FORWARD_COMMAND}
+              </code>
+              <CopyButton text={PORT_FORWARD_COMMAND} title="Copy port-forward command" />
+            </div>
+          </div>
+        )}
 
         <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}>
           Create a token for a ServiceAccount:
