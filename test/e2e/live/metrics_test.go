@@ -530,6 +530,16 @@ func TestObs_ControllerMetrics(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, delta("kardinal_gate_blocking_duration_seconds_sum", nil), 10.0, "prod's gate blocked for more than 10s")
 	assert.Subset(t, stepNames, after.LabelValues("kardinal_step_duration_seconds_count", "step"), "step labels are step names")
+	// git-clone starts and finishes within one reconcile in every promotion
+	// above (older and bundle in test, bundle in prod, fails in gone).
+	assert.GreaterOrEqual(t, delta("kardinal_step_duration_seconds_count", map[string]string{"step": "git-clone"}), 4.0,
+		"each git-clone is observed")
+	ps, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+	require.NoError(t, err)
+	require.True(t, ok, "test PromotionStep of %s", bundle)
+	require.NotEmpty(t, ps.Status.Steps)
+	assert.Equal(t, "git-clone", ps.Status.Steps[0].Name)
+	assert.Positive(t, ps.Status.Steps[0].DurationMs, "git-clone status.steps[0].durationMs")
 
 	// controller-runtime metrics.
 	assert.Equal(t, []string{"error", "requeue", "requeue_after", "success"},

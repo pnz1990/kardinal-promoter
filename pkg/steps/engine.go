@@ -24,7 +24,14 @@ import (
 // Engine executes a named sequence of steps, accumulating outputs between steps.
 // It is not safe for concurrent use by multiple goroutines.
 type Engine struct {
-	steps []string
+	steps   []string
+	timings map[int]StepTiming
+}
+
+// StepTiming is when a step executed by ExecuteFrom started and returned.
+type StepTiming struct {
+	Started  time.Time
+	Finished time.Time
 }
 
 // NewEngine constructs an Engine with the given ordered step names.
@@ -35,6 +42,15 @@ func NewEngine(steps []string) *Engine {
 // StepNames returns the step sequence.
 func (e *Engine) StepNames() []string {
 	return e.steps
+}
+
+// Timings returns, by step index, when each step the last ExecuteFrom call
+// executed started and returned. A step run twice (after a StepRestart) has
+// the times of its last run. The caller records step durations from these, so
+// a step that finishes within one reconcile has its real duration
+// (kardinal_step_duration_seconds, status.steps[].durationMs).
+func (e *Engine) Timings() map[int]StepTiming {
+	return e.timings
 }
 
 // MaxSequenceRestarts bounds how many times one ExecuteFrom call restarts the
@@ -59,6 +75,7 @@ const MaxSequenceRestarts = 3
 func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex int) (nextIndex int, result StepResult, err error) {
 	log := zerolog.Ctx(ctx)
 	restarts := 0
+	e.timings = make(map[int]StepTiming)
 
 	for i := startIndex; i < len(e.steps); i++ {
 		name := e.steps[i]
@@ -69,7 +86,9 @@ func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex i
 
 		log.Info().Str("step", name).Int("index", i).Msg("executing step")
 
+		started := time.Now()
 		result, err = executeStep(ctx, step, state)
+		e.timings[i] = StepTiming{Started: started, Finished: time.Now()}
 		if err != nil {
 			return i, result, fmt.Errorf("step %s: %w", name, err)
 		}

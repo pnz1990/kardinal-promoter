@@ -517,9 +517,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 
 	if execErr != nil {
-		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), execErr)
+		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr)
 	}
-	updateStepStatuses(ps, eng.StepNames(), nextIdx, false, "")
+	updateStepStatuses(ps, eng.StepNames(), nextIdx, false, "", eng.Timings())
 
 	switch result.Status {
 	case steps.StepPending:
@@ -576,7 +576,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	default:
 		// ExecuteFrom reports StepFailed with an error, so this is unreachable
 		// unless a step returns an unknown status.
-		return r.handleStepError(ctx, log, base, ps, eng.StepNames(),
+		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(),
 			fmt.Errorf("step %d returned status %q: %s", nextIdx, result.Status, result.Message))
 	}
 }
@@ -591,7 +591,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 // fail the step (C03-promotionstep-06). A failed step closes the PR it opened,
 // so a later merge cannot deliver a change whose step is Failed.
 func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
-	stepNames []string, execErr error) (ctrl.Result, error) {
+	stepNames []string, timings map[int]steps.StepTiming, execErr error) (ctrl.Result, error) {
 	retryable := errors.Unwrap(execErr) != nil && !errors.Is(execErr, steps.ErrPermanent)
 	idx := ps.Status.CurrentStepIndex
 	if retryable && ps.Status.RetryCount < maxStepRetries {
@@ -599,7 +599,7 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		delay := retryDelay(ps.Status.RetryCount)
 		ps.Status.Message = fmt.Sprintf("retrying in %s (%d/%d) after error: %v",
 			delay, ps.Status.RetryCount, maxStepRetries, execErr)
-		updateStepStatuses(ps, stepNames, idx, false, "")
+		updateStepStatuses(ps, stepNames, idx, false, "", timings)
 		log.Warn().Err(execErr).Str("env", ps.Spec.Environment).
 			Int("retry", ps.Status.RetryCount).Dur("delay", delay).Msg("step failed, will retry")
 		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
@@ -616,7 +616,7 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		msg = fmt.Sprintf("%s (gave up after %d retries)", msg, maxStepRetries)
 	}
 	log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
-	updateStepStatuses(ps, stepNames, idx, true, msg)
+	updateStepStatuses(ps, stepNames, idx, true, msg, timings)
 	if closeErr := r.closeStepPR(ctx, ps, "the promotion failed: "+msg); closeErr != nil {
 		msg += fmt.Sprintf("; closing the PR it opened failed (%v) — close it by hand", closeErr)
 	}
@@ -1572,90 +1572,74 @@ func initStepStatuses(seq []string) []v1alpha1.StepStatus {
 //   - currentIdx is the index returned by ExecuteFrom (next step to execute on
 //     the next reconcile, or len(stepNames) if all steps completed successfully).
 //   - failed == true means ExecuteFrom returned an error at currentIdx.
+//   - timings is Engine.Timings() of that call: when each step it executed
+//     started and returned. A step without a timing gets time.Now().
 //
-// The reconciler writes to ps.Status before calling Status().Patch, so timing
-// (startedAt/completedAt) is derived from time.Now() here — consistent with
-// the pattern used by HealthCheckExpiry and BakeStartedAt elsewhere in the
-// reconciler.
-func updateStepStatuses(ps *v1alpha1.PromotionStep, stepNames []string, currentIdx int, failed bool, failMessage string) {
+// A step keeps the startedAt of the reconcile it started in (wait-for-merge
+// runs over many reconciles). Most steps start and finish within one
+// reconcile, so their times come from timings; otherwise every such step
+// would get startedAt == completedAt and no duration. Each step that becomes
+// Completed or Failed sets durationMs and is observed once in
+// kardinal_step_duration_seconds.
+func updateStepStatuses(ps *v1alpha1.PromotionStep, stepNames []string, currentIdx int, failed bool,
+	failMessage string, timings map[int]steps.StepTiming) {
 	if len(ps.Status.Steps) == 0 {
 		// Steps not yet initialized (e.g. crash before initStepStatuses ran).
 		// Reconstruct the Pending slice so updates have something to apply to.
 		ps.Status.Steps = initStepStatuses(stepNames)
 	}
 
-	now := metav1.Now()
+	now := time.Now()
+	stamp := func(t time.Time) *metav1.Time {
+		if t.IsZero() {
+			t = now
+		}
+		mt := metav1.NewTime(t)
+		return &mt
+	}
+	// finish records the end of step i and observes its duration.
+	finish := func(i int, step *v1alpha1.StepStatus) {
+		t, ran := timings[i]
+		if step.StartedAt == nil {
+			step.StartedAt = stamp(t.Started)
+		}
+		if ran || step.CompletedAt == nil {
+			step.CompletedAt = stamp(t.Finished)
+		}
+		d := step.CompletedAt.Sub(step.StartedAt.Time)
+		if d < 0 {
+			d = 0
+		}
+		step.DurationMs = d.Milliseconds()
+		observability.StepDurationSeconds.WithLabelValues(step.Name).Observe(d.Seconds())
+	}
 
 	for i := range ps.Status.Steps {
 		step := &ps.Status.Steps[i]
 		switch {
 		case i < currentIdx:
-			// Steps before the current index completed in a previous reconcile.
-			// Only update if not already marked Completed (idempotent).
+			// Steps before the current index have completed, in this
+			// reconcile or a previous one. Only update a step not already
+			// marked Completed (idempotent), so each is observed once.
 			if step.State != v1alpha1.StepExecutionCompleted {
 				step.State = v1alpha1.StepExecutionCompleted
-				if step.StartedAt == nil {
-					step.StartedAt = &now
-				}
-				if step.CompletedAt == nil {
-					step.CompletedAt = &now
-				}
-				if step.StartedAt != nil && step.CompletedAt != nil {
-					d := step.CompletedAt.Sub(step.StartedAt.Time)
-					if d > 0 {
-						step.DurationMs = d.Milliseconds()
-						// Emit per-step execution duration metric.
-						observability.StepDurationSeconds.WithLabelValues(step.Name).Observe(d.Seconds())
-					}
-				}
+				finish(i, step)
+			}
+		case i == currentIdx && failed:
+			if step.State != v1alpha1.StepExecutionFailed {
+				step.State = v1alpha1.StepExecutionFailed
+				finish(i, step)
+				step.Message = failMessage
 			}
 		case i == currentIdx:
-			if failed {
-				// This step failed.
-				if step.State != v1alpha1.StepExecutionFailed {
-					step.State = v1alpha1.StepExecutionFailed
-					if step.StartedAt == nil {
-						step.StartedAt = &now
-					}
-					step.CompletedAt = &now
-					if step.StartedAt != nil {
-						d := step.CompletedAt.Sub(step.StartedAt.Time)
-						if d > 0 {
-							step.DurationMs = d.Milliseconds()
-							// Emit per-step execution duration metric for failed steps.
-							observability.StepDurationSeconds.WithLabelValues(step.Name).Observe(d.Seconds())
-						}
-					}
-					step.Message = failMessage
-				}
-			} else if currentIdx < len(ps.Status.Steps) {
-				// This step is in progress (StepPending result means "still running").
-				if step.State == v1alpha1.StepExecutionPending {
-					step.State = v1alpha1.StepExecutionInProgress
-					step.StartedAt = &now
-				}
+			// This step is in progress (StepPending result means "still running").
+			if step.State == v1alpha1.StepExecutionPending {
+				step.State = v1alpha1.StepExecutionInProgress
+				step.StartedAt = stamp(timings[i].Started)
 			}
-			// currentIdx == len(stepNames): all steps done; nothing to update here.
-		case i > currentIdx:
-			// Future steps: leave as Pending.
-		}
-	}
-
-	// If currentIdx == len(stepNames) (all done), mark the last step Completed
-	// if it isn't already.
-	if !failed && currentIdx > 0 && currentIdx == len(ps.Status.Steps) {
-		last := &ps.Status.Steps[currentIdx-1]
-		if last.State != v1alpha1.StepExecutionCompleted {
-			last.State = v1alpha1.StepExecutionCompleted
-			if last.CompletedAt == nil {
-				last.CompletedAt = &now
-			}
-			if last.StartedAt != nil && last.CompletedAt != nil {
-				d := last.CompletedAt.Sub(last.StartedAt.Time)
-				if d > 0 {
-					last.DurationMs = d.Milliseconds()
-				}
-			}
+		default:
+			// Future steps: leave as Pending. When currentIdx ==
+			// len(stepNames) every step is handled by the first case.
 		}
 	}
 }
