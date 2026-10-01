@@ -23,7 +23,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
@@ -64,6 +66,40 @@ func TestNewPRClearsOldStatus(t *testing.T) {
 		assert.False(t, got.Status.ClosedFinal)
 		assert.NotNil(t, got.Status.LastCheckedAt)
 		assert.Equal(t, int64(2), got.Status.ObservedGeneration)
+	})
+
+	t.Run("a clear from a stale read keeps the status a webhook wrote since", func(t *testing.T) {
+		prs := prAt(ago(time.Minute), old)
+		prs.Generation = 2
+		base := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+			WithObjects(prs).WithStatusSubresource(prs).Build()
+		marked := false
+		c := interceptor.NewClient(base, interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
+				patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if !marked {
+					// The webhook marks the new PR merged after the reconciler read.
+					marked = true
+					var cur v1alpha1.PRStatus
+					require.NoError(t, cl.Get(ctx, client.ObjectKeyFromObject(obj), &cur))
+					cur.Status = v1alpha1.PRStatusStatus{Merged: true, MergeCommitSHA: "e7ddb9e",
+						LastCheckedAt: metaAgo(0), ObservedGeneration: 2}
+					require.NoError(t, cl.Status().Update(ctx, &cur))
+				}
+				return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			},
+		})
+		r := &prstatus.Reconciler{Client: c, SCM: &fakeSCM{open: true}}
+		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: prs.Name, Namespace: prs.Namespace}}
+
+		res, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		assert.Equal(t, ctrl.Result{Requeue: true}, res, "the conflict requeues")
+		var got v1alpha1.PRStatus
+		require.NoError(t, base.Get(context.Background(), req.NamespacedName, &got))
+		assert.True(t, got.Status.Merged, "the webhook's mark is kept")
+		assert.Equal(t, "e7ddb9e", got.Status.MergeCommitSHA)
+		assert.NotNil(t, got.Status.LastCheckedAt, "the old status had lastCheckedAt, so a stale clear would remove the webhook's")
 	})
 
 	t.Run("a status written by an older release is kept", func(t *testing.T) {

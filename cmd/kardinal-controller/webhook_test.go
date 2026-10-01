@@ -156,14 +156,16 @@ func TestWebhook_MarksPRStatusMerged_OnMerge(t *testing.T) {
 
 // TestWebhook_RecordsMergeCommit verifies that the webhook writes the merge
 // commit together with status.merged, fills it in when polling recorded the
-// merge first, and never replaces one already recorded (#1307).
+// merge first, and never replaces one already recorded (#1307). A commit it
+// writes clears status.mergeCommitUnavailable: the status holds one of the two.
 func TestWebhook_RecordsMergeCommit(t *testing.T) {
 	const sha = "e7ddb9e5a1b2c3d4e5f60718293a4b5c6d7e8f90"
 	tests := []struct {
-		name   string
-		status v1alpha1.PRStatusStatus
-		event  string
-		want   string
+		name            string
+		status          v1alpha1.PRStatusStatus
+		event           string
+		want            string
+		wantUnavailable bool
 	}{
 		{name: "open PR", status: v1alpha1.PRStatusStatus{Open: true}, event: sha, want: sha},
 		{name: "merged by polling without the commit", status: v1alpha1.PRStatusStatus{Merged: true},
@@ -171,6 +173,10 @@ func TestWebhook_RecordsMergeCommit(t *testing.T) {
 		{name: "commit already recorded", status: v1alpha1.PRStatusStatus{Merged: true, MergeCommitSHA: "d7d4d8a"},
 			event: sha, want: "d7d4d8a"},
 		{name: "event without the commit", status: v1alpha1.PRStatusStatus{Open: true}, want: ""},
+		{name: "commit recorded unavailable, the event has it", status: v1alpha1.PRStatusStatus{
+			Merged: true, MergeCommitUnavailable: true}, event: sha, want: sha},
+		{name: "commit recorded unavailable, the event has none", status: v1alpha1.PRStatusStatus{
+			Merged: true, MergeCommitUnavailable: true}, want: "", wantUnavailable: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -194,6 +200,7 @@ func TestWebhook_RecordsMergeCommit(t *testing.T) {
 			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
 			assert.True(t, got.Status.Merged)
 			assert.Equal(t, tc.want, got.Status.MergeCommitSHA)
+			assert.Equal(t, tc.wantUnavailable, got.Status.MergeCommitUnavailable)
 		})
 	}
 }

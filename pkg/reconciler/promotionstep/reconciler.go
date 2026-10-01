@@ -1242,9 +1242,12 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 // PRStatus is merged with neither status.mergeCommitSHA nor
 // status.mergeCommitUnavailable set, so the PRStatusReconciler is still
 // asking the SCM provider. A PRStatus that cannot be read (other than not
-// found), or that still reports another PR than the step's (B72), counts as
-// pending too, so a cache error or a status that has not caught up never
-// turns into an image fallback. A deleted PRStatus records nothing more.
+// found) counts as pending too, so a cache error never turns into an image
+// fallback. A deleted PRStatus records nothing more, and neither does one
+// that does not describe the step's PR (B72): the step leaves WaitingForMerge
+// only once its PRStatus does, and only Promoting and WaitingForMerge point
+// the spec at the step's PR, so such a PRStatus was deleted and recreated
+// (kro recreates it as a placeholder) or edited by hand.
 func (r *Reconciler) expectedRevision(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (rev string, pending bool) {
 	if sha := ps.Status.Outputs["commitSHA"]; sha != "" {
 		return sha, false
@@ -1264,10 +1267,7 @@ func (r *Reconciler) expectedRevision(ctx context.Context, log zerolog.Logger, p
 		log.Warn().Err(err).Str("prStatusRef", ps.Spec.PRStatusRef).Msg("could not read the PRStatus for the merge commit")
 		return "", true
 	}
-	if !prStatusOfStepPR(&prs, ps.Status.Outputs) {
-		return "", true
-	}
-	if !prs.Status.Merged {
+	if !prStatusOfStepPR(&prs, ps.Status.Outputs) || !prs.Status.Merged {
 		return "", false
 	}
 	if prs.Status.MergeCommitSHA != "" {

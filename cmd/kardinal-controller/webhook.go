@@ -240,10 +240,12 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 			prs.Status.Open = false
 			prs.Status.LastCheckedAt = &now
 		}
-		if prs.Status.MergeCommitSHA == "" {
+		if prs.Status.MergeCommitSHA == "" && event.MergeCommitSHA != "" {
 			// Written with merged, so the health check knows the commit from
-			// the start (#1307).
+			// the start (#1307). The status holds the commit or that it is
+			// unavailable, not both.
 			prs.Status.MergeCommitSHA = event.MergeCommitSHA
+			prs.Status.MergeCommitUnavailable = false
 		}
 
 		patchErr := s.client.Status().Patch(ctx, prs, patch)

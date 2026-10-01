@@ -263,7 +263,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		prs.Status.ObservedGeneration != prs.Generation
 	stale := prs.Status.LastCheckedAt == nil || now.Sub(prs.Status.LastCheckedAt.Time) >= lastCheckedRefresh
 	if changed || stale {
-		// This is the only CRD status this reconciler writes.
+		// The reconciler writes the status of no CRD but the PRStatus.
 		patch := client.MergeFrom(prs.DeepCopy())
 		prs.Status.ObservedGeneration = prs.Generation
 		prs.Status.Merged = merged
@@ -398,9 +398,10 @@ func (r *Reconciler) recordPollError(ctx context.Context, log zerolog.Logger, pr
 // neither field is set the argocd health check waits for the merge commit;
 // once mergeCommitUnavailable is set it checks the Bundle images only, like
 // the resource check, and the flux check, which has no such fallback, waits
-// until health.timeout (see docs/health-adapters.md). Idempotent: a PR with
-// either field set is a no-op, so a PRStatus a webhook or an older release
-// marked merged gets the field at its first reconcile.
+// until health.timeout (see docs/health-adapters.md). Idempotent: once
+// either field is set, the only write left is adoptLegacyStatus's, once, for
+// a status an earlier release wrote. A PRStatus a webhook or an earlier
+// release marked merged gets the field at its first reconcile.
 func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (ctrl.Result, error) {
 	if prs.Status.MergeCommitSHA != "" || prs.Status.MergeCommitUnavailable {
 		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR already merged, no-op")
@@ -433,14 +434,19 @@ func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, 
 // a poll error of the old PR would otherwise stop the new PR from being
 // polled, and fail the step or advance it without a merge. The cleared status
 // has no lastCheckedAt, so the reconcile the patch triggers polls the new PR
-// at once.
+// at once. The patch carries the resourceVersion it read, so a clear built
+// from a stale read leaves alone a status the webhook wrote for the new PR
+// since (its lastCheckedAt would be cleared); the conflict requeues.
 func (r *Reconciler) clearForNewPR(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (ctrl.Result, error) {
 	log.Info().Str("prURL", prs.Spec.PRURL).Int("prNumber", prs.Spec.PRNumber).
 		Int64("generation", prs.Generation).Int64("observedGeneration", prs.Status.ObservedGeneration).
 		Msg("PRStatus names a new PR; cleared the status of the old one")
-	patch := client.MergeFrom(prs.DeepCopy())
+	patch := client.MergeFromWithOptions(prs.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	prs.Status = v1alpha1.PRStatusStatus{ObservedGeneration: prs.Generation}
 	if err := r.Status().Patch(ctx, prs, patch); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("clear prstatus %s for a new PR: %w", prs.Name, err)
 	}
 	return ctrl.Result{Requeue: true}, nil
@@ -449,11 +455,12 @@ func (r *Reconciler) clearForNewPR(ctx context.Context, log zerolog.Logger, prs 
 // adoptLegacyStatus records the generation on a status a release before
 // observedGeneration wrote (it is 0) and that this reconciler patches for no
 // other reason: a merged PR whose merge commit is known or recorded
-// unavailable, or a PR closed for good. Left at 0, DescribesSpec held for every later spec, so a
-// PromotionStep recreated after the upgrade that pointed the spec at its new PR
-// read the old PR's merged or closedFinal (B72). One patch, when the generation
-// is not yet recorded; the reconcile it triggers finds it recorded and patches
-// nothing. A status this release wrote has it already.
+// unavailable, or a PR closed for good. Left at 0, DescribesSpec held for
+// every later spec, so a PromotionStep recreated after the upgrade that
+// pointed the spec at its new PR read the old PR's merged or closedFinal
+// (B72). One patch, when the generation is not yet recorded; the reconcile it
+// triggers finds it recorded and patches nothing. A status this release wrote
+// has it already.
 func (r *Reconciler) adoptLegacyStatus(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) error {
 	if prs.Status.ObservedGeneration == prs.Generation {
 		return nil
