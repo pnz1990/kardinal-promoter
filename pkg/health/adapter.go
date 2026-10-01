@@ -512,8 +512,9 @@ var fluxKustomizationGVR = schema.GroupVersionResource{
 // Check verifies that the Flux Kustomization's Ready condition is True, that
 // observedGeneration == generation (fully reconciled) and, with
 // ExpectedRevision set, that status.lastAppliedRevision is that commit.
-// Ready=False is a health failure; Ready=Unknown, a generation not yet
-// observed or an older applied revision is Progressing. While the
+// Ready=False is a health failure, and Terminal when Flux gave up on the
+// promoted commit because its resources stalled. Ready=Unknown, a generation
+// not yet observed or an older applied revision is Progressing. While the
 // Kustomization is suspended (spec.suspend) Flux applies nothing, so a
 // Progressing result says so.
 func (a *FluxAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatus, error) {
@@ -561,6 +562,19 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 		state += ": " + msg
 	}
 	if readyStatus == "False" {
+		// Flux gives up early on a Deployment past its progress deadline
+		// ("failed early due to stalled resources"); like the resource
+		// adapter's ProgressDeadlineExceeded, that will not recover. Only a
+		// stall of the promoted commit fails the step at once.
+		reason, _ := readyCond["reason"].(string)
+		msg, _ := readyCond["message"].(string)
+		if reason == "HealthCheckFailed" && strings.Contains(msg, "stalled resources") {
+			attempted, _, _ := unstructured.NestedString(ks.Object, "status", "lastAttemptedRevision")
+			rev, _ := fluxCommit(attempted)
+			if want := opts.ExpectedRevision; want == "" || SameRevision(rev, want) {
+				return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s)", state, shortRev(rev))), nil
+			}
+		}
 		return unhealthy(state), nil
 	}
 	// A missing field would read as 0 and make 0 == 0 look reconciled.

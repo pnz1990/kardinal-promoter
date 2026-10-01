@@ -93,3 +93,55 @@ func TestFluxAdapter_Suspended(t *testing.T) {
 		})
 	}
 }
+
+// stalledMessage is the Ready=False message Flux writes when it gives up on a
+// Deployment past its progress deadline.
+const stalledMessage = "health check failed after 1m5.017502721s: failed early due to stalled resources: " +
+	"[Deployment/prod/web status: 'Failed']"
+
+// TestFluxAdapter_Stalled proves bug 12 of the health spike fixed: Flux
+// giving up on the promoted commit because its Deployment stalled is
+// terminal, so the step fails at once instead of at health.timeout. Other
+// Ready=False results stay unhealthy.
+func TestFluxAdapter_Stalled(t *testing.T) {
+	attempted := func(rev string) func(obj map[string]interface{}) {
+		return func(obj map[string]interface{}) {
+			obj["status"].(map[string]interface{})["lastAttemptedRevision"] = rev
+		}
+	}
+	tests := []struct {
+		name     string
+		obj      *unstructured.Unstructured
+		expected string
+		want     wantKind
+		reason   string
+	}{
+		{name: "the promoted commit stalled",
+			obj: kustomization("False", "HealthCheckFailed", stalledMessage, "main@sha1:"+fluxPrevious,
+				attempted("main@sha1:"+fluxPushed)),
+			expected: fluxPushed, want: isTerminal,
+			reason: "Ready=False, observedGen=3, generation=3: " + stalledMessage + " (lastAttemptedRevision=034ce92a1b2c)"},
+		{name: "a stall with no expected commit",
+			obj:  kustomization("False", "HealthCheckFailed", stalledMessage, "main@sha1:"+fluxPrevious, nil),
+			want: isTerminal, reason: "stalled resources"},
+		{name: "another commit stalled",
+			obj: kustomization("False", "HealthCheckFailed", stalledMessage, "main@sha1:"+fluxPrevious,
+				attempted("main@sha1:"+fluxPrevious)),
+			expected: fluxPushed, want: isUnhealthy, reason: "stalled resources"},
+		{name: "a health check timeout",
+			obj: kustomization("False", "HealthCheckFailed", "health check failed after 3m0s: timeout waiting for: "+
+				"[Deployment/prod/web status: 'InProgress']", "main@sha1:"+fluxPrevious, attempted("main@sha1:"+fluxPushed)),
+			expected: fluxPushed, want: isUnhealthy, reason: "timeout waiting for"},
+		{name: "a build failure",
+			obj: kustomization("False", "BuildFailed", "kustomize build failed: accumulating resources", "main@sha1:"+fluxPrevious,
+				attempted("main@sha1:"+fluxPushed)),
+			expected: fluxPushed, want: isUnhealthy, reason: "kustomize build failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := checkFlux(t, health.CheckOptions{ExpectedRevision: tt.expected}, tt.obj)
+			assert.Equal(t, tt.want, kindOf(got), got.Reason)
+			assert.Contains(t, got.Reason, tt.reason)
+		})
+	}
+}
