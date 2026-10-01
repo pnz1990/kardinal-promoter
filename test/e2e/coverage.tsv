@@ -1,49 +1,49 @@
 id	tier	suite	status	area	feature	source
-INST-KRO-01	live	core	covered	install	kro v0.10.0-rc.0 Graph controller with GraphKind gate installed by hack/install-kro.sh; graphs.kro.run and graphrevisions CRDs present	docs/changelog.md:92; docs/installation.md:23
+INST-KRO-01	live	core	covered	install	kro v0.10.0-rc.0 Graph controller with GraphKind gate installed by hack/install-kro.sh; graphs.kro.run and graphrevisions CRDs present	docs/changelog.md:93; docs/installation.md:23
 INST-CRD-01	live	core	covered	install	kardinal CRDs installable from config/crd/bases (Pipeline, Bundle, PolicyGate, PromotionStep)	docs/installation.md:72; config/crd/bases
 INST-CRD-02	live	core	covered	install	secondary CRDs installed and served (Subscription, NotificationHook, MetricCheck, ChangeWindow, ScheduleClock, RollbackPolicy, AuditEvent, PRStatus)	config/crd/bases; docs/installation.md:72
 INST-QUICKSTART-01	live	core	covered	install	examples/quickstart pipeline.yaml and policy-gates.yaml are accepted by the API server	examples/quickstart/README.md:62-71; docs/quickstart.md:236
 INST-SHUTDOWN-01	live	upgrade	todo	install	graceful SIGTERM shutdown drains in-flight reconciles up to 30s (terminationGracePeriodSeconds 60)	docs/installation.md:267-277; chart/kardinal-promoter/values.yaml:10
 GRAPH-SEQ-01	live	core	covered	graph	default sequential ordering: each environment starts only after the previous one is Verified	docs/pipeline-reference.md:96
 GRAPH-DEP-01	live	core	covered	graph	dependsOn fan-out and fan-in: parallel environments, join waits for all	docs/pipeline-reference.md:96; docs/pipeline-reference.md:164
-GRAPH-DEP-02	live	core	covered	graph	unknown dependsOn or a dependency cycle sets Pipeline Ready=False and no promotion runs	docs/changelog.md:102; pkg/graph/cycle.go:20
+GRAPH-DEP-02	live	core	covered	graph	unknown dependsOn or a dependency cycle sets Pipeline Ready=False and no promotion runs	docs/changelog.md:103; pkg/graph/cycle.go:20
 GRAPH-WAVE-01	live	core	covered	graph	wave: same-wave environments run in parallel, a wave waits for every environment of the next lower wave	docs/pipeline-reference.md:97; docs/pipeline-reference.md:202
 GRAPH-SKIP-01	live	core	covered	graph	intent.skipEnvironments bridges over skipped environments	api/v1alpha1/bundle_types.go:101; docs/ci-integration.md:372
 GRAPH-SKIP-02	live	core	covered	graph	skipping an org-gated environment requires a skip-permission PolicyGate (kardinal.io/type=skip-permission); without it the Bundle is refused	docs/policy-gates.md:448-476
-GRAPH-TARGET-01	live	core	covered	graph	intent.targetEnvironment promotes only up to the target and the Bundle finishes Verified	api/v1alpha1/bundle_types.go:96; docs/changelog.md:101
-GRAPH-INPLACE-01	live	core	covered	graph	Pipeline edit updates the Bundle Graph in place without re-running Verified environments	docs/changelog.md:101
+GRAPH-TARGET-01	live	core	covered	graph	intent.targetEnvironment promotes only up to the target and the Bundle finishes Verified	api/v1alpha1/bundle_types.go:96; docs/changelog.md:102
+GRAPH-INPLACE-01	live	core	covered	graph	Pipeline edit updates the Bundle Graph in place without re-running Verified environments	docs/changelog.md:102
 GRAPH-HEAL-01	live	core	covered	graph	a deleted Graph is recreated and the Bundle continues	docs/graph-coverage.md
 GRAPH-RBAC-01	live	chart	todo	graph	Graph ServiceAccount and RBAC (graph-rbac.yaml) let kro create PromotionSteps, PolicyGates and PRStatus nodes	chart/kardinal-promoter/templates/graph-rbac.yaml
 GRAPH-PRSTATUS-01	live	scm-forgejo	covered	graph	one PRStatus companion node per environment, named in its step's prStatusRef, tracks PR state; only a pr-review environment's is ready when merged (an auto one's stays a placeholder)	docs/graph-coverage.md:21; pkg/graph/builder.go:558-566; pkg/graph/builder.go:833-873; api/v1alpha1/prstatus_types.go
-GRAPH-NSDELETE-01	live	core	covered	graph	deleting a namespace with a Bundle finishes even when its applier RoleBinding goes first: the controller removes kro's finalizer from its Graphs in a Terminating namespace	pkg/reconciler/graphcleanup/reconciler.go:67; docs/changelog.md:68
+GRAPH-NSDELETE-01	live	core	covered	graph	deleting a namespace with a Bundle finishes even when its applier RoleBinding goes first: the controller removes kro's finalizer from its Graphs in a Terminating namespace	pkg/reconciler/graphcleanup/reconciler.go:67; docs/changelog.md:69
 GRAPH-READER-PRUNE-01	live	core	covered	graph	deleting a namespace's last Bundle deletes the reader RoleBinding its Graph had in argocd	pkg/reconciler/graphcleanup/reconciler.go:61; docs/installation.md:610
-GRAPH-READER-PRUNE-02	live	core	covered	graph	deleting a namespace deletes the reader RoleBindings its Graphs had in argocd, with the applier RoleBinding and its record gone	pkg/graph/identity.go:246; docs/changelog.md:69
+GRAPH-READER-PRUNE-02	live	core	covered	graph	deleting a namespace deletes the reader RoleBindings its Graphs had in argocd, with the applier RoleBinding and its record gone	pkg/graph/identity.go:246; docs/changelog.md:70
 GRAPH-READER-SWEEP-01	live	upgrade	todo	graph	after an upgrade or restart, the startup sweep deletes the reader RoleBindings whose namespace is gone or holds no Graph reading through them	pkg/reconciler/graphcleanup/sweep.go:22; docs/installation.md:616
 BUNDLE-PHASE-01	live	core	covered	bundle	a new Bundle is picked up by the controller and gets phase Available or Promoting	api/v1alpha1/bundle_types.go:107
-BUNDLE-VERIFIED-01	live	core	covered	bundle	image Bundle reaches Verified when every targeted environment is Verified	docs/changelog.md:101
-BUNDLE-FAILED-01	live	core	covered	bundle	a failing step fails the Bundle; a Failed Bundle retries after its Pipeline changes	docs/changelog.md:101
-BUNDLE-SUPERSEDE-01	live	core	covered	bundle	a newer Bundle supersedes the older one; the Superseded Bundle creates no new step and a never-started step fails without an AuditEvent	docs/changelog.md:93
-BUNDLE-SUPERSEDE-02	live	scm-forgejo	covered	bundle	the open PR of a Superseded Bundle is closed	docs/changelog.md:93; pkg/scm/provider.go:78
-BUNDLE-ORDER-01	live	core	covered	bundle	Bundles created in the same second are ordered by kardinal.io/created-at	docs/changelog.md:101; pkg/lifecycle/lifecycle.go:63
-BUNDLE-INVALID-01	live	core	covered	bundle	a Bundle missing the artifacts its type needs (mixed without configRef.commitSHA) or an unbuildable Graph fails with InvalidSpec instead of retrying	docs/changelog.md:101; pkg/lifecycle/newbundle.go:27
+BUNDLE-VERIFIED-01	live	core	covered	bundle	image Bundle reaches Verified when every targeted environment is Verified	docs/changelog.md:102
+BUNDLE-FAILED-01	live	core	covered	bundle	a failing step fails the Bundle; a Failed Bundle retries after its Pipeline changes	docs/changelog.md:102
+BUNDLE-SUPERSEDE-01	live	core	covered	bundle	a newer Bundle supersedes the older one; the Superseded Bundle creates no new step and a never-started step fails without an AuditEvent	docs/changelog.md:94
+BUNDLE-SUPERSEDE-02	live	scm-forgejo	covered	bundle	the open PR of a Superseded Bundle is closed	docs/changelog.md:94; pkg/scm/provider.go:78
+BUNDLE-ORDER-01	live	core	covered	bundle	Bundles created in the same second are ordered by kardinal.io/created-at	docs/changelog.md:102; pkg/lifecycle/lifecycle.go:63
+BUNDLE-INVALID-01	live	core	covered	bundle	a Bundle missing the artifacts its type needs (mixed without configRef.commitSHA) or an unbuildable Graph fails with InvalidSpec instead of retrying	docs/changelog.md:102; pkg/lifecycle/newbundle.go:27
 BUNDLE-CONFIG-01	live	core	covered	bundle	config Bundle (configRef.gitRepo + commitSHA) runs config-merge and promotes a config change	docs/ci-integration.md:345; docs/pipeline-reference.md:282
 BUNDLE-MIXED-01	live	core	covered	bundle	mixed Bundle (images + configRef) promotes both in one step sequence	api/v1alpha1/bundle_types.go:16; docs/ci-integration.md:345
 BUNDLE-MULTI-01	live	core	covered	bundle	multi-image Bundle updates every image in kustomization.yaml	docs/ci-integration.md:320
-BUNDLE-DIGEST-01	live	core	covered	bundle	image digest (repo@sha256:...) is written instead of a tag	api/v1alpha1/bundle_types.go:54; docs/changelog.md:100
+BUNDLE-DIGEST-01	live	core	covered	bundle	image digest (repo@sha256:...) is written instead of a tag	api/v1alpha1/bundle_types.go:54; docs/changelog.md:101
 BUNDLE-HISTORY-01	live	core	covered	bundle	historyLimit (default 50) garbage-collects the oldest finished Bundles when a new one is created	docs/pipeline-reference.md:127
 BUNDLE-SLOT-01	live	core	covered	bundle	maxConcurrentPromotions caps Promoting Bundles; an over-cap Bundle stays Available with Ready reason WaitingForSlot and starts when a slot frees	docs/pipeline-reference.md:139; pkg/reconciler/bundle/reconciler.go:696
-BUNDLE-METRICS-01	live	core	covered	bundle	Bundle status.metrics (commitToProductionMinutes, bakeResets, operatorInterventions)	api/v1alpha1/bundle_types.go:146-157; docs/changelog.md:98
-BUNDLE-GRAPHCOND-01	live	core	covered	bundle	Graph Accepted and Ready conditions are shown on the Bundle; GraphReady turns True for a Verified Bundle	docs/changelog.md:101
-BUNDLE-COLUMNS-01	live	core	covered	bundle	kubectl get printer columns for Bundle and PromotionStep	docs/changelog.md:133
-BUNDLE-SUPERSEDE-03	live	core	todo	bundle	three Bundles created back to back: the two older become Superseded and only the newest keeps promoting	docs/concepts.md:35; docs/changelog.md:99
+BUNDLE-METRICS-01	live	core	covered	bundle	Bundle status.metrics (commitToProductionMinutes, bakeResets, operatorInterventions)	api/v1alpha1/bundle_types.go:146-157; docs/changelog.md:99
+BUNDLE-GRAPHCOND-01	live	core	covered	bundle	Graph Accepted and Ready conditions are shown on the Bundle; GraphReady turns True for a Verified Bundle	docs/changelog.md:102
+BUNDLE-COLUMNS-01	live	core	covered	bundle	kubectl get printer columns for Bundle and PromotionStep	docs/changelog.md:134
+BUNDLE-SUPERSEDE-03	live	core	todo	bundle	three Bundles created back to back: the two older become Superseded and only the newest keeps promoting	docs/concepts.md:35; docs/changelog.md:100
 BUNDLE-SUPERSEDE-04	live	core	todo	bundle	supersession is per Bundle type: a new image Bundle does not supersede an in-flight config Bundle, and vice versa	docs/concepts.md:49
-PIPE-READY-01	live	core	covered	pipeline	a valid Pipeline gets Ready=True	docs/changelog.md:102
-PIPE-READY-02	live	core	covered	pipeline	duplicate environment names or git.secretRef in another namespace set Ready=False (ValidationFailed) and the step fails without reading the Secret	docs/pipeline-reference.md:74; docs/changelog.md:102
+PIPE-READY-01	live	core	covered	pipeline	a valid Pipeline gets Ready=True	docs/changelog.md:103
+PIPE-READY-02	live	core	covered	pipeline	duplicate environment names or git.secretRef in another namespace set Ready=False (ValidationFailed) and the step fails without reading the Secret	docs/pipeline-reference.md:74; docs/changelog.md:103
 PIPE-NOTIMPL-01	live	core	covered	pipeline	layout: branch, shard, two or more regions, health.cluster set Ready=False reason NotImplemented; the promotion fails with the documented message	docs/pipeline-reference.md:116-125
-PIPE-REJECT-01	live	core	covered	pipeline	API server rejects non-empty steps, promotionTemplate, autoRollback, argocd with pr-review, non-empty spec.policyGates, reserved environment names	docs/changelog.md:79; api/v1alpha1/pipeline_types.go:35; api/v1alpha1/pipeline_types.go:124-128
+PIPE-REJECT-01	live	core	covered	pipeline	API server rejects non-empty steps, promotionTemplate, autoRollback, argocd with pr-review, non-empty spec.policyGates, reserved environment names	docs/changelog.md:80; api/v1alpha1/pipeline_types.go:35; api/v1alpha1/pipeline_types.go:124-128
 PIPE-NAME-01	live	core	covered	pipeline	environment name must be a DNS label, unique; Go duration syntax enforced for health.timeout and waitForMergeTimeout	docs/pipeline-reference.md:78-90; api/v1alpha1/pipeline_types.go:137
 PIPE-PATH-01	live	core	covered	pipeline	environment path must stay inside the repo: absolute paths, .. segments and escaping symlinks fail the step	docs/pipeline-reference.md:95
-PIPE-PHASE-01	live	core	covered	pipeline	Pipeline status.phase is Promoting while a Bundle is in flight or held by a gate	docs/changelog.md:102
+PIPE-PHASE-01	live	core	covered	pipeline	Pipeline status.phase is Promoting while a Bundle is in flight or held by a gate	docs/changelog.md:103
 PIPE-DORA-01	live	core	covered	pipeline	status.deploymentMetrics: rolloutsLast30Days, p50/p90 commit-to-prod, autoRollbackRateMillis, operatorInterventionRateMillis, staleProdDays	api/v1alpha1/pipeline_types.go:550-589
 STEP-SM-01	live	core	covered	step	PromotionStep state machine Pending -> Promoting -> (WaitingForMerge) -> HealthChecking -> Verified	docs/pipeline-reference.md:271-288
 STEP-AUTO-01	live	core	covered	step	approval: auto clones, commits and pushes straight to the base branch; no PR	docs/pipeline-reference.md:99; docs/pr-evidence.md:125
@@ -58,11 +58,11 @@ STEP-TIMEOUT-01	live	core	covered	step	stepTimeoutSeconds cancels a step that ru
 STEP-MERGETIMEOUT-01	live	scm-forgejo	covered	step	waitForMergeTimeout fails the step and closes the PR so a late merge cannot deliver	docs/pipeline-reference.md:109
 STEP-RESUME-01	live	upgrade	todo	step	controller restart after git-push resumes the step without a duplicate commit or PR	docs/installation.md:267
 STEP-ORPHAN-01	live	core	covered	step	PromotionSteps whose Bundle is gone are cleaned up	pkg/reconciler/promotionstep
-STEP-DELETE-PR-01	live	core	covered	step	a pr-review step holds the kardinal.io/close-pr finalizer and a Verified auto step does not; deleting their Bundle closes the PR with one comment, and the steps go	pkg/reconciler/promotionstep/finalizer.go:28; docs/changelog.md:67
+STEP-DELETE-PR-01	live	core	covered	step	a pr-review step holds the kardinal.io/close-pr finalizer and a Verified auto step does not; deleting their Bundle closes the PR with one comment, and the steps go	pkg/reconciler/promotionstep/finalizer.go:28; docs/changelog.md:68
 STEP-DELETE-PR-02	live	core	covered	step	deleting a namespace closes the open PR of its step with one comment naming the namespace; the close-pr finalizer does not stall the namespace deletion	pkg/reconciler/promotionstep/finalizer.go:127; docs/troubleshooting.md:570
 STEP-DELETE-PR-03	live	core	covered	step	a step deleted with its Graph while the Bundle is Promoting leaves its PR open and uncommented; the recreated step reuses it, so the environment has one PR	pkg/reconciler/promotionstep/finalizer.go:208; docs/troubleshooting.md:587
-STEP-AUDIT-01	live	core	covered	audit	AuditEvent objects are written for step transitions and gate decisions	api/v1alpha1/auditevent_types.go; docs/changelog.md:111
-STEP-EVENTS-01	live	core	covered	audit	controller emits events.k8s.io/v1 Events with action and note <=1024 bytes	docs/changelog.md:91
+STEP-AUDIT-01	live	core	covered	audit	AuditEvent objects are written for step transitions and gate decisions	api/v1alpha1/auditevent_types.go; docs/changelog.md:112
+STEP-EVENTS-01	live	core	covered	audit	controller emits events.k8s.io/v1 Events with action and note <=1024 bytes	docs/changelog.md:92
 ARGOSTRAT-01	live	core	covered	step	update.strategy: argocd patches the Application spec.source.helm.valuesObject with no git commit or PR	docs/argocd-native-promotion.md:26; docs/argocd-native-promotion.md:65; pkg/steps/steps/argocd_set_image.go
 ARGOSTRAT-02	live	core	covered	step	argocd strategy imageKey dot-path and multi-image Bundles	docs/argocd-native-promotion.md:134; docs/argocd-native-promotion.md:148
 ARGOSTRAT-03	live	core	covered	step	argocd strategy: config or mixed Bundle fails before its first environment	docs/argocd-native-promotion.md:82; docs/pipeline-reference.md:98
@@ -77,13 +77,13 @@ HEALTH-TIMEOUT-01	live	core	covered	health	health.timeout (default 10m) expiry c
 HEALTH-UNKNOWN-01	live	core	covered	health	unknown health.type is rejected by the CRD schema; unset type selects resource	docs/health-adapters.md:14-20; api/v1alpha1/pipeline_types.go:418; pkg/health/adapter.go:1432
 HEALTH-ARGO-01	live	core	covered	health	argocd adapter: Application Healthy, Synced on the promoted commit, last operation Succeeded -> Verified	docs/health-adapters.md:95-99; pkg/health/adapter.go:410; pkg/health/adapter.go:446
 HEALTH-ARGO-02	live	core	covered	health	argocd adapter: on the promoted commit, Degraded or a Failed/Error operation (PostSync hook failure) is a health failure	docs/pipeline-reference.md:320-326; docs/health-adapters.md:116-118; pkg/health/adapter.go:444
-HEALTH-ARGO-03	live	core	covered	health	argocd adapter: not ready while a sync is running or on an older revision	docs/changelog.md:112; docs/health-adapters.md:114; docs/health-adapters.md:120-122; pkg/health/adapter.go:441; pkg/health/adapter.go:545
+HEALTH-ARGO-03	live	core	covered	health	argocd adapter: not ready while a sync is running or on an older revision	docs/changelog.md:113; docs/health-adapters.md:114; docs/health-adapters.md:120-122; pkg/health/adapter.go:441; pkg/health/adapter.go:545
 HEALTH-ARGO-04	live	core	covered	health	argocd adapter accepts a later commit on a shared branch when the Application runs the Bundle images	docs/health-adapters.md:29; docs/health-adapters.md:101; pkg/health/adapter.go:535
 HEALTH-ARGO-05	live	core	covered	health	argocd adapter with pr-review uses the PR merge commit (mergeCommitSHA)	docs/health-adapters.md:24-27
 HEALTH-ARGO-06	live	core	covered	health	argocd adapter: Degraded health or a Failed operation from before the promoted commit is deployed waits and is not a health failure, also while the sync of the promoted commit still runs (B52)	docs/health-adapters.md:103; docs/health-adapters.md:115-120; pkg/health/adapter.go:444; pkg/health/adapter.go:518-520
 HEALTH-FLUX-01	live	flux	covered	health	flux adapter: Kustomization Ready with lastAppliedRevision on the promoted commit and observedGeneration current -> Verified	docs/health-adapters.md:130-151; pkg/health/adapter.go:609-647; pkg/health/adapter.go:706-736
 HEALTH-FLUX-02	live	flux	covered	health	flux adapter: Ready=False or Kustomization not found is unhealthy; Ready on the previous commit waits	docs/health-adapters.md:152-165; pkg/health/adapter.go:631-634; pkg/health/adapter.go:693; pkg/health/adapter.go:718-719
-HEALTH-FLUX-03	live	flux	covered	health	flux on pr-review waits for the PR merge commit, not a Ready on the previous commit	docs/changelog.md:112; docs/health-adapters.md:161; docs/health-adapters.md:167-172
+HEALTH-FLUX-03	live	flux	covered	health	flux on pr-review waits for the PR merge commit, not a Ready on the previous commit	docs/changelog.md:113; docs/health-adapters.md:161; docs/health-adapters.md:167-172
 HEALTH-FLUX-04	live	flux	covered	health	flux GitRepository sourced from self-hosted git (Forgejo) reconciles the promoted commit	docs/health-adapters.md:130
 HEALTH-FLUX-05	live	flux	covered	health	flux adapter: a suspended Kustomization (spec.suspend) waits and says it is suspended; the step verifies once it is resumed	docs/health-adapters.md:160; pkg/health/adapter.go:620-621; pkg/health/adapter.go:642-645
 HEALTH-FLUX-06	live	flux	covered	health	flux adapter: parallel environments on one branch are Verified when their Deployments run the Bundle images, though Flux applied a sibling's later commit	docs/health-adapters.md:157; pkg/health/adapter.go:718-734; pkg/health/adapter.go:805-877
@@ -93,21 +93,21 @@ HEALTH-ROLL-01	live	delivery	covered	health	argoRollouts adapter: Rollout Health
 HEALTH-ROLL-02	live	delivery	covered	health	argoRollouts adapter: Degraded (aborted canary) on the Bundle image is unhealthy; Progressing waits	docs/health-adapters.md:191-198; pkg/health/adapter.go:1047
 HEALTH-FLAG-01	live	delivery	covered	health	flagger adapter: Canary Succeeded on the promoted revision -> Verified	docs/health-adapters.md:201-231; pkg/health/adapter.go:1192; pkg/health/adapter.go:1272
 HEALTH-FLAG-02	live	delivery	covered	health	flagger adapter: Canary Failed is terminal at once, message includes Flagger's reason	docs/health-adapters.md:230-234; pkg/health/adapter.go:1286
-HEALTH-ROLL-03	live	delivery	covered	health	argoRollouts adapter: Paused waits and is not a health failure	docs/health-adapters.md:196; docs/rollback.md:122
-HEALTH-ROLL-04	live	delivery	covered	health	argoRollouts adapter: until the Rollout runs the Bundle image, a Healthy phase the previous release left waits and does not verify	docs/health-adapters.md:191; docs/rollback.md:122; pkg/health/adapter.go:1015
-HEALTH-ROLL-05	live	delivery	covered	health	argoRollouts adapter: a Degraded phase the previous release left is not a health failure; the next release is Verified	docs/health-adapters.md:191; docs/rollback.md:122
-HEALTH-FLAG-03	live	delivery	covered	health	flagger adapter: until Flagger promotes the Bundle images to the primary, a Succeeded phase the previous release left waits and does not verify	docs/health-adapters.md:215-220; docs/rollback.md:134
-HEALTH-FLAG-04	live	delivery	covered	health	flagger adapter: a Failed phase the previous release left does not fail the next release, which is Verified once Flagger promotes it	docs/health-adapters.md:219-225; docs/rollback.md:134; pkg/health/adapter.go:1244
+HEALTH-ROLL-03	live	delivery	covered	health	argoRollouts adapter: Paused waits and is not a health failure	docs/health-adapters.md:196; docs/rollback.md:124
+HEALTH-ROLL-04	live	delivery	covered	health	argoRollouts adapter: until the Rollout runs the Bundle image, a Healthy phase the previous release left waits and does not verify	docs/health-adapters.md:191; docs/rollback.md:124; pkg/health/adapter.go:1015
+HEALTH-ROLL-05	live	delivery	covered	health	argoRollouts adapter: a Degraded phase the previous release left is not a health failure; the next release is Verified	docs/health-adapters.md:191; docs/rollback.md:124
+HEALTH-FLAG-03	live	delivery	covered	health	flagger adapter: until Flagger promotes the Bundle images to the primary, a Succeeded phase the previous release left waits and does not verify	docs/health-adapters.md:215-220; docs/rollback.md:136
+HEALTH-FLAG-04	live	delivery	covered	health	flagger adapter: a Failed phase the previous release left does not fail the next release, which is Verified once Flagger promotes it	docs/health-adapters.md:219-225; docs/rollback.md:136; pkg/health/adapter.go:1244
 DELIVERY-01	live	delivery	covered	delivery	delivery.delegate: argoRollouts takes precedence over health.type and watches the Rollout	docs/pipeline-reference.md:105; docs/health-adapters.md:14-16
 DELIVERY-02	live	delivery	covered	delivery	delivery.delegate: flagger watches the Canary	docs/pipeline-reference.md:105
-DELIVERY-03	live	delivery	covered	delivery	delegation failure (Rollout aborted, Canary Failed) applies onHealthFailure	docs/rollback.md:134
+DELIVERY-03	live	delivery	covered	delivery	delegation failure (Rollout aborted, Canary Failed) applies onHealthFailure	docs/rollback.md:136
 BAKE-01	live	core	covered	health	bake.minutes requires contiguous healthy checks before Verified	docs/pipeline-reference.md:111; docs/health-adapters.md:275
 BAKE-02	live	core	covered	health	bake policy reset-on-alarm restarts the window on an unhealthy check (bakeResets counted)	docs/pipeline-reference.md:112
 BAKE-03	live	core	covered	health	bake policy fail-on-alarm applies onHealthFailure on the first unhealthy check	docs/pipeline-reference.md:112
 BAKE-04	live	delivery	covered	health	bake: a Waiting check (a paused canary) stops the window without an alarm under fail-on-alarm; the window restarts at the next healthy check	docs/pipeline-reference.md:111; docs/health-adapters.md:272
-BAKE-05	live	delivery	covered	health	bake: a release that stays unhealthy under reset-on-alarm fails at health.timeout from the moment the window stopped	docs/health-adapters.md:270-272; docs/rollback.md:128
+BAKE-05	live	delivery	covered	health	bake: a release that stays unhealthy under reset-on-alarm fails at health.timeout from the moment the window stopped	docs/health-adapters.md:270-272; docs/rollback.md:130
 ONFAIL-NONE-01	live	core	covered	health	onHealthFailure: none (default) marks the step Failed	docs/pipeline-reference.md:113
-ONFAIL-ABORT-01	live	core	covered	health	onHealthFailure: abort marks the step AbortedByAlarm and it does not reset to Pending	docs/pipeline-reference.md:113; docs/changelog.md:155
+ONFAIL-ABORT-01	live	core	covered	health	onHealthFailure: abort marks the step AbortedByAlarm and it does not reset to Pending	docs/pipeline-reference.md:113; docs/changelog.md:156
 ONFAIL-ROLLBACK-01	live	core	covered	rollback	onHealthFailure: rollback creates a rollback Bundle from the previous Verified Bundle; step RollingBack	docs/pipeline-reference.md:113; docs/rollback.md:87
 ONFAIL-ROLLBACK-02	live	core	covered	rollback	onHealthFailure: rollback with nothing safe to roll back to -> AbortedByAlarm; a rollback Bundle never rolls back again	docs/pipeline-reference.md:113; docs/rollback.md:87
 ONFAIL-ROLLBACK-03	contract	core	covered	rollback	onHealthFailure: rollback: the step stays RollingBack when its own rollback Bundle supersedes its Bundle; the supersession guard cancels a step only from the status the API server has, never from a cached copy that lags the RollingBack patch, and a step still in flight is cancelled from that fresh status	docs/rollback.md:115; pkg/reconciler/promotionstep/reconciler.go:242-244; pkg/reconciler/promotionstep/reconciler.go:302-319
@@ -168,8 +168,8 @@ SCM-ADO-02	contract	core	covered	scm	Azure DevOps: labels applied as PR tags	doc
 SCM-ADO-03	contract	core	covered	scm	Azure DevOps: merge detected by polling (status completed); merge commit fetched from API	docs/scm-providers.md:253; pkg/scm/revision.go:43-114
 SCM-ADO-04	contract	core	covered	webhook	Azure DevOps: X-AzureDevOps-Token compared in constant time; resource.status completed marks merged; wrong token 401	docs/scm-providers.md:16; pkg/scm/azuredevops.go:270-313
 SCM-ADO-05	contract	core	covered	scm	Azure DevOps: approvals read, close PR, existing-PR reuse	pkg/scm/azuredevops.go
-SCM-REOPEN-01	live	scm-forgejo	covered	scm	PR closed without merge can be reopened within 5 minutes and the promotion continues	docs/changelog.md:104
-SCM-CLOSED-01	live	scm-forgejo	covered	scm	PR closed for more than 5 minutes: kardinal comments once, stops polling, fails the step (closedAt, closedFinal)	docs/changelog.md:104
+SCM-REOPEN-01	live	scm-forgejo	covered	scm	PR closed without merge can be reopened within 5 minutes and the promotion continues	docs/changelog.md:105
+SCM-CLOSED-01	live	scm-forgejo	covered	scm	PR closed for more than 5 minutes: kardinal comments once, stops polling, fails the step (closedAt, closedFinal)	docs/changelog.md:105
 SCM-ROTATE-01	live	scm-forgejo	covered	scm	SCM token Secret change is picked up within about 30s without restart (log SCM credentials rotated)	docs/scm-providers.md:308-366; pkg/scm/secret_watcher.go:31
 SCM-STATIC-01	live	scm-forgejo	covered	scm	static mode (--github-token without --scm-token-secret-name) needs a restart to rotate	docs/scm-providers.md:367-377
 SCM-BREAKER-01	live	scm-forgejo	covered	scm	SCM circuit breaker and rate-limit backoff stop hammering a failing SCM API	pkg/scm/circuit_breaker.go
@@ -193,15 +193,15 @@ GATE-PR-01	live	core	covered	gates	bundle.pr.* (isApproved, approvalCount) from 
 GATE-ORG-01	live	core	covered	gates	org gates in platform-policies with kardinal.io/applies-to are injected into matching Pipelines and cannot be removed by the team	docs/policy-gates.md:89-108; docs/policy-gates.md:129-148
 GATE-TEAM-01	live	core	covered	gates	team gates in the Pipeline namespace apply only to that team's matching envs	docs/policy-gates.md:109-128
 GATE-POLNS-01	live	core	covered	gates	Pipeline spec.policyNamespaces adds extra gate namespaces	api/v1alpha1/pipeline_types.go:52-58; docs/guides/security.md:118-135
-GATE-PREDEPLOY-01	live	core	covered	gates	step waits for a gate evaluation at or after its own creation; a gate that turns not-ready before start holds the step	docs/policy-gates.md:521-526; pkg/reconciler/promotionstep/reconciler.go:1275-1292
+GATE-PREDEPLOY-01	live	core	covered	gates	step waits for a gate evaluation at or after its own creation; a gate that turns not-ready before start holds the step	docs/policy-gates.md:521-526; pkg/reconciler/promotionstep/reconciler.go:1306-1323
 GATE-RECHECK-01	live	core	covered	gates	recheckInterval (default 5m, min 10s) re-evaluates gates periodically	docs/policy-gates.md:450-484
 GATE-FINISHED-01	live	core	covered	gates	gates of settled or Superseded Bundles are no longer evaluated	docs/policy-gates.md:507-520; pkg/reconciler/policygate/reconciler.go:152-155
 GATE-OVERRIDE-01	live	core	covered	gates	spec.overrides with reason and expiry makes the gate pass for that stage; PR body shows OVERRIDDEN by/reason	docs/policy-gates.md:556; pkg/reconciler/policygate/reconciler.go:163-175; pkg/reconciler/policygate/reconciler.go:164
 GATE-OVERRIDE-02	live	core	covered	gates	expired override or override for another stage (kardinal.io/environment label) does not unblock	pkg/reconciler/policygate/reconciler.go:163-175
 GATE-AUDIT-01	live	core	covered	gates	GateEvaluated AuditEvent on first evaluation and on every readiness flip	docs/guides/security.md:266-275; pkg/reconciler/policygate/audit.go:62
 GATE-MESSAGE-01	live	core	covered	gates	gate spec.message is shown to the user when the gate blocks	docs/policy-gates.md:27; pkg/reconciler/policygate/reconciler.go:231-236; cmd/kardinal/cmd/policy.go:429
-GATE-REJECT-01	live	core	covered	gates	PolicyGate spec.selector or a name over 63 chars is rejected by the API server with a what-to-do message	docs/changelog.md:79
-GATE-REJECT-02	live	core	covered	gates	a PolicyGate template name over 63 characters is rejected whatever its pattern; controller-created instances and freeze gates are exempt	docs/changelog.md:51; api/v1alpha1/policygate_types.go:137
+GATE-REJECT-01	live	core	covered	gates	PolicyGate spec.selector or a name over 63 chars is rejected by the API server with a what-to-do message	docs/changelog.md:80
+GATE-REJECT-02	live	core	covered	gates	a PolicyGate template name over 63 characters is rejected whatever its pattern; controller-created instances and freeze gates are exempt	docs/changelog.md:52; api/v1alpha1/policygate_types.go:137
 METRIC-01	live	flux	covered	metriccheck	MetricCheck runs a PromQL query against Prometheus and records Pass/Fail using lt/gt/lte/gte/eq on a scalar or one-element vector	api/v1alpha1/metriccheck_types.go:13-16; pkg/reconciler/metriccheck/prometheus.go:153-174; pkg/reconciler/metriccheck/reconciler.go:206-227
 METRIC-02	live	flux	covered	metriccheck	metrics.<name> in a gate expression blocks promotion when the MetricCheck fails	docs/policy-gates.md:207-217; docs/policy-gates.md:419-427; pkg/reconciler/policygate/reconciler.go:418-427
 METRIC-03	live	flux	covered	metriccheck	result older than validUntil (max(3x interval, 30s)) reads Stale and the gate fails closed	docs/policy-gates.md:218-238; docs/reference/cel-context.md:134-140; pkg/reconciler/metriccheck/reconciler.go:231-233
@@ -210,7 +210,7 @@ METRIC-05	live	flux	covered	metriccheck	interval default 1m, minimum 10s; re-que
 METRIC-06	live	flux	covered	metriccheck	prometheusURL to loopback, link-local or metadata addresses is refused by the egress guard	docs/guides/security.md:396-433; pkg/egress/guard.go:66-89
 METRIC-07	live	flux	covered	metriccheck	MetricCheck provider is prometheus only: the CRD rejects any other provider and an unset provider defaults to prometheus (docs claimed custom query providers)	docs/guides/migrating-from-kargo.md:17; api/v1alpha1/metriccheck_types.go:13-16
 METRIC-08	live	flux	covered	metriccheck	an org PolicyGate reads MetricChecks in its own namespace; a team MetricCheck with the same name cannot satisfy it	docs/policy-gates.md:174-185; docs/reference/cel-context.md:132; pkg/reconciler/policygate/reconciler.go:537-564
-METRIC-09	live	flux	covered	metriccheck	a MetricCheck whose status write fails evaluates again and retries the write after 5s once, then at its interval (no error backoff), and recovers within one interval once writes work	docs/changelog.md:36; docs/policy-gates.md:220-226; pkg/reconciler/metriccheck/reconciler.go:122-165
+METRIC-09	live	flux	covered	metriccheck	a MetricCheck whose status write fails evaluates again and retries the write after 5s once, then at its interval (no error backoff), and recovers within one interval once writes work	docs/changelog.md:37; docs/policy-gates.md:220-226; pkg/reconciler/metriccheck/reconciler.go:122-165
 CW-01	live	core	covered	changewindow	blackout ChangeWindow blocks via changewindow.isBlocked()/isAllowed() in gate CEL	docs/policy-gates.md:360-401; pkg/reconciler/policygate/reconciler.go:408-415; pkg/reconciler/policygate/cel_evaluator.go:124-156
 CW-02	live	core	covered	changewindow	recurring ChangeWindow (allowedDays, allowedHours, timezone with embedded tzdata)	api/v1alpha1/changewindow_types.go:20-62; pkg/reconciler/changewindow/window.go:92-201
 CW-03	live	core	covered	changewindow	invalid ChangeWindow spec sets Valid=False/InvalidSpec and the window blocks	pkg/reconciler/changewindow/window.go:92-201
@@ -218,16 +218,16 @@ CW-04	live	core	covered	changewindow	ChangeWindow requeues at the next boundary 
 RB-PREV-01	live	core	covered	rollback	manual rollback creates a Bundle with rollbackOf for the previous Verified Bundle and promotes it through the env	docs/rollback.md:5-13; docs/rollback.md:64-76; pkg/lifecycle/rollback.go:68-121
 RB-TO-01	live	core	covered	rollback	rollback --to <bundle> restores a specific earlier version	docs/rollback.md:77-86; cmd/kardinal/cmd/rollback.go:40
 RB-RESTORE-01	live	core	covered	rollback	images the deployed Bundle changed and the target does not name are restored from the newest earlier Verified Bundle naming them; with none the rollback is refused	docs/rollback.md:14-20
-RB-PR-01	live	core	covered	rollback	pr-review rollback PR has title (restores ...) and label kardinal/rollback	docs/rollback.md:157-171; pkg/steps/steps/open_pr.go:70-88; pkg/steps/steps/open_pr.go:106-113
-RB-GATES-01	live	core	covered	rollback	rollback Bundles pass through the env PolicyGates as documented	docs/rollback.md:172-186
-RB-HISTORY-01	live	core	covered	rollback	rollback shows in history; how far back is bounded by historyLimit	docs/rollback.md:187-206; api/v1alpha1/pipeline_types.go:44-50
-RB-POLICY-01	live	core	covered	rollback	RollbackPolicy failureThreshold (default 3) triggers rollback after N consecutive health failures	docs/rollback.md:138-155; pkg/reconciler/rollbackpolicy/reconciler.go:149-156
-RB-POLICY-02	live	core	covered	rollback	RollbackPolicy refusal sets RollbackRefused and a Warning Event; nothing requeues afterward	docs/rollback.md:138-155
-RB-MULTI-01	live	core	covered	rollback	a rollback promotes through the environments upstream of its target first; environments not upstream are not touched	docs/rollback.md:208-215
+RB-PR-01	live	core	covered	rollback	pr-review rollback PR has title (restores ...) and label kardinal/rollback	docs/rollback.md:159-173; pkg/steps/steps/open_pr.go:70-88; pkg/steps/steps/open_pr.go:106-113
+RB-GATES-01	live	core	covered	rollback	rollback Bundles pass through the env PolicyGates as documented	docs/rollback.md:174-188
+RB-HISTORY-01	live	core	covered	rollback	rollback shows in history; how far back is bounded by historyLimit	docs/rollback.md:189-208; api/v1alpha1/pipeline_types.go:44-50
+RB-POLICY-01	live	core	covered	rollback	RollbackPolicy failureThreshold (default 3) triggers rollback after N consecutive health failures	docs/rollback.md:140-157; pkg/reconciler/rollbackpolicy/reconciler.go:149-156
+RB-POLICY-02	live	core	covered	rollback	RollbackPolicy refusal sets RollbackRefused and a Warning Event; nothing requeues afterward	docs/rollback.md:140-157
+RB-MULTI-01	live	core	covered	rollback	a rollback promotes through the environments upstream of its target first; environments not upstream are not touched	docs/rollback.md:210-217
 RB-AUDIT-01	live	core	covered	rollback	RollbackStarted AuditEvent when onHealthFailure: rollback fires	docs/guides/security.md:266-275; pkg/reconciler/promotionstep/audit.go:33-37
-PAUSE-01	live	core	covered	pause	paused Pipeline holds new steps via freeze-<pipeline> gate and a Paused condition	docs/rollback.md:228-236; pkg/lifecycle/pause.go:45
-PAUSE-02	live	core	covered	pause	in-flight WaitingForMerge/HealthChecking steps finish; others hold at the next safe point	docs/rollback.md:233
-PAUSE-03	live	core	covered	pause	resume deletes the freeze gate and held steps continue	docs/rollback.md:236
+PAUSE-01	live	core	covered	pause	paused Pipeline holds new steps via freeze-<pipeline> gate and a Paused condition	docs/rollback.md:230-238; pkg/lifecycle/pause.go:45
+PAUSE-02	live	core	covered	pause	in-flight WaitingForMerge/HealthChecking steps finish; others hold at the next safe point	docs/rollback.md:235
+PAUSE-03	live	core	covered	pause	resume deletes the freeze gate and held steps continue	docs/rollback.md:238
 PAUSE-04	live	core	covered	pause	setting spec.paused directly (kubectl) has the same effect as kardinal pause	docs/pipeline-reference.md:133-137
 SUB-OCI-01	live	core	covered	subscription	image Subscription polls a public OCI registry; a new matching tag creates Bundle <sub>-<tag>-<digest8>	docs/subscription.md:40-85; pkg/source/oci.go
 SUB-OCI-02	live	core	covered	subscription	tagFilter semver/regex picks the tag; no match (or over 50 non-semver tags) gives phase Error	docs/subscription.md:86-108; pkg/source/oci.go
@@ -287,8 +287,8 @@ CLI-DOCTOR-01	live	cli	covered	cli	doctor [--pipeline] runs preflight checks, pr
 CLI-INIT-01	live	cli	covered	cli	init --stdout/--file/--scaffold-gitops/--gitops-dir/--demo	cmd/kardinal/cmd/init.go:72
 CLI-VALIDATE-01	live	cli	covered	cli	validate -f rejects what the API server rejects and warns on deprecated fields	cmd/kardinal/cmd/validate.go:37
 CLI-COMPLETION-01	live	cli	covered	cli	completion bash|zsh|fish	cmd/kardinal/cmd/completion.go:24
-CLI-APPROVE-01	deprecated	cli	covered	cli	approve fails and points to kardinal override	cmd/kardinal/cmd/approve.go:32; docs/changelog.md:117
-CLI-EMERGENCY-01	deprecated	cli	covered	cli	rollback --emergency has no effect and prints a deprecation notice	cmd/kardinal/cmd/rollback.go:80-81; docs/changelog.md:117
+CLI-APPROVE-01	deprecated	cli	covered	cli	approve fails and points to kardinal override	cmd/kardinal/cmd/approve.go:32; docs/changelog.md:118
+CLI-EMERGENCY-01	deprecated	cli	covered	cli	rollback --emergency has no effect and prints a deprecation notice	cmd/kardinal/cmd/rollback.go:80-81; docs/changelog.md:118
 UIAPI-PIPELINES-01	live	ui	covered	ui-api	GET /api/v1/ui/pipelines lists pipelines with env status	cmd/kardinal-controller/ui_api.go:269
 UIAPI-BUNDLES-01	live	ui	covered	ui-api	GET pipelines/{p}/bundles	cmd/kardinal-controller/ui_api.go:440
 UIAPI-GRAPH-01	live	ui	covered	ui-api	GET bundles/{b}/graph returns nodes, edges and PR links	cmd/kardinal-controller/ui_api.go:520
@@ -301,7 +301,7 @@ UIAPI-PAUSE-01	live	ui	covered	ui-api	POST pause and resume	cmd/kardinal-control
 UIAPI-APPROVE-01	live	ui	covered	ui-api	POST gates/[{ns}/]{name}/approve writes an override	cmd/kardinal-controller/ui_api.go:1054
 UIAPI-VALIDATECEL-01	live	ui	covered	ui-api	POST validate-cel returns compile errors	cmd/kardinal-controller/ui_api.go:1005
 UIAPI-CREATE-01	live	ui	covered	ui-api	POST bundles creates a Bundle from the UI	cmd/kardinal-controller/ui_api.go:1365-1444
-UIAPI-LOCAL-01	live	ui	covered	ui-api	with no UI auth mode, non-loopback clients or requests with proxy headers get 403	cmd/kardinal-controller/ui_peer.go:33-71; docs/installation.md:161-200; docs/changelog.md:78
+UIAPI-LOCAL-01	live	ui	covered	ui-api	with no UI auth mode, non-loopback clients or requests with proxy headers get 403	cmd/kardinal-controller/ui_peer.go:33-71; docs/installation.md:161-200; docs/changelog.md:79
 UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:599-642; cmd/kardinal-controller/ui_hosts.go
 UIAPI-TOKEN-01	live	ui	covered	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:485-508
 UIAPI-TR-01	live	ui	covered	ui-api	TokenReview mode: 401 invalid token, 403 when SubjectAccessReview denies, 503 when review fails; 30s cache	docs/guides/security.md:509-583; pkg/uiauth/tokenreview.go
@@ -358,19 +358,19 @@ CHART-CLOCK-01	live	chart	todo	chart	scheduleClock creates kardinal-clock	chart/
 CHART-DEMO-01	live	chart	todo	chart	demo values	chart/kardinal-promoter/values.yaml:293-309
 CHART-MON-01	live	flux	covered	chart	serviceMonitor and prometheusRule are picked up by Prometheus Operator: the controller target is up and the alerts are loaded	chart/kardinal-promoter/values.yaml:311-336; docs/guides/monitoring.md:22-42; docs/guides/monitoring.md:205-278
 CHART-MON-02	live	flux	covered	chart	grafanaDashboard is imported by Grafana's dashboard sidecar, and its panels query the default Prometheus datasource and show data	chart/kardinal-promoter/values.yaml:338-359; chart/kardinal-promoter/templates/grafana-dashboard.yaml; chart/kardinal-promoter/dashboards/kardinal-promoter-dashboard.json; docs/guides/monitoring.md:281-328
-CHART-SCHEMA-01	live	chart	todo	chart	values schema rejects removed keys (controller.shard, v0.8.1 krocodile block) with a clear error	chart/kardinal-promoter/values.schema.json:6; chart/kardinal-promoter/values.schema.json:89; docs/changelog.md:77
-CHART-INTEGJOBS-01	deprecated	chart	todo	chart	rbac.integrationTestJobs has no effect	chart/kardinal-promoter/values.yaml:205; docs/changelog.md:117
-CHART-VAP-01	deprecated	chart	todo	chart	validatingAdmissionPolicy.enabled has no effect	chart/kardinal-promoter/values.yaml:238; docs/changelog.md:117
+CHART-SCHEMA-01	live	chart	todo	chart	values schema rejects removed keys (controller.shard, v0.8.1 krocodile block) with a clear error	chart/kardinal-promoter/values.schema.json:6; chart/kardinal-promoter/values.schema.json:89; docs/changelog.md:78
+CHART-INTEGJOBS-01	deprecated	chart	todo	chart	rbac.integrationTestJobs has no effect	chart/kardinal-promoter/values.yaml:205; docs/changelog.md:118
+CHART-VAP-01	deprecated	chart	todo	chart	validatingAdmissionPolicy.enabled has no effect	chart/kardinal-promoter/values.yaml:238; docs/changelog.md:118
 OBS-METRICS-01	live	flux	covered	observability	/metrics exposes the 7 kardinal metrics with labels after a promotion	docs/guides/monitoring.md:74-90; pkg/reconciler/observability/metrics.go:47-133
 OBS-CRMETRICS-01	live	flux	covered	observability	controller-runtime reconcile and workqueue metrics	docs/guides/monitoring.md:46-73
 OBS-READYZ-01	live	core	covered	observability	/readyz readiness probe on the health port	chart/kardinal-promoter/templates/deployment.yaml:142-151
 OBS-HEALTHZ-01	live	core	covered	observability	/healthz liveness probe	chart/kardinal-promoter/templates/deployment.yaml:142-151
-UPG-CRDS-01	live	upgrade	todo	upgrade	v0.8.1 to v0.9.0-rc.1: kro first, CRDs applied by hand, then helm upgrade	docs/changelog.md:87-95; docs/installation.md:211-226; docs/installation.md:285-288
+UPG-CRDS-01	live	upgrade	todo	upgrade	v0.8.1 to v0.9.0-rc.1: kro first, CRDs applied by hand, then helm upgrade	docs/changelog.md:88-96; docs/installation.md:211-226; docs/installation.md:285-288
 UPG-REUSE-01	live	upgrade	todo	upgrade	helm upgrade --reuse-values from v0.8.1	docs/installation.md:223-226; chart/kardinal-promoter/values.schema.json:6
-UPG-INFLIGHT-01	live	upgrade	todo	upgrade	in-flight Bundles re-translate into kro Graphs and continue after the upgrade	docs/changelog.md:83-104
-UPG-PAUSED-01	live	upgrade	todo	upgrade	Pipelines paused before the upgrade stay held	docs/changelog.md:83-104; pkg/lifecycle/pause.go:45
-UPG-GATES-01	live	upgrade	todo	upgrade	gates are re-evaluated at startup and pre-upgrade MetricCheck results read Stale until refreshed	docs/changelog.md:83-104
-UPG-OLDK8S-01	live	upgrade	todo	upgrade	on Kubernetes older than 1.30, stored objects with now-rejected fields must be cleaned first	docs/changelog.md:76
+UPG-INFLIGHT-01	live	upgrade	todo	upgrade	in-flight Bundles re-translate into kro Graphs and continue after the upgrade	docs/changelog.md:84-105
+UPG-PAUSED-01	live	upgrade	todo	upgrade	Pipelines paused before the upgrade stay held	docs/changelog.md:84-105; pkg/lifecycle/pause.go:45
+UPG-GATES-01	live	upgrade	todo	upgrade	gates are re-evaluated at startup and pre-upgrade MetricCheck results read Stale until refreshed	docs/changelog.md:84-105
+UPG-OLDK8S-01	live	upgrade	todo	upgrade	on Kubernetes older than 1.30, stored objects with now-rejected fields must be cleaned first	docs/changelog.md:77
 MC-ARGO-01	live	multi-cluster	todo	multi-cluster	Argo CD hub: argocd health on a hub Application whose destination is a spoke cluster	docs/distributed-mode.md:5-15; docs/pipeline-reference.md:393-416
 MC-FLUX-01	live	multi-cluster	todo	multi-cluster	Flux hub: Kustomization with spec.kubeConfig.secretRef targets a remote cluster	docs/distributed-mode.md:10; docs/health-adapters.md:239
 MC-ROLLOUTS-01	live	multi-cluster	todo	multi-cluster	argoRollouts health reads the Rollout in the controller's cluster only	docs/pipeline-reference.md:351-391
@@ -384,10 +384,10 @@ EX-CONFIG-01	live	core	covered	examples	config-promotion example (config Bundle)
 EX-WAVE-01	live	core	covered	examples	wave-topology example	examples/wave-topology
 EX-FLEET-01	live	multi-cluster	todo	examples	multi-cluster-fleet: fan-out to both prod regions	examples/multi-cluster-fleet/README.md:109; examples/multi-cluster-fleet/bundle.yaml:20-21
 EX-TENANT-01	live	core	covered	examples	multi-tenant Helm chart + ApplicationSet: each team Pipeline promotes	examples/multi-tenant/chart/templates/pipeline.yaml:13-18
-DEP-WHEN-01	deprecated	core	todo	deprecated	PolicyGate spec.when is accepted with a warning and has no effect	docs/changelog.md:117; docs/policy-gates.md:67-88
-DEP-CLUSTER-01	deprecated	multi-cluster	todo	deprecated	env health.cluster sets Pipeline Ready=False NotImplemented and steps fail	docs/changelog.md:117; pkg/graph/unimplemented.go:26-28; pkg/reconciler/promotionstep/config_check.go:20-45
-DEP-REGIONS-01	deprecated	core	todo	deprecated	regions: one region ignored, two or more set Ready=False NotImplemented	docs/changelog.md:108
-DEP-GITPROVIDER-01	deprecated	core	covered	deprecated	Pipeline spec.git.provider is ignored; --scm-provider decides	docs/changelog.md:117; docs/scm-providers.md:258-263
+DEP-WHEN-01	deprecated	core	todo	deprecated	PolicyGate spec.when is accepted with a warning and has no effect	docs/changelog.md:118; docs/policy-gates.md:67-88
+DEP-CLUSTER-01	deprecated	multi-cluster	todo	deprecated	env health.cluster sets Pipeline Ready=False NotImplemented and steps fail	docs/changelog.md:118; pkg/graph/unimplemented.go:26-28; pkg/reconciler/promotionstep/config_check.go:20-45
+DEP-REGIONS-01	deprecated	core	todo	deprecated	regions: one region ignored, two or more set Ready=False NotImplemented	docs/changelog.md:109
+DEP-GITPROVIDER-01	deprecated	core	covered	deprecated	Pipeline spec.git.provider is ignored; --scm-provider decides	docs/changelog.md:118; docs/scm-providers.md:258-263
 STEP-GITCRED-01	live	core	covered	step	git.secretRef names a missing Secret: the step message and GitCredentialMissing condition name it, one Warning Event, retries past the limit of 5, Verified once the Secret is created	docs/troubleshooting.md; pkg/reconciler/promotionstep/git_credential.go
 STEP-GITCRED-02	live	core	covered	step	no git.secretRef on an HTTPS repo: the step message says the push has no credentials, GitCredentialMissing condition, one Warning Event, Verified once the secretRef is set	docs/troubleshooting.md; pkg/reconciler/promotionstep/git_credential.go
 RB-AUDIT-02	live	core	covered	rollback	RollbackSucceeded AuditEvent, once per step, when a rollback Bundle's step reaches Verified; forward Bundles write none	docs/guides/security.md:276; pkg/reconciler/promotionstep/transition.go:119-123; pkg/reconciler/promotionstep/transition.go:146-182
