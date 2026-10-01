@@ -76,16 +76,23 @@ HEALTH-FLUX-01	live	health-flux	todo	health	flux adapter: Kustomization Ready wi
 HEALTH-FLUX-02	live	health-flux	todo	health	flux adapter: Ready=False or Kustomization not found is unhealthy; Ready on the previous commit waits	docs/health-adapters.md:141-150
 HEALTH-FLUX-03	live	health-flux	todo	health	flux on pr-review waits for the PR merge commit, not a Ready on the previous commit	docs/changelog.md:49; docs/health-adapters.md:152
 HEALTH-FLUX-04	live	health-flux	todo	health	flux GitRepository sourced from self-hosted git (Forgejo) reconciles the promoted commit	docs/health-adapters.md:119
-HEALTH-ROLL-01	live	rollouts	todo	health	argoRollouts adapter: Rollout Healthy on the Bundle image -> Verified	docs/health-adapters.md:159-181; pkg/health/adapter.go:595; pkg/health/adapter.go:641
-HEALTH-ROLL-02	live	rollouts	todo	health	argoRollouts adapter: Degraded (aborted canary) is unhealthy; Paused/Progressing waits	docs/health-adapters.md:176-181; pkg/health/adapter.go:643
-HEALTH-FLAG-01	live	flagger	todo	health	flagger adapter: Canary Succeeded on the promoted revision -> Verified	docs/health-adapters.md:185-209; pkg/health/adapter.go:660; pkg/health/adapter.go:712
-HEALTH-FLAG-02	live	flagger	todo	health	flagger adapter: Canary Failed is terminal at once, message includes Flagger's reason	docs/health-adapters.md:205-207; pkg/health/adapter.go:714
-DELIVERY-01	live	rollouts	todo	delivery	delivery.delegate: argoRollouts takes precedence over health.type and watches the Rollout	docs/pipeline-reference.md:105; docs/health-adapters.md:14-16
-DELIVERY-02	live	flagger	todo	delivery	delivery.delegate: flagger watches the Canary	docs/pipeline-reference.md:105
-DELIVERY-03	live	rollouts	todo	delivery	delegation failure (Rollout aborted, Canary Failed) applies onHealthFailure	docs/rollback.md:100
+HEALTH-ROLL-01	live	delivery	covered	health	argoRollouts adapter: Rollout Healthy on the Bundle image -> Verified	docs/health-adapters.md:159-184; pkg/health/adapter.go:630
+HEALTH-ROLL-02	live	delivery	covered	health	argoRollouts adapter: Degraded (aborted canary) on the Bundle image is unhealthy; Progressing waits	docs/health-adapters.md:176-183; pkg/health/adapter.go:704
+HEALTH-FLAG-01	live	delivery	covered	health	flagger adapter: Canary Succeeded on the promoted revision -> Verified	docs/health-adapters.md:186-216; pkg/health/adapter.go:834; pkg/health/adapter.go:897
+HEALTH-FLAG-02	live	delivery	covered	health	flagger adapter: Canary Failed is terminal at once, message includes Flagger's reason	docs/health-adapters.md:211-214; pkg/health/adapter.go:911
+HEALTH-ROLL-03	live	delivery	covered	health	argoRollouts adapter: Paused waits and is not a health failure	docs/health-adapters.md:181; docs/rollback.md:90
+HEALTH-ROLL-04	live	delivery	covered	health	argoRollouts adapter: until the Rollout runs the Bundle image, a Healthy phase the previous release left waits and does not verify	docs/health-adapters.md:176; docs/rollback.md:90; pkg/health/adapter.go:672
+HEALTH-ROLL-05	live	delivery	covered	health	argoRollouts adapter: a Degraded phase the previous release left is not a health failure; the next release is Verified	docs/health-adapters.md:176; docs/rollback.md:90
+HEALTH-FLAG-03	live	delivery	covered	health	flagger adapter: until Flagger promotes the Bundle images to the primary, a Succeeded phase the previous release left waits and does not verify	docs/health-adapters.md:200-205; docs/rollback.md:102
+HEALTH-FLAG-04	live	delivery	covered	health	flagger adapter: a Failed phase the previous release left does not fail the next release, which is Verified once Flagger promotes it	docs/health-adapters.md:204-207; docs/rollback.md:102; pkg/health/adapter.go:932
+DELIVERY-01	live	delivery	covered	delivery	delivery.delegate: argoRollouts takes precedence over health.type and watches the Rollout	docs/pipeline-reference.md:105; docs/health-adapters.md:14-16
+DELIVERY-02	live	delivery	covered	delivery	delivery.delegate: flagger watches the Canary	docs/pipeline-reference.md:105
+DELIVERY-03	live	delivery	covered	delivery	delegation failure (Rollout aborted, Canary Failed) applies onHealthFailure	docs/rollback.md:102
 BAKE-01	live	core	todo	health	bake.minutes requires contiguous healthy checks before Verified	docs/pipeline-reference.md:111; docs/health-adapters.md:250
 BAKE-02	live	core	todo	health	bake policy reset-on-alarm restarts the window on an unhealthy check (bakeResets counted)	docs/pipeline-reference.md:112
 BAKE-03	live	core	todo	health	bake policy fail-on-alarm applies onHealthFailure on the first unhealthy check	docs/pipeline-reference.md:112
+BAKE-04	live	delivery	covered	health	bake: a Waiting check (a paused canary) stops the window without an alarm under fail-on-alarm; the window restarts at the next healthy check	docs/pipeline-reference.md:111; docs/health-adapters.md:257
+BAKE-05	live	delivery	covered	health	bake: a release that stays unhealthy under reset-on-alarm fails at health.timeout from the moment the window stopped	docs/health-adapters.md:255-257; docs/rollback.md:96
 ONFAIL-NONE-01	live	core	todo	health	onHealthFailure: none (default) marks the step Failed	docs/pipeline-reference.md:113
 ONFAIL-ABORT-01	live	core	todo	health	onHealthFailure: abort marks the step AbortedByAlarm and it does not reset to Pending	docs/pipeline-reference.md:113; docs/changelog.md:84
 ONFAIL-ROLLBACK-01	live	core	todo	rollback	onHealthFailure: rollback creates a rollback Bundle from the previous Verified Bundle; step RollingBack	docs/pipeline-reference.md:113; docs/rollback.md:55
@@ -345,8 +352,8 @@ MC-ROLLOUTS-01	live	multi-cluster	todo	multi-cluster	argoRollouts health reads t
 EX-QUICKSTART-01	live	core	todo	examples	quickstart promotes test to uat to prod with weekend and soak org gates	examples/quickstart; docs/quickstart.md
 EX-GITHUB-DEMO-01	live	scm-github	todo	examples	github-demo: pr-review, bake, onHealthFailure rollback, team gates	examples/github-demo/README.md:10; examples/github-demo/README.md:79-84; examples/github-demo/README.md:124-128; examples/github-demo/README.md:140-175
 EX-FLUX-01	live	health-flux	todo	examples	flux-demo: flux health and bake fail-on-alarm	examples/flux-demo
-EX-ROLLOUTS-01	live	rollouts	todo	examples	argo-rollouts-demo: Degraded rollout opens a rollback PR	examples/argo-rollouts-demo/README.md:21; examples/argo-rollouts-demo/README.md:150
-EX-FLAGGER-01	live	flagger	todo	examples	flagger-demo: failed canary opens a rollback PR	examples/flagger-demo/README.md:23; examples/flagger-demo/README.md:126
+EX-ROLLOUTS-01	live	delivery	covered	examples	argo-rollouts-demo: Degraded rollout opens a rollback PR	examples/argo-rollouts-demo/README.md:21; examples/argo-rollouts-demo/README.md:150
+EX-FLAGGER-01	live	delivery	covered	examples	flagger-demo: failed canary opens a rollback PR	examples/flagger-demo/README.md:23; examples/flagger-demo/README.md:126
 EX-SUB-01	live	subscriptions	todo	examples	subscription example (OCI and git watchers)	examples/subscription
 EX-CONFIG-01	live	core	todo	examples	config-promotion example (config Bundle)	examples/config-promotion
 EX-WAVE-01	live	core	todo	examples	wave-topology example	examples/wave-topology

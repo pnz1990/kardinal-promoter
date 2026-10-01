@@ -18,15 +18,17 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// diagnosedGroups are the API groups whose objects Diagnose dumps.
-var diagnosedGroups = []string{"kardinal.io", "kro.run"}
+// diagnosedGroups are the API groups whose objects Diagnose dumps: kardinal,
+// kro, the workloads (Deployments, ReplicaSets), Argo Rollouts and Flagger.
+var diagnosedGroups = []string{"kardinal.io", "kro.run", "apps", "argoproj.io", "flagger.app"}
 
-// logNamespaces are the namespaces whose pod logs Diagnose saves.
-var logNamespaces = []string{ControllerNamespace, "kro-system"}
+// logNamespaces are the namespaces whose pod logs Diagnose saves. A suite
+// without Argo Rollouts or Flagger has no pods in theirs.
+var logNamespaces = []string{ControllerNamespace, "kro-system", "argo-rollouts", "flagger-system"}
 
 // Diagnose writes the state a failed test needs for debugging to
-// $KARDINAL_E2E_ARTIFACTS/<ns>/: every kardinal.io and kro.run object in
-// ns, the namespace's events, and the controller and kro logs.
+// $KARDINAL_E2E_ARTIFACTS/<ns>/: every object of diagnosedGroups in ns,
+// the namespace's events, and the logs of the pods in logNamespaces.
 func (e *Env) Diagnose(t *testing.T, ns string) {
 	t.Helper()
 	dir := filepath.Join(artifactsDir(), ns)
