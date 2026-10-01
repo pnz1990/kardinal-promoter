@@ -441,6 +441,25 @@ describe('App failed reads', () => {
     expect(screen.queryByText(/Error: Error/)).not.toBeInTheDocument()
   })
 
+  it('keeps the sidebar list while a pipelines poll fails, and drops the error when one works', async () => {
+    h.state.pipelines = [pipeline('app', { activeBundleName: 'b-new' }), pipeline('other')]
+    render(<App />)
+    await flush()
+    const list = () => screen.getByRole('list', { name: 'Pipelines' })
+    expect(within(list()).getByText('other')).toBeInTheDocument()
+
+    h.state.pipelinesError = 'API error 503: Service Unavailable'
+    await flush(5_100)
+    expect(screen.getByText('Error: API error 503: Service Unavailable')).toBeInTheDocument()
+    expect(within(list()).getByText('other')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })).toBeInTheDocument()
+
+    h.state.pipelinesError = undefined
+    await flush(5_100)
+    expect(screen.queryByText(/^Error: /)).not.toBeInTheDocument()
+    expect(within(list()).getByText('other')).toBeInTheDocument()
+  })
+
   it('shows the message of a failed graph read once', async () => {
     h.state.graphError = 'API error 500: Internal Server Error'
     render(<App />)

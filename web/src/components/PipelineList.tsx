@@ -132,7 +132,8 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
       </div>
     )
   }
-  if (error) {
+  // A failed read before any worked: there is no list to keep.
+  if (error && (total ?? pipelines.length) === 0) {
     return (
       <div style={{ padding: '1rem', color: 'var(--color-error)', fontSize: '0.82rem' }}>
         Error: {error}
@@ -203,6 +204,16 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
           >×</button>
         )}
       </div>
+      {/* A failed poll keeps the last list App read; the error shows above it
+          until a poll works again. */}
+      {error && (
+        <div
+          role="alert"
+          style={{ margin: '0.25rem 1rem 0.35rem', fontSize: '0.75rem', color: 'var(--color-error)', background: 'var(--color-error-bg)', border: '1px solid var(--color-error)', borderRadius: '4px', padding: '0.25rem 0.5rem', overflowWrap: 'anywhere' }}
+        >
+          Error: {error}
+        </div>
+      )}
       {/* #815: List container — scrollable, used as virtual scroll container when active */}
       <div
         ref={listContainerRef}

@@ -219,7 +219,8 @@ test('the data refreshes every 5 s, and the indicator tells how old it is and wh
 
   // An API that never answers: the read gives up after 10 s and says so,
   // and the polling goes on.
-  // The sidebar shows the error in place of the list; the open pipeline stays.
+  // The sidebar shows the error above the last list it read, with the filter
+  // as it was; the open pipeline stays.
   const noAnswer = `Error: GET ${PIPELINES_PATH} got no answer within 10 s. The UI tries again on the next refresh.`
   const held: Request[] = []
   const hold = (route: Route) => { held.push(route.request()) }
@@ -227,6 +228,8 @@ test('the data refreshes every 5 s, and the indicator tells how old it is and wh
   await expect(indicator(page)).toHaveAttribute('title', noAnswer, { timeout: 20_000 })
   await expect(indicator(page)).toHaveText(/^⚠ \d+s ago$/)
   await expect(page.getByText(noAnswer, { exact: true })).toBeVisible()
+  await expect(pausedBadge).toHaveText('PAUSED')
+  await expect(page.getByRole('textbox', { name: 'Filter pipelines by name or namespace' })).toHaveValue(ns)
   await expect.poll(() => held.length, { timeout: 20_000 }).toBeGreaterThanOrEqual(2)
   await expect(heading(page)).toHaveText(PIPELINE)
   await page.unroute(isPipelinesPoll, hold)
@@ -239,6 +242,7 @@ test('the data refreshes every 5 s, and the indicator tells how old it is and wh
   await page.route(isPipelinesPoll, fail)
   await expect(indicator(page)).toHaveAttribute('title', /^Error: API error 503/)
   await expect(page.getByText(/^Error: API error 503/)).toBeVisible()
+  await expect(pausedBadge).toHaveText('PAUSED')
   await expect(indicator(page)).toHaveText(/^⚠ (just now|\d+s ago)$/)
   await expect.poll(() => secondsAgo(page), { timeout: 15_000 }).toBeGreaterThanOrEqual(6)
   const refresh = page.getByRole('button', { name: 'Refresh data' })
