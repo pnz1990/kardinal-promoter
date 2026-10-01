@@ -246,15 +246,15 @@ func TestForgejo_WebhookNonMergeEvents(t *testing.T) {
 }
 
 // TestForgejo_ClosesPRs checks that a newer Bundle and waitForMergeTimeout
-// each close the open Forgejo PR with a comment, fail the step, and leave
-// nothing to merge.
+// each close the open Forgejo PR with a comment, delete its head branch, fail
+// the step, and leave nothing to merge.
 //
 // Covers SCM-FJ-06, STEP-MERGETIMEOUT-01.
 func TestForgejo_ClosesPRs(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireKind(t, e, "forgejo")
-	scmClosesPRs(t, e, true)
+	scmClosesPRs(t, e)
 }
 
 // TestForgejo_Approvals checks that Forgejo reviews reach bundle.pr.

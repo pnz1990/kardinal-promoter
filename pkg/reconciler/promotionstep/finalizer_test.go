@@ -535,7 +535,8 @@ func TestPRFinalizer_DeleteAsksSCM(t *testing.T) {
 // real Bitbucket and Azure DevOps providers: deleting a step whose PR merged
 // after the PRStatus was last polled does not ask Bitbucket to decline it or
 // Azure DevOps to abandon it, and posts no comment. An open PR is still
-// declined or abandoned, then commented on.
+// declined or abandoned, then commented on, then its head branch is deleted
+// (B70; Azure DevOps reads the ref first and finds none here).
 func TestPRFinalizer_DeleteMergedPRProviders(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -551,7 +552,8 @@ func TestPRFinalizer_DeleteMergedPRProviders(t *testing.T) {
 			provider: func(u string) scm.SCMProvider { return scm.NewBitbucketProvider("t", u, "") },
 			wantCalls: []string{"GET /2.0/repositories/ws/repo/pullrequests/5",
 				"POST /2.0/repositories/ws/repo/pullrequests/5/decline",
-				"POST /2.0/repositories/ws/repo/pullrequests/5/comments"}},
+				"POST /2.0/repositories/ws/repo/pullrequests/5/comments",
+				"DELETE /2.0/repositories/ws/repo/refs/branches/kardinal/bundle-1/prod"}},
 		{name: "Azure DevOps, completed", repo: "org/proj/repo", state: `{"status":"completed"}`,
 			provider:  func(u string) scm.SCMProvider { return scm.NewAzureDevOpsProvider("t", u, "") },
 			wantCalls: []string{"GET /org/proj/_apis/git/repositories/repo/pullrequests/5"}},
@@ -559,7 +561,8 @@ func TestPRFinalizer_DeleteMergedPRProviders(t *testing.T) {
 			provider: func(u string) scm.SCMProvider { return scm.NewAzureDevOpsProvider("t", u, "") },
 			wantCalls: []string{"GET /org/proj/_apis/git/repositories/repo/pullrequests/5",
 				"PATCH /org/proj/_apis/git/repositories/repo/pullrequests/5",
-				"POST /org/proj/_apis/git/repositories/repo/pullrequests/5/threads"}},
+				"POST /org/proj/_apis/git/repositories/repo/pullrequests/5/threads",
+				"GET /org/proj/_apis/git/repositories/repo/refs"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

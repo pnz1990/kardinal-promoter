@@ -92,14 +92,15 @@ func TestGitea_WebhookBadSignature(t *testing.T) {
 }
 
 // TestGitea_ClosesPRs checks that a newer Bundle and waitForMergeTimeout
-// each close the open Gitea PR with a comment and fail the step.
+// each close the open Gitea PR with a comment, delete its head branch, and
+// fail the step, and that the closed PR cannot be merged.
 //
 // Covers SCM-GT-06.
 func TestGitea_ClosesPRs(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireKind(t, e, "gitea")
-	scmClosesPRs(t, e, true)
+	scmClosesPRs(t, e)
 }
 
 // TestGitea_Approvals checks that Gitea reviews reach bundle.pr.

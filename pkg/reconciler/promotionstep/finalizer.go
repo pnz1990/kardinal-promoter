@@ -126,10 +126,12 @@ func prFinalizerSyncFailed(log zerolog.Logger, err error) (ctrl.Result, error) {
 
 // handleDeleted runs for a step with a deletionTimestamp. If the step holds
 // FinalizerClosePR and may still own an open PR, it closes the PR with a
-// comment (closeStepPR; a merged or closed PR is left alone) and then removes
-// the finalizer. A failed close is retried with backoff until closePRDeadline
-// after the delete request; then the finalizer is removed anyway and a Warning
-// Event and an error log say the PR must be closed by hand.
+// comment and deletes its head branch (closeStepPR; a merged PR is left
+// alone, and a closed one only loses its branch) and then removes the
+// finalizer. A failed close or delete is retried with backoff until
+// closePRDeadline after the delete request; then the finalizer is removed
+// anyway and a Warning Event and an error log say what to close or delete by
+// hand.
 //
 // The PR is left open when a new step reuses it (stepRecreated): the step went
 // with its Graph while the Bundle goes on promoting, so the Bundle reconciler
@@ -191,8 +193,8 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 				return ctrl.Result{RequeueAfter: delay}, nil
 			}
 			note := fmt.Sprintf("env %s: could not close the PR of the deleted step within %s (%v); "+
-				"close it by hand: merging it would change the environment with no PromotionStep tracking it",
-				ps.Spec.Environment, closePRDeadline, err)
+				"%s: merging it would change the environment with no PromotionStep tracking it",
+				ps.Spec.Environment, closePRDeadline, err, closeByHand(err))
 			log.Error().Err(err).Str("env", ps.Spec.Environment).Str("prURL", ps.Status.PRURL).
 				Msg("gave up closing the PR of a deleted PromotionStep; removing its finalizer")
 			kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, "ClosePRFailed", "Delete", note)

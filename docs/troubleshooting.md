@@ -574,8 +574,9 @@ Two finalizers can hold a delete, and the controller removes both itself while i
 **`kardinal.io/close-pr` on a PromotionStep.** A step that opens a promotion PR (its environment
 was `pr-review` when the step started) carries it while it is `Promoting` or `WaitingForMerge`,
 from before it opens the PR; an `auto` step never carries it. When the step is deleted, the controller asks the SCM whether
-the PR is still open, closes it with a comment if it is (a merged or closed PR is left alone), then
-removes the finalizer. What happens to the PR depends on what was deleted:
+the PR is still open, closes it with a comment if it is, and deletes its head branch
+(`kardinal/<bundle>/<env>`) so the closed PR cannot be merged later; a merged PR is left alone,
+and a closed one only loses its branch. Then it removes the finalizer. What happens to the PR depends on what was deleted:
 
 - **The Bundle.** The PR is closed with the comment `kardinal closed this PR: bundle <bundle>
   was deleted. ...`.
@@ -591,7 +592,9 @@ removes the finalizer. What happens to the PR depends on what was deleted:
 If the SCM call keeps failing, the controller retries with backoff for about 5 minutes, then
 removes the finalizer anyway and logs the error `gave up closing the PR of a deleted
 PromotionStep; removing its finalizer` with the `env` and `prURL`: close that PR by hand, since
-merging it would change the environment with no PromotionStep tracking it. It also emits a
+merging it would change the environment with no PromotionStep tracking it. When the PR was closed
+but its branch could not be deleted, the error says `PR #<n> is closed, but deleting its branch
+kardinal/<bundle>/<env> failed`: delete that branch by hand. It also emits a
 `ClosePRFailed` Warning Event on the step, except in a namespace being deleted: the API server
 refuses new Events there, and the step is gone, so the controller log is the only record.
 

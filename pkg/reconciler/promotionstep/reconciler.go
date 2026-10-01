@@ -360,7 +360,7 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 			}
 			return ctrl.Result{RequeueAfter: retryDelay(ps.Status.RetryCount)}, nil
 		}
-		msg += fmt.Sprintf("; closing its PR failed after %d retries (%v) — close it by hand", maxStepRetries, closeErr)
+		msg += fmt.Sprintf("; closing its PR failed after %d retries (%v) — %s", maxStepRetries, closeErr, closeByHand(closeErr))
 	}
 	if unstarted {
 		return ctrl.Result{}, r.cancelUnstarted(ctx, base, ps, msg)
@@ -386,7 +386,14 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 // without asking, since a merge is final; a closed PR can be reopened, so a
 // PRStatus that says closed is checked like an open one. The PR is closed
 // before it is commented on, so a restart in between leaves no comment rather
-// than two. Only the status read and the close can fail; the comment is
+// than two.
+//
+// Once the PR is closed and not merged, its head branch is deleted
+// (deletePRBranch): GitHub merges a closed PR through the API, and does not
+// once the branch is gone. A PR found closed (an earlier attempt closed it
+// and then failed or crashed before the delete, or a human closed it) gets
+// the delete too, so a retry finishes the job; a merged PR keeps its branch.
+// The status read, the close and the delete can fail; the comment is
 // best-effort.
 func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string) error {
 	repo, num := "", 0
@@ -429,7 +436,10 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 	if !open {
 		log.Info().Int("pr", num).Str("step", ps.Name).Bool("merged", merged).
 			Msg("PR of cancelled step is no longer open; not closing it")
-		return nil
+		if merged {
+			return nil
+		}
+		return r.deletePRBranch(ctx, ps, repo, num)
 	}
 	if err := r.SCM.ClosePR(ctx, repo, num); err != nil {
 		return fmt.Errorf("close PR #%d: %w", num, err)
@@ -440,7 +450,7 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 	if err := r.SCM.CommentOnPR(ctx, repo, num, body); err != nil {
 		log.Warn().Err(err).Int("pr", num).Msg("could not comment on the closed PR (non-fatal)")
 	}
-	return nil
+	return r.deletePRBranch(ctx, ps, repo, num)
 }
 
 // retryDelay is the backoff before retry n (1-based) of a transient failure.
@@ -800,7 +810,7 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 	log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
 	closed = append(closed, updateStepStatuses(ps, stepNames, idx, true, msg, timings)...)
 	if closeErr := r.closeStepPR(ctx, ps, "the promotion failed: "+msg); closeErr != nil {
-		msg += fmt.Sprintf("; closing the PR it opened failed (%v) — close it by hand", closeErr)
+		msg += fmt.Sprintf("; closing the PR it opened failed (%v) — %s", closeErr, closeByHand(closeErr))
 	}
 	if _, err := r.transitionClosing(ctx, base, ps, StateFailed, msg, "", closed); err != nil {
 		return ctrl.Result{}, err
@@ -887,7 +897,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 				// Close the PR so a late merge cannot deliver a change whose
 				// step already failed (C03-promotionstep-22).
 				if closeErr := r.closeStepPR(ctx, ps, fmt.Sprintf("it was not merged within waitForMergeTimeout (%s)", d)); closeErr != nil {
-					msg += fmt.Sprintf("; closing the PR failed (%v) — close it by hand", closeErr)
+					msg += fmt.Sprintf("; closing the PR failed (%v) — %s", closeErr, closeByHand(closeErr))
 				}
 				ps.Status.WaitForMergeExpiry = nil
 				return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)

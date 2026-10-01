@@ -55,7 +55,7 @@ export KARDINAL_SCM_PROVIDER=github
 
 | Scope | Purpose |
 |---|---|
-| `repo` | Create/close pull requests, post comments, read PR status |
+| `repo` | Create/close pull requests, post comments, read PR status, delete the head branch of a PR kardinal closed |
 | `write:repo_hook` | (Optional) Register webhooks programmatically |
 
 ### Webhook configuration
@@ -106,7 +106,7 @@ export KARDINAL_SCM_API_URL=https://gitlab.com  # or your self-managed URL
 
 | Scope | Purpose |
 |---|---|
-| `api` | Full API access — required for MR creation, comments, and label updates |
+| `api` | Full API access — required for MR creation, comments, label updates, and deleting the source branch of an MR kardinal closed |
 
 A **project access token** with `api` scope is recommended over a personal access token
 for production deployments.
@@ -192,7 +192,7 @@ export KARDINAL_SCM_API_URL=https://codeberg.org   # or your self-hosted Forgejo
 | Scope | Purpose |
 |---|---|
 | `write:issue` | Post comments on pull requests |
-| `write:repository` | Create and close pull requests, add labels |
+| `write:repository` | Create and close pull requests, add labels, delete the head branch of a PR kardinal closed |
 
 Create an API token in your Forgejo/Gitea instance under **Settings → Applications → Access Tokens**.
 The startup token check cannot see these scopes; see [Token check at startup](#token-check-at-startup).
@@ -232,7 +232,8 @@ kardinal-controller \
 ```
 
 Use a repository, project or workspace **access token** with pull request write
-access. The controller sends it as a Bearer token, so app passwords do not work.
+and repository write access (repository write deletes the head branch of a PR
+kardinal closed). The controller sends it as a Bearer token, so app passwords do not work.
 The repository is `workspace/repo`, taken from the Pipeline's `spec.git.url`.
 
 Webhook: in the repository go to **Repository settings → Webhooks → Add webhook**,
