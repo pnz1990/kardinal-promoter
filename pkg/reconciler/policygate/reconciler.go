@@ -197,6 +197,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if bundleVersion != "" {
 		reason = fmt.Sprintf("bundle.version=%s: %s", bundleVersion, reason)
 	}
+	// A false expression is what spec.message explains: lead with it, so the
+	// Ready condition, kardinal explain/status, the UI, PR evidence and
+	// notifications show it (GATE-MESSAGE-01).
+	if !pass {
+		reason = graph.BlockedReason(gate.Spec.Message, reason)
+	}
 
 	log.Info().
 		Bool("ready", pass).

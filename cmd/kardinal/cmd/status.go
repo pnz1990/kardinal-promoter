@@ -310,9 +310,15 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 			if g.Status.LastEvaluatedAt != nil && !g.Status.LastEvaluatedAt.IsZero() {
 				lastChecked = HumanAge(g.Status.LastEvaluatedAt.Time) + " ago"
 			}
+			// The gate's message is shown whole: it is what its author wrote
+			// for this table. The CEL detail is in kardinal explain.
+			reason := graph.BlockedMessage(g)
+			if reason == "" {
+				reason = truncateRunes(orDash(g.Status.Reason), 35)
+			}
 			_, _ = fmt.Fprintf(gtw, "%s\t%s\t%s\t%s\t%s\n",
 				gateDisplayName(*g), g.Labels["kardinal.io/environment"],
-				truncateRunes(g.Spec.Expression, 40), truncateRunes(orDash(g.Status.Reason), 35), lastChecked)
+				truncateRunes(g.Spec.Expression, 40), reason, lastChecked)
 		}
 		_ = gtw.Flush()
 	}

@@ -81,7 +81,10 @@ func newGateEvaluator(c sigs_client.Client) (*gateEvaluator, error) {
 }
 
 // evaluate reconciles the gate instance key at time now and returns the
-// status.ready and status.reason the reconciler wrote.
+// status.ready and status.reason the reconciler wrote. A blocked reason that
+// leads with the gate's message is returned without it (graph.BlockedDetail):
+// policy simulate prints the message on its own line, and its rows and policy
+// test show what the expression evaluated to.
 func (e *gateEvaluator) evaluate(ctx context.Context, key types.NamespacedName, now time.Time) (bool, string, error) {
 	e.now = now.UTC()
 	if _, err := e.r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
@@ -91,7 +94,10 @@ func (e *gateEvaluator) evaluate(ctx context.Context, key types.NamespacedName, 
 	if err := e.c.Get(ctx, key, &g); err != nil {
 		return false, "", fmt.Errorf("read gate %s: %w", key.Name, err)
 	}
-	return g.Status.Ready, g.Status.Reason, nil
+	if !g.Status.Ready {
+		return false, graph.BlockedDetail(g.Spec.Message, g.Status.Reason), nil
+	}
+	return true, g.Status.Reason, nil
 }
 
 // newGateInstance returns a PolicyGate instance for gate, labelled the way the
