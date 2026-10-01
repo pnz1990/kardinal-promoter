@@ -233,43 +233,43 @@ NOTIF-GIVEUP-01	live	core	covered	notifications	delivery gives up after 10 attem
 NOTIF-NEW-01	live	core	covered	notifications	a new hook delivers only the newest existing event, not the backlog	docs/notifications.md:84-111
 NOTIF-STATUS-01	live	core	covered	notifications	status records last delivery, result and failure count	docs/notifications.md:161-189
 NOTIF-PAYLOAD-01	live	core	covered	notifications	documented payload fields; Bundle events carry no environment	docs/notifications.md:53-72
-CLI-VERSION-01	live	cli	todo	cli	kardinal version prints the CLI version line	cmd/kardinal/cmd/version.go:33; docs/reference/cli/kardinal-version.md
-CLI-VERSION-02	live	cli	todo	cli	kardinal version shows the controller version from the kardinal-version ConfigMap (--controller-namespace)	cmd/kardinal/cmd/version.go:33
-CLI-GLOBAL-01	live	cli	todo	cli	global flags -n, --kubeconfig, --context select the target	cmd/kardinal/cmd/root.go:61-65
-CLI-OUTPUT-01	live	cli	todo	cli	-o json|yaml on get pipelines/bundles/steps/subscriptions returns a bare array; other commands reject -o json	cmd/kardinal/cmd/root.go:67
-CLI-GET-PIPELINES-01	live	cli	todo	cli	get pipelines table per env (-A, -w) and -o json array	cmd/kardinal/cmd/get_pipelines.go:68; docs/reference/cli/kardinal-get-pipelines.md
-CLI-GET-BUNDLES-01	live	cli	todo	cli	get bundles (--active)	docs/reference/cli/kardinal-get-bundles.md
-CLI-GET-STEPS-01	live	cli	todo	cli	get steps (-w) one row per env	docs/reference/cli/kardinal-get-steps.md
-CLI-GET-AUDIT-01	live	cli	todo	cli	get auditevents --pipeline --bundle --env --limit	docs/reference/cli/kardinal-get-auditevents.md; docs/guides/security.md:290-310
+CLI-VERSION-01	live	cli	covered	cli	kardinal version prints the CLI version line	cmd/kardinal/cmd/version.go:33; docs/reference/cli/kardinal-version.md
+CLI-VERSION-02	live	cli	covered	cli	kardinal version shows the controller version from the kardinal-version ConfigMap (--controller-namespace)	cmd/kardinal/cmd/version.go:33
+CLI-GLOBAL-01	live	cli	covered	cli	global flags -n, --kubeconfig, --context select the target	cmd/kardinal/cmd/root.go:61-65
+CLI-OUTPUT-01	live	cli	covered	cli	-o json|yaml on get pipelines/bundles/steps/subscriptions returns a bare array; other commands reject -o json	cmd/kardinal/cmd/root.go:67
+CLI-GET-PIPELINES-01	live	cli	covered	cli	get pipelines table per env (-A, -w) and -o json array	cmd/kardinal/cmd/get_pipelines.go:68; docs/reference/cli/kardinal-get-pipelines.md
+CLI-GET-BUNDLES-01	live	cli	covered	cli	get bundles (--active)	docs/reference/cli/kardinal-get-bundles.md
+CLI-GET-STEPS-01	live	cli	covered	cli	get steps (-w) one row per env	docs/reference/cli/kardinal-get-steps.md
+CLI-GET-AUDIT-01	live	cli	covered	cli	get auditevents --pipeline --bundle --env --limit	docs/reference/cli/kardinal-get-auditevents.md; docs/guides/security.md:290-310
 CLI-GET-SUBS-01	live	core	covered	cli	get subscriptions -A	docs/reference/cli/kardinal-get-subscriptions.md
-CLI-EXPLAIN-01	live	cli	todo	cli	explain <pipeline> --env shows each gate STATE (Waiting/Block/Superseded), expression and reason	cmd/kardinal/cmd/explain.go:43; docs/reference/cli/kardinal-explain.md
-CLI-EXPLAIN-02	live	cli	todo	cli	explain --watch and --color	cmd/kardinal/cmd/explain.go:43
-CLI-STATUS-01	live	cli	todo	cli	status [pipeline] shows controller health, version and blocking gates	cmd/kardinal/cmd/status.go:37
-CLI-CREATE-BUNDLE-01	live	cli	todo	cli	create bundle <pipeline> --image --commit --author --ci-run-url creates an image Bundle	cmd/kardinal/cmd/create_bundle.go:65; cmd/kardinal/cmd/create_bundle.go:184; docs/ci-integration.md:168-190
-CLI-CREATE-BUNDLE-02	live	cli	todo	cli	create bundle --type config --config-commit [--config-repo]; config without --config-commit errors	cmd/kardinal/cmd/create_bundle.go:139-140; docs/ci-integration.md:183
-CLI-CREATE-DRYRUN-01	live	cli	todo	cli	create bundle --dry-run prints the Bundle and makes no API calls	cmd/kardinal/cmd/create_bundle.go:65
-CLI-DELETE-BUNDLE-01	live	cli	todo	cli	delete bundle	cmd/kardinal/cmd/delete_bundle.go:41
-CLI-PROMOTE-01	live	cli	todo	cli	promote <pipeline> -e <env> promotes the latest Verified upstream Bundle	cmd/kardinal/cmd/promote.go:33; pkg/lifecycle/promote.go:53
-CLI-ROLLBACK-01	live	cli	todo	cli	rollback <pipeline> --env [--to] prints Bundle X created (rollbackOf=T)	cmd/kardinal/cmd/rollback.go:40; cmd/kardinal/cmd/rollback.go:106
-CLI-PAUSE-01	live	cli	todo	cli	pause <pipeline> sets spec.paused=true and prints paused	cmd/kardinal/cmd/pause.go:31
-CLI-RESUME-01	live	cli	todo	cli	resume <pipeline> clears spec.paused and promotion continues	cmd/kardinal/cmd/pause.go:68
-CLI-OVERRIDE-01	live	cli	todo	cli	override --stage --reason --expires-in [--gate] patches gate instances in the Pipeline namespace	cmd/kardinal/cmd/override.go:43; cmd/kardinal/cmd/override.go:243
-CLI-POLICY-LIST-01	live	cli	todo	cli	policy list shows gates per namespace	cmd/kardinal/cmd/policy.go:69
-CLI-POLICY-SIMULATE-01	live	cli	todo	cli	policy simulate --pipeline --env --time [--soak-minutes] reports PASS/BLOCKED per gate	cmd/kardinal/cmd/policy.go:238
-CLI-POLICY-TEST-01	live	cli	todo	cli	policy test evaluates an expression locally	cmd/kardinal/cmd/policy.go:571
-CLI-HISTORY-01	live	cli	todo	cli	history <pipeline> --env --limit	cmd/kardinal/cmd/history.go:37
-CLI-LOGS-01	live	cli	todo	cli	logs <pipeline> --env --bundle [-f] follows until a terminal state	cmd/kardinal/cmd/logs.go:42; docs/reference/cli/kardinal-logs.md:16
-CLI-DIFF-01	live	cli	todo	cli	diff <bundleA> <bundleB>	cmd/kardinal/cmd/diff.go:32
-CLI-METRICS-01	live	cli	todo	cli	metrics --pipeline [--env] [--days] prints DORA metrics	cmd/kardinal/cmd/metrics.go:28; docs/guides/monitoring.md:169-204
-CLI-AUDIT-01	live	cli	todo	cli	audit summary --pipeline --since	cmd/kardinal/cmd/audit.go:48
-CLI-REFRESH-01	live	cli	todo	cli	refresh forces a re-reconcile via annotation	cmd/kardinal/cmd/refresh_dashboard.go:24
-CLI-DASHBOARD-01	live	cli	todo	cli	dashboard [--address] [--no-open] opens the UI	cmd/kardinal/cmd/refresh_dashboard.go:79
-CLI-DOCTOR-01	live	cli	todo	cli	doctor [--pipeline] runs preflight checks, prints N check(s) passed, exits 1 on failure	cmd/kardinal/cmd/doctor.go:75
-CLI-INIT-01	live	cli	todo	cli	init --stdout/--file/--scaffold-gitops/--gitops-dir/--demo	cmd/kardinal/cmd/init.go:72
-CLI-VALIDATE-01	live	cli	todo	cli	validate -f rejects what the API server rejects and warns on deprecated fields	cmd/kardinal/cmd/validate.go:37
-CLI-COMPLETION-01	live	cli	todo	cli	completion bash|zsh|fish	cmd/kardinal/cmd/completion.go:24
-CLI-APPROVE-01	deprecated	cli	todo	cli	approve fails and points to kardinal override	cmd/kardinal/cmd/approve.go:32; docs/changelog.md:67
-CLI-EMERGENCY-01	deprecated	cli	todo	cli	rollback --emergency has no effect and prints a deprecation notice	cmd/kardinal/cmd/rollback.go:73-74; docs/changelog.md:67
+CLI-EXPLAIN-01	live	cli	covered	cli	explain <pipeline> --env shows each gate STATE (Waiting/Block/Superseded), expression and reason	cmd/kardinal/cmd/explain.go:43; docs/reference/cli/kardinal-explain.md
+CLI-EXPLAIN-02	live	cli	covered	cli	explain --watch and --color	cmd/kardinal/cmd/explain.go:43
+CLI-STATUS-01	live	cli	covered	cli	status [pipeline] shows controller health, version and blocking gates	cmd/kardinal/cmd/status.go:37
+CLI-CREATE-BUNDLE-01	live	cli	covered	cli	create bundle <pipeline> --image --commit --author --ci-run-url creates an image Bundle	cmd/kardinal/cmd/create_bundle.go:65; cmd/kardinal/cmd/create_bundle.go:184; docs/ci-integration.md:168-190
+CLI-CREATE-BUNDLE-02	live	cli	covered	cli	create bundle --type config --config-commit [--config-repo]; config without --config-commit errors	cmd/kardinal/cmd/create_bundle.go:139-140; docs/ci-integration.md:183
+CLI-CREATE-DRYRUN-01	live	cli	covered	cli	create bundle --dry-run prints the Bundle and makes no API calls	cmd/kardinal/cmd/create_bundle.go:65
+CLI-DELETE-BUNDLE-01	live	cli	covered	cli	delete bundle	cmd/kardinal/cmd/delete_bundle.go:41
+CLI-PROMOTE-01	live	cli	covered	cli	promote <pipeline> -e <env> promotes the latest Verified upstream Bundle	cmd/kardinal/cmd/promote.go:33; pkg/lifecycle/promote.go:53
+CLI-ROLLBACK-01	live	cli	covered	cli	rollback <pipeline> --env [--to] prints Bundle X created (rollbackOf=T)	cmd/kardinal/cmd/rollback.go:40; cmd/kardinal/cmd/rollback.go:106
+CLI-PAUSE-01	live	cli	covered	cli	pause <pipeline> sets spec.paused=true and prints paused	cmd/kardinal/cmd/pause.go:31
+CLI-RESUME-01	live	cli	covered	cli	resume <pipeline> clears spec.paused and promotion continues	cmd/kardinal/cmd/pause.go:68
+CLI-OVERRIDE-01	live	cli	covered	cli	override --stage --reason --expires-in [--gate] patches gate instances in the Pipeline namespace	cmd/kardinal/cmd/override.go:43; cmd/kardinal/cmd/override.go:243
+CLI-POLICY-LIST-01	live	cli	covered	cli	policy list shows gates per namespace	cmd/kardinal/cmd/policy.go:69
+CLI-POLICY-SIMULATE-01	live	cli	covered	cli	policy simulate --pipeline --env --time [--soak-minutes] reports PASS/BLOCKED per gate	cmd/kardinal/cmd/policy.go:238
+CLI-POLICY-TEST-01	live	cli	covered	cli	policy test evaluates an expression locally	cmd/kardinal/cmd/policy.go:571
+CLI-HISTORY-01	live	cli	covered	cli	history <pipeline> --env --limit	cmd/kardinal/cmd/history.go:37
+CLI-LOGS-01	live	cli	covered	cli	logs <pipeline> --env --bundle [-f] follows until a terminal state	cmd/kardinal/cmd/logs.go:42; docs/reference/cli/kardinal-logs.md:16
+CLI-DIFF-01	live	cli	covered	cli	diff <bundleA> <bundleB>	cmd/kardinal/cmd/diff.go:32
+CLI-METRICS-01	live	cli	covered	cli	metrics --pipeline [--env] [--days] prints DORA metrics	cmd/kardinal/cmd/metrics.go:28; docs/guides/monitoring.md:169-204
+CLI-AUDIT-01	live	cli	covered	cli	audit summary --pipeline --since	cmd/kardinal/cmd/audit.go:48
+CLI-REFRESH-01	live	cli	covered	cli	refresh forces a re-reconcile via annotation	cmd/kardinal/cmd/refresh_dashboard.go:24
+CLI-DASHBOARD-01	live	cli	covered	cli	dashboard [--address] [--no-open] opens the UI	cmd/kardinal/cmd/refresh_dashboard.go:79
+CLI-DOCTOR-01	live	cli	covered	cli	doctor [--pipeline] runs preflight checks, prints N check(s) passed, exits 1 on failure	cmd/kardinal/cmd/doctor.go:75
+CLI-INIT-01	live	cli	covered	cli	init --stdout/--file/--scaffold-gitops/--gitops-dir/--demo	cmd/kardinal/cmd/init.go:72
+CLI-VALIDATE-01	live	cli	covered	cli	validate -f rejects what the API server rejects and warns on deprecated fields	cmd/kardinal/cmd/validate.go:37
+CLI-COMPLETION-01	live	cli	covered	cli	completion bash|zsh|fish	cmd/kardinal/cmd/completion.go:24
+CLI-APPROVE-01	deprecated	cli	covered	cli	approve fails and points to kardinal override	cmd/kardinal/cmd/approve.go:32; docs/changelog.md:67
+CLI-EMERGENCY-01	deprecated	cli	covered	cli	rollback --emergency has no effect and prints a deprecation notice	cmd/kardinal/cmd/rollback.go:73-74; docs/changelog.md:67
 UIAPI-PIPELINES-01	live	ui	covered	ui-api	GET /api/v1/ui/pipelines lists pipelines with env status	cmd/kardinal-controller/ui_api.go:270
 UIAPI-BUNDLES-01	live	ui	covered	ui-api	GET pipelines/{p}/bundles	cmd/kardinal-controller/ui_api.go:441
 UIAPI-GRAPH-01	live	ui	covered	ui-api	GET bundles/{b}/graph returns nodes, edges and PR links	cmd/kardinal-controller/ui_api.go:521
