@@ -312,9 +312,18 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 
 // closeStepPR closes the PR this step opened, if it is still open, and leaves
 // a comment with reason. The PR is found through the PRStatus spec, falling
-// back to the step outputs when the PRStatus was never filled in (a crash
-// between opening the PR and patching the PRStatus). A step that never opened
-// a PR returns nil. Only the close can fail; the comment is best-effort.
+// back to the step outputs when the PRStatus is gone or was never filled in (a
+// crash between opening the PR and patching the PRStatus). A step that never
+// opened a PR returns nil.
+//
+// The SCM is asked first whether the PR is still open: the PRStatus can lag
+// (it is polled), or be gone with its Graph. A PR that is merged or closed
+// (by a human, or by an earlier attempt whose finalizer removal or response
+// was lost) is left alone, with no comment; without the check a merged PR got
+// a "kardinal closed this PR" comment, and Bitbucket and Azure DevOps were
+// asked to decline or abandon it. The PR is closed before it is commented on,
+// so a restart in between leaves no comment rather than two. Only the status
+// read and the close can fail; the comment is best-effort.
 func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string) error {
 	repo, num := "", 0
 	if ps.Spec.PRStatusRef != "" {
@@ -348,10 +357,19 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 	if r.SCM == nil {
 		return fmt.Errorf("no SCM provider configured to close PR #%d", num)
 	}
+	log := zerolog.Ctx(ctx)
+	merged, open, err := r.SCM.GetPRStatus(ctx, repo, num)
+	if err != nil {
+		return fmt.Errorf("get PR #%d status: %w", num, err)
+	}
+	if !open {
+		log.Info().Int("pr", num).Str("step", ps.Name).Bool("merged", merged).
+			Msg("PR of cancelled step is no longer open; not closing it")
+		return nil
+	}
 	if err := r.SCM.ClosePR(ctx, repo, num); err != nil {
 		return fmt.Errorf("close PR #%d: %w", num, err)
 	}
-	log := zerolog.Ctx(ctx)
 	log.Info().Int("pr", num).Str("step", ps.Name).Msg("closed PR of cancelled step")
 	body := fmt.Sprintf("kardinal closed this PR: %s. Merging it would change environment %s "+
 		"without a PromotionStep tracking it.", reason, ps.Spec.Environment)

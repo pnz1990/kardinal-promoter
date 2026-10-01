@@ -6,8 +6,11 @@ package promotionstep_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +28,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // prStep is a prod pr-review step in state with PRStatus prs-step and, when
@@ -211,7 +215,7 @@ func TestPRFinalizer_DeleteClosesPR(t *testing.T) {
 				objs = append(objs, tt.prs)
 			}
 			c := newClient(t, objs...)
-			m := &mockSCM{closeErrs: tt.closeErrs}
+			m := &mockSCM{open: true, closeErrs: tt.closeErrs}
 			rec := events.NewFakeRecorder(5)
 			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{}, Recorder: rec,
 				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
@@ -246,6 +250,188 @@ func TestPRFinalizer_DeleteClosesPR(t *testing.T) {
 			default:
 				assert.Empty(t, tt.wantEvent, "no event emitted")
 			}
+		})
+	}
+}
+
+// TestPRFinalizer_DeleteAsksSCM covers the #1387 review: a deleted step asks
+// the SCM whether its PR is still open before it closes it. A PR merged or
+// closed outside the controller's view (the PRStatus lags or is gone), or
+// closed by an earlier attempt that did not finish, is not closed or commented
+// on again. A failed status read is retried like a failed close.
+func TestPRFinalizer_DeleteAsksSCM(t *testing.T) {
+	tests := []struct {
+		name        string
+		prs         *v1alpha1.PRStatus // nil: the PRStatus is gone
+		scm         mockSCM
+		wantClosed  []string
+		wantComment bool
+		wantRequeue bool
+	}{
+		{name: "merged, with the PRStatus gone: not closed, no comment",
+			scm: mockSCM{merged: true}},
+		{name: "merged since the PRStatus was polled: not closed, no comment",
+			prs: openPRStatus("prs-step", "test/repo", 5), scm: mockSCM{merged: true}},
+		{name: "closed by a human: not closed again, no comment",
+			prs: openPRStatus("prs-step", "test/repo", 5)},
+		{name: "still open: closed, then commented",
+			prs: openPRStatus("prs-step", "test/repo", 5), scm: mockSCM{open: true},
+			wantClosed: []string{"test/repo#5"}, wantComment: true},
+		{name: "the status read fails: retried, nothing closed",
+			prs: openPRStatus("prs-step", "test/repo", 5), scm: mockSCM{open: true, getPRErr: errors.New("HTTP 502")},
+			wantRequeue: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			step := prStep("WaitingForMerge", 5)
+			step.Finalizers = []string{promotionstep.FinalizerClosePR}
+			deleted := metav1.NewTime(time.Now().Add(-time.Second))
+			step.DeletionTimestamp = &deleted
+			objs := []client.Object{step, makePipeline("nginx-demo")}
+			if tt.prs != nil {
+				objs = append(objs, tt.prs)
+			}
+			c := newClient(t, objs...)
+			m := &tt.scm
+			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+			res, err := r.Reconcile(context.Background(), reqFor("step"))
+			require.NoError(t, err)
+			assert.Equal(t, 1, m.getPRCalled, "the SCM is asked once")
+			assert.Equal(t, tt.wantClosed, m.closed)
+			if tt.wantComment {
+				require.Len(t, m.comments, 1)
+				assert.Contains(t, m.comments[0], "kardinal closed this PR: bundle bundle-1 was deleted.")
+			} else {
+				assert.Empty(t, m.comments)
+			}
+			var got v1alpha1.PromotionStep
+			err = c.Get(context.Background(), client.ObjectKeyFromObject(step), &got)
+			if tt.wantRequeue {
+				require.NoError(t, err, "the step stays while its PR may be open")
+				assert.Positive(t, res.RequeueAfter)
+			} else {
+				assert.True(t, apierrors.IsNotFound(err), "the step is gone: %v", err)
+				assert.Zero(t, res.RequeueAfter)
+			}
+		})
+	}
+}
+
+// TestPRFinalizer_DeleteMergedPRProviders covers the #1387 review with the
+// real Bitbucket and Azure DevOps providers: deleting a step whose PR merged
+// after the PRStatus was last polled does not ask Bitbucket to decline it or
+// Azure DevOps to abandon it, and posts no comment. An open PR is still
+// declined or abandoned, then commented on.
+func TestPRFinalizer_DeleteMergedPRProviders(t *testing.T) {
+	tests := []struct {
+		name      string
+		provider  func(url string) scm.SCMProvider
+		repo      string
+		state     string // the PR state the API returns
+		wantCalls []string
+	}{
+		{name: "Bitbucket, merged", repo: "ws/repo", state: `{"state":"MERGED"}`,
+			provider:  func(u string) scm.SCMProvider { return scm.NewBitbucketProvider("t", u, "") },
+			wantCalls: []string{"GET /2.0/repositories/ws/repo/pullrequests/5"}},
+		{name: "Bitbucket, open", repo: "ws/repo", state: `{"state":"OPEN"}`,
+			provider: func(u string) scm.SCMProvider { return scm.NewBitbucketProvider("t", u, "") },
+			wantCalls: []string{"GET /2.0/repositories/ws/repo/pullrequests/5",
+				"POST /2.0/repositories/ws/repo/pullrequests/5/decline",
+				"POST /2.0/repositories/ws/repo/pullrequests/5/comments"}},
+		{name: "Azure DevOps, completed", repo: "org/proj/repo", state: `{"status":"completed"}`,
+			provider:  func(u string) scm.SCMProvider { return scm.NewAzureDevOpsProvider("t", u, "") },
+			wantCalls: []string{"GET /org/proj/_apis/git/repositories/repo/pullrequests/5"}},
+		{name: "Azure DevOps, active", repo: "org/proj/repo", state: `{"status":"active"}`,
+			provider: func(u string) scm.SCMProvider { return scm.NewAzureDevOpsProvider("t", u, "") },
+			wantCalls: []string{"GET /org/proj/_apis/git/repositories/repo/pullrequests/5",
+				"PATCH /org/proj/_apis/git/repositories/repo/pullrequests/5",
+				"POST /org/proj/_apis/git/repositories/repo/pullrequests/5/threads"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				mu    sync.Mutex
+				calls []string
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				mu.Lock()
+				calls = append(calls, req.Method+" "+req.URL.Path)
+				mu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				if req.Method == http.MethodGet {
+					_, _ = w.Write([]byte(tt.state))
+					return
+				}
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer srv.Close()
+
+			step := prStep("WaitingForMerge", 5)
+			step.Finalizers = []string{promotionstep.FinalizerClosePR}
+			deleted := metav1.NewTime(time.Now().Add(-time.Second))
+			step.DeletionTimestamp = &deleted
+			c := newClient(t, step, openPRStatus("prs-step", tt.repo, 5), makePipeline("nginx-demo"))
+			r := &promotionstep.Reconciler{Client: c, SCM: tt.provider(srv.URL), GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+			res, err := r.Reconcile(context.Background(), reqFor("step"))
+			require.NoError(t, err)
+			assert.Zero(t, res.RequeueAfter)
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Equal(t, tt.wantCalls, calls)
+		})
+	}
+}
+
+// TestPRFinalizer_DeleteRestartAfterClose covers the #1387 review: when the
+// reconcile that closed a deleted step's PR does not finish (the close
+// response is lost, or the finalizer removal fails), the next one finds the
+// PR closed and neither closes nor comments on it again. The PR gets at most
+// one comment.
+func TestPRFinalizer_DeleteRestartAfterClose(t *testing.T) {
+	tests := []struct {
+		name         string
+		lostClose    int  // close responses lost
+		failRemove   bool // the first finalizer removal fails
+		wantComments int
+	}{
+		{name: "the close response was lost", lostClose: 1, wantComments: 0},
+		{name: "the finalizer removal failed after the comment", failRemove: true, wantComments: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			step := prStep("WaitingForMerge", 5)
+			step.Finalizers = []string{promotionstep.FinalizerClosePR}
+			deleted := metav1.NewTime(time.Now().Add(-time.Second))
+			step.DeletionTimestamp = &deleted
+			api := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}).
+				WithObjects(step, openPRStatus("prs-step", "test/repo", 5), makePipeline("nginx-demo")).Build()
+			failRemove := tt.failRemove
+			c := interceptor.NewClient(api, interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+					if _, ok := obj.(*v1alpha1.PromotionStep); ok && failRemove {
+						failRemove = false
+						return apierrors.NewInternalError(errors.New("etcdserver: request timed out"))
+					}
+					return c.Patch(ctx, obj, p, opts...)
+				},
+			})
+			m := &mockSCM{open: true, lostClose: tt.lostClose}
+			r := &promotionstep.Reconciler{Client: c, APIReader: api, SCM: m, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+			_, _ = r.Reconcile(context.Background(), reqFor("step"))
+			_, err := r.Reconcile(context.Background(), reqFor("step"))
+			require.NoError(t, err)
+			assert.Equal(t, []string{"test/repo#5"}, m.closed, "the PR is closed once")
+			assert.Len(t, m.comments, tt.wantComments, "comments")
+			var gone v1alpha1.PromotionStep
+			assert.True(t, apierrors.IsNotFound(api.Get(context.Background(), client.ObjectKeyFromObject(step), &gone)),
+				"the step is gone")
 		})
 	}
 }
@@ -357,7 +543,7 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 					return c.Get(ctx, key, obj, opts...)
 				},
 			})
-			m := &mockSCM{}
+			m := &mockSCM{open: true}
 			r := &promotionstep.Reconciler{Client: api, APIReader: reader, SCM: m, GitClient: &mockGit{},
 				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
 
@@ -420,7 +606,7 @@ func TestPRFinalizer_DeleteClosesPROnce(t *testing.T) {
 					return c.Patch(ctx, obj, p, opts...)
 				},
 			})
-			m := &mockSCM{}
+			m := &mockSCM{open: true}
 			r := &promotionstep.Reconciler{Client: cache, APIReader: api, SCM: m, GitClient: &mockGit{},
 				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
 
@@ -563,7 +749,7 @@ func TestPRFinalizer_SyncConflict(t *testing.T) {
 // step whose Bundle is gone deletes itself, and the delete closes its PR.
 func TestPRFinalizer_OrphanedStepClosesPR(t *testing.T) {
 	c := newClient(t, prStep("WaitingForMerge", 5), openPRStatus("prs-step", "test/repo", 5), makePipeline("nginx-demo"))
-	m := &mockSCM{}
+	m := &mockSCM{open: true}
 	r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{},
 		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
 

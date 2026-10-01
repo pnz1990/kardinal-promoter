@@ -17,6 +17,7 @@ package promotionstep_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -55,6 +56,7 @@ type mockSCM struct {
 
 	getPRErr  error    // returned by GetPRStatus
 	closeErrs []error  // returned in order by successive ClosePR calls; nil entries succeed
+	lostClose int      // the first lostClose ClosePR calls close the PR but return an error
 	closed    []string // "repo#number" of every ClosePR call
 	comments  []string // body of every CommentOnPR call
 }
@@ -63,13 +65,23 @@ func (m *mockSCM) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, 
 	m.openCalled++
 	return m.prURL, m.prNumber, m.openPRErr
 }
+// ClosePR records the call. A close that succeeds, or whose response is lost
+// (lostClose), leaves the PR closed: GetPRStatus then reports it not open.
 func (m *mockSCM) ClosePR(_ context.Context, repo string, number int) error {
 	m.closed = append(m.closed, fmt.Sprintf("%s#%d", repo, number))
+	if m.lostClose > 0 {
+		m.lostClose--
+		m.open = false
+		return errors.New("context deadline exceeded (Client.Timeout exceeded while awaiting headers)")
+	}
 	if len(m.closeErrs) > 0 {
 		err := m.closeErrs[0]
 		m.closeErrs = m.closeErrs[1:]
-		return err
+		if err != nil {
+			return err
+		}
 	}
+	m.open = false
 	return nil
 }
 func (m *mockSCM) CommentOnPR(_ context.Context, _ string, _ int, body string) error {
@@ -1031,7 +1043,7 @@ func TestSupersessionGuard_ClosesOpenPRAndFails(t *testing.T) {
 	}
 	pipeline := makePipeline("my-pipeline")
 
-	mock := &mockSCM{}
+	mock := &mockSCM{open: true}
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(step, bundle, pipeline).
