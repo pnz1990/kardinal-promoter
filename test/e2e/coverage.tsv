@@ -14,7 +14,7 @@ GRAPH-TARGET-01	live	core	covered	graph	intent.targetEnvironment promotes only u
 GRAPH-INPLACE-01	live	core	covered	graph	Pipeline edit updates the Bundle Graph in place without re-running Verified environments	docs/changelog.md:101
 GRAPH-HEAL-01	live	core	covered	graph	a deleted Graph is recreated and the Bundle continues	docs/graph-coverage.md
 GRAPH-RBAC-01	live	chart	todo	graph	Graph ServiceAccount and RBAC (graph-rbac.yaml) let kro create PromotionSteps, PolicyGates and PRStatus nodes	chart/kardinal-promoter/templates/graph-rbac.yaml
-GRAPH-PRSTATUS-01	live	scm-forgejo	covered	graph	PRStatus companion node per pr-review step tracks PR state	docs/graph-coverage.md; api/v1alpha1/prstatus_types.go
+GRAPH-PRSTATUS-01	live	scm-forgejo	covered	graph	one PRStatus companion node per environment, named in its step's prStatusRef, tracks PR state; only a pr-review environment's is ready when merged (an auto one's stays a placeholder)	docs/graph-coverage.md:21; pkg/graph/builder.go:558-566; pkg/graph/builder.go:833-873; api/v1alpha1/prstatus_types.go
 GRAPH-NSDELETE-01	live	core	covered	graph	deleting a namespace with a Bundle finishes even when its applier RoleBinding goes first: the controller removes kro's finalizer from its Graphs in a Terminating namespace	pkg/reconciler/graphcleanup/reconciler.go:67; docs/changelog.md:68
 GRAPH-READER-PRUNE-01	live	core	covered	graph	deleting a namespace's last Bundle deletes the reader RoleBinding its Graph had in argocd	pkg/reconciler/graphcleanup/reconciler.go:61; docs/installation.md:610
 GRAPH-READER-PRUNE-02	live	core	covered	graph	deleting a namespace deletes the reader RoleBindings its Graphs had in argocd, with the applier RoleBinding and its record gone	pkg/graph/identity.go:246; docs/changelog.md:69
