@@ -107,7 +107,7 @@ Unchanged. After the config change is applied via Git, the health adapter verifi
 
 ### Rollback
 
-Rollback creates a new Bundle of the target's type with `provenance.rollbackOf` set, and it follows the same Pipeline, PolicyGates, and PR flow. It copies the target's `configRef`, so a config or mixed rollback merges the target's config commit; when the deployed Bundle is a config or mixed Bundle and the target has no commit, it carries the newest earlier Verified one. See [Rollback](../rollback.md#images-the-target-does-not-name).
+Rollback creates a new Bundle with `provenance.rollbackOf` set to the target, and it follows the same Pipeline, PolicyGates, and PR flow. The new Bundle has the target's type, with two exceptions. First, without `--to`, a deployed image or config Bundle goes back to the newest earlier images or config commit, and a mixed Bundle may have deployed them: an image rollback to a mixed target restores only the target's images, and a config rollback to a mixed target restores only its config commit. The rollback Bundle then has the deployed Bundle's type, and the rest stays as deployed. Second, when a mixed Bundle is deployed and the target's type cannot deploy everything that Bundle changed, the rollback Bundle is mixed. A config or mixed rollback merges the target's config commit; when the deployed Bundle is a config or mixed Bundle and the target has no commit, it carries the newest earlier Verified one. See [Rollback](../rollback.md#images-the-target-does-not-name).
 
 ### Bundle Superseding
 
