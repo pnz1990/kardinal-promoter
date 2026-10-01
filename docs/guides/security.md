@@ -284,8 +284,23 @@ ISO 27001, and FedRAMP audit trail requirements.
 | `spec.outcome` | `Success`, `Failure`, or `Pending` |
 | `spec.message` | Human-readable description |
 
-An AuditEvent does not record who acted. For that, read the Bundle's
-`spec.provenance.author` and the Kubernetes API server audit log.
+An AuditEvent does not record who acted. A Bundle made by a promote or a
+rollback names who asked for it in its `kardinal.io/requested-by` annotation:
+
+- **UI with TokenReview auth** (`ui.auth.tokenReview`): the caller's Kubernetes
+  username, as the API server returned it for their token, for example
+  `system:serviceaccount:team-a:deployer`.
+- **UI with the static token, or with no UI auth**: `kardinal-ui`. The UI
+  cannot tell its callers apart in these modes.
+- **CLI** (`kardinal promote`, `kardinal rollback`): the local username on the
+  machine that ran it. Nothing verifies it.
+- **Automatic rollback**: `kardinal-controller (...)`, naming what triggered it.
+
+Anyone who may create Bundles can also set the annotation, so for a verified
+identity read the Kubernetes API server audit log. It names the kubeconfig
+user who created a CLI Bundle. The UI creates Bundles with the controller's
+ServiceAccount, so for a UI Bundle the audit log names the controller, and in
+TokenReview mode the annotation names the user.
 
 ### Querying audit events
 
