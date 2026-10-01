@@ -27,15 +27,19 @@
 //     and writes status.merged, status.open, status.approved,
 //     status.approvalCount and status.lastCheckedAt. When the PR is merged it
 //     also records status.mergeCommitSHA, which the health check requires the
-//     GitOps tool to have deployed.
+//     GitOps tool to have deployed, or status.mergeCommitUnavailable once it
+//     stops trying: the provider cannot report it, reported none, or still
+//     failed mergeCommitWindow after the merge. An argocd health check waits
+//     until one of the two is set (B80).
 //   - A poll error that a retry cannot fix (401, 403 that is not a rate limit,
 //     404, 410) is written to status.pollError and the PR is polled again
 //     every 5 minutes; the PromotionStep waiting for the PR fails with it.
 //     Transient errors (429, 5xx, network) are retried every 30 seconds.
 //   - The PromotionStep reconciler watches PRStatus and advances from
 //     WaitingForMerge when status.merged is true. The SCM webhook may set
-//     status.merged first, with status.mergeCommitSHA for GitHub and GitLab;
-//     this reconciler then only fills in a missing merge commit.
+//     status.merged first, with status.mergeCommitSHA for GitHub and for
+//     GitLab merges that are not fast-forward; this reconciler then only
+//     fills in a missing merge commit, or status.mergeCommitUnavailable.
 //   - PolicyGate CEL reads the approval state as bundle.pr["<env>"].isApproved
 //     and bundle.pr["<env>"].approvalCount (K-08).
 //   - Polling is throttled: at most one poll per requeuePollInterval, and the
@@ -47,8 +51,8 @@
 //     status.closedAt. A reopen clears closedAt. Once the window has passed
 //     the reconciler sets status.closedFinal, then comments on the PR once,
 //     and stops polling; only then does the PromotionStep fail (#1306).
-//   - Idempotent: a merged PR whose merge commit is known is a no-op, and so
-//     is a PR that is final-closed.
+//   - Idempotent: a merged PR whose merge commit is known, or recorded
+//     unavailable, is a no-op, and so is a PR that is final-closed.
 //
 // Graph-purity: eliminates PS-4, SCM-2, ST-10, ST-11, BU-3, WH-1.
 package prstatus
@@ -209,9 +213,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		approvalCount = prs.Status.ApprovalCount
 	}
 
-	mergeSHA := prs.Status.MergeCommitSHA
-	if merged && mergeSHA == "" {
-		mergeSHA = r.fetchMergeCommit(ctx, log, &prs)
+	mergeSHA, mergeUnavailable := prs.Status.MergeCommitSHA, prs.Status.MergeCommitUnavailable
+	retryMergeCommit := false
+	if merged && mergeSHA == "" && !mergeUnavailable {
+		mergeSHA, retryMergeCommit = r.fetchMergeCommit(ctx, log, &prs)
+		mergeUnavailable = mergeSHA == "" && !retryMergeCommit
 	}
 
 	// now is written to status.lastCheckedAt whenever it decides something:
@@ -221,7 +227,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	becameFinal := closedFinal && !prs.Status.ClosedFinal
 	changed := merged != prs.Status.Merged || open != prs.Status.Open ||
 		approved != prs.Status.Approved || approvalCount != prs.Status.ApprovalCount ||
-		mergeSHA != prs.Status.MergeCommitSHA || prs.Status.PollError != "" ||
+		mergeSHA != prs.Status.MergeCommitSHA || mergeUnavailable != prs.Status.MergeCommitUnavailable ||
+		prs.Status.PollError != "" ||
 		!closedAt.Equal(prs.Status.ClosedAt) || closedFinal != prs.Status.ClosedFinal
 	stale := prs.Status.LastCheckedAt == nil || now.Sub(prs.Status.LastCheckedAt.Time) >= lastCheckedRefresh
 	if changed || stale {
@@ -232,6 +239,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		prs.Status.Approved = approved
 		prs.Status.ApprovalCount = approvalCount
 		prs.Status.MergeCommitSHA = mergeSHA
+		prs.Status.MergeCommitUnavailable = mergeUnavailable
 		prs.Status.PollError = ""
 		prs.Status.ClosedAt = closedAt
 		prs.Status.ClosedFinal = closedFinal
@@ -253,8 +261,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			Str("prURL", prs.Spec.PRURL).
 			Int("prNumber", prs.Spec.PRNumber).
 			Str("mergeCommit", mergeSHA).
+			Bool("mergeCommitUnavailable", mergeUnavailable).
 			Msg("PR merged — status updated")
-		if mergeSHA == "" && r.canGetMergeCommit() {
+		if retryMergeCommit {
 			return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 		}
 		return ctrl.Result{}, nil
@@ -347,51 +356,63 @@ func (r *Reconciler) recordPollError(ctx context.Context, log zerolog.Logger, pr
 	return ctrl.Result{RequeueAfter: permanentErrorInterval}, nil
 }
 
-// recordMergeCommit fills in status.mergeCommitSHA of a merged PR. It retries
-// for mergeCommitWindow after the merge was recorded; after that, or when the
-// SCM provider cannot report merge commits, the argocd and resource health
-// checks fall back to checking the Bundle images; the flux check has no such
-// fallback and waits until health.timeout (see docs/health-adapters.md).
+// recordMergeCommit fills in status.mergeCommitSHA of a merged PR, or sets
+// status.mergeCommitUnavailable once it stops trying: the SCM provider cannot
+// report merge commits, answered without one, or still failed
+// mergeCommitWindow after the merge was recorded (status.lastCheckedAt). A
+// failed lookup within the window is retried every requeuePollInterval. While
+// neither field is set the argocd health check waits for the merge commit;
+// once mergeCommitUnavailable is set it checks the Bundle images only, like
+// the resource check, and the flux check, which has no such fallback, waits
+// until health.timeout (see docs/health-adapters.md). Idempotent: a PR with
+// either field set is a no-op, so a PRStatus a webhook or an older release
+// marked merged gets the field at its first reconcile.
 func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (ctrl.Result, error) {
-	if prs.Status.MergeCommitSHA != "" || prs.Spec.PRNumber == 0 || !r.canGetMergeCommit() {
+	if prs.Status.MergeCommitSHA != "" || prs.Status.MergeCommitUnavailable {
 		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR already merged, no-op")
 		return ctrl.Result{}, nil
 	}
+	var sha string
 	if last := prs.Status.LastCheckedAt; last != nil && time.Since(last.Time) > mergeCommitWindow {
-		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("merge commit not reported by the SCM, giving up")
-		return ctrl.Result{}, nil
-	}
-	sha := r.fetchMergeCommit(ctx, log, prs)
-	if sha == "" {
-		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
+		// The decision is written to the status below.
+		log.Info().Str("prURL", prs.Spec.PRURL).Dur("window", mergeCommitWindow).
+			Msg("merge commit not reported by the SCM, giving up")
+	} else {
+		var retry bool
+		if sha, retry = r.fetchMergeCommit(ctx, log, prs); retry {
+			return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
+		}
 	}
 	patch := client.MergeFrom(prs.DeepCopy())
 	prs.Status.MergeCommitSHA = sha
+	prs.Status.MergeCommitUnavailable = sha == ""
 	if err := r.Status().Patch(ctx, prs, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch prstatus %s merge commit: %w", prs.Name, err)
 	}
 	return ctrl.Result{}, nil
 }
 
-// canGetMergeCommit reports whether the SCM provider can report merge commits.
-func (r *Reconciler) canGetMergeCommit() bool {
-	_, ok := r.SCM.(scm.MergeCommitGetter)
-	return ok
-}
-
-// fetchMergeCommit asks the SCM provider for the merge commit of prs, or
-// returns "" when it cannot tell.
-func (r *Reconciler) fetchMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) string {
+// fetchMergeCommit asks the SCM provider for the merge commit of prs. retry
+// is true only when the lookup failed and may succeed later; "" with retry
+// false means the commit will not be known: the provider cannot report merge
+// commits (or none is configured), there is no PR number, or the provider
+// answered without one (a Bitbucket PR with no merge_commit, an Azure DevOps
+// PR with no lastMergeCommit, a provider the DynamicProvider has no lookup
+// for).
+func (r *Reconciler) fetchMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (sha string, retry bool) {
 	getter, ok := r.SCM.(scm.MergeCommitGetter)
-	if !ok {
-		return ""
+	if !ok || prs.Spec.PRNumber == 0 {
+		return "", false
 	}
 	sha, err := getter.GetPRMergeCommit(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
 	if err != nil {
 		log.Warn().Err(err).Int("prNumber", prs.Spec.PRNumber).Msg("could not read the merge commit, will retry")
-		return ""
+		return "", true
 	}
-	return sha
+	if sha == "" {
+		log.Info().Int("prNumber", prs.Spec.PRNumber).Msg("the SCM provider reports no merge commit for the PR")
+	}
+	return sha, false
 }
 
 // SetupWithManager registers the PRStatus reconciler with controller-runtime.

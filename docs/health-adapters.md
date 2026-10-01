@@ -24,9 +24,13 @@ An unknown `health.type` is rejected by the CRD schema when the Pipeline is appl
 The PromotionStep records the git commit its promotion delivered:
 
 - `status.outputs.commitSHA` — the commit pushed straight to the environment branch (`approval: auto`);
-- `status.outputs.mergeCommitSHA` — the merge commit of the promotion PR (`approval: pr-review`), copied from `PRStatus.status.mergeCommitSHA` when the step sees the merge, or at the next health check when the PRStatus records it later (a webhook can report the merge before the merge commit is known).
+- `status.outputs.mergeCommitSHA` — the merge commit of the promotion PR (`approval: pr-review`), copied from `PRStatus.status.mergeCommitSHA` when the step sees the merge, or at the next health check when the PRStatus records it later (a webhook can report the merge before the merge commit is known; see [below](#when-the-merge-commit-is-not-known-yet)).
 
 The `argocd` and `flux` adapters require that commit. On a branch shared with other environments, both also accept another commit when the Bundle images run: for `argocd` in the Application, for `flux` in the Kustomization's Deployments (see below). They compare images, not git history, so they do not check that the other commit is later than the promoted one. The `resource` adapter requires the Bundle images in the Deployment's pod template, `argoRollouts` in the Rollout's, and `flagger` in the Canary's target Deployment and, for `Succeeded`, its primary Deployment. `kubectl get promotionstep <name> -o yaml` shows the recorded commit in `status.outputs` and the last health result in `status.message`.
+
+### When the merge commit is not known yet
+
+The SCM webhook can mark the PR merged before the merge commit is known: GitLab reports none for a fast-forward merge, and the Forgejo and Gitea events never carry one. The PRStatus reconciler then asks the SCM provider for it and records `PRStatus.status.mergeCommitSHA`, or `status.mergeCommitUnavailable: true` once it stops asking: at once when the provider cannot report merge commits or answers without one (an Azure DevOps PR without `lastMergeCommit`, a Bitbucket PR whose `merge_commit` is empty), or when the lookup still fails 10 minutes after the merge. Until one of the two is set, the `argocd` and `flux` checks of a step that opened a PR wait with `merge commit of the PR not known yet`, instead of passing on an Application or Kustomization that is healthy on the previous commit. The wait counts toward `health.timeout`, so a lookup that keeps failing can use up a `health.timeout` of 10 minutes or less. Once `mergeCommitUnavailable` is set, `argocd` checks `status.summary.images` against the Bundle images, and `flux`, which has nothing to fall back on, waits until `health.timeout` (see [flux](#adapter-flux)). A direct push, a step with no changes and `update.strategy: argocd` open no PR and do not wait; `resource`, `argoRollouts` and `flagger` check images only and do not wait either.
 
 ## Adapter: resource (default)
 
@@ -121,6 +125,7 @@ On a branch shared with other environments, a later commit can reach Argo CD bef
 | An operation running on another commit | Wait. `Degraded` health counts once the promoted commit is deployed, or, on a shared branch, once `status.summary.images` shows the Bundle images |
 | An operation running, with `update.strategy: argocd` | Wait. `Degraded` health counts once `status.summary.images` shows the Bundle images |
 | `update.strategy: argocd`, and `status.summary.images` lists none of the Bundle repositories | `Healthy` and `Synced` pass (`image not verified`); `Degraded` health or a failed operation waits |
+| `approval: pr-review` and the merge commit is not known yet | Wait (`merge commit of the PR not known yet`) while the PRStatus can still learn it; once it records `mergeCommitUnavailable`, `status.summary.images` must show the Bundle images (see [above](#when-the-merge-commit-is-not-known-yet)). `onHealthFailure` at `health.timeout` |
 | Application not found | Unhealthy (counts as a health failure) |
 
 Unhealthy results count toward `status.consecutiveHealthFailures`; waiting results do not. When `health.timeout` expires without a Healthy result, whichever of the two the last check returned, the timeout counts as one more health failure and applies `onHealthFailure`. See [Timings and failures](#timings-and-failures).
@@ -164,10 +169,12 @@ health:
 | `Ready=False` otherwise (build or apply failed, a health check timed out, or a stall of another commit where no Deployment that runs the Bundle images stalled, for example a cache Deployment stalled while ours is rolled out) | Unhealthy (counts as a health failure) |
 | Not found | Unhealthy (counts as a health failure) |
 
-**The promoted commit must be known.** For a direct push it is the pushed commit. For a PR (`approval: pr-review`) it is the merge commit: the SCM webhook records it with the merge for GitHub and GitLab, and otherwise the controller asks the SCM provider for it after the merge. Until it is known, the check waits with `merge commit of the PR not known yet`, because a Kustomization that is `Ready=True` on the **previous** commit would otherwise pass: there is no image check to fall back on, unlike `argocd` and `resource`. If the commit never becomes known, `health.timeout` applies `onHealthFailure` with that reason. That happens when:
+**The promoted commit must be known.** For a direct push it is the pushed commit. For a PR (`approval: pr-review`) it is the merge commit: the SCM webhook records it with the merge for GitHub and for GitLab merges that are not fast-forward, and otherwise the controller asks the SCM provider for it after the merge (see [When the merge commit is not known yet](#when-the-merge-commit-is-not-known-yet)). Until it is known, the check waits with `merge commit of the PR not known yet`, because a Kustomization that is `Ready=True` on the **previous** commit would otherwise pass: there is no image check to fall back on, unlike `argocd` and `resource`. If the commit never becomes known, `health.timeout` applies `onHealthFailure` with that reason. That happens when:
 
 - the provider does not return one (for example an Azure DevOps PR without `lastMergeCommit`, or a Bitbucket PR whose `merge_commit` is empty);
 - the lookup keeps failing for 10 minutes after the merge, after which the controller stops asking.
+
+In both cases the PRStatus has `status.mergeCommitUnavailable: true`.
 
 For those providers, use `argocd` or `resource`.
 

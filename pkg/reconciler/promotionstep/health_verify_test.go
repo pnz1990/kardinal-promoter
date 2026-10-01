@@ -324,6 +324,98 @@ func TestFluxWaitsForTheMergeCommit(t *testing.T) {
 	}
 }
 
+// argoApplicationWithImages is argoApplication whose status.summary.images
+// lists images.
+func argoApplicationWithImages(name, revision string, images ...string) *unstructured.Unstructured {
+	app := argoApplication(name, revision)
+	list := make([]interface{}, len(images))
+	for i, img := range images {
+		list[i] = img
+	}
+	_ = unstructured.SetNestedSlice(app.Object, list, "status", "summary", "images")
+	return app
+}
+
+// TestArgoCDWaitsForTheMergeCommit proves B80: a webhook can mark the PR
+// merged before the merge commit is known (a GitLab fast-forward merge, any
+// Forgejo or Gitea merge). While the PRStatus can still learn it, an argocd
+// check of a pr-review step waits instead of verifying on
+// status.summary.images, so outputs.mergeCommitSHA is recorded and the synced
+// revision is checked. Once the PRStatus records that the merge commit will
+// not be known (status.mergeCommitUnavailable), the images decide, as before.
+// health.timeout bounds the wait.
+func TestArgoCDWaitsForTheMergeCommit(t *testing.T) {
+	argo := v1alpha1.HealthConfig{Type: "argocd", Timeout: "1m"}
+	prReview := v1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review", Health: argo}
+	v2 := []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v2"}}
+	merged := func(sha string) *v1alpha1.PRStatus {
+		prs := openPRStatus("prs", "org/repo", 42)
+		prs.Status.Open, prs.Status.Merged, prs.Status.MergeCommitSHA = false, true, sha
+		return prs
+	}
+	unavailable := merged("")
+	unavailable.Status.MergeCommitUnavailable = true
+	expired := metav1.NewTime(time.Now().Add(-time.Second))
+	const waiting = "waiting for argocd: merge commit of the PR not known yet"
+	tests := []struct {
+		name         string
+		hc           healthCase
+		wantState    string
+		wantMsg      string
+		wantFailures int
+		wantOutputs  map[string]string
+	}{
+		{name: "merge commit not known yet: waits, not a failure (B80)",
+			hc: healthCase{env: prReview, images: v2, prsRef: "prs", objs: []client.Object{merged("")},
+				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", newSHA, "ghcr.io/org/app:v2")}},
+			wantState: "HealthChecking", wantMsg: waiting},
+		{name: "merge commit not known yet at health.timeout: onHealthFailure",
+			hc: healthCase{env: prReview, images: v2, prsRef: "prs", objs: []client.Object{merged("")},
+				status:  v1alpha1.PromotionStepStatus{HealthCheckExpiry: &expired, Message: waiting},
+				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", newSHA, "ghcr.io/org/app:v2")}},
+			wantState: "Failed", wantMsg: "health check timeout after 1m0s; last result: " + waiting, wantFailures: 1},
+		{name: "merge commit recorded later: checked and copied to the outputs",
+			hc: healthCase{env: prReview, images: v2, prsRef: "prs", objs: []client.Object{merged(newSHA)},
+				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", newSHA, "ghcr.io/org/app:v2")}},
+			wantState: "Verified", wantMsg: "via argocd", wantOutputs: map[string]string{"mergeCommitSHA": newSHA}},
+		{name: "merge commit unavailable: the Bundle images decide",
+			hc: healthCase{env: prReview, images: v2, prsRef: "prs", objs: []client.Object{unavailable},
+				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", oldSHA, "ghcr.io/org/app:v2")}},
+			wantState: "Verified", wantMsg: "via argocd"},
+		{name: "merge commit unavailable, previous images: waits for them",
+			hc: healthCase{env: prReview, images: v2, prsRef: "prs", objs: []client.Object{unavailable},
+				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", oldSHA, "ghcr.io/org/app:v1")}},
+			wantState: "HealthChecking", wantMsg: "waiting for argocd: health=Healthy"},
+		{name: "no changes: no PR to wait for",
+			hc: healthCase{env: prReview, images: v2, status: v1alpha1.PromotionStepStatus{
+				Outputs: map[string]string{"noChanges": "true"}},
+				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", oldSHA, "ghcr.io/org/app:v2")}},
+			wantState: "Verified", wantMsg: "via argocd", wantOutputs: map[string]string{"noChanges": "true"}},
+		{name: "direct push: no PR to wait for",
+			hc: healthCase{env: v1alpha1.EnvironmentSpec{Name: "prod", Health: argo}, images: v2,
+				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", oldSHA, "ghcr.io/org/app:v2")}},
+			wantState: "Verified", wantMsg: "via argocd"},
+		{name: "PRStatus deleted: nothing left to learn it from",
+			hc: healthCase{env: prReview, images: v2, prsRef: "prs",
+				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", oldSHA, "ghcr.io/org/app:v2")}},
+			wantState: "Verified", wantMsg: "via argocd"},
+		{name: "resource adapter checks the images only: no wait",
+			hc: healthCase{env: v1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review",
+				Health: v1alpha1.HealthConfig{Type: "resource"}}, images: v2, prsRef: "prs",
+				objs: []client.Object{merged(""), withImage(healthyDeployment("p", "prod"), "ghcr.io/org/app:v2")}},
+			wantState: "Verified", wantMsg: "via resource"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, got, _ := tt.hc.run(t)
+			assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
+			assert.Contains(t, got.Status.Message, tt.wantMsg)
+			assert.Equal(t, tt.wantFailures, got.Status.ConsecutiveHealthFailures)
+			assert.Equal(t, tt.wantOutputs, got.Status.Outputs)
+		})
+	}
+}
+
 // TestMergeCommitRecordedLate: a webhook can mark the PR merged before the
 // merge commit is known, so the step leaves WaitingForMerge without it. Once
 // the PRStatus records it, the health check copies it into

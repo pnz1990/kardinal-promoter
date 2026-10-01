@@ -139,7 +139,9 @@ kardinal-promoter detects PR merges in two ways:
 Health checks compare the environment against the PR's merge commit. The GitHub and GitLab
 webhooks record it together with the merge. In every other case (other providers, no webhook,
 or a GitLab fast-forward merge, which reports none) the PRStatus reconciler asks the SCM API
-for it after the merge.
+for it after the merge. Until it has the commit, or records that it will not get it, the
+`argocd` and `flux` health checks wait; see
+[When the merge commit is not known yet](health-adapters.md#when-the-merge-commit-is-not-known-yet).
 
 ## Auto-Merge Environments
 

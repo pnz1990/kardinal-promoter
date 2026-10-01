@@ -138,6 +138,15 @@ spec:
                   SCM provider reports it. Health adapters use it to confirm that the GitOps
                   tool deployed this exact revision.
                 type: string
+              mergeCommitUnavailable:
+                description: |-
+                  MergeCommitUnavailable is true once the PR is merged and the
+                  PRStatusReconciler stopped trying to learn mergeCommitSHA: the SCM
+                  provider cannot report merge commits, reported none for this PR, or
+                  still failed 10 minutes after the merge was recorded. Until then an
+                  argocd health check of the PromotionStep waits for the merge commit
+                  instead of checking the Bundle images only.
+                type: boolean
               merged:
                 description: |-
                   Merged is true when the pull request has been merged.
