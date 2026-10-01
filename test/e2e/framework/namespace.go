@@ -29,7 +29,9 @@ var nonSlug = regexp.MustCompile(`[^a-z0-9-]+`)
 
 // Namespace creates a namespace for the test, copies the git token Secret into
 // it, and deletes it when the test ends. On failure it first writes
-// diagnostics (see Diagnose). KARDINAL_E2E_KEEP=1 keeps the namespace.
+// diagnostics (see Diagnose). KARDINAL_E2E_KEEP=1 keeps the namespace. A
+// test's repos are deleted only after its namespaces are drained (see
+// beforeRepoDelete).
 func (e *Env) Namespace(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
@@ -64,10 +66,9 @@ func (e *Env) Namespace(t *testing.T) string {
 		}
 	}
 
+	n := e.trackNamespace(t, name)
 	t.Cleanup(func() {
-		if t.Failed() {
-			e.Diagnose(t, name)
-		}
+		e.diagnoseOnce(t, n)
 		if os.Getenv(EnvKeep) == "1" {
 			t.Logf("keeping namespace %s (%s=1)", name, EnvKeep)
 			return

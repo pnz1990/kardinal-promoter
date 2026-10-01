@@ -50,9 +50,9 @@ func TestForgejo_PromotionPR(t *testing.T) {
 }
 
 // TestForgejo_MergeByPolling checks that without a webhook the PRStatus poll
-// finds a merge on Forgejo, and the Graph's PRStatus nodes: one per step,
-// named for the Bundle and environment, without a spec, ready when merged
-// only for pr-review, and referenced by the step.
+// finds a merge on Forgejo, and the Graph's PRStatus nodes: one per
+// environment, named for the Bundle and environment, without a spec, ready
+// when merged only for pr-review, and referenced by the step.
 //
 // Covers SCM-FJ-03, GRAPH-PRSTATUS-01.
 func TestForgejo_MergeByPolling(t *testing.T) {
@@ -126,10 +126,13 @@ func assertPRStatusNodes(t *testing.T, a *app, bundle string, prod *v1alpha1.Pro
 	assert.True(t, prs.Status.Open && !prs.Status.Merged, framework.DescribePRStatus(prs))
 }
 
-// TestForgejo_MergeWebhook checks merge events signed in X-Gitea-Signature
-// (uat) and X-Forgejo-Signature (prod), as Forgejo sends them: each marks
-// the PRStatus merged before a poll would, and the reconciler fetches the
-// merge commit, which Forgejo's event does not carry.
+// TestForgejo_MergeWebhook posts the merge events itself, on a repo without
+// a webhook: one signed only in X-Gitea-Signature (uat) and one only in
+// X-Forgejo-Signature (prod), the headers Forgejo signs in. Forgejo's own
+// delivery also sends X-Hub-Signature-256, which the controller checks
+// first, so only a posted event reaches these two. Each event marks the
+// PRStatus merged before a poll would, and the reconciler fetches the merge
+// commit, which the controller does not read from the event.
 //
 // Covers SCM-FJ-04.
 func TestForgejo_MergeWebhook(t *testing.T) {
@@ -141,6 +144,25 @@ func TestForgejo_MergeWebhook(t *testing.T) {
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	a.mergeByWebhook(t, bundle, "uat", giteaSignature, false)
 	a.mergeByWebhook(t, bundle, "prod", forgejoSignature, false)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// TestForgejo_MergeWebhookDelivery merges a PR on a repo whose webhook
+// Forgejo itself delivers: the event marks the PRStatus merged before a poll
+// would, and the reconciler fetches the merge commit, which the controller
+// does not read from the event. It fails when Forgejo cannot deliver to the
+// controller's Service, for example when Forgejo's [webhook]
+// ALLOWED_HOST_LIST blocks it.
+//
+// Covers SCM-FJ-12.
+func TestForgejo_MergeWebhookDelivery(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireKind(t, e, "forgejo")
+	a := newArgoApp(t, e, "prod")
+	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	a.mergeByWebhook(t, bundle, "prod", "", false)
 	assertEnvAt(t, a, "prod", fixtures.V2)
 }
 

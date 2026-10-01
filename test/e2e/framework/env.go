@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -66,6 +67,10 @@ type Env struct {
 	// Git is the suite's git server (see gitserver.FromEnv).
 	Git gitserver.Server
 	cli string
+
+	mu sync.Mutex
+	// namespaces are the namespaces Namespace created (see beforeRepoDelete).
+	namespaces []*testNamespace
 }
 
 // Scheme has the kardinal types plus core and apps.
