@@ -151,7 +151,7 @@ SCM-GT-09	live	scm-gitea	todo	scm	Gitea: startup token check logs SCM TOKEN SCOP
 SCM-GT-10	live	scm-gitea	todo	scm	Gitea: --scm-api-url points the controller at a self-hosted or enterprise API	docs/scm-providers.md:134-190
 SCM-GL-11	live	scm-gitlab	todo	scm	GitLab: project in a subgroup (group/sub/repo) resolves and gets MRs	docs/scm-providers.md:12
 SCM-GL-12	live	scm-gitlab	todo	scm	GitLab: fast-forward merge (no merge commit in webhook) falls back to the API for the merge commit	docs/pr-evidence.md:117-120
-SCM-FJ-11	live	scm-forgejo	todo	webhook	Forgejo/Gitea: X-Hub-Signature-256 is also accepted and takes precedence over X-Gitea/X-Forgejo-Signature	pkg/scm/repo_url.go:205-212; docs/scm-providers.md:13
+SCM-FJ-11	live	scm-forgejo	todo	webhook	Forgejo/Gitea: X-Hub-Signature-256 is also accepted and takes precedence over X-Gitea/X-Forgejo-Signature	pkg/scm/repo_url.go:214-221; docs/scm-providers.md:13
 SCM-BB-01	contract	core	covered	scm	Bitbucket Cloud: open PR with Bearer access token on workspace/repo from spec.git.url	docs/scm-providers.md:193-205; pkg/scm/bitbucket.go:84
 SCM-BB-02	contract	core	covered	scm	Bitbucket Cloud: no PR labels (AddLabelsToPR is a no-op); rollback PRs found by title	docs/scm-providers.md:15; docs/scm-providers.md:21-23; pkg/scm/bitbucket.go:302
 SCM-BB-03	contract	core	covered	scm	Bitbucket Cloud: merge detected by polling; merge commit fetched from API	pkg/scm/bitbucket.go:196; pkg/scm/revision.go:90

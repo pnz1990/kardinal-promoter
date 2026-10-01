@@ -313,6 +313,48 @@ func TestGoGitClient_ErrorBodyCredentialsAreRemoved(t *testing.T) {
 	}
 }
 
+// TestGoGitClient_ErrorBodyIsRedactedAsText covers HTTP error bodies with no
+// newline. url.Parse takes such a body for a relative URL when no colon comes
+// before its first slash, and gives it back percent-encoded with the
+// credentials kept ("blocked;%20see%20https://user:tok@proxy.example/help"),
+// so the body must be redacted as text, never parsed as a URL.
+func TestGoGitClient_ErrorBodyIsRedactedAsText(t *testing.T) {
+	for _, body := range []struct{ name, body, want string }{
+		{"a sentence ending in a URL",
+			"Access to org/repo is blocked; see https://user:tok@proxy.example/help",
+			"Access to org/repo is blocked; see https://proxy.example/help"},
+		{"a bare URL",
+			"https://user:tok@proxy.example/help",
+			"https://proxy.example/help"},
+		{"two URLs",
+			"Access to org/repo is blocked; see https://user:tok@proxy.example/help or https://bot:tok@mirror.example/org/repo.git",
+			"Access to org/repo is blocked; see https://proxy.example/help or https://mirror.example/org/repo.git"},
+	} {
+		for _, tc := range []struct {
+			status int
+			reason string
+		}{
+			{http.StatusForbidden, "authorization failed"},
+			{http.StatusInternalServerError, "HTTP 500 Internal Server Error"},
+		} {
+			t.Run(body.name+", "+http.StatusText(tc.status), func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(tc.status)
+					_, _ = w.Write([]byte(body.body))
+				}))
+				t.Cleanup(srv.Close)
+				url := srv.URL + "/org/repo.git"
+				err := scm.NewGoGitClient().Clone(context.Background(), url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+				require.Error(t, err)
+
+				assert.Equal(t, fmt.Sprintf("git clone %s: %s: %s", url, tc.reason, body.want), err.Error())
+				assert.NotContains(t, err.Error(), "tok@")
+				assert.NotContains(t, err.Error(), "%20")
+			})
+		}
+	}
+}
+
 // seedUncheckoutable creates a bare repository whose main commit holds a file
 // with a 300-byte name, which no checkout can write (file names are at most
 // 255 bytes), and returns its path and the commit.

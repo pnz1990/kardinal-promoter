@@ -84,6 +84,33 @@ func TestGitCloneStep_Hardening(t *testing.T) {
 				assert.Contains(t, res.Message, "https://github.com/owner/repo")
 			},
 		},
+		// An error that url.Parse takes for a relative URL (no colon before
+		// its first slash) is redacted as text, not percent-encoded with the
+		// credentials kept.
+		{
+			name: "clone error is redacted as text",
+			setup: func(_ *parentsteps.StepState, git *mockGitClient) {
+				git.cloneErr = errors.New("access to owner/repo is blocked; see " + secretURL)
+			},
+			check: func(t *testing.T, _ *parentsteps.StepState, _ *mockGitClient, res parentsteps.StepResult, err error) {
+				require.Error(t, err)
+				assert.Equal(t, "access to owner/repo is blocked; see https://github.com/owner/repo", res.Message)
+				assert.Equal(t, res.Message, err.Error())
+			},
+		},
+		{
+			name: "config source clone error is redacted as text",
+			setup: func(state *parentsteps.StepState, git *mockGitClient) {
+				state.Bundle.Type = "config"
+				state.Bundle.ConfigRef = &v1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "abc123"}
+				git.cloneAtErr = errors.New("access to org/config is blocked; see " + secretURL)
+			},
+			check: func(t *testing.T, _ *parentsteps.StepState, _ *mockGitClient, res parentsteps.StepResult, err error) {
+				require.Error(t, err)
+				assert.Equal(t, "config source: access to org/config is blocked; see https://github.com/owner/repo", res.Message)
+				assert.Equal(t, res.Message, err.Error())
+			},
+		},
 		{
 			name: "config bundle checks out configRef next to the work dir",
 			setup: func(state *parentsteps.StepState, _ *mockGitClient) {

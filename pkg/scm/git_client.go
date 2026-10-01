@@ -289,7 +289,7 @@ func gitErrorText(err error) string {
 // oneLine returns s without URL credentials, with each run of whitespace as
 // one space.
 func oneLine(s string) string {
-	return strings.Join(strings.Fields(RedactURL(s)), " ")
+	return strings.Join(strings.Fields(RedactText(s)), " ")
 }
 
 // remoteBranchHash returns the hash the remote advertises for ref.

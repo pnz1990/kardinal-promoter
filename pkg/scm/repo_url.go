@@ -189,7 +189,8 @@ func ParsePRURL(prURL string) (repo string, number int, err error) {
 
 // RedactURL removes userinfo (tokens, passwords) from a URL so it can be put
 // in logs, status messages and errors. The scp-like "git@host:path" form is
-// returned unchanged because its user is not a secret.
+// returned unchanged because its user is not a secret. For text that holds
+// URLs, such as an error message, use RedactText.
 func RedactURL(raw string) string {
 	if strings.Contains(raw, "://") {
 		if u, err := url.Parse(raw); err == nil {
@@ -197,7 +198,15 @@ func RedactURL(raw string) string {
 			return u.String()
 		}
 	}
-	return userinfoInURL.ReplaceAllString(raw, "//")
+	return RedactText(raw)
+}
+
+// RedactText removes the userinfo of every URL in s, a text such as an error
+// message or an HTTP response body. It never parses s as a URL: url.Parse
+// takes many texts for a relative URL and returns them percent-encoded, with
+// the credentials kept.
+func RedactText(s string) string {
+	return userinfoInURL.ReplaceAllString(s, "//")
 }
 
 // webhookSignatureHeaders lists the webhook authentication headers of the
