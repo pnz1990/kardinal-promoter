@@ -1366,7 +1366,9 @@ func eventCount(ev *corev1.Event) int32 {
 // It applies the rules of POST /api/v1/bundles and kardinal create bundle:
 // 400 when lifecycle.ValidateNewBundle rejects the spec or the API server
 // refuses the Bundle, 404 when the Pipeline does not exist in the namespace,
-// 403 when the caller may not create it.
+// 403 when the caller may not create it. Like a UI promote, the Bundle names
+// the requester (uiRequester) in kardinal.io/requested-by; "author" is the
+// build's author (spec.provenance.author), which the caller types.
 func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1428,6 +1430,7 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	requester := uiRequester(r.Context())
 	bundle := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: sanitizeName(req.Pipeline) + "-",
@@ -1435,6 +1438,7 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 			Labels: map[string]string{
 				"kardinal.io/pipeline": req.Pipeline,
 			},
+			Annotations: map[string]string{lifecycle.AnnotationRequestedBy: requester},
 		},
 		Spec: spec,
 	}
@@ -1453,6 +1457,7 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 		Str("bundle", bundle.Name).
 		Str("pipeline", req.Pipeline).
 		Str("image", req.Image).
+		Str("requestedBy", requester).
 		Msg("ui: bundle created")
 
 	w.Header().Set("Content-Type", "application/json")

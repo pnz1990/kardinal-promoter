@@ -230,10 +230,10 @@ func TestUIRequester(t *testing.T) {
 	}
 }
 
-// TestUIHandler_ActionsRecordRequester covers B53 and B56 through the real UI
-// handler: with --ui-tokenreview-auth, a UI promote and rollback record the
-// TokenReview username as kardinal.io/requested-by, exactly as the API server
-// returned it, a gate approval records it as the override's
+// TestUIHandler_ActionsRecordRequester covers B53, B56 and B57 through the
+// real UI handler: with --ui-tokenreview-auth, a UI promote, rollback and new
+// Bundle record the TokenReview username as kardinal.io/requested-by, exactly
+// as the API server returned it, a gate approval records it as the override's
 // createdBy, and each action's log line names it. The handler reads the user
 // the middleware stored in the request context, so each request is reviewed
 // once. The static-token and no-auth modes know no user and record
@@ -266,6 +266,9 @@ func TestUIHandler_ActionsRecordRequester(t *testing.T) {
 				return []client.Object{uiLcPipeline(), uiLcBundle("app-v1", "1", 0), uiLcBundle("app-v2", "2", 10),
 					uiLcStep("app-v1", "prod", "Verified", 5), uiLcStep("app-v2", "prod", "Verified", 15)}
 			},
+			wantCode: http.StatusCreated, createsBundle: true, logField: "requestedBy"},
+		{name: "create bundle", path: "/api/v1/ui/bundles", body: `{"pipeline":"app","image":"ghcr.io/org/app:3","author":"ci-bot"}`,
+			objs:     func() []client.Object { return []client.Object{uiLcPipeline()} },
 			wantCode: http.StatusCreated, createsBundle: true, logField: "requestedBy"},
 		{name: "approve gate", path: "/api/v1/ui/gates/default/no-weekend/approve", body: `{"reason":"hotfix"}`,
 			objs:     func() []client.Object { return []client.Object{gate()} },

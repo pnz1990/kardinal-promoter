@@ -24,10 +24,10 @@ import (
 // caller is: with the static UI token (--ui-auth-token) or with no UI auth.
 const uiActor = "kardinal-ui"
 
-// uiRequester is who asked for a UI action: a promote, a rollback, a gate
-// approval, a pause or a resume. With --ui-tokenreview-auth it is the username
-// the TokenReview middleware stored in the request context, as the API server
-// returned it (for example
+// uiRequester is who asked for a UI action: a promote, a rollback, a new
+// Bundle, a gate approval, a pause or a resume. With --ui-tokenreview-auth it
+// is the username the TokenReview middleware stored in the request context, as
+// the API server returned it (for example
 // system:serviceaccount:team-a:deployer); otherwise it is uiActor.
 //
 // The username is recorded as is. It only goes into the kardinal.io/requested-by
