@@ -71,7 +71,7 @@ kardinal explain github-demo --env prod
 # ENVIRONMENT   BUNDLE              TYPE         NAME                 STATE   EXPRESSION                                      REASON
 # prod          github-demo-9tptr   PolicyGate   no-bot-deploys       Pass    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-abc1234: bundle.provenance.author != "dependabot[bot]" = true
 # prod          github-demo-9tptr   PolicyGate   no-weekend-deploys   Pass    !schedule.isWeekend                             bundle.version=sha-abc1234: !schedule.isWeekend = true
-# prod          github-demo-9tptr   PolicyGate   uat-soak-gate        Block   upstream.uat.soakMinutes >= 30                  bundle.version=sha-abc1234: upstream.uat.soakMinutes >= 30 = false
+# prod          github-demo-9tptr   PolicyGate   uat-soak-gate        Block   upstream.uat.soakMinutes >= 30                  UAT must have been healthy for at least 30 contiguous minutes (bundle.version=sha-abc1234: upstream.uat.soakMinutes >= 30 = false)
 #
 # prod   deployed: none
 

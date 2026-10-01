@@ -41,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
@@ -1111,6 +1112,11 @@ func (r *Reconciler) checkRequiredGates(ctx context.Context, ps *v1alpha1.Promot
 			return "", fmt.Errorf("get policy gate %s: %w", gateName, getErr)
 		}
 		if !gate.Status.Ready {
+			// Name what the gate's author says it waits for, when its
+			// expression is what blocks (GATE-MESSAGE-01).
+			if msg := graph.BlockedMessage(&gate); msg != "" {
+				return fmt.Sprintf("waiting for gate %s: %s", gateName, msg), nil
+			}
 			return fmt.Sprintf("waiting for gate %s", gateName), nil
 		}
 		if gate.Status.LastEvaluatedAt == nil || gate.Status.LastEvaluatedAt.Before(&ps.CreationTimestamp) {

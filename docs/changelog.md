@@ -10,6 +10,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A blocked gate shows its message** — when a PolicyGate's expression is false, its `status.reason` starts with `spec.message` and the evaluated result follows in parentheses, so the `Ready` condition, `kardinal explain`, the UI, PR evidence and notifications show the message. `kardinal status <pipeline>` shows the message under Blocking Policy Gates, and the Pending step's message is `waiting for gate <name>: <message>`. A gate without a message, an evaluation error and a context error keep their reasons. Scripts that expect `status.reason` to start with `bundle.version=` need an update
+- **PolicyGate names over 63 characters are rejected whatever the name** — the name rule let through any name containing `--` or starting with `freeze-`, so a template could have a name too long for the `kardinal.io/gate-template` label of its instances, and every Bundle of a Pipeline it applied to failed at Graph build. Only the gates kardinal creates (gate instances and pause freeze gates) may be longer now. Kardinal sets the new `spec.generated` field on them and never uses a gate with it as a template; the controller sets it on the ones created before the upgrade. Apply the new PolicyGate CRD by hand: Helm does not update CRDs
 - **A superseded Bundle's PR closes at once** — the controller closed it at the step's next merge poll, up to 30 seconds later, and the PR could be merged in that window, changing the environment with no PromotionStep tracking it
 
 ---
@@ -24,7 +26,7 @@ Pin the version: without `--version 0.9.0-rc.1`, `helm install` and `helm upgrad
 
 Follow the tested steps in [Upgrading from v0.8.1](https://pnz1990.github.io/kardinal-promoter/installation/#upgrading-from-v081). A plain `helm upgrade` does not work. In short:
 
-1. Find and fix the stored objects the new CRDs reject (list below). This is required on Kubernetes older than 1.30, which does not ratchet CRD validation. A PolicyGate name over 63 characters blocks every write on any version.
+1. Find and fix the stored objects the new CRDs reject (list below). This is required on Kubernetes older than 1.30, which does not ratchet CRD validation. A PolicyGate name over 63 characters blocks every write on any version, unless kardinal created the gate: gate instances and pause freeze gates can be longer, and the new controller sets `spec.generated` on them.
 2. Stop the v0.8.1 controller and its bundled Graph controller (krocodile), and remove the krocodile finalizers from the old `graphs.experimental.kro.run` Graphs.
 3. Annotate the `kro-system` namespace with `helm.sh/resource-policy=keep`. The v0.8.1 chart created it, and `helm upgrade` would delete it, with kro in it.
 4. Install kro v0.10.0-rc.0 with the `GraphKind` feature gate (`hack/install-kro.sh`).
@@ -32,7 +34,7 @@ Follow the tested steps in [Upgrading from v0.8.1](https://pnz1990.github.io/kar
 6. Upgrade with `--reset-then-reuse-values` (Helm 3.14 or later). `--reuse-values` keeps the v0.8.1 `krocodile` default, which the new chart rejects.
 7. Check the controller's UI exposure: with no UI auth mode set, the UI API answers only `kubectl port-forward` clients.
 
-The API server now rejects: `spec.environments[].steps` (non-empty), `promotionTemplate`, `autoRollback`, `update.strategy: argocd` with `approval: pr-review`, a reserved environment name (such as `kind`, `spec` or `bundle`), an environment name that is not a lowercase DNS label of at most 63 characters, a non-empty `spec.policyGates`, a PolicyGate `spec.selector`, and a PolicyGate name over 63 characters. The fields were ignored or failed only at promotion time; a reserved name clashes with kro Graph node IDs.
+The API server now rejects: `spec.environments[].steps` (non-empty), `promotionTemplate`, `autoRollback`, `update.strategy: argocd` with `approval: pr-review`, a reserved environment name (such as `kind`, `spec` or `bundle`), an environment name that is not a lowercase DNS label of at most 63 characters, a non-empty `spec.policyGates`, a PolicyGate `spec.selector`, and a PolicyGate name over 63 characters on a gate kardinal did not create (it marks its own with `spec.generated`). The fields were ignored or failed only at promotion time; a reserved name clashes with kro Graph node IDs.
 
 ### Changed
 

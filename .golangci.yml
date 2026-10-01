@@ -1,5 +1,10 @@
 version: "2"
 
+run:
+  # Lint the live e2e suites (test/e2e, build tag e2e) too.
+  build-tags:
+    - e2e
+
 linters:
   # Start from the default set and add/remove specific linters
   enable:

@@ -93,6 +93,34 @@ func TestStatusPipelineWriter_BlockingGate(t *testing.T) {
 	assert.NotContains(t, out, "terminal state", "a Bundle held at a gate is not idle")
 }
 
+// GATE-MESSAGE-01: the REASON of a gate its expression blocks is the gate's
+// spec.message, whole, although it is longer than the 35 characters a reason
+// is cut to. A gate whose message does not explain the block (an evaluation
+// error) shows its reason as before.
+func TestStatusPipelineWriter_BlockingGateMessage(t *testing.T) {
+	recent := time.Now().Add(-time.Hour)
+	const msg = "Production deployments are blocked on weekends"
+	weekend := explainGateInstance("demo", "bundle-abc", "prod", "no-weekend-deploys", "!schedule.isWeekend",
+		false, true, msg+" (bundle.version=1.2.0: !schedule.isWeekend = false)")
+	weekend.Spec.Message = msg
+	broken := explainGateInstance("demo", "bundle-abc", "prod", "broken", "metrics.x.value > 1",
+		false, true, "CEL evaluation error: no such key: x")
+	broken.Spec.Message = "x must be above 1"
+	out := runStatusPipeline(t,
+		policyPipeline("demo", "uat", "prod"),
+		explainBundle("bundle-abc", "Promoting", recent),
+		explainStep("demo", "bundle-abc", "uat", "Verified", "", recent),
+		weekend, broken,
+	)
+
+	_, gateSection, found := strings.Cut(out, "Blocking Policy Gates")
+	require.True(t, found, out)
+	assert.Contains(t, gateSection, msg+"  ", "the whole message is the REASON")
+	assert.NotContains(t, gateSection, "bundle.version=1.2.0", "the CEL detail is left to kardinal explain")
+	assert.Contains(t, gateSection, "CEL evaluation error: no such ke...", "cut to 35 characters")
+	assert.NotContains(t, gateSection, "x must be above 1")
+}
+
 // E2E-R18: a not-ready gate blocks only once the Bundle has reached its
 // environment, every upstream environment Verified for that Bundle. A soak
 // gate on prod does not block a Bundle still health checking in test.

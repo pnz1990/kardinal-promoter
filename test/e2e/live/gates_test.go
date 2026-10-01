@@ -1058,7 +1058,7 @@ func TestGate_InvalidGatesRejected(t *testing.T) {
 		"empty-selector": {},
 	} {
 		g := framework.Gate(ns, name, "prod", "true", "")
-		g.Spec.Selector = sel
+		g.Spec.Selector = sel //nolint:staticcheck // the test checks the CRD refuses the deprecated field
 		err := e.Client.Create(ctx, g)
 		require.Error(t, err, name)
 		assert.True(t, apierrors.IsInvalid(err), "%s: %v", name, err)
@@ -1072,4 +1072,98 @@ func TestGate_InvalidGatesRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "PolicyGate names are at most 63 characters")
 
 	require.NoError(t, e.Client.Create(ctx, framework.Gate(ns, strings.Repeat("g", 63), "prod", "true", "")))
+}
+
+// TestGate_MessageShownWhenBlocked checks that a blocking gate's
+// spec.message, its "human-readable explanation shown when gate blocks"
+// (docs/policy-gates.md), reaches the user: the gate's status and Ready
+// condition, kardinal explain, kardinal status and the held step's message.
+// The CEL result stays in the reason after the message. A step exists only
+// once its gates pass, so a paused Pipeline holds prod's step while the gate
+// closes, as in TestGate_HoldsStepBeforeStart.
+//
+// Covers GATE-MESSAGE-01.
+func TestGate_MessageShownWhenBlocked(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "prod")
+	const (
+		msg  = "Production is closed while the bundle has the e2e-closed label"
+		expr = `!("e2e-closed" in bundle.labels)`
+	)
+	g := framework.Gate(a.ns, "explained", "prod", expr, recheck)
+	g.Spec.Message = msg
+	e.CreateGate(t, g)
+	a.apply(t, a.pipeline(nil))
+	assert.Contains(t, e.MustKardinal(t, a.ns, "pause", pipelineName), "Pipeline "+pipelineName+" paused.")
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	open := e.WaitGateReady(t, a.ns, bundle, "prod", "explained", true, expr+" = true", gateTimeout)
+	assert.NotContains(t, open.Status.Reason, msg, "a passing gate's reason has no message")
+	e.WaitStepMessage(t, a.ns, pipelineName, bundle, "prod", "Pending", "pipeline "+pipelineName+" is paused", time.Minute)
+
+	e.SetBundleLabel(t, a.ns, bundle, "e2e-closed", "true")
+	gate := e.WaitGateReady(t, a.ns, bundle, "prod", "explained", false, expr+" = false", gateTimeout)
+	assert.Equal(t, msg, gate.Spec.Message, "the instance carries the template's message")
+	assert.Equal(t, msg+" (bundle.version="+fixtures.V2+": "+expr+" = false)", gate.Status.Reason, "status.reason")
+	if c := meta.FindStatusCondition(gate.Status.Conditions, "Ready"); assert.NotNil(t, c) {
+		assert.Equal(t, gate.Status.Reason, c.Message, "Ready condition")
+	}
+	assert.Contains(t, e.MustKardinal(t, a.ns, "resume", pipelineName), "Pipeline "+pipelineName+" resumed.")
+	e.WaitStepMessage(t, a.ns, pipelineName, bundle, "prod", "Pending", "waiting for gate "+gate.Name+": "+msg, 90*time.Second)
+	state, row, ok := e.ExplainGate(t, a.ns, pipelineName, "prod", "explained")
+	assert.True(t, ok && state == "Block", "kardinal explain shows the gate blocking: %s", row)
+	assert.Contains(t, row, gate.Status.Reason, "kardinal explain")
+	assert.Contains(t, e.MustKardinal(t, a.ns, "status", pipelineName), msg, "kardinal status")
+}
+
+// TestGate_LongTemplateNamesRejected checks that the 63-character limit on
+// PolicyGate names has no loophole. A name over 63 characters is refused
+// whether or not it looks like the names kardinal gives the gates it creates
+// (instances contain "--", freeze gates start with "freeze-"). A 63-character
+// template still works, although the instance the Graph makes from it has a
+// longer name. A user gate that claims to be kardinal's (spec.generated) may
+// have a long name, but it is never used as a template, so it holds nothing.
+//
+// Covers GATE-REJECT-02.
+func TestGate_LongTemplateNamesRejected(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+
+	for _, name := range []string{
+		"team--" + strings.Repeat("g", 60),
+		"freeze-" + strings.Repeat("g", 60),
+		"team-" + strings.Repeat("g", 60),
+	} {
+		err := e.Client.Create(ctx, framework.Gate(a.ns, name, "prod", "true", ""), client.DryRunAll)
+		if assert.Error(t, err, "%s is accepted", name) {
+			assert.True(t, apierrors.IsInvalid(err), "%s: %v", name, err)
+			assert.Contains(t, err.Error(), "PolicyGate names are at most 63 characters", name)
+		}
+	}
+
+	long := strings.Repeat("g", 63)
+	e.CreateGate(t, framework.Gate(a.ns, long, "prod", openExpr, recheck))
+	claimed := framework.Gate(a.ns, "team--"+strings.Repeat("c", 60), "prod", "false", recheck)
+	claimed.Spec.Generated = true
+	e.CreateGate(t, claimed)
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+
+	gate := e.WaitGateReady(t, a.ns, bundle, "prod", long, false, openExpr+" = false", gateTimeout)
+	assert.Greater(t, len(gate.Name), 63, "the instance name %s is over 63 characters", gate.Name)
+	e.SetBundleLabel(t, a.ns, bundle, openLabel, "true")
+	e.WaitGateReady(t, a.ns, bundle, "prod", long, true, openExpr+" = true", gateTimeout)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+
+	var instances v1alpha1.PolicyGateList
+	require.NoError(t, e.Client.List(ctx, &instances, client.InNamespace(a.ns), client.MatchingLabels{
+		"kardinal.io/bundle": bundle, "kardinal.io/environment": "prod"}))
+	names := make([]string, 0, len(instances.Items))
+	for _, g := range instances.Items {
+		names = append(names, g.Name)
+	}
+	assert.Equal(t, []string{gate.Name}, names, "prod has only the instance of the 63-character template")
 }

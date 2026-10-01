@@ -66,6 +66,15 @@ type PolicyGateSpec struct {
 	// the gate passes immediately. Expired overrides are kept as audit records.
 	// +optional
 	Overrides []PolicyGateOverride `json:"overrides,omitempty"`
+
+	// Generated is set by kardinal on the PolicyGates it creates: the gate
+	// instances a promotion Graph makes from a template, and the freeze gate
+	// of a paused Pipeline. Kardinal never uses a generated PolicyGate as a
+	// template, so only a generated PolicyGate may have a name longer than 63
+	// characters. Do not set it on a gate you write: a generated gate never
+	// applies to an environment.
+	// +optional
+	Generated bool `json:"generated,omitempty"`
 }
 
 // PolicyGateOverride is a time-limited emergency override record (K-09).
@@ -123,16 +132,18 @@ type PolicyGateStatus struct {
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.reason`,priority=1
 // +kubebuilder:printcolumn:name="Last-Evaluated",type=date,JSONPath=`.status.lastEvaluatedAt`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
-// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63 || self.metadata.name.contains('--') || self.metadata.name.startsWith('freeze-')",message="PolicyGate names are at most 63 characters: the name is copied into the kardinal.io/gate-template label of every gate instance"
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63 || (has(self.spec) && has(self.spec.generated) && self.spec.generated)",message="PolicyGate names are at most 63 characters: the name is copied into the kardinal.io/gate-template label of every gate instance"
 
 // PolicyGate is a CEL-powered policy check represented as a node in the
 // promotion Graph. Platform teams define org-level gates; teams add their own.
 //
 // A gate's name must be at most 63 characters, because the Graph copies it
-// into a label of each instance. The rule exempts the two kinds of PolicyGate
-// kardinal names itself: gate instances ("<gate>-<namespace>-<env>--<bundle>",
-// see pkg/graph gateNodeK8sName, which can be longer) and pause freeze gates
-// ("freeze-<pipeline>"). Neither is ever used as a template.
+// into a label of each instance. Only the PolicyGates kardinal creates may be
+// longer: gate instances ("<gate>-<namespace>-<env>--<bundle>", see pkg/graph
+// gateNodeK8sName) and pause freeze gates ("freeze-<pipeline>"). Kardinal
+// sets spec.generated on them and never uses a gate with spec.generated as a
+// template. The exemption does not go by name, because a template can have
+// any name; a template that sets spec.generated is no longer a template.
 type PolicyGate struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

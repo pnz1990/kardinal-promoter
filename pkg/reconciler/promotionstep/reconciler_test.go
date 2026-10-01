@@ -1250,6 +1250,15 @@ func requiredGate(name, when string, ready bool, evaluatedAt *metav1.Time) *v1al
 	}
 }
 
+// messageGate is a required gate with spec.message, evaluated not ready with
+// reason after the step was created.
+func messageGate(name, message, reason string) *v1alpha1.PolicyGate {
+	g := requiredGate(name, "", false, gateTime(time.Minute))
+	g.Spec.Message = message
+	g.Status.Reason = reason
+	return g
+}
+
 func gateTime(d time.Duration) *metav1.Time {
 	t := metav1.NewTime(gateStepCreated.Add(d))
 	return &t
@@ -1310,6 +1319,22 @@ func TestCheckRequiredGates(t *testing.T) {
 			gateNames: []string{"soak"},
 			gates:     []*v1alpha1.PolicyGate{requiredGate("soak", "post-deploy", false, gateTime(time.Minute))},
 			wantMsg:   "waiting for gate soak",
+		},
+		{
+			// GATE-MESSAGE-01: the gate's message says what it waits for.
+			name:      "gate blocked by its expression names its message",
+			gateNames: []string{"soak"},
+			gates: []*v1alpha1.PolicyGate{messageGate("soak", "uat must soak for 30 minutes",
+				"uat must soak for 30 minutes (bundle.version=1.2.0: upstream.uat.soakMinutes >= 30 = false)")},
+			wantMsg: "waiting for gate soak: uat must soak for 30 minutes",
+		},
+		{
+			// The message does not explain an evaluation error.
+			name:      "gate blocked by an evaluation error keeps the plain message",
+			gateNames: []string{"soak"},
+			gates: []*v1alpha1.PolicyGate{messageGate("soak", "uat must soak for 30 minutes",
+				"CEL evaluation error: no such key: uat")},
+			wantMsg: "waiting for gate soak",
 		},
 		{
 			name:      "ready gate never evaluated holds",

@@ -59,6 +59,9 @@ fi
 # shellcheck disable=SC2206
 args+=(${KARDINAL_E2E_HELM_ARGS:-})
 
+# helm upgrade never updates the chart's crds/: apply them, so a reused
+# cluster runs this checkout's CRDs too.
+"${KUBECTL[@]}" apply --server-side --force-conflicts -f "$REPO_ROOT/chart/kardinal-promoter/crds/" >/dev/null
 "${HELM[@]}" upgrade --install "$KARDINAL_RELEASE" "$REPO_ROOT/chart/kardinal-promoter" \
   -n "$KARDINAL_NS" --create-namespace "${args[@]}" --wait --timeout 5m >/dev/null
 # A rebuilt image under the same tag needs a restart to be picked up.

@@ -134,7 +134,7 @@ The `metrics` map contains one entry per `MetricCheck` CRD in the same namespace
 **Staleness.** Each MetricCheck evaluation sets `status.validUntil` to the evaluation time plus
 `max(3 × interval, 30s)`. A result the gate reads after that time, or one without `validUntil`, is
 stale: `result` is `"Stale"`, `value` is `""` and `stale` is `true`, so `result == "Pass"` and
-value comparisons block, and the gate's `status.reason` ends with `metric "<name>" result is stale`.
+value comparisons block, and the gate's `status.reason` includes `metric "<name>" result is stale`.
 Compare with `== "Pass"`, not `!= "Fail"`: a stale result is neither. `kardinal policy simulate` judges
 staleness at the real current time, not at the simulated `--time`. See
 [Stale metric results](../policy-gates.md#stale-metric-results).
