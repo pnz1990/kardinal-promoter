@@ -702,6 +702,72 @@ func TestPolicyList(t *testing.T) {
 	assert.ErrorContains(t, policyListFn(&missing, c, "default", "nope", nil), `pipeline "nope" not found`)
 }
 
+// TestPolicyList_LastEvaluated: LAST-EVALUATED is the newest evaluation of a
+// template's instances, matched by the labels the Graph builder sets (name and
+// scope; the instance lives in the Pipeline's namespace), so an org template
+// and a team template of the same name never share instances.
+func TestPolicyList_LastEvaluated(t *testing.T) {
+	now := time.Now()
+	instance := func(name, ns, pipeline, template, scope string, ago time.Duration) *v1alpha1.PolicyGate {
+		g := policyGate(name, ns, "test", "true", "kardinal.io/gate-template", template,
+			"kardinal.io/scope", scope, "kardinal.io/pipeline", pipeline, "kardinal.io/bundle", pipeline+"-b")
+		g.Spec.Generated = true
+		at := metav1.NewTime(now.Add(-ago))
+		g.Status.LastEvaluatedAt = &at
+		return g
+	}
+	c := policyClient(t,
+		policyPipeline("demo", "test"),
+		policyGate("entry", "default", "test", "true", "kardinal.io/scope", "team"),
+		policyGate("entry", "platform-policies", "test", "true", "kardinal.io/scope", "org"),
+		policyGate("entry", "team-b", "test", "true"),
+		policyGate("audit", "platform-policies", "test", "true", "kardinal.io/scope", "org"),
+		policyGate("plain", "platform-policies", "test", "true"),
+		policyGate("idle", "default", "test", "true"),
+		// demo's instances in default: two of team entry, the org audit and
+		// the unlabelled plain (scope team, as the builder sets it).
+		instance("entry-default-test--demo-b", "default", "demo", "entry", "team", 150*time.Second),
+		instance("entry-default-test--demo-a", "default", "demo", "entry", "team", 650*time.Second),
+		instance("audit-platform-policies-test--demo-b", "default", "demo", "audit", "org", 330*time.Second),
+		instance("plain-platform-policies-test--demo-b", "default", "demo", "plain", "team", 150*time.Second),
+		// Another pipeline's instance of the org audit, evaluated last.
+		instance("audit-platform-policies-test--other-b", "team-c", "other", "audit", "org", 90*time.Second),
+	)
+
+	// lastEval maps name/namespace to LAST-EVALUATED, the last column (its
+	// value has a space).
+	lastEval := func(t *testing.T, pipeline string) map[string]string {
+		t.Helper()
+		var out bytes.Buffer
+		require.NoError(t, policyListFn(&out, c, "default", pipeline, nil))
+		lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+		col := strings.Index(lines[0], "LAST-EVALUATED")
+		require.Positive(t, col, out.String())
+		got := map[string]string{}
+		for _, l := range lines[1:] {
+			f := strings.Fields(l)
+			got[f[0]+"/"+f[1]] = strings.TrimSpace(l[col:])
+		}
+		return got
+	}
+
+	assert.Equal(t, map[string]string{
+		"entry/default":           "2m ago", // the newer of its two instances
+		"entry/platform-policies": "-",      // org: default's entry instances are team
+		"entry/team-b":            "-",      // team: no instance in its namespace
+		"audit/platform-policies": "1m ago", // org: every namespace
+		"plain/platform-policies": "-",      // team, and its instances are in default
+		"idle/default":            "-",      // no instance
+	}, lastEval(t, ""))
+	assert.Equal(t, map[string]string{
+		"entry/default":           "2m ago",
+		"entry/platform-policies": "-",
+		"audit/platform-policies": "5m ago", // demo's instance only
+		"plain/platform-policies": "-",
+		"idle/default":            "-",
+	}, lastEval(t, "demo"))
+}
+
 // ─── validate CEL (C09b-cli-16) ─────────────────────────────────────────────
 
 func TestValidateCELExpression(t *testing.T) {

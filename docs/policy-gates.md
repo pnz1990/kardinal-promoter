@@ -489,8 +489,13 @@ The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph 
 starts (see [When a gate holds a step](#when-a-gate-holds-a-step)). While the controller is down,
 every gate keeps its last result and no step starts. The controller re-evaluates every gate when it
 starts. A result from before an outage still counts for a step created before that result.
-`kardinal policy list`, `kardinal status` and the UI show when each gate was last evaluated, so a
-stale result is visible.
+The controller evaluates the per-Bundle instances of a gate, never the gate you wrote, so
+`kardinal policy list` shows in LAST-EVALUATED the newest evaluation of the gate's instances (with
+`--pipeline`, of that pipeline's instances), or `-` when none has been evaluated. An instance
+records its gate's name and `kardinal.io/scope`, not its namespace: a gate labelled
+`kardinal.io/scope: org` counts its instances in every namespace, any other gate only those in its
+own namespace. `kardinal status` shows when each gate holding a Bundle was last checked, and the UI
+when each gate of the Bundle on screen was last evaluated, so a stale result is visible.
 
 ### ScheduleClock setup
 
