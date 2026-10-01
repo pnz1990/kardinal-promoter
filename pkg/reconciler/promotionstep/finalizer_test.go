@@ -394,6 +394,58 @@ func TestPRFinalizer_DeleteDeadlineUsesClock(t *testing.T) {
 	assert.Empty(t, rec.Events, "no ClosePRFailed Event before the deadline")
 }
 
+// TestPRFinalizer_DeleteWithoutPR covers the #1387 review: a step that has no
+// PR is deleted at once, whatever its state, and the SCM is not asked about
+// anything. That is an auto step (it never holds kardinal.io/close-pr), and a
+// pr-review step deleted before it opened its PR or after it ended.
+func TestPRFinalizer_DeleteWithoutPR(t *testing.T) {
+	auto := func(state string) *v1alpha1.PromotionStep {
+		ps := makeStep("step", "nginx-demo", "bundle-1", "test")
+		ps.Spec.PRStatusRef = "prs-step"
+		ps.Status.State = state
+		return ps
+	}
+	tests := []struct {
+		name string
+		step *v1alpha1.PromotionStep
+	}{
+		{name: "an auto step in Pending", step: auto("Pending")},
+		{name: "an auto step in Promoting", step: auto("Promoting")},
+		{name: "an auto step in HealthChecking", step: auto("HealthChecking")},
+		{name: "an auto step in Failed", step: auto("Failed")},
+		{name: "a pr-review step in Pending", step: prStep("Pending", 0)},
+		{name: "a pr-review step in Promoting, before it opened its PR", step: prStep("Promoting", 0)},
+		{name: "a pr-review step in Failed", step: prStep("Failed", 0)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newClient(t, tt.step, openPRStatus("prs-step", "", 0), makePipeline("nginx-demo"),
+				makeBundle("bundle-1", "nginx-demo"))
+			m := &mockSCM{open: true}
+			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+			ctx := context.Background()
+			// syncPRFinalizer runs first: the step gets the finalizer only if it
+			// needs it. Then it is deleted and reconciled until it is gone.
+			got := getStep(t, c, "step")
+			if needs := got.Status.State == "Promoting" && got.Spec.Environment == "prod"; needs {
+				got.Finalizers = []string{promotionstep.FinalizerClosePR}
+				require.NoError(t, c.Update(ctx, &got))
+			}
+			require.NoError(t, c.Delete(ctx, &got))
+			res, err := r.Reconcile(ctx, reqFor("step"))
+			require.NoError(t, err)
+			assert.Zero(t, res.RequeueAfter)
+			var gone v1alpha1.PromotionStep
+			assert.True(t, apierrors.IsNotFound(c.Get(ctx, client.ObjectKeyFromObject(tt.step), &gone)),
+				"the step is gone after one reconcile")
+			assert.Zero(t, m.getPRCalled, "the SCM is not asked")
+			assert.Empty(t, m.closed)
+			assert.Empty(t, m.comments)
+		})
+	}
+}
+
 // TestPRFinalizer_DeleteAsksSCM covers the #1387 review: a deleted step asks
 // the SCM whether its PR is still open before it closes it. A PR merged or
 // closed outside the controller's view (the PRStatus lags or is gone), or
