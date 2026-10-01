@@ -161,6 +161,7 @@ func TestBranchWithoutPRIsDeleted(t *testing.T) {
 		outputs     map[string]string
 		prStatus    *v1alpha1.PRStatus // the step's PRStatus (nil: none)
 		noPipeline  bool
+		gitURL      string // the Pipeline's git.url ("" keeps makePipeline's)
 		retryCount  int
 		scm         mockSCM
 		wantState   string
@@ -188,6 +189,10 @@ func TestBranchWithoutPRIsDeleted(t *testing.T) {
 			wantMsg:     "the step opened no PR, but deleting its branch kardinal/b1/prod failed: HTTP 502",
 			wantDeleted: []string{branch},
 			again:       &againWant{"Failed", []string{branch, branch}}},
+		{name: "a Pipeline git URL that names no repository is retried, not skipped", started: true,
+			gitURL:    "https://git.example.com/",
+			wantState: "Promoting",
+			wantMsg:   "deleting its branch kardinal/b1/prod failed: repository URL"},
 		{name: "a delete that keeps failing says to delete the branch by hand", started: true, retryCount: 5,
 			scm:       mockSCM{deleteErrs: []error{errors.New("HTTP 403")}},
 			wantState: "Failed", wantMsg: "— delete branch kardinal/b1/prod by hand", wantDeleted: []string{branch}},
@@ -199,6 +204,9 @@ func TestBranchWithoutPRIsDeleted(t *testing.T) {
 				env = "prod"
 			}
 			pipeline := makePipeline("p")
+			if tt.gitURL != "" {
+				pipeline.Spec.Git.URL = tt.gitURL
+			}
 			ps := labelled(makeStep("step", "p", "b1", env))
 			if tt.started {
 				ps = asPromoting(ps, pipeline)

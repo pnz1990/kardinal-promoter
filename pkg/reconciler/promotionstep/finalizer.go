@@ -15,7 +15,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -378,7 +377,7 @@ func newStepPushesAtOnce(ctx context.Context, reader client.Reader, ps *v1alpha1
 			return false, nil
 		}
 	}
-	paused, err := lifecycle.IsPaused(ctx, reader, ps.Namespace, ps.Spec.PipelineName)
+	paused, err := lifecycle.IsPaused(ctx, reader, ps.Namespace, pl.Name)
 	if err != nil || paused {
 		return false, err
 	}
@@ -397,8 +396,8 @@ func newStepPushesAtOnce(ctx context.Context, reader client.Reader, ps *v1alpha1
 // When kro has not judged the current generation yet, the Bundle's copy of
 // that condition (GraphAccepted, which the Bundle reconciler keeps) decides.
 func graphRejected(g *unstructured.Unstructured, b *v1alpha1.Bundle) (bool, error) {
-	var typed graph.Graph
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(g.Object, &typed); err != nil {
+	typed, err := graph.FromUnstructured(g)
+	if err != nil {
 		return false, fmt.Errorf("read graph %s: %w", g.GetName(), err)
 	}
 	if c := meta.FindStatusCondition(typed.Status.Conditions, "Accepted"); c != nil &&

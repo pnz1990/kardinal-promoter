@@ -619,8 +619,9 @@ again at once (the PromotionStep alone, below). Then it removes the finalizer. W
   wait or not come, so the controller deletes the branch. On GitHub the closed old PR can still
   be merged through the API while its branch is kept, with the same Bundle's change for the same
   environment. The branch goes when the controller closes the new step's PR. If the new step ends
-  before it opens a PR (its Bundle is superseded, or the step fails or is deleted), the
-  controller deletes the branch then.
+  before it opens a PR (its Bundle is superseded, the step fails, or it is deleted after it
+  started and no step after it pushes at once), the controller deletes the branch then; **A
+  branch left with no PR** below lists when it stays.
 - **The Graph, while the Bundle is `Promoting`.** The PR stays open: the controller recreates the
   Graph, and the new step reuses the PR. The controller logs `left the PR of a step deleted with
   its Graph open` with the `env` and `prURL`.
@@ -656,6 +657,8 @@ kubectl get promotionsteps -n <namespace> -l kardinal.io/bundle=<bundle>,kardina
 ```
 
 Close it by hand. The `left the PR of a step deleted with its Graph open` log line names it.
+If a new step for that Bundle and environment ends before it opens a PR, it deletes the branch
+(below), and the SCM closes such a PR with no comment from kardinal.
 
 **A branch left with no PR.** A step that opens a PR but ends before it opens one (it is
 superseded, fails, or is deleted) deletes its `kardinal/<bundle>/<environment>` branch, because
