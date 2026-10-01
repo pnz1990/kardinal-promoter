@@ -44,7 +44,7 @@ func (e *Env) Certificate(t *testing.T, ns, name string, dnsNames ...string) *co
 		"spec": map[string]interface{}{
 			"secretName": name,
 			"isCA":       true,
-			"commonName": dnsNames[0],
+			"commonName": name, // a DNS name can exceed the 64-byte CN limit
 			"dnsNames":   names,
 			"issuerRef":  map[string]interface{}{"name": issuer, "kind": "ClusterIssuer"},
 		},

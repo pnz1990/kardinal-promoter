@@ -9,7 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,12 +22,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -183,6 +190,7 @@ func TestChart_DefaultInstall(t *testing.T) {
 	}
 
 	a := newArgoApp(t, e, "test", "prod")
+	deleteReaderBindingAtEnd(t, e, "kardinal-promoter-graph-reader-"+a.ns)
 	r := e.InstallChart(t, "kardinal-promoter", framework.ControllerNamespace, framework.Values{"logLevel": "info"})
 	r.CleansUp(a.ns)
 	require.Equal(t, "kardinal-promoter", r.Fullname)
@@ -843,6 +851,7 @@ func TestChart_PolicyNamespaces(t *testing.T) {
 	a := newArgoApp(t, e, "test", "prod")
 	listed, unlisted := e.Namespace(t), e.Namespace(t)
 
+	deleteReaderBindingAtEnd(t, e, framework.ChartFullname(releaseName(a.ns))+"-graph-reader-"+a.ns)
 	r := e.InstallChart(t, releaseName(a.ns), a.ns, framework.Values{
 		"controller": framework.Values{"policyNamespaces": []string{listed}},
 	})
@@ -1085,4 +1094,849 @@ func TestChart_BundleAPI(t *testing.T) {
 	runningPod(t, r)
 	res = bundleRequest(t, probe, url, token, body(nil))
 	assert.Equal(t, 404, res.Code, "without bundleAPI.tokenSecretRef the route is not mounted")
+}
+
+// newRepoApp is an app with a GitOps repo and no Argo CD Applications, for
+// tests that need a Pipeline the UI lists but promote nothing.
+func newRepoApp(t *testing.T, e *framework.Env, envs ...string) *app {
+	t.Helper()
+	ns := e.Namespace(t)
+	return &app{e: e, ns: ns, envs: envs,
+		repo: e.Repo(t, ns, fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: envs}))}
+}
+
+// uiPipelines is the UI API route that lists the watched Pipelines.
+const uiPipelines = "/api/v1/ui/pipelines"
+
+// bearer is a curl Authorization header for token.
+func bearer(token string) string { return "Authorization: Bearer " + token }
+
+// httpsURL is the in-cluster HTTPS URL of the release's Service on port.
+func httpsURL(r *framework.Release, port int, path string) string {
+	return fmt.Sprintf("https://%s.%s.svc.cluster.local:%d%s", r.Fullname, r.Namespace, port, path)
+}
+
+// brief is res for an assertion message.
+func brief(res framework.CurlResult) string {
+	return fmt.Sprintf("%d %.200s", res.Code, res.Body+res.Err)
+}
+
+// crashLogs waits until the release's controller crash-loops and returns
+// the log of its last run.
+func crashLogs(t *testing.T, e *framework.Env, r *framework.Release) string {
+	t.Helper()
+	framework.Eventually(t, 3*time.Minute, "the controller crash-loops", func(ctx context.Context) (bool, string) {
+		reason, msg := podWaiting(ctx, e, r.Namespace, r)
+		return reason == "CrashLoopBackOff", reason + ": " + msg
+	})
+	pods := r.Pods(t)
+	require.NotEmpty(t, pods)
+	return r.Logs(t, pods[0].Name, true)
+}
+
+// hostRequest makes an HTTP request from the test process, as a browser on
+// the host would (through a port-forward or a NodePort). A "Host" entry in
+// header sets the Host header. It uses no proxy and never fails the test.
+func hostRequest(t *testing.T, method, target string, header map[string]string) framework.CurlResult {
+	t.Helper()
+	res := framework.CurlResult{Headers: map[string]string{}}
+	logged := make([]string, 0, len(header))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, target, nil)
+	if err != nil {
+		res.Err = err.Error()
+		return res
+	}
+	for k, v := range header {
+		if strings.EqualFold(k, "Authorization") {
+			logged = append(logged, k+": <redacted>")
+		} else {
+			logged = append(logged, k+": "+v)
+		}
+		if strings.EqualFold(k, "Host") {
+			req.Host = v
+			continue
+		}
+		req.Header.Set(k, v)
+	}
+	resp, err := (&http.Client{Transport: &http.Transport{}}).Do(req)
+	if err != nil {
+		res.Err = err.Error()
+	} else {
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			res.Err = err.Error()
+		}
+		res.Code, res.Body = resp.StatusCode, string(body)
+		for k, v := range resp.Header {
+			res.Headers[strings.ToLower(k)] = strings.Join(v, ", ")
+		}
+	}
+	t.Logf("%s %s %v -> %s", method, target, logged, firstLine(brief(res)))
+	return res
+}
+
+// firstLine is the first line of s.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return line
+}
+
+// nodeInternalIP is the kind node's InternalIP, where NodePorts listen.
+func nodeInternalIP(t *testing.T, e *framework.Env) string {
+	t.Helper()
+	nodes, err := e.Kube.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	for _, n := range nodes.Items {
+		for _, addr := range n.Status.Addresses {
+			if addr.Type == corev1.NodeInternalIP {
+				return addr.Address
+			}
+		}
+	}
+	t.Fatal("no node has an InternalIP")
+	return ""
+}
+
+// releaseLabels are the chart's selector labels for r: the labels its
+// Service, PodDisruptionBudget and NetworkPolicy select the controller by.
+func releaseLabels(r *framework.Release) map[string]string {
+	return map[string]string{"app.kubernetes.io/name": "kardinal-promoter", "app.kubernetes.io/instance": r.Name}
+}
+
+// notReady gives a probe Pod a readiness probe that never passes, so a probe
+// carrying the controller's labels never becomes a Service endpoint.
+func notReady(p *corev1.Pod) {
+	p.Spec.Containers[0].ReadinessProbe = &corev1.Probe{
+		ProbeHandler:  corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"sh", "-c", "exit 1"}}},
+		PeriodSeconds: 60,
+	}
+}
+
+// mountSecret mounts Secret name read-only at path in a probe Pod.
+func mountSecret(name, path string) func(*corev1.Pod) {
+	return func(p *corev1.Pod) {
+		p.Spec.Volumes = append(p.Spec.Volumes, corev1.Volume{Name: name,
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name}}})
+		c := &p.Spec.Containers[0]
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: name, MountPath: path, ReadOnly: true})
+	}
+}
+
+// bundleGraph is the Graph of bundle in ns.
+func bundleGraph(t *testing.T, e *framework.Env, ns, bundle string) *unstructured.Unstructured {
+	t.Helper()
+	list, err := e.Dynamic.Resource(framework.GraphGVR).Namespace(ns).List(context.Background(), metav1.ListOptions{
+		LabelSelector: "kardinal.io/bundle=" + bundle,
+	})
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1, "one Graph for Bundle %s", bundle)
+	return &list.Items[0]
+}
+
+// hasAppRef reports whether Graph g has a ref node on an Argo CD
+// Application in ns.
+func hasAppRef(g *unstructured.Unstructured, ns string) bool {
+	nodes, _, _ := unstructured.NestedSlice(g.Object, "spec", "nodes")
+	for _, n := range nodes {
+		node, ok := n.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		kind, _, _ := unstructured.NestedString(node, "ref", "kind")
+		refNS, _, _ := unstructured.NestedString(node, "ref", "metadata", "namespace")
+		if kind == "Application" && refNS == ns {
+			return true
+		}
+	}
+	return false
+}
+
+// deleteReaderBindingAtEnd deletes, when the test ends, the Graph reader
+// RoleBinding name in argocd that a cluster-mode release's controller made.
+// Nothing deletes it when the release and the Graph namespace go (see
+// docs/installation.md), so each run would leave one. Call it before
+// installing the release, so it runs after the uninstall.
+func deleteReaderBindingAtEnd(t *testing.T, e *framework.Env, name string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if os.Getenv(framework.EnvKeep) == "1" {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Delete(ctx, name, metav1.DeleteOptions{})
+		switch {
+		case err == nil:
+			t.Logf("reader binding %s/%s was left after uninstall; deleted it", framework.ArgoCDNamespace, name)
+		case !apierrors.IsNotFound(err):
+			t.Errorf("delete reader binding %s/%s: %v", framework.ArgoCDNamespace, name, err)
+		}
+	})
+}
+
+// kroPodIP is the IP of the running kro controller Pod.
+func kroPodIP(t *testing.T, e *framework.Env) string {
+	t.Helper()
+	pods, err := e.Kube.CoreV1().Pods("kro-system").List(context.Background(), metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/name=kro",
+	})
+	require.NoError(t, err)
+	for _, p := range pods.Items {
+		if p.Status.Phase == corev1.PodRunning && p.Status.PodIP != "" {
+			return p.Status.PodIP
+		}
+	}
+	t.Fatal("no running kro Pod in kro-system")
+	return ""
+}
+
+// listening maps each server the controller logged "server listening" for
+// (webhook, ui) to whether it serves TLS.
+func listening(logs string) map[string]bool {
+	out := map[string]bool{}
+	for _, line := range strings.Split(logs, "\n") {
+		var l struct {
+			Server  string `json:"server"`
+			TLS     bool   `json:"tls"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &l) == nil && l.Message == "server listening" {
+			out[l.Server] = l.TLS
+		}
+	}
+	return out
+}
+
+// TestChart_TLSAndExtras serves the UI and the webhook over TLS from a
+// cert-manager Secret mounted with controller.extraVolumes and
+// extraVolumeMounts, sets the UI token with extraEnv and the CORS origins
+// with extraArgs. A client that trusts the CA gets HTTPS answers and the
+// token and origin settings apply; plain HTTP and a client that does not
+// trust the CA are refused. A cert file without a key file, and cert paths
+// with nothing mounted, stop the controller with an error that says so.
+//
+// Covers CHART-TLS-01, CHART-EXTRA-01.
+func TestChart_TLSAndExtras(t *testing.T) {
+	t.Parallel()
+	namespaceScoped(t)
+	e := framework.New(t)
+	a := newRepoApp(t, e, "test")
+	ns := a.ns
+	fullname := framework.ChartFullname(releaseName(ns))
+	e.Certificate(t, ns, "kardinal-tls", fullname+"."+ns+".svc", fullname+"."+ns+".svc.cluster.local")
+	token := randomHex(t, 16)
+	secret(t, e, ns, "ui-token", "token", token)
+	origin := "https://kardinal.example.com"
+	tlsFiles := framework.Values{"tlsCertFile": "/etc/kardinal-tls/tls.crt", "tlsKeyFile": "/etc/kardinal-tls/tls.key"}
+	extras := framework.Values{
+		"extraVolumes": []interface{}{framework.Values{"name": "kardinal-tls", "secret": framework.Values{"secretName": "kardinal-tls"}}},
+		"extraVolumeMounts": []interface{}{framework.Values{
+			"name": "kardinal-tls", "mountPath": "/etc/kardinal-tls", "readOnly": true,
+		}},
+		"extraArgs": []interface{}{"--cors-allowed-origins=" + origin},
+		"extraEnv": []interface{}{framework.Values{"name": "KARDINAL_UI_TOKEN", "valueFrom": framework.Values{
+			"secretKeyRef": framework.Values{"name": "ui-token", "key": "token"},
+		}}},
+	}
+	r := e.InstallChart(t, releaseName(ns), ns, nsValues(ns, framework.Values{"controller": framework.MergeValues(tlsFiles, extras)}))
+	a.apply(t, a.resourcePipeline(nil))
+
+	pod := runningPod(t, r)
+	c := pod.Spec.Containers[0]
+	assert.Contains(t, c.Args, "--cors-allowed-origins="+origin, "extraArgs reach the container")
+	env := map[string]corev1.EnvVar{}
+	for _, v := range c.Env {
+		env[v.Name] = v
+	}
+	assert.Equal(t, "/etc/kardinal-tls/tls.crt", env["KARDINAL_TLS_CERT_FILE"].Value)
+	assert.Equal(t, "/etc/kardinal-tls/tls.key", env["KARDINAL_TLS_KEY_FILE"].Value)
+	uiToken := env["KARDINAL_UI_TOKEN"].ValueFrom
+	require.True(t, uiToken != nil && uiToken.SecretKeyRef != nil, "extraEnv reaches the container: %+v", env["KARDINAL_UI_TOKEN"])
+	assert.Equal(t, "ui-token", uiToken.SecretKeyRef.Name)
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == "kardinal-tls" {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	require.True(t, vol != nil && vol.Secret != nil, "extraVolumes reach the Pod")
+	assert.Equal(t, "kardinal-tls", vol.Secret.SecretName)
+	assert.Contains(t, c.VolumeMounts, corev1.VolumeMount{Name: "kardinal-tls", MountPath: "/etc/kardinal-tls", ReadOnly: true},
+		"extraVolumeMounts reach the container")
+
+	framework.Eventually(t, time.Minute, "both servers listen with TLS", func(context.Context) (bool, string) {
+		got := listening(r.Logs(t, pod.Name, false))
+		return got["webhook"] && got["ui"], fmt.Sprint(got)
+	})
+	assert.Contains(t, r.Logs(t, pod.Name, false), "UI API authentication enabled (--ui-auth-token set)",
+		"the token from extraEnv turns UI auth on")
+
+	trusting := e.Probe(t, ns, "client", nil, mountSecret("kardinal-tls", "/tls"))
+	https := func(args ...string) framework.CurlResult {
+		return trusting.Curl(t, 5*time.Second, append([]string{"--cacert", "/tls/ca.crt"}, args...)...)
+	}
+	res := https(httpsURL(r, 8082, "/ui/"))
+	assert.Equal(t, 200, res.Code, "the UI over HTTPS: %s", brief(res))
+	assert.Contains(t, res.Body, "<html")
+	res = https(httpsURL(r, 8083, "/webhook/scm/health"))
+	assert.Equal(t, 200, res.Code, "the webhook over HTTPS: %s", brief(res))
+	res = trusting.Curl(t, 5*time.Second, serviceURL(r, 8082, "/ui/"))
+	assert.Equal(t, 400, res.Code, brief(res))
+	assert.Contains(t, res.Body, "Client sent an HTTP request to an HTTPS server")
+	res = trusting.Curl(t, 5*time.Second, httpsURL(r, 8082, "/ui/"))
+	assert.Equal(t, 0, res.Code, "a client that does not trust the CA gets no answer: %s", brief(res))
+	assert.Contains(t, res.Err, "certificate")
+
+	api := httpsURL(r, 8082, uiPipelines)
+	res = https(api)
+	assert.Equal(t, 401, res.Code, "no token: %s", brief(res))
+	res = https("-H", bearer(token), api)
+	assert.Equal(t, 200, res.Code, brief(res))
+	assert.Contains(t, res.Body, pipelineName)
+	res = https("-H", bearer(token), "-H", "Origin: "+origin, api)
+	assert.Equal(t, 200, res.Code, brief(res))
+	assert.Equal(t, origin, res.Headers["access-control-allow-origin"], "the origin from extraArgs gets CORS headers")
+	res = https("-H", bearer(token), "-H", "Origin: https://evil.example", api)
+	assert.Equal(t, 403, res.Code, brief(res))
+	assert.Contains(t, res.Body, "CORS: origin not allowed")
+
+	partial := e.Namespace(t)
+	rp, out, err := e.TryInstallChart(t, releaseName(partial), partial, nsValues(partial, framework.Values{
+		"controller": framework.Values{"tlsCertFile": "/etc/kardinal-tls/tls.crt"},
+	}), false)
+	require.NoError(t, err, out)
+	assert.Contains(t, crashLogs(t, e, rp), "--tls-cert-file and --tls-key-file must be set together")
+
+	unmounted := e.Namespace(t)
+	ru, out, err := e.TryInstallChart(t, releaseName(unmounted), unmounted, nsValues(unmounted, framework.Values{"controller": tlsFiles}), false)
+	require.NoError(t, err, out)
+	assert.Contains(t, crashLogs(t, e, ru), "open /etc/kardinal-tls/tls.crt: no such file or directory")
+}
+
+// TestChart_UIAuth checks the UI API access values. With
+// ui.auth.tokenSecretRef the API wants that bearer token; origins in
+// ui.corsAllowedOrigins get CORS headers (the preflight too) and others are
+// refused; a host in ui.allowedHosts is one of the UI's own names, so a page
+// served there is same-origin. With ui.auth.tokenReview the API takes
+// Kubernetes tokens and serves each caller what its own RBAC allows.
+//
+// Covers CHART-UIAUTH-01.
+func TestChart_UIAuth(t *testing.T) {
+	t.Parallel()
+	namespaceScoped(t)
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newRepoApp(t, e, "test")
+	ns := a.ns
+	token := randomHex(t, 16)
+	secret(t, e, ns, "ui-token", "token", token)
+	origin := "https://kardinal.example.com"
+	r := e.InstallChart(t, releaseName(ns), ns, nsValues(ns, framework.Values{"ui": framework.Values{
+		"corsAllowedOrigins": []string{origin},
+		"allowedHosts":       []string{"kardinal.example"},
+		"auth":               framework.Values{"tokenSecretRef": framework.Values{"name": "ui-token"}},
+	}}))
+	a.apply(t, a.resourcePipeline(nil))
+	args := runningPod(t, r).Spec.Containers[0].Args
+	assert.Contains(t, args, "--cors-allowed-origins="+origin)
+	assert.Contains(t, args, fmt.Sprintf("--ui-allowed-hosts=%[1]s,%[1]s.%[2]s,%[1]s.%[2]s.svc,%[1]s.%[2]s.svc.cluster.local,kardinal.example", r.Fullname, ns))
+	assert.NotContains(t, args, "--ui-tokenreview-auth=true")
+
+	probe := e.Probe(t, ns, "client", nil)
+	api := serviceURL(r, 8082, uiPipelines)
+	res := probe.Curl(t, 5*time.Second, api)
+	assert.Equal(t, 401, res.Code, "no token: %s", brief(res))
+	assert.Equal(t, `Bearer realm="kardinal-ui"`, res.Headers["www-authenticate"])
+	res = probe.Curl(t, 5*time.Second, "-H", bearer(randomHex(t, 16)), api)
+	assert.Equal(t, 401, res.Code, "a wrong token: %s", brief(res))
+	res = probe.Curl(t, 5*time.Second, "-H", bearer(token), api)
+	assert.Equal(t, 200, res.Code, brief(res))
+	assert.Contains(t, res.Body, pipelineName)
+	res = probe.Curl(t, 5*time.Second, serviceURL(r, 8082, "/ui/"))
+	assert.Equal(t, 200, res.Code, "the UI's own files need no token: %s", brief(res))
+
+	res = probe.Curl(t, 5*time.Second, "-H", bearer(token), "-H", "Origin: "+origin, api)
+	assert.Equal(t, 200, res.Code, brief(res))
+	assert.Equal(t, origin, res.Headers["access-control-allow-origin"])
+	res = probe.Curl(t, 5*time.Second, "-X", "OPTIONS", "-H", "Origin: "+origin, "-H", "Access-Control-Request-Method: GET", api)
+	assert.Equal(t, 200, res.Code, "the preflight needs no token: %s", brief(res))
+	assert.Equal(t, origin, res.Headers["access-control-allow-origin"])
+	assert.Equal(t, "GET, POST, OPTIONS", res.Headers["access-control-allow-methods"])
+	assert.Equal(t, "Authorization, Content-Type", res.Headers["access-control-allow-headers"])
+	res = probe.Curl(t, 5*time.Second, "-H", bearer(token), "-H", "Origin: https://evil.example", api)
+	assert.Equal(t, 403, res.Code, brief(res))
+	assert.Contains(t, res.Body, "CORS: origin not allowed")
+
+	res = probe.Curl(t, 5*time.Second, "-H", bearer(token), "-H", "Host: kardinal.example", "-H", "Origin: http://kardinal.example", api)
+	assert.Equal(t, 200, res.Code, "a page on an allowed host is same-origin: %s", brief(res))
+	assert.Empty(t, res.Headers["access-control-allow-origin"], "same-origin needs no CORS headers")
+	res = probe.Curl(t, 5*time.Second, "-H", bearer(token), "-H", "Host: evil.example", "-H", "Origin: http://evil.example", api)
+	assert.Equal(t, 403, res.Code, "a page on another host is not: %s", brief(res))
+	assert.Contains(t, res.Body, "CORS: origin not allowed")
+
+	controller := framework.ServiceAccountUser(ns, r.Fullname)
+	reviews := []framework.Access{
+		{Verb: "create", Group: "authentication.k8s.io", Resource: "tokenreviews"},
+		{Verb: "create", Group: "authorization.k8s.io", Resource: "subjectaccessreviews"},
+	}
+	checkAccess(t, e, controller, nil, reviews)
+
+	r.Upgrade(t, nsValues(ns, framework.Values{"ui": framework.Values{"auth": framework.Values{"tokenReview": true}}}))
+	assert.Contains(t, runningPod(t, r).Spec.Containers[0].Args, "--ui-tokenreview-auth=true")
+	checkAccess(t, e, controller, reviews, nil)
+
+	for _, name := range []string{"viewer", "nobody"} {
+		require.NoError(t, e.Client.Create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}))
+	}
+	_, err := e.Kube.RbacV1().Roles(ns).Create(ctx, &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "kardinal-viewer"},
+		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{"kardinal.io"}, Resources: []string{"*"}, Verbs: []string{"get", "list", "watch"}}},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = e.Kube.RbacV1().RoleBindings(ns).Create(ctx, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "kardinal-viewer"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "kardinal-viewer"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "viewer", Namespace: ns}},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	viewer := framework.ServiceAccountUser(ns, "viewer")
+	framework.Eventually(t, 30*time.Second, "viewer may list Pipelines", func(context.Context) (bool, string) {
+		return e.Can(t, viewer, framework.Access{Verb: "list", Group: "kardinal.io", Resource: "pipelines", Namespace: ns}), "not yet"
+	})
+	saToken := func(name string) string {
+		expiry := int64(600)
+		tr, err := e.Kube.CoreV1().ServiceAccounts(ns).CreateToken(ctx, name, &authenticationv1.TokenRequest{
+			Spec: authenticationv1.TokenRequestSpec{ExpirationSeconds: &expiry},
+		}, metav1.CreateOptions{})
+		require.NoError(t, err)
+		return tr.Status.Token
+	}
+	viewerToken, nobodyToken := saToken("viewer"), saToken("nobody")
+	framework.Eventually(t, 90*time.Second, "the UI API takes viewer's Kubernetes token", func(context.Context) (bool, string) {
+		res := probe.Curl(t, 5*time.Second, "-H", bearer(viewerToken), api)
+		return res.Code == 200 && strings.Contains(res.Body, pipelineName), brief(res)
+	})
+	res = probe.Curl(t, 5*time.Second, "-H", bearer(nobodyToken), api)
+	assert.Equal(t, 403, res.Code, "a caller without RBAC: %s", brief(res))
+	assert.Contains(t, res.Body, fmt.Sprintf(`forbidden: user "system:serviceaccount:%s:nobody" cannot list pipelines.kardinal.io in namespace %s`, ns, ns))
+	for what, tok := range map[string]string{"no token": "", "a token Kubernetes did not issue": randomHex(t, 16), "the old static token": token} {
+		args := []string{api}
+		if tok != "" {
+			args = []string{"-H", bearer(tok), api}
+		}
+		res = probe.Curl(t, 5*time.Second, args...)
+		assert.Equal(t, 401, res.Code, "%s: %s", what, brief(res))
+	}
+}
+
+// TestChart_UIExpose checks what the installation guide says about exposing
+// the UI. With no UI auth mode, kubectl port-forward is served, while
+// another pod, a NodePort and a request with proxy headers get a 403 that
+// says why, and the Host must be one of the controller's names. With
+// ui.auth.tokenSecretRef the NodePort serves token holders, and a page on
+// the node address is same-origin only once ui.allowedHosts names it.
+//
+// Covers CHART-UIEXPOSE-01.
+func TestChart_UIExpose(t *testing.T) {
+	t.Parallel()
+	namespaceScoped(t)
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newRepoApp(t, e, "test")
+	ns := a.ns
+	r := e.InstallChart(t, releaseName(ns), ns, nsValues(ns, nil))
+	a.apply(t, a.resourcePipeline(nil))
+	runningPod(t, r)
+
+	local := e.PortForward(t, ns, r.Fullname, 8082)
+	res := hostRequest(t, http.MethodGet, local+uiPipelines, nil)
+	assert.Equal(t, 200, res.Code, "port-forward is served: %s", brief(res))
+	assert.Contains(t, res.Body, pipelineName)
+	res = hostRequest(t, http.MethodGet, local+"/ui/", nil)
+	assert.Equal(t, 200, res.Code, brief(res))
+	res = hostRequest(t, http.MethodGet, local+uiPipelines, map[string]string{"Host": "evil.example"})
+	assert.Equal(t, 403, res.Code, brief(res))
+	assert.Contains(t, res.Body, "UI API: host not allowed")
+	res = hostRequest(t, http.MethodGet, local+uiPipelines, map[string]string{"X-Forwarded-For": "203.0.113.7"})
+	assert.Equal(t, 403, res.Code, "a request through a proxy is not local: %s", brief(res))
+	assert.Contains(t, res.Body, "only local clients")
+
+	other := e.Probe(t, ns, "other-pod", nil)
+	res = other.Curl(t, 5*time.Second, serviceURL(r, 8082, uiPipelines))
+	assert.Equal(t, 403, res.Code, "another pod: %s", brief(res))
+	assert.Contains(t, res.Body, "only local clients (kubectl port-forward) are served")
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "ui-nodeport"},
+		Spec: corev1.ServiceSpec{
+			Type:     corev1.ServiceTypeNodePort,
+			Selector: releaseLabels(r),
+			Ports:    []corev1.ServicePort{{Name: "ui", Port: 8082, TargetPort: intstr.FromString("ui")}},
+		},
+	}
+	require.NoError(t, e.Client.Create(ctx, svc))
+	nodeIP := nodeInternalIP(t, e)
+	nodeURL := fmt.Sprintf("http://%s:%d", nodeIP, svc.Spec.Ports[0].NodePort)
+	framework.Eventually(t, time.Minute, "the NodePort answers", func(context.Context) (bool, string) {
+		res = hostRequest(t, http.MethodGet, nodeURL+uiPipelines, nil)
+		return res.Code != 0, brief(res)
+	})
+	assert.Equal(t, 403, res.Code, "a NodePort client: %s", brief(res))
+	assert.Contains(t, res.Body, "only local clients")
+	res = hostRequest(t, http.MethodGet, nodeURL+"/ui/", nil)
+	assert.Equal(t, 200, res.Code, brief(res))
+
+	token := randomHex(t, 16)
+	secret(t, e, ns, "ui-token", "token", token)
+	withToken := func(hosts ...string) framework.Values {
+		ui := framework.Values{"auth": framework.Values{"tokenSecretRef": framework.Values{"name": "ui-token"}}}
+		if hosts != nil {
+			ui["allowedHosts"] = hosts
+		}
+		return nsValues(ns, framework.Values{"ui": ui})
+	}
+	r.Upgrade(t, withToken())
+	runningPod(t, r)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	framework.Eventually(t, time.Minute, "the NodePort wants the token", func(context.Context) (bool, string) {
+		res = hostRequest(t, http.MethodGet, nodeURL+uiPipelines, nil)
+		return res.Code == 401, brief(res)
+	})
+	res = hostRequest(t, http.MethodGet, nodeURL+uiPipelines, auth)
+	assert.Equal(t, 200, res.Code, brief(res))
+	assert.Contains(t, res.Body, pipelineName)
+	page := map[string]string{"Authorization": "Bearer " + token, "Origin": nodeURL}
+	res = hostRequest(t, http.MethodGet, nodeURL+uiPipelines, page)
+	assert.Equal(t, 403, res.Code, "the node address is not one of the UI's names yet: %s", brief(res))
+	assert.Contains(t, res.Body, "CORS: origin not allowed")
+
+	r.Upgrade(t, withToken(nodeIP))
+	runningPod(t, r)
+	framework.Eventually(t, time.Minute, "a page on an allowed node address is same-origin", func(context.Context) (bool, string) {
+		res = hostRequest(t, http.MethodGet, nodeURL+uiPipelines, page)
+		return res.Code == 200, brief(res)
+	})
+	assert.Empty(t, res.Headers["access-control-allow-origin"])
+}
+
+// TestChart_GraphIdentity checks the graph values. aggregateToKro grants
+// kro's controller watch on the kinds kro creates, and without it kro has
+// none. serviceAccountName is the identity the controller provisions and
+// kro applies each Graph as. readerNamespaces is where that identity may
+// read a health ref: a ref elsewhere is dropped from the Graph with a
+// warning, and the promotion still checks health. kroNamespace is the
+// NetworkPolicy egress rule to kro.
+//
+// Covers CHART-GRAPH-01.
+func TestChart_GraphIdentity(t *testing.T) {
+	t.Parallel()
+	clusterScoped(t)
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	name := releaseName(a.ns)
+	fullname := framework.ChartFullname(name)
+	readerBinding := fullname + "-graph-reader-" + a.ns
+	deleteReaderBindingAtEnd(t, e, readerBinding)
+	kro := framework.ServiceAccountUser("kro-system", "kro")
+	watchSteps := framework.Access{Verb: "watch", Group: "kardinal.io", Resource: "promotionsteps"}
+	teamGraph := framework.ServiceAccountUser(a.ns, "team-graph")
+	readApps := framework.Access{Verb: "get", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace}
+	values := func(readers []string, over framework.Values) framework.Values {
+		return framework.MergeValues(framework.Values{"graph": framework.Values{
+			"serviceAccountName": "team-graph", "readerNamespaces": readers, "aggregateToKro": true,
+		}}, over)
+	}
+
+	r := e.InstallChart(t, name, a.ns, framework.Values{"graph": framework.Values{"aggregateToKro": false}})
+	_, err := e.Kube.RbacV1().ClusterRoles().Get(ctx, fullname+"-kro-watch", metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "aggregateToKro=false ships no ClusterRole for kro: %v", err)
+	framework.Eventually(t, 30*time.Second, "kro may not watch PromotionSteps", func(context.Context) (bool, string) {
+		return !e.Can(t, kro, watchSteps), "kro may watch promotionsteps"
+	})
+
+	r.Upgrade(t, values([]string{"flux-system"}, nil))
+	role, err := e.Kube.RbacV1().ClusterRoles().Get(ctx, fullname+"-kro-watch", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "true", role.Labels["rbac.kro.run/aggregate-to-controller"])
+	framework.Eventually(t, time.Minute, "kro may watch PromotionSteps through the aggregated role", func(context.Context) (bool, string) {
+		return e.Can(t, kro, watchSteps), "not yet"
+	})
+	pod := runningPod(t, r)
+	args := pod.Spec.Containers[0].Args
+	assert.Contains(t, args, "--graph-service-account=team-graph")
+	assert.Contains(t, args, "--graph-reader-namespaces=flux-system")
+	logs := r.FollowLogs(t, pod.Name)
+	a.apply(t, a.pipeline(nil))
+	v2 := promote(t, a, fixtures.V2, nil)
+
+	g := bundleGraph(t, e, a.ns, v2)
+	sa, _, _ := unstructured.NestedString(g.Object, "spec", "serviceAccountName")
+	assert.Equal(t, "team-graph", sa, "kro applies the Graph as graph.serviceAccountName")
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: "team-graph"}, &corev1.ServiceAccount{}))
+	applier, err := e.Kube.RbacV1().RoleBindings(a.ns).Get(ctx, fullname+"-graph-applier", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Len(t, applier.Subjects, 1)
+	assert.Equal(t, [3]string{"ServiceAccount", "team-graph", a.ns},
+		[3]string{applier.Subjects[0].Kind, applier.Subjects[0].Name, applier.Subjects[0].Namespace})
+	_, err = e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, readerBinding, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "argocd is not a reader namespace, so no reader binding there: %v", err)
+	line, ok := logs.Find("no health ref node: namespace not in --graph-reader-namespaces")
+	assert.True(t, ok, "the dropped health ref is logged")
+	assert.Contains(t, line.Text, `"namespace":"argocd"`)
+	assert.False(t, hasAppRef(g, framework.ArgoCDNamespace), "the Argo CD health ref is dropped from the Graph")
+	assert.False(t, e.Can(t, teamGraph, readApps), "team-graph may not read Applications in argocd")
+
+	r.Upgrade(t, values([]string{framework.ArgoCDNamespace}, nil))
+	assert.Contains(t, runningPod(t, r).Spec.Containers[0].Args, "--graph-reader-namespaces="+framework.ArgoCDNamespace)
+	v3 := promote(t, a, fixtures.V3, nil)
+	reader, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, readerBinding, metav1.GetOptions{})
+	require.NoError(t, err, "a reader binding in argocd")
+	assert.Equal(t, fullname+"-graph-reader", reader.RoleRef.Name)
+	require.Len(t, reader.Subjects, 1)
+	assert.Equal(t, [2]string{"team-graph", a.ns}, [2]string{reader.Subjects[0].Name, reader.Subjects[0].Namespace})
+	applier, err = e.Kube.RbacV1().RoleBindings(a.ns).Get(ctx, fullname+"-graph-applier", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Contains(t, strings.Split(applier.Annotations["kardinal.io/reader-namespaces"], ","), framework.ArgoCDNamespace)
+	assert.True(t, hasAppRef(bundleGraph(t, e, a.ns, v3), framework.ArgoCDNamespace), "the Argo CD health ref is in the Graph")
+	assert.True(t, e.Can(t, teamGraph, readApps), "team-graph may read Applications in argocd")
+
+	netpol := framework.Values{"networkPolicy": framework.Values{"enabled": true}}
+	r.Upgrade(t, values([]string{framework.ArgoCDNamespace}, netpol))
+	runningPod(t, r)
+	kroMetrics := fmt.Sprintf("http://%s:8078/metrics", kroPodIP(t, e))
+	other := e.Probe(t, a.ns, "other", nil)
+	res := other.Curl(t, 5*time.Second, kroMetrics)
+	require.NotEqual(t, 0, res.Code, "kro answers on its metrics port: %s", brief(res))
+	asController := e.Probe(t, a.ns, "as-controller", releaseLabels(r), notReady)
+	framework.Eventually(t, time.Minute, "the policy lets the controller reach kro-system", func(context.Context) (bool, string) {
+		res := asController.Curl(t, 5*time.Second, kroMetrics)
+		return res.Code != 0, brief(res)
+	})
+	r.Upgrade(t, values([]string{framework.ArgoCDNamespace}, framework.MergeValues(netpol,
+		framework.Values{"graph": framework.Values{"kroNamespace": ""}})))
+	framework.Eventually(t, time.Minute, `graph.kroNamespace "" drops the egress rule to kro`, func(context.Context) (bool, string) {
+		res := asController.Curl(t, 3*time.Second, kroMetrics)
+		return res.Code == 0, brief(res)
+	})
+}
+
+// TestChart_NetworkPolicy checks networkPolicy on a CNI that enforces it.
+// Each port admits the peers networkPolicy.ingressFrom lists, or any peer
+// when none are listed. The controller may reach DNS, :443 and :6443, and
+// the extraEgress destinations, and nothing else: it cannot promote until
+// extraEgress lets it reach the git server.
+//
+// Covers CHART-NETPOL-01.
+func TestChart_NetworkPolicy(t *testing.T) {
+	t.Parallel()
+	namespaceScoped(t)
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	ns := a.ns
+
+	scm, err := url.Parse(os.Getenv(framework.EnvSCMAPI))
+	require.NoError(t, err)
+	host := strings.Split(scm.Hostname(), ".")
+	require.True(t, len(host) >= 2 && scm.Port() != "", "%s=%s is http://<service>.<namespace>...:<port>", framework.EnvSCMAPI, scm)
+	gitPort, err := strconv.Atoi(scm.Port())
+	require.NoError(t, err)
+	gitEgress := framework.Values{
+		"to": []interface{}{framework.Values{"namespaceSelector": framework.Values{
+			"matchLabels": framework.Values{"kubernetes.io/metadata.name": host[1]},
+		}}},
+		"ports": []interface{}{framework.Values{"port": gitPort, "protocol": "TCP"}},
+	}
+	values := func(extraEgress ...interface{}) framework.Values {
+		if extraEgress == nil {
+			extraEgress = []interface{}{}
+		}
+		return nsValues(ns, framework.Values{"networkPolicy": framework.Values{
+			"enabled": true,
+			"ingressFrom": framework.Values{"metrics": []interface{}{framework.Values{
+				"podSelector": framework.Values{"matchLabels": framework.Values{"role": "scraper"}},
+			}}},
+			"extraEgress": extraEgress,
+		}})
+	}
+	r := e.InstallChart(t, releaseName(ns), ns, values())
+	runningPod(t, r)
+	pol, err := e.Kube.NetworkingV1().NetworkPolicies(ns).Get(ctx, r.Fullname+"-controller", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, releaseLabels(r), pol.Spec.PodSelector.MatchLabels, "the policy selects the controller Pod")
+
+	scraper := e.Probe(t, ns, "scraper", map[string]string{"role": "scraper"})
+	other := e.Probe(t, ns, "other", nil)
+	asController := e.Probe(t, ns, "as-controller", releaseLabels(r), notReady)
+	metrics := serviceURL(r, 8080, "/metrics")
+	framework.Eventually(t, time.Minute, "ingressFrom.metrics admits the scraper", func(context.Context) (bool, string) {
+		res := scraper.Curl(t, 5*time.Second, metrics)
+		return res.Code == 200, brief(res)
+	})
+	framework.Eventually(t, time.Minute, "ingressFrom.metrics refuses other pods", func(context.Context) (bool, string) {
+		res := other.Curl(t, 3*time.Second, metrics)
+		return res.Code == 0, brief(res)
+	})
+	res := other.Curl(t, 5*time.Second, serviceURL(r, 8082, "/ui/"))
+	assert.Equal(t, 200, res.Code, "a port with no ingressFrom admits any pod: %s", brief(res))
+	res = other.Curl(t, 5*time.Second, serviceURL(r, 8081, "/readyz"))
+	assert.Equal(t, 200, res.Code, brief(res))
+	res = other.Curl(t, 5*time.Second, "-X", "POST", "-d", "{}", serviceURL(r, 8083, "/webhook/scm"))
+	assert.Equal(t, 401, res.Code, brief(res))
+
+	gitURL := strings.TrimSuffix(scm.String(), "/") + "/api/v1/version"
+	podinfo := fmt.Sprintf("http://%s.%s.svc.cluster.local:9898/", fixtures.Workload("test"), ns)
+	res = other.Curl(t, 5*time.Second, gitURL)
+	require.NotEqual(t, 0, res.Code, "the git server answers pods the policy does not select: %s", brief(res))
+	res = other.Curl(t, 5*time.Second, podinfo)
+	require.Equal(t, 200, res.Code, brief(res))
+	framework.Eventually(t, time.Minute, "the controller may not reach the git server", func(context.Context) (bool, string) {
+		res := asController.Curl(t, 3*time.Second, gitURL)
+		return res.Code == 0, brief(res)
+	})
+	res = asController.Curl(t, 5*time.Second, "-k", "https://kubernetes.default.svc.cluster.local/version")
+	assert.NotEqual(t, 0, res.Code, "the controller may reach the API server: %s", brief(res))
+	res = asController.Curl(t, 3*time.Second, podinfo)
+	assert.Equal(t, 0, res.Code, "the controller may not reach other pods: %s", brief(res))
+
+	a.apply(t, a.resourcePipeline(nil))
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	framework.Consistently(t, 45*time.Second, "without git egress the promotion does not land", func(ctx context.Context) (bool, string) {
+		ps, ok, err := e.Step(ctx, ns, pipelineName, bundle, "test")
+		if err != nil {
+			return false, err.Error()
+		}
+		if ok && ps.Status.State == "Verified" {
+			return false, "the test step is Verified"
+		}
+		return true, ""
+	})
+	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, ns, fixtures.Workload("test")))
+	if ps, ok, err := e.Step(ctx, ns, pipelineName, bundle, "test"); err == nil && ok {
+		t.Logf("test step without git egress: %s: %s", ps.Status.State, ps.Status.Message)
+	}
+
+	r.Upgrade(t, values(gitEgress))
+	runningPod(t, r)
+	framework.Eventually(t, time.Minute, "extraEgress lets the controller reach the git server", func(context.Context) (bool, string) {
+		res := asController.Curl(t, 3*time.Second, gitURL)
+		return res.Code != 0, brief(res)
+	})
+	e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	e.WaitDeploymentImage(t, ns, fixtures.Workload("test"), fixtures.Image+":"+fixtures.V2, syncTimeout)
+}
+
+// TestChart_Demo installs the chart with demo.enabled. The demo Pipeline is
+// what the values describe and promotes a Bundle through test, uat and a
+// reviewed prod; demo.secretRef is the Secret it pushes with; disabling
+// demo removes it; a missing demo.git.url fails the install with the
+// chart's message.
+//
+// Covers CHART-DEMO-01.
+func TestChart_Demo(t *testing.T) {
+	t.Parallel()
+	clusterScoped(t)
+	e := framework.New(t)
+	ctx := context.Background()
+	envs := []string{"test", "uat", "prod"}
+	ns := e.Namespace(t)
+	repo := e.Repo(t, ns, fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: envs}))
+	require.Equal(t, "main", repo.Branch, "the demo Pipeline promotes branch main")
+	// The demo Pipeline's health refs are these Application names in argocd.
+	for _, env := range envs {
+		e.ArgoApp(t, "kardinal-test-app-"+env, repo, fixtures.Path(env), ns)
+	}
+	for _, env := range envs {
+		e.WaitArgoApp(t, "kardinal-test-app-"+env, syncTimeout)
+		e.WaitDeploymentImage(t, ns, fixtures.Workload(env), fixtures.Image+":"+fixtures.V1, syncTimeout)
+	}
+	name := releaseName(ns)
+	deleteReaderBindingAtEnd(t, e, framework.ChartFullname(name)+"-graph-reader-"+ns)
+	demo := func(over framework.Values) framework.Values {
+		return framework.Values{"demo": framework.MergeValues(framework.Values{
+			"enabled": true, "image": fixtures.Image + ":" + fixtures.V1, "git": framework.Values{"url": repo.CloneURL},
+		}, over)}
+	}
+	r := e.InstallChart(t, name, ns, demo(nil))
+	runningPod(t, r)
+
+	key := types.NamespacedName{Namespace: ns, Name: "demo"}
+	var p v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, key, &p), "demo.enabled creates Pipeline demo")
+	assert.Equal(t, "demo", p.Labels["app.kubernetes.io/component"])
+	assert.Equal(t, name, p.Labels["app.kubernetes.io/instance"])
+	assert.Equal(t, "true", p.Annotations["kardinal.io/demo"])
+	assert.Equal(t, fixtures.Image+":"+fixtures.V1, p.Annotations["kardinal.io/demo-image"], "demo.image")
+	assert.Contains(t, p.Annotations["kardinal.io/demo-instructions"], "kardinal create bundle demo --image")
+	assert.Equal(t, repo.CloneURL, p.Spec.Git.URL, "demo.git.url")
+	assert.Equal(t, "main", p.Spec.Git.Branch)
+	assert.Equal(t, "directory", p.Spec.Git.Layout)
+	require.NotNil(t, p.Spec.Git.SecretRef)
+	assert.Equal(t, framework.GitSecretName, p.Spec.Git.SecretRef.Name, "the default is the chart's SCM token Secret")
+	approvals := map[string]string{}
+	for _, env := range p.Spec.Environments {
+		approvals[env.Name] = env.Approval
+	}
+	assert.Equal(t, map[string]string{"test": "auto", "uat": "auto", "prod": "pr-review"}, approvals)
+
+	v2 := e.CreateBundle(t, ns, "demo", "--image", fixtures.Image+":"+fixtures.V2)
+	for _, env := range []string{"test", "uat"} {
+		e.WaitStepState(t, ns, "demo", v2, env, "Verified", promoteTimeout)
+		e.WaitDeploymentImage(t, ns, fixtures.Workload(env), fixtures.Image+":"+fixtures.V2, syncTimeout)
+	}
+	e.WaitStepState(t, ns, "demo", v2, "prod", "WaitingForMerge", promoteTimeout)
+	pr := e.WaitPR(t, repo, time.Minute, "prod promotion PR", func(pr gitserver.PR) bool {
+		return pr.State == "open" && strings.Contains(pr.Body, fixtures.V2)
+	})
+	require.NoError(t, e.Git.MergePR(ctx, repo, pr.Number))
+	e.WaitStepState(t, ns, "demo", v2, "prod", "Verified", promoteTimeout)
+	e.WaitDeploymentImage(t, ns, fixtures.Workload("prod"), fixtures.Image+":"+fixtures.V2, syncTimeout)
+
+	// demo.secretRef: a Secret whose token the git server refuses stops the
+	// push; the real token in the same Secret lets the same Bundle land.
+	secret(t, e, ns, "demo-git", "token", randomHex(t, 20))
+	r.Upgrade(t, demo(framework.Values{"secretRef": framework.Values{"name": "demo-git"}}))
+	require.NoError(t, e.Client.Get(ctx, key, &p))
+	require.NotNil(t, p.Spec.Git.SecretRef)
+	assert.Equal(t, "demo-git", p.Spec.Git.SecretRef.Name, "demo.secretRef.name")
+	runningPod(t, r)
+	v3 := e.CreateBundle(t, ns, "demo", "--image", fixtures.Image+":"+fixtures.V3)
+	framework.Eventually(t, 2*time.Minute, "the refused token fails the push", func(ctx context.Context) (bool, string) {
+		ps, ok, err := e.Step(ctx, ns, "demo", v3, "test")
+		if err != nil || !ok {
+			return false, fmt.Sprintf("no step yet (%v)", err)
+		}
+		return strings.Contains(ps.Status.Message, "retrying in"), ps.Status.State + ": " + ps.Status.Message
+	})
+	assert.Equal(t, fixtures.Image+":"+fixtures.V2, e.DeploymentImage(t, ns, fixtures.Workload("test")))
+	var real, demoGit corev1.Secret
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: framework.GitSecretName}, &real))
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: "demo-git"}, &demoGit))
+	demoGit.Data = map[string][]byte{"token": real.Data["token"]}
+	require.NoError(t, e.Client.Update(ctx, &demoGit))
+	e.WaitStepState(t, ns, "demo", v3, "test", "Verified", promoteTimeout)
+	e.WaitDeploymentImage(t, ns, fixtures.Workload("test"), fixtures.Image+":"+fixtures.V3, syncTimeout)
+
+	r.Upgrade(t, framework.Values{})
+	framework.Eventually(t, 2*time.Minute, "demo.enabled=false removes the demo Pipeline", func(ctx context.Context) (bool, string) {
+		err := e.Client.Get(ctx, key, &v1alpha1.Pipeline{})
+		return apierrors.IsNotFound(err), fmt.Sprint(err)
+	})
+
+	other := e.Namespace(t)
+	_, out, err := e.TryInstallChart(t, releaseName(other), other, nsValues(other, framework.Values{
+		"demo": framework.Values{"enabled": true, "git": framework.Values{"url": nil}},
+	}), false)
+	require.Error(t, err)
+	assert.Contains(t, out, "demo.git.url is required (your fork of pnz1990/kardinal-demo)")
+	_, out, err = e.TryInstallChart(t, releaseName(other), other, nsValues(other, framework.Values{
+		"demo": framework.Values{"enabled": true, "git": framework.Values{"url": ""}},
+	}), false)
+	require.Error(t, err)
+	assert.Contains(t, out, "values don't meet the specifications of the schema")
+	assert.Contains(t, out, "url")
 }
