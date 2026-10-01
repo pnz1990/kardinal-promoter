@@ -1363,6 +1363,11 @@ func eventCount(ev *corev1.Event) int32 {
 // Response (JSON on success, HTTP 201):
 //
 //	{"bundle": "nginx-demo-20260421120000-1234", "message": "bundle created"}
+//
+// It applies the rules of POST /api/v1/bundles and kardinal create bundle:
+// 400 when lifecycle.ValidateNewBundle rejects the spec or the API server
+// refuses the Bundle, 404 when the Pipeline does not exist in the namespace,
+// 403 when the caller may not create it.
 func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1403,6 +1408,27 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 		Timestamp: metav1.Now(),
 	}
 
+	spec := v1alpha1.BundleSpec{
+		Type:       "image",
+		Pipeline:   req.Pipeline,
+		Images:     []v1alpha1.ImageRef{imageRef},
+		Provenance: provenance,
+	}
+	// The same rules as POST /api/v1/bundles and kardinal create bundle.
+	if err := lifecycle.ValidateNewBundle(&spec); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var pipeline v1alpha1.Pipeline
+	if err := s.client.Get(r.Context(), client.ObjectKey{Namespace: ns, Name: req.Pipeline}, &pipeline); err != nil {
+		if apierrors.IsNotFound(err) {
+			http.Error(w, fmt.Sprintf("pipeline %s/%s not found", ns, req.Pipeline), http.StatusNotFound)
+			return
+		}
+		s.writeLifecycleError(w, "look up pipeline", err)
+		return
+	}
+
 	bundle := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: sanitizeName(req.Pipeline) + "-",
@@ -1411,18 +1437,16 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 				"kardinal.io/pipeline": req.Pipeline,
 			},
 		},
-		Spec: v1alpha1.BundleSpec{
-			Type:       "image",
-			Pipeline:   req.Pipeline,
-			Images:     []v1alpha1.ImageRef{imageRef},
-			Provenance: provenance,
-		},
+		Spec: spec,
 	}
 	lifecycle.StampCreatedAt(bundle, time.Now())
 
 	if err := s.client.Create(r.Context(), bundle); err != nil {
-		s.log.Error().Err(err).Str("pipeline", req.Pipeline).Msg("ui: create bundle")
-		http.Error(w, "failed to create bundle", http.StatusInternalServerError)
+		if apierrors.IsInvalid(err) {
+			http.Error(w, "bundle rejected by validation: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.writeLifecycleError(w, "create bundle", err)
 		return
 	}
 

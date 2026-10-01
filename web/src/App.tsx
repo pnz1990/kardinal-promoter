@@ -50,6 +50,12 @@ import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyG
 
 const POLL_INTERVAL_MS = 5000
 
+/** The message of a failed read. The views print it after "Error: ", so it
+ *  must not start with one (String(new Error(m)) is "Error: m"). */
+function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
 /** Format elapsed seconds into a human-readable staleness string. */
 function formatElapsed(seconds: number | null): string {
   if (seconds === null) return 'Loading...'
@@ -96,10 +102,15 @@ export function App() {
   }, [setUrlState])
 
   // #740: When graph data changes, restore selectedNode from URL if a node= param is present
-  // and the current selectedNode doesn't already match.
+  // and the current selectedNode doesn't already match. With no node= (Back to an entry
+  // before the node was opened), the details close.
   useEffect(() => {
     const nodeId = urlState.node
-    if (!nodeId || !graph) return
+    if (!nodeId) {
+      if (selectedNode?.id) setSelectedNodeLocal(null)
+      return
+    }
+    if (!graph) return
     if (selectedNode?.id === nodeId) return
     const node = graph.nodes?.find(n => n.id === nodeId)
     if (node) setSelectedNodeLocal(node)
@@ -165,7 +176,7 @@ export function App() {
       // #522: mark poll success so the header staleness indicator clears "Loading..."
       onPollSuccess()
     } catch (e) {
-      setPipelinesError(String(e))
+      setPipelinesError(errorText(e))
     } finally {
       setPipelinesLoading(false)
     }
@@ -197,7 +208,11 @@ export function App() {
           return
         }
         try {
-          const [g, steps] = await Promise.all([api.getGraph(shown.name), api.getSteps(shown.name)])
+          // The bundle's own namespace: its name may repeat in other namespaces.
+          const [g, steps] = await Promise.all([
+            api.getGraph(shown.name, shown.namespace),
+            api.getSteps(shown.name, shown.namespace),
+          ])
           if (stale()) return
           setGraph(g)
           setActiveSteps(steps)
@@ -211,7 +226,7 @@ export function App() {
         }
       } catch (e) {
         if (!stale()) {
-          setGraphError(String(e))
+          setGraphError(errorText(e))
           setBundlesLoading(false)
         }
       } finally {
@@ -298,20 +313,23 @@ export function App() {
   const handleTimelineBundleSelect = useCallback((bundleName: string) => {
     const seq = ++viewSeq.current
     const stale = () => seq !== viewSeq.current
+    // The timeline lists the selected pipeline's bundles, so the picked one is
+    // in that pipeline's namespace.
+    const namespace = bundles.find(b => b.name === bundleName)?.namespace ?? selectedNamespace
     userBundleRef.current = bundleName
     setShownBundleName(bundleName)
     setGraphLoading(true)
     setGraphError(undefined)
     setSelectedNode(null) // close detail panel when switching bundles
-    void track(seq, Promise.all([api.getGraph(bundleName), api.getSteps(bundleName)])
+    void track(seq, Promise.all([api.getGraph(bundleName, namespace), api.getSteps(bundleName, namespace)])
       .then(([g, steps]) => {
         if (stale()) return
         setGraph(g)
         setActiveSteps(steps)
       })
-      .catch(e => { if (!stale()) setGraphError(String(e)) })
+      .catch(e => { if (!stale()) setGraphError(errorText(e)) })
       .finally(() => { if (!stale()) setGraphLoading(false) }))
-  }, [setSelectedNode])
+  }, [setSelectedNode, bundles, selectedNamespace])
 
   // Namespace chip: the selected pipeline's namespace, or the only namespace.
   const currentNamespace = activePipeline?.namespace
@@ -389,6 +407,17 @@ export function App() {
 
   // Use the bundle graph when available; fall back to static topology (#525).
   const displayGraph = graph ?? staticGraph
+
+  // #913: Insecure connection warning — plain HTTP from a non-loopback address.
+  // It heads every main view, so it shows before any pipeline loads (the API
+  // may refuse the page's requests outright).
+  const insecureBanner = (
+    <InsecureConnectionBanner
+      dismissed={insecureBannerDismissed}
+      onDismiss={() => setInsecureBannerDismissed(true)}
+      margin="1rem 1.5rem 0"
+    />
+  )
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
@@ -535,6 +564,7 @@ export function App() {
               loading={pipelinesLoading}
               error={pipelinesError}
               searchInputRef={searchInputRef}
+              total={pipelines.length}
             />
           </ErrorBoundary>
         </div>
@@ -543,6 +573,7 @@ export function App() {
       {/* Ops table mode — full-width table replaces the main content area */}
       {viewMode === 'ops-table' ? (
         <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg-deep)' }}>
+          {insecureBanner}
           <PipelineOpsTable
             pipelines={pipelines}
             selected={selectedPipeline}
@@ -555,6 +586,7 @@ export function App() {
       ) : (
         <>{/* Main area — column layout for header + content row */}
         <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg)' }}>
+        {insecureBanner}
         {!selectedPipeline ? (
           <div style={{ color: 'var(--color-text-faint)', padding: '3rem 2rem', textAlign: 'center' }}>
             {pipelines.length > 0 ? (
@@ -657,12 +689,6 @@ export function App() {
                   onRefresh={manualRefresh}
                 />
               )}
-
-              {/* #913: Insecure connection warning — shown when UI accessed over HTTP from non-localhost */}
-              <InsecureConnectionBanner
-                dismissed={insecureBannerDismissed}
-                onDismiss={() => setInsecureBannerDismissed(true)}
-              />
 
               {/* Blocked PolicyGate banner */}
               <BlockedBanner

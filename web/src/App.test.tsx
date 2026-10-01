@@ -25,17 +25,25 @@ const h = vi.hoisted(() => {
     graphDelay: undefined as undefined | ((bundle: string) => Promise<void>),
     // Optional graph returned instead of graphFor(bundle) (blocked-banner tests).
     graph: undefined as unknown,
+    // When set, listPipelines fails with this error (the API refuses the page).
+    pipelinesError: undefined as string | undefined,
+    // When set, getGraph fails with this error.
+    graphError: undefined as string | undefined,
   }
   const graphFor = (b: string) => ({
     nodes: [{ id: `${b}-step`, type: 'PromotionStep', label: `env-of-${b}`, environment: `env-of-${b}`, state: 'Verified' }],
     edges: [],
   })
   const api = {
-    listPipelines: vi.fn(async () => state.pipelines),
+    listPipelines: vi.fn(async () => {
+      if (state.pipelinesError) throw new Error(state.pipelinesError)
+      return state.pipelines
+    }),
     listGates: vi.fn(async () => state.gates),
     listBundles: vi.fn(async (p: string) => state.bundles[p] ?? []),
     getGraph: vi.fn(async (b: string) => {
       if (state.graphDelay) await state.graphDelay(b)
+      if (state.graphError) throw new Error(state.graphError)
       return state.graph ?? graphFor(b)
     }),
     getSteps: vi.fn(async () => []),
@@ -77,6 +85,8 @@ beforeEach(() => {
   h.state.gates = []
   h.state.graphDelay = undefined
   h.state.graph = undefined
+  h.state.pipelinesError = undefined
+  h.state.graphError = undefined
   for (const fn of Object.values(h.api)) fn.mockClear()
   localStorage.clear()
   window.history.replaceState(null, '', '/ui/#pipeline=app')
@@ -220,6 +230,125 @@ describe('App pipeline selection', () => {
     expect(screen.getByTitle('Namespace: team-b')).toBeInTheDocument()
     // The timeline only lists bundles from the selected namespace.
     expect(screen.queryByTitle(/^app-a:/)).not.toBeInTheDocument()
+  })
+
+  it('reads the graph and steps of the bundle in the namespace on screen', async () => {
+    // Bundle names repeat across namespaces; the server only tells them apart
+    // by ?namespace=, so every read names the namespace of the pipeline shown.
+    window.history.replaceState(null, '', '/ui/#pipeline=app&ns=team-b')
+    h.state.pipelines = [
+      pipeline('app', { namespace: 'team-a', activeBundleName: 'app-v2' }),
+      pipeline('app', { namespace: 'team-b', activeBundleName: 'app-v2' }),
+    ]
+    h.state.bundles = {
+      app: [
+        bundle('app-v2', 'Promoting', 1, { namespace: 'team-a' }),
+        bundle('app-v2', 'Failed', 1, { namespace: 'team-b' }),
+      ],
+    }
+    render(<App />)
+    await flush()
+    expect(h.api.getGraph).toHaveBeenLastCalledWith('app-v2', 'team-b')
+    expect(h.api.getSteps).toHaveBeenLastCalledWith('app-v2', 'team-b')
+
+    // A poll tick and a timeline pick read the same namespace again.
+    await flush(5_100)
+    fireEvent.click(screen.getByTitle(/^app-v2: Failed/))
+    await flush()
+    for (const fn of [h.api.getGraph, h.api.getSteps]) {
+      expect(fn.mock.calls.length).toBeGreaterThanOrEqual(3)
+      for (const call of fn.mock.calls) expect(call).toEqual(['app-v2', 'team-b'])
+    }
+  })
+
+  it('opens and closes the node details as Back and Forward change node=', async () => {
+    const go = async (hash: string) => {
+      window.history.replaceState(null, '', `/ui/${hash}`)
+      await act(async () => { window.dispatchEvent(new PopStateEvent('popstate')) })
+      await flush()
+    }
+    window.history.replaceState(null, '', '/ui/#pipeline=app&node=b-new-step')
+    render(<App />)
+    await flush()
+    expect(screen.getByTestId('node-detail')).toBeInTheDocument()
+
+    // Back to the entry before the node was opened.
+    await go('#pipeline=app')
+    expect(screen.queryByTestId('node-detail')).not.toBeInTheDocument()
+    // Forward to it again.
+    await go('#pipeline=app&node=b-new-step')
+    expect(screen.getByTestId('node-detail')).toBeInTheDocument()
+  })
+})
+
+// docs/installation.md: a NodePort without TLS shows a security warning. The
+// API refuses such a client outright unless ui.allowedHosts names the host, so
+// the warning cannot wait for a pipeline view: it heads every view.
+describe('App insecure connection banner', () => {
+  const original = window.location
+  const at = (href: string) => Object.defineProperty(window, 'location', { value: new URL(href), writable: true, configurable: true })
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { value: original, writable: true, configurable: true })
+  })
+  const banners = () => screen.queryAllByText(/^Insecure connection — kardinal UI is accessed over plain HTTP\./)
+
+  it('warns on the landing page', async () => {
+    at('http://10.0.0.1:30082/ui/')
+    render(<App />)
+    await flush()
+    expect(screen.getByText('Select a pipeline to view its promotion DAG.')).toBeInTheDocument()
+    expect(banners()).toHaveLength(1)
+  })
+
+  it('warns when the API refuses the page and no pipeline loads', async () => {
+    at('http://10.0.0.1:30082/ui/')
+    h.state.pipelinesError = 'API error 403: Forbidden'
+    render(<App />)
+    await flush()
+    expect(h.api.getGraph).not.toHaveBeenCalled()
+    expect(banners()).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss insecure connection warning' }))
+    expect(banners()).toHaveLength(0)
+  })
+
+  it('warns once in the pipeline view and in the operations table', async () => {
+    at('http://kardinal.internal:8082/ui/#pipeline=app')
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('heading', { level: 1, name: 'app' })).toBeInTheDocument()
+    expect(banners()).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Operations Table' }))
+    await flush()
+    expect(banners()).toHaveLength(1)
+  })
+
+  it('does not warn on the documented port-forward', async () => {
+    at('http://127.0.0.1:8082/ui/')
+    render(<App />)
+    await flush()
+    expect(screen.getByText('Select a pipeline to view its promotion DAG.')).toBeInTheDocument()
+    expect(banners()).toHaveLength(0)
+  })
+})
+
+// The API client throws Error('API error 503: ...'); the views print the
+// message after "Error: ", so it reads once, not "Error: Error: ...".
+describe('App failed reads', () => {
+  it('shows the message of a failed pipelines read once', async () => {
+    h.state.pipelinesError = 'API error 503: Service Unavailable'
+    render(<App />)
+    await flush()
+    expect(screen.getByText('Error: API error 503: Service Unavailable')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Refresh data' }).querySelector('span[aria-live="polite"]'))
+      .toHaveAttribute('title', 'Error: API error 503: Service Unavailable')
+    expect(screen.queryByText(/Error: Error/)).not.toBeInTheDocument()
+  })
+
+  it('shows the message of a failed graph read once', async () => {
+    h.state.graphError = 'API error 500: Internal Server Error'
+    render(<App />)
+    await flush()
+    expect(screen.getByRole('alert')).toHaveTextContent(/^Error: API error 500: Internal Server Error$/)
   })
 })
 

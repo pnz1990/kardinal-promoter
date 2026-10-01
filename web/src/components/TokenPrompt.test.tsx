@@ -105,3 +105,38 @@ describe('TokenPrompt', () => {
     await expect(pipelines).rejects.toThrow('API error 401')
   })
 })
+
+// The page's insecure-connection banner sits behind the dialog's backdrop, and
+// the token is typed here, so over plain HTTP from a non-loopback address the
+// dialog warns by itself (docs/installation.md: a NodePort without TLS shows a
+// security warning).
+describe('TokenPrompt over plain HTTP', () => {
+  const original = window.location
+  const at = (href: string) => Object.defineProperty(window, 'location', { value: new URL(href), writable: true, configurable: true })
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { value: original, writable: true, configurable: true })
+  })
+
+  it('warns that the token is sent unencrypted from a NodePort', async () => {
+    at('http://10.0.0.1:30082/ui/')
+    stubServer('t')
+    render(<TokenPrompt />)
+    void api.listPipelines().catch(() => {})
+    const dialog = await screen.findByRole('dialog', { name: 'Sign in to kardinal' })
+    expect(dialog).toHaveAccessibleDescription(/plain HTTP, so the token is sent unencrypted/)
+    expect(dialog).toHaveTextContent('kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082')
+    expect(screen.getByRole('link', { name: 'http://localhost:8082/ui/' })).toHaveAttribute('href', 'http://localhost:8082/ui/')
+    // Advisory, not an error: the form's alert stays free for token errors.
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it.each(['http://localhost:8082/ui/', 'http://127.0.0.1:8082/ui/', 'https://10.0.0.1:30443/ui/'])('does not warn on %s', async href => {
+    at(href)
+    stubServer('t')
+    render(<TokenPrompt />)
+    void api.listPipelines().catch(() => {})
+    const dialog = await screen.findByRole('dialog', { name: 'Sign in to kardinal' })
+    expect(dialog).not.toHaveTextContent('plain HTTP')
+    expect(dialog).toHaveAttribute('aria-describedby', 'ui-token-desc')
+  })
+})

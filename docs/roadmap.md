@@ -137,7 +137,7 @@ The UI work from #462–#468 shipped in v0.5.0–v0.6.0. This is what the UI sho
 ### Currently available
 
 - DAG visualization with per-node health states
-- Bundle timeline with env status chips, PR links, pagination
+- Bundle timeline: the 10 newest Bundles as chips colored by phase (the selected and comparison Bundles stay visible); click a chip to show that Bundle, Shift-click to compare two
 - PolicyGate expression display with CEL highlighting
 - HealthChip status chips
 - Live polling with staleness indicator

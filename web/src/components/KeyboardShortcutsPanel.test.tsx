@@ -100,4 +100,20 @@ describe('KeyboardShortcutsPanel', () => {
     fireEvent.keyDown(document.activeElement!, { key })
     expect(onClose).toHaveBeenCalledOnce()
   })
+
+  // In a browser React removes the panel before the keydown reaches the
+  // document, so the page's ? shortcut (useKeyboardShortcuts) would see no
+  // modal and open the panel again. The ? that closes it must stop here.
+  it('keeps the ? that closes it from the page shortcuts', () => {
+    const pageShortcut = vi.fn()
+    document.addEventListener('keydown', pageShortcut)
+    try {
+      render(<KeyboardShortcutsPanel onClose={onClose} />)
+      fireEvent.keyDown(document.activeElement!, { key: '?' })
+      expect(onClose).toHaveBeenCalledOnce()
+      expect(pageShortcut).not.toHaveBeenCalled()
+    } finally {
+      document.removeEventListener('keydown', pageShortcut)
+    }
+  })
 })

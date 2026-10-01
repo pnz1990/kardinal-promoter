@@ -161,14 +161,23 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 /** Encode one URL path segment, so a name can never add path segments or a query. */
 const seg = encodeURIComponent
 
+/** The ?namespace= query of a namespaced read, or nothing without a namespace. */
+const nsQuery = (namespace?: string) => (namespace ? `?namespace=${seg(namespace)}` : '')
+
 export const api = {
   listPipelines: () => get<Pipeline[]>('/pipelines'),
   /** Bundles of a pipeline, newest first. With namespace, only that namespace's
    *  bundles (pipelines are namespaced; the same name can exist twice). */
   listBundles: (pipelineName: string, namespace?: string) =>
-    get<Bundle[]>(`/pipelines/${seg(pipelineName)}/bundles${namespace ? `?namespace=${seg(namespace)}` : ''}`),
-  getGraph: (bundleName: string) => get<GraphResponse>(`/bundles/${seg(bundleName)}/graph`),
-  getSteps: (bundleName: string) => get<PromotionStep[]>(`/bundles/${seg(bundleName)}/steps`),
+    get<Bundle[]>(`/pipelines/${seg(pipelineName)}/bundles${nsQuery(namespace)}`),
+  /** The DAG of a bundle. Bundle names repeat across namespaces (each
+   *  pipeline's bundles are its namespace's), so pass the namespace on screen:
+   *  without it the server reads whichever namespace's bundle it finds first. */
+  getGraph: (bundleName: string, namespace?: string) =>
+    get<GraphResponse>(`/bundles/${seg(bundleName)}/graph${nsQuery(namespace)}`),
+  /** The PromotionSteps of a bundle; pass the namespace as for getGraph. */
+  getSteps: (bundleName: string, namespace?: string) =>
+    get<PromotionStep[]>(`/bundles/${seg(bundleName)}/steps${nsQuery(namespace)}`),
   listGates: () => get<PolicyGate[]>('/gates'),
   /** Kubernetes events for a PromotionStep node — newest-first, capped at 20 (#527). */
   getStepEvents: (namespace: string, stepName: string) =>

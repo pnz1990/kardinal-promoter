@@ -11,6 +11,7 @@
 #   core    Forgejo + Argo CD
 #   gitea   Gitea + Argo CD
 #   delivery Forgejo + Argo CD + Argo Rollouts + Flagger
+#   ui      Forgejo + Argo CD + the UI auth, CORS and TLS releases (ui.sh)
 #
 # Env:
 #   KIND_CLUSTER     cluster name (default kardinal-e2e-SUITE)
@@ -25,6 +26,10 @@
 set -euo pipefail
 
 SUITE=${1:?usage: $0 SUITE}
+# AFTER lists components that need the controller image, so they run after
+# components/kardinal.sh. HELM_ARGS are the suite's chart values for the main
+# release, before KARDINAL_E2E_HELM_ARGS.
+AFTER=() HELM_ARGS=
 case "$SUITE" in
   # RUN is the go test -run pattern of the suite's tests; the prefix names
   # the area (test/e2e/README.md). Every git server suite runs the TestCore_
@@ -34,6 +39,12 @@ case "$SUITE" in
   gitea) COMPONENTS=("giteafamily.sh gitea" argocd.sh) RUN='^Test(Core|SCM)_' ;;
   delivery) COMPONENTS=("giteafamily.sh forgejo" argocd.sh rollouts.sh flagger.sh)
     RUN='^Test(Rollouts|Flagger|Delivery)_' ;;
+  # The UI API and the web app in a browser: the main release with no UI
+  # auth (reached through kubectl port-forward; the browser also uses the
+  # allowed host kardinal-ui.test), plus the auth, CORS and TLS releases of
+  # components/ui.sh.
+  ui) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(ui.sh) RUN='^TestUI_'
+    HELM_ARGS='--set ui.allowedHosts={kardinal-ui.test}' ;;
   *)
     echo "unknown suite $SUITE" >&2
     exit 1
@@ -77,5 +88,9 @@ for c in "${COMPONENTS[@]}"; do
   # shellcheck disable=SC2086
   bash "$E2E_DIR/components/"$c
 done
-bash "$E2E_DIR/components/kardinal.sh"
+KARDINAL_E2E_HELM_ARGS="$HELM_ARGS ${KARDINAL_E2E_HELM_ARGS:-}" bash "$E2E_DIR/components/kardinal.sh"
+for c in "${AFTER[@]}"; do
+  # shellcheck disable=SC2086
+  bash "$E2E_DIR/components/"$c
+done
 log "suite $SUITE up on $CTX in $(($(date +%s) - start))s; env: $E2E_OUT/env"

@@ -53,7 +53,9 @@ export function KeyboardShortcutsPanel({ onClose }: KeyboardShortcutsPanelProps)
         if (e.target === e.currentTarget) onClose()
       }}
       onKeyDown={e => {
-        if (e.key === '?') { e.preventDefault(); onClose() }
+        // Stop it here: in a browser the panel is gone by the time the event
+        // reaches the page's ? shortcut, which would open the panel again.
+        if (e.key === '?') { e.preventDefault(); e.stopPropagation(); onClose() }
       }}
     >
       <div
