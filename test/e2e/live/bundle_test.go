@@ -409,7 +409,13 @@ const (
 
 // configDeployment is env's Deployment with the config change.
 func configDeployment(env string) string {
-	return strings.Replace(fixtures.Deployment(fixtures.Workload(env), imageV1), "          ports:\n",
+	return withConfigChange(fixtures.Deployment(fixtures.Workload(env), imageV1))
+}
+
+// withConfigChange adds the config change to a fixtures.Deployment manifest:
+// podinfo's container gets configVar=configValue.
+func withConfigChange(deployment string) string {
+	return strings.Replace(deployment, "          ports:\n",
 		"          env:\n            - name: "+configVar+"\n              value: "+configValue+"\n          ports:\n", 1)
 }
 
