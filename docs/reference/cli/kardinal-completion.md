@@ -6,6 +6,9 @@ Generate shell completion scripts
 
 Generate shell completion scripts for kardinal.
 
+The bash script needs the bash-completion package (it calls
+_get_comp_words_by_ref); install it with your OS package manager first.
+
 To load completions immediately in the current shell session:
 
   # Bash
@@ -52,7 +55,7 @@ kardinal completion [bash|zsh|fish|powershell]
 
 ```
       --context string      Kubeconfig context override
-      --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
+      --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
   -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
 ```

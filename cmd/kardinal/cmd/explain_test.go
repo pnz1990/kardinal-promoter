@@ -18,7 +18,10 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"os"
+	"os/signal"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -576,4 +579,53 @@ func TestExplainWatch_ContinuesAfterErrorAndNoClearOnPipe(t *testing.T) {
 	got := out.buf.String()
 	assert.Equal(t, 3, strings.Count(got, `error: pipeline "demo" not found`), got)
 	assert.NotContains(t, got, "\033[H\033[2J", "no clear-screen on a pipe")
+}
+
+// firstFrameWriter closes first once the first frame's footer is written.
+type firstFrameWriter struct {
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	once  sync.Once
+	first chan struct{}
+}
+
+func (w *firstFrameWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.buf.Write(p)
+	if strings.Contains(w.buf.String(), "(watching") {
+		w.once.Do(func() { close(w.first) })
+	}
+	return n, err
+}
+
+// Ctrl-C (SIGINT) ends explain --watch with no error, so the CLI exits 0 like
+// the other --watch commands instead of being killed by the signal.
+func TestExplainWatch_InterruptEndsTheWatch(t *testing.T) {
+	// Another listener turns off the default action (exit), so without the
+	// handler the test fails on the timeout instead of killing the binary.
+	keep := make(chan os.Signal, 1)
+	signal.Notify(keep, os.Interrupt)
+	defer signal.Stop(keep)
+
+	c := policyClient(t)
+	out := &firstFrameWriter{first: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		done <- explainWatch(context.Background(), out, c, "default", "demo", "", false, time.Hour)
+	}()
+	select {
+	case <-out.first:
+	case <-time.After(10 * time.Second):
+		t.Fatal("explain --watch rendered no frame")
+	}
+	self, err := os.FindProcess(os.Getpid())
+	require.NoError(t, err)
+	require.NoError(t, self.Signal(os.Interrupt))
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("explain --watch kept running after SIGINT")
+	}
 }

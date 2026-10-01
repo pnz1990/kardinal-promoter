@@ -35,14 +35,14 @@ kardinal init [flags]
       --gitops-dir string   Directory for the GitOps scaffold (default ".gitops")
   -h, --help                help for init
       --scaffold-gitops     Create GitOps repo structure (environments/<env>/kustomization.yaml)
-      --stdout              Print to stdout instead of writing a file
+      --stdout              Print the Pipeline YAML to stdout instead of writing a file (a scaffold still writes its files)
 ```
 
 ### Options inherited from parent commands
 
 ```
       --context string      Kubeconfig context override
-      --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
+      --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
   -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
 ```

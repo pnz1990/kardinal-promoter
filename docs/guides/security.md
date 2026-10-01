@@ -257,8 +257,8 @@ These defaults comply with the Kubernetes `restricted` pod security standard.
 ## Audit Logging
 
 kardinal writes an immutable `AuditEvent` CRD record at every significant promotion
-lifecycle transition. AuditEvents are append-only — the spec is set at creation and
-never mutated. Kubernetes RBAC can be used to prevent deletion, satisfying SOC 2,
+lifecycle transition, in the Pipeline's namespace. AuditEvents are append-only — the
+spec is set at creation and never mutated. Kubernetes RBAC can be used to prevent deletion, satisfying SOC 2,
 ISO 27001, and FedRAMP audit trail requirements.
 
 ### Events written automatically
@@ -290,7 +290,7 @@ An AuditEvent does not record who acted. For that, read the Bundle's
 ### Querying audit events
 
 ```bash
-# List all audit events (most recent first)
+# List the audit events in the current namespace (most recent first)
 kardinal get auditevents
 
 # Filter by pipeline
@@ -300,10 +300,10 @@ kardinal get auditevents --pipeline my-app
 kardinal get auditevents --pipeline my-app --env prod
 
 # Raw kubectl (shows all fields)
-kubectl get auditevents -n kardinal-system -o wide
+kubectl get auditevents -n my-team -o wide
 
 # Watch a specific pipeline's events in real-time
-kubectl get auditevents -n kardinal-system \
+kubectl get auditevents -n my-team \
   -l kardinal.io/pipeline=my-app \
   --watch
 ```
@@ -313,8 +313,8 @@ kubectl get auditevents -n kardinal-system \
 Export AuditEvents as structured JSON for forwarding to your SIEM:
 
 ```bash
-# JSON dump of all events (pipe to your log forwarder)
-kubectl get auditevents -n kardinal-system -o json \
+# JSON dump of all events in every namespace (pipe to your log forwarder)
+kubectl get auditevents -A -o json \
   | jq -c '.items[] | {
       ts: .spec.timestamp,
       pipeline: .spec.pipelineName,

@@ -6,14 +6,19 @@ Show promotion step execution logs for a pipeline (Kargo parity)
 
 Show the execution history and output of PromotionSteps for a pipeline.
 
-For each active PromotionStep, shows:
+It shows the PromotionSteps of every Bundle of the pipeline that is not
+Superseded (all of them if those have none), or of the Bundle --bundle names.
+For each PromotionStep, it shows:
   - Current state (Promoting, WaitingForMerge, HealthChecking, Verified, Failed)
   - Step message (error details, health check results, PR URLs)
   - Step outputs (branch name, PR URL, PR number)
   - Conditions from the status
+  - The steps it ran (status.steps), with state and duration
 
-Use --follow (-f) to stream step progress in real time, polling every 2 seconds
-until all steps reach a terminal state (Verified, Failed, or AbortedByAlarm).
+Use --follow (-f) to stream step progress in real time, polling every 2 seconds.
+It exits when every step shown is in a terminal state (Verified, Failed,
+AbortedByAlarm or RollingBack) and no Bundle it follows is still promoting.
+With --env it exits once that environment's steps are terminal.
 Each state change is printed once.
 
 Example:
@@ -29,9 +34,9 @@ kardinal logs <pipeline> [flags]
 ### Options
 
 ```
-      --bundle string   Show logs for a specific bundle (default: most recent active)
+      --bundle string   Show logs for one bundle (default: every bundle that is not Superseded)
       --env string      Filter by environment
-  -f, --follow          Stream step progress, polling every 2s until terminal state
+  -f, --follow          Stream step progress, polling every 2s until the promotion ends
   -h, --help            help for logs
 ```
 
@@ -39,7 +44,7 @@ kardinal logs <pipeline> [flags]
 
 ```
       --context string      Kubeconfig context override
-      --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
+      --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
   -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
 ```

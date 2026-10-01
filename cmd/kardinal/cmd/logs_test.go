@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -262,6 +263,50 @@ func TestLogsFollow_RollingBackIsTerminal(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, logsFollowFn(ctx, &out, policyClient(t, step), "default", "demo", "", ""))
 	assert.True(t, strings.HasSuffix(out.String(), "[demo/prod] → RollingBack\nAll steps reached terminal state.\n"), out.String())
+}
+
+// --follow waits for the Bundle, not only for the steps that exist: the next
+// environment's PromotionStep is created only once its upstream is Verified
+// and its gates pass, so a Verified test step of a Promoting Bundle is not the
+// end of the promotion.
+func TestLogsFollow_WaitsForInFlightBundle(t *testing.T) {
+	step := explainStep("demo", "b1", "test", "Verified", "", policyTestNow.Add(-time.Hour))
+	bundle := func(name, phase string) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "demo", Type: "image"},
+			Status:     v1alpha1.BundleStatus{Phase: phase},
+		}
+	}
+	follow := func(t *testing.T, timeout time.Duration, env, bundleName string, objs ...ctrlclient.Object) string {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		var out bytes.Buffer
+		require.NoError(t, logsFollowFn(ctx, &out, policyClient(t, objs...), "default", "demo", env, bundleName))
+		return out.String()
+	}
+	const done = "All steps reached terminal state.\n"
+
+	out := follow(t, 2500*time.Millisecond, "", "", step, bundle("b1", "Promoting"))
+	assert.True(t, strings.HasSuffix(out, "\nStopped.\n"), "a Promoting Bundle keeps --follow running:\n%s", out)
+	assert.NotContains(t, out, done)
+	assert.Equal(t, 1, strings.Count(out, "[demo/test] → Verified\n"), out)
+
+	for _, tc := range []struct {
+		name, env, bundle string
+		objs              []ctrlclient.Object
+	}{
+		{"the Bundle is Verified", "", "", []ctrlclient.Object{step, bundle("b1", "Verified")}},
+		{"the Bundle is Failed", "", "", []ctrlclient.Object{step, bundle("b1", "Failed")}},
+		{"--env follows one environment", "test", "", []ctrlclient.Object{step, bundle("b1", "Promoting")}},
+		{"--bundle ignores other Bundles", "", "b1", []ctrlclient.Object{step, bundle("b1", "Verified"), bundle("b2", "Promoting")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := follow(t, 10*time.Second, tc.env, tc.bundle, tc.objs...)
+			assert.True(t, strings.HasSuffix(out, done), out)
+		})
+	}
 }
 
 // C09b-cli-25: truncation counts runes, so it never splits a UTF-8 character.

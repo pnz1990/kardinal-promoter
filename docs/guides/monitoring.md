@@ -171,18 +171,18 @@ workqueue_depth{name=~"bundle|promotionstep|policygate"}
 kardinal-promoter also exposes **DORA-style promotion metrics** via the `kardinal metrics` command (not Prometheus — these are computed from CRD history):
 
 ```bash
-kardinal metrics --pipeline my-app --env prod --days 30
+kardinal metrics --pipeline my-app --env prod --days 7
 ```
 
 Output:
 ```
 METRIC                 VALUE     NOTES
-pipeline               my-app    (last 30 days)
+pipeline               my-app    (last 7 days)
 target_env             prod
-bundles_total          64
-deployment_frequency   2.10/day  (63 verified in target env)
-lead_time_avg          45m12s    (creation → prod verified, 63 samples)
-change_fail_rate       3.1%      (2 failed / 64 total)
+bundles_total          15
+deployment_frequency   2.00/day  (14 verified in target env)
+lead_time_avg          45m12s    (creation → prod verified, 14 samples)
+change_fail_rate       6.7%      (1 failed / 15 total)
 rollback_count         1
 ```
 
@@ -194,9 +194,9 @@ rollback_count         1
 | `change_fail_rate` | Failed Bundles divided by `bundles_total` |
 | `rollback_count` | Rollback Bundles in the window |
 
-With the defaults (`--env` omitted, so the Pipeline's last environment, and `--days 30`)
-the command prints the controller's own figures from `Pipeline.status.deploymentMetrics`
-instead, when they are present: `rollouts_last_30d`, `p50_commit_to_prod`,
+When `--env` is the Pipeline's last environment and `--days` is 30 (the defaults, whether
+the flags are given or not), the command prints the controller's own figures from
+`Pipeline.status.deploymentMetrics` instead, when they are present: `rollouts_last_30d`, `p50_commit_to_prod`,
 `p90_commit_to_prod`, `auto_rollback_rate`, `operator_intervention_rate` and
 `stale_prod_days`, over the last 30 Bundles Verified in the last environment.
 

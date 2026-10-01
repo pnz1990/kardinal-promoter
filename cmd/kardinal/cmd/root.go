@@ -61,7 +61,7 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 	root.PersistentFlags().StringVarP(&globalNamespace, "namespace", "n", "",
 		"Kubernetes namespace (default: current context namespace)")
 	root.PersistentFlags().StringVar(&globalKubeconfig, "kubeconfig", "",
-		`Path to kubeconfig file (default "~/.kube/config")`)
+		"Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)")
 	root.PersistentFlags().StringVar(&globalContext, "context", "",
 		"Kubeconfig context override")
 	root.PersistentFlags().StringVarP(&globalOutput, "output", "o", "",

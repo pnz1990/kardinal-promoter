@@ -12,7 +12,7 @@ It communicates with the Kubernetes API server to read and write CRDs.
 ```
       --context string      Kubeconfig context override
   -h, --help                help for kardinal
-      --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
+      --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
   -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
 ```

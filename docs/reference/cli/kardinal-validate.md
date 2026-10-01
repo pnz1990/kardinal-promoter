@@ -18,9 +18,13 @@ Checks:
     Deployment). The controller reports the same fields as
     Ready=False/NotImplemented on the Pipeline. With metadata.namespace set,
     a git.secretRef in another namespace is an error too (the controller
-    reports it as Ready=False/ValidationFailed).
+    reports it as Ready=False/ValidationFailed). spec.policyGates is an
+    error (the API server rejects it); spec.git.provider is a warning (the
+    controller ignores it).
   - PolicyGate: spec.expression set and compiles with the controller's
-    PolicyGate CEL environment
+    PolicyGate CEL environment; no spec.selector and a name of at most 63
+    characters (the API server rejects both); spec.when is a warning (it has
+    no effect)
 
 This is not full CRD schema validation; 'kubectl apply --dry-run=server'
 checks the schema.
@@ -44,7 +48,7 @@ kardinal validate [flags]
 
 ```
       --context string      Kubeconfig context override
-      --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
+      --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
   -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
 ```

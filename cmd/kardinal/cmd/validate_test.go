@@ -15,6 +15,7 @@ package cmd
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -166,6 +167,54 @@ func TestValidate_Documents(t *testing.T) {
 			content: validPipelineDoc + "    approval: auto\n    update:\n      strategy: argocd\n" +
 				"      argocd:\n        application: web-prod\n",
 			wantOut: []string{"✓ f.yaml is valid"},
+		},
+		// E2E-R24: the API server rejects these, so validate must too.
+		{
+			name:    "spec.policyGates",
+			content: validPipelineDoc + "  policyGates:\n  - name: no-weekend-deploys\n",
+			wantOut: []string{"✗ f.yaml is invalid:", "  - spec.policyGates is not implemented; remove it"},
+			wantErr: true,
+		},
+		{
+			name: "PolicyGate spec.selector",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: g\n" +
+				"spec:\n  expression: \"true\"\n  selector: {}\n",
+			wantOut: []string{"✗ f.yaml is invalid:", "  - spec.selector is not implemented; use the kardinal.io/applies-to label"},
+			wantErr: true,
+		},
+		{
+			name: "PolicyGate name over 63 characters",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: " + strings.Repeat("g", 64) +
+				"\nspec:\n  expression: \"true\"\n",
+			wantOut: []string{"✗ f.yaml is invalid:", `has 64 characters: PolicyGate names are at most 63 characters`},
+			wantErr: true,
+		},
+		{
+			name: "PolicyGate name of 63 characters",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: " + strings.Repeat("g", 63) +
+				"\nspec:\n  expression: \"true\"\n",
+			wantOut: []string{"✓ f.yaml is valid"},
+		},
+		{
+			name: "a long generated gate is allowed",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: " + strings.Repeat("g", 60) +
+				"--prod-abc\nspec:\n  expression: \"true\"\n  generated: true\n",
+			wantOut: []string{"✓ f.yaml is valid"},
+		},
+		{
+			// The CRD rule looks only at spec.generated, not at the name's shape.
+			name: "a long instance-shaped or freeze- name without spec.generated is rejected",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: " + strings.Repeat("g", 60) +
+				"--prod-abc\nspec:\n  expression: \"true\"\n---\napiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\n" +
+				"metadata:\n  name: freeze-" + strings.Repeat("p", 60) + "\nspec:\n  expression: \"false\"\n",
+			wantOut: []string{"✗ f.yaml is invalid:", "has 70 characters", "has 67 characters"},
+			wantErr: true,
+		},
+		{
+			name: "git.provider warns",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata:\n  name: web\n" +
+				"spec:\n  git:\n    url: https://github.com/o/r\n    provider: gitlab\n  environments:\n  - name: test\n",
+			wantOut: []string{"✓ f.yaml is valid", "  ! warning: spec.git.provider is deprecated and ignored"},
 		},
 		{
 			name:    "steps are reported once",

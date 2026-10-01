@@ -26,9 +26,11 @@ func newRefreshCmd() *cobra.Command {
 		Long: `Force the controller to re-reconcile a Pipeline immediately.
 
 Sets the kardinal.io/refresh annotation on the Pipeline to the current time.
-The change requeues the Pipeline reconciler and the reconcilers of the
-Pipeline's Bundles. PolicyGates and PromotionSteps do not watch Pipelines, so
-this does not re-evaluate gates or re-run health checks; they re-check on their
+The change requeues the Pipeline reconciler, which re-derives the Pipeline's
+status (phase, Ready condition, deployment metrics) and its pause freeze gate.
+Bundle reconcilers follow Pipeline spec changes only, so this does not retry
+a Bundle. PolicyGates and PromotionSteps do not watch Pipelines, so this
+does not re-evaluate gates or re-run health checks; they re-check on their
 own intervals.
 
 Example:
@@ -87,13 +89,14 @@ port 8082 first (see "Accessing the UI" in docs/installation.md).
 
 Example:
   kardinal dashboard
-  kardinal dashboard --address http://localhost:8082`,
+  kubectl -n kardinal-system port-forward svc/kardinal-promoter 9090:8082 &
+  kardinal dashboard --address http://localhost:9090/ui/`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return dashboardFn(cmd.OutOrStdout(), uiAddress, noOpen)
 		},
 	}
 
-	cmd.Flags().StringVar(&uiAddress, "address", "", "Direct URL to the kardinal UI (skip auto-detection)")
+	cmd.Flags().StringVar(&uiAddress, "address", "", "URL of the kardinal UI (default http://localhost:8082/ui/)")
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "Print the URL without opening browser")
 
 	return cmd

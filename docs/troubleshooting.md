@@ -57,7 +57,7 @@ kardinal get steps my-app
 kardinal explain my-app --env prod
 ```
 
-If the output shows a PolicyGate in FAIL state, the gate's CEL expression has not been satisfied. Common causes:
+If the output shows a PolicyGate in Block state, the gate's CEL expression has not been satisfied; REASON shows what it evaluated to. Common causes:
 - `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> --stage prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](policy-gates.md#emergency-overrides-k-09)).
 - `staging-soak`: the upstream environment was verified recently. Wait for the soak time to pass.
 - CEL error: the expression references an attribute from a later phase. Check `kardinal policy test <file>`.
@@ -288,7 +288,7 @@ kardinal get steps my-app
 # Why is an environment blocked?
 kardinal explain my-app --env prod
 
-# Continuous watch (re-evaluates on change)
+# Redraw every 3 seconds until Ctrl-C
 kardinal explain my-app --env prod --watch
 
 # Bundle history and evidence
@@ -312,7 +312,7 @@ kubectl get graph -l kardinal.io/pipeline=my-app
 
 ## PolicyGate never becomes Ready
 
-### Symptom: PolicyGate stays in FAIL or shows "CEL error"
+### Symptom: PolicyGate stays Block or Waiting, or shows "CEL error"
 
 ```bash
 # Check the gate's current status

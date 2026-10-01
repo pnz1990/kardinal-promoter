@@ -43,9 +43,13 @@ func newDeleteBundleCmd() *cobra.Command {
 		Short:   "Delete a Bundle by name",
 		Long: `Delete a Bundle by name.
 
-Deleting a Bundle cancels any in-progress promotion for that Bundle.
-Superseded Bundles are deleted automatically by the garbage collector;
-use this command to explicitly remove a Bundle before that occurs.`,
+Deleting a Bundle stops its promotion: its Graph, PromotionSteps and gate
+instances are deleted with it. Nothing is written to git, and a pull request
+the promotion opened stays open; close it on the Git server.
+
+Finished Bundles (Verified, Failed or Superseded) beyond the Pipeline's
+spec.historyLimit (default 50) are deleted automatically, oldest first;
+use this command to remove a Bundle before that.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()

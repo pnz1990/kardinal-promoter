@@ -237,13 +237,21 @@ func TestCheckGitHubToken(t *testing.T) {
 }
 
 // C09a-cli-11: pipeline phases are Ready, Degraded, Promoting, Unknown; a Get error other
-// than NotFound is reported as such.
+// than NotFound is reported as such. The Ready condition comes first: a
+// Pipeline the controller refused fails whatever its phase, and one it has not
+// reconciled at its current generation warns.
 func TestCheckPipelineHealth(t *testing.T) {
-	pipe := func(phase string) *v1alpha1.Pipeline {
-		p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team-a"}}
+	withReady := func(phase string, status metav1.ConditionStatus, reason, msg string, observed int64) *v1alpha1.Pipeline {
+		p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team-a", Generation: 2}}
 		p.Status.Phase = phase
+		p.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: status, Reason: reason, Message: msg,
+			ObservedGeneration: observed}}
 		return p
 	}
+	pipe := func(phase string) *v1alpha1.Pipeline {
+		return withReady(phase, metav1.ConditionTrue, "Valid", "Pipeline spec is valid", 2)
+	}
+	noCondition := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team-a"}}
 	cases := []struct {
 		name       string
 		client     sigs_client.Client
@@ -254,10 +262,22 @@ func TestCheckPipelineHealth(t *testing.T) {
 		{name: "degraded", client: doctorClient(pipe("Degraded")), wantIcon: doctorWarn, wantDetail: "status: Degraded"},
 		// E2E-R05: a Bundle in flight or held by a gate.
 		{name: "promoting", client: doctorClient(pipe("Promoting")), wantIcon: doctorPass, wantDetail: "status: Promoting"},
-		{name: "unknown", client: doctorClient(pipe("Unknown")), wantIcon: doctorWarn,
-			wantDetail: "status: Unknown (not yet reconciled)"},
-		{name: "unset", client: doctorClient(pipe("")), wantIcon: doctorWarn,
-			wantDetail: "status: Unknown (not yet reconciled)"},
+		// Unknown is the phase before the first Bundle.
+		{name: "unknown", client: doctorClient(pipe("Unknown")), wantIcon: doctorPass,
+			wantDetail: "status: Unknown (spec valid, no Bundle yet)"},
+		{name: "unset", client: doctorClient(pipe("")), wantIcon: doctorPass,
+			wantDetail: "status: Unknown (spec valid, no Bundle yet)"},
+		{name: "no Ready condition", client: doctorClient(noCondition), wantIcon: doctorWarn,
+			wantDetail: "not yet reconciled by the controller"},
+		{name: "condition of an older generation",
+			client:   doctorClient(withReady("Ready", metav1.ConditionTrue, "Valid", "Pipeline spec is valid", 1)),
+			wantIcon: doctorWarn, wantDetail: "not yet reconciled by the controller"},
+		{name: "refused", client: doctorClient(withReady("Unknown", metav1.ConditionFalse, "ValidationFailed",
+			`git.secretRef.namespace "x" is not allowed`, 2)),
+			wantIcon: doctorFail, wantDetail: `Ready=False (ValidationFailed): git.secretRef.namespace "x" is not allowed`},
+		{name: "refused after a promotion", client: doctorClient(withReady("Ready", metav1.ConditionFalse, "NotImplemented",
+			"not implemented", 2)),
+			wantIcon: doctorFail, wantDetail: "Ready=False (NotImplemented): not implemented"},
 		{name: "not found", client: doctorClient(), wantIcon: doctorFail,
 			wantDetail: `Pipeline "web" not found in namespace "team-a"`},
 		{

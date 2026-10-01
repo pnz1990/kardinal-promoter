@@ -27,7 +27,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Change freeze management** | Yes — cluster-scoped `ChangeWindow` (blackout or recurring), enforced by any gate that references it | No | Manual CommitStatus |
 | **Wave topology** | Yes — `wave:` field generates multi-region DAG edges automatically | No | No |
 | **CLI** | Full `kardinal` CLI incl. `override`, `metrics`, `logs`, `validate`, `status`, shell completion | `kargo` CLI | No CLI |
-| **UI dashboard** | Embedded UI: fleet health bar, ops table, pipeline lane and DAG, bundle timeline and comparison, policy gates with CEL expressions, metrics bar; create bundle, pause/resume, promote and roll back from the UI (approve and gate override are CLI-only) | Polished Kargo UI | No UI |
+| **UI dashboard** | Embedded UI: fleet health bar, ops table, pipeline lane and DAG, bundle timeline and comparison, policy gates with CEL expressions, metrics bar; create bundle, pause/resume, promote and roll back from the UI (gate override is CLI-only) | Polished Kargo UI | No UI |
 | **Metric-gated promotions** | Yes (`MetricCheck` CRD + PromQL) | No | No |
 | **DORA metrics** | Yes — `Bundle.status.metrics`, `kardinal metrics` CLI | No | No |
 | **Custom promotion steps** | No — each environment runs a fixed sequence chosen by the Bundle type, `update.strategy` and `approval` ([Promotion Steps](pipeline-reference.md#promotion-steps)) | Yes — a Stage's `promotionTemplate` lists promotion steps | No |

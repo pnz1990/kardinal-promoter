@@ -100,22 +100,32 @@ Example:
 				return err
 			}
 
+			// With --stdout, stdout carries only the Pipeline YAML (it is
+			// usually redirected), so the scaffold reports to stderr.
+			progress := cmd.OutOrStdout()
 			if stdoutFlag {
-				_, err = fmt.Fprint(cmd.OutOrStdout(), buf.String())
-				return err
+				if _, err := fmt.Fprint(cmd.OutOrStdout(), buf.String()); err != nil {
+					return err
+				}
+				progress = cmd.ErrOrStderr()
+			} else {
+				outFile := fileFlag
+				// --file may name a directory that does not exist yet
+				// (the help's "--file deploy/pipeline.yaml").
+				if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
+					return fmt.Errorf("create directory for %s: %w", outFile, err)
+				}
+				if err := os.WriteFile(outFile, buf.Bytes(), 0o644); err != nil {
+					return fmt.Errorf("write %s: %w", outFile, err)
+				}
+				_, _ = fmt.Fprintf(progress,
+					"Pipeline YAML written to %s\nApply with: kubectl apply -f %s\n",
+					outFile, outFile,
+				)
 			}
-
-			outFile := fileFlag
-			if err := os.WriteFile(outFile, buf.Bytes(), 0o644); err != nil {
-				return fmt.Errorf("write %s: %w", outFile, err)
-			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(),
-				"Pipeline YAML written to %s\nApply with: kubectl apply -f %s\n",
-				outFile, outFile,
-			)
 
 			if (scaffoldGitOps || demoFlag) && cfg.UpdateStrategy != "kustomize" {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+				_, _ = fmt.Fprintf(progress,
 					"GitOps scaffold skipped: it writes Kustomize overlays, and the update strategy is %s\n",
 					cfg.UpdateStrategy)
 			} else if scaffoldGitOps || demoFlag {
@@ -127,7 +137,7 @@ Example:
 				if demoFlag {
 					imageRef = demoImageRef
 				}
-				if err := scaffoldGitOpsFn(cmd.OutOrStdout(), cfg.Environments, dir, imageRef); err != nil {
+				if err := scaffoldGitOpsFn(progress, cfg.Environments, dir, imageRef); err != nil {
 					return fmt.Errorf("scaffold gitops: %w", err)
 				}
 			}
@@ -136,7 +146,8 @@ Example:
 		},
 	}
 
-	cmd.Flags().BoolVar(&stdoutFlag, "stdout", false, "Print to stdout instead of writing a file")
+	cmd.Flags().BoolVar(&stdoutFlag, "stdout", false,
+		"Print the Pipeline YAML to stdout instead of writing a file (a scaffold still writes its files)")
 	cmd.Flags().StringVar(&fileFlag, "file", "pipeline.yaml", "File to write the Pipeline YAML to")
 	cmd.Flags().BoolVar(&scaffoldGitOps, "scaffold-gitops", false, "Create GitOps repo structure (environments/<env>/kustomization.yaml)")
 	cmd.Flags().StringVar(&gitopsDirFlag, "gitops-dir", ".gitops", "Directory for the GitOps scaffold")
