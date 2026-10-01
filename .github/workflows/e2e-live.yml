@@ -112,6 +112,12 @@ jobs:
           echo "${KIND_SHA256}  kind" | sha256sum -c -
           chmod +x kind && sudo mv kind /usr/local/bin/
 
+      # One kubectl for every job. KUBECTL_VERSION is within kubectl's one
+      # minor of skew of the three newest minors, not of the upgrade job's
+      # 1.29: that job runs it seven minors past the supported skew, which
+      # upstream does not test. Its kubectl calls pass there; if one breaks on
+      # 1.29, install a v1.29 or v1.30 kubectl for that job only rather than
+      # moving KUBECTL_VERSION (test/hack pins it to the middle minor).
       - name: Install kubectl
         run: |
           source hack/tool-versions.env
