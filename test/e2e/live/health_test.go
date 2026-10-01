@@ -36,11 +36,13 @@ import (
 // timeout: longer than a rollout, shorter than a test.
 const healthTimeout = "3m"
 
-// resourcePipeline is a.pipeline with resource health on each environment's
-// Deployment, fixtures.Workload(env) in the test namespace. Argo CD still
-// delivers; kardinal reads the Deployment.
-func (a *app) resourcePipeline() *v1alpha1.Pipeline {
-	p := a.pipeline(nil)
+// resourcePipeline is a.pipeline(approval) with resource health on each
+// environment's Deployment, fixtures.Workload(env) in the test namespace.
+// Argo CD still delivers; kardinal reads the Deployment. A namespace-mode
+// controller caches only its watch namespace, so it needs this: it cannot
+// read Argo CD Applications in argocd.
+func (a *app) resourcePipeline(approval map[string]string) *v1alpha1.Pipeline {
+	p := a.pipeline(approval)
 	for i := range p.Spec.Environments {
 		env := &p.Spec.Environments[i]
 		env.Health = v1alpha1.HealthConfig{Type: "resource", Timeout: healthTimeout,
@@ -110,7 +112,7 @@ func TestHealth_ResourceWaitsForImage(t *testing.T) {
 	e := framework.New(t)
 	a := newArgoApp(t, e, "test")
 	e.SetArgoAutoSync(t, a.argoApp("test"), false)
-	a.apply(t, a.resourcePipeline())
+	a.apply(t, a.resourcePipeline(nil))
 
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	waiting := fmt.Sprintf("waiting for resource: Deployment %s/%s not updated yet: runs %s:%s, Bundle has %s",
@@ -146,7 +148,7 @@ func TestHealth_ResourceOverrides(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	a := newArgoApp(t, e, "test")
-	p := a.resourcePipeline()
+	p := a.resourcePipeline(nil)
 	envSpec(t, p, "test").Health.Resource.Condition = "Progressing"
 	a.apply(t, p)
 
@@ -182,7 +184,7 @@ func TestHealth_LabelSelector(t *testing.T) {
 	applyExtra(fixtures.Image + ":" + fixtures.V1)
 	e.WaitDeploymentImage(t, a.ns, extra, fixtures.Image+":"+fixtures.V1, syncTimeout)
 
-	p := a.resourcePipeline()
+	p := a.resourcePipeline(nil)
 	envSpec(t, p, "test").Health = v1alpha1.HealthConfig{Type: "resource", Timeout: healthTimeout,
 		LabelSelector: selector, Resource: &v1alpha1.ResourceRef{Namespace: a.ns}}
 	none := map[string]string{"app.kubernetes.io/name": "podinfo-none"}
@@ -231,7 +233,7 @@ func TestHealth_UnsupportedKind(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	a := newArgoApp(t, e, "test")
-	p := a.resourcePipeline()
+	p := a.resourcePipeline(nil)
 	envSpec(t, p, "test").Health.Resource.Kind = "StatefulSet"
 	a.apply(t, p)
 
@@ -271,7 +273,7 @@ func TestHealth_TimeoutFails(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	a := newArgoApp(t, e, "test", "prod")
-	p := a.resourcePipeline()
+	p := a.resourcePipeline(nil)
 	envSpec(t, p, "test").Health.Timeout = ""
 	prod := envSpec(t, p, "prod")
 	prod.Health.Timeout = "1m"
@@ -319,7 +321,7 @@ func TestHealth_TimeoutFails(t *testing.T) {
 func brokenRollout(t *testing.T, e *framework.Env, policy string) (*app, string) {
 	t.Helper()
 	a := newArgoApp(t, e, "test")
-	p := a.resourcePipeline()
+	p := a.resourcePipeline(nil)
 	test := envSpec(t, p, "test")
 	test.OnHealthFailure = policy
 	test.Health.Timeout = "5m" // longer than the progress deadline
@@ -397,7 +399,7 @@ func TestHealth_AbortStaysAborted(t *testing.T) {
 func bakePipeline(t *testing.T, e *framework.Env, bake v1alpha1.BakeConfig) (*app, string) {
 	t.Helper()
 	a := newArgoApp(t, e, "test")
-	p := a.resourcePipeline()
+	p := a.resourcePipeline(nil)
 	envSpec(t, p, "test").Bake = &bake
 	a.apply(t, p)
 	return a, e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)

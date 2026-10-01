@@ -105,8 +105,8 @@ func (s ArgoAppStatus) String() string {
 	return fmt.Sprintf("health=%s sync=%s revision=%s", s.Health, s.Sync, s.Revision)
 }
 
-// GetArgoApp reads the status of the Application name.
-func (e *Env) GetArgoApp(ctx context.Context, name string) (ArgoAppStatus, error) {
+// ArgoAppState reads the status of the Application name.
+func (e *Env) ArgoAppState(ctx context.Context, name string) (ArgoAppStatus, error) {
 	app, err := e.Dynamic.Resource(ApplicationGVR).Namespace(ArgoCDNamespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return ArgoAppStatus{}, err

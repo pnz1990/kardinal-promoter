@@ -519,7 +519,7 @@ func TestRollback_Policy(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	a := newArgoApp(t, e, "test")
-	p := a.resourcePipeline()
+	p := a.resourcePipeline(nil)
 	// The bake keeps the second Bundle in HealthChecking while its pod turns
 	// unready, so its health checks fail one by one.
 	envSpec(t, p, "test").Bake = &v1alpha1.BakeConfig{Minutes: 1}
@@ -632,7 +632,7 @@ func TestRollback_PolicyRefused(t *testing.T) {
 func rbAlarmPipeline(t *testing.T, e *framework.Env, bake *v1alpha1.BakeConfig) *app {
 	t.Helper()
 	a := newArgoApp(t, e, "test")
-	p := a.resourcePipeline()
+	p := a.resourcePipeline(nil)
 	test := envSpec(t, p, "test")
 	test.OnHealthFailure = "rollback"
 	test.Health.Timeout = "5m"

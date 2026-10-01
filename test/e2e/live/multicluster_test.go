@@ -88,7 +88,7 @@ func TestMultiCluster_ArgoHub(t *testing.T) {
 	require.Contains(t, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("prod")+"/kustomization.yaml"), "newTag: "+fixtures.V2)
 	s.WaitDeploymentImage(t, a.ns, workload, v2, 30*time.Second)
 	notInHub(t, e, a.ns, workload)
-	st, err := e.GetArgoApp(context.Background(), application)
+	st, err := e.ArgoAppState(context.Background(), application)
 	require.NoError(t, err)
 	require.NotEmpty(t, ps.Status.Outputs["commitSHA"])
 	assert.Equal(t, ps.Status.Outputs["commitSHA"], st.Revision, "the Application synced the promoted commit: %s", st)
@@ -417,7 +417,7 @@ func (f *fleet) promote(t *testing.T, bundle, tag string, prods ...string) {
 			return r.Image == image && r.Phase == "Paused"
 		})
 		framework.Eventually(t, time.Minute, "Application "+fleetPipeline+"-"+env+" Suspended", func(ctx context.Context) (bool, string) {
-			st, err := e.GetArgoApp(ctx, fleetPipeline+"-"+env)
+			st, err := e.ArgoAppState(ctx, fleetPipeline+"-"+env)
 			if err != nil {
 				return false, err.Error()
 			}

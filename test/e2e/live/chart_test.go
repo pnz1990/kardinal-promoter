@@ -74,24 +74,6 @@ func nsValues(ns string, over framework.Values) framework.Values {
 	return framework.MergeValues(framework.Values{"controller": framework.Values{"watchNamespace": ns}}, over)
 }
 
-// resourcePipeline is a.pipeline with resource health on each env's
-// Deployment in the app namespace. A namespace-mode controller caches only
-// its watch namespace, so it cannot read Argo CD Applications in argocd.
-func (a *app) resourcePipeline(approval map[string]string) *v1alpha1.Pipeline {
-	p := a.pipeline(approval)
-	for i := range p.Spec.Environments {
-		env := p.Spec.Environments[i].Name
-		p.Spec.Environments[i].Health = v1alpha1.HealthConfig{
-			Type:    "resource",
-			Timeout: "3m",
-			Resource: &v1alpha1.ResourceRef{
-				Kind: "Deployment", Name: fixtures.Workload(env), Namespace: a.ns,
-			},
-		}
-	}
-	return p
-}
-
 // promote creates a Bundle for tag and waits until it is Verified in every
 // env of a, merging the promotion PR of each env in prEnvs. It returns the
 // Bundle name.
