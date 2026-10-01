@@ -693,8 +693,11 @@ func TestCLI_Reports(t *testing.T) {
 	assert.Regexp(t, `^\d+(s|m\d+s)$`, mc[9][1])
 	assert.Equal(t, "(last computed by controller)", mc[9][2])
 	assert.Equal(t, "0.0%", mc[6][1], "no automatic rollback")
-	assert.Equal(t, mc, cells(c.Must(a.ns, "metrics", "--pipeline", pipelineName, "--env", "prod", "--days", "30"))[:10],
-		"the defaults are the last environment and 30 days")
+	// metrics_age is the only row that changes between the two calls.
+	explicit := cells(c.Must(a.ns, "metrics", "--pipeline", pipelineName, "--env", "prod", "--days", "30"))
+	require.Len(t, explicit, 10, "%v", explicit)
+	assert.Equal(t, mc[:9], explicit[:9], "the defaults are the last environment and 30 days")
+	assert.Equal(t, "metrics_age", explicit[9][0])
 
 	lead := regexp.MustCompile(`^(\d+s|\d+m\d+s)$`)
 	mc = cells(c.Must(a.ns, "metrics", "--pipeline", pipelineName, "--days", "7"))
