@@ -551,7 +551,8 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 |---|---|
 | All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create) and `changewindows` (get, list, watch; get, update, patch on `/status`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
-| `serviceaccounts`, `rolebindings` | get, create; get, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs) |
+| `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
+| `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |
 | `clusterroles` | `bind`, limited to `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` |
 | `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
 | `secrets` | get only: the controller reads each Secret by name and never lists or watches them. In the default cluster mode `get` covers **every Secret in the cluster**. The release-namespace Role adds `get` on the SCM token Secret by name |
@@ -569,13 +570,17 @@ kro does not apply a Graph's children with its own identity. It impersonates the
 controller creates that ServiceAccount and binds it with RoleBindings to `kardinal-promoter-graph-applier`
 (in the Graph namespace) and `kardinal-promoter-graph-reader` (in each namespace a health `ref` node reads,
 limited to the Graph's own namespace and `graph.readerNamespaces`). Reader bindings that no Graph
-in the namespace needs any more are deleted.
+in the namespace needs any more are deleted: when a Bundle is translated, when a Graph is deleted,
+and, in cluster mode, by a sweep at controller startup and every 10 minutes that also catches the
+bindings of namespaces that are gone. The sweep lists only RoleBindings labeled
+`app.kubernetes.io/managed-by=kardinal-promoter`.
 See G5 in the [Graph capability ledger](design/16-graph-capability-ledger.md).
 
 **Upgrading:** earlier versions bound the reader role in every namespace a health `ref` named,
-and did not record those bindings, so the controller does not delete them. After upgrading,
-list them and delete any in a namespace that is not the Graph's own and not in
-`graph.readerNamespaces`:
+and did not record those bindings. In cluster mode the sweep deletes them once no Graph reads
+through them. A binding that a Graph made by the old version still reads through stays until
+that Graph's Bundle is replaced. To revoke such bindings at once, list them and delete any in
+a namespace that is not the Graph's own and not in `graph.readerNamespaces`:
 
 ```bash
 kubectl get rolebindings -A -l app.kubernetes.io/managed-by=kardinal-promoter \

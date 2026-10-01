@@ -206,9 +206,15 @@ list/watch on every kind a Graph uses.
   forbidden, is dropped from the Graph with a warning: kro treats a forbidden ref read as a
   hard error, while health refs are only observational (G3).
 - The namespaces that hold a reader binding are recorded in the applier RoleBinding's
-  `kardinal.io/reader-namespaces` annotation. After each Graph create, `Prune` deletes the
-  bindings that no Graph in the namespace reads through any more. Bindings are not pruned
-  when the last Graph of a namespace goes away without another translation.
+  `kardinal.io/reader-namespaces` annotation. `Prune` deletes the bindings that no Graph in
+  the namespace reads through any more, after each Graph create and after each Graph delete
+  (`pkg/reconciler/graphcleanup`), so the last Graph of a namespace takes its bindings with it.
+  When the applier RoleBinding and its record are gone (the namespace was deleted), `Prune`
+  looks in the Graph namespace and the named allowlist namespaces. In cluster mode a
+  leader-only sweep runs at startup and every 10 minutes: it lists the RoleBindings labeled
+  `app.kubernetes.io/managed-by=kardinal-promoter` and prunes every Graph namespace that has a
+  reader binding, which also catches bindings from Graphs deleted while the controller was
+  down, from older versions, and, with `*`, outside the named namespaces.
 - The chart ships the applier and reader ClusterRoles, plus an aggregation ClusterRole
   that gives kro list/watch on kardinal kinds (`chart/kardinal-promoter/templates/graph-rbac.yaml`).
 
@@ -268,6 +274,12 @@ the Graph finalizer, the managed-resource inventory, and prune
 `pkg/graph/builder.go`). Children carry `kardinal.io/bundle`, `kardinal.io/pipeline`
 and `kardinal.io/environment` labels, and reconcilers look up their parent by label.
 Deleting the Bundle garbage-collects the Graph, and kro's finalizer removes the children.
+Deleting the namespace instead deletes the applier RoleBinding kro deletes as, in no set
+order, so kro can be left unable to delete anything and keeps its finalizer. For its own
+Graphs in a Terminating namespace whose applier RoleBinding is gone, the controller removes
+kro's finalizer and lets the namespace deletion remove the children
+(`pkg/reconciler/graphcleanup`). The children all live in the Graph's namespace; one kro
+records elsewhere would be deleted first.
 
 **Upstream contribution.** Optional: `spec.childOwnerReference: true` so children point
 at the Graph. That would give native `kubectl tree` views and GC. Low priority.

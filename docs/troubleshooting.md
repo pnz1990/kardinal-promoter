@@ -540,8 +540,10 @@ If a PolicyGate node is not ready, downstream PromotionSteps will not be created
 
 ## A PromotionStep, Graph or namespace never finishes deleting
 
-A step that opens or has opened a promotion PR carries the `kardinal.io/close-pr` finalizer
-while it is `Promoting` or `WaitingForMerge`. When the step is deleted (its Bundle or
+Two finalizers can hold a delete, and the controller removes both itself while it runs.
+
+**`kardinal.io/close-pr` on a PromotionStep.** A step that opens or has opened a promotion PR
+carries it while it is `Promoting` or `WaitingForMerge`. When the step is deleted (its Bundle or
 its namespace was deleted) the controller closes the PR with a comment, then removes the
 finalizer. If the SCM call keeps failing, it retries with backoff for about 5 minutes, then
 removes the finalizer anyway and emits a `ClosePRFailed` Warning Event on the step: close that PR
@@ -557,6 +559,25 @@ kubectl get promotionsteps -A -o jsonpath='{range .items[?(@.metadata.deletionTi
 # Remove kardinal.io/close-pr (the test op makes the patch fail if index 0 holds another finalizer)
 kubectl patch promotionstep <name> -n <namespace> --type=json -p \
   '[{"op":"test","path":"/metadata/finalizers/0","value":"kardinal.io/close-pr"},{"op":"remove","path":"/metadata/finalizers/0"}]'
+```
+
+**`kro.run/graph-finalizer` on a Graph in a namespace being deleted.** kro deletes a Graph's
+resources as the Graph ServiceAccount, which the applier RoleBinding authorizes. Deleting the
+namespace deletes that RoleBinding too, after which every delete kro makes is forbidden and it
+keeps its finalizer. The controller removes kro's finalizer from its own Graphs (the
+`kardinal.io/bundle` label and a Bundle owner) once the namespace is Terminating and the applier
+RoleBinding is gone; the namespace deletion then deletes the resources. It logs `removed kro's
+finalizer from a Graph in a terminating namespace`. It never touches a Graph outside a
+Terminating namespace, or one kardinal did not create.
+
+If the controller is not running, check that the namespace is Terminating, then remove the
+finalizer by hand:
+
+```bash
+kubectl get namespace <namespace> -o jsonpath='{.status.phase}'   # Terminating
+kubectl get graphs.kro.run -n <namespace> -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.finalizers}{"\n"}{end}'
+kubectl patch graphs.kro.run <name> -n <namespace> --type=json -p \
+  '[{"op":"test","path":"/metadata/finalizers/0","value":"kro.run/graph-finalizer"},{"op":"remove","path":"/metadata/finalizers/0"}]'
 ```
 
 ---

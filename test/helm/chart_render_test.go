@@ -404,7 +404,7 @@ func controllerAccess() []apiAccess {
 		{"kro.run", "graphs", rwVerbs, inWatched, "", "pkg/graph client"},
 		{"kro.run", "graphs/status", []string{"get"}, inWatched, "", "pkg/graph client"},
 		{"", "serviceaccounts", []string{"get", "create"}, inWatched, "", "graph identity.go"},
-		{"rbac.authorization.k8s.io", "rolebindings", []string{"get", "create", "update", "delete"}, inWatched, "", "graph identity.go; delete prunes reader bindings (fix/audit-graph)"},
+		{"rbac.authorization.k8s.io", "rolebindings", []string{"get", "list", "create", "update", "delete"}, inWatched, "", "graph identity.go; delete prunes reader bindings (fix/audit-graph); list: graphcleanup sweep.go (cluster mode)"},
 		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-graph-applier", "graph identity.go"},
 		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-graph-reader", "graph identity.go"},
 		{"apps", "deployments", readVerbs, inWatched, "", "health adapter resource"},
@@ -417,6 +417,9 @@ func controllerAccess() []apiAccess {
 		{"", "configmaps", []string{"get", "update", "patch"}, inRelease, "kardinal-version", "ensureVersionConfigMap"},
 		{"kardinal.io", "changewindows", readVerbs, inCluster, "", "policygate buildChangeWindowContext (cluster-scoped kind)"},
 		{"kardinal.io", "changewindows/status", []string{"get", "update", "patch"}, inCluster, "", "changewindow reconciler status writer (fix/audit-gates)"},
+		// Namespace mode limits it to the watched namespace (releaseNS in
+		// TestChartRBACGrantsControllerAccess); TestChartRBACNamespaceGet checks both modes.
+		{"", "namespaces", []string{"get"}, inCluster, releaseNS, "graphcleanup reconciler.go namespaceTerminating"},
 	}
 	for _, k := range kardinalNamespacedKinds {
 		acc = append(acc,
@@ -498,8 +501,10 @@ func TestChartRBACLeastPrivilege(t *testing.T) {
 	denied := []struct {
 		ns, group, resource, verb, name string
 	}{
-		{"", "", "namespaces", "get", ""},
+		{"", "", "namespaces", "list", ""},
+		{"", "", "namespaces", "watch", ""},
 		{"", "", "namespaces", "patch", "team-a"},
+		{"", "", "namespaces", "delete", "team-a"},
 		{"team-a", "", "configmaps", "create", ""},
 		{"team-a", "", "configmaps", "patch", "some-app-config"},
 		{releaseNS, "", "configmaps", "patch", "some-app-config"},
@@ -524,6 +529,24 @@ func TestChartRBACLeastPrivilege(t *testing.T) {
 		assert.False(t, v.allowed(releaseNS, sa, d.ns, d.group, d.resource, d.verb, d.name),
 			"controller must not be allowed to %s %s/%s %q in %q", d.verb, d.group, d.resource, d.name, d.ns)
 	}
+}
+
+// TestChartRBACNamespaceGet: the Graph cleanup reconciler reads the namespace
+// of each deleted Graph. Cluster mode may read any namespace; namespace mode
+// only the watched one.
+func TestChartRBACNamespaceGet(t *testing.T) {
+	sa := "kardinal-promoter"
+	cluster := newRBACView(t, render(t, "kardinal-promoter"))
+	assert.True(t, cluster.allowed(releaseNS, sa, "", "", "namespaces", "get", "team-a"), "cluster mode")
+	assert.True(t, cluster.allowed(releaseNS, sa, "", "rbac.authorization.k8s.io", "rolebindings", "list", ""),
+		"cluster mode: the sweep lists RoleBindings cluster-wide")
+
+	scoped := newRBACView(t, render(t, "kardinal-promoter", "--set", "controller.watchNamespace="+releaseNS))
+	assert.True(t, scoped.allowed(releaseNS, sa, "", "", "namespaces", "get", releaseNS), "namespace mode: the watched namespace")
+	assert.False(t, scoped.allowed(releaseNS, sa, "", "", "namespaces", "get", "team-a"), "namespace mode: another namespace")
+	assert.False(t, scoped.allowed(releaseNS, sa, "", "", "namespaces", "get", ""), "namespace mode: any namespace")
+	assert.False(t, scoped.allowed(releaseNS, sa, "", "rbac.authorization.k8s.io", "rolebindings", "list", ""),
+		"namespace mode: no cluster-wide RoleBinding list")
 }
 
 // TestChartRBACSCMTokenSecret covers #1266: the release-namespace Role gets a

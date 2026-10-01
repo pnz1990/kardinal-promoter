@@ -132,7 +132,11 @@ func (t *Translator) Translate(ctx context.Context,
 	// kro applies the Graph as spec.serviceAccountName; it must exist and be
 	// bound before kro's first reconcile or every apply is forbidden. A ref
 	// into a namespace the reader role could not be bound in would be a hard
-	// kro error, so those health refs are dropped for this Graph.
+	// kro error, so those health refs are dropped for this Graph. The lock
+	// keeps a concurrent Prune (Graph cleanup, sweep) from deleting a reader
+	// binding before the Graph that needs it is created.
+	t.identity.Lock()
+	defer t.identity.Unlock()
 	unbound, err := t.identity.Ensure(ctx, result.Graph)
 	if err != nil {
 		return "", fmt.Errorf("translator.Translate: graph identity: %w", err)
