@@ -8,7 +8,8 @@ Controller ClusterRole. Rules are defined in _rbac.tpl.
     holds every namespaced rule plus the cluster-scoped rules.
   Namespace mode: the namespaced rules are a Role (role.yaml); this
     ClusterRole, <fullname>-cluster-scoped, holds only the cluster-scoped
-    rules (ChangeWindows, and TokenReview when ui.auth.tokenReview).
+    rules (ChangeWindows, get on the watched Namespace, and TokenReview
+    when ui.auth.tokenReview).
 */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

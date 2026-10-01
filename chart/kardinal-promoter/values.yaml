@@ -74,8 +74,8 @@ controller:
   # -- Namespace-scoped install mode (--watch-namespace). Empty = cluster-wide.
   # When set, the controller caches and reconciles only this namespace, its
   # namespaced permissions are a Role/RoleBinding there, and a small
-  # ClusterRole (<fullname>-cluster-scoped) covers the cluster-scoped
-  # ChangeWindow kind. It must equal the release namespace (install the chart
+  # ClusterRole (<fullname>-cluster-scoped) covers ChangeWindows and get on
+  # this Namespace. It must equal the release namespace (install the chart
   # into the namespace it watches); org-level PolicyGates are read from this
   # namespace too.
   watchNamespace: ""
