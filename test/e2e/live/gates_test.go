@@ -892,9 +892,9 @@ var createdByRE = regexp.MustCompile(`(?m)^Created by: (\S+)$`)
 
 // TestGate_OverridePassesStage checks an emergency override through the CLI:
 // kardinal override on the blocked prod gate, with a reason and an expiry,
-// makes the gate pass with a reason naming who overrode it, why and until
-// when. prod then promotes, and its PR's Policy Gate Compliance table shows
-// the override.
+// records the override on the gate instance and makes it pass with a reason
+// naming who overrode it, why and until when. prod then promotes. (The PR
+// body's gate row is TestForgejo_PRBodySnapshot's.)
 //
 // Covers GATE-OVERRIDE-01.
 func TestGate_OverridePassesStage(t *testing.T) {
@@ -922,7 +922,6 @@ func TestGate_OverridePassesStage(t *testing.T) {
 
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "WaitingForMerge", promoteTimeout)
 	pr := e.WaitPR(t, a.repo, time.Minute, "prod PR", func(pr gitserver.PR) bool { return pr.State == "open" })
-	assert.Regexp(t, `\| hold \| `+a.ns+` \| Pass \| OVERRIDDEN by `+regexp.QuoteMeta(m[1])+`: INC-4521 hotfix \(expires `, pr.Body)
 	require.NoError(t, e.Git.MergePR(context.Background(), a.repo, pr.Number))
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
