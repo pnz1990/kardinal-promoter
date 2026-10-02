@@ -226,6 +226,62 @@ func TestMetric_StaleResultFailsClosed(t *testing.T) {
 	assert.Equal(t, fixtures.Image+":"+fixtures.V2, e.DeploymentImage(t, a.ns, fixtures.Workload("prod")))
 }
 
+// TestMetric_WriteRetryAfterEdit makes the API server deny the status writes
+// of a passing MetricCheck with a 2m interval, then edits the MetricCheck (an
+// annotation) seconds after its last write. The edit evaluates at once, and
+// its denied write is retried at the interval, not every 5s until the 2m are
+// up. Once writes are allowed again, the next edit writes a fresh result.
+//
+// Covers METRIC-10.
+func TestMetric_WriteRetryAfterEdit(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	ns := e.Namespace(t)
+	const name = "edited"
+	e.CreateMetricCheck(t, framework.MetricCheck(t, ns, name, "vector(0)", "lt", 1, "2m"))
+	mc := e.WaitMetricCheck(t, ns, name, metricTimeout, "passing", framework.MetricResult("Pass", "0 lt 1 = true"))
+	written := mc.Status.LastEvaluatedAt.Time
+	edit := func(n int) {
+		t.Helper()
+		obj := &v1alpha1.MetricCheck{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}
+		require.NoError(t, e.Client.Patch(ctx, obj, client.RawPatch(types.MergePatchType,
+			fmt.Appendf(nil, `{"metadata":{"annotations":{"e2e.kardinal.io/edit":"%d"}}}`, n))))
+	}
+
+	policy, lift := e.DenyStatusWrites(t, ns, name)
+	base, err := e.AdmissionDenials(ctx, policy)
+	require.NoError(t, err)
+	edit(1)
+	framework.Eventually(t, 30*time.Second, "the edit's status write to be denied", func(ctx context.Context) (bool, string) {
+		n, err := e.AdmissionDenials(ctx, policy)
+		if err != nil {
+			return false, err.Error()
+		}
+		return n > base, fmt.Sprintf("%g denied writes", n-base)
+	})
+	edited := time.Now()
+	require.Less(t, edited.Sub(written), 80*time.Second, "the edit came well before the 2m evaluation")
+	framework.Consistently(t, 30*time.Second, "the denied write to wait for the interval, not retry every 5s", func(ctx context.Context) (bool, string) {
+		n, err := e.AdmissionDenials(ctx, policy)
+		if err != nil {
+			return false, err.Error()
+		}
+		return n-base <= 1, fmt.Sprintf("%g denied writes in %s", n-base, time.Since(edited).Round(time.Second))
+	})
+	mc, err = e.GetMetricCheck(ctx, ns, name)
+	require.NoError(t, err)
+	assert.True(t, mc.Status.LastEvaluatedAt.Time.Equal(written), "no write worked while denied")
+
+	lift()
+	liftAt := time.Now()
+	edit(2)
+	e.WaitMetricCheck(t, ns, name, 15*time.Second, "the next edit to write a fresh result", func(mc *v1alpha1.MetricCheck) bool {
+		return mc.Status.Result == "Pass" && mc.Status.LastEvaluatedAt != nil &&
+			!mc.Status.LastEvaluatedAt.Time.Before(liftAt.Add(-time.Second))
+	})
+}
+
 // TestMetric_QueryErrorsFail checks that every way a query can fail gives
 // result Fail with no value and the cause in the reason: bad PromQL, an empty
 // vector, two series, a range vector, a host that does not resolve, a server

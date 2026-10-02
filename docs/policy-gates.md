@@ -223,7 +223,9 @@ gate compares it with the time of its own evaluation. When `validUntil` is unset
 result is stale: nothing has refreshed it for three intervals, for example after a controller
 outage or while the MetricCheck's status write keeps failing (the controller evaluates again and
 retries the write after 5 seconds the first time, then every `interval`, and the first write that
-works refreshes the result). A stale result is exposed as
+works refreshes the result; a write that fails on an evaluation an edit or a controller restart
+started, less than an `interval` after the last write that worked, is retried at `interval`). A
+stale result is exposed as
 `result: "Stale"`, `value: ""` and `stale: true`, so both `metrics["x"].result == "Pass"` and
 `double(metrics["x"].value) < 0.01` block (the second with an evaluation error, since `""` is not a
 number). Compare with `== "Pass"`, not `!= "Fail"`: a stale result is neither. The gate's

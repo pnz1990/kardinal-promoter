@@ -73,8 +73,9 @@ type Reconciler struct {
 //  4. Patch status.lastValue, status.result, status.lastEvaluatedAt, status.reason
 //     and status.validUntil.
 //  5. Requeue after spec.interval (default 1m, minimum 10s). When the status
-//     patch fails, requeue after min(interval, 5s) the first time and after
-//     the interval while it keeps failing.
+//     patch fails, requeue after min(interval, 5s) the first time (the
+//     evaluation due one interval after the last write that worked) and
+//     after the interval otherwise.
 //
 // A MetricCheck deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -148,17 +149,21 @@ func (r *Reconciler) record(ctx context.Context, log zerolog.Logger, mc *kardina
 //
 // Which failure this is follows from the stored object, not from memory
 // (nothing is kept between reconciles): lastWrite is status.lastEvaluatedAt
-// as read, the time of the last write that worked. The first failure comes
-// about one interval after it, and the retry of that failure comes
-// min(interval, 5s) later, past the window. A MetricCheck never written is
-// retried early only on its first attempt, right after it is created.
+// as read, the time of the last write that worked. The first failure is the
+// evaluation due one interval after it, and the retry of that failure comes
+// min(interval, 5s) later, past the window. A failure less than an interval
+// after it (an edit or a controller restart started the reconcile, or this
+// replica's clock is behind) is retried at interval: retrying it early
+// would stay in the window, every 5s, until an interval had passed. A
+// MetricCheck never written is retried early only on its first attempt,
+// right after it is created.
 func writeRetry(lastWrite *metav1.Time, created, attempted time.Time, interval time.Duration) time.Duration {
 	early := min(interval, firstWriteRetry)
-	since, window := attempted.Sub(created), early
+	since, from := attempted.Sub(created), time.Duration(0)
 	if lastWrite != nil {
-		since, window = attempted.Sub(lastWrite.Time), interval+early
+		since, from = attempted.Sub(lastWrite.Time), interval
 	}
-	if since < window {
+	if since >= from && since < from+early {
 		return early
 	}
 	return interval
