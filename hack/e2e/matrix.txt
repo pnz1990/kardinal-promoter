@@ -6,7 +6,7 @@
 # (all.sh -matrix prints its matrix). A suite's minors and shards are here,
 # nowhere else; test/hack checks that every suite in up.sh has a line, that
 # core runs on every KIND_NODE_1_* minor in hack/tool-versions.env and that
-# upgrade runs on a minor below 1.30.
+# upgrade runs on 1.30, the oldest minor kardinal supports.
 #
 # suite       Kubernetes  shard (hack/e2e/run.sh SHARD; - for the whole suite)
 core          1.35        1/2
@@ -25,8 +25,8 @@ ui            1.37        -
 # same minor.
 multi-cluster 1.36        -
 flux          1.37        -
-# 1.29: KIND_NODE_UPGRADE_1_29, no CRD validation ratcheting (UPG-OLDK8S-01).
+# 1.30: KIND_NODE_UPGRADE_1_30, the oldest minor kardinal supports.
 # all.sh and CI run the upgrade test once whatever COUNT is: it upgrades its
 # cluster.
-upgrade       1.29        -
+upgrade       1.30        -
 upgrade       1.37        -
