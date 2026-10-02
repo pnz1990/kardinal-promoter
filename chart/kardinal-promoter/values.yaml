@@ -303,7 +303,7 @@ topologySpread:
 # -prod; see docs/quickstart.md.
 #
 # Example:
-#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
 #     --namespace kardinal-system --create-namespace \
 #     --set demo.enabled=true \
 #     --set demo.git.url=https://github.com/<your-user>/kardinal-demo \
@@ -360,7 +360,7 @@ serviceMonitor:
 # with the configured label (default: grafana_dashboard=1) and loads dashboards automatically.
 #
 # Example (kube-prometheus-stack):
-#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
 #     --namespace kardinal-system --create-namespace --set github.secretRef.name=github-token \
 #     --set grafanaDashboard.enabled=true \
 #     --set 'grafanaDashboard.sidecarLabel.grafana_dashboard=1'

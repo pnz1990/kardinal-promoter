@@ -58,7 +58,7 @@ kubectl create secret generic github-token \
 ### 2. Install with Helm
 
 ```bash
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   --namespace kardinal-system \
   --create-namespace \
   --set github.secretRef.name=github-token
@@ -94,11 +94,11 @@ macOS (`amd64`, `arm64`) and `kardinal-windows-amd64.exe`.
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
-curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.9.0-rc.1/kardinal-${OS}-${ARCH}"
+curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.9.0/kardinal-${OS}-${ARCH}"
 chmod +x kardinal && sudo mv kardinal /usr/local/bin/
 kardinal version
-# CLI:        v0.9.0-rc.1
-# Controller: v0.9.0-rc.1
+# CLI:        v0.9.0
+# Controller: v0.9.0
 # Graph:      kro v0.10.0-rc.0
 ```
 
@@ -235,7 +235,7 @@ helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version
 Then upgrade the release:
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   --namespace kardinal-system \
   --reset-then-reuse-values
 ```
@@ -367,7 +367,7 @@ On Kubernetes older than 1.30 the script exits 1 and installs nothing (see [Kube
 **7. Apply the new kardinal CRDs.** The v0.8.1 chart shipped no CRDs, and Helm never upgrades CRDs, so apply all 12 by hand. This adds the new `notificationhooks.kardinal.io` CRD. Apply them before the new controller starts.
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 | kubectl apply --server-side -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 | kubectl apply --server-side -f -
 ```
 
 If this reports field-manager conflicts, add `--force-conflicts`.
@@ -375,7 +375,7 @@ If this reports field-manager conflicts, add `--force-conflicts`.
 **8. Upgrade the chart.** Use `--reset-then-reuse-values`, not `--reuse-values`. With `--reuse-values`, the v0.8.1 `krocodile` default is carried over and fails the new schema.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 

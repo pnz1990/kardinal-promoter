@@ -4,7 +4,7 @@ This guide walks you through setting up your first promotion pipeline with kardi
 
 ## Fast Start — under 10 minutes
 
-No GitOps repo setup required. Install with `demo.enabled=true` and you get a pre-configured
+Install with `demo.enabled=true` and you get a pre-configured
 Pipeline named `demo` in the release namespace. It pushes to the repository in
 `demo.git.url`, which defaults to the
 [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo) reference repository.
@@ -32,7 +32,7 @@ kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
 
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   --namespace kardinal-system \
   --set demo.enabled=true \
   --set demo.git.url=$DEMO_REPO \
@@ -118,14 +118,14 @@ kubectl create secret generic github-token \
   --from-literal=token=$GITHUB_PAT \
   --dry-run=client -o yaml | kubectl apply -f -
 
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   --namespace kardinal-system --create-namespace \
   --set github.secretRef.name=github-token
 
 # Option B: pass the token directly (development/testing only)
 # The chart stores it in Secret kardinal-promoter-github-token, but the token
 # also stays in the Helm release history.
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   --namespace kardinal-system --create-namespace \
   --set github.token=$GITHUB_PAT
 ```
@@ -142,8 +142,8 @@ kubectl get pods -n kro-system
 # kro-7d4b8f9f5-xk2pq               1/1     Running   0          30s
 
 kardinal version
-# CLI:        v0.9.0-rc.1
-# Controller: v0.9.0-rc.1
+# CLI:        v0.9.0
+# Controller: v0.9.0
 # Graph:      kro v0.10.0-rc.0
 ```
 

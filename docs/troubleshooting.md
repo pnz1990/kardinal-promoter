@@ -529,7 +529,7 @@ kubectl logs -n kardinal-system deploy/kardinal-promoter | grep -i "forbidden\|p
 
 The Helm chart installs a ClusterRole with all required permissions. If you customized RBAC or installed in a restricted namespace, re-apply the Helm chart:
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   --namespace kardinal-system --reset-then-reuse-values
 ```
 
@@ -729,7 +729,7 @@ resources:
 **3. Reduce ScheduleClock tick frequency** if no gate needs minute-level `schedule.*`
 re-evaluation. The chart owns the `kardinal-clock` ScheduleClock, so set it through Helm:
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   -n kardinal-system --reset-then-reuse-values --set scheduleClock.interval=5m
 ```
 

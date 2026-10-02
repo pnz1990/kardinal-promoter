@@ -115,7 +115,7 @@ The kardinal controller's ServiceAccount must have permission to `get` and `patc
 grants read access by default; enable `patch` with:
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   --namespace kardinal-system --reset-then-reuse-values \
   --set rbac.argocdApplicationsWrite=true
 ```
