@@ -54,6 +54,10 @@ func TestForgejoSCM(t *testing.T) {
 	assert.Equal(t, "release/x", f.bodies["POST /api/v1/repos/e2e/r/pulls"]["base"])
 	require.NoError(t, b.DeleteBranch(ctx, r, "release/x"))
 	require.NoError(t, b.DeleteBranch(ctx, r, "gone"), "404 on delete is success")
+	f.fail["DELETE /api/v1/repos/e2e/r/branches/old"] = []int{http.StatusInternalServerError}
+	require.NoError(t, b.DeleteBranch(ctx, r, "old"), "Forgejo's 500 for a branch that then reads 404 is success")
+	f.fail["DELETE /api/v1/repos/e2e/r/branches/release/x"] = []int{http.StatusInternalServerError}
+	require.Error(t, b.DeleteBranch(ctx, r, "release/x"), "a 500 for a branch that is still there is an error")
 
 	require.NoError(t, s.(Reviewer).ApprovePR(ctx, r, 2, "lgtm"))
 	assert.Equal(t, "APPROVED", f.bodies["POST /api/v1/repos/e2e/r/pulls/2/reviews"]["event"])

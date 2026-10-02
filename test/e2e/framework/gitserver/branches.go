@@ -36,9 +36,16 @@ func (f *forgejo) CreateBranch(ctx context.Context, r Repo, branch, from string)
 		map[string]string{"new_branch_name": branch, "old_branch_name": from}, nil)
 }
 
+// DeleteBranch: Forgejo answers 500 "object does not exist", not 404, to the
+// delete of a branch that is not there (B90), so after a failed delete the
+// branch is read, and a branch that reads 404 is gone.
 func (f *forgejo) DeleteBranch(ctx context.Context, r Repo, branch string) error {
-	err := f.do(ctx, http.MethodDelete, f.repoPath(r)+"/branches/"+segments(branch), nil, nil)
-	if IsNotFound(err) {
+	path := f.repoPath(r) + "/branches/" + segments(branch)
+	err := f.do(ctx, http.MethodDelete, path, nil, nil)
+	if err == nil || IsNotFound(err) {
+		return nil
+	}
+	if IsNotFound(f.do(ctx, http.MethodGet, path, nil, nil)) {
 		return nil
 	}
 	return err
