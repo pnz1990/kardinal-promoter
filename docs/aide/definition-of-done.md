@@ -461,17 +461,19 @@ the tests pass does not count either.
 
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
-| 1: Quickstart | live, partial | 2026-10-02 | `TestCore_QuickstartExample` (EX-QUICKSTART-01) passed in e2e-live [run 36911946726](https://github.com/pnz1990/kardinal-promoter/actions/runs/36911946726) (c48f36e9) on core 1.35–1.37, gitea and gitlab. It uses podinfo on a local git server. The github.com PR path (EX-GITHUB-DEMO-01) is still todo: DEMO_GITHUB_TOKEN is rejected. |
-| 2: Multi-cluster fleet | live setup only, no e2e-live run | 2026-10-02 | `TestMultiCluster_FleetExample` (EX-FLEET-01, MC-ARGO-01, MC-FLUX-01) runs a kind hub and one spoke (#1388). It has passed only in a local `make e2e-all` (884bdb60). #1388 merged after the last full e2e-live run. The 4-cluster demo is tracked in #1293. |
-| 3: Policy governance | live, partial | 2026-10-02 | GATE-ORG-01, GATE-TEAM-01, GATE-SOAK-01, GATE-RECHECK-01, CLI-POLICY-LIST-01 and CLI-POLICY-SIMULATE-01 passed in [run 36911946726](https://github.com/pnz1990/kardinal-promoter/actions/runs/36911946726). No live test covers pass criterion 7 (RBAC on `platform-policies`). |
-| 4: Rollback | live, partial | 2026-10-02 | RB-PREV-01, RB-TO-01, RB-PR-01, RB-HISTORY-01, CLI-ROLLBACK-01 and CLI-HISTORY-01 passed in [run 36911946726](https://github.com/pnz1990/kardinal-promoter/actions/runs/36911946726). |
-| 5: CLI workflow | live, partial | 2026-10-02 | All 35 live CLI-* rows passed in [run 36911946726](https://github.com/pnz1990/kardinal-promoter/actions/runs/36911946726). The two deprecated rows also passed: `approve` fails and points to `kardinal override`, and `rollback --emergency` has no effect. |
+| 1: Quickstart | live, partial | 2026-10-02 | `TestCore_QuickstartExample` (EX-QUICKSTART-01) passed in the v0.9.0 release e2e-live [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174) (956bb4ed, tagged v0.9.0) on core 1.35–1.37, gitea and gitlab. It uses podinfo on a local git server. The github.com PR path (EX-GITHUB-DEMO-01) is still todo: DEMO_GITHUB_TOKEN is rejected. |
+| 2: Multi-cluster fleet | live, partial | 2026-10-02 | `TestMultiCluster_FleetExample`, `TestMultiCluster_ArgoHub`, `TestMultiCluster_FluxHub` and `TestMultiCluster_RolloutsInSpoke` (EX-FLEET-01, MC-ARGO-01, MC-FLUX-01) passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174) on a kind hub and one spoke (#1388). The 4-cluster demo is tracked in #1293. |
+| 3: Policy governance | live, partial | 2026-10-02 | GATE-ORG-01, GATE-TEAM-01, GATE-SOAK-01, GATE-RECHECK-01, CLI-POLICY-LIST-01 and CLI-POLICY-SIMULATE-01 passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). No live test covers pass criterion 7 (RBAC on `platform-policies`). |
+| 4: Rollback | live, partial | 2026-10-02 | RB-PREV-01, RB-TO-01, RB-PR-01, RB-HISTORY-01, CLI-ROLLBACK-01 and CLI-HISTORY-01 passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). |
+| 5: CLI workflow | live, partial | 2026-10-02 | All 35 live CLI-* rows passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). The two deprecated rows also passed: `approve` fails and points to `kardinal override`, and `rollback --emergency` has no effect. |
 | 6: Rendered manifests | not implemented in v0.9.0 | 2026-10-02 | `layout: branch` is not implemented (#1271, open), planned for v0.10.0. PIPE-NOTIMPL-01 only checks that the Pipeline reports NotImplemented. This journey cannot pass yet. |
-| 7: Multi-tenant self-service | live, partial | 2026-10-02 | `TestHealth_MultiTenantExample` (EX-TENANT-01) passed in [run 36911946726](https://github.com/pnz1990/kardinal-promoter/actions/runs/36911946726). It covers one Pipeline per team from the ApplicationSet, and each team promoting. It does not cover RBAC isolation, the org weekend gate on a new team, or cascade delete. |
+| 7: Multi-tenant self-service | live, partial | 2026-10-02 | `TestHealth_MultiTenantExample` (EX-TENANT-01) passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). It covers one Pipeline per team from the ApplicationSet, and each team promoting. It does not cover RBAC isolation, the org weekend gate on a new team, or cascade delete. |
 
-No e2e-live run exists yet on the release commit. The v0.9.0 release run link is added after
-the tag. Before v0.9.0 final, J1–J5 and J7 need e2e-live evidence on the tagged commit
-(AGENTS.md §Journey validation, #1356).
+The v0.9.0 evidence is e2e-live [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174) on 956bb4ed, the commit tagged v0.9.0: 16 of 17 jobs
+passed (core 1.35–1.37, gitea, gitlab, flux, delivery, chart, ui, multi-cluster, upgrade on 1.30
+and 1.37), 777 tests, none failed. The github suite did not start: GitHub rejects the
+DEMO_GITHUB_TOKEN secret (401), so EX-GITHUB-DEMO-01 is still todo (AGENTS.md §Journey
+validation, #1356).
 
 ---
 
