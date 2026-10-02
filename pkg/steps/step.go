@@ -65,7 +65,9 @@ type GitConfig struct {
 	// URL is the GitOps repository HTTPS URL.
 	URL string
 
-	// Branch is the base branch.
+	// Branch is the base branch: git-clone checks it out, git-push pushes to
+	// it when the step opens no PR, and open-pr targets it. The reconciler
+	// never leaves it empty; an unset spec.git.branch is main.
 	Branch string
 
 	// Token is the SCM authentication token.

@@ -543,7 +543,10 @@ spec:
                   environments in this pipeline.
                 properties:
                   branch:
-                    description: Branch is the default base branch for this repository.
+                    default: main
+                    description: |-
+                      Branch is the base branch: git-clone checks it out, approval: auto
+                      pushes to it, and pr-review PRs target it. Defaults to main.
                     type: string
                   layout:
                     default: directory

@@ -109,6 +109,35 @@ func TestStep_AutoPushAndCommitFormat(t *testing.T) {
 	a.running(t, "prod", imageV2, "prod after the merge")
 }
 
+// TestStep_DefaultBaseBranch (B99): a Pipeline that omits spec.git.branch
+// promotes to main. The API server defaults the field to main, and the
+// pr-review step opens its PR into main; once the PR is merged the step
+// reaches Verified. Without the default, open-pr sent an empty base and the
+// SCM refused the PR, so the step never reached WaitingForMerge.
+//
+// Covers STEP-BASEBRANCH-01.
+func TestStep_DefaultBaseBranch(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "prod")
+	require.Equal(t, "main", a.repo.Branch, "the test repository's default branch")
+	p := a.pipeline(map[string]string{"prod": "pr-review"})
+	p.Spec.Git.Branch = "" // omitted: the field is omitempty
+	a.apply(t, p)
+	assert.Equal(t, "main", p.Spec.Git.Branch, "the API server defaults spec.git.branch")
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "WaitingForMerge", promoteTimeout)
+	pr := a.openPR(t, bundle, "prod")
+	assert.Equal(t, "main", pr.Base, "the PR targets main")
+	a.fileHas(t, "prod", fixtures.V1, "prod before the merge")
+
+	a.merge(t, pr)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	a.fileHas(t, "prod", fixtures.V2, "prod after the merge")
+	a.running(t, "prod", imageV2, "prod after the merge")
+}
+
 // TestStep_KustomizeImages promotes one Bundle through four kustomizations
 // and checks the images list kustomize-set-image leaves in each
 // (docs/pipeline-reference.md, "How kustomize-set-image matches images"):
