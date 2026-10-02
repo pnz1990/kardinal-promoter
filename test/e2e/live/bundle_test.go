@@ -283,6 +283,39 @@ func stepAudits(t *testing.T, e *framework.Env, ns, bundle, env string) []string
 	return out
 }
 
+// TestBundle_SupersededBeforePushPRReview supersedes a Bundle whose pr-review
+// step is held by a pause, so it never pushed its kardinal/<bundle>/<env>
+// branch. A pr-review step that ends before it opens its PR deletes that
+// branch, and a branch that is not there is not an error: the step fails at
+// once with "superseded before this step started" (B90: Forgejo answers 500
+// "object does not exist" to the delete of a missing branch, so the step
+// retried the delete with backoff and then said to delete the branch by
+// hand). After resume the newer Bundle opens its PR.
+//
+// Covers BUNDLE-SUPERSEDE-06.
+func TestBundle_SupersededBeforePushPRReview(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(map[string]string{"test": "pr-review"}))
+	e.MustKardinal(t, a.ns, "pause", pipelineName)
+
+	older := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStep(t, a.ns, pipelineName, older, "test", time.Minute, "held by the pause", func(ps *v1alpha1.PromotionStep) (bool, string) {
+		return ps.Status.State == "" && strings.Contains(ps.Status.Message, "is paused"),
+			fmt.Sprintf("state=%q message=%q", ps.Status.State, ps.Status.Message)
+	})
+	newer := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	e.WaitBundlePhase(t, a.ns, older, "Superseded", time.Minute)
+	cancelled := e.WaitStepState(t, a.ns, pipelineName, older, "test", "Failed", 30*time.Second)
+	assert.Equal(t, fmt.Sprintf("bundle %s was superseded before this step started", older), cancelled.Status.Message)
+	assert.Zero(t, cancelled.Status.RetryCount, "status.retryCount of a step whose branch delete found no branch")
+
+	e.MustKardinal(t, a.ns, "resume", pipelineName)
+	e.WaitStepState(t, a.ns, pipelineName, newer, "test", "WaitingForMerge", promoteTimeout)
+	a.openPR(t, newer, "test")
+}
+
 // TestBundle_SupersededBackToBack creates three image Bundles of an auto
 // Pipeline back to back, as a burst of CI builds does. The two older ones turn
 // Superseded with Ready reason Superseded, every step they got fails as

@@ -103,20 +103,23 @@ func (g *GitLabProvider) DeleteBranch(ctx context.Context, repo, branch string) 
 }
 
 // DeleteBranch deletes a Forgejo or Gitea branch. Both route /branches/* by
-// path, so the slashes of the name stay.
+// path, so the slashes of the name stay. Forgejo answers 500 "object does
+// not exist" to the delete of a branch that is not there (B90), so after a
+// failed delete the branch is read, and a branch that reads 404 is gone.
 func (f *ForgejoProvider) DeleteBranch(ctx context.Context, repo, branch string) error {
 	owner, name, err := splitRepo(repo)
 	if err != nil {
 		return err
 	}
-	err = f.do(ctx, http.MethodDelete, fmt.Sprintf("/api/v1/repos/%s/%s/branches/%s", owner, name, branchPath(branch)), nil, nil)
-	if _, gone := statusIs(err, http.StatusNotFound); gone {
+	path := fmt.Sprintf("/api/v1/repos/%s/%s/branches/%s", owner, name, branchPath(branch))
+	err = f.do(ctx, http.MethodDelete, path, nil, nil)
+	if _, gone := statusIs(err, http.StatusNotFound); gone || err == nil {
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("delete Forgejo branch %s in %s: %w", branch, repo, err)
+	if _, gone := statusIs(f.do(ctx, http.MethodGet, path, nil, nil), http.StatusNotFound); gone {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("delete Forgejo branch %s in %s: %w", branch, repo, err)
 }
 
 // DeleteBranch deletes a Bitbucket Cloud branch.
