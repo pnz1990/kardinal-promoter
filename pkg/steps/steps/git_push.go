@@ -71,9 +71,6 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	force := true
 	if !state.OpensPR() {
 		branch = state.Git.Branch
-		if branch == "" {
-			branch = "main"
-		}
 		force = false
 	}
 

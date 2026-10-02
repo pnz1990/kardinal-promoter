@@ -690,7 +690,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		Outputs:      cloneMap(ps.Status.Outputs),
 		Git: steps.GitConfig{
 			URL:         pipeline.Spec.Git.URL,
-			Branch:      pipeline.Spec.Git.Branch,
+			Branch:      baseBranch(pipeline),
 			Token:       cred.token,
 			AuthorName:  "kardinal-promoter",
 			AuthorEmail: "kardinal@kardinal.io",
@@ -910,11 +910,7 @@ func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger,
 	if opensPR(ps) {
 		return
 	}
-	target := pipeline.Spec.Git.Branch
-	if target == "" {
-		target = "main"
-	}
-	if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != target {
+	if pushed := ps.Status.Outputs["branch"]; pushed == "" || pushed != baseBranch(pipeline) {
 		return
 	}
 	hr, ok := r.GitClient.(scm.HeadCommitReader)

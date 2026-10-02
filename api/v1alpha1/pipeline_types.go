@@ -80,7 +80,9 @@ type PipelineGit struct {
 	// +kubebuilder:validation:MinLength=1
 	URL string `json:"url"`
 
-	// Branch is the default base branch for this repository.
+	// Branch is the base branch: git-clone checks it out, approval: auto
+	// pushes to it, and pr-review PRs target it. Defaults to main.
+	// +kubebuilder:default=main
 	// +optional
 	Branch string `json:"branch,omitempty"`
 

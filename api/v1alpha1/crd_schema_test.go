@@ -27,6 +27,7 @@ import (
 	apiextensionsinternal "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	structuraldefaulting "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/defaulting"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/listtype"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/pruning"
 	utiljson "k8s.io/apimachinery/pkg/util/json"
@@ -615,4 +616,45 @@ func TestCRDSchemaAcceptsShippedPolicyGates(t *testing.T) {
 		}))
 	}
 	assert.Greater(t, checked, 10)
+}
+
+// TestCRDPipelineGitBranchDefault (B99): the Pipeline CRD defaults
+// spec.git.branch to main. Without the default, a Pipeline that omits the
+// field sent an empty PR base and the SCM refused every pr-review PR. The API
+// server applies a structural default on create and update and when it reads
+// an object from etcd, so Pipelines created before the default get it too. It
+// fills only an absent (or null) field: an explicit "" stays "", which is why
+// the controller also treats "" as main.
+func TestCRDPipelineGitBranchDefault(t *testing.T) {
+	s := loadCRDs(t)["Pipeline"].structural
+	branch := s.Properties["spec"].Properties["git"].Properties["branch"]
+	assert.Equal(t, "main", branch.Default.Object, "spec.git.branch default")
+
+	doc := func(git string) map[string]interface{} {
+		return toUnstructured(t, []byte(`apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata: {name: p, namespace: default}
+spec:
+  git: {url: "https://example.com/org/repo.git"`+git+`}
+  environments: [{name: prod, approval: pr-review}]
+`))
+	}
+	gitBranch := func(obj map[string]interface{}) interface{} {
+		return obj["spec"].(map[string]interface{})["git"].(map[string]interface{})["branch"]
+	}
+	for _, tc := range []struct {
+		name, git string
+		want      interface{}
+	}{
+		{"omitted", "", "main"},
+		{"null", ", branch: null", "main"},
+		{"set", ", branch: release", "release"},
+		{"empty string is kept", `, branch: ""`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := doc(tc.git)
+			structuraldefaulting.Default(obj, s)
+			assert.Equal(t, tc.want, gitBranch(obj))
+		})
+	}
 }
