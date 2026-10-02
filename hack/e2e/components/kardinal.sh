@@ -89,11 +89,26 @@ args+=(${KARDINAL_E2E_HELM_ARGS:-})
 # helm upgrade never updates the chart's crds/: apply them, so a reused
 # cluster runs this checkout's CRDs too.
 "${KUBECTL[@]}" apply --server-side --force-conflicts -f "$REPO_ROOT/chart/kardinal-promoter/crds/" >/dev/null
+existed=false
+"${HELM[@]}" -n "$KARDINAL_NS" status "$KARDINAL_RELEASE" >/dev/null 2>&1 && existed=true
 "${HELM[@]}" upgrade --install "$KARDINAL_RELEASE" "$REPO_ROOT/chart/kardinal-promoter" \
   -n "$KARDINAL_NS" --create-namespace "${args[@]}" --wait --timeout 5m >/dev/null
-# A rebuilt image under the same tag needs a restart to be picked up.
-"${KUBECTL[@]}" -n "$KARDINAL_NS" rollout restart "deploy/$KARDINAL_RELEASE" >/dev/null
-"${KUBECTL[@]}" -n "$KARDINAL_NS" rollout status "deploy/$KARDINAL_RELEASE" --timeout=180s >/dev/null
+# A rebuilt image under the same tag needs a restart to be picked up; a new
+# release's Pods already run it.
+if $existed; then
+  "${KUBECTL[@]}" -n "$KARDINAL_NS" rollout restart "deploy/$KARDINAL_RELEASE" >/dev/null
+  "${KUBECTL[@]}" -n "$KARDINAL_NS" rollout status "deploy/$KARDINAL_RELEASE" --timeout=180s >/dev/null
+fi
+# A rollout is done while the old Pod still shuts down (the chart's
+# shutdownDelaySeconds), and tests that look up the controller Pod expect
+# only the running ones.
+want=$("${KUBECTL[@]}" -n "$KARDINAL_NS" get "deploy/$KARDINAL_RELEASE" -o jsonpath='{.spec.replicas}')
+waited=0
+until [ "$("${KUBECTL[@]}" -n "$KARDINAL_NS" get pods -l app.kubernetes.io/name=kardinal-promoter -o name | wc -l)" -eq "$want" ]; do
+  waited=$((waited + 2))
+  [ "$waited" -ge 120 ] && die "the old controller Pods are still there after 120s (want $want)"
+  sleep 2
+done
 
 env_set KARDINAL_E2E_CLI "$BIN/kardinal"
 log "controller ready (scm.provider=$KARDINAL_E2E_SCM_PROVIDER)"
