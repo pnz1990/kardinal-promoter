@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -202,4 +204,193 @@ func TestGitHub_SCMAPIURL(t *testing.T) {
 	a.merge(t, pr)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// TestGitHub_ExampleGitHubDemo runs examples/github-demo on GitHub: its
+// Pipeline and its three team PolicyGates, then Bundles as CI would create
+// them.
+//
+// A good Bundle bakes through uat; at prod uat-soak-gate blocks until uat has
+// soaked, no-weekend-deploys passes on a weekday (an operator overrides it on
+// a weekend) and no-bot-deploys passes. prod opens a PR titled and labeled as
+// the README says, whose body has the provenance, gate and upstream sections;
+// after the merge prod bakes and is Verified. A second Bundle whose prod pods
+// turn unready during the prod bake is never healthy again, so at
+// health.timeout onHealthFailure: rollback creates <bundle>-rollback-alarm
+// from the good Bundle. The rollback goes through test and uat, and its prod
+// PR carries kardinal/rollback and the rollback note naming both Bundles and
+// the controller as the actor. Once merged, every environment runs the good
+// release again.
+//
+// Changes to the example: the namespace, Git URL and branch; the Argo CD
+// Application names (the test's, since the quickstart test's
+// kardinal-test-app-<env> may run alongside); the gates are in the
+// Pipeline's namespace; the bakes are shortened to 1m (uat) and 2m (prod,
+// room to break the release mid-bake), uat-soak-gate to one minute and the
+// prod health.timeout to 3m; the image is podinfo.
+//
+// Covers EX-GITHUB-DEMO-01.
+func TestGitHub_ExampleGitHubDemo(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireKind(t, e, "github")
+	ctx := context.Background()
+	const name = "github-demo"
+	a := newArgoApp(t, e, "test", "uat", "prod")
+	ns := a.ns
+	createExampleToken(t, e, ns)
+
+	var pipeline *unstructured.Unstructured
+	var gateNames []string
+	msgs := map[string]string{}
+	for _, obj := range exampleManifests(t, "github-demo/pipeline.yaml") {
+		if obj.GetKind() == "Pipeline" {
+			pipeline = obj
+			continue
+		}
+		require.Equal(t, "PolicyGate", obj.GetKind())
+		assert.Equal(t, "team", obj.GetLabels()["kardinal.io/scope"], obj.GetName())
+		assert.Equal(t, "prod", obj.GetLabels()["kardinal.io/applies-to"], obj.GetName())
+		obj.SetNamespace(ns)
+		if obj.GetName() == "uat-soak-gate" {
+			expr, _, _ := unstructured.NestedString(obj.Object, "spec", "expression")
+			require.Equal(t, "upstream.uat.soakMinutes >= 30", expr)
+			require.NoError(t, unstructured.SetNestedField(obj.Object, "upstream.uat.soakMinutes >= 1", "spec", "expression"))
+		}
+		gateNames = append(gateNames, obj.GetName())
+		msgs[obj.GetName()], _, _ = unstructured.NestedString(obj.Object, "spec", "message")
+		_, err := e.Apply(ctx, obj)
+		require.NoError(t, err, "apply PolicyGate %s", obj.GetName())
+	}
+	require.NotNil(t, pipeline, "the example has a Pipeline")
+	require.ElementsMatch(t, []string{"no-weekend-deploys", "uat-soak-gate", "no-bot-deploys"}, gateNames)
+
+	p := applyExamplePipeline(t, e, pipeline, ns, a.repo, func(u *unstructured.Unstructured) {
+		envs, _, err := unstructured.NestedSlice(u.Object, "spec", "environments")
+		require.NoError(t, err)
+		bakes := map[string]int64{"uat": 1, "prod": 2}
+		field := func(m map[string]interface{}, path ...string) string {
+			v, _, _ := unstructured.NestedString(m, path...)
+			return v
+		}
+		for _, x := range envs {
+			env := x.(map[string]interface{})
+			n := env["name"].(string)
+			require.Equal(t, fixtures.Path(n), env["path"], "%s's path", n)
+			require.Equal(t, "kardinal-test-app-"+n, field(env, "health", "argocd", "name"), "%s's Application", n)
+			require.NoError(t, unstructured.SetNestedField(env, a.argoApp(n), "health", "argocd", "name"))
+			if bake, ok := env["bake"].(map[string]interface{}); ok {
+				require.Contains(t, bakes, n, "%s bakes", n)
+				require.Equal(t, "fail-on-alarm", bake["policy"])
+				bake["minutes"] = bakes[n]
+			}
+			if n == "prod" {
+				require.Equal(t, "15m", field(env, "health", "timeout"))
+				require.NoError(t, unstructured.SetNestedField(env, "3m", "health", "timeout"))
+			}
+		}
+		require.NoError(t, unstructured.SetNestedSlice(u.Object, envs, "spec", "environments"))
+	})
+	prod := p.Spec.Environments[2]
+	require.Equal(t, "prod", prod.Name)
+	require.Equal(t, "pr-review", prod.Approval)
+	require.Equal(t, "rollback", prod.OnHealthFailure)
+	require.NotNil(t, prod.Bake)
+	require.Equal(t, 2, prod.Bake.Minutes)
+
+	// gates waits until bundle's prod gates pass: on a weekend an operator
+	// overrides no-weekend-deploys first.
+	gates := func(bundle string) {
+		t.Helper()
+		if weekendGate(t, e, ns, bundle, msgs["no-weekend-deploys"]) {
+			e.MustKardinal(t, ns, "override", name, "--stage", "prod", "--gate", "no-weekend-deploys",
+				"--reason", "e2e: the suite runs on weekends")
+			e.WaitGateReady(t, ns, bundle, "prod", "no-weekend-deploys", true, "", gateTimeout)
+		}
+		e.WaitGateReady(t, ns, bundle, "prod", "no-bot-deploys", true, "= true", gateTimeout)
+		e.WaitGateReady(t, ns, bundle, "prod", "uat-soak-gate", true, "= true", 3*time.Minute)
+	}
+	baked := func(bundle, env string, minutes int) {
+		t.Helper()
+		ps := e.WaitStepState(t, ns, name, bundle, env, "Verified", promoteTimeout)
+		assert.Equal(t, fmt.Sprintf("bake complete: %dm contiguous healthy via argocd (resets=0)", minutes), ps.Status.Message)
+	}
+
+	good := e.CreateBundle(t, ns, name, "--image", imageV2)
+	e.WaitStepState(t, ns, name, good, "test", "Verified", promoteTimeout)
+	baked(good, "uat", 1)
+	soak := e.WaitGate(t, ns, good, "prod", "uat-soak-gate", gateTimeout, "blocked until uat has soaked",
+		func(g *v1alpha1.PolicyGate) bool {
+			return g.Status.LastEvaluatedAt != nil && !g.Status.Ready && strings.HasPrefix(g.Status.Reason, msgs["uat-soak-gate"]+" (")
+		})
+	assert.Contains(t, soak.Status.Reason, "upstream.uat.soakMinutes >= 1 = false")
+	gates(good)
+	e.WaitStepState(t, ns, name, good, "prod", "WaitingForMerge", promoteTimeout)
+	pr := a.openPR(t, good, "prod")
+	assert.Equal(t, "[kardinal] Promote "+good+" to prod", pr.Title)
+	assert.ElementsMatch(t, []string{"kardinal", "kardinal/promotion"}, pr.Labels)
+	assert.True(t, strings.HasPrefix(pr.Body, "<!-- kardinal-promoter auto-generated PR -->\n## Promotion: "+good+" -> "+name+"/prod\n"), pr.Body)
+	for _, want := range []string{
+		"### Artifact Provenance", "| " + fixtures.Image + " | " + fixtures.V2 + " |",
+		"### Policy Gate Compliance", "| no-weekend-deploys | " + ns + " | Pass |", "| uat-soak-gate | " + ns + " | Pass |",
+		"| no-bot-deploys | " + ns + " | Pass |",
+		"### Upstream Verification", "| test | ", "| uat | ",
+	} {
+		assert.Contains(t, pr.Body, want)
+	}
+	assert.Equal(t, imageV1, e.DeploymentImage(t, ns, fixtures.Workload("prod")), "prod waits for the merge")
+	a.merge(t, pr)
+	baked(good, "prod", 2)
+	e.WaitBundlePhase(t, ns, good, "Verified", time.Minute)
+
+	// The next release passes prod's health check, then its pods turn
+	// unready during the bake: the window stops and never restarts.
+	bad := e.CreateBundle(t, ns, name, "--image", imageV3)
+	e.WaitStepState(t, ns, name, bad, "test", "Verified", promoteTimeout)
+	baked(bad, "uat", 1)
+	gates(bad)
+	e.WaitStepState(t, ns, name, bad, "prod", "WaitingForMerge", promoteTimeout)
+	a.merge(t, a.openPR(t, bad, "prod"))
+	e.WaitStep(t, ns, name, bad, "prod", promoteTimeout, "the prod bake to start", func(ps *v1alpha1.PromotionStep) (bool, string) {
+		return ps.Status.BakeStartedAt != nil, framework.DescribeStep(ps)
+	})
+	e.FailReadiness(t, ns, fixtures.Workload("prod"))
+	rb := bad + "-rollback-alarm"
+	ps := e.WaitStepState(t, ns, name, bad, "prod", "RollingBack", promoteTimeout)
+	assert.True(t, strings.HasPrefix(ps.Status.Message,
+		"health alarm via argocd (onHealthFailure=rollback): health check timeout after 3m0s; last result: bake: "), ps.Status.Message)
+	assert.True(t, strings.HasSuffix(ps.Status.Message, " — rollback Bundle "+rb+" created"), ps.Status.Message)
+	e.WaitBundlePhase(t, ns, bad, "Superseded", time.Minute)
+
+	b := getBundle(t, e, ns, rb)
+	assert.Equal(t, "true", b.Labels["kardinal.io/rollback"])
+	assert.Equal(t, "AutoRollback", b.Labels["kardinal.io/reason"])
+	assert.Equal(t, name, b.Labels["kardinal.io/pipeline"])
+	assert.Equal(t, bad, b.Annotations["kardinal.io/rollback-from"])
+	assert.Equal(t, alarmActor, b.Annotations["kardinal.io/requested-by"])
+	require.NotNil(t, b.Spec.Provenance)
+	assert.Equal(t, good, b.Spec.Provenance.RollbackOf, "the rollback restores the last Bundle Verified in prod")
+	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, b.Spec.Images)
+
+	// The rollback is a forward promotion: test, uat and its soak, then a
+	// prod PR.
+	e.WaitStepState(t, ns, name, rb, "test", "Verified", promoteTimeout)
+	baked(rb, "uat", 1)
+	gates(rb)
+	e.WaitStepState(t, ns, name, rb, "prod", "WaitingForMerge", promoteTimeout)
+	pr = a.openPR(t, rb, "prod")
+	assert.Equal(t, "[kardinal] Rollback prod to "+rb+" (restores "+fixtures.V2+")", pr.Title)
+	assert.ElementsMatch(t, []string{"kardinal", "kardinal/promotion", "kardinal/rollback"}, pr.Labels)
+	note := fmt.Sprintf("<!-- kardinal-promoter auto-generated PR -->\n## ROLLBACK: %s -> %s/prod\n\n"+
+		"> **This is a rollback PR.** It restores the images of bundle %s in environment prod.\n"+
+		"> Rolling back FROM: %s (%s)\n> Rolling back TO: %s (%s)\n> Rolled back by: %s\n",
+		rb, name, good, bad, fixtures.V3, good, fixtures.V2, alarmActor)
+	assert.True(t, strings.HasPrefix(pr.Body, note), "the rollback note:\n%s", pr.Body)
+	assert.Contains(t, pr.Body, "### Policy Gate Compliance")
+	a.merge(t, pr)
+	baked(rb, "prod", 2)
+	e.WaitBundlePhase(t, ns, rb, "Verified", time.Minute)
+	for _, env := range a.envs {
+		assertEnvAt(t, a, env, fixtures.V2)
+	}
 }
