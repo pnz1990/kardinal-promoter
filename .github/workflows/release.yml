@@ -297,7 +297,7 @@ jobs:
             ### Install
 
             kardinal-promoter runs on the upstream [kro](https://github.com/kubernetes-sigs/kro)
-            Graph controller (kro >= v0.10.0 with the `GraphKind` feature gate). Install kro first:
+            Graph controller (kro v0.10.0-rc.0 or later with the `GraphKind` feature gate). Install kro first:
 
             ```bash
             helm install kro oci://registry.k8s.io/kro/charts/kro \

@@ -66,7 +66,7 @@ helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
 
 This installs the kardinal CRDs (from the chart's `crds/` directory), the **kardinal-promoter
 controller** in the `kardinal-system` namespace, and the ClusterRoles bound to the Graph identity
-(`<release>-graph-applier`, `<release>-graph-reader`).
+(`<fullname>-graph-applier`, `<fullname>-graph-reader`; see [RBAC requirements](#rbac-requirements)).
 
 Helm installs `crds/` only on the first install and never updates or deletes it. See
 [Upgrade](#upgrade) for how to update the CRDs.
@@ -114,14 +114,20 @@ kardinal version
 | `image.repository` | `ghcr.io/pnz1990/kardinal-promoter/controller` | Controller image |
 | `image.tag` | Chart `appVersion` | Image tag |
 | `image.pullPolicy` | `IfNotPresent` | Pull policy |
+| `imagePullSecrets` | `[]` | Image pull secrets for private registries |
+| `nameOverride` / `fullnameOverride` | `""` | Override the chart name / the full name (`<fullname>`) used in object names |
+| `serviceAccount.create` / `.name` / `.annotations` | `true` / `""` / `{}` | Create the controller ServiceAccount; its name (default `<fullname>`) and annotations |
+| `podAnnotations` | `{}` | Controller Pod annotations |
+| `podSecurityContext` | `runAsNonRoot`, `RuntimeDefault` seccomp | Pod security context |
+| `securityContext` | non-root, read-only root filesystem, no privilege escalation, all capabilities dropped | Container security context |
 | `logLevel` | `info` | Log verbosity (`debug`, `info`, `warn`, `error`). Sets both `--log-level` and `--zap-log-level` (`warn` maps to `error` there) |
 | `leaderElect` | `true` | Enable leader election (required for HA) |
 | `github.secretRef.name` | `""` | Existing Secret (release namespace) holding the SCM token. Recommended |
 | `github.secretRef.key` | `token` | Key in the Secret |
-| `github.token` | `""` | Token value. The chart stores it in Secret `<release>-github-token`; the value stays in the Helm release history. Setting both this and `secretRef.name` fails |
+| `github.token` | `""` | Token value. The chart stores it in Secret `<fullname>-github-token` (`kardinal-promoter-github-token` for release `kardinal-promoter`); the value stays in the Helm release history. Setting both this and `secretRef.name` fails |
 | `scm.provider` | `""` | `--scm-provider`: `github` (default), `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops` |
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |
-| `webhook.secretRef.name` / `.key` | `""` / `secret` | Secret with the SCM webhook HMAC secret (`KARDINAL_WEBHOOK_SECRET`) |
+| `webhook.secretRef.name` / `.key` | `""` / `secret` | Secret with the SCM webhook secret (`KARDINAL_WEBHOOK_SECRET`): the HMAC key, or for GitLab and Azure DevOps the plain token |
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
@@ -129,6 +135,8 @@ kardinal version
 | `ui.allowedHosts` | `[]` | Extra host names for `--ui-allowed-hosts` (Ingress host, node IP). localhost and the Service DNS names are always allowed |
 | `service.uiPort` | `8082` | UI and UI API port (container and Service) |
 | `service.webhookPort` | `8083` | Webhook (`/webhook/scm`) and Bundle API port (container and Service) |
+| `service.metricsPort` / `.healthPort` | `8080` / `8081` | Metrics and health probe Service ports |
+| `metricsBindAddress` / `healthProbeBindAddress` | `:8080` / `:8081` | `--metrics-bind-address` / `--health-probe-bind-address` (the container ports) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
@@ -142,10 +150,17 @@ kardinal version
 | `nodeSelector` | `{}` | Node selector |
 | `tolerations` | `[]` | Pod tolerations |
 | `affinity` | `{}` | Pod affinity |
+| `topologySpread.enabled` | `true` | With `replicaCount` > 1, prefer spreading replicas across zones (`whenUnsatisfiable: ScheduleAnyway`) |
+| `pdb.enabled` / `.minAvailable` | `true` / `1` | PodDisruptionBudget, created only when `replicaCount` > 1 |
+| `terminationGracePeriodSeconds` / `shutdownDelaySeconds` | `60` / `5` | See [Graceful shutdown](#graceful-shutdown) |
 | `networkPolicy.enabled` | `false` | NetworkPolicy for the controller Pod |
 | `networkPolicy.ingressFrom.{metrics,health,ui,webhook}` | `[]` | Allowed peers per ingress port (empty admits any source) |
 | `networkPolicy.extraEgress` | `[]` | Extra egress rules (e.g. Prometheus for MetricChecks) |
+| `scheduleClock.enabled` / `.interval` | `true` / `"1m"` | ScheduleClock `kardinal-clock` in the release namespace. Each tick re-evaluates every PolicyGate instance |
 | `validatingAdmissionPolicy.enabled` | `true` | Deprecated, no effect. The CRD schemas validate these fields |
+
+The monitoring values (`serviceMonitor`, `prometheusRule`, `grafanaDashboard`) are described in
+[Monitoring](guides/monitoring.md), and `demo.*` in the [Quickstart](quickstart.md).
 
 ### kro Graph integration
 
@@ -160,7 +175,7 @@ kardinal version
 
 ## Accessing the UI
 
-The kardinal controller serves an embedded web UI at port `8082` (configurable via `--ui-listen-address`).
+The kardinal controller serves an embedded web UI at port `8082` (`--ui-listen-address`, Helm value `service.uiPort`).
 
 ### In-cluster access (recommended): kubectl port-forward
 
@@ -289,6 +304,7 @@ Fix each line it prints. In the commands below, `<i>` is the environment's posit
 | Finding | Fix |
 |---|---|
 | `steps` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/steps"}]'`. Every environment runs the default step sequence. |
+| `promotionTemplate` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/promotionTemplate"}]'`. Only clusters that ran a build from `main` have it. |
 | `autoRollback` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/autoRollback"}]'`. Use `onHealthFailure` instead (see [Rollback](rollback.md)). |
 | `shard` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/shard"}]'`. Distributed mode was removed. |
 | `spec.policyGates` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/policyGates"}]'`. Label org gates with `kardinal.io/applies-to`. |
@@ -367,7 +383,8 @@ Helm deletes the objects that only v0.8.1 needed:
 
 - the `graph-controller` Deployment and ServiceAccount in `kro-system`;
 - the `kardinal-graph-controller` ClusterRole and ClusterRoleBinding;
-- the CRDs `graphs.experimental.kro.run` and `graphrevisions.experimental.kro.run`.
+- the CRDs `graphs.experimental.kro.run` and `graphrevisions.experimental.kro.run`;
+- with `validatingAdmissionPolicy.enabled` (the v0.8.1 default), the ValidatingAdmissionPolicies and bindings `kardinal-pipeline-validation`, `kardinal-policygate-validation` and `kardinal-bundle-validation`.
 
 It adds:
 
@@ -473,7 +490,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 - **Custom RBAC.** If you manage the controller's RBAC yourself, allow `create` and `patch` on `events.k8s.io` events.
 - **UI.** With no UI auth mode set, `/api/` answers only local clients (`kubectl port-forward`). Set `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name` if the UI is reached another way.
-- **Notes that don't apply to v0.8.1:**
+- **Notes in the [changelog](changelog.md) that don't apply to v0.8.1:**
     - `promotionTemplate`, `PromotionStep.spec.inputs` and the `promotiontemplates` CRD don't exist in v0.8.1.
     - The `update.strategy: argocd` with `approval: pr-review` note doesn't apply: v0.8.1 allows only `kustomize` and `helm`.
     - The renamed examples (flux, flagger, argo-rollouts, github) are not in v0.8.1.
@@ -616,7 +633,7 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
 | `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
 | `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |
-| `clusterroles` | `bind`, limited to `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` |
+| `clusterroles` | `bind`, limited to `<fullname>-graph-applier` and `<fullname>-graph-reader` |
 | `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
 | `replicasets` | get only: the `resource` and `flux` adapters read the ReplicaSet a Deployment's `ProgressDeadlineExceeded` names |
 | `secrets` | get only: the controller reads each Secret by name and never lists or watches them. In the default cluster mode `get` covers **every Secret in the cluster**. The release-namespace Role adds `get` on the SCM token Secret by name |

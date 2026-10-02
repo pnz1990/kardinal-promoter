@@ -74,6 +74,7 @@ metadata:
   namespace: flux-system
 spec:
   interval: 1m
+  # Your fork of kardinal-demo: the same repo as spec.git.url in pipeline.yaml.
   url: https://github.com/pnz1990/kardinal-demo
   ref:
     branch: main

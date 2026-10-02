@@ -43,10 +43,11 @@ kardinal get pipelines -n kardinal-system
 # PIPELINE   BUNDLE   TEST   UAT   PROD   SUB   AGE
 # demo       -        -      -     -      0     10s
 
-# 4. Trigger the first promotion (get the latest test-app SHA from CI)
-SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
+# 4. Trigger the first promotion. The kardinal-demo overlays already run
+#    sha-9349a3f, so a Bundle with only that tag changes nothing; the digest
+#    makes it a real change (see "Create your first Bundle" below).
 kardinal create bundle demo -n kardinal-system \
-  --image ghcr.io/pnz1990/kardinal-test-app:sha-${SHA}
+  --image ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
 ```
 
 The demo Pipeline uses your fork of the `kardinal-demo` GitOps repo (it already has the
@@ -111,14 +112,11 @@ Then install kardinal-promoter:
 # Option A: reference an existing Secret (recommended for production)
 # The controller watches this Secret and reloads the token automatically on rotation —
 # no controller restart needed. See "Credential rotation" in docs/scm-providers.md.
+kubectl create namespace kardinal-system --dry-run=client -o yaml | kubectl apply -f -
 kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT \
-  --dry-run=client -o yaml | kubectl apply -f - --namespace kardinal-system 2>/dev/null || \
-kubectl create namespace kardinal-system && \
-kubectl create secret generic github-token \
-  --namespace kardinal-system \
-  --from-literal=token=$GITHUB_PAT
+  --dry-run=client -o yaml | kubectl apply -f -
 
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system --create-namespace \
@@ -217,10 +215,11 @@ First, create a Secret with your GitHub token:
 
 ```bash
 kubectl create secret generic github-token \
+  --namespace default \
   --from-literal=token=<your-github-pat>
 ```
 
-You can generate a Pipeline YAML using `kardinal init`:
+You can generate a starting Pipeline YAML using `kardinal init`:
 
 ```bash
 kardinal init
@@ -234,13 +233,7 @@ kardinal init
 # Apply with: kubectl apply -f pipeline.yaml
 ```
 
-Then apply it:
-
-```bash
-kubectl apply -f pipeline.yaml
-```
-
-Or apply `examples/quickstart/pipeline.yaml` from a checkout (`kubectl apply -f examples/quickstart/pipeline.yaml`). This is the same Pipeline with the Argo CD Application names spelled out:
+`kardinal init` sets no health check. Without one, kardinal waits for a Deployment named after the Pipeline in a namespace named after the environment (`test`, `uat`, `prod`). The Applications above deploy to `kardinal-test-app-<env>`, so apply the Pipeline below instead. It checks the Argo CD Applications. It is `examples/quickstart/pipeline.yaml` (`kubectl apply -f examples/quickstart/pipeline.yaml` from a checkout) with the Application names written out:
 
 ```bash
 cat <<EOF | kubectl apply -f -
@@ -248,6 +241,7 @@ apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:
   name: kardinal-test-app
+  namespace: default
 spec:
   git:
     url: https://github.com/pnz1990/kardinal-demo
@@ -306,13 +300,11 @@ kardinal get pipelines
 ## Create your first Bundle
 
 In a real setup, your CI pipeline creates Bundles after building and pushing images.
-For this quickstart, use the latest `kardinal-test-app` image:
+For this quickstart, promote the `kardinal-test-app` image `sha-9349a3f` with its digest pinned.
+The kardinal-demo overlays already run `sha-9349a3f`, so a Bundle with only that tag changes nothing and opens no PR; the digest adds a `digest:` line to each overlay.
 
 ```bash
-# Get the latest image SHA from the test app repository
-LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
-TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
-echo "Using image: $TEST_IMAGE"
+TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0"
 
 # Create the Bundle
 kardinal create bundle kardinal-test-app --image $TEST_IMAGE
@@ -325,7 +317,8 @@ cat <<EOF | kubectl apply -f -
 apiVersion: kardinal.io/v1alpha1
 kind: Bundle
 metadata:
-  name: kardinal-test-app-sha-${LATEST_SHA}
+  name: kardinal-test-app-sha-9349a3f
+  namespace: default
   labels:
     kardinal.io/pipeline: kardinal-test-app
 spec:
@@ -333,9 +326,10 @@ spec:
   pipeline: kardinal-test-app
   images:
     - repository: ghcr.io/pnz1990/kardinal-test-app
-      tag: "sha-${LATEST_SHA}"
+      tag: sha-9349a3f
+      digest: sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
   provenance:
-    commitSHA: "${LATEST_SHA}"
+    commitSHA: "9349a3f"
     author: "quickstart"
 EOF
 ```
@@ -384,7 +378,7 @@ kardinal get steps kardinal-test-app
 #               wait-for-merge   InProgress   -          -
 ```
 
-Go to your GitHub repo ([pnz1990/kardinal-demo](https://github.com/pnz1990/kardinal-demo)). You will see a PR titled:
+Go to your fork of kardinal-demo. You will see a PR titled:
 
 > **[kardinal] Promote kardinal-test-app-x7k2p to prod**
 
@@ -396,7 +390,7 @@ The PR body contains:
 - Upstream verification status (test and uat verified timestamps)
 - Policy gate compliance (if any gates are configured)
 
-**Merge the PR.** kardinal-promoter detects the merge via webhook, Argo CD syncs the prod Application, and the health adapter verifies it.
+**Merge the PR.** kardinal-promoter checks the PR every 30 seconds and sees the merge. With an SCM webhook set up, it sees it at once. Argo CD then syncs the prod Application, and the health adapter verifies it.
 
 ```bash
 kardinal get pipelines

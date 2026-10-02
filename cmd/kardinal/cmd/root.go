@@ -65,7 +65,7 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 	root.PersistentFlags().StringVar(&globalContext, "context", "",
 		"Kubeconfig context override")
 	root.PersistentFlags().StringVarP(&globalOutput, "output", "o", "",
-		"Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)")
+		"Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)")
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newGetCmd())

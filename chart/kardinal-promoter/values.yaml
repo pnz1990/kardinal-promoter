@@ -137,7 +137,7 @@ tolerations: []
 # -- Affinity rules for the controller Pod
 affinity: {}
 
-# -- SCM token (GitHub, GitLab or Forgejo) for opening PRs and detecting
+# -- SCM token for the provider in scm.provider, for opening PRs and detecting
 # merges. Set one of:
 #   github.secretRef.name  an existing Secret in the release namespace
 #                          (recommended; the token stays out of Helm values)
@@ -167,7 +167,8 @@ scm:
   provider: ""
   apiURL: ""
 
-# -- HMAC secret for SCM webhooks on :8083/webhook/scm (KARDINAL_WEBHOOK_SECRET).
+# -- Webhook secret for :8083/webhook/scm (KARDINAL_WEBHOOK_SECRET): the HMAC
+# key, or for GitLab and Azure DevOps the plain token the SCM sends.
 webhook:
   secretRef:
     name: ""
@@ -193,8 +194,10 @@ ui:
   # checked. Host names only: no scheme, path or wildcard.
   allowedHosts: []
   # With neither auth mode set, /api/ serves only clients connecting from
-  # loopback (kubectl port-forward); Ingress, NodePort, LoadBalancer, pod and
-  # service-mesh clients get 403. Set one mode to serve them.
+  # loopback (kubectl port-forward); Ingress, NodePort, LoadBalancer and pod
+  # clients get 403. Set one mode to serve them. A service-mesh sidecar makes
+  # mesh clients connect from loopback; they are refused only on a best-effort
+  # check of the headers the sidecar adds, so with a mesh, set an auth mode.
   auth:
     # -- Static bearer token for /api/v1/ui/* (KARDINAL_UI_TOKEN).
     tokenSecretRef:
@@ -216,8 +219,8 @@ rbac:
   integrationTestJobs: false
 
 # -- kro Graph integration.
-# kardinal renders one kro Graph (kro.run/v1alpha1) per Bundle. kro >= v0.10.0
-# with the GraphKind feature gate must be installed separately:
+# kardinal renders one kro Graph (kro.run/v1alpha1) per Bundle. kro v0.10.0-rc.0
+# or later with the GraphKind feature gate must be installed separately:
 #   bash hack/install-kro.sh
 # kro applies each Graph's children by impersonating graph.serviceAccountName
 # in the Graph's namespace; the controller creates that ServiceAccount and binds
@@ -282,8 +285,9 @@ pdb:
   minAvailable: 1
 
 # -- Topology spread constraints for multi-replica deployments.
-# When enabled and replicaCount > 1, spreads replicas across availability
-# zones to prevent both replicas from landing on the same node.
+# When enabled and replicaCount > 1, prefers spreading replicas across zones
+# (topology.kubernetes.io/zone, whenUnsatisfiable: ScheduleAnyway). It does
+# not stop two replicas from sharing a node.
 topologySpread:
   enabled: true
 
@@ -294,12 +298,15 @@ topologySpread:
 # Use `kardinal create bundle demo --image <image>` to trigger the first promotion.
 #
 # Time to first promotion with demo.enabled=true: under 10 minutes on a
-# fresh kind cluster (no manual GitOps repo setup required).
+# fresh kind cluster. It needs a fork of pnz1990/kardinal-demo (set
+# demo.git.url) and Argo CD Applications kardinal-test-app-test, -uat and
+# -prod; see docs/quickstart.md.
 #
 # Example:
 #   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
 #     --namespace kardinal-system --create-namespace \
 #     --set demo.enabled=true \
+#     --set demo.git.url=https://github.com/<your-user>/kardinal-demo \
 #     --set github.secretRef.name=github-token
 demo:
   # -- Enable the demo Pipeline. When true, a Pipeline named "demo" is created.
@@ -354,6 +361,7 @@ serviceMonitor:
 #
 # Example (kube-prometheus-stack):
 #   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+#     --namespace kardinal-system --create-namespace --set github.secretRef.name=github-token \
 #     --set grafanaDashboard.enabled=true \
 #     --set 'grafanaDashboard.sidecarLabel.grafana_dashboard=1'
 grafanaDashboard:

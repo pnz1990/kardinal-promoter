@@ -1,6 +1,6 @@
 # Flagger Demo — kardinal-promoter with Flagger Canary health adapter
 
-This example demonstrates using kardinal-promoter with [Flagger](https://flagger.app/) for progressive delivery in production. kardinal promotes the new image (merges the PR); Flagger automatically runs a canary analysis; kardinal's Flagger health adapter waits for `Canary.status.phase == Succeeded` before marking the promotion as Verified.
+This example demonstrates using kardinal-promoter with [Flagger](https://flagger.app/) for progressive delivery in production. kardinal opens a PR with the new image; you merge it. Flagger automatically runs a canary analysis; kardinal's Flagger health adapter waits for `Canary.status.phase == Succeeded` before marking the promotion as Verified.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ kardinal-controller
     ↓ kustomize-set-image → git-commit → open-pr
 Human merges prod PR
     ↓
-Deployment updated (new image)
+Argo CD syncs the new image into the Deployment
     ↓
 Flagger detects image change → starts canary analysis
     ↓ routes 5%→10%→...→50% of traffic to canary
@@ -25,6 +25,8 @@ kardinal checks Canary.status.phase
 
 ## Prerequisites
 
+- A fork of pnz1990/kardinal-demo. Point `spec.git.url` in pipeline.yaml (and any Argo CD or Flux source) at the fork. The token needs write access to it.
+- [Argo CD](https://argo-cd.readthedocs.io/en/stable/getting_started/) installed (it syncs test, uat and prod from the fork)
 - [Flagger](https://docs.flagger.app/install/flagger-install-on-kubernetes) installed
 - A metrics provider (Prometheus recommended; required for `request-success-rate` metric)
 - If using a service mesh: Istio, Linkerd, or Nginx ingress controller
@@ -48,33 +50,50 @@ kubectl -n flagger-system get pods
 # 1. Create the namespace and GitHub token
 kubectl create namespace prod
 kubectl create secret generic github-token \
+  --namespace default \
   --from-literal=token=$GITHUB_TOKEN
 
-# 2. Deploy the initial version of the app (so Flagger can initialize)
+# 2. Deploy test and uat. The quickstart's ApplicationSet syncs environments/test
+#    and environments/uat into kardinal-test-app-test and kardinal-test-app-uat,
+#    the namespaces pipeline.yaml checks. (It also syncs environments/prod into
+#    kardinal-test-app-prod, which this example does not use.) Set its repoURL
+#    to your fork.
+kubectl apply -f examples/quickstart/argocd-applications.yaml
+
+# 3. Sync environments/prod into namespace prod, so the merged PR changes the
+#    image Flagger watches. Flagger scales the target Deployment to zero, so
+#    Argo CD must ignore its replica count.
 kubectl apply -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Application
 metadata:
-  name: kardinal-test-app
-  namespace: prod
+  name: flagger-demo-prod
+  namespace: argocd
 spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: kardinal-test-app
-  template:
-    metadata:
-      labels:
-        app: kardinal-test-app
-    spec:
-      containers:
-        - name: kardinal-test-app
-          image: ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f
-          ports:
-            - containerPort: 8080
+  project: default
+  source:
+    repoURL: https://github.com/<you>/kardinal-demo
+    targetRevision: main
+    path: environments/prod
+    kustomize:
+      namespace: prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - RespectIgnoreDifferences=true
 EOF
 
-# 3. Apply the Flagger Canary
+# 4. Apply the Flagger Canary
 kubectl apply -f examples/flagger-demo/canary.yaml
 
 # Wait for Flagger to initialize the canary
@@ -82,15 +101,17 @@ kubectl get canary -n prod -w
 # NAME           READY   STATUS       WEIGHT   LASTTRANSITIONTIME
 # flagger-demo   True    Initialized  0        2026-04-18T...
 
-# 4. Apply the Pipeline
+# 5. Apply the Pipeline
 kubectl apply -f examples/flagger-demo/pipeline.yaml
 ```
 
 ## Trigger a Promotion
 
+The digest is pinned because the kardinal-demo overlays already run
+`sha-9349a3f`: a Bundle with only the tag changes nothing and opens no PR.
+
 ```bash
-LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
-TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
+TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0"
 
 kardinal create bundle flagger-demo --image $TEST_IMAGE
 kardinal get pipelines
@@ -158,7 +179,7 @@ If you don't have Prometheus/service mesh metrics, remove the `metrics:` block f
 # Unit tests for the Flagger adapter
 go test ./pkg/health/... -run TestFlagger -v
 
-# Full demo validation
+# Build and run the health adapter unit tests
 bash scripts/demo-validate.sh
 ```
 

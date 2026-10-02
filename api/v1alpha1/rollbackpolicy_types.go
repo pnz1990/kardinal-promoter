@@ -22,8 +22,8 @@ type RollbackPolicySpec struct {
 	// of this Bundle in Environment are read: the steps labelled
 	// kardinal.io/pipeline and kardinal.io/environment whose spec.bundleName
 	// (or, when that is empty, kardinal.io/bundle label) is BundleRef. When the highest
-	// ConsecutiveHealthFailures among them (one step per region) reaches
-	// FailureThreshold, a rollback Bundle is created.
+	// ConsecutiveHealthFailures among them reaches FailureThreshold, a rollback
+	// Bundle is created.
 	// +kubebuilder:validation:MinLength=1
 	BundleRef string `json:"bundleRef"`
 

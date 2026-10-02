@@ -19,6 +19,8 @@ kardinal checks Kustomization.status.conditions[Ready]
 
 ## Prerequisites
 
+- A fork of pnz1990/kardinal-demo. Point `spec.git.url` in pipeline.yaml (and any Argo CD or Flux source) at the fork. The token needs write access to it.
+  Here the Flux source is the GitRepository `url` in `flux-kustomizations.yaml`.
 - [Flux](https://fluxcd.io/flux/installation/) installed in your cluster (`flux install`)
 - `kubectl` connected to your cluster
 - GitHub token with repo write access
@@ -28,15 +30,22 @@ kardinal checks Kustomization.status.conditions[Ready]
 ```bash
 # 1. Create the GitHub token secret
 kubectl create secret generic github-token \
+  --namespace default \
   --from-literal=token=$GITHUB_TOKEN
 
-# 2. Apply Flux GitRepository and Kustomizations
+# 2. Create the target namespaces. Flux does not create a Kustomization's
+#    targetNamespace, and kardinal-demo has no Namespace manifest.
+kubectl create namespace kardinal-test-app-test
+kubectl create namespace kardinal-test-app-uat
+kubectl create namespace kardinal-test-app-prod
+
+# 3. Apply Flux GitRepository and Kustomizations
 kubectl apply -f examples/flux-demo/flux-kustomizations.yaml
 
-# 3. Apply the Pipeline
+# 4. Apply the Pipeline
 kubectl apply -f examples/flux-demo/pipeline.yaml
 
-# 4. Verify Flux is reconciling
+# 5. Verify Flux is reconciling
 kubectl get kustomizations -n flux-system
 # NAME             READY   STATUS
 # flux-demo-test   True    Applied revision: main/...
@@ -46,10 +55,11 @@ kubectl get kustomizations -n flux-system
 
 ## Trigger a Promotion
 
+The digest is pinned because the kardinal-demo overlays already run
+`sha-9349a3f`: a Bundle with only the tag changes nothing and opens no PR.
+
 ```bash
-# Get the latest test app image
-LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
-TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
+TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0"
 
 # Create a bundle
 kardinal create bundle flux-demo --image $TEST_IMAGE
@@ -98,16 +108,18 @@ and `health.flux.namespace` on the environment.
 # Run the unit tests for the Flux adapter
 go test ./pkg/health/... -run TestFlux -v
 
-# Run the full demo validation
+# Build and run the health adapter unit tests
 bash scripts/demo-validate.sh
 ```
 
 ## Expected Output
 
-```
-test  | Flux Kustomization flux-demo-test  | Ready=True, generation=2 matches, lastAppliedRevision=1f0c2a9b7d3e
-uat   | Flux Kustomization flux-demo-uat   | Ready=True, generation=2 matches, lastAppliedRevision=8b41d7e05c2a
-prod  | PR #42 open — waiting for merge
+After test and uat are Verified, the prod PR is open:
+
+```bash
+kardinal get pipelines
+# PIPELINE    BUNDLE            TEST       UAT        PROD              SUB   AGE
+# flux-demo   flux-demo-x7k2p   Verified   Verified   WaitingForMerge   0     15m
 ```
 
 ## Troubleshooting

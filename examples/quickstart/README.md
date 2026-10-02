@@ -73,10 +73,12 @@ kubectl apply -f pipeline.yaml
 
 ### 5. Create your first Bundle
 
-Pick a kardinal-test-app image that CI has built:
+Promote the kardinal-test-app image by tag and digest. The digest is pinned because
+the kardinal-demo overlays already run `sha-9349a3f`: a Bundle with only the tag
+changes nothing and opens no PR.
 
 ```bash
-IMAGE=ghcr.io/pnz1990/kardinal-test-app:sha-$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
+IMAGE=ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
 kardinal create bundle kardinal-test-app --image "$IMAGE"
 ```
 

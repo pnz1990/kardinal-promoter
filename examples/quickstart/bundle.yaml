@@ -1,9 +1,8 @@
 # Sample Bundle for manual creation.
 # In practice, your CI pipeline creates this via the /api/v1/bundles webhook
-# or via: kardinal create bundle kardinal-test-app --image ghcr.io/pnz1990/kardinal-test-app:sha-<7 chars>
-# sha-9349a3f is the tag the kardinal-demo overlays start from; use a newer
-# tag from `gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]'`
-# to see a real promotion.
+# or via: kardinal create bundle kardinal-test-app --image ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:<digest>
+# The digest is pinned because the kardinal-demo overlays already run
+# sha-9349a3f: a Bundle with only the tag changes nothing and opens no PR.
 apiVersion: kardinal.io/v1alpha1
 kind: Bundle
 metadata:
@@ -17,6 +16,7 @@ spec:
   images:
     - repository: ghcr.io/pnz1990/kardinal-test-app
       tag: sha-9349a3f
+      digest: sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
   provenance:
     commitSHA: "9349a3f"
     author: "your-username"

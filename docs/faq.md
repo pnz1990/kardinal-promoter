@@ -8,15 +8,9 @@ Frequently asked questions about kardinal-promoter.
 
 ### How does kardinal-promoter differ from Kargo?
 
-Both tools automate Kubernetes promotion pipelines. The key differences:
-
-| Aspect | kardinal-promoter | Kargo |
-|---|---|---|
-| Promotion model | DAG — fan-out to parallel envs, arbitrary dependencies | Linear — envs in a fixed chain |
-| Policy gates | CEL expressions with kro library (json, maps, schedule, etc.) | Basic approval-only gates |
-| GitOps engine | Any (ArgoCD, Flux, raw K8s) | ArgoCD only |
-| PR evidence | Structured body with image digest, CI run, gate results | None |
-| Architecture | Graph-first (kro Graph DAG) | Reconciler-first |
+Both tools promote changes between environments on Kubernetes. kardinal models a pipeline
+as a DAG of environments, gates promotions with CEL PolicyGates, writes promotion evidence into
+each PR, and works with Argo CD, Flux or plain Deployments.
 
 For a full feature comparison, see [Comparison](comparison.md).
 
@@ -25,18 +19,20 @@ For a full feature comparison, see [Comparison](comparison.md).
 Yes. kardinal-promoter opens Git pull requests and checks Kubernetes `Deployment` readiness
 by default. ArgoCD and Flux integrations are optional. You can use:
 
-- **Kubernetes Deployment health check** (no GitOps engine needed)
-- **ArgoCD Application sync** (`health.type: argocd`)
-- **Flux Kustomization ready** (`health.type: flux`)
-- **Argo Rollouts** (`health.type: argo-rollouts`)
+- **Deployment readiness** (`health.type: resource`, the default; no GitOps engine needed)
+- **Argo CD Application** (`health.type: argocd`)
+- **Flux Kustomization** (`health.type: flux`)
+- **Argo Rollouts Rollout** (`health.type: argoRollouts`)
+- **Flagger Canary** (`health.type: flagger`)
 
 See [Health Adapters](health-adapters.md) for configuration.
 
 ### Does it work with GitLab?
 
-Yes, GitLab SCM support is in beta. Start the controller with `--scm-provider gitlab`
+Yes. Start the controller with `--scm-provider gitlab`
 (Helm value `scm.provider: gitlab`). One controller serves one SCM for every Pipeline;
-`spec.git.provider` is deprecated and ignored. See [SCM Providers](scm-providers.md).
+`spec.git.provider` is deprecated and ignored. Forgejo, Gitea, Bitbucket Cloud and Azure DevOps
+are also supported. See [SCM Providers](scm-providers.md).
 
 ### Can I use it with Helm?
 
@@ -55,7 +51,8 @@ fails the step. Use one Bundle per chart image, or kustomize.
   older clusters; see [Kubernetes version](installation.md#kubernetes-version). CI runs the live
   e2e suites on the three newest minors, currently 1.35, 1.36 and 1.37.
 - [kro](installation.md#install-kro) v0.10.0-rc.0+ with the Graph controller (`GraphKind` feature gate)
-- A GitHub (or GitLab) personal access token with `repo` write scope
+- An SCM token: for GitHub, a token with `repo` scope; for GitLab, one with `api` scope. See
+  [SCM Providers](scm-providers.md) for the other providers.
 
 ### What permissions does the controller need?
 
@@ -78,6 +75,7 @@ The Helm chart creates the necessary `ClusterRole` (a `Role` in namespace mode).
 - `create/patch` on `events.k8s.io` `events` and `get/list/watch/create/patch` on core `events`
 - in the release namespace: the leader election `leases`, and `create` plus
   `get/update/patch` on the `kardinal-version` ConfigMap
+- `create` on `tokenreviews` and `subjectaccessreviews`, only with `ui.auth.tokenReview`
 
 It grants nothing on `pods`, `services`, other ConfigMaps or `batch` Jobs.
 
@@ -184,8 +182,12 @@ Rollbacks are triggered:
    `pr-review` environment it opens a PR labelled `kardinal/rollback`; in an `auto` environment
    it commits and pushes straight to the branch, the same as any promotion there, with no PR
    (with `update.strategy: argocd` it sets the image on the Argo CD Application instead)
-2. **Automatic**: If the environment sets `onHealthFailure: rollback` and a health check
-   fails during a `bake` window with `policy: fail-on-alarm`. See [Rollback](rollback.md#automatic-rollback).
+2. **Automatic**: the environment sets `onHealthFailure: rollback` and its health check fails.
+   That means a terminal result (a Deployment `ProgressDeadlineExceeded` from this promotion's
+   rollout, a failed Flagger canary), no healthy result before `health.timeout`, or an unhealthy
+   check during a `bake` window with `policy: fail-on-alarm`. A rollback Bundle that fails its own
+   health check is not rolled back again; its step ends `AbortedByAlarm`.
+   See [Rollback](rollback.md#automatic-rollback).
    (`environments[].autoRollback` is not implemented and is rejected by the API server.)
 
 A rollback is a forward promotion of the previously-verified Bundle image through the
@@ -215,7 +217,8 @@ spec:
     ("kardinal.io/hotfix" in bundle.labels && bundle.labels["kardinal.io/hotfix"] == "true")
 ```
 
-Label the Bundle `kardinal.io/hotfix=true` at creation time to mark it as a hotfix.
+Create the Bundle with `kubectl apply` and set `kardinal.io/hotfix: "true"` in `metadata.labels`.
+`kardinal create bundle` and the Bundle API do not set custom labels.
 Bundle annotations are not in the CEL context; labels are (`bundle.labels`).
 
 ### How often does kardinal re-evaluate a gate?

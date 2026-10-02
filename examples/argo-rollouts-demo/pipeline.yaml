@@ -39,7 +39,7 @@ spec:
         type: argocd
 
     # prod: Argo Rollouts progressive delivery — canary analysis before full rollout
-    # The Pipeline updates the Rollout's image; Argo Rollouts manages traffic splitting.
+    # kardinal updates the Rollout's image in git; Argo Rollouts manages traffic splitting.
     # kardinal waits until the Rollout runs the Bundle's image and its
     # status.phase is "Healthy" (full promotion complete).
     # Rollout name is derived: <pipeline> = argo-rollouts-demo, namespace = <env> = prod

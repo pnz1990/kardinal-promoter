@@ -8,11 +8,11 @@ This example demonstrates kardinal-promoter with [Argo Rollouts](https://argopro
 CI creates Bundle
     ↓
 kardinal-controller
-    ↓ test:    kustomize-set-image → Deployment → resource adapter → Ready
+    ↓ test:    kustomize-set-image → ArgoCD syncs the Deployment → resource adapter → Ready
     ↓ uat:     kustomize-set-image → ArgoCD syncs → argocd adapter → Healthy+Synced
     ↓ prod:    kustomize-set-image → open-pr → human merges
                 ↓
-           Rollout detects new image → starts canary steps
+           ArgoCD syncs the new image into the Rollout → starts canary steps
            10% → pause 5m → 30% → pause 5m → 60% → pause 5m → 100%
                 ↓
            kardinal checks the Rollout runs the Bundle image, then Rollout.status.phase
@@ -29,72 +29,79 @@ kardinal-controller
 | Clusters | Single | Hub plus workload clusters |
 | Strategy | Steps (setWeight + pause) | Steps (setWeight + pause) |
 | Focus | Learning Argo Rollouts integration | Multi-cluster fan-out |
-| ArgoCD needed | Optional (uat only) | Required (prod environments) |
+| ArgoCD needed | Required (syncs all three environments) | Required (prod environments) |
 
 ## Prerequisites
 
+- A fork of pnz1990/kardinal-demo. Point `spec.git.url` in pipeline.yaml (and any Argo CD or Flux source) at the fork. The token needs write access to it.
+- In the fork, replace `environments/prod/deployment.yaml` with the contents of
+  `rollout.yaml` (the Rollout and its Services). kardinal changes the image in
+  git; Argo CD applies it to the Rollout.
 - [Argo Rollouts](https://argoproj.github.io/rollouts/installation/) installed
   ```bash
   kubectl create namespace argo-rollouts
   kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/download/v1.7.1/install.yaml
   ```
-- [ArgoCD](https://argo-cd.readthedocs.io/en/stable/getting_started/) installed (for the uat env)
+- [ArgoCD](https://argo-cd.readthedocs.io/en/stable/getting_started/) installed (it syncs test, uat and prod from the fork)
 - `kubectl` connected to your cluster
 
 ## Setup
 
 ```bash
 # 1. Create namespaces
-kubectl create namespace prod
+kubectl create namespace test
 kubectl create namespace uat
+kubectl create namespace prod
 
-# 2. Apply Rollout and Services
-kubectl apply -f examples/argo-rollouts-demo/rollout.yaml
-
-# 3. Create GitHub token secret
+# 2. Create GitHub token secret
 kubectl create secret generic github-token \
+  --namespace default \
   --from-literal=token=$GITHUB_TOKEN
 
-# 4. Create ArgoCD Application for uat (optional — remove the uat env if not using ArgoCD)
+# 3. Create one ArgoCD Application per environment. Set repoURL to your fork.
 #    The kardinal-demo overlays set namespace "default"; kustomize.namespace
-#    moves the uat copy into the uat namespace.
+#    moves each copy into the environment's namespace. Argo CD syncs the
+#    test Deployment, the uat Deployment and the prod Rollout from git.
+for env in test uat prod; do
 kubectl apply -f - <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: argo-rollouts-demo-uat
+  name: argo-rollouts-demo-${env}
   namespace: argocd
 spec:
   project: default
   source:
-    repoURL: https://github.com/pnz1990/kardinal-demo
+    repoURL: https://github.com/<you>/kardinal-demo
     targetRevision: main
-    path: environments/uat
+    path: environments/${env}
     kustomize:
-      namespace: uat
+      namespace: ${env}
   destination:
     server: https://kubernetes.default.svc
-    namespace: uat
+    namespace: ${env}
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
 EOF
+done
 
-# 5. Apply the Pipeline
+# 4. Apply the Pipeline
 kubectl apply -f examples/argo-rollouts-demo/pipeline.yaml
 
 # Verify Rollout is initialized
 kubectl argo rollouts get rollout argo-rollouts-demo -n prod
-# NAME                   KIND     IMAGE                                    TAG       HASH      REPLICAS
-# argo-rollouts-demo     Rollout  ghcr.io/pnz1990/kardinal-test-app  sha-...  xxxxx     3/3
+# Status:          ✔ Healthy
 ```
 
 ## Trigger a Promotion
 
+The digest is pinned because the kardinal-demo overlays already run
+`sha-9349a3f`: a Bundle with only the tag changes nothing and opens no PR.
+
 ```bash
-LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
-TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
+TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0"
 
 # Create bundle — starts promotion through test → uat → prod
 kardinal create bundle argo-rollouts-demo --image $TEST_IMAGE
@@ -168,7 +175,7 @@ kubectl argo rollouts abort argo-rollouts-demo -n prod
 # Unit tests for the Argo Rollouts adapter
 go test ./pkg/health/... -run TestArgoRollouts -v
 
-# Full demo validation
+# Build and run the health adapter unit tests
 bash scripts/demo-validate.sh
 ```
 
@@ -177,6 +184,6 @@ bash scripts/demo-validate.sh
 | Symptom | Cause | Fix |
 |---|---|---|
 | Promotion stuck at `HealthChecking` | Rollout phase is `Paused` | Check step durations; use `kubectl argo rollouts resume` if manual pause |
-| `Rollout not found` | Rollout CR not applied | `kubectl apply -f examples/argo-rollouts-demo/rollout.yaml` |
+| `Rollout not found` | Argo CD has not synced the Rollout | Check that `environments/prod/deployment.yaml` in your fork holds the Rollout, and that `argo-rollouts-demo-prod` is synced |
 | Rollout immediately `Degraded` | readinessProbe failing | Check pod logs; verify `/health` endpoint |
 | kardinal shows `RollingBack` | Rollout stayed `Degraded` until `health.timeout` | Merge the rollback PR; `kubectl argo rollouts get rollout argo-rollouts-demo -n prod` shows why it aborted |
