@@ -738,8 +738,9 @@ func TestRollback_OnHealthFailureEarlierDeadline(t *testing.T) {
 
 	earlier := fmt.Sprintf("Deployment %s/%s: ProgressDeadlineExceeded (", a.ns, workload)
 	ps := e.WaitStepMessageAll(t, a.ns, pipelineName, rb, "test", "HealthChecking", promoteTimeout,
-		earlier, ") is from an earlier rollout: its lastUpdateTime ", " is before this health check started (",
+		earlier, ") is from an earlier rollout: its lastUpdateTime ",
 		"; waiting for the Deployment controller to see this rollout progress")
+	assertEarlierRollout(t, ps.Status.Message)
 	assert.Zero(t, ps.Status.ConsecutiveHealthFailures, framework.DescribeStep(ps))
 	assert.NotNil(t, ps.Status.TargetUpdatedAt, "status.targetUpdatedAt: the check found the template on the Bundle images")
 
@@ -765,6 +766,17 @@ func TestRollback_OnHealthFailureEarlierDeadline(t *testing.T) {
 	lift()
 	rbVerified(t, a, rb, "test")
 	assertEnvAt(t, a, "test", fixtures.V2)
+}
+
+// assertEarlierRollout checks why a step's message takes a
+// ProgressDeadlineExceeded for an earlier rollout's: the condition is from
+// before the health check started or, when the rollback started in the same
+// second as the condition, not after the check first found the pod template on
+// the Bundle images.
+func assertEarlierRollout(t *testing.T, msg string) {
+	t.Helper()
+	assert.True(t, strings.Contains(msg, " is before this health check started (") ||
+		strings.Contains(msg, " is not after the health check first found the pod template running the Bundle images ("), msg)
 }
 
 // TestRollback_OnHealthFailureRefused checks the two cases where
