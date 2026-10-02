@@ -21,8 +21,8 @@ import (
 
 // TestE2ECoverage keeps test/e2e/coverage.tsv honest: a row is "covered" if
 // and only if a test's doc comment names it, live and deprecated rows are
-// covered only by live tests, and every live test names its rows and runs in
-// some suite.
+// covered only by live tests, every live test names its rows and runs in
+// some suite, and a row's suite runs one of its tests.
 func TestE2ECoverage(t *testing.T) {
 	root := repoRoot(t)
 	rows, err := coverage.Rows(root)
@@ -44,6 +44,7 @@ func TestE2ECoverage(t *testing.T) {
 	runs, err := coverage.SuiteRuns(root)
 	require.NoError(t, err)
 	coveredBy := map[string][]string{}
+	testsOf := map[string][]string{}
 	for _, ct := range tests {
 		name := ct.File + ":" + ct.Name
 		if ct.Live {
@@ -63,7 +64,26 @@ func TestE2ECoverage(t *testing.T) {
 				assert.True(t, ct.Live, "%s covers %s row %s; only a test in %s can", name, row.Tier, id, coverage.LiveDir)
 			}
 			coveredBy[id] = append(coveredBy[id], name)
+			testsOf[id] = append(testsOf[id], ct.Name)
 		}
+	}
+
+	// A live or deprecated row's suite is the hack/e2e/up.sh suite that runs
+	// one of its tests; a contract row's tests are unit tests.
+	for _, r := range rows {
+		if r.Tier == "contract" {
+			assert.Equal(t, "unit", r.Suite, "%s: a contract row's suite is unit", r.ID)
+			continue
+		}
+		re, ok := runs[r.Suite]
+		if !assert.True(t, ok, "%s: suite %q is not in hack/e2e/up.sh", r.ID, r.Suite) || len(testsOf[r.ID]) == 0 {
+			continue
+		}
+		inSuite := false
+		for _, name := range testsOf[r.ID] {
+			inSuite = inSuite || re.MatchString(name)
+		}
+		assert.True(t, inSuite, "%s: suite %s runs none of its tests %v", r.ID, r.Suite, testsOf[r.ID])
 	}
 
 	counts := map[string][2]int{}

@@ -35,7 +35,8 @@ type Row struct {
 	// a recorded API: Bitbucket, Azure DevOps) or deprecated (a live test of
 	// the deprecation behavior).
 	Tier string
-	// Suite is the suite the row's tests belong to.
+	// Suite is the hack/e2e/up.sh suite that runs the row's tests, or unit
+	// for a contract row.
 	Suite string
 	// Status is covered when a test claims the row, else todo.
 	Status  string
