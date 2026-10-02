@@ -5,9 +5,16 @@
 replicaCount: 1
 
 # -- Pod termination grace period in seconds.
-# Must be at least 2× the controller's GracefulShutdownTimeout (30s) to allow
-# in-flight reconcile loops to complete before SIGKILL. (#574)
+# Keep it above shutdownDelaySeconds plus the controller's 30s shutdown timeout: on SIGTERM the
+# controller gives in-flight HTTP requests up to 20s, then cancels in-flight reconciles, and exits
+# within 30s. (#574)
 terminationGracePeriodSeconds: 60
+
+# -- Seconds a controller Pod being deleted keeps serving before it gets SIGTERM (a preStop
+# sleep). Services stop sending it new connections meanwhile, so a rollout or a node drain does
+# not refuse or drop UI, webhook and Bundle API requests. It counts against
+# terminationGracePeriodSeconds. 0 sends SIGTERM at once.
+shutdownDelaySeconds: 5
 
 image:
   # -- Container image repository
@@ -61,9 +68,12 @@ leaderElect: true
 
 controller:
   # TLS for the UI (:8082) and webhook/Bundle API (:8083) servers.
-  # When both tlsCertFile and tlsKeyFile are set, both servers use HTTPS.
+  # When both tlsCertFile and tlsKeyFile are set, both servers use HTTPS; one alone fails the install.
   # Typically used with cert-manager: mount the certificate Secret with
   # extraVolumes/extraVolumeMounts, then set the paths to the mounted files.
+  # A path that is not in a secret, projected or csi volume mounted that way fails the install.
+  # For certificates that reach the container another way (hostPath, the image, an injected
+  # volume), set KARDINAL_TLS_CERT_FILE and KARDINAL_TLS_KEY_FILE with extraEnv instead.
   # See docs/guides/security.md for the recommended cert-manager setup.
   #
   # -- Path to the TLS certificate file (PEM). Set together with tlsKeyFile to enable TLS.
@@ -73,14 +83,15 @@ controller:
   # -- Namespace-scoped install mode (--watch-namespace). Empty = cluster-wide.
   # When set, the controller caches and reconciles only this namespace, its
   # namespaced permissions are a Role/RoleBinding there, and a small
-  # ClusterRole (<fullname>-cluster-scoped) covers the cluster-scoped
-  # ChangeWindow kind. It must equal the release namespace (install the chart
+  # ClusterRole (<fullname>-cluster-scoped) covers ChangeWindows and get on
+  # this Namespace. It must equal the release namespace (install the chart
   # into the namespace it watches); org-level PolicyGates are read from this
   # namespace too.
   watchNamespace: ""
   # -- Namespaces holding org-level PolicyGates (--policy-namespaces).
-  # Empty keeps the controller default, platform-policies. Ignored in
-  # namespace mode, which always uses watchNamespace.
+  # Empty keeps the controller default, platform-policies. In namespace
+  # mode org gates are read from watchNamespace, and an entry other than
+  # watchNamespace fails the install.
   policyNamespaces: []
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []

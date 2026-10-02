@@ -106,6 +106,44 @@ Install-mode checks. Rendered from deployment.yaml so a bad combination fails
 {{- if and .Values.github.token .Values.github.secretRef.name -}}
 {{- fail "set github.token or github.secretRef.name, not both" -}}
 {{- end -}}
+{{- $cert := .Values.controller.tlsCertFile -}}
+{{- $key := .Values.controller.tlsKeyFile -}}
+{{- if or (and $cert (not $key)) (and $key (not $cert)) -}}
+{{- fail (printf "controller.tlsCertFile and controller.tlsKeyFile must be set together (only %s is set): the UI and webhook servers use TLS only with both, and the controller does not start with one." (ternary "tlsCertFile" "tlsKeyFile" (not (empty $cert)))) -}}
+{{- end -}}
+{{- /* Each TLS path must be in a Secret (secret, projected or CSI volume)
+mounted with controller.extraVolumes and extraVolumeMounts: in a directory
+mount, or the file a subPath (or subPathExpr) mount puts there. Else the
+controller cannot open it and crash-loops. Certificates that come another way
+(a hostPath, the image, an injected volume) are set with controller.extraEnv
+instead, which this check does not see. */ -}}
+{{- if and $cert $key -}}
+{{- range $value, $path := dict "tlsCertFile" $cert "tlsKeyFile" $key -}}
+{{- $mount := "" -}}
+{{- range $.Values.controller.extraVolumeMounts -}}
+{{- $at := default "" .mountPath -}}
+{{- $file := or .subPath .subPathExpr -}}
+{{- if or (and $file (eq $path $at)) (and (not $file) (hasPrefix (printf "%s/" (trimSuffix "/" $at)) $path)) -}}
+{{- $mount = default "" .name -}}
+{{- end -}}
+{{- end -}}
+{{- if not $mount -}}
+{{- fail (printf "controller.%s (%s) is not in a mounted Secret: mount the certificate Secret at its directory with controller.extraVolumes and controller.extraVolumeMounts (docs/guides/security.md, TLS Configuration). The controller cannot start without the file." $value $path) -}}
+{{- end -}}
+{{- $volume := dict -}}
+{{- range $.Values.controller.extraVolumes -}}
+{{- if eq (default "" .name) $mount -}}
+{{- $volume = . -}}
+{{- end -}}
+{{- end -}}
+{{- if not $volume -}}
+{{- fail (printf "controller.%s (%s) is mounted from volume %q, which controller.extraVolumes does not define: add the certificate Secret there (docs/guides/security.md, TLS Configuration)." $value $path $mount) -}}
+{{- end -}}
+{{- if not (or $volume.secret $volume.projected $volume.csi) -}}
+{{- fail (printf "controller.%s (%s) is in volume %q, which is not a secret, projected or csi volume in controller.extraVolumes: mount the certificate Secret there (docs/guides/security.md, TLS Configuration)." $value $path $mount) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- with .Values.github.secretRef.namespace -}}
 {{- if ne . $.Release.Namespace -}}
 {{- fail (printf "github.secretRef.namespace (%s) must be empty or the release namespace (%s): GITHUB_TOKEN is read with a secretKeyRef, which only reads the Pod's namespace, so the startup token and the rotation watcher would read different Secrets." . $.Release.Namespace) -}}
@@ -154,4 +192,27 @@ controller-runtime's --zap-log-level accepts debug, info, error and panic
 */}}
 {{- define "kardinal-promoter.zapLogLevel" -}}
 {{- if eq .Values.logLevel "warn" -}}error{{- else -}}{{ .Values.logLevel }}{{- end -}}
+{{- end }}
+
+{{/*
+The container port a bind address (":8080", "0.0.0.0:8080") listens on.
+Called with (list <bind address> <fallback port>); the fallback is for an
+address with no port or port 0 (controller-runtime's "disabled").
+*/}}
+{{- define "kardinal-promoter.bindPort" -}}
+{{- $port := splitList ":" (index . 0) | last -}}
+{{- if and $port (ne $port "0") -}}{{ $port }}{{- else -}}{{ index . 1 }}{{- end -}}
+{{- end }}
+
+{{/*
+The controller's container ports. Metrics and health listen on their bind
+addresses; the UI and webhook servers listen on their Service ports.
+*/}}
+{{- define "kardinal-promoter.containerPorts" -}}
+{{- $ports := dict -}}
+{{- $_ := set $ports "metrics" (include "kardinal-promoter.bindPort" (list .Values.metricsBindAddress .Values.service.metricsPort)) -}}
+{{- $_ = set $ports "health" (include "kardinal-promoter.bindPort" (list .Values.healthProbeBindAddress .Values.service.healthPort)) -}}
+{{- $_ = set $ports "ui" (toString .Values.service.uiPort) -}}
+{{- $_ = set $ports "webhook" (toString .Values.service.webhookPort) -}}
+{{- toJson $ports -}}
 {{- end }}

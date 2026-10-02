@@ -15,6 +15,7 @@ make e2e-down SUITE=core
 `make e2e-up` is idempotent: re-run it after changing the controller to
 rebuild and redeploy it. It writes `test/e2e/results/kardinal-e2e-<suite>/env`
 (git server URLs and tokens, mode 0600), which `make test-e2e-live` sources.
+`make e2e-down SUITE=multi-cluster` deletes its spoke cluster too.
 
 On hosts where `docker build` can't download Go modules, set
 `KARDINAL_E2E_BUILD=host` to build the controller binary on the host instead.
@@ -25,7 +26,8 @@ and keeps the `go test -json` stream in `test/e2e/results/<cluster>/test.json`.
 tests starting at the second. `make e2e-up KIND_K8S=1.37` picks the
 Kubernetes minor (one of the `KIND_NODE_*` images in `hack/tool-versions.env`;
 the default is `test/e2e/kind-config.yaml`'s). Use the kind version pinned
-there: older kind releases can't boot its node images. The core suite also
+there: older kind releases can't boot its node images. CI also installs the
+helm version pinned there. The core suite also
 needs bash and zsh on PATH: `TestCLI_Completion` checks the completion scripts
 with `bash -n` and `zsh -n`.
 
@@ -38,20 +40,23 @@ SUITES='gitea flux' make e2e-all   # only these suites
 ```
 
 `hack/e2e/matrix.txt` lists the jobs: every suite, the core suite on each of
-the three Kubernetes minors split across two jobs per minor with `SHARD`.
+the three Kubernetes minors split across two jobs per minor with `SHARD`, and
+the upgrade suite on Kubernetes 1.29 and the newest minor.
 `make e2e-all` runs them on this host, each on a kind cluster of its own
 (`kardinal-e2e-all-<job>`), deletes the clusters (`KEEP=1` keeps them), and
 runs `go run ./test/e2e/proof` over all the results. It fails when a job
 fails, or when a covered row's test failed, skipped or did not run. Each
 cluster takes 2-3 GB of memory, GitLab's about 7 GB. The results, each
-job's log and the proof are in `test/e2e/results/all-<UTC time>/`. The `github` job runs only when
-`KARDINAL_E2E_GITHUB_TOKEN_FILE` or `DEMO_GITHUB_TOKEN` is set; otherwise it
-is listed as not run.
+job's log and the proof are in `test/e2e/results/all-<UTC time>/`. The
+`github` job runs only when `KARDINAL_E2E_GITHUB_TOKEN_FILE` or
+`DEMO_GITHUB_TOKEN` is set; otherwise it is listed as not run. The upgrade
+jobs run once whatever `COUNT` is: the test upgrades its cluster
+(`hack/e2e/run.sh` refuses `COUNT` above 1 for it).
 
 Pull requests don't run the live suites in CI: run `make e2e-all`, or the
 suites a change touches, before you merge, and put the result in the PR.
 `.github/workflows/e2e-live.yml` runs the same jobs weekly, repeating every
-test three times to find flakes, and when dispatched
+test three times to find flakes (the upgrade test once), and when dispatched
 (`gh workflow run e2e-live.yml --ref <branch>`; `-f count=N` repeats each
 test). Only its `github` job gets the `DEMO_GITHUB_TOKEN` secret. Its
 `e2e live` job passes when every job passed and the coverage proof holds.
@@ -70,6 +75,9 @@ pattern of its tests.
 | `delivery` | Forgejo, Argo CD, Argo Rollouts, Flagger | `TestRollouts_*`, `TestFlagger_*`, `TestDelivery_*` |
 | `ui` | Forgejo, Argo CD, four more chart releases (static token and CORS, TokenReview, TokenReview without its RBAC, TLS), Playwright's Chromium | `TestUI_*` |
 | `flux` | Forgejo, Flux, Prometheus Operator, Prometheus, Pushgateway, Grafana | `TestFlux_*`, `TestMetric_*`, `TestObs_*` |
+| `chart` | Forgejo, Argo CD, cert-manager; no controller release: each test installs its own | `TestChart_*`, `TestDeprecated_*` |
+| `upgrade` | Forgejo, Argo CD, kardinal-promoter v0.8.1 with its bundled Graph controller and no kro; the test follows the upgrade guide, so a cluster serves one run. `KIND_K8S=1.29` runs it on Kubernetes 1.29 | `TestUpgrade_*` |
+| `multi-cluster` | Forgejo, Argo CD, Flux and Argo Rollouts in the hub, and a second kind cluster (`<cluster>-spoke`, Argo Rollouts) registered with the hub's Argo CD and Flux | `TestMultiCluster_*` |
 
 `TestSCM_*` tests use only `Env.Git`, so they run against every git server;
 a test that needs one provider is named after it and checks `Env.Git.Kind()`

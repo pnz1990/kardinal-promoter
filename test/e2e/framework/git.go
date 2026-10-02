@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,6 +166,45 @@ func (e *Env) ReadFile(t *testing.T, repo gitserver.Repo, ref, path string) stri
 		t.Fatalf("read %s@%s: %v", path, ref, err)
 	}
 	return string(raw)
+}
+
+// StallPushes makes the suite's Forgejo or Gitea hold every push to repo in
+// a pre-receive hook, so a test can stop the controller while its push is in
+// flight. stalled reports whether a push is being held. release removes the
+// hook: a held push is then refused, and later pushes go through. It also
+// runs when the test ends.
+func (e *Env) StallPushes(t *testing.T, repo gitserver.Repo) (stalled func() bool, release func()) {
+	t.Helper()
+	kind := e.Git.Kind()
+	if kind != "forgejo" && kind != "gitea" {
+		t.Fatalf("StallPushes needs a forgejo or gitea git server, not %s", kind)
+	}
+	// The server's global pre-receive hook runs each repo's
+	// hooks/pre-receive.d/* (giteafamily.sh deploys it as deploy/<kind> in
+	// namespace <kind>, with its data at /var/lib/gitea).
+	dir := fmt.Sprintf("/var/lib/gitea/git/repositories/%s/%s.git", strings.ToLower(repo.Owner), strings.ToLower(repo.Name))
+	hook := dir + "/hooks/pre-receive.d/kardinal-e2e-stall"
+	marker := dir + "/kardinal-e2e-stalled"
+	script := fmt.Sprintf("#!/bin/sh\n# kardinal e2e: hold the push until the test removes this hook, then refuse it.\n"+
+		"touch %[1]s\nwhile [ -e %[2]s ]; do sleep 1; done\nrm -f %[1]s\necho 'refused by the kardinal e2e stall hook'\nexit 1\n", marker, hook)
+	e.Kubectl(t, kind, script, "exec", "-i", "deploy/"+kind, "--", "sh", "-c",
+		fmt.Sprintf("test -d %[1]s && mkdir -p %[1]s/hooks/pre-receive.d && cat > %[2]s && chmod +x %[2]s", dir, hook))
+	run := func(cmd string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return exec.CommandContext(ctx, "kubectl", "--context", e.Context, "-n", kind,
+			"exec", "deploy/"+kind, "--", "sh", "-c", cmd).Run()
+	}
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			if err := run("rm -f " + hook); err != nil {
+				t.Errorf("remove the stall hook of %s: %v", repo.Name, err)
+			}
+		})
+	}
+	t.Cleanup(release)
+	return func() bool { return run("test -e "+marker) == nil }, release
 }
 
 func describePRs(prs []gitserver.PR) string {

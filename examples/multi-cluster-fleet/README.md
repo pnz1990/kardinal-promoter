@@ -113,8 +113,9 @@ kardinal create bundle rollouts-demo --image ghcr.io/myorg/rollouts-demo:v2.0.0
    - Argo CD syncs the Rollout manifest.
    - Argo Rollouts executes canary: 20% --> 40% --> 60% --> 80% --> 100% with ALB.
    - kardinal-promoter watches the region's Application in the hub via the argocd health
-     adapter. Argo CD's built-in Rollout health keeps the Application `Progressing` while the
-     canary runs and `Healthy` once it completes.
+     adapter. Argo CD's built-in Rollout health reports the Application `Progressing` while the
+     canary moves between steps, `Suspended` while it waits at a pause step, and `Healthy` once
+     it completes. The argocd adapter waits on both `Progressing` and `Suspended`.
    - When the Application is Synced to the promoted commit and Healthy, the region is Verified.
 7. Both regions verified: Bundle fully promoted.
 
@@ -154,5 +155,5 @@ kardinal history rollouts-demo
 |---|---|
 | `pipeline.yaml` | Pipeline CRD (4 environments, parallel prod fan-out, argocd health from the hub) |
 | `policy-gates.yaml` | Org-level PolicyGates (no-weekend-deploys, pre-prod-soak), one per prod region |
-| `bundle.yaml` | Sample Bundle for manual creation |
+| `bundle.yaml` | Sample Bundle for manual creation. Its `intent.targetEnvironment: prod-us` promotes to prod-us only and skips prod-eu |
 | `argocd-applications.yaml` | Argo CD ApplicationSet for 4 environments across 4 clusters |

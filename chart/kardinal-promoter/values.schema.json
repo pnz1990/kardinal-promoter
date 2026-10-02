@@ -16,6 +16,10 @@
       "type": "integer",
       "minimum": 0
     },
+    "shutdownDelaySeconds": {
+      "type": "integer",
+      "minimum": 0
+    },
     "image": {
       "type": "object",
       "additionalProperties": false,

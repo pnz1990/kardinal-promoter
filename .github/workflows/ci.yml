@@ -121,7 +121,7 @@ jobs:
         run: |
           # Install controller-gen at the pinned version used by Makefile.
           CONTROLLER_GEN_VERSION=$(grep 'CONTROLLER_GEN_VERSION\s*?=' Makefile | awk '{print $NF}')
-          go install sigs.k8s.io/controller-tools/cmd/controller-gen@${CONTROLLER_GEN_VERSION}
+          go install "sigs.k8s.io/controller-tools/cmd/controller-gen@${CONTROLLER_GEN_VERSION}"
           controller-gen crd:allowDangerousTypes=true paths="./api/..." \
             output:crd:artifacts:config=config/crd/bases
           controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
@@ -309,7 +309,7 @@ jobs:
       - name: Check if chart exists
         id: chart_check
         run: |
-          echo "has_chart=$(test -d chart/kardinal-promoter && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_chart=$(test -d chart/kardinal-promoter && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Install Helm
         if: steps.chart_check.outputs.has_chart == 'true'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1

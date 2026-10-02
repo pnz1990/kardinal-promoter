@@ -152,17 +152,18 @@ func toolVersions(t *testing.T) map[string]string {
 var (
 	semver    = regexp.MustCompile(`^v\d+\.(\d+)\.\d+$`)
 	sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	// toolDownload matches a download of kind, kubectl or the argocd CLI.
-	toolDownload = regexp.MustCompile(`kind\.sigs\.k8s\.io/dl/|dl\.k8s\.io/release/|argo-cd/releases/download/`)
+	// toolDownload matches a download of kind, kubectl, helm or the argocd
+	// CLI.
+	toolDownload = regexp.MustCompile(`kind\.sigs\.k8s\.io/dl/|dl\.k8s\.io/release/|get\.helm\.sh/|argo-cd/releases/download/`)
 )
 
-// TestToolDownloadsArePinnedAndVerified covers #1294: every kind, kubectl
-// and argocd download in a workflow takes its version from
+// TestToolDownloadsArePinnedAndVerified covers #1294: every kind, kubectl,
+// helm and argocd download in a workflow takes its version from
 // hack/tool-versions.env and is checked against the sha256 there, kubectl
 // matches the kind node's minor, and nothing installs a floating version.
 func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 	tv := toolVersions(t)
-	for _, tool := range []string{"KIND", "KUBECTL"} {
+	for _, tool := range []string{"KIND", "KUBECTL", "HELM"} {
 		assert.Regexp(t, semver, tv[tool+"_VERSION"], "%s_VERSION", tool)
 		assert.Regexp(t, sha256Hex, tv[tool+"_SHA256"], "%s_SHA256", tool)
 	}
@@ -193,7 +194,7 @@ func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 				"%s: step %q must check every download with sha256sum -c", f, s.Name)
 		}
 	}
-	assert.GreaterOrEqual(t, downloads, 2, "expected the kind and kubectl installs in e2e-live")
+	assert.GreaterOrEqual(t, downloads, 3, "expected the kind, kubectl and helm installs in e2e-live")
 
 	for _, rel := range append(workflowFiles(t), "Makefile") {
 		data, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
@@ -202,13 +203,19 @@ func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 	}
 }
 
-var kindNodeKey = regexp.MustCompile(`^KIND_NODE_1_(\d+)$`)
+var (
+	kindNodeKey = regexp.MustCompile(`^KIND_NODE_1_(\d+)$`)
+	// suiteNodeKey is KIND_NODE_<SUITE>_1_<minor>, a minor only that suite
+	// runs on (hack/e2e/up.sh, KIND_K8S).
+	suiteNodeKey = regexp.MustCompile(`^KIND_NODE_([A-Z][A-Z_]*)_1_(\d+)$`)
+)
 
 // TestKindNodeMatrixIsPinned checks the KIND_NODE_1_<minor> images in
 // hack/tool-versions.env that the live e2e matrix boots: at least three
 // minors, each image digest-pinned with the minor its key names and new
 // enough for kro, kind-config.yaml using one of them, and kubectl within its
-// one minor of skew of every one.
+// one minor of skew of every one. A KIND_NODE_<SUITE>_1_<minor> image is
+// digest-pinned with its key's minor too.
 func TestKindNodeMatrixIsPinned(t *testing.T) {
 	tv := toolVersions(t)
 	kubectl := semver.FindStringSubmatch(tv["KUBECTL_VERSION"])
@@ -218,6 +225,15 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 
 	images := map[string]bool{}
 	for k, v := range tv {
+		if m := suiteNodeKey.FindStringSubmatch(k); m != nil {
+			img := kindNodeImage.FindStringSubmatch(v)
+			if assert.NotNil(t, img, "%s=%s is not a kindest/node image", k, v) {
+				assert.Equal(t, v, img[0], "%s=%s: only the image, nothing else", k, v)
+				assert.Equal(t, m[2], img[1], "%s=%s: the image's minor must match the key", k, v)
+				assert.NotEmpty(t, img[2], "%s=%s: pin the image by digest", k, v)
+			}
+			continue
+		}
 		m := kindNodeKey.FindStringSubmatch(k)
 		if m == nil {
 			continue
@@ -245,11 +261,14 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 
 // TestE2EMatrixRunsEverySuite checks hack/e2e/matrix.txt, the jobs
 // hack/e2e/all.sh runs locally and e2e-live.yml in CI: every suite in
-// hack/e2e/up.sh has a job and no other suite does, every job boots a
-// KIND_NODE_* minor of hack/tool-versions.env, each suite runs on a minor
-// once, as a whole or with a complete set of shards, and the core suite runs
-// on every one of those minors. e2e-live.yml must take its matrix from
-// all.sh -matrix.
+// hack/e2e/up.sh has a job and no other suite does, every job boots a node
+// image up.sh finds in hack/tool-versions.env (KIND_NODE_1_<minor>, or
+// KIND_NODE_<SUITE>_1_<minor> for a minor only that suite runs on), each
+// suite runs on a minor once, as a whole or with a complete set of shards,
+// and the core suite runs on every KIND_NODE_1_* minor. The upgrade suite
+// must also run on a Kubernetes older than 1.30 (no CRD validation
+// ratcheting), the cluster UPG-OLDK8S-01 needs. e2e-live.yml must take its
+// matrix from all.sh -matrix.
 func TestE2EMatrixRunsEverySuite(t *testing.T) {
 	root := repoRoot(t)
 	runs, err := coverage.SuiteRuns(root)
@@ -261,6 +280,7 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 	suites := map[string]bool{}
 	// shards["core 1.37"] is the set of core's shards on 1.37 ("-" for none).
 	shards := map[string]map[string]bool{}
+	var oldUpgrade []string
 	for _, line := range strings.Split(string(data), "\n") {
 		f := strings.Fields(line)
 		if len(f) == 0 || strings.HasPrefix(f[0], "#") {
@@ -272,8 +292,13 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 		suite, minor, shard := f[0], f[1], f[2]
 		_, known := runs[suite]
 		assert.True(t, known, "matrix.txt %q: hack/e2e/up.sh has no suite %s", line, suite)
-		assert.NotEmpty(t, tv["KIND_NODE_"+strings.ReplaceAll(minor, ".", "_")],
-			"matrix.txt %q: hack/tool-versions.env has no KIND_NODE_ image for %s", line, minor)
+		node, suiteNode := "KIND_NODE_"+strings.ReplaceAll(minor, ".", "_"),
+			"KIND_NODE_"+strings.ReplaceAll(strings.ToUpper(suite), "-", "_")+"_"+strings.ReplaceAll(minor, ".", "_")
+		assert.True(t, tv[node] != "" || tv[suiteNode] != "",
+			"matrix.txt %q: hack/tool-versions.env has no %s or %s", line, node, suiteNode)
+		if n, err := strconv.Atoi(strings.TrimPrefix(minor, "1.")); suite == "upgrade" && err == nil && n < 30 {
+			oldUpgrade = append(oldUpgrade, minor)
+		}
 		if shard != "-" {
 			assert.Regexp(t, `^[1-9][0-9]*/[1-9][0-9]*$`, shard, "matrix.txt %q", line)
 		}
@@ -309,6 +334,7 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 		}
 		assert.Equal(t, want, got, "%s: the whole suite, or every shard 1/n to n/n, once", key)
 	}
+	assert.NotEmpty(t, oldUpgrade, "matrix.txt has no upgrade job on Kubernetes < 1.30; UPG-OLDK8S-01 needs one (no CRD validation ratcheting)")
 
 	const rel = ".github/workflows/e2e-live.yml"
 	data, err = os.ReadFile(filepath.Join(root, rel))

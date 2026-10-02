@@ -331,7 +331,9 @@ datasource.
 
 ## Changing the Metrics Port
 
-Set `metricsBindAddress` in Helm values to use a different port:
+Set `metricsBindAddress` in Helm values to use a different port. The container port and
+the NetworkPolicy follow it; `service.metricsPort` sets the port of the `kardinal-promoter`
+Service, which targets the container port by name:
 
 ```yaml
 # values.yaml

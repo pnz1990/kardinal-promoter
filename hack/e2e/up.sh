@@ -17,13 +17,26 @@
 #   ui      Forgejo + Argo CD + the UI auth, CORS and TLS releases (ui.sh)
 #   flux    Forgejo + Flux + Prometheus Operator, Prometheus, Pushgateway,
 #           Grafana
+#   chart   Forgejo + Argo CD + cert-manager + podinfo on the node, and no
+#           controller release: each TestChart_ test installs the chart from
+#           this checkout itself
+#   upgrade Forgejo + Argo CD + kardinal-promoter v0.8.1 (kardinal-v081.sh) and
+#           no kro: the TestUpgrade_ test upgrades v0.8.1 to this checkout,
+#           so the cluster serves one run; delete it before the next
+#   multi-cluster  the hub (Forgejo, Argo CD, Flux, Argo Rollouts, kardinal)
+#           and a second kind cluster, <cluster>-spoke, with Argo Rollouts,
+#           which the hub's Argo CD and Flux manage (spoke.sh); both have
+#           podinfo on the node
 #
 # Env:
 #   KIND_CLUSTER     cluster name (default kardinal-e2e-SUITE)
 #   KIND_K8S         Kubernetes minor, e.g. 1.37: boots KIND_NODE_1_37 from
-#                    hack/tool-versions.env (default: the node image in
-#                    test/e2e/kind-config.yaml)
-#   KUBECONFIG       honoured; recorded in the env file
+#                    hack/tool-versions.env, or KIND_NODE_<SUITE>_1_37 there
+#                    for a minor only SUITE runs on (default: the node image
+#                    in test/e2e/kind-config.yaml)
+#   KUBECONFIG       honoured; recorded in the env file. When unset, it is
+#                    test/e2e/results/<cluster>/kubeconfig, so kind does not
+#                    write the default ~/.kube/config
 #   plus the KARDINAL_E2E_* build settings of components/kardinal.sh
 #
 # Copyright 2026 The kardinal-promoter Authors.
@@ -57,6 +70,17 @@ case "$SUITE" in
   # ServiceMonitor, PrometheusRule and Grafana dashboard.
   flux) COMPONENTS=("giteafamily.sh forgejo" flux.sh prometheus.sh grafana.sh) RUN='^Test(Flux|Metric|Obs)_'
     HELM_ARGS='--set serviceMonitor.enabled=true --set prometheusRule.enabled=true --set grafanaDashboard.enabled=true' ;;
+  chart) COMPONENTS=("giteafamily.sh forgejo" argocd.sh cert-manager.sh podinfo.sh) RUN='^Test(Chart|Deprecated)_'
+    export KARDINAL_E2E_INSTALL=0 ;;
+  # v0.8.1 ran its own Graph controller, so kro is not installed: the test
+  # installs it as the upgrade guide's step 6. kardinal.sh only builds and
+  # loads the image and the CLI; the test applies the CRDs and upgrades.
+  upgrade) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v081.sh) RUN='^TestUpgrade_'
+    export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
+  # Argo Rollouts runs in the hub too, so a Rollout the hub's argoRollouts
+  # check cannot find is missing from the hub, not from its API.
+  multi-cluster) COMPONENTS=("giteafamily.sh forgejo" argocd.sh flux.sh rollouts.sh podinfo.sh spoke.sh)
+    RUN='^TestMultiCluster_' ;;
   *)
     echo "unknown suite $SUITE" >&2
     exit 1
@@ -69,17 +93,15 @@ export E2E_OUT
 
 NODE_IMAGE=
 if [ -n "${KIND_K8S:-}" ]; then
-  var="KIND_NODE_${KIND_K8S//./_}"
+  suitevar=${SUITE^^}
+  var="KIND_NODE_${KIND_K8S//./_}" suitevar="KIND_NODE_${suitevar//-/_}_${KIND_K8S//./_}"
   # shellcheck disable=SC1091
-  NODE_IMAGE=$(source "$REPO_ROOT/hack/tool-versions.env" && echo "${!var:-}")
-  [ -n "$NODE_IMAGE" ] || die "KIND_K8S=$KIND_K8S: no $var in hack/tool-versions.env"
+  NODE_IMAGE=$(source "$REPO_ROOT/hack/tool-versions.env" && echo "${!var:-${!suitevar:-}}")
+  [ -n "$NODE_IMAGE" ] || die "KIND_K8S=$KIND_K8S: no $var or $suitevar in hack/tool-versions.env"
 fi
 
 start=$(date +%s)
-if ! kind get clusters 2>/dev/null | grep -qx "$KIND_CLUSTER"; then
-  kind create cluster --name "$KIND_CLUSTER" --config "$REPO_ROOT/test/e2e/kind-config.yaml" \
-    ${NODE_IMAGE:+--image "$NODE_IMAGE"} --wait 120s
-fi
+kind_cluster "$KIND_CLUSTER"
 target_cluster
 trap 'rc=$?; [ "$rc" -eq 0 ] || dump_setup_diagnostics; exit "$rc"' EXIT
 if [ -n "$NODE_IMAGE" ]; then
@@ -92,17 +114,24 @@ env_set KARDINAL_E2E_SUITE "$SUITE"
 env_set KARDINAL_E2E_CONTEXT "$CTX"
 env_set KARDINAL_E2E_RUN "$RUN"
 env_set KARDINAL_E2E_ARTIFACTS "$E2E_OUT/diagnostics"
-[ -n "${KUBECONFIG:-}" ] && env_set KUBECONFIG "$KUBECONFIG"
+env_set KUBECONFIG "$KUBECONFIG"
 
-KUBE_CONTEXT="$CTX" bash "$REPO_ROOT/hack/install-kro.sh" >/dev/null
-log "kro ready"
+if [ "${KARDINAL_E2E_KRO:-1}" = 1 ]; then
+  KUBE_CONTEXT="$CTX" bash "$REPO_ROOT/hack/install-kro.sh" >/dev/null
+  log "kro ready"
+fi
 for c in "${COMPONENTS[@]}"; do
   # shellcheck disable=SC2086
   bash "$E2E_DIR/components/"$c
 done
 KARDINAL_E2E_HELM_ARGS="$HELM_ARGS ${KARDINAL_E2E_HELM_ARGS:-}" bash "$E2E_DIR/components/kardinal.sh"
+if [ "${KARDINAL_E2E_INSTALL:-1}" != 1 ]; then
+  # No release of this checkout in kardinal-system receives webhooks; tests
+  # that need one register their own release's URL.
+  env_set KARDINAL_E2E_WEBHOOK_URL ""
+fi
 for c in "${AFTER[@]}"; do
   # shellcheck disable=SC2086
   bash "$E2E_DIR/components/"$c
 done
-log "suite $SUITE up on $CTX in $(($(date +%s) - start))s; env: $E2E_OUT/env"
+log "suite $SUITE up on $CTX in $(($(date +%s) - start))s; env: $E2E_OUT/env; KUBECONFIG=$KUBECONFIG"

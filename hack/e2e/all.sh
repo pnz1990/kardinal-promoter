@@ -16,10 +16,11 @@
 #   -matrix  print every job as the GitHub Actions matrix of e2e-live.yml
 #
 # Env:
-#   JOBS        clusters at once (default 4; each takes 2-3 GB of memory,
-#               gitlab's about 7 GB)
+#   JOBS        jobs at once (default 4; each cluster takes 2-3 GB of
+#               memory, gitlab's about 7 GB; multi-cluster's job has two)
 #   SUITES      only these suites, e.g. 'core gitea' (default every suite)
-#   COUNT       go test -count (default 1). RUN is ignored: every job runs
+#   COUNT       go test -count (default 1; the upgrade jobs always 1: the
+#               test upgrades its cluster). RUN is ignored: every job runs
 #               its whole suite (for some tests, use make test-e2e-live RUN=)
 #   KEEP        set to keep the clusters (default: each is deleted when its
 #               job ends)
@@ -114,9 +115,11 @@ PREFIX=${ALL_PREFIX:-kardinal-e2e-all}
 existing=$(kind get clusters 2>/dev/null || true)
 for j in "${run[@]}"; do
   read -r id _ <<<"$j"
-  if grep -qx "$PREFIX-$id" <<<"$existing"; then
-    die "kind cluster $PREFIX-$id exists (a KEEP run, or another run with ALL_PREFIX=$PREFIX); delete it with kind delete cluster --name $PREFIX-$id"
-  fi
+  for c in "$PREFIX-$id" "$PREFIX-$id-spoke"; do
+    if grep -qx "$c" <<<"$existing"; then
+      die "kind cluster $c exists (a KEEP run, or another run with ALL_PREFIX=$PREFIX); delete it with kind delete cluster --name $c"
+    fi
+  done
 done
 if printf '%s\n' "${run[@]}" | grep -q ' core '; then
   command -v zsh >/dev/null || die "the core suite needs zsh on PATH (TestCLI_Completion)"
@@ -125,9 +128,15 @@ fi
 OUT="$REPO_ROOT/test/e2e/results/${PREFIX#kardinal-e2e-}-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$OUT"
 
+# delete_cluster ID deletes the job's cluster and the multi-cluster suite's
+# spoke (components/spoke.sh), if it has one.
 delete_cluster() {
-  kind delete cluster --name "$PREFIX-$1" --kubeconfig "$OUT/$1/kubeconfig" >>"$OUT/$1.log" 2>&1 ||
-    log "deleting kind cluster $PREFIX-$1 failed; see $OUT/$1.log"
+  local c
+  for c in "$PREFIX-$1" "$PREFIX-$1-spoke"; do
+    [ "$c" = "$PREFIX-$1" ] || kind get clusters 2>/dev/null | grep -qx "$c" || continue
+    kind delete cluster --name "$c" --kubeconfig "$OUT/$1/kubeconfig" >>"$OUT/$1.log" 2>&1 ||
+      log "deleting kind cluster $c failed; see $OUT/$1.log"
+  done
 }
 
 # run_job ID SUITE K8S SHARD writes ID.log and ID.rc ("<exit code> <seconds>").
@@ -139,6 +148,8 @@ run_job() {
     unset RUN
     [ "$suite" = github ] || unset KARDINAL_E2E_GITHUB_TOKEN_FILE DEMO_GITHUB_TOKEN
     export KIND_CLUSTER="$PREFIX-$id" KIND_K8S="$k8s" SHARD="$shard" COUNT="${COUNT:-1}"
+    # run.sh refuses COUNT above 1 for the upgrade suite.
+    [ "$suite" != upgrade ] || COUNT=1
     export E2E_OUT="$OUT/$id" KUBECONFIG="$OUT/$id/kubeconfig"
     mkdir -p "$E2E_OUT"
     bash "$E2E_DIR/up.sh" "$suite" && bash "$E2E_DIR/run.sh" "$suite"

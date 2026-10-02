@@ -195,8 +195,9 @@ make e2e-down SUITE=core        # delete the kind cluster
   asserts. `go test ./test/hack -run TestE2ECoverage` fails when a row's status and the tests
   disagree, when a live test claims no row, or when no suite runs it.
 
-**Multi-cluster (J2):** there is no live multi-cluster setup in this repo. J2 evidence is
-tracked in #1293.
+**Multi-cluster (J2):** the multi-cluster suite runs a hub kind cluster and a spoke
+(`<cluster>-spoke`) that the hub's Argo CD and Flux manage (`TestMultiCluster_*`). The J2
+demo is tracked in #1293.
 
 **Test application**: podinfo (`ghcr.io/stefanprodan/podinfo`) at the real tags pinned in
 test/e2e/fixtures (`fixtures.V1`..`V3`); `fixtures.BrokenTag` gives a rollout that never becomes
@@ -461,7 +462,8 @@ make test-e2e-live SUITE=core RUN='^TestGate_Pause'   # only the pause tests
 make e2e-down SUITE=core
 ```
 
-Journey 2 (multi-cluster) has no live setup yet; evidence is tracked in #1293. The fake-client
+The multi-cluster suite (`make e2e-up SUITE=multi-cluster`, a hub and a spoke) runs Journey
+2's setup live; the J2 demo is tracked in #1293. The fake-client
 journey tests run without a cluster: `go test ./test/e2e/ -run TestJourney` (TestJourney5CLI
 needs `make build` first).
 

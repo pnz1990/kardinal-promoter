@@ -15,6 +15,11 @@
 #                           host: go build on the host + hack/e2e/controller.Dockerfile
 #                           none: KARDINAL_E2E_IMAGE is already built (CI)
 #   KARDINAL_E2E_HELM_ARGS  extra helm arguments, word-split
+#   KARDINAL_E2E_INSTALL    0: build and load the image and the CLI and apply the
+#                           chart's CRDs, but install no release (the chart suite's
+#                           tests install their own); build: only build and load
+#                           the image and the CLI (the upgrade suite's test applies
+#                           the CRDs and upgrades the v0.8.1 release); default 1
 #
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
@@ -45,6 +50,24 @@ esac
 load_image "$IMAGE"
 (cd "$REPO_ROOT" && go build -o "$BIN/kardinal" ./cmd/kardinal)
 log "controller image $IMAGE ($BUILD), CLI $BIN/kardinal"
+env_set KARDINAL_E2E_IMAGE "$IMAGE"
+env_set KARDINAL_E2E_CHART "$REPO_ROOT/chart/kardinal-promoter"
+env_set KARDINAL_E2E_HELM "$(command -v helm)"
+
+if [ "${KARDINAL_E2E_INSTALL:-1}" = build ]; then
+  env_set KARDINAL_E2E_CLI "$BIN/kardinal"
+  log "no controller release and no CRDs (KARDINAL_E2E_INSTALL=build)"
+  exit 0
+fi
+if [ "${KARDINAL_E2E_INSTALL:-1}" = 0 ]; then
+  # Helm installs crds/ only when a CRD is missing, and parallel installs
+  # would race for them; apply them once here.
+  "${HELM[@]}" show crds "$REPO_ROOT/chart/kardinal-promoter" |
+    "${KUBECTL[@]}" apply --server-side --force-conflicts -f - >/dev/null
+  env_set KARDINAL_E2E_CLI "$BIN/kardinal"
+  log "no controller release (KARDINAL_E2E_INSTALL=0); CRDs applied"
+  exit 0
+fi
 
 args=(
   --set "image.repository=${IMAGE%:*}" --set "image.tag=${IMAGE##*:}" --set image.pullPolicy=Never
@@ -66,11 +89,26 @@ args+=(${KARDINAL_E2E_HELM_ARGS:-})
 # helm upgrade never updates the chart's crds/: apply them, so a reused
 # cluster runs this checkout's CRDs too.
 "${KUBECTL[@]}" apply --server-side --force-conflicts -f "$REPO_ROOT/chart/kardinal-promoter/crds/" >/dev/null
+existed=false
+"${HELM[@]}" -n "$KARDINAL_NS" status "$KARDINAL_RELEASE" >/dev/null 2>&1 && existed=true
 "${HELM[@]}" upgrade --install "$KARDINAL_RELEASE" "$REPO_ROOT/chart/kardinal-promoter" \
   -n "$KARDINAL_NS" --create-namespace "${args[@]}" --wait --timeout 5m >/dev/null
-# A rebuilt image under the same tag needs a restart to be picked up.
-"${KUBECTL[@]}" -n "$KARDINAL_NS" rollout restart "deploy/$KARDINAL_RELEASE" >/dev/null
-"${KUBECTL[@]}" -n "$KARDINAL_NS" rollout status "deploy/$KARDINAL_RELEASE" --timeout=180s >/dev/null
+# A rebuilt image under the same tag needs a restart to be picked up; a new
+# release's Pods already run it.
+if $existed; then
+  "${KUBECTL[@]}" -n "$KARDINAL_NS" rollout restart "deploy/$KARDINAL_RELEASE" >/dev/null
+  "${KUBECTL[@]}" -n "$KARDINAL_NS" rollout status "deploy/$KARDINAL_RELEASE" --timeout=180s >/dev/null
+fi
+# A rollout is done while the old Pod still shuts down (the chart's
+# shutdownDelaySeconds), and tests that look up the controller Pod expect
+# only the running ones.
+want=$("${KUBECTL[@]}" -n "$KARDINAL_NS" get "deploy/$KARDINAL_RELEASE" -o jsonpath='{.spec.replicas}')
+waited=0
+until [ "$("${KUBECTL[@]}" -n "$KARDINAL_NS" get pods -l app.kubernetes.io/name=kardinal-promoter -o name | wc -l)" -eq "$want" ]; do
+  waited=$((waited + 2))
+  [ "$waited" -ge 120 ] && die "the old controller Pods are still there after 120s (want $want)"
+  sleep 2
+done
 
 env_set KARDINAL_E2E_CLI "$BIN/kardinal"
 log "controller ready (scm.provider=$KARDINAL_E2E_SCM_PROVIDER)"

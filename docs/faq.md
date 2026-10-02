@@ -59,14 +59,26 @@ fails the step. Use one Bundle per chart image, or kustomize.
 
 ### What permissions does the controller need?
 
-The Helm chart creates the necessary `ClusterRole`. The minimum permissions are:
+The Helm chart creates the necessary `ClusterRole` (a `Role` in namespace mode). It grants:
 
-- `get/list/watch/create/update/patch/delete` on all `kardinal.io` CRDs
+- `get/list/watch/create/update/patch/delete` on the `kardinal.io` kinds, except
+  `auditevents` (`get/list/watch/create`: audit records are append-only) and the
+  cluster-scoped `changewindows` (`get/list/watch`, in a `ClusterRole` in both modes)
+- `get/update/patch` on the `status` subresources of those kinds (`auditevents` has none)
 - `get/list/watch/create/update/patch/delete` on `graphs.kro.run`
-- `get/list/watch` on `deployments`, `pods`, `services`
-- `get` on `secrets` (GitHub token secret only)
-- `create/patch` on `events.k8s.io` `events` (reconciler Events) and on core `events` (leader election)
-- `get/create/update` on `configmaps` (leader election)
+- `get/list/watch` on the health targets: `deployments`, Argo CD `applications` and `rollouts`,
+  Flux `kustomizations`, Flagger `canaries` (`patch` on `applications` only with
+  `rbac.argocdApplicationsWrite`)
+- `get` on `secrets` (Pipeline `spec.git.secretRef` and the SCM token); no `list` or `watch`
+- `get/create` on `serviceaccounts` and `get/list/create/update/delete` on `rolebindings`, plus
+  `bind` on the two Graph ClusterRoles only, for the [Graph identity](installation.md)
+- `get` on `namespaces` (only the watched one in namespace mode), to tell whether a Graph's,
+  Bundle's or step's namespace is being deleted
+- `create/patch` on `events.k8s.io` `events` and `get/list/watch/create/patch` on core `events`
+- in the release namespace: the leader election `leases`, and `create` plus
+  `get/update/patch` on the `kardinal-version` ConfigMap
+
+It grants nothing on `pods`, `services`, other ConfigMaps or `batch` Jobs.
 
 See [Security Guide](guides/security.md) for a full RBAC manifest.
 

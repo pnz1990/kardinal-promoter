@@ -26,7 +26,6 @@ What the namespaced rules grant:
 | `secrets` | get | Pipeline `spec.git.secretRef` and the SCM token Secret. The controller reads Secrets straight from the API server, one by name, and never lists or watches them. In cluster mode `get` still reaches **every Secret in the cluster** by name, because the rule is in a ClusterRole |
 | `events.k8s.io` `events` | create, patch | Events from every reconciler (the events.k8s.io/v1 API) |
 | `events` (core) | get, list, watch, create, patch | The UI step event list reads Events through core/v1; leader election writes core Events |
-| `configmaps` | get, list, watch | Cached reads; the only write is the `kardinal-version` ConfigMap |
 | All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
 | `auditevents` | get, list, watch, create | Audit records are append-only |
 | `graphs.kro.run` | full CRUD; get on `graphs/status` | One Graph per Bundle |
@@ -673,7 +672,7 @@ Because of `frame-ancestors 'none'`, the UI cannot be embedded in another dashbo
 
 Both the UI server (`:8082`) and the webhook/bundle-API server (`:8083`) support TLS via the `--tls-cert-file` and `--tls-key-file` flags (environment variables `KARDINAL_TLS_CERT_FILE` / `KARDINAL_TLS_KEY_FILE`).
 
-When both flags are set, both servers serve HTTPS. When neither is set, both serve plain HTTP. Setting only one of the two flags is a startup error: the controller exits instead of silently serving plain HTTP.
+When both flags are set, both servers serve HTTPS. When neither is set, both serve plain HTTP. Setting only one of the two flags is a startup error: the controller exits instead of silently serving plain HTTP. The Helm chart refuses `controller.tlsCertFile` without `controller.tlsKeyFile` (or the reverse) at install time.
 
 ### Helm: cert-manager integration (recommended)
 
@@ -691,11 +690,17 @@ spec:
   duration: 2160h  # 90 days
   renewBefore: 360h
   dnsNames:
+    - kardinal-promoter.kardinal-system.svc
     - kardinal-promoter.kardinal-system.svc.cluster.local
   issuerRef:
-    name: letsencrypt-prod  # your ClusterIssuer
+    name: internal-ca  # your private CA ClusterIssuer
     kind: ClusterIssuer
 ```
+
+The issuer must be one that signs in-cluster names, such as a cert-manager
+[CA issuer](https://cert-manager.io/docs/configuration/ca/) backed by your private CA.
+Public ACME issuers such as Let's Encrypt cannot issue certificates for `.svc` names.
+Clients then trust that CA (for example `curl --cacert ca.crt`).
 
 ```yaml
 # 2. tls-values.yaml: mount the cert-manager Secret and point the controller at it
@@ -713,8 +718,26 @@ controller:
 ```
 
 Apply it with `helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 -f tls-values.yaml`.
-The paths must point at a mounted certificate: if the files cannot be read, the controller
-exits at startup instead of serving plain HTTP.
+The paths must point at a mounted certificate. The chart refuses a path that is not in a
+`secret`, `projected` or `csi` volume mounted with `controller.extraVolumes` and
+`controller.extraVolumeMounts` (in the mounted directory, or the file a `subPath` mount puts
+there). If the files still cannot be read, for example a wrong file name in the Secret, the
+controller exits at startup instead of serving plain HTTP.
+
+Certificates that reach the container another way (a `hostPath` volume, files in a custom
+image, or a volume a mutating webhook injects, such as the Vault Agent Injector's
+`/vault/secrets`) do not pass that check. Set the paths with `controller.extraEnv` instead:
+
+```yaml
+controller:
+  extraEnv:
+    - name: KARDINAL_TLS_CERT_FILE
+      value: /vault/secrets/tls.crt
+    - name: KARDINAL_TLS_KEY_FILE
+      value: /vault/secrets/tls.key
+```
+
+The chart does not check those paths; the controller exits at startup if it cannot open them.
 
 ### Self-signed certificates (development only)
 

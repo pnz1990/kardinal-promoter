@@ -4,15 +4,17 @@ name: E2E live
 # gets its own kind cluster with a real git server and GitOps engine and the
 # controller built from this commit; nothing is faked. The core suite runs on
 # the three Kubernetes minors in hack/tool-versions.env, split across two
-# jobs per minor (hack/e2e/run.sh SHARD).
+# jobs per minor (hack/e2e/run.sh SHARD); the upgrade suite on Kubernetes
+# 1.29 (UPG-OLDK8S-01) and the newest minor.
 #
 # Pull requests and pushes to main don't run it: twelve jobs of 10 to 45
 # minutes on every push filled the runners and held up every PR's required
 # checks. Before a merge, run the suites locally (make e2e-all,
 # hack/e2e/all.sh, the same jobs). This workflow runs weekly, repeating every
-# test three times to find flakes, and on a manual dispatch (gh workflow run
-# e2e-live.yml --ref <branch>). Only the github job gets a secret,
-# DEMO_GITHUB_TOKEN, in its setup step.
+# test three times to find flakes (the upgrade test once: it upgrades its
+# cluster), and on a manual dispatch (gh workflow run e2e-live.yml --ref
+# <branch>). Only the github job gets a secret, DEMO_GITHUB_TOKEN, in its
+# setup step.
 #
 # The "e2e live" job passes when every job passed and the coverage proof
 # holds. Branch protection does not require it.
@@ -75,7 +77,8 @@ jobs:
       SUITE: ${{ matrix.suite }}
       KIND_K8S: ${{ matrix.k8s }}
       KARDINAL_E2E_BUILD: none
-      COUNT: ${{ github.event_name == 'schedule' && '3' || inputs.count || '1' }}
+      # hack/e2e/run.sh refuses COUNT above 1 for the upgrade suite.
+      COUNT: ${{ matrix.suite == 'upgrade' && '1' || github.event_name == 'schedule' && '3' || inputs.count || '1' }}
       SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -92,12 +95,29 @@ jobs:
           echo "${KIND_SHA256}  kind" | sha256sum -c -
           chmod +x kind && sudo mv kind /usr/local/bin/
 
+      # One kubectl for every job. KUBECTL_VERSION is within kubectl's one
+      # minor of skew of the three newest minors, not of the upgrade job's
+      # 1.29: that job runs it seven minors past the supported skew, which
+      # upstream does not test. Its kubectl calls pass there; if one breaks on
+      # 1.29, install a v1.29 or v1.30 kubectl for that job only rather than
+      # moving KUBECTL_VERSION (test/hack pins it to the middle minor).
       - name: Install kubectl
         run: |
           source hack/tool-versions.env
           curl -fsSLO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
           echo "${KUBECTL_SHA256}  kubectl" | sha256sum -c -
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+
+      # Every suite installs the chart with helm, and the chart suite tests
+      # what helm reports; the runner image's helm floats.
+      - name: Install helm
+        run: |
+          source hack/tool-versions.env
+          curl -fsSLO "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm-${HELM_VERSION}-linux-amd64.tar.gz" | sha256sum -c -
+          tar -xzf "helm-${HELM_VERSION}-linux-amd64.tar.gz" --strip-components=1 linux-amd64/helm
+          rm "helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          sudo mv helm /usr/local/bin/ && helm version
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:

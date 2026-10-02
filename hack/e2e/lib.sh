@@ -40,6 +40,29 @@ die() {
   exit 1
 }
 
+# kind_cluster NAME creates the kind cluster NAME from test/e2e/kind-config.yaml,
+# with the node image NODE_IMAGE if set, unless it exists. kind writes the
+# cluster's context to the first file in KUBECONFIG, or to ~/.kube/config
+# when KUBECONFIG is unset, so an unset KUBECONFIG defaults to
+# $E2E_OUT/kubeconfig (printed) and kind always gets --kubeconfig: the
+# user's kubeconfig is never touched. In that default file the context of
+# an existing cluster is exported again, for a cluster an older run created.
+kind_cluster() {
+  local name=$1 file
+  if [ -z "${KUBECONFIG:-}" ]; then
+    mkdir -p "$E2E_OUT"
+    export KUBECONFIG=$E2E_OUT/kubeconfig
+    log "KUBECONFIG is not set: using $KUBECONFIG"
+  fi
+  file=${KUBECONFIG%%:*}
+  if ! kind get clusters 2>/dev/null | grep -qx "$name"; then
+    kind create cluster --name "$name" --config "$REPO_ROOT/test/e2e/kind-config.yaml" --kubeconfig "$file" \
+      ${NODE_IMAGE:+--image "$NODE_IMAGE"} --wait 120s
+  elif [ "$file" = "$E2E_OUT/kubeconfig" ]; then
+    kind export kubeconfig --name "$name" --kubeconfig "$file" >&2
+  fi
+}
+
 # target_cluster checks CTX and points KUBECTL and HELM at it.
 target_cluster() {
   use_kind_context "$CTX" >&2

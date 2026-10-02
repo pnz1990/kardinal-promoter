@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -399,7 +400,6 @@ func controllerAccess() []apiAccess {
 		{"events.k8s.io", "events", []string{"create", "patch"}, inWatched, "", "GetEventRecorder (main.go): reconciler Events"},
 		{"", "events", []string{"list", "create", "patch"}, inWatched, "", "UI step events list (ui_api.go); leader election Events (controller-runtime)"},
 		{"", "secrets", []string{"get"}, inWatched, "", "Pipeline git secret (promotionstep Get), SCM SecretWatcher (Get; Secrets are uncached)"},
-		{"", "configmaps", readVerbs, inWatched, "", "ensureVersionConfigMap cached Get (main.go)"},
 		{"kardinal.io", "auditevents", []string{"get", "list", "watch", "create"}, inWatched, "", "audit.go"},
 		{"kro.run", "graphs", rwVerbs, inWatched, "", "pkg/graph client; get: promotionstep finalizer.go stepComeback"},
 		{"kro.run", "graphs/status", []string{"get"}, inWatched, "", "pkg/graph client"},
@@ -508,6 +508,13 @@ func TestChartRBACLeastPrivilege(t *testing.T) {
 		{"team-a", "", "configmaps", "create", ""},
 		{"team-a", "", "configmaps", "patch", "some-app-config"},
 		{releaseNS, "", "configmaps", "patch", "some-app-config"},
+		// ConfigMaps are uncached and the only one read is kardinal-version,
+		// by name in the release namespace: no list, watch or get elsewhere.
+		{"team-a", "", "configmaps", "get", "some-app-config"},
+		{"team-a", "", "configmaps", "list", ""},
+		{"team-a", "", "configmaps", "watch", ""},
+		{releaseNS, "", "configmaps", "list", ""},
+		{releaseNS, "", "configmaps", "get", "some-app-config"},
 		{"team-a", "coordination.k8s.io", "leases", "update", "kardinal-promoter-leader"},
 		{"", "kardinal.io", "changewindows", "create", ""},
 		{"", "kardinal.io", "changewindows", "delete", "freeze"},
@@ -673,6 +680,111 @@ func TestChartExposesUIAndWebhookPorts(t *testing.T) {
 	assert.Equal(t, ":9083", args["webhook-bind-address"])
 }
 
+// The metrics and health servers listen on metricsBindAddress and
+// healthProbeBindAddress, so the container ports, the probes (port: health)
+// and the NetworkPolicy must follow those addresses, not the Service ports.
+// Before the fix a custom bind address left the probes on a port nothing
+// listened on and the install never became ready.
+func TestChartPortsFollowBindAddresses(t *testing.T) {
+	docs := render(t, "kardinal-promoter", "--set", "networkPolicy.enabled=true",
+		"--set", "metricsBindAddress=:9100", "--set", "healthProbeBindAddress=0.0.0.0:9101",
+		"--set", "service.metricsPort=9090", "--set", "service.healthPort=9091")
+	c := controllerContainer(t, docs)
+	ports := map[string]int32{}
+	for _, p := range c.Ports {
+		ports[p.Name] = p.ContainerPort
+	}
+	assert.Equal(t, map[string]int32{"metrics": 9100, "health": 9101, "ui": 8082, "webhook": 8083}, ports)
+	args := argValues(c)
+	assert.Equal(t, ":9100", args["metrics-bind-address"])
+	assert.Equal(t, "0.0.0.0:9101", args["health-probe-bind-address"])
+	assert.Equal(t, "health", c.LivenessProbe.HTTPGet.Port.String())
+	assert.Equal(t, "health", c.ReadinessProbe.HTTPGet.Port.String())
+
+	svcs := docsOfKind(docs, "Service")
+	require.Len(t, svcs, 1)
+	var svc corev1.Service
+	decodeStrict(t, svcs[0], &svc)
+	svcPorts := map[string]int32{}
+	for _, p := range svc.Spec.Ports {
+		svcPorts[p.Name] = p.Port
+		assert.Equal(t, p.Name, p.TargetPort.String(), "Service port %s targets the named container port", p.Name)
+	}
+	assert.Equal(t, map[string]int32{"metrics": 9090, "health": 9091, "ui": 8082, "webhook": 8083}, svcPorts)
+
+	nps := docsOfKind(docs, "NetworkPolicy")
+	require.Len(t, nps, 1)
+	var np networkingv1.NetworkPolicy
+	decodeStrict(t, nps[0], &np)
+	var ingress []int32
+	for _, r := range np.Spec.Ingress {
+		for _, p := range r.Ports {
+			ingress = append(ingress, p.Port.IntVal)
+		}
+	}
+	assert.ElementsMatch(t, []int32{9100, 9101, 8082, 8083}, ingress,
+		"NetworkPolicy ports are Pod ports, so they must be the container ports")
+
+	// Port 0 disables controller-runtime's metrics server; the container port
+	// falls back to the Service port instead of rendering an invalid 0.
+	c = controllerContainer(t, render(t, "kardinal-promoter", "--set-string", "metricsBindAddress=0"))
+	for _, p := range c.Ports {
+		if p.Name == "metrics" {
+			assert.Equal(t, int32(8080), p.ContainerPort)
+		}
+	}
+}
+
+// terminationGracePeriodSeconds 0 is a valid value (kill at once); the chart
+// used `default 60`, which treats 0 as unset and rendered 60.
+func TestChartTerminationGracePeriod(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want int64
+	}{
+		{nil, 60},
+		{[]string{"--set", "terminationGracePeriodSeconds=0"}, 0},
+		{[]string{"--set", "terminationGracePeriodSeconds=120"}, 120},
+		{[]string{"--set", "terminationGracePeriodSeconds=null"}, 60},
+	} {
+		deps := docsOfKind(render(t, "kardinal-promoter", tc.args...), "Deployment")
+		require.Len(t, deps, 1)
+		var dep appsv1.Deployment
+		decodeStrict(t, deps[0], &dep)
+		require.NotNil(t, dep.Spec.Template.Spec.TerminationGracePeriodSeconds, "%v", tc.args)
+		assert.Equal(t, tc.want, *dep.Spec.Template.Spec.TerminationGracePeriodSeconds, "%v", tc.args)
+	}
+}
+
+// shutdownDelaySeconds is a preStop sleep, so a Pod being deleted serves
+// until Services stop routing to it; 0 removes the hook, and null is the
+// default.
+func TestChartShutdownDelay(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want []string
+	}{
+		{nil, []string{"sleep", "5"}},
+		{[]string{"--set", "shutdownDelaySeconds=0"}, nil},
+		{[]string{"--set", "shutdownDelaySeconds=12"}, []string{"sleep", "12"}},
+		{[]string{"--set", "shutdownDelaySeconds=null"}, []string{"sleep", "5"}},
+	} {
+		c := controllerContainer(t, render(t, "kardinal-promoter", tc.args...))
+		if tc.want == nil {
+			assert.Nil(t, c.Lifecycle, "%v", tc.args)
+			continue
+		}
+		if assert.NotNil(t, c.Lifecycle, "%v", tc.args) && assert.NotNil(t, c.Lifecycle.PreStop, "%v", tc.args) &&
+			assert.NotNil(t, c.Lifecycle.PreStop.Exec, "%v", tc.args) {
+			assert.Equal(t, tc.want, c.Lifecycle.PreStop.Exec.Command, "%v", tc.args)
+		}
+	}
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "shutdownDelaySeconds=-1")
+	require.Error(t, err)
+	// Helm 3.14 and 3.22 (CI) word the schema error differently.
+	assert.Regexp(t, `shutdownDelaySeconds(: Must be greater than or equal to 0|': minimum: got -1, want 0)`, out)
+}
+
 // ── C08-api-config-11: values wired to real controller flags ─────────────────
 
 var flagDef = regexp.MustCompile(`flag\.\w+Var\(\s*&[\w.]+,\s*"([a-z0-9-]+)"`)
@@ -725,6 +837,10 @@ func controllerEnvReads(t *testing.T) map[string]bool {
 var everyValue = []string{
 	"--set", "controller.tlsCertFile=/tls/tls.crt",
 	"--set", "controller.tlsKeyFile=/tls/tls.key",
+	"--set", "controller.extraVolumes[0].name=tls",
+	"--set", "controller.extraVolumes[0].secret.secretName=kardinal-tls",
+	"--set", "controller.extraVolumeMounts[0].name=tls",
+	"--set", "controller.extraVolumeMounts[0].mountPath=/tls",
 	"--set", "controller.policyNamespaces={platform-policies}",
 	"--set", "scm.provider=gitlab",
 	"--set", "scm.apiURL=https://gitlab.example.com",
@@ -806,6 +922,87 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 	assert.Equal(t, "/tls", mounts["tls"])
 }
 
+// TestChartTLSFilesSetTogether: the controller exits at startup when only one
+// of --tls-cert-file and --tls-key-file is set, so the chart refuses a
+// controller.tlsCertFile without controller.tlsKeyFile (and the reverse)
+// before anything is applied, naming the value that is missing its pair.
+func TestChartTLSFilesSetTogether(t *testing.T) {
+	for set, only := range map[string]string{
+		"controller.tlsCertFile=/tls/tls.crt": "tlsCertFile",
+		"controller.tlsKeyFile=/tls/tls.key":  "tlsKeyFile",
+	} {
+		out, err := helmTemplate(t, "kardinal-promoter", "--set", set)
+		require.Error(t, err, "--set %s alone must fail:\n%s", set, out)
+		assert.Contains(t, out, "controller.tlsCertFile and controller.tlsKeyFile must be set together (only "+only+" is set)")
+	}
+	env := envByName(controllerContainer(t, render(t, "kardinal-promoter")))
+	assert.NotContains(t, env, "KARDINAL_TLS_CERT_FILE", "no TLS by default")
+	assert.NotContains(t, env, "KARDINAL_TLS_KEY_FILE", "no TLS by default")
+}
+
+// TestChartTLSFilesInASecret: the controller crash-loops when it cannot open
+// --tls-cert-file or --tls-key-file, so the chart refuses TLS paths that are
+// not in a secret, projected or csi volume mounted with controller.extraVolumes
+// and extraVolumeMounts, naming the value and its path. A directory mount and
+// subPath mounts of the two files both render.
+func TestChartTLSFilesInASecret(t *testing.T) {
+	tls := func(cert, key string) []string {
+		return []string{"--set", "controller.tlsCertFile=" + cert, "--set", "controller.tlsKeyFile=" + key}
+	}
+	volume := func(source string) []string {
+		return []string{"--set", "controller.extraVolumes[0].name=tls", "--set", "controller.extraVolumes[0]." + source}
+	}
+	mount := func(i int, at, subPath string) []string {
+		m := fmt.Sprintf("controller.extraVolumeMounts[%d].", i)
+		args := []string{"--set", m + "name=tls", "--set", m + "mountPath=" + at}
+		if subPath != "" {
+			args = append(args, "--set", m+"subPath="+subPath)
+		}
+		return args
+	}
+	mountExpr := func(i int, at, subPathExpr string) []string {
+		m := fmt.Sprintf("controller.extraVolumeMounts[%d].", i)
+		return []string{"--set", m + "name=tls", "--set", m + "mountPath=" + at, "--set", m + "subPathExpr=" + subPathExpr}
+	}
+	join := func(parts ...[]string) []string {
+		var out []string
+		for _, p := range parts {
+			out = append(out, p...)
+		}
+		return out
+	}
+	secret := volume("secret.secretName=kardinal-tls")
+	notInSecret := func(value, path string) string {
+		return "controller." + value + " (" + path + ") is not in a mounted Secret"
+	}
+	for name, c := range map[string]struct {
+		args []string
+		want string
+	}{
+		"no mount":           {tls("/tls/tls.crt", "/tls/tls.key"), notInSecret("tlsCertFile", "/tls/tls.crt")},
+		"key outside":        {join(tls("/tls/tls.crt", "/etc/tls.key"), secret, mount(0, "/tls", "")), notInSecret("tlsKeyFile", "/etc/tls.key")},
+		"sibling directory":  {join(tls("/tlsx/tls.crt", "/tlsx/tls.key"), secret, mount(0, "/tls", "")), notInSecret("tlsCertFile", "/tlsx/tls.crt")},
+		"path is the mount":  {join(tls("/tls", "/tls/tls.key"), secret, mount(0, "/tls", "")), notInSecret("tlsCertFile", "/tls")},
+		"configMap volume":   {join(tls("/tls/tls.crt", "/tls/tls.key"), volume("configMap.name=tls"), mount(0, "/tls", "")), `controller.tlsCertFile (/tls/tls.crt) is in volume "tls", which is not a secret, projected or csi volume`},
+		"mount of no volume": {join(tls("/tls/tls.crt", "/tls/tls.key"), mount(0, "/tls", "")), `controller.tlsCertFile (/tls/tls.crt) is mounted from volume "tls", which controller.extraVolumes does not define`},
+	} {
+		out, err := helmTemplate(t, "kardinal-promoter", c.args...)
+		require.Error(t, err, "%s must fail:\n%s", name, out)
+		assert.Contains(t, out, c.want, name)
+	}
+	for name, args := range map[string][]string{
+		"secret directory":  join(tls("/tls/tls.crt", "/tls/tls.key"), secret, mount(0, "/tls/", "")),
+		"subPath files":     join(tls("/etc/c.crt", "/etc/c.key"), secret, mount(0, "/etc/c.crt", "tls.crt"), mount(1, "/etc/c.key", "tls.key")),
+		"subPathExpr files": join(tls("/etc/c.crt", "/etc/c.key"), secret, mountExpr(0, "/etc/c.crt", "$(POD_NAME)/tls.crt"), mountExpr(1, "/etc/c.key", "$(POD_NAME)/tls.key")),
+		"projected":         join(tls("/tls/tls.crt", "/tls/tls.key"), volume("projected.sources[0].secret.name=kardinal-tls"), mount(0, "/tls", "")),
+		"csi":               join(tls("/tls/tls.crt", "/tls/tls.key"), volume("csi.driver=csi.cert-manager.io"), mount(0, "/tls", "")),
+	} {
+		env := envByName(controllerContainer(t, render(t, "kardinal-promoter", args...)))
+		assert.NotEmpty(t, env["KARDINAL_TLS_CERT_FILE"].Value, name)
+		assert.NotEmpty(t, env["KARDINAL_TLS_KEY_FILE"].Value, name)
+	}
+}
+
 // TestChartRejectsUnknownValues: values.schema.json fails unknown keys, so the
 // value names the docs used to give can no longer be silently ignored.
 // controller.shard was removed with distributed mode (#1321).
@@ -835,8 +1032,11 @@ func TestChartAcceptsRepoSetKeys(t *testing.T) {
 		"networkPolicy.enabled=true",
 		"demo.enabled=true",
 		"controller.watchNamespace=" + releaseNS,
-		"controller.tlsCertFile=/tls/tls.crt",
-		"controller.tlsKeyFile=/tls/tls.key",
+		// Set together and in a mounted Secret, as hack/e2e/components/ui.sh
+		// does (TestChartTLSFilesSetTogether, TestChartTLSFilesInASecret).
+		"controller.extraVolumes[0].name=tls,controller.extraVolumes[0].secret.secretName=kui-tls-cert," +
+			"controller.extraVolumeMounts[0].name=tls,controller.extraVolumeMounts[0].mountPath=/etc/kardinal/tls," +
+			"controller.tlsCertFile=/etc/kardinal/tls/tls.crt,controller.tlsKeyFile=/etc/kardinal/tls/tls.key",
 		"prometheusRule.enabled=true",
 		"prometheusRule.additionalLabels.release=kube-prometheus-stack",
 		"grafanaDashboard.enabled=true",

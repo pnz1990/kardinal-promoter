@@ -131,7 +131,7 @@ kardinal version
 | `service.webhookPort` | `8083` | Webhook (`/webhook/scm`) and Bundle API port (container and Service) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
-| `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts` |
+| `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
 | `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed, so the chart grants no Job access |
@@ -164,7 +164,7 @@ The kardinal controller serves an embedded web UI at port `8082` (configurable v
 
 ### In-cluster access (recommended): kubectl port-forward
 
-The supported access method for in-cluster deployments without Ingress is `kubectl port-forward`:
+The chart's Service is `ClusterIP` and the chart creates no Ingress. Without an Ingress, `NodePort` or `LoadBalancer` Service of your own, use `kubectl port-forward`:
 
 ```bash
 kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082
@@ -448,7 +448,7 @@ What each finding blocks:
 | env `steps` / `autoRollback` | every write fails | only edits to that environment fail |
 | reserved environment name (e.g. `graph`) | every write fails | only edits to that environment fail |
 | `spec.policyGates`, PolicyGate `spec.selector` | every write fails | writes succeed; the next edit must remove the field |
-| environment name that is not a DNS label (e.g. `Test`) | spec writes fail; status writes succeed and the Pipeline reports Valid | writes succeed |
+| environment name that is not a DNS label (e.g. `Test`) | spec and label writes fail; status writes succeed and the Pipeline reports Valid | writes succeed |
 | PolicyGate name longer than 63 characters | every write fails | **every write fails**, including labels and status |
 | duplicate environment name | writes succeed; Pipeline `Ready=False` `ValidationFailed` | same |
 | `shard` | writes succeed; Pipeline `Ready=False` `NotImplemented` | same |
@@ -469,7 +469,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 - **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The chart ships no ValidatingAdmissionPolicy; the CRD schemas validate these fields.
 - **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart no longer grants `batch/jobs`.
-- **`--reuse-values`** fails with `Additional property krocodile is not allowed`, even when you never set `krocodile`. Use `--reset-then-reuse-values`.
+- **`--reuse-values`** fails with `additional properties 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
 
 #### Other notes
 
@@ -482,7 +482,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 #### If something goes wrong
 
-- **`helm upgrade` fails with `Additional property krocodile is not allowed`.** Nothing was changed. Rerun step 8 with `--reset-then-reuse-values`, or with `-f` and a values file without `krocodile`.
+- **`helm upgrade` fails with `additional properties 'krocodile' not allowed`** (Helm before 3.18.5: `Additional property krocodile is not allowed`). Nothing was changed. Rerun step 8 with `--reset-then-reuse-values`, or with `-f` and a values file without `krocodile`.
 - **`kro-system` was deleted** (step 5 skipped). kro was deleted with it. Rerun `KUBE_CONTEXT=<your-context> bash hack/install-kro.sh`. The Graphs are in the Bundles' namespaces and survive; kro picks them up again.
 - **`graphs.experimental.kro.run` is stuck `Terminating`** (step 4 skipped). Run the step 4 command. The CRD then finishes deleting (`kubectl wait --for=delete crd/graphs.experimental.kro.run --timeout=60s`), and no kardinal object is lost.
 - **Steps ran again after the upgrade.** The CRDs were applied while v0.8.1 was running. Nothing is lost, and the Bundles finish.
@@ -494,20 +494,46 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 ## Graceful shutdown
 
-The controller handles `SIGTERM` gracefully: it stops accepting new reconcile requests
-and allows in-flight reconcile loops up to **30 seconds** to complete before exiting.
-This prevents mid-step interruptions during rolling updates or node evictions — for
-example, a git-push that was 5 seconds from finishing will complete rather than leaving
-the PromotionStep in an inconsistent state.
+When Kubernetes deletes the controller Pod (a rolling update, a scale-down or a node drain),
+the Pod first keeps serving for `shutdownDelaySeconds` (default **5**). Services stop sending
+it new connections in that time, so the UI, SCM webhooks and the Bundle API keep answering
+through a rollout instead of refusing or dropping requests on a node whose routes still point
+at the old Pod. Then the controller gets `SIGTERM` and shuts down in this order:
 
-The Helm chart sets `terminationGracePeriodSeconds: 60` (double the shutdown timeout)
-so Kubernetes sends `SIGKILL` only after the controller has had a full 30 seconds to drain.
+1. The webhook and UI servers stop accepting connections and give the requests in flight up
+   to **20 seconds** to finish. Reconciles keep running meanwhile.
+2. The controller stops starting reconciles and cancels the ones in flight. A git push or SCM
+   API call in progress is cancelled, not finished: the step logs `step failed, will retry`
+   with `context canceled`.
+3. The metrics and health probe servers stop, waiting for the requests in flight.
 
-To adjust the timeout:
+With no request in flight the controller usually exits within a second. The whole shutdown
+is bounded at **30 seconds**: when a request is still open then, the controller logs
+`failed waiting for all runnables to end within grace period of 30s` and exits.
+
+This leaves no inconsistent state. After the restart the step runs again from its last saved
+step. A `pr-review` step force-pushes its branch `kardinal/<bundle>/<env>`, so a step stopped
+after its push and before its PR opens one PR with one commit, and the base branch changes
+only when the PR is merged.
+
+The Helm chart sets `terminationGracePeriodSeconds: 60` so Kubernetes sends `SIGKILL` only
+after the shutdown delay and the controller's full 30 seconds to shut down. The delay counts
+against the grace period: keep `terminationGracePeriodSeconds` above `shutdownDelaySeconds`
+plus 30. A leader keeps its lease while it waits, so the delay also postpones the new
+leader's takeover by as much.
 
 ```yaml
 # values.yaml
-terminationGracePeriodSeconds: 120  # increase if reconcile loops routinely take >30s
+shutdownDelaySeconds: 0  # SIGTERM at once: new connections can still reach the Pod as it stops
+```
+
+The 30-second shutdown timeout is fixed in the controller. `terminationGracePeriodSeconds` only sets
+when Kubernetes sends `SIGKILL`, so a value above 30 does not give reconciles more time.
+A value below 30 can cut the shutdown short, and `0` kills the Pod at once:
+
+```yaml
+# values.yaml
+terminationGracePeriodSeconds: 0  # no graceful shutdown: SIGKILL at once
 ```
 
 ---
@@ -593,7 +619,7 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 | `clusterroles` | `bind`, limited to `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` |
 | `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
 | `secrets` | get only: the controller reads each Secret by name and never lists or watches them. In the default cluster mode `get` covers **every Secret in the cluster**. The release-namespace Role adds `get` on the SCM token Secret by name |
-| `configmaps` | get, list, watch; the `kardinal-version` ConfigMap is written through the leader-election Role |
+| `configmaps` | None in the watched namespaces. The leader-election Role reads and writes the `kardinal-version` ConfigMap by name |
 | `leases` | Leader election, through a Role in the release namespace |
 | `events` | get, list, watch, create, patch |
 
@@ -604,9 +630,12 @@ to turn the namespaced rules into a Role in one namespace.
 
 kro does not apply a Graph's children with its own identity. It impersonates the Graph's
 `spec.serviceAccountName` (default `kardinal-graph`) in the Graph's namespace. The kardinal-promoter
-controller creates that ServiceAccount and binds it with RoleBindings to `kardinal-promoter-graph-applier`
-(in the Graph namespace) and `kardinal-promoter-graph-reader` (in each namespace a health `ref` node reads,
-limited to the Graph's own namespace and `graph.readerNamespaces`). Reader bindings that no Graph
+controller creates that ServiceAccount and binds it with RoleBindings to `<fullname>-graph-applier`
+(in the Graph namespace) and `<fullname>-graph-reader` (in each namespace a health `ref` node reads,
+limited to the Graph's own namespace and `graph.readerNamespaces`). Each reader binding is named
+`<fullname>-graph-reader-<graph namespace>`: with release `kp`, `kp-kardinal-promoter-graph-reader-<graph namespace>`.
+`<fullname>` is the chart's full name: `fullnameOverride` if set, else the release name, plus
+`-kardinal-promoter` unless the release name contains it. Reader bindings that no Graph
 in the namespace needs any more are deleted: when a Bundle is translated, when a Graph is deleted,
 and, in cluster mode, by a sweep at controller startup and every 10 minutes that also catches the
 bindings of namespaces that are gone. The sweep lists only RoleBindings labeled

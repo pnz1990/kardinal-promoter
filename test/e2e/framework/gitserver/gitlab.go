@@ -61,12 +61,28 @@ func (g *gitlab) createIn(ctx context.Context, owner, name string, files map[str
 	return r, err
 }
 
+// gitlabDeleteTries is how many times DeleteRepo asks.
+const gitlabDeleteTries = 3
+
+// DeleteRepo deletes the project. GitLab can answer 500 when the delete
+// races a post-receive job of the last push (NoRepository "repository not
+// found" while it expires the project's caches), so a 5xx is retried.
 func (g *gitlab) DeleteRepo(ctx context.Context, r Repo) error {
-	err := g.do(ctx, http.MethodDelete, g.projectPath(r), nil, nil)
-	if IsNotFound(err) {
-		return nil
+	for try := 1; ; try++ {
+		err := g.do(ctx, http.MethodDelete, g.projectPath(r), nil, nil)
+		if IsNotFound(err) {
+			return nil
+		}
+		se, ok := err.(*StatusError)
+		if err == nil || !ok || se.Code < 500 || try == gitlabDeleteTries {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(g.retryEvery()):
+		}
 	}
-	return err
 }
 
 func (g *gitlab) ReadFile(ctx context.Context, r Repo, ref, path string) ([]byte, error) {

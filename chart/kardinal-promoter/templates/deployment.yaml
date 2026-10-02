@@ -31,7 +31,8 @@ spec:
       serviceAccountName: {{ include "kardinal-promoter.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 60 }}
+      {{- /* default treats 0 as unset; 0 is a valid grace period */}}
+      terminationGracePeriodSeconds: {{ if kindIs "invalid" .Values.terminationGracePeriodSeconds }}60{{ else }}{{ .Values.terminationGracePeriodSeconds }}{{ end }}
       containers:
         - name: controller
           securityContext:
@@ -126,19 +127,21 @@ spec:
             {{- with .Values.controller.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- $ports := include "kardinal-promoter.containerPorts" . | fromJson }}
           ports:
-            - name: metrics
-              containerPort: {{ .Values.service.metricsPort }}
+            {{- range $name := list "metrics" "health" "ui" "webhook" }}
+            - name: {{ $name }}
+              containerPort: {{ index $ports $name }}
               protocol: TCP
-            - name: health
-              containerPort: {{ .Values.service.healthPort }}
-              protocol: TCP
-            - name: ui
-              containerPort: {{ .Values.service.uiPort }}
-              protocol: TCP
-            - name: webhook
-              containerPort: {{ .Values.service.webhookPort }}
-              protocol: TCP
+            {{- end }}
+          {{- $shutdownDelay := ternary 5 .Values.shutdownDelaySeconds (kindIs "invalid" .Values.shutdownDelaySeconds) }}
+          {{- if gt (int $shutdownDelay) 0 }}
+          lifecycle:
+            preStop:
+              exec:
+                # The Pod keeps serving while Services stop routing to it.
+                command: ["sleep", "{{ int $shutdownDelay }}"]
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

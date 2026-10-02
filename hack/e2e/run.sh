@@ -8,7 +8,8 @@
 # the results, for test/e2e/proof, in summary.json next to it.
 #
 # Env:
-#   COUNT         go test -count (default 1; the weekly flake job uses more)
+#   COUNT         go test -count (default 1; the weekly flake job uses more;
+#                 the upgrade suite runs once)
 #   RUN           go test -run pattern (default: the suite's, from up.sh)
 #   SHARD         i/n runs every nth of the matching tests, starting at the
 #                 ith (CI splits the core suite across jobs this way)
@@ -34,6 +35,8 @@ cd "$REPO_ROOT"
 go build -o "$E2E_OUT/bin/report" ./test/e2e/report
 RUN=${RUN:-$KARDINAL_E2E_RUN}
 COUNT=${COUNT:-1}
+# The upgrade test upgrades the cluster's v0.8.1 release, so it runs once.
+[ "$SUITE" != upgrade ] || [ "$COUNT" = 1 ] || die "COUNT=$COUNT: the upgrade suite's cluster serves one run; use COUNT=1"
 if [ -n "${SHARD:-}" ]; then
   if ! [[ "$SHARD" =~ ^([0-9]+)/([0-9]+)$ ]] || [ "${BASH_REMATCH[1]}" -lt 1 ] ||
     [ "${BASH_REMATCH[1]}" -gt "${BASH_REMATCH[2]}" ]; then
