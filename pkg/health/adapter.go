@@ -703,9 +703,10 @@ var fluxKustomizationGVR = schema.GroupVersionResource{
 // promoted commit because its resources stalled, or on another commit when
 // a stalled Deployment itself runs the Bundle images. A stall of a
 // Deployment whose ProgressDeadlineExceeded is from an earlier rollout is
-// Progressing (see stalledEarlier), and so is Ready=False on another git
-// commit while the Kustomization's Deployments do not run the Bundle
-// images: Flux has not applied the promoted change. Ready=Unknown, a
+// Progressing (see stalledEarlier), on the promoted commit or another, and
+// so is Ready=False on another git commit while no Deployment of the
+// Kustomization runs the Bundle images: Flux has not applied the promoted
+// change. Ready=Unknown, a
 // generation not yet observed or another applied revision is Progressing.
 // While the Kustomization is suspended (spec.suspend) Flux applies nothing,
 // so a Progressing result says so.
@@ -764,11 +765,11 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 		// deadline: Flux applied the Bundle's change and that rollout
 		// stalled. Another Deployment's stall is not ours to fail on, nor a
 		// ProgressDeadlineExceeded from an earlier rollout.
-		// A failure on another commit while the Kustomization's Deployments
-		// do not run the Bundle images is not about the promoted change
-		// (B94): Flux has not applied it yet, as after a failed release
-		// until Flux fetches the fix. That waits, as Argo CD's Degraded from
-		// before the change does (B52).
+		// A failure on another commit while no Deployment of the
+		// Kustomization runs the Bundle images is not about the promoted
+		// change (B94): Flux has not applied it yet, as after a failed
+		// release until Flux fetches the fix. That waits, as Argo CD's
+		// Degraded from before the change does (B52).
 		reason, _ := readyCond["reason"].(string)
 		msg, _ := readyCond["message"].(string)
 		stalled := reason == "HealthCheckFailed" && strings.Contains(msg, "stalled resources")
@@ -797,9 +798,15 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 				}
 			}
 		}
-		if rev != "" && !w.runsBundle() {
-			return progressing(fmt.Sprintf("%s (lastAttemptedRevision=%s, not %s: Flux has not applied the promoted change, "+
-				"and the Kustomization's Deployments do not run the Bundle images)", state, shortRev(rev), shortRev(want))), nil
+		other := fmt.Sprintf("%s (lastAttemptedRevision=%s, not %s", state, shortRev(rev), shortRev(want))
+		if rev != "" && !w.anyBundle() {
+			return progressing(other + ": Flux has not applied the promoted change, " +
+				"and no Deployment of the Kustomization runs the Bundle images)"), nil
+		}
+		if stalled {
+			if earlier := a.stalledEarlier(ctx, ks, msg, opts); earlier != "" {
+				return progressing(fmt.Sprintf("%s), but %s; waiting for Flux to check again", other, earlier)), nil
+			}
 		}
 		return unhealthy(state), nil
 	}
@@ -922,6 +929,16 @@ func (w fluxWorkloads) runsBundle() bool {
 		found = found || d.bundle
 	}
 	return found
+}
+
+// anyBundle reports whether a Deployment runs the Bundle images.
+func (w fluxWorkloads) anyBundle() bool {
+	for _, d := range w {
+		if d.bundle {
+			return true
+		}
+	}
+	return false
 }
 
 // worst returns the worst result (severity) of the Deployments keep selects

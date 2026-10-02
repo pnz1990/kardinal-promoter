@@ -418,7 +418,7 @@ func TestFlux_FixForwardWaitsForFlux(t *testing.T) {
 	bundle := e.CreateBundle(t, ns, pipelineName, "--image", newImage)
 	commit := stepCommit(t, e, ns, pipelineName, bundle, "test")
 	notApplied := fmt.Sprintf("(lastAttemptedRevision=%s, not %s: Flux has not applied the promoted change, "+
-		"and the Kustomization's Deployments do not run the Bundle images)", shortSHA(failed), shortSHA(commit))
+		"and no Deployment of the Kustomization runs the Bundle images)", shortSHA(failed), shortSHA(commit))
 	ps := e.WaitStep(t, ns, pipelineName, bundle, "test", time.Minute, "the fix to wait for Flux",
 		func(ps *v1alpha1.PromotionStep) (bool, string) {
 			return ps.Status.State == "HealthChecking" && strings.Contains(ps.Status.Message, notApplied), framework.DescribeStep(ps)

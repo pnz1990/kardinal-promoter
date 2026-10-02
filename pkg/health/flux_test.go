@@ -284,15 +284,20 @@ func TestFluxAdapter_SharedBranch(t *testing.T) {
 // and the step waits (B94).
 func TestFluxAdapter_StalledSharedBranch(t *testing.T) {
 	bundle := []health.ImageExpectation{{Repository: podinfo, Tag: "6.15.0"}}
-	stalledLater := func(mutate func(obj map[string]interface{})) *unstructured.Unstructured {
-		return kustomization("False", "HealthCheckFailed", stalledMessage, "main@sha1:"+fluxPrevious, both(
+	stalledLaterOn := func(msg string, mutate func(obj map[string]interface{})) *unstructured.Unstructured {
+		return kustomization("False", "HealthCheckFailed", msg, "main@sha1:"+fluxPrevious, both(
 			func(obj map[string]interface{}) {
 				obj["status"].(map[string]interface{})["lastAttemptedRevision"] = "main@sha1:" + fluxLater
 			}, mutate))
 	}
+	stalledLater := func(mutate func(obj map[string]interface{})) *unstructured.Unstructured {
+		return stalledLaterOn(stalledMessage, mutate)
+	}
+	const cacheStalled = "health check failed after 1m5.017502721s: failed early due to stalled resources: " +
+		"[Deployment/prod/cache status: 'Failed']"
 	const unhealthyReason = "Ready=False, observedGen=3, generation=3: " + stalledMessage
 	const notApplied = unhealthyReason + " (lastAttemptedRevision=8e9966475a0b, not 034ce92a1b2c: Flux has not applied " +
-		"the promoted change, and the Kustomization's Deployments do not run the Bundle images)"
+		"the promoted change, and no Deployment of the Kustomization runs the Bundle images)"
 	tests := []struct {
 		name   string
 		objs   []runtime.Object
@@ -306,13 +311,18 @@ func TestFluxAdapter_StalledSharedBranch(t *testing.T) {
 			reason: unhealthyReason + " (lastAttemptedRevision=8e9966475a0b, " +
 				"not 034ce92a1b2c, but Deployment prod/web, which runs the Bundle images, stalled)"},
 		{name: "the Bundle Deployment is healthy and a Deployment that runs no Bundle image stalled",
-			objs: []runtime.Object{stalledLater(withInventory("web", "cache")), deploymentObj("web", 2, podinfo+":6.15.0", 1),
-				stalledDeployment("cache", "docker.io/library/redis:7")},
-			want: isUnhealthy, reason: unhealthyReason},
+			objs: []runtime.Object{stalledLaterOn(cacheStalled, withInventory("web", "cache")),
+				deploymentObj("web", 2, podinfo+":6.15.0", 1), stalledDeployment("cache", "docker.io/library/redis:7")},
+			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + cacheStalled},
 		{name: "the Bundle Deployment lost its replicas but did not stall",
-			objs: []runtime.Object{stalledLater(withInventory("web", "cache")), lostReplicas("web", podinfo+":6.15.0"),
-				stalledDeployment("cache", "docker.io/library/redis:7")},
-			want: isUnhealthy, reason: unhealthyReason},
+			objs: []runtime.Object{stalledLaterOn(cacheStalled, withInventory("web", "cache")),
+				lostReplicas("web", podinfo+":6.15.0"), stalledDeployment("cache", "docker.io/library/redis:7")},
+			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + cacheStalled},
+		{name: "Flux lists the Bundle Deployment, which is no longer past its deadline",
+			objs: []runtime.Object{stalledLater(withInventory("web")), deploymentObj("web", 2, podinfo+":6.15.0", 1)},
+			want: isProgressing, reason: unhealthyReason + " (lastAttemptedRevision=8e9966475a0b, not 034ce92a1b2c), " +
+				"but no Deployment Flux lists is past a progress deadline set during this promotion: Deployment prod/web: " +
+				"Available=True, 1/1 replicas updated and available; waiting for Flux to check again"},
 		{name: "the stalled Deployment runs the previous image",
 			objs: []runtime.Object{stalledLater(withInventory("web")), stalledDeployment("web", podinfo+":6.14.0")},
 			want: isProgressing, reason: notApplied},
@@ -357,7 +367,7 @@ func TestFluxAdapter_FailedOnAnotherCommit(t *testing.T) {
 		}))
 	}
 	const notApplied = " (lastAttemptedRevision=d7d4d8a00000, not 034ce92a1b2c: Flux has not applied the promoted " +
-		"change, and the Kustomization's Deployments do not run the Bundle images)"
+		"change, and no Deployment of the Kustomization runs the Bundle images)"
 	previous := "main@sha1:" + fluxPrevious
 	tests := []struct {
 		name       string
@@ -373,9 +383,13 @@ func TestFluxAdapter_FailedOnAnotherCommit(t *testing.T) {
 		{name: "a build failure on the previous commit, the Deployment gone",
 			objs: []runtime.Object{failed("BuildFailed", build, previous, nil)},
 			want: isProgressing, reason: "Ready=False, observedGen=3, generation=3: " + build + notApplied},
-		{name: "a second Deployment runs another tag of the Bundle repository",
+		{name: "a Deployment runs the Bundle images and a second another tag (partly applied)",
 			objs: []runtime.Object{failed("HealthCheckFailed", timeout, previous, withInventory("web", "web-canary")),
 				deploymentObj("web", 2, podinfo+":6.15.0", 1), deploymentObj("web-canary", 2, podinfo+":6.14.0", 1)},
+			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + timeout},
+		{name: "neither Deployment runs the Bundle images",
+			objs: []runtime.Object{failed("HealthCheckFailed", timeout, previous, withInventory("web", "web-canary")),
+				deploymentObj("web", 2, podinfo+":6.14.0", 1), deploymentObj("web-canary", 2, podinfo+":6.14.0", 1)},
 			want: isProgressing, reason: "Ready=False, observedGen=3, generation=3: " + timeout + notApplied},
 		{name: "the Kustomization applies to another cluster",
 			objs: []runtime.Object{failed("HealthCheckFailed", timeout, previous,
