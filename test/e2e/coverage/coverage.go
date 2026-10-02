@@ -42,7 +42,8 @@ type Row struct {
 	Status  string
 	Area    string
 	Feature string
-	// Source is where the behavior is documented.
+	// Source is where the behavior is documented and implemented: refs
+	// separated by "; ", each a repo path, path:N or path:N-M.
 	Source string
 }
 
