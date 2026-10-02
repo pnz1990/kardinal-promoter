@@ -109,10 +109,12 @@ first. The `github` suite takes its token from `KARDINAL_E2E_GITHUB_TOKEN_FILE`,
 whether a test covers it yet. A test claims rows with one sentence in its doc
 comment, `Covers STEP-AUTO-01, SCM-CLOSED-01.`, and only for what it fully
 asserts. `go test ./test/hack -run TestE2ECoverage` fails when the file and
-the tests disagree, when a live test claims no row, and when no suite runs a
-live test. Only live tests cover live rows; contract rows are covered by unit
-tests: Bitbucket and Azure DevOps, which can't be self-hosted, and behaviors
-a live test cannot force, such as a race between two status writes.
+the tests disagree, when a live test claims no row, when no suite runs a live
+test, and when a row's `suite` (a suite in `hack/e2e/up.sh`, or `unit` for a
+contract row) runs none of its tests. Only live tests cover live rows;
+contract rows are covered by unit tests: Bitbucket and Azure DevOps, which
+can't be self-hosted, and behaviors a live test cannot force, such as a race
+between two status writes.
 
 Each suite run writes `test/e2e/results/<cluster>/summary.json`. The `e2e
 live` job runs `go run ./test/e2e/proof` on every suite's summary: it fails
