@@ -25,9 +25,16 @@ and keeps the `go test -json` stream in `test/e2e/results/<cluster>/test.json`.
 `COUNT=3` repeats every test, `SHARD=2/3` runs every third of the suite's
 tests starting at the second. `make e2e-up KIND_K8S=1.37` picks the
 Kubernetes minor (one of the `KIND_NODE_*` images in `hack/tool-versions.env`;
-the default is `test/e2e/kind-config.yaml`'s). Use the kind version pinned
-there: older kind releases can't boot its node images. CI also installs the
-helm version pinned there. The core suite also
+the default is `test/e2e/kind-config.yaml`'s).
+
+The scripts use the kind, kubectl and helm versions pinned in
+`hack/tool-versions.env`, as CI does: `hack/e2e/tools.sh` downloads them into
+`bin/e2e`, checks their sha256, and puts `bin/e2e` first on PATH (older kind
+releases can't boot the node images, and helm versions word errors
+differently). `make e2e-tools` installs them up front; the chart tests in
+`test/helm` then use `bin/e2e/helm` too. The pins are linux-amd64 binaries;
+on another platform, or with `KARDINAL_E2E_TOOLS=path`, the tools on PATH are
+used, with a warning for each version that differs. The core suite also
 needs bash and zsh on PATH: `TestCLI_Completion` checks the completion scripts
 with `bash -n` and `zsh -n`.
 

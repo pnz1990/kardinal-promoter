@@ -158,6 +158,7 @@ t.organization_id ||= Organizations::Organization.first.id if t.respond_to?(:org
 t.set_token(tok)
 t.save!
 RUBY
+  # shellcheck disable=SC2016 # the Pod's shell expands $?
   "${KUBECTL[@]}" -n "$NS" exec deploy/gitlab -- sh -c \
     'gitlab-rails runner /tmp/kardinal-seed.rb; rc=$?; rm -f /tmp/kardinal-seed-token /tmp/kardinal-seed.rb; exit $rc' >&2
   token_ok gitlab-root-token || die "root token not accepted by GET /api/v4/user"

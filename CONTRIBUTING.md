@@ -48,7 +48,9 @@ make e2e-down SUITE=core
 cluster of its own, JOBS (default 4) at a time, and fails when a test
 failed or a coverage row's test did not run. Pull requests don't run the
 live suites in CI, so run the ones your change touches and put the result in
-the PR. [test/e2e/README.md](test/e2e/README.md) lists the suites.
+the PR. The scripts download the kind, kubectl and helm versions CI uses
+into `bin/e2e` (`make e2e-tools`). [test/e2e/README.md](test/e2e/README.md)
+lists the suites.
 
 ## How to Contribute
 

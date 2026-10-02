@@ -25,7 +25,7 @@ IMG      ?= $(IMG_REPO):$(IMG_TAG)
 .PHONY: all build build-controller build-cli ui ui-test ui-test-e2e test test-integration test-cover \
         lint lint-local vet vuln generate manifests api-docs \
         install uninstall docker-build helm-lint validate-manifests \
-        install-kro e2e-up e2e-down test-e2e-live e2e-all \
+        install-kro e2e-tools e2e-up e2e-down test-e2e-live e2e-all \
         tools help
 
 all: generate build test lint
@@ -139,6 +139,9 @@ COUNT ?= 1
 RUN ?=
 SHARD ?=
 JOBS ?= 4
+
+e2e-tools: ## Install the pinned kind, kubectl and helm (hack/tool-versions.env) into bin/e2e
+	bash hack/e2e/tools.sh
 
 e2e-up: ## Create or update the kind cluster for live suite SUITE (default core)
 	KIND_CLUSTER=kardinal-e2e-$(SUITE) KIND_K8S=$(KIND_K8S) bash hack/e2e/up.sh $(SUITE)

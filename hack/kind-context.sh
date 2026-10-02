@@ -45,7 +45,7 @@ require_kind_context() {
 # use_kind_context CTX checks CTX and sets KUBECTL and HELM to target it.
 use_kind_context() {
   require_kind_context "$1"
-  KUBECTL=(kubectl --context "$1")
-  HELM=(helm --kube-context "$1")
+  # shellcheck disable=SC2034 # the scripts that source this use them
+  KUBECTL=(kubectl --context "$1") HELM=(helm --kube-context "$1")
   echo "Target kube context: $1"
 }

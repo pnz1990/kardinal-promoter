@@ -221,6 +221,8 @@ func TestKindClusterKeepsDefaultKubeconfig(t *testing.T) {
 				"FAKE_KIND_CLUSTERS=" + tt.clusters,
 				"KIND_CLUSTER=kardinal-e2e-x",
 				"E2E_OUT=" + out,
+				// lib.sh would put bin/e2e's kind (make e2e-tools) before the fake.
+				"KARDINAL_E2E_TOOLS=path",
 			}
 			if tt.kubeconfig != "" {
 				cmd.Env = append(cmd.Env, "KUBECONFIG="+tt.kubeconfig)

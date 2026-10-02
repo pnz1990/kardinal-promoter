@@ -19,6 +19,8 @@
 
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$E2E_DIR/../.." && pwd)"
+# The pinned kind, kubectl and helm that tools.sh installs.
+[ "${KARDINAL_E2E_TOOLS:-pinned}" = path ] || PATH="$REPO_ROOT/bin/e2e:$PATH"
 # shellcheck source=hack/kind-context.sh
 source "$REPO_ROOT/hack/kind-context.sh"
 # shellcheck source=hack/e2e/versions.env
@@ -32,6 +34,7 @@ KARDINAL_NS=kardinal-system
 KARDINAL_RELEASE=kardinal-promoter
 # The controller's webhook as in-cluster git servers reach it (chart Service
 # <release>, port webhook).
+# shellcheck disable=SC2034 # the git server components use it
 KARDINAL_WEBHOOK_URL="http://$KARDINAL_RELEASE.$KARDINAL_NS.svc.cluster.local:8083/webhook/scm"
 
 log() { printf '[e2e %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }

@@ -38,8 +38,15 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
+// helmBin is bin/e2e/helm when make e2e-tools installed it, the helm version
+// CI runs (hack/tool-versions.env; versions word errors differently), and
+// helm on PATH otherwise.
 func helmBin(t *testing.T) string {
 	t.Helper()
+	pinned := filepath.Join(repoRoot(t), "bin", "e2e", "helm")
+	if fi, err := os.Stat(pinned); err == nil && fi.Mode()&0o111 != 0 {
+		return pinned
+	}
 	bin, err := exec.LookPath("helm")
 	if err != nil {
 		// CI sets KARDINAL_REQUIRE_HELM so a missing helm fails the job
