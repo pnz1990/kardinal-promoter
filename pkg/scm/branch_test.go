@@ -197,6 +197,64 @@ func TestDeleteBranch_GitHub404Warns(t *testing.T) {
 	}
 }
 
+// TestDeleteBranch_ForgejoMissingBranch covers B90: Forgejo answers 500
+// "object does not exist" to the delete of a branch that is not there, so a
+// failed delete reads the branch, and only a branch that reads 404 is gone.
+// A branch that is still there keeps the delete's error.
+func TestDeleteBranch_ForgejoMissingBranch(t *testing.T) {
+	const (
+		branch = "kardinal/my-app-v2/prod"
+		uri    = "/api/v1/repos/o/r/branches/kardinal/my-app-v2/prod"
+	)
+	missing := `{"message":"object does not exist [id: refs/heads/kardinal/my-app-v2/prod, rel_path: ]"}`
+	tests := []struct {
+		name      string
+		delStatus int
+		delBody   string
+		getStatus int
+		wantErr   string
+	}{
+		{name: "a 500 for a branch that reads 404 is gone", delStatus: http.StatusInternalServerError, delBody: missing,
+			getStatus: http.StatusNotFound},
+		{name: "a 500 for a branch that is there is an error", delStatus: http.StatusInternalServerError, delBody: missing,
+			getStatus: http.StatusOK, wantErr: "status 500"},
+		{name: "an archived repository's refusal is an error", delStatus: http.StatusLocked, delBody: `{"message":"repo is archived"}`,
+			getStatus: http.StatusOK, wantErr: "status 423"},
+		{name: "a branch the read cannot find either way is an error", delStatus: http.StatusInternalServerError, delBody: missing,
+			getStatus: http.StatusInternalServerError, wantErr: "status 500"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var reqs []branchRequest
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				reqs = append(reqs, branchRequest{Method: r.Method, URI: r.RequestURI})
+				mu.Unlock()
+				if r.Method == http.MethodDelete {
+					w.WriteHeader(tc.delStatus)
+					_, _ = io.WriteString(w, tc.delBody)
+					return
+				}
+				w.WriteHeader(tc.getStatus)
+				_, _ = io.WriteString(w, `{"name":"`+branch+`"}`)
+			}))
+			t.Cleanup(srv.Close)
+
+			err := scm.NewForgejoProvider("t", srv.URL, "s").DeleteBranch(context.Background(), "o/r", branch)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr, "the delete's error")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Equal(t, []branchRequest{{Method: http.MethodDelete, URI: uri}, {Method: http.MethodGet, URI: uri}}, reqs)
+		})
+	}
+}
+
 // TestDeleteBranch_AzureDevOps checks that the Azure DevOps provider reads the
 // branch's commit and updates the ref from it to the zero object ID, that a
 // branch it cannot find is already deleted, and that a ref update the API
