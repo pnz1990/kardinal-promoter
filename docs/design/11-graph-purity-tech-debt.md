@@ -142,9 +142,9 @@ be contributed upstream — but kardinal no longer requires it as a prerequisite
 
 | ID | Issue | Desired Graph contribution | Priority |
 |---|---|---|---|
-| PG-1 / PG-4 | #138 | `recheckAfter` on Graph nodes | Nice-to-have — superseded by `ScheduleClock` pattern |
-| GB-5 | #138 | Explicit `dependsOn` edges | Nice-to-have — positional workaround is correct today |
-| HE-1 / HE-2 / HE-3 | #136 | Watch external K8s resources | Done with kro `ref` nodes (`pkg/health/watch_node.go`); cross-node readiness is ledger G3. #1283 (open) plans to drop the health ref nodes. |
+| PG-1 / PG-4 | #138 | `recheckAfter` on Graph nodes | Nice-to-have — superseded by `ScheduleClock` pattern. Upstream: [KREP-025](https://github.com/kubernetes-sigs/kro/pull/1376) (in review) re-checks a Graph when a `time.now()` comparison flips; weekly windows are deferred (ledger G8) |
+| GB-5 | #138 | Explicit `dependsOn` edges | Nice-to-have — positional workaround is correct today. Upstream: [kro#110](https://github.com/kubernetes-sigs/kro/issues/110) is frozen and would only order evaluation |
+| HE-1 / HE-2 / HE-3 | #136 | Watch external K8s resources | Done with kro `ref` nodes (`pkg/health/watch_node.go`); cross-node readiness is ledger G3, reclassified Low. #1283 (open) plans to drop the health ref nodes. |
 
 ---
 

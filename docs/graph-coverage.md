@@ -6,7 +6,8 @@ runs on the Graph, what needs a workaround, and what still runs in kardinal's ow
 controllers. We move items onto the Graph over time, either by asking kro for the missing
 feature or by contributing it ourselves.
 
-> Last reviewed: 2026-09-29, against kro v0.10.0-rc.0 on a kind cluster.
+> Last reviewed: 2026-09-29, against kro v0.10.0-rc.0 on a kind cluster. Upstream kro work
+> was surveyed on 2026-10-02.
 > The engineering record, with kro source references for every row, is the
 > [Graph capability ledger](design/16-graph-capability-ledger.md).
 
@@ -32,9 +33,9 @@ These run on the Graph, but kardinal has to bend the Graph to get the behavior i
 | Wait until the previous environment is ready | A standalone Graph does not wait for readiness by default. kardinal wraps each dependency in a CEL expression that only resolves once the condition holds. | A Graph option to wait for dependencies to be ready. The engine already has it, but only for ResourceGraphDefinition instances. | [G1](design/16-graph-capability-ledger.md#g1-readywhen-does-not-gate-dependents-in-a-standalone-graph) |
 | Stop a Superseded Bundle | kro cannot suspend a Graph, and deleting it deletes the Bundle's steps and gates, which are its history. Each step node only resolves while the Bundle is not Superseded, so the Graph creates no new step and keeps the ones it has. | A way to suspend a Graph. The suspend annotation applies only to ResourceGraphDefinition instances. | [G1](design/16-graph-capability-ledger.md#g1-readywhen-does-not-gate-dependents-in-a-standalone-graph) |
 | Skip one environment for a Bundle | Using `includeWhen` to skip a node also skips every node after it. kardinal removes skipped environments when it builds the Graph instead, so a skip cannot depend on runtime state. | A way to skip a node without skipping its dependents. | [G2](design/16-graph-capability-ledger.md#g2-includewhen-is-contagious) |
-| Health checks for tools that are not installed | One kind the cluster does not serve (for example Flux on an Argo CD cluster) fails the whole Graph. kardinal leaves those nodes out. | Optional nodes that stay pending instead of failing the Graph. | [G4](design/16-graph-capability-ledger.md#g4-a-missing-crd-fails-the-whole-graph) |
-| Permissions the Graph runs with | kro runs each Graph as a ServiceAccount. kardinal creates that ServiceAccount and its RoleBindings before it creates the Graph. | A documented or built-in way to provision a Graph's identity. | [G5](design/16-graph-capability-ledger.md#g5-the-graph-identity-is-provisioned-outside-the-graph) |
-| Knowing which Bundle owns an object | Objects the Graph creates have no owner reference, so kardinal labels them. | An option to set owner references on created objects. | [G7](design/16-graph-capability-ledger.md#g7-no-ownerreferences-on-graph-children) |
+| Health checks for tools that are not installed | One kind the cluster does not serve (for example Flux on an Argo CD cluster) fails the whole Graph. kardinal leaves those nodes out. | Nothing for the compile failure: kro's dynamic types (`${}` in `apiVersion`) already handle it. What is left is a way for a missing kind not to hold the Graph's `Ready`. kardinal plans to remove these nodes instead ([#1283](https://github.com/pnz1990/kardinal-promoter/issues/1283)). | [G4](design/16-graph-capability-ledger.md#g4-a-missing-crd-fails-the-whole-graph) |
+| Permissions the Graph runs with | kro runs each Graph as a ServiceAccount. kardinal creates that ServiceAccount and its RoleBindings before it creates the Graph. | kro documents the identity model now, and by design will not create the identity. Left: docs for controllers that generate Graphs, and reporting a permission error as a named condition instead of failing the Graph. | [G5](design/16-graph-capability-ledger.md#g5-the-graph-identity-is-provisioned-outside-the-graph) |
+| Knowing which Bundle owns an object | Objects the Graph creates have no owner reference, so kardinal labels them. In a namespace being deleted, kardinal removes kro's finalizer itself. | Safe teardown in a namespace being deleted. kardinal can set owner references to the Bundle in its own templates without any kro change. | [G7](design/16-graph-capability-ledger.md#g7-no-ownerreferences-on-graph-children) |
 
 ## Not on the Graph yet
 
@@ -42,13 +43,13 @@ These still run in kardinal's controllers because the Graph has no way to expres
 
 | What | Where it runs | Why it is not on the Graph | What kro would need | Ledger |
 |------|---------------|----------------------------|---------------------|--------|
-| Time: weekend and business-hour windows, soak timers | ScheduleClock and Bundle controllers | kro's CEL has no clock, and a Graph cannot re-check itself on a timer. | A `now` value in CEL plus a periodic re-evaluation, or a built-in clock node. | [G8](design/16-graph-capability-ledger.md#g8-logic-still-outside-the-graph) |
-| Gate rules (the CEL in `PolicyGate.spec.expression`) | PolicyGate controller | Gate rules read the clock, metrics and upstream soak time, which kro's CEL cannot see. The controller writes `status.ready`, and the Graph waits on that. | Custom CEL functions or data sources in the Graph. | [G8](design/16-graph-capability-ledger.md#g8-logic-still-outside-the-graph) |
-| Deciding "healthy, so Verified" | PromotionStep controller | A node's `readyWhen` can only look at the node itself, so a step cannot say "I am done when the Deployment is healthy". The health ref nodes are shown on the Graph, but the controller makes the call. | `readyWhen` that can read the nodes a node depends on. | [G3](design/16-graph-capability-ledger.md#g3-readywhen-may-only-reference-the-node-itself) |
-| Checking health against the exact commit or images that were promoted | PromotionStep controller | Needs the same cross-node `readyWhen` as the row above. | Same as above. | [G3](design/16-graph-capability-ledger.md#g3-readywhen-may-only-reference-the-node-itself) |
+| Time: weekend and business-hour windows, soak timers | ScheduleClock and Bundle controllers | kro's CEL has no clock, and a Graph cannot re-check itself on a timer. | In review upstream: KREP-025 adds `time.now()` and re-checks a Graph when a time comparison flips, which covers soak timers and fixed windows. Weekly windows and time zones are left for a follow-up proposal. | [G8](design/16-graph-capability-ledger.md#g8-logic-still-outside-the-graph) |
+| Gate rules (the CEL in `PolicyGate.spec.expression`) | PolicyGate controller | A Graph can read the data gate rules use, but not the clock, and it cannot record why a gate blocked, which `kardinal explain` shows. The controller writes `status.ready` and the reason, and the Graph waits on `status.ready`. | A clock (row above). The reason stays on the PolicyGate by design. | [G8](design/16-graph-capability-ledger.md#g8-logic-still-outside-the-graph) |
+| Deciding "healthy, so Verified" | PromotionStep controller | A Graph cannot set a PromotionStep's status, and a node's `readyWhen` does not hold back the nodes after it. The controller makes the call, and the step node's `readyWhen` (`Verified`) carries it into the Graph. | Nothing: this stays in the controller by design. | [G3](design/16-graph-capability-ledger.md#g3-readywhen-may-only-reference-the-node-itself) |
+| Checking health against the exact commit or images that were promoted | PromotionStep controller | Same as the row above. | Nothing: this stays in the controller by design. | [G3](design/16-graph-capability-ledger.md#g3-readywhen-may-only-reference-the-node-itself) |
 
-The G3 fix and a clock in CEL would move the most logic onto the Graph: health, soak timers
-and time windows.
+A clock in CEL (KREP-025) would move the most logic onto the Graph: soak timers and time
+windows. Health stays in the PromotionStep controller.
 
 ## Outside the Graph by design
 
@@ -71,15 +72,23 @@ and time windows.
 
 ## Upstream status
 
-| Gap | kro issue or PR |
-|-----|-----------------|
-| G1: wait for ready dependencies | Not filed yet |
-| G2: skip without skipping dependents | Not filed yet |
-| G3: `readyWhen` across nodes | Not filed yet |
-| G4: optional nodes for missing CRDs | Not filed yet |
-| G5: Graph identity | Not filed yet |
-| G7: owner references on created objects | Not filed yet |
-| G8: clock and custom functions in CEL | Not filed yet |
+What kro has in flight for each gap, as of 2026-10-02. "Complete" means kardinal could delete
+its workaround once it ships; "Partial" covers only part of the gap. Details and the full list
+of items checked are in the [ledger](design/16-graph-capability-ledger.md#upstream-survey-2026-10-02).
+
+| Gap | Upstream work | Coverage | Next step |
+|-----|---------------|----------|-----------|
+| G1: wait for ready dependencies | [KREP-006 propagation control](https://github.com/kubernetes-sigs/kro/pull/861), stalled since May | Partial | Ask kro for a per-Graph opt-in to the readiness gate it already has for ResourceGraphDefinitions |
+| G1: stop a Superseded Bundle | None for Graphs (suspend exists only for ResourceGraphDefinition instances) | None | Ask kro to honor the suspend annotation on Graphs |
+| G2: skip without skipping dependents | [KREP-018 partial dependencies](https://github.com/kubernetes-sigs/kro/pull/1125), inactive | Partial | None for now: kardinal's build-time skip covers the product |
+| G3: health across nodes | None, and not needed | None | Close with [#1283](https://github.com/pnz1990/kardinal-promoter/issues/1283) |
+| G4: optional nodes for missing CRDs | Dynamic types, already in kro | Complete for the compile failure | None: [#1283](https://github.com/pnz1990/kardinal-promoter/issues/1283) removes the nodes |
+| G5: Graph identity | [kro#1402](https://github.com/kubernetes-sigs/kro/pull/1402) docs (merged); [kro#1465](https://github.com/kubernetes-sigs/kro/pull/1465) (open) | Partial | Ask kro to report permission errors as a named condition |
+| G7: owner references and cleanup | [kro#1445](https://github.com/kubernetes-sigs/kro/pull/1445) deletion policy, for ResourceGraphDefinitions only | None | Ask kro for safe teardown in a namespace being deleted |
+| G8: clock in CEL | [KREP-025](https://github.com/kubernetes-sigs/kro/pull/1376) (approved once, in review) and its draft [kro#1434](https://github.com/kubernetes-sigs/kro/pull/1434) | Partial | Feedback shared with the author; the Graph re-check is planned for the final version, weekly windows for a follow-up proposal |
+| G8: gate rules, multi-cluster, custom functions | Nothing that applies to Graphs | None | No ask: time is the only real blocker |
+
+No kro issue has been filed or commented on by kardinal yet.
 
 ## Closed
 
