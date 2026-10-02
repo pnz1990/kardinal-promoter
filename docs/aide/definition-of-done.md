@@ -461,7 +461,7 @@ the tests pass does not count either.
 
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
-| 1: Quickstart | live, partial | 2026-10-02 | `TestCore_QuickstartExample` (EX-QUICKSTART-01) passed in the v0.9.0 release e2e-live [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174) (956bb4ed, tagged v0.9.0) on core 1.35–1.37, gitea and gitlab. It uses podinfo on a local git server. The github.com PR path (EX-GITHUB-DEMO-01) is still todo: DEMO_GITHUB_TOKEN is rejected. |
+| 1: Quickstart | live, partial | 2026-10-02 | `TestCore_QuickstartExample` (EX-QUICKSTART-01) passed in the v0.9.0 release e2e-live [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174) (956bb4ed, tagged v0.9.0) on core 1.35–1.37, gitea and gitlab. It uses podinfo on a local git server. `TestGitHub_ExampleGitHubDemo` (EX-GITHUB-DEMO-01) runs `examples/github-demo` on github.com: the three team gates, the prod PR's title, labels and evidence body, the bakes, and the auto-rollback PR after a bad release. It passed in e2e-live [run 37056344511](https://github.com/pnz1990/kardinal-promoter/actions/runs/37056344511) (79e1f4c1). |
 | 2: Multi-cluster fleet | live, partial | 2026-10-02 | `TestMultiCluster_FleetExample`, `TestMultiCluster_ArgoHub`, `TestMultiCluster_FluxHub` and `TestMultiCluster_RolloutsInSpoke` (EX-FLEET-01, MC-ARGO-01, MC-FLUX-01) passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174) on a kind hub and one spoke (#1388). The 4-cluster demo is tracked in #1293. |
 | 3: Policy governance | live, partial | 2026-10-02 | GATE-ORG-01, GATE-TEAM-01, GATE-SOAK-01, GATE-RECHECK-01, CLI-POLICY-LIST-01 and CLI-POLICY-SIMULATE-01 passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). No live test covers pass criterion 7 (RBAC on `platform-policies`). |
 | 4: Rollback | live, partial | 2026-10-02 | RB-PREV-01, RB-TO-01, RB-PR-01, RB-HISTORY-01, CLI-ROLLBACK-01 and CLI-HISTORY-01 passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). |
@@ -471,9 +471,13 @@ the tests pass does not count either.
 
 The v0.9.0 evidence is e2e-live [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174) on 956bb4ed, the commit tagged v0.9.0: 16 of 17 jobs
 passed (core 1.35–1.37, gitea, gitlab, flux, delivery, chart, ui, multi-cluster, upgrade on 1.30
-and 1.37), 777 tests, none failed. The github suite did not start: GitHub rejects the
-DEMO_GITHUB_TOKEN secret (401), so EX-GITHUB-DEMO-01 is still todo (AGENTS.md §Journey
-validation, #1356).
+and 1.37), 777 tests, none failed. The github suite did not start then: GitHub rejected the
+DEMO_GITHUB_TOKEN secret (401). With a new token (#1431), e2e-live
+[run 37054920646](https://github.com/pnz1990/kardinal-promoter/actions/runs/37054920646) on main
+(7b6c4500) passed all 17 jobs, the github suite included (25 passed, none failed or skipped), and
+[run 37056344511](https://github.com/pnz1990/kardinal-promoter/actions/runs/37056344511) added
+EX-GITHUB-DEMO-01 (github: 26 passed). Every live row of `test/e2e/coverage.tsv` now has a passing
+live test.
 
 ---
 
