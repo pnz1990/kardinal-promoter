@@ -62,8 +62,8 @@ type HealthStatus struct {
 	// CheckedAt records when the check was performed.
 	CheckedAt time.Time
 	// TargetUpdated is true when the check found the workload's target running
-	// the Bundle images (ExpectedImages). Only the flagger adapter sets it; the
-	// reconciler records the first such check in
+	// the Bundle images (ExpectedImages). The resource and flagger adapters set
+	// it; the reconciler records the first such check in
 	// status.targetUpdatedAt and passes it back as CheckOptions.TargetUpdatedAt.
 	TargetUpdated bool
 }
@@ -124,13 +124,16 @@ type CheckOptions struct {
 
 	// Since is when the health check of this promotion started. The flagger
 	// adapter ignores a Succeeded or Failed phase that Flagger set before it
-	// when it cannot compare images. Zero skips that check.
+	// when it cannot compare images, and the resource adapter a
+	// ProgressDeadlineExceeded the Deployment controller set before it. Zero
+	// skips that check.
 	Since time.Time
 
 	// TargetUpdatedAt is when a check of this promotion first found the
-	// Canary target running the Bundle images (HealthStatus.TargetUpdated);
-	// zero when no check has yet. With Since set, the flagger adapter counts
-	// a Failed phase only when Flagger set it after this time.
+	// target (the Deployment, or the Canary's target) running the Bundle
+	// images (HealthStatus.TargetUpdated); zero when no check has yet. With
+	// Since set, the flagger adapter counts a Failed phase, and the resource
+	// adapter a ProgressDeadlineExceeded, only when set after this time.
 	TargetUpdatedAt time.Time
 }
 
@@ -212,7 +215,9 @@ func (a *DeploymentAdapter) Name() string { return "resource" }
 //
 //  1. the pod template runs the Bundle images (ExpectedImages), else Progressing;
 //  2. status.observedGeneration >= metadata.generation, else Progressing;
-//  3. no Progressing condition with reason ProgressDeadlineExceeded, else Terminal;
+//  3. no Progressing condition with reason ProgressDeadlineExceeded, else
+//     Terminal, or Progressing when the condition is from an earlier rollout
+//     (see deadlineFromEarlierRollout);
 //  4. updatedReplicas == spec.replicas, no old replicas left and every updated
 //     replica available, else Progressing (or unhealthy when the rollout had
 //     already finished and replicas became unavailable afterwards);
@@ -233,10 +238,20 @@ func (a *DeploymentAdapter) Check(ctx context.Context, opts CheckOptions) (Healt
 			return unhealthy(fmt.Sprintf("no Deployment in namespace %s matches labels %v", cfg.Namespace, cfg.LabelSelector)), nil
 		}
 		// Every matching Deployment must be healthy. Report the most severe
-		// result: terminal, then unhealthy, then progressing.
+		// result: terminal, then unhealthy, then progressing. The target is
+		// updated when every Deployment whose images can be compared with the
+		// Bundle's runs them, and there is one.
 		var worst *HealthStatus
+		comparable, updated := 0, 0
 		for i := range list.Items {
-			st := checkDeployment(&list.Items[i], cfg.Condition, opts.ExpectedImages)
+			d := &list.Items[i]
+			st := checkDeployment(d, cfg.Condition, opts)
+			if runsRepository(opts.ExpectedImages, deploymentImages(d)) {
+				comparable++
+				if st.TargetUpdated {
+					updated++
+				}
+			}
 			if st.Healthy {
 				continue
 			}
@@ -244,10 +259,12 @@ func (a *DeploymentAdapter) Check(ctx context.Context, opts CheckOptions) (Healt
 				worst = &st
 			}
 		}
+		result := healthy(fmt.Sprintf("%d Deployments matching %v rolled out and %s", len(list.Items), cfg.LabelSelector, cfg.Condition))
 		if worst != nil {
-			return *worst, nil
+			result = *worst
 		}
-		return healthy(fmt.Sprintf("%d Deployments matching %v rolled out and %s", len(list.Items), cfg.LabelSelector, cfg.Condition)), nil
+		result.TargetUpdated = comparable > 0 && updated == comparable
+		return result, nil
 	}
 
 	var deploy appsv1.Deployment
@@ -260,7 +277,7 @@ func (a *DeploymentAdapter) Check(ctx context.Context, opts CheckOptions) (Healt
 		}
 		return HealthStatus{}, fmt.Errorf("get deployment %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}
-	return checkDeployment(&deploy, cfg.Condition, opts.ExpectedImages), nil
+	return checkDeployment(&deploy, cfg.Condition, opts), nil
 }
 
 func severity(st HealthStatus) int {
@@ -275,14 +292,31 @@ func severity(st HealthStatus) int {
 }
 
 // checkDeployment applies the rollout checks documented on DeploymentAdapter.Check.
-func checkDeployment(d *appsv1.Deployment, condition string, expected []ImageExpectation) HealthStatus {
-	id := fmt.Sprintf("Deployment %s/%s", d.Namespace, d.Name)
+// It reads opts.ExpectedImages, Since and TargetUpdatedAt, and sets
+// TargetUpdated when the pod template runs the Bundle images.
+func checkDeployment(d *appsv1.Deployment, condition string, opts CheckOptions) HealthStatus {
+	running := deploymentImages(d)
+	imagesOK, imageNote := checkImages(opts.ExpectedImages, running)
+	updated := imagesOK && runsRepository(opts.ExpectedImages, running)
+	st := deploymentRollout(d, condition, imagesOK, imageNote, updated, opts)
+	st.TargetUpdated = updated
+	return st
+}
 
+func deploymentImages(d *appsv1.Deployment) []string {
 	var running []string
 	for _, c := range d.Spec.Template.Spec.Containers {
 		running = append(running, c.Image)
 	}
-	imagesOK, imageNote := checkImages(expected, running)
+	return running
+}
+
+// deploymentRollout is checkDeployment after the image check: updated
+// reports that the pod template was compared with the Bundle images and runs
+// them.
+func deploymentRollout(d *appsv1.Deployment, condition string, imagesOK bool, imageNote string,
+	updated bool, opts CheckOptions) HealthStatus {
+	id := fmt.Sprintf("Deployment %s/%s", d.Namespace, d.Name)
 	if !imagesOK {
 		return progressing(fmt.Sprintf("%s not updated yet: %s", id, imageNote))
 	}
@@ -302,6 +336,14 @@ func checkDeployment(d *appsv1.Deployment, condition string, expected []ImageExp
 	}
 	prog := deploymentCondition(d, string(appsv1.DeploymentProgressing))
 	if prog != nil && prog.Reason == "ProgressDeadlineExceeded" {
+		deadline := "ProgressDeadlineExceeded"
+		if prog.Message != "" {
+			deadline += " (" + prog.Message + ")"
+		}
+		if earlier := deadlineFromEarlierRollout(prog, updated, opts); earlier != "" {
+			return progressing(fmt.Sprintf("%s: %s is from an earlier rollout: %s; "+
+				"waiting for the Deployment controller to see this rollout progress", id, deadline, earlier))
+		}
 		msg := fmt.Sprintf("%s rollout failed: ProgressDeadlineExceeded", id)
 		if prog.Message != "" {
 			msg += ": " + prog.Message
@@ -351,6 +393,49 @@ func checkDeployment(d *appsv1.Deployment, condition string, expected []ImageExp
 		reason += " " + imageNote
 	}
 	return healthy(reason)
+}
+
+// deadlineFromEarlierRollout explains why a ProgressDeadlineExceeded
+// condition is from an earlier rollout than this promotion's, or returns ""
+// when it may be this promotion's.
+//
+// The Deployment controller replaces the condition only when it sees the
+// rollout progress, or when it creates a ReplicaSet. A rollout back to an
+// existing ReplicaSet (a rollback to the revision that ran before a stalled
+// one) creates none: until the controller sees the stalled ReplicaSet's pods
+// go, the Deployment observes the new template and still reports the
+// ProgressDeadlineExceeded, with the time and message of the stalled one. So,
+// like the flagger adapter's Failed phase, the condition counts only when set
+// after the health check started and after a check first found the pod
+// template on the Bundle images. The controller sets it no sooner than
+// progressDeadlineSeconds after the rollout started, and checks run every 10
+// seconds. If the rollout of the Bundle stalls again, the condition does not
+// change, and the step fails at health.timeout instead of at once.
+//
+// With Since zero (the promotion changed nothing in git, or the step sequence
+// has no health-check step) every ProgressDeadlineExceeded counts.
+func deadlineFromEarlierRollout(prog *appsv1.DeploymentCondition, updated bool, opts CheckOptions) string {
+	if opts.Since.IsZero() {
+		return ""
+	}
+	at, field := prog.LastUpdateTime.Time, "lastUpdateTime"
+	if at.IsZero() {
+		at, field = prog.LastTransitionTime.Time, "lastTransitionTime"
+	}
+	since := opts.Since.Truncate(time.Second)
+	switch {
+	case at.Before(since):
+		return fmt.Sprintf("its %s %s is before this health check started (%s)",
+			field, at.UTC().Format(time.RFC3339), since.UTC().Format(time.RFC3339))
+	case updated && opts.TargetUpdatedAt.IsZero():
+		return "this check is the first to find the pod template running the Bundle images"
+	case updated && !at.After(opts.TargetUpdatedAt.Truncate(time.Second)):
+		// Both times have whole seconds: one in the same second as the
+		// template update may be the earlier rollout's.
+		return fmt.Sprintf("its %s %s is not after the health check first found the pod template running the Bundle images (%s)",
+			field, at.UTC().Format(time.RFC3339), opts.TargetUpdatedAt.UTC().Format(time.RFC3339))
+	}
+	return ""
 }
 
 func deploymentCondition(d *appsv1.Deployment, condType string) *appsv1.DeploymentCondition {
@@ -665,8 +750,9 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 	}
 	if readyStatus == "False" {
 		// Flux gives up early on a Deployment past its progress deadline
-		// ("failed early due to stalled resources"); like the resource
-		// adapter's ProgressDeadlineExceeded, that will not recover. Only a
+		// ("failed early due to stalled resources"); like a
+		// ProgressDeadlineExceeded of the promoted rollout, that will not
+		// recover. Only a
 		// stall of the promoted commit fails the step at once, or of another
 		// commit on the shared branch (another environment's push) when a
 		// Deployment that runs the Bundle images is itself past its progress
@@ -859,7 +945,10 @@ func (a *FluxAdapter) workloads(ctx context.Context, ks *unstructured.Unstructur
 		case err != nil:
 			return nil, err
 		default:
-			fd.status = checkDeployment(d, string(appsv1.DeploymentAvailable), expected)
+			// No Since: a ProgressDeadlineExceeded always counts here, as it
+			// does for Flux, and the flux adapter does not date the update.
+			fd.status = checkDeployment(d, string(appsv1.DeploymentAvailable), CheckOptions{ExpectedImages: expected})
+			fd.status.TargetUpdated = false
 			if fd.status.Healthy {
 				fd.status.Reason = fmt.Sprintf("Deployment %s: %s", ref, fd.status.Reason)
 			}
@@ -1340,7 +1429,7 @@ type canaryRevision struct {
 // primaryHealth is the health of a primary Deployment that runs the Bundle
 // images, prefixed with what the phase says.
 func (r canaryRevision) primaryHealth(prefix string) HealthStatus {
-	st := checkDeployment(r.primary, "Available", nil)
+	st := checkDeployment(r.primary, "Available", CheckOptions{})
 	id := fmt.Sprintf("primary Deployment %s/%s", r.primary.Namespace, r.primary.Name)
 	if st.Healthy {
 		return healthy(fmt.Sprintf("%s; %s runs the Bundle images: %s", prefix, id, st.Reason))

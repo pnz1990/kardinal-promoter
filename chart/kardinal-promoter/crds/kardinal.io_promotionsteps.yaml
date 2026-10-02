@@ -342,11 +342,11 @@ spec:
               targetUpdatedAt:
                 description: |-
                   TargetUpdatedAt is when a health check of this step first found the
-                  workload's target running the Bundle images (health.type flagger: the
-                  Canary's target Deployment). Set once. The flagger check counts a
-                  Failed phase only when Flagger set it after this time: the previous
-                  release can fail after the health check started but before the GitOps
-                  tool applied the Bundle.
+                  workload's target running the Bundle images (health.type resource: the
+                  Deployment's pod template; flagger: the Canary's target Deployment).
+                  Set once. The resource check counts a ProgressDeadlineExceeded, and
+                  the flagger check a Failed phase, only when set after this time: the
+                  earlier rollout's condition or phase can outlast the Bundle's update.
                 format: date-time
                 type: string
               waitForMergeExpiry:

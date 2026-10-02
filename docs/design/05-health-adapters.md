@@ -16,7 +16,10 @@
 > - Adapters verify the promoted revision, not only health: Argo CD and Flux compare the
 >   synced/applied revision with the commit kardinal pushed or merged; the resource adapter
 >   requires the Bundle images, a current `observedGeneration` and a finished rollout, and
->   treats `ProgressDeadlineExceeded` as a terminal failure. Flagger `Failed` is terminal.
+>   treats `ProgressDeadlineExceeded` as a terminal failure when it was set after the health
+>   check started and after a check first found the pod template on the Bundle images
+>   (`status.targetUpdatedAt`); an earlier one, which Kubernetes keeps after a rollback to the
+>   previous ReplicaSet, is progressing. Flagger `Failed` is terminal on the same terms.
 > - Results are healthy, progressing, unhealthy or terminal; only unhealthy results count
 >   toward `status.consecutiveHealthFailures`.
 > - Remote-cluster checks (`health.cluster`, the Remote Cluster Client Management section)

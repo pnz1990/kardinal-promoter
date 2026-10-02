@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	eventsv1 "k8s.io/api/events/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -709,6 +710,61 @@ func TestRollback_OnHealthFailure(t *testing.T) {
 		"the failed step stays RollingBack; the rollback Bundle carries on")
 	assert.Empty(t, auditActions(t, e, a.ns, rb, "test", "RollbackStarted"), "the rollback Bundle's own promotion is not a RollbackStarted")
 	e.WaitBundlePhase(t, a.ns, b2, "Superseded", time.Minute)
+}
+
+// TestRollback_OnHealthFailureEarlierDeadline checks that the rollback
+// Bundle's step does not fail on the ProgressDeadlineExceeded the broken
+// release left (B92). The rollback goes back to the ReplicaSet the Deployment
+// ran before, so the Deployment controller creates no ReplicaSet: it observes
+// the rolled-back template and keeps the broken rollout's condition until it
+// sees the broken pod go. The test holds that pod (the API server denies its
+// delete) to keep the condition for as long as it checks: the step waits,
+// without counting a failure, and is Verified once the pod goes.
+//
+// Covers HEALTH-RES-07.
+func TestRollback_OnHealthFailureEarlierDeadline(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := rbAlarmPipeline(t, e, nil)
+	broken := fixtures.Image + ":" + fixtures.BrokenTag
+	workload := fixtures.Workload("test")
+
+	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	rbVerified(t, a, b1, "test")
+	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", broken)
+	lift := e.HoldPodDeletion(t, a.ns, broken, promoteTimeout)
+	e.WaitStepState(t, a.ns, pipelineName, b2, "test", "RollingBack", promoteTimeout)
+	rb := b2 + "-rollback-alarm"
+
+	earlier := fmt.Sprintf("Deployment %s/%s: ProgressDeadlineExceeded (", a.ns, workload)
+	ps := e.WaitStepMessageAll(t, a.ns, pipelineName, rb, "test", "HealthChecking", promoteTimeout,
+		earlier, ") is from an earlier rollout: its lastUpdateTime ", " is before this health check started (",
+		"; waiting for the Deployment controller to see this rollout progress")
+	assert.Zero(t, ps.Status.ConsecutiveHealthFailures, framework.DescribeStep(ps))
+	assert.NotNil(t, ps.Status.TargetUpdatedAt, "status.targetUpdatedAt: the check found the template on the Bundle images")
+
+	var d appsv1.Deployment
+	require.NoError(t, e.Client.Get(context.Background(), client.ObjectKey{Namespace: a.ns, Name: workload}, &d))
+	assert.Equal(t, imageV2, d.Spec.Template.Spec.Containers[0].Image, "the rolled-back template")
+	assert.Equal(t, d.Generation, d.Status.ObservedGeneration, "the Deployment controller observed it")
+	var prog *appsv1.DeploymentCondition
+	for i := range d.Status.Conditions {
+		if d.Status.Conditions[i].Type == appsv1.DeploymentProgressing {
+			prog = &d.Status.Conditions[i]
+		}
+	}
+	if assert.NotNil(t, prog, "Progressing condition") {
+		assert.Equal(t, "ProgressDeadlineExceeded", prog.Reason, "the broken rollout's condition stays: %s", prog.Message)
+	}
+
+	e.HoldStep(t, deliveryHold, a.ns, pipelineName, rb, "test", "the rollback waits on the earlier deadline",
+		func(ps *v1alpha1.PromotionStep) bool {
+			return ps.Status.State == "HealthChecking" && ps.Status.ConsecutiveHealthFailures == 0 &&
+				strings.Contains(ps.Status.Message, earlier)
+		})
+	lift()
+	rbVerified(t, a, rb, "test")
+	assertEnvAt(t, a, "test", fixtures.V2)
 }
 
 // TestRollback_OnHealthFailureRefused checks the two cases where

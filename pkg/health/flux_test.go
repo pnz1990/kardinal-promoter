@@ -422,6 +422,8 @@ func TestFluxAdapter_ReconcilingAgain(t *testing.T) {
 			got := checkFlux(t, health.CheckOptions{ExpectedRevision: fluxPushed, ExpectedImages: bundle}, tt.objs...)
 			assert.Equal(t, tt.want, kindOf(got), got.Reason)
 			assert.Contains(t, got.Reason, tt.reason)
+			// The flux check does not date the target update (status.targetUpdatedAt).
+			assert.False(t, got.TargetUpdated, "TargetUpdated")
 		})
 	}
 }

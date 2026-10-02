@@ -115,64 +115,15 @@ func DescribeMetricCheck(mc *v1alpha1.MetricCheck) string {
 func (e *Env) DenyStatusWrites(t *testing.T, ns, name string) (policy string, lift func()) {
 	t.Helper()
 	policy = "e2e-deny-status-" + ns
-	fail := admissionv1.Fail
-	vap := &admissionv1.ValidatingAdmissionPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: policy, Labels: map[string]string{"kardinal.io/e2e": "true"}},
-		Spec: admissionv1.ValidatingAdmissionPolicySpec{
-			FailurePolicy: &fail,
-			MatchConstraints: &admissionv1.MatchResources{ResourceRules: []admissionv1.NamedRuleWithOperations{{
-				RuleWithOperations: admissionv1.RuleWithOperations{
-					Operations: []admissionv1.OperationType{admissionv1.Update},
-					Rule: admissionv1.Rule{
-						APIGroups:   []string{v1alpha1.GroupVersion.Group},
-						APIVersions: []string{"*"},
-						Resources:   []string{"metricchecks/status"},
-					},
-				},
-			}}},
-			MatchConditions: []admissionv1.MatchCondition{{
-				Name:       "this-metriccheck",
-				Expression: fmt.Sprintf("request.namespace == %q && request.name == %q", ns, name),
-			}},
-			Validations: []admissionv1.Validation{{
-				Expression: "false",
-				Message:    fmt.Sprintf("e2e: status writes to MetricCheck %s/%s are denied", ns, name),
-			}},
+	remove := e.denyAdmission(t, policy, admissionv1.RuleWithOperations{
+		Operations: []admissionv1.OperationType{admissionv1.Update},
+		Rule: admissionv1.Rule{
+			APIGroups:   []string{v1alpha1.GroupVersion.Group},
+			APIVersions: []string{"*"},
+			Resources:   []string{"metricchecks/status"},
 		},
-	}
-	binding := &admissionv1.ValidatingAdmissionPolicyBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: policy, Labels: map[string]string{"kardinal.io/e2e": "true"}},
-		Spec: admissionv1.ValidatingAdmissionPolicyBindingSpec{
-			PolicyName:        policy,
-			ValidationActions: []admissionv1.ValidationAction{admissionv1.Deny},
-		},
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	adm := e.Kube.AdmissionregistrationV1()
-	if _, err := adm.ValidatingAdmissionPolicies().Create(ctx, vap, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create ValidatingAdmissionPolicy %s: %v", policy, err)
-	}
-	if _, err := adm.ValidatingAdmissionPolicyBindings().Create(ctx, binding, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create ValidatingAdmissionPolicyBinding %s: %v", policy, err)
-	}
-	remove := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		for _, del := range []func(context.Context, string, metav1.DeleteOptions) error{
-			adm.ValidatingAdmissionPolicyBindings().Delete, adm.ValidatingAdmissionPolicies().Delete,
-		} {
-			if err := del(ctx, policy, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-				return err
-			}
-		}
-		return nil
-	}
-	t.Cleanup(func() {
-		if err := remove(); err != nil {
-			t.Errorf("delete admission policy %s: %v", policy, err)
-		}
-	})
+	}, fmt.Sprintf("request.namespace == %q && request.name == %q", ns, name),
+		fmt.Sprintf("e2e: status writes to MetricCheck %s/%s are denied", ns, name))
 	Eventually(t, time.Minute, "the API server to deny status writes to "+ns+"/"+name, func(ctx context.Context) (bool, string) {
 		err := e.probeStatusWrite(ctx, ns, name)
 		return err != nil && strings.Contains(err.Error(), policy), fmt.Sprintf("dry-run status patch: %v", err)

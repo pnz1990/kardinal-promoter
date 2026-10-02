@@ -51,11 +51,13 @@ health:
 
 1. every container that runs one of the Bundle's image repositories runs the Bundle's tag or digest (otherwise: waiting, "not updated yet");
 2. `status.observedGeneration` is at least `metadata.generation` (otherwise: waiting);
-3. the `Progressing` condition does not have reason `ProgressDeadlineExceeded` (otherwise: **failed**, see [Timings and failures](#timings-and-failures));
+3. the `Progressing` condition does not have reason `ProgressDeadlineExceeded` (otherwise: **failed**, see [Timings and failures](#timings-and-failures), or waiting when the condition is from an earlier rollout, see below);
 4. all replicas are updated, no old replicas remain, and every updated replica is available (otherwise: waiting while the rollout runs; unhealthy if replicas become unavailable after the rollout finished);
 5. the configured condition (default `Available`) is `True`.
 
 If the Deployment runs none of the Bundle's image repositories (for example, kustomize `newName` renamed the image), the image cannot be verified. The check then passes with "(image not verified)" in the message.
+
+A `ProgressDeadlineExceeded` counts only when the Deployment controller set it during this promotion: after the health check started and, when the image can be verified, after a check first found the pod template on the Bundle images. The check records that time in the PromotionStep's `status.targetUpdatedAt`. An earlier one is Waiting: `Deployment <ns>/<name>: ProgressDeadlineExceeded (<message>) is from an earlier rollout: ...; waiting for the Deployment controller to see this rollout progress`. This happens after a rollback. The rollback returns the Deployment to the ReplicaSet it ran before the stalled release, so the Deployment controller creates no new ReplicaSet and keeps the stalled rollout's condition, with its time and message, until it sees the stalled pods go. The controller sets the condition no sooner than `progressDeadlineSeconds` after a rollout starts, and checks run every 10 seconds, so a stall of the Bundle's own rollout is set after that first check. If the Bundle's rollout stalls again before the controller replaced the earlier condition, the condition does not change: the step fails at `health.timeout` instead of at once. A promotion that changed nothing in git, or a step sequence without a `health-check` step, has no health-check start, and every `ProgressDeadlineExceeded` counts.
 
 `resource.kind` other than `Deployment` fails the PromotionStep with `health.resource.kind "StatefulSet" is not supported: only Deployment is checked`. For other workloads, use the `argocd` or `flux` adapter.
 
@@ -287,7 +289,7 @@ Each health check has one of four results:
 - **Healthy** — Verified (or the bake window starts or advances).
 - **Waiting** — the promoted revision is still rolling out or syncing. It does not count as a failure.
 - **Unhealthy** — for example Degraded, `Ready=False`, not found, or replicas unavailable after the rollout finished. Each check increments `status.consecutiveHealthFailures`, which a `RollbackPolicy` you create reads (see [Rollback](rollback.md)).
-- **Failed** — Deployment `ProgressDeadlineExceeded`, Flagger canary `Failed` or a Flux Kustomization whose resources stalled, on the promoted revision (for Flux, also on another commit when the stalled Deployment runs the Bundle images). `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack) applies at once.
+- **Failed** — Deployment `ProgressDeadlineExceeded` (set during this promotion, see [resource](#adapter-resource-default)), Flagger canary `Failed` or a Flux Kustomization whose resources stalled, on the promoted revision (for Flux, also on another commit when the stalled Deployment runs the Bundle images). `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack) applies at once.
 
 Reaching `health.timeout` without a Healthy result is treated like a Failed result: it is counted and applies `onHealthFailure`. A new image that crash-loops is **Waiting**, not Unhealthy: Kubernetes reports the rollout as still progressing (`Progressing=True`, reason `ReplicaSetUpdated`) until the Deployment's `progressDeadlineSeconds` (default 600s) passes. Set `progressDeadlineSeconds` below `health.timeout` to fail such a rollout sooner; otherwise the timeout fails it.
 
