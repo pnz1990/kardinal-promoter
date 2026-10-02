@@ -92,7 +92,7 @@ when empty), and picks one artifact:
 |---|---|---|
 | Exactly one (for example `tagFilter: "^main$"`) | That tag; a new Bundle is created whenever its digest changes | tag list + 1 |
 | All are semantic versions (`1.2.3`, `v1.2.3`, pre-releases) | The highest version | tag list + 1 |
-| Anything else, up to 50 tags | The most recently built image (the image config `created` time) | tag list + about 2 per tag |
+| Anything else, up to 50 tags | The most recently built image (the image config `created` time); when several tags point to it, the first listed tag. Different images with the same newest build time give phase `Error` ("same build time") | tag list + about 2 per tag |
 | Anything else, more than 50 tags | Nothing: phase `Error` asking you to narrow `tagFilter` | tag list |
 | None | Nothing: phase `Error` ("no tag ... matches tagFilter") | tag list |
 
