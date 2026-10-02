@@ -336,7 +336,7 @@ UI-CREATE-01	live	ui	covered	ui	Create Bundle dialog	docs/roadmap.md:133
 UI-TIMELINE-01	live	ui	covered	ui	bundle timeline select/compare and diff panel	docs/roadmap.md:133
 UI-INSECURE-01	live	ui	covered	ui	insecure-connection banner and port-forward hint	docs/guides/security.md:642-655
 UI-SHELL-01	live	ui	covered	ui	keyboard shortcuts, theme, URL deep links, refreshed-ago polling	docs/roadmap.md:133
-UI-OVERRIDE-01	live	ui	todo	ui	approve or override a gate from the UI	docs/roadmap.md:83-85; docs/guides/security.md:568-569
+UI-OVERRIDE-01	deprecated	ui	covered	ui	the web UI has no gate approve or override control (removed in #1245; use kardinal override)	docs/design/06-kardinal-ui.md:211; docs/comparison.md:30
 CIAPI-OFF-01	live	core	covered	ci-api	without --bundle-api-token / KARDINAL_BUNDLE_TOKEN, POST /api/v1/bundles is not mounted (404)	docs/ci-integration.md:228-254; cmd/kardinal-controller/bundle_api.go
 CIAPI-AUTH-01	live	core	covered	ci-api	wrong bearer gets 401; non-POST gets 405	cmd/kardinal-controller/bundle_api.go:136-151
 CIAPI-CREATE-01	live	core	covered	ci-api	valid POST returns 201 {name,namespace}; the Bundle promotes with provenance	docs/ci-integration.md:7-36; docs/ci-integration.md:285-314; docs/ci-integration.md:390
