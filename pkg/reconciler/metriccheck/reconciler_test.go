@@ -332,6 +332,47 @@ func TestReconciler_StatusWriteFailureRequeuesAtInterval(t *testing.T) {
 	}
 }
 
+// TestReconciler_StatusWriteFailureOffSchedule: a status write that fails on
+// a reconcile that is not the evaluation due one interval after the last
+// write that worked (an edit, or a controller restart, soon after it) is
+// retried at spec.interval, not every 5s until an interval has passed. The
+// retry that is the scheduled evaluation is retried early once.
+func TestReconciler_StatusWriteFailureOffSchedule(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		last time.Duration // the last write that worked, relative to the first attempt
+	}{
+		{name: "an edit 2s after a write that worked", last: -2 * time.Second},
+		{name: "a restart 20s after a write that worked", last: -20 * time.Second},
+		{name: "a last write ahead of this replica's clock", last: time.Minute},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now := fixedNow
+			mc := newMetricCheck("error-rate", "lt", 0.01)
+			mc.CreationTimestamp = metav1.NewTime(now.Add(-time.Hour))
+			last := metav1.NewTime(now.Add(tt.last))
+			mc.Status = kardinalv1alpha1.MetricCheckStatus{Result: "Pass", LastEvaluatedAt: &last}
+			provider := &countingProvider{fakeProvider: fakeProvider{value: 0.005}}
+			c := fake.NewClientBuilder().WithScheme(buildScheme()).WithStatusSubresource(mc).WithObjects(mc).
+				WithInterceptorFuncs(interceptor.Funcs{
+					SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch,
+						...client.SubResourcePatchOption) error {
+						return fmt.Errorf("admission webhook denied the request")
+					},
+				}).Build()
+			r := &metriccheck.Reconciler{Client: c, Provider: provider, NowFn: func() time.Time { return now }}
+			start := now
+			for now.Sub(start) < 30*time.Second {
+				res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(mc)})
+				require.NoError(t, err)
+				require.Positive(t, res.RequeueAfter)
+				now = now.Add(res.RequeueAfter)
+			}
+			assert.Equal(t, 1, provider.queries, "one evaluation in the first interval, not one every 5s")
+		})
+	}
+}
+
 // TestReconcile_DeletedBeforeStatusWrite: a MetricCheck deleted between its
 // read and its status write ends the reconcile with no error, requeue or warn
 // or error log.
