@@ -379,6 +379,70 @@ func TestFlux_RollbackOfStalledRelease(t *testing.T) {
 	e.WaitDeploymentImage(t, a.ns, workload, v2, time.Minute)
 }
 
+// TestFlux_FixForwardWaitsForFlux checks a fix-forward after a failed
+// release on flux health: the app runs fixtures.BrokenTag, so Flux gives up
+// on its rollout and the Kustomization stays Ready=False on that commit. The
+// step for V2 waits, with no health failure, while Flux (its source
+// suspended) has not fetched the pushed commit, so a RollbackPolicy would not
+// roll the fix back. Once the source resumes, Flux applies V2 and the step is
+// Verified.
+//
+// Covers HEALTH-FLUX-10.
+func TestFlux_FixForwardWaitsForFlux(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ns := e.Namespace(t)
+	a := &fluxApp{e: e, ns: ns, envs: []string{"test"},
+		repo: e.Repo(t, ns, fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: []string{"test"}, Tag: fixtures.BrokenTag}))}
+	e.FluxSource(t, ns, fluxSource, a.repo, 5*time.Second)
+	a.kustomize(t, "test", fluxSource, 10*time.Minute)
+	var failed string
+	framework.Eventually(t, 3*time.Minute, "Flux to give up on the broken release", func(ctx context.Context) (bool, string) {
+		ks, err := e.FluxObject(ctx, framework.KustomizationGVR, ns, fixtures.Workload("test"))
+		if err != nil {
+			return false, err.Error()
+		}
+		failed, _, _ = unstructured.NestedString(ks.Object, "status", "lastAttemptedRevision")
+		status, reason, msg, _ := framework.FluxReady(ks)
+		return status == "False" && strings.Contains(msg, "stalled resources"),
+			fmt.Sprintf("Ready=%s %s: %s (lastAttemptedRevision=%s)", status, reason, msg, failed)
+	})
+	require.True(t, strings.HasPrefix(failed, a.repo.Branch+"@sha1:"), "lastAttemptedRevision %q", failed)
+	failed = strings.TrimPrefix(failed, a.repo.Branch+"@sha1:")
+
+	e.SuspendFlux(t, framework.GitRepositoryGVR, ns, fluxSource, true)
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Health.Timeout = "5m"
+	a.apply(t, p)
+	newImage := fixtures.Image + ":" + fixtures.V2
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", newImage)
+	commit := stepCommit(t, e, ns, pipelineName, bundle, "test")
+	notApplied := fmt.Sprintf("(lastAttemptedRevision=%s, not %s: Flux has not applied the promoted change, "+
+		"and no Deployment of the Kustomization runs the Bundle images)", shortSHA(failed), shortSHA(commit))
+	ps := e.WaitStep(t, ns, pipelineName, bundle, "test", time.Minute, "the fix to wait for Flux",
+		func(ps *v1alpha1.PromotionStep) (bool, string) {
+			return ps.Status.State == "HealthChecking" && strings.Contains(ps.Status.Message, notApplied), framework.DescribeStep(ps)
+		})
+	assert.True(t, strings.HasPrefix(ps.Status.Message, "waiting for flux: Ready=False, "), ps.Status.Message)
+	assert.Contains(t, ps.Status.Message, fmt.Sprintf("failed early due to stalled resources: [Deployment/%s/%s status: 'Failed']",
+		ns, fixtures.Workload("test")))
+	assert.Zero(t, ps.Status.ConsecutiveHealthFailures)
+	e.HoldStep(t, deliveryHold, ns, pipelineName, bundle, "test", "the fix waits for Flux with no health failure",
+		func(ps *v1alpha1.PromotionStep) bool {
+			return ps.Status.State == "HealthChecking" && ps.Status.ConsecutiveHealthFailures == 0 &&
+				strings.HasPrefix(ps.Status.Message, "waiting for flux: ") && strings.Contains(ps.Status.Message, notApplied)
+		})
+	assert.Equal(t, fixtures.Image+":"+fixtures.BrokenTag, e.DeploymentImage(t, ns, fixtures.Workload("test")))
+
+	e.SuspendFlux(t, framework.GitRepositoryGVR, ns, fluxSource, false)
+	ps = e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Contains(t, ps.Status.Message, "health check passed via flux: Ready=True")
+	assert.Contains(t, ps.Status.Message, "lastAppliedRevision="+shortSHA(commit))
+	assert.Equal(t, newImage, e.DeploymentImage(t, ns, fixtures.Workload("test")))
+	assert.Equal(t, fluxRev(a.repo.Branch, commit), framework.FluxAppliedRevision(a.kustomization(t, "test")))
+	e.WaitBundlePhase(t, ns, bundle, "Verified", time.Minute)
+}
+
 // TestFlux_PRReviewWaitsForMergeCommit checks that a pr-review environment
 // on flux health waits for Flux to apply the PR's merge commit: a
 // Kustomization still Ready on the previous commit after the merge does not
