@@ -441,17 +441,17 @@ kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found
 
 v0.9.0 needs Kubernetes 1.30 or later. kro's `graphrevisions.internal.kro.run` CRD uses CRD `selectableFields`, which older API servers reject. `hack/install-kro.sh` checks the server version first and exits 1 on an older cluster, and the chart's `kubeVersion` makes `helm upgrade` refuse it. v0.8.1 runs on 1.30, so on a v0.8.1 cluster on 1.29 or older, upgrade Kubernetes first, then follow the steps above.
 
-From 1.30, CRD validation ratcheting lets most writes to a stored object through when the new schema rejects one of its fields. Some writes still fail, so step 1's finder is still required. What each finding blocks once the new CRDs are applied:
+From 1.30, CRD validation ratcheting lets most writes to a stored object through when the new schema rejects one of its fields. On 1.30 to 1.32, status writes to such an object still fail, including the controller's. Some writes fail on every version, so step 1's finder is required. What each finding blocks once the new CRDs are applied:
 
-| Stored value | Writes |
-|---|---|
-| env `steps` / `autoRollback` | only edits to that environment fail |
-| reserved environment name (e.g. `graph`) | only edits to that environment fail |
-| `spec.policyGates`, PolicyGate `spec.selector` | writes succeed; the next edit must remove the field |
-| environment name that is not a DNS label (e.g. `Test`) | writes succeed |
-| PolicyGate name longer than 63 characters | **every write fails**, including labels and status, even with ratcheting |
-| duplicate environment name | writes succeed; Pipeline `Ready=False` `ValidationFailed` |
-| `shard` | writes succeed; Pipeline `Ready=False` `NotImplemented` |
+| Stored value | Kubernetes 1.30 to 1.32 | Kubernetes 1.33 and later |
+|---|---|---|
+| env `steps` / `autoRollback` | status writes and edits to that environment fail | only edits to that environment fail |
+| reserved environment name (e.g. `graph`) | status writes and edits to that environment fail | only edits to that environment fail |
+| `spec.policyGates`, PolicyGate `spec.selector` | status writes fail; other writes succeed, with a warning | writes succeed, with a warning |
+| environment name that is not a DNS label (e.g. `Test`) | writes succeed | writes succeed |
+| PolicyGate name longer than 63 characters | **every write fails**, including labels and status | **every write fails**, including labels and status |
+| duplicate environment name | writes succeed; Pipeline `Ready=False` `ValidationFailed` | same |
+| `shard` | writes succeed; Pipeline `Ready=False` `NotImplemented` | same |
 
 If you already applied the CRDs, run the fixes from step 1 now. The patches and the gate copy succeed, and the objects recover.
 

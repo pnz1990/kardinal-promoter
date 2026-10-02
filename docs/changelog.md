@@ -117,7 +117,7 @@ Pin the version: without `--version 0.9.0-rc.1`, `helm install` and `helm upgrad
 
 Follow the tested steps in [Upgrading from v0.8.1](https://pnz1990.github.io/kardinal-promoter/installation/#upgrading-from-v081). A plain `helm upgrade` does not work. In short:
 
-1. Find and fix the stored objects the new CRDs reject (list below). This is required on Kubernetes older than 1.30, which does not ratchet CRD validation. A PolicyGate name over 63 characters blocks every write on any version, unless kardinal created the gate: gate instances and pause freeze gates can be longer, and the new controller sets `spec.generated` on them.
+1. Find and fix the stored objects the new CRDs reject (list below). This is required: before Kubernetes 1.33, status writes to these objects fail, including the controller's. A PolicyGate name over 63 characters blocks every write on any version, unless kardinal created the gate: gate instances and pause freeze gates can be longer, and the new controller sets `spec.generated` on them.
 2. Stop the v0.8.1 controller and its bundled Graph controller (krocodile), and remove the krocodile finalizers from the old `graphs.experimental.kro.run` Graphs.
 3. Annotate the `kro-system` namespace with `helm.sh/resource-policy=keep`. The v0.8.1 chart created it, and `helm upgrade` would delete it, with kro in it.
 4. Install kro v0.10.0-rc.0 with the `GraphKind` feature gate (`hack/install-kro.sh`).
