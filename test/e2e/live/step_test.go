@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -313,14 +314,21 @@ func TestStep_GitAuth(t *testing.T) {
 // ExternalName Service to the git server), a retry clones and pushes, and the
 // promotion finishes.
 //
+// The environment has a gate re-evaluated every 10s, and each evaluation
+// reconciles the step. The step still waits out each delay: its second retry
+// comes 10s after the first and its third 20s after the second, not at the
+// next evaluation (B87: each evaluation ran a retry, so the five retries ran
+// in about 40s and the step failed).
+//
 // Only git errors are injected: an SCM API fault would need the controller's
 // SCM endpoint, which every test of the suite shares.
 //
-// Covers STEP-RETRY-01.
+// Covers STEP-RETRY-01, STEP-RETRY-02.
 func TestStep_RetriesTransientGitErrors(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	a := newArgoApp(t, e, "test")
+	e.CreateGate(t, framework.Gate(a.ns, "open", "test", "true", recheck))
 	p := a.pipeline(nil)
 	resolve := a.unresolvedGit(t, p)
 	base := a.headSHA(t, a.repo.Branch)
@@ -331,6 +339,36 @@ func TestStep_RetriesTransientGitErrors(t *testing.T) {
 	assert.Contains(t, ps.Status.Message, "no such host")
 	assert.GreaterOrEqual(t, ps.Status.RetryCount, 1, "status.retryCount")
 
+	// When the step's status first shows each retry, up to the third.
+	seen := map[int]time.Time{1: time.Now()}
+	framework.Eventually(t, 2*time.Minute, "the third git-clone retry", func(ctx context.Context) (bool, string) {
+		got, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+		if err != nil || !ok {
+			return false, fmt.Sprintf("step: ok=%v err=%v", ok, err)
+		}
+		ps = got
+		if ps.Status.State != "Promoting" {
+			t.Fatalf("step %s turned %s while it retried: %s", ps.Name, ps.Status.State, ps.Status.Message)
+		}
+		n := ps.Status.RetryCount
+		if _, ok := seen[n]; !ok {
+			seen[n] = time.Now()
+			t.Logf("retry %d seen after %s: %s", n, seen[n].Sub(seen[1]).Round(time.Second), ps.Status.Message)
+		}
+		return n >= 3, fmt.Sprintf("state=%q retryCount=%d message=%q", ps.Status.State, n, ps.Status.Message)
+	})
+	require.NotNil(t, ps.Status.NextRetryAt, "status.nextRetryAt of a step that retries: %s", ps.Status.Message)
+	require.Contains(t, seen, 2, "retries 2 and 3 ran between two polls")
+	assert.GreaterOrEqual(t, seen[2].Sub(seen[1]), 7*time.Second, "the first retry waits its 10s")
+	assert.GreaterOrEqual(t, seen[3].Sub(seen[2]), 16*time.Second, "the second retry waits its 20s")
+	g, ok, err := e.GateInstance(context.Background(), a.ns, bundle, "test", "open")
+	require.NoError(t, err)
+	require.True(t, ok, "gate instance open")
+	require.NotNil(t, g.Status.LastEvaluatedAt, "gate open evaluated")
+	assert.True(t, g.Status.LastEvaluatedAt.After(seen[2]),
+		"the gate was re-evaluated while the step waited for its third retry: last at %s, second retry seen at %s",
+		g.Status.LastEvaluatedAt, seen[2].UTC().Format(time.RFC3339))
+
 	resolve()
 	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	checkSteps(t, ps, imageSteps("kustomize-set-image", false))
@@ -338,6 +376,97 @@ func TestStep_RetriesTransientGitErrors(t *testing.T) {
 	require.Len(t, pushed, 1, "the retried promotion pushes once")
 	checkPromoteCommit(t, pushed[0], bundle, "test")
 	a.running(t, "test", imageV2, "test after the retries")
+}
+
+// TestStep_SupersededCloseRetriesWithBackoff supersedes a Bundle whose test
+// PR is open while the repository is archived. Forgejo closes the PR of an
+// archived repository but refuses to delete its head branch (423), so the
+// close fails and the superseded step keeps its state and retries it with
+// backoff, with the SupersededCloseFailed condition True and
+// status.nextRetryAt set (docs/concepts.md, Bundle supersession).
+//
+// The test annotates the step at every poll, as any write to the step, its
+// gates, its PRStatus or its Bundle wakes it. The step still waits out each
+// delay: its second retry comes 10s after the first and its third 20s after
+// the second (B89: each wake ran a retry, so the five retries ran in seconds
+// and the step failed with the branch left, which keeps the closed PR
+// mergeable on GitHub). Once the repository is unarchived, a retry deletes
+// the branch, and the step fails with "promotion cancelled" and loses the
+// condition. The PR is commented on at most once: the comment is best-effort,
+// and Forgejo may refuse it on the archived repository.
+//
+// Covers BUNDLE-SUPERSEDE-05.
+func TestStep_SupersededCloseRetriesWithBackoff(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	archiver, ok := e.Git.(gitserver.Archiver)
+	require.True(t, ok, "the %s git server cannot archive a repo", e.Git.Kind())
+	brancher, ok := e.Git.(gitserver.Brancher)
+	require.True(t, ok, "the %s git server cannot read branches", e.Git.Kind())
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(map[string]string{"test": "pr-review"}))
+	older := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, older, "test", "WaitingForMerge", promoteTimeout)
+	pr := a.openPR(t, older, "test")
+
+	require.NoError(t, archiver.SetArchived(ctx, a.repo, true))
+	t.Cleanup(func() {
+		if err := archiver.SetArchived(context.Background(), a.repo, false); err != nil {
+			t.Errorf("unarchive %s: %v", a.repo.Name, err)
+		}
+	})
+	e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	e.WaitBundlePhase(t, a.ns, older, "Superseded", promoteTimeout)
+	ps := e.WaitStep(t, a.ns, pipelineName, older, "test", time.Minute, "a failed close", func(ps *v1alpha1.PromotionStep) (bool, string) {
+		return ps.Status.RetryCount >= 1 && strings.Contains(ps.Status.Message, "closing its PR failed"),
+			fmt.Sprintf("state=%q retryCount=%d message=%q", ps.Status.State, ps.Status.RetryCount, ps.Status.Message)
+	})
+	assert.Equal(t, "WaitingForMerge", ps.Status.State, "the step keeps its state while it retries the close")
+
+	// When the step's status first shows each close retry, up to the third.
+	seen := map[int]time.Time{ps.Status.RetryCount: time.Now()}
+	first := ps.Status.RetryCount
+	step := &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: ps.Name, Namespace: a.ns}}
+	framework.Eventually(t, 2*time.Minute, "the third close retry", func(ctx context.Context) (bool, string) {
+		annotate(t, e, step)
+		got, ok, err := e.Step(ctx, a.ns, pipelineName, older, "test")
+		if err != nil || !ok {
+			return false, fmt.Sprintf("step: ok=%v err=%v", ok, err)
+		}
+		ps = got
+		if ps.Status.State == "Failed" {
+			t.Fatalf("step %s turned Failed while it retried the close: %s", ps.Name, ps.Status.Message)
+		}
+		n := ps.Status.RetryCount
+		if _, ok := seen[n]; !ok {
+			seen[n] = time.Now()
+			t.Logf("close retry %d seen after %s: %s", n, seen[n].Sub(seen[first]).Round(time.Second), ps.Status.Message)
+		}
+		return n >= 3, fmt.Sprintf("state=%q retryCount=%d message=%q", ps.Status.State, n, ps.Status.Message)
+	})
+	require.Equal(t, 1, first, "the first failed close is retry 1")
+	require.Contains(t, seen, 2, "close retries 2 and 3 ran between two polls")
+	assert.GreaterOrEqual(t, seen[2].Sub(seen[1]), 7*time.Second, "the first close retry waits its 10s")
+	assert.GreaterOrEqual(t, seen[3].Sub(seen[2]), 16*time.Second, "the second close retry waits its 20s")
+	require.NotNil(t, ps.Status.NextRetryAt, "status.nextRetryAt of a step that retries the close: %s", ps.Status.Message)
+	ok, cond := framework.CondIs(ps.Status.Conditions, "SupersededCloseFailed", metav1.ConditionTrue, "CloseFailed")
+	assert.True(t, ok, "SupersededCloseFailed: %s", cond)
+	assert.Contains(t, ps.Status.Message, "deleting its branch "+prHead(older, "test")+" failed")
+	e.WaitPRState(t, a.repo, pr.Number, "closed", time.Second)
+	_, err := brancher.BranchHead(ctx, a.repo, prHead(older, "test"))
+	require.NoError(t, err, "the branch is kept while the repository is archived")
+
+	require.NoError(t, archiver.SetArchived(ctx, a.repo, false))
+	ps = e.WaitStepState(t, a.ns, pipelineName, older, "test", "Failed", 2*time.Minute)
+	assert.Contains(t, ps.Status.Message, "promotion cancelled")
+	assert.NotContains(t, ps.Status.Message, "by hand")
+	assert.Nil(t, meta.FindStatusCondition(ps.Status.Conditions, "SupersededCloseFailed"), "the condition once the close is done")
+	assert.Nil(t, ps.Status.NextRetryAt, "status.nextRetryAt of a Failed step")
+	_, err = brancher.BranchHead(ctx, a.repo, prHead(older, "test"))
+	assert.Error(t, err, "the branch is deleted")
+	comments := e.PRComments(t, a.repo, pr.Number, "kardinal closed this PR: bundle "+older+" was superseded")
+	assert.LessOrEqual(t, len(comments), 1, "the PR is commented on at most once")
 }
 
 // TestStep_ApprovalEditMidPromotion edits an environment's approval while its

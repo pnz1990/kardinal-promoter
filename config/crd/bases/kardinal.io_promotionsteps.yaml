@@ -243,6 +243,16 @@ spec:
                 description: Message provides human-readable detail about the current
                   state.
                 type: string
+              nextRetryAt:
+                description: |-
+                  NextRetryAt is when a step that failed with a retryable error runs
+                  again, or when a superseded step whose PR close failed retries the close
+                  (condition SupersededCloseFailed). A reconcile before then waits for it,
+                  so the retry backoff holds however often the step is reconciled (a gate
+                  re-evaluation, a PRStatus change, a controller restart). Cleared when the
+                  step runs again.
+                format: date-time
+                type: string
               outputs:
                 additionalProperties:
                   type: string

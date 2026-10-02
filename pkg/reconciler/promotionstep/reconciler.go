@@ -28,6 +28,7 @@ import (
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -152,7 +153,8 @@ type Reconciler struct {
 	Recorder events.EventRecorder
 
 	// NowFn returns the current time. When nil, time.Now is used. Tests set
-	// it. It drives the deadline for closing a deleted step's PR.
+	// it. It drives the deadline for closing a deleted step's PR and the
+	// retry backoff (status.nextRetryAt).
 	NowFn func() time.Time
 }
 
@@ -328,13 +330,32 @@ func (r *Reconciler) supersededStep(ctx context.Context, log zerolog.Logger, ps 
 	return fresh, nil
 }
 
+// ConditionSupersededCloseFailed is True while a superseded step retries
+// closing its PR, and stays True on a step that failed after the last retry.
+const ConditionSupersededCloseFailed = "SupersededCloseFailed"
+
 // handleSuperseded closes the step's PR, if it opened one that is still open,
 // and fails the step. A failed close is retried with backoff up to
 // maxStepRetries times; after that the step fails anyway and the message
 // tells the operator to close the PR by hand (C03-promotionstep-08). A step
 // that never left Pending is failed without an AuditEvent (cancelUnstarted).
+//
+// A close retry waits for status.nextRetryAt, as a step retry does (B87):
+// the step's gates, PRStatus and Bundle wake it during the backoff, and each
+// wake ran a retry (B89). The first failed close starts retryCount over, so
+// the close gets its retries whatever the step used before it was
+// superseded, and sets ConditionSupersededCloseFailed. Only with it is
+// nextRetryAt the close's: a step superseded during a git retry's backoff is
+// cancelled at once, not when that retry was due.
 func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
+	closing := meta.IsStatusConditionTrue(ps.Status.Conditions, ConditionSupersededCloseFailed)
+	if closing && ps.Status.NextRetryAt != nil {
+		if wait := ps.Status.NextRetryAt.Sub(r.now()); wait > 0 {
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
+	}
 	base := ps.DeepCopy()
+	ps.Status.NextRetryAt = nil
 	log.Info().
 		Str("bundle", ps.Spec.BundleName).
 		Str("env", ps.Spec.Environment).
@@ -351,16 +372,32 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 		msg = fmt.Sprintf("bundle %s was superseded before this step started", ps.Spec.BundleName)
 	}
 	if closeErr := r.closeStepPR(ctx, ps, "bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle", false); closeErr != nil {
+		if !closing {
+			ps.Status.RetryCount = 0
+		}
+		meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
+			Type:               ConditionSupersededCloseFailed,
+			Status:             metav1.ConditionTrue,
+			Reason:             "CloseFailed",
+			Message:            closeErr.Error(),
+			ObservedGeneration: ps.Generation,
+			LastTransitionTime: metav1.NewTime(r.now().UTC()),
+		})
 		if ps.Status.RetryCount < maxStepRetries {
 			ps.Status.RetryCount++
-			ps.Status.Message = fmt.Sprintf("bundle %s was superseded; closing its PR failed, retrying (%d/%d): %v",
-				ps.Spec.BundleName, ps.Status.RetryCount, maxStepRetries, closeErr)
+			delay := retryDelay(ps.Status.RetryCount)
+			next := metav1.NewTime(r.now().Add(delay))
+			ps.Status.NextRetryAt = &next
+			ps.Status.Message = fmt.Sprintf("bundle %s was superseded; closing its PR failed, retrying in %s (%d/%d): %v",
+				ps.Spec.BundleName, delay, ps.Status.RetryCount, maxStepRetries, closeErr)
 			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("patch supersession retry: %w", err)
 			}
-			return ctrl.Result{RequeueAfter: retryDelay(ps.Status.RetryCount)}, nil
+			return ctrl.Result{RequeueAfter: delay}, nil
 		}
 		msg += fmt.Sprintf("; closing its PR failed after %d retries (%v) — %s", maxStepRetries, closeErr, closeByHand(closeErr))
+	} else {
+		meta.RemoveStatusCondition(&ps.Status.Conditions, ConditionSupersededCloseFailed)
 	}
 	if unstarted {
 		return ctrl.Result{}, r.cancelUnstarted(ctx, base, ps, msg)
@@ -576,8 +613,22 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 }
 
 // handlePromoting runs the step engine from the current index.
+//
+// A step that retries waits until status.nextRetryAt. The retry's
+// RequeueAfter alone did not hold the backoff: every PolicyGate status write
+// (policyGateMapper), PRStatus change or restart reconciled the step at once,
+// so a gate with recheckInterval 10s used up the five retries in about 40s
+// instead of 4.5 minutes (B87).
 func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
+	if ps.Status.NextRetryAt != nil {
+		if wait := ps.Status.NextRetryAt.Sub(r.now()); wait > 0 {
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
+	}
 	base := ps.DeepCopy()
+	// A status patch from base clears it, and a retry sets it again. One left
+	// behind (the pause hold patches from its own copy) has passed already.
+	ps.Status.NextRetryAt = nil
 	pipeline, err := r.loadPipeline(ctx, ps)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
@@ -810,6 +861,8 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		}
 		// Both kinds of retry back off together.
 		delay := retryDelay(ps.Status.RetryCount + ps.Status.GitCredentialRetries)
+		next := metav1.NewTime(r.now().Add(delay))
+		ps.Status.NextRetryAt = &next
 		ps.Status.Message = fmt.Sprintf("retrying in %s (%s) after error: %v", delay, count, execErr)
 		closed = append(closed, updateStepStatuses(ps, stepNames, idx, false, "", timings)...)
 		log.Warn().Err(execErr).Str("env", ps.Spec.Environment).

@@ -92,7 +92,7 @@ func TestClosedPRBranchIsDeleted(t *testing.T) {
 			}{"Failed", []string{"org/repo#42"}, 1, []string{"org/repo:" + branch, "org/repo:" + branch}}},
 		{name: "a close whose response was lost is finished by the retry", prStatus: openPRStatus("prs", "org/repo", 42),
 			outputs: map[string]string{"branch": branch}, scm: mockSCM{open: true, lostClose: 1},
-			wantState: "WaitingForMerge", wantMsg: "closing its PR failed, retrying (1/5)",
+			wantState: "WaitingForMerge", wantMsg: "closing its PR failed, retrying in 10s (1/5)",
 			wantClosed: []string{"org/repo#42"},
 			again: &struct {
 				state    string
@@ -111,13 +111,16 @@ func TestClosedPRBranchIsDeleted(t *testing.T) {
 			ps := labelled(makeStep("step", "p", "b1", "prod"))
 			ps.Status.State = "WaitingForMerge"
 			ps.Status.RetryCount = tt.retryCount
+			if tt.retryCount > 0 {
+				retryingClose(ps)
+			}
 			ps.Status.Outputs = tt.outputs
 			ps.Spec.PRStatusRef = tt.prStatus.Name
 			bundle := makeBundle("b1", "p")
 			bundle.Status.Phase = "Superseded"
 			c := newClient(t, ps, makePipeline("p"), bundle, tt.prStatus)
 			m := tt.scm
-			r := &promotionstep.Reconciler{Client: c, SCM: &m, GitClient: &mockGit{}}
+			r := &promotionstep.Reconciler{Client: c, SCM: &m, GitClient: &mockGit{}, NowFn: pastBackoff()}
 
 			_, err := r.Reconcile(context.Background(), reqFor("step"))
 			require.NoError(t, err)
@@ -212,6 +215,9 @@ func TestBranchWithoutPRIsDeleted(t *testing.T) {
 				ps = asPromoting(ps, pipeline)
 			}
 			ps.Status.RetryCount = tt.retryCount
+			if tt.retryCount > 0 {
+				retryingClose(ps)
+			}
 			ps.Status.Outputs = tt.outputs
 			bundle := makeBundle("b1", "p")
 			bundle.Status.Phase = "Superseded"
@@ -225,7 +231,7 @@ func TestBranchWithoutPRIsDeleted(t *testing.T) {
 			}
 			c := newClient(t, objs...)
 			m := tt.scm
-			r := &promotionstep.Reconciler{Client: c, SCM: &m, GitClient: &mockGit{}}
+			r := &promotionstep.Reconciler{Client: c, SCM: &m, GitClient: &mockGit{}, NowFn: pastBackoff()}
 
 			_, err := r.Reconcile(context.Background(), reqFor("step"))
 			require.NoError(t, err)

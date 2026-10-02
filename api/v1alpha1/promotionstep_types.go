@@ -200,6 +200,15 @@ type PromotionStepStatus struct {
 	// +optional
 	GitCredentialRetries int `json:"gitCredentialRetries,omitempty"`
 
+	// NextRetryAt is when a step that failed with a retryable error runs
+	// again, or when a superseded step whose PR close failed retries the close
+	// (condition SupersededCloseFailed). A reconcile before then waits for it,
+	// so the retry backoff holds however often the step is reconciled (a gate
+	// re-evaluation, a PRStatus change, a controller restart). Cleared when the
+	// step runs again.
+	// +optional
+	NextRetryAt *metav1.Time `json:"nextRetryAt,omitempty"`
+
 	// LastHealthCheckAt records when the health adapter was last called. Used to
 	// space health checks at the health-check interval regardless of how often
 	// the step is reconciled.
