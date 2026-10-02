@@ -408,6 +408,7 @@ func controllerAccess() []apiAccess {
 		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-graph-applier", "graph identity.go"},
 		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-graph-reader", "graph identity.go"},
 		{"apps", "deployments", readVerbs, inWatched, "", "health adapter resource"},
+		{"apps", "replicasets", []string{"get"}, inWatched, "", "health adapters resource and flux: deadlineOfReplicaSet (uncached dynamic Get)"},
 		{"argoproj.io", "applications", readVerbs, inWatched, "", "health adapter argocd, argocd update strategy"},
 		{"argoproj.io", "rollouts", readVerbs, inWatched, "", "health adapter argoRollouts"},
 		{"kustomize.toolkit.fluxcd.io", "kustomizations", readVerbs, inWatched, "", "health adapter flux"},

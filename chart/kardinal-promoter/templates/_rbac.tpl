@@ -100,6 +100,11 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["apps"]
   resources: ["deployments"]
   verbs: ["get", "list", "watch"]
+# The resource and flux adapters read the ReplicaSet a Deployment's
+# ProgressDeadlineExceeded names, by name and uncached.
+- apiGroups: ["apps"]
+  resources: ["replicasets"]
+  verbs: ["get"]
 - apiGroups: ["argoproj.io"]
   resources: ["applications"]
   {{- if .Values.rbac.argocdApplicationsWrite }}

@@ -360,9 +360,9 @@ func TestFlux_RollbackOfStalledRelease(t *testing.T) {
 	commit := stepCommit(t, e, a.ns, pipelineName, rb, "test")
 	ps = e.WaitStepMessageAll(t, a.ns, pipelineName, rb, "test", "HealthChecking", promoteTimeout,
 		fmt.Sprintf("failed early due to stalled resources: [Deployment/%s/%s status: 'Failed'", a.ns, workload),
-		fmt.Sprintf("(lastAttemptedRevision=%s), but no Deployment Flux lists is past a progress deadline set during "+
-			"this promotion: Deployment %s/%s: ProgressDeadlineExceeded (", shortSHA(commit), a.ns, workload),
-		") is from an earlier rollout: its lastUpdateTime ", "; waiting for Flux to check again")
+		fmt.Sprintf("(lastAttemptedRevision=%s), but no Deployment Flux lists is past a progress deadline of "+
+			"this promotion's rollout: Deployment %s/%s: ProgressDeadlineExceeded (", shortSHA(commit), a.ns, workload),
+		") is from an earlier rollout: ReplicaSet ", "; waiting for Flux to check again")
 	assertEarlierRollout(t, ps.Status.Message)
 	assert.Equal(t, v2, e.DeploymentImage(t, a.ns, workload), "Flux applied the rolled-back template")
 	failures := ps.Status.ConsecutiveHealthFailures

@@ -57,7 +57,7 @@ func TestDeploymentAdapter_Healthy(t *testing.T) {
 	s := buildScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(deploy).Build()
 
-	adapter := health.NewDeploymentAdapter(c)
+	adapter := health.NewDeploymentAdapter(c, nil)
 	result, err := adapter.Check(context.Background(), health.CheckOptions{
 		Resource: health.ResourceConfig{
 			Name:      "nginx",
@@ -86,7 +86,7 @@ func TestDeploymentAdapter_Degraded(t *testing.T) {
 	s := buildScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(deploy).Build()
 
-	adapter := health.NewDeploymentAdapter(c)
+	adapter := health.NewDeploymentAdapter(c, nil)
 	result, err := adapter.Check(context.Background(), health.CheckOptions{
 		Resource: health.ResourceConfig{
 			Name:      "nginx",
@@ -105,7 +105,7 @@ func TestDeploymentAdapter_NotFound(t *testing.T) {
 	s := buildScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
-	adapter := health.NewDeploymentAdapter(c)
+	adapter := health.NewDeploymentAdapter(c, nil)
 	result, err := adapter.Check(context.Background(), health.CheckOptions{
 		Resource: health.ResourceConfig{Name: "gone", Namespace: "prod", Condition: "Available"},
 	})

@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -90,6 +92,58 @@ func TestResourceRecordsWhenTheTemplateRanTheBundle(t *testing.T) {
 			default:
 				assert.Nil(t, got.Status.TargetUpdatedAt)
 			}
+		})
+	}
+}
+
+// TestResourceStallOfTheCurrentReplicaSetFollowsTheBundleType proves the
+// reconciler passes the Bundle type to the resource check (B95): a
+// ProgressDeadlineExceeded of the Deployment's current ReplicaSet, set before
+// the health check started, fails an image Bundle whose images the pod
+// template runs at once. A config or mixed Bundle may change the template in
+// ways the check cannot see (a rollback Argo CD has not applied yet), so the
+// condition's times decide, and that one is from an earlier rollout.
+func TestResourceStallOfTheCurrentReplicaSetFollowsTheBundleType(t *testing.T) {
+	env := v1alpha1.EnvironmentSpec{Name: "test", Health: v1alpha1.HealthConfig{Type: "resource"}}
+	v2 := []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v2"}}
+	started := metav1.NewTime(time.Now().Add(-time.Minute).Truncate(time.Second))
+	steps := []v1alpha1.StepStatus{{Name: "health-check", State: v1alpha1.StepExecutionInProgress, StartedAt: &started}}
+	deadline := metav1.NewTime(started.Add(-30 * time.Second))
+	d := withImage(stalledDeployment("p", "test"), "ghcr.io/org/app:v2")
+	d.Annotations = map[string]string{"deployment.kubernetes.io/revision": "3"}
+	c := &d.Status.Conditions[len(d.Status.Conditions)-1]
+	c.LastUpdateTime, c.LastTransitionTime = deadline, deadline
+	c.Message = `ReplicaSet "p-5d8f" has timed out progressing.`
+	rs := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "apps/v1", "kind": "ReplicaSet",
+		"metadata": map[string]interface{}{"name": "p-5d8f", "namespace": "test",
+			"annotations": map[string]interface{}{"deployment.kubernetes.io/revision": "3"}}}}
+	tests := []struct {
+		name         string
+		bundleType   string
+		images       []v1alpha1.ImageRef
+		wantState    string
+		wantMsg      string
+		wantFailures int
+	}{
+		{name: "an image Bundle on the stalled template fails at once", bundleType: "image", images: v2,
+			wantState: "Failed", wantMsg: "rollout failed: ProgressDeadlineExceeded", wantFailures: 1},
+		{name: "a config Bundle leaves the times to decide", bundleType: "config",
+			wantState: "HealthChecking", wantMsg: "is from an earlier rollout: its lastUpdateTime"},
+		{name: "a mixed Bundle whose images the template already runs leaves the times to decide",
+			bundleType: "mixed", images: v2,
+			wantState: "HealthChecking", wantMsg: "is from an earlier rollout: its lastUpdateTime"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, got, _ := healthCase{env: env, images: tt.images,
+				status:  v1alpha1.PromotionStepStatus{Steps: steps},
+				objs:    []client.Object{d.DeepCopy()},
+				dynObjs: []runtime.Object{rs.DeepCopy()},
+				bundle:  func(b *v1alpha1.Bundle) { b.Spec.Type = tt.bundleType },
+			}.run(t)
+			assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
+			assert.Contains(t, got.Status.Message, tt.wantMsg)
+			assert.Equal(t, tt.wantFailures, got.Status.ConsecutiveHealthFailures)
 		})
 	}
 }
