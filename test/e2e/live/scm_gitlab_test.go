@@ -25,11 +25,12 @@ import (
 // --scm-provider=gitlab against GitLab CE. GitLab calls a PR a merge request
 // (MR); kardinal's PR steps and fields cover both.
 //
-// Not covered here: a label failure (SCM-GL-02). No project role opens an
-// MR but cannot label it. Observed on GitLab CE 19.4.1: a Reporter gets 403
-// on the branch push, on the MR and on the label; a Developer may push, open
-// the MR and label it (the labels are created on the fly), as the bot does
-// with its api-scoped token.
+// A refused label request is a contract row, SCM-GL-13
+// (pkg/reconciler/promotionstep), against a fake GitLab API: no project role
+// opens an MR but cannot label it. Observed on GitLab CE 19.4.1: a Reporter
+// gets 403 on the branch push, on the MR and on the label; a Developer may
+// push, open the MR and label it (the labels are created on the fly), as the
+// bot does with its api-scoped token.
 
 // TestGitLab_PromotionPR checks the MR a pr-review environment opens on
 // GitLab, and that rerunning open-pr finds it instead of opening another.
@@ -103,6 +104,18 @@ func TestGitLab_Approvals(t *testing.T) {
 	e := framework.New(t)
 	requireKind(t, e, "gitlab")
 	scmApprovals(t, e)
+}
+
+// TestGitLab_Labels checks the labels kardinal puts on GitLab MRs: kardinal
+// and kardinal/promotion, plus kardinal/rollback on the MR of a `kardinal
+// rollback`.
+//
+// Covers SCM-GL-02.
+func TestGitLab_Labels(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireKind(t, e, "gitlab")
+	scmLabels(t, e)
 }
 
 // TestGitLab_TokenCheck checks the startup token check on GitLab: a token

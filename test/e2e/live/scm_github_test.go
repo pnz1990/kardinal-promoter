@@ -29,9 +29,11 @@ import (
 // can't reach the kind cluster, so no test repo has a webhook: the webhook
 // tests post the event GitHub would send, signed with the suite's secret.
 //
-// Not covered here: a label failure (SCM-GH-02) needs a token that may open
-// PRs but not label them, and an approval (SCM-GH-07) a second account: a
-// GitHub user can't approve their own PR.
+// A refused label request needs a token that may open PRs but not label
+// them, and an approval a second account: a GitHub user can't approve their
+// own PR. The suite has one token, so those are contract rows, SCM-GH-11
+// (pkg/reconciler/promotionstep) and SCM-GH-12 (pkg/reconciler/prstatus),
+// against a fake GitHub API.
 
 // TestGitHub_PromotionPR checks the PR a pr-review environment opens on
 // GitHub, and that rerunning open-pr finds it instead of opening another.
@@ -43,6 +45,30 @@ func TestGitHub_PromotionPR(t *testing.T) {
 	requireKind(t, e, "github")
 	assert.Contains(t, controllerArgs(t, e), "--scm-provider=github")
 	scmPromotionPR(t, e, nil)
+}
+
+// TestGitHub_Labels checks the labels kardinal puts on GitHub PRs: kardinal
+// and kardinal/promotion, plus kardinal/rollback on the PR of a `kardinal
+// rollback`.
+//
+// Covers SCM-GH-02.
+func TestGitHub_Labels(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireKind(t, e, "github")
+	scmLabels(t, e)
+}
+
+// TestGitHub_UnreviewedPR checks that the PRStatus poll reads the reviews of
+// a GitHub PR no one reviewed: not approved, no approvals, and no failed
+// review read, and a gate on bundle.pr["staging"].isApproved holds prod.
+//
+// Covers SCM-GH-07.
+func TestGitHub_UnreviewedPR(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireKind(t, e, "github")
+	scmUnreviewed(t, e)
 }
 
 // TestGitHub_MergeByPolling checks that without a webhook the PRStatus poll
