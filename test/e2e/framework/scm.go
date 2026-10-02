@@ -401,6 +401,60 @@ func (e *Env) RestartController(t *testing.T) {
 	})
 }
 
+// StopController scales the controller Deployment to zero and waits until no
+// controller pod is left. The returned func scales it back and waits until
+// the new pod leads; it also runs when the test ends. Tests that call it must
+// not be parallel: no other test's promotion moves while it is stopped.
+func (e *Env) StopController(t *testing.T) (start func()) {
+	t.Helper()
+	ctx := context.Background()
+	key := types.NamespacedName{Namespace: ControllerNamespace, Name: ControllerName}
+	var d appsv1.Deployment
+	if err := e.Client.Get(ctx, key, &d); err != nil {
+		t.Fatalf("get Deployment %s: %v", key, err)
+	}
+	replicas := int32(1)
+	if d.Spec.Replicas != nil {
+		replicas = *d.Spec.Replicas
+	}
+	scale := func(n int32) {
+		t.Helper()
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			var cur appsv1.Deployment
+			if err := e.Client.Get(ctx, key, &cur); err != nil {
+				return err
+			}
+			cur.Spec.Replicas = &n
+			return e.Client.Update(ctx, &cur)
+		})
+		if err != nil {
+			t.Fatalf("scale Deployment %s to %d: %v", key, n, err)
+		}
+	}
+	var once sync.Once
+	start = func() {
+		once.Do(func() {
+			scale(replicas)
+			e.WaitControllerLeads(t)
+		})
+	}
+	t.Cleanup(start)
+	scale(0)
+	Eventually(t, rolloutTimeout, "no controller pod is left", func(ctx context.Context) (bool, string) {
+		var pods corev1.PodList
+		if err := e.Client.List(ctx, &pods, client.InNamespace(ControllerNamespace),
+			client.MatchingLabels{"app.kubernetes.io/name": ControllerName}); err != nil {
+			return false, err.Error()
+		}
+		var names []string
+		for _, p := range pods.Items {
+			names = append(names, p.Name)
+		}
+		return len(names) == 0, fmt.Sprintf("pods %v", names)
+	})
+	return start
+}
+
 func (e *Env) updateController(t *testing.T, edit func(*appsv1.Deployment)) {
 	t.Helper()
 	ctx := context.Background()

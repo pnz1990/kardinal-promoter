@@ -159,6 +159,121 @@ func TestGraph_ReaderBindingPruned(t *testing.T) {
 	})
 }
 
+// sweptMessage is what the controller logs for each reader RoleBinding it
+// deletes.
+const sweptMessage = "graph identity: deleted a reader rolebinding no Graph reads through"
+
+// readerRecord is the annotation on the applier RoleBinding that records the
+// namespaces the controller bound the reader role in.
+const readerRecord = "kardinal.io/reader-namespaces"
+
+// TestGraph_ReaderBindingSweep stops the controller and leaves behind, in
+// argocd, two reader RoleBindings that no Graph reads through. One is of a
+// namespace whose only Bundle, and so its Graph, is deleted while the
+// controller is down; its record on the applier RoleBinding is removed too, as
+// the versions that did not record their bindings left it. The other, made as
+// the controller makes them, is of a namespace that is gone. The Graph-delete
+// prune never sees either Graph go. When the controller starts, its startup
+// sweep deletes exactly those two (the next sweep is 10 minutes away), and
+// keeps the binding a live Graph reads through and an unlabeled binding of the
+// same shape. An upgrade restarts the controller the same way, but the
+// upgrade suite cannot leave such bindings: v0.8.1 made no RoleBindings.
+// Not parallel: it stops the controller.
+//
+// Covers GRAPH-READER-SWEEP-01.
+func TestGraph_ReaderBindingSweep(t *testing.T) {
+	e := framework.New(t)
+	ctx := context.Background()
+	live, emptied := newArgoApp(t, e, "test"), newArgoApp(t, e, "test")
+	var bundles []string
+	for _, a := range []*app{live, emptied} {
+		a.apply(t, a.pipeline(nil))
+		bundles = append(bundles, e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2))
+	}
+	for i, a := range []*app{live, emptied} {
+		e.WaitStepState(t, a.ns, pipelineName, bundles[i], "test", "Verified", promoteTimeout)
+	}
+	liveRB, emptiedRB := readerBinding(t, e, live.ns), readerBinding(t, e, emptied.ns)
+	assert.Equal(t, liveRB.RoleRef.Name+"-"+live.ns, liveRB.Name, "a reader binding is named after its Graph namespace")
+	graph := emptied.bundle(t, bundles[1]).Status.GraphRef
+	require.NotEmpty(t, graph, "the Bundle has a Graph")
+	gone, goneUnlabeled := e.Namespace(t), e.Namespace(t)
+	for _, ns := range []string{gone, goneUnlabeled} {
+		require.NoError(t, e.Kube.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{}))
+	}
+	framework.Eventually(t, 2*time.Minute, "namespaces "+gone+" and "+goneUnlabeled+" are gone", func(ctx context.Context) (bool, string) {
+		for _, ns := range []string{gone, goneUnlabeled} {
+			if _, err := e.Kube.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+				return false, fmt.Sprintf("%s: err=%v", ns, err)
+			}
+		}
+		return true, ""
+	})
+
+	start := e.StopController(t)
+	require.NoError(t, e.Client.Delete(ctx, emptied.bundle(t, bundles[1])))
+	framework.Eventually(t, 2*time.Minute, "Graph "+graph+" is gone", func(ctx context.Context) (bool, string) {
+		_, err := e.Dynamic.Resource(framework.GraphGVR).Namespace(emptied.ns).Get(ctx, graph, metav1.GetOptions{})
+		return apierrors.IsNotFound(err), describeGraph(ctx, e, emptied.ns, graph)
+	})
+	applier := applierBinding(t, e, emptied.ns)
+	require.Contains(t, strings.Split(applier.Annotations[readerRecord], ","), framework.ArgoCDNamespace, "the record lists argocd")
+	delete(applier.Annotations, readerRecord)
+	_, err := e.Kube.RbacV1().RoleBindings(emptied.ns).Update(ctx, applier, metav1.UpdateOptions{})
+	require.NoError(t, err, "remove the record")
+	stale := sameShape(liveRB, gone, liveRB.Labels)
+	unlabeled := sameShape(liveRB, goneUnlabeled, nil)
+	for _, rb := range []*rbacv1.RoleBinding{stale, unlabeled} {
+		created, err := e.Kube.RbacV1().RoleBindings(rb.Namespace).Create(ctx, rb, metav1.CreateOptions{})
+		require.NoError(t, err, "create RoleBinding %s", rb.Name)
+		*rb = *created
+		t.Cleanup(func() {
+			err := e.Kube.RbacV1().RoleBindings(rb.Namespace).Delete(context.Background(), rb.Name, metav1.DeleteOptions{})
+			if err != nil && !apierrors.IsNotFound(err) {
+				t.Errorf("delete RoleBinding %s: %v", rb.Name, err)
+			}
+		})
+	}
+	assert.Equal(t, []string{emptiedRB.Name}, readerBindings(t, e, emptied.ns), "the Graph went while the controller was down")
+
+	started := time.Now()
+	start()
+	for _, s := range []struct{ name, graphNS string }{{emptiedRB.Name, emptied.ns}, {stale.Name, gone}} {
+		e.WaitControllerLog(t, started, time.Minute, "the startup sweep deletes "+s.name, framework.LogMessage(sweptMessage,
+			"runnable", "graph-reader-sweep", "rolebinding", framework.ArgoCDNamespace+"/"+s.name, "graphNamespace", s.graphNS))
+		_, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, s.name, metav1.GetOptions{})
+		assert.True(t, apierrors.IsNotFound(err), "%s is deleted: err=%v", s.name, err)
+	}
+	for _, rb := range []*rbacv1.RoleBinding{liveRB, unlabeled} {
+		got, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, rb.Name, metav1.GetOptions{})
+		if assert.NoError(t, err, "%s is kept", rb.Name) {
+			assert.Equal(t, rb.UID, got.UID, "%s is the same binding", rb.Name)
+		}
+	}
+	assert.Empty(t, e.ControllerLogLines(t, started, framework.LogMessage(sweptMessage,
+		"rolebinding", framework.ArgoCDNamespace+"/"+liveRB.Name)), "the live binding is not deleted")
+}
+
+// readerBinding returns the one reader RoleBinding in argocd for ns.
+func readerBinding(t *testing.T, e *framework.Env, ns string) *rbacv1.RoleBinding {
+	t.Helper()
+	names := readerBindings(t, e, ns)
+	require.Len(t, names, 1, "one reader binding for %s in argocd", ns)
+	rb, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(context.Background(), names[0], metav1.GetOptions{})
+	require.NoError(t, err)
+	return rb
+}
+
+// sameShape is a reader RoleBinding like rb, with labels, for the
+// kardinal-graph service account of graphNS.
+func sameShape(rb *rbacv1.RoleBinding, graphNS string, labels map[string]string) *rbacv1.RoleBinding {
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: rb.RoleRef.Name + "-" + graphNS, Namespace: rb.Namespace, Labels: labels},
+		RoleRef:    rb.RoleRef,
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: rb.Subjects[0].Name, Namespace: graphNS}},
+	}
+}
+
 // stepFinalizers returns the finalizers of the step of bundle for env.
 func stepFinalizers(t *testing.T, e *framework.Env, ns, bundle, env string) []string {
 	t.Helper()
