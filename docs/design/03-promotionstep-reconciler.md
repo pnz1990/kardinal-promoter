@@ -18,14 +18,16 @@
 >   `rollback` → RollingBack) on timeout or a terminal result; see the Health Check section.
 > - Distributed mode (the kardinal-agent and shard filtering) was removed (#1321; see
 >   [07](07-distributed-architecture.md)). The shard filtering below is history.
+> - Custom steps (`spec.steps`, the `webhook` step) and PromotionTemplate were removed in
+>   v0.9.0. The step sequence is always the built-in default (`pkg/steps/defaults.go`).
 > Depends on: 01-graph-integration, 02-pipeline-to-graph-translator, 08-promotion-steps-engine
 > Blocks: nothing (leaf node, but the workhorse)
 
 ## Purpose
 
-The PromotionStep reconciler watches PromotionStep CRDs created by the Graph controller and executes the promotion logic: running the step sequence (built-in or custom), managing the state machine, and writing evidence back to the Bundle.
+The PromotionStep reconciler watches PromotionStep CRDs created by the Graph controller and executes the promotion logic: running the built-in step sequence, managing the state machine, and writing evidence back to the Bundle.
 
-This is the code that runs in both the standalone kardinal-controller and the distributed kardinal-agent. The logic is identical in both modes. In distributed mode, the reconciler only processes PromotionSteps whose `kardinal.io/shard` label matches the agent's `--shard` flag.
+It runs in the kardinal-controller. The kardinal-agent and shard filtering were removed (#1321). A step whose environment sets `shard` fails with `shard is not supported`.
 
 ## Go Package Structure
 
@@ -34,8 +36,7 @@ pkg/
   reconciler/
     promotionstep/
       reconciler.go       # Main reconciliation loop
-      state_machine.go    # State transition logic
-      evidence.go         # Evidence collection + copy to Bundle status
+      transition.go       # State transition logic
       reconciler_test.go  # Unit tests
 ```
 
@@ -128,7 +129,7 @@ On reaching Verified:
 1. Record `status.verifiedAt` timestamp.
 2. Collect evidence (see Evidence Collection below).
 3. Copy evidence to Bundle `status.environments[<env>]` for durable storage.
-4. Graph sees `readyWhen` satisfied and advances to dependent nodes.
+4. The `resolvableWhen` guards of dependent nodes now resolve, so the Graph creates them (ledger G1).
 
 ### State: Failed
 
@@ -176,10 +177,9 @@ func (r *PromotionStepReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 ### handlePending
 
-1. Load the Bundle CRD (from `spec.bundleRef`).
-2. Resolve the step sequence:
-   - If `spec.steps` is set, use the explicit step list.
-   - If not, infer the default step sequence from `spec.update.strategy`, `spec.approval`, and the Bundle type (`image` or `config`).
+1. Load the Bundle CRD (from `spec.bundleName`).
+2. Resolve the step sequence: the default sequence from the Pipeline environment's
+   `update.strategy`, `approval` and `layout`, and the Bundle type (`stepSequence`).
 3. Initialize `status.currentStepIndex = 0`.
 4. Set `status.state = "Promoting"`.
 5. Requeue immediately.
@@ -308,7 +308,7 @@ type PolicyGateResult struct {
 
 ## Unit Tests
 
-1. Pending to Promoting: verify step sequence resolution (default and custom).
+1. Pending to Promoting: verify default step sequence resolution.
 2. Step execution: mock each built-in step, verify correct ordering and output passing.
 3. WaitingForMerge: verify transition on prMerged = true.
 4. WaitingForMerge: verify transition to Failed on prClosed = true.
@@ -317,6 +317,5 @@ type PolicyGateResult struct {
 7. Evidence copy: verify Bundle status is updated with evidence at Verified.
 8. Evidence copy: verify Bundle status is updated with failure at Failed.
 9. Idempotency: run reconcile twice at each state, verify no side effects.
-10. Shard filtering: verify PromotionSteps with non-matching shard are skipped.
+10. Shard: verify a step whose environment sets `shard` fails with `shard is not supported`.
 11. Config Bundle: verify config-merge step is used instead of kustomize-set-image.
-12. Custom steps: verify custom step webhook is called with correct payload.

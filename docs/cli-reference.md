@@ -15,7 +15,7 @@
 | [`kardinal completion`](reference/cli/kardinal-completion.md) | Generate shell completion scripts |
 | [`kardinal create`](reference/cli/kardinal-create.md) | Create kardinal resources |
 | [`kardinal create bundle`](reference/cli/kardinal-create-bundle.md) | Create a Bundle to trigger promotion through a Pipeline |
-| [`kardinal dashboard`](reference/cli/kardinal-dashboard.md) | Open the kardinal UI dashboard in a browser (Kargo parity) |
+| [`kardinal dashboard`](reference/cli/kardinal-dashboard.md) | Open the kardinal UI dashboard in a browser |
 | [`kardinal delete`](reference/cli/kardinal-delete.md) | Delete kardinal resources |
 | [`kardinal delete bundle`](reference/cli/kardinal-delete-bundle.md) | Delete a Bundle by name |
 | [`kardinal diff`](reference/cli/kardinal-diff.md) | Show artifact differences between two Bundles |
@@ -29,16 +29,16 @@
 | [`kardinal get subscriptions`](reference/cli/kardinal-get-subscriptions.md) | List Subscriptions (passive artifact watchers) |
 | [`kardinal history`](reference/cli/kardinal-history.md) | Show Bundle promotion history for a pipeline |
 | [`kardinal init`](reference/cli/kardinal-init.md) | Interactive wizard to generate a Pipeline YAML and scaffold the GitOps repo |
-| [`kardinal logs`](reference/cli/kardinal-logs.md) | Show promotion step execution logs for a pipeline (Kargo parity) |
+| [`kardinal logs`](reference/cli/kardinal-logs.md) | Show promotion step execution logs for a pipeline |
 | [`kardinal metrics`](reference/cli/kardinal-metrics.md) | Show promotion metrics (DORA-style) for a pipeline |
-| [`kardinal override`](reference/cli/kardinal-override.md) | Force-pass a PolicyGate with a mandatory audit record (K-09) |
+| [`kardinal override`](reference/cli/kardinal-override.md) | Force-pass a PolicyGate with a mandatory audit record |
 | [`kardinal pause`](reference/cli/kardinal-pause.md) | Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point |
 | [`kardinal policy`](reference/cli/kardinal-policy.md) | Manage and evaluate promotion policy gates |
 | [`kardinal policy list`](reference/cli/kardinal-policy-list.md) | List PolicyGates |
 | [`kardinal policy simulate`](reference/cli/kardinal-policy-simulate.md) | Simulate PolicyGate evaluation for a hypothetical promotion context |
 | [`kardinal policy test`](reference/cli/kardinal-policy-test.md) | Validate PolicyGate YAML syntax and dry-run CEL expressions |
 | [`kardinal promote`](reference/cli/kardinal-promote.md) | Promote the Bundle verified upstream into an environment |
-| [`kardinal refresh`](reference/cli/kardinal-refresh.md) | Force re-reconciliation of a Pipeline (Kargo parity) |
+| [`kardinal refresh`](reference/cli/kardinal-refresh.md) | Force re-reconciliation of a Pipeline |
 | [`kardinal resume`](reference/cli/kardinal-resume.md) | Resume a paused pipeline |
 | [`kardinal rollback`](reference/cli/kardinal-rollback.md) | Roll back a pipeline environment to a previous Bundle |
 | [`kardinal status`](reference/cli/kardinal-status.md) | Show controller health or per-pipeline in-flight promotion details |

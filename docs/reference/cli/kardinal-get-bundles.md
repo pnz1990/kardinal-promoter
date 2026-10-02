@@ -9,7 +9,7 @@ kardinal get bundles [pipeline] [flags]
 ### Options
 
 ```
-      --active   Show only active bundles (Promoting/Verified/Failed — excludes Superseded)
+      --active   Hide Superseded bundles
   -h, --help     help for bundles
 ```
 
@@ -19,7 +19,7 @@ kardinal get bundles [pipeline] [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
 ```
 
 ### SEE ALSO

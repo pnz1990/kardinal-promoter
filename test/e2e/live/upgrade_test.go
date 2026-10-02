@@ -37,7 +37,7 @@ var v081BundleCreated = regexp.MustCompile(`Bundle (\S+) created for pipeline`)
 const (
 	// guideChart is the chart the upgrade guide's commands name; the test runs
 	// them on the checkout's chart (KARDINAL_E2E_CHART).
-	guideChart = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1"
+	guideChart = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0"
 	// legacyLongGate is a PolicyGate a user created under v0.8.1 with a name
 	// the new CRD rejects; legacyShortGate is the name the guide's copy gives it.
 	legacyLongGate  = "legacy-gate-name-longer-than-the-sixty-three-character-name-limit"

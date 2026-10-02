@@ -19,6 +19,27 @@
 > - The UI is not read-only.
 > - Skip permission is the PolicyGate `spec.skipPermission` bool; there is no `SkipDenied`.
 > - The Bundle API uses a Bearer token only, limited to 60 requests a minute per token.
+> - Custom steps, `spec.environments[].steps` and `promotionTemplate` do not exist. The API
+>   server rejects them. Every environment runs the default step sequence
+>   (`pkg/steps/defaults.go`).
+> - The Bundle, Subscription, MetricCheck and generated Graph YAML below use old field names.
+>   For the real fields, read [API reference](../reference/api.md) and `api/v1alpha1/`.
+> - A failed step does not open a rollback PR by default. It does so only with
+>   `onHealthFailure: rollback` or a RollbackPolicy.
+> - A Superseded Bundle keeps its Graph, which creates no new step. The Graph is deleted with
+>   its Bundle when `historyLimit` (default 50) is exceeded. There is no `kardinal.io/pin`.
+> - The Go interfaces in §4 are the original sketch. `pkg/delivery` and `pkg/metrics` do not
+>   exist. Read `pkg/scm/provider.go`, `pkg/health/adapter.go` and `pkg/steps/step.go`.
+> - `spec.git.provider` is ignored. The controller's `--scm-provider` flag (Helm
+>   `scm.provider`) selects the SCM.
+> - `config-merge` has no cherry-pick mode. It copies the environment's subtree from the
+>   config commit (`pkg/steps/steps/config_merge.go`).
+> - An Argo CD Application that is not found reports unhealthy, and the step retries until
+>   `health.timeout`. There is no fallback to the resource adapter.
+> - There is no `pr: true` field. The GitHub Action is `.github/actions/create-bundle` in this
+>   repo, not `kardinal-dev/create-bundle-action`.
+> - §16 is stale: `propagateWhen` does not exist, and no code carries a
+>   `TODO(contribute-upstream):` marker. The ledger tracks the real kro gaps.
 >
 > Version: 2.1
 > Date: 2026-04-09
@@ -411,6 +432,8 @@ The controller exposes a `/metrics` endpoint in Prometheus format.
 | `kardinal_promotion_lead_time_seconds` | Histogram | Time from Bundle creation to environment verification |
 
 ### 3.14 Distributed Controller Architecture
+
+> Removed in v0.9.0 (#1321). Kept for history.
 
 The architecture separates orchestration (what to promote where) from execution (how to promote). This separation is the natural sharding boundary for distributed deployments.
 

@@ -41,7 +41,7 @@ func newLogsCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "logs <pipeline>",
-		Short: "Show promotion step execution logs for a pipeline (Kargo parity)",
+		Short: "Show promotion step execution logs for a pipeline",
 		Long: `Show the execution history and output of PromotionSteps for a pipeline.
 
 It shows the PromotionSteps of every Bundle of the pipeline that is not

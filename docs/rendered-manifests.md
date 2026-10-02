@@ -7,19 +7,19 @@
     `layout: branch is not implemented` before it touches the
     repository. `kardinal validate` reports it, and the controller sets the Pipeline's
     `Ready` condition to `False` with reason `NotImplemented`.
+    With `update.strategy: argocd` there is no `git-clone` step, so `layout: branch` does not
+    stop the promotion. The Pipeline is still `Ready=False`.
     Nothing writes to `env/<name>` branches today, and the `kustomize-build`
     step never runs: the only default sequence that includes it is the `layout: branch` one.
     `renderManifests`, `sourceBranch` and `branchPrefix` are not fields of the Pipeline CRD.
     Use the default `layout: directory` until this lands. The rest of this page describes
     the intended design.
 
-The rendered manifests pattern is an advanced GitOps workflow in which Kustomize (or Helm)
-templates are executed at promotion time and the rendered YAML is committed directly to Git.
+The rendered manifests pattern is an advanced GitOps workflow in which Kustomize overlays
+are rendered at promotion time and the rendered YAML is committed directly to Git.
 Argo CD and Flux sync from the rendered output, not from the source templates.
 
-This pattern is the standard for large Argo CD deployments (50+ applications) and is
-used in production at organizations that need PR reviewers to see exact YAML diffs
-rather than template changes.
+Teams use this pattern when PR reviewers need to see the exact YAML that will be applied.
 
 ## Why Render Manifests at Promotion Time
 

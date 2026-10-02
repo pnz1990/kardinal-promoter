@@ -47,7 +47,7 @@ For a specific pipeline: `kardinal doctor --pipeline my-app` (in the current nam
 
 ### Symptom: PromotionStep stays in "Pending"
 
-The Graph has not yet created this PromotionStep. Check if an upstream step or PolicyGate is blocking.
+The PromotionStep exists but has not started. Its `status.message` says why: `waiting for gate <name>` (a required gate is not ready), or `pipeline <name> is paused — resume with: kardinal resume <name>`. An environment the Graph has not reached yet has no PromotionStep at all.
 
 ```bash
 # Show all steps and gates
@@ -60,9 +60,9 @@ kardinal explain my-app --env prod
 If the output shows a PolicyGate in Block state, the gate's CEL expression has not been satisfied; REASON shows what it evaluated to. Common causes:
 - `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> --stage prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](policy-gates.md#emergency-overrides-k-09)).
 - `staging-soak`: the upstream environment was verified recently. Wait for the soak time to pass.
-- CEL error: the expression references an attribute from a later phase. Check `kardinal policy test <file>`.
+- CEL error: the expression uses a variable or key that is not in the [CEL context](reference/cel-context.md). Check `kardinal policy test <file>`.
 
-If the step exists and its message is `waiting for gate <name>`, that gate holds it before it starts
+If the step's message is `waiting for gate <name>`, that gate holds it before it starts
 (see [When a gate holds a step](policy-gates.md#when-a-gate-holds-a-step)). When the gate's
 expression is false and the gate has a `message`, the step's message adds it:
 `waiting for gate <name>: <message>`. `waiting for gate <name>
@@ -76,7 +76,8 @@ The PR has been opened but not merged. Check:
 
 ```bash
 # Find the PR URL
-kubectl get promotionstep my-app-v1-29-0-prod -o jsonpath='{.status.prURL}'
+kubectl get promotionsteps -l kardinal.io/pipeline=my-app,kardinal.io/environment=prod \
+  -o jsonpath='{range .items[*]}{.metadata.name}: {.status.prURL}{"\n"}{end}'
 ```
 
 Common causes:
@@ -99,10 +100,11 @@ minutes old is normal for an open PR; once a PR is merged or final-closed it sto
 With `logLevel: debug`, the controller logs `PR still open, requeueing` with `prstatus` and
 `namespace` at every poll of an open PR.
 
-**If the PR was merged but the step is still "WaitingForMerge"**: this can happen if the controller was down when the webhook arrived. On next controller restart, startup reconciliation automatically re-checks all in-flight PRs and advances any that were merged during downtime. You can also force a restart:
+**If the PR was merged but the step is still `WaitingForMerge`**: the PRStatus poll sees the merge within 30 seconds even when no webhook arrived. Check the PRStatus. A `pollError` means the poll fails; see the HTTP 401/403/404 symptom below.
 
 ```bash
-kubectl rollout restart deployment/kardinal-promoter -n kardinal-system
+kubectl get prstatus -l kardinal.io/pipeline=my-app,kardinal.io/environment=prod \
+  -o custom-columns=NAME:.metadata.name,MERGED:.status.merged,ERROR:.status.pollError
 ```
 
 To verify webhook connectivity:
@@ -130,9 +132,9 @@ itself is not logged.
 `webhookConfigured: false` means the `--webhook-secret` flag is not set. The controller
 then answers every `POST /webhook/scm` with `401` (it does not accept unsigned events)
 and logs `SCM webhooks disabled` once at startup. Promotions still complete: merges are
-detected by PR status polling, just more slowly than with webhooks. To enable webhooks, set
-`KARDINAL_WEBHOOK_SECRET` in your controller deployment and use the same value as the
-webhook secret in your SCM.
+detected by PR status polling, just more slowly than with webhooks. To enable webhooks, store
+the secret in a Secret in the controller's namespace and set the chart's `webhook.secretRef.name`
+(key `secret`). Use the same value as the webhook secret in your SCM.
 
 ### Symptom: PromotionStep stays in "HealthChecking"
 
@@ -140,7 +142,7 @@ The health adapter has not reported the environment as healthy.
 
 ```bash
 # Check the PromotionStep status
-kubectl get promotionstep my-app-v1-29-0-prod -o yaml
+kubectl get promotionsteps -l kardinal.io/pipeline=my-app,kardinal.io/environment=prod -o yaml
 ```
 
 `status.message` names the adapter and its last result. `waiting for <adapter>` means the rollout is still in progress; `unhealthy via <adapter>` means the target is not healthy, and `status.consecutiveHealthFailures` counts those checks.
@@ -156,7 +158,7 @@ Common causes:
 
 ### Symptom: PolicyGate shows "CEL error"
 
-The CEL expression references an attribute that does not exist in the current phase.
+The CEL expression uses a variable or key that is not in the gate's context.
 
 ```bash
 # Validate the expression
@@ -169,15 +171,13 @@ The output will show which attribute is unavailable. Only the attributes in the 
 
 ### Symptom: Bundle stays in "Available"
 
-The Bundle was created but no Graph was generated. Check:
+The Bundle was created but no Graph was generated. Check that `spec.pipeline` names a Pipeline in the Bundle's namespace, and read the Bundle's conditions:
 
 ```bash
-# Is there a Pipeline for this Bundle?
-kubectl get pipelines
-kubectl get bundle <name> -o yaml | grep kardinal.io/pipeline
+kubectl get bundle <name> -o jsonpath='{.spec.pipeline}{"\n"}{range .status.conditions[*]}{.type} {.reason}: {.message}{"\n"}{end}'
 ```
 
-The `kardinal.io/pipeline` label on the Bundle must match a Pipeline name. If the label is missing or mismatched, the controller ignores the Bundle.
+Reason `PipelineNotFound` means no such Pipeline exists. Reason `WaitingForSlot` means the Pipeline's `maxConcurrentPromotions` Bundles are already promoting; the Bundle starts when one of them finishes.
 
 ### Symptom: Bundle is Failed with "skip denied"
 
@@ -191,24 +191,22 @@ Either remove the environment from `intent.skipEnvironments`, or have the platfo
 
 ## Git errors
 
-### Symptom: "push failed: conflict" in controller logs
+### Symptom: "base branch ... moved while promoting"
 
-Another process (or another controller replica) pushed to the same branch between the controller's fetch and push. The controller retries up to 3 times with re-fetch.
+In an `approval: auto` environment, something else pushed to the base branch while the step was promoting. The step starts again from a fresh clone, up to 3 times, then fails with `(gave up after 3 restarts)`. If this happens often, check for other tools (Renovate, Dependabot, CI jobs) that push to the same branch. `pr-review` environments push to their own `kardinal/<bundle>/<env>` branch and do not hit this.
 
-If this happens frequently, check:
-- Multiple Bundles for the same Pipeline promoting simultaneously (expected, but the controller serializes pushes per repo via mutex)
-- External tools (Renovate, Dependabot) writing to the same directories
+### Symptom: "authentication required" or "authorization failed" on git clone or push
 
-### Symptom: "authentication failed" in controller logs
+The git token is invalid, expired, or lacks write permissions.
 
-The Git token in the Secret is invalid, expired, or lacks write permissions.
+git uses the Secret named by the Pipeline's `spec.git.secretRef` (key `token`), in the Pipeline's namespace. PR and API calls use the controller's token, set with the chart's `github.secretRef` in the controller's namespace. The controller reloads it when the Secret changes.
 
 ```bash
-# Check the Secret exists
-kubectl get secret github-token
+# Which Secret does git use?
+kubectl get pipeline my-app -o jsonpath='{.spec.git.secretRef.name}'
 
 # Verify the token works (from your machine)
-curl -H "Authorization: token $(kubectl get secret github-token -o jsonpath='{.data.token}' | base64 -d)" \
+curl -H "Authorization: token $(kubectl get secret <secret> -o jsonpath='{.data.token}' | base64 -d)" \
   https://api.github.com/repos/<owner>/<repo>
 ```
 
@@ -265,9 +263,9 @@ Common causes:
   confirm the merge event with the SCM provider` with the `prstatus`, `namespace`, `repo` and
   `pr`. The event changes nothing; the next poll, within 30 seconds, sees the merge.
 
-On controller restart, the controller lists all open PRs with the `kardinal` label and reconciles any that were merged during downtime. If the controller recently restarted, wait 30 seconds and check again.
+Merges are also found by polling: each PRStatus checks its PR every 30 seconds, and after a restart every PRStatus is polled again. Wait 30 seconds and check again.
 
-### Symptom: "429 Too Many Requests" from webhook endpoint
+### Symptom: "429 Too Many Requests" from the Bundle API
 
 The Bundle API allows 60 requests per minute. There is one token, so every CI job and every Pipeline shares that limit, and every request with the right token counts, including ones rejected with `400`. The window is a fixed minute kept in the controller process.
 
@@ -284,23 +282,20 @@ The Graph controller is not reconciling. Check:
 kubectl get pods -n kro-system
 
 # Check Graph status
-kubectl get graph my-app-v1-29-0 -o yaml
+kubectl get graph -l kardinal.io/bundle=<bundle> -o yaml
 ```
 
 If the Graph controller is not running, PromotionSteps will not be created. kardinal-promoter requires the Graph controller to be operational.
 
 ### Symptom: Graph shows "Accepted: False"
 
-The Graph spec is invalid. Check the Graph status conditions for the error message:
+kardinal generates the Graph, so a rejected Graph is a bug in kardinal. The Bundle is `Failed` with reason `GraphRejected` and kro's message:
 
 ```bash
-kubectl get graph my-app-v1-29-0 -o jsonpath='{.status.conditions}'
+kubectl describe bundle <name>
 ```
 
-Common causes:
-- Invalid CEL expression in a readyWhen clause
-- Circular dependency between nodes
-- Reference to a non-existent node ID
+Please open an issue with that message and the Pipeline.
 
 ## Debugging commands
 
@@ -341,24 +336,26 @@ kubectl get graph -l kardinal.io/pipeline=my-app
 ### Symptom: PolicyGate stays Block or Waiting, or shows "CEL error"
 
 ```bash
-# Check the gate's current status
-kubectl get policygate my-gate -o yaml | grep -A10 status
+# Check the gate's per-Bundle instances (the template itself is never evaluated)
+kubectl get policygates -A -l kardinal.io/gate-template=my-gate -o custom-columns=NAME:.metadata.name,READY:.status.ready,REASON:.status.reason
 
 # Show the expression and current evaluation
 kardinal explain my-app --env prod
 ```
 
 **CEL syntax error:** The expression failed to compile. Common mistakes:
-- Parentheses mismatch: `!schedule.isWeekend` (correct) vs `!schedule.isWeekend()` (wrong — it's a map field, not a function)
+- Calling a field as a function: `!schedule.isWeekend` (correct) vs `!schedule.isWeekend()` (fails with `undeclared reference to 'isWeekend'`: it is a map field, not a function)
 - Unknown variable: `bundle.version` (correct) vs `bundle.spec.images[0].tag` (not in the context; see the [CEL context reference](reference/cel-context.md))
 - Type mismatch: comparing string to int without casting
 
 Test your expression before applying:
 ```bash
-kardinal policy simulate --pipeline my-app --env prod --time "Tuesday 10am"
+kardinal policy test my-gate.yaml
 ```
 
-**gate.recheckInterval too long:** The gate evaluates on each ScheduleClock tick. The default cluster clock interval is 1 minute. If your gate has `recheckInterval: 10m`, it will only re-evaluate every 10 minutes. For testing, reduce to `recheckInterval: 30s`.
+After applying, `kardinal policy simulate --pipeline my-app --env prod --time "Tuesday 10am"` evaluates it at a chosen time.
+
+**No ScheduleClock:** each ScheduleClock tick re-evaluates every gate. The chart creates `kardinal-clock`, which ticks every minute. Without a ScheduleClock (`scheduleClock.enabled: false`), a gate is re-evaluated only every `spec.recheckInterval` (default 5m, minimum 10s). Check with `kubectl get scheduleclocks -A`.
 
 **Gate expression references an upstream environment that hasn't verified yet:**
 ```bash
@@ -386,21 +383,23 @@ above are conventions. A status-only write does not.
 
 ## SCM provider failures
 
-### Symptom: "git push failed: 403 Forbidden" or "remote: Permission to ... denied"
+### Symptom: `git push origin <branch>: authorization failed`
 
-The GitHub PAT has expired or lacks the required scope.
+The remote refused the push (HTTP 403): the token has no write access to the repository or lacks the required scope. An expired or revoked token gives `authentication required` instead (HTTP 401).
+
+git uses the Secret named by the Pipeline's `spec.git.secretRef` (key `token`), in the Pipeline's namespace. PR and API calls use the controller's token, set with the chart's `github.secretRef` in the controller's namespace. The controller reloads it when the Secret changes.
 
 ```bash
-# Check the token secret exists
-kubectl get secret github-token -o yaml
+# Which Secret does git use?
+kubectl get pipeline my-app -o jsonpath='{.spec.git.secretRef.name}'
 
 # Verify token scope — must have 'repo' scope (or 'contents:write' for fine-grained tokens)
 # Test the token directly:
-TOKEN=$(kubectl get secret github-token -o jsonpath='{.data.token}' | base64 -d)
+TOKEN=$(kubectl get secret <secret> -o jsonpath='{.data.token}' | base64 -d)
 curl -s -H "Authorization: token $TOKEN" https://api.github.com/user | jq .login
 ```
 
-To rotate the token:
+To rotate the token, update the Secret in place (here `github-token` in the Pipeline's namespace):
 ```bash
 kubectl create secret generic github-token \
   --from-literal=token=<new-token> \
@@ -475,11 +474,11 @@ GitHub's API rate limit (5000 req/hr for authenticated requests) or GitLab's rat
 **Checking circuit state in logs:**
 
 ```bash
-# Look for circuit open/close events
-kubectl logs -n kardinal-system deploy/kardinal-promoter | grep "scm circuit"
+# Look for SCM calls the open circuit blocked
+kubectl logs -n kardinal-system deploy/kardinal-promoter | grep "SCM circuit open"
 
-# Example log when circuit is open:
-# ERR scm: github scm: SCM circuit open until 2026-04-17T05:30:00Z
+# The error the blocked call returns, also shown in PromotionStep messages:
+# github scm: SCM circuit open until 2026-04-17T05:30:00Z
 ```
 
 **Manual recovery if circuit stays open too long:**
@@ -492,7 +491,8 @@ kubectl rollout restart deployment/kardinal-promoter -n kardinal-system
 **Check current GitHub rate limit:**
 
 ```bash
-TOKEN=$(kubectl get secret github-token -o jsonpath='{.data.token}' | base64 -d)
+# The controller's token: the Secret named by the chart's github.secretRef.name
+TOKEN=$(kubectl get secret github-token -n kardinal-system -o jsonpath='{.data.token}' | base64 -d)
 curl -s -H "Authorization: token $TOKEN" https://api.github.com/rate_limit | jq .rate
 ```
 
@@ -506,8 +506,8 @@ kubectl logs -n kardinal-system deploy/kardinal-promoter | grep "open-pr\|pull_r
 ```
 
 Common causes:
-- The base branch does not exist in the GitOps repo (check `spec.environments[*].branch`)
-- The commit SHA is empty (a previous git-commit step failed silently — check its status)
+- The base branch (`spec.git.branch`, default `main`) does not exist in the GitOps repo
+- The environment already runs this version. `git-commit` finds nothing to change, so no PR is opened, and the PromotionStep has `status.outputs.noChanges: "true"`
 - The GitOps repo is private and the token lacks `repo` scope
 
 ---
@@ -529,19 +529,15 @@ kubectl logs -n kardinal-system deploy/kardinal-promoter | grep -i "forbidden\|p
 
 The Helm chart installs a ClusterRole with all required permissions. If you customized RBAC or installed in a restricted namespace, re-apply the Helm chart:
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   --namespace kardinal-system --reset-then-reuse-values
 ```
 
 ### Symptom: Team cannot create PolicyGates in another team's namespace
 
-This is expected behavior. RBAC isolation prevents cross-namespace modifications:
-- Org gates live in `platform-policies` — only platform admins can write there
-- Team gates live in the team's own namespace
-
-Verify the ClusterRole bindings:
+kardinal does not create RBAC for users. Your cluster's Roles decide who may write PolicyGates in each namespace. Check with:
 ```bash
-kubectl get rolebinding -A | grep policygate
+kubectl auth can-i create policygates.kardinal.io -n platform-policies --as <user>
 ```
 
 ---
@@ -550,23 +546,13 @@ kubectl get rolebinding -A | grep policygate
 
 ### Symptom: Graph shows `Accepted: False` with a CEL compile error
 
-The Graph spec contains an invalid CEL expression in a `readyWhen` or `includeWhen` clause.
+kardinal generates the Graph, so a rejected Graph is a bug in kardinal. The Bundle is `Failed` with reason `GraphRejected` and kro's message: `kubectl describe bundle <name>`. Please open an issue with that message and the Pipeline.
+
+### Symptom: Graph exists but its Ready condition stays False
 
 ```bash
-# Check the Graph status
-kubectl get graph -l kardinal.io/bundle=my-app-v1 -o yaml | grep -A20 conditions
-
-# Check kro logs
-kubectl logs -n kro-system deployment/kro --tail=100 | grep -i error
-```
-
-This usually means a node template contains malformed `${...}` expressions. Check the translator output by looking at the Graph spec's nodes.
-
-### Symptom: Graph is created but reconciler does not advance (stuck in "Reconciling")
-
-```bash
-# Check Graph revision status
-kubectl get graphrevisions -l kardinal.io/pipeline=my-app 2>/dev/null
+# Graph conditions: Accepted, ResourcesConverged, Ready
+kubectl get graph -l kardinal.io/bundle=<bundle> -o jsonpath='{range .items[0].status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
 
 # Check for CRD schema issues
 kubectl get crd policygates.kardinal.io -o jsonpath='{.status.conditions}' | python3 -m json.tool
@@ -728,23 +714,22 @@ controller runs with `--leader-elect`, so only one replica reconciles and the ot
 standbys (`replicaCount`, default 1).
 ```yaml
 # values.yaml
-controller:
-  resources:
-    limits:
-      cpu: "2"
-      memory: 2Gi
-    requests:
-      cpu: 500m
-      memory: 512Mi
+resources:
+  limits:
+    cpu: "2"
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
 ```
 
-**2. Reconcile concurrency** is controller-runtime's default of one worker per CRD type;
-there is no flag to change it.
+**2. Reconcile concurrency** is controller-runtime's default of one worker per CRD type
+(MetricCheck uses 4); there is no flag to change it.
 
 **3. Reduce ScheduleClock tick frequency** if no gate needs minute-level `schedule.*`
 re-evaluation. The chart owns the `kardinal-clock` ScheduleClock, so set it through Helm:
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   -n kardinal-system --reset-then-reuse-values --set scheduleClock.interval=5m
 ```
 
@@ -758,6 +743,6 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
 kubectl port-forward svc/kardinal-promoter -n kardinal-system 8080:8080
 curl -s http://localhost:8080/metrics | grep "^workqueue_depth"
 
-# Or use the built-in Prometheus alerts
+# Or use the built-in Prometheus alerts (install with --set prometheusRule.enabled=true)
 kubectl get prometheusrule kardinal-promoter -n kardinal-system -o yaml
 ```

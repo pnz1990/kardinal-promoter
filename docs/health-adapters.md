@@ -1,6 +1,6 @@
 # Health Adapters
 
-After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment runs **the promoted revision** and is healthy before marking the PromotionStep as Verified. A healthy environment that still runs the previous version is not Verified. Health verification uses pluggable adapters that check the appropriate Kubernetes resource status.
+After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy and runs **the promoted revision** before marking the PromotionStep as Verified. `argocd` and `flux` check the promoted commit. `resource`, `argoRollouts` and `flagger` check the Bundle images. A config-only Bundle has no images, and an image renamed by kustomize `newName` cannot be matched. In both cases `resource` and `argoRollouts` cannot tell the new revision from the previous one; see [What "the promoted revision" means](#what-the-promoted-revision-means). Health verification uses pluggable adapters that check the appropriate Kubernetes resource status.
 
 ## Selecting an Adapter
 
@@ -55,7 +55,7 @@ health:
 4. all replicas are updated, no old replicas remain, and every updated replica is available (otherwise: waiting while the rollout runs; unhealthy if replicas become unavailable after the rollout finished);
 5. the configured condition (default `Available`) is `True`.
 
-If the Deployment runs none of the Bundle's image repositories (for example, kustomize `newName` renamed the image), the image cannot be verified. The check then passes with "(image not verified)" in the message.
+If the Deployment runs none of the Bundle's image repositories (for example, kustomize `newName` renamed the image), the image cannot be verified. The check then passes with "(image not verified)" in the message. A Bundle without images (a config-only Bundle) has nothing to compare either. Before the GitOps tool applies the change, the old Deployment is already rolled out and Available, so the check can pass on the previous revision.
 
 A `ProgressDeadlineExceeded` fails the step only when it is a stall of this promotion's rollout. The condition's message names the ReplicaSet that timed out (`ReplicaSet "<name>" has timed out progressing.`), and the adapter reads that ReplicaSet with `get` on `replicasets` (in the chart's RBAC):
 
@@ -156,7 +156,7 @@ health:
 **Healthy when:** all of these are met:
 - `Ready=True` in `status.conditions`
 - `status.observedGeneration` equals `metadata.generation` (the controller has reconciled the latest spec). A Kustomization missing either field waits.
-- `status.lastAppliedRevision` is the promoted commit (Flux reports `<branch>@sha1:<commit>`, or `<branch>/<commit>` before Flux 2.0), or another commit while the Kustomization's Deployments run the Bundle images (see the table below). A revision that is not a git commit (an OCI or Helm source) cannot be compared: the check passes with "(revision not verified)" in the message.
+- `status.lastAppliedRevision` is the promoted commit (Flux reports `<branch>@sha1:<commit>`, or `<branch>/<commit>` before Flux 2.0), or another commit while the Kustomization's Deployments run the Bundle images (see the table below). A revision that is not a git commit (an OCI or Bucket source) cannot be compared: the check passes with "(revision not verified)" in the message.
 
 **When to use:** Any cluster managed by Flux.
 
@@ -205,7 +205,7 @@ health:
 
 This adapter is used for `health.type: argoRollouts` and when `delivery.delegate: argoRollouts` is set on the environment. After kardinal-promoter writes the new image tag to Git and the GitOps tool syncs, Argo Rollouts detects the image change and executes the canary or blue-green strategy. The adapter watches the Rollout until it completes.
 
-Until the GitOps tool applied the change and Argo Rollouts observed it, the check waits (`Rollout <ns>/<name> not updated yet: ...`) whatever the phase says: the phase still describes the previous release, so neither a `Healthy` nor a `Degraded` phase from it counts. Then:
+The check waits until the Rollout's pod template runs the Bundle images (`Rollout <ns>/<name> not updated yet: ...`) and Argo Rollouts observed that spec (`waiting for the Argo Rollouts controller to observe generation ...`). Until then the phase still describes the previous release, so neither a `Healthy` nor a `Degraded` phase from it counts. This needs a Bundle image the Rollout runs. A config-only Bundle has no images, so there is nothing to wait for. Before the GitOps tool applies its change, Argo Rollouts has already observed the old spec, so the previous release's `Healthy` phase verifies the step. Then:
 
 | Rollout phase | Adapter behavior |
 |---|---|
@@ -235,7 +235,7 @@ Flagger keeps the phase of its last analysis until an analysis tick notices that
 - `Succeeded` with a primary on other images is from an earlier release: Wait.
 - `Failed` counts only when Flagger set it after the target ran the Bundle images; an earlier `Failed` is from an earlier release: Wait. The previous release's analysis can fail after this health check started but before the GitOps tool applied the Bundle, so the start of the health check is not enough. The first check that finds the target on the Bundle images records the time in the PromotionStep's `status.targetUpdatedAt`; that check, and every later one, waits on a `Failed` set at or before it (in the same second counts as before). Flagger notices a new target before it rolls back, so a `Failed` set later is about the Bundle.
 - A `Failed` Canary whose primary runs the Bundle images (the Bundle is the revision Flagger last promoted) is checked like `Succeeded`.
-- When the images cannot be compared (a Bundle without images, a target that is not a Deployment), `Succeeded` and `Failed` count only when Flagger set them at or after the start of this health check.
+- When the images cannot be compared (a Bundle without images, a Canary without `spec.targetRef`, a target that is not a Deployment, or a target that runs none of the Bundle repositories), `Succeeded` and `Failed` count only when Flagger set them at or after the start of this health check. The same holds for `Succeeded` when Flagger has not created the primary Deployment yet.
 
 When Flagger set the phase is the `lastUpdateTime` of the Canary's `Promoted` condition, whose reason is the phase. `status.lastTransitionTime` is not used for this when that condition is there: Flagger rewrites it at every analysis tick of a `Failed` Canary.
 
@@ -296,7 +296,7 @@ Each health check has one of four results:
 - **Healthy** — Verified (or the bake window starts or advances).
 - **Waiting** — the promoted revision is still rolling out or syncing. It does not count as a failure.
 - **Unhealthy** — for example Degraded or `Ready=False` once the promoted change is deployed, not found, or replicas unavailable after the rollout finished. Each check increments `status.consecutiveHealthFailures`, which a `RollbackPolicy` you create reads (see [Rollback](rollback.md)).
-- **Failed** — Deployment `ProgressDeadlineExceeded` (from this promotion's rollout, see [resource](#adapter-resource-default)), Flagger canary `Failed` or a Flux Kustomization whose resources stalled, on the promoted revision and not only on deadlines from an earlier rollout (for Flux, also on another commit when the stalled Deployment runs the Bundle images). `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack) applies at once.
+- **Failed** — Deployment `ProgressDeadlineExceeded` (from this promotion's rollout, see [resource](#adapter-resource-default)), Flagger canary `Failed` or a Flux Kustomization whose resources stalled, on the promoted revision and not only on deadlines from an earlier rollout (for Flux, also on another commit when the stalled Deployment runs the Bundle images). `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack, or AbortedByAlarm when the Bundle is itself a rollback or there is nothing safe to roll back to) applies at once.
 
 Reaching `health.timeout` without a Healthy result is treated like a Failed result: it is counted and applies `onHealthFailure`. A new image that crash-loops is **Waiting**, not Unhealthy: Kubernetes reports the rollout as still progressing (`Progressing=True`, reason `ReplicaSetUpdated`) until the Deployment's `progressDeadlineSeconds` (default 600s) passes. Set `progressDeadlineSeconds` below `health.timeout` to fail such a rollout sooner; otherwise the timeout fails it.
 

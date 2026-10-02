@@ -72,10 +72,8 @@ cd /path/to/kardinal-promoter
 GITHUB_TOKEN=ghp_xxx ./demo/scripts/setup.sh
 
 # 2. Trigger a promotion
-LATEST=$(curl -sf https://api.github.com/repos/pnz1990/kardinal-test-app/commits/main \
-  -H "Authorization: Bearer $GITHUB_TOKEN" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'][:7])")
 kardinal create bundle kardinal-test-app \
-  --image ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST}
+  --image ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
 
 # 3. Watch it promote
 kardinal get pipelines --watch
@@ -96,7 +94,7 @@ kardinal dashboard     # opens http://localhost:8082/ui/
 The scenarios use a real kardinal-test-app image:
 
 ```bash
-IMAGE=ghcr.io/pnz1990/kardinal-test-app:sha-$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
+IMAGE=ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
 ```
 
 ### Scenario A: Happy path

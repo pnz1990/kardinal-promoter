@@ -18,16 +18,22 @@ test → uat → prod automatically, with a PR opened for prod that they review 
 ### Exact steps that must work
 
 ```bash
-# 1. Install kro (Graph controller), then kardinal-promoter
+# 1. Install kro (Graph controller), then kardinal-promoter with the GitHub token
+#    (the controller opens the prod PR with it)
 bash hack/install-kro.sh
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
-  --namespace kardinal-system --create-namespace
+kubectl create namespace kardinal-system
+kubectl create secret generic github-token \
+  --namespace kardinal-system \
+  --from-literal=token=$GITHUB_PAT
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
+  --namespace kardinal-system \
+  --set github.secretRef.name=github-token
 
 # 2. Verify
 kardinal version
 # must print CLI: vX.Y.Z and Controller: vX.Y.Z (the installed release)
 
-# 3. Create git credentials
+# 3. Create git credentials in the Pipeline's namespace (default)
 kubectl create secret generic github-token \
   --from-literal=token=$GITHUB_PAT
 
@@ -51,7 +57,7 @@ kardinal explain kardinal-test-app --env prod
 # Must show: PolicyGates evaluated, reason why prod is waiting or ready
 
 # 9. Prod PR is opened automatically
-# Must open a PR titled: "[kardinal] Promote kardinal-test-app sha-9349a3f to prod"
+# Must open a PR titled: "[kardinal] Promote <bundle-name> to prod"
 # PR body must contain: artifact info, upstream verification, policy compliance table
 
 # 10. After PR merge
@@ -83,6 +89,8 @@ kardinal get pipelines
 Argo CD in the hub manages Applications for 4 workload clusters; the prod clusters run an Argo
 Rollouts canary. kardinal checks each environment's Argo CD Application in the hub
 (`health.type: argocd`), not the Rollout. Two PRs are opened in parallel for prod-eu and prod-us.
+Live tests run test and pre-prod on the hub and both prod regions on one spoke. The 4-cluster
+layout is the demo (#1293).
 
 ### Exact steps that must work
 
@@ -173,9 +181,9 @@ EOF
 
 # 2. Verify they're listed
 kardinal policy list
-# Must show:
-#   no-weekend-deploys  [org] applies-to: prod  recheckInterval: 5m
-#   staging-soak-30m    [org] applies-to: prod  recheckInterval: 2m
+# Must show a table with the columns
+#   NAME  NAMESPACE  SCOPE  APPLIES-TO  RECHECK  CEL  LAST-EVALUATED
+# and one row each for no-weekend-deploys and staging-soak-30m (scope org, applies-to prod)
 
 # 3. Simulate a weekend promotion
 kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 3pm"
@@ -189,15 +197,17 @@ kardinal policy simulate --pipeline kardinal-test-app --env prod \
   --time "Tuesday 10am" --soak-minutes 10
 # RESULT: BLOCKED
 # Blocked by: staging-soak-30m
-# bundle.upstreamSoakMinutes = 10 (threshold: >= 30)
-# ETA: ~20 minutes
+# Message: "Must soak in staging for 30 minutes before promoting to prod"
+#
+# no-weekend-deploys:   PASS    (<reason>)
+# staging-soak-30m:     BLOCK   (<reason>)
 
 # 5. Simulate both gates passing
 kardinal policy simulate --pipeline kardinal-test-app --env prod \
   --time "Tuesday 10am" --soak-minutes 45
 # RESULT: PASS
-# no-weekend-deploys: PASS (Tuesday 10:00 UTC, isWeekend=false)
-# staging-soak-30m:   PASS (soakMinutes=45 >= 30)
+# no-weekend-deploys:   PASS   (<reason>)
+# staging-soak-30m:     PASS   (<reason>)
 
 # 6. Apply a team-level gate in a different namespace
 kubectl apply -f - <<EOF
@@ -234,7 +244,7 @@ kardinal explain kardinal-test-app --env prod
 - [ ] Team-level gate is additive alongside org gates
 - [ ] Team cannot delete or modify org gates in `platform-policies` namespace (RBAC verified)
 - [ ] `kardinal explain` shows all three gates as nodes with CEL expression and current value
-- [ ] Gates appear as nodes in the promotion Graph (visible in `kardinal get steps`)
+- [ ] Gates appear as nodes in the promotion Graph. Gates show in `kardinal explain <pipeline> --env prod` and in the UI graph.
 - [ ] Soak gate re-evaluates after `recheckInterval` without manual trigger
 
 ---
@@ -257,8 +267,9 @@ kardinal create bundle kardinal-test-app --image ghcr.io/pnz1990/kardinal-test-a
 
 # 2. Roll back
 kardinal rollback kardinal-test-app --env prod
-# Rolling back kardinal-test-app in prod: v1.30.0-bad -> v1.29.0
-# PR #N opened: https://github.com/.../pull/N
+# Rolling back kardinal-test-app in prod from <bundle> to <bundle> (...)
+# Bundle <x> created (rollbackOf=<y>)
+# Track with: kardinal explain kardinal-test-app --env prod
 
 # 3. PR has kardinal/rollback label, same evidence structure as a forward promotion
 # Must show previous version info, not just a diff
@@ -289,10 +300,10 @@ matching the documented format.
 ```bash
 kardinal version                          # CLI + controller versions
 kardinal get pipelines                    # table with PIPELINE/BUNDLE/ENV columns
-kardinal get steps <pipeline>             # PromotionSteps + PolicyGates with states
+kardinal get steps <pipeline>             # PromotionSteps with states (gates show in explain and the UI graph)
 kardinal get bundles <pipeline>           # Bundle history with provenance
 kardinal create bundle <pipeline> --image # creates Bundle CRD, prints confirmation
-kardinal promote <pipeline> --env <env>   # triggers promotion, prints PR URL
+kardinal promote <pipeline> --env <env>   # creates a Bundle; prints "Promoting <p> to <env>: bundle <x> created from <y> ..." and "Track with: kardinal get bundles <p>"
 kardinal explain <pipeline> --env <env>   # policy gate trace with current values
 kardinal rollback <pipeline> --env <env>  # opens rollback PR
 kardinal pause <pipeline>                 # injects freeze gate
@@ -312,6 +323,8 @@ kardinal policy simulate                  # gate simulation with result
 ---
 
 ## Journey 6: Rendered Manifests — Pre-Rendered GitOps
+
+Not implemented yet (#1271).
 
 **Source**: `docs/rendered-manifests.md`, `examples/rendered-manifests/`
 
@@ -333,18 +346,13 @@ CPU load, enables CODEOWNERS on rendered output, surfaces hidden config changes 
 #   env/staging  (rendered: plain YAML for staging)
 #   env/prod     (rendered: plain YAML for prod)
 
-# 2. Apply the Pipeline with branch layout and kustomize-build step
+# 2. Apply the Pipeline with branch layout
 kubectl apply -f examples/rendered-manifests/pipeline.yaml
 
-# Pipeline uses layout: branch with kustomize-build in the step sequence:
-# steps:
-#   - uses: git-clone         # checks out source branch
-#   - uses: kustomize-set-image
-#   - uses: kustomize-build   # renders manifests to stdout
-#   - uses: git-commit        # commits rendered YAML to env/prod branch
-#   - uses: open-pr           # PR: env/prod-incoming -> env/prod
-#   - uses: wait-for-merge
-#   - uses: health-check
+# There is no steps field. An environment with layout: branch runs the default sequence:
+# git-clone, kustomize-set-image, kustomize-build, git-commit, git-push, then open-pr and
+# wait-for-merge for pr-review, then health-check (pkg/steps/defaults.go).
+# Today git-clone fails it, because layout: branch is not implemented (#1271).
 
 # 3. Create a Bundle
 kardinal create bundle rendered-demo \
@@ -363,7 +371,7 @@ kardinal get pipelines
 
 ### Pass criteria
 
-- [ ] `layout: branch` with `kustomize-build` step renders manifests and commits to env branch
+- [ ] `layout: branch` renders manifests with `kustomize-build` and commits them to the env branch
 - [ ] PR diff shows rendered YAML, not template source
 - [ ] Argo CD Application tracking `env/prod` branch reflects the merged content
 - [ ] `kardinal explain` shows the branch each environment tracks
@@ -400,16 +408,21 @@ kubectl apply -f examples/multi-tenant/root-appset.yaml
 # 2. Developer creates a new service
 mkdir teams/payment-service
 cat > teams/payment-service/pipeline-values.yaml <<EOF
-image: ghcr.io/myorg/payment-service
-environments: [dev, staging, prod]
-prodApproval: pr-review
+appName: payment-service
+gitRepo: https://github.com/myorg/gitops-repo
+gitBranch: main
+environments:
+  - name: test
+  - name: uat
+  - name: prod
+    approval: pr-review
 EOF
 git add . && git commit -m "feat: add payment-service" && git push
 
 # 3. ApplicationSet detects the new folder and provisions the Pipeline
 kubectl get pipeline -n payment-service
-# NAME              ENVS   STATUS
-# payment-service   3      Ready
+# NAME              PHASE     PAUSED   AGE
+# payment-service   Unknown   false    10s
 
 # 4. Team creates their first Bundle from CI
 kardinal create bundle payment-service \
@@ -418,9 +431,9 @@ kardinal create bundle payment-service \
 
 # 5. Verify isolation: pipeline only affects payment-service namespace
 kardinal get pipelines --all-namespaces
-# NAMESPACE          PIPELINE          BUNDLE   STATUS
-# payment-service    payment-service   v1.0.0   Promoting
-# checkout-service   checkout-service  v3.1.2   Verified
+# NAMESPACE          PIPELINE           BUNDLE   TEST       UAT              PROD       SUB   AGE
+# payment-service    payment-service    v1.0.0   Verified   HealthChecking   -          0     5m
+# checkout-service   checkout-service   v3.1.2   Verified   Verified         Verified   0     2d
 ```
 
 ### Pass criteria
@@ -436,7 +449,7 @@ kardinal get pipelines --all-namespaces
 
 ## Journey Status
 
-**Rule (Issue #418):** A journey is only marked ✅ when an e2e-live run
+**Rule:** A journey is only marked ✅ when an e2e-live run
 (`.github/workflows/e2e-live.yml`) on the commit passed the live tests that cover the journey's
 steps, and every code example in the relevant doc page runs without error. The `e2e live` job
 summary lists each test/e2e/coverage.tsv row's result. Put the run link in the Notes column
@@ -448,13 +461,17 @@ the tests pass does not count either.
 
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
-| 1: Quickstart | unverified | 2026-10-01 | Fake-client test only (`TestJourney1Quickstart`). No e2e-live run is recorded as evidence. |
-| 2: Multi-cluster fleet | unverified | 2026-09-29 | Fake-client test only (`TestJourney2MultiClusterFleet`). No multi-cluster run on record; live J2 evidence is tracked in #1293. |
-| 3: Policy governance | unverified | 2026-09-29 | Fake-client test only (`TestJourney3PolicyGovernance`). |
-| 4: Rollback | unverified | 2026-09-29 | Fake-client test only (`TestJourney4Rollback`). |
-| 5: CLI workflow | unverified | 2026-09-29 | `TestJourney5CLI` runs `version`, `policy simulate` and `policy test` from the built CLI with no cluster, and skips if the binary is missing. |
-| 6: Rendered manifests | unverified | 2026-10-01 | `layout: branch` is not implemented (PIPE-NOTIMPL-01). `TestJourney6RenderedManifests` checks that the Pipeline reports it NotImplemented and that a promotion in that environment fails. |
-| 7: Multi-tenant self-service | unverified | 2026-09-29 | Fake-client test only (`TestJourney7MultiTenantSelfService`); a fake client enforces no RBAC. |
+| 1: Quickstart | live, partial | 2026-10-02 | `TestCore_QuickstartExample` (EX-QUICKSTART-01) passed in e2e-live [run 36911946726](https://github.com/pnz1990/kardinal-promoter/actions/runs/36911946726) (c48f36e9) on core 1.35–1.37, gitea and gitlab. It uses podinfo on a local git server. The github.com PR path (EX-GITHUB-DEMO-01) is still todo: DEMO_GITHUB_TOKEN is rejected. |
+| 2: Multi-cluster fleet | live setup only, no e2e-live run | 2026-10-02 | `TestMultiCluster_FleetExample` (EX-FLEET-01, MC-ARGO-01, MC-FLUX-01) runs a kind hub and one spoke (#1388). It has passed only in a local `make e2e-all` (884bdb60). #1388 merged after the last full e2e-live run. The 4-cluster demo is tracked in #1293. |
+| 3: Policy governance | live, partial | 2026-10-02 | GATE-ORG-01, GATE-TEAM-01, GATE-SOAK-01, GATE-RECHECK-01, CLI-POLICY-LIST-01 and CLI-POLICY-SIMULATE-01 passed in [run 36911946726](https://github.com/pnz1990/kardinal-promoter/actions/runs/36911946726). No live test covers pass criterion 7 (RBAC on `platform-policies`). |
+| 4: Rollback | live, partial | 2026-10-02 | RB-PREV-01, RB-TO-01, RB-PR-01, RB-HISTORY-01, CLI-ROLLBACK-01 and CLI-HISTORY-01 passed in [run 36911946726](https://github.com/pnz1990/kardinal-promoter/actions/runs/36911946726). |
+| 5: CLI workflow | live, partial | 2026-10-02 | All 35 live CLI-* rows passed in [run 36911946726](https://github.com/pnz1990/kardinal-promoter/actions/runs/36911946726). The two deprecated rows also passed: `approve` fails and points to `kardinal override`, and `rollback --emergency` has no effect. |
+| 6: Rendered manifests | not implemented in v0.9.0 | 2026-10-02 | `layout: branch` is not implemented (#1271, open), planned for v0.10.0. PIPE-NOTIMPL-01 only checks that the Pipeline reports NotImplemented. This journey cannot pass yet. |
+| 7: Multi-tenant self-service | live, partial | 2026-10-02 | `TestHealth_MultiTenantExample` (EX-TENANT-01) passed in [run 36911946726](https://github.com/pnz1990/kardinal-promoter/actions/runs/36911946726). It covers one Pipeline per team from the ApplicationSet, and each team promoting. It does not cover RBAC isolation, the org weekend gate on a new team, or cascade delete. |
+
+No e2e-live run exists yet on the release commit. The v0.9.0 release run link is added after
+the tag. Before v0.9.0 final, J1–J5 and J7 need e2e-live evidence on the tagged commit
+(AGENTS.md §Journey validation, #1356).
 
 ---
 

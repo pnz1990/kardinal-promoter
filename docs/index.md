@@ -38,7 +38,7 @@ kardinal-promoter is a Kubernetes-native controller that automates software prom
 
     ---
 
-    Every prod promotion opens a PR with structured evidence: image digest, CI run, gate results, soak time.
+    An environment with `approval: pr-review` promotes through a PR with structured evidence: image digest, CI run, gate results, upstream health checks.
 
     [:octicons-arrow-right-24: PR Evidence](pr-evidence.md)
 
@@ -46,21 +46,23 @@ kardinal-promoter is a Kubernetes-native controller that automates software prom
 
 ## Why kardinal-promoter?
 
+All three tools can promote through a DAG of environments. The first rows show where kardinal differs.
+
 | Feature | kardinal | Kargo | GitOps Promoter |
 |---|---|---|---|
-| DAG promotion pipelines | ✅ | ❌ linear only | ❌ linear only |
-| CEL policy gates with kro library | ✅ | basic | ❌ |
-| PR evidence body (structured) | ✅ | ❌ | ✅ basic |
-| GitOps-agnostic (ArgoCD + Flux) | ✅ | ArgoCD only | Flux only |
-| Auto-rollback on health failure | ✅ | ❌ | ❌ |
-| Contiguous healthy soak (`bake.minutes`) | ✅ | ❌ elapsed only | ❌ elapsed only |
+| CEL policy gates with pipeline context (schedule, upstream soak, metrics, PR review, Bundle metadata) | ✅ | ❌ manual approval and verification | partial: `expr` checks on commits and web responses |
+| Soak that resets on a health alarm (`bake`) | ✅ | ❌ elapsed only (`requiredSoakTime`) | ❌ elapsed only (`TimedCommitStatus`) |
 | Wave topology for multi-region rollouts | ✅ | ❌ | ❌ |
-| Change freeze management (`ChangeWindow` CRD) | ✅ | ❌ | ❌ |
-| Every gate re-checked before a step starts | ✅ | ❌ | ❌ |
-| DORA metrics built-in | ✅ | ❌ | ❌ |
-| Integration test step | No — run tests as an Argo CD PostSync hook with `health.type: argocd`, or gate on a `MetricCheck` ([how](pipeline-reference.md#image-signatures-and-tests)) | ❌ | ❌ |
-| Emergency override with audit record | ✅ | ❌ | ❌ |
-| Cross-stage history in gates | ✅ | ❌ | ❌ |
+| Structured PR evidence (provenance, gate results, upstream health) | ✅ | ❌ user-written PR description | basic: commits and a diff link |
+| Cluster-wide change freeze (`ChangeWindow` CRD) | ✅ | Enterprise only (promotion windows) | per PromotionStrategy (`ScheduledCommitStatus`) |
+| DORA metrics built-in | ✅ | ❌ | ❌ on its roadmap |
+| Upstream promotion history in gates | ✅ | ❌ | ❌ |
+| Time-limited gate override with a recorded reason | ✅ | ❌ | ❌ |
+| Auto-rollback on health failure | ✅ | Enterprise only | ❌ |
+| DAG promotion pipelines | ✅ | ✅ Stage DAG | ✅ `dependsOn` |
+| GitOps-agnostic (ArgoCD + Flux) | ✅ | ArgoCD (primary) | ✅ |
+| Every gate re-checked before a step starts | ✅ | ❌ | ✅ proposed commit statuses |
+| Integration test step | No — run tests as an Argo CD PostSync hook with `health.type: argocd`, or gate on a `MetricCheck` ([how](pipeline-reference.md#image-signatures-and-tests)) | ✅ verification can run a Job | ❌ |
 | Graph-first architecture (kro Graph) | ✅ | ❌ | ❌ |
 
 See [detailed comparison →](comparison.md)
@@ -80,7 +82,7 @@ kubectl create secret generic github-token \
   --from-literal=token=$GITHUB_PAT
 
 # 2. Install kardinal-promoter
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 \
   --namespace kardinal-system \
   --create-namespace \
   --set github.secretRef.name=github-token
@@ -88,7 +90,7 @@ helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
 # 3. Install the CLI
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
-curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.9.0-rc.1/kardinal-${OS}-${ARCH}"
+curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.9.0/kardinal-${OS}-${ARCH}"
 chmod +x kardinal && sudo mv kardinal /usr/local/bin/
 
 # 4. Verify
@@ -114,7 +116,7 @@ graph LR
 2. **The controller translates** the Bundle + Pipeline into a kro DAG Graph
 3. **The Graph advances** through environments, running steps (image update → PR → health check)
 4. **PolicyGates block** or allow promotion based on CEL expressions
-5. **A PR is opened** for human review at gated environments, with full evidence
+5. **A PR is opened** for human review at `approval: pr-review` environments, with full evidence
 
 ## Key concepts
 

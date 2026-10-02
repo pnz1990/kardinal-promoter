@@ -56,6 +56,8 @@ The controller manager runs these reconcilers:
 | `ScheduleClockReconciler` | `ScheduleClock` | Writes `status.tick` on a configurable interval for time-based gates |
 | `ChangeWindowReconciler` | `ChangeWindow` | Writes `status.active` and requeues at the next window boundary |
 | `SubscriptionReconciler` | `Subscription` | Polls OCI/Git sources; creates Bundles on new artifacts |
+| `NotificationHookReconciler` | `NotificationHook` | Sends webhooks for the events it selects; writes delivery status |
+| Graph cleanup (`pkg/reconciler/graphcleanup`) | kro `Graph` | Deletes reader RoleBindings no Graph needs any more; lets a Graph in a terminating namespace go once kro can no longer tear it down |
 
 ### Translator (`pkg/translator`)
 
@@ -117,10 +119,10 @@ checks and tests, see [Pipeline Reference: Image signatures and tests](pipeline-
 
 ### PolicyGate Evaluator (`pkg/reconciler/policygate`)
 
-Evaluates CEL expressions against the promotion context. Uses the
-[kro CEL library](https://github.com/kubernetes-sigs/kro/tree/main/pkg/cel/library),
-giving gates access to `json.*`, `maps.*`, `lists.*`, `random.*`, and standard string
-extension functions.
+Evaluates CEL expressions against the promotion context, with the `json.*`, `maps.*`,
+`lists.*` and `random.*` functions adapted from the
+[kro CEL library](https://github.com/kubernetes-sigs/kro/tree/main/pkg/cel/library)
+(`pkg/cel/library`) and the standard string extensions.
 
 See [CEL Context Reference](reference/cel-context.md) for the full variable list.
 
@@ -168,17 +170,16 @@ sequenceDiagram
     API->>K8s: create Bundle CR
     K8s->>Bundle: reconcile event
     Bundle->>K8s: create Graph CR (DAG spec)
-    kro->>K8s: create PromotionStep[test] + PolicyGate instances
+    kro->>K8s: create PolicyGate[test] instances
     K8s->>PG: reconcile PolicyGate[test]
     PG->>K8s: status.ready = true (CEL passed)
-    kro->>K8s: advance DAG → create PromotionStep[test] steps
+    kro->>K8s: every gate ready → create PromotionStep[test]
     K8s->>PS: reconcile PromotionStep[test]
     PS->>PS: image update → commit → open PR → wait merge → health check
     PS->>K8s: status.state = Verified
-    kro->>kro: readyWhen satisfied → advance to uat
+    kro->>kro: uat nodes resolve → advance to uat
     Note over kro,PS: Repeat for uat → prod
-    kro->>K8s: Graph.status.state = Verified
-    K8s->>Bundle: status.phase = Verified
+    Bundle->>K8s: every PromotionStep Verified → status.phase = Verified
 ```
 
 ---
@@ -212,9 +213,9 @@ All state is stored in Kubernetes CRDs:
 | `Bundle` | Immutable deployment unit; created by CI |
 | `PromotionStep` | Per-environment promotion progress; owned by Graph |
 | `PolicyGate` | Namespaced policy check: templates, and the per-Bundle instances the Graph creates |
-| `PRStatus` | Tracks GitHub/GitLab PR open/merged/closed state |
+| `PRStatus` | Tracks a promotion PR's open, merged or closed state |
 | `RollbackPolicy` | Consecutive-failure rollback trigger for one Bundle in one environment (user-created; see [Rollback](rollback.md#autorollback-is-not-implemented)) |
-| `MetricCheck` | Prometheus query check, created as a DAG node |
+| `MetricCheck` | Prometheus query with a pass/fail threshold, created by the user; gates read it as `metrics.<name>` |
 | `ScheduleClock` | Writes `status.tick` on a configurable interval; enables time-based policy gates |
 | `ChangeWindow` | Cluster-scoped blackout/recurring allow windows for pipeline promotions |
 | `Subscription` | Watches OCI registries or Git repos; auto-creates Bundles on new artifacts |

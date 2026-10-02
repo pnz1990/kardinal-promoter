@@ -82,7 +82,7 @@ spec:
   expression: "!schedule.isWeekend"
   message: "Block deployments on Saturday and Sunday UTC"
 ---
-# PolicyGate: require upstream UAT soak of 30 minutes
+# PolicyGate: prod waits until uat has been Verified for 30 minutes
 apiVersion: kardinal.io/v1alpha1
 kind: PolicyGate
 metadata:
@@ -94,7 +94,7 @@ metadata:
     kardinal.io/type: gate
 spec:
   expression: "upstream.uat.soakMinutes >= 30"
-  message: "UAT must have been healthy for at least 30 contiguous minutes"
+  message: "UAT must have been Verified for at least 30 minutes"
 ---
 # PolicyGate: block deployments by dependabot (bundle metadata check)
 apiVersion: kardinal.io/v1alpha1

@@ -11,7 +11,7 @@ It targets the pnz1990/kardinal-demo GitOps reference repository with
 environments: test (auto) → uat (auto) → prod (pr-review).
 
 Usage after install:
-  kardinal create bundle demo --image ghcr.io/pnz1990/kardinal-test-app:sha-<SHA>
+  kardinal create bundle demo --image ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
 */}}
 {{- if .Values.demo.enabled }}
 {{- $secretName := .Values.demo.secretRef.name | default (include "kardinal-promoter.githubSecretName" .) | default "github-token" }}
@@ -29,8 +29,7 @@ metadata:
     kardinal.io/demo-instructions: |
       Run `kardinal create bundle demo --image <image>` to trigger the first promotion.
       Example:
-        SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
-        kardinal create bundle demo --image ghcr.io/pnz1990/kardinal-test-app:sha-${SHA}
+        kardinal create bundle demo --image ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
 spec:
   git:
     url: {{ required "demo.git.url is required (your fork of pnz1990/kardinal-demo)" .Values.demo.git.url | quote }}

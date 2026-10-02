@@ -41,17 +41,20 @@ func newOverrideCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "override <pipeline> --stage <environment> --gate <gate-name> --reason <text> [--expires-in <duration>]",
-		Short: "Force-pass a PolicyGate with a mandatory audit record (K-09)",
+		Short: "Force-pass a PolicyGate with a mandatory audit record",
 		Long: `Override a PolicyGate for a specific pipeline stage.
 
 The override is time-limited and creates a mandatory audit record in
 PolicyGate.spec.overrides[]. The gate passes immediately without evaluating
 the CEL expression until the override expires.
 
-All overrides are preserved for audit purposes. Use --expires-in to control
-the override window (default: 1h).
+Expired overrides stay in spec.overrides[] as an audit record for as long
+as the Bundle exists. Deleting a Bundle deletes its gate instances and their
+overrides, and the Pipeline's historyLimit cleanup deletes old finished
+Bundles (50 by default). Use --expires-in to control the override window
+(default: 1h).
 
---gate takes the gate template name (for example no-weekend-deploy). The
+--gate takes the gate template name (for example no-weekend-deploys). The
 override is recorded on the instances of that gate that the Pipeline's
 in-progress Bundles have for --stage (every stage when --stage is not set),
 so run it while the Bundle waits on the gate. Instances of Verified, Failed
@@ -61,7 +64,7 @@ instance, as kubectl get policygates shows it, is also accepted; that instance
 alone gets the override.
 
 Example:
-  kardinal override my-app --stage prod --gate no-weekend-deploy \
+  kardinal override my-app --stage prod --gate no-weekend-deploys \
     --reason "P0 hotfix — incident #4521"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

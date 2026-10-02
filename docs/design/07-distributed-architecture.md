@@ -43,7 +43,7 @@ Runs in the control plane cluster. Contains:
 - Webhook handlers: `/api/v1/bundles`, `/webhooks`
 - Metrics: `/metrics`
 
-In standalone mode, this is the only binary. It handles every PromotionStep without a shard label; steps with a `kardinal.io/shard` label are left for an agent (`pkg/reconciler/promotionstep`, `Shard == ""`), so do not set `environments[].shard` without running the matching agent.
+In standalone mode, this was the only binary. It handled every PromotionStep without a shard label and left steps with a `kardinal.io/shard` label for an agent. Today the controller is the only binary, and a step whose environment sets `shard` fails with `shard is not supported` (`pkg/reconciler/promotionstep/config_check.go`).
 
 ### kardinal-agent (per shard)
 
@@ -134,8 +134,9 @@ kardinal-agent \
   --health-kubeconfig=/etc/kardinal/local-kubeconfig  # or in-cluster
 ```
 
-> The shipped agent has `--shard` but none of the three kubeconfig/cache flags above: it uses
-> one client configuration (`--kubeconfig`, `KUBECONFIG` or in-cluster) for everything.
+> The agent, before it was removed, had `--shard` but none of the three kubeconfig/cache flags
+> above: it used one client configuration (`--kubeconfig`, `KUBECONFIG` or in-cluster) for
+> everything.
 
 The agent:
 1. Watches PromotionStep CRs in the control plane (read via the control plane kubeconfig)
@@ -189,8 +190,8 @@ The agent cannot: create or delete PromotionSteps, create or delete Bundles, acc
 > The PromotionStep reconciler on `main` also reads Pipelines, PolicyGates, PRStatus
 > objects and the Git token Secret, deletes orphaned PromotionSteps, and creates the
 > auto-rollback Bundle. It no longer writes Bundle status: the Bundle reconciler copies
-> the evidence. The agent is not shipped with an image or chart yet, so there is no
-> tested agent Role; the permissions the reconciler uses are in the controller's
+> the evidence. The agent never shipped with an image or chart, so there was no tested
+> agent Role; the permissions the reconciler uses are in the controller's
 > `chart/kardinal-promoter/templates/clusterrole.yaml`.
 
 ### Git and SCM credentials
@@ -201,7 +202,7 @@ This means the control plane never holds workload cluster credentials or Git tok
 
 ### Health check credentials
 
-> **Not implemented (2026-09 audit).** `kardinal-agent` builds one Kubernetes client from one configuration (`ctrl.GetConfigOrDie()`) and uses it for the PromotionSteps and for health checks, so it checks the API server that holds the PromotionSteps, not the cluster it runs in. `health.cluster` kubeconfig Secrets are not read; a non-empty `health.cluster` fails the PromotionStep.
+> **Never implemented.** `kardinal-agent` built one Kubernetes client from one configuration (`ctrl.GetConfigOrDie()`) and used it for the PromotionSteps and for health checks, so it checked the API server that holds the PromotionSteps, not the cluster it ran in. `health.cluster` kubeconfig Secrets are not read; a non-empty `health.cluster` fails the PromotionStep.
 
 The design: the agent uses its local cluster credentials (in-cluster ServiceAccount or a provided kubeconfig) for health checks. For remote health checks within the agent's network, the agent stores kubeconfig Secrets locally.
 

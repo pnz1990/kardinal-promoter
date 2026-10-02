@@ -114,7 +114,7 @@ A rollback Bundle (label `kardinal.io/rollback: "true"` or `spec.provenance.roll
 
 A rollback of a stalled Deployment returns it to the ReplicaSet it ran before, so Kubernetes creates no new ReplicaSet and keeps the stalled rollout's `ProgressDeadlineExceeded` until it sees the stalled pods go. The rollback Bundle's health check does not fail on that condition: it names the stalled ReplicaSet, which no longer has the Deployment's revision, so the check is Waiting (`... is from an earlier rollout ...`) until Kubernetes replaces it (see [resource](health-adapters.md#adapter-resource-default)). With `health.type: flux`, Flux fails on that condition and checks again only at its next reconcile; the step waits for that (see [flux](health-adapters.md#adapter-flux)).
 
-The rollback Bundle is a newer Bundle of the same pipeline and type, so the failing Bundle ends `Superseded`. The step that raised the alarm stays `RollingBack`, with the message naming the rollback Bundle: it is not cancelled as superseded, whichever order the two status updates land in.
+The rollback Bundle is a newer Bundle of the same pipeline and type, so the failing Bundle ends `Superseded`, or `Failed` when the controller sees the step turn `RollingBack` before it sees the rollback Bundle. The step that raised the alarm stays `RollingBack`, with the message naming the rollback Bundle: it is not cancelled as superseded, whichever order the two status updates land in.
 
 ### What counts as a failed health check
 
@@ -168,8 +168,11 @@ commit def456  [kardinal] Promote my-app-rollback-bkgwk to prod
 ```
 
 Every commit, a rollback's included, is titled `[kardinal] Promote <bundle> to <environment>`, with
-the Bundle and Pipeline names in the body. A rollback Bundle is usually named `<pipeline>-rollback-<suffix>`,
-and its PR is labelled `kardinal/rollback` (on Bitbucket Cloud, which has no PR labels, it is titled `[kardinal] Rollback ...`).
+the Bundle and Pipeline names in the body. A rollback from the CLI or UI is named
+`<pipeline>-rollback-<suffix>`. An automatic one is named `<failing bundle>-rollback-alarm`
+(`onHealthFailure: rollback`) or `<bundle>-rollback-policy` (RollbackPolicy); a name longer than
+63 characters is shortened and ends in a hash. Every rollback PR is labelled `kardinal/rollback`.
+Bitbucket Cloud has no PR labels, so there the PR is titled `[kardinal] Rollback ...`.
 
 The rollback commit is a new commit, not a `git revert`. The history is always append-only.
 
@@ -247,7 +250,7 @@ kardinal resume my-app
 - A step in `WaitingForMerge` or `HealthChecking` finishes. Stopping it would leave a merged change unverified. Open PRs stay open; merging one during a pause still deploys it.
 - New Bundles are still accepted, but their steps wait in `Pending`.
 
-After resume, held steps continue from where they stopped. No re-trigger is required.
+After resume, held steps continue from where they stopped. A held step re-checks the pause every minute, so this takes up to a minute. No re-trigger is needed.
 
 While the Pipeline is paused it has a `Paused` condition. `True` (reason `FreezeGateActive`) means the freeze gate holds new promotions. Do not name your own PolicyGate `freeze-<pipeline>`: kardinal does not treat a gate it did not create (no `kardinal.io/freeze=true` label and not owned by the Pipeline) as a pause, and does not delete it. While such a gate exists, `kardinal pause` fails with an error naming it, and the condition is `False` with reason `FreezeGateNameConflict`, so the pipeline keeps running. Rename or delete that gate and the pause takes effect.
 

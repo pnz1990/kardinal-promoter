@@ -4,6 +4,7 @@
 > so nothing runs the loop on a schedule. Historical design; the workflow it described also
 > differed from this page (it ran hourly, had no `actions: write` permission and no
 > `X-OAuth-Scopes` preflight). Do not follow it.
+> The loop docs and scripts (`.specify/`, `team.yml`, `roadmap.md`) were deleted in #1343.
 > Created: 2026-04-19
 
 ---

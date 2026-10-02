@@ -49,12 +49,12 @@ failed; see kardinal explain), its PromotionSteps (one row per environment it
 has a step in, ▶ marking a step that is Promoting, WaitingForMerge or
 HealthChecking, with the Bundle each row belongs to, the step it is on, and the
 last 40 characters of the step's PR URL, open or merged; REGION is - unless the
-step was created by a Graph built before spec.regions was removed), the Bundle
-deployed in every environment (the one whose change landed there last, as
-kardinal rollback judges it, with its image tags or config commit; "none" when
-no change has landed yet), and the PolicyGates holding it back (with their CEL
-expression cut to 40 characters, current reason and when each was last
-checked). A gate is listed as blocking only while it holds the bundle back: it
+step was created by a Graph built before multi-region fan-out was removed;
+spec.regions is deprecated), the Bundle deployed in every environment (the
+one whose change landed there last, as kardinal rollback judges it, with its
+image tags or config commit; "none" when no change has landed yet), and the
+PolicyGates holding it back (with their CEL expression cut to 40 characters,
+current reason and when each was last checked). A gate is listed as blocking only while it holds the bundle back: it
 is not ready and either every upstream environment is Verified for that bundle
 and the bundle has no PromotionStep in the gate's environment yet, or the
 bundle's Pending PromotionStep there waits on it. A gate of an environment the

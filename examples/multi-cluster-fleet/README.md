@@ -9,7 +9,7 @@ Equivalent to the AWS workshops:
 
 1. CI builds the `rollouts-demo` image and creates a Bundle.
 2. kardinal-promoter promotes through: test (auto) --> pre-prod (PR) --> [prod-eu, prod-us] (PR, parallel).
-3. Test and pre-prod use instant deploy. Prod regions use Argo Rollouts canary with ALB traffic routing.
+3. Test and pre-prod use instant deploy. Prod regions use an Argo Rollouts canary.
 4. PolicyGates on each prod region enforce: no weekend deploys, and a 30-minute soak after pre-prod.
 5. Argo CD hub-spoke manages Applications across 4 clusters.
 
@@ -43,7 +43,7 @@ no cross-cluster API calls and needs no credentials for the workload clusters. S
   and Argo CD
 - 4 workload clusters registered as Argo CD cluster targets
 - Argo Rollouts installed in prod-eu and prod-us clusters
-- AWS ALB Ingress Controller in prod clusters (for canary traffic routing)
+- A traffic router in prod clusters if your Rollout uses one (for example the AWS Load Balancer Controller for ALB routing)
 - GitOps repo with Kustomize overlays. `pipeline.yaml` and `argocd-applications.yaml` use
   the placeholder `https://github.com/myorg/rollouts-demo-deploy`; change both to your repo:
   ```
@@ -75,7 +75,7 @@ kubectl create secret generic github-token \
 ### 2. Create Argo CD Applications for each cluster
 
 ```bash
-kubectl apply -f argocd-applications.yaml
+kubectl apply -f examples/multi-cluster-fleet/argocd-applications.yaml
 ```
 
 ### 3. Create org-level PolicyGates
@@ -84,13 +84,13 @@ kubectl apply -f argocd-applications.yaml
 prod region, because a `kardinal.io/applies-to` label holds a single environment name.
 
 ```bash
-kubectl apply -f policy-gates.yaml
+kubectl apply -f examples/multi-cluster-fleet/policy-gates.yaml
 ```
 
 ### 4. Create the Pipeline
 
 ```bash
-kubectl apply -f pipeline.yaml
+kubectl apply -f examples/multi-cluster-fleet/pipeline.yaml
 ```
 
 ### 5. Create a Bundle (from CI or manually)
@@ -108,10 +108,10 @@ kardinal create bundle rollouts-demo --image ghcr.io/myorg/rollouts-demo:v2.0.0
    and the same two for prod-us.
 5. When gates pass: prod-eu and prod-us PromotionSteps created in parallel.
 6. For each prod region:
-   - PR opened with promotion evidence (including pre-prod metrics).
+   - PR opened with promotion evidence (image provenance, gate results, and when test and pre-prod were Verified).
    - Human reviews and merges.
    - Argo CD syncs the Rollout manifest.
-   - Argo Rollouts executes canary: 20% --> 40% --> 60% --> 80% --> 100% with ALB.
+   - Argo Rollouts runs the canary steps in your base/rollout.yaml.
    - kardinal-promoter watches the region's Application in the hub via the argocd health
      adapter. Argo CD's built-in Rollout health reports the Application `Progressing` while the
      canary moves between steps, `Suspended` while it waits at a pause step, and `Healthy` once
@@ -145,7 +145,7 @@ kardinal history rollouts-demo
 | CRDs to write | Project + Warehouse + PromotionTask + 4 Stages = 7 resources | Pipeline + 2 PolicyGates per prod region = 5 resources |
 | Parallel prod regions | Separate Stage per region, manual ordering | `dependsOn: [pre-prod]` on both regions, Graph handles parallel execution |
 | Promotion mechanism | PromotionTask steps (git-clone, kustomize-set-image, git-push, argocd-update) | Built-in: controller handles git + kustomize + PR automatically |
-| Approval | Kargo UI or manual `kargo promote` | GitHub PR with promotion evidence (metrics, provenance, policy gates) |
+| Approval | Kargo UI or manual `kargo promote` | GitHub PR with promotion evidence (provenance, policy gates, upstream verification) |
 | Policy governance | None (autoPromotionEnabled: true/false) | PolicyGate DAG nodes with CEL expressions |
 | Canary | Argo Rollouts (same) | Argo Rollouts in the spoke, verified through the hub Argo CD Application |
 

@@ -154,7 +154,7 @@ informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
             // All environments verified, mark Bundle as Verified
         }
         if graphIsFailed(graph) {
-            // A step failed, trigger rollback
+            // A step failed. Rollback is a new Bundle, not a Graph change.
         }
     },
 })
@@ -226,10 +226,10 @@ The Graph API is experimental. To detect breaking changes:
 
 | Error | Behavior |
 |---|---|
-| Graph CRD not installed | Controller logs an error on startup and exits. Graph is a prerequisite. |
-| Graph controller not running | Graph CR is created but child CRDs are never produced. The promotion stalls. The controller detects this via a timeout (configurable, default 5 minutes) and marks the Bundle as Failed with reason "Graph controller not responding." |
-| Invalid Graph spec (Accepted=False) | The Graph status condition `Accepted=False` is set with an error message. The controller reads this, marks the Bundle as Failed with the error message, and logs it. |
-| Graph deletion (Bundle GC) | When a Bundle is garbage-collected, the owned Graph and all its child CRDs are cascade-deleted by Kubernetes. No controller intervention needed. |
+| Graph CRD not installed | The Bundle and graph cleanup controllers watch Graphs, so their caches cannot sync. About 2 minutes after the controller becomes leader, it exits, and the pod restarts until kro is installed. `kardinal doctor` reports the missing CRD. |
+| Graph controller not running | The Graph is created, but no child objects appear and the promotion stalls. There is no timeout. `kardinal doctor` checks that the kro pod runs. |
+| Invalid Graph spec (Accepted=False) | The Graph status condition `Accepted=False` is set with an error message. The controller copies it to the Bundle as `GraphAccepted` and marks the Bundle Failed with reason `GraphRejected`. |
+| Graph deletion (Bundle GC) | When a Bundle is deleted (`historyLimit` GC or by hand), Kubernetes deletes its Graph through the owner reference. kro's finalizer then deletes the Graph's children, which carry no ownerReferences (ledger G7). |
 
 ## What This Spec Does NOT Cover
 
@@ -240,10 +240,10 @@ The Graph API is experimental. To detect breaking changes:
 
 ## Present
 
-✅ Graph controller fork pinned to `cdc4bb9` (2026-04-17): schema-aware CEL, forEach data-loss fix,
+✅ (fork era, superseded by kro v0.10.0-rc.0) Graph controller fork pinned to `cdc4bb9` (2026-04-17): schema-aware CEL, forEach data-loss fix,
    NodeTypeOwn→NodeTypeTemplate cosmetic rename (PR merged before #789 tracking)
 
-✅ Graph controller fork upgraded to `3376810` (2026-04-18, PR #789): propagation trigger on self-state
+✅ (fork era, superseded by kro v0.10.0-rc.0) Graph controller fork upgraded to `3376810` (2026-04-18, PR #789): propagation trigger on self-state
    refresh — fixes J1 blocker where UAT PromotionStep never started because the fork's
    Path 2 dispatch did not mark dependents as `propagationTriggered`.
    Root cause: fork commit `3bcbe92` (correctness: propagation trigger on self-state
@@ -255,13 +255,13 @@ The Graph API is experimental. To detect breaking changes:
    Previously the empty hash was misinterpreted as "spec has changed", causing a spurious
    Graph deletion that reset all PromotionSteps to empty status.
 
-✅ Graph controller fork upgraded to `d6cbc54` (2026-04-19, PR #803): 5 additive commits — forEach
+✅ (fork era, superseded by kro v0.10.0-rc.0) Graph controller fork upgraded to `d6cbc54` (2026-04-19, PR #803): 5 additive commits — forEach
    incremental O(K) diff, WatchManager canonical Kind caching fix, context-aware hashing.
    No breaking changes to kardinal integration. No source changes required.
 
-✅ Graph controller upgrade cadence (ongoing): COORD checks for new kro releases per the
-   AGENTS.md protocol; the pin lives in `hack/install-kro.sh`. No separate code component —
-   the cadence lives in the agent loop.
+✅ Graph controller upgrade cadence: the kro pin lives in `hack/install-kro.sh`. AGENTS.md
+   §kro Upgrade Cadence describes the upgrade check. The agent loop that ran it was retired
+   (#1343).
 
 ✅ Migrated to upstream kro v0.10.0-rc.0 Graph (`kro.run/v1alpha1`, `GraphKind` gate, 2026-09):
    resolvability gating replaces `propagateWhen`, `ref` nodes replace `watch:`, per-Graph

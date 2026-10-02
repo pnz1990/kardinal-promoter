@@ -4,6 +4,8 @@ This page documents every variable available in `PolicyGate` CEL expressions. Th
 
 Referencing an attribute or map key that does not exist is an evaluation error, and the gate blocks (fail-closed). A test (`TestDocumentedCELContext` in `pkg/reconciler/policygate`) evaluates every attribute and example on this page against the controller's real context.
 
+Graph `readyWhen` and template expressions run in kro's CEL environment, not this one. The variables on this page exist only in PolicyGate expressions.
+
 ---
 
 ## Root Variables
@@ -24,7 +26,7 @@ Referencing an attribute or map key that does not exist is an evaluation error, 
 | Field | Type | Example | When populated |
 |---|---|---|---|
 | `bundle.type` | string | `"image"` | Always |
-| `bundle.version` | string | `"1.29.0"` | Always; derived from image tag or configRef |
+| `bundle.version` | string | `"1.29.0"` | Always. `image` and `mixed` Bundles: the first image's tag (`""` when that image has only a digest). `config` Bundles: the first 8 characters of `configRef.commitSHA` |
 | `bundle.upstreamSoakMinutes` | int | `45` | Soak of the direct upstream environment(s) of the gated environment; minimum across them on fan-in; 0 for a root environment or an upstream that is not Verified |
 | `bundle.provenance.author` | string | `"engineer@co.com"` | When Bundle was created with `provenance.author` |
 | `bundle.provenance.commitSHA` | string | `"abc123def"` | When Bundle was created with `provenance.commitSHA` |
@@ -154,9 +156,9 @@ double(metrics["p99-latency"].value) < 500.0
 
 ---
 
-## Extended CEL Functions (kro library)
+## Extended CEL Functions
 
-kardinal uses the [kro CEL library](https://github.com/kubernetes-sigs/kro/tree/main/pkg/cel/library) for all gate evaluation. These functions are available in addition to standard CEL:
+Gate expressions can use these functions in addition to standard CEL. They come from kardinal's `pkg/cel/library`, which is adapted from the [kro CEL library](https://github.com/kubernetes-sigs/kro/tree/main/pkg/cel/library). Only the functions listed here are available. Other kro functions, such as `hash.*`, `deepMerge` and `omit`, are not.
 
 ### JSON
 
@@ -188,6 +190,10 @@ kardinal uses the [kro CEL library](https://github.com/kubernetes-sigs/kro/tree/
 |---|---|---|
 | `random.seededInt` | `(int, int, string) → int` | `random.seededInt(0, 100, bundle.version) < 10` |
 | `random.seededString` | `(int, string) → string` | `random.seededString(8, bundle.version)` |
+
+`random.seededInt(min, max, seed)` returns an integer from `min` up to, but not
+including, `max`. `min` must be less than `max`. The same seed always gives the
+same number.
 
 `random.seededString` returns lowercase letters and digits. The length must be
 between 1 and 1024. The same seed always gives the same string.
@@ -298,4 +304,3 @@ kardinal policy test my-gate.yaml
 
 - [Policy Gates](../policy-gates.md) — PolicyGate CRD reference
 - [CLI Reference: policy simulate](cli/kardinal-policy-simulate.md) — simulate gate evaluation
-- [AGENTS.md CEL section](https://github.com/pnz1990/kardinal-promoter/blob/main/AGENTS.md) — which CEL context is which (PolicyGate vs. kro Graph)

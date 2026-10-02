@@ -1,7 +1,9 @@
 # 41: Published Docs Freshness
 
-> Status: Active | Created: 2026-04-22
-> Applies to: kardinal-promoter PM phase (pm.md §5n)
+> Status: Retired (2026-09-30, #1343). The PM phase and its scripts were removed. Nothing
+> runs these checks. Keep docs/comparison.md current by hand.
+> Created: 2026-04-22
+> Applied to: the kardinal-promoter PM phase (pm.md §5n)
 
 ---
 

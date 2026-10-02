@@ -52,9 +52,10 @@ spec:
 - Noisy PR history (all apps in one repo)
 - Git clone size grows with repo size (mitigated by shallow clone)
 
-**kardinal-promoter behavior in monorepo:** The `git-clone` step uses sparse checkout
-to fetch only the `path` directory. Git history is scoped to the target path in commit
-messages. PRs target the specific path, so CODEOWNERS can still enforce per-app review.
+**kardinal-promoter behavior in a monorepo:** The `git-clone` step makes a shallow clone
+(depth 1) of the branch. It fetches the whole tree at the latest commit, not only `path`. A
+promotion changes only files under the environment's `path`, so CODEOWNERS can still require
+per-app review. The commit message names the Bundle and the Pipeline, not the path.
 
 ### Multi-Repo
 
@@ -313,8 +314,9 @@ removes the Pipeline and its Bundles are garbage-collected.
 
 ## Bundle Supersession
 
-When a new Bundle is created while an existing Bundle is still promoting through the
-same Pipeline, the older Bundle is superseded:
+When a newer Bundle of the same type is created for the same Pipeline, an older Bundle that is
+still waiting or promoting (`Available` or `Promoting`) is superseded. A `Failed` Bundle stays
+`Failed`; if it would resume, a newer Bundle supersedes it instead:
 
 1. The old Bundle's status is set to `Superseded`, which is final.
 2. Its unfinished PromotionSteps are failed. A PR one of them opened that is still open
@@ -333,9 +335,9 @@ Deleting the superseded Bundle deletes its Graph and everything the Graph create
 ```bash
 # Check which Bundles were superseded
 kardinal get bundles my-app
-# BUNDLE          PHASE       ENV     AGE
-# v1.29.0-feat    Superseded  uat     5m    (superseded by v1.30.0)
-# v1.30.0         Promoting   prod    2m
+# BUNDLE         TYPE    PHASE        AGE
+# my-app-7f3k2   image   Superseded   5m
+# my-app-9x8q1   image   Promoting    2m
 ```
 
 **When supersession does not occur:** Config Bundles (`type: config`) and Image Bundles
@@ -350,8 +352,8 @@ webhooks, the controller polls each open PR every 30 seconds.
 ### Setting up webhooks
 
 The webhook endpoint is `/webhook/scm` on port 8083 of the `kardinal-promoter` Service. It
-checks each event against the controller's webhook secret (an HMAC signature for GitHub and
-Forgejo, a shared token for GitLab). The secret is set with `--webhook-secret` or
+checks each event against the controller's webhook secret (an HMAC signature for GitHub,
+Forgejo, Gitea and Bitbucket, a shared token for GitLab and Azure DevOps). The secret is set with `--webhook-secret` or
 `KARDINAL_WEBHOOK_SECRET` (with the chart, `webhook.secretRef.name`). With no secret set,
 the endpoint rejects every event and merges are detected by polling only.
 
@@ -393,19 +395,20 @@ no Pipeline field for this; polling is always on.
 ## Namespace Sprawl Management
 
 Each Pipeline creates PromotionStep and PolicyGate CRs in its own namespace. For
-organizations with many Pipelines, this can create dozens of additional CRDs per
+organizations with many Pipelines, this can create dozens of additional objects per
 namespace.
 
 ### Recommendations
 
 1. **Use team namespaces**: group related Pipelines in one namespace rather than one
-   namespace per Pipeline. `kardinal-promoter` scopes Bundles by `kardinal.io/pipeline`
-   label, not by namespace.
+   namespace per Pipeline. kardinal-promoter matches a Bundle to its Pipeline by
+   `spec.pipeline`, so several Pipelines can share a namespace. A Bundle must be in its
+   Pipeline's namespace.
 
 2. **Set historyLimit**: the default `historyLimit: 50` retains the last 50 finished Bundles.
-   For high-frequency teams, reduce to `5` to limit CRD count.
+   For high-frequency teams, reduce to `5` to limit the object count.
 
-3. **Monitor CRD count**: count the objects themselves, for example
+3. **Monitor the object count**: count the objects themselves, for example
    `kubectl get bundles,promotionsteps -A --no-headers | wc -l`, or a kube-state-metrics
    custom-resource metric. The controller's `kardinal_bundles_total{phase}` and
    `kardinal_steps_total` are counters of phase transitions and finished steps, not object
@@ -471,10 +474,15 @@ Some tools shortcut promotion by patching `spec.source.targetRevision` on an Arg
 Application CRD without writing to Git. This breaks GitOps: Git is no longer the
 source of truth. Cluster state cannot be reconstructed from Git after a disaster.
 
-kardinal-promoter never mutates GitOps tool CRDs directly. All promotions write to
-Git first.
+kardinal-promoter never patches `targetRevision`. The `kustomize` and `helm` update strategies
+write to Git first. The `argocd` strategy is the exception: it patches the Application's
+`spec.source.helm.valuesObject` directly, with no Git commit and no PR, so it cannot be used
+with `approval: pr-review`.
 
 ### Committing templated sources to rendered branches
+
+kardinal does not write rendered branches (`layout: branch` is not implemented). This applies
+only if your own CI renders manifests to a branch.
 
 Do not commit Kustomize `kustomization.yaml` files or Helm `values.yaml` files to a
 rendered branch. Rendered branches must contain only plain Kubernetes YAML. Argo CD's
@@ -486,13 +494,13 @@ present, Argo CD may fail to apply them or silently ignore them.
 `approval: auto` pushes directly to the target branch without a PR. This is appropriate
 for dev and staging where speed matters, but not for prod. A human reviewer should
 always merge the production PR to confirm:
-- The rendered diff looks correct
+- The PR diff looks correct
 - Policy gates have all passed
 - The upstream environments are verified
 
 ### Not setting `historyLimit`
 
 The default `historyLimit: 50` retains 50 finished Bundles per Pipeline. In active pipelines
-with frequent deployments, this creates many PromotionStep CRDs. If you deploy
+with frequent deployments, this creates many PromotionStep objects. If you deploy
 multiple times per day, set `historyLimit: 5`. The Git audit trail is permanent
 regardless of this setting.

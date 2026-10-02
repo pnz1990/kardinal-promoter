@@ -10,7 +10,7 @@ This example demonstrates every GitHub-specific feature of kardinal-promoter: st
 | Structured PR evidence body | Prod PR body lists the image provenance, each gate's result and reason, and when test and uat were Verified |
 | PR review gate | `approval: pr-review` on prod — requires GitHub review before merge |
 | PolicyGate: schedule | `!schedule.isWeekend` — blocks Saturday/Sunday UTC |
-| PolicyGate: upstream soak | `upstream.uat.soakMinutes >= 30` — 30-min contiguous healthy soak |
+| PolicyGate: upstream soak | `upstream.uat.soakMinutes >= 30` — prod waits until uat has been Verified for 30 minutes |
 | PolicyGate: bundle metadata | `bundle.provenance.author != "dependabot[bot]"` |
 | `kardinal explain` | Shows all three gates, CEL expressions, and current values |
 | `kardinal policy simulate` | Simulate gate results for any time/context |
@@ -20,6 +20,7 @@ This example demonstrates every GitHub-specific feature of kardinal-promoter: st
 
 ## Prerequisites
 
+- A fork of pnz1990/kardinal-demo. Point `spec.git.url` in pipeline.yaml (and any Argo CD or Flux source) at the fork. The token needs write access to it.
 - GitHub token with `repo` scope (read + write + PR creation)
 - ArgoCD installed (for the health checks)
 - `kubectl` connected to your cluster
@@ -32,6 +33,7 @@ kubectl create namespace kardinal-test-app-test
 kubectl create namespace kardinal-test-app-uat
 kubectl create namespace kardinal-test-app-prod
 kubectl create secret generic github-token \
+  --namespace default \
   --from-literal=token=$GITHUB_TOKEN
 
 # 2. Apply the quickstart's Argo CD Applications (kardinal-test-app-{test,uat,prod}).
@@ -44,17 +46,22 @@ kubectl apply -f examples/github-demo/pipeline.yaml
 
 # Verify PolicyGates are registered
 kubectl get policygates -n default
-# NAME                EXPRESSION                              READY
-# no-weekend-deploys  !schedule.isWeekend                    true
-# uat-soak-gate       upstream.uat.soakMinutes >= 30         true
-# no-bot-deploys      bundle.provenance.author != "depen..." true
+# NAME                 READY   AGE
+# no-bot-deploys       false   10s
+# no-weekend-deploys   false   10s
+# uat-soak-gate        false   10s
 ```
+
+These are templates: READY stays false. Only each Bundle's copy of a gate is evaluated.
 
 ## Walkthrough: Full Promotion with Evidence
 
+The image is pinned by tag and digest. The digest is pinned because the
+kardinal-demo overlays already run `sha-9349a3f`: a Bundle with only the tag
+changes nothing and opens no PR.
+
 ```bash
-LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
-TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
+TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0"
 
 # 1. Create bundle (simulates CI trigger)
 # The CLI records no CI provenance; a Bundle created by CI (the create-bundle
@@ -63,15 +70,15 @@ kardinal create bundle github-demo --image "$TEST_IMAGE"
 
 # 2. Watch test auto-promote
 kardinal get pipelines
-# NAME          TEST      UAT       PROD
-# github-demo   Verified  Baking    Gated
+# PIPELINE      BUNDLE              TEST       UAT              PROD      SUB   AGE
+# github-demo   github-demo-9tptr   Verified   HealthChecking   Waiting   0     5m
 
 # 3. Check what's gating prod
 kardinal explain github-demo --env prod
 # ENVIRONMENT   BUNDLE              TYPE         NAME                 STATE   EXPRESSION                                      REASON
-# prod          github-demo-9tptr   PolicyGate   no-bot-deploys       Pass    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-abc1234: bundle.provenance.author != "dependabot[bot]" = true
-# prod          github-demo-9tptr   PolicyGate   no-weekend-deploys   Pass    !schedule.isWeekend                             bundle.version=sha-abc1234: !schedule.isWeekend = true
-# prod          github-demo-9tptr   PolicyGate   uat-soak-gate        Block   upstream.uat.soakMinutes >= 30                  UAT must have been healthy for at least 30 contiguous minutes (bundle.version=sha-abc1234: upstream.uat.soakMinutes >= 30 = false)
+# prod          github-demo-9tptr   PolicyGate   no-bot-deploys       Pass    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-9349a3f: bundle.provenance.author != "dependabot[bot]" = true
+# prod          github-demo-9tptr   PolicyGate   no-weekend-deploys   Pass    !schedule.isWeekend                             bundle.version=sha-9349a3f: !schedule.isWeekend = true
+# prod          github-demo-9tptr   PolicyGate   uat-soak-gate        Block   upstream.uat.soakMinutes >= 30                  UAT must have been Verified for at least 30 minutes (bundle.version=sha-9349a3f: upstream.uat.soakMinutes >= 30 = false)
 #
 # prod   deployed: none
 
@@ -83,8 +90,8 @@ kardinal explain github-demo --env prod
 # test and uat were Verified (see "PR Evidence Body" below).
 
 # 5. Review and merge the PR
-gh pr list --repo pnz1990/kardinal-demo
-gh pr merge <PR_NUMBER> --repo pnz1990/kardinal-demo --squash
+gh pr list --repo <you>/kardinal-demo
+gh pr merge <PR_NUMBER> --repo <you>/kardinal-demo --squash
 ```
 
 ## Policy Simulation
@@ -160,7 +167,7 @@ The prod PR has:
 ## ROLLBACK: github-demo-rollback-x7k2p -> github-demo/prod
 
 > **This is a rollback PR.** It restores the images of bundle github-demo-4fq8m in environment prod.
-> Rolling back FROM: github-demo-9tptr (sha-abc1234)
+> Rolling back FROM: github-demo-9tptr (sha-9349a3f)
 > Rolling back TO: github-demo-4fq8m (sha-1a2b3c4)
 > Rolled back by: your-alias
 ```
@@ -177,8 +184,8 @@ kardinal create bundle github-demo --image ghcr.io/pnz1990/kardinal-test-app:sha
 ## PR Evidence Body
 
 The prod PR body from the walkthrough. The Bundle came from `kardinal create
-bundle` without `--commit`, `--author` or `--ci-run-url`, and the image has a
-tag but no digest, so those cells are `—`. A Bundle created by CI fills them in.
+bundle` without `--commit`, `--author` or `--ci-run-url`, so those cells are `—`.
+A Bundle created by CI fills them in.
 `Elapsed` is the time between that environment's Verified and the PR opening.
 See [PR Evidence](../../docs/pr-evidence.md).
 
@@ -190,15 +197,15 @@ See [PR Evidence](../../docs/pr-evidence.md).
 
 | Image | Tag | Digest | CI Run | Commit SHA | Author |
 |---|---|---|---|---|---|
-| ghcr.io/pnz1990/kardinal-test-app | sha-abc1234 | — | — | — | — |
+| ghcr.io/pnz1990/kardinal-test-app | sha-9349a3f | sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0 | — | — | — |
 
 ### Policy Gate Compliance
 
 | Gate | Namespace | Result | Reason | Last Evaluated |
 |---|---|---|---|---|
-| no-bot-deploys | default | Pass | bundle.version=sha-abc1234: bundle.provenance.author != "dependabot[bot]" = true | 2026-04-15T14:02Z |
-| no-weekend-deploys | default | Pass | bundle.version=sha-abc1234: !schedule.isWeekend = true | 2026-04-15T14:02Z |
-| uat-soak-gate | default | Pass | bundle.version=sha-abc1234: upstream.uat.soakMinutes >= 30 = true | 2026-04-15T14:02Z |
+| no-bot-deploys | default | Pass | bundle.version=sha-9349a3f: bundle.provenance.author != "dependabot[bot]" = true | 2026-04-15T14:02Z |
+| no-weekend-deploys | default | Pass | bundle.version=sha-9349a3f: !schedule.isWeekend = true | 2026-04-15T14:02Z |
+| uat-soak-gate | default | Pass | bundle.version=sha-9349a3f: upstream.uat.soakMinutes >= 30 = true | 2026-04-15T14:02Z |
 
 ### Upstream Verification
 
@@ -217,6 +224,6 @@ See [PR Evidence](../../docs/pr-evidence.md).
 # Unit tests for GitHub SCM features are in pkg/scm/
 go test ./pkg/scm/... -v
 
-# Full demo validation including all adapters
+# Build and run the health adapter unit tests
 bash scripts/demo-validate.sh
 ```

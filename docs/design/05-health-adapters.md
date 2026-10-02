@@ -1,6 +1,6 @@
 # 05: Health Adapters
 
-> Status: Comprehensive
+> Status: Historical
 > Depends on: 01-graph-integration (for CRD types)
 > Blocks: nothing (consumed by 03-promotionstep-reconciler via the health-check step)
 
@@ -216,9 +216,10 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 | Healthy | Synced | Succeeded or empty | Healthy |
 | Healthy | Synced | Running | Wait (sync in progress) |
 | Progressing | any | any | Wait |
-| Degraded | any | any | Unhealthy (will fail after timeout) |
-| Missing | any | any | Unhealthy (immediate fail) |
-| Suspended | any | any | Unhealthy (will fail after timeout) |
+| Degraded | any | any | Unhealthy once the promoted revision is deployed; Wait before that |
+| Missing | any | any | Wait (progressing) |
+| Suspended | any | any | Wait (progressing) |
+| any | any | Failed or Error on the promoted revision | Unhealthy |
 | any | OutOfSync | any | Wait (may be mid-sync-wave) |
 
 **Multi-cluster:** In the Argo CD hub-spoke model, Applications for remote clusters live in the hub. The adapter reads Application status from the hub cluster (where the controller runs). No remote kubeconfig needed.
@@ -425,7 +426,7 @@ The PromotionStep reconciler handles the "not healthy yet" case by requeueing af
 - ✅ examples/argo-rollouts-demo/: Standalone Argo Rollouts example + README (PR #820, 2026-04-18)
 - ✅ examples/github-demo/: GitHub SCM full-feature example + README (PR #820, 2026-04-18)
 - ✅ scripts/demo-validate.sh: runs all adapter test paths (PR #820, 2026-04-18)
-- ✅ docs/demo-validation.md: documented results per adapter (PR #820, 2026-04-18)
+- ✅ docs/demo-validation.md: documented results per adapter (PR #820, 2026-04-18). The page was removed in #1378.
 
 ## Future
 

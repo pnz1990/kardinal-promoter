@@ -1,6 +1,6 @@
 ## kardinal override
 
-Force-pass a PolicyGate with a mandatory audit record (K-09)
+Force-pass a PolicyGate with a mandatory audit record
 
 ### Synopsis
 
@@ -10,10 +10,13 @@ The override is time-limited and creates a mandatory audit record in
 PolicyGate.spec.overrides[]. The gate passes immediately without evaluating
 the CEL expression until the override expires.
 
-All overrides are preserved for audit purposes. Use --expires-in to control
-the override window (default: 1h).
+Expired overrides stay in spec.overrides[] as an audit record for as long
+as the Bundle exists. Deleting a Bundle deletes its gate instances and their
+overrides, and the Pipeline's historyLimit cleanup deletes old finished
+Bundles (50 by default). Use --expires-in to control the override window
+(default: 1h).
 
---gate takes the gate template name (for example no-weekend-deploy). The
+--gate takes the gate template name (for example no-weekend-deploys). The
 override is recorded on the instances of that gate that the Pipeline's
 in-progress Bundles have for --stage (every stage when --stage is not set),
 so run it while the Bundle waits on the gate. Instances of Verified, Failed
@@ -23,7 +26,7 @@ instance, as kubectl get policygates shows it, is also accepted; that instance
 alone gets the override.
 
 Example:
-  kardinal override my-app --stage prod --gate no-weekend-deploy \
+  kardinal override my-app --stage prod --gate no-weekend-deploys \
     --reason "P0 hotfix — incident #4521"
 
 ```
@@ -46,7 +49,7 @@ kardinal override <pipeline> --stage <environment> --gate <gate-name> --reason <
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: get auditevents, bundles, pipelines, steps, subscriptions)
 ```
 
 ### SEE ALSO

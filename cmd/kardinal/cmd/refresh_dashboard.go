@@ -22,7 +22,7 @@ import (
 func newRefreshCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "refresh <pipeline>",
-		Short: "Force re-reconciliation of a Pipeline (Kargo parity)",
+		Short: "Force re-reconciliation of a Pipeline",
 		Long: `Force the controller to re-reconcile a Pipeline immediately.
 
 Sets the kardinal.io/refresh annotation on the Pipeline to the current time.
@@ -79,7 +79,7 @@ func newDashboardCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "dashboard",
-		Short: "Open the kardinal UI dashboard in a browser (Kargo parity)",
+		Short: "Open the kardinal UI dashboard in a browser",
 		Long: `Open the embedded kardinal UI in the default system browser.
 
 The UI is served by the controller at /ui/ (default port 8082). This command

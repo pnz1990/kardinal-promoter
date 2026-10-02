@@ -18,16 +18,26 @@ spec:
     provider: <string>                  # Deprecated and ignored; the controller's --scm-provider flag selects the SCM
     secretRef:
       name: <string>                    # Secret containing the Git token
+      namespace: <string>               # Must be empty or the Pipeline's namespace
 
   environments:                         # Ordered list of environments
     - name: <string>                    # Environment name (must be unique within the Pipeline)
       path: <string>                    # Path in the GitOps repo (default: "environments/<name>")
       dependsOn: [<string>, ...]        # Environments this one depends on (default: previous in list)
+      wave: <int>                       # Deployment wave, minimum 1 (default: none)
       update:
         strategy: <string>              # "kustomize" (default), "helm" or "argocd"
+        helm:                           # When strategy: helm
+          imagePathTemplate: <string>   # Dot path of the image tag (default: ".image.tag")
+          valuesFile: <string>          # Relative to path (default: "values.yaml")
+        argocd:                         # When strategy: argocd
+          application: <string>         # Argo CD Application to patch (required)
+          namespace: <string>           # Default: "argocd"
+          imageKey: <string>            # Key in spec.source.helm.valuesObject (default: "image.tag")
       approval: <string>                # "auto" (default) or "pr-review"
       health:
         type: <string>                  # "resource" (default), "argocd", "flux", "argoRollouts", "flagger"
+        labelSelector: {<key>: <value>} # type: resource only: check every matching Deployment
         resource:                       # When type: resource
           kind: <string>                # Only "Deployment" is supported
           name: <string>                # Default: Pipeline metadata.name
@@ -47,9 +57,15 @@ spec:
           namespace: <string>           # Default: environment name
         cluster: <string>               # Deprecated, not supported: must be empty (see Health Adapters)
         timeout: <duration>             # Health check timeout (default: "10m")
+      bake:
+        minutes: <int>                  # Contiguous healthy minutes before Verified, minimum 1
+        policy: <string>                # "reset-on-alarm" (default) or "fail-on-alarm"
+      onHealthFailure: <string>         # "none" (default), "abort" or "rollback"
       delivery:
         delegate: <string>              # "none" (default), "argoRollouts" (implemented), "flagger" (implemented)
+      layout: <string>                  # "directory" (default); "branch" is not implemented (promotions fail)
       shard: <string>                   # Deprecated, not supported: must be empty (distributed mode was removed)
+      regions: [<string>, ...]          # Deprecated, not supported: declare one environment per region
       steps:                            # Deprecated, not supported: the API server rejects it
         - uses: <string>                #   (see Promotion Steps below)
       promotionTemplate:                # Deprecated, not supported: the API server rejects it
@@ -57,6 +73,9 @@ spec:
       waitForMergeTimeout: <duration>   # pr-review only: fail the step and close the PR after this (default: wait forever)
       stepTimeoutSeconds: <int>         # Per built-in step timeout in seconds, minimum 1 (default: none)
 
+  paused: <bool>                        # Hold every promotion of the Pipeline (default: false)
+  maxConcurrentPromotions: <int>        # Bundles promoting at once; 0 is no cap (default: 0)
+  policyNamespaces: [<string>, ...]     # Extra namespaces to read PolicyGates from (default: none)
   historyLimit: <int>                   # Number of Bundles to retain (default: 50)
 ```
 
@@ -69,7 +88,7 @@ spec:
 | `url` | Yes | | HTTPS URL of the GitOps repository |
 | `branch` | No | `main` | Base branch: `git-clone` checks it out, `approval: auto` pushes to it, and `pr-review` PRs target it. The API server sets `main` when the field is omitted, and the controller also reads an empty value as `main`. |
 | `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch` (rendered manifests on per-environment branches) is **not implemented**: the `git-clone` step fails every promotion that uses it. See [Rendered Manifests](rendered-manifests.md). |
-| `provider` | No | `github` | **Not read by the controller.** The SCM provider is chosen once per controller by `--scm-provider` (`github`, `gitlab`, `forgejo`, `gitea`, `bitbucket` or `azuredevops`); see [SCM Providers](scm-providers.md). The CRD accepts only `github` or `gitlab` here. Leave it unset. |
+| `provider` | No | (none) | **Not read by the controller.** The SCM provider is chosen once per controller by `--scm-provider` (`github`, `gitlab`, `forgejo`, `gitea`, `bitbucket` or `azuredevops`); see [SCM Providers](scm-providers.md). The CRD accepts only `github` or `gitlab` here. Leave it unset. |
 | `secretRef.name` | No | | `secretRef` is optional; when it is set, `name` must be too. Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token. Needed when the HTTPS remote refuses git without a token (every push to a hosted provider, and the clone of a private repository); not needed for an ssh remote or a URL that carries its credentials. When it is not set, or the Secret does not exist, and the HTTPS remote refuses `git-clone` or `git-push` without a token, the step retries until the Secret exists; the step message says what is missing (see [Troubleshooting](troubleshooting.md#symptom-authentication-required-with-git-secret-not-found-or-specgitsecretref-is-not-set)). |
 | `secretRef.namespace` | No | Pipeline's namespace | Must be empty or the Pipeline's own namespace. Any other namespace fails the PromotionStep without reading the Secret, so a Pipeline cannot use another namespace's credentials. The Pipeline's `Ready` condition is `False` with reason `ValidationFailed`, and `kardinal validate` reports it when the file sets `metadata.namespace`. |
 
@@ -94,8 +113,10 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `name` | Yes | | Environment name. Must be unique within the Pipeline. Used in PolicyGate matching (`kardinal.io/applies-to` label). |
 | `path` | No | `environments/<name>` | Directory in the GitOps repo containing the environment's manifests. It must be relative and stay inside the repository: absolute paths, `..` segments and symlinks that point outside the checkout fail the step. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
-| `wave` | No | 0 (sequential) | Assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. A wave depends on every environment of the next lower wave, and on the environment without a wave listed before it. Gaps in the numbers are allowed. Composable with `dependsOn`. See [Wave Topology](#wave-topology-k-06). |
-| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches a configurable path in `values.yaml`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). |
+| `wave` | No | (none) | Assigns this environment to a numbered deployment wave (K-06). Minimum 1. Environments with the same wave number are promoted in parallel. A wave depends on every environment of the next lower wave, and on the environment without a wave listed before it. Gaps in the numbers are allowed. Composable with `dependsOn`. See [Wave Topology](#wave-topology-k-06). |
+| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches the image tag at `update.helm.imagePathTemplate` in `update.helm.valuesFile`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). |
+| `update.helm.imagePathTemplate` | No | `.image.tag` | `helm` only. Dot path of the image tag in the values file. |
+| `update.helm.valuesFile` | No | `values.yaml` | `helm` only. Values file to patch, relative to the environment `path`. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
 | `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. |
@@ -103,7 +124,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `health.cluster` | No | (must be empty) | **Deprecated, not supported.** kardinal checks health only in the cluster it runs in. A non-empty value sets the Pipeline `Ready=False` and fails the PromotionStep. For a workload in another cluster, check its Argo CD Application (`type: argocd`) or a Flux Kustomization that targets the cluster (`type: flux`) in the hub; see [Remote Clusters](health-adapters.md#remote-clusters). |
 | `health.labelSelector` | No | (none) | `health.type=resource` only. When set, **every** Deployment in the namespace that matches these labels must pass the health check. No match is unhealthy. Example: `{"app": "nginx", "kardinal.io/pipeline": "nginx-demo"}`. When unset, a single Deployment named after the Pipeline is checked. Ignored for `argocd`, `flux`, `argoRollouts`, and `flagger`. |
 | `delivery.delegate` | No | `none` | Progressive delivery delegation. `argoRollouts`: watch Argo Rollouts Rollout status after promotion. `flagger`: watch Flagger Canary status. `none`: instant deploy (rolling update). |
-| `shard` | No | (must be empty) | **Deprecated, not supported.** Distributed mode was removed. A non-empty value sets the Pipeline `Ready=False`, `kardinal validate` fails, and a PromotionStep left over from distributed mode fails with `shard is not supported`. Remove it; the controller reconciles every environment. See [Multi-Cluster](distributed-mode.md). |
+| `shard` | No | (must be empty) | **Deprecated, not supported.** Distributed mode was removed. A non-empty value sets the Pipeline `Ready=False` (reason `NotImplemented`), `kardinal validate` fails, and every PromotionStep of the environment fails with `shard is not supported`. Remove it; the controller reconciles every environment. See [Multi-Cluster](distributed-mode.md). |
 | `steps` | No | (none) | **Deprecated, not supported.** kardinal has no custom step engine: the controller always runs the sequence it infers from the Bundle type, `update.strategy`, `approval` and `layout`. The API server rejects a Pipeline that sets `steps` (an empty list is accepted). See [Promotion Steps](#promotion-steps). |
 | `promotionTemplate` | No | (none) | **Deprecated, not supported.** The `PromotionTemplate` CRD was removed. The API server rejects a Pipeline that sets `promotionTemplate`. |
 | `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR and deletes its head branch (`kardinal/<bundle>/<env>`), so a late merge cannot deliver the change: GitHub's API merges a closed PR whose branch is still there. Unset or `0` waits forever. |
@@ -120,7 +141,7 @@ when it reaches an environment that uses one (two or more `regions` fail it when
 built; the others fail the environment's step before it changes anything in git).
 `kardinal validate` reports each of them, and the controller sets the Pipeline's `Ready` condition to `False` with reason `NotImplemented` and the same messages
 (`kubectl get pipeline <name> -o jsonpath='{.status.conditions}'`). The API server rejects
-`autoRollback` and the deprecated `steps` and `promotionTemplate` outright. A Pipeline stored
+`autoRollback`, a non-empty `spec.policyGates` (org gates use the `kardinal.io/applies-to` label) and the deprecated `steps` and `promotionTemplate` outright. A Pipeline stored
 before those rules existed is still reported the same way, and its Bundles fail when their
 Graph is built.
 
@@ -141,6 +162,12 @@ Default: `false`.
 Maximum number of this Pipeline's Bundles in the `Promoting` phase at once. A Bundle over the cap stays `Available` with the `Ready` condition reason `WaitingForSlot`, and starts when a promoting Bundle becomes Verified, Failed or Superseded. `0` means no cap.
 
 Default: `0`.
+
+### spec.policyNamespaces
+
+Extra namespaces to read PolicyGates from. It only adds: the org policy namespaces (the controller's `--policy-namespaces`, default `platform-policies`) and the Pipeline's namespace are always read. A gate found only through it is a team gate unless it is labelled `kardinal.io/scope: org`, and it never grants a skip. See [Policy Gates](policy-gates.md).
+
+Default: none.
 
 ## Health Check Defaults
 
@@ -238,7 +265,7 @@ The rules, in full:
 
 Only the first environment in the list is a root, unless `dependsOn` says otherwise.
 
-List the waves in ascending order. If a higher wave comes before a lower one with an environment without a wave between them (`test`, `a` in wave 2, `staging`, `b` in wave 1), the list-order edges and the wave edges form a cycle. The Pipeline is then rejected, and the error names each edge in the cycle.
+List the waves in ascending order. If a higher wave comes before a lower one with an environment without a wave between them (`test`, `a` in wave 2, `staging`, `b` in wave 1), the list-order edges and the wave edges form a cycle. The Pipeline is then `Ready=False` (reason `ValidationFailed`), `kardinal validate` fails, and every Bundle fails; the message names each edge in the cycle.
 
 See `examples/wave-topology/pipeline.yaml` for a complete example.
 

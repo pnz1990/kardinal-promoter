@@ -217,4 +217,3 @@ These parts of the original design were never built. Open an issue before relyin
 - `message` and `path` fields on the config reference.
 - A config-specific PR body (commit message, changed files).
 - Subscription path filtering (`pathGlob`) and one Bundle per commit.
-- CLI flags for a config reference.

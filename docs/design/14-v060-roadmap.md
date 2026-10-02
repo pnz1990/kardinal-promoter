@@ -7,6 +7,8 @@
 >   with distributed mode (#1321; see [07](07-distributed-architecture.md)).
 > - The auto-rollback field is `autoRollbackRateMillis`, not `autoRollbackRate`.
 > - `changewindow.isAllowed` lives in `pkg/reconciler/policygate/cel_evaluator.go`.
+> - The security-checks workflow (`otherness-security-checks.yml`, 14.8) was removed in #1343.
+>   The PDCA workflow (14.6, O2) was removed in #1378. The live e2e suites replace it.
 > Milestone: v0.6.0
 
 ---

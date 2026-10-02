@@ -61,7 +61,7 @@ kardinal get bundles my-app
 
 ### Bundle types
 
-- **`image`** (default): References container image tags. The promotion updates image references in manifests using `kustomize-set-image` or `helm-set-image`.
+- **`image`** (default): References container image tags. The promotion updates image references in manifests using `kustomize-set-image` or `helm-set-image`. The Bundle API (`POST /api/v1/bundles`) and `kardinal create bundle` use it when `type` is omitted; a Bundle applied with kubectl must set `type`.
 - **`config`**: References a Git commit SHA from a configuration repository. The promotion merges that commit's changes into each environment directory. This supports promoting configuration changes (resource limits, env vars, feature flags) independently from image changes.
 
 Image Bundle:
@@ -166,7 +166,7 @@ kardinal has no custom step engine. The API server rejects a Pipeline that sets 
 
 kardinal runs in one cluster, next to the Argo CD or Flux hub that manages your workload clusters. Declare one environment per cluster or region (for example `prod-eu` and `prod-us`) and promote them in parallel with `wave` or `dependsOn`. Each environment reads its health from the hub: `health.type: argocd` on its Application, or `health.type: flux` on a hub Kustomization that targets the remote cluster. A spoke the hub cannot reach has no kardinal health check. See [Multi-Cluster](distributed-mode.md) and [Remote Clusters](health-adapters.md#remote-clusters).
 
-Distributed mode (`shard` and `kardinal-agent`) was removed. A Pipeline environment that sets `shard` is rejected; remove it, and the controller reconciles every environment.
+Distributed mode (`shard` and `kardinal-agent`) was removed. The API server accepts a Pipeline environment that sets `shard`, but the Pipeline is `Ready=False` (reason `NotImplemented`) and that environment's PromotionSteps fail with `shard is not supported`. Remove it; the controller reconciles every environment.
 
 ### How it works under the hood
 
@@ -177,7 +177,7 @@ When a Bundle is created, the kardinal-controller generates a [kro Graph](https:
 | Mode | Behavior |
 |---|---|
 | `auto` | Manifests are pushed directly to the target branch. No PR. Promotion proceeds automatically when the upstream environment is verified. |
-| `pr-review` | A PR is opened in the GitOps repo with promotion evidence (artifact provenance, upstream metrics, policy gate compliance). A human reviews and merges. |
+| `pr-review` | A PR is opened in the GitOps repo with promotion evidence (artifact provenance, policy gate compliance, upstream verification). A human reviews and merges. |
 
 ## PromotionStep
 
@@ -186,9 +186,9 @@ A PromotionStep represents one environment promotion for one Bundle. You do not 
 Each PromotionStep tracks:
 - Which environment it targets
 - Which Bundle it promotes
-- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verified, Failed)
+- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verified, Failed, AbortedByAlarm, RollingBack)
 - The PR URL (for pr-review environments)
-- Promotion evidence (metrics, gate results, approver, timing)
+- Per-step progress and timing (`status.steps`), the current message and conditions, and bake and retry counters. Promotion evidence (provenance, gate results, upstream verification) goes into the PR body.
 
 Use `kardinal get steps <pipeline>` to see all active PromotionSteps.
 
@@ -213,7 +213,7 @@ spec:
 
 ### How gates are applied
 
-- **Org-level gates** (namespace `platform-policies`) are injected into every Pipeline that targets the matching environment. Teams cannot remove them.
+- **Org-level gates** (the controller's `--policy-namespaces`, default `platform-policies`) are injected into every Pipeline that targets the matching environment. Teams cannot remove them.
 - **Team-level gates** (team namespace) are added alongside org gates. Teams can add their own restrictions.
 - The `kardinal.io/applies-to` label names the environment the gate blocks. A label value cannot contain a comma, so a gate blocks one environment; create one gate per environment to block several.
 
@@ -276,7 +276,7 @@ When the skip is allowed, the permission's expression is evaluated in front of t
 
 ## Health Verification
 
-After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy. Health adapters are pluggable. A step reaches Verified only when the environment runs the promoted revision, not merely when it is healthy.
+After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy. Health adapters are pluggable. A step reaches Verified when the environment is healthy and runs the promoted revision: `argocd` and `flux` check the promoted commit, the other adapters the Bundle images. A config-only Bundle has no images, so `resource` and `argoRollouts` can verify it while the previous revision still runs (see [What "the promoted revision" means](health-adapters.md#what-the-promoted-revision-means)).
 
 | Adapter | What it checks | When to use |
 |---|---|---|

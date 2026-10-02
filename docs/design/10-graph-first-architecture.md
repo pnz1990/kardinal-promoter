@@ -21,6 +21,10 @@ every metric condition, every external approval — all of it is expressed as a 
 in a kro Graph. This is not an aspiration. It is the governing constraint on every
 implementation decision in this codebase.
 
+Today some of this logic still runs in reconcilers that write their own CRD status.
+Ledger [G8](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph) and
+[doc 11](11-graph-purity-tech-debt.md#current-status-2026-09-29) list each piece.
+
 If a feature cannot be expressed as a Graph node, that is a signal that either:
 1. kro is missing a primitive that should be contributed upstream (log it in
    [16-graph-capability-ledger.md](16-graph-capability-ledger.md)), or
@@ -85,6 +89,8 @@ Two kro limits shape how a `ref` node can block a promotion:
 
 Example: the health checks. `pkg/health/watch_node.go` adds a `ref` node for the
 Deployment, Argo CD Application or Flux Kustomization, with a self-only `readyWhen`.
+Planned: #1283 (open) drops these ref nodes. The PromotionStep's Go adapters already
+decide health; the ref nodes only feed Graph readiness.
 
 **Q2. Can this be an Owned node whose status is written by a reconciler?**
 
@@ -188,7 +194,10 @@ structural dependencies that don't involve data flow.
 
 ---
 
-## Known Exceptions (Transitional — Must Be Resolved)
+## Known Exceptions
+
+The accepted exceptions are listed in
+[doc 11 §Current status](11-graph-purity-tech-debt.md#current-status-2026-09-29).
 
 These are known violations of the Graph-first principle that exist as intentional
 transitional workarounds. Each must be tracked to resolution. **No new exceptions

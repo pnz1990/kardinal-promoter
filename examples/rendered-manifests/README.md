@@ -51,10 +51,8 @@ kubectl apply -f examples/rendered-manifests/pipeline.yaml
 
 kardinal create bundle rendered-demo --image ghcr.io/myorg/app:v2.0.0
 
-# Watch the DAG
-kardinal explain rendered-demo --env prod
-# prod: kustomize-build Succeeded (rendered 1234 bytes)
-# prod: WaitingForMerge PR #N (rendered branch diff visible in GitHub)
+kardinal get steps rendered-demo
+# The dev step fails: layout: branch is not implemented
 ```
 
 ## Benefits

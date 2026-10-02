@@ -7,9 +7,9 @@ This page describes what is currently available in kardinal-promoter and what is
 
 ---
 
-## Currently Available (v0.9.0-rc.1)
+## Currently Available (v0.9.0)
 
-> v0.9.0-rc.1 released 2026-09-30, a release candidate. kardinal runs on upstream kro Graph (v0.10.0-rc.0), and unfinished features (distributed mode, regions, custom steps, PromotionTemplate, the admission webhook) are removed. The latest final release is v0.8.1. For the full list and the upgrade steps see the [changelog](changelog.md).
+> v0.9.0 released 2026-10-02. kardinal runs on upstream kro Graph (v0.10.0-rc.0), and unfinished features (distributed mode, regions, custom steps, PromotionTemplate, the admission webhook) are removed. For the full list and the upgrade steps see the [changelog](changelog.md).
 
 All of the following are implemented and shipped:
 
@@ -20,10 +20,12 @@ All of the following are implemented and shipped:
 - PromotionStep reconciler — full git-clone → kustomize/helm → commit → PR → merge → health loop
 - Graph-first architecture via kro Graph (see [Graph Coverage](graph-coverage.md) for what is not on the Graph yet)
 
-**Manifest update strategies**
-- `kustomize` — `kustomize edit set-image`
-- `helm` — patch values.yaml at configurable path
-- `config-merge` — GitOps config-only promotions
+**Manifest update strategies** (`update.strategy`)
+- `kustomize` — edits the `images:` list in `kustomization.yaml`
+- `helm` — patches the image tag in `values.yaml` at a configurable path
+- `argocd` — patches the Argo CD Application, with no git commit (`approval: auto` only)
+
+Config and mixed Bundles run the `config-merge` step, which copies the environment directory from the `configRef` commit.
 
 **Health adapters**
 - `resource` — Kubernetes Deployment condition
@@ -80,7 +82,7 @@ All of the following are implemented and shipped:
 - `bundle.pr["staging"].isApproved` and `bundle.pr["staging"].approvalCount` in CEL context
 - Reads `PRStatus` CRD; no external SCM API calls in the reconciler hot path
 
-**K-09: `kardinal override` with audit record**
+**K-09: `kardinal override` with a recorded reason**
 - `kardinal override` adds a time-limited override to the gate instances of the stage
 - The override stays in the instance's `spec.overrides[]`; while it is active the gate reason (`OVERRIDDEN by ...`) shows in the PR evidence gate table and in `kardinal explain`
 
@@ -91,8 +93,8 @@ All of the following are implemented and shipped:
 
 **K-11: Cross-stage history CEL functions**
 - `upstream.staging.soakMinutes` — elapsed minutes since upstream Verified
-- `upstream.staging.recentSuccessCount` — successful promotions in last N days
-- `upstream.staging.recentFailureCount` — failed promotions in last N days
+- `upstream.staging.recentSuccessCount` — Verified promotions among the pipeline's last 10 Bundles
+- `upstream.staging.recentFailureCount` — Failed promotions among the pipeline's last 10 Bundles
 - `upstream.staging.lastPromotedAt` — RFC3339 timestamp of last Verified promotion
 
 **Operations**
@@ -101,13 +103,11 @@ All of the following are implemented and shipped:
 - Supersession for concurrent Bundles
 - Multi-cluster through an Argo CD or Flux hub (see [Multi-Cluster](distributed-mode.md); `health.cluster` kubeconfig Secrets are not supported)
 
-**CLI** — full command set: `get`, `explain`, `create`, `promote`, `rollback`, `pause`, `resume`, `history`, `policy`, `diff`, `logs`, `metrics`, `version`, `override`
+**CLI** — `get`, `explain`, `status`, `create`, `promote`, `rollback`, `pause`, `resume`, `override`, `history`, `audit`, `diff`, `logs`, `metrics`, `policy`, `validate`, `doctor`, `init`, `refresh`, `delete`, `dashboard`, `completion`, `version` (see [CLI Reference](cli-reference.md))
 
 **UI** — embedded control plane UI: fleet health bar and pipeline operations table, pipeline lane and DAG views, bundle promotion timeline with bundle comparison, policy gates panel and gate details (CEL expression, last evaluation), release efficiency metrics bar, and actions: create bundle, pause/resume, promote, roll back. Overriding a gate is CLI-only (`kardinal override`)
 
 **Multi-tenant self-service** — ApplicationSet + Pipeline template bootstrap; team onboarding by committing a folder to Git; org PolicyGates automatically inherited; namespace isolation enforced by RBAC.
-
-**Subscription CRD + source watchers** — `OCIWatcher` polls container registries; `GitWatcher` polls Git branches; Bundles are created automatically on new images or commits. No CI pipeline integration needed.
 
 **Pipeline deployment metrics** — `Pipeline.status.deploymentMetrics` persisted by the PipelineReconciler: `rolloutsLast30Days`, `p50CommitToProdMinutes`, `p90CommitToProdMinutes`, `autoRollbackRateMillis`, `operatorInterventionRateMillis`.
 
@@ -122,7 +122,7 @@ changewindow.isBlocked("holiday-freeze")    # true when the window IS currently 
 
 **`kardinal get pipelines --watch`** — real-time promotion progress with live table refresh. (#629)
 
-**`kardinal doctor`** — pre-flight cluster health check: the controller's `kardinal-version` ConfigMap, the kardinal CRDs, the kro controller Pod and Graph CRD, the controller's GitHub token Secret, and optionally one Pipeline (`--pipeline`). (#607)
+**`kardinal doctor`** — pre-flight cluster health check: the controller's `kardinal-version` ConfigMap, the kardinal CRDs, the kro controller Pod and Graph CRD, the controller's SCM token (`GITHUB_TOKEN` on the controller Deployment, and the Secret it comes from), and optionally one Pipeline (`--pipeline`). (#607)
 
 **Shell completion** — bash, zsh, fish, and PowerShell completion via `kardinal completion <shell>`. (#606)
 
@@ -150,6 +150,18 @@ The UI work from #462–#468 shipped in v0.5.0–v0.6.0. This is what the UI sho
 - **Policy gates (#468)** — a panel with each gate of the bundle on screen, its state, and its CEL expression; click a gate for the highlighted expression, when it was last evaluated, and a syntax check
 
 Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, and gate override history (see `kardinal explain` or `kubectl get policygate <name> -o yaml`).
+
+---
+
+## Planned
+
+- kro v0.10.0 (v0.9.1, #1424)
+- `layout: branch`: promote rendered manifests (#1271)
+- `scm.allowedRepositories`: limit the repositories the SCM token may open PRs in (#1332)
+- `kardinal override` writes an AuditEvent with the cluster identity (#1286)
+- Secret-backed auth header for NotificationHook and MetricCheck (#1267)
+- `rollback` and `promote --env` without re-running upstream environments (#1311)
+- `kardinal approve`: a real gate bypass, or removal (#1309)
 
 ---
 

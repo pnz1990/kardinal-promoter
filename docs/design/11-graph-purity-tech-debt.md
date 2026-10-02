@@ -8,7 +8,7 @@
 
 ## Agent Instructions
 
-**Read this document at the start of every queue generation. It overrides any other scope.**
+**Read this document before you add logic outside the Graph.**
 
 ### Milestone v0.2.1: issues closed, leaks not all gone
 
@@ -36,6 +36,10 @@ writes its result to its own CRD status, because kro has no primitive for it (le
 | — (not catalogued) | Reconcilers make external HTTP calls: NotificationHook (webhook delivery), Subscription (registry and Git Smart HTTP reads in `pkg/source`), MetricCheck (Prometheus). Each writes the result to its own status. | Accepted |
 | — (not catalogued) | The `verify-image` step ran the `cosign` binary (`pkg/steps/steps/verify_image.go`). | Done: step removed (#1278, #1282); signatures are verified at admission in the target cluster |
 | PS-2 / BU-2, #1300, #1313 | The PromotionStep reconciler reads the freeze gate and its required gates before it starts git work (`holdIfPaused`, `checkRequiredGates`). A required gate must be ready and evaluated at or after the step was created; the check compares two stored times and does not read the clock. The step writes only its own `status.message`. It stays in the reconciler because the Graph cannot hold a step that already exists: `readyWhen` does not hold dependents in a standalone Graph (only the RGD instance controller turns on `GateReadiness`); a resolve error such as kardinal's `resolvableWhen` makes the node Unresolved, so kro stops updating the existing step but neither holds nor deletes it; `includeWhen: false` prunes the existing step; and a ref to a missing object (the freeze gate exists only while the Pipeline is paused) holds the Graph, the inverse of a pause. Ledger [G8](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph). | Accepted |
+| — (not catalogued) | `IdentityProvisioner` creates the Graph ServiceAccount and its RoleBindings before every Graph create (`pkg/graph/identity.go`, ledger [G5](16-graph-capability-ledger.md#g5-the-graph-identity-is-provisioned-outside-the-graph)). | Accepted |
+| — (not catalogued) | `graphcleanup` removes kro's finalizer (`kro.run/graph-finalizer`) from kardinal Graphs in a Terminating namespace, and prunes reader RoleBindings that no Graph uses (`pkg/reconciler/graphcleanup`, ledger G5 and G7). | Accepted |
+| — (not catalogued) | The PromotionStep reconciler runs git and SCM calls: clone, push, open or close a PR, and delete a branch (`pkg/steps`, `pkg/reconciler/promotionstep/pr_branch.go`, ledger G8). | Accepted |
+| — (not catalogued) | The Go health adapters move a step from HealthChecking to Verified (`pkg/health/adapter.go`, ledger G3). | Accepted |
 
 ### What to work on now
 
@@ -52,7 +56,7 @@ See §Flat DAG Compilation — Why It Does Not Work below.
 
 **Any PR that introduces logic outside the Graph layer (a new `time.Now()`, a new external HTTP call in a reconciler, a new cross-CRD mutation, a new CEL evaluation outside `pkg/reconciler/policygate`) requires explicit human approval before merging.**
 
-QA must block such PRs with `[NEEDS HUMAN]`. Engineers must not implement them. This is Constitution Article XII.
+Review must block such PRs and ask the owner (AGENTS.md §Anti-Patterns).
 
 ---
 
@@ -103,7 +107,7 @@ Issues #131–#155 are closed, but not every leak below is gone: see
 | ST-5 / ST-6 | #144 | `exec.Command("kustomize")` in reconcile path | Use `kyaml`/`sigs.k8s.io/kustomize` library; no binary deps |
 | ST-7 / ST-8 / ST-9 / SCM-5 | #144 | `git` host-local operations | Use `go-git` library; no shell-out; add `status.workdir` |
 | GB-2 | #145 | `validateSkipPermissions()` at Graph-build time in Go | Move to Graph `includeWhen` expression |
-| BU-1 / BU-4 | #146 | `supersedeSiblings()` in Go loop (now `isSuperseededByNewer` / `markSuperseded` in `pkg/reconciler/bundle/reconciler.go`) | Dedicated supersession reconciler watching Pipeline.status |
+| BU-1 / BU-4 | #146 | `supersedeSiblings()` in Go loop (now `markSuperseded` and `hasNewerSibling` in `pkg/reconciler/bundle/reconciler.go`) | Dedicated supersession reconciler watching Pipeline.status |
 | WH-1 / WH-2 | #147 | Reconciler work in HTTP handler; triplicated URL parsing | Webhook only writes PRStatus CRD; consolidate URL parsing |
 
 ### MEDIUM
@@ -140,7 +144,7 @@ be contributed upstream — but kardinal no longer requires it as a prerequisite
 |---|---|---|---|
 | PG-1 / PG-4 | #138 | `recheckAfter` on Graph nodes | Nice-to-have — superseded by `ScheduleClock` pattern |
 | GB-5 | #138 | Explicit `dependsOn` edges | Nice-to-have — positional workaround is correct today |
-| HE-1 / HE-2 / HE-3 | #136 | Watch external K8s resources | Done with kro `ref` nodes (`pkg/health/watch_node.go`); cross-node readiness is ledger G3 |
+| HE-1 / HE-2 / HE-3 | #136 | Watch external K8s resources | Done with kro `ref` nodes (`pkg/health/watch_node.go`); cross-node readiness is ledger G3. #1283 (open) plans to drop the health ref nodes. |
 
 ---
 
@@ -173,7 +177,7 @@ adding `status.steps[]` to PromotionStep (no architecture change needed).
 was deleted in #487 and the CEL environment construction moved to
 `pkg/reconciler/policygate/cel_evaluator.go`. What remains in `pkg/cel/` is:
 - `library/` — kardinal's copy of kro's CEL library (ALLOWED — imported by cel_evaluator.go)
-- `conversion/` and `sentinels/` — utilities
+- `conversion/` — utilities
 
 The schedule.* CEL library extension (Part 2 of the ScheduleClock design) was tracked in
 issue #616, which is now **closed**. The `schedule.*` functions were NOT promoted to a CEL
@@ -182,10 +186,10 @@ reconciler. The blocking condition has changed: this is now unblocked (no Graph 
 required) but untriaged. If schedule.* as a proper Graph CEL library function is still desired,
 open a new issue — see #645 for context.
 
-### #400 (Journey 2 multi-cluster): unblocked via Stage 14 implementation
+### #400 (Journey 2 multi-cluster): closed
 
-Was labeled blocked via Stage 14 → #132 → the Graph controller. Since #132 is unblocked, Stage 14 is
-a kardinal implementation task. Journey 2 test can be written once Stage 14 ships.
+Distributed mode was removed (#1321). Journey 2 uses an Argo CD hub and a spoke cluster. The
+multi-cluster live suite covers its setup. The demo is tracked in #1293.
 
 ---
 
@@ -375,8 +379,8 @@ If an aggregated API provider for GitHub were contributed to kro, kardinal could
 | `PAT-in-Secret` auth model | User manages PAT lifecycle | OAuth device flow via `GithubAuthentication` |
 | Subscription CRD polling | Polling reconciler (`pkg/reconciler/subscription`) that requeues on `spec.interval` | Watch node on `GithubArtifact` where `status.sha` changes → create Bundle |
 
-This single aggregated API adoption PR would close issues **#128, #133, #140, #143, #149**
-and unblock the Subscription CRD implementation as a clean Watch node.
+Issues #133, #140, #143 and #149 are closed. An aggregated API would still remove the PRStatus
+reconciler and the go-git clone.
 
 ### Future migration path
 
@@ -409,8 +413,8 @@ contributing upstream for the benefit of the broader kro ecosystem. New Graph ga
 
 | Contribution | Kardinal alternative | Tracked |
 |---|---|---|
-| `recheckAfter` on Graph nodes | `ScheduleClock` CRD pattern | #134 |
-| Explicit `dependsOn` edges | Positional naming workaround (acceptable) | #134 |
-| Graph CEL extension functions (for example a `schedule` library) | `schedule.*` map in the PolicyGate context (ledger G8) | #126 |
-| `startAfterMinutes` on Graph edges | Sequential waves (deferred) | #454 |
-| Aggregated API provider (GitHub) | `PRStatus` CRD workaround (#133) until landed | #456 |
+| `recheckAfter` on Graph nodes | `ScheduleClock` CRD pattern | ledger G1/G8; no open issue |
+| Explicit `dependsOn` edges | Positional naming workaround (acceptable) | ledger G1/G8; no open issue |
+| Graph CEL extension functions (for example a `schedule` library) | `schedule.*` map in the PolicyGate context (ledger G8) | ledger G1/G8; no open issue |
+| `startAfterMinutes` on Graph edges | Sequential waves (deferred) | ledger G1/G8; no open issue |
+| Aggregated API provider (GitHub) | `PRStatus` CRD workaround (#133) until landed | ledger G1/G8; no open issue |

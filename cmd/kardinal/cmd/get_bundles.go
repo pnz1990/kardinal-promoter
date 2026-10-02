@@ -38,7 +38,7 @@ func newGetBundlesCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&activeOnly, "active", false,
-		"Show only active bundles (Promoting/Verified/Failed — excludes Superseded)")
+		"Hide Superseded bundles")
 	return cmd
 }
 

@@ -4,6 +4,7 @@
 > `.github/workflows/otherness-scheduled.yml` (#1247). Historical design; the code and the
 > process differ. Do not follow it. In particular, never bypass branch protection: a PR that
 > cannot merge normally waits for a human.
+> The loop docs and scripts (`.specify/`, `team.yml`, `roadmap.md`) were deleted in #1343.
 > Created: 2026-04-18
 
 ---
