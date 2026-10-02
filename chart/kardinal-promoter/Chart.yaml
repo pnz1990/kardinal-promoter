@@ -7,6 +7,9 @@ description: |
   Built on the kro Graph (kro.run/v1alpha1); requires kro >= v0.10.0 with the
   GraphKind feature gate.
 type: application
+# kro's CRDs use CRD selectableFields, which Kubernetes accepts from 1.30. The
+# -0 lets pre-release builds such as v1.30.5-eks-ce1d5eb match.
+kubeVersion: ">=1.30.0-0"
 version: 0.8.1
 appVersion: "v0.8.1"
 keywords:

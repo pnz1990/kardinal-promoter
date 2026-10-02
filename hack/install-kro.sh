@@ -10,8 +10,9 @@
 #   KRO_VERSION=0.10.0 ./hack/install-kro.sh     # override version
 #   KRO_RBAC_MODE=unrestricted ./hack/install-kro.sh
 #
-# Prerequisites: helm >= 3.8 (OCI), kubectl. The current kubectl context (or
-# KUBECONFIG / KUBE_CONTEXT) must point to the target cluster.
+# Prerequisites: Kubernetes 1.30 or later (the script checks first), helm >= 3.8
+# (OCI), kubectl. The current kubectl context (or KUBECONFIG / KUBE_CONTEXT)
+# must point to the target cluster.
 #
 # RBAC: kro runs in "aggregation" mode by default — it gets only its own
 # permissions plus any ClusterRole labelled
@@ -37,6 +38,40 @@ fi
 
 echo "=== Installing kro v${KRO_VERSION} (Graph controller, rbac.mode=${KRO_RBAC_MODE}) ==="
 echo "Target kube context: ${KUBE_CONTEXT:-$(kubectl config current-context 2>/dev/null || echo '<none>') (current)}"
+
+# ── 0. Kubernetes version ─────────────────────────────────────────────────────
+# kro's graphrevisions.internal.kro.run CRD declares selectableFields, which
+# Kubernetes accepts from 1.30. Check before installing anything. Managed
+# clusters report minors like "30+" (EKS, GKE); only the digits count.
+if ! version_json=$("${KUBECTL[@]}" version -o json); then
+  echo "install-kro.sh: cannot read the Kubernetes server version (kubectl version failed)" >&2
+  exit 1
+fi
+server_major="" server_minor=""
+if [[ $version_json == *'"serverVersion"'* ]]; then
+  server_json=${version_json#*\"serverVersion\"}
+  major_re='"major":[[:space:]]*"([0-9]+)'
+  minor_re='"minor":[[:space:]]*"([0-9]+)'
+  git_re='"gitVersion":[[:space:]]*"v([0-9]+)\.([0-9]+)'
+  if [[ $server_json =~ $major_re ]]; then
+    server_major=${BASH_REMATCH[1]}
+    if [[ $server_json =~ $minor_re ]]; then
+      server_minor=${BASH_REMATCH[1]}
+    fi
+  fi
+  if [ -z "$server_minor" ] && [[ $server_json =~ $git_re ]]; then
+    server_major=${BASH_REMATCH[1]} server_minor=${BASH_REMATCH[2]}
+  fi
+fi
+if [ -z "$server_minor" ]; then
+  echo "install-kro.sh: cannot read the Kubernetes server version from kubectl version -o json" >&2
+  exit 1
+fi
+if (( 10#$server_major < 1 || (10#$server_major == 1 && 10#$server_minor < 30) )); then
+  echo "install-kro.sh: Kubernetes ${server_major}.${server_minor} is not supported: kro's CRDs need 1.30 or later (CRD selectableFields). Upgrade the cluster first." >&2
+  exit 1
+fi
+echo "Kubernetes server: ${server_major}.${server_minor}"
 
 # ── 1. Helm install with the GraphKind feature gate ───────────────────────────
 "${HELM[@]}" upgrade --install kro "$KRO_CHART" \

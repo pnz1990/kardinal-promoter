@@ -5,7 +5,7 @@ name: E2E live
 # controller built from this commit; nothing is faked. The core suite runs on
 # the three Kubernetes minors in hack/tool-versions.env, split across two
 # jobs per minor (hack/e2e/run.sh SHARD); the upgrade suite on Kubernetes
-# 1.29 (UPG-OLDK8S-01) and the newest minor.
+# 1.30 (the oldest supported minor) and the newest minor.
 #
 # Pull requests and pushes to main don't run it: twelve jobs of 10 to 45
 # minutes on every push filled the runners and held up every PR's required
@@ -94,10 +94,11 @@ jobs:
       #
       # One kubectl for every job. KUBECTL_VERSION is within kubectl's one
       # minor of skew of the three newest minors, not of the upgrade job's
-      # 1.29: that job runs it seven minors past the supported skew, which
-      # upstream does not test. Its kubectl calls pass there; if one breaks on
-      # 1.29, install a v1.29 or v1.30 kubectl for that job only rather than
-      # moving KUBECTL_VERSION (test/hack pins it to the middle minor).
+      # 1.30: that job runs it six minors away, past the supported skew, which
+      # upstream does not test. Its kubectl calls passed on 1.29, seven away;
+      # if one breaks on 1.30, install a v1.30 or v1.31 kubectl for that job
+      # only rather than moving KUBECTL_VERSION (test/hack pins it to the
+      # middle minor).
       - name: Install kind, kubectl and helm
         run: |
           bash hack/e2e/tools.sh

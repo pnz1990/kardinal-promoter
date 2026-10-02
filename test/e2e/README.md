@@ -48,7 +48,8 @@ SUITES='gitea flux' make e2e-all   # only these suites
 
 `hack/e2e/matrix.txt` lists the jobs: every suite, the core suite on each of
 the three Kubernetes minors split across two jobs per minor with `SHARD`, and
-the upgrade suite on Kubernetes 1.29 and the newest minor.
+the upgrade suite on Kubernetes 1.30, the oldest supported minor, and the
+newest minor.
 `make e2e-all` runs them on this host, each on a kind cluster of its own
 (`kardinal-e2e-all-<job>`), deletes the clusters (`KEEP=1` keeps them), and
 runs `go run ./test/e2e/proof` over all the results. It fails when a job
@@ -83,7 +84,7 @@ pattern of its tests.
 | `ui` | Forgejo, Argo CD, four more chart releases (static token and CORS, TokenReview, TokenReview without its RBAC, TLS), Playwright's Chromium | `TestUI_*` |
 | `flux` | Forgejo, Flux, Prometheus Operator, Prometheus, Pushgateway, Grafana | `TestFlux_*`, `TestMetric_*`, `TestObs_*` |
 | `chart` | Forgejo, Argo CD, cert-manager; no controller release: each test installs its own | `TestChart_*`, `TestDeprecated_*` |
-| `upgrade` | Forgejo, Argo CD, kardinal-promoter v0.8.1 with its bundled Graph controller and no kro; the test follows the upgrade guide, so a cluster serves one run. `KIND_K8S=1.29` runs it on Kubernetes 1.29 | `TestUpgrade_*` |
+| `upgrade` | Forgejo, Argo CD, kardinal-promoter v0.8.1 with its bundled Graph controller and no kro; the test follows the upgrade guide, so a cluster serves one run. `KIND_K8S=1.30` runs it on Kubernetes 1.30 | `TestUpgrade_*` |
 | `multi-cluster` | Forgejo, Argo CD, Flux and Argo Rollouts in the hub, and a second kind cluster (`<cluster>-spoke`, Argo Rollouts) registered with the hub's Argo CD and Flux | `TestMultiCluster_*` |
 
 `TestSCM_*` tests use only `Env.Git`, so they run against every git server;
@@ -116,8 +117,9 @@ not a repo path, `path:N` or `path:N-M`, names lines past the end of its
 file, or starts on a blank line, a bare `---` or a markdown table
 separator. Only live tests cover live rows;
 contract rows are covered by unit tests: Bitbucket and Azure DevOps, which
-can't be self-hosted, and behaviors a live test cannot force, such as a race
-between two status writes.
+can't be self-hosted, behaviors a live test cannot force, such as a race
+between two status writes, and a Kubernetes older than 1.30, which no suite
+boots.
 
 Each suite run writes `test/e2e/results/<cluster>/summary.json`. The `e2e
 live` job runs `go run ./test/e2e/proof` on every suite's summary: it fails

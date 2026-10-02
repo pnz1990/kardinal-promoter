@@ -1236,3 +1236,30 @@ func TestChartPrometheusRuleAlertsCanFire(t *testing.T) {
 	// up == 0 never fires once the target is gone; absent() does.
 	assert.Contains(t, out, "absent(up{")
 }
+
+// TestChartRequiresKubernetes130: the chart's kubeVersion refuses Kubernetes
+// older than 1.30, where kro's CRDs (CRD selectableFields) cannot be
+// installed, and accepts 1.30 and later, including a managed cluster's
+// pre-release version such as v1.30.5-eks-ce1d5eb. Covers UPG-OLDK8S-01.
+func TestChartRequiresKubernetes130(t *testing.T) {
+	for _, tc := range []struct {
+		kube string
+		ok   bool
+	}{
+		{kube: "1.29.0"},
+		{kube: "v1.29.15-gke.1234000"},
+		{kube: "1.30.0", ok: true},
+		{kube: "v1.30.5-eks-ce1d5eb", ok: true},
+		{kube: "1.37.0", ok: true},
+	} {
+		t.Run(tc.kube, func(t *testing.T) {
+			out, err := helmTemplate(t, "kardinal-promoter", "--kube-version", tc.kube)
+			if tc.ok {
+				require.NoError(t, err, out)
+				return
+			}
+			require.Error(t, err, "helm template --kube-version %s must fail", tc.kube)
+			assert.Contains(t, out, "chart requires kubeVersion: >=1.30.0-0")
+		})
+	}
+}

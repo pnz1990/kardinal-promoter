@@ -256,11 +256,11 @@ func (u *upgrade) assertKept(t *testing.T, objs []kept) {
 }
 
 // ratchetCase is a legacy object and the writes that fail on it once the new
-// CRDs are applied, before Kubernetes 1.30 and from 1.30 (the guide's
-// "Kubernetes < 1.30" table).
+// CRDs are applied, with the CRD validation ratcheting of Kubernetes 1.30 and
+// later (the table in the guide's "Kubernetes version").
 type ratchetCase struct {
-	kind, name     string
-	fail29, fail30 []string
+	kind, name string
+	fail       []string
 }
 
 // ratchetWrite is the kubectl command of a write ("label", "spec", "status",
@@ -287,27 +287,24 @@ func (u *upgrade) ratchetWrite(kind, name, write string) string {
 
 // assertRatchets writes to every legacy object and checks which writes the
 // API server rejects.
-func (u *upgrade) assertRatchets(t *testing.T, ratchets bool) {
+func (u *upgrade) assertRatchets(t *testing.T) {
 	t.Helper()
 	pipelineWrites := []string{"label", "spec", "status", "env0"}
 	gateWrites := []string{"label", "spec", "status"}
 	cases := []ratchetCase{
-		{"pipeline", "legacy-steps", pipelineWrites, []string{"env0"}},
-		{"pipeline", "legacy-autorollback", pipelineWrites, []string{"env0"}},
-		{"pipeline", "legacy-reserved", pipelineWrites, []string{"env0"}},
-		{"pipeline", "legacy-policygates", pipelineWrites, nil},
-		{"policygate", "legacy-selector", gateWrites, nil},
-		{"pipeline", "legacy-badname", []string{"label", "spec", "env0"}, nil},
-		{"policygate", legacyLongGate, gateWrites, gateWrites},
-		{"pipeline", "legacy-dupenv", nil, nil},
-		{"pipeline", "legacy-shard", nil, nil},
-		{"pipeline", "legacy-clean", nil, nil},
+		{"pipeline", "legacy-steps", []string{"env0"}},
+		{"pipeline", "legacy-autorollback", []string{"env0"}},
+		{"pipeline", "legacy-reserved", []string{"env0"}},
+		{"pipeline", "legacy-policygates", nil},
+		{"policygate", "legacy-selector", nil},
+		{"pipeline", "legacy-badname", nil},
+		{"policygate", legacyLongGate, gateWrites},
+		{"pipeline", "legacy-dupenv", nil},
+		{"pipeline", "legacy-shard", nil},
+		{"pipeline", "legacy-clean", nil},
 	}
 	for _, c := range cases {
-		fails := c.fail29
-		if ratchets {
-			fails = c.fail30
-		}
+		fails := c.fail
 		writes := pipelineWrites
 		if c.kind == "policygate" {
 			writes = gateWrites
@@ -419,11 +416,11 @@ func serverMinor(t *testing.T, e *framework.Env) int {
 //
 //   - Step 1's finder reports each of those objects once. The fixes run after
 //     step 7 (the guide's "If you already applied the CRDs" path), so the test
-//     first checks the "Kubernetes < 1.30" table: which label, spec, status
-//     and environment writes the new CRDs reject on each object. On a cluster
-//     older than 1.30 the test checks that table's 1.29 column and that
-//     install-kro.sh exits 1 while kro runs; on 1.30 and later, the other
-//     column. UPG-OLDK8S-01 is covered by the run with KIND_K8S=1.29.
+//     first checks the table in "Kubernetes version": which label, spec,
+//     status and environment writes the new CRDs reject on each object with
+//     CRD validation ratcheting. The cluster must run Kubernetes 1.30 or
+//     later; the suite runs on 1.30, the oldest minor kardinal supports, and
+//     the newest.
 //   - Step 7 applies all 12 CRDs by hand; the API server then enforces them
 //     (a reserved environment name and a 64-character PolicyGate name are
 //     rejected), and kardinal policy simulate reads the pre-upgrade MetricCheck
@@ -444,7 +441,7 @@ func serverMinor(t *testing.T, e *framework.Env) int {
 //   - Step 11: both paused Pipelines stay held, resume releases them, and the
 //     leftover command removes what a Superseded Bundle left after deletion.
 //
-// Covers UPG-CRDS-01, UPG-REUSE-01, UPG-INFLIGHT-01, UPG-PAUSED-01, UPG-GATES-01, UPG-OLDK8S-01.
+// Covers UPG-CRDS-01, UPG-REUSE-01, UPG-INFLIGHT-01, UPG-PAUSED-01, UPG-GATES-01, UPG-RATCHET-01.
 func TestUpgrade_FromV081(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -452,8 +449,8 @@ func TestUpgrade_FromV081(t *testing.T) {
 	ns := e.Namespace(t)
 	u := &upgrade{e: e, ns: ns, main: ns, cliPaused: ns + "-cli", specPaused: ns + "-spec"}
 	minor := serverMinor(t, e)
-	ratchets := minor >= 30
-	t.Logf("Kubernetes 1.%d: CRD validation ratcheting %v", minor, ratchets)
+	require.GreaterOrEqual(t, minor, 30, "kardinal needs Kubernetes 1.30 or later; the cluster runs 1.%d", minor)
+	t.Logf("Kubernetes 1.%d", minor)
 	require.Greater(t, len(legacyLongGate), 63)
 
 	u.repo = e.Repo(t, ns, fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: []string{"test", "prod", "cli", "spec"}}))
@@ -588,13 +585,8 @@ spec:
 
 	// ── 6. Install kro ──────────────────────────────────────────────────
 	kro := e.Shell(t, framework.Fill(t, framework.GuideBlock(t, "install-kro.sh"), "<your-context>", `"$E2E_CONTEXT"`))
-	if ratchets {
-		require.Zero(t, kro.Code, kro.Output)
-		assert.Contains(t, kro.Output, "installed (graphs.kro.run served)")
-	} else {
-		assert.Equal(t, 1, kro.Code, "install-kro.sh exits 1 on Kubernetes < 1.30:\n%s", kro.Output)
-		assert.Contains(t, kro.Output, ".spec.versions[0].selectableFields: field not declared in schema")
-	}
+	require.Zero(t, kro.Code, kro.Output)
+	assert.Contains(t, kro.Output, "installed (graphs.kro.run served)")
 	u.deploymentReady(t, "kro-system", "kro", 3*time.Minute)
 	_, err = e.Dynamic.Resource(crdGVR).Get(ctx, "graphs.kro.run", metav1.GetOptions{})
 	require.NoError(t, err, "CRD graphs.kro.run")
@@ -620,7 +612,7 @@ spec:
 				long.Code != 0 && strings.Contains(long.Output, "PolicyGate names are at most 63 characters"),
 			reserved.Output + long.Output
 	})
-	u.assertRatchets(t, ratchets)
+	u.assertRatchets(t)
 
 	sim := e.MustKardinal(t, ns, "policy", "simulate", "--pipeline", u.main, "--env", "prod")
 	assert.True(t, strings.HasPrefix(sim, "RESULT: BLOCKED\n"), sim)

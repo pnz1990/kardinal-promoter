@@ -90,7 +90,7 @@ graph LR
 
 ## Prerequisites
 
-- A Kubernetes cluster (kind, Docker Desktop, EKS, GKE, or any distribution)
+- A Kubernetes 1.30 or later cluster (kind, Docker Desktop, EKS, GKE, or any distribution)
 - [kardinal-promoter installed](#install-kardinal-promoter), and the `kardinal` CLI ([Install the CLI](installation.md#3-install-the-cli))
 - [Argo CD installed](https://argo-cd.readthedocs.io/en/stable/getting_started/) (or Flux; this guide uses Argo CD)
 - A GitHub account with a personal access token (PAT) that has repo write access
