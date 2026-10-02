@@ -1280,8 +1280,9 @@ func (r *Reconciler) expectedRevision(ctx context.Context, log zerolog.Logger, p
 // expectedRevision returned, when the outputs have neither a pushed commit
 // nor a merge commit: rev then came from the PRStatus. The step copies the
 // merge commit when it leaves WaitingForMerge, but a webhook can mark the PR
-// merged before the merge commit is known (the parsed Forgejo event has none),
-// and the PRStatus reconciler records it later. The health-check paths that
+// merged before the merge commit is known (the Bitbucket and Azure DevOps
+// events and a GitLab fast-forward merge have none), and the PRStatus
+// reconciler records it later. The health-check paths that
 // follow patch the status, except an adapter error, which requeues without a
 // patch: the merge commit is then recorded by the next check that reaches a
 // result.
