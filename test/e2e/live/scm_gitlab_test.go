@@ -81,14 +81,15 @@ func TestGitLab_WebhookBadSignature(t *testing.T) {
 }
 
 // TestGitLab_ClosesPRs checks that a newer Bundle and waitForMergeTimeout
-// each close the open MR with a comment and fail the step.
+// each close the open MR with a comment, delete its source branch, and fail
+// the step, and that the closed MR cannot be merged.
 //
 // Covers SCM-GL-06.
 func TestGitLab_ClosesPRs(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireKind(t, e, "gitlab")
-	scmClosesPRs(t, e, true)
+	scmClosesPRs(t, e)
 }
 
 // TestGitLab_Approvals checks that GitLab MR approvals reach bundle.pr.

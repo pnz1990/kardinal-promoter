@@ -62,6 +62,11 @@ type mockSCM struct {
 	lostClose int      // the first lostClose ClosePR calls close the PR but return an error
 	closed    []string // "repo#number" of every ClosePR call
 	comments  []string // body of every CommentOnPR call
+
+	deleteErrs []error  // returned in order by successive DeleteBranch calls; nil entries succeed
+	deleted    []string // "repo:branch" of every DeleteBranch call
+
+	labelsErr error // returned by AddLabelsToPR
 }
 
 func (m *mockSCM) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, error) {
@@ -88,6 +93,18 @@ func (m *mockSCM) ClosePR(_ context.Context, repo string, number int) error {
 	m.open = false
 	return nil
 }
+
+// DeleteBranch records the call (scm.BranchDeleter).
+func (m *mockSCM) DeleteBranch(_ context.Context, repo, branch string) error {
+	m.deleted = append(m.deleted, repo+":"+branch)
+	if len(m.deleteErrs) > 0 {
+		err := m.deleteErrs[0]
+		m.deleteErrs = m.deleteErrs[1:]
+		return err
+	}
+	return nil
+}
+
 func (m *mockSCM) CommentOnPR(_ context.Context, _ string, _ int, body string) error {
 	m.comments = append(m.comments, body)
 	return nil
@@ -103,7 +120,7 @@ func (m *mockSCM) ParseWebhookEvent(_ []byte, _ string) (scm.WebhookEvent, error
 	return scm.WebhookEvent{}, nil
 }
 func (m *mockSCM) AddLabelsToPR(_ context.Context, _ string, _ int, _ []string) error {
-	return nil
+	return m.labelsErr
 }
 
 type mockGit struct {

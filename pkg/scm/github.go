@@ -38,6 +38,7 @@ type GitHubProvider struct {
 	APIURL string
 
 	// WebhookSecret is the HMAC secret for validating incoming webhook payloads.
+	// Empty refuses every event (ErrNoWebhookSecret).
 	WebhookSecret string
 
 	// circuit guards all outbound GitHub API calls. Opened on 5 consecutive
@@ -225,10 +226,11 @@ func (g *GitHubProvider) ParseWebhookEvent(payload []byte, signature string) (We
 // does not name its event. Only a "pull_request" event reports Merged.
 // Without the header the payload is read as a pull_request event.
 func (g *GitHubProvider) parseWebhookEvent(payload []byte, signature, eventType string) (WebhookEvent, error) {
-	if g.WebhookSecret != "" {
-		if err := g.validateSignature(payload, signature); err != nil {
-			return WebhookEvent{}, fmt.Errorf("webhook signature invalid: %w", err)
-		}
+	if g.WebhookSecret == "" {
+		return WebhookEvent{}, ErrNoWebhookSecret
+	}
+	if err := g.validateSignature(payload, signature); err != nil {
+		return WebhookEvent{}, fmt.Errorf("webhook signature invalid: %w", err)
 	}
 
 	var raw struct {

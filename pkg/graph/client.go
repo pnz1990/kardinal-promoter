@@ -143,7 +143,7 @@ func (c *GraphClient) Get(ctx context.Context, namespace, name string) (*Graph, 
 	if err != nil {
 		return nil, fmt.Errorf("graph.Get %s/%s: %w", namespace, name, err)
 	}
-	g, err := fromUnstructured(u)
+	g, err := FromUnstructured(u)
 	if err != nil {
 		return nil, fmt.Errorf("graph.Get %s/%s: unmarshal: %w", namespace, name, err)
 	}
@@ -174,7 +174,7 @@ func (c *GraphClient) List(ctx context.Context, namespace string) ([]*Graph, err
 	}
 	result := make([]*Graph, 0, len(list.Items))
 	for i := range list.Items {
-		g, err := fromUnstructured(&list.Items[i])
+		g, err := FromUnstructured(&list.Items[i])
 		if err != nil {
 			return nil, fmt.Errorf("graph.List %s: item %d unmarshal: %w", namespace, i, err)
 		}
@@ -198,8 +198,8 @@ func toUnstructured(g *Graph) (*unstructured.Unstructured, error) {
 	return &unstructured.Unstructured{Object: obj}, nil
 }
 
-// fromUnstructured converts an unstructured.Unstructured to a Graph.
-func fromUnstructured(u *unstructured.Unstructured) (*Graph, error) {
+// FromUnstructured converts an unstructured.Unstructured to a Graph (a JSON round trip).
+func FromUnstructured(u *unstructured.Unstructured) (*Graph, error) {
 	data, err := json.Marshal(u.Object)
 	if err != nil {
 		return nil, err

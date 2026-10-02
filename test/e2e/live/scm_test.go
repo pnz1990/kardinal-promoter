@@ -104,6 +104,20 @@ func controllerArgs(t *testing.T, e *framework.Env) []string {
 	return nil
 }
 
+// kindSignature is the header the git server of kind signs its webhook
+// deliveries in.
+func kindSignature(kind string) string {
+	switch kind {
+	case "gitlab":
+		return gitlabToken
+	case "github":
+		return hubSignature
+	case "gitea":
+		return giteaSignature
+	}
+	return forgejoSignature
+}
+
 // eventHeader is the event header that goes with signature header sig.
 func eventHeader(sig string) string {
 	switch sig {
@@ -207,7 +221,10 @@ func (a *app) mergeSeenByWebhook(t *testing.T, ps *v1alpha1.PromotionStep, pr gi
 		deliver(prs)
 	}
 	mark := a.e.WaitControllerLog(t, since, 25*time.Second, "the webhook to mark "+ref+" merged",
-		framework.LogMessage("PRStatus marked merged via webhook", "prstatus", ref, "pr", strconv.Itoa(pr.Number)))
+		framework.LogMessage("PRStatus marked merged via webhook", "prstatus", ref, "namespace", a.ns, "pr", strconv.Itoa(pr.Number)))
+	received := framework.LogMessage("webhook received", "pr", strconv.Itoa(pr.Number), "merged", "true")
+	a.e.WaitControllerLog(t, since, 5*time.Second, "the merge event of "+prs.Spec.Repo+" logged with its repo",
+		func(l framework.LogLine) bool { return received(l) && strings.EqualFold(l.Str("repo"), prs.Spec.Repo) })
 	for _, l := range a.e.ControllerLogLines(t, since, framework.LogMessage("PR merged — status updated", "prstatus", ref, "namespace", a.ns)) {
 		assert.False(t, l.At.Before(mark.At), "a poll saw the merge before the webhook: %s", l)
 	}
@@ -403,11 +420,11 @@ func prOpenWithoutWebhook(t *testing.T, e *framework.Env) (*app, string, gitserv
 
 // scmClosesPRs checks the two ways kardinal closes its PR: a newer Bundle
 // supersedes the older one's open PR, and waitForMergeTimeout fails the step
-// and closes its PR. Each PR is closed unmerged with one comment saying why.
-// When the git server refuses to merge a closed PR (refusesClosedMerge),
-// neither can be merged later; GitHub's API merges a closed PR, so there the
-// test does not try.
-func scmClosesPRs(t *testing.T, e *framework.Env, refusesClosedMerge bool) {
+// and closes its PR. Each PR is closed unmerged with one comment saying why,
+// and its head branch kardinal/<bundle>/prod is deleted, so neither can be
+// merged later. GitHub's merge API merges a closed PR whose branch is still
+// there; with the branch gone it refuses, as the other servers do.
+func scmClosesPRs(t *testing.T, e *framework.Env) {
 	t.Helper()
 	a := newArgoApp(t, e, "prod")
 	p := a.pipeline(map[string]string{"prod": "pr-review"})
@@ -428,13 +445,20 @@ func scmClosesPRs(t *testing.T, e *framework.Env, refusesClosedMerge bool) {
 	e.WaitPRState(t, a.repo, pr2.Number, "closed", time.Minute)
 	oneComment(t, a, pr2.Number, "kardinal closed this PR: it was not merged within waitForMergeTimeout (1m30s)")
 
-	for _, n := range []int{pr1.Number, pr2.Number} {
-		if refusesClosedMerge {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			assert.Error(t, e.Git.MergePR(ctx, a.repo, n), "closed PR #%d cannot be merged", n)
-			cancel()
-		}
-		e.WaitPRState(t, a.repo, n, "closed", 30*time.Second) // not merged
+	for _, c := range []struct {
+		bundle string
+		pr     int
+	}{{older, pr1.Number}, {newer, pr2.Number}} {
+		head := prHead(c.bundle, "prod")
+		framework.Eventually(t, time.Minute, fmt.Sprintf("PR #%d's branch %s deleted", c.pr, head),
+			func(ctx context.Context) (bool, string) {
+				_, err := e.Brancher(t).BranchHead(ctx, a.repo, head)
+				return gitserver.IsNotFound(err), fmt.Sprintf("err=%v", err)
+			})
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		assert.Error(t, e.Git.MergePR(ctx, a.repo, c.pr), "closed PR #%d cannot be merged", c.pr)
+		cancel()
+		e.WaitPRState(t, a.repo, c.pr, "closed", 30*time.Second) // not merged
 	}
 	assertEnvAt(t, a, "prod", fixtures.V1)
 }
@@ -605,6 +629,15 @@ func scmLabelsAndRotation(t *testing.T, e *framework.Env, scopes []string) {
 	assert.Empty(t, pr.Labels, "the new token may not label PRs")
 	e.WaitControllerLog(t, since, time.Minute, "the label failure",
 		framework.LogMessage("add PR labels failed", "pr", strconv.Itoa(pr.Number)))
+	// The step message records the failure while the step waits for the merge
+	// (docs/pr-evidence.md), and status.outputs.prLabelsError keeps it.
+	want := fmt.Sprintf("PR #%d is open, waiting for merge; adding labels failed: ", pr.Number)
+	ps := e.WaitStep(t, a.ns, pipelineName, fourth, "prod", time.Minute, "the label failure in its message",
+		func(s *v1alpha1.PromotionStep) (bool, string) {
+			return s.Status.State == "WaitingForMerge" && strings.HasPrefix(s.Status.Message, want),
+				fmt.Sprintf("state=%q message=%q", s.Status.State, s.Status.Message)
+		})
+	assert.NotEmpty(t, ps.Status.Outputs["prLabelsError"], "status.outputs.prLabelsError")
 	a.stillOpen(t, fourth, "prod", 10*time.Second, "after the label failure")
 
 	since = time.Now()
@@ -614,6 +647,102 @@ func scmLabelsAndRotation(t *testing.T, e *framework.Env, scopes []string) {
 	a.merge(t, pr)
 	e.WaitStepState(t, a.ns, pipelineName, fourth, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V3)
+}
+
+// TestSCM_DeletedStepTracksItsNewPR deletes, on its own, the prod
+// PromotionStep of a Bundle waiting for its PR. The controller closes that PR
+// with a comment, kro creates the step again, and the new step opens a new PR.
+// Its PRStatus kept naming the old PR, so the controller polled the closed PR,
+// never saw a merge of the new one, and failed the new step when the 5-minute
+// grace window ended (B72). Now the PRStatus names the new PR, with a status
+// written for it, and merging the new PR promotes prod. The new PR is opened
+// from the same branch about a second after the delete; the controller deleted
+// that branch with the old PR, and Forgejo and Gitea close every open PR of a
+// deleted branch from a queue after the delete returns, so they closed the new
+// PR too (B79). The controller keeps the branch now, and the new PR stays open
+// until it is merged.
+//
+// Covers STEP-DELETE-PR-04.
+func TestSCM_DeletedStepTracksItsNewPR(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	old, pr := a.waitOpenPR(t, bundle, "prod")
+	require.Contains(t, old.Finalizers, closePRFinalizer, "the step closes its PR when it is deleted")
+	e.WaitPRStatus(t, a.ns, pipelineName, bundle, "prod", time.Minute, fmt.Sprintf("tracking PR #%d", pr.Number),
+		func(p *v1alpha1.PRStatus) bool { return p.Spec.PRNumber == pr.Number && p.Status.Open })
+
+	require.NoError(t, e.Client.Delete(ctx, old))
+	e.WaitPRState(t, a.repo, pr.Number, "closed", 2*time.Minute)
+	oneComment(t, a, pr.Number, "kardinal closed this PR: PromotionStep "+old.Name+" was deleted")
+
+	e.WaitStep(t, a.ns, pipelineName, bundle, "prod", promoteTimeout, "the recreated step waiting for a new PR",
+		func(s *v1alpha1.PromotionStep) (bool, string) {
+			return s.UID != old.UID && s.Status.State == "WaitingForMerge",
+				fmt.Sprintf("uid=%s state=%q message=%q", s.UID, s.Status.State, s.Status.Message)
+		})
+	again := a.openPR(t, bundle, "prod")
+	require.NotEqual(t, pr.Number, again.Number, "the recreated step opened a new PR")
+	require.Equal(t, pr.Head, again.Head, "the new PR is from the old PR's branch")
+	e.WaitPRStatus(t, a.ns, pipelineName, bundle, "prod", time.Minute, fmt.Sprintf("tracking the new PR #%d", again.Number),
+		func(p *v1alpha1.PRStatus) bool {
+			return p.Spec.PRNumber == again.Number && p.Status.ObservedGeneration == p.Generation &&
+				p.Status.Open && !p.Status.ClosedFinal && p.Status.ClosedAt == nil
+		})
+
+	a.merge(t, again)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// TestSCM_WebhookMergeIsConfirmed posts a merge event, signed with the
+// webhook secret, for a PR that is still open. The controller asks the git
+// server whether the PR is merged, so the PRStatus is not marked merged and
+// the step keeps waiting; any validly signed merge event used to advance the
+// step without a merge (B73). The same event signed wrong, and unsigned, is
+// refused and logged with the header its signature was read from and the
+// sender's address (B76). Once the PR is merged, the event is confirmed and
+// marks it merged, logged with its repo and the PRStatus namespace.
+//
+// Covers WEBHOOK-CONFIRM-01, WEBHOOK-LOG-01.
+func TestSCM_WebhookMergeIsConfirmed(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a, bundle, pr, prs := prOpenWithoutWebhook(t, e)
+	kind := e.Git.Kind()
+	sig := kindSignature(kind)
+	body := mergedEvent(t, kind, prs.Spec.Repo, pr.Number, pr.HeadSHA)
+	since := time.Now()
+	require.Equal(t, http.StatusNoContent, e.PostSCMWebhook(t, signedPREvent(sig, framework.WebhookSecret(t), body), body),
+		"the merge event of the open PR, signed in %s", sig)
+	e.WaitControllerLog(t, since, 30*time.Second, "the git server reporting PR #"+strconv.Itoa(pr.Number)+" open",
+		framework.LogMessage("SCM provider reports the PR of the merge event not merged; PRStatus not marked merged",
+			"prstatus", prs.Name, "namespace", a.ns, "repo", prs.Spec.Repo, "pr", strconv.Itoa(pr.Number), "open", "true"))
+	a.stillOpen(t, bundle, "prod", 15*time.Second, "after the merge event of the open PR")
+	assert.Empty(t, e.ControllerLogLines(t, since, framework.LogMessage("PRStatus marked merged via webhook", "prstatus", prs.Name)))
+
+	for _, c := range []struct {
+		header, logged string
+		headers        map[string]string
+	}{
+		{sig, sig, signedPREvent(sig, "not-the-secret", body)},
+		{"no signature", "none", map[string]string{eventHeader(sig): prEvent(sig)}},
+	} {
+		since := time.Now()
+		require.Equal(t, http.StatusUnauthorized, e.PostSCMWebhook(t, c.headers, body), "the merge event, %s", c.header)
+		l := e.WaitControllerLog(t, since, 30*time.Second, "the refused event logged with signatureHeader "+c.logged,
+			framework.LogMessage("webhook signature invalid or parse error", "signatureHeader", c.logged))
+		assert.NotEmpty(t, l.Str("remoteAddr"), "the sender of the refused event: %s", l)
+	}
+
+	// Signed right once the PR is merged, the event is confirmed and marks
+	// the PRStatus merged (mergeSeenByWebhook checks the logged repo and
+	// namespace).
+	a.mergeByWebhook(t, bundle, "prod", sig, kind == "github" || kind == "gitlab")
+	assertEnvAt(t, a, "prod", fixtures.V2)
 }
 
 // TestSCM_DuplicatePRReusesSameBase checks which PR open-pr adopts when the

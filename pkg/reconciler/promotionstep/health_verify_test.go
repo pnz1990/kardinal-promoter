@@ -357,7 +357,9 @@ func argoApplicationWithImages(name, revision string, images ...string) *unstruc
 // status.summary.images, so outputs.mergeCommitSHA is recorded and the synced
 // revision is checked. Once the PRStatus records that the merge commit will
 // not be known (status.mergeCommitUnavailable), the images decide, as before.
-// health.timeout bounds the wait.
+// health.timeout bounds the wait. A PRStatus that no longer describes the
+// step's PR (B72) is not waited for: nothing points it back at that PR once
+// the step is past WaitingForMerge.
 func TestArgoCDWaitsForTheMergeCommit(t *testing.T) {
 	argo := v1alpha1.HealthConfig{Type: "argocd", Timeout: "1m"}
 	prReview := v1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review", Health: argo}
@@ -369,6 +371,10 @@ func TestArgoCDWaitsForTheMergeCommit(t *testing.T) {
 	}
 	unavailable := merged("")
 	unavailable.Status.MergeCommitUnavailable = true
+	// kro recreates a deleted PRStatus from the Graph without a PR number.
+	placeholder := &v1alpha1.PRStatus{ObjectMeta: metav1.ObjectMeta{Name: "prs", Namespace: "default"},
+		Spec: v1alpha1.PRStatusSpec{Repo: "org/repo"}}
+	stepPR := map[string]string{"prURL": "https://git.example/org/repo/pulls/42", "prNumber": "42"}
 	expired := metav1.NewTime(time.Now().Add(-time.Second))
 	const waiting = "waiting for argocd: merge commit of the PR not known yet"
 	tests := []struct {
@@ -414,6 +420,11 @@ func TestArgoCDWaitsForTheMergeCommit(t *testing.T) {
 				prsGetErr: errors.New("informer cache not synced"),
 				dynObjs:   []runtime.Object{argoApplicationWithImages("p-prod", oldSHA, "ghcr.io/org/app:v2")}},
 			wantState: "HealthChecking", wantMsg: waiting},
+		{name: "PRStatus recreated as a placeholder: the Bundle images decide (B72)",
+			hc: healthCase{env: prReview, images: v2, prsRef: "prs", objs: []client.Object{placeholder},
+				status:  v1alpha1.PromotionStepStatus{Outputs: stepPR},
+				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", oldSHA, "ghcr.io/org/app:v2")}},
+			wantState: "Verified", wantMsg: "via argocd", wantOutputs: stepPR},
 		{name: "PRStatus deleted: nothing left to learn it from",
 			hc: healthCase{env: prReview, images: v2, prsRef: "prs",
 				dynObjs: []runtime.Object{argoApplicationWithImages("p-prod", oldSHA, "ghcr.io/org/app:v2")}},

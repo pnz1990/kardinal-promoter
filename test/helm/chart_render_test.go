@@ -401,7 +401,7 @@ func controllerAccess() []apiAccess {
 		{"", "secrets", []string{"get"}, inWatched, "", "Pipeline git secret (promotionstep Get), SCM SecretWatcher (Get; Secrets are uncached)"},
 		{"", "configmaps", readVerbs, inWatched, "", "ensureVersionConfigMap cached Get (main.go)"},
 		{"kardinal.io", "auditevents", []string{"get", "list", "watch", "create"}, inWatched, "", "audit.go"},
-		{"kro.run", "graphs", rwVerbs, inWatched, "", "pkg/graph client; get: promotionstep finalizer.go stepRecreated"},
+		{"kro.run", "graphs", rwVerbs, inWatched, "", "pkg/graph client; get: promotionstep finalizer.go stepComeback"},
 		{"kro.run", "graphs/status", []string{"get"}, inWatched, "", "pkg/graph client"},
 		{"", "serviceaccounts", []string{"get", "create"}, inWatched, "", "graph identity.go"},
 		{"rbac.authorization.k8s.io", "rolebindings", []string{"get", "list", "create", "update", "delete"}, inWatched, "", "graph identity.go; delete prunes reader bindings (fix/audit-graph); list: graphcleanup sweep.go (cluster mode)"},
@@ -419,7 +419,7 @@ func controllerAccess() []apiAccess {
 		{"kardinal.io", "changewindows/status", []string{"get", "update", "patch"}, inCluster, "", "changewindow reconciler status writer (fix/audit-gates)"},
 		// Namespace mode limits it to the watched namespace (releaseNS in
 		// TestChartRBACGrantsControllerAccess); TestChartRBACNamespaceGet checks both modes.
-		{"", "namespaces", []string{"get"}, inCluster, releaseNS, "graphcleanup reconciler.go namespaceTerminating; bundle reconciler.go namespaceDeleting; promotionstep finalizer.go stepRecreated"},
+		{"", "namespaces", []string{"get"}, inCluster, releaseNS, "graphcleanup reconciler.go namespaceTerminating; bundle reconciler.go namespaceDeleting; promotionstep finalizer.go stepComeback"},
 	}
 	for _, k := range kardinalNamespacedKinds {
 		acc = append(acc,

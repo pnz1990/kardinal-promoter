@@ -32,12 +32,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 const (
 	// maxWebhookBody is the maximum webhook payload size (1 MB).
 	maxWebhookBody = 1 << 20
+	// mergeConfirmTimeout bounds the SCM API call that confirms a merge event
+	// (mergeConfirmed). GitHub counts a webhook delivery failed when the
+	// endpoint has not answered within 10 seconds, and the handler's 30-second
+	// context and the provider's 30-second HTTP timeout would let one slow SCM
+	// call turn the delivery into a failure. A confirmation that runs out of
+	// time is treated as a failed one: 204, nothing marked, polling records
+	// the merge.
+	mergeConfirmTimeout = 8 * time.Second
 )
 
 // webhookServer is an HTTP server that handles incoming SCM webhook events.
@@ -102,7 +111,14 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 		// own header (or the payload); the provider validates and reads them.
 		event, err := scm.ParseWebhookRequest(s.scm, body, r.Header)
 		if err != nil {
-			s.log.Warn().Err(err).Msg("webhook signature invalid or parse error")
+			// The header's name, never its value: GitLab and Azure DevOps send
+			// the secret itself.
+			header := scm.WebhookSignatureHeader(r.Header)
+			if header == "" {
+				header = "none"
+			}
+			s.log.Warn().Err(err).Str("signatureHeader", header).Str("remoteAddr", r.RemoteAddr).
+				Msg("webhook signature invalid or parse error")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -114,6 +130,7 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 			Str("action", event.Action).
 			Bool("merged", event.Merged).
 			Int("pr", event.PRNumber).
+			Str("repo", event.RepoFullName).
 			Msg("webhook received")
 
 		// Only act on merged pull_request events.
@@ -165,6 +182,10 @@ func (s *webhookServer) HealthHandler() http.HandlerFunc {
 // The PromotionStep reconciler will detect the change on its next reconcile
 // and advance to HealthChecking.
 //
+// The event is a hint, not the record: before it marks anything, the webhook
+// asks the SCM provider once whether the PR is merged (mergeConfirmed), so an
+// event signed with the shared secret cannot advance a PR that is not merged.
+//
 // This is the pure version of the old reconcileMergedPR — the webhook now only
 // writes to its own CRD (PRStatus) and does not touch PromotionStep status.
 func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.WebhookEvent) error {
@@ -179,7 +200,7 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 		return fmt.Errorf("list prstatuses: %w", err)
 	}
 
-	now := metav1.NewTime(time.Now().UTC())
+	var toMark []*v1alpha1.PRStatus
 	for i := range prsList.Items {
 		prs := &prsList.Items[i]
 
@@ -192,22 +213,39 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 		if prs.Spec.Repo == "" || !strings.EqualFold(prs.Spec.Repo, event.RepoFullName) {
 			continue
 		}
-
-		// Already marked merged, and nothing to add — idempotent skip.
-		if prs.Status.Merged && (prs.Status.MergeCommitSHA != "" || event.MergeCommitSHA == "") {
+		if prstatus.DescribesSpec(prs) && prs.Status.Merged &&
+			(prs.Status.MergeCommitSHA != "" || event.MergeCommitSHA == "") {
+			// Already marked merged, and nothing to add — idempotent skip.
 			continue
 		}
+		toMark = append(toMark, prs)
+	}
+	// An event that names no tracked PR, or only PRs already marked, costs no
+	// SCM API call.
+	if len(toMark) == 0 || !s.mergeConfirmed(ctx, toMark[0]) {
+		return nil
+	}
 
+	now := metav1.NewTime(time.Now().UTC())
+	for _, prs := range toMark {
 		patch := client.MergeFrom(prs.DeepCopy())
+		if !prstatus.DescribesSpec(prs) {
+			// The status is still the one of the PR the spec named before (a
+			// recreated step opened this one, B72): none of it holds.
+			prs.Status = v1alpha1.PRStatusStatus{}
+		}
+		prs.Status.ObservedGeneration = prs.Generation
 		if !prs.Status.Merged {
 			prs.Status.Merged = true
 			prs.Status.Open = false
 			prs.Status.LastCheckedAt = &now
 		}
-		if prs.Status.MergeCommitSHA == "" {
+		if prs.Status.MergeCommitSHA == "" && event.MergeCommitSHA != "" {
 			// Written with merged, so the health check knows the commit from
-			// the start (#1307).
+			// the start (#1307). The status holds the commit or that it is
+			// unavailable, not both.
 			prs.Status.MergeCommitSHA = event.MergeCommitSHA
+			prs.Status.MergeCommitUnavailable = false
 		}
 
 		patchErr := s.client.Status().Patch(ctx, prs, patch)
@@ -224,9 +262,37 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 		}
 		s.log.Info().
 			Str("prstatus", prs.Name).
+			Str("namespace", prs.Namespace).
 			Int("pr", event.PRNumber).
 			Str("mergeCommit", event.MergeCommitSHA).
 			Msg("PRStatus marked merged via webhook")
 	}
 	return nil
+}
+
+// mergeConfirmed asks the SCM provider whether the PR of a merge event, which
+// prs tracks, is merged. A valid signature proves only that the sender has
+// the webhook secret, and GitLab and Azure DevOps send that secret in plain
+// text with every event, so the webhook only marks a merge the SCM API
+// reports, as a poll would. When the API says the PR is not merged, or the
+// call fails, nothing is marked and the event still gets 204: the PRStatus
+// poll records the merge when there is one, and a 5xx would only make the
+// SCM retry the delivery or disable the webhook. The call gets
+// mergeConfirmTimeout, under GitHub's delivery timeout, so a slow SCM API
+// does not make the delivery fail.
+func (s *webhookServer) mergeConfirmed(ctx context.Context, prs *v1alpha1.PRStatus) bool {
+	ctx, cancel := context.WithTimeout(ctx, mergeConfirmTimeout)
+	defer cancel()
+	merged, open, err := s.scm.GetPRStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
+	if err == nil && merged {
+		return true
+	}
+	log := s.log.Warn().Str("prstatus", prs.Name).Str("namespace", prs.Namespace).
+		Str("repo", prs.Spec.Repo).Int("pr", prs.Spec.PRNumber)
+	if err != nil {
+		log.Err(err).Msg("could not confirm the merge event with the SCM provider; PRStatus not marked merged, polling will record the merge")
+		return false
+	}
+	log.Bool("open", open).Msg("SCM provider reports the PR of the merge event not merged; PRStatus not marked merged")
+	return false
 }

@@ -43,6 +43,7 @@ type ForgejoProvider struct {
 	// WebhookSecret is the secret for validating incoming webhook payloads.
 	// Forgejo/Gitea signs payloads with HMAC-SHA256 and sends the result in
 	// the X-Gitea-Signature header (same scheme as GitHub's X-Hub-Signature-256).
+	// Empty refuses every event (ErrNoWebhookSecret).
 	WebhookSecret string
 
 	// circuit guards all outbound Forgejo API calls.
@@ -263,14 +264,15 @@ func (f *ForgejoProvider) ParseWebhookEvent(payload []byte, signature string) (W
 // a "pull_request" event with action "closed" is a merge. Without the header
 // the payload is read as a pull_request event.
 func (f *ForgejoProvider) parseWebhookEvent(payload []byte, signature, eventType string) (WebhookEvent, error) {
-	if f.WebhookSecret != "" {
-		mac := hmac.New(sha256.New, []byte(f.WebhookSecret))
-		mac.Write(payload)
-		expected := hex.EncodeToString(mac.Sum(nil))
-		signature = strings.ToLower(strings.TrimPrefix(signature, "sha256="))
-		if subtle.ConstantTimeCompare([]byte(signature), []byte(expected)) != 1 {
-			return WebhookEvent{}, fmt.Errorf("webhook HMAC mismatch")
-		}
+	if f.WebhookSecret == "" {
+		return WebhookEvent{}, ErrNoWebhookSecret
+	}
+	mac := hmac.New(sha256.New, []byte(f.WebhookSecret))
+	mac.Write(payload)
+	expected := hex.EncodeToString(mac.Sum(nil))
+	signature = strings.ToLower(strings.TrimPrefix(signature, "sha256="))
+	if subtle.ConstantTimeCompare([]byte(signature), []byte(expected)) != 1 {
+		return WebhookEvent{}, fmt.Errorf("webhook HMAC mismatch")
 	}
 
 	var raw struct {

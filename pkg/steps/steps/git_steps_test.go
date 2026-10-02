@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
 func runStep(t *testing.T, name string, state *parentsteps.StepState) (parentsteps.StepResult, error) {
@@ -337,6 +339,32 @@ func TestGitPushStep_Modes(t *testing.T) {
 	}
 }
 
+// TestPRBranch covers the one definition of the branch kardinal promotes
+// through: git-push pushes PRBranch(bundle, env), open-pr opens the PR from it
+// when git-push reported no branch, and both are under PRBranchPrefix, the
+// only prefix the PromotionStep reconciler deletes a branch under. Three
+// literals of the same name used to live in these places (B70 nit).
+func TestPRBranch(t *testing.T) {
+	want := "kardinal/nginx-demo-v1-29-0/prod"
+	assert.Equal(t, want, steps.PRBranch("nginx-demo-v1-29-0", "prod"))
+	assert.True(t, strings.HasPrefix(want, steps.PRBranchPrefix))
+
+	git := &mockGitClient{}
+	state := makeState(t, git, nil)
+	state.Sequence = parentsteps.DefaultSequenceForBundle("pr-review", "image", "", "")
+	state.Environment.Approval = "pr-review"
+	_, err := runStep(t, "git-push", state)
+	require.NoError(t, err)
+	assert.Equal(t, want, git.pushBranch, "git-push pushes the PR branch")
+
+	scmP := &mockSCMProvider{prURL: "https://example/pr/7", prNumber: 7}
+	state = makeState(t, &mockGitClient{}, scmP)
+	delete(state.Outputs, "branch")
+	_, err = runStep(t, "open-pr", state)
+	require.NoError(t, err)
+	assert.Equal(t, []string{want}, scmP.heads, "open-pr falls back to the PR branch")
+}
+
 // TestPromotionSequence_NoChangesSkipsPR runs the pr-review sequence against a
 // tree that already has the target version: no push, no PR, and the sequence
 // completes (E2E-04).
@@ -402,8 +430,29 @@ func TestOpenPRStep_Providers(t *testing.T) {
 				}
 			}
 			assert.Contains(t, res.Message, tc.wantMsg)
+			if tc.labelsErr != nil {
+				assert.Equal(t, tc.labelsErr.Error(), res.Outputs["prLabelsError"],
+					"the output keeps the label error once wait-for-merge's message replaces this one (B71)")
+			} else {
+				assert.NotContains(t, res.Outputs, "prLabelsError")
+			}
 		})
 	}
+}
+
+// TestOpenPRStep_LabelsErrorCleared covers B71: a PR whose labels worked
+// clears the label error an earlier PR of the step left in the outputs.
+func TestOpenPRStep_LabelsErrorCleared(t *testing.T) {
+	scmP := &mockSCMProvider{prURL: "https://example/pr/8", prNumber: 8}
+	state := makeState(t, &mockGitClient{}, scmP)
+	state.Pipeline.Git.URL = "https://github.com/owner/repo"
+	state.Outputs["branch"] = "kardinal/nginx-demo-v1-29-0/prod"
+	state.Outputs["prLabelsError"] = "403 labels"
+	res, err := runStep(t, "open-pr", state)
+	require.NoError(t, err)
+	v, ok := res.Outputs["prLabelsError"]
+	assert.True(t, ok, "the output is set, to empty")
+	assert.Empty(t, v)
 }
 
 // TestWaitForMergeStep_Transient proves an SCM API error keeps the step

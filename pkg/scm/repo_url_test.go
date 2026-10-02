@@ -178,6 +178,7 @@ func TestWebhookSignature(t *testing.T) {
 			h := http.Header{}
 			h.Set(tc.header, tc.value)
 			assert.Equal(t, tc.value, scm.WebhookSignature(h))
+			assert.Equal(t, tc.header, scm.WebhookSignatureHeader(h))
 		})
 	}
 	t.Run("github prefers sha256 over sha1", func(t *testing.T) {
@@ -185,8 +186,18 @@ func TestWebhookSignature(t *testing.T) {
 		h.Set("X-Hub-Signature", "sha1=old")
 		h.Set("X-Hub-Signature-256", "sha256=new")
 		assert.Equal(t, "sha256=new", scm.WebhookSignature(h))
+		assert.Equal(t, "X-Hub-Signature-256", scm.WebhookSignatureHeader(h))
+	})
+	t.Run("gitea signature and X-Hub-Signature-256", func(t *testing.T) {
+		// WebhookSignatureHeader names the header WebhookSignature reads (B76).
+		h := http.Header{}
+		h.Set("X-Gitea-Signature", "abc")
+		h.Set("X-Hub-Signature-256", "sha256=abc")
+		assert.Equal(t, "sha256=abc", scm.WebhookSignature(h))
+		assert.Equal(t, "X-Hub-Signature-256", scm.WebhookSignatureHeader(h))
 	})
 	t.Run("none", func(t *testing.T) {
 		assert.Empty(t, scm.WebhookSignature(http.Header{}))
+		assert.Empty(t, scm.WebhookSignatureHeader(http.Header{}))
 	})
 }

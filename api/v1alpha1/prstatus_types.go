@@ -17,6 +17,8 @@ type PRStatusSpec struct {
 
 	// PRNumber is the pull request number (numeric ID within the repo).
 	// Set by the open-pr step after the PR is created. Zero in the placeholder.
+	// The PromotionStep sets it again when it opened another PR (a recreated
+	// step whose PR was closed): the spec always names the step's PR.
 	// +optional
 	PRNumber int `json:"prNumber,omitempty"`
 
@@ -55,7 +57,9 @@ type PRStatusStatus struct {
 
 	// LastCheckedAt records when the status was last written from an SCM API
 	// poll. Polls that change nothing refresh it at most every 5 minutes, so it
-	// can lag the most recent poll by up to that much.
+	// can lag the most recent poll by up to that much: every status write
+	// queues the PRStatus again, so writing on each unchanged poll would make
+	// it poll in a loop.
 	// +optional
 	LastCheckedAt *metav1.Time `json:"lastCheckedAt,omitempty"`
 
@@ -99,6 +103,16 @@ type PRStatusStatus struct {
 	// an older release and counts as final too.
 	// +optional
 	ClosedFinal bool `json:"closedFinal,omitempty"`
+
+	// ObservedGeneration is the metadata.generation of the spec this status
+	// describes. The PromotionStep points the spec at another PR when a
+	// recreated step opened a new one; the PRStatus reconciler then clears
+	// the status of the old PR and polls the new one, and the PromotionStep
+	// does not act on a status whose observedGeneration is older than the
+	// spec. Zero on a status written by an older release: it is taken to
+	// describe the current spec.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // +kubebuilder:object:root=true

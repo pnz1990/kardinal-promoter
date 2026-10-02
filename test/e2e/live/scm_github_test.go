@@ -90,16 +90,16 @@ func TestGitHub_WebhookBadSignature(t *testing.T) {
 }
 
 // TestGitHub_ClosesPRs checks that a newer Bundle and waitForMergeTimeout
-// each close the open GitHub PR with a comment and fail the step. It does
-// not try to merge the closed PRs: GitHub's merge API merges a closed,
-// unmerged PR without reopening it.
+// each close the open GitHub PR with a comment, delete its head branch, and
+// fail the step, and that the closed PR cannot be merged: GitHub's merge API
+// merges a closed, unmerged PR, but not once its head branch is gone.
 //
 // Covers SCM-GH-06.
 func TestGitHub_ClosesPRs(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireKind(t, e, "github")
-	scmClosesPRs(t, e, false)
+	scmClosesPRs(t, e)
 }
 
 // TestGitHub_TokenCheck checks that a token GitHub rejects gets the startup

@@ -152,6 +152,11 @@ type StepState struct {
 // OpenPRStepName is the name of the step that opens the promotion PR.
 const OpenPRStepName = "open-pr"
 
+// OutputPRLabelsError is the open-pr output that keeps the error of a failed
+// attempt to label the PR it opened. The PR stays open without the labels,
+// and the PromotionStep's WaitingForMerge message repeats the error.
+const OutputPRLabelsError = "prLabelsError"
+
 // OpensPR reports whether the sequence being run opens a PR.
 func (s *StepState) OpensPR() bool {
 	return slices.Contains(s.Sequence, OpenPRStepName)

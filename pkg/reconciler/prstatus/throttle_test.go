@@ -62,6 +62,9 @@ func ago(d time.Duration) *time.Time {
 // the next one. Reconciles within the poll interval of the last recorded
 // check do not call the SCM, and a poll that changes nothing does not patch
 // the status (every patch is a watch event that re-enqueues the object).
+// lastCheckedAt is refreshed once it is 5 minutes old (B75, by design).
+//
+// Covers SCM-POLLREFRESH-01.
 func TestPollThrottle(t *testing.T) {
 	tests := []struct {
 		name        string

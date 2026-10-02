@@ -22,10 +22,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -41,10 +45,22 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
-// mockSCMProvider is a test double that returns a fixed WebhookEvent.
+// mockSCMProvider is a test double that returns a fixed WebhookEvent. Its
+// GetPRStatus reports the PR merged when the event says so, unless notMerged
+// or statusErr is set, and counts the calls. With hang set it stands in for
+// an SCM that answers only when the caller gives up: it records the deadline
+// of the context it gets (statusDeadline, statusHasDeadline) and ends the
+// call with context.DeadlineExceeded at once, so a test does not wait for the
+// deadline; without one it waits for the context, as the real call would.
 type mockSCMProvider struct {
-	event scm.WebhookEvent
-	err   error
+	event             scm.WebhookEvent
+	err               error
+	notMerged         bool
+	statusErr         error
+	statusCalls       int
+	hang              bool
+	statusDeadline    time.Time
+	statusHasDeadline bool
 }
 
 func (m *mockSCMProvider) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, error) {
@@ -54,8 +70,19 @@ func (m *mockSCMProvider) ClosePR(_ context.Context, _ string, _ int) error { re
 func (m *mockSCMProvider) CommentOnPR(_ context.Context, _ string, _ int, _ string) error {
 	return nil
 }
-func (m *mockSCMProvider) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, error) {
-	return m.event.Merged, true, nil
+func (m *mockSCMProvider) GetPRStatus(ctx context.Context, _ string, _ int) (bool, bool, error) {
+	m.statusCalls++
+	if m.hang {
+		m.statusDeadline, m.statusHasDeadline = ctx.Deadline()
+		if !m.statusHasDeadline {
+			<-ctx.Done()
+		}
+		return false, false, context.DeadlineExceeded
+	}
+	if m.statusErr != nil {
+		return false, false, m.statusErr
+	}
+	return m.event.Merged && !m.notMerged, true, nil
 }
 func (m *mockSCMProvider) GetPRReviewStatus(_ context.Context, _ string, _ int) (bool, int, error) {
 	return false, 0, nil
@@ -129,14 +156,16 @@ func TestWebhook_MarksPRStatusMerged_OnMerge(t *testing.T) {
 
 // TestWebhook_RecordsMergeCommit verifies that the webhook writes the merge
 // commit together with status.merged, fills it in when polling recorded the
-// merge first, and never replaces one already recorded (#1307).
+// merge first, and never replaces one already recorded (#1307). A commit it
+// writes clears status.mergeCommitUnavailable: the status holds one of the two.
 func TestWebhook_RecordsMergeCommit(t *testing.T) {
 	const sha = "e7ddb9e5a1b2c3d4e5f60718293a4b5c6d7e8f90"
 	tests := []struct {
-		name   string
-		status v1alpha1.PRStatusStatus
-		event  string
-		want   string
+		name            string
+		status          v1alpha1.PRStatusStatus
+		event           string
+		want            string
+		wantUnavailable bool
 	}{
 		{name: "open PR", status: v1alpha1.PRStatusStatus{Open: true}, event: sha, want: sha},
 		{name: "merged by polling without the commit", status: v1alpha1.PRStatusStatus{Merged: true},
@@ -144,6 +173,10 @@ func TestWebhook_RecordsMergeCommit(t *testing.T) {
 		{name: "commit already recorded", status: v1alpha1.PRStatusStatus{Merged: true, MergeCommitSHA: "d7d4d8a"},
 			event: sha, want: "d7d4d8a"},
 		{name: "event without the commit", status: v1alpha1.PRStatusStatus{Open: true}, want: ""},
+		{name: "commit recorded unavailable, the event has it", status: v1alpha1.PRStatusStatus{
+			Merged: true, MergeCommitUnavailable: true}, event: sha, want: sha},
+		{name: "commit recorded unavailable, the event has none", status: v1alpha1.PRStatusStatus{
+			Merged: true, MergeCommitUnavailable: true}, want: "", wantUnavailable: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,8 +200,138 @@ func TestWebhook_RecordsMergeCommit(t *testing.T) {
 			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
 			assert.True(t, got.Status.Merged)
 			assert.Equal(t, tc.want, got.Status.MergeCommitSHA)
+			assert.Equal(t, tc.wantUnavailable, got.Status.MergeCommitUnavailable)
 		})
 	}
+}
+
+// TestWebhook_StatusOfTheOldPR covers B72: a PRStatus whose spec was pointed
+// at a new PR (a recreated step) still has the old PR's status until the
+// PRStatus reconciler clears it. A merge of the new PR replaces that status
+// and records the generation, so the clear does not undo the merge.
+func TestWebhook_StatusOfTheOldPR(t *testing.T) {
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-bundle-1-prod", Namespace: "default", Generation: 2},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/owner/repo/pull/43", PRNumber: 43, Repo: "owner/repo"},
+		Status: v1alpha1.PRStatusStatus{ClosedFinal: true, PollError: "status 404", Approved: true,
+			ApprovalCount: 2, ObservedGeneration: 1},
+	}
+	c := fake.NewClientBuilder().WithScheme(webhookScheme()).
+		WithObjects(prs).WithStatusSubresource(prs).Build()
+	mockSCM := &mockSCMProvider{event: scm.WebhookEvent{
+		EventType: "pull_request", Action: "closed", Merged: true,
+		PRNumber: 43, RepoFullName: "owner/repo", MergeCommitSHA: "e7ddb9e",
+	}}
+	w := httptest.NewRecorder()
+	newWebhookServerWithConfig(mockSCM, c, zerolog.Nop(), true).Handler()(w,
+		httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader([]byte(`{}`))))
+	assert.Equal(t, http.StatusNoContent, w.Code)
+
+	var got v1alpha1.PRStatus
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
+	assert.True(t, got.Status.Merged)
+	assert.Equal(t, "e7ddb9e", got.Status.MergeCommitSHA)
+	assert.Equal(t, int64(2), got.Status.ObservedGeneration)
+	assert.False(t, got.Status.ClosedFinal)
+	assert.Empty(t, got.Status.PollError)
+	assert.False(t, got.Status.Approved)
+	assert.Zero(t, got.Status.ApprovalCount)
+}
+
+// TestWebhook_ConfirmsMergeWithSCM covers B73: a validly signed merge event
+// marks the PRStatus merged only when the SCM provider, asked once, reports
+// the PR merged. When it reports the PR not merged, or the call fails, the
+// event gets 204 and the PRStatus is left to polling. An event that names no
+// tracked PR, or one already marked, makes no call.
+func TestWebhook_ConfirmsMergeWithSCM(t *testing.T) {
+	open := v1alpha1.PRStatusStatus{Open: true}
+	tests := []struct {
+		name       string
+		status     v1alpha1.PRStatusStatus
+		pr         int
+		notMerged  bool
+		statusErr  error
+		wantMerged bool
+		wantCalls  int
+	}{
+		{name: "the provider reports the PR merged", status: open, pr: 42, wantMerged: true, wantCalls: 1},
+		{name: "the provider reports the PR not merged", status: open, pr: 42, notMerged: true, wantCalls: 1},
+		{name: "the provider call fails", status: open, pr: 42, statusErr: errors.New("status 502: Bad Gateway"), wantCalls: 1},
+		{name: "no PRStatus tracks the PR", status: open, pr: 99, wantCalls: 0},
+		{name: "already marked merged", status: v1alpha1.PRStatusStatus{Merged: true, MergeCommitSHA: "d7d4d8a"}, pr: 42,
+			wantMerged: true, wantCalls: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prs := &v1alpha1.PRStatus{
+				ObjectMeta: metav1.ObjectMeta{Name: "prstatus-bundle-1-prod", Namespace: "default"},
+				Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/owner/repo/pull/42", PRNumber: 42, Repo: "owner/repo"},
+				Status:     tc.status,
+			}
+			c := fake.NewClientBuilder().WithScheme(webhookScheme()).
+				WithObjects(prs).WithStatusSubresource(prs).Build()
+			mockSCM := &mockSCMProvider{event: scm.WebhookEvent{
+				EventType: "pull_request", Action: "closed", Merged: true,
+				PRNumber: tc.pr, RepoFullName: "owner/repo", MergeCommitSHA: "e7ddb9e",
+			}, notMerged: tc.notMerged, statusErr: tc.statusErr}
+			w := httptest.NewRecorder()
+			newWebhookServerWithConfig(mockSCM, c, zerolog.Nop(), true).Handler()(w,
+				httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader([]byte(`{}`))))
+			assert.Equal(t, http.StatusNoContent, w.Code)
+			assert.Equal(t, tc.wantCalls, mockSCM.statusCalls, "GetPRStatus calls")
+
+			var got v1alpha1.PRStatus
+			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
+			assert.Equal(t, tc.wantMerged, got.Status.Merged)
+			if !tc.wantMerged {
+				assert.Equal(t, tc.status, got.Status, "the status is left to polling")
+			}
+		})
+	}
+}
+
+// TestWebhook_MergeConfirmationIsBounded covers the B73 follow-up: the SCM
+// call that confirms a merge event runs under its own deadline, within the 10
+// seconds GitHub gives a delivery (mergeConfirmTimeout), not the handler's
+// 30-second context or the provider's 30-second HTTP timeout, which would
+// turn every slow confirmation into a failed delivery. An SCM that does not
+// answer in time gets the same treatment as a failed call: the event is
+// answered 204 and counted as received (eventsProcessed and mergedPREvents
+// count events, not confirmed merges), the PRStatus is left alone, and
+// polling records the merge.
+func TestWebhook_MergeConfirmationIsBounded(t *testing.T) {
+	open := v1alpha1.PRStatusStatus{Open: true}
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-bundle-1-prod", Namespace: "default"},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/owner/repo/pull/42", PRNumber: 42, Repo: "owner/repo"},
+		Status:     open,
+	}
+	c := fake.NewClientBuilder().WithScheme(webhookScheme()).WithObjects(prs).WithStatusSubresource(prs).Build()
+	mockSCM := &mockSCMProvider{event: scm.WebhookEvent{
+		EventType: "pull_request", Action: "closed", Merged: true, PRNumber: 42, RepoFullName: "owner/repo",
+	}, hang: true}
+	var logs bytes.Buffer
+	s := newWebhookServerWithConfig(mockSCM, c, zerolog.New(&logs), true)
+
+	w := httptest.NewRecorder()
+	before := time.Now()
+	s.Handler()(w, httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader([]byte(`{}`))))
+
+	assert.Equal(t, http.StatusNoContent, w.Code)
+	assert.Equal(t, 1, mockSCM.statusCalls, "GetPRStatus calls")
+	require.True(t, mockSCM.statusHasDeadline, "the confirmation call has no deadline of its own")
+	left := mockSCM.statusDeadline.Sub(before)
+	assert.Greater(t, left, time.Duration(0))
+	assert.LessOrEqual(t, left, 10*time.Second, "GitHub counts a delivery failed after 10 seconds")
+	assert.Equal(t, int64(1), s.eventsTotal.Load(), "the event is counted as received")
+	assert.Equal(t, int64(1), s.mergedPREventsTotal.Load(),
+		"mergedPREvents counts the merged-PR events received, confirmed or not")
+	assert.NotNil(t, webhookLogLine(t, &logs,
+		"could not confirm the merge event with the SCM provider; PRStatus not marked merged, polling will record the merge"))
+
+	var got v1alpha1.PRStatus
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
+	assert.Equal(t, open, got.Status, "the status is left to polling")
 }
 
 // TestWebhook_RejectsInvalidSignature verifies that a webhook with an invalid
@@ -286,6 +449,49 @@ func webhookMerged(t *testing.T, c client.Client, name, ns string) bool {
 	return p.Status.Merged
 }
 
+// prAPI serves the pull request API a real provider asks before the webhook
+// marks a merge (B73): GET of PR (merge request) pr answers with the state
+// provider reports for a merged PR, or for an open one when open is set. It
+// returns the API URL for scm.NewProvider.
+func prAPI(t *testing.T, provider string, pr int, open bool) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/"+strconv.Itoa(pr)) {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, prJSON(provider, open))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// prJSON is provider's pull request, merged or open, as its API returns it.
+func prJSON(provider string, open bool) string {
+	switch provider {
+	case "gitlab":
+		if open {
+			return `{"state":"opened"}`
+		}
+		return `{"state":"merged"}`
+	case "bitbucket":
+		if open {
+			return `{"state":"OPEN"}`
+		}
+		return `{"state":"MERGED"}`
+	case "azuredevops":
+		if open {
+			return `{"status":"active"}`
+		}
+		return `{"status":"completed"}`
+	}
+	if open {
+		return `{"state":"open","merged":false}`
+	}
+	return `{"state":"closed","merged":true}`
+}
+
 // TestWebhook_FailsClosed verifies that the SCM webhook uses the real GitHub
 // provider to reject forged merge events: with no secret configured every
 // request is rejected, and with a secret only a valid HMAC is accepted.
@@ -321,7 +527,7 @@ func TestWebhook_FailsClosed(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p, err := scm.NewProvider("github", "", "", tt.secret)
+			p, err := scm.NewProvider("github", "", prAPI(t, "github", 7, false), tt.secret)
 			require.NoError(t, err)
 			c := fake.NewClientBuilder().WithScheme(webhookScheme()).
 				WithObjects(webhookPRS("prs", "default", "org/app", 7), webhookPRS("placeholder", "default", "", 0)).
@@ -515,7 +721,7 @@ func TestWebhook_EventTypeFromHeader(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := scm.NewProvider(tc.provider, "", "", secret)
+			p, err := scm.NewProvider(tc.provider, "", prAPI(t, tc.provider, 5, false), secret)
 			require.NoError(t, err)
 			c := fake.NewClientBuilder().WithScheme(webhookScheme()).
 				WithObjects(webhookPRS("prs", "default", "o/r", 5)).
@@ -580,4 +786,102 @@ func TestWebhook_PRStatusDeletedBeforePatch(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, w.Code)
 	assert.NotContains(t, logs.String(), `"level":"error"`)
+}
+
+// webhookLogLine returns the JSON log line with message msg, or nil.
+func webhookLogLine(t *testing.T, logs *bytes.Buffer, msg string) map[string]any {
+	t.Helper()
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var l map[string]any
+		if json.Unmarshal([]byte(line), &l) == nil && l["message"] == msg {
+			return l
+		}
+	}
+	return nil
+}
+
+// TestWebhook_LogFields checks the webhook logs say where an event came from:
+// "webhook received" names the repo, "PRStatus marked merged via webhook" the
+// PRStatus namespace, and a refused event the header its signature was read
+// from (the one scm.WebhookSignature reads, "none" without one) and the remote
+// address, never the signature or token itself. The 401 stays a text error,
+// like the handler's other errors (B76).
+func TestWebhook_LogFields(t *testing.T) {
+	const secret = "s3cret"
+	const remote = "203.0.113.7:4711"
+	body := `{"action":"closed","number":5,"pull_request":{"number":5,"merged":true},"repository":{"full_name":"o/r"}}`
+
+	t.Run("accepted merge", func(t *testing.T) {
+		p, err := scm.NewProvider("github", "", prAPI(t, "github", 5, false), secret)
+		require.NoError(t, err)
+		c := fake.NewClientBuilder().WithScheme(webhookScheme()).
+			WithObjects(webhookPRS("prs", "team-a", "o/r", 5)).
+			WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+		var logs bytes.Buffer
+		req := httptest.NewRequest(http.MethodPost, "/webhook/scm", strings.NewReader(body))
+		req.Header.Set("X-GitHub-Event", "pull_request")
+		req.Header.Set("X-Hub-Signature-256", "sha256="+hmacHexOf(secret, body))
+		w := httptest.NewRecorder()
+		newWebhookServerWithConfig(p, c, zerolog.New(&logs), true).Handler()(w, req)
+		require.Equal(t, http.StatusNoContent, w.Code, logs.String())
+
+		received := webhookLogLine(t, &logs, "webhook received")
+		require.NotNil(t, received, logs.String())
+		assert.Equal(t, "o/r", received["repo"])
+		marked := webhookLogLine(t, &logs, "PRStatus marked merged via webhook")
+		require.NotNil(t, marked, logs.String())
+		assert.Equal(t, "prs", marked["prstatus"])
+		assert.Equal(t, "team-a", marked["namespace"])
+	})
+
+	tests := []struct {
+		name       string
+		provider   string
+		headers    map[string]string
+		wantHeader string
+	}{
+		{"github wrong signature", "github",
+			map[string]string{"X-Hub-Signature-256": "sha256=" + hmacHexOf("wrong-secret-value", body)}, "X-Hub-Signature-256"},
+		{"gitlab wrong token", "gitlab",
+			map[string]string{"X-Gitlab-Token": "wrong-secret-value"}, "X-Gitlab-Token"},
+		{"azure devops wrong token", "azuredevops",
+			map[string]string{"X-AzureDevOps-Token": "wrong-secret-value"}, "X-AzureDevOps-Token"},
+		{"gitea signature read from X-Hub-Signature-256 first", "gitea",
+			map[string]string{"X-Gitea-Signature": hmacHexOf("wrong-secret-value", body), "X-Hub-Signature-256": "sha256=" + hmacHexOf("wrong-secret-value", body)},
+			"X-Hub-Signature-256"},
+		{"unsigned", "forgejo", map[string]string{}, "none"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := scm.NewProvider(tc.provider, "", prAPI(t, tc.provider, 5, false), secret)
+			require.NoError(t, err)
+			c := fake.NewClientBuilder().WithScheme(webhookScheme()).
+				WithObjects(webhookPRS("prs", "team-a", "o/r", 5)).
+				WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+			var logs bytes.Buffer
+			req := httptest.NewRequest(http.MethodPost, "/webhook/scm", strings.NewReader(body))
+			req.RemoteAddr = remote
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			w := httptest.NewRecorder()
+			newWebhookServerWithConfig(p, c, zerolog.New(&logs), true).Handler()(w, req)
+
+			require.Equal(t, http.StatusUnauthorized, w.Code)
+			assert.Equal(t, "text/plain; charset=utf-8", w.Header().Get("Content-Type"), "the 401 is a text error like the others")
+			refused := webhookLogLine(t, &logs, "webhook signature invalid or parse error")
+			require.NotNil(t, refused, logs.String())
+			assert.Equal(t, tc.wantHeader, refused["signatureHeader"])
+			assert.Equal(t, remote, refused["remoteAddr"])
+			assert.NotContains(t, logs.String(), "wrong-secret-value", "a signature or token is never logged")
+			assert.NotContains(t, logs.String(), hmacHexOf("wrong-secret-value", body), "a signature is never logged")
+			assert.False(t, webhookMerged(t, c, "prs", "team-a"))
+		})
+	}
+}
+
+func hmacHexOf(key, body string) string {
+	m := hmac.New(sha256.New, []byte(key))
+	m.Write([]byte(body))
+	return hex.EncodeToString(m.Sum(nil))
 }
