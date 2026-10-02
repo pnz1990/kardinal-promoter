@@ -407,7 +407,7 @@ kubectl create secret generic github-token \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-A step that returns an error is retried with backoff (10s, 20s, 40s, 80s, then 2m) up to 5 times; `status.message` shows `retrying in <d> (<n>/5)`. Rotate the token within that window and the step continues. After the last retry the PromotionStep is Failed; create a new Bundle to promote again.
+A step that returns an error is retried with backoff (10s, 20s, 40s, 80s, then 2m) up to 5 times; `status.message` shows `retrying in <d> (<n>/5)` and `status.nextRetryAt` when the retry runs. The step waits for it even when something else reconciles it first, such as a gate re-evaluation or a PR status change. Rotate the token within that window and the step continues. After the last retry the PromotionStep is Failed; create a new Bundle to promote again.
 
 ### Symptom: "authentication required" with "git Secret ... not found" or "spec.git.secretRef is not set"
 

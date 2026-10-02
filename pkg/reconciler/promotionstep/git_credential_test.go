@@ -122,7 +122,7 @@ func TestGitCredentialMissing(t *testing.T) {
 			rec := events.NewFakeRecorder(50)
 			workDir := filepath.Join(t.TempDir(), "w")
 			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &authGit{failPush: tt.failPush},
-				Recorder: rec, WorkDirFn: func(_, _ string) string { return workDir }}
+				Recorder: rec, WorkDirFn: func(_, _ string) string { return workDir }, NowFn: pastBackoff()}
 
 			// Past the retry limit (5): the step still retries.
 			for i := 1; i <= 7; i++ {
@@ -207,7 +207,7 @@ func TestGitCredentialRetries_LeaveTheRetryLimit(t *testing.T) {
 			git := &authGit{failPush: true}
 			workDir := filepath.Join(t.TempDir(), "w")
 			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
-				Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir }}
+				Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir }, NowFn: pastBackoff()}
 
 			for range 8 {
 				reconcileStep(t, r, "step-cred")
@@ -257,7 +257,7 @@ func TestGitCredentialRetries_ResetOnProgress(t *testing.T) {
 	git := &authGit{} // the clone needs a token
 	workDir := filepath.Join(t.TempDir(), "w")
 	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
-		Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir }}
+		Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir }, NowFn: pastBackoff()}
 
 	git.cloneErr = errors.New("git clone https://github.com/test/repo: dial tcp: connection refused")
 	reconcileStep(t, r, "step-cred")
@@ -295,7 +295,7 @@ func TestGitCredentialRetries_BackOffTogether(t *testing.T) {
 	git := &authGit{failPush: true}
 	workDir := filepath.Join(t.TempDir(), "w")
 	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
-		Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir }}
+		Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir }, NowFn: pastBackoff()}
 
 	steps := []struct {
 		pushErr   error
@@ -350,7 +350,7 @@ func TestGitCredentialUnreadable_KeepsTheRetryLimit(t *testing.T) {
 			rec := events.NewFakeRecorder(50)
 			workDir := filepath.Join(t.TempDir(), "w")
 			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
-				Recorder: rec, WorkDirFn: func(_, _ string) string { return workDir }}
+				Recorder: rec, WorkDirFn: func(_, _ string) string { return workDir }, NowFn: pastBackoff()}
 
 			retries := 5
 			if otherErrorsFirst {
@@ -437,7 +437,8 @@ func TestGitCredentialPresent_KeepsTheRetryLimit(t *testing.T) {
 			}
 			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{},
 				GitClient: &mockGit{cloneErr: errors.New(cloneErr)},
-				Recorder:  rec, WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+				Recorder:  rec, WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") },
+				NowFn: pastBackoff()}
 
 			for range 6 {
 				reconcileStep(t, r, "step-cred")

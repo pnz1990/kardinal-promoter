@@ -36,7 +36,10 @@ same Pipeline, the older Bundle is **superseded**:
 
 - The older Bundle's status transitions to `Superseded`, which is final
 - Its unfinished PromotionSteps are failed, and a PR one of them opened that is still
-  open is closed with a comment
+  open is closed with a comment. If the SCM fails to close it or to delete its branch, the
+  step keeps its state and retries after 10s, 20s, 40s, 80s and 2m, with the
+  `SupersededCloseFailed` condition `True` and `status.nextRetryAt`; after the last retry it
+  fails, and its message says to close the PR (or delete its branch) by hand
 - Its Graph, PromotionSteps and PolicyGates are kept as history, but the Graph creates no
   new PromotionStep (a Graph built before this behaviour can still create one at the
   moment of supersession), and its PolicyGates are no longer evaluated: they keep the

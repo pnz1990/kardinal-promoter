@@ -137,7 +137,7 @@ func TestApprovalEditMidPromotion(t *testing.T) {
 			}
 			git := &pushRecorder{headGit: headGit{sha: newSHA}, pushErrs: tt.pushErrs}
 			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: git,
-				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }, NowFn: pastBackoff()}
 
 			reconcileStep(t, r, step.Name) // Pending → Promoting records the step list
 			reconcileStep(t, r, step.Name) // runs up to the failing step

@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -215,6 +216,8 @@ func TestSupersession(t *testing.T) {
 		name        string
 		state       string
 		retryCount  int
+		gitBackoff  bool // a git retry's nextRetryAt is still ahead
+		closing     bool // an earlier close failed (retryingClose)
 		prStatus    *v1alpha1.PRStatus
 		outputs     map[string]string
 		closeErrs   []error
@@ -224,6 +227,7 @@ func TestSupersession(t *testing.T) {
 		wantMsg     string
 		wantClosed  []string
 		wantAudit   []string
+		wantCond    bool // ConditionSupersededCloseFailed is True
 	}{
 		{name: "step never reconciled is failed without an audit", state: "",
 			wantState: "Failed", wantMsg: "superseded before this step started", wantAudit: []string{}},
@@ -249,12 +253,24 @@ func TestSupersession(t *testing.T) {
 		{name: "failed close is retried", state: "WaitingForMerge",
 			prStatus: openPRStatus("prs", "org/repo", 42), closeErrs: []error{errors.New("HTTP 502")},
 			wantState: "WaitingForMerge", wantRetry: 1, wantRequeue: 10 * time.Second,
-			wantMsg:    "closing its PR failed, retrying (1/5)",
-			wantClosed: []string{"org/repo#42"}, wantAudit: []string{}},
-		{name: "failed close after the retries fails the step", state: "WaitingForMerge", retryCount: 5,
+			wantMsg:    "closing its PR failed, retrying in 10s (1/5)",
+			wantClosed: []string{"org/repo#42"}, wantAudit: []string{}, wantCond: true},
+		{name: "failed close after the retries fails the step", state: "WaitingForMerge", retryCount: 5, closing: true,
 			prStatus: openPRStatus("prs", "org/repo", 42), closeErrs: []error{errors.New("HTTP 502")},
 			wantState: "Failed", wantMsg: "close it by hand",
+			wantClosed: []string{"org/repo#42"}, wantAudit: []string{"PromotionSuperseded"}, wantCond: true},
+		// B89: the guard does not wait for a git retry's nextRetryAt, and the
+		// git retries do not use up the close's.
+		{name: "a step superseded during a git retry's backoff is cancelled at once", state: "Promoting",
+			retryCount: 3, gitBackoff: true, prStatus: openPRStatus("prs", "org/repo", 42),
+			wantState: "Failed", wantMsg: "promotion cancelled",
 			wantClosed: []string{"org/repo#42"}, wantAudit: []string{"PromotionSuperseded"}},
+		{name: "the close gets its retries after git retries", state: "Promoting",
+			retryCount: 3, gitBackoff: true, prStatus: openPRStatus("prs", "org/repo", 42),
+			closeErrs: []error{errors.New("HTTP 502")},
+			wantState: "Promoting", wantRetry: 1, wantRequeue: 10 * time.Second,
+			wantMsg:    "closing its PR failed, retrying in 10s (1/5)",
+			wantClosed: []string{"org/repo#42"}, wantAudit: []string{}, wantCond: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -262,6 +278,13 @@ func TestSupersession(t *testing.T) {
 			ps.Status.State = tt.state
 			ps.Status.RetryCount = tt.retryCount
 			ps.Status.Outputs = tt.outputs
+			if tt.gitBackoff {
+				next := metav1.NewTime(time.Now().Add(time.Minute))
+				ps.Status.NextRetryAt = &next
+			}
+			if tt.closing {
+				retryingClose(ps)
+			}
 			bundle := makeBundle("b1", "p")
 			bundle.Status.Phase = "Superseded"
 			objs := []client.Object{ps, makePipeline("p"), bundle}
@@ -283,6 +306,10 @@ func TestSupersession(t *testing.T) {
 			assert.Contains(t, got.Status.Message, tt.wantMsg)
 			assert.Equal(t, tt.wantClosed, m.closed)
 			assert.Equal(t, tt.wantAudit, auditActions(t, c))
+			assert.Equal(t, tt.wantCond, meta.IsStatusConditionTrue(got.Status.Conditions, promotionstep.ConditionSupersededCloseFailed))
+			if tt.wantState == "Failed" {
+				assert.Nil(t, got.Status.NextRetryAt)
+			}
 
 			// Idempotent: a second reconcile changes nothing more.
 			if tt.wantState == "Failed" {
@@ -293,6 +320,15 @@ func TestSupersession(t *testing.T) {
 			}
 		})
 	}
+}
+
+// retryingClose marks ps as a superseded step whose PR close failed before,
+// so that its retryCount counts the close's retries.
+func retryingClose(ps *v1alpha1.PromotionStep) {
+	meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
+		Type: promotionstep.ConditionSupersededCloseFailed, Status: metav1.ConditionTrue,
+		Reason: "CloseFailed", Message: "HTTP 502",
+	})
 }
 
 // TestSupersession_CacheLagsOwnWrite proves that the supersession guard
