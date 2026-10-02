@@ -605,6 +605,8 @@ func main() {
 		logger.Warn().Err(err).Msg("failed to register version ConfigMap runnable")
 	}
 
+	// Nothing may run after Start returns: a leader has released its Lease by
+	// then (LeaderElectionReleaseOnCancel), and a standby may already lead.
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		logger.Fatal().Err(err).Msg("problem running manager")
 	}

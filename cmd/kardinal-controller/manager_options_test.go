@@ -60,6 +60,7 @@ func TestManagerOptions(t *testing.T) {
 	assert.Equal(t, ":8081", opts.HealthProbeBindAddress)
 	assert.True(t, opts.LeaderElection)
 	assert.Equal(t, "kardinal-promoter-leader", opts.LeaderElectionID)
+	assert.True(t, opts.LeaderElectionReleaseOnCancel, "a leader that shuts down releases its Lease")
 	assert.Equal(t, []string{"team-a"}, keys(opts.Cache.DefaultNamespaces))
 }
 
