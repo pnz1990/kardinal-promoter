@@ -15,7 +15,7 @@ This guide walks through migrating a Kargo-managed delivery pipeline to kardinal
 | `Promotion` | `PromotionStep` CRD | Created automatically by the Graph controller |
 | `VerifiedIn` / approval required | `approval: pr-review` on environment | PR approval required before HealthChecking |
 | `AnalysisTemplate` | `MetricCheck` CRD | A Prometheus query with a pass/fail threshold; Prometheus is the only provider |
-| `ClusterStage` | `Pipeline` with `namespace` per env | Multi-cluster through an Argo CD hub; `health.cluster` kubeconfig Secrets are not implemented |
+| Stage that updates an Argo CD Application in another cluster | Environment with `health.type: argocd` on that Application in the hub | Multi-cluster through an Argo CD or Flux hub; `health.cluster` kubeconfig Secrets are not supported |
 | `Project` | Kubernetes Namespace | RBAC isolation is namespace-scoped |
 | Argo Rollouts integration | `health.type: argoRollouts` on environment | Reads Rollout `.status.phase` |
 
@@ -244,9 +244,18 @@ spec:
 ### Step 6: Install kardinal and verify
 
 ```bash
-# Install kardinal
+# Install kro with the Graph feature gate (from a kardinal-promoter checkout)
+bash hack/install-kro.sh
+
+# Create the SCM token secret and install kardinal
+kubectl create namespace kardinal-system
+kubectl create secret generic github-token \
+  --namespace kardinal-system \
+  --from-literal=token=$GITHUB_PAT
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
-  --namespace kardinal-system --create-namespace
+  --namespace kardinal-system \
+  --create-namespace \
+  --set github.secretRef.name=github-token
 
 # Apply your Pipeline
 kubectl apply -f pipeline.yaml
@@ -276,27 +285,27 @@ helm uninstall kargo -n kargo
 |---|---|---|
 | Image watching | Warehouse `image` subscription | `Subscription` CRD with `type: image` |
 | Git watching | Warehouse `git` subscription | `Subscription` CRD with `type: git` |
-| Auto-promotion | `promotionTemplate` | `approval: auto` |
-| Manual approval | `Stage` with `promotionMechanisms.gitUpdateMechanisms` | `approval: pr-review` |
+| Auto-promotion | ProjectConfig `promotionPolicies[].autoPromotionEnabled` | `approval: auto` |
+| Manual approval | Promote by hand (any Stage without auto-promotion) | `approval: pr-review` |
 | Stage sequencing | `requestedFreight.sources.stages` | `dependsOn` |
 | Parallel stages (fan-out) | Multiple Stages with same upstream | Multiple environments with same `dependsOn` |
-| Argo Rollouts | `argoRollouts` promotion mechanism | `health.type: argoRollouts` |
+| Argo Rollouts | Verification with Argo Rollouts AnalysisTemplates | `health.type: argoRollouts` |
 | Metrics gates | `AnalysisTemplate` + `AnalysisRun` | `MetricCheck` CRD + `PolicyGate` CEL |
-| Time-based gates | Not built-in (requires AnalysisTemplate) | `PolicyGate` with `schedule.isWeekend` |
-| Pause/freeze | Manual Stage freeze | `kardinal pause my-app` |
+| Time-based gates | Promotion windows (Kargo Enterprise, v1.12+) | `PolicyGate` with `schedule.isWeekend` |
+| Pause/freeze | Turn off auto-promotion; freeze windows in Kargo Enterprise (v1.12+) | `kardinal pause my-app` |
 | Rollback | Manual re-promotion of older Freight | `kardinal rollback my-app --env prod` |
 | Evidence / audit | Promotion annotations | PR body with structured evidence + `kardinal history` |
-| DAG visualization | Kargo UI (separate install) | Built-in React UI (embedded in controller) |
-| Multi-cluster | `ClusterStage` + RBAC | Argo CD hub: `health.type: argocd` reads each Application in the hub (`health.cluster` kubeconfig Secrets are not implemented) |
+| DAG visualization | Kargo UI | Built-in React UI (embedded in the controller) |
+| Multi-cluster | Stages that update each cluster's Argo CD Application | Argo CD or Flux hub: `health.type: argocd` or `flux` reads each Application or Kustomization in the hub (`health.cluster` kubeconfig Secrets are not supported) |
 
 ---
 
 ## Common differences to be aware of
 
-**Bundle supersession:** When a new Bundle is created while an older one is still Promoting, kardinal supersedes the older Bundle (marks it `Superseded`). Kargo allows multiple in-flight Freights simultaneously. To maintain Kargo-like behavior, set `spec.maxConcurrentBundles: 2` on the Pipeline (near-term feature).
+**Bundle supersession:** When a new Bundle of the same type is created while an older one is still Promoting, kardinal supersedes the older Bundle (marks it `Superseded`). Kargo allows several Freight in flight at once. kardinal has no setting to turn supersession off; `spec.maxConcurrentPromotions` only caps how many Bundles promote at the same time.
 
 **Namespace model:** Kargo Projects map to Kubernetes Namespaces in both systems. In kardinal, the Pipeline, its Bundles and the Subscriptions that feed it live in the same namespace: a Subscription creates Bundles only in its own namespace, for a Pipeline there (a different `spec.namespace` sets the Subscription to phase `Error`).
 
-**GitOps repo structure:** kardinal's `kustomize` update strategy modifies `kustomization.yaml` files exactly like Kargo's git update mechanism. The `rendered-manifests` strategy (committing rendered YAML) has no direct Kargo equivalent.
+**GitOps repo structure:** kardinal's `kustomize` update strategy edits `kustomization.yaml` the way Kargo's `kustomize-set-image` step does. Promoting rendered manifests (`layout: branch`) is not implemented yet ([#1271](https://github.com/pnz1990/kardinal-promoter/issues/1271)); Kargo does it with its `kustomize-build` and `helm-template` steps.
 
-**Policy gates:** Kargo's AnalysisTemplates run inline during promotion. kardinal's PolicyGates are separate CRDs that evaluate independently and are wired into the Graph. This means gates are cluster-reusable and visible to all pipelines that reference the same PolicyGate namespace.
+**Policy gates:** Kargo's AnalysisTemplates run as verification after a promotion. kardinal's PolicyGates are separate CRDs that evaluate independently and are wired into the Graph. This means gates are cluster-reusable and visible to all pipelines that reference the same PolicyGate namespace.
