@@ -115,8 +115,11 @@ func assertPRStatusNodes(t *testing.T, a *app, bundle string, prod *v1alpha1.Pro
 	require.NoError(t, a.e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: "prstatus-" + bundle + "-test"}, &test))
 	assert.Zero(t, test.Spec.PRNumber, "an auto environment's PRStatus stays a placeholder")
 	assert.False(t, test.Status.Merged)
-	prs, err := a.e.PRStatusOf(ctx, prod)
-	require.NoError(t, err)
+	// open-pr writes the PRStatus spec and the step waits for the merge at
+	// once, so the PRStatus reconciler's first poll of the PR can come after
+	// the step reads WaitingForMerge (B88).
+	prs := a.e.WaitPRStatus(t, a.ns, pipelineName, bundle, "prod", 30*time.Second, "polled once",
+		func(p *v1alpha1.PRStatus) bool { return p.Status.LastCheckedAt != nil })
 	assert.Equal(t, pr.Number, prs.Spec.PRNumber)
 	assert.True(t, strings.HasSuffix(prs.Spec.PRURL, "/"+strconv.Itoa(pr.Number)), "prURL %s", prs.Spec.PRURL)
 	assert.True(t, prs.Status.Open && !prs.Status.Merged, framework.DescribePRStatus(prs))
