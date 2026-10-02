@@ -17,6 +17,8 @@ type PRStatusSpec struct {
 
 	// PRNumber is the pull request number (numeric ID within the repo).
 	// Set by the open-pr step after the PR is created. Zero in the placeholder.
+	// The PromotionStep sets it again when it opened another PR (a recreated
+	// step whose PR was closed): the spec always names the step's PR.
 	// +optional
 	PRNumber int `json:"prNumber,omitempty"`
 
@@ -31,7 +33,7 @@ type PRStatusSpec struct {
 // Written exclusively by the PRStatusReconciler.
 type PRStatusStatus struct {
 	// Merged is true when the pull request has been merged.
-	// The Graph Watch node uses this field: readyWhen: ${prStatus.status.merged == true}
+	// A PromotionStep in WaitingForMerge watches this field.
 	// +optional
 	Merged bool `json:"merged,omitempty"`
 
@@ -55,7 +57,9 @@ type PRStatusStatus struct {
 
 	// LastCheckedAt records when the status was last written from an SCM API
 	// poll. Polls that change nothing refresh it at most every 5 minutes, so it
-	// can lag the most recent poll by up to that much.
+	// can lag the most recent poll by up to that much: every status write
+	// queues the PRStatus again, so writing on each unchanged poll would make
+	// it poll in a loop.
 	// +optional
 	LastCheckedAt *metav1.Time `json:"lastCheckedAt,omitempty"`
 
@@ -65,6 +69,17 @@ type PRStatusStatus struct {
 	// tool deployed this exact revision.
 	// +optional
 	MergeCommitSHA string `json:"mergeCommitSHA,omitempty"`
+
+	// MergeCommitUnavailable is true once the PR is merged and the
+	// PRStatusReconciler stopped trying to learn mergeCommitSHA: the SCM
+	// provider cannot report merge commits, reported none for this PR,
+	// failed with an error a retry cannot fix (401, 403 that is not a rate
+	// limit, 404, 410), or still failed 5 minutes after the merge was
+	// recorded. Until then an
+	// argocd health check of the PromotionStep waits for the merge commit
+	// instead of checking the Bundle images only.
+	// +optional
+	MergeCommitUnavailable bool `json:"mergeCommitUnavailable,omitempty"`
 
 	// PollError is the SCM API error of the last poll when a retry cannot fix
 	// it: HTTP 401, 403 (not a rate limit), 404 or 410. The PromotionStep
@@ -88,6 +103,16 @@ type PRStatusStatus struct {
 	// an older release and counts as final too.
 	// +optional
 	ClosedFinal bool `json:"closedFinal,omitempty"`
+
+	// ObservedGeneration is the metadata.generation of the spec this status
+	// describes. The PromotionStep points the spec at another PR when a
+	// recreated step opened a new one; the PRStatus reconciler then clears
+	// the status of the old PR and polls the new one, and the PromotionStep
+	// does not act on a status whose observedGeneration is older than the
+	// spec. Zero on a status written by an older release: it is taken to
+	// describe the current spec.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -105,8 +130,8 @@ type PRStatusStatus struct {
 //
 // Architecture: PromotionStep open-pr step creates a PRStatus CR. The
 // PRStatusReconciler polls GitHub (or receives webhook events) and writes
-// status.merged. The Graph Watch node propagates when status.merged == true,
-// replacing the previous polling loop in handleWaitingForMerge.
+// status.merged. The PromotionStep watches status.merged, replacing the
+// previous polling loop in handleWaitingForMerge.
 //
 // Graph-purity: eliminates PS-4, SCM-2, ST-10, ST-11, BU-3, WH-1 from
 // docs/design/11-graph-purity-tech-debt.md.

@@ -30,16 +30,19 @@ type webhookDelivery struct {
 	headers    map[string]string
 	wantCode   int
 	wantMerged bool
+	// prOpen: the provider API reports the PR open, not merged.
+	prOpen bool
 }
 
 // deliver sends each delivery to a webhook server backed by the real
 // providerType provider, with PRStatus "prs" for repo#pr and "other" for the
-// same PR number in another repository.
+// same PR number in another repository. The provider asks prAPI whether the
+// PR is merged before the webhook marks it.
 func deliver(t *testing.T, providerType, repo, otherRepo string, pr int, deliveries []webhookDelivery) {
 	t.Helper()
 	for _, d := range deliveries {
 		t.Run(d.name, func(t *testing.T) {
-			p, err := scm.NewProvider(providerType, "token", "", d.secret)
+			p, err := scm.NewProvider(providerType, "token", prAPI(t, providerType, pr, d.prOpen), d.secret)
 			require.NoError(t, err)
 			c := fake.NewClientBuilder().WithScheme(webhookScheme()).
 				WithObjects(webhookPRS("prs", "default", repo, pr), webhookPRS("other", "default", otherRepo, pr)).
@@ -63,7 +66,8 @@ func deliver(t *testing.T, providerType, repo, otherRepo string, pr int, deliver
 // TestWebhook_BitbucketCloud sends Bitbucket Cloud webhook deliveries to the
 // controller's webhook endpoint: a "Pull request: Merged" delivery signed in
 // X-Hub-Signature with the webhook secret marks the PRStatus merged, a
-// declined PR does not, and a delivery with a wrong, missing or stale
+// declined PR does not, nor does a merged delivery for a PR the Bitbucket API
+// reports open, and a delivery with a wrong, missing or stale
 // signature, or to a controller without a webhook secret, is refused with 401.
 // Covers SCM-BB-04.
 func TestWebhook_BitbucketCloud(t *testing.T) {
@@ -97,6 +101,8 @@ func TestWebhook_BitbucketCloud(t *testing.T) {
 			wantCode: http.StatusNoContent, wantMerged: true},
 		{name: "declined", secret: secret, body: declined, headers: headers("pullrequest:rejected", sign(secret, declined)),
 			wantCode: http.StatusNoContent},
+		{name: "merged, but the API reports the PR open", secret: secret, body: merged,
+			headers: headers("pullrequest:fulfilled", sign(secret, merged)), prOpen: true, wantCode: http.StatusNoContent},
 		{name: "wrong secret", secret: secret, body: merged, headers: headers("pullrequest:fulfilled", sign("guess", merged)),
 			wantCode: http.StatusUnauthorized},
 		{name: "signature of another body", secret: secret, body: merged, headers: headers("pullrequest:fulfilled", sign(secret, declined)),
@@ -111,8 +117,9 @@ func TestWebhook_BitbucketCloud(t *testing.T) {
 // TestWebhook_AzureDevOps sends Azure DevOps service hook deliveries to the
 // controller's webhook endpoint: a "Pull request updated" delivery for a
 // completed PR with the webhook secret in X-AzureDevOps-Token marks the
-// PRStatus merged, an active or abandoned PR does not, and a delivery with a
-// wrong or missing token, or to a controller without a webhook secret, is
+// PRStatus merged, an active or abandoned PR does not, nor does a completed
+// delivery for a PR the Azure DevOps API reports active, and a delivery with
+// a wrong or missing token, or to a controller without a webhook secret, is
 // refused with 401. Covers SCM-ADO-04.
 func TestWebhook_AzureDevOps(t *testing.T) {
 	const secret = "ado-webhook-secret"
@@ -143,6 +150,8 @@ func TestWebhook_AzureDevOps(t *testing.T) {
 			wantCode: http.StatusNoContent},
 		{name: "abandoned", secret: secret, body: event("git.pullrequest.updated", "abandoned"), headers: headers(secret),
 			wantCode: http.StatusNoContent},
+		{name: "completed, but the API reports the PR active", secret: secret, body: completed, headers: headers(secret),
+			prOpen: true, wantCode: http.StatusNoContent},
 		{name: "wrong token", secret: secret, body: completed, headers: headers("ado-webhook-guess"),
 			wantCode: http.StatusUnauthorized},
 		{name: "no token", secret: secret, body: completed, headers: headers(""),

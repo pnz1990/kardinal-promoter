@@ -38,6 +38,7 @@ type GitLabProvider struct {
 
 	// WebhookSecret is the secret token for validating incoming GitLab webhook payloads.
 	// GitLab sends the token in the X-Gitlab-Token header (plaintext comparison).
+	// Empty refuses every event (ErrNoWebhookSecret).
 	WebhookSecret string
 
 	// circuit guards all outbound GitLab API calls.
@@ -206,11 +207,12 @@ func (g *GitLabProvider) ParseWebhookEvent(payload []byte, signature string) (We
 // X-Gitlab-Event header ("Push Hook", ...), names it when object_kind is
 // missing.
 func (g *GitLabProvider) parseWebhookEvent(payload []byte, signature, eventType string) (WebhookEvent, error) {
-	if g.WebhookSecret != "" {
-		// GitLab uses a plaintext token, not HMAC. Constant-time comparison prevents timing attacks.
-		if subtle.ConstantTimeCompare([]byte(signature), []byte(g.WebhookSecret)) != 1 {
-			return WebhookEvent{}, fmt.Errorf("webhook token mismatch")
-		}
+	if g.WebhookSecret == "" {
+		return WebhookEvent{}, ErrNoWebhookSecret
+	}
+	// GitLab uses a plaintext token, not HMAC. Constant-time comparison prevents timing attacks.
+	if subtle.ConstantTimeCompare([]byte(signature), []byte(g.WebhookSecret)) != 1 {
+		return WebhookEvent{}, fmt.Errorf("webhook token mismatch")
 	}
 
 	var raw struct {

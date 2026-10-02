@@ -90,6 +90,15 @@ After those 5 minutes the controller comments on the PR that it no longer tracks
 kubectl get prstatus -o custom-columns=NAME:.metadata.name,OPEN:.status.open,CLOSED_AT:.status.closedAt,FINAL:.status.closedFinal
 ```
 
+The PRStatus polls an open PR every 30 seconds, but `status.lastCheckedAt` is not the time of
+the last poll. A poll that finds nothing changed writes nothing, unless `lastCheckedAt` is 5
+minutes old; then it refreshes it. This is by design: every status write is an update event
+that queues the PRStatus again, so writing on every poll made it poll in a loop, and it would
+also add an API server write every 30 seconds for each open PR. A `lastCheckedAt` up to 5
+minutes old is normal for an open PR; once a PR is merged or final-closed it stops changing.
+With `logLevel: debug`, the controller logs `PR still open, requeueing` with `prstatus` and
+`namespace` at every poll of an open PR.
+
 **If the PR was merged but the step is still "WaitingForMerge"**: this can happen if the controller was down when the webhook arrived. On next controller restart, startup reconciliation automatically re-checks all in-flight PRs and advances any that were merged during downtime. You can also force a restart:
 
 ```bash
@@ -107,8 +116,16 @@ curl http://localhost:8083/webhook/scm/health
 `eventsProcessed` counts every signed event since the controller started, whatever its
 type (push, comment, pull request), so any test delivery from your SCM raises it.
 `mergedPREvents` counts only merged pull request (merge request) events, the only events
-that move a promotion. The `webhook received` log line names each event's type in
-`event_type`.
+that move a promotion, including those the SCM API did not confirm. The `webhook received`
+log line names each event's type in `event_type` and its repository in `repo`, and
+`PRStatus marked merged via webhook` names the PRStatus in `prstatus` and `namespace`.
+
+With a secret set, an event the controller refuses gets `401` with a plain-text body, like
+the endpoint's other errors, and the controller logs `webhook signature invalid or parse
+error` with `signatureHeader`, the header the signature was read from (`none` when the
+request had none, usually because the webhook in the SCM has no secret), and `remoteAddr`,
+the sender's address (the proxy's, when requests come through an ingress). The signature
+itself is not logged.
 
 `webhookConfigured: false` means the `--webhook-secret` flag is not set. The controller
 then answers every `POST /webhook/scm` with `401` (it does not accept unsigned events)
@@ -239,6 +256,10 @@ Common causes:
 - Webhook not configured in GitHub (Settings > Webhooks)
 - Webhook URL is not accessible from GitHub (firewall, private cluster)
 - Webhook secret mismatch (`X-Hub-Signature-256` validation failing)
+- The SCM API did not confirm the merge. The controller asks it before it marks a PR
+  merged, and logs `SCM provider reports the PR of the merge event not merged` or `could not
+  confirm the merge event with the SCM provider` with the `prstatus`, `namespace`, `repo` and
+  `pr`. The event changes nothing; the next poll, within 30 seconds, sees the merge.
 
 On controller restart, the controller lists all open PRs with the `kardinal` label and reconciles any that were merged during downtime. If the controller recently restarted, wait 30 seconds and check again.
 
@@ -574,8 +595,10 @@ Two finalizers can hold a delete, and the controller removes both itself while i
 **`kardinal.io/close-pr` on a PromotionStep.** A step that opens a promotion PR (its environment
 was `pr-review` when the step started) carries it while it is `Promoting` or `WaitingForMerge`,
 from before it opens the PR; an `auto` step never carries it. When the step is deleted, the controller asks the SCM whether
-the PR is still open, closes it with a comment if it is (a merged or closed PR is left alone), then
-removes the finalizer. What happens to the PR depends on what was deleted:
+the PR is still open, closes it with a comment if it is, and deletes its head branch
+(`kardinal/<bundle>/<env>`) so the closed PR cannot be merged later; a merged PR is left alone,
+and a closed one only loses its branch. The branch is kept when the step comes back and pushes it
+again at once (the PromotionStep alone, below). Then it removes the finalizer. What happens to the PR depends on what was deleted:
 
 - **The Bundle.** The PR is closed with the comment `kardinal closed this PR: bundle <bundle>
   was deleted. ...`.
@@ -583,7 +606,22 @@ removes the finalizer. What happens to the PR depends on what was deleted:
   <namespace> was deleted. ...`.
 - **The PromotionStep alone** (`kubectl delete promotionstep`). kro creates the step again, under
   the same name, once the old one is gone. The old PR is closed first (`kardinal closed this PR:
-  PromotionStep <name> was deleted. ...`), and the new step opens a new PR.
+  PromotionStep <name> was deleted. ...`), and the new step opens a new PR. The step's PRStatus
+  then names the new PR (`spec.prNumber`), and the old PR's status is cleared before the new PR
+  is polled (`status.observedGeneration` catches up with `metadata.generation`).
+  The old PR keeps its branch while the Bundle is `Promoting` or `Failed`, its Graph is still
+  there, and the new step pushes at once. The controller logs `kept the head branch of the
+  closed PR`. The new step pushes the same branch about a second later. Forgejo and Gitea close
+  every open PR of a deleted branch from a queue after the delete returns, so deleting the
+  branch closed the new PR too. The new step pushes at once when kro accepted the Graph, every
+  required gate of the step is ready, the Pipeline is not paused, the upstream steps are
+  `Verified`, and the controller supports the step's configuration. Otherwise the new step would
+  wait or not come, so the controller deletes the branch. On GitHub the closed old PR can still
+  be merged through the API while its branch is kept, with the same Bundle's change for the same
+  environment. The branch goes when the controller closes the new step's PR. If the new step ends
+  before it opens a PR (its Bundle is superseded, the step fails, or it is deleted after it
+  started and no step after it pushes at once), the controller deletes the branch then; **A
+  branch left with no PR** below lists when it stays.
 - **The Graph, while the Bundle is `Promoting`.** The PR stays open: the controller recreates the
   Graph, and the new step reuses the PR. The controller logs `left the PR of a step deleted with
   its Graph open` with the `env` and `prURL`.
@@ -591,7 +629,10 @@ removes the finalizer. What happens to the PR depends on what was deleted:
 If the SCM call keeps failing, the controller retries with backoff for about 5 minutes, then
 removes the finalizer anyway and logs the error `gave up closing the PR of a deleted
 PromotionStep; removing its finalizer` with the `env` and `prURL`: close that PR by hand, since
-merging it would change the environment with no PromotionStep tracking it. It also emits a
+merging it would change the environment with no PromotionStep tracking it. When the PR was closed
+but its branch could not be deleted, the error says `PR #<n> is closed, but deleting its branch
+kardinal/<bundle>/<env> failed` (for a step with no PR, `the step opened no PR, but deleting its
+branch kardinal/<bundle>/<env> failed`): delete that branch by hand. It also emits a
 `ClosePRFailed` Warning Event on the step, except in a namespace being deleted: the API server
 refuses new Events there, and the step is gone, so the controller log is the only record.
 
@@ -616,6 +657,24 @@ kubectl get promotionsteps -n <namespace> -l kardinal.io/bundle=<bundle>,kardina
 ```
 
 Close it by hand. The `left the PR of a step deleted with its Graph open` log line names it.
+If a new step for that Bundle and environment ends before it opens a PR, it deletes the branch
+(below), and the SCM closes such a PR with no comment from kardinal.
+
+**A branch left with no PR.** A step that opens a PR but ends before it opens one (it is
+superseded, fails, or is deleted) deletes its `kardinal/<bundle>/<environment>` branch, because
+`git-push` may have pushed it, or a deleted step may have kept it for this one. The branch can
+still be left in a few cases:
+
+- The Pipeline is gone, so nothing names the repository.
+- A gate stopped being ready, or the Pipeline was paused, in the second between the delete of a
+  step that kept the branch and kro creating the step again. The new step then waits in
+  `Pending`, and a `Pending` step holds no finalizer, so deleting it (or its Bundle) leaves the
+  branch.
+- The environment changed from `pr-review` to `auto` before that new step started.
+
+Such a branch has no open PR, and no PromotionStep for its Bundle and environment is
+`Promoting` or `WaitingForMerge` (use the `kubectl get promotionsteps` command above). It holds
+only that Bundle's change for that environment, so deleting it by hand changes nothing deployed.
 
 The step stays only while the controller is not running, for example after `helm uninstall`
 without deleting the Bundles first. The controller did not close its PR: close the PR by hand,

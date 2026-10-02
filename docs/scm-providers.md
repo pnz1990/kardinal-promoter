@@ -20,7 +20,11 @@ Webhooks only speed things up: without them, the controller still sees merges by
 Only a merged pull request (merge request) event moves a promotion. The controller reads
 the event type from `X-GitHub-Event`, `X-Forgejo-Event` or `X-Gitea-Event`, or from
 GitLab's `object_kind` (`X-Gitlab-Event` when that is missing), and logs and ignores
-other events such as pushes and comments.
+other events such as pushes and comments. A merge event is checked before it counts: the
+controller asks the SCM API once, with its token, whether the PR is merged. A merge event
+for a PR the API reports not merged, or one the controller cannot check because the API
+call failed, is answered with `204` and changes nothing; polling records the merge when
+there is one.
 
 Bitbucket Cloud and Azure DevOps are newer and less tested than GitHub and GitLab.
 On Bitbucket, PRs carry no `kardinal` or `kardinal/rollback` labels, so find rollback
@@ -55,8 +59,13 @@ export KARDINAL_SCM_PROVIDER=github
 
 | Scope | Purpose |
 |---|---|
-| `repo` | Create/close pull requests, post comments, read PR status |
+| `repo` | Create/close pull requests, post comments, read PR status, delete the head branch of a PR kardinal closed |
 | `write:repo_hook` | (Optional) Register webhooks programmatically |
+
+These are classic token scopes. With a fine-grained personal access token or a GitHub App
+token, deleting the head branch is a git refs call and needs the **Contents: read and write**
+repository permission, besides the pull request permissions kardinal already needs; without it
+every PR kardinal closes ends with its step asking you to delete the branch by hand.
 
 ### Webhook configuration
 
@@ -106,7 +115,7 @@ export KARDINAL_SCM_API_URL=https://gitlab.com  # or your self-managed URL
 
 | Scope | Purpose |
 |---|---|
-| `api` | Full API access — required for MR creation, comments, and label updates |
+| `api` | Full API access — required for MR creation, comments, label updates, and deleting the source branch of an MR kardinal closed |
 
 A **project access token** with `api` scope is recommended over a personal access token
 for production deployments.
@@ -192,10 +201,18 @@ export KARDINAL_SCM_API_URL=https://codeberg.org   # or your self-hosted Forgejo
 | Scope | Purpose |
 |---|---|
 | `write:issue` | Post comments on pull requests |
-| `write:repository` | Create and close pull requests, add labels |
+| `write:repository` | Create and close pull requests, add labels, delete the head branch of a PR kardinal closed |
 
 Create an API token in your Forgejo/Gitea instance under **Settings → Applications → Access Tokens**.
 The startup token check cannot see these scopes; see [Token check at startup](#token-check-at-startup).
+
+Deleting a branch on Forgejo and Gitea also closes every open pull request from it, from a queue,
+shortly after the delete call returns. kardinal deletes the head branch of a PR it closed. It keeps
+the branch of a PromotionStep deleted on its own while its Bundle is `Promoting` or `Failed`, its
+Graph is still there, and the new step pushes at once. kro creates that step again, and the new
+step opens its PR from the same branch name about a second later, so deleting the branch would
+close that PR too. When the new step would wait (a gate is not ready, the Pipeline is paused, or an
+upstream step is not `Verified`) or would not come, kardinal deletes the branch.
 
 ### Webhook configuration
 
@@ -232,7 +249,8 @@ kardinal-controller \
 ```
 
 Use a repository, project or workspace **access token** with pull request write
-access. The controller sends it as a Bearer token, so app passwords do not work.
+and repository write access (repository write deletes the head branch of a PR
+kardinal closed). The controller sends it as a Bearer token, so app passwords do not work.
 The repository is `workspace/repo`, taken from the Pipeline's `spec.git.url`.
 
 Webhook: in the repository go to **Repository settings → Webhooks → Add webhook**,

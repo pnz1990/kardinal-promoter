@@ -31,7 +31,7 @@ target (`spec.provenance.rollbackOf`).
 | `kardinal/promotion` | Always, rollbacks included | Promotion PR |
 | `kardinal/rollback` | On rollbacks | Added next to `kardinal/promotion` when the Bundle is a rollback (`spec.provenance.rollbackOf` is set) |
 
-If adding the labels fails, the PR stays open and the step message records the error. On Azure DevOps the labels are PR tags. Bitbucket Cloud has no PR labels, so its PRs get none; find rollback PRs there by their `[kardinal] Rollback` title.
+If adding the labels fails, the PR stays open without them: while the step waits for the merge, its message ends with `; adding labels failed: <error>`, and `status.outputs.prLabelsError` keeps the error. On Azure DevOps the labels are PR tags. Bitbucket Cloud has no PR labels, so its PRs get none; find rollback PRs there by their `[kardinal] Rollback` title.
 
 ### Body
 
@@ -136,10 +136,13 @@ kardinal-promoter detects PR merges in two ways:
 - **Polling**: the PRStatus reconciler checks each open PR every 30 seconds, so merges are
   picked up without webhooks and after a controller restart.
 
-Health checks compare the environment against the PR's merge commit. The GitHub and GitLab
-webhooks record it together with the merge. In every other case (other providers, no webhook,
-or a GitLab fast-forward merge, which reports none) the PRStatus reconciler asks the SCM API
-for it after the merge.
+The `argocd` and `flux` health checks compare the environment against the PR's merge commit.
+The GitHub and GitLab webhooks record it together with the merge. In every other case (other
+providers, no webhook, or a GitLab fast-forward merge, which reports none) the PRStatus
+reconciler asks the SCM API for it after the merge. Until it has the commit, both checks wait.
+If the PRStatus records that it will not get the commit, `argocd` checks the Bundle images
+instead, and `flux` waits until `health.timeout`; see
+[When the merge commit is not known yet](health-adapters.md#when-the-merge-commit-is-not-known-yet).
 
 ## Auto-Merge Environments
 

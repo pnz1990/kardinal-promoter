@@ -353,10 +353,17 @@ func TestStep_RetriesTransientGitErrors(t *testing.T) {
 //     branch, no PR is opened, and the step and the Bundle are Verified with
 //     the auto steps.
 //
+// Either way the Bundle in flight finishes: its Graph, rebuilt in place by the
+// edit, turns Ready, and the environment's gate is not evaluated after that
+// (B69: the auto step's PRStatus node waited for a merge, so GraphReady stayed
+// False and the gate was evaluated at every recheckInterval for good). Only
+// auto-to-pr-review catches B69: after pr-review-to-auto the environment is
+// auto, whose PRStatus node had no readyWhen before the fix either.
+//
 // The edit lands while git-clone retries, not open-pr: an SCM API fault would
 // need the controller's SCM endpoint, which every test of the suite shares.
 //
-// Covers STEP-APPROVAL-EDIT-01.
+// Covers STEP-APPROVAL-EDIT-01, STEP-APPROVAL-EDIT-02.
 func TestStep_ApprovalEditMidPromotion(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ name, from, to string }{
@@ -367,6 +374,7 @@ func TestStep_ApprovalEditMidPromotion(t *testing.T) {
 			t.Parallel()
 			e := framework.New(t)
 			a := newArgoApp(t, e, "test")
+			e.CreateGate(t, framework.Gate(a.ns, "open", "test", "true", recheck))
 			p := a.pipeline(map[string]string{"test": c.from})
 			resolve := a.unresolvedGit(t, p)
 			base := a.headSHA(t, a.repo.Branch)
@@ -397,8 +405,72 @@ func TestStep_ApprovalEditMidPromotion(t *testing.T) {
 				require.NoError(t, err)
 				assert.Empty(t, prs, "no PR is opened")
 			}
+			a.settled(t, bundle, "test", "open")
 		})
 	}
+}
+
+// TestStep_NoChangesPRReview promotes, through a pr-review environment, the
+// image the environment already runs. git-commit finds nothing to commit, so
+// git-push, open-pr and wait-for-merge do nothing (docs/pipeline-reference.md,
+// Promotion Steps): the step goes Promoting, HealthChecking, Verified, with
+// every pr-review step Completed, no PR and no commit. The Bundle is Verified,
+// its Graph turns Ready, and the environment's gate is not evaluated after
+// that (B69: the PRStatus node waited for a merge of a PR that was never
+// opened, so GraphReady stayed False and the gate was evaluated for good).
+//
+// Covers STEP-NOCHANGE-01.
+func TestStep_NoChangesPRReview(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	states := e.RecordStepStates(t, a.ns)
+	e.CreateGate(t, framework.Gate(a.ns, "open", "test", "true", recheck))
+	base := a.headSHA(t, a.repo.Branch)
+	a.apply(t, a.pipeline(map[string]string{"test": "pr-review"}))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV1)
+
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	checkStates(t, "test", states.States(bundle, "test"), "Promoting", "HealthChecking", "Verified")
+	checkSteps(t, ps, imageSteps("kustomize-set-image", true))
+	assert.Empty(t, ps.Status.PRURL, "status.prURL")
+	assert.Equal(t, "true", ps.Status.Outputs["noChanges"], "status.outputs.noChanges")
+	assert.Equal(t, base, a.headSHA(t, a.repo.Branch), "nothing is pushed to %s", a.repo.Branch)
+	prs, err := e.Git.PullRequests(ctx, a.repo)
+	require.NoError(t, err)
+	assert.Empty(t, prs, "no PR is opened")
+	a.running(t, "test", imageV1, "test after the promotion")
+	a.settled(t, bundle, "test", "open")
+}
+
+// settled checks that bundle finishes: it is Verified with GraphReady True,
+// and for 30 seconds the instance of gate for env is not evaluated after the
+// test saw both (docs/policy-gates.md, gates of finished Bundles). The gate's
+// recheckInterval is shorter than that. The reference is the time the test saw
+// both, not GraphReady's lastTransitionTime: GraphReady can turn True before
+// the phase is Verified, and the gate is still evaluated in between. An
+// evaluation that started before the Bundle settled may still land, and
+// lastEvaluatedAt has second precision, so 2 seconds of slack are allowed.
+func (a *app) settled(t *testing.T, bundle, env, gate string) {
+	t.Helper()
+	a.e.WaitBundle(t, a.ns, bundle, 2*time.Minute, "Verified with GraphReady True", func(b *v1alpha1.Bundle) (bool, string) {
+		ok, seen := framework.CondIs(b.Status.Conditions, "GraphReady", metav1.ConditionTrue, "")
+		return ok && b.Status.Phase == "Verified", fmt.Sprintf("phase=%s %s", b.Status.Phase, seen)
+	})
+	ready := time.Now()
+	framework.Consistently(t, 30*time.Second, "gate "+gate+" of "+bundle+" not evaluated after it settled", func(ctx context.Context) (bool, string) {
+		g, ok, err := a.e.GateInstance(ctx, a.ns, bundle, env, gate)
+		switch {
+		case err != nil:
+			return false, err.Error()
+		case !ok || g.Status.LastEvaluatedAt == nil:
+			return false, fmt.Sprintf("gate %s of %s not evaluated", gate, bundle)
+		}
+		at := g.Status.LastEvaluatedAt.Time
+		return !at.After(ready.Add(2 * time.Second)),
+			fmt.Sprintf("gate %s evaluated at %s, settled since %s", g.Name, at.Format(time.RFC3339), ready.Format(time.RFC3339))
+	})
 }
 
 // unresolvedGit points p's git.url at git-proxy.<ns>.svc.cluster.local, a host

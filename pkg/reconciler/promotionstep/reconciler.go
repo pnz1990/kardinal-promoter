@@ -128,7 +128,7 @@ type Reconciler struct {
 	// deleted step is read through it before its PR is closed, because the
 	// informer cache can lag the finalizer removal of the previous reconcile
 	// (handleDeleted), and so are the Bundle, namespace, Pipeline and Graph
-	// that tell whether the step comes back (stepRecreated). The supersession
+	// that tell whether the step comes back (stepComeback). The supersession
 	// guard reads a step through it too, before cancelling it (supersededStep).
 	// When nil, Client is used (tests).
 	APIReader client.Reader
@@ -350,7 +350,7 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 	if unstarted {
 		msg = fmt.Sprintf("bundle %s was superseded before this step started", ps.Spec.BundleName)
 	}
-	if closeErr := r.closeStepPR(ctx, ps, "bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle"); closeErr != nil {
+	if closeErr := r.closeStepPR(ctx, ps, "bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle", false); closeErr != nil {
 		if ps.Status.RetryCount < maxStepRetries {
 			ps.Status.RetryCount++
 			ps.Status.Message = fmt.Sprintf("bundle %s was superseded; closing its PR failed, retrying (%d/%d): %v",
@@ -360,7 +360,7 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 			}
 			return ctrl.Result{RequeueAfter: retryDelay(ps.Status.RetryCount)}, nil
 		}
-		msg += fmt.Sprintf("; closing its PR failed after %d retries (%v) — close it by hand", maxStepRetries, closeErr)
+		msg += fmt.Sprintf("; closing its PR failed after %d retries (%v) — %s", maxStepRetries, closeErr, closeByHand(closeErr))
 	}
 	if unstarted {
 		return ctrl.Result{}, r.cancelUnstarted(ctx, base, ps, msg)
@@ -373,9 +373,12 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 
 // closeStepPR closes the PR this step opened, if it is still open, and leaves
 // a comment with reason. The PR is found through the PRStatus spec, falling
-// back to the step outputs when the PRStatus is gone or was never filled in (a
-// crash between opening the PR and patching the PRStatus). A step that never
-// opened a PR returns nil.
+// back to the step outputs when the PRStatus is gone, was never filled in (a
+// crash between opening the PR and patching the PRStatus), or still names or
+// reports the PR from before the step was recreated (prStatusOfStepPR). A
+// step that never opened a PR has its head branch deleted, unless keepBranch
+// (deleteBranchWithoutPR): git-push may have pushed it, or an earlier step may
+// have left it for this one.
 //
 // The SCM is asked first whether the PR is still open: the PRStatus can lag
 // (it is polled), or be gone with its Graph. A PR that is merged or closed
@@ -386,19 +389,31 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 // without asking, since a merge is final; a closed PR can be reopened, so a
 // PRStatus that says closed is checked like an open one. The PR is closed
 // before it is commented on, so a restart in between leaves no comment rather
-// than two. Only the status read and the close can fail; the comment is
-// best-effort.
-func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string) error {
+// than two.
+//
+// Once the PR is closed and not merged, its head branch is deleted
+// (deletePRBranch): GitHub merges a closed PR through the API, and does not
+// once the branch is gone. A PR found closed (an earlier attempt closed it
+// and then failed or crashed before the delete, or a human closed it) gets
+// the delete too, so a retry finishes the job; a merged PR keeps its branch.
+// With keepBranch the branch is kept: a deleted step that kro applies again
+// pushes it again at once, and deleting it closed the new step's PR on
+// Forgejo and Gitea (handleDeleted, B79). The status read, the close and the
+// delete can fail; the comment is best-effort.
+func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) error {
 	repo, num := "", 0
 	if ps.Spec.PRStatusRef != "" {
 		var prs v1alpha1.PRStatus
 		err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs)
 		switch {
-		case err == nil:
+		case err == nil && prStatusOfStepPR(&prs, ps.Status.Outputs):
 			if prs.Status.Merged {
 				return nil // a merge is final: nothing to close
 			}
 			repo, num = prs.Spec.Repo, prs.Spec.PRNumber
+		case err == nil:
+			// The PRStatus still names, or reports, the PR from before the
+			// step was recreated (B72): close the step's own PR, below.
 		case !apierrors.IsNotFound(err):
 			return fmt.Errorf("get prstatus %s: %w", ps.Spec.PRStatusRef, err)
 		}
@@ -416,7 +431,12 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		repo = extractRepo(prURL)
 	}
 	if num <= 0 {
-		return nil
+		if keepBranch {
+			zerolog.Ctx(ctx).Info().Str("step", ps.Name).Str("branch", prHeadBranch(ps)).
+				Msg("kept the head branch of a step that opened no PR: the step comes back and pushes it again")
+			return nil
+		}
+		return r.deleteBranchWithoutPR(ctx, ps)
 	}
 	if r.SCM == nil {
 		return fmt.Errorf("no SCM provider configured to close PR #%d", num)
@@ -429,7 +449,10 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 	if !open {
 		log.Info().Int("pr", num).Str("step", ps.Name).Bool("merged", merged).
 			Msg("PR of cancelled step is no longer open; not closing it")
-		return nil
+		if merged {
+			return nil
+		}
+		return r.closedPRBranch(ctx, ps, repo, num, keepBranch)
 	}
 	if err := r.SCM.ClosePR(ctx, repo, num); err != nil {
 		return fmt.Errorf("close PR #%d: %w", num, err)
@@ -440,7 +463,18 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 	if err := r.SCM.CommentOnPR(ctx, repo, num, body); err != nil {
 		log.Warn().Err(err).Int("pr", num).Msg("could not comment on the closed PR (non-fatal)")
 	}
-	return nil
+	return r.closedPRBranch(ctx, ps, repo, num, keepBranch)
+}
+
+// withLabelsError appends the error of open-pr's failed attempt to label the
+// PR (steps.OutputPRLabelsError) to a WaitingForMerge message. The wait-for-
+// merge message replaces open-pr's, which carried it, so without this the
+// step message never said the PR has no labels (docs/pr-evidence.md).
+func withLabelsError(msg string, outputs map[string]string) string {
+	if e := outputs[steps.OutputPRLabelsError]; e != "" {
+		return msg + "; adding labels failed: " + e
+	}
+	return msg
 }
 
 // retryDelay is the backoff before retry n (1-based) of a transient failure.
@@ -563,7 +597,10 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// from the live Pipeline: an approval edit made while the step runs would
 	// otherwise move the current index into another sequence (skipping open-pr,
 	// or opening a PR the finalizer was not added for). The edit applies from
-	// the next Bundle.
+	// the next Bundle. The in-place Graph rebuild that follows the edit does
+	// not wait on a PR either: the PRStatus node has no readyWhen, so this
+	// environment's nodes are ready once this step is Verified, with or
+	// without a PR (B69).
 	seq := recordedSequence(ps)
 	if len(seq) == 0 {
 		// A step is Promoting with no step list only if its status was edited
@@ -644,7 +681,8 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if prURL := state.Outputs["prURL"]; prURL != "" {
 			// The open-pr step (or similar) has opened a PR and is waiting for merge.
 			// Transition to WaitingForMerge so the PRStatusReconciler can take over.
-			if _, err := r.transitionClosing(ctx, base, ps, StateWaitingForMerge, result.Message, "", closed); err != nil {
+			if _, err := r.transitionClosing(ctx, base, ps, StateWaitingForMerge,
+				withLabelsError(result.Message, state.Outputs), "", closed); err != nil {
 				return ctrl.Result{}, err
 			}
 			// Fill in the PRStatus spec so the PRStatusReconciler can poll it.
@@ -796,8 +834,8 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 	}
 	log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
 	closed = append(closed, updateStepStatuses(ps, stepNames, idx, true, msg, timings)...)
-	if closeErr := r.closeStepPR(ctx, ps, "the promotion failed: "+msg); closeErr != nil {
-		msg += fmt.Sprintf("; closing the PR it opened failed (%v) — close it by hand", closeErr)
+	if closeErr := r.closeStepPR(ctx, ps, "the promotion failed: "+msg, false); closeErr != nil {
+		msg += fmt.Sprintf("; closing the PR it opened failed (%v) — %s", closeErr, closeByHand(closeErr))
 	}
 	if _, err := r.transitionClosing(ctx, base, ps, StateFailed, msg, "", closed); err != nil {
 		return ctrl.Result{}, err
@@ -883,8 +921,8 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 				msg := fmt.Sprintf("wait-for-merge timeout after %s: PR was not merged within the configured deadline", d)
 				// Close the PR so a late merge cannot deliver a change whose
 				// step already failed (C03-promotionstep-22).
-				if closeErr := r.closeStepPR(ctx, ps, fmt.Sprintf("it was not merged within waitForMergeTimeout (%s)", d)); closeErr != nil {
-					msg += fmt.Sprintf("; closing the PR failed (%v) — close it by hand", closeErr)
+				if closeErr := r.closeStepPR(ctx, ps, fmt.Sprintf("it was not merged within waitForMergeTimeout (%s)", d), false); closeErr != nil {
+					msg += fmt.Sprintf("; closing the PR failed (%v) — %s", closeErr, closeByHand(closeErr))
 				}
 				ps.Status.WaitForMergeExpiry = nil
 				return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
@@ -912,8 +950,10 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 
 	// The spec patch in handlePromoting is best-effort; until it lands the
 	// PRStatusReconciler has no PR to poll and the step would wait forever
-	// (C03-promotionstep-07).
-	if prs.Spec.PRNumber == 0 && ps.Status.Outputs["prURL"] != "" {
+	// (C03-promotionstep-07). A spec that names another PR, from before the
+	// step was recreated, is patched too, and the status the PRStatus
+	// reconciler wrote for that PR is not read: it polled a closed PR (B72).
+	if !prStatusOfStepPR(&prs, ps.Status.Outputs) {
 		if prErr := r.patchPRStatusSpec(ctx, ps, ps.Status.Outputs); prErr != nil {
 			log.Warn().Err(prErr).Msg("failed to patch PRStatus spec, will retry")
 		}
@@ -991,7 +1031,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	case prstatus.IsClosed(&prs.Status):
 		msg = closedMsg
 	case msg == closedMsg:
-		msg = fmt.Sprintf("PR #%d is open, waiting for merge", prs.Spec.PRNumber)
+		msg = withLabelsError(fmt.Sprintf("PR #%d is open, waiting for merge", prs.Spec.PRNumber), ps.Status.Outputs)
 	}
 	if msg != ps.Status.Message {
 		ps.Status.Message = msg
@@ -1012,7 +1052,9 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 // ref nodes (C03-promotionstep-04, -19). The expected revision is the pushed
 // or merged commit (expectedRevision) and the expected images are the Bundle
 // images (C03-promotionstep-11, E2E-01). A flux check of a pr-review step
-// that opened a PR is Progressing until the merge commit is known (#1307).
+// that opened a PR is Progressing until the merge commit is known (#1307),
+// and an argocd one until it is known or the PRStatus records that it will
+// not be (status.mergeCommitUnavailable, B80).
 //
 // health.timeout bounds the time until the first Healthy result. Reaching it
 // is a health failure: it counts in status.consecutiveHealthFailures and
@@ -1097,7 +1139,8 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 
 	opts := health.OptionsForEnv(pipeline.Name, env)
 	opts.Timeout = timeout
-	opts.ExpectedRevision = r.expectedRevision(ctx, ps)
+	var mergeCommitPending bool
+	opts.ExpectedRevision, mergeCommitPending = r.expectedRevision(ctx, log, ps)
 	recordMergeCommit(ps, opts.ExpectedRevision)
 	for _, img := range bundle.Spec.Images {
 		opts.ExpectedImages = append(opts.ExpectedImages,
@@ -1114,20 +1157,31 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, err.Error())
 	}
 
+	// With no changes there is no PR and no merge commit, and the previous
+	// commit already is the target. Whether there is a PR follows from the
+	// recorded sequence, not the live approval: a step that pushed straight
+	// to the base branch has no merge commit to wait for.
+	noMergeCommit := opts.ExpectedRevision == "" && opensPR(ps) && ps.Status.Outputs["noChanges"] != "true"
 	var result health.HealthStatus
 	var checkErr error
-	if adapter.Name() == "flux" && opensPR(ps) && opts.ExpectedRevision == "" &&
-		ps.Status.Outputs["noChanges"] != "true" {
+	switch {
+	case noMergeCommit && adapter.Name() == "flux":
 		// The flux adapter has no image check to fall back on: without the
 		// merge commit, a Kustomization Ready on the previous commit would
-		// pass. Wait for it; health.timeout ends the wait (#1307). With no
-		// changes there is no PR and no merge commit, and the previous
-		// commit already is the target. Whether there is a PR follows from
-		// the recorded sequence, not the live approval: a step that pushed
-		// straight to the base branch has no merge commit to wait for.
+		// pass. Wait for it; health.timeout ends the wait (#1307).
 		result = health.HealthStatus{Progressing: true,
 			Reason: "merge commit of the PR not known yet (needed to check lastAppliedRevision)"}
-	} else {
+	case noMergeCommit && mergeCommitPending && adapter.Name() == "argocd":
+		// The argocd adapter falls back to status.summary.images without a
+		// commit, which does not show that Argo CD synced the merge. A
+		// webhook can mark the PR merged before the merge commit is known
+		// (B80), so wait while the PRStatus can still record it; it sets
+		// status.mergeCommitUnavailable when it stops trying, and the images
+		// decide from then on. health.timeout ends the wait. The resource,
+		// argoRollouts and flagger adapters check images only and do not wait.
+		result = health.HealthStatus{Progressing: true,
+			Reason: "merge commit of the PR not known yet (needed to check the synced revision)"}
+	default:
 		result, checkErr = adapter.Check(ctx, opts)
 	}
 	if checkErr != nil {
@@ -1183,25 +1237,43 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 // deployed: the commit pushed straight to the tracked branch, or the PR merge
 // commit. "" means it is not known, and the adapters fall back to checking
 // the Bundle images.
-func (r *Reconciler) expectedRevision(ctx context.Context, ps *v1alpha1.PromotionStep) string {
+//
+// pending reports that the revision is not known yet but may still be: the
+// PRStatus is merged with neither status.mergeCommitSHA nor
+// status.mergeCommitUnavailable set, so the PRStatusReconciler is still
+// asking the SCM provider. A PRStatus that cannot be read (other than not
+// found) counts as pending too, so a cache error never turns into an image
+// fallback. A deleted PRStatus records nothing more, and neither does one
+// that does not describe the step's PR (B72): the step leaves WaitingForMerge
+// only once its PRStatus does, and only Promoting and WaitingForMerge point
+// the spec at the step's PR, so such a PRStatus was deleted and recreated
+// (kro recreates it as a placeholder) or edited by hand.
+func (r *Reconciler) expectedRevision(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (rev string, pending bool) {
 	if sha := ps.Status.Outputs["commitSHA"]; sha != "" {
-		return sha
+		return sha, false
 	}
 	if sha := ps.Status.Outputs["mergeCommitSHA"]; sha != "" {
-		return sha
+		return sha, false
 	}
 	if ps.Spec.PRStatusRef == "" {
-		return ""
+		return "", false
 	}
 	// The PRStatusReconciler may record the merge commit shortly after the merge.
 	var prs v1alpha1.PRStatus
 	if err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs); err != nil {
-		return ""
+		if apierrors.IsNotFound(err) {
+			return "", false
+		}
+		log.Warn().Err(err).Str("prStatusRef", ps.Spec.PRStatusRef).Msg("could not read the PRStatus for the merge commit")
+		return "", true
 	}
-	if prs.Status.Merged {
-		return prs.Status.MergeCommitSHA
+	if !prStatusOfStepPR(&prs, ps.Status.Outputs) || !prs.Status.Merged {
+		return "", false
 	}
-	return ""
+	if prs.Status.MergeCommitSHA != "" {
+		return prs.Status.MergeCommitSHA, false
+	}
+	return "", !prs.Status.MergeCommitUnavailable
 }
 
 // recordMergeCommit sets status.outputs.mergeCommitSHA to rev, the revision
@@ -1597,9 +1669,12 @@ func (r *Reconciler) policyGateMapper(ctx context.Context, obj client.Object) []
 	return reqs
 }
 
-// patchPRStatusSpec updates the spec of the companion PRStatus CRD with PR data
-// from the open-pr step outputs. This is idempotent: if the PRStatus already has
-// a PR number set, it is a no-op.
+// patchPRStatusSpec points the spec of the companion PRStatus at the PR in the
+// open-pr step outputs. It patches only when the spec names another PR (or
+// none): a step recreated after its PR was closed opens a new PR, and a spec
+// left on the old one polled that closed PR, failed the step after the grace
+// window and left the new PR open with nothing tracking it (B72). The PRStatus
+// reconciler then clears the old PR's status (prstatus.DescribesSpec).
 func (r *Reconciler) patchPRStatusSpec(ctx context.Context, ps *v1alpha1.PromotionStep, outputs map[string]string) error {
 	var prs v1alpha1.PRStatus
 	if err := r.Get(ctx, types.NamespacedName{
@@ -1608,38 +1683,48 @@ func (r *Reconciler) patchPRStatusSpec(ctx context.Context, ps *v1alpha1.Promoti
 	}, &prs); err != nil {
 		return fmt.Errorf("get prstatus %s: %w", ps.Spec.PRStatusRef, err)
 	}
-
-	// Idempotent: already has PR data — skip.
-	if prs.Spec.PRNumber > 0 {
+	want, ok := prSpecFromOutputs(outputs)
+	if !ok || specNamesPR(prs.Spec, want) {
 		return nil
 	}
-
-	prURL := outputs["prURL"]
-	prNumStr := outputs["prNumber"]
-	if prURL == "" {
-		return nil
-	}
-
-	prNum := 0
-	if prNumStr != "" {
-		if n, err := strconv.Atoi(prNumStr); err == nil {
-			prNum = n
-		}
-	}
-	if prNum == 0 {
-		prNum = extractPRNumber(prURL)
-	}
-	repo := extractRepo(prURL)
-
 	patch := client.MergeFrom(prs.DeepCopy())
-	prs.Spec.PRURL = prURL
-	prs.Spec.PRNumber = prNum
-	prs.Spec.Repo = repo
-
+	prs.Spec = want
 	if err := r.Patch(ctx, &prs, patch); err != nil {
 		return fmt.Errorf("patch prstatus spec %s: %w", ps.Spec.PRStatusRef, err)
 	}
 	return nil
+}
+
+// prSpecFromOutputs is the PRStatus spec for the PR in the open-pr outputs,
+// and false when they have no PR.
+func prSpecFromOutputs(outputs map[string]string) (v1alpha1.PRStatusSpec, bool) {
+	prURL := outputs["prURL"]
+	if prURL == "" {
+		return v1alpha1.PRStatusSpec{}, false
+	}
+	prNum, err := strconv.Atoi(outputs["prNumber"])
+	if err != nil || prNum == 0 {
+		prNum = extractPRNumber(prURL)
+	}
+	return v1alpha1.PRStatusSpec{PRURL: prURL, PRNumber: prNum, Repo: extractRepo(prURL)}, true
+}
+
+// specNamesPR reports whether spec names the PR of want: the same number and
+// URL. A spec without a URL, which patchPRStatusSpec never writes, is matched
+// on the number.
+func specNamesPR(spec, want v1alpha1.PRStatusSpec) bool {
+	return spec.PRNumber == want.PRNumber && (spec.PRURL == "" || spec.PRURL == want.PRURL)
+}
+
+// prStatusOfStepPR reports whether the PRStatus spec names the PR the step
+// opened (the open-pr outputs), and its status describes that spec. Before
+// patchPRStatusSpec lands after a recreated step opened a new PR, and until
+// the PRStatus reconciler cleared the old PR's status, the PRStatus still
+// reports the old PR. A step whose outputs have no PR takes the PRStatus as
+// it is.
+func prStatusOfStepPR(prs *v1alpha1.PRStatus, outputs map[string]string) bool {
+	want, ok := prSpecFromOutputs(outputs)
+	return (!ok || specNamesPR(prs.Spec, want)) && prstatus.DescribesSpec(prs)
 }
 
 // --- helpers ---

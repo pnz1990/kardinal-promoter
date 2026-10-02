@@ -96,7 +96,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
 | `wave` | No | 0 (sequential) | Assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. A wave depends on every environment of the next lower wave, and on the environment without a wave listed before it. Gaps in the numbers are allowed. Composable with `dependsOn`. See [Wave Topology](#wave-topology-k-06). |
 | `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches a configurable path in `values.yaml`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). |
-| `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. |
+| `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
 | `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. |
 | `health.timeout` | No | `10m` | Maximum time from the start of health checking to the first healthy check, and from the moment a `bake` window stops to the next healthy check. When it expires, it counts as a health failure and applies `onHealthFailure`. It does not cut a running `bake` window short. |
@@ -106,7 +106,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `shard` | No | (must be empty) | **Deprecated, not supported.** Distributed mode was removed. A non-empty value sets the Pipeline `Ready=False`, `kardinal validate` fails, and a PromotionStep left over from distributed mode fails with `shard is not supported`. Remove it; the controller reconciles every environment. See [Multi-Cluster](distributed-mode.md). |
 | `steps` | No | (none) | **Deprecated, not supported.** kardinal has no custom step engine: the controller always runs the sequence it infers from the Bundle type, `update.strategy`, `approval` and `layout`. The API server rejects a Pipeline that sets `steps` (an empty list is accepted). See [Promotion Steps](#promotion-steps). |
 | `promotionTemplate` | No | (none) | **Deprecated, not supported.** The `PromotionTemplate` CRD was removed. The API server rejects a Pipeline that sets `promotionTemplate`. |
-| `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR, so a late merge cannot deliver the change. Unset or `0` waits forever. |
+| `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR and deletes its head branch (`kardinal/<bundle>/<env>`), so a late merge cannot deliver the change: GitHub's API merges a closed PR whose branch is still there. Unset or `0` waits forever. |
 | `stepTimeoutSeconds` | No | (none) | Maximum seconds one built-in step (`git-clone`, `kustomize-set-image`, `open-pr`, ...) may run. The step is cancelled and the error is handled like any other step error: a retryable error is retried with backoff, then the PromotionStep is marked `Failed`. Minimum 1. Unset means no per-step timeout. |
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A check that is not healthy stops the window; it starts again at the next healthy check, and `health.timeout` bounds the wait for it. A Waiting check (the workload is changing, such as a canary paused at a step) is not an alarm under either policy. |
 | `bake.policy` | No | `reset-on-alarm` | What to do when a check is unhealthy during the bake window. `reset-on-alarm`: stop the window, increment `status.bakeResets`, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. A release that keeps flapping between healthy and unhealthy never fails under `reset-on-alarm`; `fail-on-alarm` bounds it. |
@@ -273,7 +273,8 @@ See [Rendered Manifests](rendered-manifests.md) for the planned design.
 Every environment runs a fixed step sequence. The controller picks it from the Bundle type,
 `update.strategy`, `approval` and `layout` (`pkg/steps/defaults.go`) when the environment's step
 starts, records it in the step's `status.steps`, and runs that list to the end: an `approval`
-edit made while the step runs applies from the next Bundle.
+edit made while the step runs applies from the next Bundle. The Bundle in flight still
+finishes, and its Graph turns Ready once its steps are Verified and its gates pass, with or without a PR.
 
 | Case | Steps |
 |---|---|
@@ -283,8 +284,10 @@ edit made while the step runs applies from the next Bundle.
 | Mixed Bundle | `git-clone`, `config-merge`, then the image Bundle's update step (`kustomize-set-image` or `helm-set-image`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | `update.strategy: argocd` | `argocd-set-image`, `health-check` |
 
-`open-pr` and `wait-for-merge` run only with `approval: pr-review`. `layout: branch` is not
-implemented and fails at `git-clone`. [Architecture: Steps Engine](architecture.md#steps-engine-pkgsteps)
+`open-pr` and `wait-for-merge` run only with `approval: pr-review`. When the files in git
+already have the Bundle's change, `git-commit` finds nothing to commit: `git-push`, `open-pr`
+and `wait-for-merge` then do nothing, no PR is opened, and the step goes on to the health check.
+`layout: branch` is not implemented and fails at `git-clone`. [Architecture: Steps Engine](architecture.md#steps-engine-pkgsteps)
 describes each step.
 
 kardinal has no custom step engine. `spec.environments[].steps` and

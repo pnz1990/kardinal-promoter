@@ -491,12 +491,6 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
 	skipGates map[string][]skipPermissionGate) []GraphNode {
-	// Build env spec map for quick lookup
-	envSpecMap := make(map[string]kardinalv1alpha1.EnvironmentSpec)
-	for _, e := range pipeline.Spec.Environments {
-		envSpecMap[e.Name] = e
-	}
-
 	bundleSlug := bundleVersionSlug(bundle.Name) // camelCase — node IDs only
 	pipelineName := pipeline.Name
 
@@ -526,8 +520,6 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	nodes = append(nodes, bundleWatchNode)
 
 	for _, envName := range filteredEnvs {
-		envSpec := envSpecMap[envName]
-
 		// Compute upstream deps for this env (filtered to only include surviving envs)
 		// Return as CEL-safe IDs (matching the step node IDs built with CELSafeSlug).
 		rawUpstreams := filteredDeps(envName, deps, filteredSet)
@@ -561,8 +553,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		stepNodeID := CELSafeSlug(envName)
 		prStatusNodeID := prStatusNodeName(bundleSlug, envName)
 		prStatusK8sName := prStatusNodeK8sName(bundle.Name, envName)
-		prStatusNode := buildPRStatusNode(prStatusNodeID, prStatusK8sName, pipelineName, bundle.Name, envName,
-			envSpec.Approval == "pr-review")
+		prStatusNode := buildPRStatusNode(prStatusNodeID, prStatusK8sName, pipelineName, bundle.Name, envName)
 		nodes = append(nodes, prStatusNode)
 
 		// PromotionStep node — node ID must be a valid CEL identifier.
@@ -840,15 +831,18 @@ func buildSkipPermissionNode(nodeID, k8sName string, sg skipPermissionGate,
 // and re-applies them on drift, so any spec field in the template would be
 // owned by kro and reverted after the open-pr step writes it.
 //
-// ReadyWhen is a health signal only (green in the UI once merged). It does
-// not gate the PromotionStep, which references this node's metadata.name and
-// enforces the merge gate in its own WaitingForMerge state. It is emitted only
-// for pr-review environments: an auto environment never opens a PR, so a
-// merged == true readyWhen would keep the Graph from ever reaching Ready.
+// The node has no readyWhen, so it is ready once applied. The PromotionStep
+// references this node's metadata.name and enforces the merge in its own
+// WaitingForMerge state, and its readyWhen (state Verified) already covers
+// the merge: a step that opened a PR is Verified only after the merge. A
+// readyWhen on status.merged would keep the Graph from ever being Ready when
+// the step opens no PR, which the live approval cannot tell (B69): the step
+// runs the step list recorded when it started, so an edit to pr-review does
+// not add a PR to it, and a pr-review step with nothing to commit opens none.
 //
-// Graph-purity: this node provides observable PR merge state for the UI and
-// for the PromotionStep reconciler (eliminates direct GitHub API polling PS-4, SCM-2).
-func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string, prReview bool) GraphNode {
+// Graph-purity: this node provides observable PR merge state for the
+// PromotionStep reconciler (eliminates direct GitHub API polling PS-4, SCM-2).
+func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string) GraphNode {
 	templateMeta := map[string]interface{}{
 		"name": k8sName,
 		"labels": map[string]interface{}{
@@ -858,7 +852,7 @@ func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string
 		},
 	}
 
-	node := GraphNode{
+	return GraphNode{
 		ID: nodeID,
 		Template: map[string]interface{}{
 			"apiVersion": "kardinal.io/v1alpha1",
@@ -866,10 +860,6 @@ func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string
 			"metadata":   templateMeta,
 		},
 	}
-	if prReview {
-		node.ReadyWhen = []string{fmt.Sprintf(`${%s.status.merged == true}`, nodeID)}
-	}
-	return node
 }
 
 // --- Step 7: assemble Graph ---

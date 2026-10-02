@@ -51,8 +51,8 @@ func TestForgejo_PromotionPR(t *testing.T) {
 
 // TestForgejo_MergeByPolling checks that without a webhook the PRStatus poll
 // finds a merge on Forgejo, and the Graph's PRStatus nodes: one per
-// environment, named for the Bundle and environment, without a spec, ready
-// when merged only for pr-review, and referenced by the step.
+// environment, named for the Bundle and environment, without a spec or a
+// readyWhen (B69), and referenced by the step.
 //
 // Covers SCM-FJ-03, GRAPH-PRSTATUS-01.
 func TestForgejo_MergeByPolling(t *testing.T) {
@@ -106,11 +106,7 @@ func assertPRStatusNodes(t *testing.T, a *app, bundle string, prod *v1alpha1.Pro
 		_, hasSpec := n["template"].(map[string]interface{})["spec"]
 		assert.False(t, hasSpec, "the open-pr step owns the PRStatus spec, not kro")
 		ready, _, _ := unstructured.NestedStringSlice(n, "readyWhen")
-		if env == "prod" {
-			assert.Equal(t, []string{"${" + id + ".status.merged == true}"}, ready, "a pr-review node is ready when merged")
-		} else {
-			assert.Empty(t, ready, "an auto environment opens no PR")
-		}
+		assert.Empty(t, ready, "a PRStatus node has no readyWhen (B69): the PromotionStep node is ready once Verified, after the merge")
 		assert.Equal(t, "${"+id+".metadata.name}", stepRefs[env], "%s step's prStatusRef", env)
 	}
 	assert.Equal(t, "prstatus-"+bundle+"-prod", prod.Spec.PRStatusRef)
@@ -250,15 +246,15 @@ func TestForgejo_WebhookNonMergeEvents(t *testing.T) {
 }
 
 // TestForgejo_ClosesPRs checks that a newer Bundle and waitForMergeTimeout
-// each close the open Forgejo PR with a comment, fail the step, and leave
-// nothing to merge.
+// each close the open Forgejo PR with a comment, delete its head branch, fail
+// the step, and leave nothing to merge.
 //
 // Covers SCM-FJ-06, STEP-MERGETIMEOUT-01.
 func TestForgejo_ClosesPRs(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	requireKind(t, e, "forgejo")
-	scmClosesPRs(t, e, true)
+	scmClosesPRs(t, e)
 }
 
 // TestForgejo_Approvals checks that Forgejo reviews reach bundle.pr.

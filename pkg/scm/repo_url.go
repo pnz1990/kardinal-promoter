@@ -233,6 +233,18 @@ func WebhookSignature(h http.Header) string {
 	return ""
 }
 
+// WebhookSignatureHeader returns the name of the header WebhookSignature reads
+// the signature from, or "" when the request carries none. It is safe to log;
+// the signature is not (GitLab and Azure DevOps send the secret itself).
+func WebhookSignatureHeader(h http.Header) string {
+	for _, name := range webhookSignatureHeaders {
+		if h.Get(name) != "" {
+			return name
+		}
+	}
+	return ""
+}
+
 // webhookEventHeaders lists the headers that name the event type of a
 // webhook. The first one present in a request is used. Gitea and Forgejo also
 // send X-GitHub-Event with the same value, so their own headers come first.

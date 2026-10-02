@@ -15,6 +15,7 @@ package scm
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -31,6 +32,12 @@ const (
 	// default server maximum).
 	forgejoPageSize = 50
 )
+
+// ErrNoWebhookSecret is returned by every provider's ParseWebhookEvent when
+// the provider has no webhook secret. A signature is only proof with a secret
+// (an HMAC with an empty key is one anyone can compute), so a provider without
+// one refuses every event instead of skipping the check.
+var ErrNoWebhookSecret = errors.New("webhook secret not configured; event refused")
 
 // WebhookEvent carries parsed SCM webhook payload data.
 //
@@ -92,6 +99,7 @@ type SCMProvider interface {
 	GetPRReviewStatus(ctx context.Context, repo string, prNumber int) (approved bool, approvalCount int, err error)
 
 	// ParseWebhookEvent parses a raw webhook payload and validates the HMAC signature.
+	// A provider without a webhook secret returns ErrNoWebhookSecret for every payload.
 	// The webhook handler calls ParseWebhookRequest instead, which also passes
 	// the event header to the providers that need it.
 	ParseWebhookEvent(payload []byte, signature string) (WebhookEvent, error)

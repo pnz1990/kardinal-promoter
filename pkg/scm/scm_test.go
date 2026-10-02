@@ -154,6 +154,18 @@ func TestGitHubProvider_ParseWebhookEvent_InvalidSignature(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid")
 }
 
+func TestGitHubProvider_ParseWebhookEvent_NoSecret(t *testing.T) {
+	// Without a secret every event is refused, one signed with an empty key
+	// too (B74).
+	p := scm.NewGitHubProvider("token", "", "")
+	payload := []byte(`{"action":"closed","pull_request":{"number":42,"merged":true},"repository":{"full_name":"owner/repo"}}`)
+	for _, sig := range []string{"", "sha256=" + hmacHex("", payload)} {
+		event, err := p.ParseWebhookEvent(payload, sig)
+		require.ErrorIs(t, err, scm.ErrNoWebhookSecret, "signature %q", sig)
+		assert.Equal(t, scm.WebhookEvent{}, event)
+	}
+}
+
 func TestGitHubProvider_APIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
@@ -614,16 +626,18 @@ func TestGitLabProvider_ParseWebhookEvent_InvalidToken(t *testing.T) {
 }
 
 func TestGitLabProvider_ParseWebhookEvent_NoSecret(t *testing.T) {
-	// When no secret is configured, any token passes.
+	// Without a secret every token is refused, the empty one too (B74).
 	p := scm.NewGitLabProvider("token", "", "")
 	payload := []byte(`{
 		"object_kind": "merge_request",
-		"object_attributes": {"iid": 5, "state": "opened", "action": "open"},
+		"object_attributes": {"iid": 5, "state": "merged", "action": "merge"},
 		"project": {"path_with_namespace": "g/r"}
 	}`)
-	event, err := p.ParseWebhookEvent(payload, "anything")
-	require.NoError(t, err)
-	assert.Equal(t, 5, event.PRNumber)
+	for _, token := range []string{"anything", ""} {
+		event, err := p.ParseWebhookEvent(payload, token)
+		require.ErrorIs(t, err, scm.ErrNoWebhookSecret, "token %q", token)
+		assert.Equal(t, scm.WebhookEvent{}, event)
+	}
 }
 
 func TestGitLabProvider_AddLabelsToPR(t *testing.T) {
@@ -862,10 +876,15 @@ func TestForgejoProvider_ParseWebhookEvent_InvalidSignature(t *testing.T) {
 }
 
 func TestForgejoProvider_ParseWebhookEvent_NoSecret(t *testing.T) {
+	// Without a secret every event is refused, one signed with an empty key
+	// too (B74).
 	p := scm.NewForgejoProvider("token", "", "")
-	evt, err := p.ParseWebhookEvent([]byte(`{"action":"opened","number":10,"pull_request":{},"repository":{"full_name":"owner/repo"}}`), "")
-	require.NoError(t, err)
-	assert.Equal(t, 10, evt.PRNumber)
+	payload := []byte(`{"action":"closed","number":10,"pull_request":{"merged":true},"repository":{"full_name":"owner/repo"}}`)
+	for _, sig := range []string{"", hmacHex("", payload)} {
+		evt, err := p.ParseWebhookEvent(payload, sig)
+		require.ErrorIs(t, err, scm.ErrNoWebhookSecret, "signature %q", sig)
+		assert.Equal(t, scm.WebhookEvent{}, evt)
+	}
 }
 
 func TestForgejoProvider_APIError(t *testing.T) {
@@ -1334,11 +1353,15 @@ func TestBitbucketProvider_ParseWebhookEvent_InvalidSignature(t *testing.T) {
 }
 
 func TestBitbucketProvider_ParseWebhookEvent_NoSecret(t *testing.T) {
+	// Without a secret every event is refused, one signed with an empty key
+	// too (B74).
 	p := scm.NewBitbucketProvider("token", "", "")
-	payload := []byte(`{"pullrequest":{"id":5,"state":"OPEN","source":{"repository":{"full_name":"workspace/myrepo"}},"links":{"html":{"href":""}}}}`)
-	evt, err := p.ParseWebhookEvent(payload, "")
-	require.NoError(t, err)
-	assert.Equal(t, 5, evt.PRNumber)
+	payload := []byte(`{"pullrequest":{"id":5,"state":"MERGED","destination":{"repository":{"full_name":"workspace/myrepo"}}}}`)
+	for _, sig := range []string{"", "sha256=" + hmacHex("", payload)} {
+		evt, err := p.ParseWebhookEvent(payload, sig)
+		require.ErrorIs(t, err, scm.ErrNoWebhookSecret, "signature %q", sig)
+		assert.Equal(t, scm.WebhookEvent{}, evt)
+	}
 }
 
 func TestBitbucketProvider_APIError(t *testing.T) {
@@ -1472,12 +1495,14 @@ func TestAzureDevOpsProvider_ParseWebhookEvent_InvalidToken(t *testing.T) {
 }
 
 func TestAzureDevOpsProvider_ParseWebhookEvent_NoSecret(t *testing.T) {
+	// Without a secret every token is refused, the empty one too (B74).
 	p := scm.NewAzureDevOpsProvider("token", "", "")
-	payload := []byte(`{"eventType":"git.pullrequest.created","resource":{"pullRequestId":5,"status":"active","repository":{"name":"myrepo","project":{"name":"myproject"},"remoteUrl":""}}}`)
-	evt, err := p.ParseWebhookEvent(payload, "")
-	require.NoError(t, err)
-	assert.Equal(t, 5, evt.PRNumber)
-	assert.False(t, evt.Merged)
+	payload := []byte(`{"eventType":"git.pullrequest.merged","resource":{"pullRequestId":5,"status":"completed","repository":{"name":"myrepo","project":{"name":"myproject"},"remoteUrl":""}}}`)
+	for _, token := range []string{"anything", ""} {
+		evt, err := p.ParseWebhookEvent(payload, token)
+		require.ErrorIs(t, err, scm.ErrNoWebhookSecret, "token %q", token)
+		assert.Equal(t, scm.WebhookEvent{}, evt)
+	}
 }
 
 func TestAzureDevOpsProvider_APIError(t *testing.T) {
