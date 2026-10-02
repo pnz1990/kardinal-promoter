@@ -1,6 +1,9 @@
 # 39: Demo E2E Reliability — No Flaky Tests, No Ignored CI
 
-> Status: Active | Created: 2026-04-20 | Validation section corrected 2026-09-29
+> Status: Retired (2026-09-30, #1378). Demo Validate and PDCA were removed. The live e2e
+> suites replace them. The CRD schema check for demo/ and examples/ still runs in ci.yml
+> and `make validate-manifests`.
+> Created: 2026-04-20 | Validation section corrected 2026-09-29
 > Applies to: kardinal-promoter
 
 ---
@@ -41,7 +44,7 @@ The fix has two parts:
 - ✅ Fixed `examples/argo-rollouts-demo/pipeline.yaml` — removed `health.argoRollouts{}` and `health.argocd{}`
 - ✅ Fixed `examples/multi-cluster-fleet/pipeline.yaml` — removed `health.argoRollouts{}` (×2)
 - ✅ Fixed `examples/flagger-demo/pipeline.yaml` — removed `health.flagger{}`
-- ✅ `ci.yml` build job: added "Validate demo and example manifests against CRD schema" step. The first version only checked `health` sub-keys against a fixed list. Since #1247 it runs `go test ./test/examples/...` (`TestExampleManifestsMatchCRDSchemas`), which checks every kardinal.io object in `examples/`, `demo/` and `test/pdca/` against the generated CRD schemas
+- ✅ `ci.yml` build job: added "Validate demo and example manifests against CRD schema" step. The first version only checked `health` sub-keys against a fixed list. Since #1247 it runs `go test ./test/examples/...` (`TestExampleManifestsMatchCRDSchemas`), which checks every kardinal.io object in `examples/` and `demo/` against the generated CRD schemas
 
 ---
 
@@ -49,19 +52,18 @@ The fix has two parts:
 - ✅ `cmd/kardinal/cmd`: `FormatBundleErrors` surfaces Failed-phase bundles with their `TranslationError` / `CircularDependency` condition message after the `get pipelines` table — operators no longer need `kubectl describe graph` to find the root cause. `getPipelinesOnce` fetches Bundles (non-fatal on error) and calls `FormatBundleErrors`. (PR #1048, 2026-04-22)
 - ✅ **`pkg/cel/conversion/conversion.go` `GoNativeType` returns `nil, nil` for a nil CEL value — ambiguous for callers** — Added `ErrNilCELValue` sentinel; `GoNativeType(nil)` now returns `(nil, ErrNilCELValue)` so callers can distinguish evaluator failure from CEL null (`types.NullType` still returns `(nil, nil)`). Tests cover both cases. (PR #1089, 2026-04-22)
 
-- ✅ 39.1 — PDCA scenario for schema drift: add a PDCA scenario that creates a Pipeline manifest with an unknown field and asserts that `ci.yml` fails with the expected error. This makes the CI validation step itself testable. (PR #931)
+- ✅ 39.1 — PDCA scenario for schema drift: add a PDCA scenario that creates a Pipeline manifest with an unknown field and asserts that `ci.yml` fails with the expected error. This makes the CI validation step itself testable. (PR #931; the PDCA scenario was removed with PDCA in #1378)
 - ✅ 39.2 — Update `README.md` examples section: the README may also reference the old `health.argoRollouts{}` syntax. Audit all docs for stale field references. (PR #898)
 - ✅ 39.3 — `make validate-manifests` lets contributors run the check locally before pushing. (PR #1001, 2026-04-21) It runs the same Go test as CI; kubeconform is not used.
-- ✅ 39.4 — Fix PDCA S1 flap: `readyz` probe now gates on informer cache sync — pod reports Ready only after the cache is populated and reconcilers can process events. `helm --wait` now guarantees reconciliation is active before tests run. The S1 wait stays at 5 minutes (`wait_state … test 300` in pdca.yml). Root cause: `healthz.Ping` was used for `/readyz`, allowing the pod to report Ready before `WaitForCacheSync` completed (~5min on resource-constrained CI runners). (PR #1132, 2026-04-23)
+- ✅ 39.4 — Fix PDCA S1 flap: `readyz` probe now gates on informer cache sync — pod reports Ready only after the cache is populated and reconcilers can process events. `helm --wait` now guarantees reconciliation is active before tests run. The S1 wait stayed at 5 minutes (`wait_state … test 300` in pdca.yml, removed in #1378). Root cause: `healthz.Ping` was used for `/readyz`, allowing the pod to report Ready before `WaitForCacheSync` completed (~5min on resource-constrained CI runners). (PR #1132, 2026-04-23)
 
 ---
 
 ## Zone 1 — Obligations
 
-**O1 — Demo Validate must be green on every PR that touches its trigger paths.**
-There are no acceptable "known flaky" failures. If Demo Validate is red, the PR does
-not merge. Period. The agent must treat Demo Validate failures as real failures and fix
-them, not bypass them with `--admin`.
+**O1 — The manifest schema step in ci.yml must be green on every PR.**
+There are no acceptable "known flaky" failures. If the step is red, the PR does
+not merge. Treat its failures as real failures and fix them, not bypass them with `--admin`.
 
 **O2 — The CI manifest validation step runs on every push.**
 It is not path-filtered. Every push rebuilds the validation to catch drift introduced by

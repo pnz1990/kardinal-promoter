@@ -931,8 +931,10 @@ func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger,
 // handleWaitingForMerge checks the PRStatus CRD (written by PRStatusReconciler)
 // instead of polling GitHub directly. This eliminates the PS-4 logic leak.
 //
-// Architecture: the open-pr step created a PRStatus CR and set spec.prURL/prNumber/repo.
-// The PRStatusReconciler polls GitHub and writes status.merged/open.
+// Architecture: the Graph creates the companion PRStatus next to each PromotionStep
+// (buildPRStatusNode in pkg/graph/builder.go). After the open-pr step, this reconciler
+// points its spec at the PR (patchPRStatusSpec). The PRStatusReconciler polls the SCM
+// and writes status.merged/open.
 // This reconciler simply reads the CRD status — no GitHub API call here.
 func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
 	base := ps.DeepCopy()

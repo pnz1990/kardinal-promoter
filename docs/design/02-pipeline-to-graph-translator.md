@@ -11,7 +11,10 @@
 > - Skip permission is the PolicyGate `spec.skipPermission` bool, checked in Go
 >   (`pkg/graph/skip.go`); a denied skip fails the Bundle. There is no `SkipDenied` node.
 > - A Pipeline change mid-flight updates the Graph in place; it is not immutable (ledger G6).
-> - Per-region steps use the `region` variable, not `${item}`.
+> - There is no per-region fan-out. Two or more `regions` fail the Graph build
+>   (`pkg/graph/validate.go`).
+> - The PromotionStep node template below uses old fields. The real template is
+>   `buildPromotionStepNode` in `pkg/graph/builder.go`.
 > - [design-v2.1](design-v2.1.md), cited below, is itself superseded.
 > Depends on: 01-graph-integration
 > Blocks: 03-promotionstep-reconciler, 04-policygate-reconciler
@@ -201,10 +204,9 @@ Each Bundle gets its own Graph with a unique name. Both Graphs execute independe
 
 **Bundle superseding:**
 
-When a new Bundle is created for a Pipeline that already has an active (Promoting) Bundle:
-1. Check if the old Bundle is pinned (`kardinal.io/pin: "true"`). If pinned, both coexist.
-2. If not pinned, and the old Bundle's Graph has no environment past HealthChecking state (no canary in progress), delete the old Graph (via Bundle ownerRef cascade) and mark the old Bundle as `Superseded`.
-3. Create a new Graph for the new Bundle.
+Each Bundle supersedes itself when a newer Bundle of the same type exists for the Pipeline.
+It is marked `Superseded`, and its Graph creates no new step. The Graph is kept, not deleted.
+There is no pin label.
 
 ## Pipeline Spec Changes Mid-Flight
 
@@ -223,7 +225,7 @@ and its E2E record.
 | intent.skipEnvironments removes all environments | Error: Bundle set to Failed with reason "All environments skipped." |
 | PolicyGate applies-to matches no environment in the Pipeline | Gate is ignored (not injected). No error. |
 | Two PolicyGates with the same name in different namespaces | Both are injected. Node IDs include the namespace to prevent collisions. |
-| dependsOn references a skipped environment | Error: Bundle set to Failed with reason "dependsOn references skipped environment." |
+| dependsOn references a skipped environment | No error. The skipped environment is bridged: its downstream environments depend on its upstream ones. |
 | Circular dependsOn or waves listed out of order | Error: Bundle set to Failed with the `InvalidSpec` condition, reason `CircularDependency`. The message is the graph error, which names each edge of the cycle (dependsOn, wave or list order) and the fix. |
 
 ## Unit Tests
@@ -244,12 +246,8 @@ Test cases for `translator.go`:
 
 ## Present
 
-✅ Multi-region fan-out via Graph `forEach` (PR #612, 2026-04-22):
-   `EnvironmentSpec.Regions []string` — when ≥2 regions are set, the translator emits
-   a `forEach` Graph node. The Graph controller stamps out one PromotionStep per region; each
-   instance receives `spec.region = "${item}"`. `PromotionStepSpec.Region string` carries
-   the current region. Per-item `propagateWhen` (pre-upstream fork ≥ `745998f`) ensures all
-   regional instances must be Verified before downstream environments proceed.
+Removed in v0.9.0: per-region fan-out. Two or more `regions` fail the Graph build with
+`regions is not supported`. Declare one environment per region and use `wave`.
 
 ## Future
 

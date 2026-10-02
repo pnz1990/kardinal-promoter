@@ -6,7 +6,10 @@
 > - The engine is `pkg/steps` (`engine.go`, `registry.go`, `step.go`, `defaults.go`) with
 >   built-ins in `pkg/steps/steps/`. There is no `RunStep` and no `status.stepOutputs`.
 > - Default steps come from `DefaultSequenceForBundle` (`pkg/steps/defaults.go`), not
->   `InferDefaultSteps`.
+>   `InferDefaultSteps`. With `update.strategy: argocd` the sequence is `argocd-set-image`,
+>   then `health-check`, with no git step.
+> - The package tree below lists `state.go`, `webhook.go` and `helm.go`. The first two do not
+>   exist; the Helm step is `pkg/steps/steps/helm_set_image.go`.
 > - Merge detection goes through the PRStatus CRD, not a `prMerged` webhook.
 > - Custom webhook steps, `verify-image` and `integration-test` were removed (#1282, #1278):
 >   `Lookup` returns an error for any name that is not a registered built-in step.
@@ -234,7 +237,7 @@ func (s *HelmSetImageStep) Execute(ctx context.Context, state *StepState) (StepR
 
 ### kustomize-build (Phase 1)
 
-Runs `kustomize build` and writes the rendered output. This supports the Rendered Manifests pattern (see docs/rendered-manifests.md). Promoted to Phase 1 because Journey 6 (Rendered Manifests) requires it and it is simpler to implement than Helm.
+Runs `kustomize build`. It runs only with `layout: branch`, which is not implemented yet (#1271). Today git-clone fails first.
 
 ```go
 func (s *KustomizeBuildStep) Execute(ctx context.Context, state *StepState) (StepResult, error) {

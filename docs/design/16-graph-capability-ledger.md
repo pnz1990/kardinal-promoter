@@ -22,10 +22,11 @@ Graph behave, is logged here with:
 Rules:
 
 1. Before adding logic outside the Graph, check this list. If the gap is new, add an entry
-   first (Constitution Article XII, `docs/design/10-graph-first-architecture.md`).
+   first (`docs/design/10-graph-first-architecture.md`).
 2. When kro ships a fix, verify it on kind, delete the workaround, and move the entry to
    **Closed** with the kro version.
 3. GitHub issues blocked on one of these entries carry the `blocked-on-upstream` label.
+   No kro issue is filed for G1 to G5 yet, and no kardinal issue carries `blocked-on-upstream`.
 4. The public summary of this ledger is [Graph Coverage](../graph-coverage.md). When an
    entry opens, changes or closes, update that page in the same PR.
 
@@ -135,7 +136,7 @@ the node itself").
 
 - Health checks are separate ref nodes (`healthProd` and similar) with a self-only
   `readyWhen` (`pkg/health/watch_node.go`, `pkg/translator/translator.go`
-  `injectHealthNodes`). They feed Graph readiness, not the PromotionStep's own `readyWhen`.
+  `healthInjector.inject`). They feed Graph readiness, not the PromotionStep's own `readyWhen`.
 - The PromotionStep reconciler still runs the Go health adapter to move the step from
   HealthChecking to Verified (`pkg/health/adapter.go`).
 - **Solved in the reconciler (2026-09 audit, E2E-01):** the PromotionStep reconciler's
@@ -149,6 +150,9 @@ the node itself").
   readiness alone can see the previous revision.
   Doing it in the Graph needs `app.status.sync.revision == step.status.outputs.commitSHA`,
   which is a cross-node `readyWhen`.
+- **Planned:** #1283 (open) removes the health ref nodes and the reader RBAC (ClusterRole,
+  RoleBindings, `Prune`, `--graph-reader-namespaces`). Health stays in the PromotionStep
+  reconciler.
 
 **Upstream contribution.** Allow `readyWhen` to reference nodes the node already depends
 on (its existing DAG edges), which keeps the ordering unambiguous. Alternatively, add
@@ -169,6 +173,10 @@ not serve fails the whole Graph: `pkg/graphengine/compiler/context.go:265-280`
 drops the health ref node if it is not (`pkg/translator/translator.go` `servedKind`,
 `WithRESTMapper`). The PromotionStep's Go health adapter still runs, so the step stays in
 HealthChecking with a "not found" reason until the kind and object exist.
+
+**Planned:** #1283 (open) removes the health ref nodes and the reader RBAC (ClusterRole,
+RoleBindings, `Prune`, `--graph-reader-namespaces`). Health stays in the PromotionStep
+reconciler.
 
 **Upstream contribution.** An opt-in per-node `optional: true` for ref nodes: an
 unresolvable GVK makes the node (and only its dependents) Unresolved instead of failing
@@ -217,6 +225,9 @@ list/watch on every kind a Graph uses.
   down, from older versions, and, with `*`, outside the named namespaces.
 - The chart ships the applier and reader ClusterRoles, plus an aggregation ClusterRole
   that gives kro list/watch on kardinal kinds (`chart/kardinal-promoter/templates/graph-rbac.yaml`).
+- **Planned:** #1283 (open) removes the health ref nodes and the reader RBAC (ClusterRole,
+  RoleBindings, `Prune`, `--graph-reader-namespaces`). Health stays in the PromotionStep
+  reconciler.
 
 Verified on kind: `kardinal-promoter-graph-reader-default` in `argocd`, impersonated
 applies succeed, and there are no RBAC or watch errors in the kro logs.
@@ -246,7 +257,7 @@ Verified on kind with a scratch ConfigMap Graph:
 - Deleting the Graph deleted all of them.
 
 **What kardinal did.** `ensurePipelineSpecCurrent` deleted the Graph when the Pipeline spec
-hash changed, and `ensureGraphExists` recreated it. Under kro that deletes every
+hash changed, and the Bundle reconciler recreated it. Under kro that deletes every
 PromotionStep, including Verified ones. The recreated steps start Pending, so every
 environment promotes again.
 
@@ -312,16 +323,14 @@ These are not gaps, but the translator has to work around them.
   `object`, `self`, `this`, `context`, CEL keywords).
   The PromotionStep node ID is the environment name in camelCase (`test`, `uat`,
   `prod`); PRStatus, health and gate nodes carry a prefix. kardinal also uses `bundle` as
-  a node ID. **Open kardinal bug:** a Pipeline environment named `bundle`, `status`,
-  `graph`, `each` or a CEL keyword produces a Graph that kro rejects. Pipeline validation
-  should reject those names, or the builder should prefix step IDs.
-- **No `forEach` on ref nodes** (`validation.go:131-133`). Multi-region health cannot fan
-  out one ref per region; use a label-selector collection ref with a per-element
-  `readyWhen` on `each`.
+  a node ID. Pipeline validation rejects these names. The API server refuses a reserved
+  environment name (`api/v1alpha1/pipeline_types.go`), and `pkg/graph/validate.go` checks
+  node IDs.
+- **No `forEach` on ref nodes** (`validation.go:131-133`). A selector health ref is a
+  collection ref with a per-element `readyWhen` on `each`.
 - **An empty collection is ready** (`pkg/graphengine/runtime/node.go:240-252`). A
-  selector ref that matches nothing passes. For multi-region PromotionSteps the builder
-  adds `size(x) == N` before `x.all(...)` (`verifiedCond`). For selector health refs this
-  is documented as a known limitation (`docs/health-adapters.md`).
+  selector health ref that matches nothing passes Graph readiness. The PromotionStep's Go
+  adapter does not: it treats no matching Deployment as unhealthy (`docs/health-adapters.md`).
 - **The Graph is not Ready while any node is not Ready.** A `readyWhen` on a node that
   can never become ready keeps the Graph `Ready=False` forever. This happened with
   `PRStatus` nodes whose step opened no PR: an auto environment, then (B69) a `pr-review`

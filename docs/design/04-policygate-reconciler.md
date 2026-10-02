@@ -4,10 +4,15 @@
 > code; `pkg/reconciler/policygate/` and [policy-gates](../policy-gates.md) are the reference.
 > Known differences:
 > - The package holds `audit.go`, `cel_evaluator.go`, `doc.go` and `reconciler.go`.
+>   `pkg/cel` holds only `doc.go`, `conversion/` and `library/`; there is no
+>   `environment.go` or `types.go`.
 > - There is no `NewCELEnvironment`. `newEvaluator` in `cel_evaluator.go` declares the
 >   variables `bundle`, `schedule`, `environment`, `metrics`, `upstream` and `changewindow`.
 >   There are no `previousBundle`, `delegation`, `externalApproval`, `contracts` or
 >   `targetDrift` variables.
+> - There is no `environment.approval`. `metrics.<name>` is a map with `value` (a string),
+>   `result` and `stale`. It covers every MetricCheck in the gate's namespace
+>   (`buildMetricsContext`).
 > - `bundle.upstreamSoakMinutes` is the smallest `soakMinutes` among the environments directly
 >   upstream of the gated environment in the Pipeline DAG
 >   (`directUpstreamSoakMinutes` in `reconciler.go`).
@@ -163,7 +168,7 @@ func (r *PolicyGateReconciler) evaluate(gate *v1alpha1.PolicyGate, context map[s
 }
 ```
 
-The CEL expression is compiled and cached (keyed by expression string) to avoid recompilation on every evaluation cycle. Cache invalidation: on controller restart.
+The CEL expression is compiled and cached (keyed by expression string) to avoid recompilation on every evaluation cycle. The cache holds up to 1024 programs. When it is full it is cleared, and programs are recompiled on demand.
 
 ## Reconciliation Loop
 
