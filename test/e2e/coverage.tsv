@@ -21,7 +21,7 @@ GRAPH-PRSTATUS-01	live	scm-forgejo	covered	graph	one PRStatus companion node per
 GRAPH-NSDELETE-01	live	core	covered	graph	deleting a namespace with a Bundle finishes even when its applier RoleBinding goes first: the controller removes kro's finalizer from its Graphs in a Terminating namespace	pkg/reconciler/graphcleanup/reconciler.go:67; docs/changelog.md:77
 GRAPH-READER-PRUNE-01	live	core	covered	graph	deleting a namespace's last Bundle deletes the reader RoleBinding its Graph had in argocd	pkg/reconciler/graphcleanup/reconciler.go:61; docs/installation.md:639
 GRAPH-READER-PRUNE-02	live	core	covered	graph	deleting a namespace deletes the reader RoleBindings its Graphs had in argocd, with the applier RoleBinding and its record gone	pkg/graph/identity.go:246; docs/changelog.md:78
-GRAPH-READER-SWEEP-01	live	upgrade	todo	graph	after an upgrade or restart, the startup sweep deletes the reader RoleBindings whose namespace is gone or holds no Graph reading through them	pkg/reconciler/graphcleanup/sweep.go:22; docs/installation.md:645
+GRAPH-READER-SWEEP-01	live	core	covered	graph	after a restart, as after an upgrade, the startup sweep deletes the reader RoleBindings whose namespace is gone or holds no Graph reading through them, even ones the applier RoleBinding's record does not list	pkg/reconciler/graphcleanup/sweep.go:22; docs/installation.md:645
 BUNDLE-PHASE-01	live	core	covered	bundle	a new Bundle is picked up by the controller and gets phase Available or Promoting	api/v1alpha1/bundle_types.go:107
 BUNDLE-VERIFIED-01	live	core	covered	bundle	image Bundle reaches Verified when every targeted environment is Verified	docs/changelog.md:119
 BUNDLE-FAILED-01	live	core	covered	bundle	a failing step fails the Bundle; a Failed Bundle retries after its Pipeline changes	docs/changelog.md:119
@@ -38,8 +38,8 @@ BUNDLE-SLOT-01	live	core	covered	bundle	maxConcurrentPromotions caps Promoting B
 BUNDLE-METRICS-01	live	core	covered	bundle	Bundle status.metrics (commitToProductionMinutes, bakeResets, operatorInterventions)	api/v1alpha1/bundle_types.go:146-157; docs/changelog.md:116
 BUNDLE-GRAPHCOND-01	live	core	covered	bundle	Graph Accepted and Ready conditions are shown on the Bundle; GraphReady turns True for a Verified Bundle	docs/changelog.md:119
 BUNDLE-COLUMNS-01	live	core	covered	bundle	kubectl get printer columns for Bundle and PromotionStep	docs/changelog.md:151
-BUNDLE-SUPERSEDE-03	live	core	todo	bundle	three Bundles created back to back: the two older become Superseded and only the newest keeps promoting	docs/concepts.md:35; docs/changelog.md:117
-BUNDLE-SUPERSEDE-04	live	core	todo	bundle	supersession is per Bundle type: a new image Bundle does not supersede an in-flight config Bundle, and vice versa	docs/concepts.md:49
+BUNDLE-SUPERSEDE-03	live	core	covered	bundle	three Bundles created back to back: the two older become Superseded and only the newest keeps promoting	docs/concepts.md:35; docs/changelog.md:125
+BUNDLE-SUPERSEDE-04	live	core	covered	bundle	supersession is per Bundle type: a new image Bundle does not supersede an in-flight config Bundle, and vice versa	docs/concepts.md:49
 PIPE-READY-01	live	core	covered	pipeline	a valid Pipeline gets Ready=True	docs/changelog.md:120
 PIPE-READY-02	live	core	covered	pipeline	duplicate environment names or git.secretRef in another namespace set Ready=False (ValidationFailed) and the step fails without reading the Secret	docs/pipeline-reference.md:74; docs/changelog.md:120
 PIPE-NOTIMPL-01	live	core	covered	pipeline	layout: branch, shard, two or more regions, health.cluster set Ready=False reason NotImplemented; the promotion fails with the documented message	docs/pipeline-reference.md:116-125
