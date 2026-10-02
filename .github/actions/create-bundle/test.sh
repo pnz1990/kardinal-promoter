@@ -93,6 +93,7 @@ echo "--- Names and URLs ---"
 for name in my-app a app.v2; do
   if is_k8s_name "$name"; then check "valid name $name" ok ok; else check "valid name $name" rejected ok; fi
 done
+# shellcheck disable=SC2016 # 'a$(id)' is a literal payload
 for name in "" My-App "-app" "app-" "a'b" 'a$(id)' "$(printf 'a\nb')"; do
   if is_k8s_name "$name"; then check "invalid name ${name@Q}" accepted rejected; else check "invalid name ${name@Q}" rejected rejected; fi
 done
@@ -156,6 +157,7 @@ check "hostile image is sent literally" \
   "$INJECT"
 check "hostile image runs nothing" "$([ -e "$WORK/pwned" ] && echo ran || echo clean)" clean
 
+# shellcheck disable=SC2016 # the literal payload under test
 if run_action 201 'my-app$(id)'; then check "hostile pipeline rejected" accepted rejected; else check "hostile pipeline rejected" rejected rejected; fi
 check "hostile pipeline makes no request" "$(calls)" 0
 

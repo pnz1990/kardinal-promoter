@@ -233,6 +233,16 @@ jobs:
         # The live tests (test/e2e/live) are behind the e2e build tag and run
         # with make e2e-all (hack/e2e/all.sh) and in e2e-live.yml.
         run: go test ./test/e2e/... -race -count=1 -timeout 120s -v
+      # Every tracked shell script, most of them the live e2e harness
+      # (hack/e2e), which pull requests don't run. Version and sum:
+      # hack/tool-versions.env.
+      - name: shellcheck
+        run: |
+          source hack/tool-versions.env
+          curl -fsSLO "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | sha256sum -c -
+          tar -xJf "shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" --strip-components=1 "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          git ls-files -z '*.sh' | xargs -0 ./shellcheck -x -P SCRIPTDIR
 
   # ── create-bundle composite action tests ──────────────────────────────────
   action-tests:

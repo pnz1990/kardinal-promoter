@@ -4,7 +4,7 @@
 # The node image must be Kubernetes 1.30 or newer: on 1.29 the API server's
 # CEL cost estimate rejects kro's graphs.kro.run CRD ("estimated rule cost
 # exceeds budget"). The image is the one built for the kind release the
-# workflows install (KIND_VERSION in hack/tool-versions.env): KIND_NODE_1_36
+# e2e scripts install (KIND_VERSION in hack/tool-versions.env): KIND_NODE_1_36
 # there. The live e2e matrix boots the other KIND_NODE_* images with this
 # config and kind's --image flag. KUBECTL_VERSION there has the same minor.
 kind: Cluster

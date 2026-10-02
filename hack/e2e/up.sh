@@ -37,6 +37,9 @@
 #   KUBECONFIG       honoured; recorded in the env file. When unset, it is
 #                    test/e2e/results/<cluster>/kubeconfig, so kind does not
 #                    write the default ~/.kube/config
+#   KARDINAL_E2E_TOOLS  pinned (default): install the kind, kubectl and helm
+#                    of hack/tool-versions.env into bin/e2e (tools.sh) and use
+#                    them; path: use the ones on PATH
 #   plus the KARDINAL_E2E_* build settings of components/kardinal.sh
 #
 # Copyright 2026 The kardinal-promoter Authors.
@@ -92,6 +95,7 @@ export KIND_CLUSTER=${KIND_CLUSTER:-kardinal-e2e-$SUITE}
 # shellcheck source=hack/e2e/lib.sh
 source "$(dirname "$0")/lib.sh"
 export E2E_OUT
+bash "$E2E_DIR/tools.sh"
 
 NODE_IMAGE=
 if [ -n "${KIND_K8S:-}" ]; then
@@ -105,7 +109,12 @@ fi
 start=$(date +%s)
 kind_cluster "$KIND_CLUSTER"
 target_cluster
-trap 'rc=$?; [ "$rc" -eq 0 ] || dump_setup_diagnostics; exit "$rc"' EXIT
+on_exit() {
+  local rc=$?
+  [ "$rc" -eq 0 ] || dump_setup_diagnostics
+  exit "$rc"
+}
+trap on_exit EXIT
 if [ -n "$NODE_IMAGE" ]; then
   have=$("${KUBECTL[@]}" version -o json | python3 -c 'import json,sys; v=json.load(sys.stdin)["serverVersion"]; print(v["major"]+"."+v["minor"].rstrip("+"))')
   [ "$have" = "$KIND_K8S" ] || die "$KIND_CLUSTER runs Kubernetes $have, not $KIND_K8S; make e2e-down SUITE=$SUITE first"

@@ -152,18 +152,19 @@ func toolVersions(t *testing.T) map[string]string {
 var (
 	semver    = regexp.MustCompile(`^v\d+\.(\d+)\.\d+$`)
 	sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	// toolDownload matches a download of kind, kubectl, helm or the argocd
-	// CLI.
-	toolDownload = regexp.MustCompile(`kind\.sigs\.k8s\.io/dl/|dl\.k8s\.io/release/|get\.helm\.sh/|argo-cd/releases/download/`)
+	// toolDownload matches a download of kind, kubectl, helm, shellcheck or
+	// the argocd CLI.
+	toolDownload = regexp.MustCompile(`kind\.sigs\.k8s\.io/dl/|dl\.k8s\.io/release/|get\.helm\.sh/|koalaman/shellcheck/releases/download/|argo-cd/releases/download/`)
 )
 
 // TestToolDownloadsArePinnedAndVerified covers #1294: every kind, kubectl,
-// helm and argocd download in a workflow takes its version from
+// helm and argocd download in a workflow or in hack/e2e/tools.sh (which
+// e2e-live and local runs install with) takes its version from
 // hack/tool-versions.env and is checked against the sha256 there, kubectl
 // matches the kind node's minor, and nothing installs a floating version.
 func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 	tv := toolVersions(t)
-	for _, tool := range []string{"KIND", "KUBECTL", "HELM"} {
+	for _, tool := range []string{"KIND", "KUBECTL", "HELM", "SHELLCHECK"} {
 		assert.Regexp(t, semver, tv[tool+"_VERSION"], "%s_VERSION", tool)
 		assert.Regexp(t, sha256Hex, tv[tool+"_SHA256"], "%s_SHA256", tool)
 	}
@@ -176,25 +177,36 @@ func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 		assert.Equal(t, node[1], m[1], "KUBECTL_VERSION %s must have the kind node's minor (%s)", tv["KUBECTL_VERSION"], node[0])
 	}
 
-	downloads := 0
+	tools, err := os.ReadFile(filepath.Join(repoRoot(t), "hack/e2e/tools.sh"))
+	require.NoError(t, err)
+	installs := map[string]bool{}
+	scripts := []struct{ file, step, run string }{{"hack/e2e/tools.sh", "", string(tools)}}
 	for _, f := range workflowFiles(t) {
 		for _, s := range workflowSteps(t, f) {
-			assert.NotContains(t, s.Run, "stable.txt", "%s: step %q installs a floating kubectl", f, s.Name)
-			if !toolDownload.MatchString(s.Run) {
-				continue
+			scripts = append(scripts, struct{ file, step, run string }{f, s.Name, s.Run})
+			if strings.Contains(s.Run, "hack/e2e/tools.sh") {
+				installs[f] = true
 			}
-			downloads++
-			assert.Contains(t, s.Run, "source hack/tool-versions.env", "%s: step %q", f, s.Name)
-			for _, l := range strings.Split(s.Run, "\n") {
-				if toolDownload.MatchString(l) {
-					assert.Contains(t, l, "_VERSION}", "%s: step %q hard-codes a tool version: %s", f, s.Name, strings.TrimSpace(l))
-				}
-			}
-			assert.Equal(t, strings.Count(s.Run, "curl "), strings.Count(s.Run, "sha256sum -c"),
-				"%s: step %q must check every download with sha256sum -c", f, s.Name)
 		}
 	}
-	assert.GreaterOrEqual(t, downloads, 3, "expected the kind, kubectl and helm installs in e2e-live")
+	assert.True(t, installs[".github/workflows/e2e-live.yml"], "e2e-live must install kind, kubectl and helm with hack/e2e/tools.sh")
+	downloads := 0
+	for _, s := range scripts {
+		assert.NotContains(t, s.run, "stable.txt", "%s: step %q installs a floating kubectl", s.file, s.step)
+		if !toolDownload.MatchString(s.run) {
+			continue
+		}
+		assert.Regexp(t, `source "?(\$REPO_ROOT/)?hack/tool-versions.env`, s.run, "%s: step %q", s.file, s.step)
+		for _, l := range strings.Split(s.run, "\n") {
+			if toolDownload.MatchString(l) {
+				downloads++
+				assert.Contains(t, l, "_VERSION}", "%s: step %q hard-codes a tool version: %s", s.file, s.step, strings.TrimSpace(l))
+			}
+		}
+		assert.Equal(t, strings.Count(s.run, "curl "), strings.Count(s.run, "sha256sum -c"),
+			"%s: step %q must check every download with sha256sum -c", s.file, s.step)
+	}
+	assert.GreaterOrEqual(t, downloads, 3, "expected the kind, kubectl and helm downloads in hack/e2e/tools.sh")
 
 	for _, rel := range append(workflowFiles(t), "Makefile") {
 		data, err := os.ReadFile(filepath.Join(repoRoot(t), rel))

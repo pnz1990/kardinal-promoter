@@ -112,6 +112,9 @@ fi
 JOBS=${JOBS:-4}
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || die "JOBS=$JOBS: want a positive number"
 PREFIX=${ALL_PREFIX:-kardinal-e2e-all}
+# Once here, so the jobs' up.sh find the pinned tools in place.
+bash "$E2E_DIR/tools.sh"
+[ "${KARDINAL_E2E_TOOLS:-pinned}" = path ] || PATH="$REPO_ROOT/bin/e2e:$PATH"
 existing=$(kind get clusters 2>/dev/null || true)
 for j in "${run[@]}"; do
   read -r id _ <<<"$j"
