@@ -137,8 +137,8 @@ kardinal-promoter detects PR merges in two ways:
   picked up without webhooks and after a controller restart.
 
 The `argocd` and `flux` health checks compare the environment against the PR's merge commit.
-The GitHub and GitLab webhooks record it together with the merge. In every other case (other
-providers, no webhook, or a GitLab fast-forward merge, which reports none) the PRStatus
+The GitHub, GitLab, Forgejo and Gitea webhooks record it together with the merge. In every other
+case (Bitbucket, Azure DevOps, no webhook, or a GitLab fast-forward merge, which reports none) the PRStatus
 reconciler asks the SCM API for it after the merge. Until it has the commit, both checks wait.
 If the PRStatus records that it will not get the commit, `argocd` checks the Bundle images
 instead, and `flux` waits until `health.timeout`; see

@@ -127,8 +127,10 @@ func assertPRStatusNodes(t *testing.T, a *app, bundle string, prod *v1alpha1.Pro
 // X-Forgejo-Signature (prod), the headers Forgejo signs in. Forgejo's own
 // delivery also sends X-Hub-Signature-256, which the controller checks
 // first, so only a posted event reaches these two. Each event marks the
-// PRStatus merged before a poll would, and the reconciler fetches the merge
-// commit, which the controller does not read from the event.
+// PRStatus merged before a poll would. The uat event carries
+// pull_request.merge_commit_sha, as Forgejo's does, and the webhook records
+// that commit with the merge; the prod event carries none, and the
+// reconciler fetches the merge commit from the API.
 //
 // Covers SCM-FJ-04.
 func TestForgejo_MergeWebhook(t *testing.T) {
@@ -138,15 +140,15 @@ func TestForgejo_MergeWebhook(t *testing.T) {
 	a := newArgoAppIn(t, e, e.RepoWithoutWebhook, "uat", "prod")
 	a.apply(t, a.pipeline(map[string]string{"uat": "pr-review", "prod": "pr-review"}))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
-	a.mergeByWebhook(t, bundle, "uat", giteaSignature, false)
+	a.mergeByWebhook(t, bundle, "uat", giteaSignature, true)
 	a.mergeByWebhook(t, bundle, "prod", forgejoSignature, false)
 	assertEnvAt(t, a, "prod", fixtures.V2)
 }
 
 // TestForgejo_MergeWebhookDelivery merges a PR on a repo whose webhook
 // Forgejo itself delivers: the event marks the PRStatus merged before a poll
-// would, and the reconciler fetches the merge commit, which the controller
-// does not read from the event. It fails when Forgejo cannot deliver to the
+// would, with the merge commit Forgejo reports in
+// pull_request.merge_commit_sha. It fails when Forgejo cannot deliver to the
 // controller's Service, for example when Forgejo's [webhook]
 // ALLOWED_HOST_LIST blocks it.
 //
@@ -158,7 +160,7 @@ func TestForgejo_MergeWebhookDelivery(t *testing.T) {
 	a := newArgoApp(t, e, "prod")
 	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
-	a.mergeByWebhook(t, bundle, "prod", "", false)
+	a.mergeByWebhook(t, bundle, "prod", "", true)
 	assertEnvAt(t, a, "prod", fixtures.V2)
 }
 

@@ -275,36 +275,114 @@ func TestParseWebhookEvent_NotMerged(t *testing.T) {
 	}
 }
 
-// TestParseWebhookEvent_MergeCommitSHA proves the GitHub and GitLab parsers
-// report the merge commit of a merged PR, so the webhook can record it with
-// status.merged (#1307). Before the merge GitHub's merge_commit_sha is the
-// test merge commit, which is not the promoted one.
+// giteaPullRequestEvent returns a pull_request webhook body the way Gitea 28
+// and Forgejo 16 send it (structs.PullRequestPayload): the top-level number,
+// the full pull_request object, the repository and the sender. Gitea and
+// Forgejo set merged, merged_at, merged_by and merge_commit_sha only once the
+// PR is merged; otherwise they are false and null.
+func giteaPullRequestEvent(action string, merged bool, mergeSHA string) string {
+	mergedAt, mergedBy, mergeCommit := "null", "null", "null"
+	if merged {
+		mergedAt = `"2026-10-02T09:14:07Z"`
+		mergedBy = `{"id":1,"login":"kardinal","full_name":"","email":"kardinal@noreply.localhost","username":"kardinal"}`
+	}
+	if mergeSHA != "" {
+		mergeCommit = `"` + mergeSHA + `"`
+	}
+	repo := `{"id":3,"owner":{"id":1,"login":"kardinal","username":"kardinal"},"name":"fleet","full_name":"kardinal/fleet",` +
+		`"private":false,"html_url":"http://forgejo.local/kardinal/fleet","clone_url":"http://forgejo.local/kardinal/fleet.git",` +
+		`"default_branch":"main"}`
+	return `{"action":"` + action + `","number":12,"pull_request":{"id":21,` +
+		`"url":"http://forgejo.local/kardinal/fleet/pulls/12","number":12,` +
+		`"user":{"id":1,"login":"kardinal","username":"kardinal"},"title":"Promote web to prod","body":"",` +
+		`"labels":[],"milestone":null,"assignee":null,"assignees":null,"requested_reviewers":[],` +
+		`"state":"closed","draft":false,"is_locked":false,"comments":0,` +
+		`"html_url":"http://forgejo.local/kardinal/fleet/pulls/12",` +
+		`"diff_url":"http://forgejo.local/kardinal/fleet/pulls/12.diff",` +
+		`"patch_url":"http://forgejo.local/kardinal/fleet/pulls/12.patch",` +
+		`"mergeable":true,"merged":` + fmt.Sprint(merged) + `,"merged_at":` + mergedAt + `,` +
+		`"merge_commit_sha":` + mergeCommit + `,"merged_by":` + mergedBy + `,"allow_maintainer_edit":false,` +
+		`"base":{"label":"main","ref":"main","sha":"4b8f0e2d9c1a7b6e5f4d3c2b1a0918273645abcd","repo_id":3,"repo":` + repo + `},` +
+		`"head":{"label":"kardinal/web/prod","ref":"kardinal/web/prod","sha":"9a1c2e3f4b5d6a7c8e9f0a1b2c3d4e5f6a7b8c9d","repo_id":3,"repo":` + repo + `},` +
+		`"merge_base":"4b8f0e2d9c1a7b6e5f4d3c2b1a0918273645abcd","due_date":null,` +
+		`"created_at":"2026-10-02T09:13:51Z","updated_at":"2026-10-02T09:14:07Z","closed_at":"2026-10-02T09:14:07Z","pin_order":0},` +
+		`"requested_reviewer":null,"repository":` + repo + `,` +
+		`"sender":{"id":1,"login":"kardinal","username":"kardinal"},"commit_id":"","review":null}`
+}
+
+// TestParseWebhookEvent_MergeCommitSHA proves the GitHub, GitLab, Forgejo and
+// Gitea parsers report the merge commit of a merged PR, so the webhook can
+// record it with status.merged (#1307). Before the merge GitHub's
+// merge_commit_sha is the test merge commit, which is not the promoted one.
+// A Forgejo/Gitea comment on a merged PR carries the merged pull_request too,
+// and is not a merge. Rows with headers are read the way the webhook handler
+// reads a request (scm.ParseWebhookRequest).
 func TestParseWebhookEvent_MergeCommitSHA(t *testing.T) {
 	const sha = "e7ddb9e5a1b2c3d4e5f60718293a4b5c6d7e8f90"
+	gitea, err := scm.NewProvider("gitea", "t", "", testWebhookSecret)
+	require.NoError(t, err)
+	forgejoHeaders := map[string]string{"X-Forgejo-Event": "pull_request", "X-Gitea-Event": "pull_request", "X-GitHub-Event": "pull_request"}
+	giteaHeaders := map[string]string{"X-Gitea-Event": "pull_request", "X-GitHub-Event": "pull_request"}
 	tests := []struct {
 		name     string
 		provider scm.SCMProvider
 		payload  string
 		want     string
+		headers  map[string]string
 	}{
-		{"github merged", scm.NewGitHubProvider("t", "", testWebhookSecret),
-			`{"action":"closed","pull_request":{"number":7,"merged":true,"merge_commit_sha":"` + sha + `"},"repository":{"full_name":"o/r"}}`,
-			sha},
-		{"github open with a test merge commit", scm.NewGitHubProvider("t", "", testWebhookSecret),
-			`{"action":"synchronize","pull_request":{"number":7,"merged":false,"merge_commit_sha":"` + sha + `"},"repository":{"full_name":"o/r"}}`,
-			""},
-		{"gitlab merged", scm.NewGitLabProvider("t", "", testWebhookSecret),
-			`{"object_kind":"merge_request","object_attributes":{"iid":8,"state":"merged","action":"merge","merge_commit_sha":"` + sha + `"},"project":{"path_with_namespace":"g/p"}}`,
-			sha},
-		{"gitlab fast-forward merge", scm.NewGitLabProvider("t", "", testWebhookSecret),
-			`{"object_kind":"merge_request","object_attributes":{"iid":8,"state":"merged","action":"merge","merge_commit_sha":null},"project":{"path_with_namespace":"g/p"}}`,
-			""},
+		{name: "forgejo merged", provider: scm.NewForgejoProvider("t", "", testWebhookSecret),
+			payload: giteaPullRequestEvent("closed", true, sha), want: sha, headers: forgejoHeaders},
+		{name: "gitea merged", provider: gitea,
+			payload: giteaPullRequestEvent("closed", true, sha), want: sha, headers: giteaHeaders},
+		{name: "forgejo merged without an event header", provider: scm.NewForgejoProvider("t", "", testWebhookSecret),
+			payload: giteaPullRequestEvent("closed", true, sha), want: sha},
+		{name: "gitea closed without a merge", provider: gitea,
+			payload: giteaPullRequestEvent("closed", false, ""), want: "", headers: giteaHeaders},
+		{name: "gitea edit of a merged PR is not a merge", provider: gitea,
+			payload: giteaPullRequestEvent("edited", true, sha), want: "", headers: giteaHeaders},
+		{name: "gitea comment on a merged PR is not a merge", provider: gitea,
+			payload: `{"action":"created","issue":{"id":21,"number":12,"title":"Promote web to prod","state":"closed",` +
+				`"pull_request":{"merged":true,"merged_at":"2026-10-02T09:14:07Z"}},` +
+				`"pull_request":{"id":21,"number":12,"state":"closed","merged":true,"merge_commit_sha":"` + sha + `"},` +
+				`"comment":{"id":40,"body":"lgtm"},"repository":{"id":3,"full_name":"kardinal/fleet"},` +
+				`"sender":{"id":1,"login":"kardinal"},"is_pull":true}`,
+			want: "", headers: map[string]string{"X-Gitea-Event": "issue_comment", "X-GitHub-Event": "issue_comment"}},
+		{name: "github merged", provider: scm.NewGitHubProvider("t", "", testWebhookSecret),
+			payload: `{"action":"closed","pull_request":{"number":7,"merged":true,"merge_commit_sha":"` + sha + `"},"repository":{"full_name":"o/r"}}`,
+			want:    sha},
+		{name: "github open with a test merge commit", provider: scm.NewGitHubProvider("t", "", testWebhookSecret),
+			payload: `{"action":"synchronize","pull_request":{"number":7,"merged":false,"merge_commit_sha":"` + sha + `"},"repository":{"full_name":"o/r"}}`,
+			want:    ""},
+		{name: "gitlab merged", provider: scm.NewGitLabProvider("t", "", testWebhookSecret),
+			payload: `{"object_kind":"merge_request","object_attributes":{"iid":8,"state":"merged","action":"merge","merge_commit_sha":"` + sha + `"},"project":{"path_with_namespace":"g/p"}}`,
+			want:    sha},
+		{name: "gitlab fast-forward merge", provider: scm.NewGitLabProvider("t", "", testWebhookSecret),
+			payload: `{"object_kind":"merge_request","object_attributes":{"iid":8,"state":"merged","action":"merge","merge_commit_sha":null},"project":{"path_with_namespace":"g/p"}}`,
+			want:    ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ev, err := tc.provider.ParseWebhookEvent([]byte(tc.payload), signedFor(tc.provider, []byte(tc.payload)))
+			payload := []byte(tc.payload)
+			require.True(t, json.Valid(payload), "payload is not JSON")
+			var ev scm.WebhookEvent
+			var err error
+			if tc.headers == nil {
+				ev, err = tc.provider.ParseWebhookEvent(payload, signedFor(tc.provider, payload))
+			} else {
+				// Gitea and Forgejo send the bare hex digest in X-Gitea-Signature.
+				h := http.Header{"X-Gitea-Signature": []string{hmacHex(testWebhookSecret, payload)}}
+				for k, v := range tc.headers {
+					h.Set(k, v)
+				}
+				ev, err = scm.ParseWebhookRequest(tc.provider, payload, h)
+			}
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, ev.MergeCommitSHA)
+			if tc.want != "" {
+				assert.True(t, ev.EventType == "pull_request" && ev.Action == "closed" && ev.Merged, "a merge event: %+v", ev)
+				assert.NotZero(t, ev.PRNumber)
+				assert.NotEmpty(t, ev.RepoFullName)
+			}
 		})
 	}
 }

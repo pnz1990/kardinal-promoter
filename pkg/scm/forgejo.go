@@ -262,7 +262,9 @@ func (f *ForgejoProvider) ParseWebhookEvent(payload []byte, signature string) (W
 // "issue_comment", ...). The payload does not name its event, and a comment
 // or label event on a merged PR carries pull_request.merged=true too, so only
 // a "pull_request" event with action "closed" is a merge. Without the header
-// the payload is read as a pull_request event.
+// the payload is read as a pull_request event. A merge event reports
+// pull_request.merge_commit_sha, the commit the merge produced on the base
+// branch; Forgejo and Gitea set it only once the PR is merged.
 func (f *ForgejoProvider) parseWebhookEvent(payload []byte, signature, eventType string) (WebhookEvent, error) {
 	if f.WebhookSecret == "" {
 		return WebhookEvent{}, ErrNoWebhookSecret
@@ -279,10 +281,11 @@ func (f *ForgejoProvider) parseWebhookEvent(payload []byte, signature, eventType
 		Action      string `json:"action"`
 		Number      int    `json:"number"`
 		PullRequest struct {
-			Number  int    `json:"number"`
-			HTMLURL string `json:"html_url"`
-			Merged  bool   `json:"merged"`
-			State   string `json:"state"`
+			Number         int    `json:"number"`
+			HTMLURL        string `json:"html_url"`
+			Merged         bool   `json:"merged"`
+			State          string `json:"state"`
+			MergeCommitSHA string `json:"merge_commit_sha"`
 		} `json:"pull_request"`
 		Repository struct {
 			FullName string `json:"full_name"`
@@ -301,7 +304,9 @@ func (f *ForgejoProvider) parseWebhookEvent(payload []byte, signature, eventType
 		number = raw.PullRequest.Number
 	}
 	if eventType == "pull_request" && raw.PullRequest.Merged && raw.Action == "closed" {
-		return mergedPREvent(raw.Repository.FullName, number), nil
+		event := mergedPREvent(raw.Repository.FullName, number)
+		event.MergeCommitSHA = raw.PullRequest.MergeCommitSHA
+		return event, nil
 	}
 	return WebhookEvent{
 		EventType:    eventType,

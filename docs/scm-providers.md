@@ -226,6 +226,9 @@ upstream step is not `Verified`) or would not come, kardinal deletes the branch.
 > sends the signature in `X-Forgejo-Signature` and `X-Gitea-Signature`; Gitea sends
 > `X-Gitea-Signature`. The controller accepts any of them.
 
+A merge event carries the merge commit in `pull_request.merge_commit_sha`, and the controller
+records it with the merge, so the `argocd` and `flux` health checks need no further API call for it.
+
 Forgejo and Gitea deliver webhooks only to hosts their `ALLOWED_HOST_LIST` setting allows,
 and its default, `external`, excludes private and loopback addresses. When the controller's
 webhook URL is one (an in-cluster Service, a private load balancer), the server blocks the

@@ -171,7 +171,8 @@ func forgejoEvent(t *testing.T, repo string, number int, action string, merged b
 }
 
 // mergedEvent is the body kind's git server sends when PR number of repo
-// is merged; sha is the merge commit (GitLab and GitHub send it).
+// is merged; sha is the merge commit the event carries, "" for an event
+// without one (a GitLab fast-forward merge).
 func mergedEvent(t *testing.T, kind, repo string, number int, sha string) []byte {
 	t.Helper()
 	switch kind {
@@ -190,7 +191,17 @@ func mergedEvent(t *testing.T, kind, repo string, number int, sha string) []byte
 			"repository":   map[string]interface{}{"full_name": repo},
 		})
 	}
-	return forgejoEvent(t, repo, number, "closed", true, "closed")
+	if sha == "" {
+		return forgejoEvent(t, repo, number, "closed", true, "closed")
+	}
+	return framework.JSONBody(t, map[string]interface{}{
+		"action": "closed",
+		"number": number,
+		"pull_request": map[string]interface{}{
+			"number": number, "merged": true, "state": "closed", "merge_commit_sha": sha,
+		},
+		"repository": map[string]interface{}{"full_name": repo},
+	})
 }
 
 // mergeSeenByWebhook merges pr right after the PRStatus reconciler polled it,
@@ -741,7 +752,7 @@ func TestSCM_WebhookMergeIsConfirmed(t *testing.T) {
 	// Signed right once the PR is merged, the event is confirmed and marks
 	// the PRStatus merged (mergeSeenByWebhook checks the logged repo and
 	// namespace).
-	a.mergeByWebhook(t, bundle, "prod", sig, kind == "github" || kind == "gitlab")
+	a.mergeByWebhook(t, bundle, "prod", sig, true)
 	assertEnvAt(t, a, "prod", fixtures.V2)
 }
 

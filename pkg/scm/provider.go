@@ -64,8 +64,8 @@ type WebhookEvent struct {
 	Merged bool
 
 	// MergeCommitSHA is the commit a merged PR produced on its base branch,
-	// when the payload reports it (GitHub and GitLab). Empty otherwise; the
-	// PRStatus reconciler then asks the SCM API for it.
+	// when the payload reports it (GitHub, GitLab, Forgejo and Gitea). Empty
+	// otherwise; the PRStatus reconciler then asks the SCM API for it.
 	MergeCommitSHA string
 
 	// Action is the event action (e.g., "closed", "opened").

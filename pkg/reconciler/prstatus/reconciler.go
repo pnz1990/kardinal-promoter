@@ -38,9 +38,9 @@
 //     Transient errors (429, 5xx, network) are retried every 30 seconds.
 //   - The PromotionStep reconciler watches PRStatus and advances from
 //     WaitingForMerge when status.merged is true. The SCM webhook may set
-//     status.merged first, with status.mergeCommitSHA for GitHub and for
-//     GitLab merges that are not fast-forward; this reconciler then only
-//     fills in a missing merge commit, or status.mergeCommitUnavailable.
+//     status.merged first, with status.mergeCommitSHA for GitHub, Forgejo,
+//     Gitea and GitLab merges that are not fast-forward; this reconciler then
+//     only fills in a missing merge commit, or status.mergeCommitUnavailable.
 //   - PolicyGate CEL reads the approval state as bundle.pr["<env>"].isApproved
 //     and bundle.pr["<env>"].approvalCount (K-08).
 //   - Polling is throttled: at most one poll per requeuePollInterval, and the
