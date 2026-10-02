@@ -25,8 +25,11 @@ import (
 // --scm-provider=gitlab against GitLab CE. GitLab calls a PR a merge request
 // (MR); kardinal's PR steps and fields cover both.
 //
-// Not covered here: a label failure (SCM-GL-02). kardinal labels an MR by
-// editing it, which any token that may open the MR may also do.
+// Not covered here: a label failure (SCM-GL-02). No project role opens an
+// MR but cannot label it. Observed on GitLab CE 19.4.1: a Reporter gets 403
+// on the branch push, on the MR and on the label; a Developer may push, open
+// the MR and label it (the labels are created on the fly), as the bot does
+// with its api-scoped token.
 
 // TestGitLab_PromotionPR checks the MR a pr-review environment opens on
 // GitLab, and that rerunning open-pr finds it instead of opening another.

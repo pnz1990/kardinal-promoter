@@ -12,7 +12,7 @@
 #   gitea   Gitea + Argo CD
 #   gitlab  GitLab CE + Argo CD
 #   github  real GitHub (branches of one shared repo, components/github.sh
-#           says which token it uses) + Argo CD
+#           says which token it uses) + Argo CD, webhook receiver
 #   delivery Forgejo + Argo CD + Argo Rollouts + Flagger
 #   ui      Forgejo + Argo CD + the UI auth, CORS and TLS releases (ui.sh)
 #   flux    Forgejo + Flux + Prometheus Operator, Prometheus, Pushgateway,
@@ -57,7 +57,9 @@ case "$SUITE" in
     RUN='^Test(Core|SCM|Forgejo|Gate|Bundle|Pipeline|Graph|Step|Rollback|Health|CLI|CIAPI|Notify|Sub|Audit)_' ;;
   gitea) COMPONENTS=("giteafamily.sh gitea" argocd.sh) RUN='^Test(Core|SCM|Gitea)_' ;;
   gitlab) COMPONENTS=(gitlab.sh argocd.sh) RUN='^Test(Core|SCM|GitLab)_' ;;
-  github) COMPONENTS=(github.sh argocd.sh) RUN='^Test(Core|SCM|GitHub)_' ;;
+  # The webhook receiver is the other API host TestGitHub_SCMAPIURL points
+  # --scm-api-url at.
+  github) COMPONENTS=(github.sh argocd.sh webhook-receiver.sh) RUN='^Test(Core|SCM|GitHub)_' ;;
   delivery) COMPONENTS=("giteafamily.sh forgejo" argocd.sh rollouts.sh flagger.sh)
     RUN='^Test(Rollouts|Flagger|Delivery)_' ;;
   # The UI API and the web app in a browser: the main release with no UI

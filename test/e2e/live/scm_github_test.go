@@ -6,7 +6,10 @@
 package live
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +20,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 )
 
 // The GitHub tests run in the github suite, whose controller runs with
@@ -28,9 +32,6 @@ import (
 // Not covered here: a label failure (SCM-GH-02) needs a token that may open
 // PRs but not label them, and an approval (SCM-GH-07) a second account: a
 // GitHub user can't approve their own PR.
-
-// githubAPI is GitHub's public API, the default of --scm-api-url.
-const githubAPI = "https://api.github.com"
 
 // TestGitHub_PromotionPR checks the PR a pr-review environment opens on
 // GitHub, and that rerunning open-pr finds it instead of opening another.
@@ -114,39 +115,62 @@ func TestGitHub_TokenCheck(t *testing.T) {
 }
 
 // TestGitHub_SCMAPIURL checks that --scm-api-url is the API base the
-// controller calls, as for a GitHub Enterprise server. Set to GitHub's API,
-// the controller opens the PR through it. Set to a host that does not exist,
-// the startup token check and the PRStatus poll call that host, and the step
-// keeps waiting. Back on the suite's controller, the merge is seen and the
-// step is Verified. The PR is opened before the host changes, so no branch
-// is pushed without a PR that cleanup closes. Not parallel: it changes the
-// controller's flags.
+// controller calls, as for a GitHub Enterprise server. The PR is opened on
+// github.com, the default API. Then the flag is pointed at a bucket of the
+// suite's webhook receiver, which records every request and answers 200
+// "OK": the startup token check asks it for /user and the PRStatus poll for
+// /repos/<repo>/pulls/<n>, each with the token as a Bearer and GitHub's
+// Accept header. The answer has no X-OAuth-Scopes header, so the check
+// reports the scopes unverified; "OK" is not GitHub's JSON, so the poll
+// fails to decode it and retries, and the step keeps waiting. Back
+// on the suite's controller, the merge is seen and the step is Verified.
+// The PR is opened before the host changes, so no branch is pushed without
+// a PR that cleanup closes. Not parallel: it changes the controller's flags.
 //
 // Covers SCM-GH-10.
 func TestGitHub_SCMAPIURL(t *testing.T) {
 	e := framework.New(t)
 	requireKind(t, e, "github")
-
-	restore := e.PatchController(t, func(spec *corev1.PodSpec) { framework.SetArg(spec, "scm-api-url", githubAPI) })
-	assert.Contains(t, controllerArgs(t, e), "--scm-api-url="+githubAPI)
+	rec := framework.NewReceiver(t)
 	a := newArgoApp(t, e, "prod")
 	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	ps, pr := a.waitOpenPR(t, bundle, "prod")
-	e.WaitPRStatus(t, a.ns, pipelineName, bundle, "prod", time.Minute, "tracking the open PR",
+	prs := e.WaitPRStatus(t, a.ns, pipelineName, bundle, "prod", time.Minute, "tracking the open PR",
 		func(p *v1alpha1.PRStatus) bool { return p.Spec.PRNumber == pr.Number && p.Status.Open })
 
+	api := strings.TrimRight(rec.URL(a.ns, ""), "/")
 	since := time.Now()
-	e.EditController(t, func(spec *corev1.PodSpec) { framework.SetArg(spec, "scm-api-url", "http://"+noSCMHost) })
-	assert.Contains(t, controllerArgs(t, e), "--scm-api-url=http://"+noSCMHost)
-	callsNoSCMHost := func(match func(framework.LogLine) bool) func(framework.LogLine) bool {
-		return func(l framework.LogLine) bool { return match(l) && strings.Contains(l.Str("error"), noSCMHost) }
+	restore := e.PatchController(t, func(spec *corev1.PodSpec) { framework.SetArg(spec, "scm-api-url", api) })
+	assert.Contains(t, controllerArgs(t, e), "--scm-api-url="+api)
+	userPath := "/" + a.ns + "/user"
+	pullPath := fmt.Sprintf("/%s/repos/%s/pulls/%d", a.ns, prs.Spec.Repo, pr.Number)
+	got := map[string]framework.Received{}
+	framework.Eventually(t, 90*time.Second, "the receiver to get the token check and the PRStatus poll", func(ctx context.Context) (bool, string) {
+		recs, err := rec.Records(ctx, a.ns)
+		if err != nil {
+			return false, err.Error()
+		}
+		var paths []string
+		for _, r := range recs {
+			paths = append(paths, r.Method+" "+r.Path)
+			if r.Method == http.MethodGet && (r.Path == userPath || r.Path == pullPath) {
+				got[r.Path] = r
+			}
+		}
+		return len(got) == 2, fmt.Sprintf("%d requests: %s", len(recs), strings.Join(paths, ", "))
+	})
+	for path, r := range got {
+		// The header's value is the token; it is not logged.
+		assert.True(t, r.Header("Authorization") == "Bearer "+os.Getenv(gitserver.EnvToken), "%s: the suite's token goes as a Bearer", path)
+		assert.Equal(t, "application/vnd.github+json", r.Header("Accept"), path)
 	}
-	e.WaitControllerLog(t, since, time.Minute, "the token check to call "+noSCMHost,
-		callsNoSCMHost(framework.LogMessage("SCM token scope check skipped", "provider", "github")))
-	e.WaitControllerLog(t, since, 90*time.Second, "the PRStatus poll to call "+noSCMHost,
-		callsNoSCMHost(framework.LogMessage("GetPRStatus failed, will retry", "prstatus", ps.Spec.PRStatusRef, "namespace", a.ns)))
-	a.stillOpen(t, bundle, "prod", 10*time.Second, "while the API host does not resolve")
+	e.WaitControllerLog(t, since, time.Minute, "the token check to read the receiver's answer",
+		framework.LogMessage("SCM TOKEN SCOPE WARNING", "provider", "github", "missing_scope", "<unverified>"))
+	l := e.WaitControllerLog(t, since, 90*time.Second, "the PRStatus poll to fail on the receiver's answer",
+		framework.LogMessage("GetPRStatus failed, will retry", "prstatus", ps.Spec.PRStatusRef, "namespace", a.ns))
+	assert.Contains(t, l.Str("error"), "decode response")
+	a.stillOpen(t, bundle, "prod", 10*time.Second, "while the API host is the receiver")
 
 	restore()
 	a.merge(t, pr)

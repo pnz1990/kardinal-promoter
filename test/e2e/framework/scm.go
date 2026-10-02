@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -326,6 +327,22 @@ func (e *Env) SCMWebhookHealth(t *testing.T) WebhookHealth {
 	var h WebhookHealth
 	if err := json.Unmarshal(raw, &h); err != nil {
 		t.Fatalf("decode /webhook/scm/health %q: %v", raw, err)
+	}
+	return h
+}
+
+// WebhookHealthAt reads GET /webhook/scm/health of the controller whose
+// webhook port the host reaches at base (a Variant's URL). The endpoint
+// answers JSON.
+func WebhookHealthAt(t *testing.T, base string) WebhookHealth {
+	t.Helper()
+	res := HTTP(t, http.MethodGet, base+"/webhook/scm/health", nil, nil)
+	if res.Status != http.StatusOK || res.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("GET %s/webhook/scm/health: HTTP %d %s %s", base, res.Status, res.Header.Get("Content-Type"), clip(res.Body))
+	}
+	var h WebhookHealth
+	if err := json.Unmarshal([]byte(res.Body), &h); err != nil {
+		t.Fatalf("decode /webhook/scm/health %q: %v", res.Body, err)
 	}
 	return h
 }

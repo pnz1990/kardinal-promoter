@@ -2,7 +2,8 @@
 # hack/e2e/components/webhook-receiver.sh
 #
 # Installs the webhook receiver (hack/e2e/receiver) in namespace
-# webhook-receiver: a recorder that NotificationHooks deliver to. Tests read
+# webhook-receiver: a recorder that NotificationHooks deliver to, and that the
+# github suite points --scm-api-url at as a stand-in SCM API. Tests read
 # what it got and make it fail through its host NodePort. It is built from
 # this checkout on the host (standard library only) into a FROM scratch
 # image, so nothing is pulled. Idempotent.

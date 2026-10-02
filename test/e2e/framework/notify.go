@@ -58,7 +58,7 @@ func NewReceiver(t *testing.T) *Receiver {
 		api: strings.TrimRight(os.Getenv(EnvReceiverAPI), "/"),
 	}
 	if r.url == "" || r.api == "" {
-		t.Fatalf("%s and %s must be set; the core suite runs hack/e2e/components/webhook-receiver.sh",
+		t.Fatalf("%s and %s must be set; the core and github suites run hack/e2e/components/webhook-receiver.sh",
 			EnvReceiverURL, EnvReceiverAPI)
 	}
 	return r

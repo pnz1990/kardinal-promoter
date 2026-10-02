@@ -42,11 +42,19 @@ else
   die "no GitHub token: set KARDINAL_E2E_GITHUB_TOKEN_FILE or DEMO_GITHUB_TOKEN, or log in with gh"
 fi
 
-# The token must be able to push to the repo.
-perm=$(curl -fsS -H "Authorization: Bearer $(secret_get github-token)" -H 'X-GitHub-Api-Version: 2022-11-28' \
-  "https://api.github.com/repos/$REPO" |
-  python3 -c 'import json,sys; d=json.load(sys.stdin); print("%s %s" % (d.get("permissions",{}).get("push",False), d.get("private")))') ||
-  die "the GitHub token can't read $REPO"
+# The token must be able to push to the repo. The status says why it can't:
+# 401 is a token GitHub does not accept (expired, revoked or mistyped), 403
+# or 404 one without access to the repo.
+resp=$(curl -sS -w '\n%{http_code}' -H "Authorization: Bearer $(secret_get github-token)" -H 'X-GitHub-Api-Version: 2022-11-28' \
+  "https://api.github.com/repos/$REPO") || die "can't reach api.github.com"
+code=${resp##*$'\n'}
+case $code in
+  200) ;;
+  401) die "GitHub does not accept the token (401): it is expired, revoked or wrong" ;;
+  *) die "the GitHub token can't read $REPO ($code)" ;;
+esac
+perm=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print("%s %s" % (d.get("permissions",{}).get("push",False), d.get("private")))' <<<"${resp%$'\n'*}") ||
+  die "the GitHub answer for $REPO is not JSON"
 [ "${perm%% *}" = True ] || die "the GitHub token can't push to $REPO"
 [ "${perm##* }" = False ] || die "$REPO is private; Argo CD clones it anonymously"
 log "github: $REPO, token can push"

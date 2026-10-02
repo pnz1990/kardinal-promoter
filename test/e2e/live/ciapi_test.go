@@ -7,10 +7,7 @@ package live
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -607,7 +604,7 @@ func TestCIAPI_WebhookHealth(t *testing.T) {
 	secret := os.Getenv(framework.EnvWebhookSecret)
 	require.NotEmpty(t, secret, "%s is not set", framework.EnvWebhookSecret)
 	v := e.ControllerVariant(t, ns, nil)
-	assert.Equal(t, webhookHealth{Status: "ok", WebhookConfigured: true, EventsProcessed: 0}, readWebhookHealth(t, v.URL))
+	assert.Equal(t, framework.WebhookHealth{Status: "ok", WebhookConfigured: true, EventsProcessed: 0}, framework.WebhookHealthAt(t, v.URL))
 
 	repo := e.Repo(t, ns, fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: []string{"test"}}))
 	tester, ok := e.Git.(gitserver.HookTester)
@@ -619,7 +616,7 @@ func TestCIAPI_WebhookHealth(t *testing.T) {
 	var delivered int64
 	var changed time.Time
 	framework.Eventually(t, 2*time.Minute, "the Forgejo deliveries to be counted", func(context.Context) (bool, string) {
-		n := readWebhookHealth(t, v.URL).EventsProcessed
+		n := framework.WebhookHealthAt(t, v.URL).EventsProcessed
 		if n != delivered {
 			delivered, changed = n, time.Now()
 		}
@@ -630,42 +627,19 @@ func TestCIAPI_WebhookHealth(t *testing.T) {
 
 	event := []byte(`{"action":"opened","number":1,"repository":{"full_name":"kardinal/e2e"}}`)
 	bad := framework.HTTP(t, http.MethodPost, v.URL+"/webhook/scm",
-		map[string]string{"Content-Type": "application/json", "X-Forgejo-Signature": sign("wrong-secret", event)}, event)
+		map[string]string{"Content-Type": "application/json", "X-Forgejo-Signature": framework.HMACHex("wrong-secret", event)}, event)
 	assert.Equal(t, http.StatusUnauthorized, bad.Status, "a bad signature is refused")
-	assert.Equal(t, delivered, readWebhookHealth(t, v.URL).EventsProcessed, "a refused request is not counted")
+	assert.Equal(t, delivered, framework.WebhookHealthAt(t, v.URL).EventsProcessed, "a refused request is not counted")
 	good := framework.HTTP(t, http.MethodPost, v.URL+"/webhook/scm",
-		map[string]string{"Content-Type": "application/json", "X-Forgejo-Signature": sign(secret, event)}, event)
+		map[string]string{"Content-Type": "application/json", "X-Forgejo-Signature": framework.HMACHex(secret, event)}, event)
 	assert.Equal(t, http.StatusNoContent, good.Status, "a signed event that is not a merge")
-	assert.Equal(t, delivered+1, readWebhookHealth(t, v.URL).EventsProcessed)
+	assert.Equal(t, delivered+1, framework.WebhookHealthAt(t, v.URL).EventsProcessed)
 
 	off := e.ControllerVariant(t, ns, nil, "KARDINAL_WEBHOOK_SECRET")
-	assert.Equal(t, webhookHealth{Status: "ok", WebhookConfigured: false, EventsProcessed: 0}, readWebhookHealth(t, off.URL))
+	assert.Equal(t, framework.WebhookHealth{Status: "ok", WebhookConfigured: false, EventsProcessed: 0}, framework.WebhookHealthAt(t, off.URL))
 	res := framework.HTTP(t, http.MethodPost, off.URL+"/webhook/scm",
-		map[string]string{"Content-Type": "application/json", "X-Forgejo-Signature": sign(secret, event)}, event)
+		map[string]string{"Content-Type": "application/json", "X-Forgejo-Signature": framework.HMACHex(secret, event)}, event)
 	assert.Equal(t, http.StatusUnauthorized, res.Status)
 	assert.Equal(t, "webhook secret not configured", strings.TrimSpace(res.Body))
-	assert.EqualValues(t, 0, readWebhookHealth(t, off.URL).EventsProcessed)
-}
-
-type webhookHealth struct {
-	Status            string `json:"status"`
-	WebhookConfigured bool   `json:"webhookConfigured"`
-	EventsProcessed   int64  `json:"eventsProcessed"`
-}
-
-func readWebhookHealth(t *testing.T, base string) webhookHealth {
-	t.Helper()
-	res := framework.HTTP(t, http.MethodGet, base+"/webhook/scm/health", nil, nil)
-	require.Equal(t, http.StatusOK, res.Status, res.Body)
-	assert.Equal(t, "application/json", res.Header.Get("Content-Type"))
-	var h webhookHealth
-	require.NoError(t, json.Unmarshal([]byte(res.Body), &h), res.Body)
-	return h
-}
-
-// sign is Forgejo's webhook signature: hex HMAC-SHA256 of the body.
-func sign(secret string, body []byte) string {
-	m := hmac.New(sha256.New, []byte(secret))
-	m.Write(body)
-	return hex.EncodeToString(m.Sum(nil))
+	assert.EqualValues(t, 0, framework.WebhookHealthAt(t, off.URL).EventsProcessed)
 }
