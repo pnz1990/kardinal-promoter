@@ -322,6 +322,63 @@ func TestFlux_StalledOnSiblingCommit(t *testing.T) {
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
 }
 
+// TestFlux_RollbackOfStalledRelease checks onHealthFailure: rollback on
+// flux health when a release stalls. The rollback returns the Deployment to
+// the ReplicaSet it ran before, so Kubernetes creates no new ReplicaSet and
+// keeps the stalled rollout's ProgressDeadlineExceeded while the stalled pods
+// stay (the API server denies their deletion here). Flux fails on that
+// condition at once on the rollback commit ("failed early due to stalled
+// resources"). The rollback step waits for Flux to check again, with no
+// health failure, and is Verified once the stalled pods are gone and Flux's
+// next attempt passes.
+//
+// Covers HEALTH-FLUX-09.
+func TestFlux_RollbackOfStalledRelease(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newFluxRepo(t, e, "test")
+	// Without spec.retryInterval, Flux retries a failed health check every interval.
+	a.kustomize(t, "test", fluxSource, 30*time.Second)
+	a.waitSynced(t, "test")
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].OnHealthFailure = "rollback"
+	p.Spec.Environments[0].Health.Timeout = "5m"
+	a.apply(t, p)
+	workload := fixtures.Workload("test")
+	v2 := fixtures.Image + ":" + fixtures.V2
+	broken := fixtures.Image + ":" + fixtures.BrokenTag
+
+	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", v2)
+	e.WaitStepState(t, a.ns, pipelineName, b1, "test", "Verified", promoteTimeout)
+	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", broken)
+	lift := e.HoldPodDeletion(t, a.ns, broken, promoteTimeout)
+	ps := e.WaitStepState(t, a.ns, pipelineName, b2, "test", "RollingBack", promoteTimeout)
+	assert.Contains(t, ps.Status.Message, "health alarm via flux (onHealthFailure=rollback)")
+	assert.Contains(t, ps.Status.Message, "stalled resources")
+	rb := b2 + "-rollback-alarm"
+
+	commit := stepCommit(t, e, a.ns, pipelineName, rb, "test")
+	ps = e.WaitStepMessageAll(t, a.ns, pipelineName, rb, "test", "HealthChecking", promoteTimeout,
+		fmt.Sprintf("failed early due to stalled resources: [Deployment/%s/%s status: 'Failed'", a.ns, workload),
+		fmt.Sprintf("(lastAttemptedRevision=%s), but no Deployment Flux lists is past a progress deadline set during "+
+			"this promotion: Deployment %s/%s: ProgressDeadlineExceeded (", shortSHA(commit), a.ns, workload),
+		") is from an earlier rollout: its lastUpdateTime ", " is before this health check started (",
+		"; waiting for Flux to check again")
+	assert.Equal(t, v2, e.DeploymentImage(t, a.ns, workload), "Flux applied the rolled-back template")
+	failures := ps.Status.ConsecutiveHealthFailures
+
+	e.HoldStep(t, deliveryHold, a.ns, pipelineName, rb, "test", "the rollback waits for Flux on the earlier deadline",
+		func(ps *v1alpha1.PromotionStep) bool {
+			return ps.Status.State == "HealthChecking" && ps.Status.ConsecutiveHealthFailures == failures &&
+				strings.HasPrefix(ps.Status.Message, "waiting for flux: ")
+		})
+	lift()
+	ps = e.WaitStepState(t, a.ns, pipelineName, rb, "test", "Verified", promoteTimeout)
+	assert.Contains(t, ps.Status.Message, "health check passed via flux: Ready=True")
+	assert.Contains(t, ps.Status.Message, shortSHA(commit), "Flux applied the rollback commit")
+	e.WaitDeploymentImage(t, a.ns, workload, v2, time.Minute)
+}
+
 // TestFlux_PRReviewWaitsForMergeCommit checks that a pr-review environment
 // on flux health waits for Flux to apply the PR's merge commit: a
 // Kustomization still Ready on the previous commit after the merge does not

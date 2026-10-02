@@ -112,7 +112,7 @@ spec:
 
 A rollback Bundle (label `kardinal.io/rollback: "true"` or `spec.provenance.rollbackOf` set) is not rolled back again: when its own health check fails with `rollback` set, the step is `AbortedByAlarm` instead, so rollbacks do not chain.
 
-A rollback of a stalled Deployment returns it to the ReplicaSet it ran before, so Kubernetes creates no new ReplicaSet and keeps the stalled rollout's `ProgressDeadlineExceeded` until it sees the stalled pods go. The rollback Bundle's health check does not fail on that condition: it is from before its health check started, so the check is Waiting (`... is from an earlier rollout ...`) until Kubernetes replaces it (see [resource](health-adapters.md#adapter-resource-default)).
+A rollback of a stalled Deployment returns it to the ReplicaSet it ran before, so Kubernetes creates no new ReplicaSet and keeps the stalled rollout's `ProgressDeadlineExceeded` until it sees the stalled pods go. The rollback Bundle's health check does not fail on that condition: it is from before its health check started, so the check is Waiting (`... is from an earlier rollout ...`) until Kubernetes replaces it (see [resource](health-adapters.md#adapter-resource-default)). With `health.type: flux`, Flux fails on that condition and checks again only at its next reconcile; the step waits for that (see [flux](health-adapters.md#adapter-flux)).
 
 The rollback Bundle is a newer Bundle of the same pipeline and type, so the failing Bundle ends `Superseded`. The step that raised the alarm stays `RollingBack`, with the message naming the rollback Bundle: it is not cancelled as superseded, whichever order the two status updates land in.
 

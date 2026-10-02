@@ -13,6 +13,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
@@ -170,6 +172,111 @@ func TestDeploymentTargetUpdated(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, kindOf(got), got.Reason)
 			assert.Equal(t, tt.updated, got.TargetUpdated, "TargetUpdated")
+		})
+	}
+}
+
+// TestFluxStalledOnAnEarlierDeadline proves the Flux twin of B92 fixed: Flux
+// (kstatus) fails a Deployment on any ProgressDeadlineExceeded, also one the
+// Deployment controller kept from an earlier rollout after a rollback to the
+// ReplicaSet before a stalled one, and does not check again until its next
+// reconcile. That "failed early due to stalled resources" on the promoted
+// commit waits for Flux when every resource it lists is a Deployment whose
+// condition is from before the health check started, or that is no longer
+// past its progress deadline. Any other stall stays terminal.
+func TestFluxStalledOnAnEarlierDeadline(t *testing.T) {
+	bundle := []health.ImageExpectation{{Repository: podinfo, Tag: "6.15.0"}}
+	since, _ := time.Parse(time.RFC3339, "2026-10-02T05:02:00Z")
+	const (
+		before = "2026-10-02T05:01:30Z"
+		after  = "2026-10-02T05:12:30Z"
+		web    = "[Deployment/prod/web status: 'Failed']"
+	)
+	// stalledAt is Deployment prod/<name> on the Bundle image, past a
+	// progress deadline the controller set at at.
+	stalledAt := func(name, at string) *unstructured.Unstructured {
+		d := stalledDeployment(name, podinfo+":6.15.0")
+		c := d.Object["status"].(map[string]interface{})["conditions"].([]interface{})[1].(map[string]interface{})
+		c["lastUpdateTime"], c["lastTransitionTime"] = at, at
+		c["message"] = `ReplicaSet "` + name + `-5d8f" has timed out progressing.`
+		return d
+	}
+	stalledKs := func(listed, attempted string, mutate func(obj map[string]interface{})) *unstructured.Unstructured {
+		return kustomization("False", "HealthCheckFailed",
+			"health check failed after 5.01s: failed early due to stalled resources: "+listed,
+			"main@sha1:"+fluxPrevious, both(withInventory("web"), func(obj map[string]interface{}) {
+				obj["status"].(map[string]interface{})["lastAttemptedRevision"] = "main@sha1:" + attempted
+			}, func(obj map[string]interface{}) {
+				if mutate != nil {
+					mutate(obj)
+				}
+			}))
+	}
+	const earlier = "(lastAttemptedRevision=034ce92a1b2c), but no Deployment Flux lists is past a progress deadline " +
+		"set during this promotion: Deployment prod/web: ProgressDeadlineExceeded (ReplicaSet \"web-5d8f\" has timed out " +
+		"progressing.) is from an earlier rollout: its lastUpdateTime 2026-10-02T05:01:30Z is before this health check " +
+		"started (2026-10-02T05:02:00Z); waiting for the Deployment controller to see this rollout progress; " +
+		"waiting for Flux to check again"
+	tests := []struct {
+		name   string
+		objs   []runtime.Object
+		since  time.Time
+		want   wantKind
+		reason string
+	}{
+		{name: "a deadline from before the health check started waits for Flux",
+			objs: []runtime.Object{stalledKs(web, fluxPushed, nil), stalledAt("web", before)}, since: since,
+			want: isProgressing, reason: earlier},
+		{name: "a deadline set during this promotion is terminal, though the template runs the Bundle images",
+			objs: []runtime.Object{stalledKs(web, fluxPushed, nil), stalledAt("web", after)}, since: since,
+			want: isTerminal, reason: "(lastAttemptedRevision=034ce92a1b2c)"},
+		{name: "a Deployment no longer past its deadline waits for Flux",
+			objs: []runtime.Object{stalledKs(web, fluxPushed, nil), deploymentObj("web", 2, podinfo+":6.15.0", 1)}, since: since,
+			want: isProgressing, reason: "set during this promotion: Deployment prod/web: Available=True, 1/1 replicas " +
+				"updated and available; waiting for Flux to check again"},
+		{name: "without a health-check start every deadline counts",
+			objs: []runtime.Object{stalledKs(web, fluxPushed, nil), stalledAt("web", before)},
+			want: isTerminal, reason: "stalled resources"},
+		{name: "a listed Deployment that is gone is terminal",
+			objs: []runtime.Object{stalledKs(web, fluxPushed, nil)}, since: since,
+			want: isTerminal, reason: "stalled resources"},
+		{name: "a listed resource of another kind is terminal",
+			objs: []runtime.Object{stalledKs("[Deployment/prod/web status: 'Failed', StatefulSet/prod/db status: 'Failed']",
+				fluxPushed, nil), stalledAt("web", before), stalledAt("db", before)}, since: since,
+			want: isTerminal, reason: "StatefulSet/prod/db"},
+		{name: "a second listed Deployment that stalled during this promotion is terminal",
+			objs: []runtime.Object{stalledKs("[Deployment/prod/web status: 'Failed', Deployment/prod/api status: 'Failed']",
+				fluxPushed, nil), stalledAt("web", before), stalledAt("api", after)}, since: since,
+			want: isTerminal, reason: "Deployment/prod/api"},
+		{name: "two listed Deployments from an earlier rollout wait for Flux",
+			objs: []runtime.Object{stalledKs("[Deployment/prod/web status: 'Failed', Deployment/prod/api status: 'Failed']",
+				fluxPushed, nil), stalledAt("web", before), stalledAt("api", before)}, since: since,
+			want: isProgressing, reason: "Deployment prod/api: ProgressDeadlineExceeded"},
+		{name: "a message that lists no resource is terminal",
+			objs: []runtime.Object{stalledKs("[]", fluxPushed, nil), stalledAt("web", before)}, since: since,
+			want: isTerminal, reason: "stalled resources"},
+		{name: "a Kustomization that applies to another cluster is terminal",
+			objs: []runtime.Object{stalledKs(web, fluxPushed, withSpec("kubeConfig",
+				map[string]interface{}{"secretRef": map[string]interface{}{"name": "remote"}})), stalledAt("web", before)},
+			since: since, want: isTerminal, reason: "stalled resources"},
+		{name: "a sibling's commit with the Bundle Deployment's deadline from an earlier rollout is unhealthy",
+			objs: []runtime.Object{stalledKs(web, fluxLater, nil), stalledAt("web", before)}, since: since,
+			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: health check failed"},
+		{name: "a sibling's commit with the Bundle Deployment stalled during this promotion is terminal",
+			objs: []runtime.Object{stalledKs(web, fluxLater, nil), stalledAt("web", after)}, since: since,
+			want: isTerminal, reason: "but Deployment prod/web, which runs the Bundle images, stalled"},
+		{name: "reconciling the promoted commit again with a deadline from an earlier rollout waits",
+			objs:  []runtime.Object{reconciling("main@sha1:"+fluxPushed, "main@sha1:"+fluxPushed, nil), stalledAt("web", before)},
+			since: since, want: isProgressing, reason: "is from an earlier rollout"},
+		{name: "reconciling the promoted commit again with a deadline set during this promotion is terminal",
+			objs:  []runtime.Object{reconciling("main@sha1:"+fluxPushed, "main@sha1:"+fluxPushed, nil), stalledAt("web", after)},
+			since: since, want: isTerminal, reason: "rollout failed: ProgressDeadlineExceeded"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := checkFlux(t, health.CheckOptions{ExpectedRevision: fluxPushed, ExpectedImages: bundle, Since: tt.since}, tt.objs...)
+			assert.Equal(t, tt.want, kindOf(got), got.Reason)
+			assert.Contains(t, got.Reason, tt.reason)
 		})
 	}
 }

@@ -24,6 +24,7 @@ package health
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -700,7 +701,9 @@ var fluxKustomizationGVR = schema.GroupVersionResource{
 // checks the images, not the git history.
 // Ready=False is a health failure, and Terminal when Flux gave up on the
 // promoted commit because its resources stalled, or on another commit when
-// a stalled Deployment itself runs the Bundle images. Ready=Unknown, a
+// a stalled Deployment itself runs the Bundle images. A stall of a
+// Deployment whose ProgressDeadlineExceeded is from an earlier rollout is
+// Progressing (see stalledEarlier). Ready=Unknown, a
 // generation not yet observed or another applied revision is Progressing.
 // While the Kustomization is suspended (spec.suspend) Flux applies nothing,
 // so a Progressing result says so.
@@ -757,7 +760,8 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 		// commit on the shared branch (another environment's push) when a
 		// Deployment that runs the Bundle images is itself past its progress
 		// deadline: Flux applied the Bundle's change and that rollout
-		// stalled. Another Deployment's stall is not ours to fail on.
+		// stalled. Another Deployment's stall is not ours to fail on, nor a
+		// ProgressDeadlineExceeded from an earlier rollout.
 		reason, _ := readyCond["reason"].(string)
 		msg, _ := readyCond["message"].(string)
 		if reason == "HealthCheckFailed" && strings.Contains(msg, "stalled resources") {
@@ -765,9 +769,13 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 			rev, _ := fluxCommit(attempted)
 			want := opts.ExpectedRevision
 			if want == "" || SameRevision(rev, want) {
-				return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s)", state, shortRev(rev))), nil
+				stalled := fmt.Sprintf("%s (lastAttemptedRevision=%s)", state, shortRev(rev))
+				if earlier := a.stalledEarlier(ctx, ks, msg, opts); earlier != "" {
+					return progressing(fmt.Sprintf("%s, but %s; waiting for Flux to check again", stalled, earlier)), nil
+				}
+				return terminal(stalled), nil
 			}
-			if w, err := a.workloads(ctx, ks, opts.ExpectedImages); err == nil {
+			if w, err := a.workloads(ctx, ks, opts); err == nil {
 				for _, d := range w {
 					if d.bundle && d.status.Terminal {
 						return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s, not %s, but Deployment %s, which runs the Bundle images, stalled)",
@@ -808,7 +816,7 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 			// revision only when the Kustomization's Deployments
 			// demonstrably run the Bundle images and are all rolled out.
 			// Nothing here can tell whether that commit is later than ours.
-			w, err := a.workloads(ctx, ks, opts.ExpectedImages)
+			w, err := a.workloads(ctx, ks, opts)
 			if err != nil || !w.runsBundle() {
 				return waiting, nil
 			}
@@ -835,7 +843,7 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 // repository, or for another revision, it is Progressing as before.
 func (a *FluxAdapter) reconcilingAgain(ctx context.Context, ks *unstructured.Unstructured, state, applied string,
 	opts CheckOptions) HealthStatus {
-	w, err := a.workloads(ctx, ks, opts.ExpectedImages)
+	w, err := a.workloads(ctx, ks, opts)
 	if err != nil {
 		return progressing(state)
 	}
@@ -931,7 +939,7 @@ func (w fluxWorkloads) worst(keep func(fluxDeployment) bool) (HealthStatus, int)
 // applied (status.inventory) or health-checks (spec.healthChecks). A
 // Kustomization that applies to another cluster (spec.kubeConfig) has none
 // that can be read here.
-func (a *FluxAdapter) workloads(ctx context.Context, ks *unstructured.Unstructured, expected []ImageExpectation) (fluxWorkloads, error) {
+func (a *FluxAdapter) workloads(ctx context.Context, ks *unstructured.Unstructured, opts CheckOptions) (fluxWorkloads, error) {
 	var w fluxWorkloads
 	if _, remote, _ := unstructured.NestedMap(ks.Object, "spec", "kubeConfig"); remote {
 		return w, nil
@@ -945,24 +953,73 @@ func (a *FluxAdapter) workloads(ctx context.Context, ks *unstructured.Unstructur
 		case err != nil:
 			return nil, err
 		default:
-			// No Since: a ProgressDeadlineExceeded always counts here, as it
-			// does for Flux, and the flux adapter does not date the update.
-			fd.status = checkDeployment(d, string(appsv1.DeploymentAvailable), CheckOptions{ExpectedImages: expected})
-			fd.status.TargetUpdated = false
+			fd.status = checkFluxDeployment(d, opts)
 			if fd.status.Healthy {
 				fd.status.Reason = fmt.Sprintf("Deployment %s: %s", ref, fd.status.Reason)
 			}
-			var images []string
-			for _, c := range d.Spec.Template.Spec.Containers {
-				images = append(images, c.Image)
-			}
-			fd.bundleRepo = runsRepository(expected, images)
-			ok, note := checkImages(expected, images)
+			images := deploymentImages(d)
+			fd.bundleRepo = runsRepository(opts.ExpectedImages, images)
+			ok, note := checkImages(opts.ExpectedImages, images)
 			fd.bundle = fd.bundleRepo && ok && note == ""
 		}
 		w = append(w, fd)
 	}
 	return w, nil
+}
+
+// checkFluxDeployment is checkDeployment for a Deployment Flux applied or
+// health-checks. A ProgressDeadlineExceeded counts only when set after the
+// health check started (opts.Since): one from an earlier rollout is
+// Progressing, as for the resource adapter. The flux adapter does not record
+// when the pod template first ran the Bundle images (TargetUpdatedAt), so
+// the time check is the only one (see deadlineFromEarlierRollout).
+func checkFluxDeployment(d *appsv1.Deployment, opts CheckOptions) HealthStatus {
+	imagesOK, imageNote := checkImages(opts.ExpectedImages, deploymentImages(d))
+	return deploymentRollout(d, string(appsv1.DeploymentAvailable), imagesOK, imageNote, false, CheckOptions{Since: opts.Since})
+}
+
+// fluxStalledResource matches a resource Flux lists in a "failed early due
+// to stalled resources" message: <kind>/<namespace>/<name> status: 'Failed'
+// (fluxcd/pkg ssa, WaitForSetWithContext).
+var fluxStalledResource = regexp.MustCompile(`([A-Za-z0-9]+)/(?:([a-z0-9.-]+)/)?([a-z0-9.-]+) status: 'Failed'`)
+
+// stalledEarlier explains why Flux's "failed early due to stalled resources"
+// (msg) is not a stall of this promotion, or returns "" when it may be.
+// Flux fails a Deployment on any ProgressDeadlineExceeded, also one the
+// Deployment controller kept from an earlier rollout after a rollback to the
+// ReplicaSet before a stalled one (see deadlineFromEarlierRollout), and
+// checks again only at its next reconcile. So the stall is not this
+// promotion's when every resource Flux lists is a Deployment, in this
+// cluster, whose ProgressDeadlineExceeded is from before the health check
+// started or that is no longer past its progress deadline. A resource of
+// another kind, one that cannot be read, or a message that names none, is.
+func (a *FluxAdapter) stalledEarlier(ctx context.Context, ks *unstructured.Unstructured, msg string, opts CheckOptions) string {
+	if _, remote, _ := unstructured.NestedMap(ks.Object, "spec", "kubeConfig"); remote {
+		return ""
+	}
+	listed := fluxStalledResource.FindAllStringSubmatch(msg, -1)
+	if len(listed) == 0 {
+		return ""
+	}
+	var now []string
+	for _, m := range listed {
+		if m[1] != "Deployment" || m[2] == "" {
+			return ""
+		}
+		d, err := getDeployment(ctx, a.dynamic, m[2], m[3])
+		if err != nil {
+			return ""
+		}
+		st := checkFluxDeployment(d, opts)
+		if st.Terminal {
+			return ""
+		}
+		if st.Healthy {
+			st.Reason = fmt.Sprintf("Deployment %s/%s: %s", m[2], m[3], st.Reason)
+		}
+		now = append(now, st.Reason)
+	}
+	return "no Deployment Flux lists is past a progress deadline set during this promotion: " + strings.Join(now, "; ")
 }
 
 // fluxDeploymentRefs lists the Deployments in the Kustomization's inventory

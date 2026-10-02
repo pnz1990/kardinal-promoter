@@ -19,7 +19,11 @@
 >   treats `ProgressDeadlineExceeded` as a terminal failure when it was set after the health
 >   check started and after a check first found the pod template on the Bundle images
 >   (`status.targetUpdatedAt`); an earlier one, which Kubernetes keeps after a rollback to the
->   previous ReplicaSet, is progressing. Flagger `Failed` is terminal on the same terms.
+>   previous ReplicaSet, is progressing. Flagger `Failed` is terminal on the same terms. Flux's
+>   "failed early due to stalled resources" on the promoted commit is terminal unless every
+>   resource it lists is a Deployment whose `ProgressDeadlineExceeded` is from before the health
+>   check started, or that is no longer past its deadline: Flux fails on any such condition and
+>   checks again only at its next reconcile, so that stall is progressing.
 > - Results are healthy, progressing, unhealthy or terminal; only unhealthy results count
 >   toward `status.consecutiveHealthFailures`.
 > - Remote-cluster checks (`health.cluster`, the Remote Cluster Client Management section)
