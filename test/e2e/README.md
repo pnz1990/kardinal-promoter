@@ -111,7 +111,10 @@ comment, `Covers STEP-AUTO-01, SCM-CLOSED-01.`, and only for what it fully
 asserts. `go test ./test/hack -run TestE2ECoverage` fails when the file and
 the tests disagree, when a live test claims no row, when no suite runs a live
 test, and when a row's `suite` (a suite in `hack/e2e/up.sh`, or `unit` for a
-contract row) runs none of its tests. Only live tests cover live rows;
+contract row) runs none of its tests. It also fails when a `source` ref is
+not a repo path, `path:N` or `path:N-M`, names lines past the end of its
+file, or starts on a blank line, a bare `---` or a markdown table
+separator. Only live tests cover live rows;
 contract rows are covered by unit tests: Bitbucket and Azure DevOps, which
 can't be self-hosted, and behaviors a live test cannot force, such as a race
 between two status writes.

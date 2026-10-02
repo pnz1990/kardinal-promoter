@@ -4,7 +4,7 @@
 package hack
 
 import (
-	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -111,42 +111,140 @@ func TestE2ECoverage(t *testing.T) {
 	}
 }
 
-// rollbackRef is a source ref that names lines: path:N or path:N-M.
-var rollbackRef = regexp.MustCompile(`^([^:\s]+):([0-9]+)(?:-([0-9]+))?$`)
+// sourceRef is a source ref: a path in the repo (a file or a directory), or
+// lines of a file: path:N or path:N-M.
+var sourceRef = regexp.MustCompile(`^([^:\s]+)(?::([0-9]+)(?:-([0-9]+))?)?$`)
 
-// TestE2ECoverage_RollbackRefsNameLines: every source ref of a covered
-// rollback row names the lines that document or implement the row, and those
-// lines exist, so a reader of the row finds them without reading the file.
-func TestE2ECoverage_RollbackRefsNameLines(t *testing.T) {
+// tableSeparator is the line under the header of a markdown table, such as
+// |---|---| or | :--- | ---: |. Each cell needs three dashes, so a YAML "- |"
+// line is not one.
+var tableSeparator = regexp.MustCompile(`^\|?(\s*:?-{3,}:?\s*\|)+\s*(:?-{3,}:?)?$`)
+
+// TestE2ECoverage_SourceRefs: every source ref of every row names a path in
+// the repo. A ref with lines names lines that exist, and its first line has
+// content, so a reader of the row lands on the behavior. A covered rollback row
+// names lines in every ref.
+func TestE2ECoverage_SourceRefs(t *testing.T) {
 	root := repoRoot(t)
 	rows, err := coverage.Rows(root)
 	require.NoError(t, err)
-	lineCount := map[string]int{}
-	for _, r := range rows {
-		if r.Area != "rollback" || r.Status != "covered" {
+	for _, p := range sourceRefProblems(root, rows) {
+		t.Error(p)
+	}
+}
+
+// TestSourceRefProblems: each rule of TestE2ECoverage_SourceRefs refuses a ref
+// that breaks it, and a ref that keeps every rule passes.
+func TestSourceRefProblems(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, "pkg"), 0o755))
+	doc := "# Title\n\n| a | b |\n|---|---|\n---\ntext\n- |\n| :--- | ---: |\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(doc), 0o600))
+	for _, tc := range []struct {
+		source, area, status string
+		// problem is part of the one problem expected, or "" for none.
+		problem string
+	}{
+		{source: "doc.md"},
+		{source: "pkg"},
+		{source: "doc.md:1"},
+		{source: "doc.md:3-6"},
+		{source: "doc.md:6; pkg"},
+		{source: "doc.md:7"},
+		{source: "doc.md:1", area: "rollback", status: "covered"},
+		{source: "doc.md", area: "rollback", status: "todo"},
+		{source: "doc.md handleBake", problem: "is not path, path:N or path:N-M"},
+		{source: "doc.md:handleBake", problem: "is not path, path:N or path:N-M"},
+		{source: "doc.md:1;doc.md:6", problem: "is not path, path:N or path:N-M"},
+		{source: "missing.md", problem: "names no path in the repo"},
+		{source: "../doc.md", problem: "names a path outside the repo"},
+		{source: "/doc.md:1", problem: "names a path outside the repo"},
+		{source: "missing.md:1", problem: "names lines of no file"},
+		{source: "pkg:1", problem: "names lines of no file"},
+		{source: "doc.md:0", problem: "is outside doc.md, which has 8 lines"},
+		{source: "doc.md:9", problem: "is outside doc.md, which has 8 lines"},
+		{source: "doc.md:6-9", problem: "is outside doc.md, which has 8 lines"},
+		{source: "doc.md:3-2", problem: "is outside doc.md, which has 8 lines"},
+		{source: "doc.md:1; doc.md:2-3", problem: `"doc.md:2-3" starts on a blank line`},
+		{source: "doc.md:4", problem: "starts on a markdown table separator"},
+		{source: "doc.md:8", problem: "starts on a markdown table separator"},
+		{source: "doc.md:5-6", problem: "starts on a bare ---"},
+		{source: "doc.md", area: "rollback", status: "covered", problem: "names no lines"},
+	} {
+		row := coverage.Row{ID: "TEST-01", Area: tc.area, Status: tc.status, Source: tc.source}
+		got := sourceRefProblems(root, []coverage.Row{row})
+		if tc.problem == "" {
+			assert.Empty(t, got, "source %q", tc.source)
 			continue
 		}
-		for _, ref := range strings.Split(r.Source, "; ") {
-			m := rollbackRef.FindStringSubmatch(ref)
-			if !assert.NotNil(t, m, "%s: ref %q names no lines; write path:N or path:N-M", r.ID, ref) {
-				continue
-			}
-			n, ok := lineCount[m[1]]
-			if !ok {
-				b, err := os.ReadFile(filepath.Join(root, m[1]))
-				if !assert.NoError(t, err, "%s: ref %q", r.ID, ref) {
-					continue
-				}
-				n = bytes.Count(b, []byte("\n"))
-				lineCount[m[1]] = n
-			}
-			first, _ := strconv.Atoi(m[2])
-			last := first
-			if m[3] != "" {
-				last, _ = strconv.Atoi(m[3])
-			}
-			assert.True(t, first >= 1 && first <= last && last <= n,
-				"%s: ref %q is outside %s, which has %d lines", r.ID, ref, m[1], n)
+		if assert.Len(t, got, 1, "source %q", tc.source) {
+			assert.Contains(t, got[0], tc.problem, "source %q", tc.source)
 		}
 	}
+}
+
+// sourceRefProblems returns one message for each source ref of rows that
+// breaks a rule of TestE2ECoverage_SourceRefs. The paths are relative to root.
+func sourceRefProblems(root string, rows []coverage.Row) []string {
+	var problems []string
+	files := map[string][]string{}
+	for _, r := range rows {
+		for _, ref := range strings.Split(r.Source, "; ") {
+			if p := sourceRefProblem(root, files, r, ref); p != "" {
+				problems = append(problems, fmt.Sprintf("%s: ref %q %s", r.ID, ref, p))
+			}
+		}
+	}
+	return problems
+}
+
+// sourceRefProblem returns the rule that ref, a source ref of row r, breaks,
+// or "" when it keeps them all. files holds the lines of the files read so far.
+func sourceRefProblem(root string, files map[string][]string, r coverage.Row, ref string) string {
+	m := sourceRef.FindStringSubmatch(ref)
+	if m == nil {
+		return "is not path, path:N or path:N-M"
+	}
+	path := m[1]
+	if !filepath.IsLocal(path) {
+		return "names a path outside the repo"
+	}
+	if m[2] == "" {
+		if r.Area == "rollback" && r.Status == "covered" {
+			return "names no lines; a covered rollback row writes path:N or path:N-M"
+		}
+		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
+			return fmt.Sprintf("names no path in the repo: %v", err)
+		}
+		return ""
+	}
+	lines, ok := files[path]
+	if !ok {
+		b, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			return fmt.Sprintf("names lines of no file: %v", err)
+		}
+		lines = strings.Split(string(b), "\n")
+		if lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
+		}
+		files[path] = lines
+	}
+	first, _ := strconv.Atoi(m[2])
+	last := first
+	if m[3] != "" {
+		last, _ = strconv.Atoi(m[3])
+	}
+	if first < 1 || first > last || last > len(lines) {
+		return fmt.Sprintf("is outside %s, which has %d lines", path, len(lines))
+	}
+	switch line := strings.TrimSpace(lines[first-1]); {
+	case line == "":
+		return "starts on a blank line"
+	case line == "---":
+		return "starts on a bare ---"
+	case tableSeparator.MatchString(line):
+		return "starts on a markdown table separator"
+	}
+	return ""
 }
