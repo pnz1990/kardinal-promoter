@@ -506,6 +506,8 @@ at the old Pod. Then the controller gets `SIGTERM` and shuts down in this order:
    API call in progress is cancelled, not finished: the step logs `step failed, will retry`
    with `context canceled`.
 3. The metrics and health probe servers stop, waiting for the requests in flight.
+4. A leader releases its leader Lease, so another replica takes over within seconds instead
+   of waiting for the Lease to expire (15 seconds).
 
 With no request in flight the controller usually exits within a second. The whole shutdown
 is bounded at **30 seconds**: when a request is still open then, the controller logs
@@ -519,7 +521,7 @@ only when the PR is merged.
 The Helm chart sets `terminationGracePeriodSeconds: 60` so Kubernetes sends `SIGKILL` only
 after the shutdown delay and the controller's full 30 seconds to shut down. The delay counts
 against the grace period: keep `terminationGracePeriodSeconds` above `shutdownDelaySeconds`
-plus 30. A leader keeps its lease while it waits, so the delay also postpones the new
+plus 30. A leader keeps its Lease while it waits, so the delay also postpones the new
 leader's takeover by as much.
 
 ```yaml

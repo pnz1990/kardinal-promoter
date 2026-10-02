@@ -106,7 +106,9 @@ Never put the token directly in `values.yaml` for production clusters.
 
 One replica is sufficient for most clusters. Leader election is enabled by default
 (`leaderElect: true`), so you can safely run 2 for HA. The second replica stays in
-standby and takes over if the primary crashes.
+standby and takes over if the primary crashes. A leader that shuts down (a rollout or a
+node drain) releases its lease, so the standby takes over within seconds; after a crash
+it waits for the lease to expire (15 seconds).
 
 ---
 

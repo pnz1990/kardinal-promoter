@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -668,12 +669,64 @@ func leaseHolder(ctx context.Context, e *framework.Env, ns string) (string, stri
 	return pod, *l.Spec.HolderIdentity
 }
 
+// watchLease watches the controller's leader Lease in ns until the test ends.
+// The func it returns gives every spec the watch saw, in order.
+func watchLease(t *testing.T, e *framework.Env, ns string) func() []coordinationv1.LeaseSpec {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	leases := e.Kube.CoordinationV1().Leases(ns)
+	l, err := leases.Get(ctx, "kardinal-promoter-leader", metav1.GetOptions{})
+	require.NoError(t, err)
+	var mu sync.Mutex
+	specs := []coordinationv1.LeaseSpec{l.Spec}
+	rv := l.ResourceVersion
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ctx.Err() == nil {
+			w, err := leases.Watch(ctx, metav1.ListOptions{FieldSelector: "metadata.name=kardinal-promoter-leader", ResourceVersion: rv})
+			if err != nil {
+				select {
+				case <-ctx.Done():
+				case <-time.After(time.Second):
+				}
+				continue
+			}
+			for ev := range w.ResultChan() {
+				l, ok := ev.Object.(*coordinationv1.Lease)
+				if !ok {
+					// A watch error: watch again from now. A missed release
+					// fails the test; it cannot pass it.
+					rv = ""
+					break
+				}
+				rv = l.ResourceVersion
+				mu.Lock()
+				specs = append(specs, l.Spec)
+				mu.Unlock()
+			}
+			w.Stop()
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return func() []coordinationv1.LeaseSpec {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]coordinationv1.LeaseSpec(nil), specs...)
+	}
+}
+
 // TestChart_HighAvailability runs two replicas with leader election, the
 // PodDisruptionBudget and the topology spread: one replica leads and
 // reconciles, the other takes over when the leader goes, and the budget
-// refuses an eviction that would leave no replica.
+// refuses an eviction that would leave no replica. The deleted leader
+// releases its Lease as it shuts down, so the next holder takes it without
+// waiting for it to expire.
 //
-// Covers CHART-HA-01.
+// Covers CHART-HA-01, CHART-LEADER-RELEASE-01.
 func TestChart_HighAvailability(t *testing.T) {
 	t.Parallel()
 	namespaceScoped(t)
@@ -707,6 +760,9 @@ func TestChart_HighAvailability(t *testing.T) {
 	promote(t, a, fixtures.V2, nil)
 	assert.NotContains(t, r.Logs(t, follower, false), "Starting workers", "the follower does not reconcile")
 
+	// The release is one update the next holder overwrites within seconds, so
+	// watch the Lease from before the delete.
+	specs := watchLease(t, e, a.ns)
 	require.NoError(t, e.Client.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: a.ns, Name: leader}}))
 	// The follower or the leader's replacement takes over, whichever wins the
 	// Lease first.
@@ -716,6 +772,32 @@ func TestChart_HighAvailability(t *testing.T) {
 		next = holder
 		return holder != "" && holder != leader, why
 	})
+	// The leader released the Lease as it shut down: client-go writes no
+	// holder and a 1-second duration. The next holder took it less than the
+	// 15-second lease duration later, so it did not wait for it to expire.
+	var gap time.Duration
+	framework.Eventually(t, 30*time.Second, leader+" releases the Lease and "+next+" takes it", func(context.Context) (bool, string) {
+		var release *coordinationv1.LeaseSpec
+		var seen []string
+		for _, s := range specs() {
+			holder := ""
+			if s.HolderIdentity != nil {
+				holder = *s.HolderIdentity
+			}
+			seen = append(seen, fmt.Sprintf("%q", holder))
+			pod, _, _ := strings.Cut(holder, "_")
+			switch {
+			case release == nil && holder == "" && s.LeaseDurationSeconds != nil && *s.LeaseDurationSeconds == 1 && s.RenewTime != nil:
+				release = &s
+			case release != nil && pod == next && s.AcquireTime != nil:
+				gap = s.AcquireTime.Sub(release.RenewTime.Time)
+				return true, ""
+			}
+		}
+		return false, "holders " + strings.Join(seen, " -> ")
+	})
+	assert.Less(t, gap, 15*time.Second, "%s takes the released Lease without waiting for it to expire", next)
+	t.Logf("%s took the Lease %s after %s released it", next, gap, leader)
 	framework.Eventually(t, time.Minute, "the new leader starts its controllers", func(context.Context) (bool, string) {
 		return strings.Contains(r.Logs(t, next, false), "Starting workers"), "no Starting workers yet"
 	})

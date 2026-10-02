@@ -33,17 +33,24 @@ type managerConfig struct {
 // true, so a panic in a Reconcile is caught, counted in the ReconcilePanics
 // metric and retried with backoff. Do not set it to false; that brings back
 // crash-loop-on-panic. (spec #920, docs/design/15-production-readiness.md)
+//
+// LeaderElectionReleaseOnCancel makes a leader that shuts down release its
+// Lease, so a standby takes over at once instead of after the 15s lease
+// duration. The manager releases it only after every runnable has stopped or
+// the graceful shutdown timed out, and it is safe only because main exits as
+// soon as mgr.Start returns: nothing reconciles after the release.
 func buildManagerOptions(cfg managerConfig) ctrl.Options {
 	return ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
 			BindAddress: cfg.metricsBindAddress,
 		},
-		HealthProbeBindAddress:  cfg.healthProbeBindAddress,
-		LeaderElection:          cfg.leaderElect,
-		LeaderElectionID:        "kardinal-promoter-leader",
-		GracefulShutdownTimeout: ptr(gracefulShutdownTimeout),
-		Cache:                   buildCacheOpts(cfg.watchNamespace),
+		HealthProbeBindAddress:        cfg.healthProbeBindAddress,
+		LeaderElection:                cfg.leaderElect,
+		LeaderElectionID:              "kardinal-promoter-leader",
+		LeaderElectionReleaseOnCancel: true,
+		GracefulShutdownTimeout:       ptr(gracefulShutdownTimeout),
+		Cache:                         buildCacheOpts(cfg.watchNamespace),
 		Client: sigs_client.Options{
 			Cache: &sigs_client.CacheOptions{DisableFor: uncachedObjects()},
 		},
