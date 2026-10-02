@@ -123,8 +123,8 @@ Each health check has one of four results (see [Timings and failures](health-ada
 | Result | Examples | Counts in `consecutiveHealthFailures` | Applies `onHealthFailure` |
 |---|---|---|---|
 | Healthy | The promoted revision runs and is available | No (resets it to 0) | No |
-| Waiting | A rollout in progress, including new pods that are not available yet; a Deployment `ProgressDeadlineExceeded` from an earlier rollout; Argo CD or Flux not synced to the promoted commit yet; a Rollout or Canary target not on the Bundle images yet, so a `Healthy`, `Degraded`, `Succeeded` or `Failed` phase left by the previous release; Argo Rollouts `Progressing` or `Paused`; Flagger `Progressing` | No | No |
-| Unhealthy | A Deployment whose rollout finished but whose pods became unavailable; Argo CD `Degraded`; Flux `Ready=False`; Argo Rollouts `Degraded` on the promoted revision; target not found | Yes, once per check | Only during a bake window with `fail-on-alarm` |
+| Waiting | A rollout in progress, including new pods that are not available yet; a Deployment `ProgressDeadlineExceeded` from an earlier rollout; Argo CD or Flux not synced to the promoted commit yet, also when Argo CD is `Degraded` or Flux `Ready=False` from the version before it (a fix-forward after a failed release); a Rollout or Canary target not on the Bundle images yet, so a `Healthy`, `Degraded`, `Succeeded` or `Failed` phase left by the previous release; Argo Rollouts `Progressing` or `Paused`; Flagger `Progressing` | No | No |
+| Unhealthy | A Deployment whose rollout finished but whose pods became unavailable; Argo CD `Degraded` or Flux `Ready=False` once the promoted change is deployed; Argo Rollouts `Degraded` on the promoted revision; target not found | Yes, once per check | Only during a bake window with `fail-on-alarm` |
 | Failed | Deployment `ProgressDeadlineExceeded` set during this promotion; Flagger canary `Failed` on the promoted revision | Yes | Yes, at once |
 
 ### Health timeout

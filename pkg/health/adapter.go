@@ -703,7 +703,9 @@ var fluxKustomizationGVR = schema.GroupVersionResource{
 // promoted commit because its resources stalled, or on another commit when
 // a stalled Deployment itself runs the Bundle images. A stall of a
 // Deployment whose ProgressDeadlineExceeded is from an earlier rollout is
-// Progressing (see stalledEarlier). Ready=Unknown, a
+// Progressing (see stalledEarlier), and so is Ready=False on another git
+// commit while the Kustomization's Deployments do not run the Bundle
+// images: Flux has not applied the promoted change. Ready=Unknown, a
 // generation not yet observed or another applied revision is Progressing.
 // While the Kustomization is suspended (spec.suspend) Flux applies nothing,
 // so a Progressing result says so.
@@ -762,27 +764,42 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 		// deadline: Flux applied the Bundle's change and that rollout
 		// stalled. Another Deployment's stall is not ours to fail on, nor a
 		// ProgressDeadlineExceeded from an earlier rollout.
+		// A failure on another commit while the Kustomization's Deployments
+		// do not run the Bundle images is not about the promoted change
+		// (B94): Flux has not applied it yet, as after a failed release
+		// until Flux fetches the fix. That waits, as Argo CD's Degraded from
+		// before the change does (B52).
 		reason, _ := readyCond["reason"].(string)
 		msg, _ := readyCond["message"].(string)
-		if reason == "HealthCheckFailed" && strings.Contains(msg, "stalled resources") {
-			attempted, _, _ := unstructured.NestedString(ks.Object, "status", "lastAttemptedRevision")
-			rev, _ := fluxCommit(attempted)
-			want := opts.ExpectedRevision
-			if want == "" || SameRevision(rev, want) {
-				stalled := fmt.Sprintf("%s (lastAttemptedRevision=%s)", state, shortRev(rev))
-				if earlier := a.stalledEarlier(ctx, ks, msg, opts); earlier != "" {
-					return progressing(fmt.Sprintf("%s, but %s; waiting for Flux to check again", stalled, earlier)), nil
-				}
-				return terminal(stalled), nil
+		stalled := reason == "HealthCheckFailed" && strings.Contains(msg, "stalled resources")
+		attempted, _, _ := unstructured.NestedString(ks.Object, "status", "lastAttemptedRevision")
+		rev, _ := fluxCommit(attempted)
+		want := opts.ExpectedRevision
+		if want == "" || SameRevision(rev, want) {
+			if !stalled {
+				return unhealthy(state), nil
 			}
-			if w, err := a.workloads(ctx, ks, opts); err == nil {
-				for _, d := range w {
-					if d.bundle && d.status.Terminal {
-						return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s, not %s, but Deployment %s, which runs the Bundle images, stalled)",
-							state, shortRev(rev), shortRev(want), d.ref)), nil
-					}
+			st := fmt.Sprintf("%s (lastAttemptedRevision=%s)", state, shortRev(rev))
+			if earlier := a.stalledEarlier(ctx, ks, msg, opts); earlier != "" {
+				return progressing(fmt.Sprintf("%s, but %s; waiting for Flux to check again", st, earlier)), nil
+			}
+			return terminal(st), nil
+		}
+		w, err := a.workloads(ctx, ks, opts)
+		if err != nil {
+			return unhealthy(state), nil
+		}
+		if stalled {
+			for _, d := range w {
+				if d.bundle && d.status.Terminal {
+					return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s, not %s, but Deployment %s, which runs the Bundle images, stalled)",
+						state, shortRev(rev), shortRev(want), d.ref)), nil
 				}
 			}
+		}
+		if rev != "" && !w.runsBundle() {
+			return progressing(fmt.Sprintf("%s (lastAttemptedRevision=%s, not %s: Flux has not applied the promoted change, "+
+				"and the Kustomization's Deployments do not run the Bundle images)", state, shortRev(rev), shortRev(want))), nil
 		}
 		return unhealthy(state), nil
 	}

@@ -5,6 +5,7 @@ package health_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	dynfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 )
@@ -102,7 +104,8 @@ const stalledMessage = "health check failed after 1m5.017502721s: failed early d
 // TestFluxAdapter_Stalled proves bug 12 of the health spike fixed: Flux
 // giving up on the promoted commit because its Deployment stalled is
 // terminal, so the step fails at once instead of at health.timeout. Other
-// Ready=False results stay unhealthy.
+// Ready=False results on the promoted commit stay unhealthy; a stall on
+// another commit with no Deployment on the Bundle images waits (B94).
 func TestFluxAdapter_Stalled(t *testing.T) {
 	attempted := func(rev string) func(obj map[string]interface{}) {
 		return func(obj map[string]interface{}) {
@@ -127,7 +130,8 @@ func TestFluxAdapter_Stalled(t *testing.T) {
 		{name: "another commit stalled",
 			obj: kustomization("False", "HealthCheckFailed", stalledMessage, "main@sha1:"+fluxPrevious,
 				attempted("main@sha1:"+fluxPrevious)),
-			expected: fluxPushed, want: isUnhealthy, reason: "stalled resources"},
+			expected: fluxPushed, want: isProgressing,
+			reason: stalledMessage + " (lastAttemptedRevision=d7d4d8a00000, not 034ce92a1b2c: Flux has not applied the promoted change"},
 		{name: "a health check timeout",
 			obj: kustomization("False", "HealthCheckFailed", "health check failed after 3m0s: timeout waiting for: "+
 				"[Deployment/prod/web status: 'InProgress']", "main@sha1:"+fluxPrevious, attempted("main@sha1:"+fluxPushed)),
@@ -274,8 +278,10 @@ func TestFluxAdapter_SharedBranch(t *testing.T) {
 // commit) and a Deployment that runs the Bundle images is itself past its
 // progress deadline, Flux applied the Bundle's change and that rollout
 // stalled: the step fails at once. The stall of a Deployment that runs no
-// Bundle image, or still runs another image, stays unhealthy, also while a
-// Bundle Deployment is healthy (review item 2 of the flux suite).
+// Bundle image stays unhealthy while a Bundle Deployment runs the Bundle
+// images, healthy or not (review item 2 of the flux suite). With no
+// Deployment on the Bundle images Flux has not applied the promoted change,
+// and the step waits (B94).
 func TestFluxAdapter_StalledSharedBranch(t *testing.T) {
 	bundle := []health.ImageExpectation{{Repository: podinfo, Tag: "6.15.0"}}
 	stalledLater := func(mutate func(obj map[string]interface{})) *unstructured.Unstructured {
@@ -285,6 +291,8 @@ func TestFluxAdapter_StalledSharedBranch(t *testing.T) {
 			}, mutate))
 	}
 	const unhealthyReason = "Ready=False, observedGen=3, generation=3: " + stalledMessage
+	const notApplied = unhealthyReason + " (lastAttemptedRevision=8e9966475a0b, not 034ce92a1b2c: Flux has not applied " +
+		"the promoted change, and the Kustomization's Deployments do not run the Bundle images)"
 	tests := []struct {
 		name   string
 		objs   []runtime.Object
@@ -307,13 +315,13 @@ func TestFluxAdapter_StalledSharedBranch(t *testing.T) {
 			want: isUnhealthy, reason: unhealthyReason},
 		{name: "the stalled Deployment runs the previous image",
 			objs: []runtime.Object{stalledLater(withInventory("web")), stalledDeployment("web", podinfo+":6.14.0")},
-			want: isUnhealthy, reason: unhealthyReason},
+			want: isProgressing, reason: notApplied},
 		{name: "no Deployments",
 			objs: []runtime.Object{stalledLater(func(map[string]interface{}) {})},
-			want: isUnhealthy, reason: unhealthyReason},
+			want: isProgressing, reason: notApplied},
 		{name: "no Bundle images to compare",
 			objs:   []runtime.Object{stalledLater(withInventory("web")), stalledDeployment("web", podinfo+":6.15.0")},
-			images: []health.ImageExpectation{}, want: isUnhealthy, reason: unhealthyReason},
+			images: []health.ImageExpectation{}, want: isProgressing, reason: notApplied},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -322,6 +330,96 @@ func TestFluxAdapter_StalledSharedBranch(t *testing.T) {
 				images = tt.images
 			}
 			got := checkFlux(t, health.CheckOptions{ExpectedRevision: fluxPushed, ExpectedImages: images}, tt.objs...)
+			assert.Equal(t, tt.want, kindOf(got), got.Reason)
+			assert.Equal(t, tt.reason, got.Reason)
+		})
+	}
+}
+
+// TestFluxAdapter_FailedOnAnotherCommit proves B94 fixed: Ready=False on a
+// commit other than the promoted one, while no Deployment of the
+// Kustomization runs the Bundle images, waits instead of counting a health
+// failure. That is a fix-forward after a failed release until Flux fetches
+// the fix, and a RollbackPolicy must not roll the fix back meanwhile. Once a
+// Deployment runs the Bundle images, or when the attempted revision is not a
+// git commit or there is none, Ready=False stays unhealthy.
+func TestFluxAdapter_FailedOnAnotherCommit(t *testing.T) {
+	bundle := []health.ImageExpectation{{Repository: podinfo, Tag: "6.15.0"}}
+	const timeout = "health check failed after 3m0s: timeout waiting for: [Deployment/prod/web status: 'InProgress']"
+	const build = "kustomize build failed: accumulating resources"
+	failed := func(reason, message, attempted string, mutate func(obj map[string]interface{})) *unstructured.Unstructured {
+		return kustomization("False", reason, message, "main@sha1:"+fluxPrevious, both(func(obj map[string]interface{}) {
+			obj["status"].(map[string]interface{})["lastAttemptedRevision"] = attempted
+		}, withInventory("web"), func(obj map[string]interface{}) {
+			if mutate != nil {
+				mutate(obj)
+			}
+		}))
+	}
+	const notApplied = " (lastAttemptedRevision=d7d4d8a00000, not 034ce92a1b2c: Flux has not applied the promoted " +
+		"change, and the Kustomization's Deployments do not run the Bundle images)"
+	previous := "main@sha1:" + fluxPrevious
+	tests := []struct {
+		name       string
+		objs       []runtime.Object
+		noRevision bool
+		getErr     bool
+		want       wantKind
+		reason     string
+	}{
+		{name: "a timeout on the previous commit, the Deployment on the previous image",
+			objs: []runtime.Object{failed("HealthCheckFailed", timeout, previous, nil), deploymentObj("web", 2, podinfo+":6.14.0", 1)},
+			want: isProgressing, reason: "Ready=False, observedGen=3, generation=3: " + timeout + notApplied},
+		{name: "a build failure on the previous commit, the Deployment gone",
+			objs: []runtime.Object{failed("BuildFailed", build, previous, nil)},
+			want: isProgressing, reason: "Ready=False, observedGen=3, generation=3: " + build + notApplied},
+		{name: "a second Deployment runs another tag of the Bundle repository",
+			objs: []runtime.Object{failed("HealthCheckFailed", timeout, previous, withInventory("web", "web-canary")),
+				deploymentObj("web", 2, podinfo+":6.15.0", 1), deploymentObj("web-canary", 2, podinfo+":6.14.0", 1)},
+			want: isProgressing, reason: "Ready=False, observedGen=3, generation=3: " + timeout + notApplied},
+		{name: "the Kustomization applies to another cluster",
+			objs: []runtime.Object{failed("HealthCheckFailed", timeout, previous,
+				withSpec("kubeConfig", map[string]interface{}{"secretRef": map[string]interface{}{"name": "remote"}})),
+				deploymentObj("web", 2, podinfo+":6.15.0", 1)},
+			want: isProgressing, reason: "Ready=False, observedGen=3, generation=3: " + timeout + notApplied},
+		{name: "a suspended Kustomization",
+			objs: []runtime.Object{failed("BuildFailed", build, previous, withSpec("suspend", true))},
+			want: isProgressing, reason: "Kustomization flux-system/web-prod is suspended; Flux applies nothing until it is " +
+				"resumed (Ready=False, observedGen=3, generation=3: " + build + notApplied + ")"},
+		{name: "a timeout on a later commit, the Deployment on the Bundle image",
+			objs: []runtime.Object{failed("HealthCheckFailed", timeout, "main@sha1:"+fluxLater, nil), deploymentObj("web", 2, podinfo+":6.15.0", 1)},
+			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + timeout},
+		{name: "a build failure on a later commit, the Deployment on the Bundle image past its deadline",
+			objs: []runtime.Object{failed("BuildFailed", build, "main@sha1:"+fluxLater, nil), stalledDeployment("web", podinfo+":6.15.0")},
+			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + build},
+		{name: "an OCI artifact revision",
+			objs: []runtime.Object{failed("HealthCheckFailed", timeout, "latest@sha256:6c1a4b0e", nil), deploymentObj("web", 2, podinfo+":6.14.0", 1)},
+			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + timeout},
+		{name: "no attempted revision",
+			objs: []runtime.Object{failed("ArtifactFailed", "Source artifact not found", "", nil)},
+			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: Source artifact not found"},
+		{name: "no expected commit",
+			objs:       []runtime.Object{failed("HealthCheckFailed", timeout, previous, nil), deploymentObj("web", 2, podinfo+":6.14.0", 1)},
+			noRevision: true, want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + timeout},
+		{name: "a Deployment that cannot be read",
+			objs:   []runtime.Object{failed("HealthCheckFailed", timeout, previous, nil), deploymentObj("web", 2, podinfo+":6.14.0", 1)},
+			getErr: true, want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + timeout},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := health.CheckOptions{ExpectedRevision: fluxPushed, ExpectedImages: bundle,
+				Flux: health.FluxConfig{Name: "web-prod", Namespace: "flux-system"}}
+			if tt.noRevision {
+				opts.ExpectedRevision = ""
+			}
+			c := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), tt.objs...)
+			if tt.getErr {
+				c.PrependReactor("get", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, errors.New("the server is currently unable to handle the request")
+				})
+			}
+			got, err := health.NewFluxAdapter(c).Check(context.Background(), opts)
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, kindOf(got), got.Reason)
 			assert.Equal(t, tt.reason, got.Reason)
 		})
