@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -222,6 +224,142 @@ func TestHealth_LabelSelector(t *testing.T) {
 	assert.Equal(t, "health alarm via resource (onHealthFailure=none): health check timeout after 1m0s; last result: "+unhealthy,
 		ps.Status.Message)
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
+}
+
+// TestHealth_LabelSelectorStall checks a ProgressDeadlineExceeded set before
+// the promotion on a Deployment of this rollout: a second Deployment that
+// health.labelSelector matches already runs the Bundle image but cannot
+// schedule its pod, so it stalled before the Bundle exists. Its condition
+// names the ReplicaSet with the Deployment's revision, so the step fails on
+// the first check, long before health.timeout, though the condition's time
+// is before the health check started. Covers HEALTH-RES-08.
+func TestHealth_LabelSelectorStall(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	selector := map[string]string{"app.kubernetes.io/name": fixtures.Workload("test")}
+	extra := fixtures.Workload("test") + "-extra"
+	var obj unstructured.Unstructured
+	require.NoError(t, yaml.Unmarshal([]byte(fixtures.Deployment(extra, imageV2)), &obj.Object))
+	obj.SetNamespace(a.ns)
+	obj.SetLabels(selector)
+	require.NoError(t, unstructured.SetNestedStringMap(obj.Object, map[string]string{"kardinal.io/e2e-no-such-node": "true"},
+		"spec", "template", "spec", "nodeSelector"))
+	_, err := e.Apply(context.Background(), &obj)
+	require.NoError(t, err)
+
+	var stalled string
+	framework.Eventually(t, 3*time.Minute, "the second Deployment to pass its progress deadline", func(ctx context.Context) (bool, string) {
+		var d appsv1.Deployment
+		if err := e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: extra}, &d); err != nil {
+			return false, err.Error()
+		}
+		for _, c := range d.Status.Conditions {
+			if c.Type == appsv1.DeploymentProgressing {
+				stalled = c.Message
+				return c.Reason == "ProgressDeadlineExceeded", c.Reason + ": " + c.Message
+			}
+		}
+		return false, "no Progressing condition"
+	})
+
+	p := a.resourcePipeline(nil)
+	envSpec(t, p, "test").Health = v1alpha1.HealthConfig{Type: "resource", Timeout: "5m",
+		LabelSelector: selector, Resource: &v1alpha1.ResourceRef{Namespace: a.ns}}
+	a.apply(t, p)
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", promoteTimeout)
+	assert.Equal(t, fmt.Sprintf("health alarm via resource (onHealthFailure=none): Deployment %s/%s rollout failed: ProgressDeadlineExceeded: %s",
+		a.ns, extra, stalled), ps.Status.Message)
+	assert.Equal(t, 1, ps.Status.ConsecutiveHealthFailures, "a terminal result fails on the first failed check")
+	require.NotNil(t, ps.Status.LastHealthCheckAt)
+	require.NotNil(t, ps.Status.HealthCheckExpiry)
+	assert.True(t, ps.Status.LastHealthCheckAt.Add(4*time.Minute).Before(ps.Status.HealthCheckExpiry.Time),
+		"failed at once, not at health.timeout: last check %s, expiry %s", ps.Status.LastHealthCheckAt, ps.Status.HealthCheckExpiry)
+	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
+}
+
+// TestHealth_ConfigFixOfStalledRelease checks a config Bundle promoted onto
+// a Deployment whose current ReplicaSet stalled: a release of a missing image
+// failed, and the config commit that fixes it pins a good image. Argo CD's
+// automated sync is off, so the cluster still runs the stalled release when
+// the step's health check runs. The condition names the ReplicaSet with the
+// Deployment's revision, but a config Bundle may change the pod template in
+// ways the check cannot see, so the condition's time decides: it is from
+// before the health check started, and the step waits with no failure
+// instead of failing on the stall it fixes. Once Argo CD applies the fix,
+// the step is Verified. Covers HEALTH-RES-09.
+func TestHealth_ConfigFixOfStalledRelease(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a, broken := brokenRollout(t, e, "")
+	workload := fixtures.Workload("test")
+	e.WaitStepState(t, a.ns, pipelineName, broken, "test", "Failed", promoteTimeout)
+	stalled := currentReplicaSetStall(t, e, a.ns, workload)
+
+	e.SetArgoAutoSync(t, a.argoApp("test"), false)
+	kustomization := e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/kustomization.yaml")
+	require.Contains(t, kustomization, "newTag: "+fixtures.BrokenTag)
+	cfg := e.Repo(t, a.ns+"-config", map[string][]byte{
+		fixtures.Path("test") + "/kustomization.yaml": []byte(strings.Replace(kustomization,
+			"newTag: "+fixtures.BrokenTag, "newTag: "+fixtures.V2, 1)),
+		fixtures.Path("test") + "/deployment.yaml": []byte(withConfigChange(fixtures.Deployment(workload, imageV2))),
+	})
+	commits, err := gitserver.Commits(context.Background(), e.Git, cfg, cfg.Branch, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, commits)
+	fix := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", commits[0].SHA,
+		"--config-repo", cfg.CloneURL)
+
+	earlier := fmt.Sprintf("Deployment %s/%s: ProgressDeadlineExceeded (%s) is from an earlier rollout: its lastUpdateTime ",
+		a.ns, workload, stalled)
+	ps := e.WaitStepMessageAll(t, a.ns, pipelineName, fix, "test", "HealthChecking", promoteTimeout,
+		earlier, " is before this health check started (", "; waiting for the Deployment controller to see this rollout progress")
+	assert.Zero(t, ps.Status.ConsecutiveHealthFailures, framework.DescribeStep(ps))
+	require.True(t, a.configDeployed(t, "test"), "the fix is in git")
+	assert.Equal(t, stalled, currentReplicaSetStall(t, e, a.ns, workload), "Argo CD has not applied the fix")
+	assert.Equal(t, fixtures.Image+":"+fixtures.BrokenTag, e.DeploymentImage(t, a.ns, workload))
+
+	e.HoldStep(t, deliveryHold, a.ns, pipelineName, fix, "test", "the config fix waits on the stall it replaces",
+		func(ps *v1alpha1.PromotionStep) bool {
+			return ps.Status.State == "HealthChecking" && ps.Status.ConsecutiveHealthFailures == 0 &&
+				strings.Contains(ps.Status.Message, earlier)
+		})
+	e.SetArgoAutoSync(t, a.argoApp("test"), true)
+	ps = e.WaitStepState(t, a.ns, pipelineName, fix, "test", "Verified", promoteTimeout)
+	assert.Zero(t, ps.Status.ConsecutiveHealthFailures, framework.DescribeStep(ps))
+	a.waitConfigRunning(t, "test")
+	assert.Equal(t, imageV2, e.DeploymentImage(t, a.ns, workload))
+}
+
+// stalledReplicaSet is the message of a Progressing condition with reason
+// ProgressDeadlineExceeded.
+var stalledReplicaSet = regexp.MustCompile(`^ReplicaSet "([a-z0-9.-]+)" has timed out progressing\.$`)
+
+// currentReplicaSetStall returns the message of the Deployment's
+// ProgressDeadlineExceeded after checking that the ReplicaSet it names has
+// the Deployment's revision: the Deployment's current pod template stalled.
+func currentReplicaSetStall(t *testing.T, e *framework.Env, ns, name string) string {
+	t.Helper()
+	ctx := context.Background()
+	var d appsv1.Deployment
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &d))
+	var prog *appsv1.DeploymentCondition
+	for i := range d.Status.Conditions {
+		if d.Status.Conditions[i].Type == appsv1.DeploymentProgressing {
+			prog = &d.Status.Conditions[i]
+		}
+	}
+	require.NotNil(t, prog, "Progressing condition: %v", d.Status.Conditions)
+	require.Equal(t, "ProgressDeadlineExceeded", prog.Reason, prog.Message)
+	m := stalledReplicaSet.FindStringSubmatch(prog.Message)
+	require.NotNil(t, m, prog.Message)
+	var rs appsv1.ReplicaSet
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: m[1]}, &rs))
+	const revision = "deployment.kubernetes.io/revision"
+	require.Equal(t, d.Annotations[revision], rs.Annotations[revision], "the stalled ReplicaSet %s is the Deployment's current one", m[1])
+	return prog.Message
 }
 
 // TestHealth_UnsupportedKind checks health.resource.kind other than

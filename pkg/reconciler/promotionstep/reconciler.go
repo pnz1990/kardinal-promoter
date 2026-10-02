@@ -1199,6 +1199,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		opts.ExpectedImages = append(opts.ExpectedImages,
 			health.ImageExpectation{Repository: img.Repository, Tag: img.Tag, Digest: img.Digest})
 	}
+	opts.ImagesOnly = bundle.Spec.Type == "image"
 	opts.Since = healthCheckStart(ps)
 	if at := ps.Status.TargetUpdatedAt; at != nil {
 		opts.TargetUpdatedAt = at.Time
@@ -1244,9 +1245,10 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	checkedAt := metav1.NewTime(time.Now())
 	ps.Status.LastHealthCheckAt = &checkedAt
 	// The first check that finds the target on the Bundle images dates the
-	// update: the flagger check counts a Failed phase, and the resource check
-	// a ProgressDeadlineExceeded, only when set later. Every path below
-	// patches the status.
+	// update: the flagger check counts a Failed phase only when set later, and
+	// so does the resource check a ProgressDeadlineExceeded when the
+	// ReplicaSet it names does not decide. Every path below patches the
+	// status.
 	if result.TargetUpdated && ps.Status.TargetUpdatedAt == nil {
 		ps.Status.TargetUpdatedAt = &checkedAt
 	}

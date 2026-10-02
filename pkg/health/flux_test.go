@@ -321,7 +321,7 @@ func TestFluxAdapter_StalledSharedBranch(t *testing.T) {
 		{name: "Flux lists the Bundle Deployment, which is no longer past its deadline",
 			objs: []runtime.Object{stalledLater(withInventory("web")), deploymentObj("web", 2, podinfo+":6.15.0", 1)},
 			want: isProgressing, reason: unhealthyReason + " (lastAttemptedRevision=8e9966475a0b, not 034ce92a1b2c), " +
-				"but no Deployment Flux lists is past a progress deadline set during this promotion: Deployment prod/web: " +
+				"but no Deployment Flux lists is past a progress deadline of this promotion's rollout: Deployment prod/web: " +
 				"Available=True, 1/1 replicas updated and available; waiting for Flux to check again"},
 		{name: "the stalled Deployment runs the previous image",
 			objs: []runtime.Object{stalledLater(withInventory("web")), stalledDeployment("web", podinfo+":6.14.0")},

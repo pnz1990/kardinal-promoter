@@ -107,12 +107,12 @@ spec:
 **When it applies.** The controller applies `onHealthFailure` when:
 
 - the PromotionStep has no Healthy check within `health.timeout` (default: 10m) of entering `HealthChecking`, or of a bake window stopping;
-- the health adapter reports a terminal result (Deployment `ProgressDeadlineExceeded` set during this promotion, Flagger canary `Failed`);
+- the health adapter reports a terminal result (Deployment `ProgressDeadlineExceeded` from this promotion's rollout, Flagger canary `Failed`);
 - a health check is Unhealthy during a bake window with `bake.policy: fail-on-alarm`.
 
 A rollback Bundle (label `kardinal.io/rollback: "true"` or `spec.provenance.rollbackOf` set) is not rolled back again: when its own health check fails with `rollback` set, the step is `AbortedByAlarm` instead, so rollbacks do not chain.
 
-A rollback of a stalled Deployment returns it to the ReplicaSet it ran before, so Kubernetes creates no new ReplicaSet and keeps the stalled rollout's `ProgressDeadlineExceeded` until it sees the stalled pods go. The rollback Bundle's health check does not fail on that condition: it is from before its health check started, so the check is Waiting (`... is from an earlier rollout ...`) until Kubernetes replaces it (see [resource](health-adapters.md#adapter-resource-default)). With `health.type: flux`, Flux fails on that condition and checks again only at its next reconcile; the step waits for that (see [flux](health-adapters.md#adapter-flux)).
+A rollback of a stalled Deployment returns it to the ReplicaSet it ran before, so Kubernetes creates no new ReplicaSet and keeps the stalled rollout's `ProgressDeadlineExceeded` until it sees the stalled pods go. The rollback Bundle's health check does not fail on that condition: it names the stalled ReplicaSet, which no longer has the Deployment's revision, so the check is Waiting (`... is from an earlier rollout ...`) until Kubernetes replaces it (see [resource](health-adapters.md#adapter-resource-default)). With `health.type: flux`, Flux fails on that condition and checks again only at its next reconcile; the step waits for that (see [flux](health-adapters.md#adapter-flux)).
 
 The rollback Bundle is a newer Bundle of the same pipeline and type, so the failing Bundle ends `Superseded`. The step that raised the alarm stays `RollingBack`, with the message naming the rollback Bundle: it is not cancelled as superseded, whichever order the two status updates land in.
 
@@ -125,7 +125,7 @@ Each health check has one of four results (see [Timings and failures](health-ada
 | Healthy | The promoted revision runs and is available | No (resets it to 0) | No |
 | Waiting | A rollout in progress, including new pods that are not available yet; a Deployment `ProgressDeadlineExceeded` from an earlier rollout; Argo CD or Flux not synced to the promoted commit yet, also when Argo CD is `Degraded` or Flux `Ready=False` on another commit while no Deployment runs the Bundle images (a fix-forward after a failed release); a Rollout or Canary target not on the Bundle images yet, so a `Healthy`, `Degraded`, `Succeeded` or `Failed` phase left by the previous release; Argo Rollouts `Progressing` or `Paused`; Flagger `Progressing` | No | No |
 | Unhealthy | A Deployment whose rollout finished but whose pods became unavailable; Argo CD `Degraded` or Flux `Ready=False` once the promoted change is deployed; Argo Rollouts `Degraded` on the promoted revision; target not found | Yes, once per check | Only during a bake window with `fail-on-alarm` |
-| Failed | Deployment `ProgressDeadlineExceeded` set during this promotion; Flagger canary `Failed` on the promoted revision | Yes | Yes, at once |
+| Failed | Deployment `ProgressDeadlineExceeded` from this promotion's rollout; Flagger canary `Failed` on the promoted revision | Yes | Yes, at once |
 
 ### Health timeout
 

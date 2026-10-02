@@ -738,7 +738,7 @@ func TestRollback_OnHealthFailureEarlierDeadline(t *testing.T) {
 
 	earlier := fmt.Sprintf("Deployment %s/%s: ProgressDeadlineExceeded (", a.ns, workload)
 	ps := e.WaitStepMessageAll(t, a.ns, pipelineName, rb, "test", "HealthChecking", promoteTimeout,
-		earlier, ") is from an earlier rollout: its lastUpdateTime ",
+		earlier, ") is from an earlier rollout: ReplicaSet ",
 		"; waiting for the Deployment controller to see this rollout progress")
 	assertEarlierRollout(t, ps.Status.Message)
 	assert.Zero(t, ps.Status.ConsecutiveHealthFailures, framework.DescribeStep(ps))
@@ -769,15 +769,20 @@ func TestRollback_OnHealthFailureEarlierDeadline(t *testing.T) {
 }
 
 // assertEarlierRollout checks why a step's message takes a
-// ProgressDeadlineExceeded for an earlier rollout's: the condition is from
-// before the health check started or, when the rollback started in the same
-// second as the condition, not after the check first found the pod template on
-// the Bundle images.
+// ProgressDeadlineExceeded for an earlier rollout's: the ReplicaSet the
+// condition names, which the rollback left, has a revision other than the
+// Deployment's. The controller reads it with the chart's get on replicasets.
 func assertEarlierRollout(t *testing.T, msg string) {
 	t.Helper()
-	assert.True(t, strings.Contains(msg, " is before this health check started (") ||
-		strings.Contains(msg, " is not after the health check first found the pod template running the Bundle images ("), msg)
+	m := earlierReplicaSet.FindStringSubmatch(msg)
+	if assert.NotNil(t, m, msg) {
+		assert.Equal(t, m[1], m[2], "the ReplicaSet the condition names: %s", msg)
+		assert.NotEqual(t, m[3], m[4], "its revision and the Deployment's: %s", msg)
+	}
 }
+
+var earlierReplicaSet = regexp.MustCompile(`ProgressDeadlineExceeded \(ReplicaSet "([a-z0-9.-]+)" has timed out progressing\.\) ` +
+	`is from an earlier rollout: ReplicaSet ([a-z0-9.-]+) has revision ([0-9]+), not the Deployment's revision ([0-9]+);`)
 
 // TestRollback_OnHealthFailureRefused checks the two cases where
 // onHealthFailure: rollback does not roll back and stops the step at

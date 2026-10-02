@@ -12,9 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
@@ -111,7 +115,7 @@ func TestDeploymentDeadlineFromAnEarlierRollout(t *testing.T) {
 				}
 			})
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(d).Build()
-			got, err := health.NewDeploymentAdapter(c).Check(context.Background(), health.CheckOptions{
+			got, err := health.NewDeploymentAdapter(c, nil).Check(context.Background(), health.CheckOptions{
 				Resource:        health.ResourceConfig{Name: "web", Namespace: "prod"},
 				ExpectedImages:  tt.expected,
 				Since:           tt.since,
@@ -123,6 +127,195 @@ func TestDeploymentDeadlineFromAnEarlierRollout(t *testing.T) {
 			assert.Equal(t, tt.updated, got.TargetUpdated, "TargetUpdated")
 		})
 	}
+}
+
+// replicaSetObj is ReplicaSet prod/<name> at revision (none when empty).
+func replicaSetObj(name, revision string) *unstructured.Unstructured {
+	rs := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "apps/v1", "kind": "ReplicaSet",
+		"metadata": map[string]interface{}{"name": name, "namespace": "prod"}}}
+	if revision != "" {
+		rs.SetAnnotations(map[string]string{"deployment.kubernetes.io/revision": revision})
+	}
+	return rs
+}
+
+// TestDeploymentDeadlineOfReplicaSet proves B95 fixed: the condition's times
+// can take this rollout's ProgressDeadlineExceeded for an earlier one. With
+// health.labelSelector, while a second matching Deployment does not run the
+// Bundle images yet, no check records the template update
+// (status.targetUpdatedAt), so the stalled Deployment's deadline waited for
+// health.timeout; so did a deadline the first check found already set (a
+// late merge, a short progressDeadlineSeconds). The ReplicaSet the condition
+// names now decides: one whose revision is the Deployment's is the stall of
+// the current pod template, whatever the times, and one of another revision,
+// or one that is gone, is from an earlier rollout. When the ReplicaSet cannot
+// tell, the times decide as before.
+func TestDeploymentDeadlineOfReplicaSet(t *testing.T) {
+	v2 := []health.ImageExpectation{{Repository: "ghcr.io/org/app", Tag: "v2"}}
+	at := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339, s)
+		require.NoError(t, err)
+		return v
+	}
+	const stalled = `ReplicaSet "web-5d8f" has timed out progressing.`
+	since := at("2026-10-02T05:00:00Z")
+	const firstCheck = "is from an earlier rollout: this check is the first to find the pod template running the Bundle images"
+	tests := []struct {
+		name       string
+		revision   string
+		message    string
+		deadlineAt string
+		since      time.Time
+		seen       time.Time
+		replicaSet *unstructured.Unstructured
+		forbidden  bool
+		second     bool
+		// image is the pod template's image (the Bundle's when empty);
+		// noImages is a Bundle without images (type config), and mixed a
+		// Bundle that is not only images.
+		image    string
+		noImages bool
+		mixed    bool
+		want     wantKind
+		reason   string
+	}{
+		{name: "the current ReplicaSet's deadline from before the health check started fails at once",
+			revision: "3", deadlineAt: "2026-10-02T04:59:00Z", since: since, replicaSet: replicaSetObj("web-5d8f", "3"),
+			want: isTerminal, reason: "Deployment prod/web rollout failed: ProgressDeadlineExceeded: " + stalled},
+		{name: "the current ReplicaSet's deadline the first check found already set fails at once",
+			revision: "3", deadlineAt: "2026-10-02T05:01:30Z", since: since, seen: at("2026-10-02T05:02:00Z"),
+			replicaSet: replicaSetObj("web-5d8f", "3"), want: isTerminal, reason: "rollout failed: ProgressDeadlineExceeded"},
+		{name: "the current ReplicaSet's deadline fails the first check to find the Bundle template",
+			revision: "3", deadlineAt: "2026-10-02T05:01:30Z", since: since, replicaSet: replicaSetObj("web-5d8f", "3"),
+			want: isTerminal, reason: "rollout failed: ProgressDeadlineExceeded"},
+		{name: "one matching Deployment stalled while another does not run the Bundle images fails at once",
+			revision: "3", deadlineAt: "2026-10-02T05:01:30Z", since: since, replicaSet: replicaSetObj("web-5d8f", "3"),
+			second: true, want: isTerminal, reason: "Deployment prod/web rollout failed: ProgressDeadlineExceeded: " + stalled},
+		{name: "a ReplicaSet of another revision is an earlier rollout's, also after the template update",
+			revision: "3", deadlineAt: "2026-10-02T05:01:30Z", since: since, seen: at("2026-10-02T05:01:00Z"),
+			replicaSet: replicaSetObj("web-5d8f", "2"), want: isProgressing,
+			reason: "Deployment prod/web: ProgressDeadlineExceeded (" + stalled + ") is from an earlier rollout: " +
+				"ReplicaSet web-5d8f has revision 2, not the Deployment's revision 3; " +
+				"waiting for the Deployment controller to see this rollout progress"},
+		{name: "a ReplicaSet of another revision is an earlier rollout's without a health-check start",
+			revision: "3", deadlineAt: "2026-10-02T05:01:30Z", replicaSet: replicaSetObj("web-5d8f", "2"),
+			want: isProgressing, reason: "ReplicaSet web-5d8f has revision 2, not the Deployment's revision 3"},
+		{name: "a ReplicaSet that is gone is an earlier rollout's",
+			revision: "3", deadlineAt: "2026-10-02T05:01:30Z", since: since, seen: at("2026-10-02T05:01:00Z"),
+			want: isProgressing, reason: "is from an earlier rollout: ReplicaSet web-5d8f no longer exists; waiting"},
+		{name: "a ReplicaSet without a revision leaves the times to decide",
+			revision: "3", deadlineAt: "2026-10-02T05:01:30Z", since: since, replicaSet: replicaSetObj("web-5d8f", ""),
+			want: isProgressing, reason: firstCheck},
+		{name: "a Deployment without a revision leaves the times to decide",
+			deadlineAt: "2026-10-02T05:01:30Z", since: since, replicaSet: replicaSetObj("web-5d8f", "3"),
+			want: isProgressing, reason: firstCheck},
+		{name: "a message that names no ReplicaSet leaves the times to decide",
+			revision: "3", message: `Deployment "web" has timed out progressing.`, deadlineAt: "2026-10-02T05:01:30Z",
+			since: since, replicaSet: replicaSetObj("web-5d8f", "3"), want: isProgressing, reason: firstCheck},
+		{name: "another message that names a ReplicaSet leaves the times to decide",
+			revision: "3", message: `ReplicaSet "web-5d8f" is progressing.`, deadlineAt: "2026-10-02T05:01:30Z",
+			since: since, replicaSet: replicaSetObj("web-5d8f", "3"), want: isProgressing, reason: firstCheck},
+		{name: "a ReplicaSet that cannot be read leaves the times to decide",
+			revision: "3", deadlineAt: "2026-10-02T05:01:30Z", since: since, replicaSet: replicaSetObj("web-5d8f", "3"),
+			forbidden: true, want: isProgressing, reason: firstCheck},
+		{name: "a ReplicaSet name with dots is read",
+			revision: "3", message: `ReplicaSet "web.v2-5d8f" has timed out progressing.`, deadlineAt: "2026-10-02T04:59:00Z",
+			since: since, replicaSet: replicaSetObj("web.v2-5d8f", "3"), want: isTerminal, reason: "rollout failed"},
+		{name: "a message with more text after the ReplicaSet leaves the times to decide",
+			revision: "3", message: stalled + " Check the pods.", deadlineAt: "2026-10-02T05:01:30Z",
+			since: since, replicaSet: replicaSetObj("web-5d8f", "3"), want: isProgressing, reason: firstCheck},
+		{name: "a message with more text before the ReplicaSet leaves the times to decide",
+			revision: "3", message: "Deployment web: " + stalled, deadlineAt: "2026-10-02T05:01:30Z",
+			since: since, replicaSet: replicaSetObj("web-5d8f", "3"), want: isProgressing, reason: firstCheck},
+		// The rollback of a broken config change: the check before Argo CD
+		// applies it finds the broken release's stall on the current
+		// ReplicaSet (B95 review).
+		{name: "the current ReplicaSet's deadline from before the health check started waits for a config Bundle",
+			revision: "3", deadlineAt: "2026-10-02T04:59:00Z", since: since, replicaSet: replicaSetObj("web-5d8f", "3"),
+			noImages: true, want: isProgressing, reason: "Deployment prod/web: ProgressDeadlineExceeded (" + stalled +
+				") is from an earlier rollout: its lastUpdateTime 2026-10-02T04:59:00Z is before this health check started"},
+		{name: "the current ReplicaSet's deadline set during the health check fails a config Bundle",
+			revision: "3", deadlineAt: "2026-10-02T05:01:30Z", since: since, replicaSet: replicaSetObj("web-5d8f", "3"),
+			noImages: true, want: isTerminal, reason: "rollout failed: ProgressDeadlineExceeded: " + stalled},
+		{name: "a ReplicaSet of another revision is an earlier rollout's for a config Bundle",
+			revision: "3", deadlineAt: "2026-10-02T05:01:30Z", since: since, replicaSet: replicaSetObj("web-5d8f", "2"),
+			noImages: true, want: isProgressing, reason: "ReplicaSet web-5d8f has revision 2, not the Deployment's revision 3"},
+		{name: "the current ReplicaSet's deadline from before the health check started waits for a mixed Bundle on its images",
+			revision: "3", deadlineAt: "2026-10-02T04:59:00Z", since: since, replicaSet: replicaSetObj("web-5d8f", "3"),
+			mixed: true, want: isProgressing, reason: "is before this health check started"},
+		{name: "the current ReplicaSet's deadline after the template update fails a mixed Bundle",
+			revision: "3", deadlineAt: "2026-10-02T05:01:30Z", since: since, seen: at("2026-10-02T05:01:00Z"),
+			replicaSet: replicaSetObj("web-5d8f", "3"), mixed: true, want: isTerminal, reason: "rollout failed"},
+		{name: "the current ReplicaSet's deadline waits while the image cannot be verified",
+			revision: "3", deadlineAt: "2026-10-02T04:59:00Z", since: since, replicaSet: replicaSetObj("web-5d8f", "3"),
+			image: "registry.local:5000/other:v9", want: isProgressing, reason: "is before this health check started"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := stalled
+			if tt.message != "" {
+				msg = tt.message
+			}
+			image := "ghcr.io/org/app:v2"
+			if tt.image != "" {
+				image = tt.image
+			}
+			d := deployment("web", image, func(d *appsv1.Deployment) {
+				if tt.revision != "" {
+					d.Annotations = map[string]string{"deployment.kubernetes.io/revision": tt.revision}
+				}
+				d.Status.Replicas, d.Status.UnavailableReplicas = 3, 1
+				setProgressing(d, corev1.ConditionFalse, "ProgressDeadlineExceeded")
+				d.Status.Conditions[1].Message = msg
+				d.Status.Conditions[1].LastUpdateTime = metav1.NewTime(at(tt.deadlineAt))
+			})
+			b := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(d)
+			opts := health.CheckOptions{Resource: health.ResourceConfig{Name: "web", Namespace: "prod"},
+				ExpectedImages: v2, ImagesOnly: !tt.noImages && !tt.mixed, Since: tt.since, TargetUpdatedAt: tt.seen}
+			if tt.noImages {
+				opts.ExpectedImages = nil
+			}
+			if tt.second {
+				b = b.WithObjects(deployment("web-canary", "ghcr.io/org/app:v1", nil))
+				opts.Resource.LabelSelector = map[string]string{"app": "web"}
+			}
+			var objs []runtime.Object
+			if tt.replicaSet != nil {
+				objs = append(objs, tt.replicaSet)
+			}
+			dyn := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), objs...)
+			if tt.forbidden {
+				dyn.PrependReactor("get", "replicasets", func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "replicasets"}, "web-5d8f", nil)
+				})
+			}
+			got, err := health.NewDeploymentAdapter(b.Build(), dyn).Check(context.Background(), opts)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, kindOf(got), got.Reason)
+			assert.Contains(t, got.Reason, tt.reason)
+			assert.Equal(t, !tt.second && !tt.noImages && tt.image == "", got.TargetUpdated, "TargetUpdated")
+		})
+	}
+}
+
+// TestAutoDetector_ResourceReadsReplicaSets proves the resource adapter that
+// the controller selects reads the ReplicaSet a ProgressDeadlineExceeded
+// names through the dynamic client (B95).
+func TestAutoDetector_ResourceReadsReplicaSets(t *testing.T) {
+	d := deployment("web", "ghcr.io/org/app:v2", func(d *appsv1.Deployment) {
+		d.Annotations = map[string]string{"deployment.kubernetes.io/revision": "3"}
+		setProgressing(d, corev1.ConditionFalse, "ProgressDeadlineExceeded")
+		d.Status.Conditions[1].Message = `ReplicaSet "web-5d8f" has timed out progressing.`
+	})
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(d).Build()
+	dyn := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), replicaSetObj("web-5d8f", "2"))
+	adapter, err := health.NewAutoDetector(c, dyn).Select(context.Background(), "resource")
+	require.NoError(t, err)
+	got, err := adapter.Check(context.Background(), health.CheckOptions{
+		Resource: health.ResourceConfig{Name: "web", Namespace: "prod"}})
+	require.NoError(t, err)
+	assert.Equal(t, isProgressing, kindOf(got), got.Reason)
+	assert.Contains(t, got.Reason, "ReplicaSet web-5d8f has revision 2, not the Deployment's revision 3")
 }
 
 // TestDeploymentTargetUpdated proves the resource adapter reports the target
@@ -168,7 +361,7 @@ func TestDeploymentTargetUpdated(t *testing.T) {
 			for i, img := range tt.images {
 				b = b.WithObjects(deployment("web-"+string(rune('0'+i)), img, nil))
 			}
-			got, err := health.NewDeploymentAdapter(b.Build()).Check(context.Background(), opts)
+			got, err := health.NewDeploymentAdapter(b.Build(), nil).Check(context.Background(), opts)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, kindOf(got), got.Reason)
 			assert.Equal(t, tt.updated, got.TargetUpdated, "TargetUpdated")
@@ -194,13 +387,14 @@ func TestFluxStalledOnAnEarlierDeadline(t *testing.T) {
 	)
 	// stalledAt is Deployment prod/<name> on the Bundle image, past a
 	// progress deadline the controller set at at.
-	stalledAt := func(name, at string) *unstructured.Unstructured {
-		d := stalledDeployment(name, podinfo+":6.15.0")
+	stalledOn := func(name, image, at string) *unstructured.Unstructured {
+		d := stalledDeployment(name, image)
 		c := d.Object["status"].(map[string]interface{})["conditions"].([]interface{})[1].(map[string]interface{})
 		c["lastUpdateTime"], c["lastTransitionTime"] = at, at
 		c["message"] = `ReplicaSet "` + name + `-5d8f" has timed out progressing.`
 		return d
 	}
+	stalledAt := func(name, at string) *unstructured.Unstructured { return stalledOn(name, podinfo+":6.15.0", at) }
 	stalledKs := func(listed, attempted string, mutate func(obj map[string]interface{})) *unstructured.Unstructured {
 		return kustomization("False", "HealthCheckFailed",
 			"health check failed after 5.01s: failed early due to stalled resources: "+listed,
@@ -213,26 +407,55 @@ func TestFluxStalledOnAnEarlierDeadline(t *testing.T) {
 			}))
 	}
 	const earlier = "(lastAttemptedRevision=034ce92a1b2c), but no Deployment Flux lists is past a progress deadline " +
-		"set during this promotion: Deployment prod/web: ProgressDeadlineExceeded (ReplicaSet \"web-5d8f\" has timed out " +
+		"of this promotion's rollout: Deployment prod/web: ProgressDeadlineExceeded (ReplicaSet \"web-5d8f\" has timed out " +
 		"progressing.) is from an earlier rollout: its lastUpdateTime 2026-10-02T05:01:30Z is before this health check " +
 		"started (2026-10-02T05:02:00Z); waiting for the Deployment controller to see this rollout progress; " +
 		"waiting for Flux to check again"
+	// atRevision is d with the Deployment controller's revision.
+	atRevision := func(d *unstructured.Unstructured, revision string) *unstructured.Unstructured {
+		d.SetAnnotations(map[string]string{"deployment.kubernetes.io/revision": revision})
+		return d
+	}
 	tests := []struct {
-		name   string
-		objs   []runtime.Object
-		since  time.Time
+		name  string
+		objs  []runtime.Object
+		since time.Time
+		// mixed is a Bundle that is not only images.
+		mixed  bool
 		want   wantKind
 		reason string
 	}{
+		{name: "a deadline set during this promotion on a ReplicaSet of another revision waits for Flux",
+			objs: []runtime.Object{stalledKs(web, fluxPushed, nil), atRevision(stalledAt("web", after), "3"),
+				replicaSetObj("web-5d8f", "2")}, since: since,
+			want: isProgressing, reason: "(lastAttemptedRevision=034ce92a1b2c), but no Deployment Flux lists is past a " +
+				"progress deadline of this promotion's rollout: Deployment prod/web: ProgressDeadlineExceeded (ReplicaSet " +
+				"\"web-5d8f\" has timed out progressing.) is from an earlier rollout: ReplicaSet web-5d8f has revision 2, " +
+				"not the Deployment's revision 3; waiting for the Deployment controller to see this rollout progress; " +
+				"waiting for Flux to check again"},
+		{name: "a deadline from before the health check started on the current ReplicaSet is terminal",
+			objs: []runtime.Object{stalledKs(web, fluxPushed, nil), atRevision(stalledAt("web", before), "3"),
+				replicaSetObj("web-5d8f", "3")}, since: since,
+			want: isTerminal, reason: "(lastAttemptedRevision=034ce92a1b2c)"},
+		{name: "a deadline from before the health check started on the current ReplicaSet waits for a mixed Bundle",
+			objs: []runtime.Object{stalledKs(web, fluxPushed, nil), atRevision(stalledAt("web", before), "3"),
+				replicaSetObj("web-5d8f", "3")}, since: since, mixed: true,
+			want: isProgressing, reason: earlier},
 		{name: "a deadline from before the health check started waits for Flux",
 			objs: []runtime.Object{stalledKs(web, fluxPushed, nil), stalledAt("web", before)}, since: since,
 			want: isProgressing, reason: earlier},
+		{name: "a deadline from before the health check started on the current ReplicaSet of a Deployment on no Bundle image waits",
+			objs: []runtime.Object{stalledKs("[Deployment/prod/cache status: 'Failed']", fluxPushed, nil),
+				atRevision(stalledOn("cache", "docker.io/library/redis:7", before), "3"), replicaSetObj("cache-5d8f", "3")},
+			since: since, want: isProgressing, reason: "Deployment prod/cache: ProgressDeadlineExceeded (ReplicaSet " +
+				"\"cache-5d8f\" has timed out progressing.) is from an earlier rollout: its lastUpdateTime 2026-10-02T05:01:30Z " +
+				"is before this health check started"},
 		{name: "a deadline set during this promotion is terminal, though the template runs the Bundle images",
 			objs: []runtime.Object{stalledKs(web, fluxPushed, nil), stalledAt("web", after)}, since: since,
 			want: isTerminal, reason: "(lastAttemptedRevision=034ce92a1b2c)"},
 		{name: "a Deployment no longer past its deadline waits for Flux",
 			objs: []runtime.Object{stalledKs(web, fluxPushed, nil), deploymentObj("web", 2, podinfo+":6.15.0", 1)}, since: since,
-			want: isProgressing, reason: "set during this promotion: Deployment prod/web: Available=True, 1/1 replicas " +
+			want: isProgressing, reason: "of this promotion's rollout: Deployment prod/web: Available=True, 1/1 replicas " +
 				"updated and available; waiting for Flux to check again"},
 		{name: "without a health-check start every deadline counts",
 			objs: []runtime.Object{stalledKs(web, fluxPushed, nil), stalledAt("web", before)},
@@ -262,7 +485,20 @@ func TestFluxStalledOnAnEarlierDeadline(t *testing.T) {
 		{name: "a sibling's commit with the Bundle Deployment's deadline from an earlier rollout waits for Flux",
 			objs: []runtime.Object{stalledKs(web, fluxLater, nil), stalledAt("web", before)}, since: since,
 			want: isProgressing, reason: "(lastAttemptedRevision=8e9966475a0b, not 034ce92a1b2c), but no Deployment Flux " +
-				"lists is past a progress deadline set during this promotion: Deployment prod/web: ProgressDeadlineExceeded"},
+				"lists is past a progress deadline of this promotion's rollout: Deployment prod/web: ProgressDeadlineExceeded"},
+		{name: "a sibling's commit with the Bundle Deployment's current ReplicaSet stalled before the health check is terminal",
+			objs: []runtime.Object{stalledKs(web, fluxLater, nil), atRevision(stalledAt("web", before), "3"),
+				replicaSetObj("web-5d8f", "3")}, since: since,
+			want: isTerminal, reason: "but Deployment prod/web, which runs the Bundle images, stalled"},
+		// A mixed Bundle whose images the Deployment already runs: Flux has
+		// not applied its config change (B95 review).
+		{name: "a sibling's commit with the current ReplicaSet stalled before the health check waits for a mixed Bundle",
+			objs: []runtime.Object{stalledKs(web, fluxLater, nil), atRevision(stalledAt("web", before), "3"),
+				replicaSetObj("web-5d8f", "3")}, since: since, mixed: true,
+			want: isProgressing, reason: "(lastAttemptedRevision=8e9966475a0b, not 034ce92a1b2c), but no Deployment Flux " +
+				"lists is past a progress deadline of this promotion's rollout: Deployment prod/web: ProgressDeadlineExceeded " +
+				"(ReplicaSet \"web-5d8f\" has timed out progressing.) is from an earlier rollout: its lastUpdateTime " +
+				"2026-10-02T05:01:30Z is before this health check started"},
 		{name: "a sibling's commit with the Bundle Deployment no longer past its deadline waits for Flux",
 			objs: []runtime.Object{stalledKs(web, fluxLater, nil), deploymentObj("web", 2, podinfo+":6.15.0", 1)}, since: since,
 			want: isProgressing, reason: "Available=True, 1/1 replicas updated and available; waiting for Flux to check again"},
@@ -292,7 +528,8 @@ func TestFluxStalledOnAnEarlierDeadline(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := checkFlux(t, health.CheckOptions{ExpectedRevision: fluxPushed, ExpectedImages: bundle, Since: tt.since}, tt.objs...)
+			got := checkFlux(t, health.CheckOptions{ExpectedRevision: fluxPushed, ExpectedImages: bundle,
+				ImagesOnly: !tt.mixed, Since: tt.since}, tt.objs...)
 			assert.Equal(t, tt.want, kindOf(got), got.Reason)
 			assert.Contains(t, got.Reason, tt.reason)
 		})

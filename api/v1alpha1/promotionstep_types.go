@@ -218,9 +218,10 @@ type PromotionStepStatus struct {
 	// TargetUpdatedAt is when a health check of this step first found the
 	// workload's target running the Bundle images (health.type resource: the
 	// Deployment's pod template; flagger: the Canary's target Deployment).
-	// Set once. The resource check counts a ProgressDeadlineExceeded, and
-	// the flagger check a Failed phase, only when set after this time: the
-	// earlier rollout's condition or phase can outlast the Bundle's update.
+	// Set once. The flagger check counts a Failed phase, and the resource
+	// check a ProgressDeadlineExceeded when it cannot read the ReplicaSet the
+	// condition names, only when set after this time: the earlier rollout's
+	// condition or phase can outlast the Bundle's update.
 	// +optional
 	TargetUpdatedAt *metav1.Time `json:"targetUpdatedAt,omitempty"`
 

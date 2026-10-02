@@ -161,7 +161,7 @@ func TestDeploymentAdapter_RolloutAndImage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(tt.deploy).Build()
-			got, err := health.NewDeploymentAdapter(c).Check(context.Background(), health.CheckOptions{
+			got, err := health.NewDeploymentAdapter(c, nil).Check(context.Background(), health.CheckOptions{
 				Resource:       health.ResourceConfig{Name: "web", Namespace: "prod"},
 				ExpectedImages: tt.expected,
 			})
@@ -198,7 +198,7 @@ func TestDeploymentAdapter_LabelSelector(t *testing.T) {
 			}
 			// A Deployment with the right name but without the labels must not count.
 			other := deployment("web", "ghcr.io/org/app:v1", func(d *appsv1.Deployment) { d.Labels = nil })
-			got, err := health.NewDeploymentAdapter(b.WithObjects(other).Build()).Check(context.Background(), health.CheckOptions{
+			got, err := health.NewDeploymentAdapter(b.WithObjects(other).Build(), nil).Check(context.Background(), health.CheckOptions{
 				Resource: health.ResourceConfig{Name: "web", Namespace: "prod",
 					LabelSelector: map[string]string{"app": "web"}},
 				ExpectedImages: []health.ImageExpectation{{Repository: "ghcr.io/org/app", Tag: "v2"}},

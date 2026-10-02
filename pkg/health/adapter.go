@@ -123,11 +123,20 @@ type CheckOptions struct {
 	// target to run them.
 	ExpectedImages []ImageExpectation
 
+	// ImagesOnly reports that the Bundle changes only images (Bundle type
+	// image): a pod template on the Bundle images is then the promoted state,
+	// so the resource and flux adapters fail a Deployment on it at once when
+	// its current ReplicaSet is past its progress deadline (see
+	// deadlineOfReplicaSet). A config or mixed Bundle may change the pod
+	// template in other ways, which the adapters cannot see, so the
+	// condition's times decide (see deadlineFromEarlierRollout).
+	ImagesOnly bool
+
 	// Since is when the health check of this promotion started. The flagger
 	// adapter ignores a Succeeded or Failed phase that Flagger set before it
 	// when it cannot compare images, and the resource adapter a
-	// ProgressDeadlineExceeded the Deployment controller set before it. Zero
-	// skips that check.
+	// ProgressDeadlineExceeded the Deployment controller set before it, when
+	// the ReplicaSet it names does not decide. Zero skips that check.
 	Since time.Time
 
 	// TargetUpdatedAt is when a check of this promotion first found the
@@ -200,11 +209,15 @@ type Adapter interface {
 // DeploymentAdapter checks Kubernetes Deployment readiness conditions.
 type DeploymentAdapter struct {
 	client sigs_client.Client
+	// dynamic reads the ReplicaSet a ProgressDeadlineExceeded names (see
+	// deadlineOfReplicaSet), uncached; nil leaves the condition's times to
+	// decide.
+	dynamic dynamic.Interface
 }
 
-// NewDeploymentAdapter constructs a DeploymentAdapter.
-func NewDeploymentAdapter(c sigs_client.Client) *DeploymentAdapter {
-	return &DeploymentAdapter{client: c}
+// NewDeploymentAdapter constructs a DeploymentAdapter. dynClient may be nil.
+func NewDeploymentAdapter(c sigs_client.Client, dynClient dynamic.Interface) *DeploymentAdapter {
+	return &DeploymentAdapter{client: c, dynamic: dynClient}
 }
 
 // Name returns "resource".
@@ -218,7 +231,7 @@ func (a *DeploymentAdapter) Name() string { return "resource" }
 //  2. status.observedGeneration >= metadata.generation, else Progressing;
 //  3. no Progressing condition with reason ProgressDeadlineExceeded, else
 //     Terminal, or Progressing when the condition is from an earlier rollout
-//     (see deadlineFromEarlierRollout);
+//     (see deadlineOfReplicaSet and deadlineFromEarlierRollout);
 //  4. updatedReplicas == spec.replicas, no old replicas left and every updated
 //     replica available, else Progressing (or unhealthy when the rollout had
 //     already finished and replicas became unavailable afterwards);
@@ -228,6 +241,7 @@ func (a *DeploymentAdapter) Check(ctx context.Context, opts CheckOptions) (Healt
 	if cfg.Condition == "" {
 		cfg.Condition = "Available"
 	}
+	rs := replicaSetLookup(ctx, a.dynamic)
 
 	if len(cfg.LabelSelector) > 0 {
 		var list appsv1.DeploymentList
@@ -246,7 +260,7 @@ func (a *DeploymentAdapter) Check(ctx context.Context, opts CheckOptions) (Healt
 		comparable, updated := 0, 0
 		for i := range list.Items {
 			d := &list.Items[i]
-			st := checkDeployment(d, cfg.Condition, opts)
+			st := checkDeployment(d, cfg.Condition, opts, rs)
 			if runsRepository(opts.ExpectedImages, deploymentImages(d)) {
 				comparable++
 				if st.TargetUpdated {
@@ -278,7 +292,7 @@ func (a *DeploymentAdapter) Check(ctx context.Context, opts CheckOptions) (Healt
 		}
 		return HealthStatus{}, fmt.Errorf("get deployment %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}
-	return checkDeployment(&deploy, cfg.Condition, opts), nil
+	return checkDeployment(&deploy, cfg.Condition, opts, rs), nil
 }
 
 func severity(st HealthStatus) int {
@@ -293,13 +307,14 @@ func severity(st HealthStatus) int {
 }
 
 // checkDeployment applies the rollout checks documented on DeploymentAdapter.Check.
-// It reads opts.ExpectedImages, Since and TargetUpdatedAt, and sets
-// TargetUpdated when the pod template runs the Bundle images.
-func checkDeployment(d *appsv1.Deployment, condition string, opts CheckOptions) HealthStatus {
+// It reads opts.ExpectedImages, ImagesOnly, Since and TargetUpdatedAt, and
+// sets TargetUpdated when the pod template runs the Bundle images. rs may be
+// nil.
+func checkDeployment(d *appsv1.Deployment, condition string, opts CheckOptions, rs replicaSetRevision) HealthStatus {
 	running := deploymentImages(d)
 	imagesOK, imageNote := checkImages(opts.ExpectedImages, running)
 	updated := imagesOK && runsRepository(opts.ExpectedImages, running)
-	st := deploymentRollout(d, condition, imagesOK, imageNote, updated, opts)
+	st := deploymentRollout(d, condition, imagesOK, imageNote, updated, updated && opts.ImagesOnly, opts, rs)
 	st.TargetUpdated = updated
 	return st
 }
@@ -314,9 +329,11 @@ func deploymentImages(d *appsv1.Deployment) []string {
 
 // deploymentRollout is checkDeployment after the image check: updated
 // reports that the pod template was compared with the Bundle images and runs
-// them.
+// them, and promoted that it is the promoted state, so that a
+// ProgressDeadlineExceeded of the Deployment's current ReplicaSet is this
+// promotion's (see CheckOptions.ImagesOnly).
 func deploymentRollout(d *appsv1.Deployment, condition string, imagesOK bool, imageNote string,
-	updated bool, opts CheckOptions) HealthStatus {
+	updated, promoted bool, opts CheckOptions, rs replicaSetRevision) HealthStatus {
 	id := fmt.Sprintf("Deployment %s/%s", d.Namespace, d.Name)
 	if !imagesOK {
 		return progressing(fmt.Sprintf("%s not updated yet: %s", id, imageNote))
@@ -341,7 +358,15 @@ func deploymentRollout(d *appsv1.Deployment, condition string, imagesOK bool, im
 		if prog.Message != "" {
 			deadline += " (" + prog.Message + ")"
 		}
-		if earlier := deadlineFromEarlierRollout(prog, updated, opts); earlier != "" {
+		// The current ReplicaSet's stall is this promotion's only when the
+		// pod template is the promoted state. Before Argo CD applies a
+		// rollback of a config change, say, it is the stall of the release
+		// the rollback replaces.
+		earlier, known := deadlineOfReplicaSet(d, prog, rs)
+		if !known || earlier == "" && !promoted {
+			earlier = deadlineFromEarlierRollout(prog, updated, opts)
+		}
+		if earlier != "" {
 			return progressing(fmt.Sprintf("%s: %s is from an earlier rollout: %s; "+
 				"waiting for the Deployment controller to see this rollout progress", id, deadline, earlier))
 		}
@@ -396,9 +421,78 @@ func deploymentRollout(d *appsv1.Deployment, condition string, imagesOK bool, im
 	return healthy(reason)
 }
 
+// replicaSetRevision returns the revision (deployment.kubernetes.io/revision)
+// of ReplicaSet namespace/name, and found false when it does not exist.
+type replicaSetRevision func(namespace, name string) (revision string, found bool, err error)
+
+var replicaSetGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"}
+
+// deploymentRevisionAnnotation is the revision the Deployment controller
+// sets on a Deployment and on each of its ReplicaSets.
+const deploymentRevisionAnnotation = "deployment.kubernetes.io/revision"
+
+// replicaSetLookup reads ReplicaSets through dyn, or is nil without dyn. A
+// health check reads one only for a Deployment past its progress deadline,
+// so it does not use the cached client, whose informer would watch every
+// ReplicaSet.
+func replicaSetLookup(ctx context.Context, dyn dynamic.Interface) replicaSetRevision {
+	if dyn == nil {
+		return nil
+	}
+	return func(namespace, name string) (string, bool, error) {
+		rs, err := dyn.Resource(replicaSetGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, err
+		}
+		return rs.GetAnnotations()[deploymentRevisionAnnotation], true, nil
+	}
+}
+
+// timedOutReplicaSet matches the message of the ProgressDeadlineExceeded the
+// Deployment controller sets: it names the Deployment's new ReplicaSet at the
+// time (pkg/controller/deployment/progress.go).
+var timedOutReplicaSet = regexp.MustCompile(`^ReplicaSet "([a-z0-9.-]+)" has timed out progressing\.$`)
+
+// deadlineOfReplicaSet tells from the ReplicaSet a ProgressDeadlineExceeded
+// names whether the condition is from an earlier rollout: it explains why, or
+// returns "" when that ReplicaSet is the Deployment's current one, whose
+// revision is the Deployment's, so the rollout of the current pod template
+// stalled (this promotion's when that template is the promoted state; see
+// deploymentRollout). A rollout back to an existing ReplicaSet gives that ReplicaSet the
+// next revision, so a condition the controller kept from the stalled rollout
+// names a ReplicaSet of another revision (see deadlineFromEarlierRollout), or
+// one the controller has since deleted. known is false when the ReplicaSet
+// cannot tell: no rs, a message of another form, a Deployment or ReplicaSet
+// without a revision, or an error reading it (a chart without get on
+// replicasets, say). The condition's times decide then.
+func deadlineOfReplicaSet(d *appsv1.Deployment, prog *appsv1.DeploymentCondition, rs replicaSetRevision) (earlier string, known bool) {
+	current := d.Annotations[deploymentRevisionAnnotation]
+	m := timedOutReplicaSet.FindStringSubmatch(prog.Message)
+	if rs == nil || current == "" || m == nil {
+		return "", false
+	}
+	rev, found, err := rs(d.Namespace, m[1])
+	switch {
+	case err != nil:
+		return "", false
+	case !found:
+		return fmt.Sprintf("ReplicaSet %s no longer exists", m[1]), true
+	case rev == "":
+		return "", false
+	case rev != current:
+		return fmt.Sprintf("ReplicaSet %s has revision %s, not the Deployment's revision %s", m[1], rev, current), true
+	}
+	return "", true
+}
+
 // deadlineFromEarlierRollout explains why a ProgressDeadlineExceeded
 // condition is from an earlier rollout than this promotion's, or returns ""
-// when it may be this promotion's.
+// when it may be this promotion's. It decides when deadlineOfReplicaSet
+// cannot, or finds the current ReplicaSet stalled while the pod template may
+// not be the promoted state yet.
 //
 // The Deployment controller replaces the condition only when it sees the
 // rollout progress, or when it creates a ReplicaSet. A rollout back to an
@@ -414,7 +508,8 @@ func deploymentRollout(d *appsv1.Deployment, condition string, imagesOK bool, im
 // change, and the step fails at health.timeout instead of at once.
 //
 // With Since zero (the promotion changed nothing in git, or the step sequence
-// has no health-check step) every ProgressDeadlineExceeded counts.
+// has no health-check step) it takes every ProgressDeadlineExceeded for this
+// promotion's.
 func deadlineFromEarlierRollout(prog *appsv1.DeploymentCondition, updated bool, opts CheckOptions) string {
 	if opts.Since.IsZero() {
 		return ""
@@ -987,7 +1082,7 @@ func (a *FluxAdapter) workloads(ctx context.Context, ks *unstructured.Unstructur
 		case err != nil:
 			return nil, err
 		default:
-			fd.status = checkFluxDeployment(d, opts)
+			fd.status = a.checkFluxDeployment(ctx, d, opts)
 			if fd.status.Healthy {
 				fd.status.Reason = fmt.Sprintf("Deployment %s: %s", ref, fd.status.Reason)
 			}
@@ -1002,14 +1097,21 @@ func (a *FluxAdapter) workloads(ctx context.Context, ks *unstructured.Unstructur
 }
 
 // checkFluxDeployment is checkDeployment for a Deployment Flux applied or
-// health-checks. A ProgressDeadlineExceeded counts only when set after the
-// health check started (opts.Since): one from an earlier rollout is
-// Progressing, as for the resource adapter. The flux adapter does not record
-// when the pod template first ran the Bundle images (TargetUpdatedAt), so
-// the time check is the only one (see deadlineFromEarlierRollout).
-func checkFluxDeployment(d *appsv1.Deployment, opts CheckOptions) HealthStatus {
-	imagesOK, imageNote := checkImages(opts.ExpectedImages, deploymentImages(d))
-	return deploymentRollout(d, string(appsv1.DeploymentAvailable), imagesOK, imageNote, false, CheckOptions{Since: opts.Since})
+// health-checks. A ProgressDeadlineExceeded from an earlier rollout is
+// Progressing, as for the resource adapter: the ReplicaSet it names tells
+// (see deadlineOfReplicaSet), or else the condition counts only when set
+// after the health check started (opts.Since). The flux adapter does not
+// record when the pod template first ran the Bundle images
+// (TargetUpdatedAt), so that time check is the only one (see
+// deadlineFromEarlierRollout). As for the resource adapter, a stall of the
+// current ReplicaSet fails at once only for an image Bundle
+// (opts.ImagesOnly) whose images the pod template runs.
+func (a *FluxAdapter) checkFluxDeployment(ctx context.Context, d *appsv1.Deployment, opts CheckOptions) HealthStatus {
+	running := deploymentImages(d)
+	imagesOK, imageNote := checkImages(opts.ExpectedImages, running)
+	promoted := opts.ImagesOnly && imagesOK && runsRepository(opts.ExpectedImages, running)
+	return deploymentRollout(d, string(appsv1.DeploymentAvailable), imagesOK, imageNote, false, promoted,
+		CheckOptions{Since: opts.Since}, replicaSetLookup(ctx, a.dynamic))
 }
 
 // fluxStalledResource matches a resource Flux lists in a "failed early due
@@ -1021,11 +1123,11 @@ var fluxStalledResource = regexp.MustCompile(`([A-Za-z0-9]+)/(?:([a-z0-9.-]+)/)?
 // (msg) is not a stall of this promotion, or returns "" when it may be.
 // Flux fails a Deployment on any ProgressDeadlineExceeded, also one the
 // Deployment controller kept from an earlier rollout after a rollback to the
-// ReplicaSet before a stalled one (see deadlineFromEarlierRollout), and
-// checks again only at its next reconcile. So the stall is not this
-// promotion's when every resource Flux lists is a Deployment, in this
-// cluster, whose ProgressDeadlineExceeded is from before the health check
-// started or that is no longer past its progress deadline. A resource of
+// ReplicaSet before a stalled one (see deadlineOfReplicaSet), and checks
+// again only at its next reconcile. So the stall is not this promotion's
+// when every resource Flux lists is a Deployment, in this cluster, whose
+// ProgressDeadlineExceeded is from an earlier rollout or that is no longer
+// past its progress deadline. A resource of
 // another kind, one that cannot be read, or a message that names none, is.
 func (a *FluxAdapter) stalledEarlier(ctx context.Context, ks *unstructured.Unstructured, msg string, opts CheckOptions) string {
 	if _, remote, _ := unstructured.NestedMap(ks.Object, "spec", "kubeConfig"); remote {
@@ -1044,7 +1146,7 @@ func (a *FluxAdapter) stalledEarlier(ctx context.Context, ks *unstructured.Unstr
 		if err != nil {
 			return ""
 		}
-		st := checkFluxDeployment(d, opts)
+		st := a.checkFluxDeployment(ctx, d, opts)
 		if st.Terminal {
 			return ""
 		}
@@ -1053,7 +1155,7 @@ func (a *FluxAdapter) stalledEarlier(ctx context.Context, ks *unstructured.Unstr
 		}
 		now = append(now, st.Reason)
 	}
-	return "no Deployment Flux lists is past a progress deadline set during this promotion: " + strings.Join(now, "; ")
+	return "no Deployment Flux lists is past a progress deadline of this promotion's rollout: " + strings.Join(now, "; ")
 }
 
 // fluxDeploymentRefs lists the Deployments in the Kustomization's inventory
@@ -1520,7 +1622,7 @@ type canaryRevision struct {
 // primaryHealth is the health of a primary Deployment that runs the Bundle
 // images, prefixed with what the phase says.
 func (r canaryRevision) primaryHealth(prefix string) HealthStatus {
-	st := checkDeployment(r.primary, "Available", CheckOptions{})
+	st := checkDeployment(r.primary, "Available", CheckOptions{}, nil)
 	id := fmt.Sprintf("primary Deployment %s/%s", r.primary.Namespace, r.primary.Name)
 	if st.Healthy {
 		return healthy(fmt.Sprintf("%s; %s runs the Bundle images: %s", prefix, id, st.Reason))
@@ -1612,7 +1714,7 @@ func NewAutoDetector(k8s sigs_client.Client, dynClient dynamic.Interface) *AutoD
 func (d *AutoDetector) Select(_ context.Context, healthType string) (Adapter, error) {
 	switch healthType {
 	case "resource":
-		return NewDeploymentAdapter(d.k8s), nil
+		return NewDeploymentAdapter(d.k8s, d.dynamic), nil
 	case "argocd":
 		return NewArgoCDAdapter(d.dynamic), nil
 	case "flux":

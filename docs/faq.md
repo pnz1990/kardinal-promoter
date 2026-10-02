@@ -68,7 +68,8 @@ The Helm chart creates the necessary `ClusterRole` (a `Role` in namespace mode).
 - `get/list/watch/create/update/patch/delete` on `graphs.kro.run`
 - `get/list/watch` on the health targets: `deployments`, Argo CD `applications` and `rollouts`,
   Flux `kustomizations`, Flagger `canaries` (`patch` on `applications` only with
-  `rbac.argocdApplicationsWrite`)
+  `rbac.argocdApplicationsWrite`), and `get` on `replicasets` (the ReplicaSet a Deployment's
+  `ProgressDeadlineExceeded` names)
 - `get` on `secrets` (Pipeline `spec.git.secretRef` and the SCM token); no `list` or `watch`
 - `get/create` on `serviceaccounts` and `get/list/create/update/delete` on `rolebindings`, plus
   `bind` on the two Graph ClusterRoles only, for the [Graph identity](installation.md)
