@@ -781,7 +781,8 @@ func TestChartShutdownDelay(t *testing.T) {
 	}
 	out, err := helmTemplate(t, "kardinal-promoter", "--set", "shutdownDelaySeconds=-1")
 	require.Error(t, err)
-	assert.Contains(t, out, "shutdownDelaySeconds: Must be greater than or equal to 0")
+	// Helm 3.14 and 3.22 (CI) word the schema error differently.
+	assert.Regexp(t, `shutdownDelaySeconds(: Must be greater than or equal to 0|': minimum: got -1, want 0)`, out)
 }
 
 // ── C08-api-config-11: values wired to real controller flags ─────────────────
