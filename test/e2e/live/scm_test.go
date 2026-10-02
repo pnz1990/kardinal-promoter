@@ -491,18 +491,7 @@ func scmApprovals(t *testing.T, e *framework.Env) {
 	t.Helper()
 	reviewer, ok := e.Git.(gitserver.Reviewer)
 	require.True(t, ok, "the suite's git server %T cannot review PRs", e.Git)
-	a := newArgoApp(t, e, "staging", "prod")
-	e.CreateGate(t, framework.Gate(a.ns, "staging-approved", "prod",
-		`"staging" in bundle.pr && bundle.pr["staging"].isApproved && bundle.pr["staging"].approvalCount >= 1`, recheck))
-	a.apply(t, a.pipeline(map[string]string{"staging": "pr-review"}))
-
-	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
-	_, pr := a.waitOpenPR(t, bundle, "staging")
-	prs := e.WaitPRStatus(t, a.ns, pipelineName, bundle, "staging", time.Minute, "polled",
-		func(p *v1alpha1.PRStatus) bool { return p.Spec.PRNumber == pr.Number && p.Status.LastCheckedAt != nil })
-	assert.False(t, prs.Status.Approved, "not approved before the review")
-	assert.Zero(t, prs.Status.ApprovalCount)
-	e.WaitGateReady(t, a.ns, bundle, "prod", "staging-approved", false, "= false", gateTimeout)
+	a, bundle, pr := scmUnreviewed(t, e)
 
 	require.NoError(t, reviewer.ApprovePR(context.Background(), a.repo, pr.Number, "e2e: approved"))
 	waitPRApproved(t, e, a.ns, bundle, "staging", 1)
@@ -511,6 +500,33 @@ func scmApprovals(t *testing.T, e *framework.Env) {
 	e.WaitGateReady(t, a.ns, bundle, "prod", "staging-approved", true, "= true", gateTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// scmUnreviewed opens the PR of pr-review environment staging, which no one
+// reviews, under gate staging-approved, which lets prod promote once
+// bundle.pr["staging"] is approved. Its poll reads the PR's reviews: the
+// PRStatus says not approved with no approvals, and the controller logs no
+// failed review read, which would keep the PRStatus's previous values. The
+// gate holds prod. It returns the app, the Bundle and the PR.
+func scmUnreviewed(t *testing.T, e *framework.Env) (*app, string, gitserver.PR) {
+	t.Helper()
+	a := newArgoApp(t, e, "staging", "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "staging-approved", "prod",
+		`"staging" in bundle.pr && bundle.pr["staging"].isApproved && bundle.pr["staging"].approvalCount >= 1`, recheck))
+	a.apply(t, a.pipeline(map[string]string{"staging": "pr-review"}))
+
+	since := time.Now()
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	_, pr := a.waitOpenPR(t, bundle, "staging")
+	prs := e.WaitPRStatus(t, a.ns, pipelineName, bundle, "staging", time.Minute, "polled",
+		func(p *v1alpha1.PRStatus) bool { return p.Spec.PRNumber == pr.Number && p.Status.LastCheckedAt != nil })
+	assert.False(t, prs.Status.Approved, "not approved before the review")
+	assert.Zero(t, prs.Status.ApprovalCount)
+	assert.Empty(t, e.ControllerLog(since).Lines(t,
+		framework.LogMessage("GetPRReviewStatus failed", "prstatus", prs.Name, "namespace", a.ns)),
+		"the poll read the PR's reviews")
+	e.WaitGateReady(t, a.ns, bundle, "prod", "staging-approved", false, "= false", gateTimeout)
+	return a, bundle, pr
 }
 
 // scmRejectedToken starts a controller variant with a token the git server
@@ -581,13 +597,11 @@ func scmBogusAPI(t *testing.T, e *framework.Env, ns string) {
 	assert.Contains(t, l.Str("error"), noSCMHost)
 }
 
-// scmLabelsAndRotation checks the PR labels on a promotion and a rollback,
-// then rotates the token to a git user that may push and open PRs but not
-// label them: the running controller picks the new token up from the Secret
-// without a restart, opens the next PR as that user, and leaves it open
-// without labels. The test must not be parallel: it changes the controller's
-// token.
-func scmLabelsAndRotation(t *testing.T, e *framework.Env, scopes []string) {
+// scmLabels checks the PR labels on a promotion and a rollback: a promotion
+// PR gets kardinal and kardinal/promotion, and the PR of a `kardinal
+// rollback` gets kardinal/rollback too, with the rollback title and body. It
+// merges every PR and returns the app, whose prod runs fixtures.V2.
+func scmLabels(t *testing.T, e *framework.Env) *app {
 	t.Helper()
 	a := newArgoApp(t, e, "prod")
 	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
@@ -621,6 +635,18 @@ func scmLabelsAndRotation(t *testing.T, e *framework.Env, scopes []string) {
 	a.merge(t, pr)
 	e.WaitStepState(t, a.ns, pipelineName, rollback, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
+	return a
+}
+
+// scmLabelsAndRotation checks the PR labels on a promotion and a rollback
+// (scmLabels), then rotates the token to a git user that may push and open
+// PRs but not label them: the running controller picks the new token up from
+// the Secret without a restart, opens the next PR as that user, and leaves it
+// open without labels. The test must not be parallel: it changes the
+// controller's token.
+func scmLabelsAndRotation(t *testing.T, e *framework.Env, scopes []string) {
+	t.Helper()
+	a := scmLabels(t, e)
 
 	// The new token's user may push and open PRs but not label them.
 	user := "rot-" + a.ns[len(a.ns)-8:]
@@ -635,7 +661,7 @@ func scmLabelsAndRotation(t *testing.T, e *framework.Env, scopes []string) {
 	assert.Equal(t, pod, e.ControllerPod(t).Name, "no restart")
 
 	fourth := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
-	_, pr = a.waitOpenPR(t, fourth, "prod")
+	_, pr := a.waitOpenPR(t, fourth, "prod")
 	assert.Equal(t, user, pr.Author, "the PR is opened with the new token")
 	assert.Empty(t, pr.Labels, "the new token may not label PRs")
 	e.WaitControllerLog(t, since, time.Minute, "the label failure",

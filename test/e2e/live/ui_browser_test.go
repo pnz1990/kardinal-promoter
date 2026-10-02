@@ -314,6 +314,61 @@ func TestUI_BrowserGates(t *testing.T) {
 	assert.False(t, exists, "the gate still holds prod")
 }
 
+// TestUI_BrowserNoGateOverride checks that the web app cannot approve or
+// override a gate: #1245 removed its Override gate dialog, and an override
+// is made with `kardinal override` (the UI API's approve endpoint stays, see
+// UIAPI-APPROVE-01). The scripts the controller serves are the whole app
+// (no lazily loaded chunk) and never name the approve endpoint. In a
+// browser, while gate hold-prod holds a Bundle, neither the Policy Gates
+// panel nor the gate's node details offers an approve or override control,
+// and the page sends no request but GETs and the node details' CEL check
+// (POST validate-cel, which writes nothing). Afterwards the gate instance has
+// no override and still holds prod.
+//
+// Covers UI-OVERRIDE-01.
+func TestUI_BrowserNoGateOverride(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	hold := holdGate(a.ns, "prod")
+	require.NoError(t, e.Client.Create(ctx, hold))
+	a.apply(t, a.pipeline(nil))
+	held := createBundle(t, e, a.ns, pipelineName, "", fixtures.V2, nil)
+	e.WaitStepState(t, a.ns, pipelineName, held.Name, "test", "Verified", promoteTimeout)
+	c := mainUI(t, e)
+	var holding uiGate
+	framework.Eventually(t, time.Minute, "hold-prod to hold the Bundle", func(context.Context) (bool, string) {
+		gates := gatesOf(t, c, a.ns, held.Name)
+		if len(gates) == 1 {
+			holding = gates[0]
+		}
+		return len(gates) == 1 && holding.State == "Block" && holding.Holding, fmt.Sprintf("%+v", gates)
+	})
+
+	index := c.Get(t, "/ui/")
+	require.Equal(t, http.StatusOK, index.Status, "GET /ui/: %s", index)
+	scripts := regexp.MustCompile(`<script[^>]*\ssrc="(/ui/[^"]+\.js)"`).FindAllStringSubmatch(index.Body, -1)
+	require.NotEmpty(t, scripts, "index.html names no script: %s", index.Body)
+	for _, m := range scripts {
+		r := c.Get(t, m[1])
+		require.Equal(t, http.StatusOK, r.Status, "GET %s: %s", m[1], r)
+		assert.NotContains(t, r.Body, "import(", "%s loads a chunk this test does not read", m[1])
+		assert.NotContains(t, r.Body, "/approve", "%s calls the approve endpoint", m[1])
+	}
+
+	framework.Playwright(t, "override.spec.ts", browserEnv(c, a.ns,
+		"KARDINAL_UI_HOLD_GATE", hold.Name,
+		"KARDINAL_UI_HOLD_INSTANCE", holding.Name))
+
+	var inst v1alpha1.PolicyGate
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: holding.Name}, &inst))
+	assert.Empty(t, inst.Spec.Overrides, "no override on the gate instance")
+	_, exists, err := e.Step(ctx, a.ns, pipelineName, held.Name, "prod")
+	require.NoError(t, err)
+	assert.False(t, exists, "the gate still holds prod")
+}
+
 // subSteps is a PromotionStep's status.steps as the node.spec.ts reads them.
 func subSteps(t *testing.T, ps *v1alpha1.PromotionStep) string {
 	t.Helper()

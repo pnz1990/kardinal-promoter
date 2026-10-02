@@ -5,9 +5,12 @@ package prstatus_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -68,10 +71,17 @@ func providers(t *testing.T, providerType, token, apiURL string) map[string]scm.
 // reconcilePoll reconciles a PRStatus that was never polled and returns it.
 func reconcilePoll(t *testing.T, p scm.SCMProvider, spec v1alpha1.PRStatusSpec) v1alpha1.PRStatus {
 	t.Helper()
+	return reconcilePollFrom(t, p, spec, v1alpha1.PRStatusStatus{Open: true})
+}
+
+// reconcilePollFrom reconciles a PRStatus whose status is status and
+// returns it.
+func reconcilePollFrom(t *testing.T, p scm.SCMProvider, spec v1alpha1.PRStatusSpec, status v1alpha1.PRStatusStatus) v1alpha1.PRStatus {
+	t.Helper()
 	prs := &v1alpha1.PRStatus{
 		ObjectMeta: metav1.ObjectMeta{Name: "pr", Namespace: "default"},
 		Spec:       spec,
-		Status:     v1alpha1.PRStatusStatus{Open: true},
+		Status:     status,
 	}
 	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(prs).
 		WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
@@ -177,6 +187,117 @@ func TestReconciler_AzureDevOpsPolling(t *testing.T) {
 					after := calls()
 					assert.Equal(t, tt.wantPRGets, after["GET "+path]-before["GET "+path], "status and, once merged, the merge commit")
 					assert.Equal(t, 1, after["GET "+reviewers]-before["GET "+reviewers])
+				})
+			}
+		})
+	}
+}
+
+// TestReconciler_GitHubApprovals polls a fake GitHub API for an open PR whose
+// reviews (GET /repos/{repo}/pulls/{n}/reviews, 100 per page) are those of
+// each case. The PRStatus gets approved and approvalCount, which PolicyGates
+// read as bundle.pr["<env>"].isApproved and approvalCount: each reviewer's
+// latest APPROVED or CHANGES_REQUESTED review counts, COMMENTED and DISMISSED
+// do not, any reviewer's change request blocks, and a review on page two
+// counts as one on page one. The PRStatus starts with a stale approval, so a
+// failed read, which keeps it, cannot pass. Covers SCM-GH-12.
+func TestReconciler_GitHubApprovals(t *testing.T) {
+	const (
+		pr      = "/repos/acme/web-app/pulls/7"
+		reviews = pr + "/reviews"
+	)
+	type review struct{ login, state string }
+	times := func(n int, r review) []review {
+		out := make([]review, n)
+		for i := range out {
+			out[i] = r
+		}
+		return out
+	}
+	tests := []struct {
+		name      string
+		pages     [][]review
+		wantOK    bool
+		wantCount int
+	}{
+		{name: "no reviews", pages: [][]review{{}}},
+		{name: "one approval", pages: [][]review{{{"alice", "APPROVED"}}}, wantOK: true, wantCount: 1},
+		{name: "two reviewers, one approving twice",
+			pages:  [][]review{{{"alice", "APPROVED"}, {"bob", "APPROVED"}, {"alice", "APPROVED"}}},
+			wantOK: true, wantCount: 2},
+		{name: "comments and dismissed reviews do not count",
+			pages: [][]review{{{"alice", "COMMENTED"}, {"bob", "DISMISSED"}}}},
+		{name: "a comment after an approval keeps it",
+			pages:  [][]review{{{"alice", "APPROVED"}, {"alice", "COMMENTED"}}},
+			wantOK: true, wantCount: 1},
+		{name: "a change request blocks",
+			pages:     [][]review{{{"alice", "APPROVED"}, {"bob", "CHANGES_REQUESTED"}}},
+			wantCount: 1},
+		{name: "an approval after a change request counts",
+			pages:  [][]review{{{"alice", "CHANGES_REQUESTED"}, {"alice", "APPROVED"}}},
+			wantOK: true, wantCount: 1},
+		{name: "a change request after an approval withdraws it",
+			pages: [][]review{{{"alice", "APPROVED"}, {"alice", "CHANGES_REQUESTED"}}}},
+		{name: "a change request on page two blocks",
+			pages:     [][]review{times(100, review{"alice", "APPROVED"}), {{"bob", "CHANGES_REQUESTED"}}},
+			wantCount: 1},
+		{name: "an approval on page two counts",
+			pages:  [][]review{times(100, review{"alice", "COMMENTED"}), {{"alice", "APPROVED"}}},
+			wantOK: true, wantCount: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var asked []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "Bearer gh-token", r.Header.Get("Authorization"), r.URL.String())
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == pr:
+					_, _ = io.WriteString(w, `{"number":7,"state":"open","merged":false,"html_url":"https://github.com/acme/web-app/pull/7"}`)
+				case r.Method == http.MethodGet && r.URL.Path == reviews:
+					q := r.URL.Query()
+					mu.Lock()
+					asked = append(asked, "per_page="+q.Get("per_page")+"&page="+q.Get("page"))
+					mu.Unlock()
+					page, err := strconv.Atoi(q.Get("page"))
+					assert.NoError(t, err, r.URL.String())
+					var out []map[string]interface{}
+					if page >= 1 && page <= len(tt.pages) {
+						for i, rv := range tt.pages[page-1] {
+							out = append(out, map[string]interface{}{"id": page*1000 + i,
+								"user": map[string]string{"login": rv.login}, "state": rv.state})
+						}
+					}
+					if out == nil {
+						out = []map[string]interface{}{}
+					}
+					assert.NoError(t, json.NewEncoder(w).Encode(out))
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(srv.Close)
+
+			var wantPages []string
+			for i := range tt.pages {
+				wantPages = append(wantPages, "per_page=100&page="+strconv.Itoa(i+1))
+			}
+			for name, p := range providers(t, "github", "gh-token", srv.URL) {
+				t.Run(name, func(t *testing.T) {
+					mu.Lock()
+					asked = nil
+					mu.Unlock()
+					got := reconcilePollFrom(t, p,
+						v1alpha1.PRStatusSpec{PRURL: "https://github.com/acme/web-app/pull/7", PRNumber: 7, Repo: "acme/web-app"},
+						v1alpha1.PRStatusStatus{Open: true, Approved: !tt.wantOK, ApprovalCount: 9})
+					assert.True(t, got.Status.Open)
+					assert.Equal(t, tt.wantOK, got.Status.Approved, "approved")
+					assert.Equal(t, tt.wantCount, got.Status.ApprovalCount, "approvalCount")
+					mu.Lock()
+					defer mu.Unlock()
+					assert.Equal(t, wantPages, asked, "every page, until one has fewer than 100: %s", strings.Join(asked, ", "))
 				})
 			}
 		})
