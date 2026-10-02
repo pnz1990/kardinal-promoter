@@ -1244,8 +1244,9 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	checkedAt := metav1.NewTime(time.Now())
 	ps.Status.LastHealthCheckAt = &checkedAt
 	// The first check that finds the target on the Bundle images dates the
-	// update: the flagger check counts a Failed phase only when Flagger set it
-	// later. Every path below patches the status.
+	// update: the flagger check counts a Failed phase, and the resource check
+	// a ProgressDeadlineExceeded, only when set later. Every path below
+	// patches the status.
 	if result.TargetUpdated && ps.Status.TargetUpdatedAt == nil {
 		ps.Status.TargetUpdatedAt = &checkedAt
 	}
