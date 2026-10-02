@@ -171,8 +171,9 @@ func TestSub_ImageNewTag(t *testing.T) {
 // TestSub_ImageTagFilter checks tag selection: among the tags matching a
 // regular expression the highest semantic version wins (a higher version
 // outside the filter is ignored); among non-semver tags the most recently
-// built image wins. No matching tag, and more than 50 non-semver matching
-// tags, give phase Error with the documented messages and no Bundle.
+// built image wins, also when a second tag points to it. No matching tag, and
+// more than 50 non-semver matching tags, give phase Error with the documented
+// messages and no Bundle.
 //
 // Covers SUB-OCI-02.
 func TestSub_ImageTagFilter(t *testing.T) {
@@ -185,10 +186,11 @@ func TestSub_ImageTagFilter(t *testing.T) {
 	for _, tag := range framework.SeedTags {
 		digest[tag] = reg.Copy(t, tag, repo, tag)
 	}
-	// Non-semver tags: build-old is podinfo 6.13.0, build-new 6.15.0 (built
-	// later), build-mid 6.14.0.
+	// Non-semver tags: build-old is podinfo 6.13.0, build-new and
+	// build-new-signed 6.15.0 (built later), build-mid 6.14.0.
 	reg.Copy(t, "6.13.0", repo, "build-old")
 	reg.Copy(t, "6.15.0", repo, "build-new")
+	reg.Copy(t, "6.15.0", repo, "build-new-signed")
 	reg.Copy(t, "6.14.0", repo, "build-mid")
 
 	// 6.14.x only: 6.15.0 exists but does not match.
@@ -206,7 +208,7 @@ func TestSub_ImageTagFilter(t *testing.T) {
 	waitBaseline(t, e, a.ns, "builds", digest["6.15.0"])
 
 	newSub(t, e, a.ns, "none", imageSub(reg.Ref(repo), `^v99\.`, "30s"))
-	assert.Equal(t, fmt.Sprintf(`OCIWatcher: no tag of %q matches tagFilter %q (%d tags listed)`, reg.Ref(repo), `^v99\.`, 7),
+	assert.Equal(t, fmt.Sprintf(`OCIWatcher: no tag of %q matches tagFilter %q (%d tags listed)`, reg.Ref(repo), `^v99\.`, 8),
 		waitSubError(t, e, a.ns, "none"))
 
 	for i := 1; i <= 51; i++ {

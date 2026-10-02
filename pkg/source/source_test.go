@@ -538,6 +538,26 @@ func TestOCIWatcher_SelectsNewestTag(t *testing.T) {
 			wantErr: "same build time",
 		},
 		{
+			name: "two tags on the newest image are not a tie",
+			tags: []string{"build-41", "build-42", "build-42-signed"},
+			images: map[string]testImage{
+				"build-41":        {digest: "sha256:old", created: "2026-01-01T00:00:00Z"},
+				"build-42":        {digest: "sha256:new", created: "2026-02-01T00:00:00Z"},
+				"build-42-signed": {digest: "sha256:new", created: "2026-02-01T00:00:00Z"},
+			},
+			wantTag: "build-42",
+		},
+		{
+			name: "equal build times are an error when any of the images differ",
+			tags: []string{"sha-aaa", "sha-bbb", "sha-ccc"},
+			images: map[string]testImage{
+				"sha-aaa": {digest: "sha256:aaa", created: "1970-01-01T00:00:00Z"},
+				"sha-bbb": {digest: "sha256:bbb", created: "1970-01-01T00:00:00Z"},
+				"sha-ccc": {digest: "sha256:aaa", created: "1970-01-01T00:00:00Z"},
+			},
+			wantErr: "same build time",
+		},
+		{
 			name:    "no matching tag is an error",
 			tags:    []string{"v1.0.0", "v1.1.0"},
 			images:  imagesWithDigests("v1.0.0", "v1.1.0"),

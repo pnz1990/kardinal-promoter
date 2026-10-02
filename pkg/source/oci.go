@@ -186,8 +186,9 @@ func (s *registrySession) selectNewest(ctx context.Context, tags []string) (stri
 }
 
 // newestBuild returns the tag whose image config has the latest "created" time.
-// Equal build times (for example reproducible builds that pin created to the
-// epoch) cannot be ordered and are an error.
+// Several tags on the newest image are not a tie: the first listed tag is
+// returned. Equal build times of different images (for example reproducible
+// builds that pin created to the epoch) cannot be ordered and are an error.
 func (s *registrySession) newestBuild(ctx context.Context, tags []string) (string, string, error) {
 	var bestTag, bestDigest string
 	var bestCreated time.Time
@@ -200,7 +201,7 @@ func (s *registrySession) newestBuild(ctx context.Context, tags []string) (strin
 		switch {
 		case bestTag == "" || created.After(bestCreated):
 			bestTag, bestDigest, bestCreated, tie = tag, digest, created, false
-		case created.Equal(bestCreated):
+		case created.Equal(bestCreated) && digest != bestDigest:
 			tie = true
 		}
 	}
