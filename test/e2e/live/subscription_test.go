@@ -260,6 +260,71 @@ func TestSub_ImageMovingTag(t *testing.T) {
 	assert.ElementsMatch(t, names, got, "one Bundle per digest of main")
 }
 
+// TestSub_ImageReturningDigest checks a moving tag pushed back to an earlier
+// image (main: 6.13.0, 6.14.0, 6.15.0, then 6.14.0 again): the digest that
+// comes back is a new change and gets a new Bundle, named after the first
+// Bundle for it with -2. A later poll, and a poll after a status reset to the
+// previous digest, create nothing.
+//
+// Covers SUB-DEDUPE-02.
+func TestSub_ImageReturningDigest(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := pausedApp(t, e, e.Namespace(t), "test")
+	reg := framework.NewRegistry(t)
+	repo := a.ns + "/podinfo"
+	d13 := reg.Copy(t, "6.13.0", repo, "main")
+	newSub(t, e, a.ns, "main", imageSub(reg.Ref(repo), "^main$", "30s"))
+	waitBaseline(t, e, a.ns, "main", d13)
+
+	push := func(src string, generation int) (string, string) {
+		t.Helper()
+		d := reg.Copy(t, src, repo, "main")
+		want := "main-main-" + digestHex(d)[:8]
+		if generation > 1 {
+			want += fmt.Sprintf("-%d", generation)
+		}
+		poke(t, e, a.ns, "main")
+		waitSub(t, e, a.ns, "main", "Bundle "+want+" for main at "+d, func(st v1alpha1.SubscriptionStatus) bool {
+			return st.LastBundleCreated == want
+		})
+		assertImageBundle(t, e, a.ns, "main", want, reg.Repository(repo), "main", d)
+		return d, want
+	}
+	d14, first := push("6.14.0", 1)
+	d15, _ := push("6.15.0", 1)
+	again, name := push("6.14.0", 2)
+	require.Equal(t, d14, again, "the same image has the same digest")
+	assert.Equal(t, first+"-2", name)
+
+	s := getSub(t, e, a.ns, "main")
+	poke(t, e, a.ns, "main")
+	waitSub(t, e, a.ns, "main", "a poll after the push", func(st v1alpha1.SubscriptionStatus) bool {
+		return st.LastCheckedAt != s.Status.LastCheckedAt
+	})
+	assert.Len(t, subBundles(t, e, a.ns, "main"), 3)
+
+	// Reset lastSeenDigest to 6.15.0: the next poll sees 6.14.0 as new, and
+	// the newest Bundle, already for it, stops a fourth one.
+	s = getSub(t, e, a.ns, "main")
+	orig := s.DeepCopy()
+	s.Status.LastSeenDigest = d15
+	s.Status.LastBundleCreated = ""
+	require.NoError(t, e.Client.Status().Patch(context.Background(), s, client.MergeFrom(orig)))
+	poke(t, e, a.ns, "main")
+	waitSub(t, e, a.ns, "main", "the poll after the reset", func(st v1alpha1.SubscriptionStatus) bool {
+		return st.LastSeenDigest == d14
+	})
+	s = getSub(t, e, a.ns, "main")
+	assert.Equal(t, name, s.Status.LastBundleCreated, "the newest Bundle is reported")
+	assert.Equal(t, "Watching", s.Status.Phase)
+	var got []string
+	for _, b := range subBundles(t, e, a.ns, "main") {
+		got = append(got, b.Name)
+	}
+	assert.ElementsMatch(t, []string{first, "main-main-" + digestHex(d15)[:8], name}, got)
+}
+
 // TestSub_ImagePrivate checks that a registry that requires credentials (the
 // suite's second registry answers 401 with a Basic challenge) gives phase
 // Error saying so, and no Bundle: only public registries are supported.
@@ -369,9 +434,9 @@ func TestSub_GitPathGlob(t *testing.T) {
 
 // TestSub_Dedupe checks deduplication: polls that see the same digest create
 // nothing, and a poll that sees a digest other than status.lastSeenDigest
-// (as after a status reset) finds the existing Bundle by its
-// kardinal.io/subscription and kardinal.io/source-digest labels instead of
-// creating a second one. The documented kubectl query by digest finds it.
+// (as after a status reset) finds the Subscription's newest Bundle by its
+// kardinal.io/subscription label, sees from its kardinal.io/source-digest
+// label that it is for that digest, and creates no second one. The documented kubectl query by digest finds it.
 //
 // Covers SUB-DEDUPE-01.
 func TestSub_Dedupe(t *testing.T) {
@@ -412,7 +477,7 @@ func TestSub_Dedupe(t *testing.T) {
 	s = getSub(t, e, a.ns, "dedupe")
 	assert.Equal(t, name, s.Status.LastBundleCreated, "the existing Bundle is reported")
 	list := subBundles(t, e, a.ns, "dedupe")
-	require.Len(t, list, 1, "the same digest never creates a second Bundle")
+	require.Len(t, list, 1, "the digest of the newest Bundle creates no second Bundle")
 	assert.Equal(t, name, list[0].Name)
 
 	out := e.Kubectl(t, a.ns, "", "get", "bundles", "-o", "name",

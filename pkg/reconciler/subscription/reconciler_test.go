@@ -566,6 +566,60 @@ func TestSubscriptionReconciler_MutableTagRepush(t *testing.T) {
 	assert.ElementsMatch(t, []string{"app-sub-latest-22222222", "app-sub-latest-33333333"}, names)
 }
 
+// TestSubscriptionReconciler_ReturningDigest verifies that a moving tag pushed
+// back to an earlier image creates a new Bundle, named after the earlier one
+// with a -<n> suffix, also after the oldest Bundle was pruned, and that a
+// reconcile that sees the same change again (a stale lastSeenDigest) finds the
+// newest Bundle and creates nothing.
+func TestSubscriptionReconciler_ReturningDigest(t *testing.T) {
+	reg := &fakeRegistry{name: "org/app", tags: map[string]string{"main": digestOf('1')}}
+	srv := httptest.NewServer(reg)
+	defer srv.Close()
+
+	sub := makeImageSub("app-sub", "default", "my-pipeline", srv.URL+"/org/app")
+	sub.Spec.Image.TagFilter = "^main$"
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	now := time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC)
+	r := newReconcilerWithRealWatchers(c, func() time.Time { now = now.Add(time.Second); return now }, srv.Client())
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
+	ctx := context.Background()
+
+	poll := func(d byte) string {
+		t.Helper()
+		reg.set("main", digestOf(d))
+		_, err := r.Reconcile(ctx, req)
+		require.NoError(t, err)
+		var got kardinalv1alpha1.Subscription
+		require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+		require.Equal(t, "Watching", got.Status.Phase, got.Status.Message)
+		return got.Status.LastBundleCreated
+	}
+	var created []string
+	for _, d := range []byte{'1', '2', '3', '2', '3', '2'} {
+		created = append(created, poll(d))
+	}
+	assert.Equal(t, []string{"", "app-sub-main-22222222", "app-sub-main-33333333", "app-sub-main-22222222-2",
+		"app-sub-main-33333333-2", "app-sub-main-22222222-3"}, created)
+	assert.Len(t, listBundles(t, c), 5)
+
+	// The same change seen again creates nothing.
+	var got kardinalv1alpha1.Subscription
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+	orig := got.DeepCopy()
+	got.Status.LastSeenDigest = digestOf('3')
+	got.Status.LastBundleCreated = ""
+	require.NoError(t, c.Status().Patch(ctx, &got, client.MergeFrom(orig)))
+	assert.Equal(t, "app-sub-main-22222222-3", poll('2'))
+	assert.Len(t, listBundles(t, c), 5)
+
+	// historyLimit pruned the first Bundle for the digest: the suffix still grows.
+	require.NoError(t, c.Delete(ctx, &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{
+		Name: "app-sub-main-22222222", Namespace: "default"}}))
+	assert.Equal(t, "app-sub-main-33333333-3", poll('3'))
+	assert.Equal(t, "app-sub-main-22222222-4", poll('2'))
+	assert.Len(t, listBundles(t, c), 6)
+}
+
 // TestSubscriptionReconciler_NameCollisionWithOtherDigestIsAnError verifies that
 // AlreadyExists is only treated as crash recovery when the existing Bundle is
 // for the same digest (C04-gates-19).
