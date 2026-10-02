@@ -34,15 +34,13 @@ package subscription
 import (
 	"context"
 	"fmt"
-	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/selection"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -172,30 +170,35 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // createBundle creates a Bundle CRD from the WatchResult.
 // Returns the created Bundle's name on success.
 //
-// Deduplication: before creating, checks for an existing Bundle with label
-// kardinal.io/source-digest=<digest> and kardinal.io/subscription=<name>.
-// This is safe under HA and concurrent reconciles — unlike the status.lastSeenDigest
-// comparison, which has a read-compare-write race (#620).
+// Deduplication: when the Subscription's newest Bundle (label
+// kardinal.io/subscription=<name>) is already for the digest
+// (kardinal.io/source-digest), it is returned and nothing is created. That is
+// the Bundle a reconcile that read a stale status.lastSeenDigest, or crashed
+// before writing it, created for this change (#620). A digest that comes back
+// after another one (a moving tag pushed back to an earlier image) gets a new
+// Bundle; its name ends in -<n>, one more than the highest generation of the
+// Subscription's Bundles for the digest, so a retry of the same change picks
+// the same name and hits AlreadyExists.
 func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Subscription, result *source.WatchResult, now time.Time) (string, error) {
 	ns := sub.Namespace
 
-	// Short-circuit: check if a Bundle for this digest already exists in the API server.
-	// Uses a label selector — safe under concurrent reconciles and HA deployments.
+	generation := 0
 	if result.Digest != "" {
-		existingName, err := r.findExistingBundleForDigest(ctx, ns, sub.Name, result.Digest)
+		newest, highest, err := r.bundlesForDigest(ctx, ns, sub.Name, result.Digest)
 		if err != nil {
 			return "", fmt.Errorf("createBundle: check for existing bundle: %w", err)
 		}
-		if existingName != "" {
+		if newest != "" {
 			zerolog.Ctx(ctx).Debug().
-				Str("bundle", existingName).
+				Str("bundle", newest).
 				Str("digest", result.Digest).
-				Msg("bundle already exists for digest — skipping creation")
-			return existingName, nil
+				Msg("the newest bundle is for this digest — skipping creation")
+			return newest, nil
 		}
+		generation = highest + 1
 	}
 
-	bundleName := bundleNameFor(sub.Name, result, now)
+	bundleName := bundleNameFor(sub.Name, result, now, generation)
 
 	bundleType := "image"
 	if sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit {
@@ -272,15 +275,9 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 // at most maxBundleNameLen characters. The digest suffix keeps a re-pushed
 // mutable tag ("latest", "v1") from colliding with the previous Bundle. The
 // tag part is omitted when it is already a prefix of the digest (git short SHA).
-func bundleNameFor(subName string, result *source.WatchResult, now time.Time) string {
-	digest := result.Digest
-	if _, hexPart, ok := strings.Cut(digest, ":"); ok {
-		digest = hexPart
-	}
-	digest = dnsSlug(digest)
-	if len(digest) > 8 {
-		digest = digest[:8]
-	}
+// A generation above 1 (a digest that came back) is appended as -<generation>.
+func bundleNameFor(subName string, result *source.WatchResult, now time.Time, generation int) string {
+	digest := shortDigest(result.Digest)
 	tag := dnsSlug(result.Tag)
 	if tag != "" && digest != "" && strings.HasPrefix(digest, tag) {
 		tag = ""
@@ -289,6 +286,8 @@ func bundleNameFor(subName string, result *source.WatchResult, now time.Time) st
 	suffix := digest
 	if suffix == "" {
 		suffix = now.UTC().Format("20060102-150405")
+	} else if generation > 1 {
+		suffix += "-" + strconv.Itoa(generation)
 	}
 	prefix := subName
 	if tag != "" {
@@ -298,6 +297,34 @@ func bundleNameFor(subName string, result *source.WatchResult, now time.Time) st
 		prefix = strings.TrimRight(prefix[:max], "-.")
 	}
 	return prefix + "-" + suffix
+}
+
+// shortDigest returns the first 8 characters of the DNS-safe digest without its
+// algorithm prefix: the digest part of a Bundle name.
+func shortDigest(digest string) string {
+	if _, hexPart, ok := strings.Cut(digest, ":"); ok {
+		digest = hexPart
+	}
+	digest = dnsSlug(digest)
+	if len(digest) > 8 {
+		digest = digest[:8]
+	}
+	return digest
+}
+
+// bundleGeneration returns n for a Bundle name that ends in -<digest[:8]>-<n>
+// and 1 for any other name of a Bundle for digest (the first one, or a name an
+// older release gave it).
+func bundleGeneration(name, digest string) int {
+	_, after, ok := strings.Cut(name, "-"+shortDigest(digest)+"-")
+	if !ok {
+		return 1
+	}
+	n, err := strconv.Atoi(after)
+	if err != nil || n < 2 {
+		return 1
+	}
+	return n
 }
 
 // dnsSlug lowercases s and replaces every character that is not a lowercase
@@ -376,38 +403,39 @@ func (r *Reconciler) now() time.Time {
 	return time.Now().UTC()
 }
 
-// findExistingBundleForDigest looks up a Bundle by label selector for the given
-// subscription + digest combination. Returns the Bundle name if found, or "" if not.
+// bundlesForDigest lists the Subscription's Bundles (label
+// kardinal.io/subscription). It returns the name of the newest one
+// (lifecycle.CompareCreation) when its kardinal.io/source-digest label is for
+// digest, and otherwise the highest bundleGeneration of the Bundles for digest,
+// 0 when there is none.
 //
-// Using a label selector is safe under HA and concurrent reconciles — it reads from
-// the API server (or cache) without a read-compare-write race on status fields (#620).
-//
-// The lookup matches the current label value and the value older controllers
-// wrote (legacySourceDigestLabel), so a Bundle created before an upgrade is
-// still found and not duplicated.
-func (r *Reconciler) findExistingBundleForDigest(ctx context.Context, namespace, subscriptionName, digest string) (string, error) {
-	values := sourceDigestLabelValues(digest)
-	if len(values) == 0 {
-		return "", nil
-	}
-	digestReq, err := labels.NewRequirement(sourceDigestLabelKey, selection.In, values)
-	if err != nil {
-		return "", fmt.Errorf("findExistingBundleForDigest: selector: %w", err)
-	}
-	sel := labels.SelectorFromSet(labels.Set{"kardinal.io/subscription": subscriptionName}).Add(*digestReq)
-
+// The list reads Bundles, not status fields, so it has no read-compare-write
+// race with another reconcile (#620). The label matches in the current form
+// and the form older controllers wrote (legacySourceDigestLabel), so a Bundle
+// created before an upgrade is still found and not duplicated.
+func (r *Reconciler) bundlesForDigest(ctx context.Context, namespace, subscriptionName, digest string) (string, int, error) {
 	var list kardinalv1alpha1.BundleList
 	if err := r.List(ctx, &list,
 		client.InNamespace(namespace),
-		client.MatchingLabelsSelector{Selector: sel},
+		client.MatchingLabels{"kardinal.io/subscription": subscriptionName},
 	); err != nil {
-		return "", fmt.Errorf("findExistingBundleForDigest: list: %w", err)
+		return "", 0, fmt.Errorf("list bundles of subscription %s: %w", subscriptionName, err)
 	}
-	if len(list.Items) == 0 {
-		return "", nil
+	var newest *kardinalv1alpha1.Bundle
+	highest := 0
+	for i := range list.Items {
+		b := &list.Items[i]
+		if newest == nil || lifecycle.CompareCreation(b, newest) > 0 {
+			newest = b
+		}
+		if sourceDigestMatches(b.Labels[sourceDigestLabelKey], digest) {
+			highest = max(highest, bundleGeneration(b.Name, digest))
+		}
 	}
-	// Return the first match. Under normal operation there is at most one.
-	return list.Items[0].Name, nil
+	if newest != nil && sourceDigestMatches(newest.Labels[sourceDigestLabelKey], digest) {
+		return newest.Name, 0, nil
+	}
+	return "", highest, nil
 }
 
 // sourceDigestLabelKey is the Bundle label that records the artifact digest a
@@ -438,18 +466,6 @@ func legacySourceDigestLabel(digest string) string {
 		s = s[len(s)-63:]
 	}
 	return strings.Trim(s, "-_.")
-}
-
-// sourceDigestLabelValues returns the distinct, non-empty label values that
-// identify digest: the current one first, then the legacy one.
-func sourceDigestLabelValues(digest string) []string {
-	var out []string
-	for _, v := range []string{sourceDigestLabel(digest), legacySourceDigestLabel(digest)} {
-		if v != "" && !slices.Contains(out, v) {
-			out = append(out, v)
-		}
-	}
-	return out
 }
 
 // sourceDigestMatches reports whether a kardinal.io/source-digest label value

@@ -15,15 +15,17 @@ import (
 )
 
 // TestBundleNameFor verifies Bundle names are DNS-safe, at most 63 characters,
-// and carry a digest suffix so a re-pushed tag gets a new name (C04-gates-19).
+// and carry a digest suffix so a re-pushed tag gets a new name (C04-gates-19),
+// and a -<n> suffix for a digest that came back.
 func TestBundleNameFor(t *testing.T) {
 	sha := "sha256:" + strings.Repeat("ab", 32)
 	now := time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC)
 	tests := []struct {
-		name   string
-		sub    string
-		result source.WatchResult
-		want   string
+		name       string
+		sub        string
+		result     source.WatchResult
+		generation int
+		want       string
 	}{
 		{name: "semver tag", sub: "app", result: source.WatchResult{Tag: "v1.2.3", Digest: sha}, want: "app-v1-2-3-abababab"},
 		{name: "uppercase and underscore", sub: "app", result: source.WatchResult{Tag: "Build_42", Digest: sha}, want: "app-build-42-abababab"},
@@ -31,14 +33,44 @@ func TestBundleNameFor(t *testing.T) {
 		{name: "no digest falls back to time", sub: "app", result: source.WatchResult{Tag: "v1"}, want: "app-v1-20260413-100000"},
 		{name: "long names are truncated", sub: strings.Repeat("s", 60), result: source.WatchResult{Tag: "v1", Digest: sha},
 			want: strings.Repeat("s", 54) + "-abababab"},
+		{name: "generation 1 has no suffix", sub: "app", result: source.WatchResult{Tag: "main", Digest: sha}, generation: 1,
+			want: "app-main-abababab"},
+		{name: "a digest that came back gets its generation", sub: "app", result: source.WatchResult{Tag: "main", Digest: sha},
+			generation: 2, want: "app-main-abababab-2"},
+		{name: "long names are truncated before the generation", sub: strings.Repeat("s", 60),
+			result: source.WatchResult{Tag: "v1", Digest: sha}, generation: 12, want: strings.Repeat("s", 51) + "-abababab-12"},
+		{name: "no digest ignores the generation", sub: "app", result: source.WatchResult{Tag: "v1"}, generation: 3,
+			want: "app-v1-20260413-100000"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := bundleNameFor(tt.sub, &tt.result, now)
+			got := bundleNameFor(tt.sub, &tt.result, now, tt.generation)
 			assert.Equal(t, tt.want, got)
 			assert.LessOrEqual(t, len(got), maxBundleNameLen)
 			assert.Empty(t, validation.IsDNS1123Subdomain(got))
 			assert.Empty(t, validation.IsValidLabelValue(got))
+		})
+	}
+}
+
+// TestBundleGeneration verifies the generation read back from the name of a
+// Bundle for a digest: n for a -<digest[:8]>-<n> name, 1 for any other name.
+func TestBundleGeneration(t *testing.T) {
+	sha := "sha256:" + strings.Repeat("ab", 32)
+	tests := []struct {
+		name string
+		want int
+	}{
+		{name: "app-main-abababab", want: 1},
+		{name: "app-main-abababab-2", want: 2},
+		{name: "app-main-abababab-17", want: 17},
+		{name: "app-20260413-095900", want: 1},
+		{name: "app-main-abababab-x", want: 1},
+		{name: "app-main-abababab-1", want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, bundleGeneration(tt.name, sha))
 		})
 	}
 }

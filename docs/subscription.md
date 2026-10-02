@@ -81,7 +81,9 @@ spec:
 
 Bundle names are lowercased and made DNS-safe (`Build_42` becomes `build-42`) and are
 at most 63 characters. The digest suffix means a re-pushed mutable tag (`latest`,
-`main`) gets a new Bundle rather than colliding with the previous one.
+`main`) gets a new Bundle rather than colliding with the previous one. A digest that
+comes back after another one gets a `-2`, `-3`, ... suffix (see
+[Deduplication](#deduplication)).
 
 ## Tag selection
 
@@ -155,13 +157,17 @@ The first poll records the current digest in `status.lastSeenDigest` as a baseli
 creates no Bundle: an artifact that already existed when the Subscription was created is
 not promoted. Each later poll that sees a different digest creates one Bundle.
 
-Before creating a Bundle the controller also looks for an existing Bundle with the same
-`kardinal.io/subscription` and `kardinal.io/source-digest` labels, so a restart or two
-replicas polling at once do not create duplicates. If a Bundle with the generated name
-already exists for a different digest, the Subscription goes to phase `Error`.
+Before creating a Bundle the controller lists the Subscription's Bundles (label
+`kardinal.io/subscription`). When the newest one is already for the digest (label
+`kardinal.io/source-digest`), it creates nothing, so a restart or two replicas polling at
+once do not create duplicates. A digest that comes back after another one, such as a
+moving tag pushed back to an earlier image or a branch reset to an earlier commit, is a
+new change: it gets a new Bundle, named after the first one with `-2` the second time,
+`-3` the third, and so on. If a Bundle with the generated name already exists for a
+different digest, the Subscription goes to phase `Error`.
 
 The `kardinal.io/source-digest` value is the digest without its `sha256:` prefix, cut to
-the first 63 characters (the label value limit), so you can find a Bundle by digest:
+the first 63 characters (the label value limit), so you can find the Bundles of a digest:
 
 ```bash
 kubectl get bundles -l kardinal.io/source-digest=$(echo "${DIGEST#sha256:}" | cut -c1-63)
