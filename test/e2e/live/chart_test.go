@@ -1251,17 +1251,6 @@ func notReady(p *corev1.Pod) {
 	}
 }
 
-// controllerRestarts is how many times the controller container of a
-// release's Pod has restarted.
-func controllerRestarts(p *corev1.Pod) int32 {
-	for _, cs := range p.Status.ContainerStatuses {
-		if cs.Name == framework.ControllerContainer {
-			return cs.RestartCount
-		}
-	}
-	return 0
-}
-
 // mountSecret mounts Secret name read-only at path in a probe Pod.
 func mountSecret(name, path string) func(*corev1.Pod) {
 	return func(p *corev1.Pod) {
@@ -1921,13 +1910,12 @@ func TestChart_GraphIdentity(t *testing.T) {
 // kindnet enforces a policy for a new Pod only once it has added the Pod's
 // IP to its nftables set, about a second after the Pod gets the IP, and it
 // never re-checks a connection it let through (ct label 28). The controller
-// checks its SCM token as it starts, inside that window. Since Go 1.27,
-// net/http drains the unread 403 and keeps the connection in
-// http.DefaultTransport's pool, and go-git's clone reuses it, so the clone
-// would get through. The test therefore restarts the controller in its Pod
-// once the policy is enforced for the Pod's IP, before it creates the
-// Bundle: the Pod keeps its IP, and kindnet checks every connection the new
-// process opens.
+// checks its SCM token as it starts, inside that window. The check has its
+// own Transport without keep-alives (pkg/scm/token_validator.go), so no
+// connection it opened is left for go-git's clone to reuse. The test does
+// not restart the controller: it creates the Bundle once the policy is
+// enforced for the Pod's IP, and the clone timing out shows that no
+// connection from before the policy outlives it.
 //
 // Covers CHART-NETPOL-01.
 func TestChart_NetworkPolicy(t *testing.T) {
@@ -2002,9 +1990,7 @@ func TestChart_NetworkPolicy(t *testing.T) {
 	res = asController.Curl(t, 3*time.Second, podinfo)
 	assert.True(t, res.TimedOut(), "the controller may not reach other pods: %s", brief(res))
 
-	// Restart the controller in its Pod once kindnet enforces the policy for
-	// the Pod's IP (see above): no connection the new process opens can
-	// predate the policy.
+	// Promote once kindnet enforces the policy for the Pod's IP (see above).
 	since := time.Now()
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -2015,17 +2001,6 @@ func TestChart_NetworkPolicy(t *testing.T) {
 	framework.Eventually(t, time.Minute, "the policy is enforced for "+pod.Name+"'s IP", func(context.Context) (bool, string) {
 		res := other.Curl(t, 3*time.Second, "http://"+net.JoinHostPort(pod.Status.PodIP, "8080")+"/metrics")
 		return res.TimedOut(), brief(res)
-	})
-	restarts := controllerRestarts(&pod)
-	e.Kubectl(t, ns, "", "exec", pod.Name, "-c", framework.ControllerContainer, "--", "kill", "1")
-	framework.Eventually(t, 3*time.Minute, "the controller restarts in "+pod.Name, func(ctx context.Context) (bool, string) {
-		var p corev1.Pod
-		if err := e.Client.Get(ctx, client.ObjectKeyFromObject(&pod), &p); err != nil {
-			return false, err.Error()
-		}
-		require.Equal(t, pod.Status.PodIP, p.Status.PodIP, "the Pod keeps its IP")
-		return controllerRestarts(&p) > restarts && podReady(&p),
-			fmt.Sprintf("%d restarts, ready %t", controllerRestarts(&p), podReady(&p))
 	})
 
 	a.apply(t, a.resourcePipeline(nil))
