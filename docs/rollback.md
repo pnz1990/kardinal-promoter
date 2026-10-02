@@ -168,8 +168,11 @@ commit def456  [kardinal] Promote my-app-rollback-bkgwk to prod
 ```
 
 Every commit, a rollback's included, is titled `[kardinal] Promote <bundle> to <environment>`, with
-the Bundle and Pipeline names in the body. A rollback Bundle is usually named `<pipeline>-rollback-<suffix>`,
-and its PR is labelled `kardinal/rollback` (on Bitbucket Cloud, which has no PR labels, it is titled `[kardinal] Rollback ...`).
+the Bundle and Pipeline names in the body. A rollback from the CLI or UI is named
+`<pipeline>-rollback-<suffix>`. An automatic one is named `<failing bundle>-rollback-alarm`
+(`onHealthFailure: rollback`) or `<bundle>-rollback-policy` (RollbackPolicy); a name longer than
+63 characters is shortened and ends in a hash. Every rollback PR is labelled `kardinal/rollback`.
+Bitbucket Cloud has no PR labels, so there the PR is titled `[kardinal] Rollback ...`.
 
 The rollback commit is a new commit, not a `git revert`. The history is always append-only.
 
@@ -247,7 +250,7 @@ kardinal resume my-app
 - A step in `WaitingForMerge` or `HealthChecking` finishes. Stopping it would leave a merged change unverified. Open PRs stay open; merging one during a pause still deploys it.
 - New Bundles are still accepted, but their steps wait in `Pending`.
 
-After resume, held steps continue from where they stopped. No re-trigger is required.
+After resume, held steps continue from where they stopped. A held step re-checks the pause every minute, so this takes up to a minute. No re-trigger is needed.
 
 While the Pipeline is paused it has a `Paused` condition. `True` (reason `FreezeGateActive`) means the freeze gate holds new promotions. Do not name your own PolicyGate `freeze-<pipeline>`: kardinal does not treat a gate it did not create (no `kardinal.io/freeze=true` label and not owned by the Pipeline) as a pause, and does not delete it. While such a gate exists, `kardinal pause` fails with an error naming it, and the condition is `False` with reason `FreezeGateNameConflict`, so the pipeline keeps running. Rename or delete that gate and the pause takes effect.
 

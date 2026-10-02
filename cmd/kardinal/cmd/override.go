@@ -48,8 +48,11 @@ The override is time-limited and creates a mandatory audit record in
 PolicyGate.spec.overrides[]. The gate passes immediately without evaluating
 the CEL expression until the override expires.
 
-All overrides are preserved for audit purposes. Use --expires-in to control
-the override window (default: 1h).
+Expired overrides stay in spec.overrides[] as an audit record for as long
+as the Bundle exists. Deleting a Bundle deletes its gate instances and their
+overrides, and the Pipeline's historyLimit cleanup deletes old finished
+Bundles (50 by default). Use --expires-in to control the override window
+(default: 1h).
 
 --gate takes the gate template name (for example no-weekend-deploy). The
 override is recorded on the instances of that gate that the Pipeline's

@@ -1,8 +1,9 @@
 # Notifications
 
 kardinal-promoter can deliver outbound webhooks when promotion events occur.
-This allows platform teams to integrate with Slack, PagerDuty, custom alerting systems,
-or any HTTP endpoint.
+This lets you send events to any HTTP endpoint that accepts a JSON POST. Services that need
+their own payload shape, such as PagerDuty or Slack incoming webhooks, need a relay (see the
+[Slack example](#slack-example)).
 
 ---
 
@@ -18,7 +19,8 @@ metadata:
   namespace: default
 spec:
   webhook:
-    # HTTPS URL to POST the notification payload to (see §Slack example).
+    # URL to POST the payload to (see §Slack example). Use https://. http:// is also
+    # accepted and sends the payload and any Authorization header unencrypted.
     url: https://hooks.slack.com/triggers/T.../...
     # Optional Authorization header value (for Bearer token auth).
     # Stored in plain text in the spec; see §Authorization.
@@ -86,6 +88,12 @@ after `failed: ` is the step's `status.message`.
 | `Bundle.Failed`           | A Bundle reaches Phase=Failed                                   |
 | `PolicyGate.Blocked`      | A PolicyGate instance starts blocking a Bundle (once per block) |
 | `PromotionStep.Failed`    | A PromotionStep transitions to state=Failed                     |
+
+Steps stopped by `onHealthFailure: abort` or `rollback` end in `AbortedByAlarm` or
+`RollingBack` and do not send `PromotionStep.Failed`. An `AbortedByAlarm` step fails its Bundle,
+so `Bundle.Failed` catches it. With `rollback`, the rollback Bundle supersedes the failing one
+(see [Rollback](rollback.md#automatic-rollback)), and the rollback Bundle's own `Bundle.Verified`
+or `Bundle.Failed` reports the outcome.
 
 `PolicyGate.Blocked` is sent once each time a gate instance goes from not
 evaluated or allowed to blocked. Re-evaluations that keep blocking do not send
@@ -168,11 +176,12 @@ spec:
 The value is sent exactly as written. There is no variable expansion: a value
 such as `"Bearer ${ALERT_TOKEN}"` is sent literally. The value is stored in
 plain text in the NotificationHook spec, so anyone who can read the hook can
-read the token. Restrict `get` and `list` on `notificationhooks` accordingly.
+read the token. Restrict `get`, `list` and `watch` on `notificationhooks` accordingly.
 A Secret-backed header is not available yet.
 
 Incoming-webhook URLs (Slack, Microsoft Teams) carry their token in the path.
 The controller never writes the URL to status or logs; logs show only the host.
+`kubectl get notificationhooks` shows the full URL in its URL column.
 
 ---
 
@@ -192,7 +201,7 @@ status:
   lastEventKey: "Bundle.Verified/nginx-demo-abc123"
   processedEventKeys:
     - "Bundle.Verified/nginx-demo-abc123"
-    - "PolicyGate.Blocked/nginx-demo-abc123-prod-no-weekend-deploys/2026-04-18T10:00:00Z"
+    - "PolicyGate.Blocked/no-weekend-deploys-platform-policies-prod--nginx-demo-abc123/2026-04-18T10:00:00Z"
   observedGeneration: 1
   failedAttempts: 0   # consecutive failed attempts for the current event
   nextRetryAt: ""     # time of the next attempt after a failure

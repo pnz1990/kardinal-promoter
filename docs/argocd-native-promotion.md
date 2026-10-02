@@ -77,7 +77,9 @@ There are no git operations. The `argocd-set-image` step:
 3. If not set: applies a JSON merge patch to `spec.source.helm.valuesObject.<imageKey>`.
 
 After the patch, ArgoCD's own reconciler picks up the spec change and syncs the application.
-The `health-check` step waits for the ArgoCD Application to reach a healthy sync state.
+The `health-check` step runs the environment's health adapter. Set `health.type: argocd` to wait
+until the Application is Healthy and Synced and `status.summary.images` shows the Bundle images.
+Without it, the default `resource` adapter checks a Deployment.
 
 ### What the `argocd` strategy rejects
 
@@ -148,7 +150,8 @@ The step creates intermediate maps as needed if they do not exist.
 ## Multi-image bundles
 
 When a Bundle contains multiple images, the `argocd-set-image` step uses the **first image
-with a non-empty tag**. Setting different tags for different keys in one promotion is not
+with a non-empty tag**. A Bundle whose images have only digests sets nothing: the step succeeds
+with `no image tag to set`. Setting different tags for different keys in one promotion is not
 supported. kardinal has no custom step sequence to do it (a Pipeline that sets
 `spec.environments[].steps` is rejected; see [Promotion Steps](pipeline-reference.md#promotion-steps)).
 
@@ -162,5 +165,5 @@ supported. kardinal has no custom step sequence to do it (a Pipeline that sets
 | Creates a git commit | Yes | No |
 | Opens a PR | Yes (pr-review mode) | No (`approval: pr-review` is rejected) |
 | Promotion speed | PR merge required | Immediate |
-| Rollback mechanism | Git revert PR | Re-promote previous bundle |
-| Audit trail | Git history + PR | Kubernetes event log |
+| Rollback mechanism | Forward promotion of an earlier Bundle (commit or PR) | Forward promotion of an earlier Bundle (Application patch) |
+| Audit trail | Git history, PR and AuditEvent records | AuditEvent records only; no Git commit |

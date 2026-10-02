@@ -276,7 +276,7 @@ When the skip is allowed, the permission's expression is evaluated in front of t
 
 ## Health Verification
 
-After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy. Health adapters are pluggable. A step reaches Verified only when the environment runs the promoted revision, not merely when it is healthy.
+After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy. Health adapters are pluggable. A step reaches Verified when the environment is healthy and runs the promoted revision: `argocd` and `flux` check the promoted commit, the other adapters the Bundle images. A config-only Bundle has no images, so `resource` and `argoRollouts` can verify it while the previous revision still runs (see [What "the promoted revision" means](health-adapters.md#what-the-promoted-revision-means)).
 
 | Adapter | What it checks | When to use |
 |---|---|---|

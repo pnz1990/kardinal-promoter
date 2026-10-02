@@ -47,8 +47,9 @@ Production deployments are blocked on weekends (bundle.version=1.29.0: !schedule
 
 The gate's `Ready` condition, `kardinal explain` and the UI show this reason. `kardinal status
 <pipeline>` shows the message alone under Blocking Policy Gates. The Pending step's message names
-the gate and its message: `waiting for gate no-weekend-deploys: Production deployments are blocked
-on weekends`. A gate without a message shows only the result (`bundle.version=1.29.0:
+the gate instance and the gate's message: `waiting for gate
+no-weekend-deploys-platform-policies-prod--<bundle>: Production deployments are blocked on
+weekends`. An instance name that is too long, or has characters a name cannot hold, ends in a hash. A gate without a message shows only the result (`bundle.version=1.29.0:
 !schedule.isWeekend = false`). The message is not shown when the gate blocks for another reason: an
 evaluation error (`bundle.version=1.29.0: CEL evaluation error: ...`) or a context error
 (`context error: ...`) keeps its own reason, because the message does not explain it.
@@ -62,8 +63,8 @@ Every gate on an environment holds that environment back, twice:
    every gate in the step's `spec.requiredGates`. The step starts only when each gate exists, is
    ready, and was evaluated at or after the step was created (its `status.lastEvaluatedAt` is not
    earlier than the step's `creationTimestamp`). Otherwise the step stays in `Pending` with the
-   message `waiting for gate <name>` (`waiting for gate <name>: <message>` when the gate's
-   expression is false and it has a message) or `waiting for gate <name> to be re-evaluated`.
+   message `waiting for gate <instance>` (`waiting for gate <instance>: <message>` when the gate's
+   expression is false and it has a message) or `waiting for gate <instance> to be re-evaluated`.
    Nothing is pushed and no PR is opened.
 
 The Graph acts on the gate's last result, which can be older than the step: it can predate a
@@ -498,8 +499,9 @@ PolicyGates are re-evaluated when any of the following occurs:
 4. **ChangeWindow change** — When a `ChangeWindow` opens, closes or is edited, the gates whose
    expression reads `changewindow` are re-evaluated at once.
 
-5. **Gate spec change** — Editing a gate's `spec` re-evaluates it. The controller's own status
-   writes do not.
+5. **Gate spec or annotation change** — Editing a gate's `spec` or its annotations re-evaluates
+   it. So `kubectl annotate policygate <instance> kardinal.io/force-recheck=$(date +%s) --overwrite`
+   forces a re-evaluation. The controller's own status writes do not.
 
 6. **PromotionStep created** — When a PromotionStep that has not started is created, the gates in
    its `spec.requiredGates` are re-evaluated at once, so the step can start on a fresh result.
@@ -600,7 +602,7 @@ kardinal override my-app --stage prod --gate no-weekend-deploy \
   --reason "P0 hotfix — incident #4521" --expires-in 2h
 ```
 
-`--gate` takes the name of the PolicyGate you wrote, the template, as `kardinal explain` and `kardinal policy list` show it. The command records a `PolicyGateOverride` entry in `spec.overrides[]` of every instance of that gate that the pipeline's in-progress Bundles have for the stage. With no `--stage`, it records the entry on the instances for every stage. The instances are the per-Bundle copies the Graph creates for each environment, so run the override while the Bundle waits on the gate. Instances of Verified, Failed and Superseded Bundles are skipped, because no promotion waits on them; if a Failed Bundle resumes, run the override again. If no in-progress Bundle has an instance, the command fails and says so; it does not write to the template. `--gate` also accepts the name of one instance, as `kubectl get policygates` shows it; the command then records the entry on that instance only. The gate passes immediately until the override expires, and is re-evaluated about a second after the expiry. While the override is active, the instance's `status.reason` is `OVERRIDDEN by <user>: <reason> (expires <time>)`. **Expired overrides are never deleted**: kardinal keeps every entry in `spec.overrides[]` as an audit record. Where to see an override:
-- `kubectl get policygate <instance> -o yaml` shows every entry in `spec.overrides[]`, active or expired.
+`--gate` takes the name of the PolicyGate you wrote, the template, as `kardinal explain` and `kardinal policy list` show it. The command records a `PolicyGateOverride` entry in `spec.overrides[]` of every instance of that gate that the pipeline's in-progress Bundles have for the stage. With no `--stage`, it records the entry on the instances for every stage. The instances are the per-Bundle copies the Graph creates for each environment, so run the override while the Bundle waits on the gate. Instances of Verified, Failed and Superseded Bundles are skipped, because no promotion waits on them; if a Failed Bundle resumes, run the override again. If no in-progress Bundle has an instance, the command fails and says so; it does not write to the template. `--gate` also accepts the name of one instance, as `kubectl get policygates` shows it; the command then records the entry on that instance only. The gate passes immediately until the override expires, and is re-evaluated about a second after the expiry. While the override is active, the instance's `status.reason` is `OVERRIDDEN by <user>: <reason> (expires <time>)`. `--expires-in` defaults to `1h`. kardinal does not remove expired entries from `spec.overrides[]`. They stay on the instance as an audit record, for as long as the Bundle exists. Deleting a Bundle deletes its gate instances and their overrides. That includes the Pipeline's `historyLimit` cleanup: when a new Bundle is created, kardinal deletes the oldest finished Bundles beyond the limit (50 by default). To keep a longer record, export the entries before then. Where to see an override:
+- `kubectl get policygate <instance> -o yaml` shows every entry in `spec.overrides[]`, active or expired, while the Bundle exists.
 - `kardinal explain` shows the `OVERRIDDEN by ...` reason in the gate's REASON column while the override is active.
 - The PR evidence body has no separate badge. A PR opened while the override is active lists the gate in its Policy Gate Compliance table with Result `Pass` and the `OVERRIDDEN by ...` reason. The body is written when the PR is opened and is not updated afterwards, so an override recorded after that, or one that expired before it, does not appear there. An `auto` environment opens no PR.

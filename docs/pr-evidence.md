@@ -104,12 +104,15 @@ One row per image in the Bundle's `spec.images`:
 
 The CI run, commit and author come from the Bundle's `spec.provenance` field, which is set when the Bundle is created by CI.
 
+A Bundle with no images, such as a `config` Bundle, gets one row of `—`. The body then shows
+neither its provenance nor its config commit.
+
 ### Policy Gate Compliance
 
 Lists the PolicyGates the PromotionStep requires (`spec.requiredGates`). For each gate it shows
 the gate name, the namespace of the gate instance, the result (`Pass` or `Fail`), the
 controller's latest reason, and when the gate was last evaluated. A gate that cannot be read is
-left out. `_(none)_` means the environment has no gates.
+left out. `_(none)_` means the environment has no gates. It also shows when no gate could be read.
 
 ### Upstream Verification
 
@@ -150,13 +153,18 @@ For environments with `approval: auto`, no PR is created. The controller pushes 
 
 ## CODEOWNERS Integration
 
-The controller respects GitHub CODEOWNERS. If the target directory has a CODEOWNERS file that requires specific reviewers, the PR will require those reviews before merge. The controller does not bypass CODEOWNERS.
+kardinal never merges a PR; a person does. GitHub branch protection and CODEOWNERS apply as
+usual. When a CODEOWNERS pattern matches the environment's path, GitHub asks those owners to
+review.
 
 ## Branch Naming
 
 PR branches follow the pattern: `kardinal/<bundle>/<environment>`
 
 Example: `kardinal/my-app-x7k2p/prod`
+
+When kardinal closes a PR without a merge, it deletes this branch. It also deletes the branch
+of a step that ended before it opened a PR. A merged PR keeps its branch.
 
 ## Commit Messages
 

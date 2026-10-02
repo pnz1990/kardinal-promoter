@@ -57,7 +57,7 @@ kardinal-promoter uses [controller-runtime](https://github.com/kubernetes-sigs/c
 | `controller_runtime_max_concurrent_reconciles` | Gauge | Configured max concurrent reconciles per controller |
 | `controller_runtime_active_workers` | Gauge | Active reconcile goroutines per controller |
 
-**Controller labels**: `bundle`, `changewindow`, `metriccheck`, `notificationhook`, `pipeline`, `policygate`, `promotionstep`, `prstatus`, `rollbackpolicy`, `scheduleclock`, `subscription`
+**Controller labels**: `bundle`, `changewindow`, `graphcleanup`, `metriccheck`, `notificationhook`, `pipeline`, `policygate`, `promotionstep`, `prstatus`, `rollbackpolicy`, `scheduleclock`, `subscription`
 
 ### Work queue metrics
 
@@ -103,10 +103,10 @@ Standard Go runtime metrics are also exposed:
 
 ## Sample PromQL Queries
 
-### Active bundles (Promoting or Available)
+### Bundle reconcile rate
 
 ```promql
-# Total bundle reconcile operations in the last 5 minutes
+# Bundle reconciles per second
 rate(controller_runtime_reconcile_total{controller="bundle"}[5m])
 ```
 
@@ -122,8 +122,8 @@ rate(controller_runtime_reconcile_total{controller="promotionstep"}[5m])
 ### PolicyGate evaluation rate
 
 ```promql
-# PolicyGate evaluations per second
-rate(controller_runtime_reconcile_total{controller="policygate"}[5m])
+# PolicyGate evaluations per second, by result
+sum by (result) (rate(kardinal_gate_evaluations_total[5m]))
 ```
 
 ### Promotion failure ratio
@@ -194,6 +194,9 @@ rollback_count         1
 | `change_fail_rate` | Failed Bundles divided by `bundles_total` |
 | `rollback_count` | Rollback Bundles in the window |
 
+These count only Bundles still in the cluster. Each Pipeline keeps its 50 newest finished
+Bundles by default (`spec.historyLimit`), so busy Pipelines show a short window.
+
 When `--env` is the Pipeline's last environment and `--days` is 30 (the defaults, whether
 the flags are given or not), the command prints the controller's own figures from
 `Pipeline.status.deploymentMetrics` instead, when they are present: `rollouts_last_30d`, `p50_commit_to_prod`,
@@ -239,7 +242,9 @@ Every alert includes a `runbook_url` annotation pointing to the relevant section
 
 ### Manual alerting (without Prometheus Operator)
 
-If you don't use the Prometheus Operator, copy the rules into your `prometheus.yml`:
+If you don't use the Prometheus Operator, put these rules in a rule file listed under
+`rule_files` in `prometheus.yml`. This block has three of the five alerts; the full set is in
+`chart/kardinal-promoter/templates/prometheusrule.yaml`.
 
 ```yaml
 groups:

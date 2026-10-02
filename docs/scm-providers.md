@@ -4,6 +4,11 @@ kardinal-promoter supports multiple Source Control Management (SCM) providers fo
 pull request and merge request lifecycle operations. The provider is configured on the
 controller at startup.
 
+With the Helm chart, set `scm.provider` and `scm.apiURL`. Put the token in a Secret named by
+`github.secretRef.name`, and the webhook secret in one named by `webhook.secretRef.name` (key
+`secret`). The chart passes these to the controller as the flags and environment variables
+below.
+
 ## Supported Providers
 
 | Provider | `--scm-provider` value | PR type | Webhook header checked | PR labels | Approvals read |
@@ -59,8 +64,7 @@ export KARDINAL_SCM_PROVIDER=github
 
 | Scope | Purpose |
 |---|---|
-| `repo` | Create/close pull requests, post comments, read PR status, delete the head branch of a PR kardinal closed |
-| `write:repo_hook` | (Optional) Register webhooks programmatically |
+| `repo` | Create/close pull requests, post comments, read PR status, delete the head branch of a PR kardinal closed, or of a step that ended before it opened a PR |
 
 These are classic token scopes. With a fine-grained personal access token or a GitHub App
 token, deleting the head branch is a git refs call and needs the **Contents: read and write**
@@ -115,16 +119,18 @@ export KARDINAL_SCM_API_URL=https://gitlab.com  # or your self-managed URL
 
 | Scope | Purpose |
 |---|---|
-| `api` | Full API access — required for MR creation, comments, label updates, and deleting the source branch of an MR kardinal closed |
+| `api` | Full API access — required for MR creation, comments, label updates, and deleting the source branch of an MR kardinal closed, or of a step that ended before it opened an MR |
 
 A **project access token** with `api` scope is recommended over a personal access token
 for production deployments.
 
-The token's user (or the project access token's role) needs the **Maintainer** role on the
-project. Environments without `pr-review` push straight to the Pipeline's `spec.git.branch`,
-and GitLab protects the default branch so that only Maintainers may push to it. With Developer, every
-such environment fails at git-push with "pre-receive hook declined". Developer is enough
-only if the branch's protection allows Developers to push.
+Git pushes use the token in the Pipeline's `spec.git.secretRef` Secret, not this one. That
+token's user (or the project access token's role) needs the **Maintainer** role on the project.
+Environments without `pr-review` push straight to `spec.git.branch`, and GitLab lets only
+Maintainers push to a protected default branch. With Developer, those environments fail at
+git-push with "pre-receive hook declined". Developer is enough only if the branch protection lets
+Developers push. The controller token needs at least Developer, to open and close merge requests
+and delete their branches.
 
 ### Webhook configuration
 
@@ -201,7 +207,7 @@ export KARDINAL_SCM_API_URL=https://codeberg.org   # or your self-hosted Forgejo
 | Scope | Purpose |
 |---|---|
 | `write:issue` | Post comments on pull requests |
-| `write:repository` | Create and close pull requests, add labels, delete the head branch of a PR kardinal closed |
+| `write:repository` | Create and close pull requests, add labels, delete the head branch of a PR kardinal closed, or of a step that ended before it opened a PR |
 
 Create an API token in your Forgejo/Gitea instance under **Settings → Applications → Access Tokens**.
 The startup token check cannot see these scopes; see [Token check at startup](#token-check-at-startup).
@@ -264,7 +270,7 @@ kardinal-controller \
 
 Use a repository, project or workspace **access token** with pull request write
 and repository write access (repository write deletes the head branch of a PR
-kardinal closed). The controller sends it as a Bearer token, so app passwords do not work.
+kardinal closed, or of a step that ended before it opened a PR). The controller sends it as a Bearer token, so app passwords do not work.
 The repository is `workspace/repo`, taken from the Pipeline's `spec.git.url`.
 
 Webhook: in the repository go to **Repository settings → Webhooks → Add webhook**,
@@ -375,9 +381,11 @@ the `helm upgrade` in [Upgrade](installation.md#upgrade) with `--set github.toke
 ### Rotating a PAT (zero-downtime procedure)
 
 1. Generate the new token in your SCM provider and copy it.
-2. Update the Kubernetes Secret:
+2. Update the controller's token Secret: the Secret `github.secretRef.name` names, or
+   `<release>-github-token` when you set `github.token` (then use the `helm upgrade` above
+   instead):
    ```bash
-   kubectl create secret generic github-token \
+   kubectl create secret generic <token Secret> \
      --namespace kardinal-system \
      --from-literal=token=<NEW_TOKEN> \
      --dry-run=client -o yaml | kubectl apply -f -
@@ -427,12 +435,21 @@ Implement the `SCMProvider` interface in `pkg/scm/` and register it in
 
 ```go
 func NewProvider(providerType, token, apiURL, webhookSecret string) (SCMProvider, error) {
+    token = strings.TrimSpace(token)
     switch providerType {
     case "github", "":
         return NewGitHubProvider(token, apiURL, webhookSecret), nil
-    case "gitlab":
-        return NewGitLabProvider(token, apiURL, webhookSecret), nil
-    // Add your provider here.
+    // gitlab, forgejo/gitea, bitbucket, azuredevops ...
+    case "myscm": // your provider
+        return NewMySCMProvider(token, apiURL, webhookSecret), nil
+    default:
+        return nil, fmt.Errorf("unknown SCM provider type %q: ...", providerType)
     }
 }
 ```
+
+Implement `scm.BranchDeleter` and `scm.MergeCommitGetter` too. `DynamicProvider` forwards them
+to your provider when it implements them. Without them, kardinal leaves the head branch of a PR it
+closed, and cannot look up a merge commit the webhook did not carry. Add the provider's
+signature header to `webhookSignatureHeaders` and its event header, if it sends one, to
+`webhookEventHeaders` in `pkg/scm/repo_url.go`.

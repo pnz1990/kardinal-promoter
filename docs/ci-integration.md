@@ -36,8 +36,10 @@ Pipeline). The Pipeline named in the request must exist in the target namespace.
 
 ### GitHub Action
 
-The action is at `.github/actions/create-bundle/` and uses composite steps (no Docker
-container required). Authenticate via the `KARDINAL_TOKEN` environment variable.
+The action is in the kardinal-promoter repository at `.github/actions/create-bundle/`.
+Reference it as `pnz1990/kardinal-promoter/.github/actions/create-bundle@<tag>`. It uses
+composite steps and needs `bash`, `curl` and `python3` on the runner. GitHub-hosted runners
+have them. Authenticate via the `KARDINAL_TOKEN` environment variable.
 
 **Single-image promotion** (most common):
 
@@ -62,7 +64,7 @@ jobs:
 
       - name: Create Bundle
         id: bundle
-        uses: ./.github/actions/create-bundle
+        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.9.0-rc.1
         env:
           KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
         with:
@@ -80,7 +82,7 @@ jobs:
 
 ```yaml
       - name: Create Bundle
-        uses: ./.github/actions/create-bundle
+        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.9.0-rc.1
         env:
           KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
         with:
@@ -96,10 +98,10 @@ jobs:
 | Input | Required | Default | Description |
 |---|---|---|---|
 | `pipeline` | Yes | — | Pipeline name |
-| `image` | No | — | Single image (`repo:tag` or `repo@sha256:digest`) |
+| `image` | No | — | Single image (`repo:tag` or `repo@sha256:digest`). If both `image` and `images` are set, `image` wins |
 | `digest` | No | — | Digest (`sha256:...`) of the `image` input. It is sent with the tag from `image` (the Bundle records both) and replaces a digest given in `image` |
 | `images` | No | — | Newline-separated list of images (multi-image case) |
-| `namespace` | No | `default` | Kubernetes namespace |
+| `namespace` | No | `default` | Kubernetes namespace. The action always sends it, so set it when the controller runs with `--watch-namespace`, or the API answers `403` |
 | `kardinal-url` | Yes | — | Base URL of the Bundle API (the controller's webhook listener, `:8083` by default) |
 | `ui-url` | No | — | Base URL of the kardinal UI (`:8082` by default). Sets `bundle-status-url`; without it that output is empty |
 | `type` | No | `image` | Bundle type (`image`, `config`, `mixed`) |
@@ -113,6 +115,9 @@ jobs:
 | `bundle-name` | Name of the created Bundle CRD |
 | `bundle-namespace` | Namespace of the created Bundle CRD |
 | `bundle-status-url` | Link to the pipeline view in the kardinal UI (`<ui-url>/ui/#pipeline=<pipeline>`); empty when `ui-url` is not set |
+
+The action fills `provenance` from the job: `commitSHA` is `GITHUB_SHA`, `ciRunURL` is the
+run URL, and `author` is `GITHUB_ACTOR`.
 
 Creating a Bundle is not idempotent, so the action retries only when the request
 cannot have reached the controller: DNS or connection failures, and HTTP 502/503 from
@@ -340,7 +345,9 @@ A Bundle can contain multiple images for applications that deploy multiple conta
 }
 ```
 
-The Kustomize update strategy will run `kustomize edit set-image` for each image in the Bundle.
+The kustomize update strategy writes an `images` entry for each image in the Bundle, as
+`kustomize edit set image` does. It edits the file in Go, keeps comments, and does not need
+the `kustomize` binary.
 
 ## Config-Only Bundles
 
@@ -402,7 +409,7 @@ rejected with `400`, so a misspelt key fails the request instead of being ignore
 | Header | Required | Description |
 |---|---|---|
 | `Authorization` | Yes | `Bearer <token>` |
-| `Content-Type` | Yes | `application/json` |
+| `Content-Type` | No | `application/json`. Send it; the controller does not check it |
 
 **Body fields:**
 | Field | Required | Description |

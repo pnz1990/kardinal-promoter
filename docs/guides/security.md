@@ -17,7 +17,7 @@ Object names come from the chart's full name, which is `kardinal-promoter` for a
 | Role and RoleBinding `kardinal-promoter-manager-role` / `-manager-rolebinding`, ClusterRole and binding `kardinal-promoter-cluster-scoped` | Namespace mode (`controller.watchNamespace`) | The namespaced rules in the watched namespace; the cluster-scoped rules |
 | Role and RoleBinding `kardinal-promoter-leader-election` | Release namespace | The leader-election Lease, the `kardinal-version` ConfigMap, and `get` on the SCM token Secret by name |
 | ClusterRoles `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` | Cluster | Bound (with RoleBindings only) to the ServiceAccount kro impersonates for each Graph (`graph.serviceAccountName`, default `kardinal-graph`) |
-| ClusterRole `kardinal-promoter-kro-watch` | Cluster | Lets kro watch the kinds a Graph renders; aggregated into kro's role when kro uses `rbac.mode=aggregation` |
+| ClusterRole `kardinal-promoter-kro-watch` | Cluster | Lets kro watch the kinds a Graph renders; aggregated into kro's role when kro uses `rbac.mode=aggregation`. Rendered only when `graph.aggregateToKro=true` (the default) |
 
 What the namespaced rules grant:
 
@@ -34,8 +34,9 @@ What the namespaced rules grant:
 | `replicasets` | get | The `resource` and `flux` health adapters read, by name, the ReplicaSet a Deployment's `ProgressDeadlineExceeded` names, to tell whether the rollout of the current pod template stalled |
 
 The cluster-scoped rules cover `changewindows` (read, and status writes), `namespaces` (get,
-limited to `controller.watchNamespace` in namespace mode: the controller checks whether a Graph's
-namespace is being deleted before it removes kro's finalizer) and, with
+limited to `controller.watchNamespace` in namespace mode: the controller checks whether a
+namespace is being deleted before it translates a Bundle, removes kro's finalizer from a Graph, or
+cleans up a deleted step's PR) and, with
 `ui.auth.tokenReview=true`, `tokenreviews` and `subjectaccessreviews` (create).
 
 To see the exact rules for your values:
@@ -56,17 +57,22 @@ left out when neither is set.
 
 ## GitHub Token Scopes
 
-kardinal-promoter uses a GitHub Personal Access Token (PAT) to:
+Two tokens are used. The Pipeline's `git.secretRef` token clones and pushes (Contents: write).
+The controller token opens, labels, comments on and closes PRs (Pull requests: write) and deletes
+`kardinal/` branches (Contents: write); it never pushes.
+
+The controller uses a GitHub Personal Access Token (PAT) to:
 
 1. Open pull requests (one per environment promotion)
 2. Read PR status (merged, closed, open)
 3. Post comments on PRs (soak time, gate results, rollback evidence)
+4. Delete the head branch of a PR it closed without a merge (`kardinal/<bundle>/<env>`)
 
 ### Minimum required scopes (classic PAT)
 
 | Scope | Why |
 |---|---|
-| `repo` | Read/write access to repositories (open PRs, push branches) |
+| `repo` | Read/write access to repositories (open and close PRs, push and delete branches) |
 
 No admin scopes are required. The token does **not** need:
 - `admin:org`
@@ -80,7 +86,7 @@ GitHub fine-grained PATs give per-repository permissions:
 
 | Permission | Level |
 |---|---|
-| `Contents` | Read and write (push branches) |
+| `Contents` | Read and write (`git.secretRef` token: push branches; controller token: delete `kardinal/` branches) |
 | `Pull requests` | Read and write (open PRs, post comments) |
 | `Metadata` | Read (required by GitHub for all fine-grained PATs) |
 
@@ -95,15 +101,17 @@ kubectl create secret generic github-token \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-The controller reads the secret on every SCM operation — no restart required.
+The controller polls this Secret every 30 seconds and reloads the token when it changes. No
+restart is needed. It logs `SCM credentials rotated` when it loads the new token. Wait for that
+line before you revoke the old token.
 
 ### Using OIDC instead of a PAT
 
 The controller has no OIDC or GitHub App token exchange, and the chart has no
 `github.auth` value. The controller only reads a token from the Secret in
-`github.secretRef`. It watches that Secret and reloads the token without a restart. So a
-short-lived GitHub App installation token works if something outside kardinal refreshes
-the Secret before the token expires. The GitHub App needs `Pull requests: Read and write`
+`github.secretRef`. It polls that Secret every 30 seconds and reloads the token without a
+restart. So a short-lived GitHub App installation token works if something outside kardinal
+refreshes the Secret before the token expires. The GitHub App needs `Pull requests: Read and write`
 and `Contents: Read and write`. That refresher can be an External Secrets generator or a
 CronJob.
 
@@ -113,7 +121,11 @@ CronJob.
 
 ### Controller namespace
 
-The controller runs in `kardinal-system` by default. It watches CRDs across all namespaces but writes only to the namespaces where Pipelines are deployed.
+The controller runs in `kardinal-system` by default. It watches CRDs across all namespaces and
+writes to the namespaces where Pipelines are deployed. It also writes its leader-election Lease
+and the `kardinal-version` ConfigMap in its own namespace, and reader RoleBindings in the
+`graph.readerNamespaces` namespaces. With `update.strategy: argocd` it patches Argo CD
+Applications.
 
 ### Policy gate scoping
 
@@ -127,11 +139,10 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: platform-policies
-  labels:
-    kardinal.io/policy-namespace: "true"
 ```
 
-Configure the org policy namespace via the controller flag `--policy-namespaces platform-policies`.
+The controller reads org gates from the namespaces in `--policy-namespaces` (default
+`platform-policies`; Helm value `controller.policyNamespaces`). No namespace label is needed.
 
 ### Multi-tenant isolation
 
@@ -150,10 +161,14 @@ The namespace is kardinal's tenancy unit. There is no Project CRD, and none is p
 
 #### Known limit: the shared SCM token
 
-Git clone and push use the Pipeline's `git.secretRef` token, but the controller opens, labels,
-comments on and closes PRs with its own SCM token (`github.token` or `github.secretRef`, the
-controller Pod's `GITHUB_TOKEN`). So anyone who can create a Pipeline, in any namespace, can have
-PRs opened in any repository that token can write to. Restricting the repositories is tracked in
+Git clone and push use the Pipeline's `git.secretRef` token. The controller uses its own SCM
+token (`github.token` or `github.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
+comment on and close PRs. When it closes a PR that was not merged, it also deletes the PR's head
+branch, `kardinal/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
+deletes that branch too when a step that pushed it ends before it opens a PR. It deletes only
+branches under `kardinal/`. So the controller token needs write access to repository contents,
+not only to pull requests. And anyone who can create a Pipeline, in any namespace, can have PRs
+opened, and `kardinal/` branches deleted, in any repository that token can write to. Restricting the repositories is tracked in
 [#1332](https://github.com/pnz1990/kardinal-promoter/issues/1332) (`scm.allowedRepositories`).
 Until then:
 
@@ -197,11 +212,11 @@ controller pods. Each controller is lightweight (~50 MB RAM), but the operationa
 overhead of managing multiple Helm releases is real. Use a tool like ArgoCD's
 ApplicationSet or Flux's HelmRelease to manage the installs at scale.
 
-**When this is not appropriate**: if you have a central platform team that needs
-read access across all team namespaces for observability (e.g. `kardinal get pipelines
---all-namespaces`), the per-namespace model will not provide that. In this case,
-consider running a read-only cluster-scoped installation alongside the namespace-scoped
-installs, using RBAC to restrict writes.
+**Central read access**: a central team can still read every namespace, for example with
+`kardinal get pipelines --all-namespaces`. The CLI and kubectl read with your own kubeconfig, not
+through a controller. Give that team a ClusterRole with `get` and `list` on the `kardinal.io`
+resources (pipelines, bundles, promotionsteps, policygates). Do not add a cluster-scoped kardinal
+install next to the per-namespace ones: it would reconcile every team's Pipelines too.
 
 #### Additional isolation steps
 
@@ -244,6 +259,10 @@ spec:
 The Helm chart sets secure defaults for the controller pod:
 
 ```yaml
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
 securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
@@ -260,8 +279,8 @@ These defaults comply with the Kubernetes `restricted` pod security standard.
 
 kardinal writes an immutable `AuditEvent` CRD record at every significant promotion
 lifecycle transition, in the Pipeline's namespace. AuditEvents are append-only — the
-spec is set at creation and never mutated. Kubernetes RBAC can be used to prevent deletion, satisfying SOC 2,
-ISO 27001, and FedRAMP audit trail requirements.
+spec is set at creation and never mutated. Kubernetes RBAC controls who can delete them (see
+[RBAC: read-only access to audit records](#rbac-read-only-access-to-audit-records)).
 
 ### Events written automatically
 
@@ -291,7 +310,7 @@ An AuditEvent does not record who acted. A Bundle made by a promote or a
 rollback, or created from the UI, names who asked for it in its
 `kardinal.io/requested-by` annotation. A gate approval records the same value
 as the override's `createdBy`, which the gate's reason shows as
-`OVERRIDDEN by <createdBy>: <reason>`. The value is:
+`OVERRIDDEN by <createdBy>: <reason> (expires <time>)`. The value is:
 
 - **UI with TokenReview auth** (`ui.auth.tokenReview`): the caller's Kubernetes
   username, as the API server returned it for their token, for example
@@ -315,7 +334,7 @@ TokenReview mode the annotation or `createdBy` names the user.
 ### Querying audit events
 
 ```bash
-# List the audit events in the current namespace (most recent first)
+# List the 20 most recent audit events in the current namespace (--limit 0 for all)
 kardinal get auditevents
 
 # Filter by pipeline
@@ -351,14 +370,17 @@ kubectl get auditevents -A -o json \
     }'
 ```
 
-With **Fluentd / Vector / Fluent Bit**: configure a Kubernetes input that tails the
-`auditevents` resource and forwards to your SIEM sink (Splunk, Datadog, OpenSearch,
-etc.). The structured JSON output above is the recommended log format.
+Log forwarders such as Fluent Bit and Vector read container logs, not custom resources. Run
+the command above on a schedule (for example a CronJob) and forward its output to your SIEM
+(Splunk, Datadog, OpenSearch, etc.).
 
-### RBAC: preventing deletion
+### RBAC: read-only access to audit records
 
-By default the controller's service account creates AuditEvents but cannot delete
-them. To prevent all users from deleting audit records, apply:
+The controller's ServiceAccount can create AuditEvents but cannot update or delete them.
+Kubernetes RBAC only grants access; it cannot deny it. A user can delete AuditEvents only if a
+role grants `delete` (or `*`) on `auditevents`, as `cluster-admin` does. Grant users read-only
+access like the role below, and do not grant `delete` or `*` on `kardinal.io` resources. The API
+server audit log records any deletion. Deleting a namespace deletes its AuditEvents.
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -439,7 +461,9 @@ required strings such as `PolicyGate` `spec.expression`, the Go duration format 
 `spec.recheckInterval` (`5m`, `30s`, `1h`), and the rules for environment names. This works
 on every supported Kubernetes version and needs no admission webhook.
 
-Full CEL syntax validation (catching invalid CEL expressions) requires a validating webhook — see issue #317.
+The CRDs do not check that `spec.expression` is valid CEL. Run `kardinal validate -f <file>`
+before you apply: it compiles each PolicyGate expression with the controller's CEL environment.
+After you apply a gate, the controller compiles it and writes the result to `status.reason`.
 
 The chart no longer installs a `ValidatingAdmissionPolicy`. The
 `validatingAdmissionPolicy.enabled` value is deprecated and has no effect.

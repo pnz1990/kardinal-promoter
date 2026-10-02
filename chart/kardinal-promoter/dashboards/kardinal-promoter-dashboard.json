@@ -228,12 +228,13 @@
         "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
         "textMode": "auto"
       },
-      "title": "Gates Blocked Right Now",
+      "title": "Blocked Gate Evaluations (5m)",
+      "description": "PolicyGate evaluations that blocked in the last 5 minutes. A blocked gate counts once per evaluation (every recheckInterval, 5m by default). No metric counts the gates blocked now; kubectl get policygates -A shows them.",
       "type": "stat",
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "expr": "sum(kardinal_gate_evaluations_total{result=\"blocked\"}) or vector(0)",
+          "expr": "sum(increase(kardinal_gate_evaluations_total{result=\"blocked\"}[5m])) or vector(0)",
           "legendFormat": "blocked"
         }
       ]
@@ -748,8 +749,8 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "expr": "go_goroutines{job=\"kardinal-promoter\"}",
-          "legendFormat": "goroutines"
+          "expr": "go_goroutines and on (job, instance) kardinal_pr_duration_seconds_count",
+          "legendFormat": "{{instance}}"
         }
       ]
     },
@@ -779,8 +780,8 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "expr": "go_memstats_alloc_bytes{job=\"kardinal-promoter\"}",
-          "legendFormat": "heap alloc"
+          "expr": "go_memstats_alloc_bytes and on (job, instance) kardinal_pr_duration_seconds_count",
+          "legendFormat": "{{instance}}"
         }
       ]
     },
@@ -810,8 +811,8 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "expr": "rate(process_cpu_seconds_total{job=\"kardinal-promoter\"}[5m])",
-          "legendFormat": "cpu"
+          "expr": "rate(process_cpu_seconds_total[5m]) and on (job, instance) kardinal_pr_duration_seconds_count",
+          "legendFormat": "{{instance}}"
         }
       ]
     }
