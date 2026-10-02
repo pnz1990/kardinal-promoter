@@ -283,6 +283,161 @@ func stepAudits(t *testing.T, e *framework.Env, ns, bundle, env string) []string
 	return out
 }
 
+// TestBundle_SupersededBackToBack creates three image Bundles of an auto
+// Pipeline back to back, as a burst of CI builds does. The two older ones turn
+// Superseded with Ready reason Superseded, every step they got fails as
+// superseded, and neither gets a prod step or a new step later. Only the
+// newest promotes: it is Verified in test and prod, and both environments pin
+// and run its image, not the tag or the digest of the older two.
+//
+// Covers BUNDLE-SUPERSEDE-03.
+func TestBundle_SupersededBackToBack(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test", "prod")
+	a.apply(t, a.pipeline(nil))
+	older := []string{
+		e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2),
+		e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest),
+	}
+	newest := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+
+	for _, name := range older {
+		e.WaitBundle(t, a.ns, name, time.Minute, "Superseded", func(b *v1alpha1.Bundle) (bool, string) {
+			ok, seen := framework.CondIs(b.Status.Conditions, "Ready", metav1.ConditionFalse, "Superseded")
+			return ok && b.Status.Phase == "Superseded", fmt.Sprintf("phase=%q %s", b.Status.Phase, seen)
+		})
+	}
+	for _, env := range []string{"test", "prod"} {
+		e.WaitStepState(t, a.ns, pipelineName, newest, env, "Verified", promoteTimeout)
+	}
+	e.WaitBundlePhase(t, a.ns, newest, "Verified", time.Minute)
+	for _, env := range []string{"test", "prod"} {
+		k := e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path(env)+"/kustomization.yaml")
+		assert.Contains(t, k, "newTag: "+fixtures.V3, "%s pins the newest Bundle's tag", env)
+		assert.NotContains(t, k, "digest:", "%s does not pin the second Bundle's digest", env)
+		e.WaitDeploymentImage(t, a.ns, fixtures.Workload(env), imageV3, syncTimeout)
+	}
+
+	counts := make([]int, len(older))
+	framework.Eventually(t, time.Minute, "every step of the Superseded Bundles failed as superseded", func(ctx context.Context) (bool, string) {
+		for i, name := range older {
+			steps, err := e.Steps(ctx, a.ns, pipelineName, name)
+			if err != nil {
+				return false, err.Error()
+			}
+			for _, ps := range steps {
+				cancelled := ps.Status.Message == fmt.Sprintf("bundle %s was superseded — promotion cancelled", name) ||
+					ps.Status.Message == fmt.Sprintf("bundle %s was superseded before this step started", name)
+				if ps.Spec.Environment != "test" || ps.Status.State != "Failed" || !cancelled {
+					return false, fmt.Sprintf("%s step of %s: state=%q message=%q", ps.Spec.Environment, name,
+						ps.Status.State, ps.Status.Message)
+				}
+			}
+			counts[i] = len(steps)
+		}
+		return true, ""
+	})
+	t.Logf("the Superseded Bundles %v had %v steps", older, counts)
+	framework.Consistently(t, 20*time.Second, "the Superseded Bundles stay Superseded and get no new step", func(ctx context.Context) (bool, string) {
+		for i, name := range older {
+			var b v1alpha1.Bundle
+			if err := e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: name}, &b); err != nil {
+				return false, err.Error()
+			}
+			steps, err := e.Steps(ctx, a.ns, pipelineName, name)
+			if err != nil {
+				return false, err.Error()
+			}
+			if b.Status.Phase != "Superseded" || len(steps) != counts[i] {
+				return false, fmt.Sprintf("%s: phase=%q, %d steps (had %d)", name, b.Status.Phase, len(steps), counts[i])
+			}
+		}
+		return true, ""
+	})
+}
+
+// TestBundle_SupersessionPerType checks that supersession is per Bundle type,
+// with test behind a PR so that in-flight Bundles wait there. A config Bundle
+// waits on its PR; a newer image Bundle opens its own PR, and the config
+// Bundle keeps promoting with its PR open. A newer config Bundle then
+// supersedes the first config Bundle, whose PR is closed, while the image
+// Bundle keeps promoting. Both PRs still open merge: both Bundles end
+// Verified, and test runs the new image with the config change.
+//
+// Covers BUNDLE-SUPERSEDE-04.
+func TestBundle_SupersessionPerType(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(map[string]string{"test": "pr-review"}))
+	cfg, sha := a.configRepo(t, "test")
+	configBundle := func() string {
+		t.Helper()
+		return e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
+	}
+	waitPR := func(bundle string) gitserver.PR {
+		t.Helper()
+		e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "WaitingForMerge", promoteTimeout)
+		return a.openPR(t, bundle, "test")
+	}
+	// keepPromoting checks that each Bundle stays Promoting, its test step
+	// waiting on its PR, which stays open.
+	keepPromoting := func(what string, prs map[string]gitserver.PR) {
+		t.Helper()
+		framework.Consistently(t, 15*time.Second, what, func(ctx context.Context) (bool, string) {
+			all, err := e.Git.PullRequests(ctx, a.repo)
+			if err != nil {
+				return false, err.Error()
+			}
+			state := map[int]string{}
+			for _, pr := range all {
+				state[pr.Number] = pr.State
+			}
+			for name, pr := range prs {
+				var b v1alpha1.Bundle
+				if err := e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: name}, &b); err != nil {
+					return false, err.Error()
+				}
+				ps, ok, err := e.Step(ctx, a.ns, pipelineName, name, "test")
+				if err != nil {
+					return false, err.Error()
+				}
+				if !ok || b.Status.Phase != "Promoting" || ps.Status.State != "WaitingForMerge" || state[pr.Number] != "open" {
+					return false, fmt.Sprintf("%s: phase=%q step found=%v, PR #%d %s", name, b.Status.Phase, ok,
+						pr.Number, state[pr.Number])
+				}
+			}
+			return true, ""
+		})
+	}
+
+	config1 := configBundle()
+	config1PR := waitPR(config1)
+	image := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	imagePR := waitPR(image)
+	keepPromoting("a newer image Bundle does not supersede the config Bundle",
+		map[string]gitserver.PR{config1: config1PR, image: imagePR})
+
+	config2 := configBundle()
+	e.WaitBundlePhase(t, a.ns, config1, "Superseded", time.Minute)
+	e.WaitPRState(t, a.repo, config1PR.Number, "closed", time.Minute)
+	config2PR := waitPR(config2)
+	keepPromoting("a newer config Bundle does not supersede the image Bundle",
+		map[string]gitserver.PR{image: imagePR, config2: config2PR})
+
+	a.merge(t, imagePR)
+	a.merge(t, config2PR)
+	for _, name := range []string{image, config2} {
+		e.WaitStepState(t, a.ns, pipelineName, name, "test", "Verified", promoteTimeout)
+		e.WaitBundlePhase(t, a.ns, name, "Verified", time.Minute)
+	}
+	a.fileHas(t, "test", fixtures.V2, "the image Bundle is promoted")
+	assert.True(t, a.configDeployed(t, "test"), "the second config Bundle is promoted")
+	a.waitConfigRunning(t, "test")
+	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("test"), imageV2, syncTimeout)
+}
+
 // TestBundle_SameSecondOrder checks that within one second the
 // kardinal.io/created-at stamp, not the name or the order the API server
 // received them, decides which Bundle is newer: "-a" is created first and
