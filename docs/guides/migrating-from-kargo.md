@@ -293,9 +293,10 @@ helm uninstall kargo -n kargo
 | Metrics gates | `AnalysisTemplate` + `AnalysisRun` | `MetricCheck` CRD + `PolicyGate` CEL |
 | Time-based gates | Promotion windows (Kargo Enterprise, v1.12+) | `PolicyGate` with `schedule.isWeekend` |
 | Pause/freeze | Turn off auto-promotion; freeze windows in Kargo Enterprise (v1.12+) | `kardinal pause my-app` |
-| Rollback | Manual re-promotion of older Freight | `kardinal rollback my-app --env prod` |
-| Evidence / audit | Promotion annotations | PR body with structured evidence + `kardinal history` |
+| Rollback | Manual re-promotion of older Freight (pins the Stage since v1.11); auto-rollback in Kargo Enterprise (beta) | `kardinal rollback my-app --env prod`, or `onHealthFailure: rollback` |
+| Evidence / audit | Promotion objects and Kubernetes Events; `record-audit-event` in Kargo Enterprise (v1.12) | PR body with structured evidence, `AuditEvent` CRD, `kardinal history` |
 | DAG visualization | Kargo UI | Built-in React UI (embedded in the controller) |
+| Promotion steps | A Stage's `promotionTemplate` composes built-in steps and PromotionTasks | Fixed sequence per environment, chosen by the Bundle type, `update.strategy` and `approval`; no custom steps |
 | Multi-cluster | Stages that update each cluster's Argo CD Application | Argo CD or Flux hub: `health.type: argocd` or `flux` reads each Application or Kustomization in the hub (`health.cluster` kubeconfig Secrets are not supported) |
 
 ---
