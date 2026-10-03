@@ -226,8 +226,8 @@ For example, in a pipeline `dev -> staging -> [prod-us, prod-eu]`, if `prod-us` 
 | Tool | Rollback mechanism |
 |---|---|
 | kardinal-promoter | Forward promotion of prior Bundle through same pipeline, same gates, same PR flow |
-| Kargo | Re-promote prior Freight to the Stage (AnalysisTemplate verification) |
-| GitOps Promoter | Manual: create a revert PR |
+| Kargo | Re-promote prior Freight to the Stage; since v1.11 this pins the Stage so auto-promotion does not roll forward. Kargo Enterprise adds auto-rollback on failed verification (beta) |
+| GitOps Promoter | Manual: create a revert PR (a "restore this version" feature is in an open PR) |
 | Argo Rollouts | Automatic in-cluster rollback on AnalysisRun failure (no cross-env awareness) |
 
 ---
