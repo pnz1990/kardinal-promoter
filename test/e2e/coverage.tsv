@@ -268,10 +268,10 @@ NOTIF-01	live	core	covered	notifications	NotificationHook delivers Bundle.Verifi
 NOTIF-02	live	core	covered	notifications	NotificationHook delivers Bundle.Failed	docs/notifications.md:101
 NOTIF-03	live	core	covered	notifications	NotificationHook delivers PolicyGate.Blocked	docs/notifications.md:105; docs/notifications.md:123-132
 NOTIF-04	live	core	covered	notifications	NotificationHook delivers PromotionStep.Failed	docs/notifications.md:65-77; docs/notifications.md:107
-NOTIF-AUTH-01	live	core	covered	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:351-356; pkg/reconciler/notificationhook/reconciler.go:543-547
+NOTIF-AUTH-01	live	core	covered	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:351-356; pkg/reconciler/notificationhook/reconciler.go:551-555
 NOTIF-SEL-01	live	core	covered	notifications	pipelineSelector limits which Pipelines a hook reports on	docs/notifications.md:410-421
 NOTIF-EGRESS-01	live	core	covered	notifications	hook URL to loopback, link-local or metadata address is refused	docs/guides/security.md:418-483; pkg/egress/guard.go:70-93
-NOTIF-RETRY-01	live	core	covered	notifications	failed deliveries retried with backoff	docs/notifications.md:267-274; pkg/reconciler/notificationhook/reconciler.go:308-343; pkg/reconciler/notificationhook/reconciler.go:383-393
+NOTIF-RETRY-01	live	core	covered	notifications	failed deliveries retried with backoff	docs/notifications.md:267-274; pkg/reconciler/notificationhook/reconciler.go:316-351; pkg/reconciler/notificationhook/reconciler.go:391-401
 NOTIF-GIVEUP-01	live	core	covered	notifications	delivery gives up after 10 attempts; a spec edit resets the count	docs/notifications.md:267-274
 NOTIF-NEW-01	live	core	covered	notifications	a new hook delivers only the newest existing event, not the backlog	docs/notifications.md:264-265
 NOTIF-STATUS-01	live	core	covered	notifications	status records last delivery, result and failure count	docs/notifications.md:364-397
@@ -279,8 +279,8 @@ NOTIF-PAYLOAD-01	live	core	covered	notifications	documented payload fields; Bund
 NOTIF-SLACK-01	live	core	covered	notifications	format: slack posts a Slack incoming-webhook message (text and Block Kit blocks) that Slack accepts	docs/notifications.md:147-175; pkg/reconciler/notificationhook/format.go:97-130
 NOTIF-TEAMS-01	live	core	covered	notifications	format: teams posts a Teams Workflows message with an Adaptive Card that Teams accepts	docs/notifications.md:177-195; pkg/reconciler/notificationhook/format.go:188-224
 NOTIF-TEMPLATE-01	live	core	covered	notifications	format: template renders spec.template.body over the documented event fields	docs/notifications.md:197-254; pkg/reconciler/notificationhook/template.go:104-119
-NOTIF-SECRET-01	live	core	covered	notifications	spec.webhook.secretRef: url and authorization from a Secret; a missing Secret is Ready=False and the event waits	docs/notifications.md:322-349; pkg/reconciler/notificationhook/reconciler.go:408-466
-NOTIF-PLAINTEXT-01	live	core	covered	notifications	deprecated authorizationHeader still delivers and sets PlaintextCredential=True	docs/notifications.md:351-356; pkg/reconciler/notificationhook/reconciler.go:471-489
+NOTIF-SECRET-01	live	core	covered	notifications	spec.webhook.secretRef: url and authorization from a Secret; a missing Secret is Ready=False and the event waits	docs/notifications.md:322-349; pkg/reconciler/notificationhook/reconciler.go:416-474
+NOTIF-PLAINTEXT-01	live	core	covered	notifications	deprecated authorizationHeader still delivers and sets PlaintextCredential=True	docs/notifications.md:351-356; pkg/reconciler/notificationhook/reconciler.go:479-497
 NOTIF-UNBLOCK-01	live	core	covered	notifications	PolicyGate.Unblocked once when a blocking gate allows again	docs/notifications.md:106; docs/notifications.md:127-132
 NOTIF-PR-01	live	core	covered	notifications	PromotionStep.PROpened and PromotionStep.WaitingForApproval with prURL for a pr-review step	docs/notifications.md:108-109
 NOTIF-SUPERSEDE-01	live	core	covered	notifications	Bundle.Superseded when a newer Bundle supersedes one	docs/notifications.md:102
