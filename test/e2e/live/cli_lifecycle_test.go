@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -358,8 +359,10 @@ func TestCLI_DeleteBundle(t *testing.T) {
 // the commit is read from: git-clone checks it out, config-merge copies the
 // environment's directory from it, and test runs what that commit holds.
 // Without --config-repo the commit is read from the Pipeline's own
-// repository.
-// Covers CLI-CREATE-BUNDLE-02.
+// repository. An image Bundle with --config-repo or --config-commit is
+// refused, by the CLI and by the API server. A later image Bundle leaves the
+// config in place, and status names both Bundles as deployed.
+// Covers CLI-CREATE-BUNDLE-02, CLI-CREATE-BUNDLE-03, CLI-DEPLOYED-02.
 func TestCLI_ConfigBundle(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -379,10 +382,28 @@ func TestCLI_ConfigBundle(t *testing.T) {
 		{[]string{"--type", "config", "--config-repo", cfg.CloneURL}, `create bundle: type "config" requires --config-commit`},
 		{[]string{"--type", "mixed", "--config-commit", cfgSHA}, `create bundle: type "mixed" requires at least one --image`},
 		{[]string{"--type", "mixed", "--image", fixtures.Image + ":" + fixtures.V2}, `create bundle: type "mixed" requires --config-commit`},
+		// An image Bundle would ignore the config flags (#1353).
+		{[]string{"--image", fixtures.Image + ":" + fixtures.V2, "--config-repo", cfg.CloneURL},
+			"create bundle: --config-repo needs --type config or mixed and --config-commit"},
+		{[]string{"--image", fixtures.Image + ":" + fixtures.V2, "--config-commit", cfgSHA},
+			"create bundle: --config-commit needs --type config or mixed"},
 	} {
 		refuses(t, c, a.ns, tc.want, append([]string{"create", "bundle", pipelineName}, tc.args...)...)
 	}
 	assert.Empty(t, bundles(t, e, a.ns), "a refused create bundle creates nothing")
+
+	// The API server refuses one too, for clients that bypass the CLI and the
+	// Bundle API (#1353).
+	err := e.Client.Create(context.Background(), &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: pipelineName + "-", Namespace: a.ns},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: pipelineName,
+			Images:    []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}},
+			ConfigRef: &v1alpha1.ConfigRef{CommitSHA: cfgSHA}},
+	})
+	require.Error(t, err, "the API server refuses an image Bundle with a configRef")
+	assert.True(t, apierrors.IsInvalid(err), "%v", err)
+	assert.Contains(t, err.Error(), "spec.configRef is used only by config and mixed Bundles: an image Bundle deploys "+
+		"only its images; set type config or mixed, or remove configRef")
 
 	// The commit is read from --config-repo.
 	out := c.Must(a.ns, "create", "bundle", pipelineName, "--type", "config", "--config-commit", cfgSHA, "--config-repo", cfg.CloneURL)
@@ -415,6 +436,17 @@ func TestCLI_ConfigBundle(t *testing.T) {
 	assert.NotEqual(t, head1, e.BranchHead(t, a.repo), "b2 pushes a commit")
 	assertSameEnvFiles(t, e, a.repo, a.repo, initSHA, "test")
 	assertEnvAt(t, a, "test", fixtures.V1)
+
+	// An image Bundle does not supersede the config Bundle: test runs b3's
+	// image with b2's config, and status says both (#1353).
+	b3 := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
+	e.WaitStepState(t, a.ns, pipelineName, b3, "test", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "test", fixtures.V3)
+	e.WaitBundlePhase(t, a.ns, b2, "Verified", time.Minute)
+	status := c.Must(a.ns, "status", pipelineName)
+	_, deployed, ok := strings.Cut(status, "\nDeployed\n")
+	require.True(t, ok, status)
+	assert.Regexp(t, `\ntest +`+regexp.QuoteMeta(b3+" ("+fixtures.V3+"); config "+initSHA[:7]+" from "+b2)+"\n", deployed)
 }
 
 // TestCLI_CreateBundleDryRun previews a Bundle with kardinal create bundle
