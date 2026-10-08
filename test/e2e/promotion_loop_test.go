@@ -56,6 +56,7 @@ func (m *mockSCMForLoop) OpenPR(_ context.Context, _, _, _, _, _ string) (string
 	m.open = true
 	return m.prURL, m.prNumber, nil
 }
+
 // openCount returns how many times OpenPR was called.
 func (m *mockSCMForLoop) openCount() int {
 	m.mu.Lock()
