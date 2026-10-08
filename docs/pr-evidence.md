@@ -126,6 +126,104 @@ Lists every other environment recorded in the Bundle's `status.environments`:
 The PR body is written once, when the PR is opened. kardinal does not rewrite it when gates or
 upstream environments change, so it is a snapshot. The UI and `kardinal explain` show live state.
 
+## Customising the PR
+
+An environment's `pr` field sets the title, body, labels, reviewers and assignees of its PR,
+and can ask the SCM to merge the PR on its own. It needs `approval: pr-review`; the API server
+rejects it otherwise.
+
+```yaml
+environments:
+  - name: prod
+    approval: pr-review
+    pr:
+      titleTemplate: "Deploy {{ .Bundle.Version }} to {{ .Environment }}"
+      bodyTemplate: |
+        Release {{ .Bundle.Name }}, built from {{ .Bundle.CommitSHA | truncate 7 }} by @{{ .Bundle.Author }}.
+
+        {{ provenanceTable }}
+
+        {{ gatesTable }}
+      labels: ["env/{{ .Environment }}", "team/payments"]
+      reviewers: [alice]
+      teamReviewers: [platform]          # GitHub, Forgejo/Gitea and Azure DevOps
+      assignees: ["{{ .Bundle.Author }}"] # the author recorded in the Bundle's provenance
+      merge:
+        auto: true
+        method: squash                   # merge (default), squash or rebase
+        commitMessageTemplate: |
+          {{ .PR.Title }} (#{{ .PR.Number }})
+
+          Promoted by kardinal: {{ .Bundle.Name }}
+```
+
+| Field | Description |
+|---|---|
+| `titleTemplate` | Replaces `[kardinal] Promote <bundle> to <env>` (and the rollback title). Newlines become spaces, and the title is cut to 255 characters. A title that renders empty fails the step. |
+| `bodyTemplate` | Replaces the body. kardinal puts the `<!-- kardinal-promoter auto-generated PR -->` marker line first. The evidence sections are functions, so a custom body can keep any of them (below). |
+| `labels` | Added to `kardinal`, `kardinal/promotion` and `kardinal/rollback`. At most 50 characters each, without commas. |
+| `reviewers` | Users asked to review the PR. |
+| `teamReviewers` | Teams asked to review the PR (team slugs). |
+| `assignees` | Users the PR is assigned to. `"{{ .Bundle.Author }}"` assigns whoever `spec.provenance.author` names, such as the CI actor (`kardinal create bundle --author`); a Bundle without an author adds no one. |
+| `merge.auto` | Right after it opens the PR, kardinal enables the SCM's auto-merge: the SCM merges the PR once the repository's required checks and reviews pass, and at once when nothing is required. Branch protection still applies. kardinal sees the merge as it sees one made by hand. |
+| `merge.method` | `merge` (a merge commit, the default), `squash` or `rebase`. Needs `merge.auto: true`. |
+| `merge.commitMessageTemplate` | The merge (or squash) commit message: the first line is the title, the rest the body. Needs `merge.auto: true`. Empty leaves the SCM's message. |
+
+Each list entry is a template too. Each line it renders is one entry, and blank lines and
+repeats are dropped, so `{{ range .Bundle.Images }}image/{{ .Tag }}{{ "\n" }}{{ end }}` adds a
+label per image. Which controls each provider applies is in
+[SCM Providers](scm-providers.md#pr-controls); a control the provider does not apply fails the
+step before the PR is opened.
+
+### Template data
+
+Every template is a Go [text/template](https://pkg.go.dev/text/template) with this data:
+
+| Field | Value |
+|---|---|
+| `.Pipeline` | Pipeline name |
+| `.Environment` | Environment name |
+| `.Bundle.Name`, `.Bundle.Type` | Bundle name and type (`image`, `config`, `mixed`) |
+| `.Bundle.Version` | What the Bundle deploys: the tag of a one-image Bundle, `<image>:<tag>` for each of several images, `config <commit>` for a config Bundle (as in the rollback title) |
+| `.Bundle.Images` | The images: `.Repository`, `.Tag`, `.Digest` |
+| `.Bundle.ConfigCommitSHA` | The config commit of a config or mixed Bundle |
+| `.Bundle.Author`, `.Bundle.CommitSHA`, `.Bundle.CIRunURL` | `spec.provenance`; empty when the Bundle has none |
+| `.IsRollback` | `true` for a rollback PR |
+| `.Rollback.Of`, `.Rollback.From`, `.Rollback.By`, `.Rollback.Restores` | The rollback's target, the Bundle it replaces, who asked for it and the version it restores; empty for a promotion |
+| `.PR.Number`, `.PR.URL`, `.PR.Title` | The opened PR: only in `merge.commitMessageTemplate` |
+
+Every field is a plain value, so a Bundle without provenance renders empty strings, not an error.
+
+### Template functions
+
+| Function | Output |
+|---|---|
+| `evidence` | The whole default body |
+| `heading` | `## Promotion: ...`, or `## ROLLBACK: ...` and the rollback note |
+| `rollbackNotice` | The rollback note; empty for a promotion |
+| `provenanceTable` | `### Artifact Provenance` and its table |
+| `gatesTable` | `### Policy Gate Compliance` and its table |
+| `upstreamTable` | `### Upstream Verification` and its table |
+| `mdcell` | Escapes a value for a markdown table cell |
+| `truncate N`, `lower`, `upper`, `trimSpace`, `trimPrefix P`, `replace OLD NEW`, `contains S`, `hasPrefix P`, `join SEP`, `default D` | String helpers; the string comes last, so they work in a pipeline: `{{ .Bundle.CommitSHA \| truncate 7 }}` |
+
+### Invalid templates and failed controls
+
+The controller renders every template of a Pipeline with sample data for a promotion and a
+rollback. A template that does not parse, or that names a field or function that does not
+exist, sets the Pipeline's `Ready` condition to `False` with reason `ValidationFailed` and a
+message such as `environment "prod": pr.titleTemplate: ...`; `kardinal validate` reports the
+same error. A template that renders something no SCM takes (an empty title, a label too long)
+fails the step before the PR is opened.
+
+Once the PR is open, a control the SCM refuses (a reviewer who is not a collaborator, a
+repository that does not allow auto-merge) does not fail the step: the PR waits for a merge by
+hand. kardinal tries each control once, and enabling auto-merge for about 30 seconds while the
+SCM is still checking whether a new PR can be merged. While the step waits for the merge, its
+message ends with `; PR controls failed: <error>`, and `status.outputs.prControlsError` keeps
+the error. With auto-merge on, the message ends with `; auto-merge enabled` and
+`status.outputs.prAutoMerge` is `enabled`.
+
 ## Merge Detection
 
 kardinal-promoter detects PR merges in two ways:
@@ -147,14 +245,15 @@ If the PRStatus records that it will not get the commit, `argocd` checks the Bun
 instead, and `flux` waits until `health.timeout`; see
 [When the merge commit is not known yet](health-adapters.md#when-the-merge-commit-is-not-known-yet).
 
-## Auto-Merge Environments
+## Environments Without a PR
 
-For environments with `approval: auto`, no PR is created. The controller pushes directly to the target branch (or directory).
+For environments with `approval: auto`, no PR is created. The controller pushes directly to the target branch (or directory). For a PR the SCM merges on its own, use `approval: pr-review` with `pr.merge.auto` ([Customising the PR](#customising-the-pr)).
 
 ## CODEOWNERS Integration
 
-kardinal never merges a PR; a person does. GitHub branch protection and CODEOWNERS apply as
-usual. When a CODEOWNERS pattern matches the environment's path, GitHub asks those owners to
+kardinal never merges a PR itself: a person does, or the SCM's auto-merge when the environment
+sets `pr.merge.auto` ([Customising the PR](#customising-the-pr)). GitHub branch protection and
+CODEOWNERS apply as usual. When a CODEOWNERS pattern matches the environment's path, GitHub asks those owners to
 review.
 
 ## Branch Naming

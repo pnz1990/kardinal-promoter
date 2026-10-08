@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **PR controls per environment** (`environments[].pr`, #1453) — templated PR title and body (the evidence sections are template functions, so a custom body keeps them), templated labels, reviewers, team reviewers and assignees (`"{{ .Bundle.Author }}"` assigns the Bundle's author), and `merge.auto`, which enables the SCM's auto-merge with a `merge`, `squash` or `rebase` method and a templated commit message. GitHub, GitLab, Forgejo, Gitea, Bitbucket Cloud (reviewers only) and Azure DevOps; the [support matrix](scm-providers.md#pr-controls) lists what each applies. A template that does not render sets the Pipeline `Ready=False` (`ValidationFailed`), and a control the provider lacks fails the step before the PR is opened. See [Customising the PR](pr-evidence.md#customising-the-pr)
+
 ### Docs
 
 - **Comparison** — resurveyed Kargo v1.12.1 and GitOps Promoter v0.42.1 (2026-10-03). The matrix corrects cells that had gone stale, such as GitOps Promoter's CLI, PR body and Flux support, and Kargo's gates, steps and engines. It adds rows for pause, supersession, `explain`/`policy simulate` and audit trails, plus sections on what changed in 2026 and where Kargo or GitOps Promoter is ahead. The home table, the rollback page and the Kargo migration guide match it

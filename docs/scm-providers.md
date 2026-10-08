@@ -322,6 +322,44 @@ spec:
 
 ---
 
+## PR controls
+
+An environment's `pr` field ([Customising the PR](pr-evidence.md#customising-the-pr)) sets the
+PR's title, body, labels, reviewers and assignees, and can enable auto-merge. What each
+provider applies:
+
+| Control | GitHub | GitLab | Forgejo / Gitea | Bitbucket Cloud | Azure DevOps |
+|---|---|---|---|---|---|
+| `titleTemplate`, `bodyTemplate` | Yes | Yes | Yes | Yes | Yes |
+| `labels` | Yes | Yes | Yes | No (no PR labels) | Yes (PR tags) |
+| `reviewers` | Usernames | Usernames | Usernames | Account IDs or `{UUID}`s | Identity IDs |
+| `teamReviewers` | Team slugs (organisation repos) | No | Team names (organisation repos) | No | Group identity IDs |
+| `assignees` | Usernames | Usernames | Usernames | No (no PR assignees) | No (no PR assignees) |
+| `merge.auto` | Auto-merge (GraphQL `enablePullRequestAutoMerge`) | Auto-merge (`auto_merge`, or `merge_when_pipeline_succeeds` before GitLab 17.11) | Scheduled merge (`merge_when_checks_succeed`) | No (no auto-merge API) | Auto-complete |
+| `merge.method` | `merge`, `squash`, `rebase` | `merge`, `squash` (a rebase merge is the project's merge method setting) | `merge`, `squash`, `rebase` | — | `merge` (no fast-forward), `squash`, `rebase` |
+| `merge.commitMessageTemplate` | Yes | Yes (merge and squash commits) | Yes | — | Yes |
+
+A control the provider does not apply fails the step before the PR is opened, with a message
+such as `environment prod: pr.teamReviewers is not supported by the gitlab SCM provider`.
+
+What auto-merge needs on each provider:
+
+- **GitHub**: the repository must allow auto-merge (**Settings → General → Allow auto-merge**)
+  for a PR that waits for checks or reviews. GitHub refuses auto-merge on a PR that can be
+  merged already ("clean status"); kardinal then merges it at once with the merge method and
+  message, through the REST merge endpoint, which applies branch protection too. The token
+  needs **Contents: Read and write** and **Pull requests: Read and write**.
+- **GitLab**: an MR without a running pipeline is merged at once. A project whose merge
+  method is merge commit makes a merge commit over the squash commit; both get the message.
+- **Forgejo / Gitea**: the PR is merged once its commit statuses succeed, and at once when
+  it has none.
+- **Azure DevOps**: auto-complete is set by the token's identity, which opened the PR, and
+  completes the PR once its branch policies pass.
+
+kardinal keeps the PR's head branch when the SCM merges it, as it does for a merge by hand.
+
+---
+
 ## Token check at startup
 
 When a token is set, the controller checks it once at startup, in the background, and

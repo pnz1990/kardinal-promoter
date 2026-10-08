@@ -28,6 +28,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 func newValidateCmd() *cobra.Command {
@@ -193,6 +194,9 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		}
 	}
 	if err := graph.ValidateUpdateStrategy(&pipeline); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if err := scm.ValidatePipelinePR(&pipeline); err != nil {
 		errs = append(errs, err.Error())
 	}
 

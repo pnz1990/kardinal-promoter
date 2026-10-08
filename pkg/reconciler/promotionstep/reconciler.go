@@ -504,12 +504,20 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 }
 
 // withLabelsError appends the error of open-pr's failed attempt to label the
-// PR (steps.OutputPRLabelsError) to a WaitingForMerge message. The wait-for-
-// merge message replaces open-pr's, which carried it, so without this the
-// step message never said the PR has no labels (docs/pr-evidence.md).
+// PR (steps.OutputPRLabelsError), the pr controls it could not apply
+// (steps.OutputPRControlsError) and whether auto-merge is on
+// (steps.OutputPRAutoMerge) to a WaitingForMerge message. The wait-for-merge
+// message replaces open-pr's, which carried them, so without this the step
+// message never said the PR has no labels (docs/pr-evidence.md).
 func withLabelsError(msg string, outputs map[string]string) string {
 	if e := outputs[steps.OutputPRLabelsError]; e != "" {
-		return msg + "; adding labels failed: " + e
+		msg += "; adding labels failed: " + e
+	}
+	if e := outputs[steps.OutputPRControlsError]; e != "" {
+		msg += "; PR controls failed: " + e
+	}
+	if outputs[steps.OutputPRAutoMerge] == "enabled" {
+		msg += "; auto-merge enabled"
 	}
 	return msg
 }

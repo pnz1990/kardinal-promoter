@@ -217,3 +217,37 @@ func describePRs(prs []gitserver.PR) string {
 	}
 	return strings.Join(parts, "; ")
 }
+
+// PRPeople returns the requested reviewers and the assignees of PR number.
+// Forgejo, Gitea and GitLab only.
+func (e *Env) PRPeople(t *testing.T, repo gitserver.Repo, number int) (reviewers, assignees []string) {
+	t.Helper()
+	p, ok := e.Git.(gitserver.PRPeople)
+	if !ok {
+		t.Fatalf("%s git server can't read PR reviewers", e.Git.Kind())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	reviewers, assignees, err := p.PRReviewersAndAssignees(ctx, repo, number)
+	if err != nil {
+		t.Fatalf("reviewers of PR #%d: %v", number, err)
+	}
+	return reviewers, assignees
+}
+
+// Commit returns the message and the number of parents of commit sha.
+// Forgejo, Gitea and GitLab only.
+func (e *Env) Commit(t *testing.T, repo gitserver.Repo, sha string) (message string, parents int) {
+	t.Helper()
+	p, ok := e.Git.(gitserver.PRPeople)
+	if !ok {
+		t.Fatalf("%s git server can't read commits", e.Git.Kind())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	message, parents, err := p.Commit(ctx, repo, sha)
+	if err != nil {
+		t.Fatalf("commit %s: %v", sha, err)
+	}
+	return message, parents
+}

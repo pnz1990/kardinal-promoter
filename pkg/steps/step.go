@@ -159,6 +159,16 @@ const OpenPRStepName = "open-pr"
 // and the PromotionStep's WaitingForMerge message repeats the error.
 const OutputPRLabelsError = "prLabelsError"
 
+// OutputPRControlsError is the open-pr output that keeps the error of the pr
+// controls (reviewers, assignees, auto-merge) it could not apply to the PR it
+// opened. The PR stays open, and the WaitingForMerge message repeats the
+// error.
+const OutputPRControlsError = "prControlsError"
+
+// OutputPRAutoMerge is the open-pr output set to "enabled" once the SCM took
+// the auto-merge of pr.merge.auto.
+const OutputPRAutoMerge = "prAutoMerge"
+
 // OpensPR reports whether the sequence being run opens a PR.
 func (s *StepState) OpensPR() bool {
 	return slices.Contains(s.Sequence, OpenPRStepName)

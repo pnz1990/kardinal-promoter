@@ -15,7 +15,12 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -87,10 +92,19 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		title = fmt.Sprintf("[kardinal] Rollback %s to %s (restores %s)", state.Environment.Name, state.BundleName, restores)
 	}
 
-	body, err := scm.RenderPRBody(data)
+	prCfg := state.Environment.PR
+	// A control the provider cannot apply, or a template that does not
+	// render, fails the step before the PR exists: a PR without the
+	// reviewers or the auto-merge it was configured with must not wait for
+	// a merge as if it had them.
+	if err := scm.CheckPRSupport(prCfg, scm.SupportOf(state.SCM)); err != nil {
+		msg := fmt.Sprintf("environment %s: %v", state.Environment.Name, err)
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, parentsteps.Permanent(errors.New(msg))
+	}
+	rendered, err := scm.RenderPR(prCfg, title, data)
 	if err != nil {
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("render PR body: %v", err)},
-			fmt.Errorf("render PR body: %w", err)
+		msg := fmt.Sprintf("environment %s: render PR: %v", state.Environment.Name, err)
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, parentsteps.Permanent(fmt.Errorf("render PR: %w", err))
 	}
 
 	repo, err := scm.RepoFromURL(state.Pipeline.Git.URL)
@@ -98,7 +112,7 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
 
-	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
+	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, rendered.Title, rendered.Body, branch, state.Git.Branch)
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
@@ -106,10 +120,15 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	// Apply standard kardinal labels to the PR. Every PR gets kardinal/promotion
 	// (a rollback is a forward promotion). A rollback (Provenance.RollbackOf is set)
 	// also gets kardinal/rollback so operators can find rollback PRs (#402,
-	// docs/rollback.md, docs/pr-evidence.md).
+	// docs/rollback.md, docs/pr-evidence.md). The environment's pr.labels follow.
 	baseLabels := []string{"kardinal", "kardinal/promotion"}
 	if state.Bundle.Provenance != nil && state.Bundle.Provenance.RollbackOf != "" {
 		baseLabels = append(baseLabels, "kardinal/rollback")
+	}
+	for _, l := range rendered.Labels {
+		if !slices.Contains(baseLabels, l) {
+			baseLabels = append(baseLabels, l)
+		}
 	}
 	message := fmt.Sprintf("PR #%d: %s", prNum, prURL)
 	outputs := map[string]string{
@@ -126,6 +145,17 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	} else if state.Outputs[parentsteps.OutputPRLabelsError] != "" {
 		// An earlier PR's labels failed; this one's did not.
 		outputs[parentsteps.OutputPRLabelsError] = ""
+	}
+
+	// The other controls, like the labels, do not fail the step once the PR
+	// is open: the PR waits for a merge by hand, and the step message and
+	// status.outputs.prControlsError say what was not applied.
+	if controlsErr := applyPRControls(ctx, state, repo, prNum, prURL, rendered, data, outputs); controlsErr != nil {
+		zerolog.Ctx(ctx).Warn().Err(controlsErr).Int("pr", prNum).Msg("apply PR controls failed")
+		message += fmt.Sprintf(" (PR controls failed: %v)", controlsErr)
+		outputs[parentsteps.OutputPRControlsError] = controlsErr.Error()
+	} else if state.Outputs[parentsteps.OutputPRControlsError] != "" {
+		outputs[parentsteps.OutputPRControlsError] = ""
 	}
 
 	return parentsteps.StepResult{
@@ -153,4 +183,94 @@ func buildPRBodyUpstreamEnvs(envs []v1alpha1.EnvironmentStatus) []scm.PRBodyUpst
 		result = append(result, e)
 	}
 	return result
+}
+
+// autoMergeRetryDelays are the waits between attempts to enable auto-merge,
+// about 30s in all. Right after a PR is opened the SCM may still be
+// computing whether it can be merged: GitLab, Forgejo and Gitea refuse a
+// merge until it knows (405, 406, 409 or 422).
+var autoMergeRetryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
+
+// retryableAutoMergeErr reports whether enabling auto-merge may succeed when
+// tried again: a transient API error (5xx, 429, a rate limit), a network
+// error, or a refusal of a PR whose mergeability is still being computed.
+// A GraphQL error, an unsupported method and a permanent API error are not
+// retried.
+func retryableAutoMergeErr(err error) bool {
+	var apiErr *scm.APIError
+	if !errors.As(err, &apiErr) {
+		var netErr net.Error
+		return errors.As(err, &netErr)
+	}
+	switch apiErr.StatusCode {
+	case http.StatusMethodNotAllowed, http.StatusNotAcceptable, http.StatusConflict, http.StatusUnprocessableEntity:
+		return true
+	}
+	return apiErr.Transient
+}
+
+// applyPRControls requests the reviewers, assigns the assignees and enables
+// auto-merge on the PR it opened, as the environment's pr config says. Each
+// control is tried even when one before it failed; the error joins every
+// failure. outputs gets prAutoMerge=enabled once the SCM took auto-merge.
+func applyPRControls(ctx context.Context, state *parentsteps.StepState, repo string, prNum int, prURL string,
+	rendered scm.RenderedPR, data scm.PRBody, outputs map[string]string) error {
+	cfg := state.Environment.PR
+	if cfg == nil {
+		return nil
+	}
+	ctrl, ok := state.SCM.(scm.PRController)
+	if !ok {
+		// CheckPRSupport refused every control this provider lacks.
+		return nil
+	}
+	var errs []error
+	if len(rendered.Reviewers) > 0 || len(rendered.TeamReviewers) > 0 {
+		if err := ctrl.RequestReviewers(ctx, repo, prNum, rendered.Reviewers, rendered.TeamReviewers); err != nil {
+			errs = append(errs, fmt.Errorf("reviewers: %w", err))
+		}
+	}
+	if len(rendered.Assignees) > 0 {
+		if err := ctrl.AddAssignees(ctx, repo, prNum, rendered.Assignees); err != nil {
+			errs = append(errs, fmt.Errorf("assignees: %w", err))
+		}
+	}
+	if cfg.Merge != nil && cfg.Merge.Auto {
+		if err := enableAutoMerge(ctx, ctrl, repo, prNum, prURL, rendered.Title, cfg.Merge, data); err != nil {
+			errs = append(errs, fmt.Errorf("auto-merge: %w", err))
+		} else {
+			outputs[parentsteps.OutputPRAutoMerge] = "enabled"
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	msgs := make([]string, 0, len(errs))
+	for _, e := range errs {
+		msgs = append(msgs, e.Error())
+	}
+	return errors.New(strings.Join(msgs, "; "))
+}
+
+// enableAutoMerge renders the merge options and enables auto-merge, trying
+// again after autoMergeRetryDelays while retryableAutoMergeErr says the SCM
+// may take it later.
+func enableAutoMerge(ctx context.Context, ctrl scm.PRController, repo string, prNum int, prURL, title string,
+	m *v1alpha1.PRMergeConfig, data scm.PRBody) error {
+	opts, err := scm.RenderMergeOptions(m, data, scm.PRTemplatePR{Number: prNum, URL: prURL, Title: title})
+	if err != nil {
+		return err
+	}
+	for attempt := 0; ; attempt++ {
+		err = ctrl.EnableAutoMerge(ctx, repo, prNum, opts)
+		if err == nil || !retryableAutoMergeErr(err) || attempt >= len(autoMergeRetryDelays) {
+			return err
+		}
+		zerolog.Ctx(ctx).Debug().Err(err).Int("pr", prNum).Int("attempt", attempt+1).Msg("enable auto-merge refused, trying again")
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w (%v)", err, ctx.Err())
+		case <-time.After(autoMergeRetryDelays[attempt]):
+		}
+	}
 }

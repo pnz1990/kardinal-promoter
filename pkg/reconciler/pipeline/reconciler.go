@@ -29,6 +29,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // Ready condition reasons.
@@ -369,6 +370,11 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline) metav1.Condition {
 	// argocd + pr-review is refused by the CRD at apply time; a Pipeline
 	// stored before that rule is caught here (#1281).
 	if err := graph.ValidateUpdateStrategy(p); err != nil {
+		return invalid(err.Error())
+	}
+	// A pr template that does not parse or render would fail every PR of
+	// the environment (docs/pr-evidence.md#customising-the-pr).
+	if err := scm.ValidatePipelinePR(p); err != nil {
 		return invalid(err.Error())
 	}
 

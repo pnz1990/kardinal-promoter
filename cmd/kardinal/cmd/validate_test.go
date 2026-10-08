@@ -168,6 +168,20 @@ func TestValidate_Documents(t *testing.T) {
 				"      argocd:\n        application: web-prod\n",
 			wantOut: []string{"✓ f.yaml is valid"},
 		},
+		// #1453: a pr template that does not parse is refused, as the
+		// Pipeline's Ready=False/ValidationFailed condition does.
+		{
+			name:    "pr template that does not parse",
+			content: validPipelineDoc + "    approval: pr-review\n    pr:\n      titleTemplate: \"{{ .Bundle.Name \"\n",
+			wantOut: []string{"✗ f.yaml is invalid:", `environment "prod": pr.titleTemplate:`},
+			wantErr: true,
+		},
+		{
+			name: "pr templates that render",
+			content: validPipelineDoc + "    approval: pr-review\n    pr:\n      titleTemplate: \"deploy {{ .Bundle.Version }}\"\n" +
+				"      assignees: [\"{{ .Bundle.Author }}\"]\n",
+			wantOut: []string{"✓ f.yaml is valid"},
+		},
 		// E2E-R24: the API server rejects these, so validate must too.
 		{
 			name:    "spec.policyGates",
