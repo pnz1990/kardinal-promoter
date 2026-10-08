@@ -658,3 +658,66 @@ spec:
 		})
 	}
 }
+
+// ── MetricCheck providers (#1445, #1446) ─────────────────────────────────────
+
+// TestCRDMetricCheckProviders: each provider needs its block (and query, but
+// web), credentials are Secret refs, threshold.text only takes eq/ne, and a
+// v0.9 Prometheus MetricCheck is still valid.
+func TestCRDMetricCheckProviders(t *testing.T) {
+	crds := loadCRDs(t)
+	ref := map[string]interface{}{"name": "s", "key": "k"}
+	mc := func(spec map[string]interface{}) map[string]interface{} {
+		if _, ok := spec["threshold"]; !ok {
+			spec["threshold"] = map[string]interface{}{"operator": "lt", "value": int64(1)}
+		}
+		return map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "MetricCheck",
+			"metadata": map[string]interface{}{"name": "m", "namespace": "default"}, "spec": spec}
+	}
+	accepted := map[string]map[string]interface{}{
+		"v0.9 prometheus": mc(map[string]interface{}{"provider": "prometheus", "prometheusURL": "http://p:9090", "query": "up",
+			"threshold": map[string]interface{}{"operator": "gte", "value": int64(1)}}),
+		"prometheus with auth": mc(map[string]interface{}{"provider": "prometheus", "prometheusURL": "http://p:9090", "query": "up",
+			"prometheus": map[string]interface{}{"authorizationSecretRef": ref}}),
+		"datadog": mc(map[string]interface{}{"provider": "datadog", "query": "avg:x{*}",
+			"datadog": map[string]interface{}{"site": "datadoghq.eu", "apiKeySecretRef": ref, "applicationKeySecretRef": ref}}),
+		"cloudwatch with keys": mc(map[string]interface{}{"provider": "cloudwatch", "query": "SELECT 1",
+			"cloudWatch": map[string]interface{}{"region": "us-gov-west-1", "accessKeyIDSecretRef": ref, "secretAccessKeySecretRef": ref, "sessionTokenSecretRef": ref}}),
+		"cloudwatch ambient": mc(map[string]interface{}{"provider": "cloudwatch", "query": "SELECT 1",
+			"cloudWatch": map[string]interface{}{"region": "eu-west-1"}}),
+		"newrelic": mc(map[string]interface{}{"provider": "newrelic", "query": "SELECT count(*) FROM T",
+			"newRelic": map[string]interface{}{"accountID": int64(1), "region": "EU", "apiKeySecretRef": ref}}),
+		"web text": mc(map[string]interface{}{"provider": "web", "perPromotion": true,
+			"web": map[string]interface{}{"url": "https://x/{{ bundle.version }}", "jsonPath": "{.status}",
+				"headers": []interface{}{map[string]interface{}{"name": "Authorization", "valueFromSecret": ref},
+					map[string]interface{}{"name": "X-Env", "value": "prod"}}},
+			"threshold": map[string]interface{}{"operator": "eq", "text": "ok"}}),
+	}
+	for name, obj := range accepted {
+		assert.Empty(t, validateCR(t, crds, obj), "%s must be accepted", name)
+	}
+	rejected := map[string]map[string]interface{}{
+		"prometheus without URL": mc(map[string]interface{}{"provider": "prometheus", "query": "up"}),
+		"datadog without block":  mc(map[string]interface{}{"provider": "datadog", "query": "q"}),
+		"datadog without keys":   mc(map[string]interface{}{"provider": "datadog", "query": "q", "datadog": map[string]interface{}{}}),
+		"cloudwatch half keys": mc(map[string]interface{}{"provider": "cloudwatch", "query": "q",
+			"cloudWatch": map[string]interface{}{"region": "eu-west-1", "accessKeyIDSecretRef": ref}}),
+		"cloudwatch token only": mc(map[string]interface{}{"provider": "cloudwatch", "query": "q",
+			"cloudWatch": map[string]interface{}{"region": "eu-west-1", "sessionTokenSecretRef": ref}}),
+		"cloudwatch bad region": mc(map[string]interface{}{"provider": "cloudwatch", "query": "q",
+			"cloudWatch": map[string]interface{}{"region": "https://evil"}}),
+		"newrelic without query": mc(map[string]interface{}{"provider": "newrelic",
+			"newRelic": map[string]interface{}{"accountID": int64(1), "apiKeySecretRef": ref}}),
+		"web without block": mc(map[string]interface{}{"provider": "web"}),
+		"web header both": mc(map[string]interface{}{"provider": "web", "web": map[string]interface{}{"url": "http://x", "jsonPath": "{.a}",
+			"headers": []interface{}{map[string]interface{}{"name": "A", "value": "v", "valueFromSecret": ref}}}}),
+		"web jsonPath without braces": mc(map[string]interface{}{"provider": "web",
+			"web": map[string]interface{}{"url": "http://x", "jsonPath": ".a"}}),
+		"text with lt": mc(map[string]interface{}{"provider": "web", "web": map[string]interface{}{"url": "http://x", "jsonPath": "{.a}"},
+			"threshold": map[string]interface{}{"operator": "lt", "text": "x"}}),
+		"unknown provider": mc(map[string]interface{}{"provider": "graphite", "query": "q"}),
+	}
+	for name, obj := range rejected {
+		assert.NotEmpty(t, validateCR(t, crds, obj), "%s must be rejected", name)
+	}
+}

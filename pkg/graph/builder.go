@@ -29,6 +29,11 @@ type BuildInput struct {
 	// namespaces can permit skipping an org-gated environment. Empty means
 	// DefaultPolicyNamespace.
 	PolicyNamespaces []string
+
+	// MetricChecks are the MetricChecks of the Pipeline namespace. Each one
+	// with spec.perPromotion that a gate of an environment reads gets an
+	// instance node for that environment (buildMetricCheckNode).
+	MetricChecks []kardinalv1alpha1.MetricCheck
 }
 
 // BuildResult is the output of the graph builder.
@@ -122,7 +127,11 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 5 & 6: build nodes and wire edges
-	nodes := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates)
+	nodes, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates,
+		input.MetricChecks, input.PolicyNamespaces)
+	if err != nil {
+		return nil, err
+	}
 	if err := ValidateNodeIDs(nodes); err != nil {
 		return nil, err
 	}
@@ -490,7 +499,8 @@ func matchGatesByEnv(filteredEnvs []string,
 func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
-	skipGates map[string][]skipPermissionGate) []GraphNode {
+	skipGates map[string][]skipPermissionGate,
+	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string) ([]GraphNode, error) {
 	bundleSlug := bundleVersionSlug(bundle.Name) // camelCase — node IDs only
 	pipelineName := pipeline.Name
 
@@ -547,6 +557,19 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			nodes = append(nodes, buildSkipPermissionNode(gateNodeID, gateNodeK8s, sg, pipelineName, bundle.Name, envName))
 		}
 
+		// Per-promotion MetricCheck instances the gates of this environment read.
+		vars := MetricTemplateVars(pipeline, bundle, envName)
+		for _, mc := range metricTemplatesFor(gates, metricChecks, pipeline.Namespace, policyNamespaces) {
+			node, err := buildMetricCheckNode(
+				metricNodeName(bundleSlug, mc.Name, envName),
+				metricNodeK8sName(bundle.Name, mc.Name, envName),
+				mc, vars, pipelineName, bundle.Name, envName, upstreams)
+			if err != nil {
+				return nil, err
+			}
+			nodes = append(nodes, node)
+		}
+
 		// PRStatus node — created alongside each PromotionStep.
 		// The open-pr step writes this CRD; the PRStatusReconciler updates status.merged.
 		// The PromotionStep spec carries the prStatusRef so it can watch it without polling.
@@ -563,7 +586,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		nodes = append(nodes, stepNode)
 	}
 
-	return nodes
+	return nodes, nil
 }
 
 // filteredDeps returns the upstream dependencies of envName, filtered to only

@@ -172,6 +172,15 @@ func main() {
 			"validated via authenticationv1.TokenReview. Fail-closed: API errors return 503. "+
 			"Also readable from KARDINAL_UI_TOKENREVIEW_AUTH environment variable (set to 'true').")
 
+	// --metriccheck-cloudwatch-ambient-credentials lets cloudwatch MetricChecks
+	// that name no credential Secret use the controller's own AWS identity
+	// (IRSA, EKS Pod Identity, environment). Off by default: any user who can
+	// create a MetricCheck could read CloudWatch with that identity.
+	var cloudWatchAmbient bool
+	flag.BoolVar(&cloudWatchAmbient, "metriccheck-cloudwatch-ambient-credentials", false,
+		"Let cloudwatch MetricChecks without credential Secret refs use the controller's own AWS identity "+
+			"(SDK default chain: environment, IRSA, EKS Pod Identity). Off by default.")
+
 	var tlsCertFile string
 	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
 		"Path to the TLS certificate file (PEM). When set together with --tls-key-file, "+
@@ -416,7 +425,7 @@ func main() {
 
 	if err := (&metriccheckrecon.Reconciler{
 		Client:   mgr.GetClient(),
-		Provider: metriccheckrecon.NewPrometheusProvider(),
+		Backends: metriccheckrecon.DefaultBackends(cloudWatchAmbient),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up MetricCheckReconciler")
 	}

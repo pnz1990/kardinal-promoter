@@ -268,6 +268,15 @@ networkPolicy:
   # :9090 for MetricChecks or a webhook receiver for NotificationHooks.
   extraEgress: []
 
+# -- MetricCheck providers.
+metricCheck:
+  cloudWatch:
+    # -- Let cloudwatch MetricChecks that name no credential Secret use the
+    # controller's own AWS identity (IRSA, EKS Pod Identity, environment).
+    # Off by default: anyone who can create a MetricCheck could then read
+    # CloudWatch with that identity. Annotate serviceAccount for IRSA.
+    ambientCredentials: false
+
 # -- ScheduleClock configuration.
 # One ScheduleClock is deployed per cluster. Each tick re-evaluates every
 # PolicyGate instance, so schedule.* expressions follow the interval; each

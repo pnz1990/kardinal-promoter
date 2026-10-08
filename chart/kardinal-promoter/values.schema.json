@@ -359,6 +359,21 @@
         }
       }
     },
+    "metricCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cloudWatch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ambientCredentials": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
     "scheduleClock": {
       "type": "object",
       "additionalProperties": false,
