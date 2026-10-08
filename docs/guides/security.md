@@ -417,7 +417,8 @@ Disable with `--set networkPolicy.enabled=false` if your CNI does not support Ne
 
 ### Outbound requests to user URLs
 
-NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`)
+NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`,
+`datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`)
 and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`)
 send HTTP requests from the controller to a URL a user wrote into a resource. The controller
 refuses to connect when the address is one of these:

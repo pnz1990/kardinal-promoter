@@ -8,6 +8,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **MetricCheck providers: Datadog, CloudWatch, New Relic and web** (#1445, #1446) — `provider: datadog` (metrics query API), `cloudwatch` (`GetMetricData`, SigV4), `newrelic` (NRQL through NerdGraph) and `web`: an HTTP GET or POST to any JSON API whose value is selected with JSONPath and compared with the threshold, as a number or with the new `threshold.text` (`eq`, `ne`). `threshold.operator` adds `ne`. Every URL goes through the egress guard. See [Metric Checks](metric-checks.md)
+- **Secret-backed MetricCheck credentials** (MetricCheck half of #1267) — every provider reads its credentials from Secret keys in the MetricCheck's namespace (`*SecretRef: {name, key}`), including `prometheus.authorizationSecretRef` for an `Authorization` header; a spec never holds a token. CloudWatch can use the controller's own AWS identity (IRSA, EKS Pod Identity) only with `metricCheck.cloudWatch.ambientCredentials=true` (`--metriccheck-cloudwatch-ambient-credentials`), off by default
+- **Per-promotion metric analysis** (#1445) — a MetricCheck with `perPromotion: true` is a template: each Bundle's Graph creates an instance for every environment whose gates read it, with `{{ bundle.version }}`, `{{ environment.name }}` and other placeholders replaced, once the upstream environments are Verified, and suspends it when the Bundle stops promoting (`spec.suspend`, also settable by hand). The gate of that Bundle reads its own instance as `metrics.<name>`. Values with characters outside `[A-Za-z0-9._:@+-]` are not substituted and the instance fails closed. The Graph identity's `kardinal-graph-applier` ClusterRole gains `metricchecks`
+
+### Changed
+
+- **MetricCheck `prometheusURL` and `query` are no longer required for every provider** — `prometheusURL` is required for `prometheus`, `query` for every provider but `web` (CRD validation rules); existing MetricChecks are unchanged. A MetricCheck that is not a template and has a `{{ ... }}` placeholder in its query now fails instead of sending it
+
 ### Docs
 
 - **Comparison** — resurveyed Kargo v1.12.1 and GitOps Promoter v0.42.1 (2026-10-03). The matrix corrects cells that had gone stale, such as GitOps Promoter's CLI, PR body and Flux support, and Kargo's gates, steps and engines. It adds rows for pause, supersession, `explain`/`policy simulate` and audit trails, plus sections on what changed in 2026 and where Kargo or GitOps Promoter is ahead. The home table, the rollback page and the Kargo migration guide match it

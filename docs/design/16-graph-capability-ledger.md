@@ -98,6 +98,18 @@ Superseded Bundle's Graph from creating steps (E2E-R20). A node that already exi
 turns Unresolved is neither re-applied nor pruned (`executor/simple.go:318-324`,
 `pkg/controller/graph/tracking.go:102-106`), so its object stays as history.
 
+Per-promotion MetricCheck instances (`buildMetricCheckNode`, #1445) use the same hold on
+their `spec.query` (`spec.web.url` for provider `web`): kro creates the instance only once
+every upstream step of the gated environment is Verified. Their `spec.suspend` is a live
+`${!(bundle.status.phase in ["Available", "Promoting"])}`: kro re-applies the template when
+the Bundle ref changes, so the instance stops querying once the Bundle is Verified, Failed or
+Superseded, without kardinal deleting it. The placeholder values (`{{ bundle.version }}`) are
+rendered by the translator, not by kro string templates: they come from the Bundle the
+translator is building for, any text kro would read as `${...}` is passed as a CEL string
+literal (`${"..."}`), and values outside `[A-Za-z0-9._:@+-]` are not substituted (fail
+closed). Rendering them with kro CEL from the `bundle` ref would need the same escaping plus
+`has()` chains for optional fields, and gives nothing the translator does not have.
+
 Verified on kind: `uat` was created only after `test` was Verified; `prod` stayed absent
 while `require-uat-soak` was not ready.
 

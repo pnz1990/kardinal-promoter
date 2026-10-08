@@ -214,7 +214,9 @@ All PolicyGate expressions are evaluated against the following context. All attr
 | `metrics.<name>.stale` | bool | `true` when the MetricCheck's result has not been refreshed in time: its `status.validUntil` is unset or has passed |
 | `bundle.upstreamSoakMinutes` | int | Soak minutes of the environment(s) directly upstream of the gated environment. With several direct upstreams (fan-in) it is the minimum. An upstream that is not Verified counts as 0. A root environment gets 0. |
 
-The controller does not query a MetricCheck `spec.prometheusURL` on a loopback, link-local or cloud metadata address: the MetricCheck's `status.reason` then reads `destination address is not allowed` (see [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls)).
+MetricChecks query Prometheus, Datadog, CloudWatch, New Relic or any JSON web API, with credentials from Secrets; a `perPromotion` MetricCheck is instantiated for each Bundle and environment with the Bundle's version in its query, and the gate of that Bundle reads its own instance as `metrics.<name>` (see [Metric Checks](metric-checks.md)).
+
+The controller does not query a MetricCheck URL on a loopback, link-local or cloud metadata address: the MetricCheck's `status.reason` then reads `destination address is not allowed` (see [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls)).
 
 #### Stale metric results
 

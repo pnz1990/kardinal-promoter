@@ -5,6 +5,9 @@ go 1.26.0
 toolchain go1.26.9
 
 require (
+	github.com/aws/aws-sdk-go-v2 v1.47.2
+	github.com/aws/aws-sdk-go-v2/config v1.33.8
+	github.com/aws/aws-sdk-go-v2/credentials v1.20.8
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/google/cel-go v0.31.0
 	github.com/mattn/go-isatty v0.0.24
@@ -33,9 +36,6 @@ require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
-	github.com/aws/aws-sdk-go-v2 v1.47.2 // indirect
-	github.com/aws/aws-sdk-go-v2/config v1.33.8 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.20.8 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.2 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.5 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.5 // indirect

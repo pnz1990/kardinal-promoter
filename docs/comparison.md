@@ -33,7 +33,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **CLI** | Full `kardinal` CLI incl. `explain`, `policy simulate`, `override`, `pause`, `rollback`, `metrics`, `logs`, `validate`, `status`, shell completion | `kargo` CLI (get, promote, approve, verify, grant, logs and more) | Minimal: `gitops-promoter dashboard`, `demo` and `version`; no operational commands |
 | **Explain and simulate gates** | Yes — `kardinal explain` shows why an environment is blocked; `kardinal policy simulate` runs the gates at a chosen time | No | No (a Go package can simulate `WebRequestCommitStatus` expressions) |
 | **UI dashboard** | Embedded UI: fleet health bar, ops table, pipeline lane and DAG, bundle timeline and comparison, policy gates with CEL expressions, metrics bar; create bundle, pause/resume, promote and roll back from the UI (gate override is CLI-only) | Polished Kargo UI: pipeline graph, Freight timeline and diffs, drag-and-drop promotion, step logs | Read-only dashboard, plus an Argo CD UI extension; both show promotion history |
-| **Metric-gated promotions** | Yes — `MetricCheck` CRD (Prometheus, a polled PromQL query) | Yes — verification with AnalysisTemplates (Prometheus, Datadog, CloudWatch, New Relic and others; needs Argo Rollouts installed) | Indirect — a `WebRequestCommitStatus` can call a metrics API |
+| **Metric-gated promotions** | Yes — `MetricCheck` CRD: Prometheus, Datadog, CloudWatch, New Relic, or any JSON API (`web`, JSONPath and a threshold); Secret-backed credentials; per-promotion queries templated with the Bundle version and environment ([Metric Checks](metric-checks.md)); no Argo Rollouts needed | Yes — verification with AnalysisTemplates (Prometheus, Datadog, CloudWatch, New Relic and others; needs Argo Rollouts installed) | Indirect — a `WebRequestCommitStatus` can call a metrics API |
 | **DORA metrics** | Yes — `Bundle.status.metrics`, `Pipeline.status.deploymentMetrics`, `kardinal metrics` | No — operational Prometheus metrics only (v1.12) | No — on its roadmap ([#574](https://github.com/argoproj-labs/gitops-promoter/issues/574), its most-requested open issue) |
 | **Audit trail** | `AuditEvent` CRD (promotions, rollbacks, supersession, gate results) and Kubernetes Events | Kubernetes Events; `record-audit-event` step in Kargo Enterprise (v1.12) | `ChangeTransferPolicyHistory` (last 20 promotions per environment, v0.41), git notes, Kubernetes Events |
 | **Custom promotion steps** | No — each environment runs a fixed sequence chosen by the Bundle type, `update.strategy` and `approval` ([Promotion Steps](pipeline-reference.md#promotion-steps)) | Yes — about 35 built-in steps composed in a Stage's `promotionTemplate`, reusable PromotionTasks, conditions and retries; container steps in Kargo Enterprise (v1.10+) | No |
@@ -208,7 +208,9 @@ it with `dependsOn` on its environments.
   ones, with webhook receivers for registries and SCMs. kardinal's Subscription polls public
   registries and repos only; create Bundles from CI for private ones.
 - **Verification providers** (Kargo). AnalysisTemplates query Prometheus, Datadog, CloudWatch,
-  New Relic and others, per promotion. A kardinal `MetricCheck` is a polled Prometheus query.
+  New Relic and others, and can run a Job. A kardinal `MetricCheck` covers Prometheus, Datadog,
+  CloudWatch, New Relic and JSON web APIs, per promotion with `perPromotion` (unreleased), but
+  not Jobs or the long tail of AnalysisTemplate providers (Wavefront, Graphite, InfluxDB, Kayenta).
 - **Access control and API** (Kargo). Projects with per-project roles, OIDC claim mapping,
   API tokens and a REST API.
 - **Gates mirrored to the SCM** (GitOps Promoter). Commit statuses appear as SCM checks and are
