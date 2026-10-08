@@ -58,7 +58,7 @@ func makeImageSub(name, ns, pipeline, registry string) *kardinalv1alpha1.Subscri
 			Pipeline: pipeline,
 			Image: &kardinalv1alpha1.ImageSubscriptionSpec{
 				Registry:  registry,
-				TagFilter: "^sha-",
+				TagSelection: kardinalv1alpha1.TagSelection{TagFilter: "^sha-"},
 				Interval:  "5m",
 			},
 		},
@@ -122,7 +122,7 @@ func TestSubscriptionReconciler_ImageType_NoChange(t *testing.T) {
 
 	r := &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			return &unchangedWatcher{"sha256:existing"}, nil
 		},
 		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
@@ -150,7 +150,7 @@ func TestSubscriptionReconciler_ImageType_Changed(t *testing.T) {
 
 	r := &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			return &changedWatcher{digest: "sha256:new", tag: "sha-abc1234"}, nil
 		},
 		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
@@ -184,7 +184,7 @@ func TestSubscriptionReconciler_Deduplication(t *testing.T) {
 
 	r := &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			// same digest as LastSeenDigest → Changed=false
 			return &unchangedWatcher{"sha256:same"}, nil
 		},
@@ -211,7 +211,7 @@ func TestSubscriptionReconciler_WatcherError(t *testing.T) {
 
 	r := &subscription.Reconciler{
 		Client:    c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) { return &errWatcher{}, nil },
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) { return &errWatcher{}, nil },
 		NowFn:     func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
@@ -236,7 +236,7 @@ func TestSubscriptionReconciler_GitType_Changed(t *testing.T) {
 
 	r := &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			return &changedWatcher{digest: "abc1234def5678", tag: "abc1234"}, nil
 		},
 		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
@@ -262,7 +262,7 @@ func TestSubscriptionReconciler_Idempotent(t *testing.T) {
 
 	r := &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			return &unchangedWatcher{"sha256:stable"}, nil
 		},
 		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
@@ -297,7 +297,7 @@ func TestSubscriptionReconciler_LabelSelectorDedup(t *testing.T) {
 
 	r := &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			return &forcedChangeWatcher{digest: digest, tag: "v2.0.0"}, nil
 		},
 		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
@@ -340,7 +340,7 @@ func TestSubscriptionReconciler_SourceDigestLabelIsDigestPrefix(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
 	r := &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			return &changedWatcher{digest: e2eDigest, tag: "1.1.0"}, nil
 		},
 		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
@@ -408,7 +408,7 @@ func TestSubscriptionReconciler_LegacyDigestLabelStillDedups(t *testing.T) {
 			}
 			r := &subscription.Reconciler{
 				Client: c,
-				WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+				WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 					return &forcedChangeWatcher{digest: e2eDigest, tag: "1.1.0"}, nil
 				},
 				NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
@@ -437,15 +437,17 @@ func TestSubscriptionReconciler_LegacyDigestLabelStillDedups(t *testing.T) {
 func newReconcilerWithRealWatchers(c client.Client, now func() time.Time, httpClient *http.Client) *subscription.Reconciler {
 	return &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(sub *kardinalv1alpha1.Subscription) (source.Watcher, error) {
-			switch sub.Spec.Type {
-			case kardinalv1alpha1.SubscriptionTypeImage:
-				return source.NewOCIWatcher(sub.Spec.Image.Registry, sub.Spec.Image.TagFilter).WithHTTPClient(httpClient), nil
-			case kardinalv1alpha1.SubscriptionTypeGit:
-				return source.NewGitWatcher(sub.Spec.Git.RepoURL, sub.Spec.Git.Branch, sub.Spec.Git.PathGlob).
-					WithHTTPClient(httpClient), nil
+		WatcherFn: func(sub *kardinalv1alpha1.Subscription, creds source.Credentials) (source.Watcher, error) {
+			w, err := subscription.NewWatcher(sub, creds)
+			switch w := w.(type) {
+			case *source.OCIWatcher:
+				w.WithHTTPClient(httpClient)
+			case *source.GitWatcher:
+				w.WithHTTPClient(httpClient)
+			case *source.HelmWatcher:
+				w.WithHTTPClient(httpClient)
 			}
-			return nil, fmt.Errorf("unknown type %q", sub.Spec.Type)
+			return w, err
 		},
 		NowFn: now,
 	}
@@ -635,7 +637,7 @@ func TestSubscriptionReconciler_NameCollisionWithOtherDigestIsAnError(t *testing
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub, squatter).WithStatusSubresource(sub).Build()
 	r := &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			return &changedWatcher{digest: digestOf('1'), tag: "latest"}, nil
 		},
 		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
@@ -672,7 +674,7 @@ func TestSubscriptionReconciler_SpecNamespace(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
 			r := &subscription.Reconciler{
 				Client: c,
-				WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+				WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 					return &changedWatcher{digest: digestOf('1'), tag: "v1.0.0"}, nil
 				},
 				NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
@@ -717,7 +719,7 @@ func TestSubscriptionReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 				WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
 			r := &subscription.Reconciler{
 				Client:    c,
-				WatcherFn: func(*kardinalv1alpha1.Subscription) (source.Watcher, error) { return tt.watcher, nil },
+				WatcherFn: func(*kardinalv1alpha1.Subscription, source.Credentials) (source.Watcher, error) { return tt.watcher, nil },
 				NowFn:     func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
 			}
 			var logs bytes.Buffer

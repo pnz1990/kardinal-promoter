@@ -17,8 +17,10 @@
 //
 // The Watcher interface is the pluggable integration point for artifact discovery.
 // OCIWatcher uses the OCI Distribution Specification API to list tags and read digests.
-// GitWatcher uses the Git Smart HTTP protocol to read branch HEAD SHAs without cloning.
-// Both send their requests through the egress guard (pkg/egress).
+// GitWatcher uses the Git Smart HTTP protocol (or git-upload-pack over SSH) to
+// read branch HEAD SHAs without cloning, and a shallow fetch to match pathGlob.
+// HelmWatcher reads an HTTP chart repository's index.yaml or an OCI chart's tags.
+// All of them send their requests through the egress guard (pkg/egress).
 package source
 
 import (
@@ -85,8 +87,13 @@ type WatchResult struct {
 	//   - OCI image: the full digest (e.g. "sha256:abc123...")
 	//   - Git commit: the full SHA (e.g. "abc1234...")
 	Digest string
-	// Tag is a human-readable label (image tag or short commit SHA).
+	// Tag is a human-readable label (image tag, short commit SHA or chart
+	// version).
 	Tag string
+	// Revision is the source position the poll read up to when it differs
+	// from Digest: the branch head of a pathGlob Git poll, whose Digest is
+	// the newest matching commit. Empty otherwise.
+	Revision string
 	// Changed is true when Digest differs from the last known digest.
 	Changed bool
 }

@@ -26,25 +26,40 @@ import (
 	"net/url"
 	"path"
 	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 // GitWatcher watches a Git repository for new commits on a branch.
 //
-// It uses the Git Smart HTTP protocol v0 reference advertisement
+// Over HTTP(S) it uses the Git Smart HTTP protocol v0 reference advertisement
 // (GET info/refs?service=git-upload-pack) to read the current HEAD of a branch
 // without cloning. This works for GitHub, GitLab, Gitea/Forgejo, and any
-// standard HTTPS git server. Only public (anonymous) repositories are supported.
+// standard HTTPS git server. Over SSH (ssh://user@host/path or user@host:path)
+// it reads the same advertisement from git-upload-pack. Credentials come from
+// Credentials: a token or username and password for HTTP(S), a private key
+// and known_hosts for SSH.
 //
-// Path filtering is not implemented: a non-empty PathGlob makes Watch return an
-// error instead of silently creating a Bundle for every commit.
+// With PathGlob set, a poll that sees a new head fetches the branch's last
+// DiscoveryLimit commits (shallow, without file contents when the server
+// supports partial clone) and reports the newest commit that changed a
+// matching path.
 type GitWatcher struct {
-	// RepoURL is the HTTPS Git repository URL (e.g. "https://github.com/myorg/myapp").
+	// RepoURL is the Git repository URL (e.g. "https://github.com/myorg/myapp",
+	// "ssh://git@github.com/myorg/myapp.git", "git@github.com:myorg/myapp.git").
 	RepoURL string
 	// Branch is the branch to watch. Defaults to "main".
 	Branch string
-	// PathGlob is spec.git.pathGlob. It is not supported; Watch rejects a
-	// non-empty value.
+	// PathGlob is spec.git.pathGlob: only commits that change a matching path
+	// count. Empty means every commit.
 	PathGlob string
+	// DiscoveryLimit is the most commits a pathGlob poll reads (default 20).
+	DiscoveryLimit int
+	// LastRevision is status.lastSeenRevision: the head the previous pathGlob
+	// poll read up to. The walk stops there.
+	LastRevision string
+	// Credentials authenticate to the repository; the zero value is anonymous.
+	Credentials Credentials
 	// httpClient is the HTTP client used for requests. NewGitWatcher sets a
 	// client with a timeout and the egress guard.
 	httpClient *http.Client
@@ -74,9 +89,10 @@ func (w *GitWatcher) WithHTTPClient(c *http.Client) *GitWatcher {
 	return w
 }
 
-// Watch polls the Git repository for the latest commit SHA on the watched branch.
+// Watch polls the Git repository for the latest commit SHA on the watched
+// branch (with PathGlob, the latest commit that changed a matching path).
 //
-// Uses the Git Smart HTTP protocol endpoint:
+// Over HTTP(S) it uses the Git Smart HTTP protocol endpoint:
 //
 //	GET <repoURL>/info/refs?service=git-upload-pack
 //
@@ -92,9 +108,8 @@ func (w *GitWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 	if w.RepoURL == "" {
 		return nil, fmt.Errorf("GitWatcher: repoURL must not be empty")
 	}
-	if w.PathGlob != "" {
-		return nil, fmt.Errorf("GitWatcher: pathGlob %q is set but path filtering is not implemented; "+
-			"remove spec.git.pathGlob (every commit on the branch would create a Bundle)", w.PathGlob)
+	if w.PathGlob != "" && !doublestar.ValidatePattern(w.PathGlob) {
+		return nil, fmt.Errorf("GitWatcher: pathGlob %q is not a valid glob", w.PathGlob)
 	}
 
 	branch := w.Branch
@@ -102,25 +117,65 @@ func (w *GitWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 		branch = "main"
 	}
 
-	sha, err := w.fetchLatestSHA(ctx, branch)
+	var sha string
+	var err error
+	if isSSHURL(w.RepoURL) {
+		sha, err = w.sshHead(ctx, branch)
+	} else {
+		sha, err = w.fetchLatestSHA(ctx, branch)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("GitWatcher: fetch latest SHA for %s@%s: %w", redactURL(w.RepoURL), branch, err)
+	}
+	if w.PathGlob != "" {
+		res, err := w.watchPath(ctx, branch, sha, lastDigest)
+		if err != nil {
+			return nil, fmt.Errorf("GitWatcher: pathGlob %q on %s@%s: %w", w.PathGlob, redactURL(w.RepoURL), branch, err)
+		}
+		return res, nil
 	}
 
 	// First-run (lastDigest=="") is not considered a change to avoid creating
 	// a Bundle for every Subscription on controller startup.
 	changed := lastDigest != "" && sha != lastDigest
 
-	shortSHA := sha
-	if len(shortSHA) > 7 {
-		shortSHA = shortSHA[:7]
-	}
-
 	return &WatchResult{
 		Digest:  sha,
-		Tag:     shortSHA,
+		Tag:     shortSHA(sha),
 		Changed: changed,
 	}, nil
+}
+
+// shortSHA returns the first 7 characters of a commit SHA.
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
+
+// setHTTPAuth adds the HTTP(S) credentials to req: a token as the password
+// of user "git" (or Credentials.Username), or a username and password.
+func (w *GitWatcher) setHTTPAuth(req *http.Request) {
+	if user, pass, ok := w.httpBasic(); ok {
+		req.SetBasicAuth(user, pass)
+	}
+}
+
+// httpBasic returns the HTTP(S) basic credentials, if any.
+func (w *GitWatcher) httpBasic() (string, string, bool) {
+	c := w.Credentials
+	switch {
+	case c.Token != "":
+		user := c.Username
+		if user == "" {
+			user = "git"
+		}
+		return user, c.Token, true
+	case c.Username != "" || c.Password != "":
+		return c.Username, c.Password, true
+	}
+	return "", "", false
 }
 
 // fetchLatestSHA fetches the current HEAD SHA for the given branch using
@@ -137,6 +192,7 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 		return "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("User-Agent", userAgent)
+	w.setHTTPAuth(req)
 
 	httpClient := w.httpClient
 	if httpClient == nil {
@@ -153,8 +209,12 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 	case http.StatusNotFound:
 		return "", fmt.Errorf("repository not found: %s (HTTP 404)", repo)
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return "", fmt.Errorf("authentication required for %s (HTTP %d); only public repositories are supported",
-			repo, resp.StatusCode)
+		if _, _, ok := w.httpBasic(); ok {
+			return "", fmt.Errorf("access denied to %s (HTTP %d) with the credentials from secretRef; "+
+				"check that the token can read the repository", repo, resp.StatusCode)
+		}
+		return "", fmt.Errorf("authentication required for %s (HTTP %d); the repository may be private: "+
+			"set secretRef to a Secret with a token for it", repo, resp.StatusCode)
 	case http.StatusOK:
 		// continue
 	default:

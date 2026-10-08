@@ -385,6 +385,21 @@ type HelmUpdateConfig struct {
 	// environment path). Defaults to "values.yaml".
 	// +optional
 	ValuesFile string `json:"valuesFile,omitempty"`
+	// ChartVersionFile is the file a chart Bundle's version is written to,
+	// relative to the environment path: an umbrella Chart.yaml, an Argo CD
+	// Application, a Flux HelmRelease or a kustomization.yaml with
+	// helmCharts. Defaults to "Chart.yaml".
+	// +optional
+	ChartVersionFile string `json:"chartVersionFile,omitempty"`
+
+	// ChartVersionPath is the YAML dot-path of the chart version in
+	// chartVersionFile. A numeric segment indexes a list. Defaults to
+	// ".dependencies.0.version" (the first dependency of an umbrella chart);
+	// for example ".spec.source.targetRevision" (Argo CD Application),
+	// ".spec.chart.spec.version" (Flux HelmRelease) or ".helmCharts.0.version"
+	// (kustomize).
+	// +optional
+	ChartVersionPath string `json:"chartVersionPath,omitempty"`
 }
 
 // ArgoCDUpdateConfig holds ArgoCD-native update strategy configuration.

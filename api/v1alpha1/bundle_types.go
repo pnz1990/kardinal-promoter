@@ -13,7 +13,9 @@ type BundleSpec struct {
 	// Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
 	// An image bundle does NOT supersede a config bundle and vice versa.
 	// This allows image and config promotions to coexist independently in the same pipeline.
-	// +kubebuilder:validation:Enum=image;config;mixed
+	// A chart Bundle promotes a Helm chart version (spec.chart) with
+	// update.strategy helm.
+	// +kubebuilder:validation:Enum=image;config;mixed;chart
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`
 
@@ -29,6 +31,11 @@ type BundleSpec struct {
 	// when the bundle type is "config" or "mixed".
 	// +optional
 	ConfigRef *ConfigRef `json:"configRef,omitempty"`
+
+	// Chart is the Helm chart version a "chart" Bundle promotes. The
+	// helm-set-image step writes chart.version at update.helm.chartVersionPath.
+	// +optional
+	Chart *ChartRef `json:"chart,omitempty"`
 
 	// Provenance carries build metadata for audit and rollback.
 	// +optional
@@ -63,6 +70,26 @@ type ConfigRef struct {
 	// CommitSHA is the exact commit SHA for this config snapshot.
 	// +optional
 	CommitSHA string `json:"commitSHA,omitempty"`
+}
+
+// ChartRef identifies a Helm chart version.
+type ChartRef struct {
+	// RepoURL is the chart repository (https://... or oci://...).
+	// +optional
+	RepoURL string `json:"repoURL,omitempty"`
+
+	// Name is the chart name.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Version is the chart version.
+	// +kubebuilder:validation:MinLength=1
+	Version string `json:"version"`
+
+	// Digest is the chart package digest (index.yaml digest, or the OCI
+	// manifest digest).
+	// +optional
+	Digest string `json:"digest,omitempty"`
 }
 
 // BundleProvenance carries build origin metadata.

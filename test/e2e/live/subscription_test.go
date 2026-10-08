@@ -46,7 +46,7 @@ func newSub(t *testing.T, e *framework.Env, ns, name string, spec v1alpha1.Subsc
 // imageSub is an image Subscription spec.
 func imageSub(registry, tagFilter, interval string) v1alpha1.SubscriptionSpec {
 	return v1alpha1.SubscriptionSpec{Type: v1alpha1.SubscriptionTypeImage,
-		Image: &v1alpha1.ImageSubscriptionSpec{Registry: registry, TagFilter: tagFilter, Interval: interval}}
+		Image: &v1alpha1.ImageSubscriptionSpec{Registry: registry, TagSelection: v1alpha1.TagSelection{TagFilter: tagFilter}, Interval: interval}}
 }
 
 // getSub reads Subscription ns/name.
