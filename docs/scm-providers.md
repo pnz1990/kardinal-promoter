@@ -335,7 +335,7 @@ provider applies:
 | `reviewers` | Usernames | Usernames | Usernames | Account IDs or `{UUID}`s | Identity IDs |
 | `teamReviewers` | Team slugs (organisation repos) | No | Team names (organisation repos) | No | Group identity IDs |
 | `assignees` | Usernames | Usernames | Usernames | No (no PR assignees) | No (no PR assignees) |
-| `merge.auto` | Auto-merge (GraphQL `enablePullRequestAutoMerge`) | Auto-merge (`auto_merge`, or `merge_when_pipeline_succeeds` before GitLab 17.11) | Scheduled merge (`merge_when_checks_succeed`) | No (no auto-merge API) | Auto-complete |
+| `merge.auto` | Auto-merge (GraphQL `enablePullRequestAutoMerge`) | Auto-merge (`auto_merge`, or `merge_when_pipeline_succeeds` before GitLab 17.11) | Scheduled merge (`merge_when_checks_succeed`), or a merge at once without commit statuses | No (no auto-merge API) | Auto-complete |
 | `merge.method` | `merge`, `squash`, `rebase` | `merge`, `squash` (a rebase merge is the project's merge method setting) | `merge`, `squash`, `rebase` | — | `merge` (no fast-forward), `squash`, `rebase` |
 | `merge.commitMessageTemplate` | Yes | Yes (merge and squash commits) | Yes | — | Yes |
 
@@ -351,8 +351,11 @@ What auto-merge needs on each provider:
   needs **Contents: Read and write** and **Pull requests: Read and write**.
 - **GitLab**: an MR without a running pipeline is merged at once. A project whose merge
   method is merge commit makes a merge commit over the squash commit; both get the message.
-- **Forgejo / Gitea**: the PR is merged once its commit statuses succeed, and at once when
-  it has none.
+- **Forgejo / Gitea**: a PR whose head commit has commit statuses is scheduled to merge
+  once they succeed. Forgejo merges a scheduled PR only when a later status or review
+  arrives, so a PR with no commit status is merged at once (branch protection applies);
+  when branch protection refuses that merge, for example for missing approvals, the merge
+  is scheduled and runs after the next status or approving review.
 - **Azure DevOps**: auto-complete is set by the token's identity, which opened the PR, and
   completes the PR once its branch policies pass.
 

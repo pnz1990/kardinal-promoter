@@ -89,18 +89,6 @@ func routes(calls []apiCall) []string {
 	return out
 }
 
-// find returns the first call to route.
-func find(t *testing.T, calls []apiCall, route string) apiCall {
-	t.Helper()
-	for _, c := range calls {
-		if c.Route == route {
-			return c
-		}
-	}
-	t.Fatalf("no call to %s in %v", route, routes(calls))
-	return apiCall{}
-}
-
 // fullPRConfig asks for every control, with templates over the Bundle.
 func fullPRConfig(method string) *v1alpha1.PRConfig {
 	return &v1alpha1.PRConfig{
@@ -271,6 +259,8 @@ func TestOpenPRControls_Forgejo(t *testing.T) {
 		"POST " + repo + "/pulls/4/requested_reviewers": {{201, `[]`}},
 		"GET " + repo + "/issues/4":                     {{200, `{"assignees":[{"login":"bob"}]}`}},
 		"PATCH " + repo + "/issues/4":                   {{201, `{}`}},
+		"GET " + repo + "/pulls/4":                      {{200, `{"head":{"sha":"h3ad"}}`}},
+		"GET " + repo + "/commits/h3ad/status":          {{200, `{"state":"success","total_count":2}`}},
 		"POST " + repo + "/pulls/4/merge":               {{200, ``}},
 	})
 	p, err := scm.NewProvider("forgejo", "fj", srv.URL, "")
@@ -284,13 +274,53 @@ func TestOpenPRControls_Forgejo(t *testing.T) {
 	got := calls()
 	assert.Equal(t, []string{"POST " + repo + "/pulls", "GET " + repo + "/labels?limit=50&page=1", "POST " + repo + "/labels",
 		"POST " + repo + "/issues/4/labels", "POST " + repo + "/pulls/4/requested_reviewers", "GET " + repo + "/issues/4",
-		"PATCH " + repo + "/issues/4", "POST " + repo + "/pulls/4/merge"}, routes(got))
+		"PATCH " + repo + "/issues/4", "GET " + repo + "/pulls/4", "GET " + repo + "/commits/h3ad/status",
+		"POST " + repo + "/pulls/4/merge"}, routes(got))
 	assert.Equal(t, "env/prod", got[2].Body["name"])
 	assert.Equal(t, []interface{}{float64(1), float64(2), float64(3)}, got[3].Body["labels"])
 	assert.Equal(t, map[string]interface{}{"reviewers": []interface{}{"alice"}, "team_reviewers": []interface{}{"platform"}}, got[4].Body)
 	assert.Equal(t, []interface{}{"bob", "octocat"}, got[6].Body["assignees"], "the PR's assignee is kept")
 	assert.Equal(t, map[string]interface{}{"Do": "rebase", "merge_when_checks_succeed": true, "delete_branch_after_merge": false,
-		"MergeTitleField": "deploy 1.29.0 to prod (#4)", "MergeMessageField": "Bundle nginx-demo-v1-29-0"}, got[7].Body)
+		"MergeTitleField": "deploy 1.29.0 to prod (#4)", "MergeMessageField": "Bundle nginx-demo-v1-29-0"}, got[9].Body,
+		"a PR with commit checks is scheduled to merge when they succeed")
+
+	// Forgejo merges a scheduled PR only on a later status or review event,
+	// so a PR whose head has no commit status is merged at once, and
+	// scheduled when branch protection refuses that merge.
+	for name, tc := range map[string]struct {
+		merges    []apiReply
+		wantMerge []bool // merge_when_checks_succeed of each merge request
+	}{
+		"no checks: merged at once": {merges: []apiReply{{200, ``}}, wantMerge: []bool{false}},
+		"no checks, protection refuses: scheduled": {
+			merges:    []apiReply{{405, `{"message":"Does not have enough approvals"}`}, {201, ``}},
+			wantMerge: []bool{false, true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, calls := routedAPI(t, map[string][]apiReply{
+				"POST " + repo + "/pulls":              {{201, `{"number":4,"html_url":"https://forgejo.example/acme/web/pulls/4"}`}},
+				"GET " + repo + "/labels":              {{200, `[{"id":1,"name":"kardinal"},{"id":2,"name":"kardinal/promotion"}]`}},
+				"POST " + repo + "/issues/4/labels":    {{200, `[]`}},
+				"GET " + repo + "/pulls/4":             {{200, `{"head":{"sha":"h3ad"}}`}},
+				"GET " + repo + "/commits/h3ad/status": {{200, `{"state":"","total_count":0}`}},
+				"POST " + repo + "/pulls/4/merge":      tc.merges,
+			})
+			p, err := scm.NewProvider("forgejo", "fj", srv.URL, "")
+			require.NoError(t, err)
+			result, err := runOpenPR(t, controlsState(t, "https://forgejo.example/acme/web.git", p,
+				&v1alpha1.PRConfig{Merge: &v1alpha1.PRMergeConfig{Auto: true}}))
+			require.NoError(t, err)
+			assert.Equal(t, "enabled", result.Outputs[parentsteps.OutputPRAutoMerge], result.Message)
+			var got []bool
+			for _, c := range calls() {
+				if c.Route == "POST "+repo+"/pulls/4/merge" {
+					assert.Equal(t, "merge", c.Body["Do"])
+					got = append(got, c.Body["merge_when_checks_succeed"] == true)
+				}
+			}
+			assert.Equal(t, tc.wantMerge, got)
+		})
+	}
 }
 
 // TestOpenPRControls_Bitbucket: reviewers are added to the PR's by UUID or
@@ -400,6 +430,8 @@ func TestOpenPRControls_Failures(t *testing.T) {
 			"POST " + repo + "/pulls/4/requested_reviewers": {{422, `{"message":"reviewer is not a collaborator"}`}},
 			"GET " + repo + "/issues/4":                     {{200, `{"assignees":[]}`}},
 			"PATCH " + repo + "/issues/4":                   {{201, `{}`}},
+			"GET " + repo + "/pulls/4":                      {{200, `{"head":{"sha":"h3ad"}}`}},
+			"GET " + repo + "/commits/h3ad/status":          {{200, `{"total_count":0}`}},
 			"POST " + repo + "/pulls/4/merge":               {{403, `{"message":"user does not have permission"}`}},
 		})
 		p, err := scm.NewProvider("forgejo", "fj", srv.URL, "")
@@ -413,7 +445,7 @@ func TestOpenPRControls_Failures(t *testing.T) {
 		e := result.Outputs[parentsteps.OutputPRControlsError]
 		assert.Contains(t, e, "reviewers: request reviewers on PR acme/web#4")
 		assert.Contains(t, e, "reviewer is not a collaborator")
-		assert.Contains(t, e, "auto-merge: enable auto-merge on PR acme/web#4")
+		assert.Contains(t, e, "auto-merge: merge PR acme/web#4, which has no commit checks")
 		assert.NotContains(t, e, "assignees")
 		assert.Contains(t, result.Message, "(PR controls failed: ")
 		assert.Empty(t, result.Outputs[parentsteps.OutputPRAutoMerge])
@@ -437,10 +469,12 @@ func TestOpenPRControls_Failures(t *testing.T) {
 
 	t.Run("auto-merge retries run out", func(t *testing.T) {
 		srv, calls := routedAPI(t, map[string][]apiReply{
-			"POST " + repo + "/pulls":           {opened},
-			"GET " + repo + "/labels":           {{200, `[{"id":1,"name":"kardinal"},{"id":2,"name":"kardinal/promotion"}]`}},
-			"POST " + repo + "/issues/4/labels": {{200, `[]`}},
-			"POST " + repo + "/pulls/4/merge":   {{405, `{"message":"Please try again later"}`}},
+			"POST " + repo + "/pulls":              {opened},
+			"GET " + repo + "/labels":              {{200, `[{"id":1,"name":"kardinal"},{"id":2,"name":"kardinal/promotion"}]`}},
+			"POST " + repo + "/issues/4/labels":    {{200, `[]`}},
+			"GET " + repo + "/pulls/4":             {{200, `{"head":{"sha":"h3ad"}}`}},
+			"GET " + repo + "/commits/h3ad/status": {{200, `{"total_count":0}`}},
+			"POST " + repo + "/pulls/4/merge":      {{405, `{"message":"Please try again later"}`}},
 		})
 		p, err := scm.NewProvider("forgejo", "fj", srv.URL, "")
 		require.NoError(t, err)
