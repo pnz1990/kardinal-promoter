@@ -227,8 +227,18 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	base := hook.DeepCopy()
 	cfg, cfgErr := r.resolveConfig(ctx, reader, &hook)
 	r.setConditions(&hook, cfgErr)
-	if hook.Spec.Webhook.AuthorizationHeader != "" { //nolint:staticcheck // SA1019: the deprecated field keeps working
+	// Log condition changes once, not on every reconcile: every Bundle,
+	// PolicyGate and PromotionStep change in the namespace reconciles the hook.
+	if meta.FindStatusCondition(base.Status.Conditions, conditionPlaintextCredential) == nil &&
+		meta.FindStatusCondition(hook.Status.Conditions, conditionPlaintextCredential) != nil {
 		log.Warn().Msg("notificationhook: spec.webhook.authorizationHeader is deprecated and stored in plain text; use spec.webhook.secretRef")
+	}
+	if cfgErr != nil {
+		if was := meta.FindStatusCondition(base.Status.Conditions, conditionReady); was == nil ||
+			was.Status != metav1.ConditionFalse || was.Reason != cfgErr.reason {
+			log.Warn().Str("reason", cfgErr.reason).Str("message", cfgErr.message).
+				Msg("notificationhook: cannot deliver until the hook is fixed")
+		}
 	}
 	processed := make(map[string]bool, len(hook.Status.ProcessedEventKeys))
 	for _, k := range hook.Status.ProcessedEventKeys {
@@ -279,8 +289,6 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if cfgErr != nil {
 		// Nothing is sent and no attempt is counted until the hook is fixed;
 		// pending events stay pending.
-		log.Warn().Str("reason", cfgErr.reason).Str("message", cfgErr.message).
-			Msg("notificationhook: cannot deliver")
 		for _, ev := range events {
 			if delivered(ev) {
 				processed[ev.eventKey] = true
