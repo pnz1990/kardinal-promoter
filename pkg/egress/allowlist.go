@@ -94,7 +94,7 @@ func checkHostName(name string) error {
 			return fmt.Errorf("invalid host name %q", name)
 		}
 		for _, c := range label {
-			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
 				return fmt.Errorf("invalid host name %q: only a leading *. wildcard is allowed", name)
 			}
 		}

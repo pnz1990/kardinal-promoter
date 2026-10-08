@@ -73,8 +73,8 @@ type NotificationSecretRef struct {
 }
 
 // NotificationWebhookConfig describes a single HTTP webhook endpoint.
-// +kubebuilder:validation:XValidation:rule="(has(self.url) && self.url != '') || has(self.secretRef)",message="webhook: set url, or secretRef with a url key"
-// +kubebuilder:validation:XValidation:rule="!(has(self.authorizationHeader) && self.authorizationHeader != '' && has(self.secretRef))",message="webhook: authorizationHeader and secretRef are mutually exclusive; move the header into the Secret's authorization key"
+// +kubebuilder:validation:XValidation:rule="(has(self.url) && size(self.url) > 0) || has(self.secretRef)",message="webhook: set url, or secretRef with a url key"
+// +kubebuilder:validation:XValidation:rule="!(has(self.authorizationHeader) && size(self.authorizationHeader) > 0 && has(self.secretRef))",message="webhook: authorizationHeader and secretRef are mutually exclusive; move the header into the Secret's authorization key"
 type NotificationWebhookConfig struct {
 	// URL is the HTTPS URL to POST the notification payload to. Optional when
 	// secretRef names a Secret with a url key, which takes precedence.

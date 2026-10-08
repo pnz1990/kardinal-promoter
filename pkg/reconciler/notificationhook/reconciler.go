@@ -227,7 +227,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	base := hook.DeepCopy()
 	cfg, cfgErr := r.resolveConfig(ctx, reader, &hook)
 	r.setConditions(&hook, cfgErr)
-	if hook.Spec.Webhook.AuthorizationHeader != "" {
+	if hook.Spec.Webhook.AuthorizationHeader != "" { //nolint:staticcheck // SA1019: the deprecated field keeps working
 		log.Warn().Msg("notificationhook: spec.webhook.authorizationHeader is deprecated and stored in plain text; use spec.webhook.secretRef")
 	}
 	processed := make(map[string]bool, len(hook.Status.ProcessedEventKeys))
@@ -408,7 +408,7 @@ var guardedTransport = egress.NewTransport(http.ProxyFromEnvironment)
 func (r *Reconciler) resolveConfig(ctx context.Context, reader client.Reader, hook *v1alpha1.NotificationHook) (*deliveryConfig, *configError) {
 	cfg := &deliveryConfig{
 		url:           strings.TrimSpace(hook.Spec.Webhook.URL),
-		authorization: hook.Spec.Webhook.AuthorizationHeader,
+		authorization: hook.Spec.Webhook.AuthorizationHeader, //nolint:staticcheck // SA1019: the deprecated field keeps working
 		format:        hook.Spec.Format,
 		contentType:   "application/json",
 	}
@@ -476,7 +476,7 @@ func (r *Reconciler) setConditions(hook *v1alpha1.NotificationHook, cfgErr *conf
 		ready.Status, ready.Reason, ready.Message = metav1.ConditionFalse, cfgErr.reason, cfgErr.message
 	}
 	meta.SetStatusCondition(&hook.Status.Conditions, ready)
-	if hook.Spec.Webhook.AuthorizationHeader != "" {
+	if hook.Spec.Webhook.AuthorizationHeader != "" { //nolint:staticcheck // SA1019: the deprecated field keeps working
 		meta.SetStatusCondition(&hook.Status.Conditions, metav1.Condition{
 			Type: conditionPlaintextCredential, Status: metav1.ConditionTrue, Reason: "AuthorizationHeaderInSpec",
 			Message: "spec.webhook.authorizationHeader is deprecated: it is stored in plain text in the hook. " +

@@ -288,7 +288,7 @@ func TestDelivery_SecretRef(t *testing.T) {
 func TestDelivery_PlaintextCredentialCondition(t *testing.T) {
 	srv, url := newRecorder(t)
 	hook := newHook(url, v1alpha1.NotificationEventBundleFailed)
-	hook.Spec.Webhook.AuthorizationHeader = "Bearer plain"
+	hook.Spec.Webhook.AuthorizationHeader = "Bearer plain" //nolint:staticcheck // SA1019: tests the deprecated field
 	f := newFixture(t, hook, failedBundle("app-v0", saturday))
 	f.reconcileHook()
 	reqs := srv.all()
@@ -304,7 +304,7 @@ func TestDelivery_PlaintextCredentialCondition(t *testing.T) {
 	assert.NotContains(t, pc.Message, "plain\"")
 
 	orig := h.DeepCopy()
-	h.Spec.Webhook.AuthorizationHeader = ""
+	h.Spec.Webhook.AuthorizationHeader = "" //nolint:staticcheck // SA1019: tests the deprecated field
 	require.NoError(t, f.c.Patch(context.Background(), &h, client.MergeFrom(orig)))
 	f.reconcileHook()
 	assert.Nil(t, meta.FindStatusCondition(f.hook().Status.Conditions, "PlaintextCredential"))
@@ -344,7 +344,7 @@ func TestDelivery_InvalidTemplate(t *testing.T) {
 // and the next event is still delivered.
 func TestDelivery_TemplateRenderFailureGivesUpAtOnce(t *testing.T) {
 	for name, tc := range map[string]struct{ body, want string }{
-		"invalid JSON": {`{"text": "{{ .Message }}`, "rendered body is not valid JSON (content type application/json); quote values with {{ json .Field }}"},
+		"invalid JSON":  {`{"text": "{{ .Message }}`, "rendered body is not valid JSON (content type application/json); quote values with {{ json .Field }}"},
 		"missing field": {`{{ .Nope }}`, "render: "},
 		"too large": {`{{ printf "%999s" .Message }}{{ printf "%999s" .Message }}` + strings.Repeat(`{{ printf "%999s" .Message }}`, 70),
 			"rendered body is over 65536 bytes"},

@@ -166,11 +166,11 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: 'webhook: set url, or secretRef with a url key'
-                  rule: (has(self.url) && self.url != '') || has(self.secretRef)
+                  rule: (has(self.url) && size(self.url) > 0) || has(self.secretRef)
                 - message: 'webhook: authorizationHeader and secretRef are mutually
                     exclusive; move the header into the Secret''s authorization key'
-                  rule: '!(has(self.authorizationHeader) && self.authorizationHeader
-                    != '''' && has(self.secretRef))'
+                  rule: '!(has(self.authorizationHeader) && size(self.authorizationHeader)
+                    > 0 && has(self.secretRef))'
             required:
             - events
             - webhook

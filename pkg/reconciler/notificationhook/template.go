@@ -109,10 +109,10 @@ func parseBodyTemplate(body string) (*template.Template, error) {
 	if len(t.Templates()) > 1 {
 		return nil, errors.New("define and block are not allowed")
 	}
-	if t.Tree == nil || t.Tree.Root == nil {
+	if t.Tree == nil || t.Root == nil {
 		return nil, errors.New("empty template")
 	}
-	if err := checkNodes(t.Tree.Root); err != nil {
+	if err := checkNodes(t.Root); err != nil {
 		return nil, err
 	}
 	return t, nil
