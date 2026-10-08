@@ -20,6 +20,12 @@ spec:
     - jsonPath: .spec.webhook.url
       name: URL
       type: string
+    - jsonPath: .spec.format
+      name: Format
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
     - jsonPath: .status.lastSentAt
       name: Last-Sent
       type: string
@@ -36,7 +42,8 @@ spec:
 
           Architecture: this CRD uses the Owned-node pattern — the reconciler watches
           Bundle, PolicyGate, and PromotionStep objects and writes delivery results to
-          status. HTTP calls are made at-most-once per event (idempotent via LastEventKey).
+          status. Each event is delivered at least once and, except after a crash
+          between a POST and its status write, exactly once (status.processedEventKeys).
         properties:
           apiVersion:
             description: |-
@@ -62,23 +69,62 @@ spec:
                 description: |-
                   Events is the list of event types that trigger delivery.
                   At least one event type is required.
-                  Valid values: Bundle.Verified, Bundle.Failed, PolicyGate.Blocked, PromotionStep.Failed.
+                  See docs/notifications.md#events.
                 items:
                   description: NotificationHookEventType enumerates the events that
                     can trigger a NotificationHook delivery.
                   enum:
                   - Bundle.Verified
                   - Bundle.Failed
+                  - Bundle.Superseded
+                  - Bundle.RollbackStarted
+                  - Bundle.RolledBack
                   - PolicyGate.Blocked
+                  - PolicyGate.Unblocked
                   - PromotionStep.Failed
+                  - PromotionStep.PROpened
+                  - PromotionStep.WaitingForApproval
                   type: string
                 minItems: 1
                 type: array
+              format:
+                description: |-
+                  Format is the shape of the request body: json (the kardinal payload,
+                  the default), slack (an incoming-webhook message with blocks), teams (a
+                  Workflows webhook message with an Adaptive Card) or template
+                  (spec.template).
+                enum:
+                - json
+                - slack
+                - teams
+                - template
+                type: string
               pipelineSelector:
                 description: |-
                   PipelineSelector restricts notifications to events originating from the named Pipeline.
                   When empty, events from all Pipelines are delivered.
                 type: string
+              template:
+                description: 'Template is the request body for format: template.'
+                properties:
+                  body:
+                    description: |-
+                      Body is a Go text/template rendered over the event
+                      (docs/notifications.md#templated-body). range, define, template and
+                      block are not allowed; the rendered body is at most 64 KiB.
+                    maxLength: 16384
+                    minLength: 1
+                    type: string
+                  contentType:
+                    description: |-
+                      ContentType is the Content-Type header of the POST. Defaults to
+                      application/json, in which case the rendered body must be valid JSON.
+                    maxLength: 128
+                    pattern: ^[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+( *;.*)?$
+                    type: string
+                required:
+                - body
+                type: object
               webhook:
                 description: Webhook defines the HTTP endpoint to deliver notifications
                   to.
@@ -87,24 +133,119 @@ spec:
                     description: |-
                       AuthorizationHeader is the value of the Authorization header to include in the POST.
                       Typically "Bearer <token>" or "Token <secret>".
-                      The value is stored in plain text in the spec and sent as is: anyone who can
-                      read this NotificationHook can read it.
+
+                      Deprecated: use secretRef. The value is stored in plain text in the spec
+                      and sent as is: anyone who can read this NotificationHook can read it.
+                      A hook that sets it still delivers, and has the condition
+                      PlaintextCredential=True.
                     type: string
+                  secretRef:
+                    description: |-
+                      SecretRef names a Secret in the hook's namespace holding the
+                      Authorization header value (key authorization) and/or the webhook URL
+                      (key url). The Secret is read on every reconcile, so a rotated value is
+                      used for the next delivery.
+                    properties:
+                      name:
+                        description: |-
+                          Name of the Secret. The key "authorization" is sent as the
+                          Authorization header; the key "url", when present, is the webhook URL
+                          and takes precedence over spec.webhook.url (Slack and Teams URLs carry
+                          their token in the path). At least one of the two keys must be set.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
                   url:
-                    description: URL is the HTTPS URL to POST the notification payload
-                      to.
-                    minLength: 1
+                    description: |-
+                      URL is the HTTPS URL to POST the notification payload to. Optional when
+                      secretRef names a Secret with a url key, which takes precedence.
                     type: string
-                required:
-                - url
                 type: object
+                x-kubernetes-validations:
+                - message: 'webhook: set url, or secretRef with a url key'
+                  rule: (has(self.url) && self.url != '') || has(self.secretRef)
+                - message: 'webhook: authorizationHeader and secretRef are mutually
+                    exclusive; move the header into the Secret''s authorization key'
+                  rule: '!(has(self.authorizationHeader) && self.authorizationHeader
+                    != '''' && has(self.secretRef))'
             required:
             - events
             - webhook
             type: object
+            x-kubernetes-validations:
+            - message: 'template is required with format: template and not allowed
+                with any other format'
+              rule: (has(self.format) && self.format == 'template') == has(self.template)
           status:
             description: NotificationHookStatus defines the observed state of a NotificationHook.
             properties:
+              conditions:
+                description: |-
+                  Conditions: Ready is False when the hook cannot deliver (its Secret is
+                  missing or lacks a key, or its template does not parse); events wait
+                  until it is fixed. PlaintextCredential is True while
+                  spec.webhook.authorizationHeader is set.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               failedAttempts:
                 description: |-
                   FailedAttempts counts consecutive failed deliveries. The controller retries

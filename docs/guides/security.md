@@ -438,7 +438,35 @@ these addresses is refused too. The failure reads `destination address is not al
 Private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and public
 addresses are allowed, because in-cluster Services, Prometheus, registries and Git servers
 are the normal targets.
-To narrow egress further, enable the NetworkPolicy and list the allowed destinations in
+
+To allow only the destinations you expect, set the controller's egress allowlist (chart value
+`egress.allowlist`, flag `--egress-allowlist`, environment variable `KARDINAL_EGRESS_ALLOWLIST`):
+
+```yaml
+egress:
+  allowlist:
+    - hooks.slack.com                      # exactly this host
+    - "*.logic.azure.com"                  # any name under it (Teams Workflows)
+    - "*.monitoring.svc.cluster.local"     # in-cluster Prometheus
+    - 10.20.0.0/16                         # addresses in this range
+```
+
+With an allowlist, a NotificationHook, MetricCheck or Subscription request is allowed when
+its URL's host name matches a host entry, or when every address the controller connects to
+is inside a CIDR entry (an address entry is a `/32` or `/128`). Anything else is refused
+before connecting, with `destination address is not allowed: not in the controller egress
+allowlist: <host> (<address>) matches no entry` where that resource reports errors. A name
+entry matches the name in the URL, whatever it resolves to; a CIDR entry is checked on the
+resolved address of every connection, so a name that re-resolves outside the range is
+refused. The list above never opens the deny list: loopback, link-local, metadata,
+unspecified and multicast addresses stay refused even when an entry covers them. The default
+(empty) keeps the behavior above: every other destination is allowed. Through a proxy, the
+target is checked against the allowlist before the request goes to the proxy; the proxy's
+own address does not need an entry. The controller logs the allowlist at startup and fails
+to start on an invalid entry.
+
+The allowlist works at the HTTP level and on any CNI. To enforce egress at the network
+level as well, enable the NetworkPolicy and list the allowed destinations in
 `networkPolicy.extraEgress`.
 
 NotificationHook, MetricCheck and Subscription requests honour `HTTP_PROXY`, `HTTPS_PROXY` and

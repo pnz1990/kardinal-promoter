@@ -8,6 +8,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **NotificationHook formats** — `spec.format: slack` posts a Slack incoming-webhook message with Block Kit blocks, `teams` a Microsoft Teams Workflows message with an Adaptive Card, and `template` a body you write as a Go text/template (`spec.template`; no loops or recursion, 64 KiB rendered, JSON checked for JSON content types). `json`, the default, is unchanged ([Formats](notifications.md#formats))
+- **NotificationHook credentials in a Secret** — `spec.webhook.secretRef` names a Secret whose `authorization` key is the Authorization header and whose `url` key is the webhook URL (for Slack and Teams URLs that carry a token). The Secret is read on every delivery, so a rotated value applies at once. A missing Secret or key makes the hook `Ready=False` and events wait instead of failing (#1267)
+- **More notification events** — `Bundle.Superseded`, `Bundle.RollbackStarted`, `Bundle.RolledBack`, `PolicyGate.Unblocked`, `PromotionStep.PROpened` and `PromotionStep.WaitingForApproval`. Every request carries `X-Kardinal-Event` and `X-Kardinal-Event-Key`, and the delivery guarantees are documented: at least once, and no duplicate after a restart except for the one event in flight ([Delivery guarantees](notifications.md#delivery-guarantees))
+- **Egress allowlist** — `egress.allowlist` (`--egress-allowlist`) limits NotificationHook, MetricCheck and Subscription requests to listed host names, `*.` wildcards and CIDRs. Empty, the default, keeps today's behavior. The loopback, link-local and metadata deny list still applies on top ([Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls), #1267)
+
+### Changed
+
+- A PolicyGate instance that allows after blocking has `Ready` reason `Unblocked` instead of `Allowed`, for the whole allowed episode; one that allows on its first evaluation still reads `Allowed`
+
+### Deprecated
+
+- `NotificationHook.spec.webhook.authorizationHeader` — it is stored in plain text in the spec. It still works and sets the condition `PlaintextCredential=True`; move the value to a Secret and use `spec.webhook.secretRef`
+
 ### Docs
 
 - **Comparison** — resurveyed Kargo v1.12.1 and GitOps Promoter v0.42.1 (2026-10-03). The matrix corrects cells that had gone stale, such as GitOps Promoter's CLI, PR body and Flux support, and Kargo's gates, steps and engines. It adds rows for pause, supersession, `explain`/`policy simulate` and audit trails, plus sections on what changed in 2026 and where Kargo or GitOps Promoter is ahead. The home table, the rollback page and the Kargo migration guide match it
