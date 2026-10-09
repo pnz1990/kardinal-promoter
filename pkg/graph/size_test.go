@@ -85,3 +85,14 @@ func TestCheckSize(t *testing.T) {
 	}
 	assert.NoError(t, graph.CheckSize(nil))
 }
+
+// TestEstimateSize_NoCollections guards EstimateSize's one-object-per-node
+// count: it holds only while the builder emits no forEach node. When it
+// emits collections, EstimateSize must count each item, and this test must
+// be replaced.
+func TestEstimateSize_NoCollections(t *testing.T) {
+	g := sizedGraph(t, 3, 2)
+	for _, n := range g.Spec.Nodes {
+		assert.Empty(t, n.ForEach, "node %s is a collection: EstimateSize must count its items", n.ID)
+	}
+}

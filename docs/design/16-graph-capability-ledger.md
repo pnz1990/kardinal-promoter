@@ -518,8 +518,8 @@ took 4 to 29 s to react to a change, against about 0.1 s when idle; with 8 worke
 
 **kardinal workaround.** `hack/install-kro.sh` sets `config.graphConcurrentReconciles=8`,
 `config.clientQps=300` and `config.clientBurst=500` (overridable; `docs/installation.md`
-§Install kro). Graphs stay small: gates and PRStatus move into `forEach` collections, whose items
-kro applies 20 at a time (`--apply-concurrency`).
+§Install kro). Planned (next PR): Graphs stay small by moving gate instances and PRStatuses into
+`forEach` collections, whose items kro applies 20 at a time (`--apply-concurrency`).
 
 **Upstream work.** None filed. [kro#1324](https://github.com/kubernetes-sigs/kro/issues/1324)
 (30 s watch-sync block per reconcile) is related: it also stalls every Graph behind one.
@@ -555,8 +555,9 @@ with 3 gates and 2 hooks about 210.
 **kardinal workaround.** `pkg/graph/size.go` `CheckSize`, called by the translator before the
 Graph is written: the JSON size plus 260 bytes per template node may not exceed 1,200,000
 bytes. Over it, the Bundle fails with `GraphBuildFailed` and a message that names the size and
-the fix. Collections shrink the spec (G9 workaround); a compact shape that keeps the promotion
-DAG as data in a `def` node is planned for Pipelines with more than about 200 environments.
+the fix (a new Bundle or a Pipeline edit retries). Planned: gate and PRStatus collections shrink
+the spec (G9 workaround), and a compact shape that keeps the promotion DAG as data in a `def` node
+serves Pipelines with more than about 200 environments.
 
 **Upstream work.** None filed. Optional ask: keep the inventory out of the Graph object (an
 ApplySet-style parent or a child object), so the spec alone bounds the size.
@@ -643,7 +644,7 @@ waits for merge, hook and analysis results, image verification) while its templa
 the `resolvableWhen` gating fields of G1.
 
 **kro today.** One data-pending field makes the whole node Unresolved (`runtime/node.go:358-372`),
-and an Unresolved node is not re-applied (`executor/simple.go:300-310`). Once a gate turns false
+and an Unresolved node is not re-applied (`executor/simple.go:318-323`). Once a gate turns false
 after the step exists, the step's template is frozen. `TolerateDataPending`, which omits a
 pending field and applies the rest, is set only for the RGD adapter's status node
 (`compiler/compiler.go:304`, `compiler/program.go:100-104`).

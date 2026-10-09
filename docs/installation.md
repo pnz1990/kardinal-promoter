@@ -261,6 +261,10 @@ never applied, and a key the new chart removed fails its schema.
 `helm upgrade` upgrades the kardinal-promoter controller only. Upgrade kro separately by
 re-running `hack/install-kro.sh` from the matching kardinal-promoter release.
 
+From v0.10.0 the Pipeline CRD rejects an environment named `time`: kro#1434 proposes reserving it
+as a Graph node ID. Rename such an environment before you upgrade (see the reserved names in the
+[Pipeline reference](pipeline-reference.md)); renaming gives it new PromotionSteps and PR branches.
+
 ### Downgrading
 
 A controller from v0.9.0-rc.1 or earlier does not know the `kardinal.io/close-pr` finalizer

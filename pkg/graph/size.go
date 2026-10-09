@@ -22,7 +22,9 @@ const MaxGraphBytes = 1_200_000
 
 // managedResourceBytes is the measured size of one status.managedResources
 // entry on a kardinal Graph (kro v0.10.0-rc.0, kind, 1,050 entries: 242
-// bytes each), rounded up.
+// bytes each), rounded up. It assumes short names: an entry holds the node
+// ID, kind, namespace, name and UID, so 40-50 character node IDs and object
+// names make an entry about 450 bytes.
 const managedResourceBytes = 260
 
 // EstimateSize returns the estimated size in bytes of g once kro has applied
@@ -36,6 +38,9 @@ func EstimateSize(g *Graph) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("marshal graph: %w", err)
 	}
+	// TODO(#1480 follow-up): a forEach node creates one object per item, so
+	// count the items once the builder emits collections.
+	// TestEstimateSize_NoCollections fails until then.
 	templates := 0
 	for _, n := range g.Spec.Nodes {
 		if n.Template != nil {
@@ -59,5 +64,5 @@ func CheckSize(g *Graph) error {
 	return asInvalid(fmt.Errorf(
 		"graph size: the Graph for this Bundle would be about %d bytes with %d nodes, over kardinal's limit of %d bytes "+
 			"(etcd stores at most 1.5 MiB per object); reduce the environments, PolicyGates or health checks per environment, "+
-			"or split the Pipeline", size, len(g.Spec.Nodes), MaxGraphBytes))
+			"or split the Pipeline; a new Bundle or a Pipeline edit retries", size, len(g.Spec.Nodes), MaxGraphBytes))
 }
