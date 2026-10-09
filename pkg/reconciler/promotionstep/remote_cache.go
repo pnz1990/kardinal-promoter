@@ -5,6 +5,7 @@ package promotionstep
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
@@ -61,7 +62,7 @@ func (c *remoteCache) remoteHeads(ctx context.Context, rh scm.RemoteHeadReader, 
 
 // branchHistory returns the last maxCommits commits of branch at head.
 func (c *remoteCache) branchHistory(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, token string, maxCommits int) ([]scm.CommitPaths, error) {
-	key := url + "\x00" + branch + "\x00" + head
+	key := url + "\x00" + branch + "\x00" + head + "\x00" + strconv.Itoa(maxCommits)
 	c.mu.Lock()
 	h, ok := c.history[key]
 	c.mu.Unlock()

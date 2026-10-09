@@ -5,6 +5,7 @@ package promotionstep_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -170,6 +171,17 @@ func TestWaitingForMerge_RebuildsPRBranchOnMovedBase(t *testing.T) {
 	st = check()
 	assert.Equal(t, elsewhere, st.outputs["baseSHA"])
 	assert.Equal(t, first.Hash, remote.head(branch).Hash, "the PR's paths did not change: no rebuild")
+	assert.Empty(t, st.outputs["prBranchRebuilds"])
+
+	// A busy branch: more commits than the first history read (20) at other
+	// paths. The deeper read finds the PR's base: still no rebuild.
+	var busy string
+	for i := range 25 {
+		busy = remote.commit(map[string]string{fmt.Sprintf("notes/busy-%02d.txt", i): "x\n"}, false)
+	}
+	st = check()
+	assert.Equal(t, busy, st.outputs["baseSHA"])
+	assert.Equal(t, first.Hash, remote.head(branch).Hash, "25 commits at other paths: no rebuild")
 	assert.Empty(t, st.outputs["prBranchRebuilds"])
 
 	// A commit under environments/prod: rebuilt on the new head.

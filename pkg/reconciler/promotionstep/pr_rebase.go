@@ -31,8 +31,35 @@ const outputPRRebuilds = "prBranchRebuilds"
 const ReasonPRBranchRebuilt = "PRBranchRebuilt"
 
 // historyDepth is how many commits of the base branch a PR branch refresh
-// reads to find the paths changed since the PR was built.
-const historyDepth = 20
+// reads first to find the paths changed since the PR was built, and
+// deepHistoryDepth how many it reads when the PR's base is not among them (a
+// busy branch moves by more than historyDepth between two checks). Only when
+// it is not among those either (a force-push) is the PR rebuilt without
+// knowing which paths changed.
+const (
+	historyDepth     = 20
+	deepHistoryDepth = 500
+)
+
+// changedSince returns the paths the base branch changed between since and
+// head, reading historyDepth commits and then, if since is not among them
+// and the branch had more, deepHistoryDepth. found is false when since is
+// not in the deeper history either.
+func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, since, token string) ([]string, bool, error) {
+	for _, depth := range []int{historyDepth, deepHistoryDepth} {
+		history, err := r.remotes.branchHistory(ctx, rh, url, branch, head, token, depth)
+		if err != nil {
+			return nil, false, err
+		}
+		if changed, found := scm.PathsChangedSince(history, since); found {
+			return changed, true, nil
+		}
+		if len(history) < depth {
+			break // the whole branch was read: since is not in it
+		}
+	}
+	return nil, false, nil
+}
 
 // outputPushedSHA is git-push's status.outputs.pushedSHA, the commit kardinal
 // pushed to the PR branch: the lease a rebuild checks.
@@ -48,7 +75,7 @@ const outputPushedSHA = builtinsteps.OutputPushedSHA
 //     merges cleanly: only baseSHA is recorded. Rebuilding every PR on every
 //     move made each rebuild a move for the others' merges (livelock).
 //   - If they changed one of its paths, or baseSHA is not in the base
-//     branch's last historyDepth commits (a force-push, or a long move), it
+//     branch's last deepHistoryDepth commits (a force-push), it
 //     reruns the step list up to open-pr on a fresh clone of the new head and
 //     force-pushes the PR branch, which is kardinal's own. The PR keeps its
 //     number and branch.
@@ -96,16 +123,16 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 		ps.Status.Message = msg
 		return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
 	}
-	if history, herr := r.remotes.branchHistory(ctx, rh, url, branch, head, cred.token, historyDepth); herr == nil {
-		if changed, found := scm.PathsChangedSince(history, built); found && !touchesAny(changed, prPaths(env)) {
-			// The PR's paths did not change: it merges as it is.
-			outputs := cloneMap(ps.Status.Outputs)
-			outputs[builtinsteps.OutputBaseSHA] = head
-			ps.Status.Outputs = outputs
-			return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
-		}
-	} else {
+	changed, found, herr := r.changedSince(ctx, rh, url, branch, head, built, cred.token)
+	switch {
+	case herr != nil:
 		log.Debug().Err(herr).Msg("could not read the base branch history; rebuilding the PR branch")
+	case found && !touchesAny(changed, prPaths(env)):
+		// The PR's paths did not change: it merges as it is.
+		outputs := cloneMap(ps.Status.Outputs)
+		outputs[builtinsteps.OutputBaseSHA] = head
+		ps.Status.Outputs = outputs
+		return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
 	}
 	bundle, err := r.loadBundle(ctx, ps)
 	if err != nil {

@@ -323,12 +323,13 @@ force-pushes the base branch, so no writer's commit is lost:
   branch). The branch starts at the base head of its clone. While the PR waits for its merge,
   the controller reads the base head every 30 seconds (one `git ls-remote` per repository,
   shared by every waiting PR). When the base moved, it reads the commits since the PR's base
-  (the last 20 of the branch, once per new head) and:
+  (the last 20 of the branch, or the last 500 when the PR's base is further back; once per new
+  head) and:
   - when they changed none of the PR's paths (the environment's `path`, and a Helm `valuesFile`
     outside it), the PR still merges cleanly: only `status.outputs.baseSHA` moves, nothing is
     pushed;
-  - when they changed one of its paths, or the PR's base is not among them (a force-push, or a
-    longer move), it reruns the promotion's steps on a fresh clone of the new head and
+  - when they changed one of its paths, or the PR's base is not among the last 500 (a
+    force-push), it reruns the promotion's steps on a fresh clone of the new head and
     force-pushes the PR branch, so the PR is one commit on the current base
     (`status.outputs.prBranchRebuilds` counts it);
   - when the PR branch has a commit kardinal did not push (its head is not
