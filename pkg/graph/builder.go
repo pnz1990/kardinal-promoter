@@ -38,6 +38,11 @@ type BuildInput struct {
 	// DefaultPolicyNamespace.
 	PolicyNamespaces []string
 
+	// ScmProvider is the provider of the Pipeline's spec.git.providerRef, as
+	// the translator resolved it. Every PromotionStep gets it in
+	// spec.scmProvider; nil leaves the controller's --scm-provider.
+	ScmProvider *kardinalv1alpha1.ScmProviderIdentity
+
 	// Analyses are the Argo Rollouts analysis templates the environments'
 	// spec.verification names, as the translator read them.
 	Analyses AnalysisInput
@@ -103,7 +108,26 @@ func (b *Builder) Build(input BuildInput) (*BuildResult, error) {
 	if err != nil {
 		return nil, asInvalid(err)
 	}
+	if id := input.ScmProvider; id != nil {
+		setScmProvider(res.Graph, *id)
+	}
 	return res, nil
+}
+
+// setScmProvider writes the provider identity into the spec of every
+// PromotionStep template: a static field (no Watch node), which the
+// PromotionStep reconciler reads to pick the SCM and copies into the
+// PRStatus spec with the PR.
+func setScmProvider(g *Graph, id kardinalv1alpha1.ScmProviderIdentity) {
+	for i := range g.Spec.Nodes {
+		t := g.Spec.Nodes[i].Template
+		if t == nil || t["kind"] != "PromotionStep" {
+			continue
+		}
+		if spec, ok := t["spec"].(map[string]interface{}); ok {
+			spec["scmProvider"] = map[string]interface{}{"kind": id.Kind, "name": id.Name, "uid": id.UID}
+		}
+	}
 }
 
 func (b *Builder) build(input BuildInput) (*BuildResult, error) {

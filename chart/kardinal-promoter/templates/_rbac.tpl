@@ -57,6 +57,14 @@ rules exist for. A new client call needs a row there and a rule here.
     - renderruns
     - imageverifications
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# ScmProviders: read (the translator, reconcilers and the webhook endpoint)
+# and their Ready condition written; the controller never creates them.
+- apiGroups: ["kardinal.io"]
+  resources: ["scmproviders"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["kardinal.io"]
+  resources: ["scmproviders/status"]
+  verbs: ["get", "update", "patch"]
 - apiGroups: ["kardinal.io"]
   resources:
     - pipelines/status
@@ -80,10 +88,15 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["get", "list", "watch", "create", "delete"]
-# Audit records are append-only.
+# Audit records are append-only. audit.retention.enabled adds delete: the
+# leader deletes records past their retention (pkg/reconciler/auditretention).
 - apiGroups: ["kardinal.io"]
   resources: ["auditevents"]
+  {{- if .Values.audit.retention.enabled }}
+  verbs: ["get", "list", "watch", "create", "delete"]
+  {{- else }}
   verbs: ["get", "list", "watch", "create"]
+  {{- end }}
 # kro Graphs (one per Bundle, kro.run/v1alpha1).
 - apiGroups: ["kro.run"]
   resources: ["graphs"]
@@ -165,6 +178,14 @@ rules exist for. A new client call needs a row there and a rule here.
   verbs: ["get", "list", "watch"]
 - apiGroups: ["kardinal.io"]
   resources: ["changewindows/status"]
+  verbs: ["get", "update", "patch"]
+# ClusterScmProviders, read like ScmProviders and their Ready condition
+# written.
+- apiGroups: ["kardinal.io"]
+  resources: ["clusterscmproviders"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["kardinal.io"]
+  resources: ["clusterscmproviders/status"]
   verbs: ["get", "update", "patch"]
 # The Graph cleanup reconciler reads the namespace of a deleted Graph, the
 # Bundle reconciler the namespace of a Bundle before translating it, and the

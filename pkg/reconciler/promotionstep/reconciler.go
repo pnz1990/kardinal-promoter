@@ -198,6 +198,14 @@ type Reconciler struct {
 	// it. It drives the deadline for closing a deleted step's PR and the
 	// retry backoff (status.nextRetryAt).
 	NowFn func() time.Time
+
+	// SCMWaitTimeout bounds how long a step waits for an open SCM circuit
+	// when its environment sets no stepTimeoutSeconds; 0 is
+	// DefaultSCMWaitTimeout (#1476).
+	SCMWaitTimeout time.Duration
+	// Providers builds the clients of ScmProviders and ClusterScmProviders
+	// (spec.scmProvider). Nil serves only the controller's SCM.
+	Providers *scm.Registry
 }
 
 // now returns the current time from NowFn, or time.Now when it is nil.
@@ -527,6 +535,43 @@ func (r *Reconciler) cancelStep(ctx context.Context, log zerolog.Logger, ps *v1a
 		if !closing {
 			ps.Status.RetryCount = 0
 		}
+		wait, ok := circuitWait(closeErr, r.now())
+		started := false
+		if ok {
+			var waited time.Duration
+			if waited, started = r.startSCMWait(ps, closeErr); waited >= r.scmWaitBound(0) {
+				// Waited for the whole bound: spend the close retries now.
+				ok = false
+			}
+		} else {
+			clearSCMWait(ps, r.now())
+		}
+		if ok {
+			// The SCM circuit is open (#1476): no call was made. Wait for it
+			// without spending a close retry, so an outage longer than the
+			// retries cannot leave the PR or its branch behind.
+			meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
+				Type:               ConditionSupersededCloseFailed,
+				Status:             metav1.ConditionTrue,
+				Reason:             "CloseFailed",
+				Message:            closeErr.Error(),
+				ObservedGeneration: ps.Generation,
+				LastTransitionTime: metav1.NewTime(r.now().UTC()),
+			})
+			next := metav1.NewTime(r.now().Add(wait))
+			ps.Status.NextRetryAt = &next
+			ps.Status.Message = fmt.Sprintf("bundle %s was superseded; closing its PR waits %s for the SCM (not counted as a retry): %v",
+				ps.Spec.BundleName, wait, closeErr)
+			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+				return ctrl.Result{}, false, fmt.Errorf("patch supersession circuit wait: %w", err)
+			}
+			// After the patch: a lost patch starts the wait again on the
+			// next reconcile, which emits the one Event then.
+			if started {
+				r.emitSCMUnavailable(ps, r.scmWaitBound(0), closeErr)
+			}
+			return ctrl.Result{RequeueAfter: wait}, false, nil
+		}
 		meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
 			Type:               ConditionSupersededCloseFailed,
 			Status:             metav1.ConditionTrue,
@@ -548,6 +593,7 @@ func (r *Reconciler) cancelStep(ctx context.Context, log zerolog.Logger, ps *v1a
 			return ctrl.Result{RequeueAfter: delay}, false, nil
 		}
 		msg += fmt.Sprintf("; closing its PR failed after %d retries (%v) — %s", maxStepRetries, closeErr, closeByHand(closeErr))
+		endSCMWaitTimedOut(ps, r.now())
 	} else {
 		meta.RemoveStatusCondition(&ps.Status.Conditions, ConditionSupersededCloseFailed)
 	}
@@ -647,11 +693,15 @@ func (r *Reconciler) closeStepPRWithSCM(ctx context.Context, ps *v1alpha1.Promot
 		}
 		return false, r.deleteBranchWithoutPR(ctx, ps)
 	}
-	if r.SCM == nil {
+	provider, err := r.scmFor(ctx, ps)
+	if err != nil {
+		return false, fmt.Errorf("close PR #%d: %w", num, err)
+	}
+	if provider == nil {
 		return false, fmt.Errorf("no SCM provider configured to close PR #%d", num)
 	}
 	log := zerolog.Ctx(ctx)
-	merged, open, err := r.SCM.GetPRStatus(ctx, repo, num)
+	merged, open, err := provider.GetPRStatus(ctx, repo, num)
 	if err != nil {
 		return false, fmt.Errorf("get PR #%d status: %w", num, err)
 	}
@@ -663,14 +713,14 @@ func (r *Reconciler) closeStepPRWithSCM(ctx context.Context, ps *v1alpha1.Promot
 		}
 		return false, r.closedPRBranch(ctx, ps, repo, num, keepBranch)
 	}
-	if err := r.SCM.ClosePR(ctx, repo, num); err != nil {
+	if err := provider.ClosePR(ctx, repo, num); err != nil {
 		return false, fmt.Errorf("close PR #%d: %w", num, err)
 	}
 	log.Info().Int("pr", num).Str("step", ps.Name).Msg("closed PR of cancelled step")
 	r.markPRStatusClosedByKardinal(ctx, ps, num)
 	body := fmt.Sprintf("kardinal closed this PR: %s. Merging it would change environment %s "+
 		"without a PromotionStep tracking it.", reason, ps.Spec.Environment)
-	if err := r.SCM.CommentOnPR(ctx, repo, num, body); err != nil {
+	if err := provider.CommentOnPR(ctx, repo, num, body); err != nil {
 		log.Warn().Err(err).Int("pr", num).Msg("could not comment on the closed PR (non-fatal)")
 	}
 	return false, r.closedPRBranch(ctx, ps, repo, num, keepBranch)
@@ -937,7 +987,19 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// The git token from Pipeline spec.git.secretRef. A git step that fails
 	// without one says why (B48).
 	cred := r.resolveGitCredential(ctx, log, pipeline)
-	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, workDir, cred)
+
+	// spec.scmProvider: the provider the translator resolved for this step;
+	// without it the controller's --scm-provider. A provider that is gone, or
+	// that no longer allows the repository, fails the step with the reason:
+	// there is no silent fallback to the controller's provider.
+	provider, err := r.scmFor(ctx, ps)
+	if errors.Is(err, scm.ErrProviderGone) || errors.Is(err, scm.ErrRepositoryNotAllowed) || errors.Is(err, scm.ErrNamespaceNotAllowed) {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, err.Error())
+	}
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("scm provider: %w", err)
+	}
+	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, workDir, cred, provider)
 
 	prevIdx := ps.Status.CurrentStepIndex
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, prevIdx)
@@ -960,9 +1022,12 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 	// Every path below writes the status.
 	clearGitCredentialMissing(ps, cred)
+	if _, waiting := circuitWait(execErr, r.now()); !waiting {
+		clearSCMWait(ps, r.now())
+	}
 
 	if execErr != nil {
-		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr, nil, cred)
+		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr, nil, cred, env.StepTimeoutSeconds)
 	}
 	closed := updateStepStatuses(ps, eng.StepNames(), nextIdx, false, "", eng.Timings())
 
@@ -1039,14 +1104,15 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// ExecuteFrom reports StepFailed with an error, so this is unreachable
 		// unless a step returns an unknown status.
 		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(),
-			fmt.Errorf("step %d returned status %q: %s", nextIdx, result.Status, result.Message), closed, cred)
+			fmt.Errorf("step %d returned status %q: %s", nextIdx, result.Status, result.Message), closed, cred,
+			env.StepTimeoutSeconds)
 	}
 }
 
 // stepState is the state the step engine runs seq with for ps.
 func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
 	pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle, seq []string,
-	workDir string, cred gitCredential) *steps.StepState {
+	workDir string, cred gitCredential, provider scm.SCMProvider) *steps.StepState {
 	state := &steps.StepState{
 		Pipeline:     pipeline.Spec,
 		PipelineName: ps.Spec.PipelineName,
@@ -1064,7 +1130,7 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 			AuthorName:   "kardinal-promoter",
 			AuthorEmail:  "kardinal@kardinal.io",
 		},
-		SCM:                  r.SCM,
+		SCM:                  provider,
 		GitClient:            r.GitClient,
 		K8sClient:            r.Client,
 		StepTimeoutSeconds:   env.StepTimeoutSeconds,
@@ -1119,7 +1185,7 @@ func prOpenedAt(ps *v1alpha1.PromotionStep) (opened time.Time, ok bool) {
 // limit, since creating it does not help.
 func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
 	stepNames []string, timings map[int]steps.StepTiming, execErr error, closed stepObservations,
-	cred gitCredential) (ctrl.Result, error) {
+	cred gitCredential, stepTimeoutSeconds int) (ctrl.Result, error) {
 	idx := ps.Status.CurrentStepIndex
 	retryable := errors.Unwrap(execErr) != nil && !errors.Is(execErr, steps.ErrPermanent)
 	// A git-clone or git-push that the remote refused for lack of
@@ -1137,6 +1203,42 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		execErr = fmt.Errorf("%w (%s)", execErr, note)
 		emitCredential = markGitCredentialMissing(ps, cred.reason, note)
 		waitForSecret = cred.waitsForSecret()
+	}
+	scmDown := false
+	if wait, ok := circuitWait(execErr, r.now()); retryable && ok {
+		// The SCM circuit is open (#1476): no call was made, so nothing
+		// failed. Wait for the circuit to let a call through and run the
+		// step again without spending a retry, up to the wait bound.
+		bound := r.scmWaitBound(stepTimeoutSeconds)
+		waited, started := r.startSCMWait(ps, execErr)
+		if waited < bound {
+			next := metav1.NewTime(r.now().Add(wait))
+			ps.Status.NextRetryAt = &next
+			ps.Status.Message = fmt.Sprintf("waiting %s for the SCM (not counted as a retry; %d/%d used; waiting since %s, for %s at most): %v",
+				wait.Round(time.Second), ps.Status.RetryCount, maxStepRetries,
+				ps.Status.SCMWaitSince.UTC().Format(time.RFC3339), bound, execErr)
+			closed = append(closed, updateStepStatuses(ps, stepNames, idx, false, "", timings)...)
+			log.Info().Err(execErr).Str("env", ps.Spec.Environment).Dur("wait", wait).
+				Msg("SCM circuit open, step waits")
+			if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+				if apierrors.IsNotFound(patchErr) {
+					return ctrl.Result{}, nil
+				}
+				return ctrl.Result{}, fmt.Errorf("patch step circuit wait: %w", patchErr)
+			}
+			closed.record()
+			if started {
+				r.emitSCMUnavailable(ps, bound, execErr)
+			}
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
+		// Waited for the whole bound: the SCM stays down. Fail the step.
+		execErr = fmt.Errorf("the SCM was unavailable for %s, the most this step waits: %w", waited.Round(time.Second), execErr)
+		endSCMWaitTimedOut(ps, r.now())
+		scmDown = true
+	}
+	if scmDown {
+		retryable = false
 	}
 	contended := retryable && errors.Is(execErr, steps.ErrContended)
 	if retryable && (waitForSecret || contended || ps.Status.RetryCount < maxStepRetries) {
@@ -2259,7 +2361,11 @@ func (r *Reconciler) patchPRStatusSpec(ctx context.Context, ps *v1alpha1.Promoti
 		return fmt.Errorf("get prstatus %s: %w", ps.Spec.PRStatusRef, err)
 	}
 	want, ok := prSpecFromOutputs(outputs)
-	if !ok || specNamesPR(prs.Spec, want) {
+	if !ok {
+		return nil
+	}
+	want.ScmProvider = ps.Spec.ScmProvider
+	if specNamesPR(prs.Spec, want) && sameProvider(prs.Spec.ScmProvider, want.ScmProvider) {
 		return nil
 	}
 	patch := client.MergeFrom(prs.DeepCopy())
@@ -2604,9 +2710,14 @@ func (r *Reconciler) collectGateResults(ctx context.Context, log zerolog.Logger,
 			Result:        "Fail",
 			Reason:        g.Status.Reason,
 		}
-		// Prefer the template's name over the generated instance name.
+		// Prefer the template's name and namespace over the generated
+		// instance's: an org gate's instance lives in the Pipeline namespace,
+		// but a reviewer looks for the template (#1581).
 		if tmpl := g.Labels["kardinal.io/gate-name"]; tmpl != "" {
 			gr.GateName = tmpl
+		}
+		if tmplNS := g.Labels[graph.LabelGateTemplateNamespace]; tmplNS != "" {
+			gr.GateNamespace = tmplNS
 		}
 		if g.Status.Ready {
 			gr.Result = "Pass"
@@ -2645,6 +2756,7 @@ func (r *Reconciler) setRollbackState(ctx context.Context, log zerolog.Logger, s
 		return
 	}
 	state.RequestedBy = bundle.Annotations[lifecycle.AnnotationRequestedBy]
+	state.CreatedBy = bundle.Annotations[lifecycle.AnnotationCreatedBy]
 	name := bundle.Annotations[lifecycle.AnnotationRollbackFrom]
 	if name == "" {
 		return
@@ -2656,6 +2768,36 @@ func (r *Reconciler) setRollbackState(ctx context.Context, log zerolog.Logger, s
 		return
 	}
 	state.RollbackFromBundle = &from.Spec
+}
+
+// sameProvider reports whether two provider identities are the same.
+func sameProvider(a, b *v1alpha1.ScmProviderIdentity) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// scmFor returns the SCM provider of the step: its spec.scmProvider, through
+// the Providers registry, checked against the Pipeline's repository, or the
+// controller's --scm-provider when it has none.
+func (r *Reconciler) scmFor(ctx context.Context, ps *v1alpha1.PromotionStep) (scm.SCMProvider, error) {
+	id := ps.Spec.ScmProvider
+	if id == nil {
+		return r.SCM, nil
+	}
+	if r.Providers == nil {
+		return nil, fmt.Errorf("%s %s: the controller has no ScmProvider registry", id.Kind, id.Name)
+	}
+	repo := ""
+	if pipeline, err := r.loadPipeline(ctx, ps); err == nil {
+		repo, _ = scm.RepoFromURL(pipeline.Spec.Git.URL)
+	}
+	res, err := r.Providers.ForIdentity(ctx, ps.Namespace, *id, repo)
+	if err != nil {
+		return nil, err
+	}
+	return res.Provider, nil
 }
 
 // labelReferenceable must be "true" on a kubeconfig Secret that

@@ -269,6 +269,10 @@
           },
           "description": "--scm-allowed-repositories: host/repository globs the controller's SCM token may act on."
         },
+        "providersAllowInsecureHTTP": {
+          "type": "boolean",
+          "description": "--scm-providers-allow-http: let ScmProviders use an http:// spec.apiURL."
+        },
         "instanceSigners": {
           "type": "array",
           "items": {
@@ -555,6 +559,32 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 1000
+            }
+          }
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Turn AuditEvent retention on (off by default) and grant delete on AuditEvents."
+            },
+            "maxAge": {
+              "type": "string",
+              "pattern": "^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
+              "description": "--audit-retention-max-age: delete records created longer ago; 0s keeps any age."
+            },
+            "maxPerPipeline": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "--audit-retention-max-per-pipeline: newest records kept per Pipeline; 0 keeps any number."
             }
           }
         }

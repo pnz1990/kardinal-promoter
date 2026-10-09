@@ -330,6 +330,31 @@ spec:
                 items:
                   type: string
                 type: array
+              scmProvider:
+                description: |-
+                  ScmProvider is the provider of the Pipeline's spec.git.providerRef,
+                  as the translator resolved it when it built the Graph. Unset uses the
+                  controller's --scm-provider.
+                properties:
+                  kind:
+                    description: Kind is ScmProvider or ClusterScmProvider.
+                    enum:
+                    - ScmProvider
+                    - ClusterScmProvider
+                    type: string
+                  name:
+                    description: Name is the provider's name; a ScmProvider is in
+                      the step's namespace.
+                    type: string
+                  uid:
+                    description: UID is the provider's metadata.uid when the Graph
+                      was built.
+                    type: string
+                required:
+                - kind
+                - name
+                - uid
+                type: object
               stepType:
                 description: |-
                   StepType identifies the built-in step to execute.
@@ -558,6 +583,15 @@ spec:
                   limit the PromotionStep fails. Retries counted in gitCredentialRetries
                   are not counted here.
                 type: integer
+              scmWaitSince:
+                description: |-
+                  SCMWaitSince is when the step started waiting for an open SCM circuit
+                  (condition SCMUnavailable): its SCM host failed, so the step makes no
+                  call and waits without spending retryCount. The wait ends when the
+                  SCM answers, or fails the step after the environment's
+                  stepTimeoutSeconds, else the controller's --scm-wait-timeout (30m).
+                format: date-time
+                type: string
               state:
                 description: |-
                   State is the step execution state.

@@ -48,6 +48,12 @@ type PromotionStepSpec struct {
 	// +optional
 	PRStatusRef string `json:"prStatusRef,omitempty"`
 
+	// ScmProvider is the provider of the Pipeline's spec.git.providerRef,
+	// as the translator resolved it when it built the Graph. Unset uses the
+	// controller's --scm-provider.
+	// +optional
+	ScmProvider *ScmProviderIdentity `json:"scmProvider,omitempty"`
+
 	// PreHooks names the HookRuns of the environment's pre-deploy hooks, in
 	// order. The step stays Pending until every one of them Succeeded in
 	// spec.live.hooks, and fails when one Failed. Set by the Graph: the first
@@ -420,6 +426,14 @@ type PromotionStepStatus struct {
 	// step runs again.
 	// +optional
 	NextRetryAt *metav1.Time `json:"nextRetryAt,omitempty"`
+
+	// SCMWaitSince is when the step started waiting for an open SCM circuit
+	// (condition SCMUnavailable): its SCM host failed, so the step makes no
+	// call and waits without spending retryCount. The wait ends when the
+	// SCM answers, or fails the step after the environment's
+	// stepTimeoutSeconds, else the controller's --scm-wait-timeout (30m).
+	// +optional
+	SCMWaitSince *metav1.Time `json:"scmWaitSince,omitempty"`
 
 	// LastHealthCheckAt records when the health adapter was last called. Used to
 	// space health checks at the health-check interval regardless of how often
