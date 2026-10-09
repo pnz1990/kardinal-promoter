@@ -531,14 +531,16 @@ func TestDelivery_URLTokenNotInStatusOrLogs(t *testing.T) {
 	}
 }
 
-// TestDelivery_FirstReconcileDoesNotBackfill: a new hook reports the newest
-// existing event, as before, rather than the whole history.
+// TestDelivery_FirstReconcileDoesNotBackfill: a new hook delivers no event
+// from before it was created (#1581), only those from its creation on.
 func TestDelivery_FirstReconcileDoesNotBackfill(t *testing.T) {
 	srv := &webhookServer{}
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
-	f := newFixture(t, newHook(ts.URL, v1alpha1.NotificationEventBundleFailed),
+	hook := newHook(ts.URL, v1alpha1.NotificationEventBundleFailed)
+	hook.CreationTimestamp = metav1.NewTime(saturday.Add(-90 * time.Minute)) // after v2 and v3, before v4
+	f := newFixture(t, hook,
 		failedBundle("app-v2", saturday.Add(-3*time.Hour)),
 		failedBundle("app-v3", saturday.Add(-2*time.Hour)),
 		failedBundle("app-v4", saturday.Add(-1*time.Hour)))
@@ -618,4 +620,22 @@ func TestDelivery_UpgradedHookKeepsLegacyKey(t *testing.T) {
 	keys := f.hook().Status.ProcessedEventKeys
 	require.Len(t, keys, 1)
 	assert.True(t, strings.HasPrefix(keys[0], "PolicyGate.Blocked/app-v1-prod-no-weekend/"), keys[0])
+}
+
+// TestDelivery_NewHookSkipsOlderEvents is the #1581 repro: a hook created
+// after a Bundle was Verified does not deliver that Bundle.Verified; the
+// next event is delivered.
+func TestDelivery_NewHookSkipsOlderEvents(t *testing.T) {
+	srv := &webhookServer{}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+	hook := newHook(ts.URL, v1alpha1.NotificationEventBundleFailed)
+	hook.CreationTimestamp = metav1.NewTime(saturday)
+	f := newFixture(t, hook, failedBundle("app-v2", saturday.Add(-time.Hour)), failedBundle("app-v3", saturday.Add(-time.Minute)))
+	f.reconcileHook()
+	assert.Empty(t, srv.received(), "both events are older than the hook")
+	assert.ElementsMatch(t, []string{"Bundle.Failed/app-v2", "Bundle.Failed/app-v3"}, f.hook().Status.ProcessedEventKeys)
+	f.create(failedBundle("app-v4", saturday.Add(time.Minute)))
+	f.reconcileHook()
+	assert.Equal(t, []string{"Bundle.Failed/app-v4"}, srv.received())
 }
