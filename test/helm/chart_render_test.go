@@ -1303,6 +1303,23 @@ func TestChartRequiresKubernetes130(t *testing.T) {
 	}
 }
 
+// TestChartGitHubApp: with github.app.enabled the controller watches the
+// github.secretRef Secret, which holds the App credentials, and gets no
+// GITHUB_TOKEN (the Secret has no token key, and a secretKeyRef to a missing
+// key would keep the Pod from starting). It needs github.secretRef.name.
+func TestChartGitHubApp(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter",
+		"--set", "github.secretRef.name=github-app", "--set", "github.app.enabled=true"))
+	env := envByName(c)
+	assert.NotContains(t, env, "GITHUB_TOKEN")
+	assert.Equal(t, "github-app", env["KARDINAL_SCM_TOKEN_SECRET_NAME"].Value)
+	assert.Equal(t, releaseNS, env["KARDINAL_SCM_TOKEN_SECRET_NAMESPACE"].Value)
+
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "github.app.enabled=true")
+	require.Error(t, err)
+	assert.Contains(t, out, "github.app.enabled needs github.secretRef.name")
+}
+
 // TestChartNamespaceShard: controller.namespaceShard passes --namespace-shard,
 // and cannot be combined with namespace mode or be an invalid label value.
 func TestChartNamespaceShard(t *testing.T) {

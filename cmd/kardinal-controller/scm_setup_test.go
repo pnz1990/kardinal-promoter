@@ -5,6 +5,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -66,4 +70,37 @@ func TestBuildControllerSCM_DataCenter(t *testing.T) {
 	assert.Nil(t, none, "no --scm-allowed-repositories: no allowlist")
 	_, _, _, err = buildControllerSCM(controllerSCMConfig{providerType: "bitbucket-datacenter", token: "t", allowed: allowed})
 	assert.Error(t, err, "Data Center needs --scm-api-url")
+}
+
+// TestBuildControllerSCM_GitHubApp: with --github-app-* (static provider)
+// the controller's provider authenticates as the App and the startup check
+// gets the unguarded provider; with --scm-allowed-repositories the returned
+// provider is still guarded. A dynamic provider ignores the App.
+func TestBuildControllerSCM_GitHubApp(t *testing.T) {
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	app := &scm.GitHubAppCredentials{AppID: 1, InstallationID: 2,
+		PrivateKey: pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)})}
+	allowed, err := scm.ParseRepositoryAllowlist([]string{"github.com/acme/*"})
+	require.NoError(t, err)
+	var checked scm.SCMProvider
+	provider, dyn, _, err := buildControllerSCM(controllerSCMConfig{providerType: "github", githubApp: app, allowed: allowed,
+		onGitHubApp: func(p scm.SCMProvider) { checked = p }})
+	require.NoError(t, err)
+	assert.Nil(t, dyn)
+	require.NotNil(t, checked, "the App is checked at startup")
+	_, isGitHub := checked.(*scm.GitHubProvider)
+	assert.True(t, isGitHub, "the check gets the provider itself, not the guard: %T", checked)
+	_, _, err = provider.GetPRStatus(context.Background(), "other/repo", 1)
+	assert.ErrorIs(t, err, scm.ErrRepositoryNotAllowed, "the controller's provider is guarded")
+
+	checked = nil
+	_, _, _, err = buildControllerSCM(controllerSCMConfig{providerType: "gitlab", githubApp: app})
+	assert.Error(t, err, "App credentials need the github provider")
+
+	_, dyn, _, err = buildControllerSCM(controllerSCMConfig{providerType: "github", token: "t", dynamic: true, githubApp: app,
+		onGitHubApp: func(p scm.SCMProvider) { checked = p }})
+	require.NoError(t, err)
+	assert.NotNil(t, dyn)
+	assert.Nil(t, checked, "the dynamic provider reads a token, not the App")
 }

@@ -200,6 +200,19 @@ func main() {
 			"refused, and a Pipeline that would need the token for one is Ready=False/RepositoryNotAllowed "+
 			"and its steps fail. Empty allows every repository.")
 
+	// GitHub App authentication (static mode). With --scm-token-secret-name
+	// the watched Secret may hold the App credentials instead (githubAppID,
+	// githubAppInstallationID, githubAppPrivateKey), and the flags are not
+	// needed.
+	var githubAppID, githubAppInstallationID int64
+	var githubAppPrivateKeyFile string
+	flag.Int64Var(&githubAppID, "github-app-id", envInt64("GITHUB_APP_ID"),
+		"GitHub App ID: authenticate as a GitHub App installation instead of with --github-token. "+
+			"Needs --github-app-installation-id and --github-app-private-key-file. Also readable from GITHUB_APP_ID.")
+	flag.Int64Var(&githubAppInstallationID, "github-app-installation-id", envInt64("GITHUB_APP_INSTALLATION_ID"),
+		"GitHub App installation ID. Also readable from GITHUB_APP_INSTALLATION_ID.")
+	flag.StringVar(&githubAppPrivateKeyFile, "github-app-private-key-file", os.Getenv("GITHUB_APP_PRIVATE_KEY_FILE"),
+		"File holding the GitHub App private key (PEM). Also readable from GITHUB_APP_PRIVATE_KEY_FILE.")
 	gatesCommitStatus := true
 	flag.BoolVar(&gatesCommitStatus, "gates-commit-status", true,
 		"Post the gate results of a waiting pr-review step as a commit status on its PR (Helm "+
@@ -557,9 +570,20 @@ func main() {
 	// SCM provider — scm.NewProvider dispatches on the --scm-provider flag.
 	// When --scm-token-secret-name is set, a DynamicProvider is used so that
 	// credential rotation (Secret update) reloads the provider without a restart.
+	// Static GitHub App credentials (--github-app-*); the dynamic provider
+	// reads a token from --scm-token-secret-name instead.
+	var githubApp *scm.GitHubAppCredentials
+	if scmTokenSecretName == "" {
+		cred, credErr := staticSCMCredentials(githubToken, githubAppID, githubAppInstallationID, githubAppPrivateKeyFile)
+		if credErr != nil {
+			logger.Fatal().Err(credErr).Msg("invalid GitHub App flags")
+		}
+		githubApp = cred.GitHubApp
+	}
 	scmProvider, dynProvider, canonicalRepos, err := buildControllerSCM(controllerSCMConfig{
 		providerType: scmProviderType, token: githubToken, apiURL: scmAPIURL, webhookSecret: webhookSecret,
-		dynamic: scmTokenSecretName != "", allowed: allowedRepos,
+		dynamic: scmTokenSecretName != "", allowed: allowedRepos, githubApp: githubApp,
+		onGitHubApp: func(p scm.SCMProvider) { go checkGitHubAppAtStartup(context.Background(), logger, p) },
 	})
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up the SCM provider")
@@ -727,7 +751,10 @@ func main() {
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		RemoteClusters:      &healthpkg.RemoteClusters{},
 		Recorder:            eventRecorder,
-		SCMWaitTimeout:      scmWaitTimeout,
+		// A git Secret with GitHub App credentials gets its installation
+		// tokens from the controller's GitHub API.
+		GitHubAppTokens: &scm.AppTokenCache{APIURL: githubAPIURL(scmProviderType, scmAPIURL)},
+		SCMWaitTimeout:  scmWaitTimeout,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}

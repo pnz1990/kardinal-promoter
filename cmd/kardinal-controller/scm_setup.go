@@ -12,6 +12,13 @@ import (
 // controllerSCMConfig is the controller's own SCM provider, from its flags.
 type controllerSCMConfig struct {
 	providerType, token, apiURL, webhookSecret string
+	// githubApp, when set, authenticates the static provider as a GitHub
+	// App installation (--github-app-*); token is then ignored. The dynamic
+	// provider reads a token from its Secret.
+	githubApp *scm.GitHubAppCredentials
+	// onGitHubApp, when set, is called with the unguarded provider built
+	// from githubApp (the controller checks the App at startup).
+	onGitHubApp func(scm.SCMProvider)
 	// dynamic builds a DynamicProvider, which a SecretWatcher reloads
 	// (--scm-token-secret-name).
 	dynamic bool
@@ -34,8 +41,14 @@ func buildControllerSCM(cfg controllerSCMConfig) (provider scm.SCMProvider, dyn 
 			return nil, nil, nil, fmt.Errorf("unable to create dynamic SCM provider: %w", err)
 		}
 		provider = dyn
-	} else if provider, err = scm.NewProvider(cfg.providerType, cfg.token, cfg.apiURL, cfg.webhookSecret); err != nil {
-		return nil, nil, nil, fmt.Errorf("unable to create SCM provider: %w", err)
+	} else {
+		cred := scm.Credentials{Token: cfg.token, GitHubApp: cfg.githubApp}
+		if provider, err = scm.NewProviderWithCredentials(cfg.providerType, cred, cfg.apiURL, cfg.webhookSecret); err != nil {
+			return nil, nil, nil, fmt.Errorf("unable to create SCM provider: %w", err)
+		}
+		if cfg.githubApp != nil && cfg.onGitHubApp != nil {
+			cfg.onGitHubApp(provider)
+		}
 	}
 	allowed = cfg.allowed.WithCanonicalRepo(provider)
 	if allowed != nil {
