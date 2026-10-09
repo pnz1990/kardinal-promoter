@@ -10,6 +10,7 @@
 
 | Command | Description |
 |---|---|
+| [`kardinal approve`](reference/cli/kardinal-approve.md) | Approve (or reject) a Bundle for an environment's approval gates |
 | [`kardinal audit`](reference/cli/kardinal-audit.md) | Audit log commands — view and summarize promotion events |
 | [`kardinal audit summary`](reference/cli/kardinal-audit-summary.md) | Aggregate promotion metrics from AuditEvent records |
 | [`kardinal completion`](reference/cli/kardinal-completion.md) | Generate shell completion scripts |

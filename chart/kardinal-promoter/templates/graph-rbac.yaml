@@ -21,9 +21,9 @@ rules:
   - apiGroups: ["kardinal.io"]
     resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Graph refs.
+  # Graph refs: the Bundle, and its Approvals (approval gates).
   - apiGroups: ["kardinal.io"]
-    resources: ["bundles"]
+    resources: ["bundles", "approvals"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -61,7 +61,7 @@ metadata:
     rbac.kro.run/aggregate-to-controller: "true"
 rules:
   - apiGroups: ["kardinal.io"]
-    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "bundles"]
+    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "bundles", "approvals"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]

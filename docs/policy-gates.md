@@ -601,6 +601,59 @@ shown as **Superseded**: they are not evaluated again.
 (holding the Bundle), **Superseded**, **Pending** (not evaluated yet) or **Waiting** (evaluated not
 ready, not holding the Bundle).
 
+## Approval gates
+
+An approval gate waits for people. Put `spec.approval` on a gate template; the gate is ready only when its expression is true and enough allowed people have approved the Bundle for the environment, and none of them rejected it. It works for `approval: auto` environments as for `pr-review` ones: the environment's PromotionStep is not created until the gate is ready.
+
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: two-approvers
+  namespace: platform-policies
+  labels:
+    kardinal.io/scope: org
+    kardinal.io/applies-to: prod
+spec:
+  expression: "true"            # or any expression: both must pass
+  message: "prod needs two release managers"
+  approval:
+    required: 2                 # distinct people (default 1)
+    allowedGroups: [release-managers]
+    allowedUsers: [oidc:carol@example.com]
+    excludeAuthor: true         # the Bundle's provenance.author does not count
+```
+
+Approve with the CLI:
+
+```bash
+kardinal approve my-app-v1-29-0 --env prod --comment "checked the migration"
+kardinal approve my-app-v1-29-0 --env prod --decision reject --comment "wait for INC-42"
+kardinal approve my-app-v1-29-0 --env prod --revoke
+```
+
+```
+Recorded: oidc:alice@example.com approves my-app-v1-29-0 for prod (Approval my-app-v1-29-0-prod-3f2a9c1b0d)
+```
+
+How it works:
+
+- `kardinal approve` creates an `Approval` object in the Pipeline namespace, labelled with the Bundle and environment and owned by the Bundle (deleted with it). It records your Kubernetes username and groups, read from the API server with a SelfSubjectReview. The chart's `<release>-approvals` ValidatingAdmissionPolicy refuses an Approval whose `spec.user` is not the requester, whose `spec.groups` are not the requester's, or whose labels do not match its spec ([Verified identity](guides/security.md#verified-identity)). An Approval cannot be changed: approving again with another decision replaces yours, and `--revoke` deletes it.
+- The promotion Graph reads the Bundle's Approvals with a selector `ref` node and copies those for the environment into each approval gate instance (`spec.approvals`). A new or deleted Approval re-renders the gate at once. Approving before the Bundle reaches the gate is fine.
+- The gate counts a decision when its user is in `allowedUsers` or one of its groups is in `allowedGroups` (every decision counts when both are empty: then RBAC on `approvals` decides who can approve), and, with `excludeAuthor`, the user is not the Bundle's `spec.provenance.author`. Each user counts once. A counted `reject` blocks the gate whatever the approvals.
+- While it waits, the gate reason is `waiting for approvals: 1 of 2 (alice@example.com)` or `rejected by bob@example.com (wait for INC-42)`; once met, the expression's reason ends with `approved by alice@example.com, bob@example.com (2 of 2)`, which `kardinal explain`, the UI and the PR evidence show. `status.approvals` lists every decision, whether it counts, why not, and when the gate first saw it.
+- The expression can read the count: `approvals.count`, `approvals.required`, `approvals.users` and `approvals.rejected` ([CEL context](reference/cel-context.md#approvals)).
+- `kardinal override` still force-passes an approval gate, with its own audit record.
+
+Who may approve: bind the chart's `<release>-approver` ClusterRole (create, delete and read `approvals`, read Bundles, Pipelines and PolicyGates) with a RoleBinding in the Pipeline namespace. The Graph ServiceAccount needs `list` and `watch` on `approvals`, which the chart's `graph-applier` role has.
+
+Limits:
+
+- `excludeAuthor` compares the approver's Kubernetes username with `spec.provenance.author`, which CI writes. It only prevents self-approval when CI records the same name.
+- An Approval is for one Bundle: the next Bundle needs new approvals.
+- Approving from the UI is not available yet: the UI writes as the controller's ServiceAccount, and the identity policy would refuse an Approval in another name. It comes with per-caller identity in the UI (#1466).
+- Upgrading: `helm upgrade` does not update CRDs. Apply `chart/kardinal-promoter/crds/kardinal.io_approvals.yaml` and the updated `kardinal.io_policygates.yaml` before you add `spec.approval` to a gate; a Graph with an approval gate cannot be built without the Approval CRD.
+
 ## Emergency Overrides (K-09)
 
 Use `kardinal override` to force-pass a PolicyGate with a mandatory audit record.

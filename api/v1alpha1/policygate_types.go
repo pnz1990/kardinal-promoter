@@ -67,6 +67,20 @@ type PolicyGateSpec struct {
 	// +optional
 	Overrides []PolicyGateOverride `json:"overrides,omitempty"`
 
+	// Approval makes the gate wait for people: it is ready only when its
+	// expression is true and at least approval.required allowed people have
+	// approved the Bundle for the environment (kardinal approve), and none of
+	// them rejected it. Copied from the template to every gate instance. For
+	// a gate that only waits for approvals, use the expression "true".
+	// +optional
+	Approval *GateApprovalPolicy `json:"approval,omitempty"`
+
+	// Approvals is written by the promotion Graph on gate instances: the
+	// Approvals of the instance's Bundle and environment, copied from the
+	// Approval objects. Do not set it; on a template it is ignored.
+	// +optional
+	Approvals []GateApproval `json:"approvals,omitempty"`
+
 	// Generated is set by kardinal on the PolicyGates it creates: the gate
 	// instances a promotion Graph makes from a template, and the freeze gate
 	// of a paused Pipeline. Kardinal never uses a generated PolicyGate as a
@@ -75,6 +89,71 @@ type PolicyGateSpec struct {
 	// applies to an environment.
 	// +optional
 	Generated bool `json:"generated,omitempty"`
+}
+
+// GateApprovalPolicy says whose approvals a gate counts and how many it needs.
+type GateApprovalPolicy struct {
+	// Required is how many distinct allowed people must approve.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:default=1
+	// +optional
+	Required int `json:"required,omitempty"`
+
+	// AllowedUsers are Kubernetes usernames whose approvals count.
+	// +optional
+	AllowedUsers []string `json:"allowedUsers,omitempty"`
+
+	// AllowedGroups are Kubernetes groups: an approval counts when one of the
+	// approval's groups is listed. With neither allowedUsers nor
+	// allowedGroups, every approval counts; who may approve is then decided
+	// by RBAC on approvals.
+	// +optional
+	AllowedGroups []string `json:"allowedGroups,omitempty"`
+
+	// ExcludeAuthor does not count an approval whose user is the Bundle's
+	// spec.provenance.author (no self-approval). The author is what CI
+	// recorded, so this works when CI records the Kubernetes username.
+	// +optional
+	ExcludeAuthor bool `json:"excludeAuthor,omitempty"`
+}
+
+// GateApproval is an Approval's spec as the Graph copies it into a gate
+// instance (the fields of ApprovalSpec).
+type GateApproval struct {
+	// Bundle is the Bundle the decision is about.
+	Bundle string `json:"bundle"`
+	// Environment is the environment the decision is for.
+	Environment string `json:"environment"`
+	// User is the approver's Kubernetes username.
+	User string `json:"user"`
+	// Groups are the approver's groups that count for allowedGroups.
+	// +optional
+	Groups []string `json:"groups"`
+	// Decision is approve or reject.
+	Decision string `json:"decision"`
+	// Comment is the approver's note.
+	// +optional
+	Comment string `json:"comment"`
+}
+
+// GateApprovalStatus records how the gate counted one approval.
+type GateApprovalStatus struct {
+	// User is the approver.
+	User string `json:"user"`
+	// Decision is approve or reject.
+	Decision string `json:"decision"`
+	// Counted reports whether the decision counts for the gate.
+	Counted bool `json:"counted"`
+	// Reason says why a decision does not count.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// Comment is the approver's comment.
+	// +optional
+	Comment string `json:"comment,omitempty"`
+	// FirstSeenAt is when the gate first saw the decision.
+	// +optional
+	FirstSeenAt *metav1.Time `json:"firstSeenAt,omitempty"`
 }
 
 // PolicyGateOverride is a time-limited emergency override record (K-09).
@@ -132,6 +211,12 @@ type PolicyGateStatus struct {
 	// Conditions holds status conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Approvals records each decision in spec.approvals and whether the gate
+	// counted it (spec.approval), for kardinal explain, the PR evidence and
+	// the UI.
+	// +optional
+	Approvals []GateApprovalStatus `json:"approvals,omitempty"`
 
 	// Overrides records each spec.overrides entry the controller has seen:
 	// when it first saw it, whether its createdBy was checked by the chart's

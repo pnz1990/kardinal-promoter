@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/ext"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -22,7 +23,7 @@ import (
 // release (identity-admission.yaml).
 func identityAdmissionObjects(release string) []string {
 	var out []string
-	for _, p := range []string{"bundle-rejection", "gate-overrides"} {
+	for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals"} {
 		out = append(out, "ValidatingAdmissionPolicy/"+release+"-"+p, "ValidatingAdmissionPolicyBinding/"+release+"-"+p)
 	}
 	return out
@@ -313,6 +314,77 @@ func TestIdentityAdmission_GateInstanceFieldsComplete(t *testing.T) {
 			continue
 		}
 		assert.Contains(t, only, "object.spec."+name+" == oldObject.spec."+name, "spec.%s must not change on a gate instance", name)
+}
+}
+
+// TestIdentityAdmission_Approvals: an Approval is admitted only in the
+// requester's own name, with groups the requester has, and with the
+// kardinal.io/bundle and kardinal.io/environment labels equal to the spec;
+// the labels cannot change later.
+func TestIdentityAdmission_Approvals(t *testing.T) {
+	vap := identityPolicy(t, "approvals")
+	approval := func(user string, groups []interface{}, bundleLabel, envLabel string) map[string]interface{} {
+		labels := map[string]interface{}{}
+		if bundleLabel != "" {
+			labels["kardinal.io/bundle"] = bundleLabel
+		}
+		if envLabel != "" {
+			labels["kardinal.io/environment"] = envLabel
+		}
+		return map[string]interface{}{
+			"metadata": map[string]interface{}{"labels": labels},
+			"spec": map[string]interface{}{"bundle": "app-v1", "environment": "prod", "user": user,
+				"groups": groups, "decision": "approve"},
+		}
+	}
+	admitsAs := func(obj, old map[string]interface{}, user string, groups []interface{}) bool {
+		t.Helper()
+		env, err := cel.NewEnv(cel.Variable("object", cel.DynType), cel.Variable("oldObject", cel.DynType),
+			cel.Variable("request", cel.DynType), cel.Variable("variables", cel.DynType), ext.Strings())
+		require.NoError(t, err)
+		vars := map[string]interface{}{"object": obj, "oldObject": nil, "variables": map[string]interface{}{},
+			"request": map[string]interface{}{"userInfo": map[string]interface{}{"username": user, "groups": groups}}}
+		if old != nil {
+			vars["oldObject"] = old
+		}
+		for _, v := range vap.Spec.Validations {
+			ast, iss := env.Compile(v.Expression)
+			require.NoError(t, iss.Err(), v.Expression)
+			prg, err := env.Program(ast)
+			require.NoError(t, err)
+			out, _, err := prg.Eval(vars)
+			require.NoError(t, err, v.Expression)
+			if out.Value() != true {
+				return false
+			}
+			if v.MessageExpression != "" {
+				_, iss := env.Compile(v.MessageExpression)
+				require.NoError(t, iss.Err(), v.MessageExpression)
+			}
+		}
+		return true
+	}
+	mine := []interface{}{"release-managers", "system:authenticated"}
+	tests := []struct {
+		name     string
+		obj, old map[string]interface{}
+		user     string
+		want     bool
+	}{
+		{name: "own approval", obj: approval("alice", []interface{}{"release-managers"}, "app-v1", "prod"), user: "alice", want: true},
+		{name: "someone else's name", obj: approval("bob", []interface{}{}, "app-v1", "prod"), user: "alice", want: false},
+		{name: "a group the requester does not have", obj: approval("alice", []interface{}{"admins"}, "app-v1", "prod"), user: "alice", want: false},
+		{name: "bundle label differs from spec", obj: approval("alice", []interface{}{}, "app-v2", "prod"), user: "alice", want: false},
+		{name: "environment label missing", obj: approval("alice", []interface{}{}, "app-v1", ""), user: "alice", want: false},
+		{name: "relabel later", old: approval("alice", []interface{}{}, "app-v1", "prod"),
+			obj: approval("alice", []interface{}{}, "app-v2", "prod"), user: "alice", want: false},
+		{name: "update keeping the labels", old: approval("alice", []interface{}{}, "app-v1", "prod"),
+			obj: approval("alice", []interface{}{}, "app-v1", "prod"), user: "system:serviceaccount:kube-system:generic-garbage-collector", want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, admitsAs(tc.obj, tc.old, tc.user, mine))
+		})
 	}
 	// Every metadata field a client can set is compared, but for what the
 	// API server writes or never lets change.

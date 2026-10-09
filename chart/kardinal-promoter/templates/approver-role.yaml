@@ -1,0 +1,23 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+kardinal approve: bind this ClusterRole with a RoleBinding in a Pipeline
+namespace to let people approve its Bundles (docs/policy-gates.md, Approval
+gates). Who counts for a gate is the gate's approval.allowedUsers and
+allowedGroups; this role only lets them record a decision, in their own name
+(identity-admission.yaml).
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-approver
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["kardinal.io"]
+    resources: ["approvals"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["kardinal.io"]
+    resources: ["bundles", "pipelines", "policygates"]
+    verbs: ["get", "list", "watch"]

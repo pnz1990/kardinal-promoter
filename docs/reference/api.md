@@ -12,6 +12,7 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 
 | Kind | Resource | Scope | Short names |
 |---|---|---|---|
+| [Approval](#approval) | `approvals.kardinal.io` | Namespaced | `appr` |
 | [AuditEvent](#auditevent) | `auditevents.kardinal.io` | Namespaced | `ae`, `audit` |
 | [Bundle](#bundle) | `bundles.kardinal.io` | Namespaced | `bnd` |
 | [ChangeWindow](#changewindow) | `changewindows.kardinal.io` | Cluster | `cw` |
@@ -24,6 +25,22 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [RollbackPolicy](#rollbackpolicy) | `rollbackpolicies.kardinal.io` | Namespaced | `rbp` |
 | [ScheduleClock](#scheduleclock) | `scheduleclocks.kardinal.io` | Namespaced | `sclock` |
 | [Subscription](#subscription) | `subscriptions.kardinal.io` | Namespaced | `sub` |
+
+## Approval
+
+`kardinal.io/v1alpha1`
+
+Approval records that a person approved, or rejected, a Bundle for an environment. The promotion Graph copies the Approvals of its Bundle into the approval gates of that environment (PolicyGate spec.approvals), and the PolicyGate reconciler counts them against spec.approval.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object | yes | ApprovalSpec is one person's decision on one Bundle in one environment. An Approval is created by kardinal approve and never changed: delete it to revoke the decision. The chart's ValidatingAdmissionPolicy admits it only when spec.user is the requesting user, spec.groups are among the requester's groups, and the kardinal.io/bundle and kardinal.io/environment labels match spec.bundle and spec.environment. |
+| `spec.bundle` | string | yes | Bundle is the name of the Bundle the decision is about, in the Approval's namespace. |
+| `spec.comment` | string |  | Comment is a free-form note shown with the decision. Default: ``. |
+| `spec.decision` | string | yes | Decision is approve, or reject: a reject from an allowed approver blocks the gate whatever the other approvals. One of: `approve`, `reject`. Default: `approve`. |
+| `spec.environment` | string | yes | Environment is the Pipeline environment the decision is for. |
+| `spec.groups` | []string |  | Groups are the approver's Kubernetes groups that count for the gate's approval.allowedGroups. Each must be one of the requester's groups. Default: `[]`. |
+| `spec.user` | string | yes | User is the Kubernetes username of the approver, as the API server authenticates them (kubectl auth whoami). |
 
 ## AuditEvent
 
@@ -417,6 +434,18 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | PolicyGateSpec defines the desired state of a PolicyGate. |
+| `spec.approval` | object |  | Approval makes the gate wait for people: it is ready only when its expression is true and at least approval.required allowed people have approved the Bundle for the environment (kardinal approve), and none of them rejected it. Copied from the template to every gate instance. For a gate that only waits for approvals, use the expression "true". |
+| `spec.approval.allowedGroups` | []string |  | AllowedGroups are Kubernetes groups: an approval counts when one of the approval's groups is listed. With neither allowedUsers nor allowedGroups, every approval counts; who may approve is then decided by RBAC on approvals. |
+| `spec.approval.allowedUsers` | []string |  | AllowedUsers are Kubernetes usernames whose approvals count. |
+| `spec.approval.excludeAuthor` | boolean |  | ExcludeAuthor does not count an approval whose user is the Bundle's spec.provenance.author (no self-approval). The author is what CI recorded, so this works when CI records the Kubernetes username. |
+| `spec.approval.required` | integer |  | Required is how many distinct allowed people must approve. Default: `1`. |
+| `spec.approvals` | []object |  | Approvals is written by the promotion Graph on gate instances: the Approvals of the instance's Bundle and environment, copied from the Approval objects. Do not set it; on a template it is ignored. |
+| `spec.approvals[].bundle` | string | yes | Bundle is the Bundle the decision is about. |
+| `spec.approvals[].comment` | string |  | Comment is the approver's note. |
+| `spec.approvals[].decision` | string | yes | Decision is approve or reject. |
+| `spec.approvals[].environment` | string | yes | Environment is the environment the decision is for. |
+| `spec.approvals[].groups` | []string |  | Groups are the approver's groups that count for allowedGroups. |
+| `spec.approvals[].user` | string | yes | User is the approver's Kubernetes username. |
 | `spec.expression` | string | yes | Expression is the CEL expression evaluated to determine if promotion is allowed. Must evaluate to a boolean. |
 | `spec.generated` | boolean |  | Generated is set by kardinal on the PolicyGates it creates: the gate instances a promotion Graph makes from a template, and the freeze gate of a paused Pipeline. Kardinal never uses a generated PolicyGate as a template, so only a generated PolicyGate may have a name longer than 63 characters. Do not set it on a gate you write: a generated gate never applies to an environment. |
 | `spec.message` | string |  | Message is a human-readable explanation shown when the gate blocks. |
@@ -436,6 +465,13 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.skipPermission` | boolean |  | SkipPermission marks a skip-permission gate as granting skips. A Bundle may skip (intent.skipEnvironments) an environment an org gate applies to only when a gate labelled kardinal.io/type=skip-permission, with skipPermission true, in an org policy namespace, applies to that environment. Gates in other namespaces never grant a skip. The permission gate's expression is evaluated like any gate, in front of the next environment the Bundle promotes, so that environment waits until it is true. On any other gate this field has no effect. Default: `false`. |
 | `spec.when` | string |  | When has no effect. Every gate on an environment is re-checked right before that environment's PromotionStep starts: the step stays in Pending, with no git operation, until each gate it requires exists, is ready, and was evaluated at or after the step was created. A step that has started is not stopped by a gate that turns false later. Deprecated: remove this field. Every gate is re-checked before its PromotionStep starts, whatever the value; pre-deploy and post-deploy behave the same. One of: `pre-deploy`, `post-deploy`. Default: `post-deploy`. |
 | `status` | object |  | PolicyGateStatus defines the observed state of a PolicyGate. |
+| `status.approvals` | []object |  | Approvals records each decision in spec.approvals and whether the gate counted it (spec.approval), for kardinal explain, the PR evidence and the UI. |
+| `status.approvals[].comment` | string |  | Comment is the approver's comment. |
+| `status.approvals[].counted` | boolean | yes | Counted reports whether the decision counts for the gate. |
+| `status.approvals[].decision` | string | yes | Decision is approve or reject. |
+| `status.approvals[].firstSeenAt` | string (date-time) |  | FirstSeenAt is when the gate first saw the decision. |
+| `status.approvals[].reason` | string |  | Reason says why a decision does not count. |
+| `status.approvals[].user` | string | yes | User is the approver. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |

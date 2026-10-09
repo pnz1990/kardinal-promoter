@@ -24,6 +24,9 @@ const (
 	// NodeSkipPermissionGates creates one PolicyGate per skipGates item: the
 	// skip-permission instances, which carry a type label and an annotation.
 	NodeSkipPermissionGates = "SkipPermissionGates"
+	// NodeApprovalGates creates one PolicyGate per approvalGates item: the
+	// instances of gates that read the Bundle's Approvals (approvals.go).
+	NodeApprovalGates = "ApprovalGates"
 	// NodePRStatusData holds one entry per environment's PRStatus.
 	NodePRStatusData = "PRStatusData"
 	// NodePRStatuses creates one PRStatus per NodePRStatusData item.
@@ -45,9 +48,10 @@ type gateCollections struct {
 	pipeline, bundle string
 	templates        []interface{}
 	index            map[string]int
-	// gates and skipGates hold the items of each collection node, in chunks
-	// of at most MaxCollectionItems (kro's default forEach limit).
-	gates, skipGates [][]interface{}
+	// gates, skipGates and approvalGates hold the items of each collection
+	// node, in chunks of at most MaxCollectionItems (kro's default forEach
+	// limit).
+	gates, skipGates, approvalGates [][]interface{}
 	instances        []kardinalv1alpha1.PolicyGate
 	// collection is the collection node of each instance name.
 	collection map[string]string
@@ -79,10 +83,13 @@ func (c *gateCollections) add(gate kardinalv1alpha1.PolicyGate, envName, k8sName
 	}
 	item := map[string]interface{}{"name": k8sName, "environment": envName, "t": t}
 	var collection string
-	if len(skipped) > 0 {
+	switch {
+	case len(skipped) > 0:
 		item["skipped"] = strings.Join(skipped, ",")
 		collection = appendChunked(&c.skipGates, item, NodeSkipPermissionGates)
-	} else {
+	case needsApprovals(gate):
+		collection = appendChunked(&c.approvalGates, item, NodeApprovalGates)
+	default:
 		collection = appendChunked(&c.gates, item, NodePolicyGates)
 	}
 	c.collection[k8sName] = collection
@@ -127,6 +134,9 @@ func gateTemplateData(gate kardinalv1alpha1.PolicyGate) map[string]interface{} {
 	// (#1323); the copy keeps the instance a faithful copy of the template.
 	if gate.Spec.When != "" { //nolint:staticcheck // SA1019: copied unchanged, no behaviour depends on it
 		spec["when"] = gate.Spec.When //nolint:staticcheck // SA1019: as above
+	}
+	if p := approvalPolicyData(gate); p != nil {
+		spec["approval"] = p
 	}
 	return map[string]interface{}{
 		"spec":              spec,
@@ -182,6 +192,9 @@ func (c *gateCollections) instance(tmpl, item map[string]interface{}, skip bool)
 	if w, ok := spec["when"].(string); ok {
 		g.Spec.When = w //nolint:staticcheck // SA1019: copied unchanged
 	}
+	if p, ok := spec["approval"].(map[string]interface{}); ok {
+		g.Spec.Approval = approvalPolicyFromData(p)
+	}
 	if skip {
 		g.Annotations = map[string]string{AnnotationSkippedEnvironments: item["skipped"].(string)}
 	}
@@ -230,6 +243,9 @@ func (c *gateCollections) collectionIDs() []string {
 	for i := range c.skipGates {
 		ids = append(ids, chunkID(NodeSkipPermissionGates, i))
 	}
+	for i := range c.approvalGates {
+		ids = append(ids, chunkID(NodeApprovalGates, i))
+	}
 	return ids
 }
 
@@ -250,6 +266,11 @@ func (c *gateCollections) nodes() []GraphNode {
 		field := chunkID("skipGates", i)
 		data[field] = items
 		out = append(out, c.collectionNode(chunkID(NodeSkipPermissionGates, i), field, true))
+	}
+	for i, items := range c.approvalGates {
+		field := chunkID("approvalGates", i)
+		data[field] = items
+		out = append(out, c.approvalCollectionNode(chunkID(NodeApprovalGates, i), field))
 	}
 	return append([]GraphNode{{ID: NodePolicyGateData, Def: data}}, out...)
 }
@@ -294,4 +315,59 @@ func (c *gateCollections) collectionNode(id, field string, skip bool) GraphNode 
 		// by the dependent PromotionStep's spec.requiredGates expression.
 		ReadyWhen: []string{"${each.?status.?ready.orValue(false) == true}"},
 	}
+}
+
+// approvalPolicyData is gate's spec.approval as Graph data, or nil.
+func approvalPolicyData(gate kardinalv1alpha1.PolicyGate) map[string]interface{} {
+	p := gate.Spec.Approval
+	if p == nil {
+		return nil
+	}
+	policy := map[string]interface{}{"excludeAuthor": p.ExcludeAuthor, "required": int64(max(p.Required, 1)),
+		"allowedUsers": toInterfaces(p.AllowedUsers), "allowedGroups": toInterfaces(p.AllowedGroups)}
+	return policy
+}
+
+// approvalPolicyFromData is the inverse of approvalPolicyData.
+func approvalPolicyFromData(p map[string]interface{}) *kardinalv1alpha1.GateApprovalPolicy {
+	out := &kardinalv1alpha1.GateApprovalPolicy{}
+	if n, ok := p["required"].(int64); ok {
+		out.Required = int(n)
+	}
+	out.ExcludeAuthor, _ = p["excludeAuthor"].(bool)
+	for _, u := range p["allowedUsers"].([]interface{}) {
+		out.AllowedUsers = append(out.AllowedUsers, u.(string))
+	}
+	for _, g := range p["allowedGroups"].([]interface{}) {
+		out.AllowedGroups = append(out.AllowedGroups, g.(string))
+	}
+	return out
+}
+
+// approvalCollectionNode is the collection of approval gate instances. It
+// renders the spec field by field, unlike collectionNode, because spec.approvals
+// is not template data: it is the live list of the Bundle's Approvals for the
+// item's environment, read from the ApprovalsNodeID selector ref. Every field
+// read is present in every template entry (approvalPolicyData always sets the
+// four policy fields; when is read optionally), so the collection never goes
+// data-pending (K3, G11).
+func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
+	n := c.collectionNode(id, field, false)
+	tmpl := func(f string) string {
+		return fmt.Sprintf("${%s.templates[%s.t].spec.%s}", NodePolicyGateData, iterGate, f)
+	}
+	spec := map[string]interface{}{
+		"expression":      tmpl("expression"),
+		"message":         tmpl("message"),
+		"recheckInterval": tmpl("recheckInterval"),
+		"generated":       true,
+		"when":            fmt.Sprintf(`${%s.templates[%s.t].spec.?when.orValue("post-deploy")}`, NodePolicyGateData, iterGate),
+		"approvals": fmt.Sprintf("${%s.filter(a, a.spec.environment == %s.environment).sortBy(a, a.metadata.name).map(a, a.spec)}",
+			ApprovalsNodeID, iterGate),
+	}
+	// A gate that only reads approvals.* in its expression has no policy: a
+	// missing optional renders as null, which leaves the field unset.
+	spec["approval"] = fmt.Sprintf("${%s.templates[%s.t].spec.?approval}", NodePolicyGateData, iterGate)
+	n.Template["spec"] = spec
+	return n
 }

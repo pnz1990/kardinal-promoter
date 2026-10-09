@@ -13,6 +13,7 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
+	"github.com/google/cel-go/ext"
 	"github.com/stretchr/testify/require"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -37,10 +38,26 @@ var reWholeExpr = regexp.MustCompile(`^\$\{(.*)\}$`)
 // scalar template are returned as they are, with any ${...} left in place.
 func renderObjects(t *testing.T, g *graph.Graph) []renderedObject {
 	t.Helper()
+	return renderObjectsWith(t, g, nil)
+}
+
+// renderObjectsWith is renderObjects with the values of ref nodes (by node
+// ID) in scope, as kro reads them from the cluster.
+func renderObjectsWith(t *testing.T, g *graph.Graph, refs map[string]interface{}) []renderedObject {
+	t.Helper()
 	defs := map[string]interface{}{}
+	for k, v := range refs {
+		defs[k] = v
+	}
 	for _, n := range g.Spec.Nodes {
 		if n.Def != nil {
 			defs[n.ID] = n.Def
+		}
+		// A selector ref not given is an empty collection.
+		if md, _ := n.Ref["metadata"].(map[string]interface{}); md["selector"] != nil {
+			if _, given := defs[n.ID]; !given {
+				defs[n.ID] = []interface{}{}
+			}
 		}
 	}
 	var out []renderedObject
@@ -110,7 +127,7 @@ func evalCEL(t *testing.T, expr string, vars map[string]interface{}) interface{}
 	t.Helper()
 	m := reWholeExpr.FindStringSubmatch(expr)
 	require.NotNil(t, m, "expression %q", expr)
-	opts := []cel.EnvOption{cel.OptionalTypes()}
+	opts := []cel.EnvOption{cel.OptionalTypes(), ext.Lists()}
 	for k := range vars {
 		opts = append(opts, cel.Variable(k, cel.DynType))
 	}
@@ -127,6 +144,12 @@ func evalCEL(t *testing.T, expr string, vars map[string]interface{}) interface{}
 
 func toGo(t *testing.T, v ref.Val) interface{} {
 	switch x := v.(type) {
+	case *types.Optional:
+		// A whole-field optional renders as null when it has no value.
+		if !x.HasValue() {
+			return nil
+		}
+		return toGo(t, x.GetValue())
 	case traits.Mapper:
 		out := map[string]interface{}{}
 		it := x.Iterator()

@@ -157,3 +157,56 @@ spec:
       matchLabels:
         kubernetes.io/metadata.name: {{ . | quote }}
   {{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-approvals
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["approvals"]
+  validations:
+    # kardinal approve records the approver. The spec is immutable (CRD
+    # rule), so only the create is checked.
+    - expression: oldObject != null || object.spec.user == request.userInfo.username
+      messageExpression: >-
+        'spec.user must be your own username "' + request.userInfo.username +
+        '"; kardinal approve sets it for you'
+      reason: Forbidden
+    - expression: >-
+        oldObject != null || !has(object.spec.groups) ||
+        object.spec.groups.all(g, g in request.userInfo.groups)
+      messageExpression: >-
+        'spec.groups may only list your own groups (' +
+        request.userInfo.groups.join(', ') + ')'
+      reason: Forbidden
+    # The promotion Graph selects Approvals by the kardinal.io/bundle label
+    # and filters on spec.environment: the labels must say the same as the
+    # spec, so an Approval cannot be counted for another Bundle.
+    - expression: >-
+        has(object.metadata.labels) &&
+        'kardinal.io/bundle' in object.metadata.labels &&
+        object.metadata.labels['kardinal.io/bundle'] == object.spec.bundle &&
+        'kardinal.io/environment' in object.metadata.labels &&
+        object.metadata.labels['kardinal.io/environment'] == object.spec.environment
+      message: >-
+        the kardinal.io/bundle and kardinal.io/environment labels must equal spec.bundle
+        and spec.environment
+      reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-approvals
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kardinal-promoter.fullname" . }}-approvals
+  validationActions: ["Deny"]

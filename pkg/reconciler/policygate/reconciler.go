@@ -241,8 +241,24 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
 	}
 
+	// Approvals (#1449): count spec.approvals, which the Graph copies from
+	// the Bundle's Approval objects, against spec.approval (buildContext
+	// exposes the same count to the expression as approvals.*).
+	tally := tallyApprovals(&gate, bundleAuthor(celCtx))
+	if err := r.recordApprovals(ctx, &gate, tally); err != nil {
+		log.Warn().Err(err).Msg("failed to record approvals in status (non-fatal)")
+	}
+
 	// Evaluate CEL expression
 	pass, reason, evalErr := r.eval.evaluate(ctx, gate.Spec.Expression, celCtx)
+	// The approval policy holds a gate whose expression passes.
+	if pass && evalErr == nil {
+		if held := tally.blocked(); held != "" {
+			pass, reason = false, held
+		} else if met := tally.met(); met != "" {
+			reason = reason + "; " + met
+		}
+	}
 	// Name the stale metrics the expression uses when it blocks: a stale
 	// value is empty, so a double(...) comparison fails with an evaluation
 	// error rather than false.
@@ -526,7 +542,17 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"metrics":      metricsCtx,
 		"upstream":     upstreamCtx,
 		"changewindow": cwCtx,
+		"approvals":    tallyApprovals(gate, bundleAuthor(map[string]interface{}{"bundle": bundleCtx})).context(),
 	}, version, nil
+}
+
+// bundleAuthor reads bundle.provenance.author from a CEL context built by
+// buildContext.
+func bundleAuthor(celCtx map[string]interface{}) string {
+	b, _ := celCtx["bundle"].(map[string]interface{})
+	p, _ := b["provenance"].(map[string]interface{})
+	author, _ := p["author"].(string)
+	return author
 }
 
 // directUpstreamSoakMinutes returns the soak minutes of the environments that
