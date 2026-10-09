@@ -95,6 +95,8 @@ func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string)
 	ctx, span := tracing.Start(ctx, "git clone", attribute.String("server.address", tracing.HostOf(url)),
 		attribute.String("kardinal.git.branch", branch))
 	defer func() { tracing.End(span, err) }()
+	start := time.Now()
+	defer func() { observeGit("clone", start, err) }()
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create clone dir for %s: %w", RedactURL(url), err)
 	}
@@ -121,6 +123,8 @@ func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir, token st
 	ctx, span := tracing.Start(ctx, "git clone", attribute.String("server.address", tracing.HostOf(url)),
 		attribute.String("kardinal.git.commit", commitSHA))
 	defer func() { tracing.End(span, err) }()
+	start := time.Now()
+	defer func() { observeGit("clone", start, err) }()
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create clone dir for %s: %w", RedactURL(url), err)
 	}
@@ -199,6 +203,8 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 	ctx, span := tracing.Start(ctx, "git push", attribute.String("server.address", tracing.HostOf(remote)),
 		attribute.String("kardinal.git.branch", branch), attribute.Bool("kardinal.git.force", force))
 	defer func() { tracing.End(span, err) }()
+	start := time.Now()
+	defer func() { observeGit("push", start, err) }()
 	repo, err := gogit.PlainOpen(dir)
 	if err != nil {
 		return fmt.Errorf("open repo at %s: %w", dir, err)
