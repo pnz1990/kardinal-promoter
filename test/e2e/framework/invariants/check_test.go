@@ -251,6 +251,15 @@ func TestCheckOutcome(t *testing.T) {
 	olderFailed := testState([]v1alpha1.Bundle{at("a1", "a", "Failed", 1), at("a2", "a", "Verified", 2)}, nil)
 	assert.Len(t, checkOutcome(olderFailed, Options{}).Violations, 1, "an older Bundle may not fail either")
 
+	// Name order and created-at order disagree: z-old was created first, so
+	// a-new is the newest and must be the one Verified.
+	byCreation := testState([]v1alpha1.Bundle{at("z-old", "a", "Superseded", 1), at("a-new", "a", "Verified", 2)}, nil)
+	assert.Empty(t, checkOutcome(byCreation, Options{}).Violations, "newest is by created-at, not name")
+	byName := testState([]v1alpha1.Bundle{at("z-old", "a", "Verified", 1), at("a-new", "a", "Superseded", 2)}, nil)
+	v = checkOutcome(byName, Options{}).Violations
+	require.Len(t, v, 1)
+	assert.Contains(t, v[0], "newest Bundle a-new is \"Superseded\"")
+
 	assert.Len(t, checkOutcome(ok, Options{Outcome: OutcomeAllVerified}).Violations, 1, "a1 is Superseded")
 	assert.Len(t, checkOutcome(newestFailed, Options{Outcome: OutcomeAny}).Violations, 1, "any needs a reason")
 	assert.Empty(t, checkOutcome(newestFailed, Options{Outcome: OutcomeAny, OutcomeWhy: "the test fails a Bundle"}).Violations)
