@@ -362,10 +362,10 @@ Graph cannot grant itself RBAC while running as that identity. So `IdentityProvi
   on kro#1464 anyway ([Engagement](#engagement)).
 - **G5-c: cluster-scoped reads (2026-10-08).** A `ref` to a cluster-scoped object needs a
   ClusterRole and ClusterRoleBinding for the Graph ServiceAccount of every namespace that uses
-  it, and `IdentityProvisioner` creates only RoleBindings. Two v0.10.0 features avoid it, both
-  **planned (not on main)**: the translator inlines a `ClusterAnalysisTemplate` into the
-  AnalysisRun template (#1444, planned in #1502), and resolves a `ClusterScmProvider` into a
-  static spec field (#1459, planned in #1517), the same way it copies PolicyGate templates
+  it, and `IdentityProvisioner` creates only RoleBindings. Two v0.10.0 features avoid it: the
+  translator inlines a `ClusterAnalysisTemplate` into the AnalysisRun template (#1444,
+  `pkg/translator/analysis.go`), and resolves a `ClusterScmProvider` into a static spec field
+  (#1459, **planned in #1517 (not on main)**), the same way it copies PolicyGate templates
   into instances. No upstream ask: the grant is kardinal's to make, and
   a static copy also gives the Bundle a snapshot.
 
