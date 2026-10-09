@@ -496,15 +496,20 @@ spec:
                               items:
                                 description: |-
                                   YAMLUpdate sets one scalar in one YAML file to a value taken from a Bundle
-                                  image.
+                                  image. The file must be a regular file of at most 4 MiB holding one YAML
+                                  document; symbolic links and anchors or aliases on the path are refused.
                                 properties:
                                   file:
                                     description: |-
                                       File is the YAML file, relative to the environment path, for example
                                       "values.yaml" or "deploy/deployment.yaml". It must stay inside the
                                       repository. A file with several documents (---) is not supported.
-                                    minLength: 1
+                                    pattern: ^[A-Za-z0-9_][A-Za-z0-9_./-]*$
                                     type: string
+                                    x-kubernetes-validations:
+                                    - message: file must stay inside the environment
+                                        path
+                                      rule: '!self.contains(''..'')'
                                   image:
                                     description: |-
                                       Image is the repository of the Bundle image whose value is written,

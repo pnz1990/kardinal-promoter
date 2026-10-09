@@ -6,6 +6,7 @@ package steps
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -47,6 +48,13 @@ type pathSegment struct {
 var segmentRE = regexp.MustCompile(`^([A-Za-z0-9_-]+)((?:\[[0-9]+\])*)$`)
 var indexRE = regexp.MustCompile(`\[([0-9]+)\]`)
 
+// removeTemps removes the temporary files of a failed write.
+func removeTemps(root *os.Root, order []string) {
+	for _, rel := range order {
+		_ = root.Remove(rel + ".kardinal-tmp")
+	}
+}
+
 // parseYAMLPath parses "a.b[0].c" into segments.
 func parseYAMLPath(p string) ([]pathSegment, error) {
 	if p == "" {
@@ -82,11 +90,19 @@ func setYAMLPath(root *yaml.Node, path string, value string) error {
 	node := root
 	for i, seg := range segs {
 		last := i == len(segs)-1 && len(seg.indexes) == 0
+		if err := noAnchor(node, path); err != nil {
+			return err
+		}
 		if node.Kind != yaml.MappingNode {
 			return fmt.Errorf("%s: not a mapping at %q", path, seg.key)
 		}
 		if last {
 			v := mapValue(node, seg.key)
+			if v != nil {
+				if err := noAnchor(v, path); err != nil {
+					return err
+				}
+			}
 			if v != nil && v.Kind != yaml.ScalarNode {
 				return fmt.Errorf("%s is not a scalar", path)
 			}
@@ -108,6 +124,9 @@ func setYAMLPath(root *yaml.Node, path string, value string) error {
 			*next = yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 		}
 		for j, idx := range seg.indexes {
+			if err := noAnchor(next, path); err != nil {
+				return err
+			}
 			if next.Kind != yaml.SequenceNode {
 				return fmt.Errorf("%s: %q is not a list", path, seg.key)
 			}
@@ -116,6 +135,9 @@ func setYAMLPath(root *yaml.Node, path string, value string) error {
 			}
 			if i == len(segs)-1 && j == len(seg.indexes)-1 {
 				el := next.Content[idx]
+				if err := noAnchor(el, path); err != nil {
+					return err
+				}
 				if el.Kind != yaml.ScalarNode {
 					return fmt.Errorf("%s is not a scalar", path)
 				}
@@ -130,6 +152,45 @@ func setYAMLPath(root *yaml.Node, path string, value string) error {
 	}
 	return nil
 }
+
+// noAnchor refuses a node that is an alias or carries an anchor: editing it
+// would change every place that refers to it, or nothing at all.
+func noAnchor(n *yaml.Node, path string) error {
+	if n.Kind == yaml.AliasNode || n.Anchor != "" {
+		return fmt.Errorf("%s: anchors and aliases (& and *) on the path are not supported", path)
+	}
+	return nil
+}
+
+// getYAMLPath returns the scalar at path, for checking a written file.
+func getYAMLPath(root *yaml.Node, path string) (string, bool) {
+	segs, err := parseYAMLPath(path)
+	if err != nil {
+		return "", false
+	}
+	node := root
+	for _, seg := range segs {
+		if node.Kind != yaml.MappingNode {
+			return "", false
+		}
+		if node = mapValue(node, seg.key); node == nil {
+			return "", false
+		}
+		for _, idx := range seg.indexes {
+			if node.Kind != yaml.SequenceNode || idx >= len(node.Content) {
+				return "", false
+			}
+			node = node.Content[idx]
+		}
+	}
+	if node.Kind != yaml.ScalarNode {
+		return "", false
+	}
+	return node.Value, true
+}
+
+// maxYAMLUpdateFile bounds a file yaml-update reads.
+const maxYAMLUpdateFile = 4 << 20
 
 // yamlUpdateValue returns the value an update writes for the Bundle images.
 func yamlUpdateValue(images []v1alpha1.ImageRef, u v1alpha1.YAMLUpdate) (string, error) {
@@ -209,7 +270,10 @@ func (s *yamlUpdateStep) Execute(_ context.Context, state *parentsteps.StepState
 	}
 	defer func() { _ = root.Close() }()
 
+	type edit struct{ path, value string }
 	docs := map[string]*yamlDoc{}
+	originals := map[string][]byte{}
+	edits := map[string][]edit{}
 	var order []string
 	var applied []string
 	for i, u := range cfg.Updates {
@@ -217,12 +281,29 @@ func (s *yamlUpdateStep) Execute(_ context.Context, state *parentsteps.StepState
 		if err != nil {
 			return fail(parentsteps.Permanent(fmt.Errorf("update.yaml.updates[%d]: %w", i, err)))
 		}
-		rel, err := confinedRel(filepath.Join(envRel, filepath.FromSlash(u.File)))
+		// The file is checked on its own first, so it can neither be absolute
+		// nor leave the environment directory.
+		fileRel, err := confinedRel(u.File)
 		if err != nil {
-			return fail(fmt.Errorf("update.yaml.updates[%d].file: %w", i, err))
+			return fail(parentsteps.Permanent(fmt.Errorf("update.yaml.updates[%d].file: %w", i, err)))
 		}
+		rel := filepath.Join(envRel, fileRel)
 		doc, ok := docs[rel]
 		if !ok {
+			// A symbolic link would let two entries edit one file under two
+			// names, or point outside the environment: refuse it.
+			info, err := root.Lstat(rel)
+			if err != nil {
+				return fail(fmt.Errorf("read %s: %w", filepath.ToSlash(rel), err))
+			}
+			switch {
+			case info.Mode()&os.ModeSymlink != 0:
+				return fail(parentsteps.Permanent(fmt.Errorf("%s is a symbolic link, which yaml-update does not edit", filepath.ToSlash(rel))))
+			case !info.Mode().IsRegular():
+				return fail(parentsteps.Permanent(fmt.Errorf("%s is not a regular file", filepath.ToSlash(rel))))
+			case info.Size() > maxYAMLUpdateFile:
+				return fail(parentsteps.Permanent(fmt.Errorf("%s is larger than %d MiB", filepath.ToSlash(rel), maxYAMLUpdateFile>>20)))
+			}
 			raw, err := root.ReadFile(rel)
 			if err != nil {
 				return fail(fmt.Errorf("read %s: %w", filepath.ToSlash(rel), err))
@@ -230,24 +311,53 @@ func (s *yamlUpdateStep) Execute(_ context.Context, state *parentsteps.StepState
 			if doc, err = parseYAMLMapping(raw); err != nil {
 				return fail(parentsteps.Permanent(fmt.Errorf("parse %s: %w", filepath.ToSlash(rel), err)))
 			}
-			docs[rel] = doc
+			docs[rel], originals[rel] = doc, raw
 			order = append(order, rel)
 		}
 		if err := setYAMLPath(doc.root(), u.Path, value); err != nil {
 			return fail(parentsteps.Permanent(fmt.Errorf("update.yaml.updates[%d]: set %s in %s: %w",
 				i, u.Path, filepath.ToSlash(rel), err)))
 		}
+		edits[rel] = append(edits[rel], edit{u.Path, value})
 		applied = append(applied, fmt.Sprintf("%s:%s=%s", u.File, u.Path, value))
 	}
 
-	// Every edit is valid: write the files.
+	// Encode every file and parse the result again: each must still be one
+	// document with every value where it was set, before anything is written.
 	sort.Strings(order)
+	outs := map[string][]byte{}
 	for _, rel := range order {
 		out, err := docs[rel].encode()
 		if err != nil {
 			return fail(fmt.Errorf("encode %s: %w", filepath.ToSlash(rel), err))
 		}
-		if err := root.WriteFile(rel, out, 0o644); err != nil {
+		check, err := parseYAMLMapping(out)
+		if err != nil {
+			return fail(fmt.Errorf("re-parse %s: %w", filepath.ToSlash(rel), err))
+		}
+		for _, e := range edits[rel] {
+			if got, ok := getYAMLPath(check.root(), e.path); !ok || got != e.value {
+				return fail(fmt.Errorf("re-parse %s: %s is %q, not %q", filepath.ToSlash(rel), e.path, got, e.value))
+			}
+		}
+		outs[rel] = out
+	}
+
+	// Write each file to a temporary file next to it, then rename them all;
+	// when a rename fails, the files already replaced get their old content
+	// back, so the checkout is never left half edited.
+	for _, rel := range order {
+		if err := root.WriteFile(rel+".kardinal-tmp", outs[rel], 0o644); err != nil {
+			removeTemps(root, order)
+			return fail(fmt.Errorf("write %s: %w", filepath.ToSlash(rel), err))
+		}
+	}
+	for i, rel := range order {
+		if err := root.Rename(rel+".kardinal-tmp", rel); err != nil {
+			for _, done := range order[:i] {
+				_ = root.WriteFile(done, originals[done], 0o644)
+			}
+			removeTemps(root, order)
 			return fail(fmt.Errorf("write %s: %w", filepath.ToSlash(rel), err))
 		}
 	}

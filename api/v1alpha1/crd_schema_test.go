@@ -659,3 +659,22 @@ spec:
 		})
 	}
 }
+
+// TestCRDYAMLUpdateFile (#1448 QA): update.yaml.updates[].file is a path
+// inside the environment directory.
+func TestCRDYAMLUpdateFile(t *testing.T) {
+	crds := loadCRDs(t)
+	withFile := func(file string) map[string]interface{} {
+		p := pipelineWithEnvs("test")
+		env := p["spec"].(map[string]interface{})["environments"].([]interface{})[0].(map[string]interface{})
+		env["update"] = map[string]interface{}{"strategy": "yaml", "yaml": map[string]interface{}{
+			"updates": []interface{}{map[string]interface{}{"file": file, "path": "image.tag"}}}}
+		return p
+	}
+	for _, ok := range []string{"values.yaml", "deploy/deployment.yaml", "_x.yml"} {
+		assert.Empty(t, validateCR(t, crds, withFile(ok)), "file %q must be accepted", ok)
+	}
+	for _, bad := range []string{"/etc/passwd", "../other/values.yaml", "deploy/../../x.yaml", ".hidden/x.yaml", "a b.yaml"} {
+		assert.NotEmpty(t, validateCR(t, crds, withFile(bad)), "file %q must be rejected", bad)
+	}
+}

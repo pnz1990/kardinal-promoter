@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -173,4 +174,64 @@ func TestDefaultSequence_YAML(t *testing.T) {
 		parentsteps.DefaultSequenceForBundle("auto", "image", "yaml", ""))
 	assert.Equal(t, []string{"git-clone", "config-merge", "yaml-update", "git-commit", "git-push", "open-pr", "wait-for-merge", "health-check"},
 		parentsteps.DefaultSequenceForBundle("pr-review", "mixed", "yaml", ""))
+}
+
+// TestYAMLUpdate_RefusesUnsafeInput covers the QA findings on #1498: a
+// second YAML document, an anchored or aliased value, a symbolic link, an
+// absolute path, a file over 4 MiB. Each fails for good and changes nothing.
+func TestYAMLUpdate_RefusesUnsafeInput(t *testing.T) {
+	big := "image:\n  tag: \"1.0.0\"\npad: \"" + strings.Repeat("x", 4<<20) + "\"\n"
+	tests := []struct {
+		name    string
+		files   map[string]string
+		update  v1alpha1.YAMLUpdate
+		link    bool
+		wantMsg string
+	}{
+		{"second document", map[string]string{"values.yaml": valuesYAML + "---\nkind: Secret\n"},
+			v1alpha1.YAMLUpdate{File: "values.yaml", Path: "image.tag"}, false, "more than one YAML document"},
+		{"anchored value", map[string]string{"values.yaml": "base: &tag \"1.0.0\"\nimage:\n  tag: *tag\n"},
+			v1alpha1.YAMLUpdate{File: "values.yaml", Path: "image.tag"}, false, "anchors and aliases"},
+		{"anchored mapping", map[string]string{"values.yaml": "image: &img\n  tag: \"1.0.0\"\nother: *img\n"},
+			v1alpha1.YAMLUpdate{File: "values.yaml", Path: "image.tag"}, false, "anchors and aliases"},
+		{"absolute path", map[string]string{"values.yaml": valuesYAML},
+			v1alpha1.YAMLUpdate{File: "/etc/values.yaml", Path: "image.tag"}, false, "must be relative"},
+		{"file over 4 MiB", map[string]string{"values.yaml": big},
+			v1alpha1.YAMLUpdate{File: "values.yaml", Path: "image.tag"}, false, "larger than 4 MiB"},
+		{"symbolic link", map[string]string{"values.yaml": valuesYAML},
+			v1alpha1.YAMLUpdate{File: "link.yaml", Path: "image.tag"}, true, "is a symbolic link"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state, envDir := yamlState(t, tt.files, []v1alpha1.YAMLUpdate{tt.update}, appV2)
+			if tt.link {
+				require.NoError(t, os.Symlink("values.yaml", filepath.Join(envDir, "link.yaml")))
+			}
+			res, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, parentsteps.ErrPermanent), "%v is permanent", err)
+			assert.Contains(t, res.Message, tt.wantMsg)
+			for name, content := range tt.files {
+				assert.Equal(t, content, readEnvFile(t, envDir, name), "%s unchanged", name)
+			}
+		})
+	}
+}
+
+// TestYAMLUpdate_NoTempFilesLeft: the atomic write leaves only the edited
+// files behind.
+func TestYAMLUpdate_NoTempFilesLeft(t *testing.T) {
+	state, envDir := yamlState(t, map[string]string{"values.yaml": valuesYAML, "deploy/deployment.yaml": deploymentManifest},
+		[]v1alpha1.YAMLUpdate{{File: "values.yaml", Path: "image.tag"}, {File: "deploy/deployment.yaml",
+			Path: "spec.template.spec.containers[0].image", Value: "image"}}, appV2)
+	_, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
+	require.NoError(t, err)
+	var names []string
+	require.NoError(t, filepath.WalkDir(envDir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			names = append(names, filepath.Base(p))
+		}
+		return err
+	}))
+	assert.ElementsMatch(t, []string{"values.yaml", "deployment.yaml"}, names)
 }

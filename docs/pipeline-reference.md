@@ -385,8 +385,13 @@ update:
   tag-only image, a missing list element, a path through a scalar, a path that would replace a
   mapping or list, a file outside the repository) fails the step for good and no file is
   changed.
-- Comments, key order and the quoting of the replaced value are kept. A file with several YAML
-  documents (`---`) is not supported.
+- Comments, key order and the quoting of the replaced value are kept. Every edited file is parsed
+  again before it is written and must still hold every value where it was set. The files are then
+  written through temporary files and renamed; if a rename fails, the files already replaced get
+  their old content back.
+- Refused, failing the step: a file with more than one YAML document (`---`), an anchor or alias
+  (`&`, `*`) on the edited path, a symbolic link, a file over 4 MiB, and a `file` that is absolute
+  or contains `..`.
 - A Bundle without images (a config Bundle) changes nothing.
 
 ### Image signatures and tests

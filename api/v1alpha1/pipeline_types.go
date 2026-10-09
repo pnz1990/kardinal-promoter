@@ -393,12 +393,14 @@ type YAMLUpdateConfig struct {
 }
 
 // YAMLUpdate sets one scalar in one YAML file to a value taken from a Bundle
-// image.
+// image. The file must be a regular file of at most 4 MiB holding one YAML
+// document; symbolic links and anchors or aliases on the path are refused.
 type YAMLUpdate struct {
 	// File is the YAML file, relative to the environment path, for example
 	// "values.yaml" or "deploy/deployment.yaml". It must stay inside the
 	// repository. A file with several documents (---) is not supported.
-	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_][A-Za-z0-9_./-]*$`
+	// +kubebuilder:validation:XValidation:rule="!self.contains('..')",message="file must stay inside the environment path"
 	File string `json:"file"`
 
 	// Path is the key path of the scalar to set: keys separated by ".", with

@@ -15,7 +15,9 @@ package steps
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v3"
@@ -30,10 +32,22 @@ type yamlDoc struct {
 
 // parseYAMLMapping parses raw as a YAML document whose top level is a mapping.
 // An empty document is treated as an empty mapping.
+//
+// A stream with more than one document (---) is refused: decoding only the
+// first and writing it back would silently drop the others.
 func parseYAMLMapping(raw []byte) (*yamlDoc, error) {
 	d := &yamlDoc{compactSeq: compactSeqIndent(raw)}
-	if err := yaml.Unmarshal(raw, &d.doc); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	if err := dec.Decode(&d.doc); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
+	}
+	var extra yaml.Node
+	switch err := dec.Decode(&extra); {
+	case errors.Is(err, io.EOF):
+	case err != nil:
+		return nil, err
+	default:
+		return nil, fmt.Errorf("the file holds more than one YAML document (---), which is not supported")
 	}
 	if d.doc.Kind == 0 {
 		d.doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
