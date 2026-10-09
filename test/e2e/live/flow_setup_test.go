@@ -7,6 +7,8 @@ package live
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -153,13 +155,18 @@ func (a *app) updatePipeline(t *testing.T, name string, change func(*v1alpha1.Pi
 
 // prHead is the branch kardinal pushes a pr-review promotion of bundle to env
 // to (docs/pr-evidence.md).
-func prHead(bundle, env string) string { return "kardinal/" + bundle + "/" + env }
+// PR branches carry the first 8 hex characters of the SHA-256 of the
+// namespace, so Bundles of the same name in two namespaces do not share one.
+func prHead(ns, bundle, env string) string {
+	sum := sha256.Sum256([]byte(ns))
+	return "kardinal/" + hex.EncodeToString(sum[:])[:8] + "/" + bundle + "/" + env
+}
 
 // openPR waits for the open promotion PR of bundle to env.
 func (a *app) openPR(t *testing.T, bundle, env string) gitserver.PR {
 	t.Helper()
 	return a.e.WaitPR(t, a.repo, time.Minute, fmt.Sprintf("the open %s PR of %s", env, bundle), func(pr gitserver.PR) bool {
-		return pr.State == "open" && pr.Head == prHead(bundle, env)
+		return pr.State == "open" && pr.Head == prHead(a.ns, bundle, env)
 	})
 }
 

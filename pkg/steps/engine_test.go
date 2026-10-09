@@ -190,6 +190,13 @@ func TestEngine_StepRestart(t *testing.T) {
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErr)
+				// Running out of restarts is transient: the reconciler retries
+				// it with backoff (#1504 QA).
+				contended := tc.wantErr == "gave up after 3 restarts"
+				assert.Equal(t, contended, errors.Is(err, steps.ErrContended), "%v", err)
+				if contended {
+					assert.NotNil(t, errors.Unwrap(err), "a wrapped error is retryable")
+				}
 			} else {
 				require.NoError(t, err)
 			}

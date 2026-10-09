@@ -88,6 +88,15 @@ controller:
   # into the namespace it watches); org-level PolicyGates are read from this
   # namespace too.
   watchNamespace: ""
+  # -- Controller shard (--namespace-shard). Empty = no sharding: this
+  # controller reconciles every namespace. Set, it reconciles the namespaces
+  # labelled kardinal.io/shard=<name>; "default" also takes the namespaces
+  # without the label and the cluster-scoped kinds. Install one release per
+  # shard (one of them "default"), each in its own namespace labelled with its
+  # shard. Grants list/watch on Namespaces and Leases cluster-wide: each shard
+  # holds a Lease kardinal-shard in every namespace it reconciles. Cannot be
+  # combined with watchNamespace. See docs/sharding.md.
+  namespaceShard: ""
   # -- Namespaces holding org-level PolicyGates (--policy-namespaces).
   # Empty keeps the controller default, platform-policies. In namespace
   # mode org gates are read from watchNamespace, and an entry other than
