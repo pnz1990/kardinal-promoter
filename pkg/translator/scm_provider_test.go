@@ -37,11 +37,13 @@ func TestResolveProvider(t *testing.T) {
 		}}
 	open := shared.DeepCopy()
 	open.Name, open.UID, open.Spec.AllowedNamespaces = "open", "uid-open", nil
+	plain := &kardinalv1alpha1.ScmProvider{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "plain", UID: "uid-plain"},
+		Spec: kardinalv1alpha1.ScmProviderSpec{Type: "forgejo", APIURL: "http://forgejo.forgejo.svc:3000"}}
 
 	s := translatorTestScheme()
 	require.NoError(t, corev1.AddToScheme(s))
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(nsA, nsB, local, shared, open).Build()
-	tr := New(nil, graph.NewBuilder(), c, nil, zerolog.Nop()).WithAPIReader(c)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(nsA, nsB, local, shared, open, plain).Build()
+	tr := New(nil, graph.NewBuilder(), c, nil, zerolog.Nop()).WithProviders(&scm.Registry{Client: c, APIReader: c})
 
 	tests := []struct {
 		name, ns, url string
@@ -62,6 +64,8 @@ func TestResolveProvider(t *testing.T) {
 			wantErr: scm.ErrNamespaceNotAllowed},
 		{name: "cluster without allowedNamespaces", ns: "team-a", url: "https://github.com/acme/app", ref: &kardinalv1alpha1.ScmProviderRef{Kind: "ClusterScmProvider", Name: "open"},
 			wantErr: scm.ErrNamespaceNotAllowed},
+		{name: "http apiURL without the opt-in", ns: "team-a", url: "http://forgejo.forgejo.svc:3000/acme/app", ref: &kardinalv1alpha1.ScmProviderRef{Name: "plain"},
+			wantErr: scm.ErrProviderConfig},
 		{name: "missing", ns: "team-a", url: "https://github.com/acme/app", ref: &kardinalv1alpha1.ScmProviderRef{Kind: "ClusterScmProvider", Name: "nope"},
 			wantErr: scm.ErrProviderGone},
 	}
@@ -93,7 +97,7 @@ func TestResolveProvider_NamespaceReadUncached(t *testing.T) {
 	cached := fake.NewClientBuilder().WithScheme(s).WithObjects(shared).Build()
 	api := &countingReader{Reader: fake.NewClientBuilder().WithScheme(s).
 		WithObjects(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}}).Build()}
-	tr := New(nil, graph.NewBuilder(), cached, nil, zerolog.Nop()).WithAPIReader(api)
+	tr := New(nil, graph.NewBuilder(), cached, nil, zerolog.Nop()).WithProviders(&scm.Registry{Client: cached, APIReader: api})
 	p := &kardinalv1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "app"},
 		Spec: kardinalv1alpha1.PipelineSpec{Git: kardinalv1alpha1.PipelineGit{URL: "https://github.com/acme/app",
 			ProviderRef: &kardinalv1alpha1.ScmProviderRef{Kind: "ClusterScmProvider", Name: "gh"}}}}

@@ -17,64 +17,44 @@ import (
 	"context"
 	"fmt"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
-
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
+// WithProviders sets the registry whose checks (allowedNamespaces through
+// its Namespace cache, the apiURL scheme, allowedRepositories) the
+// translator applies to a Pipeline's spec.git.providerRef. Without one it
+// uses a registry over the translator's reader.
+func (t *Translator) WithProviders(r *scm.Registry) *Translator {
+	t.providers = r
+	return t
+}
+
 // resolveProvider returns the identity of the Pipeline's spec.git.providerRef,
-// or nil when it has none. It checks that the provider exists, that a
-// ClusterScmProvider's allowedNamespaces selects the Pipeline's namespace, and
-// that the Pipeline's repository is in the provider's allowedRepositories.
+// or nil when it has none. It checks that the provider exists and that the
+// registry allows its use by this Pipeline (Registry.Check): a
+// ClusterScmProvider's allowedNamespaces, the apiURL scheme and the
+// provider's allowedRepositories.
 func (t *Translator) resolveProvider(ctx context.Context, pipeline *kardinalv1alpha1.Pipeline) (*kardinalv1alpha1.ScmProviderIdentity, error) {
 	ref := pipeline.Spec.Git.ProviderRef
 	if ref == nil {
 		return nil, nil
 	}
-	spec, cluster, err := scm.GetProvider(ctx, t.k8s, pipeline.Namespace, ref.Kind, ref.Name)
+	reg := t.providers
+	if reg == nil {
+		reg = &scm.Registry{Client: t.k8s}
+	}
+	spec, err := scm.GetProvider(ctx, reg.Client, pipeline.Namespace, ref.Kind, ref.Name)
 	if err != nil {
 		return nil, fmt.Errorf("spec.git.providerRef: %w", err)
-	}
-	if cluster != nil {
-		if err := t.namespaceAllowed(ctx, cluster, pipeline.Namespace); err != nil {
-			return nil, fmt.Errorf("spec.git.providerRef: %w", err)
-		}
 	}
 	repo, err := scm.RepoFromURL(pipeline.Spec.Git.URL)
 	if err != nil {
 		return nil, fmt.Errorf("spec.git.url: %w", err)
 	}
-	if !scm.RepositoryAllowed(spec.Spec.AllowedRepositories, repo) {
-		return nil, fmt.Errorf("spec.git.providerRef: %s %s: repository %s: %w", spec.Identity.Kind, ref.Name, repo, scm.ErrRepositoryNotAllowed)
+	if err := reg.Check(ctx, spec, pipeline.Namespace, repo); err != nil {
+		return nil, fmt.Errorf("spec.git.providerRef: %w", err)
 	}
 	id := spec.Identity
 	return &id, nil
-}
-
-// namespaceAllowed checks the ClusterScmProvider's allowedNamespaces against
-// the labels of namespace ns. No selector allows no namespace.
-func (t *Translator) namespaceAllowed(ctx context.Context, p *kardinalv1alpha1.ClusterScmProvider, ns string) error {
-	if p.Spec.AllowedNamespaces == nil {
-		return fmt.Errorf("ClusterScmProvider %s has no spec.allowedNamespaces: %w", p.Name, scm.ErrNamespaceNotAllowed)
-	}
-	sel, err := metav1.LabelSelectorAsSelector(p.Spec.AllowedNamespaces)
-	if err != nil {
-		return fmt.Errorf("ClusterScmProvider %s: spec.allowedNamespaces: %v: %w", p.Name, err, scm.ErrNamespaceNotAllowed)
-	}
-	reader := t.apiReader
-	if reader == nil {
-		reader = t.k8s
-	}
-	var n corev1.Namespace
-	if err := reader.Get(ctx, types.NamespacedName{Name: ns}, &n); err != nil {
-		return fmt.Errorf("read namespace %s: %w", ns, err)
-	}
-	if !sel.Matches(labels.Set(n.Labels)) {
-		return fmt.Errorf("ClusterScmProvider %s, namespace %s: %w", p.Name, ns, scm.ErrNamespaceNotAllowed)
-	}
-	return nil
 }

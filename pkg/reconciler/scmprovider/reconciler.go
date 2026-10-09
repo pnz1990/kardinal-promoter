@@ -12,9 +12,11 @@
 // limitations under the License.
 
 // Package scmprovider reconciles ScmProviders and ClusterScmProviders: it
-// checks that each can be used (Secrets with their keys, a valid
-// allowedNamespaces selector) and writes the Ready condition. It calls no
-// SCM: the token is used the first time a Pipeline needs it.
+// checks that each can be used (scm.Registry.Validate: the apiURL scheme,
+// the allowedRepositories globs, the allowedNamespaces selector, and
+// Secrets labeled kardinal.io/referenceable with their keys) and writes the
+// Ready condition. It calls no SCM. A provider that is deleted is evicted
+// from the registry, so its client and token leave memory.
 package scmprovider
 
 import (
@@ -24,7 +26,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -33,6 +34,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // recheck is how often a provider's Secrets are read again: Secrets are not
@@ -47,7 +49,9 @@ const ConditionReady = "Ready"
 // ClusterScmProvider (Cluster true).
 type Reconciler struct {
 	client.Client
-	Cluster bool
+	// Registry validates the provider and drops a deleted one's client.
+	Registry *scm.Registry
+	Cluster  bool
 }
 
 var (
@@ -67,50 +71,34 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().Str("scmprovider", req.String()).Logger()
-	var (
-		obj        client.Object
-		spec       v1alpha1.ScmProviderSpec
-		status     *v1alpha1.ScmProviderStatus
-		secretNS   string
-		selectorOK = true
-		selErr     error
-	)
+	reg := r.Registry
+	if reg == nil {
+		reg = &scm.Registry{Client: r.Client}
+	}
+	kind := v1alpha1.KindScmProvider
+	var obj client.Object
+	var status *v1alpha1.ScmProviderStatus
 	if r.Cluster {
+		kind = v1alpha1.KindClusterScmProvider
 		var p v1alpha1.ClusterScmProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: req.Name}, &p); err != nil {
-			return ctrl.Result{}, client.IgnoreNotFound(err)
+			return r.gone(reg, kind, req, err)
 		}
-		obj, spec, status, secretNS = &p, p.Spec.ScmProviderSpec, &p.Status, p.Spec.SecretRef.Namespace
-		if p.Spec.AllowedNamespaces != nil {
-			if _, selErr = metav1.LabelSelectorAsSelector(p.Spec.AllowedNamespaces); selErr != nil {
-				selectorOK = false
-			}
-		}
+		obj, status = &p, &p.Status
 	} else {
 		var p v1alpha1.ScmProvider
 		if err := r.Get(ctx, req.NamespacedName, &p); err != nil {
-			return ctrl.Result{}, client.IgnoreNotFound(err)
+			return r.gone(reg, kind, req, err)
 		}
-		obj, spec, status, secretNS = &p, p.Spec, &p.Status, p.Namespace
+		obj, status = &p, &p.Status
+	}
+	spec, err := scm.GetProvider(ctx, r.Client, req.Namespace, kind, req.Name)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("read %s %s: %w", kind, req.Name, err)
 	}
 	base := obj.DeepCopyObject().(client.Object)
 
-	var problems []string
-	if !selectorOK {
-		problems = append(problems, fmt.Sprintf("spec.allowedNamespaces: %v", selErr))
-	}
-	if msg := r.checkSecret(ctx, secretNS, spec.SecretRef, "token"); msg != "" {
-		problems = append(problems, "spec.secretRef: "+msg)
-	}
-	if ref := spec.WebhookSecretRef; ref != nil {
-		ns := secretNS
-		if ref.Namespace != "" {
-			ns = ref.Namespace
-		}
-		if msg := r.checkSecret(ctx, ns, *ref, "secret"); msg != "" {
-			problems = append(problems, "spec.webhookSecretRef: "+msg)
-		}
-	}
+	problems := reg.Validate(ctx, spec)
 	cond := metav1.Condition{Type: ConditionReady, Status: metav1.ConditionTrue, Reason: "Valid",
 		Message: "the provider can be used", ObservedGeneration: obj.GetGeneration()}
 	if len(problems) > 0 {
@@ -129,21 +117,13 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{RequeueAfter: recheck}, nil
 }
 
-// checkSecret says what is wrong with the Secret key ref names in ns, or ""
-// when it has a non-empty value.
-func (r *Reconciler) checkSecret(ctx context.Context, ns string, ref v1alpha1.ScmSecretKeyRef, defaultKey string) string {
-	key := ref.Key
-	if key == "" {
-		key = defaultKey
+// gone evicts a provider that no longer exists.
+func (r *Reconciler) gone(reg *scm.Registry, kind string, req ctrl.Request, err error) (ctrl.Result, error) {
+	if client.IgnoreNotFound(err) != nil {
+		return ctrl.Result{}, err
 	}
-	var s corev1.Secret
-	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: ref.Name}, &s); err != nil {
-		return fmt.Sprintf("Secret %s/%s: %v", ns, ref.Name, err)
-	}
-	if strings.TrimSpace(string(s.Data[key])) == "" {
-		return fmt.Sprintf("Secret %s/%s has no %s key", ns, ref.Name, key)
-	}
-	return ""
+	reg.Evict(kind, req.Namespace, req.Name)
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager registers the reconciler for its kind.

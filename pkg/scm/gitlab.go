@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // GitLabProvider implements SCMProvider against the GitLab REST API v4.
@@ -41,8 +40,10 @@ type GitLabProvider struct {
 	// Empty refuses every event (ErrNoWebhookSecret).
 	WebhookSecret string
 
-	// circuit guards all outbound GitLab API calls.
-	circuit *CircuitBreaker
+	// circuits guards all outbound API calls: one circuit per repository
+	// owner and one for the token's rate limit (CircuitRegistry). A
+	// DynamicProvider shares its registry with every provider it builds.
+	circuits *CircuitRegistry
 
 	client *http.Client
 }
@@ -57,7 +58,7 @@ func NewGitLabProvider(token, apiURL, webhookSecret string) *GitLabProvider {
 		Token:         token,
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
-		circuit:       NewCircuitBreaker(),
+		circuits:      NewCircuitRegistry(),
 		client:        &http.Client{Timeout: providerHTTPTimeout},
 	}
 }
@@ -268,7 +269,8 @@ func (g *GitLabProvider) AddLabelsToPR(ctx context.Context, repo string, prNumbe
 
 // do executes an authenticated GitLab API request.
 func (g *GitLabProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
-	if err := g.circuit.Allow(); err != nil {
+	owner := ownerFromPath(path, "/api/v4/projects/")
+	if err := g.circuits.Allow(owner); err != nil {
 		return fmt.Errorf("gitlab scm: %w", err)
 	}
 
@@ -292,18 +294,18 @@ func (g *GitLabProvider) do(ctx context.Context, method, path string, body, resu
 
 	resp, err := g.client.Do(req)
 	if err != nil {
-		g.circuit.RecordFailure(time.Time{})
+		g.circuits.Record(owner, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		g.circuit.RecordResponse(resp)
+		g.circuits.Record(owner, resp, nil)
 		return newAPIError("GitLab", method, path, resp, raw)
 	}
 
-	g.circuit.RecordSuccess()
+	g.circuits.Record(owner, resp, nil)
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)

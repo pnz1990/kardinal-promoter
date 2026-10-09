@@ -79,6 +79,9 @@ args=(
   --set github.secretRef.name=git-token
   --set "scm.provider=${KARDINAL_E2E_SCM_PROVIDER:?git server component must run first}"
   --set "scm.apiURL=${KARDINAL_E2E_SCM_API:-}"
+  # The suites' git servers are in-cluster Services without TLS: let
+  # ScmProviders use their http:// API (TestForgejo_ScmProvider*).
+  --set scm.providersAllowInsecureHTTP=true
 )
 if "${KUBECTL[@]}" -n "$KARDINAL_NS" get secret scm-webhook >/dev/null 2>&1; then
   args+=(--set webhook.secretRef.name=scm-webhook)

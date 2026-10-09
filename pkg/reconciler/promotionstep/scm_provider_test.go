@@ -46,7 +46,7 @@ func TestScmProvider_StepUsesItsProvider(t *testing.T) {
 			prov := &v1alpha1.ScmProvider{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "team-gh", UID: "uid-1"},
 				Spec: v1alpha1.ScmProviderSpec{Type: "github", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "team-token"},
 					AllowedRepositories: tt.allowed}}
-			tok := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "team-token"},
+			tok := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "team-token", Labels: map[string]string{scm.LabelReferenceable: "true"}},
 				Data: map[string][]byte{"token": []byte("team")}}
 			api := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}, &v1alpha1.Bundle{}).

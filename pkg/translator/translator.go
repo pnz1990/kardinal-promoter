@@ -17,6 +17,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // Translator handles the full pipeline-to-graph creation flow:
@@ -35,9 +36,8 @@ type Translator struct {
 	// the cluster. kro resolves the CRD schema of every static-GVK node when
 	// it compiles a Graph, so one missing CRD would reject the whole Graph.
 	mapper meta.RESTMapper
-	// apiReader reads Namespaces uncached, for a ClusterScmProvider's
-	// allowedNamespaces; nil uses k8s.
-	apiReader client.Reader
+	// providers checks a Pipeline's spec.git.providerRef (WithProviders).
+	providers *scm.Registry
 }
 
 // New creates a new Translator.
@@ -74,13 +74,6 @@ func (t *Translator) WithIdentity(p *graph.IdentityProvisioner) *Translator {
 // cluster does not serve (for example Argo CD Applications without Argo CD).
 func (t *Translator) WithRESTMapper(m meta.RESTMapper) *Translator {
 	t.mapper = m
-	return t
-}
-
-// WithAPIReader sets the uncached reader Namespaces are read with: the
-// manager does not cache Namespaces, and its RBAC grants get only.
-func (t *Translator) WithAPIReader(r client.Reader) *Translator {
-	t.apiReader = r
 	return t
 }
 

@@ -6,6 +6,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,7 +39,8 @@ func TestWebhook_ProviderRoutes(t *testing.T) {
 			Status: v1alpha1.PRStatusStatus{Open: true}}
 	}
 	secret := func(ns, name, key string) *corev1.Secret {
-		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Data: map[string][]byte{key: []byte("v")}}
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: map[string]string{scm.LabelReferenceable: "true"}},
+			Data: map[string][]byte{key: []byte("v")}}
 	}
 	newObjs := func() []client.Object {
 		return []client.Object{
@@ -91,8 +95,14 @@ func TestWebhook_ProviderRoutes(t *testing.T) {
 			mux.HandleFunc("POST /webhook/scm/namespaces/{namespace}/{name}", srv.ProviderHandler(registry))
 			mux.HandleFunc("POST /webhook/scm/cluster/{name}", srv.ProviderHandler(registry))
 
+			// A GitHub merge event signed with the providers' webhook secret
+			// ("v"); the controller's endpoint uses the mock, which ignores it.
+			body := []byte(`{"action":"closed","pull_request":{"number":7,"merged":true},"repository":{"full_name":"acme/app"}}`)
+			req := httptest.NewRequest(http.MethodPost, tt.path, bytes.NewReader(body))
+			req.Header.Set("X-GitHub-Event", "pull_request")
+			req.Header.Set("X-Hub-Signature-256", "sha256="+hmacHex("v", body))
 			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, tt.path, bytes.NewReader([]byte(`{}`))))
+			mux.ServeHTTP(w, req)
 			assert.Equal(t, tt.wantCode, w.Code, w.Body.String())
 
 			var list v1alpha1.PRStatusList
@@ -106,4 +116,34 @@ func TestWebhook_ProviderRoutes(t *testing.T) {
 			assert.ElementsMatch(t, tt.wantMerged, merged)
 		})
 	}
+}
+
+func hmacHex(secret string, body []byte) string {
+	m := hmac.New(sha256.New, []byte(secret))
+	m.Write(body)
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// TestWebhook_ProviderEndpointRateLimit: a flood at one provider endpoint
+// gets 429 once its bucket is empty, before any Secret is read; another
+// endpoint keeps its own bucket.
+func TestWebhook_ProviderEndpointRateLimit(t *testing.T) {
+	s := webhookScheme()
+	require.NoError(t, corev1.AddToScheme(s))
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	srv := newWebhookServerWithConfig(&mockSCMProvider{}, c, zerolog.Nop(), true)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /webhook/scm/namespaces/{namespace}/{name}", srv.ProviderHandler(&scm.Registry{Client: c}))
+	post := func(path string) int {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{}`))))
+		return w.Code
+	}
+	codes := map[int]int{}
+	for range providerWebhookBurst + 5 {
+		codes[post("/webhook/scm/namespaces/a/flood")]++
+	}
+	assert.Equal(t, providerWebhookBurst, codes[http.StatusUnauthorized], "the burst is answered (no such provider)")
+	assert.Equal(t, 5, codes[http.StatusTooManyRequests])
+	assert.Equal(t, http.StatusUnauthorized, post("/webhook/scm/namespaces/a/other"), "another endpoint has its own bucket")
 }

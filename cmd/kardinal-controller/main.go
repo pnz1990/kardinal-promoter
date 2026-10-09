@@ -45,6 +45,7 @@ import (
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
@@ -126,6 +127,12 @@ func main() {
 		"SCM provider type for the whole controller: \"github\" (default), \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\" or \"azuredevops\".")
 	flag.StringVar(&scmAPIURL, "scm-api-url", os.Getenv("KARDINAL_SCM_API_URL"),
 		"SCM API base URL override (e.g. for GitHub Enterprise or self-managed GitLab).")
+	var scmAllowedRepositories string
+	flag.StringVar(&scmAllowedRepositories, "scm-allowed-repositories", os.Getenv("KARDINAL_SCM_ALLOWED_REPOSITORIES"),
+		"Comma-separated host/repository globs (github.com/acme/*, gitlab.example.com/team/**) of the "+
+			"repositories the controller's SCM token may act on. Every SCM call for another repository is "+
+			"refused, and a Pipeline that would need the token for one is Ready=False/RepositoryNotAllowed "+
+			"and its steps fail. Empty allows every repository.")
 
 	var bundleToken string
 	flag.StringVar(&bundleToken, "bundle-api-token", os.Getenv("KARDINAL_BUNDLE_TOKEN"),
@@ -198,6 +205,11 @@ func main() {
 	// --scm-token-secret-name is set, the --github-token flag is used only as
 	// the initial value (bootstrapping) and the Secret becomes the authoritative
 	// source thereafter.
+	var scmProvidersAllowHTTP bool
+	flag.BoolVar(&scmProvidersAllowHTTP, "scm-providers-allow-http", false,
+		"Let ScmProviders and ClusterScmProviders use an http:// spec.apiURL, for an in-cluster SCM without TLS. "+
+			"Off, a provider must use https://, so its token never crosses the network in clear text.")
+
 	var scmTokenSecretName string
 	flag.StringVar(&scmTokenSecretName, "scm-token-secret-name",
 		os.Getenv("KARDINAL_SCM_TOKEN_SECRET_NAME"),
@@ -281,6 +293,19 @@ func main() {
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
+	allowedRepos, err := scm.ParseRepositoryAllowlist(splitCSV(scmAllowedRepositories))
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --scm-allowed-repositories")
+	}
+	if allowedRepos == nil {
+		logger.Warn().Msg("--scm-allowed-repositories (Helm scm.allowedRepositories) is not set: any Pipeline " +
+			"can have the controller's SCM token open PRs and delete kardinal/ branches in any repository " +
+			"that token can write to; see docs/guides/security.md")
+	} else {
+		logger.Info().Strs("allowedRepositories", allowedRepos.Patterns()).
+			Msg("the controller's SCM token is limited to the allowed repositories")
+	}
+
 	uiHosts, err := parseUIAllowedHosts(uiAllowedHosts)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("invalid --ui-allowed-hosts")
@@ -348,14 +373,31 @@ func main() {
 			logger.Fatal().Err(provErr).Msg("unable to create SCM provider")
 		}
 	}
+	// Every SCM call the shared token makes is checked against
+	// --scm-allowed-repositories, whichever code path makes it (#1332).
+	if allowedRepos != nil {
+		scmHost, hostErr := scm.WebHost(scmProviderType, scmAPIURL)
+		if hostErr != nil {
+			logger.Fatal().Err(hostErr).Msg("--scm-allowed-repositories needs the SCM host")
+		}
+		scmProvider = allowedRepos.Guard(scmProvider, scmHost)
+	}
 	gitClient := scm.NewGoGitClient()
 
 	// ScmProviders and ClusterScmProviders: a Pipeline with
 	// spec.git.providerRef opens its PRs with that provider's client, built
 	// here from its Secret; a Pipeline without one keeps scmProvider.
-	providers := &scm.Registry{Client: mgr.GetClient()}
+	providers := &scm.Registry{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		// A provider's apiURL is written by a namespace user: its requests
+		// go through the egress guard (no loopback, link-local or cloud
+		// metadata addresses), and http:// only with the admin's opt-in.
+		Transport: egress.NewTransport(http.ProxyFromEnvironment),
+		AllowHTTP: scmProvidersAllowHTTP,
+	}
 	for _, cluster := range []bool{false, true} {
-		if err := (&scmproviderrecon.Reconciler{Client: mgr.GetClient(), Cluster: cluster}).SetupWithManager(mgr); err != nil {
+		if err := (&scmproviderrecon.Reconciler{Client: mgr.GetClient(), Registry: providers, Cluster: cluster}).SetupWithManager(mgr); err != nil {
 			logger.Fatal().Err(err).Bool("cluster", cluster).Msg("unable to set up ScmProviderReconciler")
 		}
 	}
@@ -369,7 +411,7 @@ func main() {
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
 		APIReader:        mgr.GetAPIReader(),
-		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
+		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), providers, logger),
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),
@@ -402,7 +444,7 @@ func main() {
 		}
 	}
 
-	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient()}).
+	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}
@@ -421,13 +463,14 @@ func main() {
 	}
 
 	if err := (&psreconciler.Reconciler{
-		Client:         mgr.GetClient(),
-		APIReader:      mgr.GetAPIReader(),
-		SCM:            scmProvider,
-		Providers:      providers,
-		GitClient:      gitClient,
-		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
-		Recorder:       eventRecorder,
+		Client:              mgr.GetClient(),
+		APIReader:           mgr.GetAPIReader(),
+		SCM:                 scmProvider,
+		AllowedRepositories: allowedRepos,
+		Providers:           providers,
+		GitClient:           gitClient,
+		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
+		Recorder:            eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}
@@ -710,7 +753,7 @@ func newHealthDetector(cfg *rest.Config, k8s sigs_client.Client, log zerolog.Log
 // newTranslator constructs the Translator wired with a GraphClient, Builder,
 // and the Graph identity provisioner.
 func newTranslator(mgr ctrl.Manager, identity *graphpkg.IdentityProvisioner,
-	policyNS []string, log zerolog.Logger) *translator.Translator {
+	policyNS []string, providers *scm.Registry, log zerolog.Logger) *translator.Translator {
 	dynClient, err := dynamic.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		log.Fatal().Err(err).Msg("unable to create dynamic client for graph")
@@ -721,7 +764,7 @@ func newTranslator(mgr ctrl.Manager, identity *graphpkg.IdentityProvisioner,
 	return translator.New(graphClient, builder, mgr.GetClient(), policyNS, log).
 		WithIdentity(identity).
 		WithRESTMapper(mgr.GetRESTMapper()).
-		WithAPIReader(mgr.GetAPIReader())
+		WithProviders(providers)
 }
 
 // newGraphClient constructs a GraphClient for use as a GraphChecker in the Bundle reconciler.

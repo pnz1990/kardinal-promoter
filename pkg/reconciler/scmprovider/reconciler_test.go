@@ -20,6 +20,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scmprovider"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 func scheme(t *testing.T) *runtime.Scheme {
@@ -30,7 +31,8 @@ func scheme(t *testing.T) *runtime.Scheme {
 }
 
 func secret(ns, name, key, value string) *corev1.Secret {
-	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Data: map[string][]byte{key: []byte(value)}}
+	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: map[string]string{scm.LabelReferenceable: "true"}},
+		Data: map[string][]byte{key: []byte(value)}}
 }
 
 // TestReconcile_ScmProvider: Ready follows the Secrets, and a second
@@ -45,10 +47,15 @@ func TestReconcile_ScmProvider(t *testing.T) {
 	}{
 		{name: "token and webhook secret", objs: []client.Object{secret("team-a", "tok", "token", "t"), secret("team-a", "hook", "secret", "s")},
 			webhook: true, want: metav1.ConditionTrue},
-		{name: "no token Secret", want: metav1.ConditionFalse, wantText: "spec.secretRef: Secret team-a/tok"},
+		{name: "no token Secret", want: metav1.ConditionFalse, wantText: "spec.secretRef: the Secret team-a/tok is not found"},
 		{name: "empty token", objs: []client.Object{secret("team-a", "tok", "token", " ")}, want: metav1.ConditionFalse, wantText: "has no token key"},
+		{name: "Secret not referenceable", objs: []client.Object{func() client.Object {
+			s := secret("team-a", "tok", "token", "t")
+			s.Labels = nil
+			return s
+		}()}, want: metav1.ConditionFalse, wantText: "not labeled kardinal.io/referenceable=true"},
 		{name: "no webhook Secret", objs: []client.Object{secret("team-a", "tok", "token", "t")}, webhook: true,
-			want: metav1.ConditionFalse, wantText: "spec.webhookSecretRef: Secret team-a/hook"},
+			want: metav1.ConditionFalse, wantText: "spec.webhookSecretRef: the Secret team-a/hook is not found"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

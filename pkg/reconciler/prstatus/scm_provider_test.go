@@ -43,7 +43,7 @@ func TestReconciler_PollsThroughItsProvider(t *testing.T) {
 					ScmProvider: &v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindScmProvider, Name: "gl", UID: tt.uid}}}
 			prov := &v1alpha1.ScmProvider{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "gl", UID: "uid-1"},
 				Spec: v1alpha1.ScmProviderSpec{Type: "gitlab", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "tok"}}}
-			tok := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tok"}, Data: map[string][]byte{"token": []byte("x")}}
+			tok := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "tok", Labels: map[string]string{scm.LabelReferenceable: "true"}}, Data: map[string][]byte{"token": []byte("x")}}
 			c := fake.NewClientBuilder().WithScheme(s).WithObjects(prs, prov, tok).WithStatusSubresource(prs).Build()
 
 			controller := &fakeSCM{open: true}

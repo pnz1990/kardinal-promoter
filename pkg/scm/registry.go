@@ -17,13 +17,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/lru"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -34,20 +39,30 @@ import (
 // on an SCM that kardinal cannot reach the same way any more.
 var ErrProviderGone = errors.New("the SCM provider the step started with is gone")
 
-// ErrRepositoryNotAllowed is returned for a repository outside a provider's
-// spec.allowedRepositories.
-var ErrRepositoryNotAllowed = errors.New("repository is not in the SCM provider's spec.allowedRepositories")
-
 // ErrNamespaceNotAllowed is returned for a ClusterScmProvider whose
 // spec.allowedNamespaces does not select the Pipeline's namespace.
 var ErrNamespaceNotAllowed = errors.New("the ClusterScmProvider does not allow this namespace")
 
+// ErrProviderConfig is returned for a provider that cannot be used as
+// written: an http:// apiURL without --scm-providers-allow-http, or a Secret
+// that is missing, lacks its key or is not labeled kardinal.io/referenceable.
+var ErrProviderConfig = errors.New("the SCM provider cannot be used")
+
+// LabelReferenceable must be "true" on every Secret a ScmProvider or
+// ClusterScmProvider names: a user who may create providers but not read
+// Secrets must not be able to send a Secret of the namespace to an apiURL of
+// their choice. The same opt-in applies to every Secret a custom resource
+// references (docs/guides/security.md).
+const LabelReferenceable = "kardinal.io/referenceable"
+
 // IsProviderRefError reports whether err says that a Pipeline's
 // spec.git.providerRef cannot be used: the provider is missing or recreated,
-// or it does not allow the namespace or the repository. Creating or changing
-// the provider fixes it; nothing about the Bundle does.
+// it does not allow the namespace or the repository, or it is misconfigured.
+// Creating or changing the provider or its Secret fixes it; nothing about
+// the Bundle does.
 func IsProviderRefError(err error) bool {
-	return errors.Is(err, ErrProviderGone) || errors.Is(err, ErrRepositoryNotAllowed) || errors.Is(err, ErrNamespaceNotAllowed)
+	return errors.Is(err, ErrProviderGone) || errors.Is(err, ErrRepositoryNotAllowed) ||
+		errors.Is(err, ErrNamespaceNotAllowed) || errors.Is(err, ErrProviderConfig)
 }
 
 // ProviderSpec is a ScmProvider or ClusterScmProvider read from the API:
@@ -60,85 +75,139 @@ type ProviderSpec struct {
 	// SecretNamespace is where its Secrets are: the ScmProvider's namespace,
 	// or a ClusterScmProvider's secretRef.namespace.
 	SecretNamespace string
+	// AllowedNamespaces is a ClusterScmProvider's selector; nil for a
+	// ScmProvider.
+	AllowedNamespaces *metav1.LabelSelector
 }
 
 // GetProvider reads the provider kind/name: a ScmProvider in namespace ns,
 // or a ClusterScmProvider. It returns ErrProviderGone (wrapped) when it does
 // not exist.
-func GetProvider(ctx context.Context, c client.Reader, ns, kind, name string) (ProviderSpec, *v1alpha1.ClusterScmProvider, error) {
+func GetProvider(ctx context.Context, c client.Reader, ns, kind, name string) (ProviderSpec, error) {
 	switch kind {
 	case "", v1alpha1.KindScmProvider:
 		var p v1alpha1.ScmProvider
 		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &p); err != nil {
 			if apierrors.IsNotFound(err) {
-				return ProviderSpec{}, nil, fmt.Errorf("the ScmProvider %s/%s is not found: %w", ns, name, ErrProviderGone)
+				return ProviderSpec{}, fmt.Errorf("the ScmProvider %s/%s is not found: %w", ns, name, ErrProviderGone)
 			}
-			return ProviderSpec{}, nil, fmt.Errorf("get ScmProvider %s/%s: %w", ns, name, err)
+			return ProviderSpec{}, fmt.Errorf("get ScmProvider %s/%s: %w", ns, name, err)
 		}
 		return ProviderSpec{
 			Identity:        v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindScmProvider, Name: name, UID: string(p.UID)},
 			Generation:      p.Generation,
 			Spec:            p.Spec,
 			SecretNamespace: ns,
-		}, nil, nil
+		}, nil
 	case v1alpha1.KindClusterScmProvider:
 		var p v1alpha1.ClusterScmProvider
 		if err := c.Get(ctx, types.NamespacedName{Name: name}, &p); err != nil {
 			if apierrors.IsNotFound(err) {
-				return ProviderSpec{}, nil, fmt.Errorf("the ClusterScmProvider %s is not found: %w", name, ErrProviderGone)
+				return ProviderSpec{}, fmt.Errorf("the ClusterScmProvider %s is not found: %w", name, ErrProviderGone)
 			}
-			return ProviderSpec{}, nil, fmt.Errorf("get ClusterScmProvider %s: %w", name, err)
+			return ProviderSpec{}, fmt.Errorf("get ClusterScmProvider %s: %w", name, err)
 		}
 		return ProviderSpec{
-			Identity:        v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindClusterScmProvider, Name: name, UID: string(p.UID)},
-			Generation:      p.Generation,
-			Spec:            p.Spec.ScmProviderSpec,
-			SecretNamespace: p.Spec.SecretRef.Namespace,
-		}, &p, nil
+			Identity:          v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindClusterScmProvider, Name: name, UID: string(p.UID)},
+			Generation:        p.Generation,
+			Spec:              p.Spec.ScmProviderSpec,
+			SecretNamespace:   p.Spec.SecretRef.Namespace,
+			AllowedNamespaces: p.Spec.AllowedNamespaces,
+		}, nil
 	}
-	return ProviderSpec{}, nil, fmt.Errorf("unknown SCM provider kind %q", kind)
+	return ProviderSpec{}, fmt.Errorf("unknown SCM provider kind %q", kind)
 }
 
-// RepositoryAllowed reports whether repo matches one of globs: "*" matches
-// one path segment, a trailing "/**" any number of them. No globs allows
-// every repository. Matching ignores case.
-func RepositoryAllowed(globs []string, repo string) bool {
-	if len(globs) == 0 {
-		return true
+// ProviderAllowlist is the provider's spec.allowedRepositories as a
+// RepositoryAllowlist on the provider's host (WebHost), so a provider's
+// globs are matched like --scm-allowed-repositories: case-insensitive, "*"
+// one segment, a trailing "/**" any depth, smuggled segments refused. nil
+// (no globs) allows every repository.
+func ProviderAllowlist(spec ProviderSpec) (*RepositoryAllowlist, string, error) {
+	host, err := WebHost(spec.Spec.Type, spec.Spec.APIURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("%s %s: %v: %w", spec.Identity.Kind, spec.Identity.Name, err, ErrProviderConfig)
 	}
-	repo = strings.ToLower(strings.Trim(repo, "/"))
-	for _, g := range globs {
-		g = strings.ToLower(strings.Trim(g, "/"))
-		if prefix, ok := strings.CutSuffix(g, "/**"); ok {
-			segs := strings.Count(prefix, "/") + 1
-			parts := strings.SplitN(repo, "/", segs+1)
-			if len(parts) > segs {
-				if m, _ := path.Match(prefix, strings.Join(parts[:segs], "/")); m {
-					return true
-				}
-			}
-			continue
-		}
-		if m, _ := path.Match(g, repo); m {
-			return true
-		}
+	patterns := make([]string, 0, len(spec.Spec.AllowedRepositories))
+	for _, g := range spec.Spec.AllowedRepositories {
+		patterns = append(patterns, host+"/"+strings.Trim(g, "/"))
 	}
-	return false
+	a, err := ParseRepositoryAllowlist(patterns)
+	if err != nil {
+		return nil, "", fmt.Errorf("%s %s: spec.allowedRepositories: %v: %w", spec.Identity.Kind, spec.Identity.Name, err, ErrProviderConfig)
+	}
+	return a, host, nil
 }
+
+// RepositoryAllowed returns an error wrapping ErrRepositoryNotAllowed when
+// repo does not match the provider's spec.allowedRepositories on its host
+// (ProviderAllowlist).
+func RepositoryAllowed(spec ProviderSpec, repo string) error {
+	a, host, err := ProviderAllowlist(spec)
+	if err != nil {
+		return err
+	}
+	if !a.AllowsRepo(host, repo) {
+		return fmt.Errorf("%s %s: repository %s is not in its spec.allowedRepositories: %w",
+			spec.Identity.Kind, spec.Identity.Name, repo, ErrRepositoryNotAllowed)
+	}
+	return nil
+}
+
+// Registry defaults.
+const (
+	// DefaultSecretTTL is how long a provider Secret read is reused. A
+	// rotated token is used within this time.
+	DefaultSecretTTL = 30 * time.Second
+	// DefaultNamespaceTTL is how long a Namespace's labels are reused for a
+	// ClusterScmProvider's allowedNamespaces. A namespace whose label is
+	// removed loses the provider within this time.
+	DefaultNamespaceTTL = 30 * time.Second
+	// maxRegistryClients bounds the client cache (least recently used out).
+	maxRegistryClients = 512
+	// maxCacheEntries bounds the Secret and Namespace caches; past it they
+	// are emptied.
+	maxCacheEntries = 4096
+)
 
 // Registry builds and caches one SCMProvider per ScmProvider or
-// ClusterScmProvider. An entry is rebuilt when the object's generation or
-// the resourceVersion of its token or webhook Secret changes, so a token
-// rotation is picked up at the next use, as the controller's own Secret is
-// by its SecretWatcher. It is safe for concurrent use.
+// ClusterScmProvider. Every lookup re-reads the provider (cached client),
+// checks its UID, a ClusterScmProvider's allowedNamespaces against the
+// namespace's labels, the repository against its allowedRepositories and its
+// apiURL scheme; the Secret and Namespace reads behind those checks are
+// reused for SecretTTL and NamespaceTTL. A client is rebuilt when the
+// provider's generation or a Secret's resourceVersion changes, and every
+// call it makes is checked against allowedRepositories again (Guard). It is
+// safe for concurrent use.
 type Registry struct {
-	// Client reads the providers and their Secrets.
+	// Client reads the providers (through the manager cache).
 	Client client.Reader
+	// APIReader reads Secrets and Namespaces, which the manager does not
+	// cache; nil uses Client.
+	APIReader client.Reader
 	// New builds a provider; nil is NewProvider.
 	New func(providerType, token, apiURL, webhookSecret string) (SCMProvider, error)
+	// Transport carries the providers' API requests. main sets
+	// egress.NewTransport, so a provider's apiURL cannot reach loopback or
+	// cloud metadata addresses; nil leaves the provider's own (tests).
+	Transport http.RoundTripper
+	// AllowHTTP lets a provider use an http:// apiURL
+	// (--scm-providers-allow-http): an in-cluster SCM without TLS. Off, only
+	// https:// is used, so a token never crosses the network in clear text.
+	AllowHTTP bool
+	// SecretTTL and NamespaceTTL default to DefaultSecretTTL and
+	// DefaultNamespaceTTL.
+	SecretTTL, NamespaceTTL time.Duration
+	// Now is the clock; nil is time.Now.
+	Now func() time.Time
 
-	mu      sync.Mutex
-	entries map[string]registryEntry
+	once    sync.Once
+	clients *lru.Cache // UID -> registryEntry
+	uids    sync.Map   // identityKey -> UID of its cached client
+
+	mu         sync.Mutex
+	secrets    map[types.NamespacedName]secretEntry
+	namespaces map[string]namespaceEntry
 }
 
 type registryEntry struct {
@@ -147,8 +216,16 @@ type registryEntry struct {
 	provider   SCMProvider
 }
 
-// maxRegistryEntries bounds the cache; past it the cache is emptied.
-const maxRegistryEntries = 1024
+type secretEntry struct {
+	secret  *corev1.Secret // nil: not found
+	expires time.Time
+}
+
+type namespaceEntry struct {
+	labels  map[string]string
+	err     error
+	expires time.Time
+}
 
 // Resolved is a provider client and the spec it was built from.
 type Resolved struct {
@@ -156,25 +233,134 @@ type Resolved struct {
 	Spec     ProviderSpec
 }
 
+func (r *Registry) init() {
+	r.once.Do(func() { r.clients = lru.New(maxRegistryClients) })
+}
+
+func (r *Registry) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
+}
+
+func (r *Registry) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
 // ForIdentity returns the client of the provider id, for a step or PRStatus
-// in namespace ns, checking that the object still has id's UID and that repo
-// is allowed. repo may be empty (a webhook before the event is parsed).
+// in namespace ns: the object must still have id's UID, a ClusterScmProvider
+// must still select ns, and repo (empty: not checked) must be allowed.
 func (r *Registry) ForIdentity(ctx context.Context, ns string, id v1alpha1.ScmProviderIdentity, repo string) (Resolved, error) {
-	spec, _, err := GetProvider(ctx, r.Client, ns, id.Kind, id.Name)
+	spec, err := GetProvider(ctx, r.Client, ns, id.Kind, id.Name)
 	if err != nil {
 		return Resolved{}, err
 	}
 	if spec.Identity.UID != id.UID {
 		return Resolved{}, fmt.Errorf("%s %s was deleted and created again since the Graph was built: %w", id.Kind, id.Name, ErrProviderGone)
 	}
-	if repo != "" && !RepositoryAllowed(spec.Spec.AllowedRepositories, repo) {
-		return Resolved{}, fmt.Errorf("%s %s: %s: %w", id.Kind, id.Name, repo, ErrRepositoryNotAllowed)
+	if err := r.Check(ctx, spec, ns, repo); err != nil {
+		return Resolved{}, err
 	}
 	p, err := r.client(ctx, spec)
 	if err != nil {
 		return Resolved{}, err
 	}
 	return Resolved{Provider: p, Spec: spec}, nil
+}
+
+// Check applies the use checks of ForIdentity to spec for a Pipeline in
+// namespace ns and repository repo (empty: not checked): a
+// ClusterScmProvider's allowedNamespaces, the apiURL scheme and
+// allowedRepositories. The translator calls it when it resolves a
+// providerRef.
+func (r *Registry) Check(ctx context.Context, spec ProviderSpec, ns, repo string) error {
+	if spec.Identity.Kind == v1alpha1.KindClusterScmProvider {
+		if err := r.namespaceAllowed(ctx, spec, ns); err != nil {
+			return err
+		}
+	}
+	if err := r.checkURL(spec); err != nil {
+		return err
+	}
+	if repo != "" {
+		return RepositoryAllowed(spec, repo)
+	}
+	return nil
+}
+
+// checkURL refuses an apiURL that is not https://, unless AllowHTTP.
+func (r *Registry) checkURL(spec ProviderSpec) error {
+	raw := strings.TrimSpace(spec.Spec.APIURL)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("%s %s: spec.apiURL %q is not a URL: %w", spec.Identity.Kind, spec.Identity.Name, RedactURL(raw), ErrProviderConfig)
+	}
+	switch {
+	case u.Scheme == "https":
+		return nil
+	case u.Scheme == "http" && r.AllowHTTP:
+		return nil
+	case u.Scheme == "http":
+		return fmt.Errorf("%s %s: spec.apiURL %s is http://, which would send the token in clear text; use https://, "+
+			"or ask the cluster admin to set scm.providersAllowInsecureHTTP for an in-cluster SCM without TLS: %w",
+			spec.Identity.Kind, spec.Identity.Name, RedactURL(raw), ErrProviderConfig)
+	}
+	return fmt.Errorf("%s %s: spec.apiURL scheme %q is not supported: %w", spec.Identity.Kind, spec.Identity.Name, u.Scheme, ErrProviderConfig)
+}
+
+// namespaceAllowed checks a ClusterScmProvider's allowedNamespaces against
+// the labels of namespace ns (cached for NamespaceTTL). No selector allows
+// no namespace.
+func (r *Registry) namespaceAllowed(ctx context.Context, spec ProviderSpec, ns string) error {
+	name := spec.Identity.Name
+	if spec.AllowedNamespaces == nil {
+		return fmt.Errorf("ClusterScmProvider %s has no spec.allowedNamespaces: %w", name, ErrNamespaceNotAllowed)
+	}
+	sel, err := metav1.LabelSelectorAsSelector(spec.AllowedNamespaces)
+	if err != nil {
+		return fmt.Errorf("ClusterScmProvider %s: spec.allowedNamespaces: %v: %w", name, err, ErrNamespaceNotAllowed)
+	}
+	nsLabels, err := r.namespaceLabels(ctx, ns)
+	if err != nil {
+		return err
+	}
+	if !sel.Matches(labels.Set(nsLabels)) {
+		return fmt.Errorf("ClusterScmProvider %s, namespace %s: %w", name, ns, ErrNamespaceNotAllowed)
+	}
+	return nil
+}
+
+func (r *Registry) namespaceLabels(ctx context.Context, ns string) (map[string]string, error) {
+	now := r.now()
+	r.mu.Lock()
+	e, ok := r.namespaces[ns]
+	r.mu.Unlock()
+	if ok && now.Before(e.expires) {
+		return e.labels, e.err
+	}
+	var n corev1.Namespace
+	if err := r.apiReader().Get(ctx, types.NamespacedName{Name: ns}, &n); err != nil {
+		// Not cached: retried at the next use.
+		return nil, fmt.Errorf("read namespace %s: %w", ns, err)
+	}
+	ttl := r.NamespaceTTL
+	if ttl <= 0 {
+		ttl = DefaultNamespaceTTL
+	}
+	r.mu.Lock()
+	if r.namespaces == nil || len(r.namespaces) >= maxCacheEntries {
+		r.namespaces = map[string]namespaceEntry{}
+	}
+	r.namespaces[ns] = namespaceEntry{labels: n.Labels, expires: now.Add(ttl)}
+	r.mu.Unlock()
+	return n.Labels, nil
 }
 
 // ForSpec returns the client of a provider read with GetProvider.
@@ -186,29 +372,69 @@ func (r *Registry) ForSpec(ctx context.Context, spec ProviderSpec) (Resolved, er
 	return Resolved{Provider: p, Spec: spec}, nil
 }
 
+// WebhookSecret returns the provider's webhook secret, reading only that
+// Secret (cached for SecretTTL, found or not), so an unauthenticated webhook
+// delivery reads neither the token nor the SCM.
+func (r *Registry) WebhookSecret(ctx context.Context, spec ProviderSpec) (string, error) {
+	ref := spec.Spec.WebhookSecretRef
+	if ref == nil {
+		return "", fmt.Errorf("%s %s has no spec.webhookSecretRef: %w", spec.Identity.Kind, spec.Identity.Name, ErrProviderConfig)
+	}
+	v, _, err := r.secretValue(ctx, webhookSecretNamespace(spec), *ref, "secret")
+	if err != nil {
+		return "", fmt.Errorf("%s %s: webhook secret: %w", spec.Identity.Kind, spec.Identity.Name, err)
+	}
+	return v, nil
+}
+
+func webhookSecretNamespace(spec ProviderSpec) string {
+	if ref := spec.Spec.WebhookSecretRef; ref != nil && ref.Namespace != "" {
+		return ref.Namespace
+	}
+	return spec.SecretNamespace
+}
+
+// Evict drops the cached client of the provider kind/name (ns for a
+// ScmProvider), for a provider that was deleted: its token is not kept in
+// memory after it is gone.
+func (r *Registry) Evict(kind, ns, name string) {
+	r.init()
+	if uid, ok := r.uids.LoadAndDelete(identityKey(kind, ns, name)); ok {
+		r.clients.Remove(uid)
+	}
+}
+
+func identityKey(kind, ns, name string) string {
+	if kind == v1alpha1.KindClusterScmProvider {
+		ns = ""
+	}
+	return kind + "/" + ns + "/" + name
+}
+
 // client returns the cached client of spec, building it when the object or
-// its Secrets changed.
+// its Secrets changed. The client is wrapped in Guard with the provider's
+// allowedRepositories, so every call checks its repository again.
 func (r *Registry) client(ctx context.Context, spec ProviderSpec) (SCMProvider, error) {
+	r.init()
+	if err := r.checkURL(spec); err != nil {
+		return nil, err
+	}
 	token, tokenRV, err := r.secretValue(ctx, spec.SecretNamespace, spec.Spec.SecretRef, "token")
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", spec.Identity.Kind, spec.Identity.Name, err)
 	}
 	webhookSecret, webhookRV := "", ""
 	if ref := spec.Spec.WebhookSecretRef; ref != nil {
-		ns := spec.SecretNamespace
-		if ref.Namespace != "" {
-			ns = ref.Namespace
-		}
-		if webhookSecret, webhookRV, err = r.secretValue(ctx, ns, *ref, "secret"); err != nil {
+		if webhookSecret, webhookRV, err = r.secretValue(ctx, webhookSecretNamespace(spec), *ref, "secret"); err != nil {
 			return nil, fmt.Errorf("%s %s: webhook secret: %w", spec.Identity.Kind, spec.Identity.Name, err)
 		}
 	}
 	key := spec.Identity.UID
 	rvs := tokenRV + "/" + webhookRV
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if e, ok := r.entries[key]; ok && e.generation == spec.Generation && e.secretRVs == rvs {
-		return e.provider, nil
+	if v, ok := r.clients.Get(key); ok {
+		if e := v.(registryEntry); e.generation == spec.Generation && e.secretRVs == rvs {
+			return e.provider, nil
+		}
 	}
 	build := r.New
 	if build == nil {
@@ -216,29 +442,121 @@ func (r *Registry) client(ctx context.Context, spec ProviderSpec) (SCMProvider, 
 	}
 	p, err := build(spec.Spec.Type, token, spec.Spec.APIURL, webhookSecret)
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w", spec.Identity.Kind, spec.Identity.Name, err)
+		return nil, fmt.Errorf("%s %s: %v: %w", spec.Identity.Kind, spec.Identity.Name, err, ErrProviderConfig)
 	}
-	if r.entries == nil || len(r.entries) >= maxRegistryEntries {
-		r.entries = map[string]registryEntry{}
+	p = WithTransport(p, r.Transport)
+	allow, host, err := ProviderAllowlist(spec)
+	if err != nil {
+		return nil, err
 	}
-	r.entries[key] = registryEntry{generation: spec.Generation, secretRVs: rvs, provider: p}
+	if allow != nil {
+		p = allow.Guard(p, host)
+	}
+	r.clients.Add(key, registryEntry{generation: spec.Generation, secretRVs: rvs, provider: p})
+	r.uids.Store(identityKey(spec.Identity.Kind, spec.SecretNamespace, spec.Identity.Name), key)
 	return p, nil
 }
 
 // secretValue reads key (defaultKey when ref.Key is empty) of the Secret ref
-// names in ns, trimmed, and the Secret's resourceVersion.
+// names in ns, trimmed, and the Secret's resourceVersion. The Secret must be
+// labeled LabelReferenceable=true. Reads are reused for SecretTTL, a
+// NotFound included.
 func (r *Registry) secretValue(ctx context.Context, ns string, ref v1alpha1.ScmSecretKeyRef, defaultKey string) (string, string, error) {
 	key := ref.Key
 	if key == "" {
 		key = defaultKey
 	}
-	var s corev1.Secret
-	if err := r.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: ref.Name}, &s); err != nil {
-		return "", "", fmt.Errorf("read Secret %s/%s: %w", ns, ref.Name, err)
+	s, err := r.secret(ctx, types.NamespacedName{Namespace: ns, Name: ref.Name})
+	if err != nil {
+		return "", "", err
+	}
+	if s.Labels[LabelReferenceable] != "true" {
+		return "", "", fmt.Errorf("the Secret %s/%s is not labeled %s=true; label it to let SCM providers use it: %w",
+			ns, ref.Name, LabelReferenceable, ErrProviderConfig)
 	}
 	v, ok := s.Data[key]
 	if !ok || strings.TrimSpace(string(v)) == "" {
-		return "", "", fmt.Errorf("the Secret %s/%s has no %s key", ns, ref.Name, key)
+		return "", "", fmt.Errorf("the Secret %s/%s has no %s key: %w", ns, ref.Name, key, ErrProviderConfig)
 	}
 	return strings.TrimSpace(string(v)), s.ResourceVersion, nil
+}
+
+func (r *Registry) secret(ctx context.Context, nn types.NamespacedName) (*corev1.Secret, error) {
+	now := r.now()
+	r.mu.Lock()
+	e, ok := r.secrets[nn]
+	r.mu.Unlock()
+	if !ok || !now.Before(e.expires) {
+		var s corev1.Secret
+		err := r.apiReader().Get(ctx, nn, &s)
+		e = secretEntry{expires: now.Add(r.secretTTL())}
+		switch {
+		case err == nil:
+			e.secret = &s
+		case apierrors.IsNotFound(err):
+		default:
+			// Not cached: an API error is retried at the next call.
+			return nil, fmt.Errorf("read Secret %s: %w", nn, err)
+		}
+		r.mu.Lock()
+		if r.secrets == nil || len(r.secrets) >= maxCacheEntries {
+			r.secrets = map[types.NamespacedName]secretEntry{}
+		}
+		r.secrets[nn] = e
+		r.mu.Unlock()
+	}
+	if e.secret == nil {
+		return nil, fmt.Errorf("the Secret %s is not found: %w", nn, ErrProviderConfig)
+	}
+	return e.secret, nil
+}
+
+func (r *Registry) secretTTL() time.Duration {
+	if r.SecretTTL > 0 {
+		return r.SecretTTL
+	}
+	return DefaultSecretTTL
+}
+
+// Validate returns what keeps spec from being used, for its Ready
+// condition: the apiURL scheme, the allowedRepositories globs, the
+// allowedNamespaces selector, and the Secrets (present, labeled
+// LabelReferenceable=true, with their keys). It reads the Secrets past the
+// cache, so a fixed Secret turns the provider Ready at its next check.
+func (r *Registry) Validate(ctx context.Context, spec ProviderSpec) []string {
+	var problems []string
+	if err := r.checkURL(spec); err != nil {
+		problems = append(problems, "spec.apiURL: "+trimSentinel(err, ErrProviderConfig))
+	}
+	if _, _, err := ProviderAllowlist(spec); err != nil {
+		problems = append(problems, trimSentinel(err, ErrProviderConfig))
+	}
+	if spec.AllowedNamespaces != nil {
+		if _, err := metav1.LabelSelectorAsSelector(spec.AllowedNamespaces); err != nil {
+			problems = append(problems, fmt.Sprintf("spec.allowedNamespaces: %v", err))
+		}
+	}
+	r.forgetSecret(types.NamespacedName{Namespace: spec.SecretNamespace, Name: spec.Spec.SecretRef.Name})
+	if _, _, err := r.secretValue(ctx, spec.SecretNamespace, spec.Spec.SecretRef, "token"); err != nil {
+		problems = append(problems, "spec.secretRef: "+trimSentinel(err, ErrProviderConfig))
+	}
+	if ref := spec.Spec.WebhookSecretRef; ref != nil {
+		ns := webhookSecretNamespace(spec)
+		r.forgetSecret(types.NamespacedName{Namespace: ns, Name: ref.Name})
+		if _, _, err := r.secretValue(ctx, ns, *ref, "secret"); err != nil {
+			problems = append(problems, "spec.webhookSecretRef: "+trimSentinel(err, ErrProviderConfig))
+		}
+	}
+	return problems
+}
+
+func (r *Registry) forgetSecret(nn types.NamespacedName) {
+	r.mu.Lock()
+	delete(r.secrets, nn)
+	r.mu.Unlock()
+}
+
+// trimSentinel returns err's text without ": <sentinel>" at its end.
+func trimSentinel(err, sentinel error) string {
+	return strings.TrimSuffix(err.Error(), ": "+sentinel.Error())
 }
