@@ -521,6 +521,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
+	mux.HandleFunc(openAPIPath, handleOpenAPI)
 	// Bundle API endpoint — only mounted if a token is configured.
 	if bundleAPIToken != "" {
 		// Default to the watched namespace; in namespace-scoped mode it is

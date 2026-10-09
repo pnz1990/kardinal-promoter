@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **OpenAPI description of the REST API** — the controller serves an OpenAPI 3.1 document of the UI API, the Bundle API and the webhook health endpoint at `GET /api/v1/openapi.json` on both listeners (no credentials needed), also published as [`docs/reference/openapi.json`](reference/openapi.json). It is generated from the controller's request and response types, and a test fails when it drifts. The new [REST API](reference/rest-api.md) page lists the endpoints and shows how to give scripts their own ServiceAccount tokens (TokenRequest) with TokenReview auth
+
 ### Docs
 
 - **Comparison** — resurveyed Kargo v1.12.1 and GitOps Promoter v0.42.1 (2026-10-03). The matrix corrects cells that had gone stale, such as GitOps Promoter's CLI, PR body and Flux support, and Kargo's gates, steps and engines. It adds rows for pause, supersession, `explain`/`policy simulate` and audit trails, plus sections on what changed in 2026 and where Kargo or GitOps Promoter is ahead. The home table, the rollback page and the Kargo migration guide match it

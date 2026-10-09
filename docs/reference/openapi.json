@@ -1,0 +1,2042 @@
+{
+  "components": {
+    "responses": {
+      "Error400": {
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "The request is invalid; the body says why."
+      },
+      "Error401": {
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "No valid credentials (Www-Authenticate: Bearer)."
+      },
+      "Error403": {
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "The caller may not do this (TokenReview mode: Kubernetes RBAC denied it), or the namespace is not watched."
+      },
+      "Error404": {
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "The object does not exist."
+      },
+      "Error405": {
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "Method not allowed."
+      },
+      "Error409": {
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "Conflict: an ambiguous name, an object that already exists, or nothing to promote or roll back to."
+      },
+      "Error429": {
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "Rate limit exceeded."
+      },
+      "Error500": {
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "Internal error."
+      }
+    },
+    "schemas": {
+      "Bundle": {
+        "additionalProperties": false,
+        "description": "uiBundleResponse is the JSON shape for a Bundle in the UI API.",
+        "properties": {
+          "createdAt": {
+            "description": "ISO 8601 creation time for timeline sorting",
+            "type": "string"
+          },
+          "environments": {
+            "description": "Per-environment statuses. The bundle comparison shows them and the release metrics bar reads HealthCheckedAt; the timeline does not.",
+            "items": {
+              "$ref": "#/components/schemas/BundleEnvironment"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "images": {
+            "description": "Container images in this Bundle — used by NodeDetail diff preview.",
+            "items": {
+              "$ref": "#/components/schemas/ImageRef"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/BundleProvenance"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "namespace",
+          "phase",
+          "pipeline",
+          "type"
+        ],
+        "type": "object"
+      },
+      "BundleEnvironment": {
+        "additionalProperties": false,
+        "description": "uiBundleEnvStatus is the per-environment status summary of a Bundle. The UI reads Name, Phase and HealthCheckedAt; nothing in it reads PRURL.",
+        "properties": {
+          "healthCheckedAt": {
+            "description": "HealthCheckedAt is when the post-merge health check for this environment completed (RFC 3339). The release metrics bar uses it for time-to-production.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "prURL": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "BundleIntent": {
+        "additionalProperties": false,
+        "description": "BundleIntent declares optional promotion targeting and skip overrides.",
+        "properties": {
+          "skipEnvironments": {
+            "description": "SkipEnvironments lists environment names to exclude from this promotion, subject to the PolicyGate SkipPermission check.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "targetEnvironment": {
+            "description": "TargetEnvironment restricts this Bundle to promoting only up to and including this environment. Empty means promote through all environments.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "BundleProvenance": {
+        "additionalProperties": false,
+        "description": "BundleProvenance carries build origin metadata.",
+        "properties": {
+          "author": {
+            "description": "Author is the committer or triggering actor for this build.",
+            "type": "string"
+          },
+          "ciRunURL": {
+            "description": "CIRunURL is the URL of the CI run that built this Bundle.",
+            "type": "string"
+          },
+          "commitSHA": {
+            "description": "CommitSHA is the application source commit that produced this Bundle.",
+            "type": "string"
+          },
+          "rollbackOf": {
+            "description": "RollbackOf is the name of the Bundle this Bundle rolls back (if any).",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "Timestamp is when the bundle was built.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "Condition": {
+        "additionalProperties": false,
+        "description": "uiCondition is the JSON shape for a Kubernetes condition.",
+        "properties": {
+          "lastTransitionTime": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "type"
+        ],
+        "type": "object"
+      },
+      "ConfigRef": {
+        "additionalProperties": false,
+        "description": "ConfigRef identifies a GitOps repository commit.",
+        "properties": {
+          "commitSHA": {
+            "description": "CommitSHA is the exact commit SHA for this config snapshot.",
+            "type": "string"
+          },
+          "gitRepo": {
+            "description": "GitRepo is the GitOps repository URL.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CreateBundleRequest": {
+        "additionalProperties": false,
+        "description": "bundleCreateRequest is the JSON body accepted by POST /api/v1/bundles.",
+        "properties": {
+          "configRef": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConfigRef"
+              }
+            ],
+            "description": "ConfigRef is the GitOps commit for \"config\" and \"mixed\" bundles."
+          },
+          "images": {
+            "description": "Images lists the container images in this Bundle.",
+            "items": {
+              "$ref": "#/components/schemas/ImageRef"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "intent": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BundleIntent"
+              }
+            ],
+            "description": "Intent limits or shapes the promotion (targetEnvironment, skipEnvironments)."
+          },
+          "namespace": {
+            "description": "Namespace is the target namespace. Defaults to the server's default namespace.",
+            "type": "string"
+          },
+          "pipeline": {
+            "description": "Pipeline is the target Pipeline name.",
+            "type": "string"
+          },
+          "provenance": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BundleProvenance"
+              }
+            ],
+            "description": "Provenance carries build metadata."
+          },
+          "type": {
+            "description": "Type is the bundle type: \"image\", \"config\", or \"mixed\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pipeline",
+          "type"
+        ],
+        "type": "object"
+      },
+      "CreateBundleResponse": {
+        "additionalProperties": false,
+        "description": "bundleCreateResponse is the JSON response for POST /api/v1/bundles.",
+        "properties": {
+          "name": {
+            "description": "Name is the name of the created Bundle CRD.",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Namespace is the namespace of the created Bundle CRD.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "namespace"
+        ],
+        "type": "object"
+      },
+      "EnvironmentNode": {
+        "additionalProperties": false,
+        "description": "uiEnvironmentNode is the static topology shape for one environment in a Pipeline. Used by the frontend to render the DAG when no active Bundle is promoting.",
+        "properties": {
+          "approval": {
+            "description": "Approval is \"auto\" or \"pr-review\" — shown as a badge on the node.",
+            "type": "string"
+          },
+          "dependsOn": {
+            "description": "DependsOn is the list of environment names this one depends on. Empty means this environment starts at the root of the DAG.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Name is the environment name (e.g. \"test\", \"uat\", \"prod\").",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "Event": {
+        "additionalProperties": false,
+        "description": "uiEventResponse is the JSON shape for a Kubernetes event in the UI API.",
+        "properties": {
+          "count": {
+            "description": "number of times event occurred",
+            "format": "int32",
+            "type": "integer"
+          },
+          "firstTimestamp": {
+            "description": "RFC3339 of first occurrence",
+            "type": "string"
+          },
+          "lastTimestamp": {
+            "description": "RFC3339 of most recent occurrence",
+            "type": "string"
+          },
+          "message": {
+            "description": "human-readable event message",
+            "type": "string"
+          },
+          "reason": {
+            "description": "short CamelCase reason",
+            "type": "string"
+          },
+          "type": {
+            "description": "Normal or Warning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "count",
+          "firstTimestamp",
+          "lastTimestamp",
+          "message",
+          "reason",
+          "type"
+        ],
+        "type": "object"
+      },
+      "GateOverrideRequest": {
+        "additionalProperties": false,
+        "description": "uiGateOverrideRequest is the body of POST /api/v1/ui/gates/{name}/approve.",
+        "properties": {
+          "expiresInMinutes": {
+            "description": "ExpiresInMinutes is how long the override lasts, 1 to 1440. Defaults to 60.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "namespace": {
+            "description": "Namespace of the gate, used only with the {name}/approve form; the {namespace}/{name}/approve form takes it from the path.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Reason is recorded on the override and in the audit trail. Required.",
+            "type": "string"
+          },
+          "stage": {
+            "description": "Stage limits the override to one environment. Empty overrides the gate in every environment it applies to.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "Graph": {
+        "additionalProperties": false,
+        "description": "uiGraphResponse is the DAG response for a Bundle.",
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/GraphEdge"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/GraphNode"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "edges",
+          "nodes"
+        ],
+        "type": "object"
+      },
+      "GraphEdge": {
+        "additionalProperties": false,
+        "description": "uiGraphEdge is a directed dependency edge in the promotion DAG.",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "GraphNode": {
+        "additionalProperties": false,
+        "description": "uiGraphNode is a node in the promotion DAG.",
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "holding": {
+            "description": "Holding is set on a PolicyGate node whose gate holds the bundle back (graph.GateHolds, the rule blockerCount uses); its State is \"Block\". See graph.GateState for the other gate states.",
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "lastEvaluatedAt": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "outputs": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "prURL": {
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "ISO 8601 step creation time for elapsed timers",
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "type": {
+            "description": "\"PromotionStep\" or \"PolicyGate\"",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "id",
+          "label",
+          "state",
+          "type"
+        ],
+        "type": "object"
+      },
+      "ImageRef": {
+        "additionalProperties": false,
+        "description": "ImageRef identifies a container image by repository, tag, and/or digest.",
+        "properties": {
+          "digest": {
+            "description": "Digest is the image digest (sha256:...).",
+            "type": "string"
+          },
+          "repository": {
+            "description": "Repository is the image repository (e.g. \"ghcr.io/nginx/nginx\").",
+            "type": "string"
+          },
+          "tag": {
+            "description": "Tag is the image tag.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository"
+        ],
+        "type": "object"
+      },
+      "MessageResponse": {
+        "additionalProperties": false,
+        "description": "uiMessageResponse is the response of an action that creates nothing.",
+        "properties": {
+          "message": {
+            "description": "Message describes what was done.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "Pipeline": {
+        "additionalProperties": false,
+        "description": "uiPipelineResponse is the JSON shape for a Pipeline in the UI API.",
+        "properties": {
+          "activeBundleName": {
+            "type": "string"
+          },
+          "blockerCount": {
+            "description": "Operations table columns: derived from active Bundle + steps + gates. BlockerCount is the number of the active bundle's PolicyGates with ready=false in environments it has reached (every upstream Verified) but not started; see blockingGateCount.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "environmentCount": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "environmentStates": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "per-environment state counts for the multi-segment health bar. Derived from the active Bundle's status.environments. Keys are environment names, values are the promotion phase.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "environmentTopology": {
+            "description": "static pipeline topology from spec — rendered even when no Bundle is promoting. Each entry is one environment in pipeline order with its dependsOn edges.",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentNode"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "failedStepCount": {
+            "description": "FailedStepCount is the number of PromotionSteps with state=Failed for the active bundle.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "inventoryAgeDays": {
+            "description": "InventoryAgeDays is the number of days since the latest bundle was created. A high value indicates stale inventory (no recent deploys). A pointer so that 0 (\"created today\") is sent; nil means no active bundle.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "lastMergedAt": {
+            "description": "LastMergedAt is the RFC3339 timestamp of the last env that reached Verified. Empty string when no environment has been verified yet.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "paused": {
+            "description": "true when spec.paused=true",
+            "type": "boolean"
+          },
+          "phase": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "environmentCount",
+          "name",
+          "namespace",
+          "phase"
+        ],
+        "type": "object"
+      },
+      "PipelineActionRequest": {
+        "additionalProperties": false,
+        "description": "uiPipelineActionRequest is the body of POST /api/v1/ui/pause and POST /api/v1/ui/resume.",
+        "properties": {
+          "namespace": {
+            "description": "Namespace of the Pipeline. Defaults to \"default\".",
+            "type": "string"
+          },
+          "pipeline": {
+            "description": "Pipeline is the Pipeline to pause or resume.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pipeline"
+        ],
+        "type": "object"
+      },
+      "PolicyGate": {
+        "additionalProperties": false,
+        "description": "uiGateResponse is the JSON shape for a PolicyGate.",
+        "properties": {
+          "bundle": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "holding": {
+            "description": "Holding is true when this gate instance holds its bundle back (graph.GateHolds, the rule blockerCount uses). A not-ready gate that is not holding is waiting for the bundle, not blocking it.",
+            "type": "boolean"
+          },
+          "lastEvaluatedAt": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "overrides": {
+            "description": "Override history from spec.overrides[].",
+            "items": {
+              "$ref": "#/components/schemas/PolicyGateOverride"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "pipeline": {
+            "description": "Pipeline, Bundle and Environment come from the kardinal.io/* labels the graph builder sets on gate instances. They are empty on templates.",
+            "type": "string"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "state": {
+            "description": "State is the state the UI shows: Pass, Block, Superseded, Pending or Waiting (graph.GateState), the same as the gate's node in the bundle graph and the STATE kardinal explain prints.",
+            "type": "string"
+          },
+          "template": {
+            "description": "Template is true for a PolicyGate template (no kardinal.io/bundle label). Templates are never evaluated for a bundle and always report ready=false, so the UI must not count them as blocking.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "expression",
+          "name",
+          "namespace",
+          "ready",
+          "state"
+        ],
+        "type": "object"
+      },
+      "PolicyGateOverride": {
+        "additionalProperties": false,
+        "description": "uiGateOverride is the JSON shape for a PolicyGateOverride (K-09 audit record).",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "PromoteRequest": {
+        "additionalProperties": false,
+        "description": "uiPromoteRequest is the body of POST /api/v1/ui/promote.",
+        "properties": {
+          "environment": {
+            "description": "Environment is the environment to promote to; its upstreams must have a Verified Bundle.",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Namespace of the Pipeline. Defaults to \"default\".",
+            "type": "string"
+          },
+          "pipeline": {
+            "description": "Pipeline is the Pipeline to promote in.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "pipeline"
+        ],
+        "type": "object"
+      },
+      "PromoteResponse": {
+        "additionalProperties": false,
+        "description": "uiPromoteResponse is the 201 response of POST /api/v1/ui/promote.",
+        "properties": {
+          "bundle": {
+            "description": "Bundle is the promotion Bundle created.",
+            "type": "string"
+          },
+          "message": {
+            "description": "Message describes the promotion.",
+            "type": "string"
+          },
+          "source": {
+            "description": "Source is the Verified Bundle whose artifacts it promotes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle",
+          "message",
+          "source"
+        ],
+        "type": "object"
+      },
+      "PromotionStep": {
+        "additionalProperties": false,
+        "description": "uiStepResponse is the JSON shape for a PromotionStep.",
+        "properties": {
+          "bakeElapsedMinutes": {
+            "description": "Bake countdown fields (served; the UI does not show them yet). BakeElapsedMinutes is contiguous healthy minutes so far in the current bake window.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "bakeResets": {
+            "description": "BakeResets is the number of times the bake timer was reset due to a health alarm.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "bakeTargetMinutes": {
+            "description": "BakeTargetMinutes is the required contiguous healthy duration from Pipeline spec. Zero means no bake is configured for this environment.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "bundle": {
+            "type": "string"
+          },
+          "conditions": {
+            "description": "Kubernetes conditions — shown in NodeDetail conditions panel.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "currentStepIndex": {
+            "description": "index into step sequence",
+            "format": "int32",
+            "type": "integer"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "outputs": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "prURL": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "stepType": {
+            "type": "string"
+          },
+          "steps": {
+            "description": "Steps is the per-step progress from status.steps[], in execution order. The UI renders it as the step progress list.",
+            "items": {
+              "$ref": "#/components/schemas/StepStatus"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "bundle",
+          "currentStepIndex",
+          "environment",
+          "name",
+          "namespace",
+          "pipeline",
+          "state",
+          "stepType"
+        ],
+        "type": "object"
+      },
+      "RollbackRequest": {
+        "additionalProperties": false,
+        "description": "uiRollbackRequest is the body of POST /api/v1/ui/rollback.",
+        "properties": {
+          "environment": {
+            "description": "Environment is the environment to roll back.",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Namespace of the Pipeline. Defaults to \"default\".",
+            "type": "string"
+          },
+          "pipeline": {
+            "description": "Pipeline is the Pipeline to roll back.",
+            "type": "string"
+          },
+          "toBundle": {
+            "description": "ToBundle is the Bundle to go back to. Empty means the most recent Bundle, other than the one deployed now, that was Verified in the environment.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "pipeline"
+        ],
+        "type": "object"
+      },
+      "RollbackResponse": {
+        "additionalProperties": false,
+        "description": "uiRollbackResponse is the 201 response of POST /api/v1/ui/rollback.",
+        "properties": {
+          "bundle": {
+            "description": "Bundle is the rollback Bundle created.",
+            "type": "string"
+          },
+          "message": {
+            "description": "Message describes the rollback.",
+            "type": "string"
+          },
+          "rollbackOf": {
+            "description": "RollbackOf is the Bundle whose artifacts it restores.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle",
+          "message",
+          "rollbackOf"
+        ],
+        "type": "object"
+      },
+      "StepStatus": {
+        "additionalProperties": false,
+        "description": "uiStepStatus is the JSON shape for one entry of PromotionStep status.steps[].",
+        "properties": {
+          "completedAt": {
+            "type": "string"
+          },
+          "durationMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "state": {
+            "description": "Pending, InProgress, Completed or Failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "type": "object"
+      },
+      "UICreateBundleRequest": {
+        "additionalProperties": false,
+        "description": "uiCreateBundleRequest is the body of POST /api/v1/ui/bundles.",
+        "properties": {
+          "author": {
+            "description": "Author is the build's author (spec.provenance.author).",
+            "type": "string"
+          },
+          "commitSHA": {
+            "description": "CommitSHA is the source commit (spec.provenance.commitSHA).",
+            "type": "string"
+          },
+          "image": {
+            "description": "Image is the image reference: repo:tag, repo@sha256:digest or repo.",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Namespace of the Pipeline. Defaults to \"default\".",
+            "type": "string"
+          },
+          "pipeline": {
+            "description": "Pipeline is the Pipeline the Bundle promotes through.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image",
+          "pipeline"
+        ],
+        "type": "object"
+      },
+      "UICreateBundleResponse": {
+        "additionalProperties": false,
+        "description": "uiCreateBundleResponse is the 201 response of POST /api/v1/ui/bundles.",
+        "properties": {
+          "bundle": {
+            "description": "Bundle is the name of the created Bundle.",
+            "type": "string"
+          },
+          "message": {
+            "description": "Message describes how to follow it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ValidateCELRequest": {
+        "additionalProperties": false,
+        "description": "uiValidateCELRequest is the body of POST /api/v1/ui/validate-cel.",
+        "properties": {
+          "expression": {
+            "description": "Expression is the PolicyGate CEL expression to compile.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expression"
+        ],
+        "type": "object"
+      },
+      "ValidateCELResponse": {
+        "additionalProperties": false,
+        "description": "uiValidateCELResponse is the response of POST /api/v1/ui/validate-cel.",
+        "properties": {
+          "error": {
+            "description": "Error is the compile error when Valid is false.",
+            "type": "string"
+          },
+          "valid": {
+            "description": "Valid is true when the expression compiles in the PolicyGate CEL environment.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid"
+        ],
+        "type": "object"
+      },
+      "WebhookHealth": {
+        "additionalProperties": false,
+        "description": "webhookHealthResponse is the body of GET /webhook/scm/health.",
+        "properties": {
+          "eventsProcessed": {
+            "description": "EventsProcessed counts the signed webhook events of any type since startup.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "mergedPREvents": {
+            "description": "MergedPREvents counts the merged pull request events among them.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "status": {
+            "description": "Status is always \"ok\".",
+            "type": "string"
+          },
+          "webhookConfigured": {
+            "description": "WebhookConfigured is true when a webhook secret is set; without one every event is refused.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "eventsProcessed",
+          "mergedPREvents",
+          "status",
+          "webhookConfigured"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bundleToken": {
+        "description": "The Bundle API token (bundleAPI.tokenSecretRef, --bundle-api-token).",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "uiToken": {
+        "description": "The static UI token (ui.auth.tokenSecretRef) or, with ui.auth.tokenReview, a Kubernetes token (kubectl create token) whose user Kubernetes RBAC authorizes for each request. With neither mode set, the UI API takes no credentials and answers only loopback peers (kubectl port-forward).",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "The UI API (/api/v1/ui/*, on the UI listener), the Bundle API for CI (POST /api/v1/bundles) and the SCM webhook health endpoint (on the webhook listener). Authentication and RBAC: https://pnz1990.github.io/kardinal-promoter/reference/rest-api/",
+    "license": {
+      "identifier": "Apache-2.0",
+      "name": "Apache-2.0"
+    },
+    "title": "kardinal-promoter REST API",
+    "version": "v1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/bundles": {
+      "post": {
+        "description": "Requires the Bundle API token (bundleAPI.tokenSecretRef). The same validation as kardinal create bundle; at most 60 requests a minute.",
+        "operationId": "createBundle",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBundleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateBundleResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "bundleToken": []
+          }
+        ],
+        "servers": [
+          {
+            "description": "The webhook and Bundle API listener (--webhook-bind-address).",
+            "url": "http://{controller}:8083",
+            "variables": {
+              "controller": {
+                "default": "kardinal-promoter.kardinal-system.svc"
+              }
+            }
+          }
+        ],
+        "summary": "Create a Bundle from CI",
+        "tags": [
+          "Bundle API"
+        ]
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPI",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "An OpenAPI 3.1 document.",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [],
+        "summary": "This OpenAPI description (also on the Bundle API listener)",
+        "tags": [
+          "Meta"
+        ]
+      }
+    },
+    "/api/v1/ui/bundles": {
+      "post": {
+        "description": "The requester (UI auth identity) is recorded in the kardinal.io/requested-by annotation.",
+        "operationId": "createBundleFromUI",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UICreateBundleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UICreateBundleResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Create an image Bundle (the UI's Create Bundle dialog)",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/bundles/{bundle}/graph": {
+      "get": {
+        "operationId": "getBundleGraph",
+        "parameters": [
+          {
+            "description": "Bundle name.",
+            "in": "path",
+            "name": "bundle",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Namespace to look in. Empty finds the object in any namespace the caller may read; an ambiguous name is refused.",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Graph"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "The promotion DAG of a Bundle: its PromotionSteps and PolicyGates",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/bundles/{bundle}/steps": {
+      "get": {
+        "operationId": "listBundleSteps",
+        "parameters": [
+          {
+            "description": "Bundle name.",
+            "in": "path",
+            "name": "bundle",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Namespace to look in. Empty finds the object in any namespace the caller may read; an ambiguous name is refused.",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PromotionStep"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "The PromotionSteps of a Bundle, with per-step timings",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/gates": {
+      "get": {
+        "operationId": "listGates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PolicyGate"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "List PolicyGates: templates and the instances of every Bundle",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/gates/{gate}/approve": {
+      "post": {
+        "description": "Adds a time-limited entry to spec.overrides with the requester as createdBy. The gate's namespace comes from the body.",
+        "operationId": "overrideGate",
+        "parameters": [
+          {
+            "description": "PolicyGate name.",
+            "in": "path",
+            "name": "gate",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Override a PolicyGate for a while (kardinal override)",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/gates/{namespace}/{gate}/approve": {
+      "post": {
+        "operationId": "overrideGateInNamespace",
+        "parameters": [
+          {
+            "description": "PolicyGate namespace.",
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "PolicyGate name.",
+            "in": "path",
+            "name": "gate",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Override a PolicyGate in a namespace for a while",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/pause": {
+      "post": {
+        "operationId": "pausePipeline",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Pause a Pipeline (kardinal pause)",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/pipelines": {
+      "get": {
+        "operationId": "listPipelines",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Pipeline"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "List Pipelines with their health, active Bundle and DORA metrics",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/pipelines/{pipeline}/bundles": {
+      "get": {
+        "operationId": "listPipelineBundles",
+        "parameters": [
+          {
+            "description": "Pipeline name.",
+            "in": "path",
+            "name": "pipeline",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Namespace of the Pipeline. Empty lists the Pipeline's Bundles in every namespace the caller may read.",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Bundle"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "List the Bundles of a Pipeline, newest first",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/promote": {
+      "post": {
+        "operationId": "promote",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromoteResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Promote the Bundle Verified upstream into an environment (kardinal promote)",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/resume": {
+      "post": {
+        "operationId": "resumePipeline",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Resume a paused Pipeline (kardinal resume)",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/rollback": {
+      "post": {
+        "operationId": "rollback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RollbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RollbackResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Roll an environment back to an earlier Verified Bundle (kardinal rollback)",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/steps/{namespace}/{step}/events": {
+      "get": {
+        "operationId": "listStepEvents",
+        "parameters": [
+          {
+            "description": "PromotionStep namespace.",
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "PromotionStep name.",
+            "in": "path",
+            "name": "step",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Event"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "The Kubernetes Events of a PromotionStep, newest first",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/validate-cel": {
+      "post": {
+        "operationId": "validateCEL",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateCELRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateCELResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Compile a PolicyGate CEL expression",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/webhook/scm/health": {
+      "get": {
+        "operationId": "webhookHealth",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookHealth"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [],
+        "servers": [
+          {
+            "description": "The webhook and Bundle API listener (--webhook-bind-address).",
+            "url": "http://{controller}:8083",
+            "variables": {
+              "controller": {
+                "default": "kardinal-promoter.kardinal-system.svc"
+              }
+            }
+          }
+        ],
+        "summary": "Whether SCM webhooks are configured, and how many were processed",
+        "tags": [
+          "SCM webhook"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "description": "The UI listener (--ui-listen-address). https:// when controller TLS is set.",
+      "url": "http://{controller}:8082",
+      "variables": {
+        "controller": {
+          "default": "kardinal-promoter.kardinal-system.svc"
+        }
+      }
+    }
+  ]
+}
