@@ -161,10 +161,29 @@ func TestPipeline_SharedBranchWriters(t *testing.T) {
 	}
 	assert.Positive(t, rebased, "auto environments of different Pipelines pushed into each other and rebased")
 
+	// The base branch moves while the prod PRs wait: every PR branch is
+	// rebuilt on the new head (status.outputs.baseSHA follows it).
+	for i, name := range names {
+		e.WaitStepState(t, ns, name, newest[i], name+"-prod", "WaitingForMerge", 10*time.Minute)
+	}
+	moved, err := git.CommitFiles(ctx, repo, "ci note while the PRs wait",
+		map[string][]byte{"notes/ci-waiting.txt": []byte("note\n")})
+	require.NoError(t, err)
+	notes = append(notes, moved)
+	for i, name := range names {
+		framework.Eventually(t, 3*time.Minute, name+"-prod PR branch rebuilt on the moved base", func(ctx context.Context) (bool, string) {
+			ps, ok, err := e.Step(ctx, ns, name, newest[i], name+"-prod")
+			if err != nil || !ok {
+				return false, fmt.Sprintf("step: %v", err)
+			}
+			return ps.Status.Outputs["baseSHA"] == moved, fmt.Sprintf("baseSHA %s rebuilds %s: %s",
+				ps.Status.Outputs["baseSHA"], ps.Status.Outputs["prBranchRebuilds"], ps.Status.Message)
+		})
+	}
+
 	// Every prod PR merges, one after the other, each onto a branch the
 	// others moved: no conflicts between Pipelines.
 	for i, name := range names {
-		e.WaitStepState(t, ns, name, newest[i], name+"-prod", "WaitingForMerge", 10*time.Minute)
 		a.merge(t, a.openPR(t, newest[i], name+"-prod"))
 	}
 	for i, name := range names {
@@ -234,8 +253,8 @@ func TestPipeline_PathConflict(t *testing.T) {
 		return a != nil && w != nil, fmt.Sprintf("api=%v web=%v", a, w)
 	})
 	assert.Equal(t, "OverlappingPath", cond("api").Reason)
-	assert.Contains(t, cond("api").Message, fmt.Sprintf("environment api-test (%s) and %s/web environment web-test (%s)",
-		fixtures.Path("api-test"), ns, fixtures.Path("api-test")))
+	assert.Contains(t, cond("api").Message, fmt.Sprintf("environment api-test (%s) and Pipeline web environment web-test (%s)",
+		fixtures.Path("api-test"), fixtures.Path("api-test")))
 	a := &app{e: e, ns: ns, repo: repo}
 	a.updatePipeline(t, "web", func(p *v1alpha1.Pipeline) { p.Spec.Environments[0].Path = fixtures.Path("web-test") })
 	framework.Eventually(t, time.Minute, "PathConflict cleared on both", func(context.Context) (bool, string) {

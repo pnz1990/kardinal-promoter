@@ -324,7 +324,7 @@ func scmPromotionPR(t *testing.T, e *framework.Env, edit func(*v1alpha1.Pipeline
 	ps, pr := a.waitOpenPR(t, bundle, "prod")
 
 	assert.Equal(t, "[kardinal] Promote "+bundle+" to prod", pr.Title)
-	assert.Equal(t, prHead(bundle, "prod"), pr.Head)
+	assert.Equal(t, prHead(a.ns, bundle, "prod"), pr.Head)
 	assert.Equal(t, a.repo.Branch, pr.Base)
 	assert.Subset(t, pr.Labels, []string{"kardinal", "kardinal/promotion"})
 	assert.NotContains(t, pr.Labels, "kardinal/rollback")
@@ -460,7 +460,7 @@ func scmClosesPRs(t *testing.T, e *framework.Env) {
 		bundle string
 		pr     int
 	}{{older, pr1.Number}, {newer, pr2.Number}} {
-		head := prHead(c.bundle, "prod")
+		head := prHead(a.ns, c.bundle, "prod")
 		framework.Eventually(t, time.Minute, fmt.Sprintf("PR #%d's branch %s deleted", c.pr, head),
 			func(ctx context.Context) (bool, string) {
 				_, err := e.Brancher(t).BranchHead(ctx, a.repo, head)

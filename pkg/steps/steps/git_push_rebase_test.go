@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,15 +41,9 @@ var _ scm.Rebaser = (*rebasingGitClient)(nil)
 // new head and pushed again, with backoff between attempts; a rebase conflict
 // (the other writer changed the same files) or running out of attempts
 // restarts the sequence from a fresh clone; any other rebase error fails the
-// step. A pr-review environment force-pushes its own branch and never
-// rebases.
+// step. The step never waits between attempts. A pr-review environment
+// force-pushes its own branch and never rebases.
 func TestGitPushStep_RebasesOntoMovedBranch(t *testing.T) {
-	var waits []time.Duration
-	defer steps.SetRebaseBackoff(func(n int) time.Duration {
-		d := time.Millisecond << n
-		waits = append(waits, d)
-		return d
-	})()
 	nonFF := fmt.Errorf("push: %w", scm.ErrNonFastForward)
 	many := make([]error, steps.MaxRebaseAttempts+1)
 	for i := range many {
@@ -84,7 +77,6 @@ func TestGitPushStep_RebasesOntoMovedBranch(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			waits = nil
 			git := &rebasingGitClient{mockGitClient: mockGitClient{pushErrs: tc.pushErrs}, rebaseErrs: tc.rebaseErrs}
 			state := makeState(t, &git.mockGitClient, nil)
 			state.GitClient = git
@@ -106,9 +98,6 @@ func TestGitPushStep_RebasesOntoMovedBranch(t *testing.T) {
 				assert.Empty(t, res.Outputs["rebases"])
 			}
 			assert.False(t, git.pushForce && tc.approval == "auto", "the base branch is never force-pushed")
-			if tc.wantRebases > 1 {
-				assert.Len(t, waits, tc.wantRebases-1, "a backoff before every rebase but the first")
-			}
 		})
 	}
 }

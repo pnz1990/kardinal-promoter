@@ -127,7 +127,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `shard` | No | (must be empty) | **Deprecated, not supported.** Distributed mode was removed. A non-empty value sets the Pipeline `Ready=False` (reason `NotImplemented`), `kardinal validate` fails, and every PromotionStep of the environment fails with `shard is not supported`. Remove it; the controller reconciles every environment. See [Multi-Cluster](distributed-mode.md). |
 | `steps` | No | (none) | **Deprecated, not supported.** kardinal has no custom step engine: the controller always runs the sequence it infers from the Bundle type, `update.strategy`, `approval` and `layout`. The API server rejects a Pipeline that sets `steps` (an empty list is accepted). See [Promotion Steps](#promotion-steps). |
 | `promotionTemplate` | No | (none) | **Deprecated, not supported.** The `PromotionTemplate` CRD was removed. The API server rejects a Pipeline that sets `promotionTemplate`. |
-| `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR and deletes its head branch (`kardinal/<bundle>/<env>`), so a late merge cannot deliver the change: GitHub's API merges a closed PR whose branch is still there. Unset or `0` waits forever. |
+| `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR and deletes its head branch (`kardinal/<namespace hash>/<bundle>/<env>`), so a late merge cannot deliver the change: GitHub's API merges a closed PR whose branch is still there. Unset or `0` waits forever. |
 | `stepTimeoutSeconds` | No | (none) | Maximum seconds one built-in step (`git-clone`, `kustomize-set-image`, `open-pr`, ...) may run. The step is cancelled and the error is handled like any other step error: a retryable error is retried with backoff, then the PromotionStep is marked `Failed`. Minimum 1. Unset means no per-step timeout. |
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A check that is not healthy stops the window; it starts again at the next healthy check, and `health.timeout` bounds the wait for it. A Waiting check (the workload is changing, such as a canary paused at a step) is not an alarm under either policy. |
 | `bake.policy` | No | `reset-on-alarm` | What to do when a check is unhealthy during the bake window. `reset-on-alarm`: stop the window, increment `status.bakeResets`, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. A release that keeps flapping between healthy and unhealthy never fails under `reset-on-alarm`; `fail-on-alarm` bounds it. |
@@ -304,24 +304,37 @@ force-pushes the base branch, so no writer's commit is lost:
 - **auto environments**: when `git-push` finds that the branch moved since its clone
   (another writer pushed first), it fetches the new head and replays its commit onto it:
   every file this promotion added, changed or deleted takes the promotion's version, every
-  other file the new head's. It pushes again, up to 6 times, waiting 100 ms doubling (plus
-  random jitter) between attempts. The step message then reads
+  other file the new head's. It pushes again, up to 6 times, without waiting in between. The
+  step message then reads
   `pushed main after rebasing onto N newer commit(s) of other writers`. When the new commits
   changed one of the same files, or the branch keeps moving, the whole step sequence runs
-  again from a fresh clone (at most 3 times), so the update is computed on the other
-  writer's version; after that the step fails and is retried with backoff like any other
-  transient failure.
+  again from a fresh clone (at most 3 times in one reconcile), so the update is computed on
+  the other writer's version. After that the step is retried with jittered backoff, like any
+  transient failure; each retry gets as far as `git-push`, which restarts the retry count, so
+  contention slows a promotion down but does not fail it.
 - **pr-review environments**: each promotion pushes its own branch
-  `kardinal/<bundle>/<environment>`, based on the branch at its clone. PRs of different
-  Pipelines change different paths, so each merges without a conflict however many merged
-  before it.
-- **Path isolation**: two environments that write the same directory, or one inside the
-  other, overwrite each other's files and their PRs conflict. The Pipeline reconciler
-  checks every Pipeline the controller sees: when another Pipeline writes the same
-  repository (`spec.git.url`, ignoring a trailing `.git` and case) and branch at an
-  overlapping path, both Pipelines get the condition `PathConflict=True` (reason
-  `OverlappingPath`) naming the environments. It does not stop promotions. Environments
-  with `update.strategy: argocd` write no git and are not compared.
+  `kardinal/<namespace hash>/<bundle>/<environment>` (the hash is the first 8 hex digits of
+  the SHA-256 of the namespace, so Bundles of the same name in two namespaces get separate
+  branches; a PR opened by an earlier release keeps its `kardinal/<bundle>/<environment>`
+  branch). The branch starts at the base head of its clone. While the PR waits for its merge,
+  the controller checks the base head every 30 seconds; when the base moved (other PRs
+  merged, a direct push, or a force-push), it reruns the promotion's steps on a fresh clone of
+  the new head and force-pushes the PR branch, so the PR is always one commit on the current
+  base. Commits pushed to the PR branch by hand are replaced, and a host set to dismiss stale
+  approvals asks for the review again. PRs of different Pipelines change different paths, so
+  each merges without a conflict however many merged before it.
+- **Path isolation**: two environments that write the same path, or one inside the other,
+  overwrite each other's files and their PRs conflict. The Pipeline reconciler checks every
+  Pipeline the controller sees, including two environments of one Pipeline. A Pipeline writes
+  each environment's `path` and, for `update.strategy: helm`, a `valuesFile` outside it (such
+  as `../shared/values.yaml`). Repositories are compared by host and path, so the https, ssh
+  and `git@host:org/repo` URLs of one repository match (case, userinfo, port and a trailing
+  `.git` are ignored); branches must be equal. On an overlap the Pipeline gets
+  `PathConflict=True` (reason `OverlappingPath`). The message names the environments and the
+  Pipelines of the same namespace; Pipelines of other namespaces are only counted
+  (`environment prod (apps/prod) and 2 other Pipeline(s) in other namespaces`). It does not
+  stop promotions. Environments with `update.strategy: argocd` write no git and are not
+  compared.
 
 ```bash
 kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[?(@.type=="PathConflict")].message}{"\n"}{end}'

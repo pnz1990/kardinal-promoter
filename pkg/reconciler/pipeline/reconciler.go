@@ -440,7 +440,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&kardinalv1alpha1.Pipeline{}).
 		// A Pipeline on the same repository and branch changed: re-check
 		// PathConflict on the others.
-		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelinesSharingRepo)).
+		Watches(&kardinalv1alpha1.Pipeline{}, r.pipelinePeers()).
 		// Deleting the freeze gate by hand while the pipeline is paused, or
 		// removing a user gate that has its name, re-enqueues the Pipeline.
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(pipelineForFreezeGate)).

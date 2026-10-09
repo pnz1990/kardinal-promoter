@@ -594,7 +594,7 @@ func TestGraph_DeletedGraphIsRecreated(t *testing.T) {
 	assert.Len(t, prs, 1, "no second PR is opened")
 	var prodPRs []string
 	for _, p := range prs {
-		if p.Head == prHead(bundle, "prod") {
+		if p.Head == prHead(a.ns, bundle, "prod") {
 			prodPRs = append(prodPRs, fmt.Sprintf("#%d %s", p.Number, p.State))
 		}
 	}

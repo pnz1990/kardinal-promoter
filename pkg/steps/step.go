@@ -110,6 +110,10 @@ type StepState struct {
 	// there is none or it cannot be read.
 	RollbackFromBundle *v1alpha1.BundleSpec
 
+	// Namespace is the PromotionStep's namespace. It makes the PR branch
+	// unique across namespaces (steps.PRBranch).
+	Namespace string
+
 	// WorkDir is the local directory where the Git work tree is checked out.
 	WorkDir string
 

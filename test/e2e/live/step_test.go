@@ -95,8 +95,8 @@ func TestStep_AutoPushAndCommitFormat(t *testing.T) {
 	for _, p := range prs {
 		heads = append(heads, p.Head)
 	}
-	assert.Equal(t, []string{prHead(bundle, "prod")}, heads, "only the pr-review environment opens a PR")
-	onBranch, err := gitserver.Commits(ctx, e.Git, a.repo, prHead(bundle, "prod"), 1)
+	assert.Equal(t, []string{prHead(a.ns, bundle, "prod")}, heads, "only the pr-review environment opens a PR")
+	onBranch, err := gitserver.Commits(ctx, e.Git, a.repo, prHead(a.ns, bundle, "prod"), 1)
 	require.NoError(t, err)
 	require.NotEmpty(t, onBranch, "the PR branch has commits")
 	checkPromoteCommit(t, onBranch[0], bundle, "prod")
@@ -481,9 +481,9 @@ func TestStep_SupersededCloseRetriesWithBackoff(t *testing.T) {
 	require.NotNil(t, ps.Status.NextRetryAt, "status.nextRetryAt of a step that retries the close: %s", ps.Status.Message)
 	ok, cond := framework.CondIs(ps.Status.Conditions, "SupersededCloseFailed", metav1.ConditionTrue, "CloseFailed")
 	assert.True(t, ok, "SupersededCloseFailed: %s", cond)
-	assert.Contains(t, ps.Status.Message, "deleting its branch "+prHead(older, "test")+" failed")
+	assert.Contains(t, ps.Status.Message, "deleting its branch "+prHead(a.ns, older, "test")+" failed")
 	e.WaitPRState(t, a.repo, pr.Number, "closed", time.Second)
-	_, err := brancher.BranchHead(ctx, a.repo, prHead(older, "test"))
+	_, err := brancher.BranchHead(ctx, a.repo, prHead(a.ns, older, "test"))
 	require.NoError(t, err, "the branch is kept while the repository is archived")
 
 	require.NoError(t, archiver.SetArchived(ctx, a.repo, false))
@@ -492,7 +492,7 @@ func TestStep_SupersededCloseRetriesWithBackoff(t *testing.T) {
 	assert.NotContains(t, ps.Status.Message, "by hand")
 	assert.Nil(t, meta.FindStatusCondition(ps.Status.Conditions, "SupersededCloseFailed"), "the condition once the close is done")
 	assert.Nil(t, ps.Status.NextRetryAt, "status.nextRetryAt of a Failed step")
-	_, err = brancher.BranchHead(ctx, a.repo, prHead(older, "test"))
+	_, err = brancher.BranchHead(ctx, a.repo, prHead(a.ns, older, "test"))
 	assert.Error(t, err, "the branch is deleted")
 	comments := e.PRComments(t, a.repo, pr.Number, "kardinal closed this PR: bundle "+older+" was superseded")
 	assert.LessOrEqual(t, len(comments), 1, "the PR is commented on at most once")

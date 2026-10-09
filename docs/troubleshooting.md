@@ -193,7 +193,11 @@ Either remove the environment from `intent.skipEnvironments`, or have the platfo
 
 ### Symptom: "base branch ... moved while promoting"
 
-In an `approval: auto` environment, something else pushed to the base branch while the step was promoting. The step starts again from a fresh clone, up to 3 times, then fails with `(gave up after 3 restarts)`. If this happens often, check for other tools (Renovate, Dependabot, CI jobs) that push to the same branch. `pr-review` environments push to their own `kardinal/<bundle>/<env>` branch and do not hit this.
+In an `approval: auto` environment, something else (another Pipeline, Renovate, Dependabot, a CI job) pushed to the base branch while the step was promoting. `git-push` first replays the promotion's files onto the new head and pushes again, up to 6 times. When the other writer changed the same files, or the branch keeps moving, the step starts again from a fresh clone, up to 3 times in one reconcile. After that the message reads `(gave up after 3 restarts in this reconcile)` and the step is retried like any transient failure: `retrying in <delay> (1/5)`, with a jittered backoff so writers that collided do not collide again. Each attempt gets as far as `git-push`, so the retry count starts over: contention alone never fails the step, it only slows it down. `pr-review` environments push to their own `kardinal/<namespace hash>/<bundle>/<env>` branch and do not hit this.
+
+### Symptom: "base branch main moved from ... to ...; rebuilt the PR branch"
+
+Not an error. While a `pr-review` PR waits for its merge, the controller compares the base branch head with the commit the promotion was built on (`status.outputs.baseSHA`) at every check (every 30 seconds). When the base moved, by a fast-forward or a force-push, it runs the promotion's steps again from a fresh clone of the new head and force-pushes the result to the PR branch. The PR keeps its number; `status.outputs.prBranchRebuilds` counts the rebuilds and the step emits a `PRBranchRebuilt` Event. Commits pushed to the PR branch by hand are replaced, and a host that dismisses approvals on a new push (GitHub's "Dismiss stale pull request approvals") asks for the review again. When a rebuild fails, the message reads `rebuilding its branch on main at <sha> failed, retrying` and the PR stays as it was.
 
 ### Symptom: "authentication required" or "authorization failed" on git clone or push
 
@@ -602,7 +606,7 @@ Two finalizers can hold a delete, and the controller removes both itself while i
 was `pr-review` when the step started) carries it while it is `Promoting` or `WaitingForMerge`,
 from before it opens the PR; an `auto` step never carries it. When the step is deleted, the controller asks the SCM whether
 the PR is still open, closes it with a comment if it is, and deletes its head branch
-(`kardinal/<bundle>/<env>`) so the closed PR cannot be merged later; a merged PR is left alone,
+(`kardinal/<namespace hash>/<bundle>/<env>`) so the closed PR cannot be merged later; a merged PR is left alone,
 and a closed one only loses its branch. The branch is kept when the step comes back and pushes it
 again at once (the PromotionStep alone, below). Then it removes the finalizer. What happens to the PR depends on what was deleted:
 
@@ -637,8 +641,8 @@ removes the finalizer anyway and logs the error `gave up closing the PR of a del
 PromotionStep; removing its finalizer` with the `env` and `prURL`: close that PR by hand, since
 merging it would change the environment with no PromotionStep tracking it. When the PR was closed
 but its branch could not be deleted, the error says `PR #<n> is closed, but deleting its branch
-kardinal/<bundle>/<env> failed` (for a step with no PR, `the step opened no PR, but deleting its
-branch kardinal/<bundle>/<env> failed`): delete that branch by hand. It also emits a
+kardinal/<namespace hash>/<bundle>/<env> failed` (for a step with no PR, `the step opened no PR, but deleting its
+branch kardinal/<namespace hash>/<bundle>/<env> failed`): delete that branch by hand. It also emits a
 `ClosePRFailed` Warning Event on the step, except in a namespace being deleted: the API server
 refuses new Events there, and the step is gone, so the controller log is the only record.
 
@@ -656,7 +660,7 @@ promise that a new step reuses it. If the Bundle is deleted or stops `Promoting`
 namespace is deleted, before the new step exists, nothing tracks the PR and the controller never
 closes it. (A Graph that fails to translate leaves the PR open only until the translation works
 again; the new step then reuses it.) Such a PR has the `kardinal/promotion` label and the branch
-`kardinal/<bundle>/<environment>`, and no PromotionStep matches it:
+`kardinal/<namespace hash>/<bundle>/<environment>`, and no PromotionStep matches it:
 
 ```bash
 kubectl get promotionsteps -n <namespace> -l kardinal.io/bundle=<bundle>,kardinal.io/environment=<environment>
@@ -667,7 +671,7 @@ If a new step for that Bundle and environment ends before it opens a PR, it dele
 (below), and the SCM closes such a PR with no comment from kardinal.
 
 **A branch left with no PR.** A step that opens a PR but ends before it opens one (it is
-superseded, fails, or is deleted) deletes its `kardinal/<bundle>/<environment>` branch, because
+superseded, fails, or is deleted) deletes its `kardinal/<namespace hash>/<bundle>/<environment>` branch, because
 `git-push` may have pushed it, or a deleted step may have kept it for this one. The branch can
 still be left in a few cases:
 

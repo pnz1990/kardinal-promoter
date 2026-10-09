@@ -15,11 +15,12 @@ package steps
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"strconv"
-	"time"
+	"strings"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -35,9 +36,27 @@ func init() {
 const PRBranchPrefix = "kardinal/"
 
 // PRBranch is the branch git-push pushes a pr-review promotion to and open-pr
-// opens the PR from: kardinal/<bundle>/<env>.
-func PRBranch(bundle, env string) string {
-	return fmt.Sprintf("%s%s/%s", PRBranchPrefix, bundle, env)
+// opens the PR from: kardinal/<namespace hash>/<bundle>/<env>, where the hash
+// is the first 8 hex characters of the SHA-256 of the namespace. Bundle names
+// are unique only within a namespace, and two namespaces' Pipelines can write
+// one repository; the hash keeps their PR branches apart. An empty namespace
+// gives the name releases before v0.10.0 used, kardinal/<bundle>/<env>.
+func PRBranch(namespace, bundle, env string) string {
+	if namespace == "" {
+		return fmt.Sprintf("%s%s/%s", PRBranchPrefix, bundle, env)
+	}
+	sum := sha256.Sum256([]byte(namespace))
+	return fmt.Sprintf("%s%s/%s/%s", PRBranchPrefix, hex.EncodeToString(sum[:])[:8], bundle, env)
+}
+
+// prBranchFor is the branch of the step's PR: the one an earlier run of
+// this promotion pushed (status.outputs.branch), so a promotion started
+// before the namespace hash keeps its branch and PR, else PRBranch.
+func prBranchFor(state *parentsteps.StepState) string {
+	if b := state.Outputs["branch"]; strings.HasPrefix(b, PRBranchPrefix) && len(b) > len(PRBranchPrefix) {
+		return b
+	}
+	return PRBranch(state.Namespace, state.BundleName, state.Environment.Name)
 }
 
 // gitPushStep pushes the promotion commit. Which branch follows from the step
@@ -45,14 +64,13 @@ func PRBranch(bundle, env string) string {
 // approval edit made while the step runs cannot strand the commit:
 //
 //   - A sequence with open-pr (approval: pr-review) pushes to the
-//     kardinal-owned branch kardinal/<bundle>/<env> with force, so a re-run
+//     kardinal-owned branch PRBranch (kardinal/<ns hash>/<bundle>/<env>) with force, so a re-run
 //     after a controller restart (which re-clones and re-commits) replaces
 //     the earlier push instead of failing non-fast-forward.
 //   - Any other sequence (approval: auto) pushes to the base branch without
 //     force. If the base branch moved since the clone (another Pipeline or
 //     environment pushed first), the step rebases its commit onto the new
-//     head and pushes again, up to maxRebaseAttempts times with jittered
-//     backoff (rebaseAndPush). The rebase replays only the files this
+//     head and pushes again, up to maxRebaseAttempts times (rebaseAndPush). The rebase replays only the files this
 //     promotion changed; when the new commits on the branch changed one of
 //     them, or the attempts run out, the step returns StepRestart and the
 //     engine re-runs the sequence from a fresh clone, so the update steps
@@ -75,8 +93,7 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 		return parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "nothing to push: " + noChangesMessage}, nil
 	}
 
-	// Promotion branch name: kardinal/<bundle>/<env>
-	branch := PRBranch(state.BundleName, state.Environment.Name)
+	branch := prBranchFor(state)
 	force := true
 	if !state.OpensPR() {
 		branch = state.Git.Branch
@@ -119,14 +136,6 @@ const outputRebases = "rebases"
 // branch before it falls back to a fresh clone (StepRestart).
 const maxRebaseAttempts = 6
 
-// rebaseBackoff is the wait before rebase attempt n (0-based): 100ms
-// doubling, plus up to as much again of jitter, so writers that collided do
-// not collide again in lockstep. Overridable in tests.
-var rebaseBackoff = func(n int) time.Duration {
-	d := 100 * time.Millisecond << n
-	return d + time.Duration(rand.Int64N(int64(d)))
-}
-
 // rebaseAndPush rebases the promotion commit onto the moved base branch and
 // pushes, until the push lands or maxRebaseAttempts are used. It returns how
 // many rebases it made, or a StepRestart message when the commit must be
@@ -137,15 +146,13 @@ func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch str
 	if !ok {
 		return 0, fmt.Sprintf("base branch %s moved while promoting; retrying from a fresh clone", branch), nil
 	}
+	// No wait between attempts: each one fetches and pushes over the
+	// network, and the reconcile must not sleep. When the attempts run out
+	// the sequence restarts from a fresh clone, and past the engine's
+	// restarts the reconciler requeues the step with backoff and jitter.
 	for n := 0; n < maxRebaseAttempts; n++ {
-		if n > 0 {
-			t := time.NewTimer(rebaseBackoff(n - 1))
-			select {
-			case <-ctx.Done():
-				t.Stop()
-				return n, "", fmt.Errorf("push %s: %w", branch, ctx.Err())
-			case <-t.C:
-			}
+		if err := ctx.Err(); err != nil {
+			return n, "", fmt.Errorf("push %s: %w", branch, err)
 		}
 		if _, err := rb.RebaseOnRemote(ctx, state.WorkDir, "origin", branch, state.Git.Token); err != nil {
 			if errors.Is(err, scm.ErrRebaseConflict) {

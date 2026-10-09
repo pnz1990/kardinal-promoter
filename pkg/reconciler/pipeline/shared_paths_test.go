@@ -20,7 +20,8 @@ import (
 // TestPipelineReconciler_PathConflict: Pipelines on one repository and
 // branch with separate environment paths have no PathConflict condition;
 // an overlapping path (the same directory, a directory inside another, the
-// default environments/<name>) sets it on both, naming the other Pipeline;
+// default environments/<name>) sets it on both, counting the Pipeline of the
+// other namespace without naming it;
 // another branch, another repository, or an argocd environment (no git
 // write) is no conflict. Fixing the path removes the condition, and a second
 // reconcile changes nothing (idempotent).
@@ -69,12 +70,14 @@ func TestPipelineReconciler_PathConflict(t *testing.T) {
 				}
 				require.NotNil(t, cond, p.Name)
 				assert.Equal(t, "OverlappingPath", cond.Reason)
-				assert.Contains(t, cond.Message, "give each Pipeline its own environment paths")
+				assert.Contains(t, cond.Message, "give each environment its own path")
 			}
 			if tt.conflict {
 				var got kardinalv1alpha1.Pipeline
 				require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(api), &got))
-				assert.Contains(t, meta.FindStatusCondition(got.Status.Conditions, "PathConflict").Message, "b/web environment")
+				msg := meta.FindStatusCondition(got.Status.Conditions, "PathConflict").Message
+				assert.Contains(t, msg, "and 1 other Pipeline(s) in other namespaces")
+				assert.NotContains(t, msg, "web", "no Pipeline of another namespace is named")
 
 				// Fix the other Pipeline's path: the condition goes away.
 				var o kardinalv1alpha1.Pipeline

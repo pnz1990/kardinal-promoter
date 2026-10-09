@@ -66,7 +66,7 @@ The controller uses a GitHub Personal Access Token (PAT) to:
 1. Open pull requests (one per environment promotion)
 2. Read PR status (merged, closed, open)
 3. Post comments on PRs (soak time, gate results, rollback evidence)
-4. Delete the head branch of a PR it closed without a merge (`kardinal/<bundle>/<env>`)
+4. Delete the head branch of a PR it closed without a merge (`kardinal/<namespace hash>/<bundle>/<env>`)
 
 ### Minimum required scopes (classic PAT)
 
@@ -164,7 +164,7 @@ The namespace is kardinal's tenancy unit. There is no Project CRD, and none is p
 Git clone and push use the Pipeline's `git.secretRef` token. The controller uses its own SCM
 token (`github.token` or `github.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
 comment on and close PRs. When it closes a PR that was not merged, it also deletes the PR's head
-branch, `kardinal/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
+branch, `kardinal/<namespace hash>/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
 deletes that branch too when a step that pushed it ends before it opens a PR. It deletes only
 branches under `kardinal/`. So the controller token needs write access to repository contents,
 not only to pull requests. And anyone who can create a Pipeline, in any namespace, can have PRs

@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"slices"
 	"strconv"
@@ -679,31 +680,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// The git token from Pipeline spec.git.secretRef. A git step that fails
 	// without one says why (B48).
 	cred := r.resolveGitCredential(ctx, log, pipeline)
-
-	state := &steps.StepState{
-		Pipeline:     pipeline.Spec,
-		PipelineName: ps.Spec.PipelineName,
-		Environment:  env,
-		Bundle:       bundle.Spec,
-		BundleName:   ps.Spec.BundleName,
-		WorkDir:      workDir,
-		Outputs:      cloneMap(ps.Status.Outputs),
-		Git: steps.GitConfig{
-			URL:         pipeline.Spec.Git.URL,
-			Branch:      baseBranch(pipeline),
-			Token:       cred.token,
-			AuthorName:  "kardinal-promoter",
-			AuthorEmail: "kardinal@kardinal.io",
-		},
-		SCM:                  r.SCM,
-		GitClient:            r.GitClient,
-		K8sClient:            r.Client,
-		StepTimeoutSeconds:   env.StepTimeoutSeconds,
-		GateResults:          r.collectGateResults(ctx, log, ps),
-		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
-		Sequence:             seq,
-	}
-	r.setRollbackState(ctx, log, state, bundle)
+	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, workDir, cred)
 
 	prevIdx := ps.Status.CurrentStepIndex
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, prevIdx)
@@ -791,6 +768,38 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 }
 
+// stepState is the state the step engine runs seq with for ps.
+func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
+	pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle, seq []string,
+	workDir string, cred gitCredential) *steps.StepState {
+	state := &steps.StepState{
+		Pipeline:     pipeline.Spec,
+		PipelineName: ps.Spec.PipelineName,
+		Environment:  env,
+		Bundle:       bundle.Spec,
+		BundleName:   ps.Spec.BundleName,
+		Namespace:    ps.Namespace,
+		WorkDir:      workDir,
+		Outputs:      cloneMap(ps.Status.Outputs),
+		Git: steps.GitConfig{
+			URL:         pipeline.Spec.Git.URL,
+			Branch:      baseBranch(pipeline),
+			Token:       cred.token,
+			AuthorName:  "kardinal-promoter",
+			AuthorEmail: "kardinal@kardinal.io",
+		},
+		SCM:                  r.SCM,
+		GitClient:            r.GitClient,
+		K8sClient:            r.Client,
+		StepTimeoutSeconds:   env.StepTimeoutSeconds,
+		GateResults:          r.collectGateResults(ctx, log, ps),
+		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
+		Sequence:             seq,
+	}
+	r.setRollbackState(ctx, log, state, bundle)
+	return state
+}
+
 // prOpenedAt is when the promotion PR was opened: when the open-pr step
 // completed, else when wait-for-merge started. ok is false when the step
 // statuses record neither.
@@ -861,6 +870,11 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		}
 		// Both kinds of retry back off together.
 		delay := retryDelay(ps.Status.RetryCount + ps.Status.GitCredentialRetries)
+		if errors.Is(execErr, steps.ErrContended) {
+			// Writers that collided on a branch must not come back in
+			// lockstep: half the backoff plus up to the whole of it again.
+			delay = delay/2 + time.Duration(rand.Int64N(int64(delay)))
+		}
 		next := metav1.NewTime(r.now().Add(delay))
 		ps.Status.NextRetryAt = &next
 		ps.Status.Message = fmt.Sprintf("retrying in %s (%s) after error: %v", delay, count, execErr)
@@ -1080,6 +1094,19 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		ps.Status.WaitForMergeExpiry = nil
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed,
 			fmt.Sprintf("PR #%d cannot be polled: %s", prs.Spec.PRNumber, prs.Status.PollError))
+	}
+
+	// An open PR follows its base branch: when the base moved, the PR
+	// branch is rebuilt on the new head (refreshPRBranch). Not while the
+	// Pipeline is paused: that holds every git write.
+	if prs.Status.Open && !pipeline.Spec.Paused {
+		wrote, err := r.refreshPRBranch(ctx, log, base, ps, pipeline, env)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if wrote {
+			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+		}
 	}
 
 	// Closed but still in the grace window: the PRStatus reconciler keeps
