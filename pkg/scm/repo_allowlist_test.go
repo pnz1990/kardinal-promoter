@@ -205,6 +205,8 @@ func (g *guardSCM) VerifyCommit(_ context.Context, repo, sha string) (scm.Commit
 // a repository that is not allowed never reaches the provider and fails with
 // a permanent ErrRepositoryNotAllowed. Calls for an allowed repository and
 // webhook parsing pass through; an unset allowlist returns the provider.
+//
+// Covers SCM-GUARD-VERIFY-01.
 func TestGuard(t *testing.T) {
 	a, err := scm.ParseRepositoryAllowlist([]string{"github.com/acme/*"})
 	require.NoError(t, err)
