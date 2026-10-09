@@ -56,9 +56,9 @@ func TestForgejo_PromotionPR(t *testing.T) {
 }
 
 // TestForgejo_MergeByPolling checks that without a webhook the PRStatus poll
-// finds a merge on Forgejo, and the Graph's PRStatus nodes: one per
-// environment, named for the Bundle and environment, without a spec or a
-// readyWhen (B69), and referenced by the step.
+// finds a merge on Forgejo, and the Bundle's PRStatuses: one per environment,
+// named for the Bundle and environment, made by the Graph's PRStatuses
+// collection, which has no spec or readyWhen (B69), and named by each step.
 //
 // Covers SCM-FJ-03, GRAPH-PRSTATUS-01.
 func TestForgejo_MergeByPolling(t *testing.T) {
@@ -70,9 +70,9 @@ func TestForgejo_MergeByPolling(t *testing.T) {
 	})
 }
 
-// assertPRStatusNodes checks the PRStatus nodes of bundle's Graph and the
-// PRStatus objects they made while prod's PR pr is open. prod is the only
-// pr-review environment.
+// assertPRStatusNodes checks the PRStatuses of bundle's Graph, the node that
+// makes them, and the PRStatus objects while prod's PR pr is open. prod is
+// the only pr-review environment.
 func assertPRStatusNodes(t *testing.T, a *app, bundle string, prod *v1alpha1.PromotionStep, pr gitserver.PR) {
 	t.Helper()
 	ctx := context.Background()
@@ -82,38 +82,31 @@ func assertPRStatusNodes(t *testing.T, a *app, bundle string, prod *v1alpha1.Pro
 	require.NoError(t, err)
 	nodes, _, err := unstructured.NestedSlice(g.Object, "spec", "nodes")
 	require.NoError(t, err)
-	prNodes := map[string]map[string]interface{}{}
-	stepRefs := map[string]string{}
+	var prNode map[string]interface{}
 	for _, raw := range nodes {
-		n, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		switch kind, _, _ := unstructured.NestedString(n, "template", "kind"); kind {
-		case "PRStatus":
-			env, _, _ := unstructured.NestedString(n, "template", "metadata", "labels", "kardinal.io/environment")
-			prNodes[env] = n
-		case "PromotionStep":
-			env, _, _ := unstructured.NestedString(n, "template", "spec", "environment")
-			stepRefs[env], _, _ = unstructured.NestedString(n, "template", "spec", "prStatusRef")
+		if n, ok := raw.(map[string]interface{}); ok && n["id"] == "PRStatuses" {
+			prNode = n
 		}
 	}
-	require.Len(t, prNodes, len(a.envs), "one PRStatus node per environment")
+	require.NotNil(t, prNode, "the Graph's PRStatuses collection node")
+	_, hasSpec := prNode["template"].(map[string]interface{})["spec"]
+	assert.False(t, hasSpec, "the open-pr step owns the PRStatus spec, not kro")
+	ready, _, _ := unstructured.NestedStringSlice(prNode, "readyWhen")
+	assert.Empty(t, ready, "PRStatuses has no readyWhen (B69): the PromotionStep node is ready once Verified, after the merge")
+
 	for _, env := range a.envs {
-		n := prNodes[env]
-		require.NotNil(t, n, "PRStatus node for %s", env)
-		id, _, _ := unstructured.NestedString(n, "id")
-		assert.True(t, strings.HasPrefix(id, "prstatus0") && strings.HasSuffix(id, "0"+env), "node id %q", id)
-		k8sName, _, _ := unstructured.NestedString(n, "template", "metadata", "name")
-		assert.Equal(t, "prstatus-"+bundle+"-"+env, k8sName)
-		labels, _, _ := unstructured.NestedStringMap(n, "template", "metadata", "labels")
-		assert.Equal(t, map[string]string{"kardinal.io/pipeline": pipelineName, "kardinal.io/bundle": bundle,
-			"kardinal.io/environment": env}, labels)
-		_, hasSpec := n["template"].(map[string]interface{})["spec"]
-		assert.False(t, hasSpec, "the open-pr step owns the PRStatus spec, not kro")
-		ready, _, _ := unstructured.NestedStringSlice(n, "readyWhen")
-		assert.Empty(t, ready, "a PRStatus node has no readyWhen (B69): the PromotionStep node is ready once Verified, after the merge")
-		assert.Equal(t, "${"+id+".metadata.name}", stepRefs[env], "%s step's prStatusRef", env)
+		var p v1alpha1.PRStatus
+		require.NoError(t, a.e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: "prstatus-" + bundle + "-" + env}, &p),
+			"PRStatus for %s", env)
+		assert.Equal(t, "PRStatuses", p.Labels["kro.run/node-id"], "%s: made by the PRStatuses collection", env)
+		for k, v := range map[string]string{"kardinal.io/pipeline": pipelineName, "kardinal.io/bundle": bundle,
+			"kardinal.io/environment": env} {
+			assert.Equal(t, v, p.Labels[k], "%s label %s", env, k)
+		}
+		step, ok, err := a.e.Step(ctx, a.ns, pipelineName, bundle, env)
+		require.NoError(t, err)
+		require.True(t, ok, "step for %s", env)
+		assert.Equal(t, p.Name, step.Spec.PRStatusRef, "%s step's prStatusRef", env)
 	}
 	assert.Equal(t, "prstatus-"+bundle+"-prod", prod.Spec.PRStatusRef)
 
