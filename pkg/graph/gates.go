@@ -45,7 +45,9 @@ type gateCollections struct {
 	pipeline, bundle string
 	templates        []interface{}
 	index            map[string]int
-	gates, skipGates []interface{}
+	// gates and skipGates hold the items of each collection node, in chunks
+	// of at most MaxCollectionItems (kro's default forEach limit).
+	gates, skipGates [][]interface{}
 	instances        []kardinalv1alpha1.PolicyGate
 	// collection is the collection node of each instance name.
 	collection map[string]string
@@ -76,13 +78,12 @@ func (c *gateCollections) add(gate kardinalv1alpha1.PolicyGate, envName, k8sName
 		c.templates = append(c.templates, tmpl)
 	}
 	item := map[string]interface{}{"name": k8sName, "environment": envName, "t": t}
-	collection := NodePolicyGates
+	var collection string
 	if len(skipped) > 0 {
 		item["skipped"] = strings.Join(skipped, ",")
-		c.skipGates = append(c.skipGates, item)
-		collection = NodeSkipPermissionGates
+		collection = appendChunked(&c.skipGates, item, NodeSkipPermissionGates)
 	} else {
-		c.gates = append(c.gates, item)
+		collection = appendChunked(&c.gates, item, NodePolicyGates)
 	}
 	c.collection[k8sName] = collection
 	c.instances = append(c.instances, c.instance(tmpl, item, len(skipped) > 0))
@@ -194,6 +195,44 @@ func (c *gateCollections) readyCond(name string) string {
 		c.collection[name], celString(name))
 }
 
+// MaxCollectionItems is the most items the builder puts in one collection
+// node: kro's default --rgd-max-collection-size, which also bounds a
+// standalone Graph's forEach. More items go into further collection nodes
+// (PolicyGates2, PolicyGates3, ...).
+const MaxCollectionItems = 1000
+
+// chunkID is the node ID (and data field suffix) of chunk i of base: base
+// itself for the first chunk, then base2, base3, ...
+func chunkID(base string, i int) string {
+	if i == 0 {
+		return base
+	}
+	return fmt.Sprintf("%s%d", base, i+1)
+}
+
+// appendChunked appends item to the last chunk of *chunks, starting a new
+// chunk when it is full, and returns the node ID of the chunk it went to.
+func appendChunked(chunks *[][]interface{}, item interface{}, base string) string {
+	if n := len(*chunks); n == 0 || len((*chunks)[n-1]) >= MaxCollectionItems {
+		*chunks = append(*chunks, nil)
+	}
+	last := len(*chunks) - 1
+	(*chunks)[last] = append((*chunks)[last], item)
+	return chunkID(base, last)
+}
+
+// collectionIDs are the node IDs of every gate collection node.
+func (c *gateCollections) collectionIDs() []string {
+	var ids []string
+	for i := range c.gates {
+		ids = append(ids, chunkID(NodePolicyGates, i))
+	}
+	for i := range c.skipGates {
+		ids = append(ids, chunkID(NodeSkipPermissionGates, i))
+	}
+	return ids
+}
+
 // nodes returns the data node and the collection nodes, or nil when the
 // Graph has no gates.
 func (c *gateCollections) nodes() []GraphNode {
@@ -202,13 +241,15 @@ func (c *gateCollections) nodes() []GraphNode {
 	}
 	data := map[string]interface{}{"templates": c.templates}
 	var out []GraphNode
-	if len(c.gates) > 0 {
-		data["gates"] = c.gates
-		out = append(out, c.collectionNode(NodePolicyGates, "gates", false))
+	for i, items := range c.gates {
+		field := chunkID("gates", i)
+		data[field] = items
+		out = append(out, c.collectionNode(chunkID(NodePolicyGates, i), field, false))
 	}
-	if len(c.skipGates) > 0 {
-		data["skipGates"] = c.skipGates
-		out = append(out, c.collectionNode(NodeSkipPermissionGates, "skipGates", true))
+	for i, items := range c.skipGates {
+		field := chunkID("skipGates", i)
+		data[field] = items
+		out = append(out, c.collectionNode(chunkID(NodeSkipPermissionGates, i), field, true))
 	}
 	return append([]GraphNode{{ID: NodePolicyGateData, Def: data}}, out...)
 }

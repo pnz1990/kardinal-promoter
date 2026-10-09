@@ -25,6 +25,13 @@ type BuildInput struct {
 	// PolicyGates contains all gates from all policy namespaces + pipeline namespace.
 	PolicyGates []kardinalv1alpha1.PolicyGate
 
+	// Shape, when set (GraphShapeNodes or GraphShapeCompact), is the shape of
+	// the Bundle's existing Graph, which a re-translation keeps: switching
+	// the shape of a Graph in flight would make kro prune the PromotionSteps
+	// of the old shape's nodes. Empty chooses the shape (Builder.CompactAbove,
+	// the Pipeline's AnnotationGraphShape).
+	Shape string
+
 	// PolicyNamespaces are the controller's org policy namespaces (not the
 	// Pipeline's spec.policyNamespaces). Only skip-permission gates in these
 	// namespaces can permit skipping an org-gated environment. Empty means
@@ -51,6 +58,12 @@ type BuildResult struct {
 	// PolicyGateData node; callers that need the gates (dry runs, policy
 	// simulate) read them here instead of parsing the Graph.
 	GateInstances []kardinalv1alpha1.PolicyGate
+	// Upstreams are each environment's upstream environments in this Graph,
+	// after skipped environments are bridged.
+	Upstreams map[string][]string
+	// Compact reports whether the Graph uses the compact shape: one
+	// PromotionSteps collection instead of one node per environment.
+	Compact bool
 }
 
 // DefaultGraphServiceAccount is the ServiceAccount (in the Pipeline's
@@ -65,11 +78,16 @@ type Builder struct {
 	// ServiceAccountName is written to Graph.spec.serviceAccountName.
 	// Empty means DefaultGraphServiceAccount.
 	ServiceAccountName string
+	// CompactAbove is the environment count above which a Graph uses the
+	// compact shape when the Pipeline does not choose one
+	// (AnnotationGraphShape). NewBuilder sets DefaultCompactAbove; zero makes
+	// every Graph compact.
+	CompactAbove int
 }
 
 // NewBuilder creates a new Builder.
 func NewBuilder() *Builder {
-	return &Builder{}
+	return &Builder{CompactAbove: DefaultCompactAbove}
 }
 
 // Build generates a Graph spec. Returns an error if the Pipeline is invalid
@@ -133,8 +151,17 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 5 & 6: build nodes and wire edges
-	nodes, instances, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates,
-		input.MetricChecks, input.PolicyNamespaces)
+	compact, err := b.compactShape(input.Pipeline, len(filteredEnvs), input.Shape)
+	if err != nil {
+		return nil, err
+	}
+	if compact {
+		if err := checkCompactSupport(input); err != nil {
+			return nil, err
+		}
+	}
+	nodes, instances, upstreams, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates,
+		input.MetricChecks, input.PolicyNamespaces, compact)
 	if err != nil {
 		return nil, err
 	}
@@ -144,12 +171,18 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 
 	// Step 7: assemble Graph
 	g := assembleGraph(input.Pipeline, input.Bundle, nodes, b.serviceAccountName())
+	g.Labels[LabelGraphShape] = GraphShapeNodes
+	if compact {
+		g.Labels[LabelGraphShape] = GraphShapeCompact
+	}
 
 	return &BuildResult{
 		Graph:         g,
 		NodeCount:     len(nodes),
 		Environments:  filteredEnvs,
 		GateInstances: instances,
+		Upstreams:     upstreams,
+		Compact:       compact,
 	}, nil
 }
 
@@ -553,7 +586,8 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
 	skipGates map[string][]skipPermissionGate,
-	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string) ([]GraphNode, []kardinalv1alpha1.PolicyGate, error) {
+	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string,
+	compact bool) ([]GraphNode, []kardinalv1alpha1.PolicyGate, map[string][]string, error) {
 	pipelineName := pipeline.Name
 	bundleSlug := CELSafeSlug(bundle.Name) // camelCase — node IDs only
 
@@ -584,11 +618,14 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 
 	gates := newGateCollections(pipelineName, bundle.Name)
 	var prItems []interface{}
+	var compactSteps []compactStep
+	upstreamEnvs := make(map[string][]string, len(filteredEnvs))
 
 	for _, envName := range filteredEnvs {
 		// Compute upstream deps for this env (filtered to only include surviving envs)
 		// Return as CEL-safe IDs (matching the step node IDs built with CELSafeSlug).
 		rawUpstreams := filteredDeps(envName, deps, filteredSet)
+		upstreamEnvs[envName] = rawUpstreams
 		upstreams := make([]string, len(rawUpstreams))
 		for i, up := range rawUpstreams {
 			upstreams[i] = CELSafeSlug(up)
@@ -600,7 +637,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			k8s := gateNodeK8sName(bundle.Name, gate.Name, gate.Namespace, envName)
 			name, err := gates.add(gate, envName, k8s, nil)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			envGates = append(envGates, name)
 		}
@@ -611,7 +648,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			k8s := gateNodeK8sName(bundle.Name, sg.gate.Name, sg.gate.Namespace, envName)
 			name, err := gates.add(sg.gate, envName, k8s, sg.skipped)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			envGates = append(envGates, name)
 		}
@@ -624,7 +661,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 				metricNodeK8sName(bundle.Name, mc.Name, envName),
 				mc, vars, pipelineName, bundle.Name, envName, upstreams)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			nodes = append(nodes, node)
 		}
@@ -636,6 +673,15 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		prName := prStatusNodeK8sName(bundle.Name, envName)
 		prItems = append(prItems, map[string]interface{}{"name": prName, "environment": envName})
 
+		if compact {
+			compactSteps = append(compactSteps, compactStep{env: envName,
+				name:      promotionStepK8sName(pipelineName, bundle.Name, envName),
+				prStatus:  prName,
+				upstreams: rawUpstreams,
+				gates:     envGates,
+			})
+			continue
+		}
 		// PromotionStep node — node ID must be a valid CEL identifier.
 		nodes = append(nodes, buildPromotionStepNode(
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
@@ -645,8 +691,11 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	nodes = append(nodes, gates.nodes()...)
 	nodes = append(nodes, GraphNode{ID: NodePRStatusData, Def: map[string]interface{}{"items": prItems}},
 		prStatusesNode(pipelineName, bundle.Name))
+	if compact {
+		nodes = append(nodes, compactNodes(pipeline, bundle, compactSteps, gates.collectionIDs())...)
+	}
 
-	return nodes, gates.instances, nil
+	return nodes, gates.instances, upstreamEnvs, nil
 }
 
 // filteredDeps returns the upstream dependencies of envName, filtered to only
