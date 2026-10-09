@@ -71,7 +71,7 @@ func TestFleet_UnresolvedEnvironmentFailsClosed(t *testing.T) {
 			assert.Equal(t, tc.state, got.Status.State, "the step does not move")
 			assert.Contains(t, got.Status.Message, "cannot be resolved")
 			assert.Contains(t, got.Status.Message, tc.want)
-			assert.Zero(t, git.calls, "nothing is cloned or pushed")
+			assert.Zero(t, int(git.clones.Load()+git.pushes.Load()), "nothing is cloned or pushed")
 		})
 	}
 
@@ -89,24 +89,4 @@ func TestFleet_UnresolvedEnvironmentFailsClosed(t *testing.T) {
 	var got v1alpha1.PromotionStep
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step", Namespace: "default"}, &got))
 	assert.Equal(t, "Promoting", got.Status.State)
-}
-
-// countingGit counts every git call.
-type countingGit struct{ calls int }
-
-func (m *countingGit) Clone(context.Context, string, string, string, string) error {
-	m.calls++
-	return nil
-}
-func (m *countingGit) CloneAt(context.Context, string, string, string, string) error {
-	m.calls++
-	return nil
-}
-func (m *countingGit) CommitAll(context.Context, string, string, string, string) error {
-	m.calls++
-	return nil
-}
-func (m *countingGit) Push(context.Context, string, string, string, string, bool) error {
-	m.calls++
-	return nil
 }
