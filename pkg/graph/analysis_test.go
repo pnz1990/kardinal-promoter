@@ -221,30 +221,74 @@ func TestBuilder_AnalysisGating(t *testing.T) {
 }
 
 // TestBuilder_AnalysisMirror evaluates the mirror: the environment's runs
-// with their template and phase, Pending before Rollouts writes a status.
+// with their template and phase, Pending before Rollouts writes a status;
+// only runs this Graph rendered (by name), applied by kro (kro.run/node-id)
+// for this Bundle (kardinal.io/bundle-uid) count, so an AnalysisRun someone
+// created with matching selector labels is no verdict (regression, QA #1502
+// round 2).
 func TestBuilder_AnalysisMirror(t *testing.T) {
 	p := analysisPipeline(kardinalv1alpha1.AnalysisTemplateRef{Name: "smoke"})
-	res, err := buildAnalysis(t, p, analysisInput(smokeTemplate("AnalysisTemplate", "smoke", "1")))
+	b := makeBundle("app-v1", "app")
+	b.UID = "bundle-uid"
+	b.Spec.Images = []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "1.4.0"}}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b,
+		Analyses: analysisInput(smokeTemplate("AnalysisTemplate", "smoke", "1"))})
+	require.NoError(t, err)
+	tmpl := hookNode(t, res.Graph, "analysis0prod0smoke").Template
+	assert.Equal(t, "bundle-uid", tmpl["metadata"].(map[string]interface{})["labels"].(map[string]interface{})[graph.LabelBundleUID])
+	name, err := celEval(t, nameExpr(t, res.Graph, "analysis0prod0smoke"), map[string]interface{}{
+		"bundle": map[string]interface{}{"status": map[string]interface{}{"phase": "Promoting"}},
+		"refSteps": []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "app-app-v1-prod"},
+			"status": map[string]interface{}{"verificationStartedAt": "2026-10-09T00:00:00Z"}}},
+	})
 	require.NoError(t, err)
 	expr := hookNode(t, res.Graph, "live0prod").Patch["spec"].(map[string]interface{})["live"].(map[string]interface{})["analyses"].(string)
-	run := func(name, env string, status map[string]interface{}) map[string]interface{} {
-		o := map[string]interface{}{"metadata": map[string]interface{}{"name": name, "creationTimestamp": "2026-10-09T00:00:0" + name[1:] + "Z",
-			"labels": map[string]interface{}{"kardinal.io/environment": env, "kardinal.io/analysis-template": "smoke"}}}
+	ok := map[string]interface{}{"kardinal.io/environment": "prod", "kardinal.io/analysis-template": "smoke",
+		graph.LabelKRONodeID: "x", graph.LabelBundleUID: "bundle-uid"}
+	run := func(name, created string, labels, status map[string]interface{}) map[string]interface{} {
+		o := map[string]interface{}{"metadata": map[string]interface{}{"name": name, "creationTimestamp": created, "labels": labels}}
 		if status != nil {
 			o["status"] = status
 		}
 		return o
 	}
+	without := func(k string) map[string]interface{} {
+		m := map[string]interface{}{}
+		for kk, v := range ok {
+			if kk != k {
+				m[kk] = v
+			}
+		}
+		return m
+	}
+	otherUID := without(graph.LabelBundleUID)
+	otherUID[graph.LabelBundleUID] = "other"
 	out, err := celEval(t, expr, map[string]interface{}{"refAnalysisRuns": []interface{}{
-		run("r1", "prod", map[string]interface{}{"phase": "Failed", "message": "Metric \"x\" assessed Failed"}),
-		run("r2", "test", map[string]interface{}{"phase": "Successful"}),
-		run("r3", "prod", nil),
+		run(name.(string), "2026-10-09T00:00:01Z", ok, map[string]interface{}{"phase": "Failed", "message": "Metric \"x\" assessed Failed"}),
+		// Forged verdicts: another name, no kro label, another Bundle's UID.
+		run("app-app-v1-prod-smoke-forged", "2026-10-09T00:00:02Z", ok, map[string]interface{}{"phase": "Successful"}),
+		run(name.(string), "2026-10-09T00:00:03Z", without(graph.LabelKRONodeID), map[string]interface{}{"phase": "Successful"}),
+		run(name.(string), "2026-10-09T00:00:04Z", otherUID, map[string]interface{}{"phase": "Successful"}),
 	}})
 	require.NoError(t, err)
-	b, err := json.Marshal(out)
+	got, err := json.Marshal(out)
 	require.NoError(t, err)
-	assert.JSONEq(t, `[{"name":"r1","created":"2026-10-09T00:00:01Z","template":"smoke","phase":"Failed","message":"Metric \"x\" assessed Failed"},
-		{"name":"r3","created":"2026-10-09T00:00:03Z","template":"smoke","phase":"Pending","message":""}]`, string(b))
+	assert.JSONEq(t, `[{"name":"`+name.(string)+`","created":"2026-10-09T00:00:01Z","template":"smoke","phase":"Failed","message":"Metric \"x\" assessed Failed"}]`, string(got))
+
+	out, err = celEval(t, expr, map[string]interface{}{"refAnalysisRuns": []interface{}{run(name.(string), "2026-10-09T00:00:01Z", ok, nil)}})
+	require.NoError(t, err)
+	got, err = json.Marshal(out)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"name":"`+name.(string)+`","created":"2026-10-09T00:00:01Z","template":"smoke","phase":"Pending","message":""}]`, string(got))
+}
+
+// TestAnalysisRunNameAlwaysHashed: the readable part alone is not injective,
+// so the name always carries a hash of its parts (QA #1502 round 2).
+func TestAnalysisRunNameAlwaysHashed(t *testing.T) {
+	a := graph.AnalysisRunName("app", "v1", "prod", "a-b", "12345678")
+	b := graph.AnalysisRunName("app", "v1", "prod-a", "b", "12345678")
+	assert.NotEqual(t, a, b)
+	assert.Empty(t, validation.IsDNS1123Label(a))
 }
 
 // TestBuilder_AnalysisWithHooks: an environment with both hooks and

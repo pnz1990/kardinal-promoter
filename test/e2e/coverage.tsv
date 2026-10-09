@@ -471,3 +471,4 @@ ANALYSIS-CLOSED-01	live	core	covered	verification	without the Argo Rollouts CRDs
 ANALYSIS-TERMINATE-01	live	delivery	covered	verification	a run nothing waits for any more (the step failed) gets spec.terminate and stops measuring	docs/analysis.md:116-118
 ANALYSIS-INJECT-01	live	delivery	covered	verification	a Bundle tag outside the OCI tag grammar is never passed as an AnalysisRun arg: refused at admission or the Bundle fails (GraphBuildFailed)	docs/analysis.md:80-85
 ANALYSIS-REBUILD-01	live	delivery	covered	verification	a template edited mid-flight and picked up by a Pipeline edit starts a new run; the step waits for the newest run and is Verified by it	docs/analysis.md:145-151
+ANALYSIS-FORGED-01	live	delivery	covered	verification	an AnalysisRun created by hand with the selector labels, the Bundle's UID and status Successful is not copied by the mirror; the step stays Verifying	docs/analysis.md:100-110

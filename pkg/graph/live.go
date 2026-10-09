@@ -48,7 +48,7 @@ func buildEnvExtras(in hookNodesInput, analyses AnalysisInput, bundle *kardinalv
 		out.analysisPolicy = runs.policy
 	}
 	if len(hooks.nodes) > 0 || len(runs.nodes) > 0 {
-		out.nodes = append(out.nodes, buildLiveMirrorNode(in.env.Name, in.stepK8sName, in.bundleUID, hooks.names, len(runs.nodes) > 0))
+		out.nodes = append(out.nodes, buildLiveMirrorNode(in.env.Name, in.stepK8sName, in.bundleUID, hooks.names, runs.runNames))
 	}
 	return out, nil
 }
@@ -74,19 +74,20 @@ func attachExtras(step GraphNode, x envExtras) {
 // AnalysisRun results onto its PromotionStep (spec.live). Hook results come
 // only from the HookRuns this build rendered (hookNames, a literal list
 // rebuilt at every translation) that kro applied for this Bundle
-// (genuineFilter), so a HookRun created by hand is not a result.
-func buildLiveMirrorNode(env, stepK8sName, bundleUID string, hookNames []string, analyses bool) GraphNode {
+// (genuineFilter), so a HookRun created by hand is not a result; the same
+// holds for AnalysisRuns (runNames).
+func buildLiveMirrorNode(env, stepK8sName, bundleUID string, hookNames, runNames []string) GraphNode {
 	live := map[string]interface{}{}
 	if len(hookNames) > 0 {
 		live["hooks"] = fmt.Sprintf(`${%s.filter(h, %s).map(h, {"name": h.metadata.name, "hook": h.spec.hook, `+
 			`"phase": h.spec.phase, "result": h.?status.?phase.orValue("Pending"), "message": h.?status.?message.orValue("")})}`,
 			refHookRunsNodeID, genuineFilter("h", hookNames, bundleUID)+" && h.spec.environment == "+strconv.Quote(env))
 	}
-	if analyses {
-		live["analyses"] = fmt.Sprintf(`${%s.filter(r, r.metadata.labels[%q] == %s).map(r, {"name": r.metadata.name, `+
+	if len(runNames) > 0 {
+		live["analyses"] = fmt.Sprintf(`${%s.filter(r, %s).map(r, {"name": r.metadata.name, `+
 			`"created": string(r.metadata.creationTimestamp), `+
 			`"template": r.metadata.labels[%q], "phase": r.?status.?phase.orValue("Pending"), "message": r.?status.?message.orValue("")})}`,
-			refAnalysisRunsNodeID, "kardinal.io/environment", strconv.Quote(env), LabelAnalysisTemplate)
+			refAnalysisRunsNodeID, genuineFilter("r", runNames, bundleUID), LabelAnalysisTemplate)
 	}
 	return GraphNode{
 		ID: liveNodeID(env),

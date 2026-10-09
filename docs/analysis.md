@@ -97,6 +97,18 @@ A template that does not declare the arg is not affected. `verification.args` va
 written by the Pipeline's author and passed as they are. Templates should still quote what
 they interpolate where the provider allows it.
 
+**Who can write the verdict.** The step reads the phase of the AnalysisRuns its Graph rendered
+and nothing else: an AnalysisRun counts only when its name is one this build of the Graph
+rendered (a list rebuilt at every translation), kro applied it (label `kro.run/node-id`) and it
+belongs to this Bundle (label `kardinal.io/bundle-uid` equal to the Bundle's UID). So an
+AnalysisRun someone creates with matching `kardinal.io/*` labels is ignored. That does not make
+the verdict tamper-proof: Argo Rollouts aggregates `create` and `patch` on `analysisruns` into
+the built-in `edit` and `admin` ClusterRoles, and its controller trusts `status`. Anyone who can
+write AnalysisRuns in the Pipeline namespace (namespace editors, by default) can patch the real
+run's status to `Successful`, or edit its metrics before it measures, and so decide whether the
+environment is verified. Treat `analysisruns` write access in Pipeline namespaces like Pipeline
+edit access, and remove it from roles that must not affect promotions.
+
 ## How it runs
 
 1. The health check (and any `bake` window) passed: the step enters **`Verifying`**, together

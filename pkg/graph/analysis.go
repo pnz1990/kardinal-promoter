@@ -110,7 +110,9 @@ func hasVerification(env kardinalv1alpha1.EnvironmentSpec) bool {
 // hash of the rendered run spec, cut and hash-suffixed to 63 characters.
 func AnalysisRunName(pipeline, bundle, env, template, specHash string) string {
 	preferred := pipeline + "-" + slugify(bundle) + "-" + slugify(env) + "-" + template + "-" + specHash
-	return boundedName(preferred, isSlug(pipeline) && isSlug(bundle) && isSlug(env) && isSlug(template),
+	// Always hash-suffixed: the readable part alone is not injective
+	// ("prod" "a-b" and "prod-a" "b" both read prod-a-b).
+	return boundedName(preferred, false,
 		nameKey("analysisrun", pipeline, bundle, env, template, specHash), validation.DNS1123LabelMaxLength)
 }
 
@@ -123,6 +125,8 @@ func analysisNodeID(env, template string) string {
 type analysisNodes struct {
 	nodes []GraphNode
 	names []interface{} // spec.analyses of the step: the template names
+	// runNames are the AnalysisRun names rendered, for the mirror.
+	runNames []string
 	// policy is spec.analysisPolicy of the step.
 	policy map[string]interface{}
 }
@@ -188,6 +192,7 @@ func buildAnalysisNodes(in hookNodesInput, a AnalysisInput, bundle *kardinalv1al
 						"kardinal.io/bundle":      in.bundle,
 						"kardinal.io/environment": in.env.Name,
 						LabelAnalysisTemplate:     ref.Name,
+						LabelBundleUID:            in.bundleUID,
 					},
 				},
 				"spec": literalStrings(spec),
@@ -196,6 +201,7 @@ func buildAnalysisNodes(in hookNodesInput, a AnalysisInput, bundle *kardinalv1al
 		})
 		out.nodes = append(out.nodes, terminateNode(in, ref.Name, name))
 		out.names = append(out.names, ref.Name)
+		out.runNames = append(out.runNames, name)
 	}
 	return out, nil
 }

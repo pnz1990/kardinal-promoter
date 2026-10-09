@@ -232,6 +232,21 @@ describe('NodeDetail — step sequence from status.steps[] (C10b-web-07)', () =>
       note: 'checking health',
     },
     {
+      name: 'verifying after the health check',
+      step: makeStep({
+        state: 'Verifying',
+        stepType: 'kustomize-set-image',
+        currentStepIndex: 1,
+        steps: [
+          { name: 'git-push', state: 'Completed' },
+          { name: 'health-check', state: 'InProgress' },
+        ],
+      }),
+      want: ['git-push', 'health-check'],
+      current: 'health-check',
+      note: 'verifying: post-deploy hooks and analyses',
+    },
+    {
       name: 'kustomize sequence at git-commit',
       step: makeStep({
         state: 'Promoting',

@@ -367,3 +367,57 @@ func TestRollouts_AnalysisTemplateEditedMidFlight(t *testing.T) {
 	assert.NotContains(t, names, first, "the replaced run is gone")
 	assert.NotEmpty(t, names)
 }
+
+// TestRollouts_AnalysisForgedRunIgnored: an AnalysisRun created by hand with
+// the selector labels and the Bundle's UID, and status Successful, is no
+// verdict: the step keeps waiting for the run its Graph rendered
+// (regression, QA #1502 round 2).
+//
+// Covers ANALYSIS-FORGED-01.
+func TestRollouts_AnalysisForgedRunIgnored(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	createAnalysisTemplate(t, e, a.ns, "slow", nil, jobMetric("m", `sleep 600`))
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{
+		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "slow"}}}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verifying", promoteTimeout)
+	var b v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: bundle}, &b))
+
+	forged := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "AnalysisRun",
+		"metadata": map[string]interface{}{"name": "forged-" + bundle, "labels": map[string]interface{}{
+			"kardinal.io/pipeline": pipelineName, "kardinal.io/bundle": bundle, "kardinal.io/environment": "prod",
+			"kardinal.io/analysis-template": "slow", "kardinal.io/bundle-uid": string(b.UID)}},
+		"spec": map[string]interface{}{"metrics": []interface{}{map[string]interface{}{"name": "m",
+			"provider": map[string]interface{}{"job": map[string]interface{}{"spec": map[string]interface{}{
+				"template": map[string]interface{}{"spec": map[string]interface{}{"restartPolicy": "Never",
+					"containers": []interface{}{map[string]interface{}{"name": "c", "image": fixtures.Image + ":" + fixtures.V1,
+						"command": []interface{}{"true"}}}}}}}}}}},
+	}}
+	// Argo Rollouts' AnalysisRun has no status subresource: whoever may
+	// create one sets its status.
+	require.NoError(t, unstructured.SetNestedField(forged.Object, "Successful", "status", "phase"))
+	_, err := e.Dynamic.Resource(analysisRunGVR).Namespace(a.ns).Create(ctx, forged, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	framework.Consistently(t, 30*time.Second, "the forged Successful run is no verdict", func(ctx context.Context) (bool, string) {
+		ps, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "prod")
+		if err != nil || !ok {
+			return false, fmt.Sprint(err)
+		}
+		if ps.Spec.Live != nil {
+			for _, r := range ps.Spec.Live.Analyses {
+				if r.Name == forged.GetName() {
+					return false, "the mirror copied the forged run"
+				}
+			}
+		}
+		return ps.Status.State == "Verifying", "state " + ps.Status.State
+	})
+}
