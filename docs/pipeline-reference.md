@@ -384,6 +384,12 @@ How a fleet is promoted:
   after the others. A removed target's PromotionStep is deleted: an open PR is closed and its
   branch deleted, and a Verified target's change stays in git. Targets already Verified are not
   promoted again.
+- **Targets on one branch.** Targets in flight together push to the same branch. Argo CD (or
+  Flux) can then deploy a later commit, another target's, before the target's own commit. The
+  `argocd` and `flux` health checks accept a later commit only when the workloads run the
+  Bundle images ([Health Adapters](health-adapters.md)). A target whose manifests run none of
+  the Bundle images, such as a config Bundle or a directory of ConfigMaps, can wait for its own
+  commit until `health.timeout`. For such targets use `maxConcurrent: 1`, or `resource` health.
 - **Intent.** `intent.targetEnvironment` may name the fleet: the Bundle stops after every
   target. `intent.skipEnvironments` cannot name a fleet or a target.
 - **Graph shape.** A Pipeline with a fleet always uses the compact Graph shape (see

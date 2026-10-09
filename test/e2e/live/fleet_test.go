@@ -25,20 +25,48 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 )
 
-// fleetOverlay is a target directory that deploys nothing but a ConfigMap:
-// the fleet tests measure kardinal's pacing, not 50 workloads starting.
-func fleetOverlay(ns, name string) map[string][]byte {
-	return map[string][]byte{
+// fleetOverlay is a target directory that deploys a ConfigMap, and with
+// workload a one-replica pause Deployment pinned to fixtures.Pause:PauseV1:
+// the fleet tests measure kardinal's pacing, not 50 applications starting.
+// Argo CD targets need the workload: when several targets push to one
+// branch at once, Argo CD can sync a later commit than a target's own, and
+// the argocd health check accepts it only when the Application runs the
+// Bundle images (docs/health-adapters.md).
+func fleetOverlay(ns, name string, workload bool) map[string][]byte {
+	files := map[string][]byte{
 		"kustomization.yaml": []byte(fmt.Sprintf("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n"+
 			"resources:\n  - configmap.yaml\nimages:\n  - name: %s\n    newTag: %s\n", fixtures.Image, fixtures.V1)),
 		"configmap.yaml": []byte(fmt.Sprintf("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: fleet-%s\n  namespace: %s\n"+
 			"data:\n  target: %s\n", name, ns, name)),
 	}
+	if workload {
+		files["kustomization.yaml"] = []byte(fmt.Sprintf("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n"+
+			"resources:\n  - configmap.yaml\n  - deployment.yaml\nimages:\n  - name: %s\n    newTag: %q\n", fixtures.Pause, fixtures.PauseV1))
+		files["deployment.yaml"] = []byte(fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet-%[1]s
+  namespace: %[2]s
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: fleet-%[1]s}
+  template:
+    metadata:
+      labels: {app: fleet-%[1]s}
+    spec:
+      containers:
+        - name: pause
+          image: %[3]s:%[4]s
+          resources: {requests: {cpu: 1m, memory: 4Mi}}
+`, name, ns, fixtures.Pause, fixtures.PauseV1))
+	}
+	return files
 }
 
 // fleetFiles is a repo with an overlay at fixtures.Path(env) for each env
 // and one fleetOverlay per target at dir/<target>.
-func fleetFiles(ns string, envs []string, dir string, targets []string) map[string][]byte {
+func fleetFiles(ns string, envs []string, dir string, targets []string, workload bool) map[string][]byte {
 	files := map[string][]byte{}
 	for _, env := range envs {
 		files[fixtures.Path(env)+"/kustomization.yaml"] = []byte(fmt.Sprintf(
@@ -46,7 +74,7 @@ func fleetFiles(ns string, envs []string, dir string, targets []string) map[stri
 			fixtures.Image, fixtures.V1))
 	}
 	for _, t := range targets {
-		for f, b := range fleetOverlay(ns, t) {
+		for f, b := range fleetOverlay(ns, t, workload) {
 			files[dir+"/"+t+"/"+f] = b
 		}
 	}
@@ -147,7 +175,7 @@ func TestGraph_FleetFiftyApplicationsFiveAtATime(t *testing.T) {
 		names = append(names, fmt.Sprintf("f%s-c%02d", short, i))
 	}
 	other := fmt.Sprintf("f%s-other", short)
-	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "clusters", append(append([]string(nil), names...), other)))
+	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "clusters", append(append([]string(nil), names...), other), true))
 	createCompactHealth(t, e, ns)
 	selector := map[string]string{"kardinal.io/e2e-fleet": short}
 	for _, name := range names {
@@ -175,7 +203,7 @@ func TestGraph_FleetFiftyApplicationsFiveAtATime(t *testing.T) {
 		return f.Message == "" && len(f.Targets) == n, fmt.Sprintf("%d targets, message %q", len(f.Targets), f.Message)
 	})
 
-	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", fixtures.Pause+":"+fixtures.PauseV2)
 	e.WaitBundlePhase(t, ns, bundle, "Verified", 25*time.Minute)
 
 	steps := fleetSteps(t, e, ns, bundle, "prod")
@@ -192,7 +220,7 @@ func TestGraph_FleetFiftyApplicationsFiveAtATime(t *testing.T) {
 		}
 		prev = &s
 		last = maxTime(last, verifiedAt(t, &s))
-		assert.Contains(t, e.ReadFile(t, repo, repo.Branch, "clusters/"+name+"/kustomization.yaml"), "newTag: "+fixtures.V2, name)
+		assert.Contains(t, e.ReadFile(t, repo, repo.Branch, "clusters/"+name+"/kustomization.yaml"), fixtures.PauseV2, name)
 	}
 	post, ok, err := e.Step(ctx, ns, pipelineName, bundle, "post")
 	require.NoError(t, err)
@@ -222,11 +250,12 @@ func labelArgoApp(t *testing.T, e *framework.Env, name string, labels map[string
 	require.NoError(t, err, "label Application %s", name)
 }
 
-// TestGraph_FleetMaxUnavailableStopsTheRollout: a fleet of 12 targets with
+// TestGraph_FleetMaxUnavailableStopsTheRollout: a fleet of 30 targets with
 // maxConcurrent 3 and maxUnavailable 2, whose first two targets fail their
-// health check. Once both have Failed no further target starts, the targets
-// already in flight finish Verified, post never starts, and the Bundle is
-// Failed.
+// health check at once (a 1s timeout on a Deployment that does not exist).
+// Once both have Failed no further target starts although a place is free,
+// the targets already in flight finish Verified, post never starts, and the
+// Bundle is Failed.
 //
 // Covers FLEET-02.
 func TestGraph_FleetMaxUnavailableStopsTheRollout(t *testing.T) {
@@ -235,19 +264,19 @@ func TestGraph_FleetMaxUnavailableStopsTheRollout(t *testing.T) {
 	ns := e.Namespace(t)
 	var targets []v1alpha1.FleetTarget
 	var names []string
-	for i := range 12 {
+	for i := range 30 {
 		name := fmt.Sprintf("t%02d", i)
 		names = append(names, name)
 		tg := v1alpha1.FleetTarget{Name: name}
 		if i < 2 {
 			// Its Deployment never exists: the health check times out.
-			tg.Health = &v1alpha1.HealthConfig{Type: "resource", Timeout: "20s",
+			tg.Health = &v1alpha1.HealthConfig{Type: "resource", Timeout: "1s",
 				Resource: &v1alpha1.ResourceRef{Name: "missing", Namespace: ns}}
 		}
 		targets = append(targets, tg)
 	}
 	two := 2
-	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "fleet", names))
+	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "fleet", names, false))
 	createCompactHealth(t, e, ns)
 	a := &app{e: e, ns: ns, envs: []string{"test", "prod", "post"}, repo: repo}
 	a.apply(t, fleetPromotion(ns, repo, &v1alpha1.FleetSpec{MaxConcurrent: 3, MaxUnavailable: &two, Targets: targets}, "auto"))
@@ -300,7 +329,7 @@ func TestGraph_FleetTargetsChangedMidRollout(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
 	ns := e.Namespace(t)
-	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "fleet", []string{"a", "b", "r", "n"}))
+	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "fleet", []string{"a", "b", "r", "n"}, false))
 	createCompactHealth(t, e, ns)
 	a := &app{e: e, ns: ns, envs: []string{"test", "prod", "post"}, repo: repo}
 	a.apply(t, fleetPromotion(ns, repo, &v1alpha1.FleetSpec{
