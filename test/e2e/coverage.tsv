@@ -331,14 +331,14 @@ UIAPI-APPROVE-01	live	ui	covered	ui-api	POST gates/[{ns}/]{name}/approve writes 
 UIAPI-VALIDATECEL-01	live	ui	covered	ui-api	POST validate-cel returns compile errors	cmd/kardinal-controller/ui_api.go:1005
 UIAPI-CREATE-01	live	ui	covered	ui-api	POST bundles creates a Bundle from the UI	cmd/kardinal-controller/ui_api.go:1349-1372; cmd/kardinal-controller/ui_api.go:1445-1469
 UIAPI-LOCAL-01	live	ui	covered	ui-api	with no UI auth mode, non-loopback clients or requests with proxy headers get 403	cmd/kardinal-controller/ui_peer.go:33-71; docs/installation.md:212-219; docs/changelog.md:194
-UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:633-676; cmd/kardinal-controller/ui_hosts.go:16-18; cmd/kardinal-controller/ui_hosts.go:53-64; cmd/kardinal-controller/main.go:787-792
+UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:635-678; cmd/kardinal-controller/ui_hosts.go:16-18; cmd/kardinal-controller/ui_hosts.go:53-64; cmd/kardinal-controller/main.go:787-792
 UIAPI-TOKEN-01	live	ui	covered	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:509-535
 UIAPI-TR-01	live	ui	covered	ui-api	TokenReview mode: 401 invalid token, 403 when SubjectAccessReview denies, 503 when review fails; 30s cache	docs/guides/security.md:544-555; pkg/uiauth/tokenreview.go:83-136; pkg/uiauth/cache.go:18-22
-RBAC-ROLES-01	live	ui	covered	ui-api	chart user roles (viewer, promoter, approver, aggregation into view) bound per namespace decide UI API and Bundle API access; lists follow namespace RBAC	docs/guides/security.md:585-616; docs/guides/security.md:579-583; chart/kardinal-promoter/templates/user-roles.yaml:1-40
+RBAC-ROLES-01	live	ui	covered	ui-api	chart user roles (viewer, promoter, approver, aggregation into view) bound per namespace decide UI API and Bundle API access; lists follow namespace RBAC	docs/guides/security.md:587-618; docs/guides/security.md:579-585; chart/kardinal-promoter/templates/user-roles.yaml:1-40
 BUNDLEAPI-TR-01	live	ui	covered	ci-api	Bundle API accepts Kubernetes tokens authorized by RBAC and records the caller in kardinal.io/requested-by	docs/ci-integration.md:268-290
-UIAPI-CORS-01	live	ui	covered	ui-api	CORS: allowed origin reflected, others 403, OPTIONS preflight 200	docs/guides/security.md:626-632
-UIAPI-TLS-01	live	ui	covered	ui-api	TLS on UI and webhook servers; cert without key is a startup error	docs/guides/security.md:706-710
-UIAPI-HEADERS-01	live	ui	covered	ui-api	browser security headers (CSP, nosniff, frame deny)	docs/guides/security.md:691-705; cmd/kardinal-controller/ui_security_headers.go:31-60
+UIAPI-CORS-01	live	ui	covered	ui-api	CORS: allowed origin reflected, others 403, OPTIONS preflight 200	docs/guides/security.md:628-634
+UIAPI-TLS-01	live	ui	covered	ui-api	TLS on UI and webhook servers; cert without key is a startup error	docs/guides/security.md:708-712
+UIAPI-HEADERS-01	live	ui	covered	ui-api	browser security headers (CSP, nosniff, frame deny)	docs/guides/security.md:693-707; cmd/kardinal-controller/ui_security_headers.go:31-60
 UIAPI-BODY-01	live	ui	covered	ui-api	request body over 1 MiB rejected	cmd/kardinal-controller/ui_auth.go:22; cmd/kardinal-controller/ui_auth.go:125-134
 UIAPI-REQUESTER-01	live	ui	covered	ui-api	TokenReview mode: a UI promote and a Bundle created from the UI record the caller's Kubernetes username as kardinal.io/requested-by and log it as requestedBy	docs/guides/security.md:309-332; cmd/kardinal-controller/ui_lifecycle.go:27-44; cmd/kardinal-controller/ui_api.go:1433-1461
 UIAPI-REQUESTER-02	live	ui	covered	ui-api	no UI auth: a UI promote and rollback record kardinal-ui as kardinal.io/requested-by	docs/guides/security.md:309-332; cmd/kardinal-controller/ui_lifecycle.go:23-25
@@ -352,7 +352,7 @@ UI-NODE-01	live	ui	covered	ui	node detail: step progress, events, CEL validate	d
 UI-ACTIONS-01	live	ui	covered	ui	promote, rollback, pause and resume from the UI	docs/roadmap.md:147; docs/guides/security.md:567-571
 UI-CREATE-01	live	ui	covered	ui	Create Bundle dialog	docs/roadmap.md:147
 UI-TIMELINE-01	live	ui	covered	ui	bundle timeline select/compare and diff panel	docs/roadmap.md:140; docs/roadmap.md:149
-UI-INSECURE-01	live	ui	covered	ui	insecure-connection banner and port-forward hint	docs/guides/security.md:677-690
+UI-INSECURE-01	live	ui	covered	ui	insecure-connection banner and port-forward hint	docs/guides/security.md:679-692
 UI-SHELL-01	live	ui	covered	ui	keyboard shortcuts, theme, URL deep links, refreshed-ago polling	docs/roadmap.md:143
 UI-OVERRIDE-01	deprecated	ui	covered	ui	the web UI has no gate approve or override control (removed in #1245; use kardinal override)	docs/design/06-kardinal-ui.md:211; docs/comparison.md:35
 CIAPI-OFF-01	live	core	covered	ci-api	without --bundle-api-token / KARDINAL_BUNDLE_TOKEN, POST /api/v1/bundles is not mounted (404)	docs/ci-integration.md:233-259; cmd/kardinal-controller/main.go:529-542
@@ -377,9 +377,9 @@ CHART-PORTS-01	live	chart	covered	chart	metricsBindAddress, healthProbeBindAddre
 CHART-WATCHNS-01	live	chart	covered	chart	controller.watchNamespace: namespace-scoped install with Role instead of ClusterRole	chart/kardinal-promoter/values.yaml:83-90; docs/guides/security.md:182-219
 CHART-POLNS-01	live	chart	covered	chart	controller.policyNamespaces	chart/kardinal-promoter/values.yaml:91-95
 CHART-EXTRA-01	live	chart	covered	chart	extraArgs, extraEnv, volumes, volumeMounts	chart/kardinal-promoter/values.yaml:101-108
-CHART-TLS-01	live	chart	covered	chart	controller.tlsCertFile/tlsKeyFile with a mounted cert-manager Secret	chart/kardinal-promoter/values.yaml:70-82; docs/guides/security.md:712-760
-CHART-TLS-02	live	chart	covered	chart	a partial TLS config (controller.tlsCertFile or tlsKeyFile alone) fails helm install with a clear message; one TLS flag reaching the controller stops it with a clear error	chart/kardinal-promoter/templates/_helpers.tpl:109-113; chart/kardinal-promoter/values.yaml:71; cmd/kardinal-controller/http_server.go:31-33; docs/guides/security.md:710
-CHART-TLS-03	live	chart	covered	chart	TLS paths (controller.tlsCertFile and tlsKeyFile) not in a mounted secret, projected or csi volume fail helm install with a message naming the value; the same paths reaching the controller another way stop it with an error naming the file	chart/kardinal-promoter/templates/_helpers.tpl:114-146; chart/kardinal-promoter/values.yaml:74-76; docs/guides/security.md:756-760; docs/guides/security.md:762-775; cmd/kardinal-controller/http_server.go:85-89
+CHART-TLS-01	live	chart	covered	chart	controller.tlsCertFile/tlsKeyFile with a mounted cert-manager Secret	chart/kardinal-promoter/values.yaml:70-82; docs/guides/security.md:714-762
+CHART-TLS-02	live	chart	covered	chart	a partial TLS config (controller.tlsCertFile or tlsKeyFile alone) fails helm install with a clear message; one TLS flag reaching the controller stops it with a clear error	chart/kardinal-promoter/templates/_helpers.tpl:109-113; chart/kardinal-promoter/values.yaml:71; cmd/kardinal-controller/http_server.go:31-33; docs/guides/security.md:712
+CHART-TLS-03	live	chart	covered	chart	TLS paths (controller.tlsCertFile and tlsKeyFile) not in a mounted secret, projected or csi volume fail helm install with a message naming the value; the same paths reaching the controller another way stop it with an error naming the file	chart/kardinal-promoter/templates/_helpers.tpl:114-146; chart/kardinal-promoter/values.yaml:74-76; docs/guides/security.md:758-762; docs/guides/security.md:764-777; cmd/kardinal-controller/http_server.go:85-89
 CHART-SCM-01	live	chart	covered	chart	github.token, github.secretRef, scm.provider, scm.apiURL	chart/kardinal-promoter/values.yaml:145-173
 CHART-WEBHOOK-01	live	chart	covered	chart	webhook.secretRef	chart/kardinal-promoter/values.yaml:175-180
 CHART-BUNDLEAPI-01	live	chart	covered	chart	bundleAPI.tokenSecretRef mounts POST /api/v1/bundles	chart/kardinal-promoter/values.yaml:182-187
