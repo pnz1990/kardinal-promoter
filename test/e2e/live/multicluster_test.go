@@ -385,9 +385,10 @@ func (f *fleet) promote(t *testing.T, bundle, tag string, prods ...string) {
 		assert.Equal(t, "org", g.Labels["kardinal.io/scope"])
 		require.Equal(t, !weekend(g.Status.LastEvaluatedAt.Time), g.Status.Ready, "no-weekend-deploys: %s", framework.DescribeGate(g))
 		if !g.Status.Ready {
+			oncall := whoAmI(t, e)
 			e.Override(t, g, v1alpha1.PolicyGateOverride{Reason: "e2e runs on weekends", Stage: env,
-				CreatedBy: "e2e-oncall", ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
-			e.WaitGateReady(t, f.ns, bundle, env, "no-weekend-deploys-"+env, true, "OVERRIDDEN by e2e-oncall", gateTimeout)
+				CreatedBy: oncall, ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
+			e.WaitGateReady(t, f.ns, bundle, env, "no-weekend-deploys-"+env, true, "OVERRIDDEN by "+oncall, gateTimeout)
 		}
 	}
 

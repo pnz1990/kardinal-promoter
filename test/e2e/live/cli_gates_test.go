@@ -174,7 +174,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	e := framework.New(t)
 	c := e.CLI(t)
 	ctx := context.Background()
-	user := cliUser(t)
+	user := whoAmI(t, e) // override records the authenticated user (#1450)
 	a := newArgoApp(t, e, "test", "prod")
 	ns := a.ns
 	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))

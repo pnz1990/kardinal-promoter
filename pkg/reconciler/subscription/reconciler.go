@@ -372,7 +372,7 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 		return "", &artifactRejectedError{digest: result.Digest, bundle: name}
 	}
 
-	if err := r.Create(ctx, bundle); err != nil {
+	if err := lifecycle.CreateBundleAs(ctx, r.Client, bundle, "subscription:"+sub.Name); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return "", fmt.Errorf("create bundle %s: %w", bundleName, err)
 		}

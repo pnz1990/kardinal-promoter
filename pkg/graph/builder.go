@@ -622,6 +622,9 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 	nodes = append(nodes, bundleWatchNode)
 	nodes = append(nodes, readBackRefs(pipeline, filteredEnvs, bundle)...)
+	if anyNeedsApprovals(gatesByEnv) {
+		nodes = append(nodes, approvalsRefNode(bundle)) // approval gates (approvals.go)
+	}
 
 	gates := newGateCollections(pipelineName, bundle.Name)
 	var prItems []interface{}

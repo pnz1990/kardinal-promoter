@@ -19,6 +19,7 @@ It communicates with the Kubernetes API server to read and write CRDs.
 
 ### SEE ALSO
 
+* [kardinal approve](kardinal-approve.md)	 - Approve (or reject) a Bundle for an environment's approval gates
 * [kardinal audit](kardinal-audit.md)	 - Audit log commands — view and summarize promotion events
 * [kardinal completion](kardinal-completion.md)	 - Generate shell completion scripts
 * [kardinal create](kardinal-create.md)	 - Create kardinal resources
