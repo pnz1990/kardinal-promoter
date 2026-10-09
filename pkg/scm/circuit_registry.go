@@ -173,3 +173,9 @@ func ownerFromPath(path, prefix string) string {
 	owner, _, _ := strings.Cut(rest, "/")
 	return owner
 }
+
+// states returns the state of owner's circuit and of the quota circuit, for
+// the kardinal_scm_circuit_state metric.
+func (r *CircuitRegistry) states(owner string) (CircuitState, CircuitState) {
+	return r.owner(owner).State(), r.quota.State()
+}

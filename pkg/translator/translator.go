@@ -173,8 +173,7 @@ func (t *Translator) Translate(ctx context.Context,
 	// kro error, so those health refs are dropped for this Graph. The lock
 	// keeps a concurrent Prune (Graph cleanup, sweep) from deleting a reader
 	// binding before the Graph that needs it is created.
-	t.identity.Lock()
-	defer t.identity.Unlock()
+	defer t.identity.LockNamespace(result.Graph.Namespace)()
 	unbound, err := t.identity.Ensure(ctx, result.Graph)
 	if err != nil {
 		return "", fmt.Errorf("translator.Translate: %w", err)
@@ -189,8 +188,11 @@ func (t *Translator) Translate(ctx context.Context,
 	}
 
 	// Remove reader RoleBindings no Graph in the namespace reads through any
-	// more. Best effort: a failure leaves a binding for a later translation.
-	if t.identity != nil {
+	// more: a Graph updated in place may read fewer namespaces. Best effort:
+	// a failure leaves a binding for a later translation. When this Graph
+	// still reads every recorded namespace, nothing can go and the
+	// namespace's Graphs are not listed (MayNeedPrune).
+	if t.identity != nil && t.identity.MayNeedPrune(ctx, result.Graph.Namespace, result.Graph) {
 		if graphs, err := t.graphClient.List(ctx, result.Graph.Namespace); err != nil {
 			log.Warn().Err(err).Msg("graph identity: list graphs for prune")
 		} else if err := t.identity.Prune(ctx, result.Graph.Namespace, graphs); err != nil {

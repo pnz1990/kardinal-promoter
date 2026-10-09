@@ -1328,6 +1328,30 @@ func TestChartGateStatusHeartbeat(t *testing.T) {
 	assert.Error(t, err, "a value that is not a Go duration must fail:\n%s", out)
 }
 
+// TestChartControllerWorkers: controller.workers sets the workers of each
+// controller; unset keeps the controller defaults (no flag); the schema
+// refuses 0 and unknown controllers.
+//
+// Covers PERF-WORKERS-01.
+func TestChartControllerWorkers(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	for _, f := range []string{"promotionstep-workers", "prstatus-workers", "policygate-workers", "bundle-workers", "pipeline-workers"} {
+		assert.NotContains(t, argValues(c), f)
+	}
+	c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "controller.workers.promotionStep=32",
+		"--set", "controller.workers.prStatus=12", "--set", "controller.workers.policyGate=6",
+		"--set", "controller.workers.bundle=2", "--set", "controller.workers.pipeline=1"))
+	assert.Equal(t, "32", argValues(c)["promotionstep-workers"])
+	assert.Equal(t, "12", argValues(c)["prstatus-workers"])
+	assert.Equal(t, "6", argValues(c)["policygate-workers"])
+	assert.Equal(t, "2", argValues(c)["bundle-workers"])
+	assert.Equal(t, "1", argValues(c)["pipeline-workers"])
+	for _, bad := range []string{"controller.workers.promotionStep=0", "controller.workers.metricCheck=4"} {
+		out, err := helmTemplate(t, "kardinal-promoter", "--set", bad)
+		assert.Error(t, err, "%s must fail:\n%s", bad, out)
+	}
+}
+
 // TestChartGraphCompactAbove: graph.compactAbove sets --graph-compact-above
 // (0 included); null keeps the controller default, and a negative value is
 // refused by the schema.
@@ -1363,4 +1387,34 @@ func TestChartMetricCheckQuerySlots(t *testing.T) {
 		assert.Contains(t, out, "/metricCheck/querySlots/", bad)
 		assert.Regexp(t, `minimum|greater than or equal to 1`, out, bad)
 	}
+}
+
+// TestChartControllerMemoryDefaults (#1553): the default memory request and
+// limit fit the loads the scale suite measured (peak 409 MiB), so a default
+// install is not OOMKilled at 200 Pipelines as the old 128Mi limit was.
+func TestChartControllerMemoryDefaults(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	limit, request := c.Resources.Limits.Memory(), c.Resources.Requests.Memory()
+	assert.Equal(t, "1Gi", limit.String())
+	assert.Equal(t, "256Mi", request.String())
+	assert.GreaterOrEqual(t, limit.Value(), int64(2*409<<20), "at least twice the largest measured peak")
+}
+
+// TestChartControllerMemoryLimitEnv (#1553): the controller gets its memory
+// limit from the downward API, from which it sets GOMEMLIMIT to 90%.
+func TestChartControllerMemoryLimitEnv(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	var found bool
+	for _, e := range c.Env {
+		if e.Name != "KARDINAL_MEMORY_LIMIT" {
+			continue
+		}
+		found = true
+		require.NotNil(t, e.ValueFrom)
+		require.NotNil(t, e.ValueFrom.ResourceFieldRef)
+		assert.Equal(t, "limits.memory", e.ValueFrom.ResourceFieldRef.Resource)
+		assert.Equal(t, "controller", e.ValueFrom.ResourceFieldRef.ContainerName)
+		assert.Equal(t, "1", e.ValueFrom.ResourceFieldRef.Divisor.String())
+	}
+	assert.True(t, found, "KARDINAL_MEMORY_LIMIT env")
 }
