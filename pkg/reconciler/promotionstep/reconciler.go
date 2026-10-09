@@ -378,9 +378,9 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 	// Bundle was superseded (E2E-R20). It is not a cancelled promotion, so it
 	// is failed without a PromotionSuperseded record or step metrics.
 	unstarted := base.Status.State == StatePending || base.Status.State == StatePendingExplicit
-	msg := fmt.Sprintf("bundle %s was superseded — promotion cancelled", ps.Spec.BundleName)
+	msg := lifecycle.SupersededMessage(ps.Spec.BundleName) + " — promotion cancelled"
 	if unstarted {
-		msg = fmt.Sprintf("bundle %s was superseded before this step started", ps.Spec.BundleName)
+		msg = lifecycle.SupersededMessage(ps.Spec.BundleName) + " before this step started"
 	}
 	if closeErr := r.closeStepPR(ctx, ps, "bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle", false); closeErr != nil {
 		if !closing {
@@ -399,8 +399,8 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 			delay := retryDelay(ps.Status.RetryCount)
 			next := metav1.NewTime(r.now().Add(delay))
 			ps.Status.NextRetryAt = &next
-			ps.Status.Message = fmt.Sprintf("bundle %s was superseded; closing its PR failed, retrying in %s (%d/%d): %v",
-				ps.Spec.BundleName, delay, ps.Status.RetryCount, maxStepRetries, closeErr)
+			ps.Status.Message = fmt.Sprintf("%s; closing its PR failed, retrying in %s (%d/%d): %v", lifecycle.SupersededMessage(ps.Spec.BundleName),
+				delay, ps.Status.RetryCount, maxStepRetries, closeErr)
 			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("patch supersession retry: %w", err)
 			}

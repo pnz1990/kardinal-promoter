@@ -83,7 +83,7 @@ func TestStep_AutoPushAndCommitFormat(t *testing.T) {
 	a.running(t, "test", imageV2, "test after its auto promotion")
 	pushed := a.commitsSince(t, a.repo.Branch, base)
 	require.Len(t, pushed, 1, "auto pushes one commit to %s", a.repo.Branch)
-	checkPromoteCommit(t, pushed[0], bundle, "test")
+	checkPromoteCommit(t, pushed[0], a.ns, bundle, "test")
 	a.fileHas(t, "test", fixtures.V2, "auto commits to the base branch")
 
 	pr := a.openPR(t, bundle, "prod")
@@ -99,7 +99,7 @@ func TestStep_AutoPushAndCommitFormat(t *testing.T) {
 	onBranch, err := gitserver.Commits(ctx, e.Git, a.repo, prHead(a.ns, bundle, "prod"), 1)
 	require.NoError(t, err)
 	require.NotEmpty(t, onBranch, "the PR branch has commits")
-	checkPromoteCommit(t, onBranch[0], bundle, "prod")
+	checkPromoteCommit(t, onBranch[0], a.ns, bundle, "prod")
 	assert.Empty(t, a.commitsSince(t, a.repo.Branch, pushed[0].SHA), "pr-review does not push to %s", a.repo.Branch)
 	a.fileHas(t, "prod", fixtures.V1, "prod before the merge")
 
@@ -320,7 +320,7 @@ func TestStep_GitAuth(t *testing.T) {
 	checkSteps(t, ps, imageSteps("kustomize-set-image", false))
 	pushed := a.commitsSince(t, a.repo.Branch, base)
 	require.Len(t, pushed, 1, "the promotion commit is pushed with the rotated token")
-	checkPromoteCommit(t, pushed[0], bundle, "test")
+	checkPromoteCommit(t, pushed[0], a.ns, bundle, "test")
 	a.running(t, "test", imageV2, "test after the token rotation")
 
 	events, err := e.Events(ctx, a.ns, "PromotionStep", ps.Name)
@@ -403,7 +403,7 @@ func TestStep_RetriesTransientGitErrors(t *testing.T) {
 	checkSteps(t, ps, imageSteps("kustomize-set-image", false))
 	pushed := a.commitsSince(t, a.repo.Branch, base)
 	require.Len(t, pushed, 1, "the retried promotion pushes once")
-	checkPromoteCommit(t, pushed[0], bundle, "test")
+	checkPromoteCommit(t, pushed[0], a.ns, bundle, "test")
 	a.running(t, "test", imageV2, "test after the retries")
 }
 
@@ -558,7 +558,7 @@ func TestStep_ApprovalEditMidPromotion(t *testing.T) {
 			if !prReview {
 				pushed := a.commitsSince(t, a.repo.Branch, base)
 				require.Len(t, pushed, 1, "auto pushes one commit to %s", a.repo.Branch)
-				checkPromoteCommit(t, pushed[0], bundle, "test")
+				checkPromoteCommit(t, pushed[0], a.ns, bundle, "test")
 				prs, err := e.Git.PullRequests(context.Background(), a.repo)
 				require.NoError(t, err)
 				assert.Empty(t, prs, "no PR is opened")
@@ -854,14 +854,14 @@ func retrying(t *testing.T, step string, redact func(string) string) func(*v1alp
 }
 
 // promoteMessage is the commit message of a promotion (docs/pr-evidence.md).
-func promoteMessage(bundle, env string) string {
-	return fmt.Sprintf("[kardinal] Promote %s to %s\n\nBundle: %s\nPipeline: %s", bundle, env, bundle, pipelineName)
+func promoteMessage(ns, bundle, env string) string {
+	return fmt.Sprintf("[kardinal] Promote %s to %s\n\nBundle: %s\nPipeline: %s\nNamespace: %s", bundle, env, bundle, pipelineName, ns)
 }
 
 // checkPromoteCommit checks c is the promotion commit of bundle to env.
-func checkPromoteCommit(t *testing.T, c gitserver.Commit, bundle, env string) {
+func checkPromoteCommit(t *testing.T, c gitserver.Commit, ns, bundle, env string) {
 	t.Helper()
-	assert.Equal(t, promoteMessage(bundle, env), strings.TrimSpace(c.Message), "commit %s message", c.SHA)
+	assert.Equal(t, promoteMessage(ns, bundle, env), strings.TrimSpace(c.Message), "commit %s message", c.SHA)
 	assert.Equal(t, "kardinal-promoter", c.AuthorName, "commit %s author", c.SHA)
 	assert.Equal(t, "kardinal@kardinal.io", c.AuthorEmail, "commit %s author email", c.SHA)
 }

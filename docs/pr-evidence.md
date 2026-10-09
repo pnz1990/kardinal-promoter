@@ -173,4 +173,12 @@ of a step that ended before it opened a PR. A merged PR keeps its branch.
 
 Bundle: my-app-x7k2p
 Pipeline: my-app
+Namespace: team-a
 ```
+
+When a promotion that pushes straight to the branch (`approval: auto`) is retried after its
+push landed (its status write was lost, for example on a controller restart), it finds this
+commit at the head of the branch and counts the change as its own, not as an environment
+that already had the version. It looks at the head commit only: if another commit landed on
+top in the meantime, the retry records `noChanges` and the deployment metrics miss that one
+deployment.
