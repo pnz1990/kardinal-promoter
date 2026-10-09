@@ -645,6 +645,43 @@ type PipelineDeploymentMetrics struct {
 	// +optional
 	SampleSize int `json:"sampleSize,omitempty"`
 
+	// Deployments is the number of deployments the change failure rate and
+	// time to restore are computed over: the last 30 Bundles whose change
+	// reached a final environment (one nothing depends on; its health check
+	// started), whatever the outcome, once per Bundle. Not deployments: a
+	// no-op promotion (outputs.noChanges), the steps a supersession
+	// cancelled (a RollingBack, AbortedByAlarm or already Failed step of a
+	// superseded Bundle still counts), and rollback Bundles (they count only
+	// as restores).
+	// +optional
+	Deployments int `json:"deployments,omitempty"`
+
+	// FailedDeployments is how many of those deployments failed: a
+	// PromotionStep in a final environment ended Failed, AbortedByAlarm or
+	// RollingBack after its health check started, a rollback Bundle later
+	// rolled a final environment back from it (annotation
+	// kardinal.io/rollback-from), or the Bundle was rejected after it was
+	// deployed.
+	// +optional
+	FailedDeployments int `json:"failedDeployments,omitempty"`
+
+	// ChangeFailureRateMillis is failedDeployments / deployments as integer
+	// thousandths (DORA change failure rate; 250 = 25%).
+	// +optional
+	ChangeFailureRateMillis int `json:"changeFailureRateMillis,omitempty"`
+
+	// MeanTimeToRestoreMinutes is the mean, in whole minutes, from each failed
+	// deployment reaching a final environment to the first later Bundle
+	// Verified in every final environment it targets, in every region (DORA
+	// time to restore). Failures not restored yet are not counted.
+	// +optional
+	MeanTimeToRestoreMinutes int64 `json:"meanTimeToRestoreMinutes,omitempty"`
+
+	// RestoredFailures is the number of failed deployments in
+	// meanTimeToRestoreMinutes.
+	// +optional
+	RestoredFailures int `json:"restoredFailures,omitempty"`
+
 	// ComputedAt is when these metrics were last written by the PipelineReconciler.
 	// +optional
 	ComputedAt *metav1.Time `json:"computedAt,omitempty"`

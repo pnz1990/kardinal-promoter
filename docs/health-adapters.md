@@ -286,7 +286,9 @@ health:
   supported`: these would run a command or read a file inside the controller, or send the
   credentials to a server that is not verified. For EKS or GKE, use a ServiceAccount token in the remote cluster
   (a `kubernetes.io/service-account-token` Secret there, or a token an external tool refreshes into
-  the kubeconfig Secret), bound to a role that can `get` and `list` the checked objects.
+  the kubeconfig Secret), bound to a role that can `get` and `list` the checked objects, and
+  `list` pods in their namespace (the `resource` check reads the new ReplicaSet's pods to name why
+  they do not start; without it the message just omits the pod's reason).
 - Only the kubeconfig's `current-context` is used. The API server address goes through the
   controller's egress guard (no loopback, link-local or cloud metadata addresses) and is dialled
   directly, not through `HTTP(S)_PROXY`. Each request has a 10 second timeout.

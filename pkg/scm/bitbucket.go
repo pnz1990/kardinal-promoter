@@ -25,6 +25,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const bitbucketDefaultAPIURL = "https://api.bitbucket.org"
@@ -67,7 +69,7 @@ func NewBitbucketProvider(token, apiURL, webhookSecret string) *BitbucketProvide
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuits:      NewCircuitRegistry(),
-		client:        &http.Client{Timeout: providerHTTPTimeout},
+		client:        &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 	}
 }
 

@@ -96,6 +96,13 @@ func (t *Translator) Translate(ctx context.Context,
 
 	log.Debug().Int("gates", len(gates)).Msg("collected policy gates")
 
+	// Per-promotion MetricChecks of the Pipeline namespace: the builder adds
+	// an instance for each one a gate reads.
+	metricChecks, err := t.collectMetricTemplates(ctx, pipeline.Namespace)
+	if err != nil {
+		return "", fmt.Errorf("translator.Translate: collect metric checks: %w", err)
+	}
+
 	// Build validates the input (names, skip permissions, node IDs) and
 	// returns the Graph spec. Only the controller's org namespaces count as
 	// org policy: a Pipeline's own spec.policyNamespaces adds gates but can
@@ -108,6 +115,7 @@ func (t *Translator) Translate(ctx context.Context,
 		Bundle:           bundle,
 		PolicyGates:      gates,
 		PolicyNamespaces: t.policyNS,
+		MetricChecks:     metricChecks,
 	})
 	if err != nil {
 		return "", &BuildError{Err: fmt.Errorf("translator.Translate: %w", err), Gates: gates}
@@ -175,6 +183,23 @@ func (t *Translator) Translate(ctx context.Context,
 		Msg("translation complete: graph applied")
 
 	return result.Graph.Name, nil
+}
+
+// collectMetricTemplates returns the MetricChecks in ns with
+// spec.perPromotion, sorted by name so the rendered Graph is stable.
+func (t *Translator) collectMetricTemplates(ctx context.Context, ns string) ([]kardinalv1alpha1.MetricCheck, error) {
+	var list kardinalv1alpha1.MetricCheckList
+	if err := t.k8s.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return nil, fmt.Errorf("list metricchecks in %s: %w", ns, err)
+	}
+	var out []kardinalv1alpha1.MetricCheck
+	for _, mc := range list.Items {
+		if mc.Spec.PerPromotion {
+			out = append(out, mc)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }
 
 // servedKind reports whether the cluster serves apiVersion/kind. Without a
