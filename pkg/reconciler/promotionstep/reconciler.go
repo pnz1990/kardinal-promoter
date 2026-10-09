@@ -25,6 +25,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -44,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
@@ -138,6 +140,10 @@ const (
 // the last persisted index, so every step must be safe to repeat (the git and
 // open-pr steps are).
 type Reconciler struct {
+	// pushTurns gives auto promotions writing one branch their turn one at a
+	// time (#1578).
+	pushTurns branchQueue
+
 	// Workers is how many objects are reconciled at once (--promotionstep-workers);
 	// 0 is the manager's default. One object is never reconciled twice at
 	// once: the work queue serializes it.
@@ -942,7 +948,7 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 // (policyGateMapper), PRStatus change or restart reconciled the step at once,
 // so a gate with recheckInterval 10s used up the five retries in about 40s
 // instead of 4.5 minutes (B87).
-func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
+func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (res ctrl.Result, err error) {
 	if ps.Status.NextRetryAt != nil {
 		if wait := ps.Status.NextRetryAt.Sub(r.now()); wait > 0 {
 			return ctrl.Result{RequeueAfter: wait}, nil
@@ -1039,6 +1045,31 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, workDir, cred, provider)
 
 	prevIdx := ps.Status.CurrentStepIndex
+	// An auto promotion pushing to its base branch waits for the branch's
+	// turn before any git work (branchQueue, #1578). It gives the worker
+	// back at once and is requeued at low priority, so other steps, in
+	// other namespaces too, go first (#1577).
+	if key, ok := basePushBranch(seq, prevIdx, state.Git.URL, state.Git.Branch); ok {
+		release, wait, got := r.pushTurns.tryTurn(key, client.ObjectKeyFromObject(ps).String(), r.now())
+		if !got {
+			return r.waitForBranchTurn(ctx, base, ps, state.Git.Branch, wait)
+		}
+		// The turn ends once git-push has landed; at the latest when the
+		// reconcile does.
+		eng.OnStepDone = func(_ int, name string) {
+			if name == "git-push" {
+				release(r.now())
+			}
+		}
+		defer func() {
+			release(r.now())
+			// Waiting lowered the step's priority, which a requeue keeps:
+			// with its turn taken, it is back at the normal one.
+			if res.Priority == nil {
+				res.Priority = &normalPriority
+			}
+		}()
+	}
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, prevIdx)
 
 	// Persist outputs regardless of result, so a PR opened in this reconcile is
@@ -2255,8 +2286,28 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A hold added or released (spec.holds) takes effect on the held
 		// environment's steps at once (holdIfEnvironmentHeld).
 		Watches(&v1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineHoldMapper),
-			builderutil.WithPredicates(holdsChanged))
+			builderutil.WithPredicates(holdsChanged)).
+		// A branch turn that ends wakes the oldest step waiting for it
+		// (branchQueue), so the branch does not sit idle until its requeue.
+		WatchesRawSource(source.Channel(r.turnWakeups(), &handler.EnqueueRequestForObject{}))
 	return shard.Active().Complete(b, tracing.WrapReconciler("promotionstep", r), &v1alpha1.PromotionStepList{})
+}
+
+// turnWakeups connects the branch queue's wake to a channel of events for
+// the controller: a full buffer drops the wake, and the waiter's own requeue
+// still comes.
+func (r *Reconciler) turnWakeups() <-chan event.GenericEvent {
+	ch := make(chan event.GenericEvent, 256)
+	r.pushTurns.mu.Lock()
+	r.pushTurns.wake = func(step string) {
+		ns, name, _ := strings.Cut(step, "/")
+		select {
+		case ch <- event.GenericEvent{Object: &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}}:
+		default:
+		}
+	}
+	r.pushTurns.mu.Unlock()
+	return ch
 }
 
 // holdsChanged passes Pipeline updates that change spec.holds.
