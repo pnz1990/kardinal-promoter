@@ -61,7 +61,6 @@ import (
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
@@ -573,26 +572,12 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up NotificationHookReconciler")
 	}
 
-	// SubscriptionReconciler: polls OCI registries and Git repositories on an interval
-	// and creates Bundle CRDs when new artifacts are detected.
+	// SubscriptionReconciler: polls OCI registries, Git repositories and Helm
+	// chart repositories on an interval (or at once on a kardinal.io/refresh
+	// request from the webhook receiver) and creates Bundle CRDs when new
+	// artifacts are detected. WatcherFn nil is subscriptionrecon.NewWatcher.
 	if err := (&subscriptionrecon.Reconciler{
 		Client: mgr.GetClient(),
-		WatcherFn: func(sub *kardinalv1alpha1.Subscription) (source.Watcher, error) {
-			switch sub.Spec.Type {
-			case kardinalv1alpha1.SubscriptionTypeImage:
-				if sub.Spec.Image == nil {
-					return nil, fmt.Errorf("image subscription missing spec.image")
-				}
-				return source.NewOCIWatcher(sub.Spec.Image.Registry, sub.Spec.Image.TagFilter), nil
-			case kardinalv1alpha1.SubscriptionTypeGit:
-				if sub.Spec.Git == nil {
-					return nil, fmt.Errorf("git subscription missing spec.git")
-				}
-				return source.NewGitWatcher(sub.Spec.Git.RepoURL, sub.Spec.Git.Branch, sub.Spec.Git.PathGlob), nil
-			default:
-				return nil, fmt.Errorf("unknown subscription type %q", sub.Spec.Type)
-			}
-		},
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up SubscriptionReconciler")
 	}
@@ -627,6 +612,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/webhook/scm", tracing.Handler("webhook.scm", webhookSrv.Handler()))
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
+	// Registry and SCM webhooks that make a Subscription poll at once. Each
+	// Subscription opts in with spec.webhook and its own token.
+	mux.HandleFunc(subscriptionWebhookPrefix, newSubscriptionWebhook(mgr.GetClient(), logger).Handler())
 	mux.HandleFunc(openAPIPath, handleOpenAPI)
 	// Bundle API endpoint — only mounted if a token is configured.
 	if bundleAPIToken != "" {

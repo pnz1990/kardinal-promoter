@@ -909,6 +909,8 @@ func defaultStepType(bundleType string) string {
 	switch bundleType {
 	case "config":
 		return "config-merge"
+	case "chart":
+		return "helm-set-image"
 	default:
 		return "kustomize-set-image"
 	}
