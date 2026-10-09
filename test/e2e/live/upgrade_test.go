@@ -856,6 +856,17 @@ spec:
 	// retired after graph.retire.superseded (#1527) and its steps live on in
 	// status.retiredSteps.
 	u.step(t, u.main, b2, "test")
+	// b1's prod step is not lost by the cleanup: it is either still a
+	// PromotionStep or, its Graph retired, a record in status.retiredSteps.
+	if _, live, err := e.Step(context.Background(), ns, u.main, b1, "prod"); assert.NoError(t, err) && !live {
+		var b v1alpha1.Bundle
+		u.get(t, b1, &b)
+		envs := []string{}
+		for _, r := range b.Status.RetiredSteps {
+			envs = append(envs, r.Environment)
+		}
+		assert.Contains(t, envs, "prod", "b1's prod step is kept in status.retiredSteps")
+	}
 }
 
 // dryRun is a script that server-side dry-runs applying y in the namespace.
