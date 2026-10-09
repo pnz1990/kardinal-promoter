@@ -388,6 +388,14 @@ func main() {
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
+	// The Go runtime's soft memory limit at 90% of the container limit, so
+	// the GC works harder before the kernel OOMKills the controller (#1553).
+	if limit, why, err := applyGoMemoryLimit(os.Getenv("GOMEMLIMIT"), os.Getenv("KARDINAL_MEMORY_LIMIT")); err != nil {
+		logger.Warn().Err(err).Msg("Go memory limit not set")
+	} else if limit > 0 {
+		logger.Info().Int64("bytes", limit).Str("from", why).Msg("Go soft memory limit set")
+	}
+
 	tracingCfg.ServiceVersion = ControllerVersion
 	tracingCfg.OnError = func(err error) { logger.Warn().Err(err).Msg("OpenTelemetry: span export failed") }
 	shutdownTracing, err := tracing.Setup(context.Background(), tracingCfg)

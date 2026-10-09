@@ -174,6 +174,35 @@ kardinal version
 
 ---
 
+### Sizing the controller
+
+The controller keeps an informer cache of every Pipeline, Bundle, PromotionStep, PRStatus and
+PolicyGate it watches, so its memory grows with the number of Pipelines times the Bundles each
+keeps (`historyLimit`), more than with the promotion rate. Measured with the scale suite (`full`
+profile, controller built without `-race`, 2 replicas; peak resident memory of the leader,
+[#1553](https://github.com/pnz1990/kardinal-promoter/issues/1553)):
+
+| Load | Controller memory (peak) |
+|---|---|
+| No Pipelines | 55-70 MiB |
+| 200 Pipelines x 3 environments, one Bundle each | 166 MiB |
+| 1,000 Bundles over 100 Pipelines | 175 MiB |
+| 200 Pipelines, one Bundle each, latency run | 187 MiB |
+| 2 Bundles a second for 10 minutes over 50 Pipelines (1,200 Bundles) | 366 MiB |
+| 2 Bundles a second over 40 Pipelines, leader killed 12 times | 409 MiB |
+
+The chart requests 256 MiB and limits the controller to 1 GiB: 2.5 times the largest load
+measured. A controller that runs out of memory is OOMKilled, re-lists everything when it
+restarts and can be killed again, and no promotion in the cluster moves while it is down. For
+more Pipelines or a longer history, raise `resources.limits.memory` in proportion: about
+0.5 MiB per Pipeline with one Bundle (the 200-Pipeline run above), plus what the kept Bundles
+and their steps hold. Watch
+`container_memory_working_set_bytes` of the controller Pod, or `process_resident_memory_bytes`
+on its metrics port. The controller sets the Go runtime's soft memory limit (`GOMEMLIMIT`) to 90% of
+its container limit, which the chart passes in from the downward API, so the garbage collector
+works harder before the kernel would OOMKill it; set `GOMEMLIMIT` in `controller.extraEnv` to
+choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
+
 ## Helm values reference
 
 ### kardinal-promoter controller
@@ -220,9 +249,9 @@ kardinal version
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
 | `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed, so the chart grants no Job access |
 | `resources.limits.cpu` | `500m` | CPU limit |
-| `resources.limits.memory` | `128Mi` | Memory limit |
+| `resources.limits.memory` | `1Gi` | Memory limit; see [Sizing the controller](#sizing-the-controller) |
 | `resources.requests.cpu` | `10m` | CPU request |
-| `resources.requests.memory` | `64Mi` | Memory request |
+| `resources.requests.memory` | `256Mi` | Memory request |
 | `nodeSelector` | `{}` | Node selector |
 | `tolerations` | `[]` | Pod tolerations |
 | `affinity` | `{}` | Pod affinity |

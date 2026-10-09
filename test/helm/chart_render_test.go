@@ -1393,3 +1393,33 @@ func TestChartMetricCheckQuerySlots(t *testing.T) {
 		assert.Regexp(t, `minimum|greater than or equal to 1`, out, bad)
 	}
 }
+
+// TestChartControllerMemoryDefaults (#1553): the default memory request and
+// limit fit the loads the scale suite measured (peak 409 MiB), so a default
+// install is not OOMKilled at 200 Pipelines as the old 128Mi limit was.
+func TestChartControllerMemoryDefaults(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	limit, request := c.Resources.Limits.Memory(), c.Resources.Requests.Memory()
+	assert.Equal(t, "1Gi", limit.String())
+	assert.Equal(t, "256Mi", request.String())
+	assert.GreaterOrEqual(t, limit.Value(), int64(2*409<<20), "at least twice the largest measured peak")
+}
+
+// TestChartControllerMemoryLimitEnv (#1553): the controller gets its memory
+// limit from the downward API, from which it sets GOMEMLIMIT to 90%.
+func TestChartControllerMemoryLimitEnv(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	var found bool
+	for _, e := range c.Env {
+		if e.Name != "KARDINAL_MEMORY_LIMIT" {
+			continue
+		}
+		found = true
+		require.NotNil(t, e.ValueFrom)
+		require.NotNil(t, e.ValueFrom.ResourceFieldRef)
+		assert.Equal(t, "limits.memory", e.ValueFrom.ResourceFieldRef.Resource)
+		assert.Equal(t, "controller", e.ValueFrom.ResourceFieldRef.ContainerName)
+		assert.Equal(t, "1", e.ValueFrom.ResourceFieldRef.Divisor.String())
+	}
+	assert.True(t, found, "KARDINAL_MEMORY_LIMIT env")
+}
