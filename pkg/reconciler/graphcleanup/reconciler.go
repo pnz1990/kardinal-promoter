@@ -202,8 +202,7 @@ func (r *Reconciler) removeKroFinalizer(ctx context.Context, g *unstructured.Uns
 // prune deletes the reader RoleBindings of namespace that no remaining Graph
 // reads through.
 func (r *Reconciler) prune(ctx context.Context, log zerolog.Logger, namespace string) error {
-	r.Identity.Lock()
-	defer r.Identity.Unlock()
+	defer r.Identity.LockNamespace(namespace)()
 	graphs, err := r.Graphs.List(ctx, namespace)
 	if err != nil {
 		return fmt.Errorf("list graphs for prune: %w", err)

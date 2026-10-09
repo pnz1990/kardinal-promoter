@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -531,12 +532,57 @@ func TestIdentityProvisioner_RefusesForeignRoleRef(t *testing.T) {
 
 func TestIdentityProvisioner_NilSafe(t *testing.T) {
 	var p *graph.IdentityProvisioner
-	p.Lock()
-	defer p.Unlock()
+	defer p.LockNamespace("default")()
+	assert.False(t, p.MayNeedPrune(context.Background(), "default", refGraph("default")))
 	unbound, err := p.Ensure(context.Background(), refGraph("default"))
 	assert.NoError(t, err)
 	assert.Empty(t, unbound)
 	assert.NoError(t, p.Prune(context.Background(), "default", nil))
 	assert.NoError(t, p.PruneIn(context.Background(), "default", nil, []string{"argocd"}))
 	assert.True(t, p.MayRead("default", "kube-system"), "no provisioner: identity is managed outside the controller")
+}
+
+// TestIdentityProvisioner_MayNeedPrune (#1509): a translation lists the
+// namespace's Graphs to prune only when the recorded reader namespaces
+// include one its Graph does not read.
+func TestIdentityProvisioner_MayNeedPrune(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewClientBuilder().WithScheme(identityScheme(t)).Build()
+	p := &graph.IdentityProvisioner{Writer: c, Reader: c, ReaderNamespaces: []string{"prod", "argocd"}}
+	assert.True(t, p.MayNeedPrune(ctx, "default", refGraph("default", "prod")), "no record yet")
+
+	_, err := p.Ensure(ctx, refGraph("default", "prod", "argocd"))
+	require.NoError(t, err)
+	assert.False(t, p.MayNeedPrune(ctx, "default", refGraph("default", "prod", "argocd")), "every recorded namespace is read")
+	assert.False(t, p.MayNeedPrune(ctx, "default", refGraph("default", "argocd", "prod", "default")), "reading more needs no prune")
+	assert.True(t, p.MayNeedPrune(ctx, "default", refGraph("default", "prod")), "argocd is no longer read by this Graph")
+}
+
+// TestIdentityProvisioner_LockNamespace: one namespace's callers take
+// turns; another namespace's are not held.
+func TestIdentityProvisioner_LockNamespace(t *testing.T) {
+	p := &graph.IdentityProvisioner{}
+	unlock := p.LockNamespace("a")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.LockNamespace("b")()
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("namespace b waited for namespace a's lock")
+	}
+	blocked := make(chan struct{})
+	go func() {
+		defer close(blocked)
+		p.LockNamespace("a")()
+	}()
+	select {
+	case <-blocked:
+		t.Fatal("a second holder of namespace a got the lock")
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlock()
+	<-blocked
 }

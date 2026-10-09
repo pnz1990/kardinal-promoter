@@ -110,8 +110,7 @@ func (s *Sweep) Run(ctx context.Context) error {
 
 // prune prunes the reader bindings for graphNS, looking in namespaces too.
 func (s *Sweep) prune(ctx context.Context, graphNS string, namespaces []string) error {
-	s.Identity.Lock()
-	defer s.Identity.Unlock()
+	defer s.Identity.LockNamespace(graphNS)()
 	graphs, err := s.Graphs.List(ctx, graphNS)
 	if err != nil {
 		return fmt.Errorf("list graphs: %w", err)
