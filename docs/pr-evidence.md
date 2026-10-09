@@ -139,6 +139,138 @@ Lists every other environment recorded in the Bundle's `status.environments`:
 The PR body is written once, when the PR is opened. kardinal does not rewrite it when gates or
 upstream environments change, so it is a snapshot. The UI and `kardinal explain` show live state.
 
+## Customising the PR
+
+An environment's `pr` field sets the title, body, labels, reviewers and assignees of its PR,
+and can ask the SCM to merge the PR on its own. It needs `approval: pr-review`; the API server
+rejects it otherwise.
+
+```yaml
+environments:
+  - name: prod
+    approval: pr-review
+    pr:
+      titleTemplate: "Deploy {{ .Bundle.Version }} to {{ .Environment }}"
+      bodyTemplate: |
+        Release {{ .Bundle.Name }}, built from {{ .Bundle.CommitSHA | truncate 7 }} by @{{ .Bundle.Author }}.
+
+        {{ provenanceTable }}
+
+        {{ gatesTable }}
+      labels: ["env/{{ .Environment }}", "team/payments"]
+      reviewers: [alice]
+      teamReviewers: [platform]          # GitHub, Forgejo/Gitea and Azure DevOps
+      assignees: ["{{ .Bundle.Author }}"] # the author recorded in the Bundle's provenance
+      merge:
+        auto: true                       # the SCM merges once required checks and reviews pass
+        method: squash                   # merge (default), squash or rebase
+        commitMessageTemplate: |
+          {{ .PR.Title }} (#{{ .PR.Number }})
+
+          Promoted by kardinal: {{ .Bundle.Name }}
+```
+
+| Field | Description |
+|---|---|
+| `titleTemplate` | Replaces `[kardinal] Promote <bundle> to <env>` (and the rollback title). Newlines become spaces, and the title is cut to 255 characters. A title that renders empty fails the step. |
+| `bodyTemplate` | Replaces the body. kardinal puts the `<!-- kardinal-promoter auto-generated PR -->` marker line first. The evidence sections are functions, so a custom body can keep any of them (below). |
+| `labels` | Added to `kardinal`, `kardinal/promotion` and `kardinal/rollback`. At most 50 characters each, without commas. |
+| `reviewers` | Users asked to review the PR. |
+| `teamReviewers` | Teams asked to review the PR (team slugs). |
+| `assignees` | Users the PR is assigned to. `"{{ .Bundle.Author }}"` assigns whoever `spec.provenance.author` names, such as the CI actor (`kardinal create bundle --author`); a Bundle without an author adds no one. |
+| `merge.auto` | Once the PR is open, kardinal enables the SCM's auto-merge: the SCM merges the PR once the repository's required checks, reviews or pipeline pass. Branch protection still applies. kardinal turns auto-merge **off** while the Pipeline is paused or a required gate of the environment is closed (a freeze, a soak), and on again when they clear. A PR with nothing pending (no required check, review or pipeline) is not merged: auto-merge is not turned on, and the PR waits for a merge by hand, unless `merge.allowImmediate` is set. kardinal sees the merge as it sees one made by hand. |
+| `merge.allowImmediate` | `true`: when nothing is pending on the PR, kardinal merges it at once. This skips human review and any CI the repository does not require; use it only for environments where the gates are the review. Needs `merge.auto: true`. Default `false`. |
+| `merge.method` | `merge` (a merge commit, the default), `squash` or `rebase`. Needs `merge.auto: true`. |
+| `merge.commitMessageTemplate` | The merge (or squash) commit message: the first line is the title, the rest the body. Needs `merge.auto: true`. Empty leaves the SCM's message. |
+
+Each list entry is a template too. Each line it renders is one entry, and blank lines and
+repeats are dropped, so `image/{{ (index .Bundle.Images 0).Tag }}` adds a label for the first
+image, and an entry that renders nothing adds nothing. Which controls each provider applies is in
+[SCM Providers](scm-providers.md#pr-controls); a control the provider does not apply fails the
+step before the PR is opened.
+
+### Template data
+
+Every template is a Go [text/template](https://pkg.go.dev/text/template) with this data:
+
+| Field | Value |
+|---|---|
+| `.Pipeline` | Pipeline name |
+| `.Environment` | Environment name |
+| `.Bundle.Name`, `.Bundle.Type` | Bundle name and type (`image`, `config`, `mixed`) |
+| `.Bundle.Version` | What the Bundle deploys: the tag of a one-image Bundle, `<image>:<tag>` for each of several images, `config <commit>` for a config Bundle (as in the rollback title) |
+| `.Bundle.Images` | The images: `.Repository`, `.Tag`, `.Digest`. Read one with `index`: `{{ (index .Bundle.Images 0).Tag }}`; list them with `imageList` |
+| `.Bundle.ConfigCommitSHA` | The config commit of a config or mixed Bundle |
+| `.Bundle.Author`, `.Bundle.CommitSHA`, `.Bundle.CIRunURL` | `spec.provenance`; empty when the Bundle has none |
+| `.IsRollback` | `true` for a rollback PR |
+| `.Rollback.Of`, `.Rollback.From`, `.Rollback.By`, `.Rollback.Restores` | The rollback's target, the Bundle it replaces, who asked for it and the version it restores; empty for a promotion |
+| `.PR.Number`, `.PR.URL`, `.PR.Title` | The opened PR: only in `merge.commitMessageTemplate` |
+
+Every field is a plain value, so a Bundle without provenance renders empty strings, not an error.
+
+### Template functions
+
+| Function | Output |
+|---|---|
+| `evidence` | The whole default body |
+| `heading` | `## Promotion: ...`, or `## ROLLBACK: ...` and the rollback note |
+| `rollbackNotice` | The rollback note; empty for a promotion |
+| `provenanceTable` | `### Artifact Provenance` and its table |
+| `gatesTable` | `### Policy Gate Compliance` and its table |
+| `upstreamTable` | `### Upstream Verification` and its table |
+| `imageList` | One line per image: `<repository>:<tag>`, with `@<digest>` when the image has one |
+| `mdcell` | Escapes a value for a markdown table cell |
+| `truncate N`, `lower`, `upper`, `trimSpace`, `trimPrefix P`, `replace OLD NEW`, `contains S`, `hasPrefix P`, `join SEP`, `default D` | String helpers; the string comes last, so they work in a pipeline: `{{ .Bundle.CommitSHA \| truncate 7 }}`. `printf` is not available; use `print` or the helpers |
+| `if`/`else if`/`else`, `with`, `and`, `or`, `not`, `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `len`, `index`, `slice`, `print`, `println`, `html`, `js`, `urlquery` | As in text/template; `slice` takes at most two indexes |
+
+### Template limits
+
+The templates run in the controller, so the language is restricted and has no loops: `range`,
+variables (`{{ $x := ... }}`, `{{ $x = ... }}`), `define`, `block`, `template`, `printf` and
+`call` are refused. Without loops, a render runs each part of the template at most once, so its
+work is bounded by the template's length, not by the Bundle. The lists a body shows (images,
+gates, upstream environments) come from `imageList` and the evidence functions. `$` and `.`
+work as usual. `print`, `println`, `html`, `js` and `urlquery` take strings, numbers and bools
+only: a struct, map, list or pointer argument, such as `.`, is refused before it is formatted.
+`replace` refuses an empty string to replace. Every function, the comparisons
+included, is counted, and its result size (for a comparison, what it reads) is computed from
+its arguments before it runs: one call builds at most 64 KiB and a whole render at most 1 MiB,
+in at most 2000 calls and 500 ms, after which every call and write fails at once. A body
+renders at most 64 KiB, a title or list entry 4 KiB and a commit message 16 KiB. The data is
+bounded too: a Bundle holds at most 100 images, a template sees at most 20 of them, and each value is at most 1024 characters, image fields included. A
+template that breaks a rule is refused like one that does not parse. A list template refuses a
+value with a line break (an author `alice\nbob` would make two entries).
+
+### Invalid templates and failed controls
+
+The controller renders every template of a Pipeline with sample data for a promotion and a
+rollback. A template that does not parse, or that names a field or function that does not
+exist, sets the Pipeline's `Ready` condition to `False` with reason `ValidationFailed` and a
+message such as `environment "prod": pr.titleTemplate: ...`; `kardinal validate` reports the
+same error. A template that renders something no SCM takes (an empty title, a label too long)
+fails the step before the PR is opened.
+
+Once the PR is open, a control the SCM refuses (a reviewer who is not a collaborator, a
+repository that does not allow auto-merge) does not fail the step: the PR waits for a merge by
+hand. While the step waits for the merge, its message ends with `; PR controls failed: <error>`,
+and `status.outputs.prControlsError` keeps the error.
+
+### Auto-merge while the step waits
+
+The PromotionStep reconciler turns auto-merge on, off and on again while the step waits for
+the merge, and records where it is in `status.outputs.prAutoMerge`; the step message ends with
+the same:
+
+| `prAutoMerge` | Message ends with | Meaning |
+|---|---|---|
+| `pending` | `; auto-merge pending` | Not on yet. The SCM may still be checking the new PR: kardinal tries again with a backoff (up to 8 times), without holding the reconcile. |
+| `enabled` | `; auto-merge enabled` | The SCM merges the PR once its requirements pass. |
+| `suspended` | `; auto-merge off: pipeline <name> is paused` (or `gate <name> is closed`) | Turned off while the Pipeline is paused or a gate is closed; turned on again when they clear. |
+| `failed` | `; auto-merge failed: <reason>` | Not turned on, for example because nothing is pending on the PR and `allowImmediate` is not set, or the repository does not allow auto-merge. The PR waits for a merge by hand. |
+
+`status.outputs.prAutoMergeError` keeps the reason, and `prMergeOptions` the rendered merge
+method and commit message.
+
 ## Merge Detection
 
 kardinal-promoter detects PR merges in two ways:
@@ -180,14 +312,15 @@ The status name is reserved for kardinal: nothing else should post `kardinal/gat
 
 How it works: the promotion Graph mirrors the live gate results onto each pr-review step (`spec.live.gates`, through a `patch` node, because the step's own template is frozen once a gate turns false), and the step reconciler posts the status when the result or the commit changes (`status.outputs.gatesStatus` records the last one, so a reconcile with nothing new makes no SCM call; posting needs one call, two on Azure DevOps, which looks up the PR iteration). A failed post never fails the step. It is recorded as `error:<hash>@<retry time>#<failures>` with one Warning Event `GatesStatusFailed`: a transient error (5xx, rate limit) is retried after 30s, doubling up to an hour; a permanent one (401, a 403 that is not a rate limit, 404) waits an hour whatever the gates do, so a token without the commit-status permission does not spend the rate limit on every poll; rotating the SCM token tries again at once. After any other failure a new gate result or commit is tried at once. Only GitHub's 403 is read for a rate limit in its JSON `message` (its secondary limit can come without the rate-limit headers); the headers decide first. Every provider kardinal supports sets it; the token needs permission to set commit statuses (included in the scopes listed in [SCM providers](scm-providers.md)).
 
-## Auto-Merge Environments
+## Environments Without a PR
 
-For environments with `approval: auto`, no PR is created. The controller pushes directly to the target branch (or directory).
+For environments with `approval: auto`, no PR is created. The controller pushes directly to the target branch (or directory). For a PR the SCM merges on its own, use `approval: pr-review` with `pr.merge.auto` ([Customising the PR](#customising-the-pr)).
 
 ## CODEOWNERS Integration
 
-kardinal never merges a PR; a person does. GitHub branch protection and CODEOWNERS apply as
-usual. When a CODEOWNERS pattern matches the environment's path, GitHub asks those owners to
+kardinal never merges a PR itself: a person does, or the SCM's auto-merge when the environment
+sets `pr.merge.auto` ([Customising the PR](#customising-the-pr)). GitHub branch protection and
+CODEOWNERS apply as usual. When a CODEOWNERS pattern matches the environment's path, GitHub asks those owners to
 review.
 
 ## Branch Naming
