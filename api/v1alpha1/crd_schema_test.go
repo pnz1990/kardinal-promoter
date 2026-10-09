@@ -435,13 +435,14 @@ func TestCRDBundleArtifactImmutable(t *testing.T) {
 		require.NoError(t, err)
 		prgs = append(prgs, prg)
 	}
-	require.GreaterOrEqual(t, len(prgs), 5, "one transition rule per artifact field")
+	require.GreaterOrEqual(t, len(prgs), 6, "one transition rule per artifact field")
 	base := func() map[string]interface{} {
 		return map[string]interface{}{
 			"type": "mixed", "pipeline": "app",
 			"images":     []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "tag": "1.0", "digest": "sha256:" + strings.Repeat("a", 64)}},
 			"configRef":  map[string]interface{}{"gitRepo": "https://github.com/org/cfg", "commitSHA": strings.Repeat("b", 40)},
 			"provenance": map[string]interface{}{"commitSHA": "abc1234", "author": "ci"},
+			"chart":      map[string]interface{}{"name": "app", "version": "1.2.0"},
 			"intent":     map[string]interface{}{"targetEnvironment": "uat"},
 		}
 	}
@@ -471,6 +472,8 @@ func TestCRDBundleArtifactImmutable(t *testing.T) {
 			m["provenance"] = map[string]interface{}{"commitSHA": "abc1234", "author": "someone"}
 		}, false},
 		{"provenance removed", func(m map[string]interface{}) { delete(m, "provenance") }, false},
+		{"chart version changed", func(m map[string]interface{}) { m["chart"] = map[string]interface{}{"name": "app", "version": "1.3.0"} }, false},
+		{"chart removed", func(m map[string]interface{}) { delete(m, "chart") }, false},
 		{"type changed", func(m map[string]interface{}) { m["type"] = "image" }, false},
 		{"pipeline changed", func(m map[string]interface{}) { m["pipeline"] = "other" }, false},
 	}
@@ -742,6 +745,25 @@ spec:
 			structuraldefaulting.Default(obj, s)
 			assert.Equal(t, tc.want, gitBranch(obj))
 		})
+	}
+}
+
+// TestCRDYAMLUpdateFile (#1448 QA): update.yaml.updates[].file is a path
+// inside the environment directory.
+func TestCRDYAMLUpdateFile(t *testing.T) {
+	crds := loadCRDs(t)
+	withFile := func(file string) map[string]interface{} {
+		p := pipelineWithEnvs("test")
+		env := p["spec"].(map[string]interface{})["environments"].([]interface{})[0].(map[string]interface{})
+		env["update"] = map[string]interface{}{"strategy": "yaml", "yaml": map[string]interface{}{
+			"updates": []interface{}{map[string]interface{}{"file": file, "path": "image.tag"}}}}
+		return p
+	}
+	for _, ok := range []string{"values.yaml", "deploy/deployment.yaml", "_x.yml"} {
+		assert.Empty(t, validateCR(t, crds, withFile(ok)), "file %q must be accepted", ok)
+	}
+	for _, bad := range []string{"/etc/passwd", "../other/values.yaml", "deploy/../../x.yaml", ".hidden/x.yaml", "a b.yaml"} {
+		assert.NotEmpty(t, validateCR(t, crds, withFile(bad)), "file %q must be rejected", bad)
 	}
 }
 

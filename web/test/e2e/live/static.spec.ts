@@ -32,7 +32,7 @@ test('/ui/ starts the web app: every file it needs loads, and it shows the landi
   await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.complete ? img.naturalWidth : 0)).toBeGreaterThan(0)
 
   // The landing page, with the cluster's pipelines in the sidebar.
-  await expect(page.getByText('Select a pipeline to view its promotion DAG.')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 2, name: 'Fleet' })).toBeVisible()
   await filterSidebar(page, ns)
   await expect(sidebarRow(page)).toHaveCount(1)
   await sidebarRow(page).click()
