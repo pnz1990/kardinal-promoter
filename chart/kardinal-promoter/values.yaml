@@ -102,6 +102,11 @@ controller:
   # mode org gates are read from watchNamespace, and an entry other than
   # watchNamespace fails the install.
   policyNamespaces: []
+  # -- Longest a PolicyGate's status goes unwritten while its result does not
+  # change (--gate-status-heartbeat, a Go duration). Empty keeps the controller
+  # default, 10m. "0s" writes the status on every evaluation; each write makes
+  # kro re-check the gate's whole Graph.
+  gateStatusHeartbeat: ""
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).

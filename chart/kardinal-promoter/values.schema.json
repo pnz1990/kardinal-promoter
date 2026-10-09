@@ -111,6 +111,10 @@
             "type": "string"
           }
         },
+        "gateStatusHeartbeat": {
+          "type": "string",
+          "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        },
         "extraArgs": {
           "type": "array",
           "items": {

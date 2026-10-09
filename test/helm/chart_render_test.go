@@ -1290,3 +1290,17 @@ func TestChartNamespaceShard(t *testing.T) {
 	_, err = helmTemplate(t, "kardinal-promoter", "--set", "controller.namespaceShard=a/b")
 	require.Error(t, err, "not a label value")
 }
+
+// TestChartGateStatusHeartbeat: controller.gateStatusHeartbeat sets
+// --gate-status-heartbeat; empty keeps the controller default (10m), and the
+// schema refuses a value that is not a Go duration.
+func TestChartGateStatusHeartbeat(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	assert.NotContains(t, argValues(c), "gate-status-heartbeat")
+	for _, v := range []string{"0s", "30m", "1h30m"} {
+		c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "controller.gateStatusHeartbeat="+v))
+		assert.Equal(t, v, argValues(c)["gate-status-heartbeat"])
+	}
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "controller.gateStatusHeartbeat=10 minutes")
+	assert.Error(t, err, "a value that is not a Go duration must fail:\n%s", out)
+}

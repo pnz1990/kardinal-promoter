@@ -100,8 +100,12 @@ func main() {
 		webhookSecret          string
 		scmProviderType        string
 		scmAPIURL              string
+		gateStatusHeartbeat    time.Duration
 	)
 
+	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
+		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
+			"re-check the gate's whole Graph. 0 writes the status on every evaluation.")
 	flag.BoolVar(&leaderElect, "leader-elect", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&zerologLevel, "log-level", "info",
@@ -427,6 +431,7 @@ func main() {
 	// An org gate's instance reads metrics.* from its template's org policy
 	// namespace, the same namespaces the translator takes org gates from.
 	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
+	pgReconciler.StatusHeartbeat = gateStatusHeartbeat
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}

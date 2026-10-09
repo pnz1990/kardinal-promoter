@@ -77,8 +77,8 @@ func TestBuilder_MultipleUpstreams(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
-	// 1 Bundle ref + 3 envs × (1 PRStatus + 1 PromotionStep) = 7
-	assert.Equal(t, 7, result.NodeCount)
+	// 1 Bundle ref + 3 PromotionSteps + PRStatusData + PRStatuses = 6
+	assert.Equal(t, 6, result.NodeCount)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
 	globalNode := nodeMap["global"]
@@ -221,7 +221,7 @@ func TestBuilder_OnlyKroKeywords(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	allowed := map[string]bool{"id": true, "template": true, "ref": true, "readyWhen": true, "includeWhen": true, "forEach": true}
+	allowed := map[string]bool{"id": true, "template": true, "ref": true, "def": true, "readyWhen": true, "includeWhen": true, "forEach": true}
 	for _, n := range result.Graph.Spec.Nodes {
 		raw, err := json.Marshal(n)
 		require.NoError(t, err)

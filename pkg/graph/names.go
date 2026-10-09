@@ -94,14 +94,6 @@ func promotionStepK8sName(pipeline, bundle, env string) string {
 		nameKey("step", pipeline, bundle, env), maxObjectNameLen)
 }
 
-// prStatusNodeName generates the CEL-safe node ID for a PRStatus node.
-// Format: prstatus0<bundleSlug>0<envSlug>
-// Uses digit separator "0" because kro node IDs may not contain underscores.
-// Uniqueness follows from the step IDs, which ValidateNodeIDs checks.
-func prStatusNodeName(bundleSlug, envName string) string {
-	return "prstatus0" + bundleSlug + "0" + CELSafeSlug(envName)
-}
-
 // prStatusNodeK8sName returns the PRStatus metadata.name
 // "prstatus-<bundle>-<env>", hash-suffixed when it would lose characters or
 // exceed 63 characters.
@@ -109,22 +101,6 @@ func prStatusNodeK8sName(bundle, envName string) string {
 	preferred := "prstatus-" + slugify(bundle) + "-" + slugify(envName)
 	return boundedName(preferred, isSlug(bundle) && isSlug(envName),
 		nameKey("prstatus", bundle, envName), validation.DNS1123LabelMaxLength)
-}
-
-// gateNodeName returns the node ID of a PolicyGate instance: the camelCase
-// gate name, namespace and environment joined with "0", then "00" and the
-// Bundle slug. This is readable but not injective (gate "a" in namespace
-// "b0c" equals gate "a0b" in namespace "c"; "no-weekend" equals "no.weekend"),
-// so Build runs ValidateNodeIDs and rejects a Pipeline whose gates collide.
-func gateNodeName(bundleSlug, gateName, gateNS, envName string) string {
-	ns := gateNS
-	if ns == "" {
-		ns = "default"
-	}
-	return CELSafeSlug(gateName) + "0" +
-		CELSafeSlug(ns) + "0" +
-		CELSafeSlug(envName) + "00" +
-		bundleSlug
 }
 
 // gateNodeK8sName returns the metadata.name of a PolicyGate instance,
@@ -138,17 +114,6 @@ func gateNodeK8sName(bundle, gateName, gateNS, envName string) string {
 	preferred := fmt.Sprintf("%s-%s-%s--%s", gateName, ns, envName, bundle)
 	exact := isSlug(gateName) && isSlug(ns) && isSlug(envName) && isSlug(bundle)
 	return boundedName(preferred, exact, nameKey("gate", ns, gateName, envName, bundle), maxObjectNameLen)
-}
-
-// bundleVersionSlug returns a CEL-safe slug from the bundle name for use in node IDs.
-//
-// Dual-slug convention (GB-3/GB-4 in docs/design/11-graph-purity-tech-debt.md):
-//   - CELSafeSlug / bundleVersionSlug → camelCase, valid CEL identifiers and kro node IDs
-//     Used in: node IDs, CEL expressions, gateNodeName
-//   - slugify → hyphens, valid Kubernetes resource names
-//     Used in: metadata.name fields only (through boundedName)
-func bundleVersionSlug(bundleName string) string {
-	return CELSafeSlug(bundleName)
 }
 
 // slugify replaces characters not valid in Kubernetes names with dashes.

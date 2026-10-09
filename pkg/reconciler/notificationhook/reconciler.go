@@ -368,7 +368,8 @@ func (r *Reconciler) qualifyingEvents(ctx context.Context, hook *v1alpha1.Notifi
 	// Templates (no kardinal.io/bundle label) are never evaluated, so they are
 	// not blocking anything. The episode is identified by the Ready
 	// condition's lastTransitionTime, which only moves when the gate flips;
-	// status.lastEvaluatedAt moves on every re-evaluation.
+	// status.lastEvaluatedAt moves on every status write (a changed result,
+	// a step waiting for a fresh one, or the --gate-status-heartbeat).
 	if eventSet[v1alpha1.NotificationEventPolicyGateBlocked] {
 		var gates v1alpha1.PolicyGateList
 		if err := r.List(ctx, &gates, client.InNamespace(hook.Namespace)); err != nil {

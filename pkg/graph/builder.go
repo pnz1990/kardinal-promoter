@@ -6,6 +6,7 @@ package graph
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +41,11 @@ type BuildResult struct {
 	// Environments are the environments this Bundle promotes through, in
 	// topological order, after targetEnvironment and skipEnvironments.
 	Environments []string
+	// GateInstances are the PolicyGate instances the Graph creates, in Graph
+	// order (environment order, then gate order). They are rendered into the
+	// PolicyGateData node; callers that need the gates (dry runs, policy
+	// simulate) read them here instead of parsing the Graph.
+	GateInstances []kardinalv1alpha1.PolicyGate
 }
 
 // DefaultGraphServiceAccount is the ServiceAccount (in the Pipeline's
@@ -122,7 +128,10 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 5 & 6: build nodes and wire edges
-	nodes := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates)
+	nodes, instances, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates)
+	if err != nil {
+		return nil, err
+	}
 	if err := ValidateNodeIDs(nodes); err != nil {
 		return nil, err
 	}
@@ -131,9 +140,10 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	g := assembleGraph(input.Pipeline, input.Bundle, nodes, b.serviceAccountName())
 
 	return &BuildResult{
-		Graph:        g,
-		NodeCount:    len(nodes),
-		Environments: filteredEnvs,
+		Graph:         g,
+		NodeCount:     len(nodes),
+		Environments:  filteredEnvs,
+		GateInstances: instances,
 	}, nil
 }
 
@@ -485,13 +495,31 @@ func matchGatesByEnv(filteredEnvs []string,
 
 // --- Step 5 & 6: build nodes and wire edges ---
 
-// buildNodes generates all PromotionStep and PolicyGate Graph nodes in
-// dependency order, with correct readyWhen and gating edges.
+// buildNodes generates the Graph nodes: the Bundle ref, one PromotionStep
+// node per environment, and two collections, PolicyGates (every gate
+// instance) and PRStatuses (one per environment).
+//
+// Gate instances and PRStatuses need no per-item gating (they are created
+// with the Graph), so each kind is one forEach node over a def node that
+// holds the rendered objects. That keeps the Graph small: one node per
+// environment instead of one per object (docs/design/16-graph-capability-
+// ledger.md gaps G9, G10). kro applies a collection's items in parallel.
+// PromotionSteps stay one node each: a collection is all-or-nothing on
+// pending data (G11), and each step is held back on its own upstreams and
+// gates.
+//
+// A collection is also all-or-nothing on apply errors: when one item cannot
+// be applied (a ResourceQuota, an admission policy that denies it,
+// throttling) kro does not publish the collection, so nothing that
+// references it resolves (G11). Steps reference the PolicyGates collection,
+// because they must wait on their gates anyway: one gate instance that cannot
+// be created holds every gated step, and the Bundle's GatesCreated condition
+// names it. Steps name their PRStatus literally, so a PRStatus that cannot be
+// created holds only its own environment.
 func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
-	skipGates map[string][]skipPermissionGate) []GraphNode {
-	bundleSlug := bundleVersionSlug(bundle.Name) // camelCase — node IDs only
+	skipGates map[string][]skipPermissionGate) ([]GraphNode, []kardinalv1alpha1.PolicyGate, error) {
 	pipelineName := pipeline.Name
 
 	// Filter deps to only include filtered envs
@@ -519,6 +547,9 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 	nodes = append(nodes, bundleWatchNode)
 
+	gates := newGateCollections(pipelineName, bundle.Name)
+	var prItems []interface{}
+
 	for _, envName := range filteredEnvs {
 		// Compute upstream deps for this env (filtered to only include surviving envs)
 		// Return as CEL-safe IDs (matching the step node IDs built with CELSafeSlug).
@@ -528,42 +559,46 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			upstreams[i] = CELSafeSlug(up)
 		}
 
-		// PolicyGate nodes for this environment
-		gates := gatesByEnv[envName]
-		gateNodeIDs := make([]string, 0, len(gates)+len(skipGates[envName]))
-		for _, gate := range gates {
-			gateNodeID := gateNodeName(bundleSlug, gate.Name, gate.Namespace, envName)
-			gateNodeK8s := gateNodeK8sName(bundle.Name, gate.Name, gate.Namespace, envName)
-			gateNodeIDs = append(gateNodeIDs, gateNodeID)
-			nodes = append(nodes, buildPolicyGateNode(gateNodeID, gateNodeK8s, gate, pipelineName, bundle.Name, envName))
+		// PolicyGate instances for this environment.
+		var envGates []string
+		for _, gate := range gatesByEnv[envName] {
+			k8s := gateNodeK8sName(bundle.Name, gate.Name, gate.Namespace, envName)
+			name, err := gates.add(gate, envName, k8s, nil)
+			if err != nil {
+				return nil, nil, err
+			}
+			envGates = append(envGates, name)
 		}
 
 		// Skip-permission gate instances: this environment follows a skipped
 		// org-gated environment, so it waits for the permission expressions.
 		for _, sg := range skipGates[envName] {
-			gateNodeID := gateNodeName(bundleSlug, sg.gate.Name, sg.gate.Namespace, envName)
-			gateNodeK8s := gateNodeK8sName(bundle.Name, sg.gate.Name, sg.gate.Namespace, envName)
-			gateNodeIDs = append(gateNodeIDs, gateNodeID)
-			nodes = append(nodes, buildSkipPermissionNode(gateNodeID, gateNodeK8s, sg, pipelineName, bundle.Name, envName))
+			k8s := gateNodeK8sName(bundle.Name, sg.gate.Name, sg.gate.Namespace, envName)
+			name, err := gates.add(sg.gate, envName, k8s, sg.skipped)
+			if err != nil {
+				return nil, nil, err
+			}
+			envGates = append(envGates, name)
 		}
 
-		// PRStatus node — created alongside each PromotionStep.
-		// The open-pr step writes this CRD; the PRStatusReconciler updates status.merged.
-		// The PromotionStep spec carries the prStatusRef so it can watch it without polling.
-		stepNodeID := CELSafeSlug(envName)
-		prStatusNodeID := prStatusNodeName(bundleSlug, envName)
-		prStatusK8sName := prStatusNodeK8sName(bundle.Name, envName)
-		prStatusNode := buildPRStatusNode(prStatusNodeID, prStatusK8sName, pipelineName, bundle.Name, envName)
-		nodes = append(nodes, prStatusNode)
+		// PRStatus — created alongside each PromotionStep. The open-pr step
+		// writes its spec; the PRStatusReconciler updates status.merged. The
+		// PromotionStep spec carries the prStatusRef so it can watch it
+		// without polling.
+		prName := prStatusNodeK8sName(bundle.Name, envName)
+		prItems = append(prItems, map[string]interface{}{"name": prName, "environment": envName})
 
 		// PromotionStep node — node ID must be a valid CEL identifier.
-		stepNode := buildPromotionStepNode(
-			pipelineName, envName, stepNodeID, bundle, upstreams, gateNodeIDs, prStatusNodeID,
-		)
-		nodes = append(nodes, stepNode)
+		nodes = append(nodes, buildPromotionStepNode(
+			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
+		))
 	}
 
-	return nodes
+	nodes = append(nodes, gates.nodes()...)
+	nodes = append(nodes, GraphNode{ID: NodePRStatusData, Def: map[string]interface{}{"items": prItems}},
+		prStatusesNode(pipelineName, bundle.Name))
+
+	return nodes, gates.instances, nil
 }
 
 // filteredDeps returns the upstream dependencies of envName, filtered to only
@@ -628,8 +663,9 @@ func buildPromotionStepNode(
 	pipelineName, envName, nodeID string,
 	bundle *kardinalv1alpha1.Bundle,
 	upstreams []string,
-	gateNodeIDs []string,
-	prStatusNodeID string,
+	gateNames []string,
+	gateReady func(name string) string,
+	prStatusName string,
 ) GraphNode {
 	// Determine step type based on bundle type
 	stepType := defaultStepType(bundle.Spec.Type)
@@ -662,10 +698,14 @@ func buildPromotionStepNode(
 		"bundleName":  resolvableWhen(`bundle.status.phase != "Superseded"`, "bundle.metadata.name"),
 		"environment": envName,
 		"stepType":    stepType,
-		// prStatusRef points to the companion PRStatus node.
-		// The PromotionStep reconciler reads spec.prStatusRef.name to find the
-		// PRStatus CRD instead of polling GitHub directly (eliminates PS-4, SCM-2).
-		"prStatusRef": fmt.Sprintf("${%s.metadata.name}", prStatusNodeID),
+		// prStatusRef names the environment's PRStatus. The PromotionStep
+		// reconciler reads it to find the PRStatus CRD instead of polling the
+		// SCM (eliminates PS-4, SCM-2). It is a literal name, not a reference
+		// to the PRStatuses collection: kro publishes a collection only when
+		// every item applied (G11), so one PRStatus that cannot be created
+		// would hold every step of the Bundle. The step waits in
+		// WaitingForMerge until its PRStatus exists.
+		"prStatusRef": prStatusName,
 	}
 
 	// Upstream states as a list — creates CEL dependency edges and gates this
@@ -679,16 +719,14 @@ func buildPromotionStepNode(
 		templateSpec["upstreamStates"] = upstreamRefs
 	}
 
-	// Required gates — creates fan-in edges from gate nodes and holds this
-	// step back until every gate reports status.ready == true. The resolved
-	// value is the gate name, which the PromotionStep reconciler reads.
-	if len(gateNodeIDs) > 0 {
-		gateRefs := make([]interface{}, len(gateNodeIDs))
-		for i, gid := range gateNodeIDs {
-			gateRefs[i] = resolvableWhen(
-				fmt.Sprintf("%s.status.ready == true", gid),
-				fmt.Sprintf("%s.metadata.name", gid),
-			)
+	// Required gates — an edge to the PolicyGates collection that holds this
+	// step back until each of its gates reports status.ready == true. The
+	// resolved value is the gate name, which the PromotionStep reconciler
+	// reads.
+	if len(gateNames) > 0 {
+		gateRefs := make([]interface{}, len(gateNames))
+		for i, name := range gateNames {
+			gateRefs[i] = resolvableWhen(gateReady(name), celString(name))
 		}
 		templateSpec["requiredGates"] = gateRefs
 	}
@@ -718,112 +756,16 @@ func buildPromotionStepNode(
 // instance's, so a team cannot decide an org gate with its own MetricChecks.
 const LabelGateTemplateNamespace = "kardinal.io/gate-template-namespace"
 
-// buildPolicyGateNode builds a Graph node for a PolicyGate instance.
-// nodeID is the CEL-safe identifier used in CEL expressions.
-// k8sName is the Kubernetes resource name (hyphens) for metadata.name.
-//
-// spec.overrides is deliberately not copied. kro server-side applies the
-// template with force and re-applies it on drift, so a template-owned
-// overrides list would revert every `kardinal override` patch on the live
-// instance. The CLI records overrides on the instances instead.
-func buildPolicyGateNode(
-	nodeID, k8sName string,
-	gate kardinalv1alpha1.PolicyGate,
-	pipelineName, bundleName, envName string,
-) GraphNode {
-	// Propagate scope and applies-to from the gate template so that
-	// `kardinal policy list` can show the correct scope (org/team) and
-	// applies-to value on the instantiated PolicyGate CRs (#249).
-	scopeLabel := gate.Labels["kardinal.io/scope"]
-	if scopeLabel == "" {
-		scopeLabel = "team"
-	}
-	appliesToLabel := gate.Labels["kardinal.io/applies-to"]
-
-	// kardinal.io/gate-name holds the user-defined gate name from the original
-	// PolicyGate template (e.g. "no-weekend-deploys"). This is propagated through
-	// cross-product instantiations so the UI can deduplicate by the human-readable
-	// gate name rather than the long cross-product instance name.
-	// If the input gate already has a gate-name label (cross-product case), inherit it;
-	// otherwise use the gate's own name (direct template case).
-	gateName := gate.Labels["kardinal.io/gate-name"]
-	if gateName == "" {
-		gateName = gate.Name
-	}
-
-	templateMeta := map[string]interface{}{
-		"name": k8sName, // K8s resource name (RFC 1123 subdomain — hyphens allowed, no underscores)
-		"labels": map[string]interface{}{
-			// These labels allow `kardinal explain` and the PolicyGate reconciler
-			// to query instances by pipeline, bundle, and environment.
-			"kardinal.io/pipeline":      pipelineName,
-			"kardinal.io/bundle":        bundleName,
-			"kardinal.io/environment":   envName,
-			"kardinal.io/gate-template": gate.Name,
-			// The template's namespace, which can differ from the Pipeline's (an
-			// org policy namespace or spec.policyNamespaces): `kardinal policy
-			// list` matches the instance to its template with it, and an org
-			// gate reads metrics.* there.
-			LabelGateTemplateNamespace: gate.Namespace,
-			// gate-name: stable human-readable name, propagated through cross-product instances.
-			"kardinal.io/gate-name": gateName,
-			// Propagated from original PolicyGate template for CLI display.
-			"kardinal.io/scope":      scopeLabel,
-			"kardinal.io/applies-to": appliesToLabel,
-		},
-	}
-
-	// generated marks the instance as kardinal's: it is never used as a
-	// template, which is what lets its name be longer than 63 characters
-	// (the PolicyGate CRD name rule).
-	templateSpec := map[string]interface{}{
-		"expression":      gate.Spec.Expression,
-		"message":         gate.Spec.Message,
-		"recheckInterval": gate.Spec.RecheckInterval,
-		"generated":       true,
-	}
-	// when is copied only when set: the CRD defaults it to post-deploy, and an
-	// empty string would fail the enum. It is deprecated and has no effect
-	// (#1323); the copy keeps the instance a faithful copy of the template.
-	if gate.Spec.When != "" { //nolint:staticcheck // SA1019: copied unchanged, no behaviour depends on it
-		templateSpec["when"] = gate.Spec.When //nolint:staticcheck // SA1019: as above
-	}
-
-	return GraphNode{
-		ID: nodeID,
-		Template: map[string]interface{}{
-			"apiVersion": "kardinal.io/v1alpha1",
-			"kind":       "PolicyGate",
-			"metadata":   templateMeta,
-			"spec":       templateSpec,
-		},
-		// ReadyWhen is the UI/Graph health signal. The blocking itself is done
-		// by the dependent PromotionStep's spec.requiredGates expression.
-		ReadyWhen: []string{
-			fmt.Sprintf(`${%s.status.ready == true}`, nodeID),
-		},
-	}
+// celString quotes s as a CEL string literal. strconv.Quote's escapes are a
+// subset of CEL's.
+func celString(s string) string {
+	return strconv.Quote(s)
 }
 
-// buildSkipPermissionNode builds the instance of a skip-permission gate that
-// holds envName, the environment after one or more skipped org-gated
-// environments. The instance is an ordinary PolicyGate: the reconciler
-// evaluates the permission expression, and envName is promoted only once it
-// is true. The labels say what the instance stands for.
-func buildSkipPermissionNode(nodeID, k8sName string, sg skipPermissionGate,
-	pipelineName, bundleName, envName string) GraphNode {
-	node := buildPolicyGateNode(nodeID, k8sName, sg.gate, pipelineName, bundleName, envName)
-	meta := node.Template["metadata"].(map[string]interface{})
-	meta["labels"].(map[string]interface{})[LabelGateType] = GateTypeSkipPermission
-	meta["annotations"] = map[string]interface{}{
-		AnnotationSkippedEnvironments: strings.Join(sg.skipped, ","),
-	}
-	return node
-}
-
-// buildPRStatusNode builds a Graph node for a PRStatus CRD.
+// prStatusesNode is the collection that creates one PRStatus per
+// NodePRStatusData item.
 //
-// The Graph creates the PRStatus as a placeholder with no spec; the open-pr
+// The Graph creates each PRStatus as a placeholder with no spec; the open-pr
 // step populates spec.prURL, spec.prNumber, spec.repo after opening the PR.
 // The PRStatus reconciler monitors the SCM and sets status.merged = true.
 //
@@ -832,7 +774,7 @@ func buildSkipPermissionNode(nodeID, k8sName string, sg skipPermissionGate,
 // owned by kro and reverted after the open-pr step writes it.
 //
 // The node has no readyWhen, so it is ready once applied. The PromotionStep
-// references this node's metadata.name and enforces the merge in its own
+// references its PRStatus by name and enforces the merge in its own
 // WaitingForMerge state, and its readyWhen (state Verified) already covers
 // the merge: a step that opened a PR is Verified only after the merge. A
 // readyWhen on status.merged would keep the Graph from ever being Ready when
@@ -842,22 +784,21 @@ func buildSkipPermissionNode(nodeID, k8sName string, sg skipPermissionGate,
 //
 // Graph-purity: this node provides observable PR merge state for the
 // PromotionStep reconciler (eliminates direct GitHub API polling PS-4, SCM-2).
-func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string) GraphNode {
-	templateMeta := map[string]interface{}{
-		"name": k8sName,
-		"labels": map[string]interface{}{
-			"kardinal.io/pipeline":    pipelineName,
-			"kardinal.io/bundle":      bundleName,
-			"kardinal.io/environment": envName,
-		},
-	}
-
+func prStatusesNode(pipelineName, bundleName string) GraphNode {
 	return GraphNode{
-		ID: nodeID,
+		ID:      NodePRStatuses,
+		ForEach: []map[string]string{{iterPR: "${" + NodePRStatusData + ".items}"}},
 		Template: map[string]interface{}{
 			"apiVersion": "kardinal.io/v1alpha1",
 			"kind":       "PRStatus",
-			"metadata":   templateMeta,
+			"metadata": map[string]interface{}{
+				"name": "${" + iterPR + ".name}",
+				"labels": map[string]interface{}{
+					"kardinal.io/pipeline":    pipelineName,
+					"kardinal.io/bundle":      bundleName,
+					"kardinal.io/environment": "${" + iterPR + ".environment}",
+				},
+			},
 		},
 	}
 }
