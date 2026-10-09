@@ -35,9 +35,11 @@ func (a *RepositoryAllowlist) Guard(p SCMProvider, host string) SCMProvider {
 }
 
 // guardedProvider is the SCMProvider Guard returns. It implements the
-// optional BranchDeleter, MergeCommitGetter and CommitStatusSetter too; when
-// the inner provider does not, the first two do nothing, as callers do
-// without them, and SetPRCommitStatus returns ErrCommitStatusUnsupported.
+// optional BranchDeleter, MergeCommitGetter, CommitStatusSetter and
+// CommitVerifier too; when the inner provider does not, the first two do
+// nothing, as callers do without them, SetPRCommitStatus returns
+// ErrCommitStatusUnsupported and VerifyCommit
+// ErrCommitVerificationUnsupported.
 type guardedProvider struct {
 	inner SCMProvider
 	allow *RepositoryAllowlist
@@ -149,6 +151,21 @@ func (g *guardedProvider) SetPRCommitStatus(ctx context.Context, repo string, pr
 	return cs.SetPRCommitStatus(ctx, repo, prNumber, sha, st)
 }
 
+// VerifyCommit implements CommitVerifier: image verification reads commit
+// signatures through the same provider, so the guard must not hide it
+// (with scm.allowedRepositories set, signed-commit checks failed as
+// unsupported). The repository is checked like every other call.
+func (g *guardedProvider) VerifyCommit(ctx context.Context, repo, sha string) (CommitSignature, error) {
+	if err := g.check("verify a commit in", repo); err != nil {
+		return CommitSignature{}, err
+	}
+	v, ok := g.inner.(CommitVerifier)
+	if !ok {
+		return CommitSignature{}, ErrCommitVerificationUnsupported
+	}
+	return v.VerifyCommit(ctx, repo, sha)
+}
+
 // TokenID implements TokenIdentifier when the inner provider does.
 func (g *guardedProvider) TokenID() string {
 	if ti, ok := g.inner.(TokenIdentifier); ok {
@@ -160,6 +177,7 @@ func (g *guardedProvider) TokenID() string {
 var (
 	_ TokenIdentifier    = (*guardedProvider)(nil)
 	_ CommitStatusSetter = (*guardedProvider)(nil)
+	_ CommitVerifier     = (*guardedProvider)(nil)
 	_ SCMProvider        = (*guardedProvider)(nil)
 	_ BranchDeleter      = (*guardedProvider)(nil)
 	_ MergeCommitGetter  = (*guardedProvider)(nil)

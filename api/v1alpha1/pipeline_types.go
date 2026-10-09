@@ -159,6 +159,7 @@ type SecretRef struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.steps) || size(self.steps) == 0",message="environments[].steps is not supported: kardinal has no custom step engine and every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
 // +kubebuilder:validation:XValidation:rule="!has(self.promotionTemplate)",message="environments[].promotionTemplate is not supported: the PromotionTemplate CRD was removed and every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
 // +kubebuilder:validation:XValidation:rule="!(self.name in ['api-version','kind','metadata','namespace','spec','status','graph','graphengine','kro','each','item','items','object','self','this','context','true','false','null','in','as','break','const','continue','else','for','function','if','import','let','loop','package','return','var','void','while','bundle','time'])",message="reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; rename the environment"
+// +kubebuilder:validation:XValidation:rule="!has(self.pr) || (has(self.approval) && self.approval == 'pr-review')",message="environments[].pr configures the promotion pull request and needs approval: pr-review"
 type EnvironmentSpec struct {
 	// Name is the environment identifier (e.g. "test", "uat", "prod").
 	// It must be a DNS label (lower-case letters, digits and '-', at most 63
@@ -284,6 +285,17 @@ type EnvironmentSpec struct {
 	// +optional
 	WaitForMergeTimeout string `json:"waitForMergeTimeout,omitempty"`
 
+	// PR configures the pull request a pr-review environment opens: its
+	// title and body, labels, reviewers, assignees, and whether the SCM merges
+	// it on its own once its checks and approvals pass (auto-merge). Every
+	// string is a Go text/template over the Bundle and the environment (see
+	// docs/pr-evidence.md#customising-the-pr). The Pipeline is
+	// Ready=False/ValidationFailed when a template does not parse or
+	// execute, and a control the SCM provider does not support fails the
+	// step before the PR is opened (docs/scm-providers.md#pr-controls).
+	// +optional
+	PR *PRConfig `json:"pr,omitempty"`
+
 	// StepTimeoutSeconds is the maximum number of seconds a single promotion
 	// step (git-clone, kustomize-set-image, open-pr, etc.) may run. The
 	// reconciler cancels a step that runs longer via context.WithTimeout and
@@ -325,6 +337,93 @@ type EnvironmentSpec struct {
 	// use wave.
 	// +optional
 	Regions []string `json:"regions,omitempty"`
+}
+
+// PRConfig configures the pull request of a pr-review environment.
+type PRConfig struct {
+	// TitleTemplate replaces the default title "[kardinal] Promote <bundle>
+	// to <env>" (or the rollback title). Newlines become spaces; an empty
+	// result fails the step.
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	TitleTemplate string `json:"titleTemplate,omitempty"`
+
+	// BodyTemplate replaces the default body. The evidence sections are
+	// template functions (evidence, provenanceTable, gatesTable,
+	// upstreamTable, rollbackNotice), so a custom body can keep them.
+	// +kubebuilder:validation:MaxLength=16384
+	// +optional
+	BodyTemplate string `json:"bodyTemplate,omitempty"`
+
+	// Labels are added to the kardinal labels (kardinal,
+	// kardinal/promotion, kardinal/rollback). Each entry is a template; each
+	// line of its output is one label, and empty lines are dropped.
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:MaxLength=256
+	// +optional
+	Labels []string `json:"labels,omitempty"`
+
+	// Reviewers are the users asked to review the PR (templates, one user
+	// per output line). Usernames on GitHub, GitLab, Forgejo and Gitea; account
+	// IDs or {UUID}s on Bitbucket Cloud; identity IDs on Azure DevOps.
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:MaxLength=256
+	// +optional
+	Reviewers []string `json:"reviewers,omitempty"`
+
+	// TeamReviewers are the teams asked to review the PR (templates, one team
+	// slug per output line): GitHub and Forgejo/Gitea organisation teams, or
+	// group identity IDs on Azure DevOps.
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:MaxLength=256
+	// +optional
+	TeamReviewers []string `json:"teamReviewers,omitempty"`
+
+	// Assignees are the users the PR is assigned to (templates, one user per
+	// output line). "{{ .Bundle.Author }}" assigns the author recorded in the
+	// Bundle's provenance.
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:MaxLength=256
+	// +optional
+	Assignees []string `json:"assignees,omitempty"`
+
+	// Merge asks the SCM to merge the PR on its own once the repository's
+	// required checks and approvals pass.
+	// +optional
+	Merge *PRMergeConfig `json:"merge,omitempty"`
+}
+
+// PRMergeConfig configures auto-merge of a promotion PR.
+// +kubebuilder:validation:XValidation:rule="self.auto || (!has(self.method) && !has(self.commitMessageTemplate) && !has(self.allowImmediate))",message="pr.merge.method, pr.merge.commitMessageTemplate and pr.merge.allowImmediate apply only to the merge kardinal asks the SCM for; set pr.merge.auto: true"
+type PRMergeConfig struct {
+	// Auto enables the SCM's auto-merge on the PR once kardinal has opened
+	// it (GitHub auto-merge, GitLab auto-merge, Forgejo/Gitea scheduled
+	// merge, Azure DevOps auto-complete, Bitbucket Data Center auto-merge):
+	// the SCM merges it once the required checks and reviews pass. kardinal
+	// turns auto-merge off while the Pipeline is paused or a required gate is
+	// closed, and on again after. A PR with nothing pending is left for a
+	// merge by hand unless allowImmediate is set.
+	// +optional
+	Auto bool `json:"auto,omitempty"`
+
+	// AllowImmediate lets kardinal merge the PR at once when nothing is
+	// pending on it (no required check, review or pipeline). This skips
+	// human review and any CI the repository does not require.
+	// +optional
+	AllowImmediate bool `json:"allowImmediate,omitempty"`
+
+	// Method is how the SCM merges the PR: merge (a merge commit), squash
+	// or rebase. Empty uses merge.
+	// +kubebuilder:validation:Enum=merge;squash;rebase
+	// +optional
+	Method string `json:"method,omitempty"`
+
+	// CommitMessageTemplate is the message of the merge (or squash) commit, a
+	// template like titleTemplate: its first line is the commit title and the
+	// rest the commit body. Empty leaves the SCM's default message.
+	// +kubebuilder:validation:MaxLength=4096
+	// +optional
+	CommitMessageTemplate string `json:"commitMessageTemplate,omitempty"`
 }
 
 // VerificationSpec configures Argo Rollouts analysis of an environment.
@@ -836,6 +935,14 @@ type PipelineStatus struct {
 	// +listMapKey=environment
 	// +optional
 	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
+
+	// PendingAuditEvents are the HoldCreated and HoldReleased AuditEvents not
+	// yet written (the audit outbox, #1552). Each entry is stored in the same
+	// status patch as observedHolds and removed once the AuditEvent exists.
+	// Normally empty.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	PendingAuditEvents []PendingAuditEvent `json:"pendingAuditEvents,omitempty"`
 
 	// DeploymentMetrics holds aggregate DORA-style metrics computed from the
 	// last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler.

@@ -410,6 +410,116 @@ spec:
                         Path is the subdirectory within the GitOps repository for this environment.
                         Used when spec.git.layout is "directory". Defaults to "environments/<name>".
                       type: string
+                    pr:
+                      description: |-
+                        PR configures the pull request a pr-review environment opens: its
+                        title and body, labels, reviewers, assignees, and whether the SCM merges
+                        it on its own once its checks and approvals pass (auto-merge). Every
+                        string is a Go text/template over the Bundle and the environment (see
+                        docs/pr-evidence.md#customising-the-pr). The Pipeline is
+                        Ready=False/ValidationFailed when a template does not parse or
+                        execute, and a control the SCM provider does not support fails the
+                        step before the PR is opened (docs/scm-providers.md#pr-controls).
+                      properties:
+                        assignees:
+                          description: |-
+                            Assignees are the users the PR is assigned to (templates, one user per
+                            output line). "{{ .Bundle.Author }}" assigns the author recorded in the
+                            Bundle's provenance.
+                          items:
+                            maxLength: 256
+                            type: string
+                          maxItems: 20
+                          type: array
+                        bodyTemplate:
+                          description: |-
+                            BodyTemplate replaces the default body. The evidence sections are
+                            template functions (evidence, provenanceTable, gatesTable,
+                            upstreamTable, rollbackNotice), so a custom body can keep them.
+                          maxLength: 16384
+                          type: string
+                        labels:
+                          description: |-
+                            Labels are added to the kardinal labels (kardinal,
+                            kardinal/promotion, kardinal/rollback). Each entry is a template; each
+                            line of its output is one label, and empty lines are dropped.
+                          items:
+                            maxLength: 256
+                            type: string
+                          maxItems: 20
+                          type: array
+                        merge:
+                          description: |-
+                            Merge asks the SCM to merge the PR on its own once the repository's
+                            required checks and approvals pass.
+                          properties:
+                            allowImmediate:
+                              description: |-
+                                AllowImmediate lets kardinal merge the PR at once when nothing is
+                                pending on it (no required check, review or pipeline). This skips
+                                human review and any CI the repository does not require.
+                              type: boolean
+                            auto:
+                              description: |-
+                                Auto enables the SCM's auto-merge on the PR once kardinal has opened
+                                it (GitHub auto-merge, GitLab auto-merge, Forgejo/Gitea scheduled
+                                merge, Azure DevOps auto-complete, Bitbucket Data Center auto-merge):
+                                the SCM merges it once the required checks and reviews pass. kardinal
+                                turns auto-merge off while the Pipeline is paused or a required gate is
+                                closed, and on again after. A PR with nothing pending is left for a
+                                merge by hand unless allowImmediate is set.
+                              type: boolean
+                            commitMessageTemplate:
+                              description: |-
+                                CommitMessageTemplate is the message of the merge (or squash) commit, a
+                                template like titleTemplate: its first line is the commit title and the
+                                rest the commit body. Empty leaves the SCM's default message.
+                              maxLength: 4096
+                              type: string
+                            method:
+                              description: |-
+                                Method is how the SCM merges the PR: merge (a merge commit), squash
+                                or rebase. Empty uses merge.
+                              enum:
+                              - merge
+                              - squash
+                              - rebase
+                              type: string
+                          type: object
+                          x-kubernetes-validations:
+                          - message: 'pr.merge.method, pr.merge.commitMessageTemplate
+                              and pr.merge.allowImmediate apply only to the merge
+                              kardinal asks the SCM for; set pr.merge.auto: true'
+                            rule: self.auto || (!has(self.method) && !has(self.commitMessageTemplate)
+                              && !has(self.allowImmediate))
+                        reviewers:
+                          description: |-
+                            Reviewers are the users asked to review the PR (templates, one user
+                            per output line). Usernames on GitHub, GitLab, Forgejo and Gitea; account
+                            IDs or {UUID}s on Bitbucket Cloud; identity IDs on Azure DevOps.
+                          items:
+                            maxLength: 256
+                            type: string
+                          maxItems: 20
+                          type: array
+                        teamReviewers:
+                          description: |-
+                            TeamReviewers are the teams asked to review the PR (templates, one team
+                            slug per output line): GitHub and Forgejo/Gitea organisation teams, or
+                            group identity IDs on Azure DevOps.
+                          items:
+                            maxLength: 256
+                            type: string
+                          maxItems: 20
+                          type: array
+                        titleTemplate:
+                          description: |-
+                            TitleTemplate replaces the default title "[kardinal] Promote <bundle>
+                            to <env>" (or the rollback title). Newlines become spaces; an empty
+                            result fails the step.
+                          maxLength: 1024
+                          type: string
+                      type: object
                     promotionTemplate:
                       description: |-
                         PromotionTemplate is not supported, and the PromotionTemplate CRD was
@@ -808,6 +918,10 @@ spec:
                       graph, self, each, item, ...) and CEL keywords are not allowed;
                       rename the environment'
                     rule: '!(self.name in [''api-version'',''kind'',''metadata'',''namespace'',''spec'',''status'',''graph'',''graphengine'',''kro'',''each'',''item'',''items'',''object'',''self'',''this'',''context'',''true'',''false'',''null'',''in'',''as'',''break'',''const'',''continue'',''else'',''for'',''function'',''if'',''import'',''let'',''loop'',''package'',''return'',''var'',''void'',''while'',''bundle'',''time''])'
+                  - message: 'environments[].pr configures the promotion pull request
+                      and needs approval: pr-review'
+                    rule: '!has(self.pr) || (has(self.approval) && self.approval ==
+                      ''pr-review'')'
                 maxItems: 500
                 minItems: 1
                 type: array
@@ -1422,6 +1536,122 @@ spec:
                 x-kubernetes-list-map-keys:
                 - environment
                 x-kubernetes-list-type: map
+              pendingAuditEvents:
+                description: |-
+                  PendingAuditEvents are the HoldCreated and HoldReleased AuditEvents not
+                  yet written (the audit outbox, #1552). Each entry is stored in the same
+                  status patch as observedHolds and removed once the AuditEvent exists.
+                  Normally empty.
+                items:
+                  description: |-
+                    PendingAuditEvent is an AuditEvent that a reconciler has decided to write
+                    but has not yet seen created. The reconciler stores it in its own status in
+                    the same patch as the transition it records. It creates the AuditEvent on
+                    that reconcile or a later one, then removes the entry. The name is fixed
+                    when the entry is stored, so a retried create that the API server already
+                    applied returns AlreadyExists, which counts as written (#1552).
+                  properties:
+                    createdAt:
+                      description: |-
+                        CreatedAt is the transition time in RFC 3339 with nanoseconds, written
+                        to the AuditEvent's kardinal.io/created-at annotation: spec.timestamp
+                        has one-second resolution.
+                      type: string
+                    labels:
+                      additionalProperties:
+                        type: string
+                      description: Labels are the AuditEvent's labels.
+                      type: object
+                    name:
+                      description: Name is the AuditEvent's name.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    spec:
+                      description: |-
+                        Spec is the AuditEvent's spec, timestamp included: the record carries
+                        the time of the transition, not the time it was written.
+                      properties:
+                        action:
+                          description: |-
+                            Action is a short verb describing what happened.
+                            Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
+                                          "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
+                                          "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
+                                          "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased".
+                            ApprovalRecorded and ApprovalRevoked are written by an approval gate
+                            when a decision (kardinal approve) appears in or leaves its
+                            spec.approvals.
+                            GateOverridden is written once per spec.overrides entry of a gate
+                            instance, naming who created it (kardinal override or the UI).
+                            HealthCheckFailed and GateBlocked are accepted but never written: a
+                            failed health check records PromotionFailed (RollbackStarted when
+                            onHealthFailure is rollback), and a blocked gate records GateEvaluated
+                            with outcome Failure.
+                          enum:
+                          - PromotionStarted
+                          - PromotionSucceeded
+                          - PromotionFailed
+                          - PromotionSuperseded
+                          - PromotionRejected
+                          - RollbackStarted
+                          - RollbackSucceeded
+                          - HealthCheckFailed
+                          - GateBlocked
+                          - GateEvaluated
+                          - GateOverridden
+                          - ApprovalRecorded
+                          - ApprovalRevoked
+                          - HoldCreated
+                          - HoldReleased
+                          type: string
+                        bundleName:
+                          description: BundleName is the name of the Bundle being
+                            promoted.
+                          minLength: 1
+                          type: string
+                        environment:
+                          description: Environment is the environment name where the
+                            event occurred.
+                          minLength: 1
+                          type: string
+                        message:
+                          description: Message is a human-readable description of
+                            the event.
+                          type: string
+                        outcome:
+                          description: |-
+                            Outcome describes the result of the action.
+                            Valid values: "Success", "Failure", "Pending".
+                          enum:
+                          - Success
+                          - Failure
+                          - Pending
+                          type: string
+                        pipelineName:
+                          description: PipelineName is the name of the Pipeline the
+                            Bundle is promoting through.
+                          minLength: 1
+                          type: string
+                        timestamp:
+                          description: Timestamp is when the event occurred (RFC 3339
+                            format).
+                          format: date-time
+                          type: string
+                      required:
+                      - action
+                      - bundleName
+                      - environment
+                      - outcome
+                      - pipelineName
+                      - timestamp
+                      type: object
+                  required:
+                  - name
+                  - spec
+                  type: object
+                maxItems: 32
+                type: array
               phase:
                 default: Unknown
                 description: |-
