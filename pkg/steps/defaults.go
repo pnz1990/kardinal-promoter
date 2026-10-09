@@ -26,8 +26,9 @@ package steps
 //     the config commit is merged first, so the Bundle's images win over the image pins it carries
 //   - image + argocd → argocd-set-image, health-check (no git operations)
 //   - image + helm  → git-clone, helm-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
-//   - layout:branch → git-clone, kustomize-set-image, kustomize-build, git-commit, git-push, [open-pr, wait-for-merge,] health-check
-//     (layout: branch is not implemented yet: git-clone fails the promotion, C05-steps-10)
+//   - layout:branch → git-clone, [kustomize-set-image | helm-set-image | yaml-update,] render-manifests,
+//     git-commit, git-push, [open-pr, wait-for-merge,] health-check (no config-merge: a configRef
+//     commit is the DRY commit that is rendered)
 //   - image + kustomize (default) → git-clone, kustomize-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, layout string) []string {
 	// ArgoCD-native path: no git operations, no PR — direct Kubernetes API patch.
@@ -39,20 +40,36 @@ func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, layout s
 	}
 
 	var updateSteps []string
-	if bundleType == "config" || bundleType == "mixed" {
-		updateSteps = []string{"config-merge"}
-	}
-	switch {
-	case bundleType == "config":
-		// No image to update.
-	case updateStrategy == "helm":
-		updateSteps = append(updateSteps, "helm-set-image")
-	case layout == "branch":
-		// Rendered manifests: run kustomize-set-image then kustomize-build.
-		// kustomize-build renders the overlay to a file; git-commit picks it up.
-		updateSteps = append(updateSteps, "kustomize-set-image", "kustomize-build")
-	default:
-		updateSteps = append(updateSteps, "kustomize-set-image")
+	if layout == "branch" {
+		// Rendered manifests: the image update edits the DRY checkout (never
+		// committed), render-manifests renders it into the rendered branch
+		// checkout. A config or mixed Bundle's configRef commit is the DRY
+		// commit itself, so there is no config-merge.
+		if bundleType != "config" {
+			switch updateStrategy {
+			case "helm":
+				updateSteps = append(updateSteps, "helm-set-image")
+			case "yaml":
+				updateSteps = append(updateSteps, "yaml-update")
+			default:
+				updateSteps = append(updateSteps, "kustomize-set-image")
+			}
+		}
+		updateSteps = append(updateSteps, "render-manifests")
+	} else {
+		if bundleType == "config" || bundleType == "mixed" {
+			updateSteps = []string{"config-merge"}
+		}
+		switch {
+		case bundleType == "config":
+			// No image to update.
+		case updateStrategy == "helm":
+			updateSteps = append(updateSteps, "helm-set-image")
+		case updateStrategy == "yaml":
+			updateSteps = append(updateSteps, "yaml-update")
+		default:
+			updateSteps = append(updateSteps, "kustomize-set-image")
+		}
 	}
 
 	base := append([]string{"git-clone"}, updateSteps...)

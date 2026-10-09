@@ -67,8 +67,13 @@ type GitConfig struct {
 
 	// Branch is the base branch: git-clone checks it out, git-push pushes to
 	// it when the step opens no PR, and open-pr targets it. The reconciler
-	// never leaves it empty; an unset spec.git.branch is main.
+	// never leaves it empty; an unset spec.git.branch is main. With layout:
+	// branch it is the environment's rendered branch.
 	Branch string
+
+	// SourceBranch is spec.git.branch, the DRY source that layout: branch
+	// renders from. Empty for layout: directory, where Branch is both.
+	SourceBranch string
 
 	// Token is the SCM authentication token.
 	Token string
