@@ -52,6 +52,10 @@ const (
 	// LabelHookRun is set on the Job and its Pods: the HookRun name.
 	LabelHookRun = "kardinal.io/hookrun"
 
+	// LabelRunJob marks the Jobs the controller runs (HookRuns and
+	// RenderRuns); the informer caches only those.
+	LabelRunJob = "kardinal.io/run-job"
+
 	// Finalizer holds a HookRun that is deleted (its Bundle deleted, or the
 	// hook renamed or removed from the Pipeline) while its Job runs, until the
 	// Job ends or passes its deadline: a migration is never cut off halfway,
@@ -343,6 +347,7 @@ func (r *Reconciler) createJob(ctx context.Context, log zerolog.Logger, base, hr
 			Namespace: hr.Namespace,
 			Labels: map[string]string{
 				LabelHookRun:              hr.Name,
+				LabelRunJob:               "hookrun",
 				"kardinal.io/pipeline":    hr.Spec.PipelineName,
 				"kardinal.io/bundle":      hr.Spec.BundleName,
 				"kardinal.io/environment": hr.Spec.Environment,

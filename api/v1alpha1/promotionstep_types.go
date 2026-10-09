@@ -86,6 +86,27 @@ type PromotionStepLive struct {
 	// Hooks are the environment's HookRuns for this Bundle.
 	// +optional
 	Hooks []LiveHookRun `json:"hooks,omitempty"`
+
+	// Renders is the environment's RenderRun for this Bundle (layout:
+	// branch), at most one.
+	// +optional
+	Renders []LiveRenderRun `json:"renders,omitempty"`
+}
+
+// LiveRenderRun is the result of the RenderRun of a layout: branch
+// environment.
+type LiveRenderRun struct {
+	// Name is the RenderRun name.
+	Name string `json:"name"`
+	// Phase is the RenderRun's status.phase (Pending when it has none yet).
+	// +optional
+	Phase string `json:"phase,omitempty"`
+	// Message is the RenderRun's status.message.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// Result is the RenderRun's status.result.
+	// +optional
+	Result *RenderRunResult `json:"result,omitempty"`
 }
 
 // LiveHookRun is the result of one HookRun.
@@ -280,6 +301,12 @@ type PromotionStepStatus struct {
 	// condition or phase can outlast the Bundle's update.
 	// +optional
 	TargetUpdatedAt *metav1.Time `json:"targetUpdatedAt,omitempty"`
+
+	// RenderRequestedAt is when the step reached its render step (layout:
+	// branch). Set once; the Graph creates the environment's RenderRun once
+	// it is set.
+	// +optional
+	RenderRequestedAt *metav1.Time `json:"renderRequestedAt,omitempty"`
 
 	// VerificationStartedAt is when the step entered Verifying (its health
 	// check passed and its post-deploy hooks may start). Set once; the

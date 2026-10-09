@@ -423,6 +423,14 @@ type RenderConfig struct {
 	// a Chart.yaml).
 	// +optional
 	Helm *HelmRenderConfig `json:"helm,omitempty"`
+
+	// AllowNondeterministic lets Helm templates call functions whose result
+	// changes from one render to the next (randAlphaNum, uuidv4, now, genCA
+	// and the like). Off by default: such a chart renders different
+	// manifests for the same DRY commit, so every promotion commits a change
+	// and a rollback does not restore what ran.
+	// +optional
+	AllowNondeterministic bool `json:"allowNondeterministic,omitempty"`
 }
 
 // HelmRenderConfig configures helm template for layout: branch.

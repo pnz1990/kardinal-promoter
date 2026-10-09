@@ -801,9 +801,12 @@ func TestJourney6RenderedManifests(t *testing.T) {
 	assert.Empty(t, graph.UnimplementedFields(pipeline), "journey 6: layout: branch is implemented")
 	require.NoError(t, graph.ValidateRenderedBranches(pipeline))
 	assert.Equal(t, "env/prod", pipeline.Spec.Environments[0].RenderedBranch())
-	assert.Equal(t,
-		[]string{"git-clone", "kustomize-set-image", "render-manifests", "git-commit", "git-push", "open-pr", "wait-for-merge", "health-check"},
+	// The controller waits for the environment's RenderRun; its Job clones,
+	// sets the images, renders, commits and pushes.
+	assert.Equal(t, []string{"render", "open-pr", "wait-for-merge", "health-check"},
 		steps.DefaultSequenceForBundle("pr-review", "image", "kustomize", "branch"))
+	assert.Equal(t, []string{"git-clone", "kustomize-set-image", "render-manifests", "git-commit", "git-push"},
+		steps.RenderJobSequence("image", "kustomize"))
 
 	pipeline.Spec.Environments[0].Render = &v1alpha1.RenderConfig{Branch: "main"}
 	err := graph.ValidateRenderedBranches(pipeline)

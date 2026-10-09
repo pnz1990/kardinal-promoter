@@ -1,0 +1,32 @@
+{{- if .Values.render.networkPolicy.enabled }}
+{{- range $ns := .Values.render.networkPolicy.namespaces }}
+---
+# The render Pods of layout: branch (docs/rendered-manifests.md) need DNS and
+# the git host only: no Kubernetes API, no cloud metadata, nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" $ }}-render
+  namespace: {{ $ns }}
+  labels:
+    {{- include "kardinal-promoter.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      kardinal.io/component: render
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    {{- with $.Values.render.networkPolicy.gitEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}

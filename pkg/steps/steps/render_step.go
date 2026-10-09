@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -24,6 +25,9 @@ import (
 // RenderManifestsStepName is the step that renders layout: branch.
 const RenderManifestsStepName = "render-manifests"
 
+// outputMarkerDigest is the sha256 of the marker render-manifests wrote.
+const outputMarkerDigest = "markerDigest"
+
 // renderMarkerPath is the file in the rendered branch that records the last
 // render: what it was rendered from and the sha256 of every file it wrote.
 const renderMarkerPath = ".kardinal/rendered.yaml"
@@ -31,6 +35,7 @@ const renderMarkerPath = ".kardinal/rendered.yaml"
 // renderMarker is the content of renderMarkerPath.
 type renderMarker struct {
 	Pipeline    string            `json:"pipeline"`
+	Namespace   string            `json:"namespace,omitempty"`
 	Environment string            `json:"environment"`
 	Bundle      string            `json:"bundle,omitempty"`
 	DryCommit   string            `json:"dryCommit,omitempty"`
@@ -56,24 +61,92 @@ func writeMarker(root *os.Root, m renderMarker) error {
 	return nil
 }
 
-// readMarker returns the marker of the rendered branch checkout, ok=false
-// when there is none.
-func readMarker(root *os.Root) (renderMarker, bool, error) {
-	var m renderMarker
+// readMarker returns the marker of the rendered branch checkout and its raw
+// bytes, ok=false when there is none.
+func readMarker(root *os.Root) (renderMarker, []byte, bool, error) {
 	raw, err := root.ReadFile(renderMarkerPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		return m, false, nil
+		return renderMarker{}, nil, false, nil
 	}
 	if err != nil {
-		return m, false, fmt.Errorf("read %s: %w", renderMarkerPath, err)
+		return renderMarker{}, nil, false, fmt.Errorf("read %s: %w", renderMarkerPath, err)
 	}
+	m, err := parseMarker(raw)
+	return m, raw, true, err
+}
+
+// parseMarker decodes a render marker.
+func parseMarker(raw []byte) (renderMarker, error) {
+	var m renderMarker
 	if err := sigsyaml.Unmarshal(raw, &m); err != nil {
-		return m, true, fmt.Errorf("parse %s: %w", renderMarkerPath, err)
+		return m, fmt.Errorf("parse %s: %w", renderMarkerPath, err)
 	}
 	if m.Files == nil {
 		m.Files = map[string]string{}
 	}
-	return m, true, nil
+	return m, nil
+}
+
+// renderNamespace is the Pipeline namespace the marker records.
+func renderNamespace(state *parentsteps.StepState) string {
+	if state.Render != nil {
+		return state.Render.Namespace
+	}
+	return ""
+}
+
+// markerOwner returns "" when marker m was written for this Pipeline
+// environment, or whose it is. A marker without a namespace was written
+// before the namespace was recorded and is matched on the rest.
+func markerOwner(m renderMarker, state *parentsteps.StepState) string {
+	ns := renderNamespace(state)
+	if m.Pipeline == state.PipelineName && m.Environment == state.Environment.Name &&
+		(m.Namespace == "" || ns == "" || m.Namespace == ns) {
+		return ""
+	}
+	owner := m.Pipeline
+	if m.Namespace != "" {
+		owner = m.Namespace + "/" + m.Pipeline
+	}
+	return fmt.Sprintf("it was rendered for Pipeline %s environment %s", owner, m.Environment)
+}
+
+// manifestLike reports whether a file in the rendered branch is one Argo CD
+// or Flux would apply (YAML or JSON), outside .git and .kardinal.
+func manifestLike(p string) bool {
+	if strings.HasPrefix(p, ".git/") || strings.HasPrefix(p, ".kardinal/") {
+		return false
+	}
+	switch strings.ToLower(path.Ext(p)) {
+	case ".yaml", ".yml", ".json":
+		return true
+	}
+	return false
+}
+
+// checkoutManifests lists the manifest-like files of the rendered branch
+// checkout (manifestLike), by slash path.
+func checkoutManifests(root *os.Root) ([]string, error) {
+	var out []string
+	err := fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if p == ".git" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if manifestLike(p) {
+			out = append(out, p)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list rendered branch: %w", err)
+	}
+	return out, nil
 }
 
 func digest(b []byte) string {
@@ -83,9 +156,10 @@ func digest(b []byte) string {
 
 // detectDrift compares the rendered branch checkout with its marker and
 // returns what changed since the last render: a file kardinal wrote that was
-// edited or deleted, or a file kardinal is about to write that someone else
-// added. Files kardinal never wrote (a CODEOWNERS, a README) are not drift.
-// A branch with files but no marker was not written by kardinal.
+// edited or deleted, and any YAML or JSON file kardinal did not write (Argo
+// CD or Flux would apply it with the render). Other files (a CODEOWNERS, a
+// README) are not drift. A branch with files but no marker was not written by
+// kardinal.
 func detectDrift(root *os.Root, marker renderMarker, hasMarker bool, next []renderedFile) ([]string, error) {
 	var drift []string
 	if !hasMarker {
@@ -111,8 +185,19 @@ func detectDrift(root *os.Root, marker renderMarker, hasMarker bool, next []rend
 			drift = append(drift, p+" changed")
 		}
 	}
+	manifests, err := checkoutManifests(root)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, p := range manifests {
+		seen[p] = true
+		if _, ours := marker.Files[p]; !ours {
+			drift = append(drift, p+" added outside kardinal")
+		}
+	}
 	for _, f := range next {
-		if _, ours := marker.Files[f.path]; ours {
+		if _, ours := marker.Files[f.path]; ours || seen[f.path] {
 			continue
 		}
 		if _, err := root.Lstat(f.path); err == nil {
@@ -149,6 +234,9 @@ func (s *renderManifestsStep) Execute(ctx context.Context, state *parentsteps.St
 	fail := func(err error) (parentsteps.StepResult, error) {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, permanentIfEscape(err)
 	}
+	if os.Getenv(parentsteps.RenderJobEnv) != "1" || state.Render == nil {
+		return fail(parentsteps.Permanent(errors.New("render-manifests runs only in the kardinal-render Job, never in the controller")))
+	}
 	if !layoutBranch(state) {
 		return fail(parentsteps.Permanent(errors.New("render-manifests runs only with layout: branch")))
 	}
@@ -167,7 +255,7 @@ func (s *renderManifestsStep) Execute(ctx context.Context, state *parentsteps.St
 	}
 	docs, err := renderWithTimeout(ctx, func(ctx context.Context) ([][]byte, error) {
 		if kind == rendererHelm {
-			return renderHelm(ctx, envDir, helmRenderOptions(state))
+			return renderHelm(ctx, dryRoot, envRel, helmRenderOptions(state))
 		}
 		return renderKustomize(dryRoot, envRel)
 	})
@@ -184,13 +272,26 @@ func (s *renderManifestsStep) Execute(ctx context.Context, state *parentsteps.St
 		return fail(fmt.Errorf("open rendered branch checkout: %w", err))
 	}
 	defer func() { _ = root.Close() }()
-	marker, hasMarker, err := readMarker(root)
+	marker, rawMarker, hasMarker, err := readMarker(root)
 	if err != nil {
 		return fail(parentsteps.Permanent(err))
+	}
+	if hasMarker {
+		// A rendered branch belongs to one Pipeline environment: two that
+		// render to the same branch would overwrite each other's render.
+		if why := markerOwner(marker, state); why != "" {
+			return fail(parentsteps.Permanent(fmt.Errorf("rendered branch %s is not this environment's: %s; "+
+				"set render.branch to a branch of its own", state.Git.Branch, why)))
+		}
 	}
 	drift, err := detectDrift(root, marker, hasMarker, files)
 	if err != nil {
 		return fail(err)
+	}
+	// The marker itself is anchored: a push that edits files and the marker
+	// together is still drift, unless the marker is one kardinal wrote.
+	if known := state.Render.KnownMarkerDigests; hasMarker && len(known) > 0 && !slices.Contains(known, digest(rawMarker)) {
+		drift = append([]string{renderMarkerPath + " is not one kardinal wrote (sha256 " + shortSHA(digest(rawMarker)) + ")"}, drift...)
 	}
 	outputs := map[string]string{"renderer": string(kind), "renderedFiles": fmt.Sprint(len(files))}
 	if len(drift) > 0 {
@@ -205,20 +306,32 @@ func (s *renderManifestsStep) Execute(ctx context.Context, state *parentsteps.St
 		outputs["driftOverwritten"] = summary
 	}
 
-	// Delete what the previous render wrote and this one does not, then
-	// write the new files and the marker.
+	// Delete what the previous render wrote and this one does not (and,
+	// overwriting drift, every manifest kardinal did not write), then write
+	// the new files and the marker.
 	next := map[string]bool{}
 	for _, f := range files {
 		next[f.path] = true
 	}
+	stale := make([]string, 0, len(marker.Files))
 	for p := range marker.Files {
+		stale = append(stale, p)
+	}
+	if len(drift) > 0 {
+		manifests, err := checkoutManifests(root)
+		if err != nil {
+			return fail(err)
+		}
+		stale = append(stale, manifests...)
+	}
+	for _, p := range stale {
 		if !next[p] {
 			if err := root.Remove(filepath.FromSlash(p)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return fail(fmt.Errorf("remove %s: %w", p, err))
 			}
 		}
 	}
-	m := renderMarker{Pipeline: state.PipelineName, Environment: state.Environment.Name, Bundle: state.BundleName,
+	m := renderMarker{Pipeline: state.PipelineName, Namespace: renderNamespace(state), Environment: state.Environment.Name, Bundle: state.BundleName,
 		DryCommit: state.Outputs[outputDryCommit], DryPath: filepath.ToSlash(envRel), Renderer: string(kind),
 		Files: map[string]string{}}
 	for _, f := range files {
@@ -235,6 +348,12 @@ func (s *renderManifestsStep) Execute(ctx context.Context, state *parentsteps.St
 	if err := writeMarker(root, m); err != nil {
 		return fail(err)
 	}
+	written, err := root.ReadFile(renderMarkerPath)
+	if err != nil {
+		return fail(fmt.Errorf("read %s: %w", renderMarkerPath, err))
+	}
+	outputs[outputMarkerDigest] = digest(written)
+	outputs["renderedObjects"] = fmt.Sprint(len(files))
 	msg := fmt.Sprintf("rendered %d objects from %s@%s with %s into %s", len(files), filepath.ToSlash(envRel),
 		shortSHA(state.Outputs[outputDryCommit]), kind, state.Git.Branch)
 	if s := outputs["driftOverwritten"]; s != "" {
@@ -260,6 +379,9 @@ func onDrift(state *parentsteps.StepState) string {
 // helmRenderOptions are render.helm's settings with their defaults.
 func helmRenderOptions(state *parentsteps.StepState) helmOptions {
 	o := helmOptions{releaseName: state.PipelineName, namespace: state.Environment.Name}
+	if r := state.Environment.Render; r != nil {
+		o.nondeterminst = r.AllowNondeterministic
+	}
 	if r := state.Environment.Render; r != nil && r.Helm != nil {
 		if r.Helm.ReleaseName != "" {
 			o.releaseName = r.Helm.ReleaseName

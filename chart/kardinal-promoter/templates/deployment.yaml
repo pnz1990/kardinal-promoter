@@ -52,6 +52,14 @@ spec:
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
             - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
             - --hook-service-accounts={{ join "," .Values.hooks.serviceAccounts }}
+            - --render-image={{ include "kardinal-promoter.renderImage" . }}
+            {{- with .Values.render.image.pullPolicy }}
+            - --render-image-pull-policy={{ . }}
+            {{- end }}
+            - --render-service-account={{ .Values.render.serviceAccountName }}
+            - --render-cpu-limit={{ .Values.render.resources.limits.cpu }}
+            - --render-memory-limit={{ .Values.render.resources.limits.memory }}
+            - --render-timeout={{ .Values.render.timeout }}
             {{- if .Values.hooks.allowPrivileged }}
             - --hook-allow-privileged=true
             {{- end }}

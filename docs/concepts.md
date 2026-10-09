@@ -343,14 +343,15 @@ This is the standard pattern for large Argo CD deployments because:
 - CODEOWNERS rules can be placed on individual rendered YAML files in the environment branch
 
 Set `layout: branch` on an environment and kardinal renders it: the `render-manifests`
-step runs kustomize build or helm template in the controller (no binaries) on the DRY
-source in `spec.git.branch`, and commits the plain YAML to the rendered branch
+step runs kustomize build or helm template on the DRY source in `spec.git.branch`, in a
+sandboxed Job of the environment's RenderRun (never in the controller), and commits the
+plain YAML to the rendered branch
 (`env/<name>` by default, `render.branch` to change it) with the DRY commit in the
 commit trailers. `pr-review` PRs show the rendered diff, a change pushed to the rendered
 branch outside kardinal fails the next promotion (`render.onDrift`), and a rollback
 re-renders the DRY commit of the Bundle it restores.
 
-See [Rendered Manifests](rendered-manifests.md) for the fields, limits, Argo CD
+See [Rendered Manifests](rendered-manifests.md) for the fields, the render Job, limits, Argo CD
 configuration and CODEOWNERS integration.
 
 ## Advanced Patterns

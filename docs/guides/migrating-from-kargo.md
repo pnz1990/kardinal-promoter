@@ -308,6 +308,6 @@ helm uninstall kargo -n kargo
 
 **Namespace model:** Kargo Projects map to Kubernetes Namespaces in both systems. In kardinal, the Pipeline, its Bundles and the Subscriptions that feed it live in the same namespace: a Subscription creates Bundles only in its own namespace, for a Pipeline there (a different `spec.namespace` sets the Subscription to phase `Error`).
 
-**GitOps repo structure:** kardinal's `kustomize` update strategy edits `kustomization.yaml` the way Kargo's `kustomize-set-image` step does. Kargo's `kustomize-build` and `helm-template` steps map to `layout: branch`, which renders in the controller and commits plain YAML to the environment's branch ([Rendered Manifests](../rendered-manifests.md)).
+**GitOps repo structure:** kardinal's `kustomize` update strategy edits `kustomization.yaml` the way Kargo's `kustomize-set-image` step does. Kargo's `kustomize-build` and `helm-template` steps map to `layout: branch`, which renders in a sandboxed Job per promotion (Kargo runs these steps in its controller) and commits plain YAML to the environment's branch ([Rendered Manifests](../rendered-manifests.md)).
 
 **Policy gates:** Kargo's AnalysisTemplates run as verification after a promotion. kardinal's PolicyGates are separate CRDs that evaluate independently and are wired into the Graph. This means gates are cluster-reusable and visible to all pipelines that reference the same PolicyGate namespace.

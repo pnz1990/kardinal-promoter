@@ -471,19 +471,21 @@ func TestDefaultSequenceForBundle_KustomizeDefault(t *testing.T) {
 	assert.Contains(t, seq, "kustomize-set-image", "default must use kustomize-set-image")
 }
 
-// TestDefaultSequenceForBundle_BranchLayout: layout: branch renders after
-// the image update, before git-commit, and a config Bundle runs no
-// config-merge (its configRef commit is the DRY commit rendered).
+// TestDefaultSequenceForBundle_BranchLayout: a layout: branch step waits for
+// its RenderRun (the render step), then opens its PR or checks health; the
+// render Job runs the clone, the image update, render-manifests, git-commit
+// and git-push, and a config Bundle runs no config-merge (its configRef
+// commit is the DRY commit rendered).
 func TestDefaultSequenceForBundle_BranchLayout(t *testing.T) {
-	assert.Equal(t, []string{"git-clone", "kustomize-set-image", "render-manifests", "git-commit", "git-push", "health-check"},
-		parentsteps.DefaultSequenceForBundle("auto", "image", "kustomize", "branch"))
-	assert.Equal(t, []string{"git-clone", "helm-set-image", "render-manifests", "git-commit", "git-push",
-		"open-pr", "wait-for-merge", "health-check"},
+	assert.Equal(t, []string{"render", "health-check"}, parentsteps.DefaultSequenceForBundle("auto", "image", "kustomize", "branch"))
+	assert.Equal(t, []string{"render", "open-pr", "wait-for-merge", "health-check"},
 		parentsteps.DefaultSequenceForBundle("pr-review", "image", "helm", "branch"))
-	assert.Equal(t, []string{"git-clone", "render-manifests", "git-commit", "git-push", "health-check"},
-		parentsteps.DefaultSequenceForBundle("auto", "config", "", "branch"))
-	assert.Equal(t, []string{"git-clone", "kustomize-set-image", "render-manifests", "git-commit", "git-push", "health-check"},
-		parentsteps.DefaultSequenceForBundle("auto", "mixed", "", "branch"))
+	assert.Equal(t, []string{"git-clone", "kustomize-set-image", "render-manifests", "git-commit", "git-push"},
+		parentsteps.RenderJobSequence("image", "kustomize"))
+	assert.Equal(t, []string{"git-clone", "helm-set-image", "render-manifests", "git-commit", "git-push"},
+		parentsteps.RenderJobSequence("mixed", "helm"))
+	assert.Equal(t, []string{"git-clone", "render-manifests", "git-commit", "git-push"},
+		parentsteps.RenderJobSequence("config", ""))
 }
 
 // TestRenderManifests_Registered: the render step is registered.

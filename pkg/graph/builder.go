@@ -554,6 +554,11 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	nodes = append(nodes, bundleWatchNode)
 	if hasHooks(pipeline, filteredEnvs) {
 		nodes = append(nodes, hookRefNodes(pipelineName, bundle.Name, bundle.Namespace)...)
+	} else if rendersAny(pipeline, filteredEnvs) {
+		nodes = append(nodes, stepsRefNode(pipelineName, bundle.Name, bundle.Namespace))
+	}
+	if rendersAny(pipeline, filteredEnvs) {
+		nodes = append(nodes, renderRefNode(pipelineName, bundle.Name, bundle.Namespace))
 	}
 
 	gates := newGateCollections(pipelineName, bundle.Name)
@@ -613,6 +618,19 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		attachHooks(stepNode, hooks)
 		nodes = append(nodes, stepNode)
 		nodes = append(nodes, hooks.nodes...)
+		envSpec := findEnvSpec(pipeline, envName)
+		stepK8s := promotionStepK8sName(pipelineName, bundle.Name, envName)
+		renders := kardinalv1alpha1.RendersToBranch(pipeline.Spec, envSpec)
+		if renders {
+			rn, err := buildRenderRunNode(pipeline, bundle, envSpec, stepK8s)
+			if err != nil {
+				return nil, nil, err
+			}
+			nodes = append(nodes, rn)
+		}
+		if len(envSpec.Hooks) > 0 || renders {
+			nodes = append(nodes, buildLiveMirrorNode(envName, stepK8s, len(envSpec.Hooks) > 0, renders))
+		}
 	}
 
 	nodes = append(nodes, gates.nodes()...)

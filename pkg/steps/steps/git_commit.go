@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -55,8 +56,14 @@ func (s *gitCommitStep) Execute(ctx context.Context, state *parentsteps.StepStat
 	// branch's history says which DRY commit ran, and a rollback can render
 	// the same one again.
 	if dry := state.Outputs[outputDryCommit]; dry != "" && layoutBranch(state) {
+		// The path rendered, as render-manifests resolved it: the
+		// environment's path, or environments/<name> when it sets none.
+		envRel, err := envSubdir(state)
+		if err != nil {
+			return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
+		}
 		message += fmt.Sprintf("\n\n%s: %s\n%s: %s\n%s: %s", trailerDryCommit, dry,
-			trailerDryPath, state.Environment.Path, trailerBundle, state.BundleName)
+			trailerDryPath, filepath.ToSlash(envRel), trailerBundle, state.BundleName)
 	}
 
 	err := state.GitClient.CommitAll(ctx, state.WorkDir, message, authorName(state), authorEmail(state))

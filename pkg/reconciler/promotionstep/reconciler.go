@@ -726,6 +726,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
 		Sequence:             seq,
 	}
+	if ps.Spec.Live != nil {
+		state.LiveRenders = ps.Spec.Live.Renders
+	}
 	r.setRollbackState(ctx, log, state, bundle)
 
 	prevIdx := ps.Status.CurrentStepIndex
@@ -735,6 +738,11 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// never forgotten (C03-promotionstep-06).
 	ps.Status.Outputs = state.Outputs
 	ps.Status.CurrentStepIndex = nextIdx
+	if state.Outputs[steps.OutputRenderRequested] == "true" && ps.Status.RenderRequestedAt == nil {
+		// The Graph creates the environment's RenderRun once this is set.
+		now := metav1.NewTime(r.now())
+		ps.Status.RenderRequestedAt = &now
+	}
 	if nextIdx > prevIdx {
 		// Progress resets the retry budget.
 		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
@@ -930,7 +938,9 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 // opens a PR the merge commit comes from the PRStatus instead.
 func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
 	pipeline *v1alpha1.Pipeline, workDir string) {
-	if opensPR(ps) {
+	if opensPR(ps) || ps.Status.Outputs["commitSHA"] != "" {
+		// A pr-review step takes the merge commit; a render reported its
+		// commit itself.
 		return
 	}
 	env := findEnv(pipeline, ps.Spec.Environment)

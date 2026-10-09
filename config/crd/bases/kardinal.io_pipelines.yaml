@@ -416,6 +416,14 @@ spec:
                     render:
                       description: 'Render configures layout: branch.'
                       properties:
+                        allowNondeterministic:
+                          description: |-
+                            AllowNondeterministic lets Helm templates call functions whose result
+                            changes from one render to the next (randAlphaNum, uuidv4, now, genCA
+                            and the like). Off by default: such a chart renders different
+                            manifests for the same DRY commit, so every promotion commits a change
+                            and a rollback does not restore what ran.
+                          type: boolean
                         branch:
                           description: |-
                             Branch is the rendered branch the manifests are committed to. Defaults

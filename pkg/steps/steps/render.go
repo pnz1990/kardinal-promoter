@@ -4,6 +4,7 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -17,9 +18,12 @@ import (
 
 	"helm.sh/helm/v4/pkg/chart/common"
 	chartutil "helm.sh/helm/v4/pkg/chart/common/util"
+	"helm.sh/helm/v4/pkg/chart/loader/archive"
+	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
 	"helm.sh/helm/v4/pkg/chart/v2/loader"
 	chartv2util "helm.sh/helm/v4/pkg/chart/v2/util"
 	"helm.sh/helm/v4/pkg/engine"
+	"helm.sh/helm/v4/pkg/ignore"
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 	sigsyaml "sigs.k8s.io/yaml"
@@ -116,57 +120,6 @@ func loadSourceTree(root string) (filesys.FileSystem, error) {
 	return mem, nil
 }
 
-// remoteKustomizeRef reports whether a kustomization entry is a remote
-// reference (a git repository or URL), which kustomize would fetch by
-// running git. Renders use only the DRY checkout.
-func remoteKustomizeRef(s string) bool {
-	s = strings.TrimSpace(s)
-	return strings.Contains(s, "://") || strings.HasPrefix(s, "git@") || strings.Contains(s, "?ref=") ||
-		strings.HasPrefix(s, "github.com/") || strings.HasPrefix(s, "gitlab.com/") || strings.HasPrefix(s, "bitbucket.org/")
-}
-
-// checkKustomizations refuses remote resources, components and bases, and
-// helmCharts (chart inflation runs the helm binary), in every kustomization
-// of the in-memory tree.
-func checkKustomizations(mem filesys.FileSystem) error {
-	return mem.Walk("/", func(p string, info fs.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return err
-		}
-		switch path.Base(p) {
-		case "kustomization.yaml", "kustomization.yml", "Kustomization":
-		default:
-			return nil
-		}
-		raw, err := mem.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		var k struct {
-			Resources  []string      `json:"resources"`
-			Components []string      `json:"components"`
-			Bases      []string      `json:"bases"`
-			HelmCharts []interface{} `json:"helmCharts"`
-		}
-		if err := sigsyaml.Unmarshal(raw, &k); err != nil {
-			return parentsteps.Permanent(fmt.Errorf("parse %s: %w", p, err))
-		}
-		if len(k.HelmCharts) > 0 {
-			return parentsteps.Permanent(fmt.Errorf("%s: helmCharts is not supported by layout: branch; "+
-				"put the chart at the environment path instead", p))
-		}
-		for _, list := range [][]string{k.Resources, k.Components, k.Bases} {
-			for _, r := range list {
-				if remoteKustomizeRef(r) {
-					return parentsteps.Permanent(fmt.Errorf("%s: remote resource %q is not supported by layout: branch; "+
-						"vendor it into the repository", p, r))
-				}
-			}
-		}
-		return nil
-	})
-}
-
 // renderKustomize runs kustomize build in process (sigs.k8s.io/kustomize/api)
 // on the DRY tree, with plugins disabled and load restrictions on.
 func renderKustomize(src, envRel string) ([][]byte, error) {
@@ -177,10 +130,24 @@ func renderKustomize(src, envRel string) ([][]byte, error) {
 	if err := checkKustomizations(mem); err != nil {
 		return nil, err
 	}
+	// A diamond of overlays multiplies its resources; refuse it before
+	// kustomize builds it in memory.
+	n, err := estimateKustomizeObjects(mem, filepath.Join("/", envRel))
+	if err != nil {
+		return nil, err
+	}
+	if n > maxRenderedObjects {
+		return nil, parentsteps.Permanent(fmt.Errorf("kustomize build %s would produce more than %d objects (its resources "+
+			"and overlays add up to at least %d)", filepath.ToSlash(envRel), maxRenderedObjects, n))
+	}
 	k := krusty.MakeKustomizer(krusty.MakeDefaultOptions())
 	rm, err := k.Run(mem, filepath.Join("/", envRel))
 	if err != nil {
 		return nil, parentsteps.Permanent(fmt.Errorf("kustomize build %s: %w", filepath.ToSlash(envRel), err))
+	}
+	if rm.Size() > maxRenderedObjects {
+		return nil, parentsteps.Permanent(fmt.Errorf("the render produced %d objects, more than the limit of %d",
+			rm.Size(), maxRenderedObjects))
 	}
 	var out [][]byte
 	for _, r := range rm.Resources() {
@@ -195,19 +162,79 @@ func renderKustomize(src, envRel string) ([][]byte, error) {
 
 // helmOptions are the release values of a helm render.
 type helmOptions struct {
-	releaseName string
-	namespace   string
-	valuesFiles []string
+	releaseName   string
+	namespace     string
+	valuesFiles   []string
+	nondeterminst bool
+}
+
+// loadChart loads the chart at envRel of the in-memory DRY tree mem (which
+// loadSourceTree checked for symbolic links and size), honouring its
+// .helmignore: nothing is read from disk.
+func loadChart(mem filesys.FileSystem, envRel string) (*chartv2.Chart, error) {
+	top := filepath.Join("/", envRel)
+	rules := ignore.Empty()
+	if raw, err := mem.ReadFile(filepath.Join(top, ignore.HelmIgnore)); err == nil {
+		r, err := ignore.Parse(bytes.NewReader(raw))
+		if err != nil {
+			return nil, parentsteps.Permanent(fmt.Errorf("parse %s: %w", ignore.HelmIgnore, err))
+		}
+		rules = r
+	}
+	rules.AddDefaults()
+	var files []*archive.BufferedFile
+	err := mem.Walk(top, func(p string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(top, p)
+		if err != nil || rel == "." {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if rules.Ignore(rel, info) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		data, err := mem.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		files = append(files, &archive.BufferedFile{Name: rel, Data: bytes.TrimPrefix(data, []byte("\xEF\xBB\xBF"))})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read chart: %w", err)
+	}
+	chrt, err := loader.LoadFiles(files)
+	if err != nil {
+		return nil, parentsteps.Permanent(fmt.Errorf("load chart: %w", err))
+	}
+	return chrt, nil
 }
 
 // renderHelm runs helm template in process (helm.sh/helm/v4): the chart at
-// chartDir with its values.yaml and valuesFiles, offline (no lookup, no
-// dependency download: subcharts must be in charts/), with the default
-// capabilities. Hooks and NOTES.txt are not part of the output.
-func renderHelm(ctx context.Context, chartDir string, opts helmOptions) ([][]byte, error) {
-	chrt, err := loader.LoadDir(chartDir)
+// envRel of the DRY tree at dryRoot, with its values.yaml and valuesFiles,
+// offline (no lookup, no DNS, no dependency download: subcharts must be in
+// charts/), with the default capabilities. The whole DRY tree is checked for
+// symbolic links and size first and the chart is loaded from memory.
+// Template functions are bounded (templateFuncs): no value over the output
+// limit, and no function whose result changes between renders unless
+// render.allowNondeterministic. Hooks and NOTES.txt are not part of the
+// output, and objects are counted as they are split.
+func renderHelm(ctx context.Context, dryRoot, envRel string, opts helmOptions) ([][]byte, error) {
+	mem, err := loadSourceTree(dryRoot)
 	if err != nil {
-		return nil, parentsteps.Permanent(fmt.Errorf("load chart: %w", err))
+		return nil, err
+	}
+	chrt, err := loadChart(mem, envRel)
+	if err != nil {
+		return nil, err
 	}
 	vals := map[string]interface{}{}
 	for _, f := range opts.valuesFiles {
@@ -215,7 +242,7 @@ func renderHelm(ctx context.Context, chartDir string, opts helmOptions) ([][]byt
 		if err != nil {
 			return nil, fmt.Errorf("values file: %w", err)
 		}
-		raw, err := os.ReadFile(filepath.Join(chartDir, rel))
+		raw, err := mem.ReadFile(filepath.Join("/", envRel, rel))
 		if err != nil {
 			return nil, parentsteps.Permanent(fmt.Errorf("read values file %s: %w", f, err))
 		}
@@ -234,7 +261,8 @@ func renderHelm(ctx context.Context, chartDir string, opts helmOptions) ([][]byt
 	if err != nil {
 		return nil, parentsteps.Permanent(fmt.Errorf("chart values: %w", err))
 	}
-	files, err := engine.Engine{Strict: false}.RenderWithContext(ctx, chrt, rv)
+	eng := engine.Engine{Strict: false, CustomTemplateFuncs: templateFuncs(opts.nondeterminst)}
+	files, err := eng.RenderWithContext(ctx, chrt, rv)
 	if err != nil {
 		return nil, parentsteps.Permanent(fmt.Errorf("helm template: %w", err))
 	}
@@ -253,6 +281,9 @@ func renderHelm(ctx context.Context, chartDir string, opts helmOptions) ([][]byt
 				continue
 			}
 			out = append(out, doc)
+			if len(out) > maxRenderedObjects {
+				return nil, parentsteps.Permanent(fmt.Errorf("the render produced more than %d objects", maxRenderedObjects))
+			}
 		}
 	}
 	return out, nil

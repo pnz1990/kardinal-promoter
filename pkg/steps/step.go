@@ -154,7 +154,33 @@ type StepState struct {
 	// in flight still turns GraphReady once its steps are Verified and its gates
 	// pass (B69).
 	Sequence []string
+
+	// Render is set only in the kardinal-render Job, which runs the render
+	// of a layout: branch environment (git-clone, the image update,
+	// render-manifests, git-commit and git-push). The controller never sets
+	// it: rendering does not run in the controller.
+	Render *RenderContext
+
+	// LiveRenders is the RenderRun of a layout: branch environment, as the
+	// Graph mirrors it onto the PromotionStep (spec.live.renders).
+	LiveRenders []v1alpha1.LiveRenderRun
 }
+
+// RenderContext is what a render Job knows beyond the step state.
+type RenderContext struct {
+	// Namespace is the Pipeline's namespace: the render marker records it,
+	// so a rendered branch written for one Pipeline is never taken over by
+	// another.
+	Namespace string
+	// KnownMarkerDigests are the marker digests of earlier renders of this
+	// Pipeline environment (RenderRun status). When there are some, the
+	// rendered branch's marker must have one of them.
+	KnownMarkerDigests []string
+}
+
+// RenderJobEnv is set to "1" in the kardinal-render Job. render-manifests
+// refuses to run without it, so a controller can never render in process.
+const RenderJobEnv = "KARDINAL_RENDER_JOB"
 
 // OpenPRStepName is the name of the step that opens the promotion PR.
 const OpenPRStepName = "open-pr"

@@ -69,6 +69,7 @@ spec:
         branch: <string>                # Rendered branch (default: "env/<name>")
         onDrift: <string>               # "fail" (default) or "overwrite"
         helm: {releaseName: <string>, namespace: <string>, valuesFiles: [<string>]}
+        allowNondeterministic: <bool>   # allow randAlphaNum, uuidv4, now, genCA, ... in Helm templates (default false)
       shard: <string>                   # Deprecated, not supported: must be empty (distributed mode was removed)
       regions: [<string>, ...]          # Deprecated, not supported: declare one environment per region
       steps:                            # Deprecated, not supported: the API server rejects it
@@ -315,7 +316,7 @@ finishes, and its Graph turns Ready once its steps are Verified and its gates pa
 | Image Bundle, `update.strategy: helm` | `git-clone`, `helm-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Config Bundle | `git-clone`, `config-merge`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Mixed Bundle | `git-clone`, `config-merge`, then the image Bundle's update step (`kustomize-set-image` or `helm-set-image`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
-| `layout: branch` | `git-clone`, the image update step (none for a config Bundle), `render-manifests`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| `layout: branch` | `render` (waits for the environment's RenderRun, a Job that runs `git-clone`, the image update step (none for a config Bundle), `render-manifests`, `git-commit` and `git-push`), [`open-pr`, `wait-for-merge`,] `health-check` |
 | `update.strategy: argocd` | `argocd-set-image`, `health-check` |
 
 `open-pr` and `wait-for-merge` run only with `approval: pr-review`. When the files in git

@@ -32,6 +32,7 @@ import (
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -57,6 +58,7 @@ import (
 	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	psreconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	prstatusrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
+	renderrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/renderrun"
 	rbprecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
@@ -268,6 +270,22 @@ func main() {
 			"host namespaces and ports, hostPath volumes and nodeName. Off by default: a hook that sets one fails. "+
 			"See docs/hooks.md.")
 
+	// Rendered manifests (layout: branch) render in a Job, never in the
+	// controller (docs/rendered-manifests.md).
+	var renderImage, renderServiceAccount, renderPullPolicy, renderCPU, renderMemory string
+	var renderTimeout time.Duration
+	flag.StringVar(&renderImage, "render-image", os.Getenv("KARDINAL_RENDER_IMAGE"),
+		"The kardinal-render image the render Jobs of layout: branch environments run. Empty: layout: branch "+
+			"promotions fail with a message naming this flag.")
+	flag.StringVar(&renderPullPolicy, "render-image-pull-policy", "", "imagePullPolicy of the render Jobs (default: Kubernetes').")
+	flag.StringVar(&renderServiceAccount, "render-service-account", renderrunrecon.DefaultServiceAccount,
+		"ServiceAccount the render Jobs run as, in the Pipeline namespace. The controller creates it there, "+
+			"without a token, when it is missing; bind no role to it.")
+	flag.StringVar(&renderCPU, "render-cpu-limit", "1", "CPU limit of a render Job.")
+	flag.StringVar(&renderMemory, "render-memory-limit", "512Mi", "Memory limit of a render Job; a render that needs more fails.")
+	flag.DurationVar(&renderTimeout, "render-timeout", renderrunrecon.DefaultTimeout,
+		"How long a render Job may run (its activeDeadlineSeconds).")
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -446,6 +464,32 @@ func main() {
 		AllowPrivileged:        hookAllowPrivileged,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up HookRunReconciler")
+	}
+
+	renderResources := renderrunrecon.DefaultResources()
+	for name, v := range map[corev1.ResourceName]string{corev1.ResourceCPU: renderCPU, corev1.ResourceMemory: renderMemory} {
+		q, err := resource.ParseQuantity(v)
+		if err != nil {
+			logger.Fatal().Err(err).Str("resource", string(name)).Msg("invalid --render-cpu-limit or --render-memory-limit")
+		}
+		renderResources.Limits[name] = q
+		if req := renderResources.Requests[name]; req.Cmp(q) > 0 {
+			renderResources.Requests[name] = q
+		}
+	}
+	if err := (&renderrunrecon.Reconciler{
+		Client:              mgr.GetClient(),
+		APIReader:           mgr.GetAPIReader(),
+		Image:               renderImage,
+		ImagePullPolicy:     corev1.PullPolicy(renderPullPolicy),
+		ServiceAccount:      renderServiceAccount,
+		Resources:           renderResources,
+		Timeout:             renderTimeout,
+		ControllerNamespace: hookControllerNS,
+		AuthorName:          "kardinal-promoter",
+		AuthorEmail:         "kardinal@kardinal.io",
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up RenderRunReconciler")
 	}
 
 	if err := (&metriccheckrecon.Reconciler{

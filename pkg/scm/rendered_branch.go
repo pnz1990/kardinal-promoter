@@ -127,3 +127,84 @@ func (c *GoGitClient) CommitMessages(_ context.Context, dir string, limit int) (
 }
 
 var errStopLog = errors.New("stop")
+
+// TreeReader is implemented by git clients that can read the files of a
+// commit in a checkout.
+type TreeReader interface {
+	// CommitFiles returns the regular files of commit sha in dir, by
+	// slash-separated path. It fails when they add up to more than maxBytes.
+	CommitFiles(ctx context.Context, dir, sha string, maxBytes int64) (map[string][]byte, error)
+}
+
+// AncestryChecker is implemented by git clients that can tell whether a
+// commit is reachable from a branch of a full clone.
+type AncestryChecker interface {
+	// ReachableFrom reports whether commit is branch's head or one of its
+	// ancestors, in the clone dir (refs/remotes/origin/<branch>).
+	ReachableFrom(ctx context.Context, dir, commit, branch string) (bool, error)
+}
+
+// CommitFiles implements TreeReader.
+func (c *GoGitClient) CommitFiles(_ context.Context, dir, sha string, maxBytes int64) (map[string][]byte, error) {
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		return nil, fmt.Errorf("open repository %s: %w", dir, err)
+	}
+	cm, err := repo.CommitObject(plumbing.NewHash(sha))
+	if err != nil {
+		return nil, fmt.Errorf("read commit %s: %w", sha, err)
+	}
+	tree, err := cm.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("read the tree of %s: %w", sha, err)
+	}
+	out := map[string][]byte{}
+	var total int64
+	err = tree.Files().ForEach(func(f *object.File) error {
+		if !f.Mode.IsRegular() {
+			return nil
+		}
+		total += f.Size
+		if total > maxBytes {
+			return fmt.Errorf("commit %s holds more than %d bytes", sha, maxBytes)
+		}
+		content, err := f.Contents()
+		if err != nil {
+			return fmt.Errorf("read %s at %s: %w", f.Name, sha, err)
+		}
+		out[f.Name] = []byte(content)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ReachableFrom implements AncestryChecker.
+func (c *GoGitClient) ReachableFrom(_ context.Context, dir, commit, branch string) (bool, error) {
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		return false, fmt.Errorf("open repository %s: %w", dir, err)
+	}
+	ref, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", branch), true)
+	if err != nil {
+		return false, fmt.Errorf("resolve origin/%s: %w", branch, err)
+	}
+	tip, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		return false, fmt.Errorf("read origin/%s: %w", branch, err)
+	}
+	if tip.Hash.String() == commit {
+		return true, nil
+	}
+	target, err := repo.CommitObject(plumbing.NewHash(commit))
+	if err != nil {
+		return false, nil
+	}
+	ok, err := target.IsAncestor(tip)
+	if err != nil {
+		return false, fmt.Errorf("walk origin/%s: %w", branch, err)
+	}
+	return ok, nil
+}

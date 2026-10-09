@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.26.9
 
 require (
+	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/google/cel-go v0.31.0
 	github.com/mattn/go-isatty v0.0.24
@@ -35,7 +36,6 @@ require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
-	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect

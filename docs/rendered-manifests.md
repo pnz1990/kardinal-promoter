@@ -97,20 +97,59 @@ An environment path holding a `Chart.yaml` is rendered with `helm template`:
           valuesFiles: [values-prod.yaml]   # over values.yaml; default update.helm.valuesFile
 ```
 
-The render is offline: subcharts must be vendored in `charts/`, `lookup` finds nothing, and the
-default capabilities are used. Hooks and `NOTES.txt` are not rendered.
+The render is offline: subcharts must be vendored in `charts/`, `lookup` finds nothing,
+`getHostByName` resolves nothing, and the default capabilities are used. Hooks and `NOTES.txt`
+are not rendered. A template that calls a function whose result changes from one render to the
+next (`randAlphaNum` and the other `rand*`, `uuidv4`, `now`, `ago`, `genCA`, `genPrivateKey` and
+the other `gen*`, `encryptAES`, `bcrypt`, `htpasswd`, `shuffle`) fails the render: the same DRY
+commit would render different manifests, every promotion would commit a change, and a rollback
+would not restore what ran. Set `render.allowNondeterministic: true` to allow them. `env` and
+`expandenv` are not available, as in Helm.
 
 ## What a promotion does
 
-| Step | What it does |
-|---|---|
-| `git-clone` | Clones `env/<name>` (the first time it creates the branch, with only the render marker) and checks out the DRY source next to it |
-| `kustomize-set-image` | Edits the image in the DRY overlay (`helm-set-image` for a chart). The DRY source is never committed to |
-| `render-manifests` | Renders the environment path in the controller, checks `env/<name>` for drift, writes one file per object and the render marker |
-| `git-commit` | Commits to `env/<name>`, with the DRY commit in the message trailers |
-| `git-push` | Pushes `env/<name>`, or `kardinal/<bundle>/<env>` for a PR |
-| `open-pr`, `wait-for-merge` | For `approval: pr-review`, a PR into `env/<name>` whose diff is the rendered YAML |
-| `health-check` | The Argo CD Application or Flux Kustomization that syncs `env/<name>` |
+Rendering never runs in the controller. The controller's step waits for the environment's
+**RenderRun**, a Kubernetes Job in the Pipeline's namespace that does the clone, the render, the
+commit and the push:
+
+| Where | Step | What it does |
+|---|---|---|
+| controller | `render` | Asks for the render (`status.renderRequestedAt`); the Bundle's Graph then creates the RenderRun, and the step waits for it (`kubectl get renderruns`) |
+| render Job | `git-clone` | Clones `env/<name>` (the first time it creates the branch, with only the render marker) and checks out the DRY source next to it |
+| render Job | `kustomize-set-image` | Edits the image in the DRY overlay (`helm-set-image` for a chart). The DRY source is never committed to |
+| render Job | `render-manifests` | Renders the environment path, checks `env/<name>` for drift, writes one file per object and the render marker |
+| render Job | `git-commit` | Commits to `env/<name>`, with the DRY commit in the message trailers |
+| render Job | `git-push` | Pushes `env/<name>`, or `kardinal/<bundle>/<env>` for a PR |
+| controller | `open-pr`, `wait-for-merge` | For `approval: pr-review`, a PR into `env/<name>` whose diff is the rendered YAML |
+| controller | `health-check` | The Argo CD Application or Flux Kustomization that syncs `env/<name>`; for `approval: auto` it waits for the commit the Job pushed |
+
+The RenderRun's `status.result` (and the step's `status.outputs`) record the commit pushed, the
+DRY commit rendered, the renderer, the object count and the marker digest. A failed render fails
+the step and the Bundle with the RenderRun's message; promote a new Bundle to render again.
+
+### The render Job
+
+The RenderRun reconciler creates the Job, owned by the RenderRun, from the `kardinal-render` image
+(Helm `render.image`, controller flag `--render-image`):
+
+- it reads the DRY source and pushes the render with the Pipeline's own git Secret
+  (`spec.git.secretRef`, its `token` key mounted read-only), never the controller's credentials;
+- it runs as the ServiceAccount `kardinal-render` (`render.serviceAccountName`), which the
+  controller creates in the namespace without a token and binds to no role, with
+  `automountServiceAccountToken: false`: the Pod has no Kubernetes credentials at all;
+- non-root (uid 65532), read-only root filesystem, no privilege escalation, every capability
+  dropped, the `RuntimeDefault` seccomp profile, no service links, and an `emptyDir` for its work;
+- CPU and memory limits (`render.resources.limits`, default 1 CPU and 512Mi) and an
+  `activeDeadlineSeconds` (`render.timeout`, default 5m). A render that runs out of memory fails
+  with `the render ran out of memory (512Mi) and was stopped`; one that runs out of time is
+  deleted with its Pod;
+- `render.networkPolicy.enabled` adds, in each namespace of `render.networkPolicy.namespaces`, a
+  NetworkPolicy that lets the render Pods reach DNS and the git hosts of
+  `render.networkPolicy.gitEgress` only (needs a CNI that enforces NetworkPolicy).
+
+The result comes back through the Pod's termination message, which the RenderRun reconciler
+copies to `status.result`. A finished RenderRun never runs again; a RenderRun is never run in the
+controller's own namespace.
 
 The rendered commit's message ends with:
 
@@ -124,9 +163,14 @@ Kardinal-Bundle: my-app-v1-29-0
 
 - A Bundle with `configRef.commitSHA` (a config or mixed Bundle, or an image Bundle that pins its
   DRY commit) renders that commit. `configRef.gitRepo` must be empty or the Pipeline's repository.
-- A rollback Bundle renders the DRY commit its target was rendered from in this environment. It
-  is found from the `Kardinal-Bundle` and `Kardinal-Dry-Commit` trailers in the last 500 commits of
-  the rendered branch; if the target's render is not there, the step fails (pin the commit with
+- A rollback Bundle renders the DRY commit its target was rendered from in this environment. The
+  render Job looks through the last 500 commits of the rendered branch for a render kardinal made
+  of the target Bundle: a commit whose `Kardinal-Bundle` trailer names it and whose
+  `Kardinal-Dry-Commit` is a full 40-character commit id, and whose tree holds a render marker for
+  this Pipeline, environment, Bundle and DRY commit with every file it lists unchanged. Other
+  commits that name the Bundle are skipped. The DRY commit must also be on `spec.git.branch`: one
+  that is not (a commit on another branch, pushed by someone who can write to the rendered branch)
+  is refused. If no such render is there, the step fails (pin the commit with
   `configRef.commitSHA`). `kardinal rollback` therefore restores the old manifests, not the old
   image over today's DRY source.
 - Otherwise the head of `spec.git.branch` is rendered. The step records the commit in
@@ -134,29 +178,59 @@ Kardinal-Bundle: my-app-v1-29-0
 
 ### Determinism and limits
 
-kustomize (`sigs.k8s.io/kustomize/api`) and Helm (`helm.sh/helm/v4`) run inside the controller at
-the versions in its `go.mod`. The image ships no `kustomize` or `helm` binary, and a render never
-runs a command. kustomize runs with plugins disabled and load restrictions on. Remote resources
-(`https://...`, `github.com/...?ref=`), `helmCharts` in a kustomization, and symbolic links in the
-DRY source are refused. Limits: 64 MiB and 20,000 files of DRY source, 16 MiB and 5,000 objects
-of output, and 60 seconds per render. A render that cannot succeed (a kustomize or template error,
-a limit) fails the step without retries.
+kustomize (`sigs.k8s.io/kustomize/api`) and Helm (`helm.sh/helm/v4`) run inside the render Job, at
+the versions in `go.mod`; the image ships no `kustomize`, `helm` or `git` binary, and a render
+never runs a command. Before anything is rendered:
+
+- the whole DRY source is read into memory: a symbolic link anywhere in it is refused, and it may
+  hold at most 64 MiB and 20,000 files. The Helm chart is loaded from that copy (its
+  `.helmignore` applies), never from disk;
+- every value of every kustomization is checked, whatever the field: a remote reference (any
+  `://`, `git@...`, `?ref=`, `github.com/...`) is refused in `resources`, `components`, `bases`,
+  generator `files` and `envs`, patch paths, `openapi`, `crds`, `replacements` and every other field
+  kustomize loads from. Only data fields may hold a URL: generator `literals`, `commonAnnotations`,
+  `commonLabels`, `labels[].pairs`, `metadata`, and inline patches. `helmCharts` is refused;
+- the objects a kustomization would produce are counted through its overlays and bases, so a
+  "diamond" of overlays that multiplies them is refused before kustomize builds it.
+
+While rendering, kustomize runs with plugins disabled and load restrictions on; Helm template
+functions are bounded: a function result over 16 MiB or a list over 100,000 items fails the
+render (a template that doubles a string in a loop stops there), and `repeat`, `indent`,
+`nindent`, `replace`, `until`, `untilStep` and `seq` are refused before they would build one.
+Objects are counted as they are produced: at most 5,000 objects and 16 MiB of output. The Job's
+memory limit and deadline bound everything else. A render that cannot succeed fails the step.
 
 ## Drift
 
-`.kardinal/rendered.yaml` records the DRY commit, the Bundle and the sha256 of every file the last
-render wrote. Before writing, `render-manifests` compares the branch with it. Drift is a file
-kardinal wrote that was edited or deleted, a file someone added where a new rendered file goes, or
-a branch with files but no marker (one kardinal did not write):
+`.kardinal/rendered.yaml` records the Pipeline, its namespace, the environment, the DRY commit,
+the Bundle and the sha256 of every file the last render wrote. Before writing, `render-manifests`
+compares the branch with it:
+
+- a rendered branch whose marker names another Pipeline, namespace or environment is refused for
+  good: `rendered branch env/prod is not this environment's: it was rendered for Pipeline
+  team-a/web environment prod; set render.branch to a branch of its own`. Two Pipelines (in any
+  namespace) that render to the same branch of one repository also get `Ready=False` with reason
+  `RenderedBranchConflict` on the newer one, before a Bundle reaches it;
+- drift is a file kardinal wrote that was edited or deleted, any YAML or JSON file anywhere on the
+  branch that kardinal did not write (Argo CD or Flux would apply it with the render), or a branch
+  with files but no marker (one kardinal did not write);
+- the marker itself is anchored: the RenderRun passes the render Job the marker digests of the
+  environment's last 20 successful renders (`status.knownMarkerDigests`), and a marker that is not
+  one of them is drift, so a push that edits a file and rewrites the marker to match is caught
+  too. An environment whose earlier RenderRuns are gone (their Bundles were deleted) has none, and
+  its branch's marker is used as it is.
+
+What happens on drift:
 
 - `render.onDrift: fail` (default) fails the step with
   `rendered branch env/prod was changed outside kardinal: <file> changed`, and nothing is pushed.
   Restore the branch, or set `onDrift: overwrite`.
-- `render.onDrift: overwrite` renders over the change, and the step message and
-  `status.outputs.driftOverwritten` say what was overwritten.
+- `render.onDrift: overwrite` renders over the change and deletes every YAML or JSON file the
+  render does not produce; the RenderRun result and `status.outputs.driftOverwritten` say what was
+  overwritten.
 
-Files kardinal never wrote (a `CODEOWNERS`, a `README`) are not drift and are kept. Files the
-previous render wrote and this one does not are deleted.
+Other files (a `CODEOWNERS`, a `README.md`) are not drift and are kept. Files the previous render
+wrote and this one does not are deleted.
 
 ## Argo CD configuration
 
@@ -186,7 +260,7 @@ default). With Flux, point a `GitRepository` at `env/prod` and a `Kustomization`
 ## Branch protection
 
 Protect `env/*`: require pull request reviews (CODEOWNERS), and allow direct pushes only from the
-kardinal token for `approval: auto` environments. kardinal never bypasses branch protection; a
+Pipeline's git token (`spec.git.secretRef`, which the render Job pushes with) for `approval: auto` environments. kardinal never bypasses branch protection; a
 promotion PR waits for the review and the merge like any other.
 
 ## Comparison: directory layout vs branch layout
@@ -199,6 +273,7 @@ promotion PR waits for the review and the merge like any other.
 | CODEOWNERS granularity | Overlay directory | Individual rendered files |
 | Git history | All environments on one branch | Each environment has its own history, with DRY commit trailers |
 | Rollback | Restores the old image over the current source | Re-renders the old DRY commit |
+| Where templates run | In the GitOps agent | In a sandboxed render Job per promotion |
 | Complexity | Lower | Higher |
 
 ## Anti-pattern: do not use `targetRevision` updates

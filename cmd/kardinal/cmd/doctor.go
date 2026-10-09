@@ -55,7 +55,7 @@ const kroMinVersion = "0.10.0-rc.0"
 // needs (config/crd/bases; TestKardinalResources_MatchCRDs keeps them equal).
 var kardinalResources = []string{
 	"auditevents", "bundles", "changewindows", "hookruns", "metricchecks", "notificationhooks",
-	"pipelines", "policygates", "promotionsteps", "prstatuses",
+	"pipelines", "policygates", "promotionsteps", "prstatuses", "renderruns",
 	"rollbackpolicies", "scheduleclocks", "subscriptions",
 }
 

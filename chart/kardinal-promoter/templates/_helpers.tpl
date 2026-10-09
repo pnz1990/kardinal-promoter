@@ -216,3 +216,10 @@ addresses; the UI and webhook servers listen on their Service ports.
 {{- $_ = set $ports "webhook" (toString .Values.service.webhookPort) -}}
 {{- toJson $ports -}}
 {{- end }}
+
+{{/*
+The kardinal-render image of the render Jobs (layout: branch).
+*/}}
+{{- define "kardinal-promoter.renderImage" -}}
+{{ .Values.render.image.repository }}:{{ .Values.render.image.tag | default .Chart.AppVersion }}
+{{- end }}

@@ -39,6 +39,7 @@ defaults:
 env:
   GOTOOLCHAIN: local
   KARDINAL_E2E_IMAGE: ghcr.io/pnz1990/kardinal-promoter/controller:e2e
+  KARDINAL_E2E_RENDER_IMAGE: ghcr.io/pnz1990/kardinal-promoter/render:e2e
 
 jobs:
   image:
@@ -57,7 +58,8 @@ jobs:
       - name: Build the controller image from this commit
         run: |
           docker build -t "$KARDINAL_E2E_IMAGE" .
-          docker save "$KARDINAL_E2E_IMAGE" | gzip > controller-image.tar.gz
+          docker build -t "$KARDINAL_E2E_RENDER_IMAGE" -f render.Dockerfile .
+          docker save "$KARDINAL_E2E_IMAGE" "$KARDINAL_E2E_RENDER_IMAGE" | gzip > controller-image.tar.gz
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: controller-image

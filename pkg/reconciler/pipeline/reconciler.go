@@ -102,6 +102,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	desired := r.validate(&p)
+	if desired.Status == metav1.ConditionTrue {
+		conflict, err := r.renderedBranchConflict(ctx, &p)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if conflict != "" {
+			desired = metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonRenderedBranchConflict,
+				Message: conflict, ObservedGeneration: p.Generation}
+		}
+	}
 
 	// Derive status.phase from Bundle phases and PromotionStep states.
 	// This is a Watch-node pattern: we read Bundle and PromotionStep CRD status
@@ -423,6 +433,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Pipeline{}).
+		// A Pipeline that renders to a branch of the same repository may
+		// clear or cause a rendered branch conflict.
+		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelinesSharingRepo)).
 		// Deleting the freeze gate by hand while the pipeline is paused, or
 		// removing a user gate that has its name, re-enqueues the Pipeline.
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(pipelineForFreezeGate)).

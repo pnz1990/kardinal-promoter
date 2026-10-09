@@ -233,7 +233,6 @@ func buildHookNodes(in hookNodesInput) (hookNodes, error) {
 			prevID = id
 		}
 	}
-	out.nodes = append(out.nodes, buildLiveMirrorNode(in.env.Name, in.stepK8sName))
 	return out, nil
 }
 
@@ -282,19 +281,26 @@ func buildHookRunNode(id, name string, in hookNodesInput, phase string,
 	}, nil
 }
 
-// buildLiveMirrorNode builds the patch node that writes env's HookRun results
-// onto its PromotionStep (spec.live.hooks).
-func buildLiveMirrorNode(env, stepK8sName string) GraphNode {
-	hooks := fmt.Sprintf(`${%s.filter(h, h.spec.environment == %s).map(h, {"name": h.metadata.name, "hook": h.spec.hook, `+
-		`"phase": h.spec.phase, "result": h.?status.?phase.orValue("Pending"), "message": h.?status.?message.orValue("")})}`,
-		refHookRunsNodeID, strconv.Quote(env))
+// buildLiveMirrorNode builds the patch node that writes env's HookRun
+// results (spec.live.hooks) and RenderRun (spec.live.renders) onto its
+// PromotionStep.
+func buildLiveMirrorNode(env, stepK8sName string, withHooks, withRenders bool) GraphNode {
+	live := map[string]interface{}{}
+	if withHooks {
+		live["hooks"] = fmt.Sprintf(`${%s.filter(h, h.spec.environment == %s).map(h, {"name": h.metadata.name, "hook": h.spec.hook, `+
+			`"phase": h.spec.phase, "result": h.?status.?phase.orValue("Pending"), "message": h.?status.?message.orValue("")})}`,
+			refHookRunsNodeID, strconv.Quote(env))
+	}
+	if withRenders {
+		live["renders"] = liveRendersExpr(env)
+	}
 	return GraphNode{
 		ID: liveNodeID(env),
 		Patch: map[string]interface{}{
 			"apiVersion": "kardinal.io/v1alpha1",
 			"kind":       "PromotionStep",
 			"metadata":   map[string]interface{}{"name": stepK8sName},
-			"spec":       map[string]interface{}{"live": map[string]interface{}{"hooks": hooks}},
+			"spec":       map[string]interface{}{"live": live},
 		},
 	}
 }
@@ -316,6 +322,12 @@ func hookRefNodes(pipeline, bundle, namespace string) []GraphNode {
 		}}
 	}
 	return []GraphNode{ref(refHookRunsNodeID, "HookRun"), ref(refStepsNodeID, "PromotionStep")}
+}
+
+// stepsRefNode is the selector ref that reads the Bundle's PromotionSteps
+// back (refSteps), for a Graph that renders but has no hooks.
+func stepsRefNode(pipeline, bundle, namespace string) GraphNode {
+	return hookRefNodes(pipeline, bundle, namespace)[1]
 }
 
 // literalStrings returns v with every string that contains "${" replaced by

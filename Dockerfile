@@ -53,8 +53,9 @@ RUN apk add --no-cache ca-certificates && \
     adduser -D -u 65532 nonroot
 
 # ── Stage 4: runtime ──────────────────────────────────────────────────────────
-# The controller runs git through go-git and renders kustomize and Helm in
-# process: it needs no binaries besides its own.
+# The controller runs git through go-git: it needs no binaries besides its
+# own. layout: branch renders run in the kardinal-render image
+# (render.Dockerfile), never in the controller.
 FROM alpine:3.24
 
 COPY --from=runtime-files /etc/ssl/certs/ /etc/ssl/certs/

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -94,7 +95,7 @@ func cloneRendered(ctx context.Context, state *parentsteps.StepState) (parentste
 
 	// 2. The DRY source.
 	dryDir := parentsteps.DrySourceDir(state.WorkDir)
-	commit, err := dryCommitToRender(ctx, state)
+	commit, rollback, err := dryCommitToRender(ctx, state)
 	if err != nil {
 		return fail(err.Error(), err)
 	}
@@ -106,6 +107,25 @@ func cloneRendered(ctx context.Context, state *parentsteps.StepState) (parentste
 	if err != nil {
 		msg := "DRY source: " + scm.RedactText(err.Error())
 		return fail(msg, errors.New(msg))
+	}
+	if rollback {
+		// A commit named in a rendered branch's history is only a claim:
+		// render it only if it is part of the DRY source branch, so a push
+		// to the rendered branch cannot make a rollback render any commit.
+		ac, ok := state.GitClient.(scm.AncestryChecker)
+		if !ok {
+			err := parentsteps.Permanent(errors.New("layout: branch rollback needs a git client that can walk history"))
+			return fail(err.Error(), err)
+		}
+		reachable, err := ac.ReachableFrom(ctx, dryDir, commit, state.Git.SourceBranch)
+		if err != nil {
+			return fail("DRY source: "+scm.RedactText(err.Error()), err)
+		}
+		if !reachable {
+			err := parentsteps.Permanent(fmt.Errorf("rollback to %s: its DRY commit %s is not on %s, so it is not rendered",
+				state.Bundle.Provenance.RollbackOf, commit, state.Git.SourceBranch))
+			return fail(err.Error(), err)
+		}
 	}
 	head, err := hr.HeadCommit(ctx, dryDir)
 	if err != nil {
@@ -128,8 +148,8 @@ func createRenderedBranch(ctx context.Context, state *parentsteps.StepState) err
 		return fmt.Errorf("open rendered branch checkout: %w", err)
 	}
 	defer func() { _ = root.Close() }()
-	if err := writeMarker(root, renderMarker{Pipeline: state.PipelineName, Environment: state.Environment.Name,
-		Files: map[string]string{}}); err != nil {
+	if err := writeMarker(root, renderMarker{Pipeline: state.PipelineName, Namespace: renderNamespace(state),
+		Environment: state.Environment.Name, Files: map[string]string{}}); err != nil {
 		return err
 	}
 	msg := fmt.Sprintf("[kardinal] Create rendered branch %s\n\nPipeline: %s\nEnvironment: %s",
@@ -144,38 +164,96 @@ func createRenderedBranch(ctx context.Context, state *parentsteps.StepState) err
 	return nil
 }
 
+// dryCommitRE is a full git commit id. A rollback trusts only a full id in a
+// rendered commit's trailer: a short one could name another commit.
+var dryCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// maxRenderedCommitBytes bounds the files read from one rendered commit
+// while a rollback looks for the render it restores.
+const maxRenderedCommitBytes = 64 << 20
+
 // dryCommitToRender is the DRY commit to check out, or "" for the head of the
-// source branch:
+// source branch, and whether it is a rollback's (which the caller must find
+// on the source branch):
 //   - the Bundle's configRef.commitSHA (a config or mixed Bundle, or an image
 //     Bundle that pins its DRY commit);
-//   - for a rollback Bundle without one, the DRY commit that the render of
-//     the restored Bundle (provenance.rollbackOf) recorded in its commit
-//     trailers on the rendered branch. A rollback whose render is not in the
-//     history fails rather than render other DRY content.
-func dryCommitToRender(ctx context.Context, state *parentsteps.StepState) (string, error) {
+//   - for a rollback Bundle without one, the DRY commit of the render of the
+//     restored Bundle (provenance.rollbackOf) on the rendered branch. Only a
+//     render kardinal made counts (trustedRender): a commit whose
+//     Kardinal-Bundle trailer names the Bundle, whose Kardinal-Dry-Commit is
+//     a full commit id, and whose tree holds a render marker for this
+//     Pipeline environment, that Bundle and that DRY commit, with every file
+//     it lists unchanged. A rollback whose render is not in the history fails
+//     rather than render other DRY content.
+func dryCommitToRender(ctx context.Context, state *parentsteps.StepState) (string, bool, error) {
 	if ref := state.Bundle.ConfigRef; ref != nil && ref.CommitSHA != "" {
-		return ref.CommitSHA, nil
+		return ref.CommitSHA, false, nil
 	}
 	prov := state.Bundle.Provenance
 	if prov == nil || prov.RollbackOf == "" {
-		return "", nil
+		return "", false, nil
 	}
-	hr, ok := state.GitClient.(scm.HistoryReader)
-	if !ok {
-		return "", parentsteps.Permanent(errors.New("layout: branch rollback needs a git client that can read history"))
+	hr, okHR := state.GitClient.(scm.HistoryReader)
+	tr, okTR := state.GitClient.(scm.TreeReader)
+	if !okHR || !okTR {
+		return "", false, parentsteps.Permanent(errors.New("layout: branch rollback needs a git client that can read history"))
 	}
 	commits, err := hr.CommitMessages(ctx, state.WorkDir, rollbackHistoryDepth)
 	if err != nil {
-		return "", fmt.Errorf("read the history of %s: %w", state.Git.Branch, err)
+		return "", false, fmt.Errorf("read the history of %s: %w", state.Git.Branch, err)
 	}
+	var refused []string
 	for _, c := range commits {
 		t := trailers(c.Message)
-		if t[trailerBundle] == prov.RollbackOf && t[trailerDryCommit] != "" {
-			return t[trailerDryCommit], nil
+		if t[trailerBundle] != prov.RollbackOf {
+			continue
+		}
+		dry := t[trailerDryCommit]
+		if why := trustedRender(ctx, tr, state, c.SHA, prov.RollbackOf, dry); why != "" {
+			refused = append(refused, shortSHA(c.SHA)+": "+why)
+			continue
+		}
+		return dry, true, nil
+	}
+	msg := fmt.Sprintf("rollback to %s: no render of it in the last %d commits of %s, so its DRY commit is unknown; "+
+		"pin it with configRef.commitSHA", prov.RollbackOf, rollbackHistoryDepth, state.Git.Branch)
+	if len(refused) > 0 {
+		msg += " (commits that name it but are not a render kardinal made: " + strings.Join(firstN(refused, 3), "; ") + ")"
+	}
+	return "", false, parentsteps.Permanent(errors.New(msg))
+}
+
+// trustedRender returns "" when rendered commit sha is a render kardinal
+// made of bundle from DRY commit dry for this Pipeline environment, or why
+// not.
+func trustedRender(ctx context.Context, tr scm.TreeReader, state *parentsteps.StepState, sha, bundle, dry string) string {
+	if !dryCommitRE.MatchString(dry) {
+		return fmt.Sprintf("%s %q is not a full commit id", trailerDryCommit, dry)
+	}
+	files, err := tr.CommitFiles(ctx, state.WorkDir, sha, maxRenderedCommitBytes)
+	if err != nil {
+		return err.Error()
+	}
+	raw, ok := files[renderMarkerPath]
+	if !ok {
+		return "no " + renderMarkerPath
+	}
+	m, err := parseMarker(raw)
+	if err != nil {
+		return err.Error()
+	}
+	if why := markerOwner(m, state); why != "" {
+		return why
+	}
+	if m.Bundle != bundle || m.DryCommit != dry {
+		return fmt.Sprintf("its marker records Bundle %q and DRY commit %q", m.Bundle, m.DryCommit)
+	}
+	for p, want := range m.Files {
+		if got, ok := files[p]; !ok || digest(got) != want {
+			return p + " does not match the marker"
 		}
 	}
-	return "", parentsteps.Permanent(fmt.Errorf("rollback to %s: no render of it in the last %d commits of %s, "+
-		"so its DRY commit is unknown; pin it with configRef.commitSHA", prov.RollbackOf, rollbackHistoryDepth, state.Git.Branch))
+	return ""
 }
 
 // trailers parses "Key: value" lines of a commit message's last paragraph.

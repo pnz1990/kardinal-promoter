@@ -274,6 +274,29 @@ securityContext:
 
 These defaults comply with the Kubernetes `restricted` pod security standard.
 
+### Render Jobs (layout: branch)
+
+A `layout: branch` environment renders kustomize overlays and Helm charts written by whoever can
+push to the DRY source: untrusted input. kardinal never renders in the controller. Each render is
+a RenderRun Job in the Pipeline's namespace ([Rendered Manifests](../rendered-manifests.md#the-render-job)),
+which also meets the `restricted` standard:
+
+- no Kubernetes credentials: `automountServiceAccountToken: false`, and its ServiceAccount
+  (`kardinal-render`, created by the controller in the namespace) has no token and no role. A
+  render that escaped the renderer still could not call the API server as anyone;
+- git access only through the Pipeline's own git Secret (`spec.git.secretRef`, the `token` key
+  only), which belongs to the tenant; the controller's SCM token is never in the Pod;
+- non-root, read-only root filesystem, no privilege escalation, every capability dropped,
+  `RuntimeDefault` seccomp, no service links;
+- CPU, memory and time limits (`render.resources.limits`, `render.timeout`): a template or overlay
+  that explodes is stopped by the kernel or the Job deadline, not by the controller's memory;
+- optionally (`render.networkPolicy`), egress to DNS and the git host only: no cloud metadata
+  endpoint, no Kubernetes API, no other Service.
+
+Inside the Job the renderer refuses remote references in any kustomization field, symbolic links
+anywhere in the DRY source, overlay diamonds past the object limit, oversized Helm template values
+and nondeterministic Helm functions; see [Determinism and limits](../rendered-manifests.md#determinism-and-limits).
+
 ---
 
 ## Audit Logging
