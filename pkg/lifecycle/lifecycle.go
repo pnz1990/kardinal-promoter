@@ -134,8 +134,38 @@ func CurrentBundle(bundles []v1alpha1.Bundle) *v1alpha1.Bundle {
 	return current
 }
 
-func createdAt(b *v1alpha1.Bundle) (time.Time, bool) {
-	s, ok := b.Annotations[AnnotationCreatedAt]
+// CompareAuditEvents orders two AuditEvents by when they happened: negative
+// when a happened before b. spec.timestamp has one-second resolution once
+// stored, so within a second the writers' kardinal.io/created-at annotation
+// (RFC3339Nano) decides, then the name. A gate that flips twice in one second
+// thus lists its records in the order of the flips (#1484).
+func CompareAuditEvents(a, b *v1alpha1.AuditEvent) int {
+	if c := a.Spec.Timestamp.Compare(b.Spec.Timestamp.Time); c != 0 {
+		return c
+	}
+	ta, okA := createdAtOf(a)
+	tb, okB := createdAtOf(b)
+	switch {
+	case okA && okB:
+		if c := ta.Compare(tb); c != 0 {
+			return c
+		}
+	case okA != okB:
+		// A record without the annotation was written by an older
+		// controller, before the ones that carry it.
+		if okA {
+			return 1
+		}
+		return -1
+	}
+	return strings.Compare(a.Name, b.Name)
+}
+
+func createdAt(b *v1alpha1.Bundle) (time.Time, bool) { return createdAtOf(b) }
+
+// createdAtOf parses obj's kardinal.io/created-at annotation.
+func createdAtOf(obj metav1.Object) (time.Time, bool) {
+	s, ok := obj.GetAnnotations()[AnnotationCreatedAt]
 	if !ok {
 		return time.Time{}, false
 	}
