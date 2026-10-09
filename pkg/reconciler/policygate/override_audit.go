@@ -49,41 +49,83 @@ func overrideKey(o kardinalv1alpha1.PolicyGateOverride) string {
 // append-only AuditEvent, from its own spec.
 func (r *Reconciler) auditOverrides(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) error {
 	var added []string
+	// An override is verified when the controller was already checking this
+	// gate (overridesVerifiedSince set) before it first saw the override: it
+	// was then created under the identity admission policy.
+	verified := gate.Status.OverridesVerifiedSince != nil
 	for _, o := range gate.Spec.Overrides {
 		key := overrideKey(o)
-		if slices.Contains(gate.Status.ObservedOverrides, key) || slices.Contains(added, key) {
+		if observed(gate, key) || slices.Contains(added, key) || slices.Contains(added, key+unverifiedSuffix) {
 			continue
 		}
-		if err := r.writeOverrideAuditEvent(ctx, gate, o, key); err != nil {
+		if err := r.writeOverrideAuditEvent(ctx, gate, o, key, verified); err != nil {
 			zerolog.Ctx(ctx).Warn().Err(err).Str("gate", gate.Name).Str("override", key).
 				Msg("failed to write the GateOverridden AuditEvent; retrying on the next reconcile")
 			continue
 		}
+		if !verified {
+			key += unverifiedSuffix
+		}
 		added = append(added, key)
 	}
-	if len(added) == 0 {
+	// A gate evaluated before (an upgrade) gets its verifiedSince stamp now,
+	// once; a new gate gets it with its first evaluation (patchStatus).
+	if len(added) == 0 && (gate.Status.OverridesVerifiedSince != nil || gate.Status.LastEvaluatedAt == nil) {
 		return nil
 	}
 	patch := client.MergeFrom(gate.DeepCopy())
 	gate.Status.ObservedOverrides = append(gate.Status.ObservedOverrides, added...)
+	stampVerifiedSince(gate, r.now())
 	if err := r.Status().Patch(ctx, gate, patch); err != nil {
 		return fmt.Errorf("record observed overrides: %w", err)
 	}
 	return nil
 }
 
+// unverifiedSuffix marks a status.observedOverrides key whose override was
+// already on the gate when the controller first checked it (an upgrade).
+const unverifiedSuffix = ":unverified"
+
+func observed(gate *kardinalv1alpha1.PolicyGate, key string) bool {
+	return slices.Contains(gate.Status.ObservedOverrides, key) ||
+		slices.Contains(gate.Status.ObservedOverrides, key+unverifiedSuffix)
+}
+
+// overrideVerified reports whether the chart's admission policy checked o's
+// createdBy: the controller first saw o on a gate it was already checking
+// (status.observedOverrides without the unverified mark). An override not
+// observed yet counts as verified once the gate has overridesVerifiedSince.
+func overrideVerified(gate *kardinalv1alpha1.PolicyGate, o kardinalv1alpha1.PolicyGateOverride) bool {
+	key := overrideKey(o)
+	switch {
+	case slices.Contains(gate.Status.ObservedOverrides, key):
+		return true
+	case slices.Contains(gate.Status.ObservedOverrides, key+unverifiedSuffix):
+		return false
+	}
+	return gate.Status.OverridesVerifiedSince != nil
+}
+
+// stampVerifiedSince sets status.overridesVerifiedSince to now the first
+// time, in memory; the caller's status patch writes it.
+func stampVerifiedSince(gate *kardinalv1alpha1.PolicyGate, now time.Time) {
+	if gate.Status.OverridesVerifiedSince == nil {
+		t := metav1.NewTime(now)
+		gate.Status.OverridesVerifiedSince = &t
+	}
+}
+
 // writeOverrideAuditEvent creates the GateOverridden AuditEvent of override o
-// of gate. AlreadyExists is success: an earlier attempt wrote it.
+// of gate. Its timestamp is when the controller first saw the override, not
+// the createdAt the writer supplied. AlreadyExists is success: an earlier
+// attempt wrote it.
 func (r *Reconciler) writeOverrideAuditEvent(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
-	o kardinalv1alpha1.PolicyGateOverride, key string) error {
+	o kardinalv1alpha1.PolicyGateOverride, key string, verified bool) error {
 	labels := gate.GetLabels()
 	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" {
 		return nil // not a gate instance a Graph created: nothing to attribute the record to
 	}
 	at := metav1.NewTime(r.now())
-	if o.CreatedAt != nil {
-		at = *o.CreatedAt
-	}
 	stage := o.Stage
 	if stage == "" {
 		stage = "every stage"
@@ -91,6 +133,9 @@ func (r *Reconciler) writeOverrideAuditEvent(ctx context.Context, gate *kardinal
 	by := o.CreatedBy
 	if by == "" {
 		by = "(unknown)"
+	}
+	if !verified {
+		by += " (unverified: recorded before kardinal checked override identity)"
 	}
 	suffix := "-override-" + key
 	base := gate.Name

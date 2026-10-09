@@ -135,10 +135,18 @@ type PolicyGateStatus struct {
 
 	// ObservedOverrides lists a key for each spec.overrides entry the
 	// controller has recorded with a GateOverridden AuditEvent, so each
-	// override is audited once.
+	// override is audited once. A key ending in ":unverified" is an override
+	// that was already there when the controller started checking this gate.
 	// +optional
 	// +listType=set
 	ObservedOverrides []string `json:"observedOverrides,omitempty"`
+
+	// OverridesVerifiedSince is when the controller first reconciled this
+	// gate with override identity checks (the chart's admission policy).
+	// Overrides already on the gate then were not checked: their createdBy is
+	// shown as unverified.
+	// +optional
+	OverridesVerifiedSince *metav1.Time `json:"overridesVerifiedSince,omitempty"`
 }
 
 // +kubebuilder:object:root=true

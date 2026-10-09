@@ -207,8 +207,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// This check is done before building the CEL context for performance.
 	now := r.now()
 	if activeOverride := findActiveOverride(gate.Spec.Overrides, gate.Labels[labelEnvironment], now); activeOverride != nil {
+		by := activeOverride.CreatedBy
+		if !overrideVerified(&gate, *activeOverride) {
+			by += " (unverified)"
+		}
 		overrideReason := fmt.Sprintf("OVERRIDDEN by %s: %s (expires %s)",
-			activeOverride.CreatedBy,
+			by,
 			activeOverride.Reason,
 			activeOverride.ExpiresAt.UTC().Format("2006-01-02T15:04Z"))
 		log.Info().Str("reason", overrideReason).Msg("policygate override active, passing")
@@ -972,6 +976,7 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 	gate.Status.Ready = ready
 	gate.Status.Reason = reason
 	gate.Status.LastEvaluatedAt = &now
+	stampVerifiedSince(gate, now.Time)
 	// The Ready condition's lastTransitionTime moves only when the gate flips,
 	// unlike lastEvaluatedAt, so it identifies one blocking episode. The
 	// NotificationHook reconciler keys PolicyGate.Blocked on it.

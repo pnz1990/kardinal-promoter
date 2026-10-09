@@ -90,9 +90,17 @@ func TestPolicyGateReconciler_ReasonWithoutMessageUnchanged(t *testing.T) {
 	assert.NotContains(t, got.Status.Reason, msg, "context error")
 
 	overridden := gate("false", msg)
+	since := metav1.NewTime(time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC))
+	overridden.Status.OverridesVerifiedSince = &since
 	overridden.Spec.Overrides = []kardinalv1alpha1.PolicyGateOverride{{
 		Reason: "hotfix", ExpiresAt: metav1.NewTime(time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)), CreatedBy: "alice",
 	}}
 	got = evaluateGate(t, overridden, bundle())
 	assert.True(t, strings.HasPrefix(got.Status.Reason, "OVERRIDDEN by alice: hotfix"), got.Status.Reason)
+
+	// An override the controller found already there (an upgrade) is not
+	// presented as verified.
+	overridden.Status.OverridesVerifiedSince = nil
+	got = evaluateGate(t, overridden, bundle())
+	assert.True(t, strings.HasPrefix(got.Status.Reason, "OVERRIDDEN by alice (unverified): hotfix"), got.Status.Reason)
 }

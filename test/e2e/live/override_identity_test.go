@@ -39,8 +39,9 @@ func overriddenAudits(t *testing.T, e *framework.Env, ns, bundle string) []v1alp
 // no second one however often the gate is re-evaluated. The chart's
 // gate-overrides policy refuses, for a real user (impersonated, with patch
 // on PolicyGates): an override in someone else's name, editing another
-// user's override, and changing the instance's expression or labels; even the
-// test's cluster admin cannot change the expression of a gate instance.
+// user's override, changing the instance's expression, message or labels,
+// and creating a gate instance by hand; even the test's cluster admin cannot
+// change the expression of a gate instance.
 //
 // Covers GATE-OVERRIDE-ID-01, GATE-OVERRIDE-ID-02.
 func TestGate_OverrideIdentity(t *testing.T) {
@@ -54,7 +55,7 @@ func TestGate_OverrideIdentity(t *testing.T) {
 	gate := e.WaitGateReady(t, a.ns, bundle, "prod", "hold", false, "= false", gateTimeout)
 
 	// The policy, for a real user who may patch PolicyGates.
-	mallory := impersonating(t, e, a.ns, "mallory@example.com", nil, []string{"policygates"}, "get", "patch", "update")
+	mallory := impersonating(t, e, a.ns, "mallory@example.com", nil, []string{"policygates"}, "get", "create", "patch", "update")
 	forge := func(overrides []v1alpha1.PolicyGateOverride) error {
 		raw, err := json.Marshal(map[string]any{"spec": map[string]any{"overrides": overrides}})
 		require.NoError(t, err)
@@ -69,8 +70,19 @@ func TestGate_OverrideIdentity(t *testing.T) {
 	assert.Contains(t, err.Error(), "only kardinal changes the expression, skipPermission or labels of a gate instance")
 	err = mallory.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"labels":{"kardinal.io/environment":"test"}}}`)))
 	require.Error(t, err, "relabelling an instance is refused")
+	err = mallory.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"spec":{"message":"x"}}`)))
+	require.Error(t, err, "changing anything but overrides on an instance is refused")
 	err = e.Client.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"spec":{"expression":"true"}}`)))
 	require.Error(t, err, "even a cluster admin cannot change a gate instance's expression")
+	// Nor can a forged instance be created ahead of kro.
+	forgedInstance := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "forged-instance", Namespace: a.ns, Labels: map[string]string{
+			"kardinal.io/bundle": bundle, "kardinal.io/environment": "prod", "kardinal.io/pipeline": pipelineName}},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "true"},
+	}
+	err = mallory.Create(ctx, forgedInstance)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only kardinal creates a gate instance")
 	e.NoStep(t, a.ns, pipelineName, bundle, "prod", 5*time.Second)
 
 	// kardinal override records the authenticated user.

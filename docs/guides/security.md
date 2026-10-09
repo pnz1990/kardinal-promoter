@@ -670,7 +670,7 @@ chart installs a `ValidatingAdmissionPolicy` with a `Deny` binding, per release:
 | Policy | Checks |
 |---|---|
 | `<release>-bundle-rejection` | A Bundle's new `spec.rejected.by` ([`kardinal reject`](../rollback.md#reject-a-bundle)) equals the requesting user's `request.userInfo.username`. A rejection already set is immutable (CRD rule), so it is checked only when it is first written. |
-| `<release>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../policy-gates.md#emergency-overrides-k-09)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. On a gate instance (label `kardinal.io/bundle`), only the namespace's Graph ServiceAccount (kro) and the controller may change `spec.expression`, `spec.skipPermission` or the labels. |
+| `<release>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../policy-gates.md#emergency-overrides-k-09)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. Only the namespace's Graph ServiceAccount (kro) and the controller may create a gate instance (label `kardinal.io/bundle`) or change anything in it but `spec.overrides`, labels included. In namespace mode (`controller.watchNamespace`) it applies to the watched namespace only. |
 
 The checks exist only where the chart's policies are installed: the CRDs do not check the
 names. Installing the CRDs alone (`kubectl apply -f config/crd/bases`) or deleting a policy

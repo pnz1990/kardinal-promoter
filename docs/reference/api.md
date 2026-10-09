@@ -444,7 +444,8 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is when the gate's result was last written. The controller re-evaluates more often, but writes the status only when the result or reason changes, when a PromotionStep that has not started needs a newer result, after a spec change, and otherwise at least every 10 minutes. |
-| `status.observedOverrides` | []string |  | ObservedOverrides lists a key for each spec.overrides entry the controller has recorded with a GateOverridden AuditEvent, so each override is audited once. |
+| `status.observedOverrides` | []string |  | ObservedOverrides lists a key for each spec.overrides entry the controller has recorded with a GateOverridden AuditEvent, so each override is audited once. A key ending in ":unverified" is an override that was already there when the controller started checking this gate. |
+| `status.overridesVerifiedSince` | string (date-time) |  | OverridesVerifiedSince is when the controller first reconciled this gate with override identity checks (the chart's admission policy). Overrides already on the gate then were not checked: their createdBy is shown as unverified. |
 | `status.ready` | boolean | yes | Ready indicates whether the gate is currently allowing promotion. The kro Graph gates downstream nodes on status.ready == true. Default: `false`. |
 | `status.reason` | string |  | Reason explains the current ready state in human-readable form. |
 

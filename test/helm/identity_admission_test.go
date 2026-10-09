@@ -4,12 +4,16 @@
 package helm
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
 // identityAdmissionObjects is every admission object the chart renders for
@@ -164,6 +168,14 @@ func TestIdentityAdmission_GateOverrides(t *testing.T) {
 		}
 		return map[string]interface{}{"metadata": map[string]interface{}{"namespace": "team-a", "labels": labels}, "spec": spec}
 	}
+	withSpec := func(g map[string]interface{}, k string, v interface{}) map[string]interface{} {
+		g["spec"].(map[string]interface{})[k] = v
+		return g
+	}
+	unlabelled := func(g map[string]interface{}) map[string]interface{} {
+		delete(g["metadata"].(map[string]interface{})["labels"].(map[string]interface{}), "kardinal.io/bundle")
+		return g
+	}
 	relabel := gate("x", true)
 	relabel["metadata"].(map[string]interface{})["labels"].(map[string]interface{})["kardinal.io/bundle"] = "app-v2"
 	skip := gate("x", true)
@@ -185,6 +197,14 @@ func TestIdentityAdmission_GateOverrides(t *testing.T) {
 		{name: "removing an override", old: gate("x", true, override("bob")), cur: gate("x", true), user: "alice", want: true},
 		{name: "the controller for the UI", old: gate("x", true), cur: gate("x", true, override("kardinal-ui")), user: controller, want: true},
 		{name: "create with a forged override", cur: gate("x", true, override("bob")), user: "alice", want: false},
+		{name: "create a gate instance by hand", cur: gate("true", true), user: "alice", want: false},
+		{name: "create a gate instance by hand, as cluster admin", cur: gate("true", true), user: "kubernetes-admin", want: false},
+		{name: "kro creates a gate instance", cur: gate("x", true), user: graphSA, want: true},
+		{name: "the controller creates a gate instance", cur: gate("x", true), user: controller, want: true},
+		{name: "edit an instance's message", old: gate("x", true), cur: withSpec(gate("x", true), "message", "changed"), user: "alice", want: false},
+		{name: "edit an instance's recheckInterval", old: gate("x", true), cur: withSpec(gate("x", true), "recheckInterval", "1h"), user: "alice", want: false},
+		{name: "add a field to an instance's spec", old: gate("x", true), cur: withSpec(gate("x", true), "generated", true), user: "alice", want: false},
+		{name: "remove an instance's label", old: gate("x", true), cur: unlabelled(gate("x", true)), user: "alice", want: false},
 		{name: "create a template gate", cur: gate("x", false), user: "alice", want: true},
 		{name: "edit an instance's expression", old: gate("x", true), cur: gate("true", true), user: "alice", want: false},
 		{name: "relabel an instance", old: gate("x", true), cur: relabel, user: "alice", want: false},
@@ -227,5 +247,28 @@ func TestIdentityAdmission_GateOverridesNamespaceMode(t *testing.T) {
 		require.NotNil(t, binding.Spec.MatchResources)
 		require.NotNil(t, binding.Spec.MatchResources.NamespaceSelector)
 		assert.Equal(t, tc.want, binding.Spec.MatchResources.NamespaceSelector.MatchLabels)
+	}
+}
+
+// TestIdentityAdmission_GateInstanceFieldsComplete: the gate-overrides
+// policy compares every PolicyGate spec field but overrides, so a field added
+// to the API cannot be changed on a gate instance by hand unnoticed.
+func TestIdentityAdmission_GateInstanceFieldsComplete(t *testing.T) {
+	vap := identityPolicy(t, "gate-overrides")
+	var only string
+	for _, v := range vap.Spec.Variables {
+		if v.Name == "onlyOverrides" {
+			only = v.Expression
+		}
+	}
+	require.NotEmpty(t, only)
+	typ := reflect.TypeOf(v1alpha1.PolicyGateSpec{})
+	for i := 0; i < typ.NumField(); i++ {
+		name := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
+		if name == "overrides" {
+			assert.NotContains(t, only, "object.spec.overrides", "overrides may change")
+			continue
+		}
+		assert.Contains(t, only, "object.spec."+name+" == oldObject.spec."+name, "spec.%s must not change on a gate instance", name)
 	}
 }

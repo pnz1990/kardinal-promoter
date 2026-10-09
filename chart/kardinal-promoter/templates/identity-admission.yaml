@@ -10,6 +10,8 @@ name. Kubernetes 1.30+ serves admissionregistration.k8s.io/v1
 ValidatingAdmissionPolicy (the chart's kubeVersion).
 */}}
 {{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
+{{- /* PolicyGate spec fields a gate instance copies from its template (all but overrides). */}}
+{{- $instanceSpecFields := list "expression" "message" "recheckInterval" "skipPermission" "when" "selector" "generated" }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -71,10 +73,23 @@ spec:
       expression: >-
         request.userInfo.username == 'system:serviceaccount:' + object.metadata.namespace +
         ':' + {{ .Values.graph.serviceAccountName | squote }}
+    # A gate instance is what a Graph made from a gate template: it has, or
+    # had, the kardinal.io/bundle label.
     - name: instance
       expression: >-
-        oldObject != null && has(oldObject.metadata.labels) &&
-        'kardinal.io/bundle' in oldObject.metadata.labels
+        (has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels) ||
+        (oldObject != null && has(oldObject.metadata.labels) &&
+         'kardinal.io/bundle' in oldObject.metadata.labels)
+    # Everything in spec but overrides, and the labels, are unchanged.
+    - name: onlyOverrides
+      expression: >-
+        oldObject != null &&
+        {{- range $i, $f := $instanceSpecFields }}
+        {{ if $i }}&& {{ end }}has(object.spec.{{ $f }}) == has(oldObject.spec.{{ $f }}) &&
+        (!has(object.spec.{{ $f }}) || object.spec.{{ $f }} == oldObject.spec.{{ $f }})
+        {{- end }}
+        && has(object.metadata.labels) == has(oldObject.metadata.labels) &&
+        (!has(object.metadata.labels) || object.metadata.labels == oldObject.metadata.labels)
   validations:
     # kardinal override (spec.overrides[]) records who overrode the gate.
     # Every entry that is new, or changed, must name the requester.
@@ -87,19 +102,14 @@ spec:
         'every new spec.overrides entry must have createdBy "' + request.userInfo.username +
         '", your own username; kardinal override sets it for you'
       reason: Forbidden
-    # A gate instance (label kardinal.io/bundle) is what a Graph made from a
-    # gate template: only kro and the controller change what it evaluates.
-    # Overriding it is the audited way to pass it.
+    # Only kro and the controller create gate instances or change anything
+    # in them but spec.overrides: an instance decides a promotion, and
+    # overriding it is the audited way to pass it.
     - expression: >-
-        !variables.instance || variables.graph || variables.controller ||
-        (object.spec.expression == oldObject.spec.expression &&
-         (has(object.spec.skipPermission) && object.spec.skipPermission) ==
-           (has(oldObject.spec.skipPermission) && oldObject.spec.skipPermission) &&
-         has(object.metadata.labels) && object.metadata.labels == oldObject.metadata.labels)
+        !variables.instance || variables.graph || variables.controller || variables.onlyOverrides
       message: >-
-        only kardinal changes the expression, skipPermission or labels of a gate instance
-        (label kardinal.io/bundle); change the gate template, or record an override with
-        kardinal override
+        only kardinal creates a gate instance (label kardinal.io/bundle) or changes its spec
+        or labels; change the gate template, or record an override with kardinal override
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
