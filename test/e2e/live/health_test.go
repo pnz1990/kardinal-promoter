@@ -1320,7 +1320,7 @@ func TestHealth_ArgoStrategyRejectsConfigBundles(t *testing.T) {
 		assert.True(t, strings.HasSuffix(c.Message, fmt.Sprintf(`environment "prod" uses update.strategy argocd, which does not support %s Bundles: `+
 			"it sets only the image in the Argo CD Application and would skip the config change; use a git-based strategy "+
 			"(kustomize or helm) for that environment, or skip it with intent.skipEnvironments — fix the Pipeline, Bundle "+
-			"or PolicyGate it names; a Pipeline change retries this Bundle", typ)), c.Message)
+			"or PolicyGate it names; a change to the Pipeline or its PolicyGates retries this Bundle", typ)), c.Message)
 		var steps v1alpha1.PromotionStepList
 		require.NoError(t, e.Client.List(context.Background(), &steps, client.InNamespace(a.ns)))
 		assert.Empty(t, steps.Items, "%s Bundle: no environment started", typ)

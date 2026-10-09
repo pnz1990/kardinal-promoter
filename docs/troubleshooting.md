@@ -177,7 +177,7 @@ The Bundle was created but no Graph was generated. Check that `spec.pipeline` na
 kubectl get bundle <name> -o jsonpath='{.spec.pipeline}{"\n"}{range .status.conditions[*]}{.type} {.reason}: {.message}{"\n"}{end}'
 ```
 
-Reason `PipelineNotFound` means no such Pipeline exists. Reason `WaitingForSlot` means the Pipeline's `maxConcurrentPromotions` Bundles are already promoting; the Bundle starts when one of them finishes.
+Reason `PipelineNotFound` means no such Pipeline exists. Reason `WaitingForSlot` means the Pipeline's `maxConcurrentPromotions` Bundles are already promoting; the Bundle starts when one of them finishes. A `Failed` Bundle waits the same way before it recovers: see [spec.maxConcurrentPromotions](pipeline-reference.md#specmaxconcurrentpromotions).
 
 ### Symptom: Bundle is Failed with "skip denied"
 
@@ -187,7 +187,7 @@ The Bundle's `intent.skipEnvironments` lists an environment that an org gate app
 kubectl get bundle <name> -o jsonpath='{.status.conditions[*].message}'
 ```
 
-Either remove the environment from `intent.skipEnvironments`, or have the platform team create a skip-permission gate for it: a PolicyGate in an org policy namespace (`--policy-namespaces`, default `platform-policies`) labelled `kardinal.io/type: skip-permission` and `kardinal.io/applies-to: <env>`, with `spec.skipPermission: true`. A gate in the Pipeline's namespace or in `spec.policyNamespaces` cannot grant a skip. See [Skip Permissions](policy-gates.md#skip-permissions).
+Either remove the environment from `intent.skipEnvironments`, or have the platform team create a skip-permission gate for it (the Failed Bundle is then retried; it promotes unless a newer Bundle of the Pipeline is in flight or Verified): a PolicyGate in an org policy namespace (`--policy-namespaces`, default `platform-policies`) labelled `kardinal.io/type: skip-permission` and `kardinal.io/applies-to: <env>`, with `spec.skipPermission: true`. A gate in the Pipeline's namespace or in `spec.policyNamespaces` cannot grant a skip. See [Skip Permissions](policy-gates.md#skip-permissions).
 
 ## Git errors
 
@@ -482,10 +482,12 @@ failed step does not resume. Fix the token or the repository, then create a new 
 GitHub's API rate limit (5000 req/hr for authenticated requests) or GitLab's rate limit has been hit. The **SCM circuit breaker** (shipped in v0.7.0) handles this automatically.
 
 **How the circuit breaker works:**
-1. After 5 consecutive failures (429 or 5xx), the circuit opens and all SCM calls are blocked for a cooldown period
-2. The cooldown respects `X-RateLimit-Reset` and `Retry-After` response headers when present
-3. After the cooldown, one probe request is allowed (half-open state)
-4. On probe success, the circuit closes and normal operation resumes
+1. Each repository owner (GitHub user or org, GitLab top-level group, Bitbucket workspace, Azure DevOps organization) has its own circuit. After 5 consecutive failures (5xx or a network error) for that owner's repositories, its circuit opens and its SCM calls are blocked for a cooldown period. Calls for other owners go on
+2. An exhausted rate limit (`X-RateLimit-Remaining: 0` or `RateLimit-Remaining: 0`, a 429, or a 403 with `Retry-After`) belongs to the token, so it opens one shared circuit at once and every owner waits for the reset
+3. The cooldown respects `X-RateLimit-Reset`, `RateLimit-Reset` and `Retry-After` response headers when present
+4. After the cooldown, one probe request is allowed (half-open state)
+5. On probe success, the circuit closes and normal operation resumes
+6. A token rotation (a new value in the token Secret) keeps the circuits: the new token is first used by the probe
 
 **Checking circuit state in logs:**
 

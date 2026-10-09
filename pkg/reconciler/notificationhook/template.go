@@ -69,6 +69,10 @@ const maxFuncCalls = 2000
 // next one.
 const maxRenderTime = 20 * time.Millisecond
 
+// renderDeadline is maxRenderTime; tests that count calls raise it so a
+// slow (-race) run stops on the count, not the clock.
+var renderDeadline = maxRenderTime
+
 // maxDataField is the most bytes of each TemplateData field a template sees;
 // longer values (a long Message) are cut.
 const maxDataField = 4 << 10
@@ -533,7 +537,7 @@ func renderTemplate(t *template.Template, data *TemplateData, contentType string
 	buf := &limitedBuffer{max: maxRenderedBody, stopped: &budget.stopped}
 	// Execute runs here, not on another goroutine; the timer only sets the
 	// flag, and is stopped when Execute returns, so nothing is left running.
-	timer := time.AfterFunc(maxRenderTime, func() { budget.stopped.Store(true) })
+	timer := time.AfterFunc(renderDeadline, func() { budget.stopped.Store(true) })
 	err = rt.Execute(buf, truncatedData(data))
 	timer.Stop()
 	if err != nil {

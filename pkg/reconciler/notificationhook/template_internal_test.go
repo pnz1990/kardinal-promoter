@@ -129,6 +129,10 @@ func TestRenderTemplate_TruncatesData(t *testing.T) {
 // TestRenderTemplate_CountedBuiltins: the comparison, logic and indexing
 // builtins still work, and every call counts against maxFuncCalls.
 func TestRenderTemplate_CountedBuiltins(t *testing.T) {
+	// The count, not the 20 ms deadline, must stop the long bodies, also
+	// under -race; not parallel, so nothing else sees the raised deadline.
+	renderDeadline = 10 * time.Second
+	t.Cleanup(func() { renderDeadline = maxRenderTime })
 	data := &TemplateData{Event: "Bundle.Failed", Environment: "prod", Message: "abc"}
 	tests := []struct{ body, want, err string }{
 		{body: `{{if eq .Environment "prod"}}P{{end}}`, want: "P"},

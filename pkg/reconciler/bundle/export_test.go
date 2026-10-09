@@ -32,3 +32,11 @@ func (r *Reconciler) WaitingSiblings(ctx context.Context, obj client.Object) []r
 func (r *Reconciler) PipelineBundles(ctx context.Context, obj client.Object) []reconcile.Request {
 	return r.pipelineBundles(ctx, obj)
 }
+
+// GateTemplateChanged exposes the PolicyGate watch predicate.
+var GateTemplateChanged = gateTemplateChanged
+
+// GateBundles exposes the PolicyGate watch mapping.
+func (r *Reconciler) GateBundles(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.gateBundles(ctx, obj)
+}
