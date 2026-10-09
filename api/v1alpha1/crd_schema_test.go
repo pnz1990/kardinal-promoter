@@ -659,3 +659,15 @@ spec:
 		})
 	}
 }
+
+// TestBundleImagesBounded: a Bundle holds at most 100 images, each with a
+// repository of at most 512 characters, a tag of 128 (the OCI limit) and a
+// digest of 256, so what a PR template reads is bounded at admission.
+func TestBundleImagesBounded(t *testing.T) {
+	images := crdSchema(t, "kardinal.io_bundles.yaml", "spec", "images")
+	assert.EqualValues(t, 100, images["maxItems"])
+	for field, want := range map[string]int64{"repository": 512, "tag": 128, "digest": 256} {
+		f := crdSchema(t, "kardinal.io_bundles.yaml", "spec", "images", "[]", field)
+		assert.EqualValues(t, want, f["maxLength"], field)
+	}
+}

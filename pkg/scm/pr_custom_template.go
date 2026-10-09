@@ -196,30 +196,27 @@ func imageList(d PRTemplateData) string {
 // functions return the sections of the default body for body, rendered once
 // before the template (their size is known before a call). The text helpers
 // are tmplsafe.StringFuncs.
-func prTemplateFuncs(body PRBody, data PRTemplateData) (tmplsafe.FuncMap, error) {
+func prTemplateFuncs(body PRBody, data PRTemplateData) tmplsafe.FuncMap {
 	funcs := tmplsafe.StringFuncs()
-	funcs["imageList"] = tmplsafe.Const(imageList(data))
-	whole, err := RenderPRBody(body)
-	if err != nil {
-		return nil, err
-	}
-	funcs["evidence"] = tmplsafe.Const(whole)
+	funcs["imageList"] = tmplsafe.Lazy(func() (string, error) { return imageList(data), nil })
+	// The evidence sections render on first use, once per RenderPR or
+	// RenderMergeOptions, whatever the number of templates.
+	funcs["evidence"] = tmplsafe.Lazy(func() (string, error) { return RenderPRBody(body) })
 	for fn, section := range map[string]string{
 		"heading": "heading", "rollbackNotice": "rollbackNotice", "provenanceTable": "provenance",
 		"gatesTable": "gates", "upstreamTable": "upstream",
 	} {
-		text, err := renderSection(section, body)
-		if err != nil {
-			return nil, err
-		}
-		funcs[fn] = tmplsafe.Const(strings.Trim(text, "\n"))
+		funcs[fn] = tmplsafe.Lazy(func() (string, error) {
+			text, err := renderSection(section, body)
+			return strings.Trim(text, "\n"), err
+		})
 	}
 	// mdcell at most doubles its input (| becomes \|).
 	funcs["mdcell"] = tmplsafe.Func{Fn: mdCellReplacer.Replace, Size: func(a []interface{}) (int, error) {
 		s, _ := a[0].(string)
 		return 2 * len(s), nil
 	}}
-	return funcs, nil
+	return funcs
 }
 
 // The limits of the pr templates (pkg/tmplsafe): a body may be as long as
@@ -243,11 +240,7 @@ func prLimits(maxOutput int) tmplsafe.Limits {
 // A template is parsed per render, with its functions bound to body:
 // parsing is cheap, and it keeps the shared state of a render out of the
 // template.
-func renderPRTemplate(field, text string, lim tmplsafe.Limits, body PRBody, data PRTemplateData) (string, error) {
-	funcs, err := prTemplateFuncs(body, data)
-	if err != nil {
-		return "", fmt.Errorf("pr.%s: %w", field, err)
-	}
+func renderPRTemplate(field, text string, lim tmplsafe.Limits, funcs tmplsafe.FuncMap, data PRTemplateData) (string, error) {
 	t, err := tmplsafe.Parse(field, text, funcs, lim)
 	if err != nil {
 		return "", fmt.Errorf("pr.%s: %w", field, err)
@@ -285,8 +278,9 @@ func RenderPR(cfg *v1alpha1.PRConfig, defaultTitle string, body PRBody) (Rendere
 		return out, nil
 	}
 	data := NewPRTemplateData(body)
+	funcs := prTemplateFuncs(body, data)
 	if cfg.TitleTemplate != "" {
-		title, err := renderPRTemplate("titleTemplate", cfg.TitleTemplate, prShortLimits, body, data)
+		title, err := renderPRTemplate("titleTemplate", cfg.TitleTemplate, prShortLimits, funcs, data)
 		if err != nil {
 			return RenderedPR{}, err
 		}
@@ -297,7 +291,7 @@ func RenderPR(cfg *v1alpha1.PRConfig, defaultTitle string, body PRBody) (Rendere
 		out.Title = tmplsafe.TruncateRunes(title, maxPRTitle)
 	}
 	if cfg.BodyTemplate != "" {
-		b, err := renderPRTemplate("bodyTemplate", cfg.BodyTemplate, prBodyLimits, body, data)
+		b, err := renderPRTemplate("bodyTemplate", cfg.BodyTemplate, prBodyLimits, funcs, data)
 		if err != nil {
 			return RenderedPR{}, err
 		}
@@ -305,7 +299,7 @@ func RenderPR(cfg *v1alpha1.PRConfig, defaultTitle string, body PRBody) (Rendere
 		out.Body = "<!-- kardinal-promoter auto-generated PR -->\n" + b
 	}
 	var err error
-	if out.Labels, err = renderPRList("labels", cfg.Labels, body, data); err != nil {
+	if out.Labels, err = renderPRList(funcs, "labels", cfg.Labels, body, data); err != nil {
 		return RenderedPR{}, err
 	}
 	for _, l := range out.Labels {
@@ -317,13 +311,13 @@ func RenderPR(cfg *v1alpha1.PRConfig, defaultTitle string, body PRBody) (Rendere
 			return RenderedPR{}, fmt.Errorf("pr.labels: label %q has a comma", l)
 		}
 	}
-	if out.Reviewers, err = renderPRList("reviewers", cfg.Reviewers, body, data); err != nil {
+	if out.Reviewers, err = renderPRList(funcs, "reviewers", cfg.Reviewers, body, data); err != nil {
 		return RenderedPR{}, err
 	}
-	if out.TeamReviewers, err = renderPRList("teamReviewers", cfg.TeamReviewers, body, data); err != nil {
+	if out.TeamReviewers, err = renderPRList(funcs, "teamReviewers", cfg.TeamReviewers, body, data); err != nil {
 		return RenderedPR{}, err
 	}
-	if out.Assignees, err = renderPRList("assignees", cfg.Assignees, body, data); err != nil {
+	if out.Assignees, err = renderPRList(funcs, "assignees", cfg.Assignees, body, data); err != nil {
 		return RenderedPR{}, err
 	}
 	return out, nil
@@ -332,7 +326,7 @@ func RenderPR(cfg *v1alpha1.PRConfig, defaultTitle string, body PRBody) (Rendere
 // renderPRList renders each template of a list. Each line of a template's
 // output is one entry; blank lines and repeats are dropped, so a template
 // that renders nothing (an empty .Bundle.Author) adds nothing.
-func renderPRList(field string, templates []string, body PRBody, data PRTemplateData) ([]string, error) {
+func renderPRList(funcs tmplsafe.FuncMap, field string, templates []string, body PRBody, data PRTemplateData) ([]string, error) {
 	if len(templates) == 0 {
 		return nil, nil
 	}
@@ -342,7 +336,7 @@ func renderPRList(field string, templates []string, body PRBody, data PRTemplate
 	var out []string
 	seen := map[string]bool{}
 	for i, text := range templates {
-		s, err := renderPRTemplate(fmt.Sprintf("%s[%d]", field, i), text, prShortLimits, body, data)
+		s, err := renderPRTemplate(fmt.Sprintf("%s[%d]", field, i), text, prShortLimits, funcs, data)
 		if err != nil {
 			return nil, err
 		}
@@ -386,7 +380,7 @@ func RenderMergeOptions(m *v1alpha1.PRMergeConfig, body PRBody, pr PRTemplatePR)
 	}
 	data := NewPRTemplateData(body)
 	data.PR = pr
-	msg, err := renderPRTemplate("merge.commitMessageTemplate", m.CommitMessageTemplate, prMergeLimits, body, data)
+	msg, err := renderPRTemplate("merge.commitMessageTemplate", m.CommitMessageTemplate, prMergeLimits, prTemplateFuncs(body, data), data)
 	if err != nil {
 		return MergeOptions{}, err
 	}

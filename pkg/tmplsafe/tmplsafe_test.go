@@ -278,7 +278,6 @@ func checkBounded(t *testing.T, text string, timeBound time.Duration) bool {
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
-	goroutines := runtime.NumGoroutine()
 	start := time.Now()
 	tmpl, err := tmplsafe.Parse("t", text, fuzzFuncs(), tmplsafe.DefaultLimits)
 	if err == nil {
@@ -292,8 +291,8 @@ func checkBounded(t *testing.T, text string, timeBound time.Duration) bool {
 	if elapsed > timeBound {
 		t.Fatalf("render took %s (bound %s):\n%.500s", elapsed, timeBound, text)
 	}
-	if n := runtime.NumGoroutine(); n > goroutines {
-		t.Fatalf("%d goroutines after Execute, %d before", n, goroutines)
+	if n := tmplsafeGoroutines(); n > 0 {
+		t.Fatalf("%d goroutines still run tmplsafe code after Execute", n)
 	}
 	return err == nil
 }
@@ -364,4 +363,60 @@ func FuzzTemplates(f *testing.F) {
 		checkBounded(t, raw, 2*time.Second)
 		checkBounded(t, (&grammar{r: rand.New(rand.NewSource(seed))}).template(16<<10), 2*time.Second)
 	})
+}
+
+// TestErrorsQuoteLittle: an error quotes at most 256 characters of the
+// failing expression, however long the template is.
+func TestErrorsQuoteLittle(t *testing.T) {
+	long := "{{ eq .Name 1 " + strings.Repeat(`"x" `, 2000) + "}}"
+	tmpl, err := tmplsafe.Parse("t", long, funcs(), tmplsafe.DefaultLimits)
+	require.NoError(t, err)
+	_, err = tmpl.Execute(testData())
+	require.Error(t, err)
+	assert.Less(t, len(err.Error()), 1100, err.Error())
+	assert.Contains(t, err.Error(), "...")
+	_, err = tmplsafe.Parse("t", "{{ "+strings.Repeat("x", 5000)+" }}", funcs(), tmplsafe.DefaultLimits)
+	require.Error(t, err)
+	assert.Less(t, len(err.Error()), 1100)
+}
+
+// TestLazy: a Lazy function computes once, on first use, and not at all
+// when the template does not call it.
+func TestLazy(t *testing.T) {
+	calls := 0
+	f := funcs()
+	f["costly"] = tmplsafe.Lazy(func() (string, error) { calls++; return "v", nil })
+	tmpl, err := tmplsafe.Parse("t", `{{ costly }}{{ costly }}`, f, lim)
+	require.NoError(t, err)
+	for range 3 {
+		out, err := tmpl.Execute(testData())
+		require.NoError(t, err)
+		assert.Equal(t, "vv", out)
+	}
+	assert.Equal(t, 1, calls, "computed once")
+	unused, err := tmplsafe.Parse("t", `x`, funcs(), lim)
+	require.NoError(t, err)
+	_, _ = unused.Execute(testData())
+	f2 := funcs()
+	n := 0
+	f2["costly"] = tmplsafe.Lazy(func() (string, error) { n++; return "", nil })
+	tmpl, _ = tmplsafe.Parse("t", `x`, f2, lim)
+	_, _ = tmpl.Execute(testData())
+	assert.Zero(t, n, "not computed when unused")
+}
+
+// tmplsafeGoroutines counts the goroutines running code of package tmplsafe
+// (not its tests): a render must leave none behind. Counting by frame, not
+// runtime.NumGoroutine, keeps the check exact under the fuzzer, whose
+// workers start and stop goroutines of their own.
+func tmplsafeGoroutines() int {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	n := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "/pkg/tmplsafe.") && !strings.Contains(g, "tmplsafe_test.") {
+			n++
+		}
+	}
+	return n
 }

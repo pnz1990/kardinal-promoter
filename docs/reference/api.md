@@ -54,7 +54,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.configRef` | object |  | ConfigRef points to the GitOps repository commit this Bundle represents when the bundle type is "config" or "mixed". |
 | `spec.configRef.commitSHA` | string |  | CommitSHA is the exact commit SHA for this config snapshot. |
 | `spec.configRef.gitRepo` | string |  | GitRepo is the GitOps repository URL. |
-| `spec.images` | []object |  | Images lists the container images included in this Bundle. |
+| `spec.images` | []object |  | Images lists the container images included in this Bundle, at most 100. |
 | `spec.images[].digest` | string |  | Digest is the image digest (sha256:...). |
 | `spec.images[].repository` | string | yes | Repository is the image repository (e.g. "ghcr.io/nginx/nginx"). |
 | `spec.images[].tag` | string |  | Tag is the image tag (at most 128 characters, the OCI limit). |

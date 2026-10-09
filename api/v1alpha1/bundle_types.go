@@ -26,7 +26,9 @@ type BundleSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Pipeline string `json:"pipeline"`
 
-	// Images lists the container images included in this Bundle.
+	// Images lists the container images included in this Bundle, at most
+	// 100.
+	// +kubebuilder:validation:MaxItems=100
 	// +optional
 	Images []ImageRef `json:"images,omitempty"`
 

@@ -49,6 +49,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	texttemplate "text/template"
 	"text/template/parse"
 	"time"
@@ -121,7 +122,7 @@ func Parse(name, text string, funcs FuncMap, lim Limits) (*Template, error) {
 	}
 	t, err := texttemplate.New(name).Option("missingkey=error").Funcs(parseFuncs).Parse(text)
 	if err != nil {
-		return nil, err
+		return nil, shorten(err)
 	}
 	if n := len(t.Templates()); n > 1 {
 		return nil, errors.New("define and block are not allowed")
@@ -192,7 +193,7 @@ func (t *Template) Execute(data interface{}) (string, error) {
 		case r.stopped:
 			return "", fmt.Errorf("template took longer than %s", lim.MaxExecTime)
 		}
-		return "", err
+		return "", shorten(err)
 	}
 	if r.stopped {
 		return "", fmt.Errorf("template took longer than %s", lim.MaxExecTime)
@@ -201,6 +202,52 @@ func (t *Template) Execute(data interface{}) (string, error) {
 }
 
 var errorType = reflect.TypeOf((*error)(nil)).Elem()
+
+// maxErrorExpr is the most of the template text an error quotes: text/template
+// puts the failing node (at <...>) in its message, which can be a whole
+// 16 KiB template.
+const maxErrorExpr = 256
+
+// shortError is err with the template text it quotes cut to maxErrorExpr.
+type shortError struct {
+	msg string
+	err error
+}
+
+func (e *shortError) Error() string { return e.msg }
+func (e *shortError) Unwrap() error { return e.err }
+
+// shorten cuts every <...> quote of template text in err's message, and
+// the message itself, to maxErrorExpr.
+func shorten(err error) error {
+	msg := err.Error()
+	if len(msg) <= maxErrorExpr {
+		return err
+	}
+	var b strings.Builder
+	for {
+		i := strings.Index(msg, " <")
+		j := strings.Index(msg, ">: ")
+		if i < 0 || j < i {
+			b.WriteString(msg)
+			break
+		}
+		b.WriteString(msg[:i+2])
+		quote := msg[i+2 : j]
+		if len(quote) > maxErrorExpr {
+			quote = TruncateRunes(quote, maxErrorExpr) + "..."
+		}
+		b.WriteString(quote)
+		msg = msg[j:]
+		b.WriteString(">: ")
+		msg = msg[3:]
+	}
+	out := b.String()
+	if len(out) > 4*maxErrorExpr {
+		out = TruncateRunes(out, 4*maxErrorExpr) + "..."
+	}
+	return &shortError{msg: out, err: err}
+}
 
 // bind wraps f so that each call checks the deadline, counts against r and
 // charges its Size before it runs.
@@ -776,6 +823,26 @@ func StringFuncs() FuncMap {
 // text computed before the render, such as a section of a default body.
 func Const(s string) Func {
 	return Func{Fn: func() string { return s }, Size: func([]interface{}) (int, error) { return len(s), nil }}
+}
+
+// Lazy returns a Func with no arguments whose result f computes on first
+// use, once (later calls and its Size reuse it): for text that is costly to
+// build and that a template may not use, such as a section of a default
+// body. An error from f fails the call.
+func Lazy(f func() (string, error)) Func {
+	var (
+		once sync.Once
+		val  string
+		err  error
+	)
+	get := func() (string, error) {
+		once.Do(func() { val, err = f() })
+		return val, err
+	}
+	return Func{Fn: get, Size: func([]interface{}) (int, error) {
+		v, err := get()
+		return len(v), err
+	}}
 }
 
 // TruncateRunes returns the first n characters of s.

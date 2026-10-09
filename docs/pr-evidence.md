@@ -224,7 +224,7 @@ included, is counted, and its result size (for a comparison, what it reads) is c
 its arguments before it runs: one call builds at most 64 KiB and a whole render at most 1 MiB,
 in at most 2000 calls and one second, after which every call and write fails at once. A body
 renders at most 64 KiB, a title or list entry 4 KiB and a commit message 16 KiB. The data is
-bounded too: at most 20 images and 1024 characters per value, image fields included. A
+bounded too: a Bundle holds at most 100 images, a template sees at most 20 of them, and each value is at most 1024 characters, image fields included. A
 template that breaks a rule is refused like one that does not parse. A list template refuses a
 value with a line break (an author `alice\nbob` would make two entries).
 

@@ -76,7 +76,9 @@ spec:
                     type: string
                 type: object
               images:
-                description: Images lists the container images included in this Bundle.
+                description: |-
+                  Images lists the container images included in this Bundle, at most
+                  100.
                 items:
                   description: ImageRef identifies a container image by repository,
                     tag, and/or digest.
@@ -98,6 +100,7 @@ spec:
                   required:
                   - repository
                   type: object
+                maxItems: 100
                 type: array
               intent:
                 description: Intent declares optional targeting and skip overrides
