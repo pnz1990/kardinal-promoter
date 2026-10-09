@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"slices"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -25,6 +27,38 @@ import (
 // ErrPRControlUnsupported is returned by a PRController method the provider
 // does not implement.
 var ErrPRControlUnsupported = errors.New("not supported by this SCM provider")
+
+// ErrNothingPending is returned by EnableAutoMerge when the PR has no check,
+// review or pipeline to wait for, so the SCM would merge it at once: kardinal
+// does not merge a PR itself unless pr.merge.allowImmediate is set.
+var ErrNothingPending = errors.New("nothing is pending on the PR (no required check, review or pipeline), " +
+	"so the SCM would merge it at once; kardinal leaves it for a merge by hand unless pr.merge.allowImmediate is true")
+
+// ErrMergeabilityUnknown is returned by EnableAutoMerge while the SCM is
+// still computing whether the PR can be merged; try again later.
+var ErrMergeabilityUnknown = errors.New("the SCM is still checking whether the PR can be merged")
+
+// IsRetryableMergeError reports whether EnableAutoMerge or DisableAutoMerge
+// may succeed when tried again: the SCM still computing mergeability, a
+// transient API error (5xx, 429, a rate limit), a network error, or a refusal
+// of a PR whose mergeability is still being computed (405, 406, 409, 422).
+// A GraphQL error, an unsupported method, ErrNothingPending and a permanent
+// API error are not retried.
+func IsRetryableMergeError(err error) bool {
+	if errors.Is(err, ErrMergeabilityUnknown) {
+		return true
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		var netErr net.Error
+		return errors.As(err, &netErr)
+	}
+	switch apiErr.StatusCode {
+	case http.StatusMethodNotAllowed, http.StatusNotAcceptable, http.StatusConflict, http.StatusUnprocessableEntity:
+		return true
+	}
+	return apiErr.Transient
+}
 
 // PRSupport says which pr controls (v1alpha1.PRConfig) a provider applies.
 // docs/scm-providers.md#pr-controls lists the same matrix.
@@ -59,9 +93,15 @@ type PRController interface {
 	AddAssignees(ctx context.Context, repo string, prNumber int, users []string) error
 
 	// EnableAutoMerge asks the SCM to merge the PR with opts once its
-	// required checks and reviews pass. A PR that can be merged already may
-	// be merged at once.
+	// required checks and reviews pass. A PR with nothing pending is merged
+	// at once only with opts.AllowImmediate; otherwise EnableAutoMerge
+	// returns ErrNothingPending and changes nothing.
 	EnableAutoMerge(ctx context.Context, repo string, prNumber int, opts MergeOptions) error
+
+	// DisableAutoMerge turns the SCM's auto-merge of the PR off again
+	// (the pipeline was paused or a gate closed). A PR without auto-merge is
+	// not an error.
+	DisableAutoMerge(ctx context.Context, repo string, prNumber int) error
 }
 
 // SupportOf returns the pr controls p applies: none when p is not a
@@ -131,6 +171,15 @@ func (d *DynamicProvider) AddAssignees(ctx context.Context, repo string, prNumbe
 		return ErrPRControlUnsupported
 	}
 	return c.AddAssignees(ctx, repo, prNumber, users)
+}
+
+// DisableAutoMerge implements PRController.
+func (d *DynamicProvider) DisableAutoMerge(ctx context.Context, repo string, prNumber int) error {
+	c, ok := d.current().(PRController)
+	if !ok {
+		return ErrPRControlUnsupported
+	}
+	return c.DisableAutoMerge(ctx, repo, prNumber)
 }
 
 // EnableAutoMerge implements PRController.

@@ -15,7 +15,6 @@ package scm
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -92,15 +91,14 @@ func (f *ForgejoProvider) AddAssignees(ctx context.Context, repo string, prNumbe
 	return nil
 }
 
-// EnableAutoMerge asks Forgejo or Gitea to merge the PR once its commit
-// checks succeed (merge_when_checks_succeed). Forgejo merges a scheduled PR
-// only on a later commit status or review event, so a PR whose head has no
-// commit status would wait forever: such a PR is merged at once instead,
-// which applies branch protection too. When branch protection refuses that
-// merge (approvals missing), the merge is scheduled. "Please try again
-// later" (the server is still checking the new PR) is returned for the
-// caller to retry. The head branch is kept: kardinal deletes it when the
-// step ends.
+// EnableAutoMerge schedules the PR to merge once its commit checks succeed
+// (merge_when_checks_succeed), and Forgejo and Gitea also merge a scheduled
+// PR on a later approval. Something must be pending for that: a commit
+// status that is not success yet, or base branch protection that requires
+// approvals or status checks. Otherwise Gitea would merge at once and Forgejo
+// never, so the PR is merged directly with opts.AllowImmediate, and left for
+// a merge by hand otherwise (ErrNothingPending). The head branch is kept:
+// kardinal deletes it when the step ends.
 func (f *ForgejoProvider) EnableAutoMerge(ctx context.Context, repo string, prNumber int, opts MergeOptions) error {
 	switch opts.Method {
 	case MergeMethodMerge, MergeMethodSquash, MergeMethodRebase:
@@ -112,44 +110,81 @@ func (f *ForgejoProvider) EnableAutoMerge(ctx context.Context, repo string, prNu
 		return err
 	}
 	base := fmt.Sprintf("/api/v1/repos/%s/%s", owner, name)
-	var pr struct {
-		Head struct {
-			SHA string `json:"sha"`
-		} `json:"head"`
-	}
-	if err := f.do(ctx, http.MethodGet, fmt.Sprintf("%s/pulls/%d", base, prNumber), nil, &pr); err != nil {
+	pending, err := f.mergePending(ctx, base, prNumber)
+	if err != nil {
 		return fmt.Errorf("enable auto-merge on PR %s#%d: %w", repo, prNumber, err)
 	}
-	var status struct {
-		TotalCount int `json:"total_count"`
-	}
-	if err := f.do(ctx, http.MethodGet, fmt.Sprintf("%s/commits/%s/status", base, url.PathEscape(pr.Head.SHA)), nil, &status); err != nil {
-		return fmt.Errorf("enable auto-merge on PR %s#%d: read commit status: %w", repo, prNumber, err)
+	if !pending && !opts.AllowImmediate {
+		return fmt.Errorf("enable auto-merge on PR %s#%d: %w", repo, prNumber, ErrNothingPending)
 	}
 	payload := map[string]interface{}{
 		"Do":                        opts.Method,
 		"delete_branch_after_merge": false,
 	}
+	if pending {
+		payload["merge_when_checks_succeed"] = true
+	}
 	if opts.CommitTitle != "" {
 		payload["MergeTitleField"] = opts.CommitTitle
 		payload["MergeMessageField"] = opts.CommitBody
 	}
-	mergePath := fmt.Sprintf("%s/pulls/%d/merge", base, prNumber)
-	if status.TotalCount == 0 {
-		err := f.do(ctx, http.MethodPost, mergePath, payload, nil)
-		if err == nil {
-			return nil
-		}
-		var apiErr *APIError
-		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusMethodNotAllowed ||
-			strings.Contains(strings.ToLower(apiErr.Body), "try again later") {
-			return fmt.Errorf("merge PR %s#%d, which has no commit checks: %w", repo, prNumber, err)
-		}
-		// Branch protection refused the merge: schedule it.
+	err = f.do(ctx, http.MethodPost, fmt.Sprintf("%s/pulls/%d/merge", base, prNumber), payload, nil)
+	if apiErr, conflict := statusIs(err, http.StatusConflict); conflict && strings.Contains(apiErr.Body, "already scheduled") {
+		// Turned on already (a retried call): nothing to do.
+		return nil
 	}
-	payload["merge_when_checks_succeed"] = true
-	if err := f.do(ctx, http.MethodPost, mergePath, payload, nil); err != nil {
+	if err != nil {
 		return fmt.Errorf("enable auto-merge on PR %s#%d: %w", repo, prNumber, err)
+	}
+	return nil
+}
+
+// mergePending reports whether the PR has something a scheduled merge waits
+// for: a head commit status that is not success, or base branch protection
+// that requires approvals or status checks.
+func (f *ForgejoProvider) mergePending(ctx context.Context, base string, prNumber int) (bool, error) {
+	var pr struct {
+		Head struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+		Base struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+	}
+	if err := f.do(ctx, http.MethodGet, fmt.Sprintf("%s/pulls/%d", base, prNumber), nil, &pr); err != nil {
+		return false, err
+	}
+	var status struct {
+		State      string `json:"state"`
+		TotalCount int    `json:"total_count"`
+	}
+	if err := f.do(ctx, http.MethodGet, fmt.Sprintf("%s/commits/%s/status", base, url.PathEscape(pr.Head.SHA)), nil, &status); err != nil {
+		return false, fmt.Errorf("read commit status: %w", err)
+	}
+	if status.TotalCount > 0 && status.State != "success" {
+		return true, nil
+	}
+	var branch struct {
+		Protected         bool `json:"protected"`
+		RequiredApprovals int  `json:"required_approvals"`
+		EnableStatusCheck bool `json:"enable_status_check"`
+	}
+	if err := f.do(ctx, http.MethodGet, fmt.Sprintf("%s/branches/%s", base, url.PathEscape(pr.Base.Ref)), nil, &branch); err != nil {
+		return false, fmt.Errorf("read base branch protection: %w", err)
+	}
+	return branch.Protected && (branch.RequiredApprovals > 0 || branch.EnableStatusCheck), nil
+}
+
+// DisableAutoMerge cancels the PR's scheduled merge. A PR without one (404)
+// is not an error.
+func (f *ForgejoProvider) DisableAutoMerge(ctx context.Context, repo string, prNumber int) error {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return err
+	}
+	err = f.do(ctx, http.MethodDelete, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/merge", owner, name, prNumber), nil, nil)
+	if _, none := statusIs(err, http.StatusNotFound); err != nil && !none {
+		return fmt.Errorf("disable auto-merge on PR %s#%d: %w", repo, prNumber, err)
 	}
 	return nil
 }

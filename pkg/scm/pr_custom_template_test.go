@@ -178,7 +178,12 @@ func TestPRTemplates_Sandbox(t *testing.T) {
 		{"doubling message", v1alpha1.PRConfig{Merge: &v1alpha1.PRMergeConfig{Auto: true, CommitMessageTemplate: doubling}},
 			"pr.merge.commitMessageTemplate: variables are not allowed"},
 		{"recursion", v1alpha1.PRConfig{BodyTemplate: `{{ define "r" }}{{ template "r" }}{{ end }}{{ template "r" }}`}, "pr.bodyTemplate: define and block are not allowed"},
-		{"range over a number", v1alpha1.PRConfig{BodyTemplate: `{{ range 100000000 }}{{ end }}`}, "range over a number is not allowed"},
+		{"range over a number", v1alpha1.PRConfig{BodyTemplate: `{{ range 100000000 }}{{ end }}`}, "range takes a data path only"},
+		{"range over a parenthesised number", v1alpha1.PRConfig{BodyTemplate: `{{ range (1000000000) }}{{ range (1000000000) }}{{ end }}{{ end }}`}, "range takes a data path only"},
+		{"range over a function", v1alpha1.PRConfig{BodyTemplate: `{{ range len .Bundle.Name }}{{ end }}`}, "range takes a data path only"},
+		{"printf", v1alpha1.PRConfig{TitleTemplate: `{{ printf "%999999999d" 1 }}`}, "printf is not available in this template"},
+		{"printf argument indexes", v1alpha1.PRConfig{BodyTemplate: `{{ printf "%[1]s%[1]s%[1]s%[1]s" .Bundle.Name }}`}, "printf is not available in this template"},
+		{"replace with an empty old", v1alpha1.PRConfig{TitleTemplate: `{{ replace "" "x" .Bundle.Name }}`}, "replace: the string to replace is empty"},
 		{"deep ranges", v1alpha1.PRConfig{BodyTemplate: `{{ range .Bundle.Images }}{{ range $.Bundle.Images }}{{ range $.Bundle.Images }}{{ end }}{{ end }}{{ end }}`},
 			"ranges nested more than 2 deep"},
 		{"output too long", v1alpha1.PRConfig{TitleTemplate: strings.Repeat("{{ evidence }}", 8)}, "pr.titleTemplate: template output is too large"},
@@ -342,4 +347,29 @@ func TestCheckPRSupport(t *testing.T) {
 		}
 	}
 	assert.NoError(t, scm.CheckPRSupport(nil, scm.PRSupport{}))
+}
+
+// TestPRTemplateData_Bounded: the template data keeps at most 20 images
+// and 1024 characters per value, and a list template refuses a value with a
+// line break, which would otherwise split into several entries (an author
+// "alice\nbob" would assign two users).
+//
+// Covers SCM-PRCTL-TPL-01.
+func TestPRTemplateData_Bounded(t *testing.T) {
+	body := prTemplateBody()
+	for i := 0; i < 30; i++ {
+		body.Bundle.Images = append(body.Bundle.Images, v1alpha1.ImageRef{Repository: fmt.Sprintf("r/i%d", i), Tag: "1"})
+	}
+	body.Bundle.Provenance.Author = strings.Repeat("a", 2000)
+	d := scm.NewPRTemplateData(body)
+	assert.Len(t, d.Bundle.Images, 20)
+	assert.Equal(t, 1024, len(d.Bundle.Author))
+
+	body = prTemplateBody()
+	body.Bundle.Provenance.Author = "alice\nbob"
+	_, err := scm.RenderPR(&v1alpha1.PRConfig{Assignees: []string{"{{ .Bundle.Author }}"}}, "t", body)
+	assert.ErrorContains(t, err, "pr.assignees: .Bundle.Author has a line break")
+	got, err := scm.RenderPR(&v1alpha1.PRConfig{TitleTemplate: "by {{ .Bundle.Author }}"}, "t", body)
+	require.NoError(t, err, "a title is one line anyway")
+	assert.Equal(t, "by alice bob", got.Title)
 }

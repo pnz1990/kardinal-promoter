@@ -149,7 +149,7 @@ environments:
       teamReviewers: [platform]          # GitHub, Forgejo/Gitea and Azure DevOps
       assignees: ["{{ .Bundle.Author }}"] # the author recorded in the Bundle's provenance
       merge:
-        auto: true
+        auto: true                       # the SCM merges once required checks and reviews pass
         method: squash                   # merge (default), squash or rebase
         commitMessageTemplate: |
           {{ .PR.Title }} (#{{ .PR.Number }})
@@ -165,7 +165,8 @@ environments:
 | `reviewers` | Users asked to review the PR. |
 | `teamReviewers` | Teams asked to review the PR (team slugs). |
 | `assignees` | Users the PR is assigned to. `"{{ .Bundle.Author }}"` assigns whoever `spec.provenance.author` names, such as the CI actor (`kardinal create bundle --author`); a Bundle without an author adds no one. |
-| `merge.auto` | Right after it opens the PR, kardinal enables the SCM's auto-merge: the SCM merges the PR once the repository's required checks and reviews pass, and at once when nothing is required. Branch protection still applies. kardinal sees the merge as it sees one made by hand. |
+| `merge.auto` | Once the PR is open, kardinal enables the SCM's auto-merge: the SCM merges the PR once the repository's required checks, reviews or pipeline pass. Branch protection still applies. kardinal turns auto-merge **off** while the Pipeline is paused or a required gate of the environment is closed (a freeze, a soak), and on again when they clear. A PR with nothing pending (no required check, review or pipeline) is not merged: auto-merge is not turned on, and the PR waits for a merge by hand, unless `merge.allowImmediate` is set. kardinal sees the merge as it sees one made by hand. |
+| `merge.allowImmediate` | `true`: when nothing is pending on the PR, kardinal merges it at once. This skips human review and any CI the repository does not require; use it only for environments where the gates are the review. Needs `merge.auto: true`. Default `false`. |
 | `merge.method` | `merge` (a merge commit, the default), `squash` or `rebase`. Needs `merge.auto: true`. |
 | `merge.commitMessageTemplate` | The merge (or squash) commit message: the first line is the title, the rest the body. Needs `merge.auto: true`. Empty leaves the SCM's message. |
 
@@ -205,16 +206,22 @@ Every field is a plain value, so a Bundle without provenance renders empty strin
 | `gatesTable` | `### Policy Gate Compliance` and its table |
 | `upstreamTable` | `### Upstream Verification` and its table |
 | `mdcell` | Escapes a value for a markdown table cell |
-| `truncate N`, `lower`, `upper`, `trimSpace`, `trimPrefix P`, `replace OLD NEW`, `contains S`, `hasPrefix P`, `join SEP`, `default D` | String helpers; the string comes last, so they work in a pipeline: `{{ .Bundle.CommitSHA \| truncate 7 }}` |
+| `truncate N`, `lower`, `upper`, `trimSpace`, `trimPrefix P`, `replace OLD NEW`, `contains S`, `hasPrefix P`, `join SEP`, `default D` | String helpers; the string comes last, so they work in a pipeline: `{{ .Bundle.CommitSHA \| truncate 7 }}`. `printf` is not available; use `print` or the helpers |
 
 ### Template limits
 
 The templates run in the controller, so they are restricted: variables (`{{ $x := ... }}`,
-`{{ $x = ... }}`, `range $i, $v := ...`), `define`, `block` and `template` are refused, as are
-`range` over a number and ranges nested more than two deep. `$` and `.` work as usual. A body
-renders at most 64 KiB, a title or list entry 4 KiB and a commit message 16 KiB, and a function
-(`print`, `printf` and the helpers above included) takes at most 64 KiB of string arguments.
-A template that breaks a rule is refused like one that does not parse.
+`{{ $x = ... }}`, `range $i, $v := ...`), `define`, `block`, `template`, `printf` and `call` are
+refused; `range` takes a data path only (`.Bundle.Images`, `$.Bundle.Images`, `.`), not a
+number, a function or a pipeline, at most 8 ranges nested at most two deep, and at most 1000
+iterations per render. `$` and `.` work as usual. `print`, `println`, `html`, `js` and
+`urlquery` take strings, numbers and bools only, and `replace` refuses an empty string to
+replace. Every function's result size is computed from its arguments before it runs: one call
+builds at most 64 KiB and a whole render at most 1 MiB, in at most 2000 calls and one second. A
+body renders at most 64 KiB, a title or list entry 4 KiB and a commit message 16 KiB. The data is
+bounded too: at most 20 images, 1024 characters per value. A template that breaks a rule is
+refused like one that does not parse. A list template refuses a value with a line break (an
+author `alice\nbob` would make two entries).
 
 ### Invalid templates and failed controls
 
@@ -227,11 +234,24 @@ fails the step before the PR is opened.
 
 Once the PR is open, a control the SCM refuses (a reviewer who is not a collaborator, a
 repository that does not allow auto-merge) does not fail the step: the PR waits for a merge by
-hand. kardinal tries each control once, and enabling auto-merge for about 30 seconds while the
-SCM is still checking whether a new PR can be merged. While the step waits for the merge, its
-message ends with `; PR controls failed: <error>`, and `status.outputs.prControlsError` keeps
-the error. With auto-merge on, the message ends with `; auto-merge enabled` and
-`status.outputs.prAutoMerge` is `enabled`.
+hand. While the step waits for the merge, its message ends with `; PR controls failed: <error>`,
+and `status.outputs.prControlsError` keeps the error.
+
+### Auto-merge while the step waits
+
+The PromotionStep reconciler turns auto-merge on, off and on again while the step waits for
+the merge, and records where it is in `status.outputs.prAutoMerge`; the step message ends with
+the same:
+
+| `prAutoMerge` | Message ends with | Meaning |
+|---|---|---|
+| `pending` | `; auto-merge pending` | Not on yet. The SCM may still be checking the new PR: kardinal tries again with a backoff (up to 8 times), without holding the reconcile. |
+| `enabled` | `; auto-merge enabled` | The SCM merges the PR once its requirements pass. |
+| `suspended` | `; auto-merge off: pipeline <name> is paused` (or `gate <name> is closed`) | Turned off while the Pipeline is paused or a gate is closed; turned on again when they clear. |
+| `failed` | `; auto-merge failed: <reason>` | Not turned on, for example because nothing is pending on the PR and `allowImmediate` is not set, or the repository does not allow auto-merge. The PR waits for a merge by hand. |
+
+`status.outputs.prAutoMergeError` keeps the reason, and `prMergeOptions` the rendered merge
+method and commit message.
 
 ## Merge Detection
 

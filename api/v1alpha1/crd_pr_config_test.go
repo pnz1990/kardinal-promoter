@@ -58,6 +58,12 @@ func TestCRDPipelinePRConfig(t *testing.T) {
 		{name: "message without auto", edit: func(env map[string]interface{}) {
 			env["pr"].(map[string]interface{})["merge"] = map[string]interface{}{"auto": false, "commitMessageTemplate": "x"}
 		}, want: "set pr.merge.auto: true"},
+		{name: "allowImmediate without auto", edit: func(env map[string]interface{}) {
+			env["pr"].(map[string]interface{})["merge"] = map[string]interface{}{"allowImmediate": true}
+		}, want: "set pr.merge.auto: true"},
+		{name: "allowImmediate with auto", edit: func(env map[string]interface{}) {
+			env["pr"].(map[string]interface{})["merge"] = map[string]interface{}{"auto": true, "allowImmediate": true}
+		}},
 		{name: "auto alone", edit: func(env map[string]interface{}) {
 			env["pr"].(map[string]interface{})["merge"] = map[string]interface{}{"auto": true}
 		}},

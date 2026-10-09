@@ -15,10 +15,9 @@ package steps
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
-	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -185,34 +184,13 @@ func buildPRBodyUpstreamEnvs(envs []v1alpha1.EnvironmentStatus) []scm.PRBodyUpst
 	return result
 }
 
-// autoMergeRetryDelays are the waits between attempts to enable auto-merge,
-// about 30s in all. Right after a PR is opened the SCM may still be
-// computing whether it can be merged: GitLab, Forgejo and Gitea refuse a
-// merge until it knows (405, 406, 409 or 422).
-var autoMergeRetryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
-
-// retryableAutoMergeErr reports whether enabling auto-merge may succeed when
-// tried again: a transient API error (5xx, 429, a rate limit), a network
-// error, or a refusal of a PR whose mergeability is still being computed.
-// A GraphQL error, an unsupported method and a permanent API error are not
-// retried.
-func retryableAutoMergeErr(err error) bool {
-	var apiErr *scm.APIError
-	if !errors.As(err, &apiErr) {
-		var netErr net.Error
-		return errors.As(err, &netErr)
-	}
-	switch apiErr.StatusCode {
-	case http.StatusMethodNotAllowed, http.StatusNotAcceptable, http.StatusConflict, http.StatusUnprocessableEntity:
-		return true
-	}
-	return apiErr.Transient
-}
-
-// applyPRControls requests the reviewers, assigns the assignees and enables
-// auto-merge on the PR it opened, as the environment's pr config says. Each
-// control is tried even when one before it failed; the error joins every
-// failure. outputs gets prAutoMerge=enabled once the SCM took auto-merge.
+// applyPRControls requests the reviewers and assigns the assignees of the
+// PR it opened, as the environment's pr config says, and renders the merge
+// options of pr.merge.auto into outputs: the PromotionStep reconciler
+// enables auto-merge while the step waits for the merge, and turns it off
+// while the Pipeline is paused or a gate is closed (status.outputs
+// prAutoMerge=pending). Each control is tried even when one before it
+// failed; the error joins every failure.
 func applyPRControls(ctx context.Context, state *parentsteps.StepState, repo string, prNum int, prURL string,
 	rendered scm.RenderedPR, data scm.PRBody, outputs map[string]string) error {
 	cfg := state.Environment.PR
@@ -236,10 +214,16 @@ func applyPRControls(ctx context.Context, state *parentsteps.StepState, repo str
 		}
 	}
 	if cfg.Merge != nil && cfg.Merge.Auto {
-		if err := enableAutoMerge(ctx, ctrl, repo, prNum, prURL, rendered.Title, cfg.Merge, data); err != nil {
+		opts, err := scm.RenderMergeOptions(cfg.Merge, data, scm.PRTemplatePR{Number: prNum, URL: prURL, Title: rendered.Title})
+		if err == nil {
+			var raw []byte
+			if raw, err = json.Marshal(opts); err == nil {
+				outputs[parentsteps.OutputPRMergeOptions] = string(raw)
+				outputs[parentsteps.OutputPRAutoMerge] = parentsteps.AutoMergePending
+			}
+		}
+		if err != nil {
 			errs = append(errs, fmt.Errorf("auto-merge: %w", err))
-		} else {
-			outputs[parentsteps.OutputPRAutoMerge] = "enabled"
 		}
 	}
 	if len(errs) == 0 {
@@ -250,27 +234,4 @@ func applyPRControls(ctx context.Context, state *parentsteps.StepState, repo str
 		msgs = append(msgs, e.Error())
 	}
 	return errors.New(strings.Join(msgs, "; "))
-}
-
-// enableAutoMerge renders the merge options and enables auto-merge, trying
-// again after autoMergeRetryDelays while retryableAutoMergeErr says the SCM
-// may take it later.
-func enableAutoMerge(ctx context.Context, ctrl scm.PRController, repo string, prNum int, prURL, title string,
-	m *v1alpha1.PRMergeConfig, data scm.PRBody) error {
-	opts, err := scm.RenderMergeOptions(m, data, scm.PRTemplatePR{Number: prNum, URL: prURL, Title: title})
-	if err != nil {
-		return err
-	}
-	for attempt := 0; ; attempt++ {
-		err = ctrl.EnableAutoMerge(ctx, repo, prNum, opts)
-		if err == nil || !retryableAutoMergeErr(err) || attempt >= len(autoMergeRetryDelays) {
-			return err
-		}
-		zerolog.Ctx(ctx).Debug().Err(err).Int("pr", prNum).Int("attempt", attempt+1).Msg("enable auto-merge refused, trying again")
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("%w (%v)", err, ctx.Err())
-		case <-time.After(autoMergeRetryDelays[attempt]):
-		}
-	}
 }

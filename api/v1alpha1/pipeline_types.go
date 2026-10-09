@@ -344,14 +344,23 @@ type PRConfig struct {
 }
 
 // PRMergeConfig configures auto-merge of a promotion PR.
-// +kubebuilder:validation:XValidation:rule="self.auto || (!has(self.method) && !has(self.commitMessageTemplate))",message="pr.merge.method and pr.merge.commitMessageTemplate apply only to the merge kardinal asks the SCM for; set pr.merge.auto: true"
+// +kubebuilder:validation:XValidation:rule="self.auto || (!has(self.method) && !has(self.commitMessageTemplate) && !has(self.allowImmediate))",message="pr.merge.method, pr.merge.commitMessageTemplate and pr.merge.allowImmediate apply only to the merge kardinal asks the SCM for; set pr.merge.auto: true"
 type PRMergeConfig struct {
-	// Auto enables the SCM's auto-merge on the PR right after kardinal opens
+	// Auto enables the SCM's auto-merge on the PR once kardinal has opened
 	// it (GitHub auto-merge, GitLab auto-merge, Forgejo/Gitea scheduled
-	// merge, Azure DevOps auto-complete). Branch protection still applies:
-	// the SCM merges only once the required checks and reviews pass.
+	// merge, Azure DevOps auto-complete, Bitbucket Data Center auto-merge):
+	// the SCM merges it once the required checks and reviews pass. kardinal
+	// turns auto-merge off while the Pipeline is paused or a required gate is
+	// closed, and on again after. A PR with nothing pending is left for a
+	// merge by hand unless allowImmediate is set.
 	// +optional
 	Auto bool `json:"auto,omitempty"`
+
+	// AllowImmediate lets kardinal merge the PR at once when nothing is
+	// pending on it (no required check, review or pipeline). This skips
+	// human review and any CI the repository does not require.
+	// +optional
+	AllowImmediate bool `json:"allowImmediate,omitempty"`
 
 	// Method is how the SCM merges the PR: merge (a merge commit), squash
 	// or rebase. Empty uses merge.
