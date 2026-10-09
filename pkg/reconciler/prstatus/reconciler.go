@@ -68,6 +68,7 @@ package prstatus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -233,11 +234,27 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if scm.IsPermanentError(err) {
 			return r.recordPollError(ctx, log, &prs, err)
 		}
-		log.Error().Err(err).
+		var open *scm.ErrCircuitOpen
+		if errors.As(err, &open) {
+			// No call was made (#1476): poll again when the circuit lets
+			// one through, not at the next interval.
+			wait := time.Until(open.RetryAfter)
+			if wait < time.Second {
+				wait = time.Second
+			}
+			if wait > requeuePollInterval {
+				wait = requeuePollInterval
+			}
+			log.Info().Err(err).Int("prNumber", prs.Spec.PRNumber).Dur("wait", wait).
+				Msg("SCM circuit open, PR status poll waits")
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
+		// Transient (429, 5xx, network): requeue to retry. An outage is
+		// expected now and then, so this is a warning.
+		log.Warn().Err(err).
 			Str("prURL", prs.Spec.PRURL).
 			Int("prNumber", prs.Spec.PRNumber).
 			Msg("GetPRStatus failed, will retry")
-		// Transient (429, 5xx, network): requeue to retry.
 		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 	}
 

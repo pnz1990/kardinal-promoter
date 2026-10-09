@@ -382,6 +382,27 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 		if !closing {
 			ps.Status.RetryCount = 0
 		}
+		if wait, ok := circuitWait(closeErr, r.now()); ok {
+			// The SCM circuit is open (#1476): no call was made. Wait for it
+			// without spending a close retry, so an outage longer than the
+			// retries cannot leave the PR or its branch behind.
+			meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
+				Type:               ConditionSupersededCloseFailed,
+				Status:             metav1.ConditionTrue,
+				Reason:             "CloseFailed",
+				Message:            closeErr.Error(),
+				ObservedGeneration: ps.Generation,
+				LastTransitionTime: metav1.NewTime(r.now().UTC()),
+			})
+			next := metav1.NewTime(r.now().Add(wait))
+			ps.Status.NextRetryAt = &next
+			ps.Status.Message = fmt.Sprintf("bundle %s was superseded; closing its PR waits %s for the SCM (not counted as a retry): %v",
+				ps.Spec.BundleName, wait, closeErr)
+			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+				return ctrl.Result{}, fmt.Errorf("patch supersession circuit wait: %w", err)
+			}
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
 		meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
 			Type:               ConditionSupersededCloseFailed,
 			Status:             metav1.ConditionTrue,
@@ -568,6 +589,24 @@ func withLabelsError(msg string, outputs map[string]string) string {
 }
 
 // retryDelay is the backoff before retry n (1-based) of a transient failure.
+// circuitWait reports whether err is an open SCM circuit (scm.ErrCircuitOpen)
+// and how long to wait for it: until the circuit lets a call through, at
+// least a second and at most retryMaxDelay.
+func circuitWait(err error, now time.Time) (time.Duration, bool) {
+	var open *scm.ErrCircuitOpen
+	if !errors.As(err, &open) {
+		return 0, false
+	}
+	wait := open.RetryAfter.Sub(now)
+	if wait < time.Second {
+		wait = time.Second
+	}
+	if wait > retryMaxDelay {
+		wait = retryMaxDelay
+	}
+	return wait, true
+}
+
 func retryDelay(n int) time.Duration {
 	d := retryBaseDelay
 	for i := 1; i < n && d < retryMaxDelay; i++ {
@@ -915,6 +954,26 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		execErr = fmt.Errorf("%w (%s)", execErr, note)
 		emitCredential = markGitCredentialMissing(ps, cred.reason, note)
 		waitForSecret = cred.waitsForSecret()
+	}
+	if wait, ok := circuitWait(execErr, r.now()); retryable && ok {
+		// The SCM circuit is open (#1476): no call was made, so nothing
+		// failed. Wait for the circuit to let a call through and run the
+		// step again without spending a retry.
+		next := metav1.NewTime(r.now().Add(wait))
+		ps.Status.NextRetryAt = &next
+		ps.Status.Message = fmt.Sprintf("waiting %s for the SCM (not counted as a retry; %d/%d used): %v",
+			wait, ps.Status.RetryCount, maxStepRetries, execErr)
+		closed = append(closed, updateStepStatuses(ps, stepNames, idx, false, "", timings)...)
+		log.Info().Err(execErr).Str("env", ps.Spec.Environment).Dur("wait", wait).
+			Msg("SCM circuit open, step waits")
+		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+			if apierrors.IsNotFound(patchErr) {
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, fmt.Errorf("patch step circuit wait: %w", patchErr)
+		}
+		closed.record()
+		return ctrl.Result{RequeueAfter: wait}, nil
 	}
 	if retryable && (waitForSecret || ps.Status.RetryCount < maxStepRetries) {
 		var count string

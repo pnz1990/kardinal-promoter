@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ForgejoProvider implements SCMProvider against the Forgejo/Gitea REST API v1.
@@ -394,6 +395,9 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 	if err := f.circuits.Allow(owner); err != nil {
 		return fmt.Errorf("forgejo scm: %w", err)
 	}
+	// When the call started: a failure of a call that started before the
+	// circuit opened is not counted (CircuitBreaker.RecordFailureFrom).
+	started := time.Now()
 
 	var bodyReader io.Reader
 	if body != nil {
@@ -416,18 +420,18 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		f.circuits.Record(owner, nil, err)
+		f.circuits.Record(owner, started, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		f.circuits.Record(owner, resp, nil)
+		f.circuits.Record(owner, started, resp, nil)
 		return newAPIError("forgejo", method, path, resp, raw)
 	}
 
-	f.circuits.Record(owner, resp, nil)
+	f.circuits.Record(owner, started, resp, nil)
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)

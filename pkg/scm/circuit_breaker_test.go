@@ -221,3 +221,87 @@ func TestRetryAfterFromResponse_ResetOnlyWhenExhausted(t *testing.T) {
 	assert.Greater(t, delta, 45*time.Minute)
 	assert.Less(t, delta, 55*time.Minute)
 }
+
+// openFor is how long cb stays open from now.
+func openFor(cb *CircuitBreaker) time.Duration {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return time.Until(cb.openUntil)
+}
+
+// expire makes cb's open window end now, so the next Allow probes.
+func expire(cb *CircuitBreaker) {
+	cb.mu.Lock()
+	cb.openUntil = time.Now().Add(-time.Millisecond)
+	cb.mu.Unlock()
+}
+
+// TestCircuitBreaker_BackoffFollowsTheOutage replays #1476: a 60-second
+// outage with dozens of calls in flight. The calls that fail after the
+// circuit opened do not count, each failed probe doubles the backoff from
+// BaseBackoff, and the first probe after the outage closes the circuit,
+// which then starts again from BaseBackoff.
+func TestCircuitBreaker_BackoffFollowsTheOutage(t *testing.T) {
+	cb := NewCircuitBreaker()
+	inFlight := time.Now()
+	for i := 0; i < cb.FailureThreshold; i++ {
+		cb.RecordFailureFrom(time.Now(), time.Time{})
+	}
+	require.Equal(t, CircuitOpen, cb.State())
+	assert.InDelta(t, cb.BaseBackoff.Seconds(), openFor(cb).Seconds(), 1, "opens for BaseBackoff")
+
+	// 40 more calls that were in flight fail late: the window stays.
+	for i := 0; i < 40; i++ {
+		cb.RecordFailureFrom(inFlight, time.Time{})
+	}
+	assert.InDelta(t, cb.BaseBackoff.Seconds(), openFor(cb).Seconds(), 1, "late failures do not extend it")
+
+	for i, want := range []time.Duration{2 * cb.BaseBackoff, 4 * cb.BaseBackoff, 8 * cb.BaseBackoff} {
+		expire(cb)
+		require.NoError(t, cb.Allow(), "probe %d", i)
+		// A call in flight since before the probe fails during it: ignored.
+		cb.RecordFailureFrom(inFlight, time.Time{})
+		require.Equal(t, CircuitHalfOpen, cb.State(), "probe %d: a late failure is not the probe's", i)
+		cb.RecordFailureFrom(time.Now(), time.Time{})
+		require.Equal(t, CircuitOpen, cb.State())
+		assert.InDelta(t, want.Seconds(), openFor(cb).Seconds(), 1, "probe %d failed: backoff doubles", i)
+	}
+
+	expire(cb)
+	require.NoError(t, cb.Allow())
+	cb.RecordSuccess()
+	assert.Equal(t, CircuitClosed, cb.State())
+	for i := 0; i < cb.FailureThreshold; i++ {
+		cb.RecordFailure(time.Time{})
+	}
+	assert.InDelta(t, cb.BaseBackoff.Seconds(), openFor(cb).Seconds(), 1, "after closing, the next opening starts from BaseBackoff")
+}
+
+// TestCircuitBreaker_BackoffCap: failed probes never keep the circuit open
+// past MaxBackoff, so it closes at most MaxBackoff after the SCM is back;
+// a server's Retry-After is still honored past it.
+func TestCircuitBreaker_BackoffCap(t *testing.T) {
+	cb := NewCircuitBreaker()
+	for i := 0; i < cb.FailureThreshold; i++ {
+		cb.RecordFailure(time.Time{})
+	}
+	for i := 0; i < 20; i++ {
+		expire(cb)
+		require.NoError(t, cb.Allow())
+		cb.RecordFailure(time.Time{})
+	}
+	assert.InDelta(t, cb.MaxBackoff.Seconds(), openFor(cb).Seconds(), 1)
+	assert.LessOrEqual(t, cb.MaxBackoff, 2*time.Minute, "a long outage is noticed over within two minutes")
+
+	later := time.Now().Add(30 * time.Minute)
+	cb.RecordFailure(later)
+	assert.InDelta(t, 30*time.Minute.Seconds(), openFor(cb).Seconds(), 1, "Retry-After extends an open circuit")
+}
+
+// TestCircuitBreaker_HalfOpenTimeout: a probe that hangs frees the slot
+// soon after the providers' HTTP timeout, not minutes later.
+func TestCircuitBreaker_HalfOpenTimeout(t *testing.T) {
+	cb := NewCircuitBreaker()
+	assert.Greater(t, cb.HalfOpenTimeout, providerHTTPTimeout)
+	assert.LessOrEqual(t, cb.HalfOpenTimeout, providerHTTPTimeout+30*time.Second)
+}

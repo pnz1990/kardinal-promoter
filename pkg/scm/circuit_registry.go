@@ -114,19 +114,20 @@ func (r *CircuitRegistry) Allow(owner string) error {
 }
 
 // Record records the outcome of a call for a repository of owner that Allow
-// admitted: callErr for a request that got no response, else resp.
-func (r *CircuitRegistry) Record(owner string, resp *http.Response, callErr error) {
+// admitted and that started at started: callErr for a request that got no
+// response, else resp.
+func (r *CircuitRegistry) Record(owner string, started time.Time, resp *http.Response, callErr error) {
 	ob := r.owner(owner)
 	switch {
 	case callErr != nil || resp == nil:
 		// Says nothing about the quota.
-		ob.RecordFailure(time.Time{})
+		ob.RecordFailureFrom(started, time.Time{})
 		r.quota.cancelProbe()
 	case IsQuotaExhausted(resp):
-		r.quota.RecordFailure(RetryAfterFromResponse(resp))
+		r.quota.RecordFailureFrom(started, RetryAfterFromResponse(resp))
 		ob.cancelProbe()
 	case IsTransientResponse(resp):
-		ob.RecordFailure(RetryAfterFromResponse(resp))
+		ob.RecordFailureFrom(started, RetryAfterFromResponse(resp))
 		r.quota.RecordSuccess()
 	default:
 		ob.RecordSuccess()

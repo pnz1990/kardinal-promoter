@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const (
@@ -358,6 +359,9 @@ func (a *AzureDevOpsProvider) do(ctx context.Context, method, path string, body,
 	if err := a.circuits.Allow(owner); err != nil {
 		return fmt.Errorf("azuredevops scm: %w", err)
 	}
+	// When the call started: a failure of a call that started before the
+	// circuit opened is not counted (CircuitBreaker.RecordFailureFrom).
+	started := time.Now()
 
 	var bodyReader io.Reader
 	if body != nil {
@@ -380,18 +384,18 @@ func (a *AzureDevOpsProvider) do(ctx context.Context, method, path string, body,
 
 	resp, err := a.client.Do(req)
 	if err != nil {
-		a.circuits.Record(owner, nil, err)
+		a.circuits.Record(owner, started, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		a.circuits.Record(owner, resp, nil)
+		a.circuits.Record(owner, started, resp, nil)
 		return newAPIError("azuredevops", method, path, resp, raw)
 	}
 
-	a.circuits.Record(owner, resp, nil)
+	a.circuits.Record(owner, started, resp, nil)
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)

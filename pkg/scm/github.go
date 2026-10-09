@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // GitHubProvider implements SCMProvider against the GitHub REST API.
@@ -308,6 +309,9 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 	if err := g.circuits.Allow(owner); err != nil {
 		return fmt.Errorf("github scm: %w", err)
 	}
+	// When the call started: a failure of a call that started before the
+	// circuit opened is not counted (CircuitBreaker.RecordFailureFrom).
+	started := time.Now()
 
 	var bodyReader io.Reader
 	if body != nil {
@@ -332,18 +336,18 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 	resp, err := g.client.Do(req)
 	if err != nil {
 		// Network error — record as failure with no retry-after hint.
-		g.circuits.Record(owner, nil, err)
+		g.circuits.Record(owner, started, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		g.circuits.Record(owner, resp, nil)
+		g.circuits.Record(owner, started, resp, nil)
 		return newAPIError("GitHub", method, path, resp, raw)
 	}
 
-	g.circuits.Record(owner, resp, nil)
+	g.circuits.Record(owner, started, resp, nil)
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)

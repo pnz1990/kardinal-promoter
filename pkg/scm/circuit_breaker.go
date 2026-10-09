@@ -51,13 +51,19 @@ func (s CircuitState) String() string {
 const (
 	// defaultFailureThreshold is the number of consecutive failures before opening.
 	defaultFailureThreshold = 5
-	// defaultBaseBackoff is the base backoff duration for exponential backoff.
-	defaultBaseBackoff = 30 * time.Second
-	// defaultMaxBackoff caps the exponential backoff.
-	defaultMaxBackoff = 10 * time.Minute
+	// defaultBaseBackoff is how long the circuit first stays open. Each
+	// failed half-open probe doubles it, so the open time follows the
+	// outage: a short outage is over after a few seconds of waiting (#1476).
+	defaultBaseBackoff = 5 * time.Second
+	// defaultMaxBackoff caps the exponential backoff: the circuit lets a
+	// probe through at least this often during a long outage, so it closes
+	// at most this long after the SCM is back. A server's Retry-After or
+	// rate-limit reset can keep it open longer.
+	defaultMaxBackoff = 2 * time.Minute
 	// defaultHalfOpenTimeout is how long a half-open probe may take before
-	// another caller is allowed to probe (the first one never reported back).
-	defaultHalfOpenTimeout = 2 * time.Minute
+	// another caller is allowed to probe (the first one never reported back):
+	// the providers' HTTP timeout and a margin.
+	defaultHalfOpenTimeout = providerHTTPTimeout + 15*time.Second
 )
 
 // CircuitBreaker implements the circuit-breaker pattern for SCM API calls.
@@ -70,9 +76,16 @@ const (
 //	Closed → Open: on N consecutive failures (N = FailureThreshold)
 //	Open → HalfOpen: when the backoff (or the server's retry time) elapses
 //	HalfOpen → Closed: on one success
-//	HalfOpen → Open: on one failure
+//	HalfOpen → Open: when the probe fails
 //
 // In half-open only one caller at a time is let through as the probe.
+//
+// The backoff grows per opening, not per failed call (#1476): it is
+// BaseBackoff when the circuit opens and doubles each time a probe fails, up
+// to MaxBackoff. A call admitted while the circuit was closed that fails
+// after it opened (a request in flight when the SCM went away) says nothing
+// new and is not counted, so a burst of concurrent failures cannot push the
+// backoff to its cap.
 type CircuitBreaker struct {
 	// FailureThreshold is the number of consecutive failures before opening.
 	FailureThreshold int
@@ -88,6 +101,9 @@ type CircuitBreaker struct {
 	mu               sync.Mutex
 	state            CircuitState
 	consecutiveFails int
+	// openings counts the failed probes since the circuit opened; the
+	// backoff is BaseBackoff * 2^openings.
+	openings int
 	openUntil        time.Time // when to transition Open → HalfOpen
 	probeStarted     time.Time // when the current half-open probe was admitted; zero if none
 }
@@ -156,6 +172,7 @@ func (cb *CircuitBreaker) RecordSuccess() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.consecutiveFails = 0
+	cb.openings = 0
 	cb.state = CircuitClosed
 	cb.probeStarted = time.Time{}
 }
@@ -189,30 +206,53 @@ func (cb *CircuitBreaker) RecordResponse(resp *http.Response) {
 	cb.RecordSuccess()
 }
 
-// RecordFailure records a failed call.
-// If the failure count exceeds FailureThreshold, the circuit opens.
-// If a retryAfter time is known (from SCM response headers), it is used
-// as the minimum open duration; otherwise exponential backoff is used.
+// RecordFailure records a failed call that started just now: it always
+// counts. Providers use RecordFailureFrom with the call's start time.
 func (cb *CircuitBreaker) RecordFailure(retryAfter time.Time) {
+	cb.RecordFailureFrom(time.Now(), retryAfter)
+}
+
+// RecordFailureFrom records a failed call that started at started.
+// retryAfter, when known (from the SCM's response headers), is the earliest
+// time the circuit may let a call through; otherwise the backoff decides.
+//
+//   - Closed: the failure is counted; FailureThreshold in a row open the
+//     circuit for BaseBackoff.
+//   - Half-open, and the call is the probe: the circuit opens again for
+//     twice its previous backoff.
+//   - Open, or half-open and the call started before the probe: a call
+//     that was in flight when the circuit opened failed late. It is not
+//     counted (#1476); a retryAfter later than the open window extends it.
+func (cb *CircuitBreaker) RecordFailureFrom(started, retryAfter time.Time) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-	defer func() { cb.probeStarted = time.Time{} }()
 
-	if cb.currentState() == CircuitHalfOpen {
-		// Probe failed — reopen the circuit with doubled timeout
-		backoff := cb.backoffDuration(cb.consecutiveFails)
-		cb.openUntil = latestTime(retryAfter, time.Now().Add(backoff))
-		cb.state = CircuitOpen
-		cb.consecutiveFails++
+	switch cb.currentState() {
+	case CircuitOpen:
+		cb.openUntil = latestTime(retryAfter, cb.openUntil)
+		return
+	case CircuitHalfOpen:
+		if cb.probeStarted.IsZero() || started.Before(cb.probeStarted) {
+			cb.openUntil = latestTime(retryAfter, cb.openUntil)
+			return
+		}
+		cb.openings++
+		cb.openLocked(retryAfter)
 		return
 	}
-
 	cb.consecutiveFails++
 	if cb.consecutiveFails >= cb.FailureThreshold {
-		backoff := cb.backoffDuration(cb.consecutiveFails - cb.FailureThreshold)
-		cb.openUntil = latestTime(retryAfter, time.Now().Add(backoff))
-		cb.state = CircuitOpen
+		cb.openings = 0
+		cb.openLocked(retryAfter)
 	}
+}
+
+// openLocked opens the circuit for the current backoff, or until retryAfter
+// if that is later. Must be called with cb.mu held.
+func (cb *CircuitBreaker) openLocked(retryAfter time.Time) {
+	cb.openUntil = latestTime(retryAfter, time.Now().Add(cb.backoffDuration(cb.openings)))
+	cb.state = CircuitOpen
+	cb.probeStarted = time.Time{}
 }
 
 // backoffDuration returns the exponential backoff for the given step.

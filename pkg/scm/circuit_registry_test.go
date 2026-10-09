@@ -172,7 +172,7 @@ func TestCircuitRegistry_Concurrent(t *testing.T) {
 			defer wg.Done()
 			owner := "o" + strconv.Itoa(i%5)
 			if err := reg.Allow(owner); err == nil {
-				reg.Record(owner, &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{}}, nil)
+				reg.Record(owner, time.Now(), &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{}}, nil)
 			}
 		}(i)
 	}
@@ -190,14 +190,29 @@ func TestCircuitRegistry_Bounded(t *testing.T) {
 	ok := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}}
 	for i := 0; i < 5; i++ {
 		require.NoError(t, reg.Allow("failing"))
-		reg.Record("failing", fail, nil)
+		reg.Record("failing", time.Now(), fail, nil)
 	}
 	require.Error(t, reg.Allow("failing"), "the failing owner's circuit is open")
 	for i := 0; i < 2000; i++ {
 		owner := "o" + strconv.Itoa(i)
 		require.NoError(t, reg.Allow(owner))
-		reg.Record(owner, ok, nil)
+		reg.Record(owner, time.Now(), ok, nil)
 	}
 	assert.LessOrEqual(t, reg.Owners(), 257, "idle owners are dropped")
 	assert.True(t, isCircuitOpen(reg.Allow("failing")), "an open circuit is never dropped")
+}
+
+// TestCircuitRegistry_InFlightFailures: requests in flight when an owner's
+// circuit opens fail with it; recorded with their start time, they do not
+// lengthen its backoff (#1476).
+func TestCircuitRegistry_InFlightFailures(t *testing.T) {
+	reg := scm.NewCircuitRegistry()
+	started := time.Now()
+	for i := 0; i < 60; i++ {
+		reg.Record("acme", started, nil, errors.New("connection refused"))
+	}
+	err := reg.Allow("acme")
+	var open *scm.ErrCircuitOpen
+	require.ErrorAs(t, err, &open)
+	assert.LessOrEqual(t, time.Until(open.RetryAfter), scm.NewCircuitBreaker().BaseBackoff+time.Second)
 }

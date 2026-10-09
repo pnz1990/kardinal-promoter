@@ -104,14 +104,20 @@ func (g *GitLabProvider) DeleteBranch(ctx context.Context, repo, branch string) 
 
 // DeleteBranch deletes a Forgejo or Gitea branch. Both route /branches/* by
 // path, so the slashes of the name stay. Forgejo answers 500 "object does
-// not exist" to the delete of a branch that is not there (B90), so after a
-// failed delete the branch is read, and a branch that reads 404 is gone.
+// not exist" to the delete of a branch that is not there (B90). That 500
+// would count against the SCM circuit, so the branch is read first and a
+// branch that reads 404 is gone: deleting a deleted branch is a no-op, as a
+// cleanup retried after an outage needs (#1476). After a failed delete the
+// branch is read again.
 func (f *ForgejoProvider) DeleteBranch(ctx context.Context, repo, branch string) error {
 	owner, name, err := splitRepo(repo)
 	if err != nil {
 		return err
 	}
 	path := fmt.Sprintf("/api/v1/repos/%s/%s/branches/%s", owner, name, branchPath(branch))
+	if _, gone := statusIs(f.do(ctx, http.MethodGet, path, nil, nil), http.StatusNotFound); gone {
+		return nil
+	}
 	err = f.do(ctx, http.MethodDelete, path, nil, nil)
 	if _, gone := statusIs(err, http.StatusNotFound); gone || err == nil {
 		return nil

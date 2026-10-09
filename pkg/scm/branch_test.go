@@ -134,9 +134,16 @@ func TestDeleteBranch(t *testing.T) {
 		t.Run(p.name+"/deleted", func(t *testing.T) {
 			srv, reqs := branchAPI(t, http.StatusNoContent, "")
 			require.NoError(t, p.new(srv.URL).DeleteBranch(context.Background(), p.repo, branch))
-			require.Len(t, reqs(), 1)
-			assert.Equal(t, http.MethodDelete, reqs()[0].Method)
-			assert.Equal(t, p.wantURI, reqs()[0].URI)
+			// Forgejo reads the branch first (#1476); every provider ends with
+			// one DELETE.
+			rs := reqs()
+			require.NotEmpty(t, rs)
+			last := rs[len(rs)-1]
+			assert.Equal(t, http.MethodDelete, last.Method)
+			assert.Equal(t, p.wantURI, last.URI)
+			for _, r := range rs[:len(rs)-1] {
+				assert.Equal(t, http.MethodGet, r.Method)
+			}
 		})
 		for _, g := range p.gone {
 			t.Run(p.name+"/already gone", func(t *testing.T) {
@@ -213,6 +220,8 @@ func TestDeleteBranch_ForgejoMissingBranch(t *testing.T) {
 		delBody   string
 		getStatus int
 		wantErr   string
+		// goneBefore makes the read before the delete answer 404.
+		goneBefore bool
 	}{
 		{name: "a 500 for a branch that reads 404 is gone", delStatus: http.StatusInternalServerError, delBody: missing,
 			getStatus: http.StatusNotFound},
@@ -222,6 +231,9 @@ func TestDeleteBranch_ForgejoMissingBranch(t *testing.T) {
 			getStatus: http.StatusOK, wantErr: "status 423"},
 		{name: "a branch the read cannot find either way is an error", delStatus: http.StatusInternalServerError, delBody: missing,
 			getStatus: http.StatusInternalServerError, wantErr: "status 500"},
+		// The read before the delete finds no branch: nothing is sent that
+		// Forgejo would answer with a 500 the SCM circuit counts (#1476).
+		{name: "a branch already gone is not deleted again", goneBefore: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -236,7 +248,12 @@ func TestDeleteBranch_ForgejoMissingBranch(t *testing.T) {
 					_, _ = io.WriteString(w, tc.delBody)
 					return
 				}
-				w.WriteHeader(tc.getStatus)
+				switch {
+				case len(reqs) > 1:
+					w.WriteHeader(tc.getStatus) // the read after the delete
+				case tc.goneBefore:
+					w.WriteHeader(http.StatusNotFound)
+				}
 				_, _ = io.WriteString(w, `{"name":"`+branch+`"}`)
 			}))
 			t.Cleanup(srv.Close)
@@ -250,7 +267,11 @@ func TestDeleteBranch_ForgejoMissingBranch(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			assert.Equal(t, []branchRequest{{Method: http.MethodDelete, URI: uri}, {Method: http.MethodGet, URI: uri}}, reqs)
+			want := []branchRequest{{Method: http.MethodGet, URI: uri}, {Method: http.MethodDelete, URI: uri}, {Method: http.MethodGet, URI: uri}}
+			if tc.goneBefore {
+				want = want[:1]
+			}
+			assert.Equal(t, want, reqs)
 		})
 	}
 }
