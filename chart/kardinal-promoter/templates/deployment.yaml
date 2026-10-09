@@ -75,6 +75,17 @@ spec:
             {{- with .Values.controller.gateStatusHeartbeat }}
             - --gate-status-heartbeat={{ . }}
             {{- end }}
+            {{- with .Values.controller.accessLog }}
+            {{- if .allRequests }}
+            - --access-log-all-requests=true
+            {{- end }}
+            {{- if .sourceIP }}
+            - --access-log-source-ip=true
+            {{- end }}
+            {{- with .trustedProxies }}
+            - --access-log-trusted-proxies={{ join "," . }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.controller.watchNamespace }}
             - --watch-namespace={{ . }}
             {{- end }}

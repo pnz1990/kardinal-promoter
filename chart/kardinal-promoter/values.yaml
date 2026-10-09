@@ -102,6 +102,18 @@ controller:
   # default, 10m. "0s" writes the status on every evaluation; each write makes
   # kro re-check the gate's whole Graph.
   gateStatusHeartbeat: ""
+  # -- Access log of the UI API and the Bundle API: logins (TokenReviews),
+  # refusals (401/403/429, with the reason) and writes are always logged as
+  # structured lines (component=access). Tokens are never logged.
+  accessLog:
+    # -- Log every request (--access-log-all-requests).
+    allRequests: false
+    # -- Add the client address (--access-log-source-ip).
+    sourceIP: false
+    # -- CIDRs of proxies (an Ingress controller) whose X-Forwarded-For gives
+    # the client address (--access-log-trusted-proxies). Other clients'
+    # X-Forwarded-For is ignored.
+    trustedProxies: []
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).
