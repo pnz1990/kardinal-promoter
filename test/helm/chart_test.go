@@ -296,6 +296,38 @@ func TestHelmTemplateUIAllowedHosts(t *testing.T) {
 	assert.Error(t, err, "a scheme in ui.allowedHosts must fail the schema:\n%s", string(out))
 }
 
+// TestHelmTemplateTracing verifies the tracing values: nothing is rendered
+// while tracing is off, the flags when it is on (samplingRatio 0 included),
+// and the schema refuses a bad endpoint or ratio.
+func TestHelmTemplateTracing(t *testing.T) {
+	helm := helmBin(t)
+	chartDir := filepath.Join(repoRoot(t), "chart", "kardinal-promoter")
+
+	out, err := exec.Command(helm, "template", "kardinal-promoter", chartDir).CombinedOutput()
+	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
+	assert.NotContains(t, string(out), "--tracing-", "tracing is off by default")
+
+	out, err = exec.Command(helm, "template", "kardinal-promoter", chartDir, "--set", "tracing.enabled=true",
+		"--set", "tracing.endpoint=http://otel-collector.observability:4318", "--set", "tracing.samplingRatio=0").CombinedOutput()
+	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
+	for _, arg := range []string{"- --tracing-enabled=true\n", "- --tracing-endpoint=http://otel-collector.observability:4318\n",
+		"- --tracing-sampling-ratio=0\n"} {
+		assert.Contains(t, string(out), arg)
+	}
+	assert.NotContains(t, string(out), "--tracing-insecure")
+
+	out, err = exec.Command(helm, "template", "kardinal-promoter", chartDir, "--set", "tracing.enabled=true",
+		"--set", "tracing.endpoint=otel:4318", "--set", "tracing.insecure=true").CombinedOutput()
+	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
+	assert.Contains(t, string(out), "- --tracing-insecure=true\n")
+	assert.Contains(t, string(out), "- --tracing-sampling-ratio=0.1\n", "the default ratio")
+
+	for _, bad := range [][]string{{"tracing.endpoint=grpc://otel:4317"}, {"tracing.endpoint=http://a b"}, {"tracing.samplingRatio=2"}} {
+		out, err = exec.Command(helm, "template", "kardinal-promoter", chartDir, "--set", bad[0]).CombinedOutput()
+		assert.Error(t, err, "%s must fail the schema:\n%s", bad[0], string(out))
+	}
+}
+
 func TestDockerignoreExists(t *testing.T) {
 	root := repoRoot(t)
 	dockerignore := filepath.Join(root, ".dockerignore")
