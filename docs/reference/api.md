@@ -53,7 +53,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec` | object |  | BundleSpec defines the desired state of a Bundle. An image Bundle deploys only its images, so a configRef on it is refused instead of ignored (#1353). Bundles stored before the rule keep working: CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest supported) lets an update through when spec is unchanged. |
 | `spec.chart` | object |  | Chart is the Helm chart version a "chart" Bundle promotes. The helm-set-image step writes chart.version at update.helm.chartVersionPath. |
 | `spec.chart.digest` | string |  | Digest is the chart package digest (index.yaml digest, or the OCI manifest digest). |
-| `spec.chart.name` | string | yes | Name is the chart name. |
+| `spec.chart.name` | string | yes | Name is the chart name: letters, digits, ".", "_" and "-", starting and ending with a letter or digit. It is joined into the chart's index and OCI paths, so a "/", "]" or other path character would point the version lookup elsewhere. |
 | `spec.chart.repoURL` | string |  | RepoURL is the chart repository (https://... or oci://...). |
 | `spec.chart.version` | string | yes | Version is the chart version. |
 | `spec.configRef` | object |  | ConfigRef points to the GitOps repository commit this Bundle represents when the bundle type is "config" or "mixed". |
@@ -452,7 +452,7 @@ Subscription watches an OCI registry, a Git repository or a Helm chart repositor
 | `spec.git.secretRef.name` | string | yes | Name is the Secret name. |
 | `spec.helm` | object |  | Helm holds Helm chart watching parameters. Required when type=helm. |
 | `spec.helm.allowTags` | []string |  | AllowTags, when not empty, keeps only the listed tags. |
-| `spec.helm.chart` | string | yes | Chart is the chart name. |
+| `spec.helm.chart` | string | yes | Chart is the chart name: letters, digits, ".", "_" and "-", starting and ending with a letter or digit (Bundle spec.chart.name takes it as is, with the same rule). |
 | `spec.helm.excludeTagFilter` | string |  | ExcludeTagFilter is an optional regular expression (RE2): tags that match it are dropped (for example "-rc\\.\|-debug$"). |
 | `spec.helm.ignoreTags` | []string |  | IgnoreTags drops the listed tags. |
 | `spec.helm.interval` | string |  | Interval is how often to poll the repository. Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised to 30s; empty or "0" means the 5m default. Default: `5m`. |

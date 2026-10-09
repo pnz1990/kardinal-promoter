@@ -35,7 +35,7 @@ poll, and the payload's tag or digest is never trusted.
 | `401 {"status":"unauthorized"}` | Any authentication failure, a Subscription that does not exist, or one without `spec.webhook`: the answer does not reveal which Subscriptions exist |
 | `404` | The path is not `/webhook/subscriptions/<namespace>/<name>/<provider>[/<token>]` |
 | `413` | The payload is over 1 MB |
-| `429` | More than 10 requests a second (bursts of 20) from one source address, or 5 a second (bursts of 10) for one Subscription. Behind an Ingress every sender has the Ingress's address, so the per-Subscription limit is what separates them |
+| `429` | More than 10 requests a second (bursts of 20) from one source address, or 5 a second (bursts of 10) for one Subscription. Behind an Ingress or load balancer every sender has its address, so all senders share one per-address bucket, and the per-Subscription limit is shared by everyone who posts to that Subscription: neither separates one sender from another. Give each Subscription its own token Secret ([Enabling it on a Subscription](#enabling-it-on-a-subscription)), so a leaked token reaches one Subscription only, and rate-limit per client at the Ingress |
 
 The reconciler polls at most once every 10 seconds per Subscription, however many
 deliveries arrive.

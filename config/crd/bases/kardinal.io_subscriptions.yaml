@@ -136,8 +136,13 @@ spec:
                     maxItems: 100
                     type: array
                   chart:
-                    description: Chart is the chart name.
+                    description: |-
+                      Chart is the chart name: letters, digits, ".", "_" and "-", starting
+                      and ending with a letter or digit (Bundle spec.chart.name takes it as
+                      is, with the same rule).
+                    maxLength: 250
                     minLength: 1
+                    pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
                     type: string
                   excludeTagFilter:
                     description: |-

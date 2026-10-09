@@ -83,8 +83,13 @@ type ChartRef struct {
 	// +optional
 	RepoURL string `json:"repoURL,omitempty"`
 
-	// Name is the chart name.
+	// Name is the chart name: letters, digits, ".", "_" and "-", starting
+	// and ending with a letter or digit. It is joined into the chart's
+	// index and OCI paths, so a "/", "]" or other path character would
+	// point the version lookup elsewhere.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=250
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`
 	Name string `json:"name"`
 
 	// Version is the chart version.

@@ -73,8 +73,14 @@ spec:
                       manifest digest).
                     type: string
                   name:
-                    description: Name is the chart name.
+                    description: |-
+                      Name is the chart name: letters, digits, ".", "_" and "-", starting
+                      and ending with a letter or digit. It is joined into the chart's
+                      index and OCI paths, so a "/", "]" or other path character would
+                      point the version lookup elsewhere.
+                    maxLength: 250
                     minLength: 1
+                    pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
                     type: string
                   repoURL:
                     description: RepoURL is the chart repository (https://... or oci://...).

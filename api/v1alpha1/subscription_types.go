@@ -255,9 +255,13 @@ type HelmSubscriptionSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	RepoURL string `json:"repoURL"`
 
-	// Chart is the chart name.
+	// Chart is the chart name: letters, digits, ".", "_" and "-", starting
+	// and ending with a letter or digit (Bundle spec.chart.name takes it as
+	// is, with the same rule).
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=250
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`
 	Chart string `json:"chart"`
 
 	// TagSelection filters the chart versions; the highest remaining
