@@ -88,9 +88,16 @@ spec:
                 type: string
               repo:
                 description: |-
-                  Repo is the "owner/repo" slug identifying the GitHub repository.
+                  Repo is the repository as the SCM API names it: "owner/repo" (GitHub,
+                  Forgejo, Gitea, Bitbucket), the project path with subgroups (GitLab), or
+                  "organization/project/repo" (Azure DevOps, whose project and repository
+                  names may hold single spaces). Each segment is letters, digits, ".", "_" and "-": no
+                  percent escapes, backslashes, "?", "#" or control characters, which the
+                  SCM API would read as another path.
                   Example: acme/my-service
                   Set by the open-pr step after the PR is created. Empty in the placeholder.
+                maxLength: 512
+                pattern: ^([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*)*)?$
                 type: string
             type: object
           status:

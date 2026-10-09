@@ -178,6 +178,14 @@ type PromotionStepStatus struct {
 	// +optional
 	BakeElapsedMinutes int64 `json:"bakeElapsedMinutes,omitempty"`
 
+	// BakeFirstStartedAt is when the first bake window of this step began:
+	// the first healthy check with env.bake configured. It is never reset.
+	// With bake.policy reset-on-alarm, the step must complete one full
+	// window by BakeFirstStartedAt + bake.minutes + health.timeout, so a
+	// release that keeps flapping ends (#1423).
+	// +optional
+	BakeFirstStartedAt *metav1.Time `json:"bakeFirstStartedAt,omitempty"`
+
 	// BakeResets is the number of times the bake timer was reset due to a
 	// health alarm during the current bake window (K-01).
 	// +optional

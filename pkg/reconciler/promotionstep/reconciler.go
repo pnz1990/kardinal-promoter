@@ -137,6 +137,13 @@ type Reconciler struct {
 	// SCM is the SCM provider for PR operations.
 	SCM scm.SCMProvider
 
+	// AllowedRepositories is --scm-allowed-repositories: a step of a Pipeline
+	// that would need the shared SCM token for a spec.git.url it does not
+	// allow fails before git-clone (repositoryNotAllowed, #1332). The SCM
+	// provider is wrapped with the same list (RepositoryAllowlist.Guard), so
+	// every SCM call is checked too. Nil allows every repository.
+	AllowedRepositories *scm.RepositoryAllowlist
+
 	// GitClient is the Git operations client.
 	GitClient scm.GitClient
 
@@ -438,6 +445,19 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 // Forgejo and Gitea (handleDeleted, B79). The status read, the close and the
 // delete can fail; the comment is best-effort.
 func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) error {
+	err := r.closeStepPRWithSCM(ctx, ps, reason, keepBranch)
+	if errors.Is(err, scm.ErrRepositoryNotAllowed) {
+		// The shared token may not act on this repository (#1332): kardinal
+		// opened nothing there with it, and retrying cannot change that.
+		zerolog.Ctx(ctx).Warn().Err(err).Str("step", ps.Name).
+			Msg("left the PR and branch of the step alone: the repository is not allowed")
+		return nil
+	}
+	return err
+}
+
+// closeStepPRWithSCM is closeStepPR without the allowlist handling.
+func (r *Reconciler) closeStepPRWithSCM(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) error {
 	repo, num := "", 0
 	if ps.Spec.PRStatusRef != "" {
 		var prs v1alpha1.PRStatus
@@ -495,12 +515,45 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		return fmt.Errorf("close PR #%d: %w", num, err)
 	}
 	log.Info().Int("pr", num).Str("step", ps.Name).Msg("closed PR of cancelled step")
+	r.markPRStatusClosedByKardinal(ctx, ps, num)
 	body := fmt.Sprintf("kardinal closed this PR: %s. Merging it would change environment %s "+
 		"without a PromotionStep tracking it.", reason, ps.Spec.Environment)
 	if err := r.SCM.CommentOnPR(ctx, repo, num, body); err != nil {
 		log.Warn().Err(err).Int("pr", num).Msg("could not comment on the closed PR (non-fatal)")
 	}
 	return r.closedPRBranch(ctx, ps, repo, num, keepBranch)
+}
+
+// markPRStatusClosedByKardinal records on the step's PRStatus that kardinal
+// closed PR num itself (prstatus.AnnotationClosedByKardinal), so the PRStatus
+// reconciler does not comment "stopped tracking" on it when the grace window
+// ends: the close comment already says why (#1351). It writes metadata only,
+// never the PRStatus status, and only when the PRStatus spec names PR num.
+// Best-effort: a failure costs a second comment, so it is logged.
+func (r *Reconciler) markPRStatusClosedByKardinal(ctx context.Context, ps *v1alpha1.PromotionStep, num int) {
+	if ps.Spec.PRStatusRef == "" {
+		return
+	}
+	log := zerolog.Ctx(ctx)
+	var prs v1alpha1.PRStatus
+	if err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs); err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Warn().Err(err).Int("pr", num).Msg("could not read the PRStatus to mark the PR closed by kardinal (non-fatal)")
+		}
+		return
+	}
+	want := strconv.Itoa(num)
+	if prs.Spec.PRNumber != num || prs.Annotations[prstatus.AnnotationClosedByKardinal] == want {
+		return
+	}
+	patch := client.MergeFrom(prs.DeepCopy())
+	if prs.Annotations == nil {
+		prs.Annotations = map[string]string{}
+	}
+	prs.Annotations[prstatus.AnnotationClosedByKardinal] = want
+	if err := r.Patch(ctx, &prs, patch); err != nil && !apierrors.IsNotFound(err) {
+		log.Warn().Err(err).Int("pr", num).Msg("could not mark the PRStatus closed by kardinal (non-fatal)")
+	}
 }
 
 // withLabelsError appends the error of open-pr's failed attempt to label the
@@ -540,7 +593,15 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
 		return res, holdErr
 	}
+	if held, res, holdErr := r.holdForSlot(ctx, log, ps); held {
+		return res, holdErr
+	}
 	if msg := unsupportedConfig(pipeline, findEnv(pipeline, ps.Spec.Environment), ps); msg != "" {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	}
+	if msg, err := r.repositoryNotAllowed(ctx, pipeline); err != nil {
+		return ctrl.Result{}, err
+	} else if msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 
@@ -642,6 +703,11 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 	env := findEnv(pipeline, ps.Spec.Environment)
 	if msg := unsupportedConfig(pipeline, env, ps); msg != "" {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	}
+	if msg, err := r.repositoryNotAllowed(ctx, pipeline); err != nil {
+		return ctrl.Result{}, err
+	} else if msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 	// Run the step list recorded when the step left Pending, never one rebuilt
@@ -1144,6 +1210,11 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	if msg := unsupportedConfig(pipeline, env, ps); msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
+	if msg, err := r.repositoryNotAllowed(ctx, pipeline); err != nil {
+		return ctrl.Result{}, err
+	} else if msg != "" {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	}
 
 	if r.HealthDetector == nil {
 		// Both binaries always set HealthDetector; only unit tests of the
@@ -1183,6 +1254,9 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			Str("onHealthFailure", env.OnHealthFailure).
 			Msg("health check timeout")
 		msg := fmt.Sprintf("health check timeout after %s", timeout)
+		if deadline, ok := bakeDeadline(ps, env, timeout); ok && !time.Now().Before(deadline) {
+			msg = bakeDeadlineMessage(ps, env, timeout)
+		}
 		if last := ps.Status.Message; last != "" {
 			msg += "; last result: " + last
 		}
@@ -1209,6 +1283,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	}
 	opts.ImagesOnly = bundle.Spec.Type == "image"
 	opts.Since = healthCheckStart(ps)
+	opts.ChangedAt = changeReachedGitAfter(ps)
 	if at := ps.Status.TargetUpdatedAt; at != nil {
 		opts.TargetUpdatedAt = at.Time
 	}
@@ -1506,6 +1581,26 @@ func healthCheckStart(ps *v1alpha1.PromotionStep) time.Time {
 	return time.Time{}
 }
 
+// changeReachedGitAfter is the earliest time the promoted change can have
+// reached the environment's branch: when the promotion PR was opened (the
+// merge is later; the SCM's merge time is not recorded), else when git-push
+// started. Zero when the step statuses record neither, or when the
+// promotion changed nothing in git.
+func changeReachedGitAfter(ps *v1alpha1.PromotionStep) time.Time {
+	if ps.Status.Outputs["noChanges"] == "true" {
+		return time.Time{}
+	}
+	if opened, ok := prOpenedAt(ps); ok {
+		return opened
+	}
+	for _, s := range ps.Status.Steps {
+		if s.Name == "git-push" && s.StartedAt != nil {
+			return s.StartedAt.Time
+		}
+	}
+	return time.Time{}
+}
+
 // handleBake implements the K-01 contiguous-healthy soak window.
 //
 // When env.Bake is configured, the step must be healthy for Bake.Minutes
@@ -1526,6 +1621,16 @@ func healthCheckStart(ps *v1alpha1.PromotionStep) time.Time {
 // step that is not healthy again within the timeout applies onHealthFailure,
 // so reset-on-alarm on a broken release ends.
 //
+// A release that keeps flapping (healthy, then an alarm, within every
+// health.timeout) would re-arm that timeout forever. So the step must
+// complete one full window by a deadline: status.bakeFirstStartedAt (the
+// first window's start, never reset) + bake.maxDuration (default
+// bake.minutes + health.timeout). A window that stops at or after the
+// deadline, on an alarm or on a Waiting result such as a paused canary,
+// applies onHealthFailure, and a stopped window's HealthCheckExpiry never
+// passes the deadline (#1423). A window running at the deadline may still
+// complete.
+//
 // All time values are written to CRD status fields — Graph-first compliant.
 func (r *Reconciler) handleBake(
 	ctx context.Context,
@@ -1540,10 +1645,18 @@ func (r *Reconciler) handleBake(
 	if !result.Progressing && !result.Healthy {
 		ps.Status.ConsecutiveHealthFailures++
 	}
+	if ps.Status.BakeFirstStartedAt == nil && ps.Status.BakeStartedAt != nil {
+		// A window that started before the field existed.
+		first := *ps.Status.BakeStartedAt
+		ps.Status.BakeFirstStartedAt = &first
+	}
 	// stopWindow stops a running window; the time to the next Healthy result
 	// is bounded by health.timeout again.
 	stopWindow := func() {
 		expiry := metav1.NewTime(now.Add(timeout))
+		if deadline, ok := bakeDeadline(ps, env, timeout); ok && deadline.Before(expiry.Time) {
+			expiry = metav1.NewTime(deadline)
+		}
 		ps.Status.HealthCheckExpiry = &expiry
 		ps.Status.BakeStartedAt = nil
 		ps.Status.BakeElapsedMinutes = 0
@@ -1571,6 +1684,11 @@ func (r *Reconciler) handleBake(
 		ps.Status.Message = fmt.Sprintf(
 			"bake: window stopped, waiting for %s: %s; the %dm window restarts at the next healthy check (resets=%d)",
 			adapterName, result.Reason, env.Bake.Minutes, ps.Status.BakeResets)
+		if pastBakeDeadline(ps, env, timeout, now.Time) {
+			ps.Status.ConsecutiveHealthFailures++
+			return r.applyHealthFailurePolicy(ctx, log, base, ps, env, adapterName,
+				bakeDeadlineMessage(ps, env, timeout)+"; last result: "+result.Reason)
+		}
 		log.Info().Str("env", ps.Spec.Environment).Str("reason", result.Reason).
 			Msg("bake: waiting result, window stopped")
 
@@ -1588,6 +1706,12 @@ func (r *Reconciler) handleBake(
 		ps.Status.Message = fmt.Sprintf(
 			"bake: health alarm via %s — timer reset (resets=%d, need %dm contiguous): %s",
 			adapterName, ps.Status.BakeResets, env.Bake.Minutes, result.Reason)
+		if pastBakeDeadline(ps, env, timeout, now.Time) {
+			// A release that keeps flapping never completes a window: the
+			// deadline from the first window ends it (#1423).
+			return r.applyHealthFailurePolicy(ctx, log, base, ps, env, adapterName,
+				bakeDeadlineMessage(ps, env, timeout)+"; last result: "+result.Reason)
+		}
 		log.Info().
 			Str("env", ps.Spec.Environment).
 			Int("bakeResets", ps.Status.BakeResets).
@@ -1600,6 +1724,9 @@ func (r *Reconciler) handleBake(
 		if ps.Status.BakeStartedAt == nil {
 			ps.Status.BakeStartedAt = &now
 			ps.Status.BakeElapsedMinutes = 0
+			if ps.Status.BakeFirstStartedAt == nil {
+				ps.Status.BakeFirstStartedAt = &now
+			}
 		} else {
 			// The window restarts on every alarm, so the time since it started
 			// is the contiguous healthy time.
@@ -1631,6 +1758,52 @@ func (r *Reconciler) handleBake(
 	return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
 }
 
+// bakeDeadline is the time by which a step with env.bake must complete one
+// full window: the first window's start + bakeMaxDuration. ok is false
+// before the first window started or without a bake. A step whose window
+// started before status.bakeFirstStartedAt existed takes the running
+// window's start (handleBake records it).
+func bakeDeadline(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpec, timeout time.Duration) (time.Time, bool) {
+	if env.Bake == nil {
+		return time.Time{}, false
+	}
+	first := ps.Status.BakeFirstStartedAt
+	if first == nil {
+		first = ps.Status.BakeStartedAt
+	}
+	if first == nil {
+		return time.Time{}, false
+	}
+	return first.Add(bakeMaxDuration(env, timeout)), true
+}
+
+// bakeMaxDuration is bake.maxDuration, or bake.minutes + health.timeout
+// when it is unset or not a duration (admission checks the format). A value
+// shorter than one window counts as one window.
+func bakeMaxDuration(env v1alpha1.EnvironmentSpec, timeout time.Duration) time.Duration {
+	window := time.Duration(env.Bake.Minutes) * time.Minute
+	if d, err := time.ParseDuration(env.Bake.MaxDuration); env.Bake.MaxDuration != "" && err == nil && d > 0 {
+		return max(d, window)
+	}
+	return window + timeout
+}
+
+// pastBakeDeadline reports that now is at or after the bake deadline.
+func pastBakeDeadline(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpec, timeout time.Duration, now time.Time) bool {
+	deadline, ok := bakeDeadline(ps, env, timeout)
+	return ok && !now.Before(deadline)
+}
+
+// bakeDeadlineMessage says that the bake deadline passed.
+func bakeDeadlineMessage(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpec, timeout time.Duration) string {
+	source := "bake.minutes + health.timeout"
+	if env.Bake.MaxDuration != "" {
+		source = "bake.maxDuration"
+	}
+	return fmt.Sprintf("bake: no %dm contiguous healthy window within %s of the first healthy check (%s; resets=%d)",
+		env.Bake.Minutes, bakeMaxDuration(env, timeout), source, ps.Status.BakeResets)
+}
+
 // SetupWithManager registers the PromotionStep reconciler with controller-runtime.
 //
 // The PromotionStep watch reacts to spec, label or annotation changes only.
@@ -1653,7 +1826,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1alpha1.PRStatus{}, handler.EnqueueRequestsFromMapFunc(r.prStatusMapper)).
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
 		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleMapper),
-			builderutil.WithPredicates(predicate.NewPredicateFuncs(isSuperseded))).
+			builderutil.WithPredicates(bundleWakesSteps)).
 		Complete(r)
 }
 
@@ -1664,7 +1837,8 @@ func isSuperseded(obj client.Object) bool {
 }
 
 // bundleMapper wakes the unfinished PromotionSteps of a superseded Bundle so
-// the supersession guard closes their PRs at once. Without it a step in
+// the supersession guard closes their PRs at once, and the steps of a Bundle
+// whose maxConcurrentPromotions hold was set or lifted (holdForSlot). Without it a step in
 // WaitingForMerge saw the new phase only at its next poll
 // (requeueWaitForMerge), and the superseded PR stayed open, and mergeable,
 // until then.
