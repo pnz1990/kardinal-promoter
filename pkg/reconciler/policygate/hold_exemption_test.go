@@ -33,6 +33,28 @@ type holdFixture struct {
 	target   *kardinalv1alpha1.Bundle
 	rb       *kardinalv1alpha1.Bundle
 	steps    []client.Object
+	others   []client.Object
+}
+
+// redigest records the rollback's current artifacts on the hold, as a hold
+// made now would.
+func (f *holdFixture) redigest() {
+	f.pipeline.Spec.Holds[0].Artifacts = lifecycle.ArtifactDigest(f.rb.Spec)
+}
+
+// verified adds a Bundle of the pipeline Verified in prod.
+func (f *holdFixture) verified(name string, spec kardinalv1alpha1.BundleSpec) {
+	b := makeBundle(name, "default")
+	b.Spec.Images = spec.Images
+	b.Spec.ConfigRef = spec.ConfigRef
+	b.Spec.Chart = spec.Chart
+	f.others = append(f.others, b, &kardinalv1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: name + "-prod", Namespace: "default",
+			Labels: map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/bundle": name,
+				"kardinal.io/environment": "prod"}},
+		Spec:   kardinalv1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", BundleName: name, Environment: "prod"},
+		Status: kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
+	})
 }
 
 func newHoldFixture() *holdFixture {
@@ -83,10 +105,41 @@ func TestPolicyGateReconciler_HoldExemption(t *testing.T) {
 		{name: "edited after the hold", env: "prod",
 			edit:       func(f *holdFixture) { f.rb.Spec.Images[0].Tag = "666" },
 			wantRefuse: "no longer has the artifacts it had when the hold was made"},
-		{name: "an image never Verified in the environment", env: "prod", edit: func(f *holdFixture) {
+		{name: "a repository rollbackOf names at another ref", env: "prod", edit: func(f *holdFixture) {
 			f.rb.Spec.Images[0].Tag = "666"
-			f.pipeline.Spec.Holds[0].Artifacts = lifecycle.ArtifactDigest(f.rb.Spec)
-		}, wantRefuse: "image ghcr.io/org/app:666 was not deployed by a Bundle Verified in prod"},
+			f.redigest()
+		}, wantRefuse: "image ghcr.io/org/app is not at rollbackOf nginx-demo-v1's ref ghcr.io/org/app:1"},
+		{name: "another repository's image from a Bundle Verified there passes", env: "prod", edit: func(f *holdFixture) {
+			f.verified("nginx-demo-v0", kardinalv1alpha1.BundleSpec{Images: []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/org/sidecar", Tag: "7"}}})
+			f.rb.Spec.Images = append(f.rb.Spec.Images, kardinalv1alpha1.ImageRef{Repository: "ghcr.io/org/sidecar", Tag: "7"})
+			f.redigest()
+		}, wantExempt: true},
+		{name: "another repository's image never Verified there", env: "prod", edit: func(f *holdFixture) {
+			f.rb.Spec.Images = append(f.rb.Spec.Images, kardinalv1alpha1.ImageRef{Repository: "ghcr.io/org/sidecar", Tag: "666"})
+			f.redigest()
+		}, wantRefuse: "image ghcr.io/org/sidecar:666 was not deployed by a Bundle Verified in prod"},
+		{name: "a rollback Bundle of another pipeline", env: "prod", edit: func(f *holdFixture) {
+			f.rb.Spec.Pipeline = "other"
+			f.redigest()
+		}, wantRefuse: "is not a rollback Bundle of pipeline nginx-demo"},
+		{name: "a config commit other than rollbackOf's", env: "prod", edit: func(f *holdFixture) {
+			f.target.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{GitRepo: "https://git/cfg", CommitSHA: "aaaa"}
+			f.rb.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{GitRepo: "https://git/cfg", CommitSHA: "bbbb"}
+			f.redigest()
+		}, wantRefuse: "config https://git/cfg is not at rollbackOf nginx-demo-v1's commit aaaa"},
+		{name: "a config commit never Verified there", env: "prod", edit: func(f *holdFixture) {
+			f.rb.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{GitRepo: "https://git/cfg", CommitSHA: "cccc"}
+			f.redigest()
+		}, wantRefuse: "config commit cccc was not deployed by a Bundle Verified in prod"},
+		{name: "a chart version other than rollbackOf's", env: "prod", edit: func(f *holdFixture) {
+			f.target.Spec.Chart = &kardinalv1alpha1.ChartRef{RepoURL: "oci://r", Name: "app", Version: "1.0.0"}
+			f.rb.Spec.Chart = &kardinalv1alpha1.ChartRef{RepoURL: "oci://r", Name: "app", Version: "2.0.0"}
+			f.redigest()
+		}, wantRefuse: "chart app is not at rollbackOf nginx-demo-v1's version 1.0.0"},
+		{name: "a chart never Verified there", env: "prod", edit: func(f *holdFixture) {
+			f.rb.Spec.Chart = &kardinalv1alpha1.ChartRef{RepoURL: "oci://r", Name: "app", Version: "9.9.9"}
+			f.redigest()
+		}, wantRefuse: "chart app 9.9.9 was not deployed by a Bundle Verified in prod"},
 		{name: "rollbackOf never Verified in the environment", env: "prod", edit: func(f *holdFixture) {
 			f.steps[0].(*kardinalv1alpha1.PromotionStep).Status.State = "Failed"
 		}, wantRefuse: "rollbackOf nginx-demo-v1 was never Verified in prod"},
@@ -105,6 +158,7 @@ func TestPolicyGateReconciler_HoldExemption(t *testing.T) {
 			gate.Labels["kardinal.io/environment"] = tc.env
 			gate.Labels["kardinal.io/gate-name"] = "no-weekend-deploys"
 			objs := append([]client.Object{gate, f.rb, f.target, f.pipeline}, f.steps...)
+			objs = append(objs, f.others...)
 			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(objs...).WithStatusSubresource(gate).Build()
 			rec := events.NewFakeRecorder(10)
 			r, err := policygate.NewReconciler(c)

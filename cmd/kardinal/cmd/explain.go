@@ -314,7 +314,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 func writeExplainHolds(w io.Writer, p *v1alpha1.Pipeline, envFilter string) error {
 	var buf strings.Builder
 	for _, h := range p.Spec.Holds {
-		if envFilter != "" && h.Environment != envFilter {
+		if (envFilter != "" && h.Environment != envFilter) || h.Expired(time.Now()) {
 			continue
 		}
 		by := h.CreatedBy

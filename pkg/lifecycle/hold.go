@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -44,30 +45,53 @@ import (
 // (the chart's hold-writes admission policy), which also pins createdBy to
 // the requesting user.
 
-// HoldOf returns the hold of env in p, or nil.
+// HoldNow is the clock HoldOf and HoldNaming compare expiresAt with. Tests
+// replace it.
+var HoldNow = time.Now
+
+// HoldOf returns the hold of env in p, or nil. A hold whose expiresAt has
+// passed counts as absent, also before the Pipeline reconciler removes it.
 func HoldOf(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentHold {
 	if p == nil {
 		return nil
 	}
+	now := HoldNow()
 	for i := range p.Spec.Holds {
-		if p.Spec.Holds[i].Environment == env {
+		if p.Spec.Holds[i].Environment == env && !p.Spec.Holds[i].Expired(now) {
 			return &p.Spec.Holds[i]
 		}
 	}
 	return nil
 }
 
-// HoldNaming returns the hold of p whose Bundle is bundle, or nil.
+// HoldNaming returns the hold of p whose Bundle is bundle, or nil. Expired
+// holds count as absent.
 func HoldNaming(p *v1alpha1.Pipeline, bundle string) *v1alpha1.EnvironmentHold {
 	if p == nil || bundle == "" {
 		return nil
 	}
+	now := HoldNow()
 	for i := range p.Spec.Holds {
-		if p.Spec.Holds[i].Bundle == bundle {
+		if p.Spec.Holds[i].Bundle == bundle && !p.Spec.Holds[i].Expired(now) {
 			return &p.Spec.Holds[i]
 		}
 	}
 	return nil
+}
+
+// UntilExpiry is how long until h expires, or fallback when that is later
+// or h has no expiresAt: the requeue of a reconciler that acts on h.
+func UntilExpiry(h *v1alpha1.EnvironmentHold, fallback time.Duration) time.Duration {
+	if h == nil || h.ExpiresAt == nil {
+		return fallback
+	}
+	if d := h.ExpiresAt.Sub(HoldNow()); d < fallback {
+		if d < time.Second {
+			return time.Second
+		}
+		return d
+	}
+	return fallback
 }
 
 // HeldFrom returns the hold that keeps bundle out of env, or nil: env is held
@@ -110,21 +134,21 @@ type HoldRequest struct {
 }
 
 // ArtifactDigest is the digest of what a Bundle deploys: its type, images
-// (repository, tag, digest), configRef and chart. A hold records it, and the gate
-// exemption applies only while the held Bundle still has the same digest.
+// (repository, tag, digest), configRef and chart, encoded as JSON and hashed
+// with SHA-256. A hold records it, and the gate exemption applies only while
+// the held Bundle still has the same digest.
 func ArtifactDigest(spec v1alpha1.BundleSpec) string {
-	h := sha256.New()
-	_, _ = fmt.Fprintf(h, "type=%s\n", spec.Type)
-	for _, img := range spec.Images {
-		_, _ = fmt.Fprintf(h, "image=%s|%s|%s\n", img.Repository, img.Tag, img.Digest)
+	raw, err := json.Marshal(struct {
+		Type      string              `json:"type"`
+		Images    []v1alpha1.ImageRef `json:"images"`
+		ConfigRef *v1alpha1.ConfigRef `json:"configRef"`
+		Chart     *v1alpha1.ChartRef  `json:"chart"`
+	}{spec.Type, spec.Images, spec.ConfigRef, spec.Chart})
+	if err != nil { // the fields are plain strings: Marshal cannot fail
+		return ""
 	}
-	if spec.ConfigRef != nil {
-		_, _ = fmt.Fprintf(h, "config=%s|%s\n", spec.ConfigRef.GitRepo, spec.ConfigRef.CommitSHA)
-	}
-	if spec.Chart != nil {
-		_, _ = fmt.Fprintf(h, "chart=%s|%s|%s\n", spec.Chart.RepoURL, spec.Chart.Name, spec.Chart.Version)
-	}
-	return "sha256:" + hex.EncodeToString(h.Sum(nil))
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // VerifyHeldRollback decides whether the Bundle h names may pass the gates
@@ -161,6 +185,18 @@ func VerifyHeldRollback(ctx context.Context, c client.Reader, p *v1alpha1.Pipeli
 	if !hist.verifiedIn(target) {
 		return nil, fmt.Sprintf("rollbackOf %s was never Verified in %s", target, h.Environment)
 	}
+	var t v1alpha1.Bundle
+	if err := c.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: target}, &t); err != nil {
+		return nil, fmt.Sprintf("rollbackOf %s: %v", target, err)
+	}
+	// Per repository: every image repository, config repository and chart
+	// rollbackOf deploys, the held Bundle deploys at rollbackOf's ref. Only
+	// what rollbackOf does not name may come from other Verified Bundles
+	// (PlanRollback fills those), so no combination is restored that the
+	// rollback target did not run with.
+	if why := sameRefsAs(&b, &t); why != "" {
+		return nil, why
+	}
 	images := map[v1alpha1.ImageRef]bool{}
 	configs := map[v1alpha1.ConfigRef]bool{}
 	charts := map[v1alpha1.ChartRef]bool{}
@@ -194,6 +230,34 @@ func VerifyHeldRollback(ctx context.Context, c client.Reader, p *v1alpha1.Pipeli
 		return nil, fmt.Sprintf("chart %s %s was not deployed by a Bundle Verified in %s", ch.Name, ch.Version, h.Environment)
 	}
 	return &b, ""
+}
+
+// sameRefsAs says why b does not deploy target's ref of every repository
+// target names, or "".
+func sameRefsAs(b, target *v1alpha1.Bundle) string {
+	held := map[string]v1alpha1.ImageRef{}
+	for _, img := range b.Spec.Images {
+		held[img.Repository] = img
+	}
+	for _, img := range target.Spec.Images {
+		got, ok := held[img.Repository]
+		if !ok || got != img {
+			return fmt.Sprintf("image %s is not at rollbackOf %s's ref %s", img.Repository, target.Name, imageString(img))
+		}
+	}
+	if tc := target.Spec.ConfigRef; tc != nil && tc.CommitSHA != "" {
+		bc := b.Spec.ConfigRef
+		if bc == nil || bc.GitRepo != tc.GitRepo || bc.CommitSHA != tc.CommitSHA {
+			return fmt.Sprintf("config %s is not at rollbackOf %s's commit %s", tc.GitRepo, target.Name, tc.CommitSHA)
+		}
+	}
+	if tch := target.Spec.Chart; tch != nil {
+		bch := b.Spec.Chart
+		if bch == nil || *bch != *tch {
+			return fmt.Sprintf("chart %s is not at rollbackOf %s's version %s", tch.Name, target.Name, tch.Version)
+		}
+	}
+	return ""
 }
 
 func imageString(img v1alpha1.ImageRef) string {
@@ -273,7 +337,16 @@ func setHold(ctx context.Context, c client.Client, ns, pipeline string, hold v1a
 		if h := HoldOf(&p, hold.Environment); h != nil {
 			return heldConflict(pipeline, h)
 		}
-		p.Spec.Holds = append(p.Spec.Holds, hold)
+		// An expired entry of the environment the controller has not
+		// removed yet makes way (one entry per environment).
+		kept := make([]v1alpha1.EnvironmentHold, 0, len(p.Spec.Holds)+1)
+		for _, x := range p.Spec.Holds {
+			if x.Environment != hold.Environment {
+				kept = append(kept, x)
+			}
+		}
+		kept = append(kept, hold)
+		p.Spec.Holds = kept
 		return c.Update(ctx, &p)
 	})
 }

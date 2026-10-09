@@ -632,10 +632,17 @@ The exemption applies only to a rollback the controller verifies, at every evalu
 
 1. The Bundle is a rollback Bundle (`kardinal.io/rollback=true`) of the Pipeline.
 2. Its `spec.provenance.rollbackOf` names a Bundle that was Verified in the held environment.
-3. Each of its images, its config commit and its chart were deployed by a Bundle Verified in
-   that environment.
+3. The combination of artifacts is checked per repository. For every image repository, config
+   repository and chart that `rollbackOf` deploys, the rollback deploys exactly `rollbackOf`'s
+   ref. Only repositories `rollbackOf` does not name (the ones `kardinal rollback` fills from
+   earlier Bundles) may come from another Bundle Verified in that environment. The rollback
+   therefore never mixes a version of one repository with another version of the same repository
+   than the target ran.
 4. Its artifacts still have the digest the hold recorded when it was made
-   (`spec.holds[].artifacts`). A Bundle edited after the hold is not exempt.
+   (`spec.holds[].artifacts`: SHA-256 of the JSON of its type, images, configRef and chart). A
+   Bundle edited after the hold is not exempt.
+5. The hold has not expired. A hold past its `expiresAt` counts as absent at once, also before
+   the controller removes it from the spec.
 
 When a hold names the Bundle but the checks fail, the gate blocks as usual, and its reason ends
 with `(hold exemption refused: <why>)`.

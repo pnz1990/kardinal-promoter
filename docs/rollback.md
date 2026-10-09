@@ -110,7 +110,9 @@ an incident is open. While the environment is held:
       comment naming the hold, and the step fails with that message;
     - in `HealthChecking` has already merged, so it finishes. The rollback, a newer Bundle,
       supersedes it.
-- **The rollback is never superseded** by a newer Bundle, and `historyLimit` never deletes it.
+- **The rollback is never superseded** by a newer Bundle. `historyLimit` does not delete it, its
+  `rollbackOf`, or the Bundles that deployed its artifacts, and they do not count toward the
+  limit.
 - **The rollback passes the PolicyGates of the held environment that would block it**, if the
   controller can verify it. See [what is exempt](policy-gates.md#rollback-hold-exemption).
   The exemption is never silent. The gate's reason starts with
@@ -126,7 +128,9 @@ an incident is open. While the environment is held:
 `--reason` is required with `--hold`. The hold records who held the environment and when.
 `kardinal explain my-app --env prod` and the UI show it. An environment holds at most one rollback:
 a second `--hold` on the same environment is refused until the first is released.
-`--hold-expires-in` ends the hold by itself: the controller removes it at `expiresAt`.
+`--hold-expires-in` ends the hold by itself. From `expiresAt` on, the hold counts as absent: the
+exemption ends, steps of other Bundles are no longer held, and the controller removes the entry
+and writes `HoldReleased`.
 
 Release the hold when the fix is ready:
 

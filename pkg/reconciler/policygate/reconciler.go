@@ -266,7 +266,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			if r.Recorder != nil && first {
 				kubeevent.Emit(r.Recorder, &gate, corev1.EventTypeWarning, ReasonGateExempted, "Evaluate", reason)
 			}
-			return ctrl.Result{RequeueAfter: recheckInterval}, nil
+			// The exemption ends at the hold's expiresAt.
+			return ctrl.Result{RequeueAfter: lifecycle.UntilExpiry(h, recheckInterval)}, nil
 		}
 	}
 	if evalErr != nil {

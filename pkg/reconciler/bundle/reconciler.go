@@ -573,11 +573,10 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 		return fmt.Errorf("enforceHistoryLimit: list bundles: %w", err)
 	}
 
+	keep := heldHistory(pipeline, allBundles.Items)
 	terminal := make([]*kardinalv1alpha1.Bundle, 0, len(allBundles.Items))
 	for i := range allBundles.Items {
-		// A Bundle a hold names (spec.holds, #1528) is kept while the hold
-		// lasts: it is what the environment is pinned to.
-		if lifecycle.HoldNaming(pipeline, allBundles.Items[i].Name) != nil {
+		if keep[allBundles.Items[i].Name] {
 			continue
 		}
 		switch allBundles.Items[i].Status.Phase {
@@ -608,6 +607,45 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 		Int("remaining", limit).
 		Msg("history GC: complete")
 	return nil
+}
+
+// heldHistory is the Bundles history GC keeps while a hold lasts (spec.holds,
+// #1528): the Bundle each hold names, its rollbackOf, and every Bundle that
+// deploys one of its artifacts (an image, config commit or chart). The gate
+// exemption checks the held Bundle against them (lifecycle.VerifyHeldRollback),
+// and none of them counts toward historyLimit.
+func heldHistory(p *kardinalv1alpha1.Pipeline, bundles []kardinalv1alpha1.Bundle) map[string]bool {
+	keep := map[string]bool{}
+	for i := range bundles {
+		held := &bundles[i]
+		if lifecycle.HoldNaming(p, held.Name) == nil {
+			continue
+		}
+		keep[held.Name] = true
+		if held.Spec.Provenance != nil && held.Spec.Provenance.RollbackOf != "" {
+			keep[held.Spec.Provenance.RollbackOf] = true
+		}
+		images := map[kardinalv1alpha1.ImageRef]bool{}
+		for _, img := range held.Spec.Images {
+			images[img] = true
+		}
+		for j := range bundles {
+			o := &bundles[j]
+			for _, img := range o.Spec.Images {
+				if images[img] {
+					keep[o.Name] = true
+				}
+			}
+			if c, oc := held.Spec.ConfigRef, o.Spec.ConfigRef; c != nil && oc != nil && c.CommitSHA != "" &&
+				c.GitRepo == oc.GitRepo && c.CommitSHA == oc.CommitSHA {
+				keep[o.Name] = true
+			}
+			if ch, och := held.Spec.Chart, o.Spec.Chart; ch != nil && och != nil && *ch == *och {
+				keep[o.Name] = true
+			}
+		}
+	}
+	return keep
 }
 
 // hasNewerSibling reports whether the pipeline has a Bundle of the same type

@@ -88,7 +88,7 @@ func (r *Reconciler) holdIfEnvironmentHeld(ctx context.Context, log zerolog.Logg
 		}
 		log.Info().Str("env", ps.Spec.Environment).Str("hold", h.Bundle).Msg("environment held — step held")
 	}
-	return true, ctrl.Result{RequeueAfter: requeuePaused}, nil
+	return true, ctrl.Result{RequeueAfter: lifecycle.UntilExpiry(h, requeuePaused)}, nil
 }
 
 // holdForSlot keeps a Pending step Pending while its Bundle waits for a

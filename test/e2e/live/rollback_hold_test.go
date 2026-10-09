@@ -15,9 +15,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -102,6 +105,41 @@ func TestRollback_Hold(t *testing.T) {
 	}
 	require.Error(t, err, "a hold in someone else's name is refused")
 	assert.Contains(t, err.Error(), "createdBy")
+
+	// A user with update on pipelines but not pipelines/hold cannot hold,
+	// even in its own name.
+	const editor = "e2e-pipeline-editor"
+	require.NoError(t, e.Client.Create(ctx, &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: "pipeline-editor", Namespace: a.ns},
+		Rules: []rbacv1.PolicyRule{{APIGroups: []string{"kardinal.io"}, Resources: []string{"pipelines"},
+			Verbs: []string{"get", "update"}}},
+	}))
+	require.NoError(t, e.Client.Create(ctx, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "pipeline-editor", Namespace: a.ns},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: "pipeline-editor"},
+		Subjects:   []rbacv1.Subject{{APIGroup: "rbac.authorization.k8s.io", Kind: "User", Name: editor}},
+	}))
+	cfg := rest.CopyConfig(e.Config)
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: editor}
+	asEditor, err := client.New(cfg, client.Options{Scheme: e.Client.Scheme()})
+	require.NoError(t, err)
+	framework.Eventually(t, time.Minute, "the editor's hold is refused for lacking pipelines/hold", func(ctx context.Context) (bool, string) {
+		var p v1alpha1.Pipeline
+		if err := asEditor.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &p); err != nil {
+			return false, "get as editor: " + err.Error() // RBAC propagates
+		}
+		p.Spec.Holds = append(p.Spec.Holds, v1alpha1.EnvironmentHold{Environment: "test", Bundle: rb,
+			Reason: "no right", CreatedBy: editor, CreatedAt: hold.CreatedAt})
+		err := asEditor.Update(ctx, &p)
+		if err == nil {
+			t.Errorf("the editor's hold was admitted")
+			return true, ""
+		}
+		return strings.Contains(err.Error(), "changing spec.holds needs update on pipelines/hold"), err.Error()
+	})
+	var after v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &after))
+	require.Len(t, after.Spec.Holds, 1, "only the real hold")
 
 	// The gate that blocks every rollback passes the held one, never silently.
 	exempt := fmt.Sprintf("EXEMPT: rollback %s holds prod (by %s: %s); without the hold: ", rb, hold.CreatedBy, reason)

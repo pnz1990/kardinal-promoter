@@ -4,6 +4,8 @@
 package v1alpha1
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -658,6 +660,12 @@ type DeliveryConfig struct {
 	// +kubebuilder:validation:Enum=none;argoRollouts;flagger
 	// +optional
 	Delegate string `json:"delegate,omitempty"`
+}
+
+// Expired reports whether the hold's expiresAt has passed at now. An expired
+// hold counts as absent; the Pipeline reconciler removes it from spec.holds.
+func (h *EnvironmentHold) Expired(now time.Time) bool {
+	return h != nil && h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time)
 }
 
 // EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.

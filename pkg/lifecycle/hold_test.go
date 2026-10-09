@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -195,4 +196,33 @@ func TestArtifactDigest(t *testing.T) {
 		edit(&s)
 		assert.NotEqual(t, d, lifecycle.ArtifactDigest(s), name)
 	}
+}
+
+// TestHoldOf_Expired (#1528 QA): an expired hold counts as absent before the
+// controller removes it, UntilExpiry requeues at expiresAt, and a new hold
+// of the environment replaces the expired entry.
+func TestHoldOf_Expired(t *testing.T) {
+	defer func(f func() time.Time) { lifecycle.HoldNow = f }(lifecycle.HoldNow)
+	now := t0
+	lifecycle.HoldNow = func() time.Time { return now }
+	exp := metav1.NewTime(t0.Add(time.Minute))
+	p := pipeline("app", "prod")
+	p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "rb", Reason: "r", ExpiresAt: &exp}}
+	require.NotNil(t, lifecycle.HoldOf(p, "prod"))
+	assert.Equal(t, time.Minute, lifecycle.UntilExpiry(lifecycle.HoldOf(p, "prod"), time.Hour))
+	assert.Equal(t, time.Hour, lifecycle.UntilExpiry(&v1alpha1.EnvironmentHold{}, time.Hour))
+	now = t0.Add(time.Minute)
+	assert.Nil(t, lifecycle.HoldOf(p, "prod"), "expired")
+	assert.Nil(t, lifecycle.HoldNaming(p, "rb"), "expired")
+	assert.Nil(t, lifecycle.HeldFrom(p, "prod", "other"))
+
+	objs := holdObjects()
+	objs[0] = p
+	p.Spec.Environments = []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "uat"}, {Name: "prod"}}
+	c := newClient(t, objs...)
+	_, h, err := lifecycle.RollbackAndHold(context.Background(), c, holdRequest())
+	require.NoError(t, err, "an expired hold does not block a new one")
+	got := getPipeline(t, c)
+	require.Len(t, got.Spec.Holds, 1, "one entry per environment")
+	assert.Equal(t, h.Bundle, got.Spec.Holds[0].Bundle)
 }
