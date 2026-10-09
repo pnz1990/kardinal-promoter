@@ -144,6 +144,20 @@ Helm installs `crds/` only on the first install and never updates or deletes it.
 The chart ships `values.schema.json`, which rejects unknown keys: a misspelled `--set` fails the
 install instead of being ignored.
 
+Create the Secrets first. The controller reads `github.secretRef`, `webhook.secretRef`,
+`bundleAPI.tokenSecretRef` and `ui.auth.tokenSecretRef` at startup, so a Pod whose Secret or key
+is missing waits in `CreateContainerConfigError`, and `helm install --wait` would time out with
+only `context deadline exceeded`. When Helm talks to the cluster (`helm install`, `helm upgrade`,
+`--dry-run=server`), the chart looks each Secret up in the release namespace and fails at once
+with the value, the Secret and the missing key, for example:
+
+```
+Error: INSTALLATION FAILED: ... github.secretRef.name: Secret "github-token" does not exist in namespace kardinal-system. Create it before installing ...
+```
+
+The installer needs `get` on Secrets in the release namespace for this check. `helm template`
+and client-side dry runs (which GitOps tools such as Argo CD use) have no cluster and skip it.
+
 Verify both controllers are running:
 
 ```bash
@@ -227,6 +241,7 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `scm.provider` | `""` | `--scm-provider`: `github` (default), `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops` |
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |
 | `scm.allowedRepositories` | `[]` | `--scm-allowed-repositories`: `host/repository` globs (`github.com/acme/*`, `gitlab.example.com/team/**`) the controller's SCM token may act on. Every SCM call for another repository is refused, and a Pipeline that would need the token for one is `Ready=False/RepositoryNotAllowed`. Empty allows every repository. See [Security](guides/security.md#the-shared-scm-token-and-scmallowedrepositories) |
+| `scm.instanceSigners` | `[]` | `--scm-instance-signers`: Forgejo/Gitea only, the names or emails the instance signs commits with (`repository.signing` `SIGNING_NAME` / `SIGNING_EMAIL`). [Image verification](image-verification.md#signed-commits) treats such a commit as a platform signature. Without it, a verified signer that is not a user of the instance is taken as the instance key |
 | `scm.gatesCommitStatus.enabled` | `true` | `--gates-commit-status`: post the gate results of a waiting pr-review step as the commit status on the commit kardinal pushed to its PR ([Gate status check](pr-evidence.md#gate-status-check-kardinalgates)). `false` posts none. |
 | `scm.gatesCommitStatus.context` | `kardinal/gates` | `--gates-status-context`: the status name branch protection requires; reserved for kardinal. |
 | `webhook.secretRef.name` / `.key` | `""` / `secret` | Secret with the SCM webhook secret (`KARDINAL_WEBHOOK_SECRET`): the HMAC key, or for GitLab and Azure DevOps the plain token |
@@ -561,7 +576,7 @@ What to expect:
 
 - `kardinal doctor` passes every check.
 - There is one `graphs.kro.run` Graph for each Bundle that was Promoting. The controller logs `graph created` for each.
-- The logs show only two warnings: SCM webhooks are disabled without `--webhook-secret`, and UI API authentication is off (see [Other notes](#other-notes)).
+- At startup the logs show three warnings: `scm.allowedRepositories` is not set, SCM webhooks are disabled without `--webhook-secret`, and UI API authentication is off (see [Other notes](#other-notes)). A Pipeline whose environments write the same path of the same repository and branch as another Pipeline's also logs `environments write overlapping paths` (its `PathConflict` condition); give each environment its own path.
 
 **10. Tidy up.**
 
@@ -647,6 +662,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 - **Custom RBAC.** If you manage the controller's RBAC yourself, allow `create` and `patch` on `events.k8s.io` events.
 - **UI.** With no UI auth mode set, `/api/` answers only local clients (`kubectl port-forward`). Set `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name` if the UI is reached another way.
+- **SCM token scope.** v0.8.1 had no `scm.allowedRepositories`, so after the upgrade any Pipeline without its own `git.secretRef` can still have the controller's SCM token open PRs in any repository the token can write, and the controller warns at startup. Set `scm.allowedRepositories` to the repositories your Pipelines use (see [The shared SCM token](guides/security.md#the-shared-scm-token-and-scmallowedrepositories)).
 - **Notes in the [changelog](changelog.md) that don't apply to v0.8.1:**
     - `promotionTemplate`, `PromotionStep.spec.inputs` and the `promotiontemplates` CRD don't exist in v0.8.1.
     - The `update.strategy: argocd` with `approval: pr-review` note doesn't apply: v0.8.1 allows only `kustomize` and `helm`.
@@ -810,6 +826,8 @@ kubectl delete crd --ignore-not-found \
   changewindows.kardinal.io \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
+  scmproviders.kardinal.io \
+  clusterscmproviders.kardinal.io \
   promotiontemplates.kardinal.io \
   auditevents.kardinal.io \
   approvals.kardinal.io
@@ -831,7 +849,7 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 
 | Resources | Verbs |
 |---|---|
-| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create) and `changewindows` (get, list, watch; get, update, patch on `/status`) |
+| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete only with `audit.retention.enabled: true`) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
 | `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
 | `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |
