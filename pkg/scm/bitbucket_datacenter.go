@@ -54,7 +54,7 @@ type BitbucketDCProvider struct {
 	// case: keys are case-insensitive), as the other providers have one per
 	// owner (#1274).
 	circuits *CircuitRegistry
-	client  *http.Client
+	client   *http.Client
 }
 
 // NewBitbucketDCProvider constructs a BitbucketDCProvider. apiURL is
