@@ -186,6 +186,7 @@ ClusterScmProvider is a cluster-scoped ScmProvider: Pipelines of the namespaces 
 | `spec.allowedNamespaces.matchLabels` | map[string]string |  | matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels map is equivalent to an element of matchExpressions, whose key field is "key", the operator is "In", and the values array contains only "value". The requirements are ANDed. |
 | `spec.allowedRepositories` | []string |  | AllowedRepositories, when set, are the only repositories this provider's token is used for: globs over the repository the SCM API names ("acme/*", "group/sub/**"). "*" matches one path segment and a trailing "/**" any depth. A Bundle of a Pipeline whose repository is not allowed fails when its Graph is built. |
 | `spec.apiURL` | string |  | APIURL is the SCM's API base URL (the --scm-api-url value). Empty uses the provider's public default (api.github.com, gitlab.com, ...). |
+| `spec.instanceSigners` | []string |  | InstanceSigners, Forgejo and Gitea only, are the names or emails the instance signs commits with (its repository.signing SIGNING_NAME and SIGNING_EMAIL), as --scm-instance-signers is for the controller's provider. Image verification treats a commit signed by one as a platform signature (forgejo-instance), even when a user of that name exists. |
 | `spec.secretRef` | object | yes | SecretRef names the Secret that holds the API token. A ScmProvider's Secret is in its own namespace; a ClusterScmProvider names the namespace. |
 | `spec.secretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
 | `spec.secretRef.name` | string | yes | Name is the Secret name. |
@@ -255,6 +256,10 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `spec.bundleName` | string | yes | BundleName is the Bundle. |
 | `spec.commit` | object |  | Commit is the config commit to verify, when commits.requireSigned. |
 | `spec.commit.repo` | string | yes | Repo is the git repository URL. |
+| `spec.commit.scmProvider` | object |  | ScmProvider is the provider of the Pipeline's spec.git.providerRef, as the translator resolved it: the signature is checked with that provider (its token, host and allowedRepositories). Unset, the controller's --scm-provider checks it. |
+| `spec.commit.scmProvider.kind` | string | yes | Kind is ScmProvider or ClusterScmProvider. One of: `ScmProvider`, `ClusterScmProvider`. |
+| `spec.commit.scmProvider.name` | string | yes | Name is the provider's name; a ScmProvider is in the step's namespace. |
+| `spec.commit.scmProvider.uid` | string | yes | UID is the provider's metadata.uid when the Graph was built. |
 | `spec.commit.sha` | string | yes | SHA is the commit. |
 | `spec.images` | []object |  | Images are the images to verify, pinned by digest. |
 | `spec.images[].digest` | string | yes | Digest is the sha256 digest the Bundle pins. |
@@ -870,6 +875,7 @@ ScmProvider is an SCM that Pipelines in its namespace open their PRs on (spec.gi
 | `spec` | object | yes | ScmProviderSpec is the SCM a Pipeline opens its PRs on: its type, API and credentials. |
 | `spec.allowedRepositories` | []string |  | AllowedRepositories, when set, are the only repositories this provider's token is used for: globs over the repository the SCM API names ("acme/*", "group/sub/**"). "*" matches one path segment and a trailing "/**" any depth. A Bundle of a Pipeline whose repository is not allowed fails when its Graph is built. |
 | `spec.apiURL` | string |  | APIURL is the SCM's API base URL (the --scm-api-url value). Empty uses the provider's public default (api.github.com, gitlab.com, ...). |
+| `spec.instanceSigners` | []string |  | InstanceSigners, Forgejo and Gitea only, are the names or emails the instance signs commits with (its repository.signing SIGNING_NAME and SIGNING_EMAIL), as --scm-instance-signers is for the controller's provider. Image verification treats a commit signed by one as a platform signature (forgejo-instance), even when a user of that name exists. |
 | `spec.secretRef` | object | yes | SecretRef names the Secret that holds the API token. A ScmProvider's Secret is in its own namespace; a ClusterScmProvider names the namespace. |
 | `spec.secretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
 | `spec.secretRef.name` | string | yes | Name is the Secret name. |

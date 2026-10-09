@@ -109,6 +109,13 @@ type Reconciler struct {
 	// the provider would be asked about a repository it does not serve.
 	SCMHost string
 
+	// Providers resolves a commit's spec.commit.scmProvider (the Pipeline's
+	// spec.git.providerRef) the way the PromotionStep reconciler does
+	// (Registry.ForIdentity): the same UID, a ClusterScmProvider's
+	// allowedNamespaces, the apiURL scheme and allowedRepositories. Nil: a
+	// commit with a provider fails.
+	Providers *scm.Registry
+
 	// PublicGoodRoot returns the Sigstore public-good trusted root (for
 	// keyless authorities without a trustedRootRef, and keys that require
 	// a transparency log entry). Nil: such authorities fail.
@@ -292,8 +299,9 @@ func (r *Reconciler) checkImages(ctx context.Context, log zerolog.Logger, iv *v1
 var fullSHA = regexp.MustCompile(`^([a-f0-9]{40}|[a-f0-9]{64})$`)
 
 // checkCommit verifies the config commit, once: the SCM must report a
-// verified signature for exactly that commit, on the SCM host the
-// controller serves, by an allowed signer when the policy lists them.
+// verified signature for exactly that commit, on the host of the SCM that
+// checks it (the Pipeline's provider, or the controller's), by an allowed
+// signer when the policy lists them.
 func (r *Reconciler) checkCommit(ctx context.Context, iv *v1alpha1.ImageVerification) outcome {
 	c := iv.Spec.Commit
 	if c == nil {
@@ -309,17 +317,25 @@ func (r *Reconciler) checkCommit(ctx context.Context, iv *v1alpha1.ImageVerifica
 	if !fullSHA.MatchString(c.SHA) {
 		return failed("not a full 40- or 64-character commit SHA")
 	}
-	cv, ok := r.SCM.(scm.CommitVerifier)
-	if !ok || r.SCM == nil {
-		return failed(scm.ErrCommitVerificationUnsupported.Error())
-	}
 	host, repo, err := scm.RepoIdentity(c.Repo)
 	if err != nil {
 		return failed(err.Error())
 	}
-	if r.SCMHost == "" || !strings.EqualFold(host, r.SCMHost) {
-		return failed(fmt.Sprintf("repository %s is on %s, not on the controller's SCM host %q; "+
-			"its commit signature cannot be checked", repo, host, r.SCMHost))
+	cs, err := r.commitSCM(ctx, iv.Namespace, c, repo)
+	if err != nil {
+		if permanentProviderError(err) {
+			return failed(err.Error())
+		}
+		iv.Status.Commit = &v1alpha1.CommitVerificationResult{Message: "SCM provider: " + err.Error()}
+		return outcome{waiting: fmt.Sprintf("commit %s: SCM provider: %v", c.SHA, err)}
+	}
+	cv, ok := cs.provider.(scm.CommitVerifier)
+	if !ok || cs.provider == nil {
+		return failed(scm.ErrCommitVerificationUnsupported.Error())
+	}
+	if cs.host == "" || !strings.EqualFold(host, cs.host) {
+		return failed(fmt.Sprintf("repository %s is on %s, not on the %s SCM host %q; "+
+			"its commit signature cannot be checked", repo, host, cs.name, cs.host))
 	}
 	sig, err := cv.VerifyCommit(ctx, repo, c.SHA)
 	switch {
@@ -339,7 +355,7 @@ func (r *Reconciler) checkCommit(ctx context.Context, iv *v1alpha1.ImageVerifica
 		return outcome{failed: fmt.Sprintf("commit %s of %s is not signed with a verified signature (%s)", c.SHA, repo, reason),
 			reason: ReasonCommitNotVerified}
 	}
-	if !sig.Platform && signerAllowed(sig, r.InstanceSigners) {
+	if !sig.Platform && signerAllowed(sig, cs.instanceSigners) {
 		sig.Signer, sig.Identities, sig.Platform = scm.PlatformSignerForgejo, []string{scm.PlatformSignerForgejo}, true
 	}
 	allowed := commitAllowedSigners(iv)
@@ -355,6 +371,54 @@ func (r *Reconciler) checkCommit(ctx context.Context, iv *v1alpha1.ImageVerifica
 	}
 	iv.Status.Commit = &v1alpha1.CommitVerificationResult{Verified: true, Signer: sig.Signer}
 	return outcome{}
+}
+
+// commitSCM is the provider a commit's signature is checked with, its web
+// host, its instance signers, and how messages name it.
+type commitSCM struct {
+	provider        scm.SCMProvider
+	host, name      string
+	instanceSigners []string
+}
+
+// errNoProviders is returned for a commit with a provider when the
+// reconciler has no Registry.
+var errNoProviders = errors.New("the controller has no ScmProvider registry")
+
+// commitSCM returns the SCM of commit c in repository repo, for an
+// ImageVerification in namespace ns: the Pipeline's provider
+// (spec.commit.scmProvider) through Providers, or the controller's
+// --scm-provider when it has none. There is no fallback from one to the
+// other.
+func (r *Reconciler) commitSCM(ctx context.Context, ns string, c *v1alpha1.VerifiedCommit, repo string) (commitSCM, error) {
+	id := c.ScmProvider
+	if id == nil {
+		return commitSCM{provider: r.SCM, host: r.SCMHost, name: "controller's", instanceSigners: r.InstanceSigners}, nil
+	}
+	name := id.Kind + " " + id.Name
+	if r.Providers == nil {
+		return commitSCM{}, fmt.Errorf("%s: %w", name, errNoProviders)
+	}
+	res, err := r.Providers.ForIdentity(ctx, ns, *id, repo)
+	if err != nil {
+		return commitSCM{}, err
+	}
+	host, err := scm.WebHost(res.Spec.Spec.Type, res.Spec.Spec.APIURL)
+	if err != nil {
+		return commitSCM{}, fmt.Errorf("%s: %v: %w", name, err, scm.ErrProviderConfig)
+	}
+	return commitSCM{provider: res.Provider, host: host, name: name + "'s", instanceSigners: res.Spec.Spec.InstanceSigners}, nil
+}
+
+// permanentProviderError reports whether the Pipeline's provider cannot
+// check the commit however long the verification waits: it is gone (or
+// another object under its name), or it no longer allows the namespace or
+// the repository. These fail a PromotionStep too. Any other error (its
+// Secret missing or not referenceable, the API unreachable) is retried
+// until the deadline, so fixing the provider lets the check go on.
+func permanentProviderError(err error) bool {
+	return errors.Is(err, scm.ErrProviderGone) || errors.Is(err, scm.ErrRepositoryNotAllowed) ||
+		errors.Is(err, scm.ErrNamespaceNotAllowed) || errors.Is(err, errNoProviders)
 }
 
 func commitAllowedSigners(iv *v1alpha1.ImageVerification) []string {

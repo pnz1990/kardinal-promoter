@@ -772,6 +772,7 @@ func main() {
 		Client:          mgr.GetClient(),
 		Registry:        &ivrecon.OCIRegistry{},
 		SCM:             scmProvider,
+		Providers:       providers,
 		SCMHost:         ivSCMHost,
 		InstanceSigners: splitCSV(scmInstanceSigners),
 		PublicGoodRoot: ivrecon.PublicGoodRoot(func() (sigroot.TrustedMaterial, error) {

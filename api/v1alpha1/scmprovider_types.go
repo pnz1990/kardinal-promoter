@@ -47,6 +47,17 @@ type ScmProviderSpec struct {
 	// +kubebuilder:validation:items:MaxLength=256
 	// +optional
 	AllowedRepositories []string `json:"allowedRepositories,omitempty"`
+
+	// InstanceSigners, Forgejo and Gitea only, are the names or emails the
+	// instance signs commits with (its repository.signing SIGNING_NAME and
+	// SIGNING_EMAIL), as --scm-instance-signers is for the controller's
+	// provider. Image verification treats a commit signed by one as a
+	// platform signature (forgejo-instance), even when a user of that name
+	// exists.
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:MaxLength=256
+	// +optional
+	InstanceSigners []string `json:"instanceSigners,omitempty"`
 }
 
 // ScmSecretKeyRef names one key of a Secret.

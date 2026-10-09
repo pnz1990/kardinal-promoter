@@ -81,6 +81,19 @@ spec:
                 x-kubernetes-validations:
                 - message: apiURL must be an http(s) URL
                   rule: self == '' || self.startsWith('https://') || self.startsWith('http://')
+              instanceSigners:
+                description: |-
+                  InstanceSigners, Forgejo and Gitea only, are the names or emails the
+                  instance signs commits with (its repository.signing SIGNING_NAME and
+                  SIGNING_EMAIL), as --scm-instance-signers is for the controller's
+                  provider. Image verification treats a commit signed by one as a
+                  platform signature (forgejo-instance), even when a user of that name
+                  exists.
+                items:
+                  maxLength: 256
+                  type: string
+                maxItems: 20
+                type: array
               secretRef:
                 description: |-
                   SecretRef names the Secret that holds the API token. A ScmProvider's
