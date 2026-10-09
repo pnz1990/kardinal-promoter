@@ -70,6 +70,11 @@ type Reconciler struct {
 	// would get a compact Graph and that uses a feature the compact shape
 	// does not carry yet is Ready=False. Nil is graph.DefaultCompactAbove.
 	CompactAbove *int
+
+	// Reader reads the Argo CD Applications a fleet selector matches. It is
+	// not cached: the controller does not watch Applications, whose CRD may
+	// be missing. Nil uses Client.
+	Reader client.Reader
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -124,11 +129,15 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 	desired := r.validate(&p, ownSecret)
+	desiredFleets := r.resolveFleets(ctx, &p)
 	// Nothing watches Secrets: a git.secretRef Secret created later is seen
-	// by this periodic re-check.
+	// by this periodic re-check. A selector fleet is re-resolved as often.
 	var result ctrl.Result
 	if desired.Reason == scm.ReasonRepositoryNotAllowed && p.Spec.Git.SecretRef != nil && !ownSecret {
 		result.RequeueAfter = secretRecheckInterval
+	}
+	if hasSelectorFleet(&p) && (result.RequeueAfter == 0 || fleetResync < result.RequeueAfter) {
+		result.RequeueAfter = fleetResync
 	}
 
 	// Derive status.phase from Bundle phases and PromotionStep states.
@@ -162,7 +171,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredPaused != nil {
 		pausedMatch = conditionMatches(p.Status.Conditions, *desiredPaused)
 	}
-	if condMatch && phaseMatch && metricsMatch && pausedMatch {
+	fleetsMatch := fleetsEqual(p.Status.Fleets, desiredFleets)
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && fleetsMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -180,6 +190,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPaused)
 	}
 	p.Status.DeploymentMetrics = desiredMetrics
+	p.Status.Fleets = desiredFleets
 
 	if err := r.Status().Patch(ctx, &p, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pipeline status: %w", err)

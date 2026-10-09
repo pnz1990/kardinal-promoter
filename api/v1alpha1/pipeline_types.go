@@ -181,6 +181,15 @@ type EnvironmentSpec struct {
 	// +optional
 	Wave int `json:"wave,omitempty"`
 
+	// Fleet expands this environment into one environment per target, named
+	// "<name>-<target>". Each target gets its own PromotionStep, PRStatus and
+	// gate instances (a PolicyGate that applies to this environment applies
+	// to every target), and the targets are promoted at most maxConcurrent at
+	// a time. An environment that depends on this one waits for every target.
+	// Without a fleet the environment is promoted once.
+	// +optional
+	Fleet *FleetSpec `json:"fleet,omitempty"`
+
 	// Shard was the agent shard of distributed mode, which was removed. A
 	// non-empty value sets the Pipeline Ready=False (reason NotImplemented)
 	// and fails the environment's PromotionSteps with "shard is not
@@ -421,6 +430,67 @@ type ArgoCDUpdateConfig struct {
 	ImageKey string `json:"imageKey,omitempty"`
 }
 
+// FleetSpec lists the targets of a fleet environment and paces them.
+// +kubebuilder:validation:XValidation:rule="has(self.targets) != has(self.selector)",message="fleet: set exactly one of targets and selector"
+type FleetSpec struct {
+	// Targets are the fleet's members.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=200
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Targets []FleetTarget `json:"targets,omitempty"`
+
+	// Selector makes every Argo CD Application it selects a target: the
+	// target is named after the Application, its path is the Application's
+	// spec.source.path, and its health is that Application (health type
+	// argocd). The controller resolves the selector into status.fleets and
+	// rebuilds the Graph of a Bundle in flight when the members change.
+	// +optional
+	Selector *FleetSelector `json:"selector,omitempty"`
+
+	// MaxConcurrent is how many targets are promoted at once. A target is in
+	// flight from its PromotionStep's creation until it is Verified; a Failed
+	// target keeps its place, so a failure stops new targets until the Bundle
+	// is retried. 0 promotes every target at once.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxConcurrent int `json:"maxConcurrent,omitempty"`
+}
+
+// FleetTarget is one member of a fleet.
+type FleetTarget struct {
+	// Name identifies the target. The target's environment is named
+	// "<environment>-<name>", which must be a DNS label of at most 63
+	// characters.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=62
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// Path is the target's directory in the GitOps repo. Default: the
+	// environment's path (default environments/<environment>) followed by
+	// "/<name>".
+	// +optional
+	Path string `json:"path,omitempty"`
+
+	// Health replaces the environment's health check for this target.
+	// +optional
+	Health *HealthConfig `json:"health,omitempty"`
+}
+
+// FleetSelector selects Argo CD Applications as fleet targets.
+type FleetSelector struct {
+	// Namespace is the Argo CD namespace the Applications are in. Default:
+	// argocd.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// MatchLabels selects the Applications.
+	// +kubebuilder:validation:MinProperties=1
+	MatchLabels map[string]string `json:"matchLabels"`
+}
+
 // HealthConfig holds health check configuration for an environment.
 type HealthConfig struct {
 	// Type selects the health check backend.
@@ -569,6 +639,28 @@ type PipelineStatus struct {
 	// last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler.
 	// +optional
 	DeploymentMetrics *PipelineDeploymentMetrics `json:"deploymentMetrics,omitempty"`
+
+	// Fleets are the resolved targets of each fleet environment that uses a
+	// selector, written by the PipelineReconciler. A Bundle's Graph is built
+	// from them; a change rebuilds the Graph of a Bundle in flight.
+	// +optional
+	// +listType=map
+	// +listMapKey=environment
+	Fleets []FleetStatus `json:"fleets,omitempty"`
+}
+
+// FleetStatus is the resolved membership of one selector fleet.
+type FleetStatus struct {
+	// Environment is the fleet environment.
+	Environment string `json:"environment"`
+
+	// Targets are the selected Applications as targets, sorted by name.
+	// +optional
+	Targets []FleetTarget `json:"targets,omitempty"`
+
+	// Message says why the selector could not be resolved, when it could not.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // PipelineDeploymentMetrics holds aggregate promotion efficiency metrics for a Pipeline.

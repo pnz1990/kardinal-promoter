@@ -1279,7 +1279,18 @@ func soakRequeue(b *kardinalv1alpha1.Bundle) ctrl.Result {
 func pipelineSpecHashFor(pipeline *kardinalv1alpha1.Pipeline) string {
 	spec := pipeline.Spec
 	spec.Paused = false
-	raw, err := json.Marshal(spec)
+	var raw []byte
+	var err error
+	if len(pipeline.Status.Fleets) == 0 {
+		raw, err = json.Marshal(spec)
+	} else {
+		// The resolved fleet members are part of what the Graph is built
+		// from: a change rebuilds the Graph of a Bundle in flight.
+		raw, err = json.Marshal(struct {
+			Spec   kardinalv1alpha1.PipelineSpec  `json:"spec"`
+			Fleets []kardinalv1alpha1.FleetStatus `json:"fleets"`
+		}{spec, pipeline.Status.Fleets})
+	}
 	if err != nil {
 		return "" // should never happen for a valid Pipeline object
 	}
@@ -1569,7 +1580,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(bundleLabelMapper)).
 		Watches(graphObject, handler.EnqueueRequestsFromMapFunc(bundleLabelMapper)).
 		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineBundles),
-			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, fleetsChanged))).
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.gateBundles),
 			builder.WithPredicates(gateTemplateChanged)).
 		Complete(r)
@@ -1712,4 +1723,17 @@ func (r *Reconciler) pipelineBundles(ctx context.Context, obj client.Object) []r
 		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&bundles[i])})
 	}
 	return reqs
+}
+
+// fleetsChanged passes a Pipeline update whose status.fleets changed: the
+// members of a selector fleet are part of the Graph (pipelineSpecHashFor).
+var fleetsChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldP, okOld := e.ObjectOld.(*kardinalv1alpha1.Pipeline)
+		newP, okNew := e.ObjectNew.(*kardinalv1alpha1.Pipeline)
+		return okOld && okNew && !equality.Semantic.DeepEqual(oldP.Status.Fleets, newP.Status.Fleets)
+	},
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
 }

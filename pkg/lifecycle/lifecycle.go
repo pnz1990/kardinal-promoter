@@ -240,13 +240,16 @@ func copyableCIRunURL(ctx context.Context, src *v1alpha1.Bundle) string {
 	return raw
 }
 
+// hasEnvironment reports whether env is an environment of p: one of
+// spec.environments (a fleet environment included) or a fleet target.
 func hasEnvironment(p *v1alpha1.Pipeline, env string) bool {
 	for _, e := range p.Spec.Environments {
 		if e.Name == env {
 			return true
 		}
 	}
-	return false
+	_, ok := graph.EnvironmentSpecFor(p, env)
+	return ok
 }
 
 // InFlightPhase reports whether a Bundle phase is still on its way through the
