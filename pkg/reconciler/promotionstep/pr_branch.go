@@ -94,7 +94,11 @@ func (r *Reconciler) closedPRBranch(ctx context.Context, ps *v1alpha1.PromotionS
 // a lost response, succeeds. A provider that cannot delete branches leaves it.
 func (r *Reconciler) deletePRBranch(ctx context.Context, ps *v1alpha1.PromotionStep, repo string, num int) error {
 	branch := prHeadBranch(ps)
-	deleter, ok := r.SCM.(scm.BranchDeleter)
+	provider, err := r.scmFor(ctx, ps)
+	if err != nil {
+		return &branchDeleteError{pr: num, branch: branch, err: err}
+	}
+	deleter, ok := provider.(scm.BranchDeleter)
 	if branch == "" || !ok {
 		return nil
 	}
@@ -119,7 +123,11 @@ func (r *Reconciler) deletePRBranch(ctx context.Context, ps *v1alpha1.PromotionS
 // is already gone is not an error.
 func (r *Reconciler) deleteBranchWithoutPR(ctx context.Context, ps *v1alpha1.PromotionStep) error {
 	branch := prHeadBranch(ps)
-	deleter, ok := r.SCM.(scm.BranchDeleter)
+	provider, perr := r.scmFor(ctx, ps)
+	if perr != nil {
+		return &branchDeleteError{branch: branch, err: perr}
+	}
+	deleter, ok := provider.(scm.BranchDeleter)
 	started := len(ps.Status.Steps) > 0
 	if branch == "" || !ok || (started && !opensPR(ps)) {
 		return nil

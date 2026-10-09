@@ -48,6 +48,12 @@ type PromotionStepSpec struct {
 	// +optional
 	PRStatusRef string `json:"prStatusRef,omitempty"`
 
+	// ScmProvider is the provider of the Pipeline's spec.git.providerRef,
+	// as the translator resolved it when it built the Graph. Unset uses the
+	// controller's --scm-provider.
+	// +optional
+	ScmProvider *ScmProviderIdentity `json:"scmProvider,omitempty"`
+
 	// Region was set on the per-region PromotionSteps of a Pipeline
 	// environment with two or more spec.regions. The Graph builder no longer
 	// sets it; the reconciler fails a step that still has one (created by a

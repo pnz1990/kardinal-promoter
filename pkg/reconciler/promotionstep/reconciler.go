@@ -156,6 +156,10 @@ type Reconciler struct {
 	// it. It drives the deadline for closing a deleted step's PR and the
 	// retry backoff (status.nextRetryAt).
 	NowFn func() time.Time
+
+	// Providers builds the clients of ScmProviders and ClusterScmProviders
+	// (spec.scmProvider). Nil serves only the controller's SCM.
+	Providers *scm.Registry
 }
 
 // now returns the current time from NowFn, or time.Now when it is nil.
@@ -475,11 +479,15 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		}
 		return r.deleteBranchWithoutPR(ctx, ps)
 	}
-	if r.SCM == nil {
+	provider, err := r.scmFor(ctx, ps)
+	if err != nil {
+		return fmt.Errorf("close PR #%d: %w", num, err)
+	}
+	if provider == nil {
 		return fmt.Errorf("no SCM provider configured to close PR #%d", num)
 	}
 	log := zerolog.Ctx(ctx)
-	merged, open, err := r.SCM.GetPRStatus(ctx, repo, num)
+	merged, open, err := provider.GetPRStatus(ctx, repo, num)
 	if err != nil {
 		return fmt.Errorf("get PR #%d status: %w", num, err)
 	}
@@ -491,13 +499,13 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		}
 		return r.closedPRBranch(ctx, ps, repo, num, keepBranch)
 	}
-	if err := r.SCM.ClosePR(ctx, repo, num); err != nil {
+	if err := provider.ClosePR(ctx, repo, num); err != nil {
 		return fmt.Errorf("close PR #%d: %w", num, err)
 	}
 	log.Info().Int("pr", num).Str("step", ps.Name).Msg("closed PR of cancelled step")
 	body := fmt.Sprintf("kardinal closed this PR: %s. Merging it would change environment %s "+
 		"without a PromotionStep tracking it.", reason, ps.Spec.Environment)
-	if err := r.SCM.CommentOnPR(ctx, repo, num, body); err != nil {
+	if err := provider.CommentOnPR(ctx, repo, num, body); err != nil {
 		log.Warn().Err(err).Int("pr", num).Msg("could not comment on the closed PR (non-fatal)")
 	}
 	return r.closedPRBranch(ctx, ps, repo, num, keepBranch)
@@ -680,6 +688,17 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// without one says why (B48).
 	cred := r.resolveGitCredential(ctx, log, pipeline)
 
+	// spec.scmProvider: the provider the translator resolved for this step;
+	// without it the controller's --scm-provider. A provider that is gone, or
+	// that no longer allows the repository, fails the step with the reason:
+	// there is no silent fallback to the controller's provider.
+	provider, err := r.scmFor(ctx, ps)
+	if errors.Is(err, scm.ErrProviderGone) || errors.Is(err, scm.ErrRepositoryNotAllowed) {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, err.Error())
+	}
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("scm provider: %w", err)
+	}
 	state := &steps.StepState{
 		Pipeline:     pipeline.Spec,
 		PipelineName: ps.Spec.PipelineName,
@@ -695,7 +714,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			AuthorName:  "kardinal-promoter",
 			AuthorEmail: "kardinal@kardinal.io",
 		},
-		SCM:                  r.SCM,
+		SCM:                  provider,
 		GitClient:            r.GitClient,
 		K8sClient:            r.Client,
 		StepTimeoutSeconds:   env.StepTimeoutSeconds,
@@ -1749,7 +1768,11 @@ func (r *Reconciler) patchPRStatusSpec(ctx context.Context, ps *v1alpha1.Promoti
 		return fmt.Errorf("get prstatus %s: %w", ps.Spec.PRStatusRef, err)
 	}
 	want, ok := prSpecFromOutputs(outputs)
-	if !ok || specNamesPR(prs.Spec, want) {
+	if !ok {
+		return nil
+	}
+	want.ScmProvider = ps.Spec.ScmProvider
+	if specNamesPR(prs.Spec, want) && sameProvider(prs.Spec.ScmProvider, want.ScmProvider) {
 		return nil
 	}
 	patch := client.MergeFrom(prs.DeepCopy())
@@ -2146,4 +2169,34 @@ func (r *Reconciler) setRollbackState(ctx context.Context, log zerolog.Logger, s
 		return
 	}
 	state.RollbackFromBundle = &from.Spec
+}
+
+// sameProvider reports whether two provider identities are the same.
+func sameProvider(a, b *v1alpha1.ScmProviderIdentity) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// scmFor returns the SCM provider of the step: its spec.scmProvider, through
+// the Providers registry, checked against the Pipeline's repository, or the
+// controller's --scm-provider when it has none.
+func (r *Reconciler) scmFor(ctx context.Context, ps *v1alpha1.PromotionStep) (scm.SCMProvider, error) {
+	id := ps.Spec.ScmProvider
+	if id == nil {
+		return r.SCM, nil
+	}
+	if r.Providers == nil {
+		return nil, fmt.Errorf("%s %s: the controller has no ScmProvider registry", id.Kind, id.Name)
+	}
+	repo := ""
+	if pipeline, err := r.loadPipeline(ctx, ps); err == nil {
+		repo, _ = scm.RepoFromURL(pipeline.Spec.Git.URL)
+	}
+	res, err := r.Providers.ForIdentity(ctx, ps.Namespace, *id, repo)
+	if err != nil {
+		return nil, err
+	}
+	return res.Provider, nil
 }

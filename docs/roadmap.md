@@ -34,7 +34,7 @@ Config and mixed Bundles run the `config-merge` step, which copies the environme
 - `argoRollouts` — Argo Rollouts Rollout phase
 - `flagger` — Flagger Canary phase
 
-**SCM providers** (one per controller, chosen with `--scm-provider`)
+**SCM providers** (the controller's `--scm-provider` plus any number of ScmProviders and ClusterScmProviders)
 - GitHub (webhooks + polling)
 - GitLab (webhooks + polling)
 - Forgejo/Gitea (webhooks + polling)

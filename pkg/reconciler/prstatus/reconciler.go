@@ -66,6 +66,7 @@ package prstatus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -147,6 +148,27 @@ type Reconciler struct {
 	// If nil the reconciler is a no-op (useful in tests that only test CRD
 	// plumbing without a live GitHub connection).
 	SCM scm.SCMProvider
+
+	// Providers builds the clients of ScmProviders and ClusterScmProviders
+	// (spec.scmProvider). Nil serves only the controller's SCM.
+	Providers *scm.Registry
+}
+
+// scmFor returns the provider the PR was opened on: its spec.scmProvider,
+// or the controller's provider.
+func (r *Reconciler) scmFor(ctx context.Context, prs *v1alpha1.PRStatus) (scm.SCMProvider, error) {
+	id := prs.Spec.ScmProvider
+	if id == nil {
+		return r.SCM, nil
+	}
+	if r.Providers == nil {
+		return nil, fmt.Errorf("%s %s: the controller has no ScmProvider registry", id.Kind, id.Name)
+	}
+	res, err := r.Providers.ForIdentity(ctx, prs.Namespace, *id, prs.Spec.Repo)
+	if err != nil {
+		return nil, err
+	}
+	return res.Provider, nil
 }
 
 // Reconcile processes one PRStatus event.
@@ -205,7 +227,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
-	if r.SCM == nil {
+	provider, err := r.scmFor(ctx, &prs)
+	if errors.Is(err, scm.ErrProviderGone) || errors.Is(err, scm.ErrRepositoryNotAllowed) {
+		// Polling cannot fix it: the step fails with the reason.
+		return r.recordPollError(ctx, log, &prs, err)
+	}
+	if err != nil {
+		log.Warn().Err(err).Msg("SCM provider of the PR not available, will retry")
+		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
+	}
+	if provider == nil {
 		log.Warn().Msg("no SCM configured, cannot poll PR status")
 		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 	}
@@ -218,7 +249,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
-	merged, open, err := r.SCM.GetPRStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
+	merged, open, err := provider.GetPRStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
 	if err != nil {
 		if scm.IsPermanentError(err) {
 			return r.recordPollError(ctx, log, &prs, err)
@@ -233,7 +264,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// Poll review approval state (K-08: PR review gate).
 	// Non-fatal on error — keep the previous values.
-	approved, approvalCount, reviewErr := r.SCM.GetPRReviewStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
+	approved, approvalCount, reviewErr := provider.GetPRReviewStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
 	if reviewErr != nil {
 		log.Warn().Err(reviewErr).
 			Str("prURL", prs.Spec.PRURL).
@@ -354,7 +385,11 @@ func (r *Reconciler) commentStoppedTracking(ctx context.Context, log zerolog.Log
 	body := fmt.Sprintf("kardinal stopped tracking this PR: it has been closed without merging for %s. "+
 		"Merging it would change environment %s without a PromotionStep tracking it. "+
 		"To promote again, create a new Bundle.", ClosedGracePeriod, env)
-	if err := r.SCM.CommentOnPR(ctx, prs.Spec.Repo, prs.Spec.PRNumber, body); err != nil {
+	provider, err := r.scmFor(ctx, prs)
+	if err == nil && provider != nil {
+		err = provider.CommentOnPR(ctx, prs.Spec.Repo, prs.Spec.PRNumber, body)
+	}
+	if err != nil {
 		log.Warn().Err(err).Int("pr", prs.Spec.PRNumber).
 			Msg("could not comment on the closed PR (non-fatal)")
 	}
@@ -484,7 +519,12 @@ func (r *Reconciler) adoptLegacyStatus(ctx context.Context, log zerolog.Logger, 
 // PR with no lastMergeCommit, a provider the DynamicProvider has no lookup
 // for).
 func (r *Reconciler) fetchMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (sha string, retry bool) {
-	getter, ok := r.SCM.(scm.MergeCommitGetter)
+	provider, perr := r.scmFor(ctx, prs)
+	if perr != nil {
+		log.Warn().Err(perr).Msg("SCM provider of the PR not available for the merge commit, will retry")
+		return "", true
+	}
+	getter, ok := provider.(scm.MergeCommitGetter)
 	if !ok || prs.Spec.PRNumber == 0 {
 		return "", false
 	}

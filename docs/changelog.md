@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Several SCM providers per controller (ScmProvider, ClusterScmProvider)** — a Pipeline's `spec.git.providerRef` names a namespaced ScmProvider or a cluster-scoped ClusterScmProvider (type, API URL, token Secret, webhook Secret, `allowedRepositories`; a ClusterScmProvider also has `allowedNamespaces`). The provider is resolved when the Bundle's Graph is built and pinned by UID in each PromotionStep and PRStatus, so a step keeps the SCM it opened its PR on. A provider that is deleted or recreated fails the step instead of falling back. Each provider has its own webhook endpoint (`/webhook/scm/namespaces/<ns>/<name>`, `/webhook/scm/cluster/<name>`). Pipelines without `providerRef` keep `--scm-provider`. The chart adds the two CRDs and read access to them. Run `helm upgrade` (or apply `config/crd/bases`) before you use them. See [SCM Providers](https://pnz1990.github.io/kardinal-promoter/scm-providers/#several-scm-providers-scmprovider-and-clusterscmprovider) (#1459)
+
 ### Changed
 
 - **Smaller Graphs: gate instances and PRStatuses are collections** — a Bundle's Graph now creates its PolicyGate instances from one `PolicyGates` node (and `SkipPermissionGates` for skip permissions) and its PRStatuses from one `PRStatuses` node, each a `forEach` over the data in a `def` node, instead of one node per object. A 150-environment Pipeline with 3 gates per environment has 155 nodes instead of 751, and 471 KB of Graph spec instead of 647 KB. The objects keep their names and labels; kro adds `kro.run/node-id: PolicyGates` (or `PRStatuses`) and its collection labels. A Graph that is updated in place keeps its existing gates and PRStatuses

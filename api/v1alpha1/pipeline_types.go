@@ -105,6 +105,13 @@ type PipelineGit struct {
 	// SecretRef references a Kubernetes Secret containing the SCM token.
 	// +optional
 	SecretRef *SecretRef `json:"secretRef,omitempty"`
+
+	// ProviderRef names the ScmProvider (in the Pipeline's namespace) or the
+	// ClusterScmProvider the Pipeline opens its PRs on and reads their state
+	// from. Unset uses the controller's --scm-provider. Git clone and push
+	// still use secretRef.
+	// +optional
+	ProviderRef *ScmProviderRef `json:"providerRef,omitempty"`
 }
 
 // SecretRef is a reference to a Kubernetes Secret by name and optional namespace.

@@ -35,6 +35,9 @@ type Translator struct {
 	// the cluster. kro resolves the CRD schema of every static-GVK node when
 	// it compiles a Graph, so one missing CRD would reject the whole Graph.
 	mapper meta.RESTMapper
+	// apiReader reads Namespaces uncached, for a ClusterScmProvider's
+	// allowedNamespaces; nil uses k8s.
+	apiReader client.Reader
 }
 
 // New creates a new Translator.
@@ -74,6 +77,13 @@ func (t *Translator) WithRESTMapper(m meta.RESTMapper) *Translator {
 	return t
 }
 
+// WithAPIReader sets the uncached reader Namespaces are read with: the
+// manager does not cache Namespaces, and its RBAC grants get only.
+func (t *Translator) WithAPIReader(r client.Reader) *Translator {
+	t.apiReader = r
+	return t
+}
+
 // Translate translates a Pipeline+Bundle pair to a Graph CR and applies it:
 // it creates the Graph, or updates the spec of the Graph this Bundle already
 // controls, and refuses a Graph of the same name controlled by another owner
@@ -103,11 +113,22 @@ func (t *Translator) Translate(ctx context.Context,
 	// Build, identity.Ensure and graphClient.Create prefix their own errors
 	// ("build: ", "graph identity: ", "graph.Create "), so they are wrapped
 	// with the Translate context only.
+	// spec.git.providerRef: resolved once here and written into every
+	// PromotionStep template, so the steps and their PRStatuses keep the
+	// provider they started with (DESIGN §10 D3, no Watch node). A provider
+	// that is missing or refuses this Pipeline is a TranslationError, retried
+	// until it is created or changed.
+	providerID, err := t.resolveProvider(ctx, pipeline)
+	if err != nil {
+		return "", fmt.Errorf("translator.Translate: %w", err)
+	}
+
 	result, err := t.builder.Build(graph.BuildInput{
 		Pipeline:         pipeline,
 		Bundle:           bundle,
 		PolicyGates:      gates,
 		PolicyNamespaces: t.policyNS,
+		ScmProvider:      providerID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("translator.Translate: %w", err)

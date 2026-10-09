@@ -274,11 +274,19 @@ func HMACHex(secret string, body []byte) string {
 // returns the HTTP status.
 func (e *Env) PostSCMWebhook(t *testing.T, headers map[string]string, body []byte) int {
 	t.Helper()
+	return e.PostSCMWebhookAt(t, nil, headers, body)
+}
+
+// PostSCMWebhookAt is PostSCMWebhook to /webhook/scm/<path...>: the endpoint
+// of a ScmProvider (namespaces, <ns>, <name>) or ClusterScmProvider
+// (cluster, <name>).
+func (e *Env) PostSCMWebhookAt(t *testing.T, path []string, headers map[string]string, body []byte) int {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	req := e.Kube.CoreV1().RESTClient().Post().Namespace(ControllerNamespace).
 		Resource("services").Name(ControllerName+":webhook").SubResource("proxy").
-		Suffix("webhook", "scm").SetHeader("Content-Type", "application/json").Body(body)
+		Suffix(append([]string{"webhook", "scm"}, path...)...).SetHeader("Content-Type", "application/json").Body(body)
 	for k, v := range headers {
 		req = req.SetHeader(k, v)
 	}
