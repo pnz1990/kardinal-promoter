@@ -31,6 +31,11 @@ type Engine struct {
 	// testing; time.Now when nil.
 	NowFn func() time.Time
 
+	// OnStepDone, when set, is called after each step that ran and returned
+	// StepSuccess, with its index and name. The PromotionStep reconciler
+	// gives back its branch's turn once git-push has landed.
+	OnStepDone func(index int, name string)
+
 	steps   []string
 	timings map[int]StepTiming
 }
@@ -136,6 +141,9 @@ func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex i
 			i = -1 // the loop increment makes this 0
 		case StepSuccess:
 			// Continue to next step.
+			if e.OnStepDone != nil {
+				e.OnStepDone(i, name)
+			}
 		default:
 			return i, result, fmt.Errorf("step %s: unknown status %q", name, result.Status)
 		}

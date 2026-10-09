@@ -160,8 +160,11 @@ Only HookRuns the Bundle's Graph created count. kro labels what it applies `kro.
 and the Graph labels each HookRun `kardinal.io/bundle-uid` with its Bundle's UID. The controller
 never runs a HookRun without both (or whose UID is not its Bundle's), and the step reads results
 only from HookRuns with those labels whose names this Graph rendered. Labels can be copied, so
-this stops HookRuns created by mistake or by a naive script, not someone who can create HookRuns
-and reads the Bundle's UID: grant `create` on `hookruns` only to those you would let run hooks.
+the chart's `<release>-graph-objects` admission policy is what stops a forged HookRun: only kro
+(impersonating the namespace's Graph ServiceAccount), the controller and
+`admission.controllerUsernames` may create, change or delete HookRuns, whatever RBAC grants
+([Verified identity](guides/security.md#verified-identity)). Whoever may impersonate the Graph
+ServiceAccount passes as kro, so treat that permission as the right to run hooks.
 
 The controller needs `create`, `get`, `list`, `watch` and `delete` on `batch/jobs` in Pipeline
 namespaces (the chart grants it) and caches only Jobs labelled `kardinal.io/hookrun`.

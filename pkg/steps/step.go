@@ -70,14 +70,25 @@ type GitConfig struct {
 	// never leaves it empty; an unset spec.git.branch is main.
 	Branch string
 
-	// Token is the SCM authentication token.
+	// Token is the HTTP(S) git token: a PAT, an access token or a GitHub App
+	// installation token.
 	Token string
+
+	// SSHPrivateKey and SSHKnownHosts authenticate an ssh remote: the
+	// sshPrivateKey and knownHosts keys of the Pipeline's git Secret.
+	SSHPrivateKey []byte
+	SSHKnownHosts []byte
 
 	// AuthorName is the git commit author name.
 	AuthorName string
 
 	// AuthorEmail is the git commit author email.
 	AuthorEmail string
+}
+
+// Auth is the git authentication of g.
+func (g GitConfig) Auth() scm.GitAuth {
+	return scm.GitAuth{Token: g.Token, SSHPrivateKey: g.SSHPrivateKey, SSHKnownHosts: g.SSHKnownHosts}
 }
 
 // StepState carries all context needed by a step during execution.
@@ -105,6 +116,11 @@ type StepState struct {
 	// annotation (the CLI or UI user, or the controller for an automatic
 	// rollback). Empty when it is not recorded.
 	RequestedBy string
+
+	// CreatedBy is the Bundle's verified creator: its kardinal.io/created-by
+	// annotation, which the chart's bundle-creator admission policy pins to
+	// the creating user. Empty when it is not recorded.
+	CreatedBy string
 
 	// RollbackFrom names the Bundle a rollback Bundle replaces: its
 	// kardinal.io/rollback-from annotation. Empty for a promotion.
@@ -162,6 +178,41 @@ const OpenPRStepName = "open-pr"
 // attempt to label the PR it opened. The PR stays open without the labels,
 // and the PromotionStep's WaitingForMerge message repeats the error.
 const OutputPRLabelsError = "prLabelsError"
+
+// OutputPRControlsError is the open-pr output that keeps the error of the pr
+// controls (reviewers, assignees, auto-merge) it could not apply to the PR it
+// opened. The PR stays open, and the WaitingForMerge message repeats the
+// error.
+const OutputPRControlsError = "prControlsError"
+
+// OutputPRAutoMerge is the state of the auto-merge of pr.merge.auto:
+// AutoMergePending, AutoMergeEnabled, AutoMergeSuspended or
+// AutoMergeFailed. open-pr sets it pending; the PromotionStep reconciler
+// moves it while the step waits for the merge.
+const OutputPRAutoMerge = "prAutoMerge"
+
+// The values of OutputPRAutoMerge.
+const (
+	AutoMergePending   = "pending"
+	AutoMergeEnabled   = "enabled"
+	AutoMergeSuspended = "suspended"
+	AutoMergeFailed    = "failed"
+)
+
+// OutputPRMergeOptions is the open-pr output that keeps the rendered merge
+// options of pr.merge.auto (scm.MergeOptions as JSON).
+const OutputPRMergeOptions = "prMergeOptions"
+
+// OutputPRAutoMergeError says why auto-merge is not on: the SCM's error, or
+// what suspended it (the Pipeline is paused, a gate is closed).
+const OutputPRAutoMergeError = "prAutoMergeError"
+
+// OutputPRAutoMergeAttempts and OutputPRAutoMergeRetryAt count the attempts
+// to enable auto-merge and when the next one may run (RFC 3339).
+const (
+	OutputPRAutoMergeAttempts = "prAutoMergeAttempts"
+	OutputPRAutoMergeRetryAt  = "prAutoMergeRetryAt"
+)
 
 // OpensPR reports whether the sequence being run opens a PR.
 func (s *StepState) OpensPR() bool {

@@ -25,6 +25,8 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -44,8 +46,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -137,6 +141,10 @@ const (
 // the last persisted index, so every step must be safe to repeat (the git and
 // open-pr steps are).
 type Reconciler struct {
+	// pushTurns gives auto promotions writing one branch their turn one at a
+	// time (#1578).
+	pushTurns branchQueue
+
 	// Workers is how many objects are reconciled at once (--promotionstep-workers);
 	// 0 is the manager's default. One object is never reconciled twice at
 	// once: the work queue serializes it.
@@ -199,6 +207,16 @@ type Reconciler struct {
 	// retry backoff (status.nextRetryAt).
 	NowFn func() time.Time
 
+	// GitHubAppTokens mints the git tokens of Pipelines whose git Secret
+	// holds GitHub App credentials, at the controller's GitHub API
+	// (--scm-api-url). When nil, a cache for api.github.com is made on first
+	// use.
+	GitHubAppTokens *scm.AppTokenCache
+	appTokensOnce   sync.Once
+	// SCMWaitTimeout bounds how long a step waits for an open SCM circuit
+	// when its environment sets no stepTimeoutSeconds; 0 is
+	// DefaultSCMWaitTimeout (#1476).
+	SCMWaitTimeout time.Duration
 	// Providers builds the clients of ScmProviders and ClusterScmProviders
 	// (spec.scmProvider). Nil serves only the controller's SCM.
 	Providers *scm.Registry
@@ -220,6 +238,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return objectgone.Reconcile(ctx, req, promotionStepsResource, r.reconcile)
 }
 
+// auditPending wakes the reconciler when a status patch stores audit
+// records in the outbox: a create that failed in the reconcile that stored
+// them is retried by the next one (#1552).
+var auditPending = predicate.Funcs{
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, okOld := e.ObjectOld.(*v1alpha1.PromotionStep)
+		n, okNew := e.ObjectNew.(*v1alpha1.PromotionStep)
+		return okOld && okNew && audit.Pending(o.Status.PendingAuditEvents, n.Status.PendingAuditEvents)
+	},
+}
+
 // promotionStepsResource is the resource objectgone matches a NotFound against.
 var promotionStepsResource = v1alpha1.GroupVersion.WithResource("promotionsteps").GroupResource()
 
@@ -236,6 +268,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 		return ctrl.Result{}, fmt.Errorf("get promotionstep %s: %w", req.Name, err)
 	}
+
+	// Audit records an earlier reconcile stored but could not write go
+	// first (#1552). A failure does not block the promotion: the records
+	// stay in status and the reconcile is requeued to retry them.
+	auditErr := r.flushAudit(ctx, &ps)
 
 	// A deleted step only closes its PR (FinalizerClosePR). Otherwise the
 	// finalizer follows the state before and after this reconcile: it is on
@@ -269,7 +306,24 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.syncPRFinalizer(ctx, &ps); err != nil {
 		return prFinalizerSyncFailed(log, err)
 	}
-	return res, nil
+	return retryAudit(res, auditErr, len(ps.Status.PendingAuditEvents)), nil
+}
+
+// auditRetryDelay is how soon a reconcile whose audit outbox still holds
+// unwritten records runs again.
+const auditRetryDelay = 5 * time.Second
+
+// retryAudit is res, requeued within auditRetryDelay when the outbox could
+// not be flushed (auditErr) or still holds records: a step in a terminal
+// state is not otherwise reconciled again.
+func retryAudit(res ctrl.Result, auditErr error, pending int) ctrl.Result {
+	if auditErr == nil && pending == 0 {
+		return res
+	}
+	if res.RequeueAfter == 0 || res.RequeueAfter > auditRetryDelay {
+		res.RequeueAfter = auditRetryDelay
+	}
+	return res
 }
 
 // reconcileState runs the orphan and supersession guards and then the
@@ -531,6 +585,43 @@ func (r *Reconciler) cancelStep(ctx context.Context, log zerolog.Logger, ps *v1a
 		if !closing {
 			ps.Status.RetryCount = 0
 		}
+		wait, ok := circuitWait(closeErr, r.now())
+		started := false
+		if ok {
+			var waited time.Duration
+			if waited, started = r.startSCMWait(ps, closeErr); waited >= r.scmWaitBound(0) {
+				// Waited for the whole bound: spend the close retries now.
+				ok = false
+			}
+		} else {
+			clearSCMWait(ps, r.now())
+		}
+		if ok {
+			// The SCM circuit is open (#1476): no call was made. Wait for it
+			// without spending a close retry, so an outage longer than the
+			// retries cannot leave the PR or its branch behind.
+			meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
+				Type:               ConditionSupersededCloseFailed,
+				Status:             metav1.ConditionTrue,
+				Reason:             "CloseFailed",
+				Message:            closeErr.Error(),
+				ObservedGeneration: ps.Generation,
+				LastTransitionTime: metav1.NewTime(r.now().UTC()),
+			})
+			next := metav1.NewTime(r.now().Add(wait))
+			ps.Status.NextRetryAt = &next
+			ps.Status.Message = fmt.Sprintf("bundle %s was superseded; closing its PR waits %s for the SCM (not counted as a retry): %v",
+				ps.Spec.BundleName, wait, closeErr)
+			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+				return ctrl.Result{}, false, fmt.Errorf("patch supersession circuit wait: %w", err)
+			}
+			// After the patch: a lost patch starts the wait again on the
+			// next reconcile, which emits the one Event then.
+			if started {
+				r.emitSCMUnavailable(ps, r.scmWaitBound(0), closeErr)
+			}
+			return ctrl.Result{RequeueAfter: wait}, false, nil
+		}
 		meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
 			Type:               ConditionSupersededCloseFailed,
 			Status:             metav1.ConditionTrue,
@@ -552,6 +643,7 @@ func (r *Reconciler) cancelStep(ctx context.Context, log zerolog.Logger, ps *v1a
 			return ctrl.Result{RequeueAfter: delay}, false, nil
 		}
 		msg += fmt.Sprintf("; closing its PR failed after %d retries (%v) — %s", maxStepRetries, closeErr, closeByHand(closeErr))
+		endSCMWaitTimedOut(ps, r.now())
 	} else {
 		meta.RemoveStatusCondition(&ps.Status.Conditions, ConditionSupersededCloseFailed)
 	}
@@ -717,12 +809,20 @@ func (r *Reconciler) markPRStatusClosedByKardinal(ctx context.Context, ps *v1alp
 }
 
 // withLabelsError appends the error of open-pr's failed attempt to label the
-// PR (steps.OutputPRLabelsError) to a WaitingForMerge message. The wait-for-
-// merge message replaces open-pr's, which carried it, so without this the
-// step message never said the PR has no labels (docs/pr-evidence.md).
+// PR (steps.OutputPRLabelsError), the pr controls it could not apply
+// (steps.OutputPRControlsError) and whether auto-merge is on
+// (steps.OutputPRAutoMerge) to a WaitingForMerge message. The wait-for-merge
+// message replaces open-pr's, which carried them, so without this the step
+// message never said the PR has no labels (docs/pr-evidence.md).
 func withLabelsError(msg string, outputs map[string]string) string {
 	if e := outputs[steps.OutputPRLabelsError]; e != "" {
-		return msg + "; adding labels failed: " + e
+		msg += "; adding labels failed: " + e
+	}
+	if e := outputs[steps.OutputPRControlsError]; e != "" {
+		msg += "; PR controls failed: " + e
+	}
+	if note := autoMergeNote(outputs); note != "" {
+		msg += "; " + note
 	}
 	return msg
 }
@@ -863,7 +963,7 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 // (policyGateMapper), PRStatus change or restart reconciled the step at once,
 // so a gate with recheckInterval 10s used up the five retries in about 40s
 // instead of 4.5 minutes (B87).
-func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
+func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (res ctrl.Result, err error) {
 	if ps.Status.NextRetryAt != nil {
 		if wait := ps.Status.NextRetryAt.Sub(r.now()); wait > 0 {
 			return ctrl.Result{RequeueAfter: wait}, nil
@@ -960,6 +1060,31 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, workDir, cred, provider)
 
 	prevIdx := ps.Status.CurrentStepIndex
+	// An auto promotion pushing to its base branch waits for the branch's
+	// turn before any git work (branchQueue, #1578). It gives the worker
+	// back at once and is requeued at low priority, so other steps, in
+	// other namespaces too, go first (#1577).
+	if key, ok := basePushBranch(seq, prevIdx, state.Git.URL, state.Git.Branch); ok {
+		release, wait, got := r.pushTurns.tryTurn(key, client.ObjectKeyFromObject(ps).String(), r.now())
+		if !got {
+			return r.waitForBranchTurn(ctx, base, ps, state.Git.Branch, wait)
+		}
+		// The turn ends once git-push has landed; at the latest when the
+		// reconcile does.
+		eng.OnStepDone = func(_ int, name string) {
+			if name == "git-push" {
+				release(r.now())
+			}
+		}
+		defer func() {
+			release(r.now())
+			// Waiting lowered the step's priority, which a requeue keeps:
+			// with its turn taken, it is back at the normal one.
+			if res.Priority == nil {
+				res.Priority = &normalPriority
+			}
+		}()
+	}
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, prevIdx)
 
 	// Persist outputs regardless of result, so a PR opened in this reconcile is
@@ -975,9 +1100,12 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 	// Every path below writes the status.
 	clearGitCredentialMissing(ps, cred)
+	if _, waiting := circuitWait(execErr, r.now()); !waiting {
+		clearSCMWait(ps, r.now())
+	}
 
 	if execErr != nil {
-		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr, nil, cred)
+		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr, nil, cred, env.StepTimeoutSeconds)
 	}
 	closed := updateStepStatuses(ps, eng.StepNames(), nextIdx, false, "", eng.Timings())
 
@@ -998,6 +1126,10 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 				if prErr := r.patchPRStatusSpec(ctx, ps, state.Outputs); prErr != nil {
 					log.Warn().Err(prErr).Msg("failed to patch PRStatus spec (non-fatal)")
 				}
+			}
+			if state.Outputs[steps.OutputPRAutoMerge] != "" {
+				// Turn auto-merge on without waiting for the next poll.
+				return ctrl.Result{RequeueAfter: time.Second}, nil
 			}
 			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 		}
@@ -1054,7 +1186,8 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// ExecuteFrom reports StepFailed with an error, so this is unreachable
 		// unless a step returns an unknown status.
 		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(),
-			fmt.Errorf("step %d returned status %q: %s", nextIdx, result.Status, result.Message), closed, cred)
+			fmt.Errorf("step %d returned status %q: %s", nextIdx, result.Status, result.Message), closed, cred,
+			env.StepTimeoutSeconds)
 	}
 }
 
@@ -1072,11 +1205,13 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		WorkDir:      workDir,
 		Outputs:      cloneMap(ps.Status.Outputs),
 		Git: steps.GitConfig{
-			URL:         pipeline.Spec.Git.URL,
-			Branch:      baseBranch(pipeline),
-			Token:       cred.token,
-			AuthorName:  "kardinal-promoter",
-			AuthorEmail: "kardinal@kardinal.io",
+			URL:           pipeline.Spec.Git.URL,
+			Branch:        baseBranch(pipeline),
+			Token:         cred.token,
+			SSHPrivateKey: cred.sshKey,
+			SSHKnownHosts: cred.knownHosts,
+			AuthorName:    "kardinal-promoter",
+			AuthorEmail:   "kardinal@kardinal.io",
 		},
 		SCM:                  provider,
 		GitClient:            r.GitClient,
@@ -1130,7 +1265,7 @@ func prOpenedAt(ps *v1alpha1.PromotionStep) (opened time.Time, ok bool) {
 // limit, since creating it does not help.
 func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
 	stepNames []string, timings map[int]steps.StepTiming, execErr error, closed stepObservations,
-	cred gitCredential) (ctrl.Result, error) {
+	cred gitCredential, stepTimeoutSeconds int) (ctrl.Result, error) {
 	idx := ps.Status.CurrentStepIndex
 	retryable := errors.Unwrap(execErr) != nil && !errors.Is(execErr, steps.ErrPermanent)
 	// A git-clone or git-push that the remote refused for lack of
@@ -1148,6 +1283,42 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		execErr = fmt.Errorf("%w (%s)", execErr, note)
 		emitCredential = markGitCredentialMissing(ps, cred.reason, note)
 		waitForSecret = cred.waitsForSecret()
+	}
+	scmDown := false
+	if wait, ok := circuitWait(execErr, r.now()); retryable && ok {
+		// The SCM circuit is open (#1476): no call was made, so nothing
+		// failed. Wait for the circuit to let a call through and run the
+		// step again without spending a retry, up to the wait bound.
+		bound := r.scmWaitBound(stepTimeoutSeconds)
+		waited, started := r.startSCMWait(ps, execErr)
+		if waited < bound {
+			next := metav1.NewTime(r.now().Add(wait))
+			ps.Status.NextRetryAt = &next
+			ps.Status.Message = fmt.Sprintf("waiting %s for the SCM (not counted as a retry; %d/%d used; waiting since %s, for %s at most): %v",
+				wait.Round(time.Second), ps.Status.RetryCount, maxStepRetries,
+				ps.Status.SCMWaitSince.UTC().Format(time.RFC3339), bound, execErr)
+			closed = append(closed, updateStepStatuses(ps, stepNames, idx, false, "", timings)...)
+			log.Info().Err(execErr).Str("env", ps.Spec.Environment).Dur("wait", wait).
+				Msg("SCM circuit open, step waits")
+			if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+				if apierrors.IsNotFound(patchErr) {
+					return ctrl.Result{}, nil
+				}
+				return ctrl.Result{}, fmt.Errorf("patch step circuit wait: %w", patchErr)
+			}
+			closed.record()
+			if started {
+				r.emitSCMUnavailable(ps, bound, execErr)
+			}
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
+		// Waited for the whole bound: the SCM stays down. Fail the step.
+		execErr = fmt.Errorf("the SCM was unavailable for %s, the most this step waits: %w", waited.Round(time.Second), execErr)
+		endSCMWaitTimedOut(ps, r.now())
+		scmDown = true
+	}
+	if scmDown {
+		retryable = false
 	}
 	contended := retryable && errors.Is(execErr, steps.ErrContended)
 	if retryable && (waitForSecret || contended || ps.Status.RetryCount < maxStepRetries) {
@@ -1436,6 +1607,20 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		base = ps.DeepCopy()
 	}
 
+	// pr.merge.auto: auto-merge on while the promotion may merge, off while
+	// the Pipeline is paused or a gate is closed.
+	requeue := requeueWaitForMerge
+	autoMergeChanged := false
+	if !prstatus.IsClosed(&prs.Status) && ps.Status.Outputs[steps.OutputPRAutoMerge] != "" {
+		if repo, num, prErr := stepPR(pipeline, ps); prErr == nil {
+			var wait time.Duration
+			autoMergeChanged, wait = r.syncAutoMerge(ctx, log, ps, repo, num)
+			if wait > 0 && wait < requeue {
+				requeue = wait
+			}
+		}
+	}
+
 	// Closed but still in the grace window: the PRStatus reconciler keeps
 	// polling, and a reopen resumes the wait. Only the message changes, and
 	// only when it differs, since each patch is a watch event.
@@ -1445,10 +1630,10 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	switch {
 	case prstatus.IsClosed(&prs.Status):
 		msg = closedMsg
-	case msg == closedMsg:
+	case msg == closedMsg || ps.Status.Outputs[steps.OutputPRAutoMerge] != "":
 		msg = withLabelsError(fmt.Sprintf("PR #%d is open, waiting for merge", prs.Spec.PRNumber), ps.Status.Outputs)
 	}
-	if msg != ps.Status.Message {
+	if msg != ps.Status.Message || autoMergeChanged {
 		ps.Status.Message = msg
 		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch wait-for-merge message: %w", err)
@@ -1456,7 +1641,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	}
 
 	// PR is still open or PRStatus reconciler hasn't polled yet — requeue.
-	return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
 // handleHealthChecking verifies that the environment runs the promoted
@@ -1570,6 +1755,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			health.ImageExpectation{Repository: img.Repository, Tag: img.Tag, Digest: img.Digest})
 	}
 	opts.ImagesOnly = bundle.Spec.Type == "image"
+	opts.RevisionContains = r.revisionContains(ctx, log, pipeline, env, opts.ExpectedRevision)
 	opts.Since = healthCheckStart(ps)
 	opts.ChangedAt = changeReachedGitAfter(ps)
 	if at := ps.Status.TargetUpdatedAt; at != nil {
@@ -2127,7 +2313,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{},
-				eventfilter.LabelChangedExceptKro, predicate.AnnotationChangedPredicate{}),
+				eventfilter.LabelChangedExceptKro, predicate.AnnotationChangedPredicate{}, auditPending),
 		)).
 		Watches(&v1alpha1.PRStatus{}, handler.EnqueueRequestsFromMapFunc(r.prStatusMapper)).
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
@@ -2136,8 +2322,28 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A hold added or released (spec.holds) takes effect on the held
 		// environment's steps at once (holdIfEnvironmentHeld).
 		Watches(&v1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineHoldMapper),
-			builderutil.WithPredicates(holdsChanged))
+			builderutil.WithPredicates(holdsChanged)).
+		// A branch turn that ends wakes the oldest step waiting for it
+		// (branchQueue), so the branch does not sit idle until its requeue.
+		WatchesRawSource(source.Channel(r.turnWakeups(), &handler.EnqueueRequestForObject{}))
 	return shard.Active().Complete(b, tracing.WrapReconciler("promotionstep", r), &v1alpha1.PromotionStepList{})
+}
+
+// turnWakeups connects the branch queue's wake to a channel of events for
+// the controller: a full buffer drops the wake, and the waiter's own requeue
+// still comes.
+func (r *Reconciler) turnWakeups() <-chan event.GenericEvent {
+	ch := make(chan event.GenericEvent, 256)
+	r.pushTurns.mu.Lock()
+	r.pushTurns.wake = func(step string) {
+		ns, name, _ := strings.Cut(step, "/")
+		select {
+		case ch <- event.GenericEvent{Object: &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}}:
+		default:
+		}
+	}
+	r.pushTurns.mu.Unlock()
+	return ch
 }
 
 // holdsChanged passes Pipeline updates that change spec.holds.
@@ -2616,9 +2822,14 @@ func (r *Reconciler) collectGateResults(ctx context.Context, log zerolog.Logger,
 			Result:        "Fail",
 			Reason:        g.Status.Reason,
 		}
-		// Prefer the template's name over the generated instance name.
+		// Prefer the template's name and namespace over the generated
+		// instance's: an org gate's instance lives in the Pipeline namespace,
+		// but a reviewer looks for the template (#1581).
 		if tmpl := g.Labels["kardinal.io/gate-name"]; tmpl != "" {
 			gr.GateName = tmpl
+		}
+		if tmplNS := g.Labels[graph.LabelGateTemplateNamespace]; tmplNS != "" {
+			gr.GateNamespace = tmplNS
 		}
 		if g.Status.Ready {
 			gr.Result = "Pass"
@@ -2657,6 +2868,7 @@ func (r *Reconciler) setRollbackState(ctx context.Context, log zerolog.Logger, s
 		return
 	}
 	state.RequestedBy = bundle.Annotations[lifecycle.AnnotationRequestedBy]
+	state.CreatedBy = bundle.Annotations[lifecycle.AnnotationCreatedBy]
 	name := bundle.Annotations[lifecycle.AnnotationRollbackFrom]
 	if name == "" {
 		return

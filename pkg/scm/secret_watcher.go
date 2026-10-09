@@ -15,6 +15,7 @@ package scm
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -114,9 +115,14 @@ func (w *SecretWatcher) Start(ctx context.Context) error {
 	}
 }
 
-// checkAndReload reads the Secret and calls Provider.Reload if the token
-// changed. The first successful read seeds lastToken and logs "SCM credentials
-// loaded"; only a later change logs "SCM credentials rotated".
+// checkAndReload reads the Secret and reloads the provider if its
+// credentials changed: the token in SecretKey, or GitHub App credentials
+// (githubAppID, githubAppInstallationID, githubAppPrivateKey) when the Secret
+// has githubAppPrivateKey. The first successful read seeds lastToken and logs
+// "SCM credentials loaded"; only a later change logs "SCM credentials
+// rotated". New GitHub App credentials are checked by minting an
+// installation token at once, so a wrong App ID or key is logged at startup
+// rather than at the first promotion.
 func (w *SecretWatcher) checkAndReload(ctx context.Context, log zerolog.Logger) {
 	secret := &corev1.Secret{}
 	key := types.NamespacedName{
@@ -128,30 +134,83 @@ func (w *SecretWatcher) checkAndReload(ctx context.Context, log zerolog.Logger) 
 		return
 	}
 
-	tokenBytes, ok := secret.Data[w.SecretKey]
-	if !ok {
-		log.Warn().Str("key", w.SecretKey).Msg("SCM credential watcher: key not found in Secret")
+	app, isApp, appErr := GitHubAppCredentialsFromData(secret.Data)
+	if appErr != nil {
+		log.Error().Err(appErr).Msg("SCM credential watcher: the GitHub App credentials in the Secret are incomplete; the provider keeps its credentials")
+		return
+	}
+	var cred Credentials
+	if isApp {
+		cred = Credentials{GitHubApp: &app}
+	} else {
+		tokenBytes, ok := secret.Data[w.SecretKey]
+		if !ok {
+			log.Warn().Str("key", w.SecretKey).Msg("SCM credential watcher: key not found in Secret")
+			return
+		}
+		// Trim so a trailing newline neither breaks the header nor looks like
+		// a rotation on every poll.
+		cred = Credentials{Token: strings.TrimSpace(string(tokenBytes))}
+	}
+	fp := cred.fingerprint()
+	if fp == w.lastToken {
+		// Credentials unchanged — no-op.
 		return
 	}
 
-	// Trim so a trailing newline neither breaks the header nor looks like a
-	// rotation on every poll.
-	token := strings.TrimSpace(string(tokenBytes))
-	if token == w.lastToken {
-		// Token unchanged — no-op.
-		return
+	var err error
+	if isApp {
+		err = w.Provider.ReloadCredentials(cred)
+	} else {
+		err = w.Provider.Reload(cred.Token)
 	}
-
-	if err := w.Provider.Reload(token); err != nil {
+	if err != nil {
 		log.Error().Err(err).Msg("SCM credential watcher: provider reload failed")
 		return
 	}
 
-	w.lastToken = token
+	w.lastToken = fp
+	what := "the token in the Secret"
+	if isApp {
+		what = fmt.Sprintf("GitHub App %d installation %d", app.AppID, app.InstallationID)
+		w.checkApp(ctx, log)
+	}
 	if !w.seeded {
 		w.seeded = true
-		log.Info().Msg("SCM credentials loaded — provider uses the token in the Secret")
+		log.Info().Msg("SCM credentials loaded — provider uses " + what)
 		return
 	}
-	log.Info().Msg("SCM credentials rotated — provider reloaded with new token")
+	log.Info().Msg("SCM credentials rotated — provider reloaded with " + what)
+}
+
+// appCheckTimeout bounds the installation token mint that checks new GitHub
+// App credentials.
+const appCheckTimeout = 15 * time.Second
+
+// checkApp mints an installation token with the provider's GitHub App
+// credentials and logs a warning when GitHub refuses them. The token is
+// cached for the provider's first requests.
+func (w *SecretWatcher) checkApp(ctx context.Context, log zerolog.Logger) {
+	ctx, cancel := context.WithTimeout(ctx, appCheckTimeout)
+	defer cancel()
+	if err := CheckGitHubApp(ctx, w.Provider.Current()); err != nil {
+		log.Warn().Err(err).Msg("SCM GITHUB APP WARNING — cannot mint an installation token; promotion steps will fail until the App ID, installation ID or private key is fixed")
+		return
+	}
+	log.Info().Msg("SCM GitHub App installation token minted")
+}
+
+// CheckGitHubApp mints an installation token with p's GitHub App
+// credentials. It returns nil for a provider that does not use a GitHub
+// App.
+func CheckGitHubApp(ctx context.Context, p SCMProvider) error {
+	if d, ok := p.(*DynamicProvider); ok {
+		p = d.Current()
+	}
+	g, ok := p.(*GitHubProvider)
+	if !ok || g.tokens == nil {
+		return nil
+	}
+	_, err := g.tokens.Token(ctx)
+	return err
 }

@@ -15,6 +15,8 @@ package scm
 
 import (
 	"context"
+	"net"
+	"sync/atomic"
 	"time"
 
 	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -54,6 +56,48 @@ func (w *SecretWatcher) CheckAndReloadForTest(ctx context.Context) {
 		Str("key", w.SecretKey).
 		Logger()
 	w.checkAndReload(ctx, log)
+}
+
+// SetAppTokenClockForTest replaces the clock of a GitHubAppTokenSource.
+func SetAppTokenClockForTest(s *GitHubAppTokenSource, now func() time.Time) { s.now = now }
+
+// AuthMethodForTest exposes authMethod.
+var AuthMethodForTest = authMethod
+
+// SetSSHTimeoutsForTest replaces the ssh connect and receive-pack wait
+// limits and returns a function that restores them.
+func SetSSHTimeoutsForTest(dial, wait time.Duration) (restore func()) {
+	oldDial, oldWait := sshDialTimeout, receivePackWait
+	sshDialTimeout, receivePackWait = dial, wait
+	return func() { sshDialTimeout, receivePackWait = oldDial, oldWait }
+}
+
+// SetGitIdleTimeoutForTest shortens the git connection idle bound.
+func SetGitIdleTimeoutForTest(d time.Duration) (restore func()) {
+	old := gitIdleTimeout
+	gitIdleTimeout = d
+	return func() { gitIdleTimeout = old }
+}
+
+// NewIdleConnForTest wraps c in the git idle bound.
+func NewIdleConnForTest(c net.Conn, idle time.Duration) net.Conn { return newIdleConn(c, idle) }
+
+// SetDialTCPForTest replaces the git TCP dial.
+func SetDialTCPForTest(f func(ctx context.Context, network, addr string) (net.Conn, error)) (restore func()) {
+	old := dialTCP
+	dialTCP = f
+	return func() { dialTCP = old }
+}
+
+// CountEvidenceRendersForTest counts the evidence renders of the PR template
+// functions (the whole body, and each section) until restore is called.
+func CountEvidenceRendersForTest() (counts func() (body, sections int), restore func()) {
+	var b, sec atomic.Int32
+	prevBody, prevSection := renderPRBodyFn, renderSectionFn
+	renderPRBodyFn = func(body PRBody) (string, error) { b.Add(1); return prevBody(body) }
+	renderSectionFn = func(name string, body PRBody) (string, error) { sec.Add(1); return prevSection(name, body) }
+	return func() (int, int) { return int(b.Load()), int(sec.Load()) },
+		func() { renderPRBodyFn, renderSectionFn = prevBody, prevSection }
 }
 
 // SetMaxRegistryClientsForTest bounds the client cache of the Registries

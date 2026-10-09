@@ -48,6 +48,9 @@ type mockGitClient struct {
 	cloneAtSHA   string
 	cloneAtDir   string
 	cloneAtToken string
+	cloneAtAuth  scm.GitAuth
+	cloneAuth    scm.GitAuth
+	pushAuth     scm.GitAuth
 	pushBranch   string
 	pushForce    bool
 	failClone    bool
@@ -61,9 +64,10 @@ type mockGitClient struct {
 	pushErrs   []error
 }
 
-func (m *mockGitClient) Clone(_ context.Context, url, _, dir, token string) error {
+func (m *mockGitClient) Clone(_ context.Context, url, _, dir string, auth scm.GitAuth) error {
+	token := auth.Token
 	m.cloneCalls++
-	m.cloneURL, m.cloneDir, m.cloneToken = url, dir, token
+	m.cloneURL, m.cloneDir, m.cloneToken, m.cloneAuth = url, dir, token, auth
 	if m.cloneErr != nil {
 		return m.cloneErr
 	}
@@ -73,9 +77,10 @@ func (m *mockGitClient) Clone(_ context.Context, url, _, dir, token string) erro
 	return os.MkdirAll(dir, 0o755)
 }
 
-func (m *mockGitClient) CloneAt(_ context.Context, url, sha, dir, token string) error {
+func (m *mockGitClient) CloneAt(_ context.Context, url, sha, dir string, auth scm.GitAuth) error {
+	token := auth.Token
 	m.cloneAtCalls++
-	m.cloneAtURL, m.cloneAtSHA, m.cloneAtDir, m.cloneAtToken = url, sha, dir, token
+	m.cloneAtURL, m.cloneAtSHA, m.cloneAtDir, m.cloneAtToken, m.cloneAtAuth = url, sha, dir, token, auth
 	if m.cloneAtErr != nil {
 		return m.cloneAtErr
 	}
@@ -93,8 +98,9 @@ func (m *mockGitClient) CommitAll(_ context.Context, _, _, _, _ string) error {
 	return nil
 }
 
-func (m *mockGitClient) Push(_ context.Context, _, _, branch, _ string, force bool) error {
+func (m *mockGitClient) Push(_ context.Context, _, _, branch string, auth scm.GitAuth, force bool) error {
 	m.pushCalls++
+	m.pushAuth = auth
 	m.pushBranch = branch
 	m.pushForce = force
 	if len(m.pushErrs) > 0 {
@@ -795,6 +801,57 @@ func TestOpenPRStep_RollbackBody(t *testing.T) {
 			assert.Equal(t, strings.Contains(tt.wantNote, "Rolled back by"), strings.Contains(body, "Rolled back by"))
 			assert.Contains(t, body, "| ghcr.io/nginx/nginx | 1.29.0 | — | — | abc1234 | ci-bot |",
 				"the provenance Author is the restored build's author")
+			assert.NotContains(t, body, "Requested by:", "a rollback names its actor once, as Rolled back by")
+			assert.NotContains(t, body, "Created by:")
+		})
+	}
+}
+
+// TestOpenPRStep_CreatedBy checks that a promotion PR names who created the
+// Bundle under the provenance table (#1581): the verified creator
+// (kardinal.io/created-by, pinned by admission) as "Created by"; without one,
+// the client-written kardinal.io/requested-by, marked unverified; and that a
+// hostile name cannot add Markdown structure.
+func TestOpenPRStep_CreatedBy(t *testing.T) {
+	tests := []struct {
+		name        string
+		createdBy   string
+		requestedBy string
+		want        string
+	}{
+		{name: "verified creator", createdBy: "alice@example.com",
+			want: "\n\nCreated by: alice@example.com\n"},
+		{name: "verified creator wins over the requester", createdBy: "alice@example.com", requestedBy: "mallory",
+			want: "\n\nCreated by: alice@example.com\n"},
+		{name: "requester only", requestedBy: "bob",
+			want: "\n\nRequested by: bob (unverified)\n"},
+		{name: "hostile creator", createdBy: "mallory\n## Approved",
+			want: "\n\nCreated by: mallory ## Approved\n"},
+		{name: "nothing recorded"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSCM := &mockSCMProvider{prURL: "https://github.com/owner/repo/pull/30", prNumber: 30}
+			state := makeState(t, &mockGitClient{}, mockSCM)
+			state.CreatedBy = tt.createdBy
+			state.RequestedBy = tt.requestedBy
+
+			step, err := parentsteps.Lookup("open-pr")
+			require.NoError(t, err)
+			result, err := step.Execute(context.Background(), state)
+			require.NoError(t, err)
+			require.Equal(t, parentsteps.StepSuccess, result.Status)
+
+			require.Len(t, mockSCM.bodies, 1)
+			body := mockSCM.bodies[0]
+			if tt.want == "" {
+				assert.NotContains(t, body, "Created by")
+				assert.NotContains(t, body, "Requested by")
+				return
+			}
+			assert.Contains(t, body, tt.want)
+			assert.Equal(t, 1, strings.Count(body, " by: "), "one creator line")
+			assert.NotContains(t, body, "\n## Approved")
 		})
 	}
 }
