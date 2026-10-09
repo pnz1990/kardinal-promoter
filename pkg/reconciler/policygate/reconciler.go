@@ -1410,19 +1410,3 @@ func (r *Reconciler) holdExemption(ctx context.Context, gate *kardinalv1alpha1.P
 	}
 	return h, ""
 }
-
-// findActiveOverride returns the first non-expired override matching the given
-// environment name (K-09). An override with Stage="" matches any environment.
-// Returns nil if no active override is found.
-func findActiveOverride(overrides []kardinalv1alpha1.PolicyGateOverride, envName string, now time.Time) *kardinalv1alpha1.PolicyGateOverride {
-	for i := range overrides {
-		o := &overrides[i]
-		if o.ExpiresAt.Time.IsZero() || now.After(o.ExpiresAt.Time) {
-			continue // expired or zero
-		}
-		if o.Stage == "" || o.Stage == envName {
-			return o
-		}
-	}
-	return nil
-}
