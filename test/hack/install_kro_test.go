@@ -108,3 +108,83 @@ func TestInstallKroRefusesOldKubernetes(t *testing.T) {
 		})
 	}
 }
+
+// TestInstallKroTuning: hack/install-kro.sh raises kro's Graph worker count
+// and client rate limit (ledger gap G9), and the environment overrides them.
+func TestInstallKroTuning(t *testing.T) {
+	tests := []struct {
+		name string
+		env  []string
+		want []string
+	}{
+		{
+			name: "defaults",
+			want: []string{
+				"--set config.graphConcurrentReconciles=8",
+				"--set config.clientQps=300",
+				"--set config.clientBurst=500",
+			},
+		},
+		{
+			name: "overrides",
+			env:  []string{"KRO_GRAPH_CONCURRENT_RECONCILES=16", "KRO_CLIENT_QPS=50", "KRO_CLIENT_BURST=75"},
+			want: []string{
+				"--set config.graphConcurrentReconciles=16",
+				"--set config.clientQps=50",
+				"--set config.clientBurst=75",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logPath := filepath.Join(t.TempDir(), "calls.log")
+			env := append([]string{"FAKE_LOG=" + logPath, "FAKE_VERSION_JSON=" + versionJSON("36", "v1.36.4")}, tc.env...)
+			out, err := runWithFakes(t, filepath.Join(repoRoot(t), "hack", "install-kro.sh"),
+				map[string]string{"kubectl": fakeVersionKubectl, "helm": fakeRecorder}, env)
+			require.NoError(t, err, out)
+			data, err := os.ReadFile(logPath)
+			require.NoError(t, err)
+			var helmCall string
+			for _, c := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(c, "helm ") && strings.Contains(c, " upgrade --install kro ") {
+					helmCall = c
+				}
+			}
+			require.NotEmpty(t, helmCall, "no helm upgrade call: %s", data)
+			for _, w := range tc.want {
+				assert.Contains(t, helmCall, w)
+			}
+		})
+	}
+}
+
+// TestCelGoParity: kardinal builds its gating expressions on kro's
+// data-pending classification of cel-go's "index out of bounds" error (ledger
+// gap G1) and tests that text with its own cel-go, so go.mod must require the
+// cel-go version kro is built with. KRO_CEL_GO_VERSION in hack/install-kro.sh
+// records that version for the pinned kro; a kro upgrade updates both.
+func TestCelGoParity(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "install-kro.sh"))
+	require.NoError(t, err)
+	kroCel := ""
+	for _, line := range strings.Split(string(script), "\n") {
+		if v, ok := strings.CutPrefix(line, "KRO_CEL_GO_VERSION="); ok {
+			kroCel = strings.Trim(v, `"`)
+		}
+	}
+	require.NotEmpty(t, kroCel, "hack/install-kro.sh must set KRO_CEL_GO_VERSION")
+
+	gomod, err := os.ReadFile(filepath.Join(repoRoot(t), "go.mod"))
+	require.NoError(t, err)
+	ours := ""
+	for _, line := range strings.Split(string(gomod), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == "github.com/google/cel-go" {
+			ours = f[1]
+		}
+	}
+	require.NotEmpty(t, ours, "go.mod must require github.com/google/cel-go")
+	assert.Equal(t, kroCel, ours,
+		"go.mod requires cel-go %s but the pinned kro is built with %s (KRO_CEL_GO_VERSION in hack/install-kro.sh): "+
+			"align them so the resolvableWhen tests exercise kro's error text", ours, kroCel)
+}
