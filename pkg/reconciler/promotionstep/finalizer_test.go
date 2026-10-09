@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -140,7 +141,7 @@ func TestPRFinalizer_FollowsState(t *testing.T) {
 
 // builtStep returns the PromotionStep the Graph builder renders for env of
 // bundle, as kro creates it: the CEL placeholders resolved (prStatusRef to the
-// PRStatus node's name), in the Bundle's namespace.
+// name of its PRStatus), in the Bundle's namespace.
 func builtStep(t *testing.T, pl *v1alpha1.Pipeline, b *v1alpha1.Bundle, env string) *v1alpha1.PromotionStep {
 	t.Helper()
 	withImage := b.DeepCopy() // the builder requires one; the step needs none to run
@@ -154,21 +155,18 @@ func builtStep(t *testing.T, pl *v1alpha1.Pipeline, b *v1alpha1.Bundle, env stri
 		Template map[string]interface{} `json:"template"`
 	}
 	require.NoError(t, json.Unmarshal(raw, &nodes))
-	names := map[string]string{}
-	for _, n := range nodes {
-		if name, ok, _ := unstructured.NestedString(n.Template, "metadata", "name"); ok {
-			names[n.ID] = name
-		}
-	}
+	// prStatusRef is ${PRStatuses.filter(p, p.metadata.name == "<name>")[0].metadata.name}:
+	// it resolves to the PRStatus name once kro has applied the collection.
+	rePRRef := regexp.MustCompile(`^\$\{` + graph.NodePRStatuses + `\.filter\(p, p\.metadata\.name == "([^"]+)"\)\[0\]\.metadata\.name\}$`)
 	for _, n := range nodes {
 		u := unstructured.Unstructured{Object: n.Template}
 		if u.GetKind() != "PromotionStep" || u.GetLabels()["kardinal.io/environment"] != env {
 			continue
 		}
 		ref, _, _ := unstructured.NestedString(u.Object, "spec", "prStatusRef")
-		id := strings.TrimSuffix(strings.TrimPrefix(ref, "${"), ".metadata.name}")
-		require.Contains(t, names, id, "prStatusRef %q names a node", ref)
-		require.NoError(t, unstructured.SetNestedField(u.Object, names[id], "spec", "prStatusRef"))
+		m := rePRRef.FindStringSubmatch(ref)
+		require.NotNil(t, m, "prStatusRef %q names a PRStatus of the PRStatuses collection", ref)
+		require.NoError(t, unstructured.SetNestedField(u.Object, m[1], "spec", "prStatusRef"))
 		require.NoError(t, unstructured.SetNestedField(u.Object, b.Name, "spec", "bundleName"))
 		if ups, ok, _ := unstructured.NestedSlice(u.Object, "spec", "upstreamStates"); ok {
 			for i := range ups {

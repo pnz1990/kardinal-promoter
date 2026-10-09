@@ -518,8 +518,10 @@ took 4 to 29 s to react to a change, against about 0.1 s when idle; with 8 worke
 
 **kardinal workaround.** `hack/install-kro.sh` sets `config.graphConcurrentReconciles=8`,
 `config.clientQps=300` and `config.clientBurst=500` (overridable; `docs/installation.md`
-§Install kro). Planned (next PR): Graphs stay small by moving gate instances and PRStatuses into
-`forEach` collections, whose items kro applies 20 at a time (`--apply-concurrency`).
+§Install kro). Graphs stay small: gate instances and PRStatuses are `forEach` collections
+(`pkg/graph/gates.go`), whose items kro applies 20 at a time (`--apply-concurrency`). The
+PolicyGate reconciler writes a gate's status only when its result changes, a step needs a fresh
+result, or every `--gate-status-heartbeat` (10m), instead of on every evaluation.
 
 **Upstream work.** None filed. [kro#1324](https://github.com/kubernetes-sigs/kro/issues/1324)
 (30 s watch-sync block per reconcile) is related: it also stalls every Graph behind one.
@@ -554,10 +556,12 @@ with 3 gates and 2 hooks about 210.
 
 **kardinal workaround.** `pkg/graph/size.go` `CheckSize`, called by the translator before the
 Graph is written: the JSON size plus 260 bytes per template node may not exceed 1,200,000
-bytes. Over it, the Bundle fails with `GraphBuildFailed` and a message that names the size and
-the fix (a new Bundle or a Pipeline edit retries). Planned: gate and PRStatus collections shrink
-the spec (G9 workaround), and a compact shape that keeps the promotion DAG as data in a `def` node
-serves Pipelines with more than about 200 environments.
+bytes (collections count one entry per item). Over it, the Bundle fails with `GraphBuildFailed`
+and a message that names the size and the fix (a new Bundle or a Pipeline edit retries). Gate
+instances and PRStatuses are `forEach`
+collections over a `def` node (`pkg/graph/gates.go`): 150 environments with 3 gates each went from
+646,536 to 471,305 bytes of spec. A compact shape that keeps the promotion DAG as data in a `def`
+node is planned for Pipelines with more than about 200 environments.
 
 **Upstream work.** None filed. Optional ask: keep the inventory out of the Graph object (an
 ApplySet-style parent or a child object), so the spec alone bounds the size.

@@ -208,14 +208,11 @@ func gatesForEnv(pipe *v1alpha1.Pipeline, bundle *v1alpha1.Bundle,
 			if e := step.Metadata.Labels["kardinal.io/environment"]; e != env && !containsString(upstreams, e) {
 				upstreams = append(upstreams, e)
 			}
-		case "PolicyGate":
-			var g v1alpha1.PolicyGate
-			if err := fromTemplate(n.Template, &g); err != nil {
-				return nil, nil, fmt.Errorf("graph node %s: %w", n.ID, err)
-			}
-			if g.Labels["kardinal.io/environment"] == env {
-				gates = append(gates, g)
-			}
+		}
+	}
+	for _, g := range res.GateInstances {
+		if g.Labels["kardinal.io/environment"] == env {
+			gates = append(gates, g)
 		}
 	}
 	return gates, upstreams, nil
