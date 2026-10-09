@@ -370,6 +370,16 @@
           "name": {
             "description": "Name is the environment name (e.g. \"test\", \"uat\", \"prod\").",
             "type": "string"
+          },
+          "upstreams": {
+            "description": "Upstreams are the environments this one waits for as the controller resolves them (dependsOn, waves, or the previous entry), sorted; empty for a root. Absent when the Pipeline's ordering is invalid.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -592,10 +602,24 @@
           "activeBundleName": {
             "type": "string"
           },
+          "activeBundleVersion": {
+            "description": "ActiveBundleVersion is what the active Bundle ships (scm.BundleVersion: the image tag, or \"config <sha>\"), for the fleet board.",
+            "type": "string"
+          },
           "blockerCount": {
             "description": "Operations table columns: derived from active Bundle + steps + gates. BlockerCount is the number of the active bundle's PolicyGates with ready=false in environments it has reached (every upstream Verified) but not started; see blockingGateCount.",
             "format": "int32",
             "type": "integer"
+          },
+          "deployed": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDeployed"
+            },
+            "description": "Deployed is, per environment, the Bundle whose change the environment runs: the newest PromotionStep there that landed its change (lifecycle.DeployedBundle, as kardinal status reports). Environments that never received one are absent.",
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "deploymentMetrics": {
             "allOf": [
@@ -1191,6 +1215,40 @@
           "mergedPREvents",
           "status",
           "webhookConfigured"
+        ],
+        "type": "object"
+      },
+      "uiDeployed": {
+        "additionalProperties": false,
+        "description": "uiDeployed is what one environment runs, for the fleet board.",
+        "properties": {
+          "bundle": {
+            "type": "string"
+          },
+          "configFrom": {
+            "description": "ConfigFrom, under an image Bundle, is the last Bundle that deployed a config commit there, and ConfigVersion that commit (\"config abc1234\"). ImagesFrom, under a config Bundle, is the last Bundle that deployed images, and ImagesVersion their tags. Image and config Bundles do not supersede each other, so the environment runs both, as kardinal status reports.",
+            "type": "string"
+          },
+          "configVersion": {
+            "type": "string"
+          },
+          "imagesFrom": {
+            "type": "string"
+          },
+          "imagesVersion": {
+            "type": "string"
+          },
+          "verifiedAt": {
+            "description": "VerifiedAt is the RFC 3339 time its step in the environment was Verified (the latest region); empty while it is still health checking.",
+            "type": "string"
+          },
+          "version": {
+            "description": "Version is scm.BundleVersion of that Bundle; empty when the Bundle is gone.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle"
         ],
         "type": "object"
       },

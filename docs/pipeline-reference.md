@@ -26,7 +26,7 @@ spec:
       dependsOn: [<string>, ...]        # Environments this one depends on (default: previous in list)
       wave: <int>                       # Deployment wave, minimum 1 (default: none)
       update:
-        strategy: <string>              # "kustomize" (default), "helm" or "argocd"
+        strategy: <string>              # "kustomize" (default), "helm", "argocd" or "yaml"
         helm:                           # When strategy: helm
           imagePathTemplate: <string>   # Dot path of the image tag (default: ".image.tag")
           valuesFile: <string>          # Relative to path (default: "values.yaml")
@@ -34,6 +34,12 @@ spec:
           application: <string>         # Argo CD Application to patch (required)
           namespace: <string>           # Default: "argocd"
           imageKey: <string>            # Key in spec.source.helm.valuesObject (default: "image.tag")
+        yaml:                           # When strategy: yaml
+          updates:                      # One or more; all are applied in one commit
+            - file: <string>            # YAML file relative to path
+              path: <string>            # Key path, e.g. "spec.template.spec.containers[0].image"
+              image: <string>           # Bundle image repository (optional with one image)
+              value: <string>           # tag (default), digest, tagWithDigest, image, imageWithDigest
       approval: <string>                # "auto" (default) or "pr-review"
       health:
         type: <string>                  # "resource" (default), "argocd", "flux", "argoRollouts", "flagger"
@@ -115,7 +121,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `path` | No | `environments/<name>` | Directory in the GitOps repo containing the environment's manifests. It must be relative and stay inside the repository: absolute paths, `..` segments and symlinks that point outside the checkout fail the step. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
 | `wave` | No | (none) | Assigns this environment to a numbered deployment wave (K-06). Minimum 1. Environments with the same wave number are promoted in parallel. A wave depends on every environment of the next lower wave, and on the environment without a wave listed before it. Gaps in the numbers are allowed. Composable with `dependsOn`. See [Wave Topology](#wave-topology-k-06). |
-| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches the image tag at `update.helm.imagePathTemplate` in `update.helm.valuesFile`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). |
+| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches the image tag at `update.helm.imagePathTemplate` in `update.helm.valuesFile`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). `yaml`: sets any YAML paths, in any files of the environment directory, to a Bundle image's tag, digest or reference; see [The yaml update strategy](#the-yaml-update-strategy). |
 | `update.helm.imagePathTemplate` | No | `.image.tag` | `helm` only. Dot path of the image tag in the values file. |
 | `update.helm.valuesFile` | No | `values.yaml` | `helm` only. Values file to patch, relative to the environment `path`. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
@@ -334,7 +340,8 @@ finishes, and its Graph turns Ready once its steps are Verified and its gates pa
 | Image Bundle, `update.strategy: kustomize` (default) | `git-clone`, `kustomize-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Image Bundle, `update.strategy: helm` | `git-clone`, `helm-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Config Bundle | `git-clone`, `config-merge`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
-| Mixed Bundle | `git-clone`, `config-merge`, then the image Bundle's update step (`kustomize-set-image` or `helm-set-image`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Mixed Bundle | `git-clone`, `config-merge`, then the image Bundle's update step (`kustomize-set-image`, `helm-set-image` or `yaml-update`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Image Bundle, `update.strategy: yaml` | `git-clone`, `yaml-update`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | `update.strategy: argocd` | `argocd-set-image`, `health-check` |
 
 `open-pr` and `wait-for-merge` run only with `approval: pr-review`. When the files in git
@@ -363,6 +370,58 @@ manifests that use that name keep promoting:
   short name. It also gets `newName: ghcr.io/org/app`.
 
 A short-name entry whose `newName` points at another repository is left alone.
+
+### The yaml update strategy
+
+`update.strategy: yaml` writes values of the Bundle's images into any YAML paths of any files
+in the environment directory: plain manifests, Helm values, a Kustomize `images` entry, a
+custom resource. Each `update.yaml.updates[]` entry sets one scalar:
+
+```yaml
+update:
+  strategy: yaml
+  yaml:
+    updates:
+      - file: deploy/deployment.yaml
+        path: spec.template.spec.containers[0].image
+        image: ghcr.io/org/api           # which Bundle image; optional with one image
+        value: image                     # ghcr.io/org/api:1.4.2
+      - file: deploy/deployment.yaml
+        path: spec.template.spec.containers[1].image
+        image: ghcr.io/org/sidecar
+        value: imageWithDigest           # ghcr.io/org/sidecar:0.3.0@sha256:...
+      - file: values.yaml
+        path: api.image.tag
+        image: ghcr.io/org/api           # value defaults to tag: 1.4.2
+```
+
+| `value` | Written |
+|---|---|
+| `tag` (default) | the tag |
+| `digest` | the digest (`sha256:...`) |
+| `tagWithDigest` | `<tag>@<digest>` |
+| `image` | `<repository>:<tag>` |
+| `imageWithDigest` | `<repository>:<tag>@<digest>`, or `<repository>@<digest>` without a tag |
+
+- `path` is keys separated by `.`, with `[N]` to index a list. Missing mapping keys are created;
+  list elements are not. A key that contains `.` (an annotation such as `app.kubernetes.io/version`)
+  cannot be addressed.
+- The step computes every edit before it writes anything. An edit that cannot be applied (a
+  Bundle without the named image, a value the image does not have such as the digest of a
+  tag-only image, a missing list element, a path through a scalar, a path that would replace a
+  mapping or list, a file outside the repository) fails the step for good and no file is
+  changed.
+- Comments, key order, the quoting of the replaced value and the file mode are kept. Every edited
+  file is parsed again before it is written and must still hold every value where it was set. The
+  files are then written through new temporary files (never through a file or link already at that
+  name) and renamed; if a rename fails, the files already replaced get their old content back.
+- Refused, failing the step: a file with more than one YAML document (`---`; an empty or
+  comment-only document after the first, such as a trailing `---` or `--- # end`, is not written
+  back, and its comments move to the end of the file), an anchor or alias
+  (`&`, `*`) or a merge key (`<<`) on the edited path, a key that appears twice in one mapping, a
+  symbolic link anywhere on the path (the environment directory, a directory in `file`, or the
+  file), a file over 4 MiB, and a `file` that is absolute or contains `..`.
+- A Bundle without images (a config Bundle) changes nothing.
 
 ### Image signatures and tests
 
