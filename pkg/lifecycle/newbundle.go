@@ -20,6 +20,7 @@ import (
 //   - spec.type is image, config or mixed; an empty type is set to image;
 //   - the type has the artifacts it needs (graph.ValidateBundleArtifacts):
 //     images for image and mixed, configRef.commitSHA for config and mixed;
+//   - an image Bundle has no configRef, which it would ignore;
 //   - provenance.ciRunURL passes graph.ValidateCIRunURL.
 //
 // It does not check that the Pipeline exists: each caller does that with its
@@ -41,6 +42,11 @@ func ValidateNewBundle(spec *v1alpha1.BundleSpec) error {
 	}
 	if err := graph.ValidateBundleArtifacts(spec); err != nil {
 		return err
+	}
+	// An image Bundle deploys only its images: a configRef on it would be
+	// ignored without a word (#1353).
+	if spec.Type == "image" && spec.ConfigRef != nil {
+		return fmt.Errorf("type \"image\" does not use configRef; set type config or mixed with configRef.commitSHA, or drop configRef")
 	}
 	if spec.Provenance != nil {
 		// The PR body and the UI link it (E2E-R22).
