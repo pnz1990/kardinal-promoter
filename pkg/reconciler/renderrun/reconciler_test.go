@@ -478,11 +478,13 @@ func TestRenderRun_RetiredLostRenderUnconfirmed(t *testing.T) {
 	verified := at(1)
 	ok := bundle("web-v1", v1alpha1.RetiredStep{Name: "s1", Environment: "prod", State: "Verified", CreatedAt: at(0), VerifiedAt: &verified,
 		MarkerDigest: strings.Repeat("1", 64)})
-	lost := bundle("web-v2", v1alpha1.RetiredStep{Name: "s2", Environment: "prod", State: "Failed", CreatedAt: at(5)})
-	older := bundle("web-v0", v1alpha1.RetiredStep{Name: "s0", Environment: "prod", State: "Failed", CreatedAt: at(-5)})
+	lost := bundle("web-v2", v1alpha1.RetiredStep{Name: "s2", Environment: "prod", State: "Failed", CreatedAt: at(5), RenderRequested: true})
+	older := bundle("web-v0", v1alpha1.RetiredStep{Name: "s0", Environment: "prod", State: "Failed", CreatedAt: at(-5), RenderRequested: true})
+	// Failed before it asked for its render (newest, but rendered nothing).
+	early := bundle("web-v2b", v1alpha1.RetiredStep{Name: "s2b", Environment: "prod", State: "Failed", CreatedAt: at(7)})
 	rr := run("rr")
 	rr.Spec.BundleName = "web-v3"
-	e := newEnv(t, rr, ok, lost, older)
+	e := newEnv(t, rr, ok, lost, older, early)
 	_, got := e.reconcile(t, "rr")
 	assert.Equal(t, []string{"web-v2"}, got.Status.UnconfirmedBundles)
 	assert.Equal(t, []string{strings.Repeat("1", 64)}, got.Status.KnownMarkerDigests)

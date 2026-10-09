@@ -408,6 +408,11 @@ spec:
                       description: PRURL is the PromotionStep's status.prURL.
                       maxLength: 2048
                       type: string
+                    renderRequested:
+                      description: |-
+                        RenderRequested is true when the step asked for its render (layout:
+                        branch): a Failed step that did may have lost a render that pushed.
+                      type: boolean
                     state:
                       description: State is the PromotionStep's final status.state.
                       type: string

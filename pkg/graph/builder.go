@@ -716,7 +716,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
 			env:         findEnvSpec(pipeline, envName),
 			stepK8sName: promotionStepK8sName(pipelineName, bundle.Name, envName),
-			conds:       hookConds(stepConds(upstreams, envGates, gates.readyCond), heldCond(pipeline, envName)),
+			conds:       stepConds(heldCond(pipeline, envName), upstreams, envGates, gates.readyCond),
 		})
 		if err != nil {
 			return nil, nil, nil, err
@@ -819,16 +819,6 @@ func heldCond(pipeline *kardinalv1alpha1.Pipeline, env string) string {
 		return "bundle.metadata.name == " + celString(h)
 	}
 	return ""
-}
-
-// hookConds adds the environment's hold (spec.holds) to a hook's
-// conditions: a held environment runs no hook of another Bundle, as it
-// creates no PromotionStep for one.
-func hookConds(conds []string, held string) []string {
-	if held != "" {
-		conds = append(conds, held)
-	}
-	return conds
 }
 
 // heldBundle is the Bundle the Pipeline holds env on (spec.holds), or "".

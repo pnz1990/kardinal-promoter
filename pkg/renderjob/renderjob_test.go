@@ -100,6 +100,18 @@ func TestRun(t *testing.T) {
 	assert.Equal(t, res.CommitSHA, res4.CommitSHA, "the commit the first attempt pushed")
 	assert.Equal(t, res.MarkerDigest, res4.MarkerDigest)
 
+	// A pr-review render of the Bundle the rendered branch already holds
+	// pushes nothing: the result names the rendered branch's head, which the
+	// controller's render step checks with git ls-remote.
+	same := config(url, true)
+	same.KnownMarkerDigests = []string{res.MarkerDigest}
+	resNC, err := renderjob.Run(ctx, same, t.TempDir(), "", git)
+	require.NoError(t, err)
+	assert.True(t, resNC.NoChanges)
+	assert.Empty(t, resNC.Branch, "nothing pushed")
+	assert.Equal(t, res.CommitSHA, resNC.CommitSHA, "the rendered branch's head")
+	assert.Equal(t, res.MarkerDigest, resNC.MarkerDigest)
+
 	pr := config(url, true)
 	pr.BundleName = "web-v3"
 	pr.Bundle.Images[0].Tag = "3.0.0"

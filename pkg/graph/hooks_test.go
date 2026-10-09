@@ -401,22 +401,40 @@ func TestHookRunName(t *testing.T) {
 	}
 }
 
-// TestBuilder_HeldEnvironmentHoldsItsHooks: an environment held on a
-// rollback Bundle (spec.holds) creates no PromotionStep for another Bundle,
-// so its hooks wait on the same hold: a pre hook (a migration) does not run
-// for a Bundle that cannot promote there.
+// TestBuilder_HeldEnvironmentHoldsItsHooks: a pre hook resolves under the
+// step's own conditions (stepCond), so it does not run for a Bundle waiting
+// for a maxConcurrentPromotions slot, nor, while the environment is held on
+// a rollback Bundle (spec.holds), for another Bundle: a pre hook (a
+// migration) never runs for a Bundle that cannot promote there.
 func TestBuilder_HeldEnvironmentHoldsItsHooks(t *testing.T) {
-	p := hookPipeline()
-	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rb", Reason: "incident"}}
-	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app")})
-	require.NoError(t, err)
-	b, err := json.Marshal(hookNode(t, res.Graph, "hook0pre0prod0migrate"))
-	require.NoError(t, err)
-	assert.Contains(t, string(b), `bundle.metadata.name == \"app-rb\"`)
+	build := func(p *kardinalv1alpha1.Pipeline) string {
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app")})
+		require.NoError(t, err)
+		return nameExpr(t, res.Graph, "hook0pre0prod0migrate")
+	}
+	bundle := func(name string, conditions ...interface{}) map[string]interface{} {
+		st := map[string]interface{}{"phase": "Promoting"}
+		if len(conditions) > 0 {
+			st["conditions"] = conditions
+		}
+		return map[string]interface{}{"metadata": map[string]interface{}{"name": name}, "status": st}
+	}
+	slot := map[string]interface{}{"type": graph.CondBundleWaitingForSlot, "status": "True"}
+	upstreams := []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "x"}}}
+	eval := func(expr string, b map[string]interface{}) error {
+		_, err := celEval(t, expr, map[string]interface{}{"bundle": b, "refSteps": []interface{}{},
+			"test": map[string]interface{}{"status": map[string]interface{}{"state": "Verified"}}, "upstreams": upstreams})
+		return err
+	}
 
-	res, err = graph.NewBuilder().Build(graph.BuildInput{Pipeline: hookPipeline(), Bundle: makeBundle("app-v1", "app")})
-	require.NoError(t, err)
-	b, err = json.Marshal(hookNode(t, res.Graph, "hook0pre0prod0migrate"))
-	require.NoError(t, err)
-	assert.NotContains(t, string(b), "bundle.metadata.name ==", "no hold, no condition")
+	expr := build(hookPipeline())
+	require.NoError(t, eval(expr, bundle("app-v1")), "resolves for a promoting Bundle")
+	require.Error(t, eval(expr, bundle("app-v1", slot)), "not while the Bundle waits for a slot")
+
+	held := hookPipeline()
+	held.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rb", Reason: "incident"}}
+	expr = build(held)
+	require.Error(t, eval(expr, bundle("app-v1")), "not for another Bundle while prod is held")
+	require.NoError(t, eval(expr, bundle("app-rb")), "the held Bundle's hooks run")
+	require.Error(t, eval(expr, bundle("app-rb", slot)), "not while the held Bundle waits for a slot")
 }

@@ -141,3 +141,32 @@ func TestCompact_RefusesRendersAndHooks(t *testing.T) {
 	}
 	assert.Empty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: makeLinearPipeline("app", "test", "prod")}))
 }
+
+// TestBuilder_LiveRendersMirrorsKnownDigests: the mirror's renders
+// expression copies each RenderRun's status.knownMarkerDigests onto the step
+// (the render step checks a noChanges result against them), and an empty
+// list when the RenderRun has none yet.
+func TestBuilder_LiveRendersMirrorsKnownDigests(t *testing.T) {
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: renderPipeline(), Bundle: makeBundle("app-v1", "app")})
+	require.NoError(t, err)
+	l := hookNode(t, res.Graph, "live0prod").Patch["spec"].(map[string]interface{})["live"].(map[string]interface{})
+	expr := l["renders"].(string)
+	run := func(name string, status map[string]interface{}) map[string]interface{} {
+		return map[string]interface{}{"metadata": map[string]interface{}{"name": name},
+			"spec": map[string]interface{}{"environment": "prod"}, "status": status}
+	}
+	out, err := celEval(t, expr, map[string]interface{}{"refRenderRuns": []interface{}{
+		run("rr1", map[string]interface{}{"phase": "Succeeded", "knownMarkerDigests": []interface{}{"m1", "m0"},
+			"result": map[string]interface{}{"commitSHA": "c", "noChanges": true}}),
+		run("rr2", map[string]interface{}{}),
+	}})
+	require.NoError(t, err)
+	renders := out.([]interface{})
+	require.Len(t, renders, 2)
+	first, second := renders[0].(map[string]interface{}), renders[1].(map[string]interface{})
+	assert.Equal(t, []interface{}{"m1", "m0"}, first["knownMarkerDigests"])
+	assert.Equal(t, "c", first["result"].(map[string]interface{})["commitSHA"])
+	assert.Equal(t, true, first["result"].(map[string]interface{})["noChanges"])
+	assert.Equal(t, []interface{}{}, second["knownMarkerDigests"], "none yet")
+	assert.Equal(t, "Pending", second["phase"])
+}

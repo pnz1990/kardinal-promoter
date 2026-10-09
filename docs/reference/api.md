@@ -107,6 +107,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.retiredSteps[].message` | string |  | Message is the PromotionStep's final status.message, cut to 512 bytes. |
 | `status.retiredSteps[].name` | string | yes | Name is the PromotionStep's name. |
 | `status.retiredSteps[].prURL` | string |  | PRURL is the PromotionStep's status.prURL. |
+| `status.retiredSteps[].renderRequested` | boolean |  | RenderRequested is true when the step asked for its render (layout: branch): a Failed step that did may have lost a render that pushed. |
 | `status.retiredSteps[].state` | string |  | State is the PromotionStep's final status.state. |
 | `status.retiredSteps[].stepType` | string |  | StepType is the PromotionStep's spec.stepType. |
 | `status.retiredSteps[].verifiedAt` | string (date-time) |  | VerifiedAt is when the PromotionStep became Verified. |

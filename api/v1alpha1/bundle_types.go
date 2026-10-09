@@ -256,6 +256,11 @@ type RetiredStep struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=64
 	MarkerDigest string `json:"markerDigest,omitempty"`
+
+	// RenderRequested is true when the step asked for its render (layout:
+	// branch): a Failed step that did may have lost a render that pushed.
+	// +optional
+	RenderRequested bool `json:"renderRequested,omitempty"`
 }
 
 // BundleMetrics holds deployment efficiency metrics for a single Bundle (K-05).

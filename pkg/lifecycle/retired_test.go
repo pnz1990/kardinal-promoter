@@ -171,8 +171,10 @@ func TestRetiredStep_MarkerDigest(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := step("v1", "app", "prod", "Verified", 1)
-			s.Status.Outputs = map[string]string{"markerDigest": tc.out}
-			assert.Equal(t, tc.want, lifecycle.RetiredStepOf(s).MarkerDigest)
+			s.Status.Outputs = map[string]string{"markerDigest": tc.out, "renderRequested": "true"}
+			r := lifecycle.RetiredStepOf(s)
+			assert.Equal(t, tc.want, r.MarkerDigest)
+			assert.True(t, r.RenderRequested)
 		})
 	}
 }

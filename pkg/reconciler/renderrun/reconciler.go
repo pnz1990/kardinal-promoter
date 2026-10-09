@@ -302,8 +302,8 @@ type earlierRender struct {
 
 // retiredRenders returns the renders of the environment that the
 // Pipeline's retired Bundles keep in status.retiredSteps: a step with a
-// marker digest got past its render; a Failed one without may have lost its
-// render's result.
+// marker digest got past its render; a Failed one that asked for its render
+// and has none may have lost its render's result.
 func (r *Reconciler) retiredRenders(ctx context.Context, run *v1alpha1.RenderRun) ([]earlierRender, error) {
 	var bundles v1alpha1.BundleList
 	if err := r.List(ctx, &bundles, client.InNamespace(run.Namespace)); err != nil {
@@ -326,7 +326,7 @@ func (r *Reconciler) retiredRenders(ctx context.Context, run *v1alpha1.RenderRun
 					at = rs.VerifiedAt.Time
 				}
 				out = append(out, earlierRender{at: at, digest: rs.MarkerDigest, bundle: b.Name})
-			case rs.State == "Failed":
+			case rs.State == "Failed" && rs.RenderRequested:
 				out = append(out, earlierRender{at: rs.CreatedAt.Time, bundle: b.Name, failed: true})
 			}
 		}

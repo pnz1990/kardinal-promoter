@@ -65,6 +65,7 @@ func RetiredStepOf(s *v1alpha1.PromotionStep) v1alpha1.RetiredStep {
 	if d := s.Status.Outputs["markerDigest"]; len(d) == markerDigestLen {
 		r.MarkerDigest = d
 	}
+	r.RenderRequested = s.Status.Outputs["renderRequested"] == "true"
 	if t, ok := VerifiedTime(s); ok {
 		at := metav1.NewTime(t)
 		r.VerifiedAt = &at
