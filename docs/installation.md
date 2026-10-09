@@ -581,7 +581,7 @@ What to expect:
 
 - `kardinal doctor` passes every check.
 - There is one `graphs.kro.run` Graph for each Bundle that was Promoting. The controller logs `graph created` for each.
-- The logs show only two warnings: SCM webhooks are disabled without `--webhook-secret`, and UI API authentication is off (see [Other notes](#other-notes)).
+- At startup the logs show three warnings: `scm.allowedRepositories` is not set, SCM webhooks are disabled without `--webhook-secret`, and UI API authentication is off (see [Other notes](#other-notes)). A Pipeline whose environments write the same path of the same repository and branch as another Pipeline's also logs `environments write overlapping paths` (its `PathConflict` condition); give each environment its own path.
 
 **10. Tidy up.**
 
@@ -667,6 +667,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 - **Custom RBAC.** If you manage the controller's RBAC yourself, allow `create` and `patch` on `events.k8s.io` events.
 - **UI.** With no UI auth mode set, `/api/` answers only local clients (`kubectl port-forward`). Set `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name` if the UI is reached another way.
+- **SCM token scope.** v0.8.1 had no `scm.allowedRepositories`, so after the upgrade any Pipeline without its own `git.secretRef` can still have the controller's SCM token open PRs in any repository the token can write, and the controller warns at startup. Set `scm.allowedRepositories` to the repositories your Pipelines use (see [The shared SCM token](guides/security.md#the-shared-scm-token-and-scmallowedrepositories)).
 - **Notes in the [changelog](changelog.md) that don't apply to v0.8.1:**
     - `promotionTemplate`, `PromotionStep.spec.inputs` and the `promotiontemplates` CRD don't exist in v0.8.1.
     - The `update.strategy: argocd` with `approval: pr-review` note doesn't apply: v0.8.1 allows only `kustomize` and `helm`.
