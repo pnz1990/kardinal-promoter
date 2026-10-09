@@ -56,6 +56,11 @@ type PodSeries struct {
 	GoroutinesStart float64   `json:"goroutinesStart"`
 	GoroutinesMax   float64   `json:"goroutinesMax"`
 	GoroutinesEnd   float64   `json:"goroutinesEnd"`
+	// LeaderStart and LeaderEnd say whether the Pod led at the start and
+	// at the end of its series (leader_election_master_status): a standby
+	// that took over starts every controller, so its growth is no leak.
+	LeaderStart bool `json:"leaderStart"`
+	LeaderEnd   bool `json:"leaderEnd"`
 }
 
 const ctrlSel = `namespace="` + framework.ControllerNamespace + `",job="` + framework.ControllerName + `"`
@@ -203,6 +208,12 @@ func podSeries(ctx context.Context, e *framework.Env, start, end time.Time) []Po
 			p.GoroutinesMax = math.Max(p.GoroutinesMax, pt.Value)
 		}
 	}
+	lead, _ := e.PromQueryRange(ctx, `max by (pod) (leader_election_master_status{`+ctrlSel+`})`, start, end, step)
+	for _, s := range lead {
+		if p := byPod[s.Metric["pod"]]; p != nil && len(s.Points) > 0 {
+			p.LeaderStart, p.LeaderEnd = s.Points[0].Value == 1, s.Points[len(s.Points)-1].Value == 1
+		}
+	}
 	out := make([]PodSeries, 0, len(byPod))
 	for _, p := range byPod {
 		out = append(out, *p)
@@ -262,8 +273,8 @@ func restarts(ctx context.Context, e *framework.Env, o Options, check, ns, name 
 }
 
 // leaks checks each controller Pod's series: one that ran the whole window
-// (it started within a minute of start and was scraped within a minute of
-// end) must not end with more than 1.5x (plus 100) its goroutines or 2x
+// in one role (it started within a minute of start, was scraped within a
+// minute of end, and led at both ends or at neither) must not end with more than 1.5x (plus 100) its goroutines or 2x
 // (plus 200 MiB) its resident memory, unless other tests shared the
 // controller; and no Pod may pass 90% of the memory limit.
 func leaks(pods []PodSeries, start, end time.Time, limitMiB float64, shared bool) []string {
@@ -272,7 +283,9 @@ func leaks(pods []PodSeries, start, end time.Time, limitMiB float64, shared bool
 		return []string{"Prometheus has no process_resident_memory_bytes for the controller in the run's window"}
 	}
 	for _, p := range pods {
-		whole := p.From.Sub(start) < time.Minute && end.Sub(p.To) < time.Minute
+		// A Pod that ran the whole window in one role: a standby that took
+		// over the lead (a leader was killed) starts every controller.
+		whole := p.From.Sub(start) < time.Minute && end.Sub(p.To) < time.Minute && p.LeaderStart == p.LeaderEnd
 		if whole && !shared && p.GoroutinesEnd > math.Max(1.5*p.GoroutinesStart, p.GoroutinesStart+100) {
 			v = append(v, fmt.Sprintf("%s: goroutines %.0f at the start, %.0f at the end (peak %.0f)",
 				p.Pod, p.GoroutinesStart, p.GoroutinesEnd, p.GoroutinesMax))

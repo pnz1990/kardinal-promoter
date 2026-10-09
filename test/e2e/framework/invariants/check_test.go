@@ -155,6 +155,11 @@ func TestLeaks(t *testing.T) {
 		{"a Pod that started late is not compared", []PodSeries{pod(t0.Add(10*time.Minute), t1, 100, 900, 40, 400)}, false, 0},
 		{"near the limit", []PodSeries{pod(t0, t1, 300, 3800, 300, 300)}, true, 1},
 		{"no series", nil, false, 1},
+		{"a standby that took over the lead", []PodSeries{func() PodSeries {
+			p := pod(t0, t1, 100, 300, 43, 325)
+			p.LeaderEnd = true
+			return p
+		}()}, false, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
