@@ -295,6 +295,38 @@ promotion whose Pipeline or environment sets `layout: branch`, before it changes
 
 See [Rendered Manifests](rendered-manifests.md) for the planned design.
 
+### Many Pipelines on one repository and branch
+
+Several Pipelines (and every environment of one Pipeline) can write the same repository
+and branch at once, as long as each environment has its own `path`. kardinal never
+force-pushes the base branch, so no writer's commit is lost:
+
+- **auto environments**: when `git-push` finds that the branch moved since its clone
+  (another writer pushed first), it fetches the new head and replays its commit onto it:
+  every file this promotion added, changed or deleted takes the promotion's version, every
+  other file the new head's. It pushes again, up to 6 times, waiting 100 ms doubling (plus
+  random jitter) between attempts. The step message then reads
+  `pushed main after rebasing onto N newer commit(s) of other writers`. When the new commits
+  changed one of the same files, or the branch keeps moving, the whole step sequence runs
+  again from a fresh clone (at most 3 times), so the update is computed on the other
+  writer's version; after that the step fails and is retried with backoff like any other
+  transient failure.
+- **pr-review environments**: each promotion pushes its own branch
+  `kardinal/<bundle>/<environment>`, based on the branch at its clone. PRs of different
+  Pipelines change different paths, so each merges without a conflict however many merged
+  before it.
+- **Path isolation**: two environments that write the same directory, or one inside the
+  other, overwrite each other's files and their PRs conflict. The Pipeline reconciler
+  checks every Pipeline the controller sees: when another Pipeline writes the same
+  repository (`spec.git.url`, ignoring a trailing `.git` and case) and branch at an
+  overlapping path, both Pipelines get the condition `PathConflict=True` (reason
+  `OverlappingPath`) naming the environments. It does not stop promotions. Environments
+  with `update.strategy: argocd` write no git and are not compared.
+
+```bash
+kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[?(@.type=="PathConflict")].message}{"\n"}{end}'
+```
+
 ## Promotion Steps
 
 Every environment runs a fixed step sequence. The controller picks it from the Bundle type,

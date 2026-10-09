@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Many Pipelines on one branch** — `git-push` on an auto environment rebases its commit onto a branch another Pipeline (or environment) moved, replaying only the files it changed, and pushes again with jittered backoff, instead of re-running the whole step sequence from a fresh clone on every collision; a commit that changed the same files still re-runs from a fresh clone. A Pipeline that writes the same repository, branch and path as another gets `PathConflict=True`. Proved live with 10 Pipelines and 60 Bundles on one branch (#1461)
+
 ### Changed
 
 - **kro tuning for large promotions** — `hack/install-kro.sh` now installs kro with 8 Graph workers (`config.graphConcurrentReconciles`, kro's default is 1) and client QPS 300 / burst 500 (`KRO_GRAPH_CONCURRENT_RECONCILES`, `KRO_CLIENT_QPS`, `KRO_CLIENT_BURST` override them). With one worker, one 150-environment promotion delayed every other Graph in the cluster by up to about 30 seconds. Re-run the script to apply it to an existing kro, or set the same Helm values if you install kro another way. See [Install kro](https://pnz1990.github.io/kardinal-promoter/installation/#install-kro)

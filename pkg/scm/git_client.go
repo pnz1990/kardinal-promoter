@@ -222,12 +222,31 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 		if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 			return nil
 		}
-		if errors.Is(err, gogit.ErrNonFastForwardUpdate) || strings.Contains(err.Error(), "non-fast-forward") {
+		if errors.Is(err, gogit.ErrNonFastForwardUpdate) || isConcurrentUpdate(err.Error()) {
 			return fmt.Errorf("git push %s %s: %w", remote, branch, ErrNonFastForward)
 		}
 		return fmt.Errorf("git push %s %s: %s", remote, branch, gitErrorText(err))
 	}
 	return nil
+}
+
+// concurrentUpdateReasons are the ref update failures a server reports when
+// another writer moved the branch while this push was in flight: the push
+// lost a race and can be retried on the new head, like a non-fast-forward.
+var concurrentUpdateReasons = []string{
+	"non-fast-forward", "fetch first", "failed to update ref", "failed to lock",
+	"cannot lock ref", "stale info", "reference already exists",
+}
+
+// isConcurrentUpdate reports whether a push error is a lost race on the ref.
+func isConcurrentUpdate(msg string) bool {
+	msg = strings.ToLower(msg)
+	for _, r := range concurrentUpdateReasons {
+		if strings.Contains(msg, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // repoName names the repository repo, opened at dir, in an error: its origin

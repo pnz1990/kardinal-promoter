@@ -62,15 +62,26 @@ func Commits(ctx context.Context, s Server, r Repo, branch string, limit int) ([
 			} `json:"author"`
 		} `json:"commit"`
 	}
-	path := fmt.Sprintf("%s/commits?sha=%s&limit=%d&stat=false&verification=false&files=false",
-		f.repoPath(r), url.QueryEscape(branch), limit)
-	if err := f.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
-		return nil, err
+	// The server returns at most 50 commits a page.
+	const pageSize = 50
+	var out []Commit
+	for page := 1; len(out) < limit; page++ {
+		raw = raw[:0]
+		path := fmt.Sprintf("%s/commits?sha=%s&limit=%d&page=%d&stat=false&verification=false&files=false",
+			f.repoPath(r), url.QueryEscape(branch), min(pageSize, limit), page)
+		if err := f.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+			return nil, err
+		}
+		for _, c := range raw {
+			out = append(out, Commit{SHA: c.SHA, Message: c.Commit.Message,
+				AuthorName: c.Commit.Author.Name, AuthorEmail: c.Commit.Author.Email})
+		}
+		if len(raw) < min(pageSize, limit) {
+			break
+		}
 	}
-	out := make([]Commit, 0, len(raw))
-	for _, c := range raw {
-		out = append(out, Commit{SHA: c.SHA, Message: c.Commit.Message,
-			AuthorName: c.Commit.Author.Name, AuthorEmail: c.Commit.Author.Email})
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }

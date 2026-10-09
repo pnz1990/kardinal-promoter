@@ -123,6 +123,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", p.Name, err)
 	}
+	// Pipelines that share a repository and branch must write separate paths
+	// (PathConflict). Reads Pipelines, writes only this Pipeline's status.
+	var pipelines kardinalv1alpha1.PipelineList
+	if err := r.List(ctx, &pipelines); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list pipelines: %w", err)
+	}
+	desiredConflict := pathConflict(&p, pipelines.Items)
+
 	desiredPhase := DerivePhase(p.Name, bundleList.Items, stepList.Items)
 	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, stepList.Items, time.Now().UTC())
 
@@ -134,7 +142,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredPaused != nil {
 		pausedMatch = conditionMatches(p.Status.Conditions, *desiredPaused)
 	}
-	if condMatch && phaseMatch && metricsMatch && pausedMatch {
+	conflictMatch := meta.FindStatusCondition(p.Status.Conditions, conditionPathConflict) == nil
+	if desiredConflict != nil {
+		conflictMatch = conditionMatches(p.Status.Conditions, *desiredConflict)
+	}
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -150,6 +162,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		meta.SetStatusCondition(&p.Status.Conditions, *desiredPaused)
 	} else {
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPaused)
+	}
+	if desiredConflict != nil {
+		meta.SetStatusCondition(&p.Status.Conditions, *desiredConflict)
+		log.Warn().Msg(desiredConflict.Message)
+	} else {
+		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPathConflict)
 	}
 	p.Status.DeploymentMetrics = desiredMetrics
 
@@ -420,6 +438,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Pipeline{}).
+		// A Pipeline on the same repository and branch changed: re-check
+		// PathConflict on the others.
+		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelinesSharingRepo)).
 		// Deleting the freeze gate by hand while the pipeline is paused, or
 		// removing a user gate that has its name, re-enqueues the Pipeline.
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(pipelineForFreezeGate)).

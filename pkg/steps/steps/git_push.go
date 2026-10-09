@@ -17,6 +17,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
+	"strconv"
+	"time"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -46,9 +49,15 @@ func PRBranch(bundle, env string) string {
 //     after a controller restart (which re-clones and re-commits) replaces
 //     the earlier push instead of failing non-fast-forward.
 //   - Any other sequence (approval: auto) pushes to the base branch without
-//     force. If the base branch moved since the clone (another environment
-//     pushed first), the step returns StepRestart and the engine re-runs the
-//     sequence from a fresh clone.
+//     force. If the base branch moved since the clone (another Pipeline or
+//     environment pushed first), the step rebases its commit onto the new
+//     head and pushes again, up to maxRebaseAttempts times with jittered
+//     backoff (rebaseAndPush). The rebase replays only the files this
+//     promotion changed; when the new commits on the branch changed one of
+//     them, or the attempts run out, the step returns StepRestart and the
+//     engine re-runs the sequence from a fresh clone, so the update steps
+//     work on the other writer's version. Base pushes are never forced, so
+//     no other writer's commit is lost.
 //   - When git-commit found nothing to commit, nothing is pushed.
 type gitPushStep struct{}
 
@@ -75,20 +84,84 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	}
 
 	err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Token, force)
+	rebases := 0
 	if !force && errors.Is(err, scm.ErrNonFastForward) {
-		return parentsteps.StepResult{
-			Status:  parentsteps.StepRestart,
-			Message: fmt.Sprintf("base branch %s moved while promoting; retrying from a fresh clone", branch),
-		}, nil
+		var restart string
+		rebases, restart, err = rebaseAndPush(ctx, state, branch)
+		if restart != "" {
+			return parentsteps.StepResult{Status: parentsteps.StepRestart, Message: restart}, nil
+		}
 	}
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("push failed: %v", err)}, err
 	}
 
 	outputs := map[string]string{"branch": branch}
+	msg := "pushed " + branch
+	if rebases > 0 {
+		msg = fmt.Sprintf("pushed %s after rebasing onto %d newer commit(s) of other writers", branch, rebases)
+		// Kept in status.outputs.rebases, so the contention is visible after
+		// the step moved on.
+		outputs[outputRebases] = strconv.Itoa(rebases)
+	}
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
-		Message: "pushed " + branch,
+		Message: msg,
 		Outputs: outputs,
 	}, nil
+}
+
+// outputRebases is the step output (status.outputs.rebases) that counts the
+// rebases git-push made before its push landed; absent when none was needed.
+const outputRebases = "rebases"
+
+// maxRebaseAttempts bounds how often git-push rebases onto a moved base
+// branch before it falls back to a fresh clone (StepRestart).
+const maxRebaseAttempts = 6
+
+// rebaseBackoff is the wait before rebase attempt n (0-based): 100ms
+// doubling, plus up to as much again of jitter, so writers that collided do
+// not collide again in lockstep. Overridable in tests.
+var rebaseBackoff = func(n int) time.Duration {
+	d := 100 * time.Millisecond << n
+	return d + time.Duration(rand.Int64N(int64(d)))
+}
+
+// rebaseAndPush rebases the promotion commit onto the moved base branch and
+// pushes, until the push lands or maxRebaseAttempts are used. It returns how
+// many rebases it made, or a StepRestart message when the commit must be
+// redone from a fresh clone (the branch changed the same files, the client
+// cannot rebase, or the attempts ran out), or the push error.
+func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch string) (int, string, error) {
+	rb, ok := state.GitClient.(scm.Rebaser)
+	if !ok {
+		return 0, fmt.Sprintf("base branch %s moved while promoting; retrying from a fresh clone", branch), nil
+	}
+	for n := 0; n < maxRebaseAttempts; n++ {
+		if n > 0 {
+			t := time.NewTimer(rebaseBackoff(n - 1))
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return n, "", fmt.Errorf("push %s: %w", branch, ctx.Err())
+			case <-t.C:
+			}
+		}
+		if _, err := rb.RebaseOnRemote(ctx, state.WorkDir, "origin", branch, state.Git.Token); err != nil {
+			if errors.Is(err, scm.ErrRebaseConflict) {
+				return n, fmt.Sprintf("base branch %s moved and changed the files this promotion writes (%v); "+
+					"redoing the change from a fresh clone", branch, err), nil
+			}
+			return n, "", fmt.Errorf("rebase onto %s: %w", branch, err)
+		}
+		err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Token, false)
+		if err == nil {
+			return n + 1, "", nil
+		}
+		if !errors.Is(err, scm.ErrNonFastForward) {
+			return n + 1, "", err
+		}
+	}
+	return maxRebaseAttempts, fmt.Sprintf("base branch %s kept moving (%d rebases); retrying from a fresh clone",
+		branch, maxRebaseAttempts), nil
 }
