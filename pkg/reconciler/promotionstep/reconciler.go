@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -206,6 +207,12 @@ type Reconciler struct {
 	// retry backoff (status.nextRetryAt).
 	NowFn func() time.Time
 
+	// GitHubAppTokens mints the git tokens of Pipelines whose git Secret
+	// holds GitHub App credentials, at the controller's GitHub API
+	// (--scm-api-url). When nil, a cache for api.github.com is made on first
+	// use.
+	GitHubAppTokens *scm.AppTokenCache
+	appTokensOnce   sync.Once
 	// SCMWaitTimeout bounds how long a step waits for an open SCM circuit
 	// when its environment sets no stepTimeoutSeconds; 0 is
 	// DefaultSCMWaitTimeout (#1476).
@@ -1198,11 +1205,13 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		WorkDir:      workDir,
 		Outputs:      cloneMap(ps.Status.Outputs),
 		Git: steps.GitConfig{
-			URL:         pipeline.Spec.Git.URL,
-			Branch:      baseBranch(pipeline),
-			Token:       cred.token,
-			AuthorName:  "kardinal-promoter",
-			AuthorEmail: "kardinal@kardinal.io",
+			URL:           pipeline.Spec.Git.URL,
+			Branch:        baseBranch(pipeline),
+			Token:         cred.token,
+			SSHPrivateKey: cred.sshKey,
+			SSHKnownHosts: cred.knownHosts,
+			AuthorName:    "kardinal-promoter",
+			AuthorEmail:   "kardinal@kardinal.io",
 		},
 		SCM:                  provider,
 		GitClient:            r.GitClient,
