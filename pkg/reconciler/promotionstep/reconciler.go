@@ -238,7 +238,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	base := ps.DeepCopy()
 	skipped, recorded := recordSkippedHooks(&ps, r.now().UTC()), recordHookRuns(&ps)
 	if skipped || recorded {
-		if err := r.Status().Patch(ctx, &ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+		// With the resourceVersion read: a merge patch of status.hookRecords
+		// from a stale copy would drop records another reconcile wrote (QA
+		// #1493). A conflict reads the step again.
+		err := r.Status().Patch(ctx, &ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		switch {
+		case apierrors.IsConflict(err):
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		case err != nil && !apierrors.IsNotFound(err):
 			return ctrl.Result{}, fmt.Errorf("patch %s condition: %w", ConditionHooksSkipped, err)
 		}
 	}
@@ -907,7 +914,18 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		}
 		// More steps remain — persist index and requeue immediately.
 		ps.Status.Message = fmt.Sprintf("completed step %d/%d", nextIdx, len(seq))
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+		// Locked like the retry and state patches: a stale reconcile's
+		// progress would rewrite the step statuses a newer one wrote. (Not
+		// reached today: ExecuteFrom runs every remaining step and reports
+		// success only with nextIdx == len(seq).)
+		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+			if apierrors.IsNotFound(patchErr) {
+				return ctrl.Result{}, nil
+			}
+			if apierrors.IsConflict(patchErr) {
+				log.Debug().Str("step", ps.Name).Msg("step changed since it was read; progress not written, requeueing")
+				return ctrl.Result{Requeue: true}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("patch step progress: %w", patchErr)
 		}
 		closed.record()
@@ -1040,9 +1058,18 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		log.Warn().Err(execErr).Str("env", ps.Spec.Environment).
 			Int("retry", ps.Status.RetryCount).Int("gitCredentialRetries", ps.Status.GitCredentialRetries).
 			Dur("delay", delay).Msg("step failed, will retry")
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+		// Locked on the resourceVersion read: a reconcile that read a stale
+		// cached step (the retry status the one before it wrote not seen
+		// yet) would mark the credential missing again and emit a second
+		// Warning Event, and reset the backoff; its patch is refused with
+		// a Conflict instead, and it runs again on the fresh copy.
+		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
+			}
+			if apierrors.IsConflict(patchErr) {
+				log.Debug().Err(patchErr).Msg("step changed while it ran; retrying on the fresh copy")
+				return ctrl.Result{Requeue: true}, nil
 			}
 			return ctrl.Result{}, fmt.Errorf("patch step retry: %w", patchErr)
 		}
