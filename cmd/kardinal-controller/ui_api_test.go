@@ -1247,3 +1247,77 @@ func TestParseUIImageRef(t *testing.T) {
 		})
 	}
 }
+
+// TestUIAPI_ListPipelines_Deployed checks the fleet board fields: per
+// environment the Bundle it runs (the newest step that landed its change),
+// that Bundle's version and when it was Verified, and the active Bundle's
+// version. A step that has not landed (Promoting) does not change what an
+// environment runs; an environment that never got a change is absent.
+func TestUIAPI_ListPipelines_Deployed(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	p := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{
+			{Name: "test"}, {Name: "uat", DependsOn: []string{"test"}}, {Name: "prod", DependsOn: []string{"uat"}},
+		}},
+	}
+	bundle := func(name, tag string, created time.Time) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: metav1.NewTime(created)},
+			Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app",
+				Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/x/app", Tag: tag}}},
+			Status: v1alpha1.BundleStatus{Phase: "Promoting"},
+		}
+	}
+	step := func(bundle, env, state string, created time.Time, verified *time.Time) *v1alpha1.PromotionStep {
+		ps := &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: bundle + "-" + env, Namespace: "default", CreationTimestamp: metav1.NewTime(created)},
+			Spec:       v1alpha1.PromotionStepSpec{BundleName: bundle, Environment: env, PipelineName: "app"},
+			Status:     v1alpha1.PromotionStepStatus{State: state},
+		}
+		if verified != nil {
+			ps.Status.Conditions = []metav1.Condition{{Type: "Verified", Status: metav1.ConditionTrue,
+				Reason: "Verified", LastTransitionTime: metav1.NewTime(*verified)}}
+		}
+		return ps
+	}
+	v1Test, v1Uat, v2Test := t0.Add(time.Minute), t0.Add(2*time.Minute), t0.Add(time.Hour+time.Minute)
+	objs := []client.Object{p,
+		bundle("app-v1", "1.0.0", t0), bundle("app-v2", "2.0.0", t0.Add(time.Hour)),
+		step("app-v1", "test", "Verified", t0, &v1Test),
+		step("app-v1", "uat", "Verified", t0, &v1Uat),
+		step("app-v2", "test", "Verified", t0.Add(time.Hour), &v2Test),
+		step("app-v2", "uat", "Promoting", t0.Add(time.Hour), nil),
+	}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs...).Build()
+	mux := http.NewServeMux()
+	newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiPipelineResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+
+	tests := []struct {
+		env  string
+		want *uiDeployed
+	}{
+		{"test", &uiDeployed{Bundle: "app-v2", Version: "2.0.0", VerifiedAt: v2Test.Format(time.RFC3339)}},
+		{"uat", &uiDeployed{Bundle: "app-v1", Version: "1.0.0", VerifiedAt: v1Uat.Format(time.RFC3339)}},
+		{"prod", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.env, func(t *testing.T) {
+			got, ok := resp[0].Deployed[tt.env]
+			if tt.want == nil {
+				assert.False(t, ok, "never deployed: absent")
+				return
+			}
+			require.True(t, ok)
+			assert.Equal(t, *tt.want, got)
+		})
+	}
+	assert.Equal(t, "app-v2", resp[0].ActiveBundleName)
+	assert.Equal(t, "2.0.0", resp[0].ActiveBundleVersion)
+}

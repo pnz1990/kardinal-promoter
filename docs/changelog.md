@@ -8,6 +8,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **UI fleet board** — the start page draws every Pipeline as a line of stations: the version each environment runs and when it was Verified, environments promoted in parallel stacked, and a lit rail where the active Bundle is on its way (promoting, held by a gate, or failed). A station opens its Pipeline, and the logo returns to the board. `GET /api/v1/ui/pipelines` gains `deployed` (per environment: Bundle, version, verifiedAt), `activeBundleVersion` and `environmentTopology[].upstreams` ([What the UI shows](installation.md#what-the-ui-shows))
+- **UI step timings** — a promotion's step list draws each step as a bar on the promotion's time span, next to its duration
+
 ### Changed
 
 - **Smaller Graphs: gate instances and PRStatuses are collections** — a Bundle's Graph now creates its PolicyGate instances from one `PolicyGates` node (and `SkipPermissionGates` for skip permissions) and its PRStatuses from one `PRStatuses` node, each a `forEach` over the data in a `def` node, instead of one node per object. A 150-environment Pipeline with 3 gates per environment has 155 nodes instead of 751, and 471 KB of Graph spec instead of 647 KB. The objects keep their names and labels; kro adds `kro.run/node-id: PolicyGates` (or `PRStatuses`) and its collection labels. A Graph that is updated in place keeps its existing gates and PRStatuses

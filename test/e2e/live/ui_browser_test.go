@@ -207,7 +207,9 @@ func listedPipeline(t *testing.T, c framework.UIClient, ns, name string) (uiPipe
 // name; the fleet bar counts what the API lists, and its Blocked, CI Red and
 // Healthy badges filter the list. Selecting a row opens that pipeline.
 //
-// Covers UI-LIST-01.
+// It also checks the fleet board drawn from the same pipelines.
+//
+// Covers UI-LIST-01, UI-FLEET-01.
 func TestUI_BrowserPipelineList(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)

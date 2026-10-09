@@ -39,6 +39,7 @@ import (
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // maxGateOverrideMinutes bounds a UI gate override to one day.
@@ -75,6 +76,58 @@ type uiPipelineResponse struct {
 	// LastMergedAt is the RFC3339 timestamp of the last env that reached Verified.
 	// Empty string when no environment has been verified yet.
 	LastMergedAt string `json:"lastMergedAt,omitempty"`
+	// ActiveBundleVersion is what the active Bundle ships (scm.BundleVersion:
+	// the image tag, or "config <sha>"), for the fleet board.
+	ActiveBundleVersion string `json:"activeBundleVersion,omitempty"`
+	// Deployed is, per environment, the Bundle whose change the environment
+	// runs: the newest PromotionStep there that landed its change
+	// (lifecycle.DeployedBundle, as kardinal status reports). Environments
+	// that never received one are absent.
+	Deployed map[string]uiDeployed `json:"deployed,omitempty"`
+}
+
+// uiDeployed is what one environment runs, for the fleet board.
+type uiDeployed struct {
+	Bundle string `json:"bundle"`
+	// Version is scm.BundleVersion of that Bundle; empty when the Bundle is
+	// gone.
+	Version string `json:"version,omitempty"`
+	// VerifiedAt is the RFC 3339 time its step in the environment was
+	// Verified (the latest region); empty while it is still health checking.
+	VerifiedAt string `json:"verifiedAt,omitempty"`
+}
+
+// deployedByEnv returns, per environment of p, the Bundle it runs.
+func deployedByEnv(p *v1alpha1.Pipeline, steps []v1alpha1.PromotionStep, bundles map[string]*v1alpha1.Bundle) map[string]uiDeployed {
+	out := map[string]uiDeployed{}
+	for _, env := range p.Spec.Environments {
+		name := lifecycle.DeployedBundle(steps, p.Name, env.Name)
+		if name == "" {
+			continue
+		}
+		d := uiDeployed{Bundle: name}
+		if b := bundles[name]; b != nil {
+			d.Version = scm.BundleVersion(b.Spec)
+		}
+		var at time.Time
+		for i := range steps {
+			s := &steps[i]
+			if s.Spec.BundleName != name || s.Spec.Environment != env.Name || s.Spec.PipelineName != p.Name {
+				continue
+			}
+			if t, ok := lifecycle.VerifiedTime(s); ok && t.After(at) {
+				at = t
+			}
+		}
+		if !at.IsZero() {
+			d.VerifiedAt = at.UTC().Format(time.RFC3339)
+		}
+		out[env.Name] = d
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // uiEnvironmentNode is the static topology shape for one environment in a Pipeline.
@@ -87,6 +140,10 @@ type uiEnvironmentNode struct {
 	DependsOn []string `json:"dependsOn,omitempty"`
 	// Approval is "auto" or "pr-review" — shown as a badge on the node.
 	Approval string `json:"approval,omitempty"`
+	// Upstreams are the environments this one waits for as the controller
+	// resolves them (dependsOn, waves, or the previous entry), sorted; empty
+	// for a root. Absent when the Pipeline's ordering is invalid.
+	Upstreams []string `json:"upstreams,omitempty"`
 }
 
 // uiBundleResponse is the JSON shape for a Bundle in the UI API.
@@ -340,9 +397,11 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	}
 	failedStepsByBundle := make(map[string]int, len(stepList.Items))
 	stepsByBundle := make(map[string][]v1alpha1.PromotionStep, len(stepList.Items))
+	stepsByPipeline := make(map[string][]v1alpha1.PromotionStep, len(list.Items))
 	for _, ps := range stepList.Items {
 		key := ps.Namespace + "/" + ps.Spec.BundleName
 		stepsByBundle[key] = append(stepsByBundle[key], ps)
+		stepsByPipeline[ps.Namespace+"/"+ps.Spec.PipelineName] = append(stepsByPipeline[ps.Namespace+"/"+ps.Spec.PipelineName], ps)
 		// AbortedByAlarm is a failure too: the health alarm stopped the promotion.
 		if ps.Status.State == "Failed" || ps.Status.State == "AbortedByAlarm" {
 			failedStepsByBundle[key]++
@@ -386,12 +445,21 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 					DependsOn: env.DependsOn,
 					Approval:  env.Approval,
 				}
+				if ups, err := graphpkg.EnvironmentUpstreams(&p, env.Name); err == nil {
+					node.Upstreams = ups
+				}
 				topo = append(topo, node)
 			}
 			resp.EnvironmentTopology = topo
 		}
+		byName := make(map[string]*v1alpha1.Bundle, len(bundlesByPipeline[key]))
+		for i := range bundlesByPipeline[key] {
+			byName[bundlesByPipeline[key][i].Name] = &bundlesByPipeline[key][i]
+		}
+		resp.Deployed = deployedByEnv(&p, stepsByPipeline[key], byName)
 		if ab := activeBundles[key]; ab != nil {
 			resp.ActiveBundleName = ab.name
+			resp.ActiveBundleVersion = scm.BundleVersion(ab.bundle.Spec)
 			if len(ab.envStates) > 0 {
 				resp.EnvironmentStates = ab.envStates
 			}
