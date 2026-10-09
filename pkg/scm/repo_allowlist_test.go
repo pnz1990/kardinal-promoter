@@ -219,6 +219,18 @@ func TestGuard(t *testing.T) {
 	_, err = g.ParseWebhookEvent(nil, "")
 	assert.NoError(t, err)
 
+	// QA #1483: a repository that only looks allowed, through escapes,
+	// separators or characters no SCM allows in a name, is refused too.
+	for _, repo := range []string{
+		"acme/%2e%2e%2fvictim%2frepo", "acme/..%2fvictim", "acme/a%20b", `acme\victim`, "acme/x?y", "acme/x#y",
+		"acme/a b", "acme/a\tb", "acme/a\nb", "acme/a\x00b", "acme/../victim", "acme//victim", "acme/./x",
+	} {
+		_, _, err := g.GetPRStatus(ctx, repo, 1)
+		assert.True(t, errors.Is(err, scm.ErrRepositoryNotAllowed), "%q: %v", repo, err)
+		assert.False(t, a.AllowsRepo("github.com", repo), "%q", repo)
+	}
+	assert.Len(t, inner.calls, 9, "none of them reached the provider")
+
 	other := &guardSCM{}
 	for _, err := range calls(a.Guard(other, "github.example.com"), "acme/gitops") {
 		assert.Error(t, err, "the same repository on another SCM host is not allowed")
@@ -227,4 +239,46 @@ func TestGuard(t *testing.T) {
 
 	var unset *scm.RepositoryAllowlist
 	assert.Same(t, inner, unset.Guard(inner, "github.com").(*guardSCM))
+}
+
+// TestRepositoryAllowlist_Segments: a repository segment is
+// [A-Za-z0-9._-]+, except an Azure DevOps project name, which may hold
+// spaces; a percent sign, backslash, ?, # or a control character is never
+// allowed (QA #1483). Covers SCM-ALLOWREPO-02.
+func TestRepositoryAllowlist_Segments(t *testing.T) {
+	a, err := scm.ParseRepositoryAllowlist([]string{"github.com/acme/**", "dev.azure.com/acme/**"})
+	require.NoError(t, err)
+	tests := []struct {
+		host, repo string
+		want       bool
+	}{
+		{"github.com", "acme/my_repo-1.0", true},
+		{"github.com", "acme/sub/deep.repo", true},
+		{"github.com", "acme/my repo", false},
+		{"github.com", "acme/my%20repo", false},
+		{"dev.azure.com", "acme/My Project/gitops", true},
+		{"dev.azure.com", "acme/My Project/git ops", false},
+		{"dev.azure.com", "ac me/Project/gitops", false},
+		{"dev.azure.com", "acme/ Project/gitops", false},
+		{"dev.azure.com", "acme/Pro\tject/gitops", false},
+		{"dev.azure.com", "acme/Pro%20ject/gitops", false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, a.AllowsRepo(tt.host, tt.repo), "%s %q", tt.host, tt.repo)
+	}
+	assert.True(t, a.Allows("https://dev.azure.com/acme/My%20Project/_git/gitops"), "an escaped space in the URL is the project's space")
+}
+
+// TestRepositoryAllowlist_IPv6Host: a pattern for an IPv6 SCM host, written
+// with brackets and a port as in a URL, matches remotes and the API host on
+// that address (QA #1483).
+func TestRepositoryAllowlist_IPv6Host(t *testing.T) {
+	a, err := scm.ParseRepositoryAllowlist([]string{"[fd00::1]:3000/acme/*"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fd00::1/acme/*"}, a.Patterns())
+	assert.True(t, a.Allows("http://[fd00::1]:3000/acme/gitops.git"))
+	assert.False(t, a.Allows("http://[fd00::2]:3000/acme/gitops.git"))
+	host, err := scm.WebHost("forgejo", "http://[fd00::1]:3000")
+	require.NoError(t, err)
+	assert.True(t, a.AllowsRepo(host, "acme/gitops"))
 }

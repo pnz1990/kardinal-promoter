@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -53,7 +54,8 @@ var ErrRepositoryNotAllowed = errors.New("repository not allowed")
 // on Azure DevOps, whose host is always dev.azure.com (an
 // {org}.visualstudio.com or ssh.dev.azure.com URL is matched as
 // dev.azure.com/{org}/{project}/{repo}). Matching ignores case and a scheme,
-// userinfo, port or ".git" in the pattern. "*" matches one path segment as in
+// userinfo, port or ".git" in the pattern; an IPv6 host may keep its URL
+// brackets ("[fd00::1]:3000/acme/*"). "*" matches one path segment as in
 // path.Match, and a pattern ending in "/**" every repository below it, GitLab
 // subgroups included. A URL that does not parse to a host and a repository
 // is never allowed.
@@ -120,7 +122,14 @@ func normalizeRepoPattern(raw string) string {
 	if i := strings.LastIndex(host, "@"); i >= 0 {
 		host = host[i+1:]
 	}
-	if h, port, ok := strings.Cut(host, ":"); ok && port != "" && !strings.ContainsAny(port, "*?[") {
+	if strings.HasPrefix(host, "[") {
+		// An IPv6 address, "[fd00::1]" or "[fd00::1]:3000": match the
+		// address alone, as url.Hostname reports it; the brackets would be
+		// a character class to path.Match.
+		if end := strings.Index(host, "]"); end > 0 {
+			host = host[1:end]
+		}
+	} else if h, port, ok := strings.Cut(host, ":"); ok && port != "" && !strings.ContainsAny(port, "*?[") {
 		host = h
 	}
 	if rest == "" {
@@ -142,8 +151,12 @@ func (a *RepositoryAllowlist) Patterns() []string {
 }
 
 // AllowsRepo reports whether repo (as the SCM API names it) on the SCM host
-// matches a pattern. A nil allowlist allows everything; an empty host or
-// repository, or one with an empty, "." or ".." segment, is never allowed.
+// matches a pattern. A nil allowlist allows everything. An empty host or
+// repository is never allowed, and neither is one with a segment that is
+// not validRepoSegment: "", "." and "..", and any segment with a percent
+// sign, backslash, ?, #, whitespace or a control character, so an escaped
+// or smuggled path ("acme/%2e%2e%2fvictim%2frepo") cannot pass for an
+// allowed one.
 func (a *RepositoryAllowlist) AllowsRepo(host, repo string) bool {
 	if a == nil {
 		return true
@@ -153,8 +166,8 @@ func (a *RepositoryAllowlist) AllowsRepo(host, repo string) bool {
 		return false
 	}
 	segs := strings.Split(repo, "/")
-	for _, s := range segs {
-		if s == "" || s == "." || s == ".." {
+	for i := range segs {
+		if !validRepoSegment(host, segs, i) {
 			return false
 		}
 	}
@@ -180,6 +193,27 @@ func (a *RepositoryAllowlist) AllowsRepo(host, repo string) bool {
 		}
 	}
 	return false
+}
+
+// repoSegment is a segment of a repository name every SCM accepts.
+var repoSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// azureProjectSegment is an Azure DevOps project name: words of repoSegment
+// characters separated by single spaces.
+var azureProjectSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$`)
+
+// validRepoSegment reports whether segs[i] may be a segment of a repository
+// on host: repoSegment and not "." or "..". Only the project of an Azure DevOps
+// repository (dev.azure.com, organization/project/repo) may hold spaces.
+func validRepoSegment(host string, segs []string, i int) bool {
+	s := segs[i]
+	if s == "." || s == ".." {
+		return false
+	}
+	if host == "dev.azure.com" && len(segs) == 3 && i == 1 {
+		return azureProjectSegment.MatchString(s)
+	}
+	return repoSegment.MatchString(s)
 }
 
 // Allows reports whether the repository of the git remote gitURL is allowed:

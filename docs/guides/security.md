@@ -187,9 +187,12 @@ Each entry is `host/repository`: the SCM host, and the repository as the SCM API
 `owner/repo` (GitHub, Forgejo, Gitea, Bitbucket), the full project path (GitLab), or
 `organization/project/repository` on `dev.azure.com` (Azure DevOps, also for
 `<org>.visualstudio.com` and SSH remotes). Matching ignores case, and a scheme, user, port or
-`.git` in the entry. `*` matches one path segment, and an entry ending in `/**` matches every
-repository below it. A `spec.git.url` that does not parse to a host and a repository never
-matches.
+`.git` in the entry (an IPv6 host may keep its brackets). `*` matches one path segment, and an
+entry ending in `/**` matches every repository below it. A `spec.git.url` that does not parse to
+a host and a repository never matches, and neither does a repository with a segment other than
+letters, digits, `.`, `_` and `-` (only an Azure DevOps project name may hold single spaces), so
+a percent escape, backslash, `?`, `#` or control character cannot smuggle in another path. The
+PRStatus CRD refuses such a `spec.repo` too.
 
 The list is enforced on every SCM API call the controller's token makes: opening, labelling,
 commenting on, polling and closing PRs, reading reviews and merge commits, and deleting

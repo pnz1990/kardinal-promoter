@@ -22,9 +22,16 @@ type PRStatusSpec struct {
 	// +optional
 	PRNumber int `json:"prNumber,omitempty"`
 
-	// Repo is the "owner/repo" slug identifying the GitHub repository.
+	// Repo is the repository as the SCM API names it: "owner/repo" (GitHub,
+	// Forgejo, Gitea, Bitbucket), the project path with subgroups (GitLab), or
+	// "organization/project/repo" (Azure DevOps, whose project names may hold
+	// single spaces). Each segment is letters, digits, ".", "_" and "-": no
+	// percent escapes, backslashes, "?", "#" or control characters, which the
+	// SCM API would read as another path.
 	// Example: acme/my-service
 	// Set by the open-pr step after the PR is created. Empty in the placeholder.
+	// +kubebuilder:validation:Pattern=`^([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*)*)?$`
+	// +kubebuilder:validation:MaxLength=512
 	// +optional
 	Repo string `json:"repo,omitempty"`
 }
