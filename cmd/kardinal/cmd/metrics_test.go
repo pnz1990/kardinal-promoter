@@ -89,3 +89,47 @@ func metricValue(out, name string) string {
 	}
 	return ""
 }
+
+// TestRenderFromCRD_Stability: the controller's change failure rate and
+// time to restore rows, and "-" when no failure has been restored.
+func TestRenderFromCRD_Stability(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name         string
+		dm           v1alpha1.PipelineDeploymentMetrics
+		cfr, cfrNote string
+		ttr, ttrNote string
+	}{
+		{"restored", v1alpha1.PipelineDeploymentMetrics{Deployments: 4, FailedDeployments: 1, ChangeFailureRateMillis: 250,
+			MeanTimeToRestoreMinutes: 42, RestoredFailures: 1},
+			"25.0%", "(1 of 4 deployments failed)", "42m", "(mean of 1 restored failures)"},
+		{"none restored", v1alpha1.PipelineDeploymentMetrics{Deployments: 3, FailedDeployments: 1, ChangeFailureRateMillis: 333},
+			"33.3%", "(1 of 3 deployments failed)", "-", "(no restored failure)"},
+		{"healthy", v1alpha1.PipelineDeploymentMetrics{Deployments: 2},
+			"0.0%", "(0 of 2 deployments failed)", "-", "(no restored failure)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, renderFromCRD(&buf, "demo", "prod", &tt.dm, now))
+			out := buf.String()
+			assert.Equal(t, tt.cfr, metricValue(out, "change_failure_rate"))
+			assert.Contains(t, out, tt.cfrNote)
+			assert.Equal(t, tt.ttr, metricValue(out, "time_to_restore"))
+			assert.Contains(t, out, tt.ttrNote)
+		})
+	}
+}
+
+// TestRenderFromCRD_NothingVerified: when every deployment failed, the
+// lead-time and staleness rows read "-" instead of 0.
+func TestRenderFromCRD_NothingVerified(t *testing.T) {
+	var buf bytes.Buffer
+	dm := v1alpha1.PipelineDeploymentMetrics{Deployments: 2, FailedDeployments: 2, ChangeFailureRateMillis: 1000}
+	require.NoError(t, renderFromCRD(&buf, "demo", "prod", &dm, time.Now()))
+	out := buf.String()
+	for _, row := range []string{"p50_commit_to_prod", "p90_commit_to_prod", "stale_prod_days"} {
+		assert.Equal(t, "-", metricValue(out, row), row)
+	}
+	assert.Equal(t, "100.0%", metricValue(out, "change_failure_rate"))
+}

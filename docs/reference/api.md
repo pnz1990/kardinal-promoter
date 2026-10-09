@@ -53,12 +53,12 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 |---|---|---|---|
 | `spec` | object |  | BundleSpec defines the desired state of a Bundle. An image Bundle deploys only its images, so a configRef on it is refused instead of ignored (#1353). Bundles stored before the rule keep working: CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest supported) lets an update through when spec is unchanged. |
 | `spec.configRef` | object |  | ConfigRef points to the GitOps repository commit this Bundle represents when the bundle type is "config" or "mixed". |
-| `spec.configRef.commitSHA` | string |  | CommitSHA is the exact commit SHA for this config snapshot. |
+| `spec.configRef.commitSHA` | string |  | CommitSHA is the exact commit SHA for this config snapshot: 4 to 64 hex characters. |
 | `spec.configRef.gitRepo` | string |  | GitRepo is the GitOps repository URL. |
 | `spec.images` | []object |  | Images lists the container images included in this Bundle. |
-| `spec.images[].digest` | string |  | Digest is the image digest (sha256:...). |
+| `spec.images[].digest` | string |  | Digest is the image digest (sha256:...), in the OCI digest grammar. |
 | `spec.images[].repository` | string | yes | Repository is the image repository (e.g. "ghcr.io/nginx/nginx"). |
-| `spec.images[].tag` | string |  | Tag is the image tag. |
+| `spec.images[].tag` | string |  | Tag is the image tag, in the OCI distribution grammar: up to 128 characters of [A-Za-z0-9_.-], not starting with "." or "-". |
 | `spec.intent` | object |  | Intent declares optional targeting and skip overrides for this Bundle. |
 | `spec.intent.skipEnvironments` | []string |  | SkipEnvironments lists environment names to exclude from this promotion, subject to the PolicyGate SkipPermission check. |
 | `spec.intent.targetEnvironment` | string |  | TargetEnvironment restricts this Bundle to promoting only up to and including this environment. Empty means promote through all environments. |
@@ -66,7 +66,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.provenance` | object |  | Provenance carries build metadata for audit and rollback. |
 | `spec.provenance.author` | string |  | Author is the committer or triggering actor for this build. |
 | `spec.provenance.ciRunURL` | string |  | CIRunURL is the URL of the CI run that built this Bundle. |
-| `spec.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle. |
+| `spec.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle: 4 to 64 hex characters, or an image digest (a Subscription records the digest it found). |
 | `spec.provenance.rollbackOf` | string |  | RollbackOf is the name of the Bundle this Bundle rolls back (if any). |
 | `spec.provenance.timestamp` | string (date-time) |  | Timestamp is when the bundle was built. |
 | `spec.type` | string | yes | Type classifies the bundle content. Supersession rule (BU-4): each bundle type supersedes only bundles of the same type. An image bundle does NOT supersede a config bundle and vice versa. This allows image and config promotions to coexist independently in the same pipeline. One of: `image`, `config`, `mixed`. |
@@ -159,21 +159,72 @@ HookRun is one run of a pre- or post-deploy hook (a Kubernetes Job) for one Bund
 
 `kardinal.io/v1alpha1`
 
-MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the namespace of the PolicyGate template that uses it: an org policy namespace for an org gate, the Pipeline namespace for a team gate.
+MetricCheck is a metric gate backed by Prometheus, Datadog, CloudWatch, New Relic or any HTTP JSON API (web). The MetricCheckReconciler queries the backend, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the namespace of the PolicyGate template that uses it: an org policy namespace for an org gate, the Pipeline namespace for a team gate.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `spec` | object |  | MetricCheckSpec defines a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus at spec.interval, evaluates the threshold, and writes results to status. PolicyGate CEL expressions can reference these results via the metrics.* context variable. |
+| `spec` | object |  | MetricCheckSpec defines a metric gate: a query against a metrics backend (or any HTTP JSON API) and a threshold. The MetricCheckReconciler queries the backend at spec.interval, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via the metrics.* context variable. Credentials are read from Secrets in the MetricCheck's namespace (*SecretRef fields); a spec never holds a token. |
+| `spec.cloudWatch` | object |  | CloudWatch configures provider cloudwatch. |
+| `spec.cloudWatch.accessKeyIDSecretRef` | object |  | AccessKeyIDSecretRef names the Secret key holding the AWS access key ID. |
+| `spec.cloudWatch.accessKeyIDSecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.cloudWatch.accessKeyIDSecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.cloudWatch.endpoint` | string |  | Endpoint overrides the CloudWatch API URL (http or https), for example a VPC endpoint. Defaults to https://monitoring.&lt;region&gt;.amazonaws.com. |
+| `spec.cloudWatch.period` | integer (int32) |  | Period is the granularity of the returned points, in seconds. Defaults to 60. |
+| `spec.cloudWatch.region` | string | yes | Region is the AWS region, for example us-east-1. |
+| `spec.cloudWatch.secretAccessKeySecretRef` | object |  | SecretAccessKeySecretRef names the Secret key holding the AWS secret access key. |
+| `spec.cloudWatch.secretAccessKeySecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.cloudWatch.secretAccessKeySecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.cloudWatch.sessionTokenSecretRef` | object |  | SessionTokenSecretRef names the Secret key holding an AWS session token, for temporary credentials. |
+| `spec.cloudWatch.sessionTokenSecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.cloudWatch.sessionTokenSecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.cloudWatch.window` | string |  | Window is how far back the query looks. Defaults to 5m. |
+| `spec.datadog` | object |  | Datadog configures provider datadog. |
+| `spec.datadog.address` | string |  | Address overrides the API base URL (http or https), for example a proxy. |
+| `spec.datadog.apiKeySecretRef` | object | yes | APIKeySecretRef names the Secret key holding the Datadog API key (DD-API-KEY header). |
+| `spec.datadog.apiKeySecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.datadog.apiKeySecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.datadog.applicationKeySecretRef` | object | yes | ApplicationKeySecretRef names the Secret key holding the Datadog application key (DD-APPLICATION-KEY header). |
+| `spec.datadog.applicationKeySecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.datadog.applicationKeySecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.datadog.site` | string |  | Site is the Datadog site: datadoghq.com (default), datadoghq.eu, us3.datadoghq.com, us5.datadoghq.com, ap1.datadoghq.com or ddog-gov.com. The API is https://api.&lt;site&gt;. |
+| `spec.datadog.window` | string |  | Window is how far back the query looks. Defaults to 5m. |
 | `spec.interval` | string |  | Interval is how often to re-evaluate the metric (e.g. "1m", "5m"). Defaults to "1m" if empty or "0". Other values below "10s" are raised to "10s". |
-| `spec.prometheusURL` | string | yes | PrometheusURL is the base URL of the Prometheus HTTP API (http or https). A path is kept as a prefix: the query goes to &lt;prometheusURL&gt;/api/v1/query. Example: http://prometheus.monitoring.svc:9090 |
-| `spec.provider` | string | yes | Provider is the metrics backend. Currently only "prometheus" is supported. One of: `prometheus`. Default: `prometheus`. |
-| `spec.query` | string | yes | Query is the PromQL query string to evaluate. The query must return a scalar or a single-element vector. |
+| `spec.newRelic` | object |  | NewRelic configures provider newrelic. |
+| `spec.newRelic.accountID` | integer (int64) | yes | AccountID is the New Relic account the NRQL query runs in. |
+| `spec.newRelic.address` | string |  | Address overrides the NerdGraph URL (http or https). |
+| `spec.newRelic.apiKeySecretRef` | object | yes | APIKeySecretRef names the Secret key holding a New Relic user API key (API-Key header). |
+| `spec.newRelic.apiKeySecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.newRelic.apiKeySecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.newRelic.region` | string |  | Region selects the NerdGraph endpoint: US (default, https://api.newrelic.com/graphql) or EU (https://api.eu.newrelic.com/graphql). One of: `US`, `EU`. |
+| `spec.newRelic.resultField` | string |  | ResultField is the field of the result row to read, for example "count" or "average.duration". Empty means the row must have exactly one field. |
+| `spec.perPromotion` | boolean |  | PerPromotion makes this MetricCheck a template that is evaluated once per promotion instead of on its own. It is never queried itself. When a Bundle's Graph is built, every PolicyGate in the Pipeline namespace that reads metrics.&lt;name&gt; of this MetricCheck gets an instance: a MetricCheck the Graph owns, labelled with the Bundle, environment and template name, whose query, web.url, web.body and web.headers[].value have the placeholders replaced: {{ bundle.name }}, {{ bundle.version }}, {{ bundle.imageTag }}, {{ bundle.imageDigest }}, {{ bundle.commitSHA }}, {{ pipeline.name }}, {{ environment.name }}, {{ namespace }}. The gate of that Bundle and environment reads the instance's result as metrics.&lt;name&gt;. The instance is created once the environment's upstream environments are Verified, and suspended once the Bundle stops promoting. |
+| `spec.prometheus` | object |  | Prometheus holds optional settings for provider prometheus. |
+| `spec.prometheus.authorizationSecretRef` | object |  | AuthorizationSecretRef names a Secret key whose value is sent as the Authorization header, for example "Bearer &lt;token&gt;" or "Basic &lt;base64&gt;". |
+| `spec.prometheus.authorizationSecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.prometheus.authorizationSecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.prometheusURL` | string |  | PrometheusURL is the base URL of the Prometheus HTTP API (http or https). A path is kept as a prefix: the query goes to &lt;prometheusURL&gt;/api/v1/query. Required when provider is prometheus. Example: http://prometheus.monitoring.svc:9090 |
+| `spec.provider` | string | yes | Provider is the metrics backend: prometheus (default), datadog, cloudwatch, newrelic, or web (any HTTP API that answers JSON). One of: `prometheus`, `datadog`, `cloudwatch`, `newrelic`, `web`. Default: `prometheus`. |
+| `spec.query` | string |  | Query is the query to evaluate, in the provider's language: PromQL (prometheus), a Datadog metrics query (datadog), a CloudWatch metric math or Metrics Insights expression (cloudwatch), or NRQL (newrelic). It must return a single value (one series; the latest point is used). Required for every provider except web. It may contain placeholders such as {{ bundle.version }}; see PerPromotion. |
+| `spec.suspend` | boolean |  | Suspend stops evaluation. The last result stays in status and goes stale at status.validUntil, so gates that read it block (fail closed). The Graph sets it on per-promotion instances once their Bundle is no longer promoting. |
 | `spec.threshold` | object | yes | Threshold defines how to compare the metric value. |
-| `spec.threshold.operator` | string | yes | Operator is the comparison operator: lt, gt, lte, gte, eq. The gate passes when: metric_value &lt;operator&gt; threshold.value Example: operator=lt, value=0.01 → gate passes if metric &lt; 0.01 One of: `lt`, `gt`, `lte`, `gte`, `eq`. |
-| `spec.threshold.value` | number | yes | Value is the numeric threshold to compare against. |
+| `spec.threshold.operator` | string | yes | Operator is the comparison operator: lt, gt, lte, gte, eq, ne. The gate passes when: metric_value &lt;operator&gt; threshold.value Example: operator=lt, value=0.01 → gate passes if metric &lt; 0.01 One of: `lt`, `gt`, `lte`, `gte`, `eq`, `ne`. |
+| `spec.threshold.text` | string |  | Text, when set, compares the value as a string instead of a number, with operator eq or ne. For provider web, for example {jsonPath: "{.status}", threshold: {operator: eq, text: "healthy"}}. |
+| `spec.threshold.value` | number |  | Value is the numeric threshold to compare against. Ignored when text is set. |
+| `spec.web` | object |  | Web configures provider web: an HTTP request whose JSON response is read with a JSONPath expression. |
+| `spec.web.body` | string |  | Body is the request body, for POST. It may contain placeholders. |
+| `spec.web.headers` | []object |  | Headers are sent with the request. A header takes its value from value or, for credentials, from valueFromSecret. |
+| `spec.web.headers[].name` | string | yes | Name is the header name. |
+| `spec.web.headers[].value` | string |  | Value is the header value. It may contain placeholders. Do not put credentials here: use valueFromSecret. |
+| `spec.web.headers[].valueFromSecret` | object |  | ValueFromSecret names a Secret key whose value is sent as the header value. |
+| `spec.web.headers[].valueFromSecret.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.web.headers[].valueFromSecret.name` | string | yes | Name is the Secret name. |
+| `spec.web.jsonPath` | string | yes | JSONPath selects the value from the JSON response, in kubectl syntax, for example {.data.errorRate} or {.checks[0].status}. It must select exactly one string, number or boolean. Recursive descent (..) is not supported, and the response may be at most 64 KiB. |
+| `spec.web.method` | string |  | Method is GET (default) or POST. One of: `GET`, `POST`. |
+| `spec.web.timeoutSeconds` | integer (int32) |  | TimeoutSeconds bounds the request. Defaults to 10, at most 60, and never more than half of spec.interval. |
+| `spec.web.url` | string | yes | URL is the http or https URL to call. It may contain placeholders such as {{ bundle.version }}; see MetricCheckSpec.PerPromotion. |
 | `status` | object |  | MetricCheckStatus records the most recent metric evaluation result. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is the timestamp of the most recent evaluation. |
-| `status.lastValue` | string |  | LastValue is the most recent metric value returned by the Prometheus query. Empty string means no evaluation has completed yet. |
+| `status.lastValue` | string |  | LastValue is the most recent value the query returned. Empty string means no evaluation has completed yet. |
 | `status.reason` | string |  | Reason is a human-readable explanation of the current result. On a query error it holds the HTTP status and, for a Prometheus API error, its error text; the response body is never copied here. |
 | `status.result` | string |  | Result is the evaluation result: "Pass" or "Fail". Empty when no evaluation has completed. One of: `Pass`, `Fail`. |
 | `status.validUntil` | string (date-time) |  | ValidUntil is when the current result goes stale: lastEvaluatedAt plus three intervals, and at least 30s. The MetricCheck reconciler writes it with each evaluation. A PolicyGate evaluated after this time, or when it is unset, sees metrics.&lt;name&gt;.result as "Stale" and metrics.&lt;name&gt;.stale as true, so a result that is no longer refreshed cannot pass a gate. |
@@ -182,17 +233,30 @@ MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler querie
 
 `kardinal.io/v1alpha1`
 
-NotificationHook defines an outbound webhook that is triggered when specific promotion events occur. The controller delivers a JSON payload to the configured URL on each qualifying event. Architecture: this CRD uses the Owned-node pattern — the reconciler watches Bundle, PolicyGate, and PromotionStep objects and writes delivery results to status. HTTP calls are made at-most-once per event (idempotent via LastEventKey).
+NotificationHook defines an outbound webhook that is triggered when specific promotion events occur. The controller delivers a JSON payload to the configured URL on each qualifying event. Architecture: this CRD uses the Owned-node pattern — the reconciler watches Bundle, PolicyGate, and PromotionStep objects and writes delivery results to status. Each event is delivered at least once and, except after a crash between a POST and its status write, exactly once (status.processedEventKeys).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | NotificationHookSpec defines the desired state of a NotificationHook. |
-| `spec.events` | []string | yes | Events is the list of event types that trigger delivery. At least one event type is required. Valid values: Bundle.Verified, Bundle.Failed, PolicyGate.Blocked, PromotionStep.Failed. |
+| `spec.events` | []string | yes | Events is the list of event types that trigger delivery. At least one event type is required. See docs/notifications.md#events. |
+| `spec.format` | string |  | Format is the shape of the request body: json (the kardinal payload, the default), slack (an incoming-webhook message with blocks), teams (a Workflows webhook message with an Adaptive Card) or template (spec.template). One of: `json`, `slack`, `teams`, `template`. |
 | `spec.pipelineSelector` | string |  | PipelineSelector restricts notifications to events originating from the named Pipeline. When empty, events from all Pipelines are delivered. |
+| `spec.template` | object |  | Template is the request body for format: template. |
+| `spec.template.body` | string | yes | Body is a Go text/template rendered over the event (docs/notifications.md#templated-body). range, define, template and block are not allowed; the rendered body is at most 64 KiB. |
+| `spec.template.contentType` | string |  | ContentType is the Content-Type header of the POST. Defaults to application/json, in which case the rendered body must be valid JSON. |
 | `spec.webhook` | object | yes | Webhook defines the HTTP endpoint to deliver notifications to. |
-| `spec.webhook.authorizationHeader` | string |  | AuthorizationHeader is the value of the Authorization header to include in the POST. Typically "Bearer &lt;token&gt;" or "Token &lt;secret&gt;". The value is stored in plain text in the spec and sent as is: anyone who can read this NotificationHook can read it. |
-| `spec.webhook.url` | string | yes | URL is the HTTPS URL to POST the notification payload to. |
+| `spec.webhook.authorizationHeader` | string |  | AuthorizationHeader is the value of the Authorization header to include in the POST. Typically "Bearer &lt;token&gt;" or "Token &lt;secret&gt;". Deprecated: use secretRef. The value is stored in plain text in the spec and sent as is: anyone who can read this NotificationHook can read it. A hook that sets it still delivers, and has the condition PlaintextCredential=True. |
+| `spec.webhook.secretRef` | object |  | SecretRef names a Secret in the hook's namespace holding the Authorization header value (key authorization) and/or the webhook URL (key url). The Secret is read on every reconcile, so a rotated value is used for the next delivery. |
+| `spec.webhook.secretRef.name` | string | yes | Name of the Secret. The key "authorization" is sent as the Authorization header; the key "url", when present, is the webhook URL and takes precedence over spec.webhook.url (Slack and Teams URLs carry their token in the path). At least one of the two keys must be set. |
+| `spec.webhook.url` | string |  | URL is the HTTPS URL to POST the notification payload to. Optional when secretRef names a Secret with a url key, which takes precedence. |
 | `status` | object |  | NotificationHookStatus defines the observed state of a NotificationHook. |
+| `status.conditions` | []object |  | Conditions: Ready is False when the hook cannot deliver (its Secret is missing or lacks a key, or its template does not parse); events wait until it is fixed. PlaintextCredential is True while spec.webhook.authorizationHeader is set. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.failedAttempts` | integer (int32) |  | FailedAttempts counts consecutive failed deliveries. The controller retries with exponential backoff and gives up on an event after 10 attempts. Reset to zero on a successful delivery. |
 | `status.failureMessage` | string |  | FailureMessage records the last webhook delivery failure, if any. Cleared on next successful delivery. |
 | `status.lastEvent` | string |  | LastEvent is the event type of the last successfully delivered notification. |
@@ -254,13 +318,16 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].health.argocd` | object |  | ArgoCD overrides the Argo CD Application checked by health.type=argocd. Defaults: name "&lt;pipeline&gt;-&lt;environment&gt;", namespace "argocd". |
 | `spec.environments[].health.argocd.name` | string |  | Name is the object name. |
 | `spec.environments[].health.argocd.namespace` | string |  | Namespace is the object namespace. |
-| `spec.environments[].health.cluster` | string |  | Cluster is not supported: kardinal checks health only in the cluster it runs in. A non-empty value sets the Pipeline Ready=False (reason NotImplemented) and fails the PromotionStep with "health.cluster is not supported" instead of silently checking the local cluster. Deprecated: remove cluster. To verify a workload in another cluster, check its Argo CD Application (health.type: argocd) or Flux Kustomization (health.type: flux) in the hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters. |
+| `spec.environments[].health.cluster` | string |  | Cluster is not supported: kardinal checks health only in the cluster it runs in. A non-empty value sets the Pipeline Ready=False (reason NotImplemented) and fails the PromotionStep with "health.cluster is not supported" instead of silently checking the local cluster. Deprecated: remove cluster. To verify a workload in another cluster, set kubeconfigSecretRef, or check its Argo CD Application (health.type: argocd) or Flux Kustomization (health.type: flux) in the hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters. |
 | `spec.environments[].health.flagger` | object |  | Flagger overrides the Canary checked by health.type=flagger (or delivery.delegate=flagger). Defaults: name "&lt;pipeline&gt;", namespace "&lt;environment&gt;". |
 | `spec.environments[].health.flagger.name` | string |  | Name is the object name. |
 | `spec.environments[].health.flagger.namespace` | string |  | Namespace is the object namespace. |
 | `spec.environments[].health.flux` | object |  | Flux overrides the Flux Kustomization checked by health.type=flux. Defaults: name "&lt;pipeline&gt;-&lt;environment&gt;", namespace "flux-system". |
 | `spec.environments[].health.flux.name` | string |  | Name is the object name. |
 | `spec.environments[].health.flux.namespace` | string |  | Namespace is the object namespace. |
+| `spec.environments[].health.kubeconfigSecretRef` | object |  | KubeconfigSecretRef runs the health check against another cluster: the one the kubeconfig in this Secret key selects (its current context). The Secret must be in the Pipeline's namespace. Every health type reads its object (Deployment, Application, Kustomization, Rollout, Canary) in that cluster instead of the controller's. Only inline credentials are accepted: a bearer token, a client certificate and key (-data fields), or a username and password. A kubeconfig with exec, auth-provider, tokenFile or any file path is refused and the step fails: it would run a command, or read a file, in the controller. The API server address goes through the controller's egress guard (no loopback, link-local or metadata addresses) and is dialled directly, not through HTTP(S)_PROXY. A cluster that cannot be reached is not unhealthy: the step reports ClusterUnreachable and keeps checking until health.timeout. Remote health is polled, not watched. |
+| `spec.environments[].health.kubeconfigSecretRef.key` | string |  | Key is the key holding the kubeconfig. Defaults to "kubeconfig". |
+| `spec.environments[].health.kubeconfigSecretRef.name` | string | yes | Name is the Secret name. |
 | `spec.environments[].health.labelSelector` | map[string]string |  | LabelSelector enables WatchKind mode for health.type=resource. When set, the health node watches ALL Deployments in the environment namespace that match the given labels (a kro Graph collection ref node). When unset, a single named Deployment is watched (a kro Graph ref node). Example: {"app": "my-service", "kardinal.io/pipeline": "nginx-demo"} Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger (those resource types are always single-named). |
 | `spec.environments[].health.resource` | object |  | Resource specifies the exact Kubernetes resource to watch for health.type=resource. When set, overrides the default behavior (which watches a Deployment named after the pipeline in the environment namespace). Use this when the health target is in a different namespace or has a different name than the pipeline. Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger. |
 | `spec.environments[].health.resource.condition` | string |  | Condition is the Deployment condition type that must be True. Defaults to "Available". |
@@ -300,7 +367,13 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].update.helm` | object |  | Helm holds Helm-specific update configuration. Used when Strategy is "helm". |
 | `spec.environments[].update.helm.imagePathTemplate` | string |  | ImagePathTemplate is the YAML dot-path to the image tag in values.yaml. Example: ".image.tag" updates the `image.tag` key. If empty, defaults to ".image.tag". |
 | `spec.environments[].update.helm.valuesFile` | string |  | ValuesFile is the name of the values file to update (relative to the environment path). Defaults to "values.yaml". |
-| `spec.environments[].update.strategy` | string |  | Strategy selects the manifest update strategy. One of: `kustomize`, `helm`, `argocd`. Default: `kustomize`. |
+| `spec.environments[].update.strategy` | string |  | Strategy selects the manifest update strategy: kustomize (default, kustomization.yaml images), helm (one values key), argocd (patch the Application, no git), or yaml (any YAML paths in any files of the environment directory). One of: `kustomize`, `helm`, `argocd`, `yaml`. Default: `kustomize`. |
+| `spec.environments[].update.yaml` | object |  | YAML holds the edits of the yaml strategy. Used when Strategy is "yaml". |
+| `spec.environments[].update.yaml.updates` | []object | yes | Updates are the values to set. |
+| `spec.environments[].update.yaml.updates[].file` | string | yes | File is the YAML file, relative to the environment path, for example "values.yaml" or "deploy/deployment.yaml". It must stay inside the repository. A file with several documents (---) is not supported. Each path segment starts with a letter, digit or "_" and has single dots only, so the file can neither be absolute nor leave the environment path. |
+| `spec.environments[].update.yaml.updates[].image` | string |  | Image is the repository of the Bundle image whose value is written, for example "ghcr.io/org/app". It may be empty when the Bundle has exactly one image. |
+| `spec.environments[].update.yaml.updates[].path` | string | yes | Path is the key path of the scalar to set: keys separated by ".", with "[N]" to index a list, for example "image.tag" or "spec.template.spec.containers[0].image". Missing mapping keys are created; list elements are not. A key that contains "." is not supported. |
+| `spec.environments[].update.yaml.updates[].value` | string |  | Value is what to write: tag (default), digest, tagWithDigest ("&lt;tag&gt;@&lt;digest&gt;"), image ("&lt;repository&gt;:&lt;tag&gt;"), or imageWithDigest ("&lt;repository&gt;:&lt;tag&gt;@&lt;digest&gt;", or "&lt;repository&gt;@&lt;digest&gt;" without a tag). A value the image does not have (a digest of a tag-only image) fails the step. One of: `tag`, `digest`, `tagWithDigest`, `image`, `imageWithDigest`. |
 | `spec.environments[].verification` | object |  | Verification runs Argo Rollouts analyses after the environment passed its health check: one AnalysisRun per template, with the Bundle's version and environment as args. The environment is Verified only when every analysis is Successful. Needs Argo Rollouts' CRDs: without them the Bundle fails (it never promotes unverified). See docs/analysis.md. |
 | `spec.environments[].verification.analysisTemplates` | []object | yes | AnalysisTemplates are the templates to run, each as its own AnalysisRun. |
 | `spec.environments[].verification.analysisTemplates[].kind` | string |  | Kind is AnalysisTemplate (default) or ClusterAnalysisTemplate. One of: `AnalysisTemplate`, `ClusterAnalysisTemplate`. |
@@ -337,10 +410,15 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.deploymentMetrics` | object |  | DeploymentMetrics holds aggregate DORA-style metrics computed from the last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler. |
 | `status.deploymentMetrics.autoRollbackRateMillis` | integer |  | AutoRollbackRateMillis is the fraction of sampled Bundles that are rollbacks (spec.provenance.rollbackOf is set), manual (`kardinal rollback`, the UI) or automatic, expressed as integer thousandths (e.g. 83 = 8.3%). Stored as integer to avoid floating-point in CRD YAML. |
+| `status.deploymentMetrics.changeFailureRateMillis` | integer |  | ChangeFailureRateMillis is failedDeployments / deployments as integer thousandths (DORA change failure rate; 250 = 25%). |
 | `status.deploymentMetrics.computedAt` | string (date-time) |  | ComputedAt is when these metrics were last written by the PipelineReconciler. |
+| `status.deploymentMetrics.deployments` | integer |  | Deployments is the number of deployments the change failure rate and time to restore are computed over: the last 30 Bundles whose change reached a final environment (one nothing depends on; its health check started), whatever the outcome, once per Bundle. Not deployments: a no-op promotion (outputs.noChanges), the steps a supersession cancelled (a RollingBack, AbortedByAlarm or already Failed step of a superseded Bundle still counts), and rollback Bundles (they count only as restores). |
+| `status.deploymentMetrics.failedDeployments` | integer |  | FailedDeployments is how many of those deployments failed: a PromotionStep in a final environment ended Failed, AbortedByAlarm or RollingBack after its health check started, a rollback Bundle later rolled a final environment back from it (annotation kardinal.io/rollback-from), or the Bundle was rejected after it was deployed. |
+| `status.deploymentMetrics.meanTimeToRestoreMinutes` | integer (int64) |  | MeanTimeToRestoreMinutes is the mean, in whole minutes, from each failed deployment reaching a final environment to the first later Bundle Verified in every final environment it targets, in every region (DORA time to restore). Failures not restored yet are not counted. |
 | `status.deploymentMetrics.operatorInterventionRateMillis` | integer |  | OperatorInterventionRateMillis is the fraction of sampled Bundles that had at least one PolicyGate override applied, expressed as integer thousandths. |
 | `status.deploymentMetrics.p50CommitToProdMinutes` | integer (int64) |  | P50CommitToProdMinutes is the median time (minutes) from Bundle creation to the final environment reaching Verified, over the sample window. |
 | `status.deploymentMetrics.p90CommitToProdMinutes` | integer (int64) |  | P90CommitToProdMinutes is the 90th-percentile time (minutes) from Bundle creation to the final environment reaching Verified, over the sample window. |
+| `status.deploymentMetrics.restoredFailures` | integer |  | RestoredFailures is the number of failed deployments in meanTimeToRestoreMinutes. |
 | `status.deploymentMetrics.rolloutsLast30Days` | integer |  | RolloutsLast30Days is the number of successful (Verified) promotions to the final pipeline environment in the last 30 calendar days. |
 | `status.deploymentMetrics.sampleSize` | integer |  | SampleSize is the number of Bundles included in this computation. |
 | `status.deploymentMetrics.staleProdDays` | integer |  | StaleProdDays is the number of days since the last successful promotion to the final pipeline environment. 0 means a promotion completed today. Until a Bundle is Verified there, deploymentMetrics is not set at all. |

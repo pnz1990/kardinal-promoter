@@ -14,7 +14,7 @@ This guide walks through migrating a Kargo-managed delivery pipeline to kardinal
 | `FreightRequest` | `Bundle.spec.intent` | Targets a specific environment; can skip others |
 | `Promotion` | `PromotionStep` CRD | Created automatically by the Graph controller |
 | `VerifiedIn` / approval required | `approval: pr-review` on environment | PR approval required before HealthChecking |
-| `AnalysisTemplate` (verification) | `spec.environments[].verification` | The same AnalysisTemplates, run as AnalysisRuns after the health check; needs Argo Rollouts. Without it, a `MetricCheck` (Prometheus only) read by a PolicyGate |
+| `AnalysisTemplate` (verification) | `spec.environments[].verification` | The same AnalysisTemplates, run as AnalysisRuns after the health check; needs Argo Rollouts ([Analysis](../analysis.md)). Without it, a `MetricCheck` (Prometheus, Datadog, CloudWatch, New Relic or a JSON web query with a threshold; `perPromotion: true` with `{{ bundle.version }}` replaces AnalysisRun arguments, [Metric Checks](../metric-checks.md)) read by a PolicyGate |
 | Stage that updates an Argo CD Application in another cluster | Environment with `health.type: argocd` on that Application in the hub | Multi-cluster through an Argo CD or Flux hub; `health.cluster` kubeconfig Secrets are not supported |
 | `Project` | Kubernetes Namespace | RBAC isolation is namespace-scoped |
 | Argo Rollouts integration | `health.type: argoRollouts` on environment | Reads Rollout `.status.phase` |
@@ -230,10 +230,16 @@ spec:
     sum(rate(http_requests_total[5m]))
   prometheusURL: http://prometheus.monitoring.svc:9090
   threshold:
-    operator: gte   # one of lt, gt, lte, gte, eq
+    operator: gte   # one of lt, gt, lte, gte, eq, ne
     value: 0.95
   interval: 1m
 ```
+
+An AnalysisTemplate that takes the Freight's version as an argument becomes a per-promotion
+MetricCheck: set `perPromotion: true` and write `{{ bundle.version }}` (or
+`{{ environment.name }}`, see [Per-promotion analysis](../metric-checks.md#per-promotion-analysis))
+in the query. Datadog, CloudWatch, New Relic and `web` providers take their credentials from
+Secret refs.
 
 ### Step 5: Convert AnalysisRunArguments to PolicyGate CEL expressions
 
