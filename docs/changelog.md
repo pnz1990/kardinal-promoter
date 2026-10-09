@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Remote-cluster health through a kubeconfig Secret** (#1458) — `environments[].health.kubeconfigSecretRef: {name, key}` names a Secret in the Pipeline's namespace; every health type then reads its object in that cluster. Only inline credentials (token, client certificate data, username and password) are accepted: `exec`, `auth-provider`, `tokenFile`, file paths and `proxy-url` fail the step. The API server address goes through the egress guard. An unreachable cluster reports `ClusterUnreachable` without counting a health failure and is checked until `health.timeout`. The deprecated `health.cluster` string stays refused, with a message that points to the new field. See [Remote Clusters](health-adapters.md#remote-clusters)
+
 ### Docs
 
 - **Comparison** — resurveyed Kargo v1.12.1 and GitOps Promoter v0.42.1 (2026-10-03). The matrix corrects cells that had gone stale, such as GitOps Promoter's CLI, PR body and Flux support, and Kargo's gates, steps and engines. It adds rows for pause, supersession, `explain`/`policy simulate` and audit trails, plus sections on what changed in 2026 and where Kargo or GitOps Promoter is ahead. The home table, the rollback page and the Kargo migration guide match it

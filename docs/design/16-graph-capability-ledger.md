@@ -436,6 +436,7 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 | PolicyGate CEL (`bundle.*`, `schedule.*`, `metrics.*`, `upstream.*`) | `pkg/reconciler/policygate` | Time and explainability. A Graph can already read every data source a gate uses (selector refs from KREP-003 decorators, reshaped by a `def` node), and `changewindow.isAllowed/isBlocked` are sugar for a map index. What it cannot do: time-derived fields (metric staleness, active ChangeWindows), and recording why a gate blocked (`status.reason`, `lastEvaluatedAt`, the audit that `kardinal explain` shows) | A clock in CEL (KREP-025). Explainability needs no kro change: the PolicyGate CR plus its reconciler, which writes `status.ready`, is the intended shape (an owned node) |
 | Git and SCM steps (clone, kustomize, push, open PR, merge detection) | `pkg/steps`, `pkg/scm`, PRStatus reconciler | Side effects on external systems; kro only applies Kubernetes objects | Out of scope for kro. The PromotionStep CR is the Graph-native boundary |
 | Health adapters (HealthChecking to Verified) | `pkg/health/adapter.go` via PromotionStep reconciler | A Graph cannot write PromotionStep status, and `readyWhen` does not gate dependents (G1, G3) | None needed: stays in the reconciler by design (#1283) |
+| Remote-cluster health (`health.kubeconfigSecretRef`, #1458) | `pkg/health/remote.go` (`RemoteClusters`), `healthDetector` in `pkg/reconciler/promotionstep` | kro reads only the cluster it runs in: a ref node cannot point at another cluster, and the remote-cluster KREPs (KREP-012/013, kro#1060, kro#591) are RGD only and rotten or frozen. The translator leaves out the health ref node of such an environment (a ref to an object that is not in this cluster would hold the Graph) | A per-node kubeconfig reference for ref nodes, with the same rules (inline credentials only, namespace-local Secret). No ask yet: hub-side Argo CD and Flux cover most users |
 | Holding an existing PromotionStep: pause (freeze gate) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
 
 **Upstream work: time.**
@@ -461,7 +462,7 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 [KREP-013](https://github.com/kubernetes-sigs/kro/pull/1223),
 [kro#1060](https://github.com/kubernetes-sigs/kro/issues/1060) and
 [kro#591](https://github.com/kubernetes-sigs/kro/issues/591) are RGD only and rotten or frozen:
-None. kardinal checks remote workloads through hub-side Argo CD and Flux objects, so no ask.
+None. kardinal checks remote workloads through hub-side Argo CD and Flux objects, or reads the remote cluster itself from the PromotionStep reconciler with a kubeconfig Secret (`health.kubeconfigSecretRef`, see the G8 table), so no ask.
 
 **Upstream work: hold and suspend.**
 
