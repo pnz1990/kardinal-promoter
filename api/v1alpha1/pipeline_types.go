@@ -399,8 +399,11 @@ type YAMLUpdate struct {
 	// File is the YAML file, relative to the environment path, for example
 	// "values.yaml" or "deploy/deployment.yaml". It must stay inside the
 	// repository. A file with several documents (---) is not supported.
-	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_][A-Za-z0-9_./-]*$`
-	// +kubebuilder:validation:XValidation:rule="!self.contains('..')",message="file must stay inside the environment path"
+	// Each path segment starts with a letter, digit or "_" and has single
+	// dots only, so the file can neither be absolute nor leave the
+	// environment path.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*(/[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*)*$`
+	// +kubebuilder:validation:MaxLength=512
 	File string `json:"file"`
 
 	// Path is the key path of the scalar to set: keys separated by ".", with
@@ -408,6 +411,7 @@ type YAMLUpdate struct {
 	// "spec.template.spec.containers[0].image". Missing mapping keys are
 	// created; list elements are not. A key that contains "." is not supported.
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]+(\[[0-9]+\])*(\.[A-Za-z0-9_-]+(\[[0-9]+\])*)*$`
+	// +kubebuilder:validation:MaxLength=512
 	Path string `json:"path"`
 
 	// Image is the repository of the Bundle image whose value is written,

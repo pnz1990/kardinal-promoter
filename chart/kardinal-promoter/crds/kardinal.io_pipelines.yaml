@@ -504,12 +504,12 @@ spec:
                                       File is the YAML file, relative to the environment path, for example
                                       "values.yaml" or "deploy/deployment.yaml". It must stay inside the
                                       repository. A file with several documents (---) is not supported.
-                                    pattern: ^[A-Za-z0-9_][A-Za-z0-9_./-]*$
+                                      Each path segment starts with a letter, digit or "_" and has single
+                                      dots only, so the file can neither be absolute nor leave the
+                                      environment path.
+                                    maxLength: 512
+                                    pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*(/[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*)*$
                                     type: string
-                                    x-kubernetes-validations:
-                                    - message: file must stay inside the environment
-                                        path
-                                      rule: '!self.contains(''..'')'
                                   image:
                                     description: |-
                                       Image is the repository of the Bundle image whose value is written,
@@ -522,6 +522,7 @@ spec:
                                       "[N]" to index a list, for example "image.tag" or
                                       "spec.template.spec.containers[0].image". Missing mapping keys are
                                       created; list elements are not. A key that contains "." is not supported.
+                                    maxLength: 512
                                     pattern: ^[A-Za-z0-9_-]+(\[[0-9]+\])*(\.[A-Za-z0-9_-]+(\[[0-9]+\])*)*$
                                     type: string
                                   value:
