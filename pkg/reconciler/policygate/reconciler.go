@@ -38,6 +38,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -1222,7 +1223,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// are re-evaluated at once (#1300).
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(stepRequiredGateRequests),
 			builder.WithPredicates(unstartedStepCreated)).
-		Complete(r)
+		Complete(tracing.WrapReconciler("policygate", r))
 }
 
 // instanceGateRequests lists PolicyGates and returns a request for every instance
