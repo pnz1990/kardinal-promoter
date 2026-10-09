@@ -3,5 +3,14 @@
 
 package promotionstep
 
+import "time"
+
 // BundleWakesSteps exposes the Bundle watch predicate.
 var BundleWakesSteps = bundleWakesSteps
+
+// SetHistoryTimeout sets historyTimeout and returns a function that restores it.
+func SetHistoryTimeout(d time.Duration) (restore func()) {
+	old := historyTimeout
+	historyTimeout = d
+	return func() { historyTimeout = old }
+}

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -30,6 +32,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
@@ -100,6 +103,11 @@ func (r *Reconciler) gitSecretCondition(ctx context.Context, p *kardinalv1alpha1
 // Reconciler watches Pipeline objects, validates them, and sets status.conditions
 // and status.phase.
 type Reconciler struct {
+	// Workers is how many objects are reconciled at once (--pipeline-workers);
+	// 0 is the manager's default. One object is never reconciled twice at
+	// once: the work queue serializes it.
+	Workers int
+
 	client.Client
 
 	// AllowedRepositories is --scm-allowed-repositories: a Pipeline that
@@ -111,6 +119,10 @@ type Reconciler struct {
 	// would get a compact Graph and that uses a feature the compact shape
 	// does not carry yet is Ready=False. Nil is graph.DefaultCompactAbove.
 	CompactAbove *int
+
+	// Now is the clock of hold expiry (spec.holds[].expiresAt). Nil is
+	// time.Now.
+	Now func() time.Time
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -138,6 +150,13 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get pipeline: %w", err)
+	}
+
+	// Holds (#1528): expiry, the HoldCreated/HoldReleased AuditEvents and
+	// status.observedHolds.
+	holdRecheck, updated, err := r.reconcileHolds(ctx, log, &p)
+	if err != nil || updated {
+		return ctrl.Result{}, err
 	}
 
 	// spec.paused is the request; the freeze gate is what the PromotionStep
@@ -175,6 +194,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredSecret != nil {
 		result.RequeueAfter = secretRecheck
 	}
+	if holdRecheck > 0 && (result.RequeueAfter == 0 || holdRecheck < result.RequeueAfter) {
+		result.RequeueAfter = holdRecheck
+	}
 	if desired.Reason == scm.ReasonRepositoryNotAllowed && p.Spec.Git.SecretRef != nil && !ownSecret {
 		result.RequeueAfter = secretRecheckInterval
 	}
@@ -199,8 +221,19 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", p.Name, err)
 	}
-	desiredPhase := DerivePhase(p.Name, bundleList.Items, stepList.Items)
-	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, stepList.Items, time.Now().UTC())
+	// Pipelines that share a repository and branch must write separate paths
+	// (PathConflict). Reads Pipelines, writes only this Pipeline's status.
+	var pipelines kardinalv1alpha1.PipelineList
+	if err := r.List(ctx, &pipelines); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list pipelines: %w", err)
+	}
+	desiredConflict := pathConflict(&p, pipelines.Items)
+
+	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+	steps := lifecycle.AddRetiredSteps(stepList.Items, bundleList.Items,
+		map[string]string{lifecycle.LabelPipeline: p.Name})
+	desiredPhase := DerivePhase(p.Name, bundleList.Items, steps)
+	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, steps, time.Now().UTC())
 
 	// Idempotency: only patch if something changed.
 	condMatch := conditionMatches(p.Status.Conditions, desired)
@@ -210,11 +243,15 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredPaused != nil {
 		pausedMatch = conditionMatches(p.Status.Conditions, *desiredPaused)
 	}
+	conflictMatch := meta.FindStatusCondition(p.Status.Conditions, conditionPathConflict) == nil
+	if desiredConflict != nil {
+		conflictMatch = conditionMatches(p.Status.Conditions, *desiredConflict)
+	}
 	secretMatch := meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil
 	if desiredSecret != nil {
 		secretMatch = conditionMatches(p.Status.Conditions, *desiredSecret)
 	}
-	if condMatch && phaseMatch && metricsMatch && pausedMatch && secretMatch {
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -230,6 +267,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		meta.SetStatusCondition(&p.Status.Conditions, *desiredPaused)
 	} else {
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPaused)
+	}
+	if desiredConflict != nil {
+		meta.SetStatusCondition(&p.Status.Conditions, *desiredConflict)
+		log.Warn().Msg(desiredConflict.Message)
+	} else {
+		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPathConflict)
 	}
 	if desiredSecret != nil {
 		if meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil {
@@ -311,6 +354,25 @@ var bundlePhaseChanged = predicate.Funcs{
 		oldB, okOld := e.ObjectOld.(*kardinalv1alpha1.Bundle)
 		newB, okNew := e.ObjectNew.(*kardinalv1alpha1.Bundle)
 		return okOld && okNew && oldB.Status.Phase != newB.Status.Phase
+	},
+}
+
+// stepStateChanged passes the PromotionStep events the Pipeline status
+// depends on: creation, deletion, and an update that changes status.state,
+// or outputs.noChanges. The deployment metrics read the health-check step's
+// start, which a step writes as it enters HealthChecking. The rest are a running
+// step's own status writes, about one a second while it promotes and every
+// health check while it bakes; mapping each to its Pipeline reconciled every
+// Pipeline about 20 times per Bundle (#1509).
+var stepStateChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldS, okOld := e.ObjectOld.(*kardinalv1alpha1.PromotionStep)
+		newS, okNew := e.ObjectNew.(*kardinalv1alpha1.PromotionStep)
+		if !okOld || !okNew {
+			return true
+		}
+		return oldS.Status.State != newS.Status.State ||
+			oldS.Status.Outputs["noChanges"] != newS.Status.Outputs["noChanges"]
 	},
 }
 
@@ -539,8 +601,12 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index PromotionStep by spec.pipelineName: %w", err)
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&kardinalv1alpha1.Pipeline{}).
+		// A Pipeline on the same repository and branch changed: re-check
+		// PathConflict on the others.
+		Watches(&kardinalv1alpha1.Pipeline{}, r.pipelinePeers()).
 		// Deleting the freeze gate by hand while the pipeline is paused, or
 		// removing a user gate that has its name, re-enqueues the Pipeline.
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(pipelineForFreezeGate)).
@@ -548,7 +614,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// gate has no PromotionStep to trigger it (E2E-R05).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(pipelineForBundle),
 			builder.WithPredicates(bundlePhaseChanged)).
-		// Enqueue the pipeline named by spec.pipelineName whenever a PromotionStep changes.
+		// Enqueue the pipeline named by spec.pipelineName when a PromotionStep
+		// is created or deleted, or its state changes (stepStateChanged): the
+		// status writes a step makes while it runs (messages, retries, health
+		// checks) do not change what the Pipeline derives from it (#1509).
 		Watches(&kardinalv1alpha1.PromotionStep{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []ctrl.Request {
 				s, ok := obj.(*kardinalv1alpha1.PromotionStep)
@@ -562,8 +631,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 					},
 				}}
 			}),
-		).
-		Complete(tracing.WrapReconciler("pipeline", r))
+			builder.WithPredicates(stepStateChanged),
+		)
+	return shard.Active().Complete(b, tracing.WrapReconciler("pipeline", r), &kardinalv1alpha1.PipelineList{})
 }
 
 // deploymentMetricsEqual returns true when a and b represent the same metrics.

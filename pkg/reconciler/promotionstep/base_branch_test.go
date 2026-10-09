@@ -50,11 +50,11 @@ func TestBaseBranchDefault(t *testing.T) {
 		wantCommit              string
 	}{
 		{name: "unset pr-review", branch: "", env: "prod", want: "main", wantState: "WaitingForMerge",
-			wantPushes: []string{"kardinal/bundle-1/prod force=true"}, wantBases: []string{"main"}},
+			wantPushes: []string{"kardinal/37a8eec1/bundle-1/prod force=true"}, wantBases: []string{"main"}},
 		{name: "unset auto", branch: "", env: "test", want: "main", wantState: "HealthChecking",
 			wantPushes: []string{"main force=false"}, wantCommit: newSHA},
 		{name: "set pr-review", branch: "release", env: "prod", want: "release", wantState: "WaitingForMerge",
-			wantPushes: []string{"kardinal/bundle-1/prod force=true"}, wantBases: []string{"release"}},
+			wantPushes: []string{"kardinal/37a8eec1/bundle-1/prod force=true"}, wantBases: []string{"release"}},
 		{name: "set auto", branch: "release", env: "test", want: "release", wantState: "HealthChecking",
 			wantPushes: []string{"release force=false"}, wantCommit: newSHA},
 	}

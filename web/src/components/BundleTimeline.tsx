@@ -12,8 +12,11 @@
 // #338: Shift-click selects a second bundle for comparison.
 // When two bundles are selected, a "Compare" button appears.
 // #532: Phase-driven visual properties use CSS classes (bundle-chip--{phase}).
+import { useRef } from 'react'
 import type { Bundle } from '../types'
+import { useRovingFocus } from '../useRovingFocus'
 import { sortBundlesNewestFirst } from '../bundleSelection'
+import { BundleTypeBadge, bundleTypeLabel } from './BundleTypeBadge'
 import '../styles/BundleTimeline.css'
 
 /** Number of newest bundles shown. */
@@ -61,6 +64,8 @@ function shortName(bundleName: string): string {
 }
 
 export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundle, compareBundle, onCompareBundle, onCompare }: Props) {
+  const chips = useRef<HTMLDivElement>(null)
+  const roving = useRovingFocus(chips, '.bundle-chip')
   // #784: skeleton loading state — shimmer chips while bundles are being fetched
   if (loading) {
     return (
@@ -127,7 +132,14 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
           </span>
         )}
       </div>
-      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+      <div
+        ref={chips}
+        role="toolbar"
+        aria-label="Bundle history (arrow keys move between bundles)"
+        onKeyDown={roving.onKeyDown}
+        onFocus={roving.onFocus}
+        style={{ display: 'flex', gap: '0.4rem', alignItems: 'stretch' }}
+      >
         {shown.map(b => {
           const isSelected = b.name === selectedBundle
           const isCompare = b.name === compareBundle
@@ -151,13 +163,15 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
                   onSelectBundle?.(b.name)
                 }
               }}
-              title={`${b.name}: ${b.phase || 'Unknown'}${isCompare ? ' (comparison target)' : ''}${isSelected ? '' : '\nShift-click to compare'}`}
+              title={`${b.name}: ${b.phase || 'Unknown'}${(b.type || 'image') === 'image' ? '' : `, ${bundleTypeLabel(b.type)} Bundle`}${isCompare ? ' (comparison target)' : ''}${isSelected ? '' : '\nShift-click to compare'}`}
               aria-pressed={isSelected}
+              data-roving-default={isSelected || undefined}
               className={chipClass}
               data-bundle-phase={b.phase}
             >
               <span className="bundle-chip__dot" aria-hidden="true" />
               <span className="bundle-chip__name">{shortName(b.name)}</span>
+              <BundleTypeBadge type={b.type} compact />
               <span className="bundle-chip__phase">
                 {b.phase === 'Superseded' ? 'Sup' : (b.phase || 'Unknown')}
               </span>

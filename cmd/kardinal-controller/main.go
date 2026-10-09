@@ -63,6 +63,7 @@ import (
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
@@ -107,7 +108,9 @@ func main() {
 		auditMaxAge            time.Duration
 		auditMaxPerPipeline    int
 		auditRetentionInterval time.Duration
+		workers                = map[string]*int{}
 		graphCompactAbove      int
+		retire                 bundlereconciler.RetirePolicy
 	)
 
 	flag.BoolVar(&auditRetention, "audit-retention", false,
@@ -119,6 +122,25 @@ func main() {
 		"Keep at most this many newest AuditEvents per Pipeline. 0 keeps any number.")
 	flag.DurationVar(&auditRetentionInterval, "audit-retention-interval", auditretention.DefaultInterval,
 		"How often the leader applies AuditEvent retention.")
+	// Workers per controller: one object is never reconciled twice at once
+	// (the work queue serializes it), so these only let different objects
+	// run side by side. The defaults are measured with the scale suite
+	// (docs/installation.md, Controller concurrency).
+	for _, w := range []struct {
+		name string
+		def  int
+		what string
+	}{
+		{"promotionstep", defaultPromotionStepWorkers, "PromotionSteps (git clone, commit, push, PR, health check)"},
+		{"bundle", defaultBundleWorkers, "Bundles (Graph creation)"},
+		{"prstatus", defaultPRStatusWorkers, "PRStatuses (SCM polls)"},
+		{"policygate", defaultPolicyGateWorkers, "PolicyGates (CEL evaluation)"},
+		{"pipeline", defaultPipelineWorkers, "Pipelines (status, history)"},
+	} {
+		v := new(int)
+		workers[w.name] = v
+		flag.IntVar(v, w.name+"-workers", w.def, "How many "+w.what+" are reconciled at once.")
+	}
 
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
 		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
@@ -126,6 +148,13 @@ func main() {
 	flag.IntVar(&graphCompactAbove, "graph-compact-above", graphpkg.DefaultCompactAbove,
 		"Environment count above which a Bundle's Graph uses the compact shape (one PromotionStep collection) "+
 			"when the Pipeline's kardinal.io/graph-shape annotation does not choose one. 0 makes every Graph compact.")
+	flag.DurationVar(&retire.Superseded, "graph-retire-superseded-after", bundlereconciler.DefaultRetirePolicy.Superseded,
+		"How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, "+
+			"is kept before it is retired (deleted; the Bundle keeps its PromotionSteps in status.retiredSteps). 0 keeps it.")
+	flag.DurationVar(&retire.Failed, "graph-retire-failed-after", bundlereconciler.DefaultRetirePolicy.Failed,
+		"How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle no longer recovers. 0 keeps it.")
+	flag.DurationVar(&retire.Verified, "graph-retire-verified-after", bundlereconciler.DefaultRetirePolicy.Verified,
+		"How long the Graph of a Verified Bundle that is still deployed in an environment is kept before it is retired. 0 keeps it.")
 	flag.BoolVar(&leaderElect, "leader-elect", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&zerologLevel, "log-level", "info",
@@ -227,7 +256,8 @@ func main() {
 	// outbound MetricCheck queries (metriccheckrecon.Limiter).
 	var metricGlobalSlots, metricNamespaceSlots int
 	flag.IntVar(&metricGlobalSlots, "metriccheck-global-slots", metriccheckrecon.DefaultGlobalSlots,
-		"Most MetricCheck queries running at once in the cluster (at least 1). The rest wait, first come, first served.")
+		"Most MetricCheck queries running at once in the cluster (at least 1). The rest wait, first come, first served. "+
+			"The MetricCheck controller runs this many workers plus 4, at least 16.")
 	flag.IntVar(&metricNamespaceSlots, "metriccheck-namespace-slots", metriccheckrecon.DefaultNamespaceSlots,
 		"Most MetricCheck queries of one namespace running at once (at least 1).")
 
@@ -286,6 +316,15 @@ func main() {
 			"only reconciles resources in the given namespace and expects a Role/RoleBinding "+
 			"instead of a ClusterRole/ClusterRoleBinding. "+
 			"Also readable from KARDINAL_WATCH_NAMESPACE environment variable.")
+
+	// --namespace-shard splits the reconcilers across controller
+	// installations by the namespace label kardinal.io/shard (pkg/shard).
+	var namespaceShard string
+	flag.StringVar(&namespaceShard, "namespace-shard", os.Getenv("KARDINAL_NAMESPACE_SHARD"),
+		"Shard this controller reconciles: namespaces labelled kardinal.io/shard=<name>; \"default\" also "+
+			"takes namespaces without the label and the cluster-scoped kinds. Empty (the default): no sharding, "+
+			"every namespace. Every controller of a sharded cluster needs a shard name. "+
+			"Also readable from KARDINAL_NAMESPACE_SHARD.")
 
 	// Graph identity: kro applies each Graph as this ServiceAccount in the
 	// Pipeline's namespace. The controller creates it and binds it to the two
@@ -364,6 +403,14 @@ func main() {
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
+	// The Go runtime's soft memory limit at 90% of the container limit, so
+	// the GC works harder before the kernel OOMKills the controller (#1553).
+	if limit, why, err := applyGoMemoryLimit(os.Getenv("GOMEMLIMIT"), os.Getenv("KARDINAL_MEMORY_LIMIT")); err != nil {
+		logger.Warn().Err(err).Msg("Go memory limit not set")
+	} else if limit > 0 {
+		logger.Info().Int64("bytes", limit).Str("from", why).Msg("Go soft memory limit set")
+	}
+
 	tracingCfg.ServiceVersion = ControllerVersion
 	tracingCfg.OnError = func(err error) { logger.Warn().Err(err).Msg("OpenTelemetry: span export failed") }
 	shutdownTracing, err := tracing.Setup(context.Background(), tracingCfg)
@@ -414,15 +461,41 @@ func main() {
 		logger.Info().Str("watchNamespace", watchNamespace).
 			Msg("namespace-scoped mode: controller cache limited to single namespace")
 	}
+	if namespaceShard != "" {
+		if err := shard.ValidateName(namespaceShard); err != nil {
+			logger.Fatal().Err(err).Msg("invalid --namespace-shard")
+		}
+		if watchNamespace != "" {
+			logger.Fatal().Msg("--namespace-shard and --watch-namespace cannot be combined: " +
+				"a namespace-scoped controller already owns exactly one namespace")
+		}
+		logger.Info().Str("shard", namespaceShard).Msg("sharded: reconciling the namespaces of this shard only")
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), buildManagerOptions(managerConfig{
 		metricsBindAddress:     metricsBindAddress,
 		healthProbeBindAddress: healthProbeBindAddress,
 		leaderElect:            leaderElect,
 		watchNamespace:         watchNamespace,
+		namespaceShard:         namespaceShard,
 	}))
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create manager")
+	}
+	// The shard gate must be in place before the reconcilers are set up:
+	// each wraps itself in shard.Active().
+	shardHome := os.Getenv("POD_NAMESPACE")
+	if shardHome == "" {
+		shardHome = "kardinal-system"
+	}
+	gateClient, gateReader, err := shardClients(mgr, namespaceShard)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create the shard gate's clients")
+	}
+	gate := shard.New(shard.Options{Name: namespaceShard, Home: shardHome, Client: gateClient,
+		Reader: gateReader, Recorder: mgr.GetEventRecorder("kardinal-shard"), Log: logger})
+	if err := shard.Setup(mgr, gate); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up the shard gate")
 	}
 	graphIdentity.Writer = mgr.GetClient()
 	graphIdentity.Reader = mgr.GetAPIReader()
@@ -487,8 +560,15 @@ func main() {
 	// patch on events.k8s.io events for this recorder.
 	eventRecorder := mgr.GetEventRecorder("kardinal-controller")
 
+	if err := retire.Validate(); err != nil {
+		logger.Fatal().Err(err).Msg("invalid --graph-retire-*-after")
+	}
+	if retire == (bundlereconciler.RetirePolicy{}) {
+		logger.Info().Msg("every --graph-retire-*-after is 0: finished Bundles keep their Graphs unless their Pipeline sets kardinal.io/graph-retire-after")
+	}
 	if err := (&bundlereconciler.Reconciler{
-		Client: mgr.GetClient(),
+		Workers: *workers["bundle"],
+		Client:  mgr.GetClient(),
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
 		APIReader:        mgr.GetAPIReader(),
@@ -496,6 +576,7 @@ func main() {
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),
+		Retire:           retire,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
@@ -515,7 +596,8 @@ func main() {
 	// The sweep lists RoleBindings cluster-wide, which namespace mode does not
 	// grant; there the controller binds the reader role only in the watched
 	// namespace, and the reconciler's prune covers it.
-	if watchNamespace == "" {
+	// The sweep lists cluster-wide; in a sharded cluster the default shard runs it.
+	if watchNamespace == "" && gate.OwnsClusterScoped() {
 		if err := mgr.Add(&graphcleanup.Sweep{
 			APIReader: mgr.GetAPIReader(),
 			Graphs:    graphLister,
@@ -550,7 +632,7 @@ func main() {
 	}
 
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
-		CompactAbove: &graphCompactAbove}).
+		CompactAbove: &graphCompactAbove, Workers: *workers["pipeline"]}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}
@@ -564,11 +646,13 @@ func main() {
 	// namespace, the same namespaces the translator takes org gates from.
 	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
 	pgReconciler.StatusHeartbeat = gateStatusHeartbeat
+	pgReconciler.Workers = *workers["policygate"]
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
 
 	if err := (&psreconciler.Reconciler{
+		Workers:             *workers["promotionstep"],
 		Client:              mgr.GetClient(),
 		APIReader:           mgr.GetAPIReader(),
 		SCM:                 scmProvider,
@@ -590,8 +674,9 @@ func main() {
 	}
 
 	if err := (&prstatusrecon.Reconciler{
-		Client: mgr.GetClient(),
-		SCM:    scmProvider,
+		Workers: *workers["prstatus"],
+		Client:  mgr.GetClient(),
+		SCM:     scmProvider,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PRStatusReconciler")
 	}

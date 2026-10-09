@@ -92,6 +92,20 @@ export interface EnvironmentNode {
   /** The environments it waits for as the controller resolves them (dependsOn,
    *  waves, or the previous entry). Absent for a root, or when the ordering is invalid. */
   upstreams?: string[]
+  /** The environment's hold (spec.holds, kardinal rollback --hold), if held. */
+  hold?: EnvironmentHold
+}
+
+/** A Pipeline environment pinned to a rollback Bundle until it is released (#1528). */
+export interface EnvironmentHold {
+  /** The rollback Bundle the environment is held on. */
+  bundle: string
+  reason: string
+  createdBy?: string
+  /** RFC 3339. */
+  createdAt?: string
+  /** When the controller removes the hold, RFC 3339; absent: when released. */
+  expiresAt?: string
 }
 
 export interface Bundle {
