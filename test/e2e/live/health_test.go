@@ -481,6 +481,7 @@ func TestHealth_ProgressDeadlineFails(t *testing.T) {
 		a.ns, fixtures.Workload("test"))
 	assert.True(t, strings.HasPrefix(ps.Status.Message, prefix), ps.Status.Message)
 	assert.Contains(t, ps.Status.Message, "has timed out progressing")
+	assert.Regexp(t, newPodPullFailure, ps.Status.Message, "the message names why the new pod does not start")
 	assert.NotContains(t, ps.Status.Message, "timeout after")
 	assert.Equal(t, 1, ps.Status.ConsecutiveHealthFailures, "a terminal result fails on the first failed check")
 	require.NotNil(t, ps.Status.LastHealthCheckAt)
@@ -501,6 +502,39 @@ func TestHealth_ProgressDeadlineFails(t *testing.T) {
 		return ps.Status.State == "Failed" && len(bundles.Items) == 1,
 			fmt.Sprintf("state=%s, %d Bundles", ps.Status.State, len(bundles.Items))
 	})
+}
+
+// newPodPullFailure is how a health reason names the new pod of a
+// fixtures.BrokenTag rollout: its podinfo container cannot pull the image.
+var newPodPullFailure = regexp.MustCompile(`; new pod \S+: container podinfo is waiting: (ErrImagePull|ImagePullBackOff)\b`)
+
+// TestHealth_TimeoutNamesPodFailure checks the resource adapter's message
+// for a rollout whose new pod never starts (#1365): the image cannot be
+// pulled, health.timeout (shorter than the 60s progress deadline) ends the
+// wait, and the Failed message, which quotes the last result, names the new
+// pod's failure, not only the old replicas that stay. Covers HEALTH-RES-10.
+func TestHealth_TimeoutNamesPodFailure(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	p := a.resourcePipeline(nil)
+	envSpec(t, p, "test").Health.Timeout = "40s"
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.BrokenTag)
+
+	waiting := e.WaitStep(t, a.ns, pipelineName, bundle, "test", promoteTimeout, "a check that names the new pod",
+		func(ps *v1alpha1.PromotionStep) (bool, string) {
+			ended := ps.Status.State == "Failed" || ps.Status.State == "Verified"
+			return ended || newPodPullFailure.MatchString(ps.Status.Message), framework.DescribeStep(ps)
+		})
+	require.Equal(t, "HealthChecking", waiting.Status.State, "a check names the new pod before the timeout: %s", framework.DescribeStep(waiting))
+	assert.Contains(t, waiting.Status.Message, fmt.Sprintf("Deployment %s/%s rolling out: ", a.ns, fixtures.Workload("test")))
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", 2*time.Minute)
+	assert.True(t, strings.HasPrefix(ps.Status.Message,
+		"health alarm via resource (onHealthFailure=none): health check timeout after 40s; last result: Deployment "), ps.Status.Message)
+	assert.Regexp(t, newPodPullFailure, ps.Status.Message)
+	assert.NotContains(t, ps.Status.Message, "ProgressDeadlineExceeded", "the timeout, not the progress deadline, ended the wait")
+	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
 }
 
 // TestHealth_AbortStaysAborted checks onHealthFailure: abort: the failed
@@ -621,6 +655,62 @@ func TestHealth_BakeResetOnAlarm(t *testing.T) {
 	at, _ := verifiedCondition(t, ps)
 	assert.GreaterOrEqual(t, at.Sub(ps.Status.BakeStartedAt.Time), 2*time.Minute-time.Second,
 		"a full window after the last reset")
+}
+
+// TestHealth_BakeFlappingEnds checks bake.policy reset-on-alarm on a release
+// that keeps flapping (#1423): the pod turns unready during every window and
+// ready again soon after, so no window lasts bake.minutes and each alarm
+// re-arms health.timeout. The step used to stay HealthChecking forever. It
+// now fails at the deadline: the first window's start
+// (status.bakeFirstStartedAt) + bake.minutes + health.timeout.
+// Covers BAKE-06.
+func TestHealth_BakeFlappingEnds(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	p := a.resourcePipeline(nil)
+	test := envSpec(t, p, "test")
+	test.Bake = &v1alpha1.BakeConfig{Minutes: 1}
+	test.Health.Timeout = "2m"
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	pods := map[string]string{"app.kubernetes.io/name": fixtures.Workload("test")}
+
+	first := waitBakeStarted(t, e, a, bundle, 1).Status.BakeStartedAt.Time
+	deadline := first.Add(3 * time.Minute)
+	done := func(ps *v1alpha1.PromotionStep) bool { return ps.Status.State != "HealthChecking" }
+	for resets := 1; ; resets++ {
+		e.SetReadyz(t, a.ns, pods, false)
+		ps := e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, fmt.Sprintf("reset %d", resets),
+			func(ps *v1alpha1.PromotionStep) (bool, string) {
+				return done(ps) || ps.Status.BakeResets >= resets, framework.DescribeStep(ps)
+			})
+		if done(ps) {
+			break
+		}
+		if assert.NotNil(t, ps.Status.BakeFirstStartedAt, "the first window's start is recorded") {
+			assert.WithinDuration(t, first, ps.Status.BakeFirstStartedAt.Time, time.Second, "an alarm keeps the first window's start")
+		}
+		e.SetReadyz(t, a.ns, pods, true)
+		ps = e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, fmt.Sprintf("window %d", resets+1),
+			func(ps *v1alpha1.PromotionStep) (bool, string) {
+				return done(ps) || ps.Status.BakeStartedAt != nil, framework.DescribeStep(ps)
+			})
+		if done(ps) {
+			break
+		}
+		require.Less(t, resets, 20, "the flapping release did not end: %s", framework.DescribeStep(ps))
+	}
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", time.Minute)
+	assert.True(t, strings.HasPrefix(ps.Status.Message,
+		"health alarm via resource (onHealthFailure=none): bake: no 1m contiguous healthy window within 3m0s of the first healthy check "+
+			"(bake.minutes + health.timeout; resets="), ps.Status.Message)
+	failedAt := time.Now() // a few seconds after the step failed (WaitStep polls)
+	assert.GreaterOrEqual(t, ps.Status.BakeResets, 2, "the release flapped more than once")
+	assert.False(t, failedAt.Before(deadline.Add(-time.Second)), "failed at %s, before the deadline %s", failedAt, deadline)
+	// The deadline ends the wait; health.timeout from the last alarm would be later.
+	assert.True(t, failedAt.Before(deadline.Add(time.Minute)), "failed at %s, long after the deadline %s", failedAt, deadline)
+	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
 }
 
 // TestHealth_BakeFailOnAlarm checks bake.policy fail-on-alarm: the first

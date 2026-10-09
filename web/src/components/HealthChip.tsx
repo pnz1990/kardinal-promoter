@@ -22,7 +22,7 @@ import '../styles/HealthChip.css'
 /** The 7 canonical health chip states. */
 export type HealthState =
   | 'Ready'         // Verified / Pass / Pipeline Ready — green
-  | 'Reconciling'   // Promoting / WaitingForMerge / HealthChecking / RollingBack — amber
+  | 'Reconciling'   // Promoting / WaitingForMerge / HealthChecking — amber
   | 'Error'         // Failed / AbortedByAlarm / Block — red
   | 'Pending'       // Pending / Available / NotStarted / gate Waiting — slate
   | 'Unknown'       // Superseded / unknown — gray
@@ -54,10 +54,10 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
     case 'Promoting':
     case 'WaitingForMerge':
     case 'HealthChecking':
-    case 'RollingBack':
       return 'Reconciling'
     case 'Failed':
     case 'AbortedByAlarm':  // terminal: an alarm stopped the promotion; a human must act
+    case 'RollingBack':     // terminal: health failed and a rollback Bundle took over (as the CLI shows it)
     case 'Block':
       return 'Error'
     case 'Degraded':

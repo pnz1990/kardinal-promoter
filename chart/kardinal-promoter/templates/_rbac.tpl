@@ -105,6 +105,12 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["apps"]
   resources: ["replicasets"]
   verbs: ["get"]
+# The resource adapter lists the pods of a Deployment's new ReplicaSet,
+# uncached and only while replicas are unavailable, to name why a new pod is
+# not ready (ErrImagePull, CrashLoopBackOff).
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
 - apiGroups: ["argoproj.io"]
   resources: ["applications"]
   {{- if .Values.rbac.argocdApplicationsWrite }}
