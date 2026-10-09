@@ -131,6 +131,9 @@ type HoldRequest struct {
 	HoldReason string
 	// ExpiresIn, when positive, ends the hold that long after it is made.
 	ExpiresIn time.Duration
+	// Creator is the rollback Bundle's kardinal.io/created-by (CreateBundleAs);
+	// empty records none.
+	Creator string
 }
 
 // ArtifactDigest is the digest of what a Bundle deploys: its type, images
@@ -314,7 +317,7 @@ func RollbackAndHold(ctx context.Context, c client.Client, req HoldRequest) (*Ro
 	if err := setHold(ctx, c, req.Namespace, req.Pipeline, hold); err != nil {
 		return nil, nil, err
 	}
-	if err := c.Create(ctx, plan.Bundle); err != nil {
+	if err := CreateBundleAs(ctx, c, plan.Bundle, req.Creator); err != nil {
 		if _, relErr := ReleaseHold(ctx, c, req.Namespace, req.Pipeline, req.Environment); relErr != nil {
 			return nil, nil, fmt.Errorf("create rollback bundle: %w (and removing the hold failed: %v)", err, relErr)
 		}

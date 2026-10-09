@@ -196,18 +196,25 @@ func imageList(d PRTemplateData) string {
 // functions return the sections of the default body for body, rendered once
 // before the template (their size is known before a call). The text helpers
 // are tmplsafe.StringFuncs.
+// renderPRBodyFn and renderSectionFn render the evidence for the template
+// functions; a test counts the calls through them.
+var (
+	renderPRBodyFn  = RenderPRBody
+	renderSectionFn = renderSection
+)
+
 func prTemplateFuncs(body PRBody, data PRTemplateData) tmplsafe.FuncMap {
 	funcs := tmplsafe.StringFuncs()
 	funcs["imageList"] = tmplsafe.Lazy(func() (string, error) { return imageList(data), nil })
 	// The evidence sections render on first use, once per RenderPR or
 	// RenderMergeOptions, whatever the number of templates.
-	funcs["evidence"] = tmplsafe.Lazy(func() (string, error) { return RenderPRBody(body) })
+	funcs["evidence"] = tmplsafe.Lazy(func() (string, error) { return renderPRBodyFn(body) })
 	for fn, section := range map[string]string{
 		"heading": "heading", "rollbackNotice": "rollbackNotice", "provenanceTable": "provenance",
 		"gatesTable": "gates", "upstreamTable": "upstream",
 	} {
 		funcs[fn] = tmplsafe.Lazy(func() (string, error) {
-			text, err := renderSection(section, body)
+			text, err := renderSectionFn(section, body)
 			return strings.Trim(text, "\n"), err
 		})
 	}

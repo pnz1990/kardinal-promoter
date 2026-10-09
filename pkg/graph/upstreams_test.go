@@ -279,6 +279,8 @@ func TestGateState(t *testing.T) {
 		{name: "Superseded bundle", phase: "Superseded", evaluated: true, steps: reached, want: GateStateSuperseded},
 		{name: "Superseded bundle, not evaluated yet", phase: "Superseded", steps: notReached, want: GateStateSuperseded},
 		{name: "Superseded bundle, ready", phase: "Superseded", ready: true, steps: reached, want: GateStatePass},
+		{name: "Rejected bundle", phase: "Rejected", evaluated: true, steps: reached, want: GateStateRejected},
+		{name: "Rejected bundle, not evaluated yet", phase: "Rejected", steps: notReached, want: GateStateRejected},
 		{name: "Pipeline gone", phase: "Promoting", noPipe: true, evaluated: true, steps: reached, want: GateStateWaiting},
 		{name: "Bundle gone", phase: "gone", evaluated: true, steps: reached, want: GateStateWaiting},
 		{name: "template, evaluated", phase: "gone", template: true, evaluated: true, want: GateStateWaiting},

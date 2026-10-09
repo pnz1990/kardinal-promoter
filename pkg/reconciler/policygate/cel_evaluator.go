@@ -111,6 +111,7 @@ func newEvaluator() (*evaluator, error) {
 		goccel.Variable("metrics", goccel.DynType),
 		goccel.Variable("upstream", goccel.DynType),
 		goccel.Variable("changewindow", goccel.DynType),
+		goccel.Variable("approvals", goccel.DynType),
 		ext.Strings(),
 		library.JSON(),
 		library.Maps(),

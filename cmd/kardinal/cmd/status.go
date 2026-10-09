@@ -47,8 +47,8 @@ When called with a pipeline name: shows in-flight promotion details for that
 pipeline — the current bundle per environment (the newest bundle that is not
 Superseded and has a PromotionStep there, or a gate instance there and has not
 failed; see kardinal explain), its PromotionSteps (one row per environment it
-has a step in, ▶ marking a step that is Promoting, WaitingForMerge or
-HealthChecking, with the Bundle each row belongs to, the step it is on, and the
+has a step in, ▶ marking a step that is Promoting, WaitingForMerge,
+HealthChecking or Verifying, with the Bundle each row belongs to, the step it is on, and the
 last 40 characters of the step's PR URL, open or merged; REGION is - unless the
 step was created by a Graph built before multi-region fan-out was removed;
 spec.regions is deprecated), the Bundle deployed in every environment (the
@@ -279,7 +279,7 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		// Mark in-progress states with a pointer.
 		marker := "  "
 		switch r.state {
-		case "Promoting", "WaitingForMerge", "HealthChecking":
+		case "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
 			marker = "▶ "
 		}
 		prDisplay := r.prURL
@@ -290,6 +290,9 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 			marker, r.env, r.region, r.bundle, r.state, r.activeStep, prDisplay, r.age)
 	}
 	_ = tw.Flush()
+	for _, h := range rejectedLiveHints(pipeline, active, bundles.Items, steps.Items, "") {
+		_, _ = fmt.Fprintln(w, h)
+	}
 
 	// What runs in each environment now, whether or not the active Bundle
 	// has reached it (lifecycle.DeployedBundle, the Bundle rollback starts

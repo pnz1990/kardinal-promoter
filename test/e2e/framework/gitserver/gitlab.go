@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -62,27 +63,48 @@ func (g *gitlab) createIn(ctx context.Context, owner, name string, files map[str
 }
 
 // gitlabDeleteTries is how many times DeleteRepo asks.
-const gitlabDeleteTries = 3
+const gitlabDeleteTries = 6
 
-// DeleteRepo deletes the project. GitLab can answer 500 when the delete
-// races a post-receive job of the last push (NoRepository "repository not
-// found" while it expires the project's caches), so a 5xx is retried.
+// DeleteRepo deletes the project, and is done once the project is gone or
+// marked for deletion. GitLab refuses a delete that races its own work on the
+// project, so these are retried with a growing wait:
+//   - a 5xx: the delete raced a post-receive job of the last push
+//     (NoRepository "repository not found" while it expires the caches);
+//   - 400 "Project could not be updated!" or a 409: the project was still
+//     being updated by an asynchronous job of the test's last merge or push
+//     (#1558).
+//
+// A project already marked for deletion (400 "... marked for deletion")
+// counts as deleted, so a second delete of the same project is a no-op.
 func (g *gitlab) DeleteRepo(ctx context.Context, r Repo) error {
 	for try := 1; ; try++ {
 		err := g.do(ctx, http.MethodDelete, g.projectPath(r), nil, nil)
-		if IsNotFound(err) {
+		if err == nil || IsNotFound(err) || gitlabMarkedForDeletion(err) {
 			return nil
 		}
-		se, ok := err.(*StatusError)
-		if err == nil || !ok || se.Code < 500 || try == gitlabDeleteTries {
+		if !gitlabRetryableDelete(err) || try == gitlabDeleteTries {
 			return err
 		}
 		select {
 		case <-ctx.Done():
 			return err
-		case <-time.After(g.retryEvery()):
+		case <-time.After(time.Duration(try) * g.retryEvery()):
 		}
 	}
+}
+
+func gitlabMarkedForDeletion(err error) bool {
+	se, ok := err.(*StatusError)
+	return ok && se.Code == http.StatusBadRequest && strings.Contains(se.Body, "marked for deletion")
+}
+
+func gitlabRetryableDelete(err error) bool {
+	se, ok := err.(*StatusError)
+	if !ok {
+		return false
+	}
+	return se.Code >= 500 || se.Code == http.StatusConflict ||
+		(se.Code == http.StatusBadRequest && strings.Contains(se.Body, "could not be updated"))
 }
 
 func (g *gitlab) ReadFile(ctx context.Context, r Repo, ref, path string) ([]byte, error) {

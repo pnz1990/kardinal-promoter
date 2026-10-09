@@ -44,12 +44,18 @@ func TestIsPermanentError(t *testing.T) {
 		header        map[string]string
 		body          string
 		wantPermanent bool
+		// githubOnly: only GitHub reads a 403 body for a rate limit; on
+		// every other provider the response is permanent.
+		githubOnly bool
 	}{
 		{name: "401 token rejected", status: http.StatusUnauthorized, body: `{"message":"Bad credentials"}`, wantPermanent: true},
 		{name: "403 token lacks access", status: http.StatusForbidden, body: `{"message":"Resource not accessible by integration"}`, wantPermanent: true},
 		{name: "403 primary rate limit", status: http.StatusForbidden, header: map[string]string{"X-RateLimit-Remaining": "0"}, body: `{}`},
 		{name: "403 with Retry-After", status: http.StatusForbidden, header: map[string]string{"Retry-After": "60"}, body: `{}`},
-		{name: "403 secondary rate limit without headers", status: http.StatusForbidden, body: `{"message":"You have exceeded a secondary rate limit."}`},
+		{name: "403 secondary rate limit without headers", status: http.StatusForbidden, body: `{"message":"You have exceeded a secondary rate limit."}`, githubOnly: true},
+		{name: "403 rate limit text that is not JSON", status: http.StatusForbidden, body: `rate limit exceeded`, wantPermanent: true},
+		{name: "403 rate limit text outside the message", status: http.StatusForbidden,
+			body: `{"message":"Forbidden","errors":[{"detail":"you hit a rate limit elsewhere"}]}`, wantPermanent: true},
 		{name: "404 not found", status: http.StatusNotFound, body: `{"message":"Not Found"}`, wantPermanent: true},
 		{name: "410 gone", status: http.StatusGone, body: `{}`, wantPermanent: true},
 		{name: "409 conflict", status: http.StatusConflict, body: `{}`},
@@ -71,7 +77,8 @@ func TestIsPermanentError(t *testing.T) {
 
 				_, _, err := p.newFn(srv.URL).GetPRStatus(context.Background(), p.repo, 7)
 				require.Error(t, err)
-				assert.Equal(t, r.wantPermanent, scm.IsPermanentError(err), "error: %v", err)
+				want := r.wantPermanent || (r.githubOnly && p.name != "github")
+				assert.Equal(t, want, scm.IsPermanentError(err), "error: %v", err)
 
 				var apiErr *scm.APIError
 				require.True(t, errors.As(err, &apiErr), "GetPRStatus must wrap an *scm.APIError: %v", err)

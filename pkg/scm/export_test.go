@@ -15,6 +15,7 @@ package scm
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -54,4 +55,15 @@ func (w *SecretWatcher) CheckAndReloadForTest(ctx context.Context) {
 		Str("key", w.SecretKey).
 		Logger()
 	w.checkAndReload(ctx, log)
+}
+
+// CountEvidenceRendersForTest counts the evidence renders of the PR template
+// functions (the whole body, and each section) until restore is called.
+func CountEvidenceRendersForTest() (counts func() (body, sections int), restore func()) {
+	var b, sec atomic.Int32
+	prevBody, prevSection := renderPRBodyFn, renderSectionFn
+	renderPRBodyFn = func(body PRBody) (string, error) { b.Add(1); return prevBody(body) }
+	renderSectionFn = func(name string, body PRBody) (string, error) { sec.Add(1); return prevSection(name, body) }
+	return func() (int, int) { return int(b.Load()), int(sec.Load()) },
+		func() { renderPRBodyFn, renderSectionFn = prevBody, prevSection }
 }

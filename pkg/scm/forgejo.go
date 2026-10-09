@@ -429,8 +429,9 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		f.circuits.Record(owner, resp, nil)
-		return newAPIError("forgejo", method, path, resp, raw)
+		apiErr := newAPIError("forgejo", method, path, resp, raw)
+		f.circuits.RecordAPIError(owner, resp, apiErr)
+		return apiErr
 	}
 
 	f.circuits.Record(owner, resp, nil)
