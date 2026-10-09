@@ -200,11 +200,11 @@ github:
 admission:
   # -- Usernames, besides this release's controller ServiceAccount, that run
   # a kardinal controller: they may name any Bundle's kardinal.io/created-by
-  # and write the objects a promotion Graph manages. Exact names, for
-  # example "system:serviceaccount:kardinal-system:kardinal-promoter-b"; an
-  # entry ending in * is a prefix (for a test rig's controller instances).
-  # Never list a tenant's namespace: whoever can mint tokens for a listed
-  # ServiceAccount passes these checks.
+  # and write the objects a promotion Graph manages. Exact usernames only,
+  # for example "system:serviceaccount:kardinal-system:kardinal-promoter-b";
+  # there are no wildcards. Never list a ServiceAccount of a tenant's
+  # namespace: whoever can mint tokens for a listed ServiceAccount passes
+  # these checks.
   controllerUsernames: []
 scm:
   provider: ""

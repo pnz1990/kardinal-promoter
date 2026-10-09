@@ -537,9 +537,6 @@ func TestIdentityAdmission_BundleCreator(t *testing.T) {
 	assert.True(t, admits(t, listed, bundle("bundle-api"), nil, variant), "a listed username names the creator")
 	assert.True(t, admits(t, listed, bundle("subscription:app"), nil, controller), "the controller still does")
 	assert.False(t, admits(t, listed, bundle("bundle-api"), nil, "system:serviceaccount:"+releaseNS+":variant-2"))
-	// An entry ending in * is a prefix, for a test rig's controller instances.
-	prefixed := identityPolicy(t, "bundle-creator", "--set", "admission.controllerUsernames={system:serviceaccount:"+releaseNS+":variant-*}")
-	assert.True(t, admits(t, prefixed, bundle("bundle-api"), nil, "system:serviceaccount:"+releaseNS+":variant-7"))
-	assert.False(t, admits(t, prefixed, bundle("bundle-api"), nil, "system:serviceaccount:"+releaseNS+":other"))
-	assert.False(t, admits(t, prefixed, bundle("bundle-api"), nil, "system:serviceaccount:team-a:variant-7"))
+	// No wildcards: an entry is one exact username.
+	assert.False(t, admits(t, listed, bundle("bundle-api"), nil, variant+"x"))
 }

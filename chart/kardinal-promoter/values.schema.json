@@ -388,8 +388,8 @@
       "properties": {
         "controllerUsernames": {
           "type": "array",
-          "items": {"type": "string", "minLength": 1},
-          "description": "Usernames (or prefixes ending in *), besides this release's controller ServiceAccount, that run a kardinal controller."
+          "items": {"type": "string", "minLength": 1, "pattern": "^[^*]+$"},
+          "description": "Exact usernames, besides this release's controller ServiceAccount, that run a kardinal controller."
         }
       }
     },

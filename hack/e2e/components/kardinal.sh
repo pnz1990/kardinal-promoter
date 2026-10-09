@@ -84,9 +84,10 @@ args=(
   --set "scm.provider=${KARDINAL_E2E_SCM_PROVIDER:?git server component must run first}"
   --set "scm.apiURL=${KARDINAL_E2E_SCM_API:-}"
   # The live tests' controller variants (framework.ControllerVariant) run as
-  # ServiceAccounts variant-<test>-<n> in the release namespace: they are
-  # kardinal controllers for the identity admission policies.
-  --set "admission.controllerUsernames={system:serviceaccount:${KARDINAL_NS}:variant-*}"
+  # ServiceAccounts variant-1 ... variant-<framework.MaxVariants> in the
+  # release namespace: they are kardinal controllers for the identity
+  # admission policies, listed by exact name (the chart has no wildcards).
+  --set "admission.controllerUsernames={$(seq -s, -f "system:serviceaccount:${KARDINAL_NS}:variant-%g" 1 128)}"
 )
 if "${KUBECTL[@]}" -n "$KARDINAL_NS" get secret scm-webhook >/dev/null 2>&1; then
   args+=(--set webhook.secretRef.name=scm-webhook)
