@@ -284,7 +284,12 @@ spec:
                   type: object
                 type: array
               lastEvaluatedAt:
-                description: LastEvaluatedAt is when the gate was last evaluated.
+                description: |-
+                  LastEvaluatedAt is when the gate's result was last written. The
+                  controller re-evaluates more often, but writes the status only when the
+                  result or reason changes, when a PromotionStep that has not started
+                  needs a newer result, after a spec change, and otherwise at least every
+                  10 minutes.
                 format: date-time
                 type: string
               ready:
