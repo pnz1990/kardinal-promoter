@@ -378,3 +378,94 @@ func TestUIHandler_BodyLimit(t *testing.T) {
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 }
+
+// groupTokens authenticates every token as a user with groups.
+type groupTokens map[string]authv1.UserInfo
+
+func (g groupTokens) Review(_ context.Context, token string) (*authv1.TokenReviewStatus, error) {
+	u, ok := g[token]
+	return &authv1.TokenReviewStatus{Authenticated: ok, User: u}, nil
+}
+
+// TestUIHandler_Approvals (E6): the UI approves, rejects and revokes as the
+// authenticated user: the Approval names the TokenReview user and groups and
+// carries kardinal.io/recorded-via: ui; the same decision again changes
+// nothing, another replaces it, and revoke deletes it. A user without create
+// on approvals is refused, and without TokenReview mode there is no
+// identity to record, so the request is refused before anything is written.
+func TestUIHandler_Approvals(t *testing.T) {
+	ctx := context.Background()
+	objs := func() []client.Object {
+		p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
+			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}}
+		b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: "team-a", UID: "uid-v2"},
+			Spec:   v1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
+			Status: v1alpha1.BundleStatus{Phase: "Promoting"}}
+		return []client.Object{p, b}
+	}
+	tokens := groupTokens{
+		"alice":  {Username: "alice@example.com", Groups: []string{"release-managers", "system:authenticated"}},
+		"viewer": {Username: "viewer"},
+	}
+	all := []string{"get", "list", "create", "delete", "update"}
+	access := &uiTestAccess{rules: map[string]map[string][]string{
+		"alice@example.com": {"team-a": all}, "viewer": {"team-a": {"get", "list"}}}}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs()...).Build()
+	h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: access}, "", nil, zerolog.Nop())
+	approvals := func() []v1alpha1.Approval {
+		var l v1alpha1.ApprovalList
+		require.NoError(t, c.List(ctx, &l))
+		return l.Items
+	}
+	post := func(token, body string) *httptest.ResponseRecorder {
+		return uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/approvals", "Bearer "+token, body)
+	}
+
+	rec := post("alice", `{"bundle":"app-v2","namespace":"team-a","environment":"prod","decision":"approve","comment":"LGTM"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), `"outcome":"Recorded"`)
+	assert.Contains(t, rec.Body.String(), "Recorded: alice@example.com approves app-v2 for prod")
+	got := approvals()
+	require.Len(t, got, 1)
+	assert.Equal(t, "alice@example.com", got[0].Spec.User)
+	assert.Equal(t, []string{"release-managers", "system:authenticated"}, got[0].Spec.Groups)
+	assert.Equal(t, "approve", got[0].Spec.Decision)
+	assert.Equal(t, "LGTM", got[0].Spec.Comment)
+	assert.Equal(t, "uid-v2", got[0].Spec.BundleUID)
+	assert.Equal(t, "ui", got[0].Annotations["kardinal.io/recorded-via"])
+
+	rec = post("alice", `{"bundle":"app-v2","namespace":"team-a","environment":"prod","decision":"approve","comment":"LGTM"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"outcome":"Already recorded"`)
+
+	rec = post("alice", `{"bundle":"app-v2","namespace":"team-a","environment":"prod","decision":"reject","comment":"CVE"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	got = approvals()
+	require.Len(t, got, 1, "a new decision replaces the old one")
+	assert.Equal(t, "reject", got[0].Spec.Decision)
+
+	rec = post("viewer", `{"bundle":"app-v2","namespace":"team-a","environment":"prod","decision":"approve"}`)
+	assert.Equal(t, http.StatusForbidden, rec.Code, "no create on approvals")
+	assert.Len(t, approvals(), 1)
+
+	rec = post("alice", `{"bundle":"app-v2","namespace":"team-a","environment":"prod","decision":"maybe"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	rec = post("alice", `{"bundle":"app-v2","namespace":"team-a","environment":"staging","decision":"approve"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "unknown environment")
+
+	rec = post("alice", `{"bundle":"app-v2","namespace":"team-a","environment":"prod","revoke":true}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "Revoked: alice@example.com no longer rejects app-v2 for prod")
+	assert.Empty(t, approvals())
+
+	// No verified identity: refused, nothing written.
+	c2 := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs()...).Build()
+	static := newUIHandler(c2, nil, uiAuthConfig{staticToken: "static-token"}, "", nil, zerolog.Nop())
+	rec = uiAuthDo(t, static, http.MethodPost, "/api/v1/ui/approvals", "Bearer static-token",
+		`{"bundle":"app-v2","namespace":"team-a","environment":"prod","decision":"approve"}`)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "TokenReview")
+	var l v1alpha1.ApprovalList
+	require.NoError(t, c2.List(ctx, &l))
+	assert.Empty(t, l.Items)
+}

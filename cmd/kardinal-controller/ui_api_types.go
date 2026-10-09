@@ -28,6 +28,34 @@ type uiPromoteResponse struct {
 	Message string `json:"message"`
 }
 
+// uiApprovalRequest is the body of POST /api/v1/ui/approvals.
+type uiApprovalRequest struct {
+	// Bundle is the Bundle decided on.
+	Bundle string `json:"bundle"`
+	// Environment is the environment whose approval gates count the decision.
+	Environment string `json:"environment"`
+	// Namespace of the Bundle. Defaults to "default".
+	Namespace string `json:"namespace,omitempty"`
+	// Decision is "approve" or "reject". Ignored with revoke.
+	Decision string `json:"decision,omitempty"`
+	// Comment is a note shown with the decision.
+	Comment string `json:"comment,omitempty"`
+	// Revoke deletes the user's decision instead of recording one.
+	Revoke bool `json:"revoke,omitempty"`
+}
+
+// uiApprovalResponse is the response of POST /api/v1/ui/approvals.
+type uiApprovalResponse struct {
+	// Outcome is "Recorded", "Already recorded" or "Revoked".
+	Outcome string `json:"outcome"`
+	// Approval is the name of the Approval recorded or deleted.
+	Approval string `json:"approval"`
+	// User is who the decision is recorded for: the authenticated UI user.
+	User string `json:"user"`
+	// Message describes what was done.
+	Message string `json:"message"`
+}
+
 // uiRollbackRequest is the body of POST /api/v1/ui/rollback.
 type uiRollbackRequest struct {
 	// Pipeline is the Pipeline to roll back.

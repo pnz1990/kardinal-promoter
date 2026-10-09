@@ -29,6 +29,22 @@ test.describe('Journey 014 — Approvals and rejected Bundles', () => {
     expect(results.violations.map(v => v.id)).toEqual([])
   })
 
+  test('approves from the UI, and asks before rejecting', async ({ page }) => {
+    await page.goto('/')
+    await page.locator('aside').getByText('payments-service').first().click()
+    await page.getByLabel('Comment (optional)').fill('checked the dashboards')
+    await page.getByRole('button', { name: 'Approve', exact: true }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Recorded: carol approves payments-service-def456 for prod' }))
+      .toBeVisible()
+    await page.getByRole('button', { name: 'Reject', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Reject payments-service-def456 for prod?' })
+    await expect(dialog).toBeVisible()
+    const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()
+    expect(results.violations.map(v => v.id)).toEqual([])
+    await dialog.getByRole('button', { name: 'Reject' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Recorded: carol rejects' })).toBeVisible()
+  })
+
   test('a rejected Bundle says who rejected it and why', async ({ page }) => {
     await page.goto('/')
     await page.locator('aside').getByText('payments-service').first().click()

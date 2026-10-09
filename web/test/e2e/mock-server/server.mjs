@@ -18,6 +18,7 @@
 //   POST /api/v1/ui/resume                            → { message: "resumed" }
 //   POST /api/v1/ui/promote                           → { bundle: "new-bundle", message }
 //   POST /api/v1/ui/rollback                          → { bundle: "rollback-bundle", message }
+//   POST /api/v1/ui/approvals                         → { outcome, approval, user: "carol", message }
 //   POST /api/v1/ui/validate-cel                      → { valid: true }
 //   GET  /                                            → 302 to /ui/
 //   GET  /ui/*                                        → built static assets (web/dist), SPA fallback
@@ -252,6 +253,11 @@ const server = http.createServer(async (req, res) => {
       case 'resume': return json(res, { message: 'resumed' })
       case 'promote': return json(res, { bundle: 'new-bundle', message: 'promotion started' })
       case 'rollback': return json(res, { bundle: 'rollback-bundle', message: 'rollback started' })
+      case 'approvals': return json(res, {
+        outcome: body.revoke ? 'Revoked' : 'Recorded', approval: 'approval-1', user: 'carol',
+        message: body.revoke ? `Revoked: carol no longer approves ${body.bundle} for ${body.environment}`
+          : `Recorded: carol ${body.decision}s ${body.bundle} for ${body.environment}`,
+      })
       case 'validate-cel': return json(res, { valid: true, expression: body.expression })
     }
   }

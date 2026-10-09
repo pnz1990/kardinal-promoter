@@ -186,6 +186,9 @@ export const api = {
   promote: (pipeline: string, environment: string, namespace = 'default') =>
     post<{ bundle: string; message: string }>('/promote', { pipeline, environment, namespace }),
   /** Trigger a rollback for the given pipeline (#331). */
+  /** Approve, reject or revoke a Bundle for an environment as the UI user (kardinal approve; TokenReview mode). */
+  recordApproval: (req: { bundle: string; environment: string; namespace?: string; decision?: 'approve' | 'reject'; comment?: string; revoke?: boolean }) =>
+    post<{ outcome: string; approval: string; user: string; message: string }>('/approvals', req),
   rollback: (pipeline: string, environment: string, namespace = 'default', toBundle?: string) =>
     post<{ bundle: string; message: string }>('/rollback', { pipeline, environment, namespace, toBundle }),
   /** Pause a pipeline — sets spec.paused=true (#506). */

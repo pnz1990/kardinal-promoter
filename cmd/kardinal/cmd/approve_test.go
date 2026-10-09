@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func approveFixture(t *testing.T, phase string) sigs_client.Client {
@@ -50,7 +51,7 @@ func TestApprove(t *testing.T) {
 	var out bytes.Buffer
 
 	require.NoError(t, approveFn(ctx, &out, c, "default", "app-v1", approveOptions{env: "prod", decision: "approve", comment: "LGTM"}))
-	name := approvalName("app-v1", "prod", "oidc:alice@example.com")
+	name := lifecycle.ApprovalName("app-v1", "prod", "oidc:alice@example.com")
 	assert.Equal(t, "Recorded: oidc:alice@example.com approves app-v1 for prod (Approval "+name+")\n", out.String())
 	list := approvals(t, c)
 	require.Len(t, list, 1)
@@ -108,11 +109,11 @@ func TestApprove_Refusals(t *testing.T) {
 }
 
 func TestApprovalName(t *testing.T) {
-	a := approvalName("app-v1", "prod", "alice")
-	assert.Equal(t, a, approvalName("app-v1", "prod", "alice"), "stable")
-	assert.NotEqual(t, a, approvalName("app-v1", "prod", "bob"), "one per user")
-	assert.NotEqual(t, a, approvalName("app-v1", "test", "alice"), "one per environment")
-	long := approvalName(string(bytes.Repeat([]byte("b"), 300)), "prod", "alice")
+	a := lifecycle.ApprovalName("app-v1", "prod", "alice")
+	assert.Equal(t, a, lifecycle.ApprovalName("app-v1", "prod", "alice"), "stable")
+	assert.NotEqual(t, a, lifecycle.ApprovalName("app-v1", "prod", "bob"), "one per user")
+	assert.NotEqual(t, a, lifecycle.ApprovalName("app-v1", "test", "alice"), "one per environment")
+	long := lifecycle.ApprovalName(string(bytes.Repeat([]byte("b"), 300)), "prod", "alice")
 	assert.LessOrEqual(t, len(long), 253)
 }
 
@@ -122,7 +123,7 @@ func TestApprovalName(t *testing.T) {
 func TestApprove_SomeoneElsesApproval(t *testing.T) {
 	stubIdentity(t, Identity{Username: "alice"})
 	ctx := context.Background()
-	name := approvalName("app-v1", "prod", "alice")
+	name := lifecycle.ApprovalName("app-v1", "prod", "alice")
 	labels := map[string]string{"kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod"}
 	squat := &v1alpha1.Approval{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: labels},

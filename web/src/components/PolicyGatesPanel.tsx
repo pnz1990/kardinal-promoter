@@ -193,7 +193,8 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
                 </div>
               )}
               {gate.approval && (
-                <ApprovalQuorum approval={gate.approval} bundle={gate.bundle} environment={gate.environment} />
+                <ApprovalQuorum approval={gate.approval} bundle={gate.bundle} environment={gate.environment}
+                  namespace={gate.namespace} />
               )}
             </div>
           ))}

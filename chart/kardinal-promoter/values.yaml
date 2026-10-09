@@ -199,8 +199,9 @@ github:
 # docs/guides/security.md#verified-identity).
 admission:
   # -- Usernames, besides this release's controller ServiceAccount, that run
-  # a kardinal controller: they may name any Bundle's kardinal.io/created-by
-  # and write the objects a promotion Graph manages. Exact usernames only,
+  # a kardinal controller: they may name any Bundle's kardinal.io/created-by,
+  # write the objects a promotion Graph manages, and record or revoke the
+  # UI's Approvals (kardinal.io/recorded-via: ui). Exact usernames only,
   # for example "system:serviceaccount:kardinal-system:kardinal-promoter-b";
   # there are no wildcards. Never list a ServiceAccount of a tenant's
   # namespace: whoever can mint tokens for a listed ServiceAccount passes
