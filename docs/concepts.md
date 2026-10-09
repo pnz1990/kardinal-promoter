@@ -4,7 +4,7 @@
 
 A Bundle is an immutable, versioned snapshot of what to deploy. It contains container image references (tag and digest), optionally a Helm chart version or Git commit SHA, and build provenance (who built it, what commit, which CI run).
 
-The API server enforces the immutability: an update that changes `spec.type`, `spec.pipeline`, `spec.images`, `spec.chart`, `spec.configRef` or `spec.provenance` is refused (`spec.<field> is immutable: create a new Bundle`), because gates and verifications were evaluated against them. `spec.intent`, labels and annotations stay editable. To promote a different artifact, create a new Bundle; it supersedes the older one.
+The API server enforces the immutability: an update that changes `spec.type`, `spec.pipeline`, `spec.images`, `spec.chart`, `spec.configRef`, `spec.provenance` or `spec.intent` is refused (`spec.<field> is immutable: create a new Bundle`), because gates and verifications were evaluated against the artifact, and an intent edit would take effect only at a later re-translation. Labels and annotations stay editable. To promote a different artifact, or to another target, create a new Bundle; it supersedes the older one.
 
 Bundles are created by your CI pipeline after building and pushing an image. All creation paths produce the same CRD in etcd:
 
@@ -117,6 +117,9 @@ spec:
   intent:
     skipEnvironments: [staging]  # skip staging (if an org gate applies to staging, a skip-permission gate in an org policy namespace must allow it; see Skip permissions)
 ```
+
+The intent is set when the Bundle is created and cannot be changed afterwards. To change the
+target, create a new Bundle (or use `kardinal promote`, which creates one).
 
 ## Pipeline
 

@@ -62,11 +62,13 @@ spec:
               CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
               supported) lets an update through when spec is unchanged.
 
-              The artifact a Bundle names is immutable: spec.type, spec.pipeline,
-              spec.images, spec.chart, spec.configRef and spec.provenance cannot change after
-              creation (they are what gates, verifications and evidence were checked
-              against; to promote something else, create a new Bundle). spec.intent stays
-              mutable. The rules are transition rules, so they run only on update.
+              A Bundle's spec is immutable: spec.type, spec.pipeline, spec.images,
+              spec.chart, spec.configRef, spec.provenance and spec.intent cannot change
+              after creation. The artifact is what gates, verifications and evidence were
+              checked against, and an intent edit would apply only at some later,
+              unrelated re-translation of the Graph; to promote something else, or to
+              another target, create a new Bundle. The rules are transition rules, so
+              they run only on update.
             properties:
               chart:
                 description: |-
@@ -222,6 +224,9 @@ spec:
             - message: 'spec.provenance is immutable: create a new Bundle'
               rule: has(self.provenance) == has(oldSelf.provenance) && (!has(self.provenance)
                 || self.provenance == oldSelf.provenance)
+            - message: 'spec.intent is immutable: create a new Bundle'
+              rule: has(self.intent) == has(oldSelf.intent) && (!has(self.intent)
+                || self.intent == oldSelf.intent)
             - message: 'spec.configRef is used only by config and mixed Bundles: an
                 image Bundle deploys only its images; set type config or mixed, or
                 remove configRef'

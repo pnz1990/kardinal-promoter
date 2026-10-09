@@ -418,7 +418,8 @@ func TestCRDAuditEventSpecImmutable(t *testing.T) {
 // TestCRDBundleArtifactImmutable: a Bundle's artifact (type, pipeline,
 // images, configRef, provenance) cannot change after creation: gates and
 // image verification were checked against it, so an edit would promote
-// something nobody checked (QA #1521). spec.intent and metadata stay
+// something nobody checked (QA #1521). spec.intent is immutable too: an edit
+// would apply only at a later, unrelated re-translation. Metadata stays
 // mutable.
 func TestCRDBundleArtifactImmutable(t *testing.T) {
 	spec := loadCRDs(t)["Bundle"].structural.Properties["spec"]
@@ -435,7 +436,7 @@ func TestCRDBundleArtifactImmutable(t *testing.T) {
 		require.NoError(t, err)
 		prgs = append(prgs, prg)
 	}
-	require.GreaterOrEqual(t, len(prgs), 6, "one transition rule per artifact field")
+	require.GreaterOrEqual(t, len(prgs), 7, "one transition rule per spec field")
 	base := func() map[string]interface{} {
 		return map[string]interface{}{
 			"type": "mixed", "pipeline": "app",
@@ -452,8 +453,8 @@ func TestCRDBundleArtifactImmutable(t *testing.T) {
 		allow bool
 	}{
 		{"unchanged", func(map[string]interface{}) {}, true},
-		{"intent changed", func(m map[string]interface{}) { m["intent"] = map[string]interface{}{"targetEnvironment": "prod"} }, true},
-		{"intent removed", func(m map[string]interface{}) { delete(m, "intent") }, true},
+		{"intent changed", func(m map[string]interface{}) { m["intent"] = map[string]interface{}{"targetEnvironment": "prod"} }, false},
+		{"intent removed", func(m map[string]interface{}) { delete(m, "intent") }, false},
 		{"image tag changed", func(m map[string]interface{}) {
 			m["images"] = []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "tag": "evil", "digest": "sha256:" + strings.Repeat("a", 64)}}
 		}, false},
@@ -501,6 +502,16 @@ func TestCRDBundleArtifactImmutable(t *testing.T) {
 		allowed = allowed && out.Value() == true
 	}
 	assert.False(t, allowed, "provenance added after creation")
+
+	old = base()
+	delete(old, "intent")
+	allowed = true
+	for _, prg := range prgs {
+		out, _, err := prg.Eval(map[string]interface{}{"self": base(), "oldSelf": old})
+		require.NoError(t, err)
+		allowed = allowed && out.Value() == true
+	}
+	assert.False(t, allowed, "intent added after creation")
 }
 
 // ── C08-api-config-24, -28: printer columns, enums, short names ──────────────
