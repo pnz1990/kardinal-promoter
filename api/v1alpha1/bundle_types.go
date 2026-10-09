@@ -12,6 +12,21 @@ import (
 // instead of ignored (#1353). Bundles stored before the rule keep working:
 // CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
 // supported) lets an update through when spec is unchanged.
+//
+// A Bundle's spec is immutable: spec.type, spec.pipeline, spec.images,
+// spec.chart, spec.configRef, spec.provenance and spec.intent cannot change
+// after creation. The artifact is what gates, verifications and evidence were
+// checked against, and an intent edit would apply only at some later,
+// unrelated re-translation of the Graph; to promote something else, or to
+// another target, create a new Bundle. The rules are transition rules, so
+// they run only on update.
+// +kubebuilder:validation:XValidation:rule="self.type == oldSelf.type",message="spec.type is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="self.pipeline == oldSelf.pipeline",message="spec.pipeline is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="has(self.images) == has(oldSelf.images) && (!has(self.images) || self.images == oldSelf.images)",message="spec.images is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="has(self.chart) == has(oldSelf.chart) && (!has(self.chart) || self.chart == oldSelf.chart)",message="spec.chart is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="has(self.configRef) == has(oldSelf.configRef) && (!has(self.configRef) || self.configRef == oldSelf.configRef)",message="spec.configRef is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="has(self.provenance) == has(oldSelf.provenance) && (!has(self.provenance) || self.provenance == oldSelf.provenance)",message="spec.provenance is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="has(self.intent) == has(oldSelf.intent) && (!has(self.intent) || self.intent == oldSelf.intent)",message="spec.intent is immutable: create a new Bundle"
 // +kubebuilder:validation:XValidation:rule="!(self.type == 'image' && has(self.configRef))",message="spec.configRef is used only by config and mixed Bundles: an image Bundle deploys only its images; set type config or mixed, or remove configRef"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rejected) || has(self.rejected)",message="spec.rejected cannot be removed: a rejected Bundle stays rejected"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rejected) || !has(self.rejected) || self.rejected == oldSelf.rejected",message="spec.rejected is immutable once set"
