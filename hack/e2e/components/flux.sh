@@ -23,7 +23,12 @@ pull_images "${images[@]}"
 # Server-side: the Flux CRDs are too large for client-side apply. Without
 # --events-addr the controllers do not post events to the scaled-down
 # notification-controller: each post blocks a reconcile for about 40s.
-sed '/--events-addr=/d' "$MANIFEST" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f - >/dev/null
+# --concurrent replaces it: the default of 4 workers starves a suite of
+# parallel tests. Every Kustomization with healthChecks holds a worker for at
+# least one 5s health poll, and one waiting on a broken rollout holds it until
+# its timeout, so a reconcile a test requested waited behind them for tens of
+# seconds (TestFlux_BakeSurvivesFluxReconcile saw one reconcile in a minute).
+sed 's/^\( *\)- --events-addr=.*/\1- --concurrent=20/' "$MANIFEST" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f - >/dev/null
 for d in helm-controller notification-controller image-automation-controller \
   image-reflector-controller source-watcher; do
   if "${KUBECTL[@]}" -n "$NS" get "deploy/$d" >/dev/null 2>&1; then
