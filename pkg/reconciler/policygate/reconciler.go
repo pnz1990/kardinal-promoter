@@ -96,7 +96,14 @@ type Reconciler struct {
 	// template's namespace (label graph.LabelGateTemplateNamespace), so the
 	// org's MetricChecks decide an org gate, not the team's.
 	PolicyNamespaces []string
+	// StatusHeartbeat is the longest the stored result may go unwritten
+	// while it does not change (unchangedResult). Zero or less writes the
+	// status on every evaluation. NewReconciler sets DefaultStatusHeartbeat.
+	StatusHeartbeat time.Duration
 }
+
+// DefaultStatusHeartbeat is the controller's --gate-status-heartbeat default.
+const DefaultStatusHeartbeat = 10 * time.Minute
 
 // NewReconciler creates a Reconciler with an initialized CEL evaluator.
 // Use this instead of struct literal construction.
@@ -106,8 +113,9 @@ func NewReconciler(c client.Client) (*Reconciler, error) {
 		return nil, fmt.Errorf("new policygate evaluator: %w", err)
 	}
 	return &Reconciler{
-		Client: c,
-		eval:   ev,
+		Client:          c,
+		eval:            ev,
+		StatusHeartbeat: DefaultStatusHeartbeat,
 	}, nil
 }
 
@@ -852,9 +860,70 @@ func (r *Reconciler) buildPRContext(ctx context.Context, ns, bundleName string) 
 	return result, nil
 }
 
-// patchStatus patches the PolicyGate's status fields.
+// unchangedResult reports whether writing ready and reason would change
+// nothing anyone waits for, so patchStatus can skip the write: the result and
+// reason are the ones stored, the stored result is younger than
+// r.StatusHeartbeat and was computed for the current generation, and no
+// PromotionStep waits for a result newer than the stored one
+// (checkRequiredGates in the PromotionStep reconciler).
+//
+// Every status write wakes kro, which re-walks the gate's whole Graph (ledger
+// gap G9), and the NotificationHook and PromotionStep watchers. A gate
+// re-evaluated every ScheduleClock tick with the same result wrote its status
+// every minute for nothing.
+func (r *Reconciler) unchangedResult(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	ready bool, reason string, now time.Time) bool {
+	last := gate.Status.LastEvaluatedAt
+	if r.StatusHeartbeat <= 0 || last == nil || gate.Status.Ready != ready || gate.Status.Reason != reason {
+		return false
+	}
+	if now.Sub(last.Time) >= r.StatusHeartbeat {
+		return false
+	}
+	c := meta.FindStatusCondition(gate.Status.Conditions, conditionReady)
+	if c == nil || c.ObservedGeneration != gate.Generation {
+		return false
+	}
+	wanted, err := r.freshResultWanted(ctx, gate)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("list promotion steps waiting for this gate; writing its status")
+		return false
+	}
+	return !wanted
+}
+
+// freshResultWanted reports whether a PromotionStep that has not started
+// requires gate and was created after gate's stored result: such a step
+// starts only on a result evaluated at or after it was created.
+func (r *Reconciler) freshResultWanted(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) (bool, error) {
+	var steps kardinalv1alpha1.PromotionStepList
+	if err := r.List(ctx, &steps, client.InNamespace(gate.Namespace),
+		client.MatchingLabels{labelBundle: gate.Labels[labelBundle]}); err != nil {
+		return false, fmt.Errorf("list promotion steps: %w", err)
+	}
+	for i := range steps.Items {
+		ps := &steps.Items[i]
+		if ps.Status.State != "" && ps.Status.State != "Pending" {
+			continue
+		}
+		for _, name := range ps.Spec.RequiredGates {
+			if name == gate.Name && gate.Status.LastEvaluatedAt.Before(&ps.CreationTimestamp) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// patchStatus patches the PolicyGate's status fields. It writes nothing when
+// the result is unchanged and no step waits for a newer one
+// (unchangedResult).
 func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
 	ready bool, reason string) error {
+	if r.unchangedResult(ctx, gate, ready, reason, r.now()) {
+		zerolog.Ctx(ctx).Debug().Bool("ready", ready).Msg("policygate result unchanged, status not written")
+		return nil
+	}
 	prevReady := gate.Status.Ready
 	isFirstEval := gate.Status.LastEvaluatedAt == nil
 	// blockedSince is when the current blocking episode started, read before

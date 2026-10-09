@@ -174,7 +174,8 @@ func (r *Reconciler) bundleEvents(ctx context.Context, ns, selector string, add 
 // block. Templates (no kardinal.io/bundle label) are never evaluated, so they
 // neither block nor unblock anything. The episode is identified by the Ready
 // condition's lastTransitionTime, which only moves when the gate flips;
-// status.lastEvaluatedAt moves on every re-evaluation.
+// status.lastEvaluatedAt moves on every status write (a changed result, a
+// step waiting for a fresh one, or the --gate-status-heartbeat).
 func (r *Reconciler) gateEvents(ctx context.Context, ns, selector string, add func(pendingEvent)) error {
 	var gates v1alpha1.PolicyGateList
 	if err := r.List(ctx, &gates, client.InNamespace(ns)); err != nil {

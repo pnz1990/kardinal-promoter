@@ -52,7 +52,10 @@ func TestEstimateSize(t *testing.T) {
 	}
 	size, err := graph.EstimateSize(g)
 	require.NoError(t, err)
-	assert.Equal(t, len(data)+templates*260, size)
+	// 3 PromotionSteps, 3 gate instances, 3 PRStatuses.
+	assert.Equal(t, 9, graph.ObjectCount(g))
+	assert.Equal(t, len(data)+9*260, size)
+	assert.Less(t, templates, 9, "collections create several objects from one node")
 
 	size, err = graph.EstimateSize(nil)
 	require.NoError(t, err)
@@ -86,13 +89,17 @@ func TestCheckSize(t *testing.T) {
 	assert.NoError(t, graph.CheckSize(nil))
 }
 
-// TestEstimateSize_NoCollections guards EstimateSize's one-object-per-node
-// count: it holds only while the builder emits no forEach node. When it
-// emits collections, EstimateSize must count each item, and this test must
-// be replaced.
-func TestEstimateSize_NoCollections(t *testing.T) {
+// TestObjectCount checks that EstimateSize counts every object a collection
+// creates, not one per node: 3 PromotionSteps, 6 gate instances and 3
+// PRStatuses from 3 + 2 collection nodes.
+func TestObjectCount(t *testing.T) {
 	g := sizedGraph(t, 3, 2)
+	assert.Equal(t, 12, graph.ObjectCount(g))
+	collections := 0
 	for _, n := range g.Spec.Nodes {
-		assert.Empty(t, n.ForEach, "node %s is a collection: EstimateSize must count its items", n.ID)
+		if len(n.ForEach) > 0 {
+			collections++
+		}
 	}
+	assert.Equal(t, 2, collections, "PolicyGates and PRStatuses")
 }
