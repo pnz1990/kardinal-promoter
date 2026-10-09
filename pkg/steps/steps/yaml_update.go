@@ -10,9 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v3"
@@ -40,15 +38,6 @@ func init() {
 type yamlUpdateStep struct{}
 
 func (s *yamlUpdateStep) Name() string { return YAMLUpdateStepName }
-
-// pathSegment is one key of a YAML path, with the list indexes after it.
-type pathSegment struct {
-	key     string
-	indexes []int
-}
-
-var segmentRE = regexp.MustCompile(`^([A-Za-z0-9_-]+)((?:\[[0-9]+\])*)$`)
-var indexRE = regexp.MustCompile(`\[([0-9]+)\]`)
 
 // tempSuffix names the temporary file written next to each edited file.
 const tempSuffix = ".kardinal-tmp"
@@ -153,107 +142,6 @@ func duplicateKey(n *yaml.Node) (string, int, bool) {
 	return "", 0, false
 }
 
-// parseYAMLPath parses "a.b[0].c" into segments.
-func parseYAMLPath(p string) ([]pathSegment, error) {
-	if p == "" {
-		return nil, fmt.Errorf("path is empty")
-	}
-	var out []pathSegment
-	for _, part := range strings.Split(p, ".") {
-		m := segmentRE.FindStringSubmatch(part)
-		if m == nil {
-			return nil, fmt.Errorf("invalid path %q: use keys separated by \".\" and [N] list indexes", p)
-		}
-		seg := pathSegment{key: m[1]}
-		for _, im := range indexRE.FindAllStringSubmatch(m[2], -1) {
-			n, err := strconv.Atoi(im[1])
-			if err != nil {
-				return nil, fmt.Errorf("invalid index in path %q", p)
-			}
-			seg.indexes = append(seg.indexes, n)
-		}
-		out = append(out, seg)
-	}
-	return out, nil
-}
-
-// setYAMLPath sets the scalar at path in mapping root. Missing mapping keys
-// are created; list elements must exist. It fails instead of replacing a
-// mapping or list, so a wrong path cannot destroy values.
-func setYAMLPath(root *yaml.Node, path string, value string) error {
-	segs, err := parseYAMLPath(path)
-	if err != nil {
-		return err
-	}
-	node := root
-	for i, seg := range segs {
-		last := i == len(segs)-1 && len(seg.indexes) == 0
-		if err := noAnchor(node, path); err != nil {
-			return err
-		}
-		if node.Kind != yaml.MappingNode {
-			return fmt.Errorf("%s: not a mapping at %q", path, seg.key)
-		}
-		if err := noMergeKey(node, path); err != nil {
-			return err
-		}
-		if last {
-			v := mapValue(node, seg.key)
-			if v != nil {
-				if err := noAnchor(v, path); err != nil {
-					return err
-				}
-			}
-			if v != nil && v.Kind != yaml.ScalarNode {
-				return fmt.Errorf("%s is not a scalar", path)
-			}
-			if v == nil {
-				// A new key in a flow mapping ({}) is written in block style.
-				node.Style &^= yaml.FlowStyle
-			}
-			setMapScalar(node, seg.key, value)
-			return nil
-		}
-		next := mapValue(node, seg.key)
-		switch {
-		case next == nil && len(seg.indexes) > 0:
-			return fmt.Errorf("%s: %q is not a list", path, seg.key)
-		case next == nil:
-			next = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-			node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: seg.key}, next)
-		case next.Kind == yaml.ScalarNode && next.Tag == "!!null" && len(seg.indexes) == 0:
-			*next = yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		}
-		for j, idx := range seg.indexes {
-			if err := noAnchor(next, path); err != nil {
-				return err
-			}
-			if next.Kind != yaml.SequenceNode {
-				return fmt.Errorf("%s: %q is not a list", path, seg.key)
-			}
-			if idx >= len(next.Content) {
-				return fmt.Errorf("%s: %s has %d elements, no [%d]", path, seg.key, len(next.Content), idx)
-			}
-			if i == len(segs)-1 && j == len(seg.indexes)-1 {
-				el := next.Content[idx]
-				if err := noAnchor(el, path); err != nil {
-					return err
-				}
-				if el.Kind != yaml.ScalarNode {
-					return fmt.Errorf("%s is not a scalar", path)
-				}
-				style := el.Style &^ (yaml.LiteralStyle | yaml.FoldedStyle | yaml.FlowStyle)
-				*el = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, Style: style,
-					HeadComment: el.HeadComment, LineComment: el.LineComment, FootComment: el.FootComment}
-				return nil
-			}
-			next = next.Content[idx]
-		}
-		node = next
-	}
-	return nil
-}
-
 // noAnchor refuses a node that is an alias or carries an anchor: editing it
 // would change every place that refers to it, or nothing at all.
 func noAnchor(n *yaml.Node, path string) error {
@@ -261,33 +149,6 @@ func noAnchor(n *yaml.Node, path string) error {
 		return fmt.Errorf("%s: anchors and aliases (& and *) on the path are not supported", path)
 	}
 	return nil
-}
-
-// getYAMLPath returns the scalar at path, for checking a written file.
-func getYAMLPath(root *yaml.Node, path string) (string, bool) {
-	segs, err := parseYAMLPath(path)
-	if err != nil {
-		return "", false
-	}
-	node := root
-	for _, seg := range segs {
-		if node.Kind != yaml.MappingNode {
-			return "", false
-		}
-		if node = mapValue(node, seg.key); node == nil {
-			return "", false
-		}
-		for _, idx := range seg.indexes {
-			if node.Kind != yaml.SequenceNode || idx >= len(node.Content) {
-				return "", false
-			}
-			node = node.Content[idx]
-		}
-	}
-	if node.Kind != yaml.ScalarNode {
-		return "", false
-	}
-	return node.Value, true
 }
 
 // maxYAMLUpdateFile bounds a file yaml-update reads.
