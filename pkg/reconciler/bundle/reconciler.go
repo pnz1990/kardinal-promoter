@@ -1198,6 +1198,13 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		// waiting for the slot itself, so it does not lift the hold.
 		limit, held := 0, false
 		if !replaced {
+			if pipeline != nil && pipeline.Spec.MaxConcurrentPromotions > 0 {
+				// A recovery back into Promoting takes a slot too: count it and
+				// write the phase under the Pipeline's lock, as handleAvailable
+				// does, so a recovering and an Available Bundle never take the
+				// same free slot (#1509).
+				defer r.lockPipeline(b.Namespace, b.Spec.Pipeline)()
+			}
 			var err error
 			if limit, held, err = r.slotTaken(ctx, b, pipeline); err != nil {
 				// A failed read is not a free slot: keep the hold as it is and retry.

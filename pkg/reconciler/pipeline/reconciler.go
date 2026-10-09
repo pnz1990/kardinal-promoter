@@ -316,6 +316,25 @@ var bundlePhaseChanged = predicate.Funcs{
 	},
 }
 
+// stepStateChanged passes the PromotionStep events the Pipeline status
+// depends on: creation, deletion, and an update that changes status.state,
+// or outputs.noChanges. The deployment metrics read the health-check step's
+// start, which a step writes as it enters HealthChecking. The rest are a running
+// step's own status writes, about one a second while it promotes and every
+// health check while it bakes; mapping each to its Pipeline reconciled every
+// Pipeline about 20 times per Bundle (#1509).
+var stepStateChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldS, okOld := e.ObjectOld.(*kardinalv1alpha1.PromotionStep)
+		newS, okNew := e.ObjectNew.(*kardinalv1alpha1.PromotionStep)
+		if !okOld || !okNew {
+			return true
+		}
+		return oldS.Status.State != newS.Status.State ||
+			oldS.Status.Outputs["noChanges"] != newS.Status.Outputs["noChanges"]
+	},
+}
+
 // Step states that DerivePhase reports as Degraded.
 var degradedStates = map[string]bool{
 	"Failed":         true,
@@ -529,7 +548,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// gate has no PromotionStep to trigger it (E2E-R05).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(pipelineForBundle),
 			builder.WithPredicates(bundlePhaseChanged)).
-		// Enqueue the pipeline named by spec.pipelineName whenever a PromotionStep changes.
+		// Enqueue the pipeline named by spec.pipelineName when a PromotionStep
+		// is created or deleted, or its state changes (stepStateChanged): the
+		// status writes a step makes while it runs (messages, retries, health
+		// checks) do not change what the Pipeline derives from it (#1509).
 		Watches(&kardinalv1alpha1.PromotionStep{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []ctrl.Request {
 				s, ok := obj.(*kardinalv1alpha1.PromotionStep)
@@ -543,6 +565,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 					},
 				}}
 			}),
+			builder.WithPredicates(stepStateChanged),
 		).
 		Complete(tracing.WrapReconciler("pipeline", r))
 }
