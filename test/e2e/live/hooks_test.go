@@ -514,12 +514,13 @@ func TestStep_HookPrivilegedRefused(t *testing.T) {
 	a.fileHas(t, "prod", fixtures.V1, "prod in git")
 }
 
-// TestStep_HookForgedHookRunIgnored: a HookRun created by hand for a
-// Bundle, with its selector labels and the Bundle's UID, is refused by the
-// chart's graph-objects policy (only kro and kardinal create HookRuns,
-// #1544), and the Graph's own hook runs and the environment is promoted.
-// The HookRun reconciler's own check (no kro.run/node-id label: no Job) is
-// the layer below it, unit-tested in pkg/reconciler/hookrun (QA #1493).
+// TestStep_HookForgedHookRunIgnored: a HookRun made by hand for a Bundle,
+// with its selector labels and the Bundle's UID, is refused by the chart's
+// graph-objects policy (only kro and kardinal create HookRuns, #1544). Made
+// anyway by an identity the policy admits, the Graph ServiceAccount as kro
+// uses it, but without kro's kro.run/node-id label, it never gets a Job or a
+// status (the controller's own check, QA #1493 round 2), while the Graph's
+// own hook runs and the environment is promoted.
 //
 // Covers HOOK-FORGED-01.
 func TestStep_HookForgedHookRunIgnored(t *testing.T) {
@@ -541,18 +542,38 @@ func TestStep_HookForgedHookRunIgnored(t *testing.T) {
 		Spec: v1alpha1.HookRunSpec{PipelineName: pipelineName, BundleName: bundle, Environment: "test",
 			Hook: "migrate", Phase: "pre", Job: hookJob(t, `echo forged`, "")},
 	}
-	err := e.Client.Create(ctx, forged)
+	err := e.Client.Create(ctx, forged.DeepCopy())
 	require.Error(t, err, "the cluster admin cannot forge a HookRun")
 	assert.True(t, apierrors.IsForbidden(err), "%v", err)
-	assert.Contains(t, err.Error(), "graph-objects")
+	assert.Contains(t, err.Error(), "only kardinal (the promotion Graph or the controller) creates or changes this object")
+	// kro's path: impersonating the namespace's Graph ServiceAccount.
+	require.NoError(t, impersonated(t, e, "system:serviceaccount:"+a.ns+":kardinal-graph",
+		"system:serviceaccounts", "system:serviceaccounts:"+a.ns, "system:authenticated").Create(ctx, forged))
 
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	waitHookRun(t, e, a.ns, graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate"), v1alpha1.HookRunSucceeded)
-	_, ok, err := hookRun(ctx, e, a.ns, forged.Name)
+	framework.Consistently(t, 10*time.Second, "the forged HookRun gets no Job and no status", func(ctx context.Context) (bool, string) {
+		_, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, forged.Name, metav1.GetOptions{})
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Sprintf("job: %v", err)
+		}
+		hr, ok, err := hookRun(ctx, e, a.ns, forged.Name)
+		if err != nil || !ok {
+			return false, fmt.Sprint(err)
+		}
+		return hr.Status.Phase == "" && len(hr.Finalizers) == 0, fmt.Sprintf("phase=%q finalizers=%v", hr.Status.Phase, hr.Finalizers)
+	})
+}
+
+// impersonated is a client acting as user in groups (the test's cluster
+// admin may impersonate), for an identity an admission policy admits.
+func impersonated(t *testing.T, e *framework.Env, user string, groups ...string) client.Client {
+	t.Helper()
+	cfg := rest.CopyConfig(e.Config)
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: user, Groups: groups}
+	c, err := client.New(cfg, client.Options{Scheme: e.Client.Scheme()})
 	require.NoError(t, err)
-	assert.False(t, ok, "no forged HookRun")
-	_, err = e.Kube.BatchV1().Jobs(a.ns).Get(ctx, forged.Name, metav1.GetOptions{})
-	assert.True(t, apierrors.IsNotFound(err), "no forged Job: %v", err)
+	return c
 }
 
 // TestStep_HooksRefusedInCompactGraph: the compact Graph shape does not
@@ -609,12 +630,9 @@ func TestStep_HookDeletedWhileRunningRunsOnce(t *testing.T) {
 	err := e.Client.Delete(ctx, first.DeepCopy())
 	require.Error(t, err, "a user cannot delete a HookRun")
 	assert.True(t, apierrors.IsForbidden(err), "%v", err)
-	gc := rest.CopyConfig(e.Config)
-	gc.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:kube-system:generic-garbage-collector",
-		Groups: []string{"system:serviceaccounts", "system:serviceaccounts:kube-system", "system:authenticated"}}
-	asGC, err := client.New(gc, client.Options{Scheme: e.Client.Scheme()})
-	require.NoError(t, err)
-	require.NoError(t, asGC.Delete(ctx, first))
+	assert.Contains(t, err.Error(), "HookRuns record that a hook ran; only kardinal deletes them")
+	require.NoError(t, impersonated(t, e, "system:serviceaccount:kube-system:generic-garbage-collector",
+		"system:serviceaccounts", "system:serviceaccounts:kube-system", "system:authenticated").Delete(ctx, first))
 
 	var again *v1alpha1.HookRun
 	framework.Eventually(t, 3*time.Minute, "the HookRun applied again", func(ctx context.Context) (bool, string) {
