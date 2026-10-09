@@ -55,3 +55,18 @@ func (w *SecretWatcher) CheckAndReloadForTest(ctx context.Context) {
 		Logger()
 	w.checkAndReload(ctx, log)
 }
+
+// SetMaxRegistryClientsForTest bounds the client cache of the Registries
+// created after it, and returns a function that restores it.
+func SetMaxRegistryClientsForTest(n int) func() {
+	prev := maxRegistryClients
+	maxRegistryClients = n
+	return func() { maxRegistryClients = prev }
+}
+
+// CacheSizesForTest returns the number of cached Secrets and Namespaces.
+func (r *Registry) CacheSizesForTest() (secrets, namespaces int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.secrets), len(r.namespaces)
+}
