@@ -109,8 +109,11 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 				deep = append(deep, fmt.Sprintf("%s=%.0f", k, v))
 			}
 		}
-		if len(deep) == 0 || time.Now().After(deadline) {
-			if len(deep) > 0 {
+		if len(deep) == 0 || o.SharedController || time.Now().After(deadline) {
+			if len(deep) > 0 && o.SharedController {
+				sort.Strings(deep)
+				queue.Note = "shared with parallel tests; at the end: " + strings.Join(deep, ", ") + "; "
+			} else if len(deep) > 0 {
 				sort.Strings(deep)
 				queue.Violations = append(queue.Violations, "work queues still not empty two minutes after the load: "+strings.Join(deep, ", "))
 			}
@@ -125,7 +128,7 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 		}
 	}
 	sort.Strings(maxQ)
-	queue.Note = "peak depth >= 10: " + strings.Join(maxQ, ", ")
+	queue.Note += "peak depth >= 10: " + strings.Join(maxQ, ", ")
 
 	m.StepSeconds = map[string]Quantiles{}
 	p50 := byLabel(ctx, e, `histogram_quantile(0.5, sum by (le, step) (increase(kardinal_step_duration_seconds_bucket{`+ctrlSel+`}[`+window+`])))`, "step")
@@ -138,7 +141,7 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 	limitMiB := memoryLimitMiB(ctx, e)
 	for _, p := range m.Pods {
 		whole := p.From.Sub(start) < time.Minute && end.Sub(p.To) < time.Minute
-		if whole && p.GoroutinesEnd > math.Max(1.5*p.GoroutinesStart, p.GoroutinesStart+100) {
+		if whole && !o.SharedController && p.GoroutinesEnd > math.Max(1.5*p.GoroutinesStart, p.GoroutinesStart+100) {
 			leak.Violations = append(leak.Violations, fmt.Sprintf("%s: goroutines %.0f at the start, %.0f at the end (peak %.0f)",
 				p.Pod, p.GoroutinesStart, p.GoroutinesEnd, p.GoroutinesMax))
 		}

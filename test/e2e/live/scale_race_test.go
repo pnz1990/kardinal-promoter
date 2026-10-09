@@ -33,8 +33,7 @@ import (
 // had it finished first), and git must hold the newest.
 // Covers SCALE-RACE-RAPIDFIRE-01.
 func TestScale_RaceRapidFire(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	p := r.Fleet.Pipeline(t, "rapid", scale.Chain(6))
 	var last scale.Created
 	for i := 1; i <= r.P.RapidFire; i++ {
@@ -51,8 +50,7 @@ func TestScale_RaceRapidFire(t *testing.T) {
 // A reviewer merges any PR. After the edits stop, one more Bundle must go
 // through the final Pipeline. Covers SCALE-RACE-PIPELINEEDIT-01.
 func TestScale_RacePipelineEdit(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.Chain(8)
 	extra := v1alpha1.EnvironmentSpec{Name: "s009"}
 	all := append(append([]v1alpha1.EnvironmentSpec(nil), envs...), extra)
@@ -134,8 +132,7 @@ func editPipeline(t *testing.T, r *scale.Run, name string, edit func(*v1alpha1.P
 // environments behind the gate must hold the last Bundle verified there.
 // Covers SCALE-RACE-GATEFLAP-01.
 func TestScale_RaceGateFlap(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	p := r.Fleet.Pipeline(t, "flap", scale.Chain(5))
 	r.E.CreateGate(t, framework.Gate(r.Fleet.NS, "flapper", "s003", `"e2e-open" in bundle.labels`, "10s"))
 	var bundles []string
@@ -181,8 +178,7 @@ func setBundleLabel(t *testing.T, r *scale.Run, bundle, key string, on bool) {
 // must get no prod step until the window is switched off again; then it
 // promotes. Covers SCALE-RACE-CHANGEWINDOW-01.
 func TestScale_RaceChangeWindowFlip(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	window := r.Fleet.NS + "-freeze"
 	now := time.Now().UTC().Truncate(time.Second)
 	r.E.CreateChangeWindow(t, blackout(window, now.Add(time.Hour), now.Add(2*time.Hour)))
@@ -221,8 +217,7 @@ func TestScale_RaceChangeWindowFlip(t *testing.T) {
 // three seconds for a minute while their Bundles promote, then resumes them
 // for good. Covers SCALE-RACE-PAUSESTORM-01.
 func TestScale_RacePauseStorm(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	names := r.Fleet.Pipelines(t, "pause", 5, scale.Chain(4))
 	for i := 1; i <= 3; i++ {
 		for _, n := range names {
@@ -249,8 +244,7 @@ func TestScale_RacePauseStorm(t *testing.T) {
 // starts a second, and while the second is mid-chain rolls the middle
 // environment back (kardinal rollback). Covers SCALE-RACE-ROLLBACK-01.
 func TestScale_RaceRollbackDuringPromotion(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	p := r.Fleet.Pipeline(t, "rb", scale.Chain(6))
 	b1 := r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
 	r.E.WaitBundlePhase(t, r.Fleet.NS, b1.Name, "Verified", 5*time.Minute)
@@ -265,8 +259,7 @@ func TestScale_RaceRollbackDuringPromotion(t *testing.T) {
 // and reopened at once, and the PR of a Bundle being superseded merged by a
 // person right as the newer Bundle arrives. Covers SCALE-RACE-EXTERNALPR-01.
 func TestScale_RaceExternalPR(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.Chain(2)
 	envs[1].Name, envs[1].Approval = "prod", "pr-review"
 	p := r.Fleet.Pipeline(t, "ext", envs)
@@ -307,8 +300,7 @@ func TestScale_RaceExternalPR(t *testing.T) {
 // clones), then a new Bundle must promote everywhere on the rewritten
 // branch. Covers SCALE-RACE-FORCEPUSH-01.
 func TestScale_RaceForcePush(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	p := r.Fleet.Pipeline(t, "force", scale.Chain(6))
 	repo := r.Fleet.Targets()[0].Repo
 	seed, err := scale.Head(r.E, repo)
@@ -331,8 +323,7 @@ func TestScale_RaceForcePush(t *testing.T) {
 // and kardinal must leave no open PR and no branch behind in its repo.
 // Covers SCALE-RACE-NSDELETE-01.
 func TestScale_RaceNamespaceDelete(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.Chain(4)
 	envs[3].Approval = "pr-review"
 	names := r.Fleet.Pipelines(t, "doomed", 3, envs)
@@ -373,8 +364,7 @@ func TestScale_RaceNamespaceDelete(t *testing.T) {
 // merged), and events for PRs that do not exist. Only the real merge may
 // advance the step. Covers SCALE-RACE-WEBHOOK-01.
 func TestScale_RaceWebhooks(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.Chain(2)
 	envs[1].Name, envs[1].Approval = "prod", "pr-review"
 	p := r.Fleet.Pipeline(t, "hooks", envs)

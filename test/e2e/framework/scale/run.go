@@ -26,18 +26,36 @@ type Run struct {
 	Start time.Time
 	// Extra are the test's own numbers for the report.
 	Extra map[string]interface{}
+
+	shared bool
 }
 
 // Begin loads the profile, connects to the cluster, creates the test's
-// fleet and starts collecting controller logs.
+// fleet and starts collecting controller logs. A test that calls Begin runs
+// alone (no t.Parallel): the controller's work queues and goroutines are its
+// own, so the invariants check that they drain and stay flat.
 func Begin(t *testing.T) *Run {
+	t.Helper()
+	return begin(t, false)
+}
+
+// BeginParallel is Begin for a test that runs in parallel with others
+// (it calls t.Parallel): the work queues and goroutines are shared, so their
+// end-of-run checks are reported, not enforced.
+func BeginParallel(t *testing.T) *Run {
+	t.Helper()
+	t.Parallel()
+	return begin(t, true)
+}
+
+func begin(t *testing.T, shared bool) *Run {
 	t.Helper()
 	p, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := framework.New(t)
-	r := &Run{T: t, E: e, P: p, Start: time.Now(), Extra: map[string]interface{}{"profile": p.Name}}
+	r := &Run{T: t, E: e, P: p, Start: time.Now(), Extra: map[string]interface{}{"profile": p.Name}, shared: shared}
 	t.Logf("scale %s", p)
 	r.Logs = invariants.Collect(t, e, invariants.Dir(t))
 	r.Fleet = NewFleet(t, e)
@@ -59,7 +77,7 @@ func (r *Run) Finish(edit ...func(*invariants.Options)) *invariants.Report {
 	r.Note("settleSeconds", int(time.Since(settleStart).Seconds()))
 	o := invariants.Options{
 		Namespace: r.Fleet.NS, Targets: r.Fleet.Targets(), Image: ImageRepo, SeedTag: SeedTag,
-		Start: r.Start, Logs: r.Logs, Metrics: true, Extra: r.Extra,
+		Start: r.Start, Logs: r.Logs, Metrics: true, Extra: r.Extra, SharedController: r.shared,
 	}
 	for _, fn := range edit {
 		fn(&o)

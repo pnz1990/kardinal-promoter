@@ -26,8 +26,7 @@ import (
 // profile's ChainStages environments (100, the most a Pipeline accepts) and
 // checks the invariants. Covers SCALE-TOPO-CHAIN-01.
 func TestScale_TopologyChain(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.Chain(r.P.ChainStages)
 	p := r.Fleet.Pipeline(t, "chain", envs)
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
@@ -62,8 +61,7 @@ func applyBig(t *testing.T, r *scale.Run, name string, envs []v1alpha1.Environme
 // profile's LongChainStages (120) environments in a line, one Bundle through
 // all of them. Covers SCALE-TOPO-LONGCHAIN-01.
 func TestScale_TopologyLongChain(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.Chain(r.P.LongChainStages)
 	p := applyBig(t, r, "longchain", envs)
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
@@ -76,8 +74,7 @@ func TestScale_TopologyLongChain(t *testing.T) {
 // wave before, so each wave's regions push to one branch at once.
 // Covers SCALE-TOPO-WAVES-01.
 func TestScale_TopologyWaves(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.Waves(r.P.Waves, r.P.WaveWidth)
 	p := r.Fleet.Pipeline(t, "waves", envs)
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
@@ -90,8 +87,7 @@ func TestScale_TopologyWaves(t *testing.T) {
 // and BigWaves (10) waves of BigWaveWidth (15) regions, 151 environments.
 // Covers SCALE-TOPO-BIGWAVES-01.
 func TestScale_TopologyBigWaves(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.Waves(r.P.BigWaves, r.P.BigWaveWidth)
 	p := applyBig(t, r, "bigwaves", envs)
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
@@ -104,8 +100,7 @@ func TestScale_TopologyBigWaves(t *testing.T) {
 // of LatticeWidth environments each depending on the whole layer before,
 // exit. Covers SCALE-TOPO-LATTICE-01.
 func TestScale_TopologyLattice(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.Lattice(r.P.LatticeDepth, r.P.LatticeWidth)
 	p := r.Fleet.Pipeline(t, "lattice", envs)
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
@@ -118,8 +113,7 @@ func TestScale_TopologyLattice(t *testing.T) {
 // depending on all of them: prod's step must not exist before every leaf is
 // Verified. Covers SCALE-TOPO-FANIN-01.
 func TestScale_TopologyFanIn(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.FanIn(r.P.FanIn)
 	p := r.Fleet.Pipeline(t, "fanin", envs)
 	b := r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
@@ -152,8 +146,7 @@ func TestScale_TopologyFanIn(t *testing.T) {
 // each PR as it opens. Two Bundles go through one after the other.
 // Covers SCALE-TOPO-MIXED-01.
 func TestScale_TopologyMixedApproval(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.Chain(12)
 	for i := range envs {
 		if i%3 == 2 {
@@ -179,8 +172,7 @@ func TestScale_TopologyMixedApproval(t *testing.T) {
 // three Bundles per Pipeline created at once, so every push races the
 // others'. Covers SCALE-TOPO-SHARED-01.
 func TestScale_TopologySharedRepo(t *testing.T) {
-	t.Parallel()
-	r := scale.Begin(t)
+	r := scale.BeginParallel(t)
 	envs := scale.Chain(5)
 	all := map[string][]string{}
 	var names []string

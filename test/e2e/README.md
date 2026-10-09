@@ -148,8 +148,10 @@ in upper snake case (`KARDINAL_E2E_SCALE_SUSTAINED_RATE=5`,
 | `TestScale_Race*` | rapid-fire Bundles, Pipeline edits, gate flapping, a ChangeWindow switched on while a step waits for merge, pause/resume storms, rollback during a promotion, PRs closed, reopened and merged from outside, a force-pushed branch, a namespace deleted mid-flight, duplicate, forged and out-of-order webhooks |
 | `TestScale_Chaos*` | the leader killed every 20-60 s, kro restarted, git latency and outages, API Priority and Fairness throttling the controller to one seat, the SCM token rotated mid-flight |
 
-The load and chaos tests run one at a time, first; the topology and race
-tests then run in parallel.
+The load and chaos tests run one at a time, first (`scale.Begin`); the
+topology and race tests then run in parallel (`scale.BeginParallel`), so
+their work queue and goroutine checks are reported, not enforced: other
+tests load the same controller.
 
 The invariants, after every Bundle settled:
 

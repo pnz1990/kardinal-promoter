@@ -60,6 +60,10 @@ type Options struct {
 	// Metrics turns on the Prometheus checks (the scale suite has
 	// Prometheus; other suites may not).
 	Metrics bool
+	// SharedController is set when other tests load the controller at the
+	// same time: the work queue and goroutine checks then only report, as
+	// neither drains nor stays flat for one test.
+	SharedController bool
 	// MaxReconcileErrorRatio is the highest share of reconciles that may end
 	// in an error over the run (default 0.05). Chaos tests set it higher.
 	MaxReconcileErrorRatio float64
