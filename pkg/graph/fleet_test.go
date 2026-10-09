@@ -231,7 +231,7 @@ func inFlight(sim *compactSim) int {
 // maxConcurrent 5 to the end: never more than 5 targets in flight, targets
 // start in fleet order, and every target is Verified once.
 //
-// Covers FLEET-01.
+// Covers FLEET-06.
 func TestFleet_FiftyTargetsFiveAtATime(t *testing.T) {
 	sim := fleetSim(t, bigFleet(50, 5, nil))
 	sim.advance()
@@ -264,7 +264,7 @@ func TestFleet_FiftyTargetsFiveAtATime(t *testing.T) {
 // second failure stops new targets; the ones in flight still finish, and a
 // failure retried to Verified lets the rollout go on.
 //
-// Covers FLEET-02.
+// Covers FLEET-06.
 func TestFleet_MaxUnavailableStopsTheRollout(t *testing.T) {
 	two := 2
 	sim := fleetSim(t, bigFleet(10, 3, &two))
@@ -308,7 +308,7 @@ func TestFleet_TargetSelector(t *testing.T) {
 // is promoted; the targets already Verified stay so, and the environment
 // after the fleet waits for it too.
 //
-// Covers FLEET-04.
+// Covers FLEET-06.
 func TestFleet_TargetAddedMidRollout(t *testing.T) {
 	p := fleetPipeline(1)
 	sim := fleetSim(t, p)
@@ -339,7 +339,7 @@ func TestFleet_TargetAddedMidRollout(t *testing.T) {
 // closes its PR), its place is freed, and the environment after the fleet
 // waits only for the targets that remain.
 //
-// Covers FLEET-04.
+// Covers FLEET-06.
 func TestFleet_TargetRemovedMidRollout(t *testing.T) {
 	p := fleetPipeline(1)
 	sim := fleetSim(t, p)

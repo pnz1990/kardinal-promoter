@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // fleetResync is how often a Pipeline with a selector fleet re-reads the
@@ -25,6 +27,10 @@ import (
 // Applications (the CRD may not be installed), so membership changes are seen
 // within this interval.
 const fleetResync = time.Minute
+
+// maxFleetTargets is the most targets a selector may resolve to, as many as
+// spec.fleet.targets may list.
+const maxFleetTargets = 500
 
 // defaultArgoNamespace is a fleet selector's default namespace.
 const defaultArgoNamespace = "argocd"
@@ -49,7 +55,7 @@ func (r *Reconciler) resolveFleets(ctx context.Context, p *kardinalv1alpha1.Pipe
 		if env.Fleet == nil || !resolvedSelector(env.Fleet.Selector) {
 			continue
 		}
-		out = append(out, r.resolveFleet(ctx, p.Namespace, env.Name, env.Fleet.Selector))
+		out = append(out, r.resolveFleet(ctx, p, env.Name, env.Fleet.Selector))
 	}
 	return out
 }
@@ -60,7 +66,8 @@ func resolvedSelector(sel *kardinalv1alpha1.FleetSelector) bool {
 	return sel != nil && sel.Kind != kardinalv1alpha1.FleetSelectorTarget
 }
 
-func (r *Reconciler) resolveFleet(ctx context.Context, pipelineNS, env string, sel *kardinalv1alpha1.FleetSelector) kardinalv1alpha1.FleetStatus {
+func (r *Reconciler) resolveFleet(ctx context.Context, p *kardinalv1alpha1.Pipeline, env string, sel *kardinalv1alpha1.FleetSelector) kardinalv1alpha1.FleetStatus {
+	pipelineNS := p.Namespace
 	st := kardinalv1alpha1.FleetStatus{Environment: env}
 	kind := sel.Kind
 	if kind == "" {
@@ -97,6 +104,10 @@ func (r *Reconciler) resolveFleet(ctx context.Context, pipelineNS, env string, s
 		}
 		return st
 	}
+	if n := len(list.Items); n > maxFleetTargets {
+		st.Message = fmt.Sprintf("the selector matches %d %ss in %s; a fleet has at most %d targets", n, kind, ns, maxFleetTargets)
+		return st
+	}
 	for _, obj := range list.Items {
 		name := obj.GetName()
 		if errs := validation.IsDNS1123Label(name); len(errs) > 0 || len(name) > 62 {
@@ -106,9 +117,18 @@ func (r *Reconciler) resolveFleet(ctx context.Context, pipelineNS, env string, s
 		}
 		t := kardinalv1alpha1.FleetTarget{Name: name}
 		if kind == kardinalv1alpha1.FleetSelectorApplication {
-			path := applicationPath(&obj)
+			repoURL, path := applicationSource(&obj)
 			if path == "" {
 				st.Message = fmt.Sprintf("Application %s/%s cannot be a target: it has no spec.source.path", ns, name)
+				st.Targets = nil
+				return st
+			}
+			// kardinal writes the target's path in the Pipeline's
+			// repository: an Application that deploys from another one
+			// would never see the change.
+			if !sameRepository(repoURL, p.Spec.Git.URL) {
+				st.Message = fmt.Sprintf("Application %s/%s cannot be a target: it deploys from %s, not the Pipeline's spec.git.url",
+					ns, name, scm.RedactURL(repoURL))
 				st.Targets = nil
 				return st
 			}
@@ -124,18 +144,33 @@ func (r *Reconciler) resolveFleet(ctx context.Context, pipelineNS, env string, s
 	return st
 }
 
-// applicationPath is an Argo CD Application's spec.source.path, or the path
-// of its first spec.sources entry.
-func applicationPath(app *unstructured.Unstructured) string {
-	p, _, _ := unstructured.NestedString(app.Object, "spec", "source", "path")
-	if p == "" {
-		if sources, _, _ := unstructured.NestedSlice(app.Object, "spec", "sources"); len(sources) > 0 {
-			if s, ok := sources[0].(map[string]interface{}); ok {
-				p, _ = s["path"].(string)
+// applicationSource is an Argo CD Application's spec.source repoURL and
+// path, or those of its first spec.sources entry with a path.
+func applicationSource(app *unstructured.Unstructured) (repoURL, path string) {
+	path, _, _ = unstructured.NestedString(app.Object, "spec", "source", "path")
+	if path != "" {
+		repoURL, _, _ = unstructured.NestedString(app.Object, "spec", "source", "repoURL")
+		return repoURL, path
+	}
+	sources, _, _ := unstructured.NestedSlice(app.Object, "spec", "sources")
+	for _, src := range sources {
+		if s, ok := src.(map[string]interface{}); ok {
+			if p, _ := s["path"].(string); p != "" {
+				r, _ := s["repoURL"].(string)
+				return r, p
 			}
 		}
 	}
-	return p
+	return "", ""
+}
+
+// sameRepository reports whether two git remote URLs name the same
+// repository on the same host (scm.RepoIdentity), whatever their scheme,
+// user or ".git" suffix.
+func sameRepository(a, b string) bool {
+	ha, ra, errA := scm.RepoIdentity(a)
+	hb, rb, errB := scm.RepoIdentity(b)
+	return errA == nil && errB == nil && strings.EqualFold(ha, hb) && strings.EqualFold(ra, rb)
 }
 
 // fleetsEqual reports whether two status.fleets lists are the same.

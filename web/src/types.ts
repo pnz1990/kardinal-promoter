@@ -92,6 +92,21 @@ export interface EnvironmentNode {
   /** The environments it waits for as the controller resolves them (dependsOn,
    *  waves, or the previous entry). Absent for a root, or when the ordering is invalid. */
   upstreams?: string[]
+  /** Set on a fleet environment: environmentStates and deployed are keyed by
+   *  its target environments, which the fleet board rolls up (D1). */
+  fleet?: EnvironmentFleet
+}
+
+/** A fleet environment's targets and pacing (spec.fleet). */
+export interface EnvironmentFleet {
+  /** Target environments ("<environment>-<target>"), in promotion order. */
+  targets: string[]
+  /** Targets promoted at once; absent or 0 is all of them. */
+  maxConcurrent?: number
+  /** Failed targets that stop the rollout; absent when unset. */
+  maxUnavailable?: number
+  /** Why the targets cannot be resolved (a selector fleet). */
+  message?: string
 }
 
 export interface Bundle {

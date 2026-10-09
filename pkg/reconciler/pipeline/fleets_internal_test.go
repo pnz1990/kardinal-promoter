@@ -5,6 +5,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,6 +30,7 @@ func app(ns, name, path string, labels map[string]string) *unstructured.Unstruct
 	u.SetLabels(labels)
 	if path != "" {
 		_ = unstructured.SetNestedField(u.Object, path, "spec", "source", "path")
+		_ = unstructured.SetNestedField(u.Object, "https://github.com/acme/gitops.git", "spec", "source", "repoURL")
 	}
 	return u
 }
@@ -36,10 +38,11 @@ func app(ns, name, path string, labels map[string]string) *unstructured.Unstruct
 func fleetPipeline(sel map[string]string) *kardinalv1alpha1.Pipeline {
 	return &kardinalv1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
-		Spec: kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{
-			{Name: "test"},
-			{Name: "prod", Fleet: &kardinalv1alpha1.FleetSpec{Selector: &kardinalv1alpha1.FleetSelector{MatchLabels: sel}}},
-		}},
+		Spec: kardinalv1alpha1.PipelineSpec{Git: kardinalv1alpha1.PipelineGit{URL: "https://github.com/Acme/gitops"},
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "prod", Fleet: &kardinalv1alpha1.FleetSpec{Selector: &kardinalv1alpha1.FleetSelector{MatchLabels: sel}}},
+			}},
 	}
 }
 
@@ -47,8 +50,12 @@ func fleetPipeline(sel map[string]string) *kardinalv1alpha1.Pipeline {
 // selected Application in the Argo CD namespace is a target with its path and
 // argocd health, sorted by name; Applications the selector does not match or
 // in another namespace are not; an Application without a path or with a name
-// that cannot be a target fails the fleet with a message; and a cluster
-// without Argo CD says so.
+// that cannot be a target fails the fleet with a message, as does one that
+// deploys from another repository than the Pipeline's (its first source with
+// a path counts) and a selector past 500 targets; and a cluster without Argo
+// CD says so.
+//
+// Covers FLEET-03.
 func TestResolveFleets(t *testing.T) {
 	sel := map[string]string{"fleet": "prod"}
 	mapper := meta.NewDefaultRESTMapper(nil)
@@ -75,6 +82,27 @@ func TestResolveFleets(t *testing.T) {
 		}},
 		{name: "no path", mapper: mapper, objs: []client.Object{app("argocd", "eu", "", sel)},
 			wantMsg: "Application argocd/eu cannot be a target: it has no spec.source.path"},
+		{name: "another repository", mapper: mapper, objs: []client.Object{func() client.Object {
+			a := app("argocd", "eu", "clusters/eu", sel)
+			_ = unstructured.SetNestedField(a.Object, "https://github.com/acme/other.git", "spec", "source", "repoURL")
+			return a
+		}()}, wantMsg: "Application argocd/eu cannot be a target: it deploys from https://github.com/acme/other.git, not the Pipeline's spec.git.url"},
+		{name: "multi-source", mapper: mapper, objs: []client.Object{func() client.Object {
+			a := app("argocd", "eu", "", sel)
+			_ = unstructured.SetNestedSlice(a.Object, []interface{}{
+				map[string]interface{}{"repoURL": "https://charts.example.com", "chart": "web"},
+				map[string]interface{}{"repoURL": "git@github.com:acme/gitops.git", "path": "clusters/eu"},
+			}, "spec", "sources")
+			return a
+		}()}, want: []kardinalv1alpha1.FleetTarget{{Name: "eu", Path: "clusters/eu", Health: &kardinalv1alpha1.HealthConfig{Type: "argocd",
+			ArgoCD: &kardinalv1alpha1.HealthTargetRef{Name: "eu", Namespace: "argocd"}}}}},
+		{name: "too many", mapper: mapper, objs: func() []client.Object {
+			var objs []client.Object
+			for i := range maxFleetTargets + 1 {
+				objs = append(objs, app("argocd", fmt.Sprintf("c%03d", i), "clusters/x", sel))
+			}
+			return objs
+		}(), wantMsg: "the selector matches 501 Applications in argocd; a fleet has at most 500 targets"},
 		{name: "Argo CD not installed", mapper: mapper, noKind: true,
 			wantMsg: "argoproj.io/v1alpha1 Applications are not served"},
 	}

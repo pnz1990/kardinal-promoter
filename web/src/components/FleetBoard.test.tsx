@@ -84,3 +84,37 @@ describe('FleetBoard', () => {
     expect(screen.getByText(/No pipeline matches this filter/)).toBeInTheDocument()
   })
 })
+
+describe('FleetBoard: fleet environments (D1)', () => {
+  const targets = Array.from({ length: 50 }, (_, i) => `prod-c${String(i + 1).padStart(2, '0')}`)
+  const states: Record<string, string> = { test: 'Verified' }
+  targets.slice(0, 20).forEach(t => { states[t] = 'Verified' })
+  targets.slice(20, 25).forEach(t => { states[t] = 'Promoting' })
+  const p: Pipeline = {
+    name: 'edge', namespace: 'team-f', phase: 'Ready', environmentCount: 2,
+    activeBundleName: 'edge-9', activeBundleVersion: '9.0.0',
+    environmentTopology: [{ name: 'test' }, { name: 'prod', upstreams: ['test'], fleet: { targets, maxConcurrent: 5 } }],
+    environmentStates: states,
+  }
+
+  it('draws a 50-target fleet as one station with its progress', () => {
+    render(<FleetBoard pipelines={[p]} total={1} onSelect={() => {}} now={now} />)
+    const prod = screen.getByRole('button', { name: /^edge prod:/ })
+    expect(prod).toHaveAttribute('data-state', 'arriving')
+    expect(prod).toHaveAttribute('data-fleet', 'true')
+    expect(within(prod).getByText('20/50 verified, 5 in flight (max 5)')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^edge prod-c01/ })).not.toBeInTheDocument()
+  })
+
+  it('says when maxUnavailable stopped the rollout', () => {
+    const stopped: Pipeline = {
+      ...p,
+      environmentTopology: [{ name: 'test' }, { name: 'prod', upstreams: ['test'], fleet: { targets, maxConcurrent: 5, maxUnavailable: 2 } }],
+      environmentStates: { ...states, 'prod-c21': 'Failed', 'prod-c22': 'Failed' },
+    }
+    render(<FleetBoard pipelines={[stopped]} total={1} onSelect={() => {}} now={now} />)
+    const prod = screen.getByRole('button', { name: /^edge prod:/ })
+    expect(prod).toHaveAttribute('data-state', 'failed')
+    expect(within(prod).getByText('stopped: 2 failed (max 2)')).toBeInTheDocument()
+  })
+})

@@ -628,6 +628,21 @@ cycle), and items already admitted stay in the list, so pacing never prunes. Ver
 with `maxConcurrent` and `maxUnavailable`. kardinal's reconcilers must ignore label-only updates
 on the objects they own, or they reconcile every item on each growth.
 
+Fleets (#1457) ship on this pattern, in the compact shape (`pkg/graph/compact.go`). Each DAG entry
+carries `fleet`, `index`, `maxConcurrent` and `maxUnavailable`. `PromotionState` adds
+`startedFleets`, `verifiedFleets` and `failedFleets`, read from the `kardinal.io/fleet` label of
+the observed steps. `PromotionEligible` holds the ready entries without a step, and
+`PromotionWave` admits the started entries plus each fleet's eligible entries ranked below its
+free places, while fewer than `maxUnavailable` of its targets have Failed. A target removed from
+the list leaves the wave; kro prunes its step, whose finalizer closes the PR. The PromotionStep
+reconciler ignores kro's label-only updates (`eventfilter.LabelChangedExceptKro`). Selector
+membership (Argo CD Applications, ClusterProfiles) is not a Graph collection `ref`: that would need
+reader RBAC on the Applications' namespace, which #1283 removes from the Graph identity. The
+Pipeline reconciler lists the selected objects and writes only its own `status.fleets`. The
+translator builds the Graph from that field, and the Bundle reconciler updates a Bundle's Graph in
+place when it changes (`pipelineSpecHashFor`). Membership changes are seen within a minute,
+because nothing watches Applications, whose CRD may not be installed.
+
 In the compact shape (G10) the PromotionSteps are one collection too, so the blast radius is the
 whole Bundle: one gate instance or step item that kro cannot apply, or that stays soft not-ready,
 holds every environment, not only its own.

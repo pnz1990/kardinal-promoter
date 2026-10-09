@@ -123,6 +123,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `name` | Yes | | Environment name. Must be unique within the Pipeline. Used in PolicyGate matching (`kardinal.io/applies-to` label). |
 | `path` | No | `environments/<name>` | Directory in the GitOps repo containing the environment's manifests. It must be relative and stay inside the repository: absolute paths, `..` segments and symlinks that point outside the checkout fail the step. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
+| `fleet` | No | (none) | Expands the environment into one environment per target, `<name>-<target>`, promoted at most `fleet.maxConcurrent` at a time, and stopped after `fleet.maxUnavailable` failures. The targets are listed in `fleet.targets` or picked by `fleet.selector` from Argo CD Applications or cluster inventory ClusterProfiles. See [Fleets](#fleets). |
 | `wave` | No | (none) | Assigns this environment to a numbered deployment wave (K-06). Minimum 1. Environments with the same wave number are promoted in parallel. A wave depends on every environment of the next lower wave, and on the environment without a wave listed before it. Gaps in the numbers are allowed. Composable with `dependsOn`. See [Wave Topology](#wave-topology-k-06). |
 | `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches the image tag at `update.helm.imagePathTemplate` in `update.helm.valuesFile`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). `yaml`: sets any YAML paths, in any files of the environment directory, to a Bundle image's tag, digest or reference; see [The yaml update strategy](#the-yaml-update-strategy). |
 | `update.helm.imagePathTemplate` | No | `.image.tag` | `helm` only. Dot path of the image tag in the values file. |
@@ -319,6 +320,76 @@ Only the first environment in the list is a root, unless `dependsOn` says otherw
 List the waves in ascending order. If a higher wave comes before a lower one with an environment without a wave between them (`test`, `a` in wave 2, `staging`, `b` in wave 1), the list-order edges and the wave edges form a cycle. The Pipeline is then `Ready=False` (reason `ValidationFailed`), `kardinal validate` fails, and every Bundle fails; the message names each edge in the cycle.
 
 See `examples/wave-topology/pipeline.yaml` for a complete example.
+
+### Fleets
+
+A **fleet** environment promotes the same release to many targets, such as clusters, regions or
+tenants, a few at a time. Each target becomes an environment of its own, named
+`<environment>-<target>`. It has its own PromotionStep, PR, PolicyGate instances and health check,
+and the steps carry the label `kardinal.io/fleet: <environment>`.
+
+```yaml
+environments:
+  - name: staging
+  - name: prod
+    approval: auto
+    fleet:
+      maxConcurrent: 5      # at most 5 targets in flight
+      maxUnavailable: 2     # 2 failed targets stop the rollout
+      targets:
+        - name: eu-west     # environment prod-eu-west, path environments/prod/eu-west
+          labels: {region: eu}
+        - name: us-east
+          path: clusters/us-east/apps   # its own directory
+          health:                       # its own health check
+            type: argocd
+            argocd: {name: us-east-apps}
+  - name: audit             # waits for every target of prod
+```
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `fleet.targets[]` | One of `targets` and `selector` | | The targets, in the order they are promoted (at most 500). `name` is a DNS label. With the environment's name and a `-`, it must make a DNS label of at most 63 characters, and it must not be the name of another environment. `labels` describe the target for a `Target` selector. `path` defaults to the environment's `path` (default `environments/<environment>`) followed by `/<name>`. `health` replaces the environment's health check for this target. |
+| `fleet.selector.kind` | No | `Application` | `Target`: pick from `fleet.targets` by their `labels`, in their order. `Application`: every Argo CD Application the selector matches in `selector.namespace` (default `argocd`) is a target, named after the Application. The Application's `spec.source.path` is its path, and the Application is its `argocd` health check. `ClusterProfile`: every `multicluster.x-k8s.io/v1alpha1` ClusterProfile of the [cluster inventory](https://github.com/kubernetes-sigs/cluster-inventory-api) the selector matches in `selector.namespace` (default the Pipeline's namespace) is a target, named after the cluster. It uses the fleet's path and health check. |
+| `fleet.selector.matchLabels`, `fleet.selector.matchExpressions` | One of them | | A Kubernetes label selector (`In`, `NotIn`, `Exists`, `DoesNotExist`). |
+| `fleet.maxConcurrent` | No | `0` | Targets promoted at once. A target is in flight from the creation of its PromotionStep until it is Verified. A Failed target keeps its place, so failures slow the rollout down. `0` promotes every target at once. |
+| `fleet.maxUnavailable` | No | (unset) | Once this many targets have Failed, no further target starts. The targets in flight finish. A Failed target that is retried to Verified gives its place back, and the rollout goes on. Unset, failures only keep their places. |
+
+How a fleet is promoted:
+
+- **Order and pacing.** The targets start in their order: list order, or by name for an
+  `Application` or `ClusterProfile` selector. A target starts once the environments the fleet
+  depends on are Verified, its own gates are ready and the fleet has a free place.
+- **Gates.** A PolicyGate that applies to the fleet environment (`kardinal.io/applies-to: prod`)
+  applies to each target, which gets its own instance. A gate can also name one target
+  (`prod-eu-west`).
+- **After the fleet.** An environment that depends on the fleet waits for every target to be
+  Verified. A failed target holds it until that target is Verified. With `maxUnavailable` unset,
+  the Bundle is `Failed` while the other targets keep promoting.
+- **Selector membership.** The controller resolves an `Application` or `ClusterProfile` selector
+  into the Pipeline's `status.fleets`, and reads it again every minute. An Application qualifies
+  only if it deploys from the Pipeline's `spec.git.url` and has a `spec.source.path`. If any
+  selected object cannot be a target, or the selector matches more than 500, the fleet is
+  refused: its Bundles fail with `GraphBuildFailed` and `status.fleets[].message` says why. The
+  controller reads ClusterProfiles with the `get` and `list` the chart grants. Argo CD
+  Applications are covered by the controller's existing read access.
+- **Targets changed mid-rollout.** An edit to `fleet.targets`, or a change in what a selector
+  selects, updates the Graph of a Bundle in flight in place. An added target joins the queue
+  after the others. A removed target's PromotionStep is deleted: an open PR is closed and its
+  branch deleted, and a Verified target's change stays in git. Targets already Verified are not
+  promoted again.
+- **Intent.** `intent.targetEnvironment` may name the fleet: the Bundle stops after every
+  target. `intent.skipEnvironments` cannot name a fleet or a target.
+- **Graph shape.** A Pipeline with a fleet always uses the compact Graph shape (see
+  [Large Pipelines](#large-pipelines)). Every target counts toward the environment and Graph
+  size limits. The annotation `kardinal.io/graph-shape: nodes` is refused on it, and a Bundle
+  whose Graph already has the nodes shape fails if a fleet is added to its Pipeline. The fleet
+  applies to new Bundles.
+- **CLI and UI.** `kardinal get pipelines` shows a fleet as one column, `Verified` or
+  `12/50 Verified, 1 Failed`. `kardinal status`, `promote` and `rollback` take a target's
+  environment name (`prod-eu-west`). The UI's fleet board draws the fleet as one station with
+  a bar of its targets: Verified, in flight and Failed. It names the fleet as `stopped` once
+  `maxUnavailable` is reached.
 
 ## Git Layout: Directory vs Branch
 

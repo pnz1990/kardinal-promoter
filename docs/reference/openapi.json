@@ -394,6 +394,14 @@
               "null"
             ]
           },
+          "fleet": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiFleet"
+              }
+            ],
+            "description": "Fleet is set on a fleet environment: its targets' environments, which environmentStates and deployed are keyed by, and its pacing."
+          },
           "name": {
             "description": "Name is the environment name (e.g. \"test\", \"uat\", \"prod\").",
             "type": "string"
@@ -1264,6 +1272,40 @@
         },
         "required": [
           "bundle"
+        ],
+        "type": "object"
+      },
+      "uiFleet": {
+        "additionalProperties": false,
+        "description": "uiFleet is a fleet environment's targets and pacing (spec.fleet).",
+        "properties": {
+          "maxConcurrent": {
+            "description": "MaxConcurrent is spec.fleet.maxConcurrent (0: every target at once).",
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxUnavailable": {
+            "description": "MaxUnavailable is spec.fleet.maxUnavailable: that many Failed targets stop the rollout. Absent when unset.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "message": {
+            "description": "Message says why the targets cannot be resolved (a selector fleet).",
+            "type": "string"
+          },
+          "targets": {
+            "description": "Targets are the target environments (\"<environment>-<target>\"), in the order they are promoted.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "targets"
         ],
         "type": "object"
       }

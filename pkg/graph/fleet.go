@@ -210,6 +210,17 @@ func FleetOf(p *kardinalv1alpha1.Pipeline, target string) string {
 	return members[target].fleet
 }
 
+// FleetTargetEnvironments returns the target environment names of each
+// fleet environment of p, in the order they are promoted (the UI's fleet
+// roll-up). An error says a fleet's targets cannot be resolved.
+func FleetTargetEnvironments(p *kardinalv1alpha1.Pipeline) (map[string][]string, error) {
+	if !hasFleets(p) {
+		return nil, nil
+	}
+	_, byFleet, err := fleetMembers(p)
+	return byFleet, err
+}
+
 // hasFleets reports whether any environment of p is a fleet.
 func hasFleets(p *kardinalv1alpha1.Pipeline) bool {
 	for _, e := range p.Spec.Environments {

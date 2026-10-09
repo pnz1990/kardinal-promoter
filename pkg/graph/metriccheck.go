@@ -329,7 +329,7 @@ func perPromotionMetricChecksUsed(in BuildInput) string {
 	for _, e := range in.Pipeline.Spec.Environments {
 		envs = append(envs, e.Name)
 	}
-	for _, gates := range matchGatesByEnv(envs, in.PolicyGates) {
+	for _, gates := range matchGatesByEnv(envs, in.PolicyGates, nil) {
 		if len(metricTemplatesFor(gates, in.MetricChecks, in.Pipeline.Namespace, in.PolicyNamespaces)) > 0 {
 			return "per-promotion MetricChecks (spec.perPromotion)"
 		}

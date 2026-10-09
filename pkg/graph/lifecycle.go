@@ -52,15 +52,17 @@ func EnvironmentUpstreams(pipeline *kardinalv1alpha1.Pipeline, envName string) (
 	return ups, nil
 }
 
-// AllEnvironmentUpstreams is EnvironmentUpstreams for every environment of
-// the Pipeline, resolving the ordering once: callers that need every
-// environment's upstreams (the UI pipeline list) must not pay a full
-// resolution per environment.
+// AllEnvironmentUpstreams is the upstreams of every environment of
+// spec.environments as written, resolving the ordering once: callers that
+// need every environment's upstreams (the UI pipeline list) must not pay a
+// full resolution per environment. A fleet environment is one environment
+// here (its targets share its upstreams, and an environment after it waits
+// for the fleet); EnvironmentUpstreams resolves a fleet target.
 func AllEnvironmentUpstreams(pipeline *kardinalv1alpha1.Pipeline) (map[string][]string, error) {
 	if pipeline == nil {
 		return nil, fmt.Errorf("environment upstreams: pipeline is required")
 	}
-	ordered, deps, err := resolveOrdering(pipeline)
+	ordered, deps, err := resolveSpecOrdering(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("environment upstreams: %w", err)
 	}
