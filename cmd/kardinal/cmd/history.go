@@ -27,6 +27,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func newHistoryCmd() *cobra.Command {
@@ -77,13 +78,12 @@ type HistoryRow struct {
 func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipeline, envFilter string, limit int) error {
 	ctx := context.Background()
 
-	var steps v1alpha1.PromotionStepList
-	if listErr := c.List(ctx, &steps,
-		sigs_client.InNamespace(ns),
-		sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline},
-	); listErr != nil {
+	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+	items, listErr := lifecycle.ListPromotionSteps(ctx, c, ns, sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline})
+	if listErr != nil {
 		return fmt.Errorf("list promotion steps: %w", listErr)
 	}
+	steps := v1alpha1.PromotionStepList{Items: items}
 
 	if len(steps.Items) == 0 {
 		if _, err := fmt.Fprintf(w, "No promotion history found for pipeline %q\n", pipeline); err != nil {

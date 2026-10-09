@@ -39,7 +39,7 @@ spec:
         yaml:                           # When strategy: yaml
           updates:                      # One or more; all are applied in one commit
             - file: <string>            # YAML file relative to path
-              path: <string>            # Key path, e.g. "spec.template.spec.containers[0].image"
+              path: <string>            # YAML path, e.g. "spec.template.spec.containers[name=app].image"
               image: <string>           # Bundle image repository (optional with one image)
               value: <string>           # tag (default), digest, tagWithDigest, image, imageWithDigest
       approval: <string>                # "auto" (default) or "pr-review"
@@ -128,7 +128,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `update.helm.imagePathTemplate` | No | `.image.tag` | `helm` only. Dot path of the image tag in the values file. |
 | `update.helm.valuesFile` | No | `values.yaml` | `helm` only. Values file to patch, relative to the environment `path`. |
 | `update.helm.chartVersionFile` | No | `Chart.yaml` | `helm` only, for `chart` Bundles (from a [Helm Subscription](subscription.md#promoting-a-chart-version)). File the chart version is written to, relative to the environment `path`. A chart Bundle fails at build in an environment whose strategy is not `helm`. |
-| `update.helm.chartVersionPath` | No | `.dependencies[name=<chart>].version` | `helm` only. Dot path of the chart version in `chartVersionFile`; a numeric segment indexes a list and `[field=value]` selects a list element (`.helmCharts[name=podinfo].version`, `.spec.chart.spec.version`, `.spec.source.targetRevision`). The default is the umbrella chart's dependency named after the Bundle's chart; the step fails when there is none. |
+| `update.helm.chartVersionPath` | No | `.dependencies[name=<chart>].version` | `helm` only. [YAML path](#yaml-paths) of the chart version in `chartVersionFile` (`.helmCharts[name=podinfo].version`, `.spec.chart.spec.version`, `.spec.source.targetRevision`). The default is the umbrella chart's dependency named after the Bundle's chart; the step fails when there is none. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
 | `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. |
@@ -140,7 +140,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `shard` | No | (must be empty) | **Deprecated, not supported.** Distributed mode was removed. A non-empty value sets the Pipeline `Ready=False` (reason `NotImplemented`), `kardinal validate` fails, and every PromotionStep of the environment fails with `shard is not supported`. Remove it; the controller reconciles every environment. See [Multi-Cluster](distributed-mode.md). |
 | `steps` | No | (none) | **Deprecated, not supported.** kardinal has no custom step engine: the controller always runs the sequence it infers from the Bundle type, `update.strategy`, `approval` and `layout`. The API server rejects a Pipeline that sets `steps` (an empty list is accepted). See [Promotion Steps](#promotion-steps). |
 | `promotionTemplate` | No | (none) | **Deprecated, not supported.** The `PromotionTemplate` CRD was removed. The API server rejects a Pipeline that sets `promotionTemplate`. |
-| `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR and deletes its head branch (`kardinal/<bundle>/<env>`), so a late merge cannot deliver the change: GitHub's API merges a closed PR whose branch is still there. Unset or `0` waits forever. |
+| `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR and deletes its head branch (`kardinal/<namespace hash>/<bundle>/<env>`), so a late merge cannot deliver the change: GitHub's API merges a closed PR whose branch is still there. Unset or `0` waits forever. |
 | `stepTimeoutSeconds` | No | (none) | Maximum seconds one built-in step (`git-clone`, `kustomize-set-image`, `open-pr`, ...) may run. The step is cancelled and the error is handled like any other step error: a retryable error is retried with backoff, then the PromotionStep is marked `Failed`. Minimum 1. Unset means no per-step timeout. |
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A check that is not healthy stops the window; it starts again at the next healthy check, and `health.timeout` bounds the wait for it. A Waiting check (the workload is changing, such as a canary paused at a step) is not an alarm under either policy. |
 | `bake.policy` | No | `reset-on-alarm` | What to do when a check is unhealthy during the bake window. `reset-on-alarm`: stop the window, increment `status.bakeResets`, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. A release that keeps flapping between healthy and unhealthy fails under `reset-on-alarm` when no full window completes by the first window's start + `bake.minutes` + `health.timeout` (see [Timings and failures](health-adapters.md#timings-and-failures)); `fail-on-alarm` fails it on the first unhealthy check. |
@@ -211,9 +211,11 @@ PromotionStep that kro cannot apply holds every environment of the Bundle, not o
 Bundle's `GatesCreated` condition names a gate that cannot be created). A feature the compact shape
 does not carry yet fails the Bundle with `GraphBuildFailed` naming the feature, and sets the
 Pipeline `Ready=False` while its new Bundles would get a compact Graph. Per-promotion MetricChecks
-(`spec.perPromotion`) are one: use the node shape (`kardinal.io/graph-shape: nodes`) for a Pipeline
-whose gates read one. Only the Bundle reports this one; the Pipeline condition does not, because
-the Pipeline reconciler does not read the gates and MetricChecks.
+(`spec.perPromotion`) are carried: the `MetricChecks` collection creates an environment's instances
+once its upstream environments are Verified, as the nodes shape does. One difference in pruning: if
+an upstream leaves Verified before the environment's step starts, the compact shape deletes that
+environment's instances (they leave the collection, so kro prunes them) and creates them again once
+the upstreams are Verified; once the step has started, its instances are kept.
 
 The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
 each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be
@@ -346,6 +348,63 @@ promotion whose Pipeline or environment sets `layout: branch`, before it changes
 
 See [Rendered Manifests](rendered-manifests.md) for the planned design.
 
+### Many Pipelines on one repository and branch
+
+Several Pipelines (and every environment of one Pipeline) can write the same repository
+and branch at once, as long as each environment has its own `path`. kardinal never
+force-pushes the base branch, so no writer's commit is lost:
+
+- **auto environments**: when `git-push` finds that the branch moved since its clone
+  (another writer pushed first), it fetches the new head and replays its commit onto it:
+  every file this promotion added, changed or deleted takes the promotion's version, every
+  other file the new head's. It pushes again, up to 6 times, without waiting in between. The
+  step message then reads
+  `pushed main after rebasing onto N newer commit(s) of other writers`. When the new commits
+  changed one of the same files, or the branch keeps moving, the whole step sequence runs
+  again from a fresh clone (at most 3 times in one reconcile), so the update is computed on
+  the other writer's version. After that the step is retried with jittered backoff (at most
+  2 minutes), counted in `status.contendedRetries` with no limit and not in
+  `status.retryCount`, so contention slows a promotion down but does not fail it.
+- **pr-review environments**: each promotion pushes its own branch
+  `kardinal/<namespace hash>/<bundle>/<environment>` (the hash is the first 8 hex digits of
+  the SHA-256 of the namespace, so Bundles of the same name in two namespaces get separate
+  branches; a PR opened by an earlier release keeps its `kardinal/<bundle>/<environment>`
+  branch). The branch starts at the base head of its clone. While the PR waits for its merge,
+  the controller reads the base head every 30 seconds (one `git ls-remote` per repository,
+  shared by every waiting PR). When the base moved, it reads the commits since the PR's base
+  (the last 20 of the branch, or the last 500 when the PR's base is further back; once per new
+  head) and:
+  - when they changed none of the PR's paths (the environment's `path`, and a Helm `valuesFile`
+    outside it), the PR still merges cleanly: only `status.outputs.baseSHA` moves, nothing is
+    pushed;
+  - when they changed one of its paths, or the PR's base is not among the last 500 (a
+    force-push), or reading them takes longer than 30 seconds, it reruns the promotion's steps on a fresh clone of the new head and
+    force-pushes the PR branch, so the PR is one commit on the current base
+    (`status.outputs.prBranchRebuilds` counts it; when the history could not be read, the
+    step message says the PR branch was rebuilt to be safe);
+  - when the PR branch has a commit kardinal did not push (its head is not
+    `status.outputs.pushedSHA`), it is never rebuilt, and the step message says so.
+
+  A rebuild replaces only kardinal's own commit; a host set to dismiss stale approvals asks for
+  the review again. PRs of different Pipelines change different paths, so
+  each merges without a conflict however many merged before it.
+- **Path isolation**: two environments that write the same path, or one inside the other,
+  overwrite each other's files and their PRs conflict. The Pipeline reconciler checks every
+  Pipeline the controller sees, including two environments of one Pipeline. A Pipeline writes
+  each environment's `path` and, for `update.strategy: helm`, a `valuesFile` outside it (such
+  as `../shared/values.yaml`). Repositories are compared by host and path, so the https, ssh
+  and `git@host:org/repo` URLs of one repository match (case, userinfo, port and a trailing
+  `.git` are ignored); branches must be equal. On an overlap the Pipeline gets
+  `PathConflict=True` (reason `OverlappingPath`). The message names the environments and the
+  Pipelines of the same namespace; Pipelines of other namespaces are only counted
+  (`environment prod (apps/prod) and 2 other Pipeline(s) in other namespaces`). It does not
+  stop promotions. Environments with `update.strategy: argocd` write no git and are not
+  compared.
+
+```bash
+kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[?(@.type=="PathConflict")].message}{"\n"}{end}'
+```
+
 ## Promotion Steps
 
 Every environment runs a fixed step sequence. The controller picks it from the Bundle type,
@@ -422,9 +481,8 @@ update:
 | `image` | `<repository>:<tag>` |
 | `imageWithDigest` | `<repository>:<tag>@<digest>`, or `<repository>@<digest>` without a tag |
 
-- `path` is keys separated by `.`, with `[N]` to index a list. Missing mapping keys are created;
-  list elements are not. A key that contains `.` (an annotation such as `app.kubernetes.io/version`)
-  cannot be addressed.
+- `path` uses the [YAML path](#yaml-paths) grammar, as `update.helm.chartVersionPath` does.
+  Missing mapping keys are created; list elements are not.
 - The step computes every edit before it writes anything. An edit that cannot be applied (a
   Bundle without the named image, a value the image does not have such as the digest of a
   tag-only image, a missing list element, a path through a scalar, a path that would replace a
@@ -441,6 +499,26 @@ update:
   symbolic link anywhere on the path (the environment directory, a directory in `file`, or the
   file), a file over 4 MiB, and a `file` that is absolute or contains `..`.
 - A Bundle without images (a config Bundle) changes nothing.
+
+### YAML paths
+
+`update.yaml.updates[].path` and `update.helm.chartVersionPath` name a scalar in a YAML file
+with one grammar:
+
+- Keys separated by `.`; a leading `.` is optional (`image.tag` and `.image.tag` are the same).
+  A key is letters, digits, `_` and `-`. A key that contains `.` or `/` (an annotation such as
+  `app.kubernetes.io/version`) cannot be addressed.
+- `[N]` after a key picks a list element by position: `spec.template.spec.containers[0].image`.
+  A digits-only key does the same when it reaches a list (`.dependencies.0.version`); in a
+  mapping it is a key. An index has at most 9 digits.
+- `[field=value]` picks the list element (a mapping) whose `field` has that value:
+  `spec.template.spec.containers[name=app].image`, `.dependencies[name=podinfo].version`. The
+  value is letters, digits and `_ - . / : @`.
+- The element a list step names must exist, and so must the list: a missing or null value before
+  `[N]`, `[field=value]` or a digits-only key fails the step for good instead of being created
+  as a mapping.
+
+The API server checks the grammar: a Pipeline with a path outside it is refused.
 
 ### Image signatures and tests
 
