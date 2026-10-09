@@ -529,7 +529,8 @@ spec:
                     rule: '!has(self.promotionTemplate)'
                   - message: 'reserved environment name: the name becomes a kro Graph
                       node ID; bundle, time, kro reserved IDs (spec, status, metadata,
-                      graph, self, each, item, ...) and CEL keywords are not allowed'
+                      graph, self, each, item, ...) and CEL keywords are not allowed;
+                      rename the environment'
                     rule: '!(self.name in [''api-version'',''kind'',''metadata'',''namespace'',''spec'',''status'',''graph'',''graphengine'',''kro'',''each'',''item'',''items'',''object'',''self'',''this'',''context'',''true'',''false'',''null'',''in'',''as'',''break'',''const'',''continue'',''else'',''for'',''function'',''if'',''import'',''let'',''loop'',''package'',''return'',''var'',''void'',''while'',''bundle'',''time''])'
                 maxItems: 100
                 minItems: 1
