@@ -53,12 +53,26 @@ func TestUI_AccessLog(t *testing.T) {
 	const sa = "dashboard"
 	_, err = e.Kube.CoreV1().ServiceAccounts(a.ns).Create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: sa}}, metav1.CreateOptions{})
 	require.NoError(t, err)
-	bindViewer(t, e, a.ns, a.ns, sa)
 	user := "system:serviceaccount:" + a.ns + ":" + sa
+	// The UI lists read every namespace, so the viewer reads cluster-wide;
+	// it may not update anything.
+	viewer := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: a.ns + "-viewer"}, Rules: []rbacv1.PolicyRule{
+		{APIGroups: []string{"kardinal.io"}, Resources: []string{"pipelines", "bundles"}, Verbs: []string{"get", "list"}}}}
+	_, err = e.Kube.RbacV1().ClusterRoles().Create(ctx, viewer, metav1.CreateOptions{})
+	require.NoError(t, err)
+	vb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: a.ns + "-viewer"},
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: viewer.Name},
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: a.ns}}}
+	_, err = e.Kube.RbacV1().ClusterRoleBindings().Create(ctx, vb, metav1.CreateOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = e.Kube.RbacV1().ClusterRoleBindings().Delete(context.Background(), vb.Name, metav1.DeleteOptions{})
+		_ = e.Kube.RbacV1().ClusterRoles().Delete(context.Background(), viewer.Name, metav1.DeleteOptions{})
+	})
 	framework.Eventually(t, time.Minute, "the variant may create TokenReviews and the viewer may get Pipelines", func(context.Context) (bool, string) {
 		return e.Can(t, framework.ServiceAccountUser(framework.ControllerNamespace, v.Name),
 				framework.Access{Verb: "create", Group: "authentication.k8s.io", Resource: "tokenreviews"}) &&
-				e.Can(t, user, framework.Access{Verb: "get", Group: "kardinal.io", Resource: "pipelines", Namespace: a.ns}),
+				e.Can(t, user, framework.Access{Verb: "list", Group: "kardinal.io", Resource: "bundles"}),
 			"not yet"
 	})
 	tr, err := e.Kube.CoreV1().ServiceAccounts(a.ns).CreateToken(ctx, sa, &authnv1.TokenRequest{
