@@ -306,3 +306,95 @@ func TestPolicyGateReconciler_ApprovalAuditOutbox(t *testing.T) {
 	assert.Equal(t, 1, n, "written once")
 	assert.NotContains(t, pending, "ApprovalRecorded")
 }
+
+// TestPolicyGateReconciler_AuditOutboxSecondPatchFails (#1552): the record
+// of an approval or an override goes in the gate's outbox in the patch that
+// records the decision, before its AuditEvent is created, and leaves the
+// outbox only in a second patch after the create. When that second patch
+// fails, the AuditEvent exists and the entry is still in status; a later
+// flush finds the AuditEvent by name, so the record is written once and the
+// outbox empties.
+func TestPolicyGateReconciler_AuditOutboxSecondPatchFails(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, action string
+		setup        func(*kardinalv1alpha1.PolicyGate)
+	}{
+		{"approval", "ApprovalRecorded", func(g *kardinalv1alpha1.PolicyGate) {
+			g.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 2}
+			g.Spec.Approvals = []kardinalv1alpha1.GateApproval{decision("alice", "approve")}
+		}},
+		{"override", "GateOverridden", func(g *kardinalv1alpha1.PolicyGate) {
+			g.Spec.Expression = "false"
+			g.Spec.Overrides = []kardinalv1alpha1.PolicyGateOverride{{
+				Reason: "hotfix", ExpiresAt: metav1.NewTime(now.Add(time.Hour)), CreatedBy: "alice"}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gate := makeGateInstance("g", "default", "nginx-demo-v1", "true", "5m")
+			tc.setup(gate)
+			bundle := makeBundle("nginx-demo-v1", "default")
+			bundle.Status.Phase = "Promoting"
+			key := client.ObjectKeyFromObject(gate)
+			created, failed := false, false
+			pendingAtFailure := -1
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).WithStatusSubresource(gate, bundle).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+						if ae, ok := obj.(*kardinalv1alpha1.AuditEvent); ok && ae.Spec.Action == tc.action {
+							// The entry is stored before the create.
+							var stored kardinalv1alpha1.PolicyGate
+							require.NoError(t, cl.Get(ctx, key, &stored))
+							assert.True(t, hasPending(stored.Status.PendingAuditEvents, tc.action), "stored in the outbox before the create")
+							created = true
+						}
+						return cl.Create(ctx, obj, opts...)
+					},
+					SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+						g, ok := obj.(*kardinalv1alpha1.PolicyGate)
+						if ok && created && !failed && !hasPending(g.Status.PendingAuditEvents, tc.action) {
+							// The patch that removes the written entry.
+							failed = true
+							var stored kardinalv1alpha1.PolicyGate
+							require.NoError(t, cl.Get(ctx, key, &stored))
+							pendingAtFailure = len(stored.Status.PendingAuditEvents)
+							return apierrors.NewInternalError(errors.New("etcdserver: request timed out"))
+						}
+						return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+					},
+				}).Build()
+			r, err := policygate.NewReconciler(c)
+			require.NoError(t, err)
+			r.NowFn = func() time.Time { return now }
+			req := ctrl.Request{NamespacedName: key}
+			count := func() int {
+				var list kardinalv1alpha1.AuditEventList
+				require.NoError(t, c.List(context.Background(), &list, client.MatchingLabels{"kardinal.io/action": tc.action}))
+				return len(list.Items)
+			}
+
+			_, _ = r.Reconcile(context.Background(), req)
+			require.True(t, failed, "the patch after the create was made, and failed")
+			assert.Positive(t, pendingAtFailure, "the entry was still in status when the second patch failed")
+			assert.Equal(t, 1, count(), "the AuditEvent was created before the second patch")
+
+			for range 2 {
+				_, err = r.Reconcile(context.Background(), req)
+				require.NoError(t, err)
+			}
+			assert.Equal(t, 1, count(), "written once")
+			var got kardinalv1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			assert.False(t, hasPending(got.Status.PendingAuditEvents, tc.action), "the outbox empties")
+		})
+	}
+}
+
+func hasPending(pending []kardinalv1alpha1.PendingAuditEvent, action string) bool {
+	for _, p := range pending {
+		if p.Spec.Action == action {
+			return true
+		}
+	}
+	return false
+}
