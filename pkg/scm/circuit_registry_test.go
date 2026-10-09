@@ -42,6 +42,7 @@ var breakerProviders = []struct {
 	{"forgejo", "bad/r", "good/r"},
 	{"bitbucket", "bad/r", "good/r"},
 	{"azuredevops", "bad/proj/r", "good/proj/r"},
+	{"bitbucket-datacenter", "bad/r", "good/r"},
 }
 
 // breakerServer answers requests for owner "bad" with badStatus and badHeader,
@@ -200,6 +201,18 @@ func TestCircuitRegistry_Bounded(t *testing.T) {
 	}
 	assert.LessOrEqual(t, reg.Owners(), 257, "idle owners are dropped")
 	assert.True(t, isCircuitOpen(reg.Allow("failing")), "an open circuit is never dropped")
+}
+
+// TestCircuitRegistry_DCProjectKeyIgnoresCase: Bitbucket Data Center project
+// keys are case-insensitive, so "bad" and "BAD" are one owner with one
+// circuit. Covers SCM-BREAKER-03.
+func TestCircuitRegistry_DCProjectKeyIgnoresCase(t *testing.T) {
+	srv := newBreakerServer(t, http.StatusBadGateway, nil)
+	prov, err := scm.NewProvider("bitbucket-datacenter", "t", srv.URL, "")
+	require.NoError(t, err)
+	openCircuit(t, prov, "bad/r")
+	_, _, err = prov.GetPRStatus(context.Background(), "BAD/r", 1)
+	assert.True(t, isCircuitOpen(err), "the same project in another case shares the circuit: %v", err)
 }
 
 // TestCircuitRegistry_InFlightFailures: requests in flight when an owner's

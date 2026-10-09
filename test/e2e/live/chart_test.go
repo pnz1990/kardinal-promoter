@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -601,9 +602,11 @@ func TestChart_ScheduleClock(t *testing.T) {
 }
 
 // TestChart_DeprecatedValues checks the two deprecated values do nothing:
-// setting them renders the same manifest, no ValidatingAdmissionPolicy is
-// ever created, and the controller's Job permissions are the hooks' (create,
-// get, delete; never patch), whatever rbac.integrationTestJobs says.
+// setting them renders the same manifest, the release has exactly the
+// ValidatingAdmissionPolicies and bindings the chart always ships (none from
+// validatingAdmissionPolicy.enabled), and the controller's Job permissions
+// are the hooks' (create, get, delete; never patch), whatever
+// rbac.integrationTestJobs says.
 //
 // Covers CHART-INTEGJOBS-01, CHART-VAP-01.
 func TestChart_DeprecatedValues(t *testing.T) {
@@ -627,28 +630,41 @@ func TestChart_DeprecatedValues(t *testing.T) {
 	runningPod(t, r)
 
 	sel := metav1.ListOptions{LabelSelector: "app.kubernetes.io/instance=" + r.Name}
-	// Only the identity admission policies (identity-admission.yaml) and
-	// the hold-writes policy (hold-admission.yaml, #1528), which the chart
-	// always ships, whatever validatingAdmissionPolicy.enabled says.
-	identity := func(name string) bool {
-		for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals", "bundle-creator",
-			"graph-objects", "scoped-writes", "hold-writes"} {
-			if name == r.Fullname+"-"+p {
-				return true
+	// The removed value controlled the CRD validation policies only. The
+	// chart always ships its own policies (identity, graph-objects,
+	// hold-writes; #1503, #1510, #1528, #1544): the release's policies and
+	// bindings are exactly those its manifest renders, the same with the
+	// value on and off (#1595).
+	shipped := func(kind string) []string {
+		var names []string
+		for _, doc := range strings.Split(r.Manifest(t, 2), "\n---") {
+			var o struct {
+				Kind     string `json:"kind"`
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+			}
+			if yaml.Unmarshal([]byte(doc), &o) == nil && o.Kind == kind {
+				names = append(names, o.Metadata.Name)
 			}
 		}
-		return false
+		return names
 	}
 	vaps, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicies().List(ctx, sel)
 	require.NoError(t, err)
+	var vapNames []string
 	for _, v := range vaps.Items {
-		assert.True(t, identity(v.Name), "validatingAdmissionPolicy.enabled creates no policy but the identity ones: %s", v.Name)
+		vapNames = append(vapNames, v.Name)
 	}
+	assert.ElementsMatch(t, shipped("ValidatingAdmissionPolicy"), vapNames,
+		"validatingAdmissionPolicy.enabled creates no policy beyond the ones the chart always ships")
 	bindings, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().List(ctx, sel)
 	require.NoError(t, err)
+	var bindingNames []string
 	for _, b := range bindings.Items {
-		assert.True(t, identity(b.Name), "binding %s", b.Name)
+		bindingNames = append(bindingNames, b.Name)
 	}
+	assert.ElementsMatch(t, shipped("ValidatingAdmissionPolicyBinding"), bindingNames)
 	// The names the removed template gave its policies and bindings, in
 	// case one is created without the instance label.
 	for _, name := range []string{"kardinal-policygate-validation", "kardinal-pipeline-validation", "kardinal-bundle-validation"} {

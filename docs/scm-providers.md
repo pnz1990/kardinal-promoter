@@ -19,6 +19,7 @@ below.
 | Gitea | `gitea` | Pull Requests | `X-Gitea-Signature` or `X-Hub-Signature-256` (HMAC-SHA256) | Yes | Yes | Commit status |
 | Bitbucket Cloud | `bitbucket` | Pull Requests | `X-Hub-Signature` (HMAC-SHA256) | No (Bitbucket has no PR labels) | Yes | Build status (key `kardinal/gates`) |
 | Azure DevOps | `azuredevops` | Pull Requests | `X-AzureDevOps-Token` (custom header you add to the service hook) | Yes (PR tags) | Yes | PR iteration status (genre `kardinal`, name `gates`) |
+| Bitbucket Data Center / Server | `bitbucket-datacenter` | Pull Requests | `X-Hub-Signature` (HMAC-SHA256) | No (no PR labels) | Yes | Not posted yet |
 
 All providers send webhooks to the same endpoint, `http://<controller-host>:8083/webhook/scm`.
 Webhooks only speed things up: without them, the controller still sees merges by polling.
@@ -31,7 +32,7 @@ for a PR the API reports not merged, or one the controller cannot check because 
 call failed, is answered with `204` and changes nothing; polling records the merge when
 there is one.
 
-Bitbucket Cloud and Azure DevOps are newer and less tested than GitHub and GitLab.
+Bitbucket Cloud, Azure DevOps and Bitbucket Data Center are newer and less tested than GitHub and GitLab: the e2e suites cannot host them, so they are checked against their documented REST APIs only.
 On Bitbucket, PRs carry no `kardinal` or `kardinal/rollback` labels, so find rollback
 PRs by their `[kardinal] Rollback` title instead.
 
@@ -345,6 +346,56 @@ status is `completed`.
 
 ---
 
+## Bitbucket Data Center
+
+```bash
+kardinal-controller \
+  --scm-provider bitbucket-datacenter \
+  --scm-api-url https://bitbucket.example.com \
+  --github-token $BITBUCKET_HTTP_ACCESS_TOKEN \
+  --webhook-secret $KARDINAL_WEBHOOK_SECRET
+```
+
+`--scm-api-url` is required: the server's base URL, with its context path if it has one
+(`https://example.com/bitbucket`). The controller uses REST API 1.0 (Bitbucket Server and Data
+Center 7.x and later).
+
+Use an **HTTP access token** (personal, project or repository) with **Repository write**
+(project admin for a project token is not needed). The controller sends it as a Bearer token.
+For git over HTTPS, put the same token in the Pipeline's git Secret; a personal token needs your
+username in the URL (`https://alice@bitbucket.example.com/scm/PLAT/web-app.git`). Or use
+[ssh](#ssh-git-authentication) (`ssh://git@bitbucket.example.com:7999/plat/web-app.git`).
+
+The repository is the project key and slug from `spec.git.url`: an HTTP clone URL
+(`/scm/PLAT/web-app.git`), a browse URL (`/projects/PLAT/repos/web-app/...`) or an ssh URL all
+work, and personal repositories (`/scm/~alice/web-app.git`, `/users/alice/repos/web-app`) too.
+Keys and slugs are matched without case, so the ssh URL's lower-case key matches webhooks.
+In `scm.allowedRepositories`, name a repository as `host/KEY/slug` on the host of `scm.apiURL`
+(`bitbucket.example.com/PLAT/*`, `bitbucket.example.com/~alice/*` for personal repositories):
+every URL form of the repository matches it ([the shared SCM token](guides/security.md#the-shared-scm-token-and-scmallowedrepositories)).
+`kardinal validate --allowed-repositories <list> --scm-provider bitbucket-datacenter` checks a
+file the same way.
+A ScmProvider or ClusterScmProvider of `type: bitbucket-datacenter` (with `apiURL`, the
+server's base URL) works the same way. Its `allowedRepositories` are `KEY/slug` globs, and they
+match every URL form of the repository.
+
+- **PRs**: opened from `kardinal/<bundle>/<env>`; a PR that is open between the same branches is
+  reused. Closing declines it (with the PR's current version) and deletes the branch with the
+  branch-utils API. There are no PR labels, so find rollback PRs by their `[kardinal] Rollback`
+  title.
+- **Approvals**: reviewers with status `APPROVED` count; one with `NEEDS_WORK` blocks
+  `bundle.pr.<env>.isApproved`.
+- **Merge commit**: read from the PR's `properties.mergeCommit`, which Bitbucket Data Center
+  returns for a merged PR though its OpenAPI description leaves it out (the webhook carries it
+  too). Without it the `argocd` and `flux` health checks fall back as described in
+  [When the merge commit is not known yet](health-adapters.md#when-the-merge-commit-is-not-known-yet).
+
+Webhook: **Repository settings → Webhooks → Create webhook**, URL
+`http://<controller-host>:8083/webhook/scm`, **Secret** the value of `--webhook-secret`, events
+**Pull request: Merged** (and optionally Declined). Bitbucket signs it in `X-Hub-Signature`.
+
+---
+
 ## Pipeline CRD configuration
 
 A Pipeline without `spec.git.providerRef` uses the controller's SCM provider, chosen by
@@ -414,16 +465,16 @@ An environment's `pr` field ([Customising the PR](pr-evidence.md#customising-the
 PR's title, body, labels, reviewers and assignees, and can enable auto-merge. What each
 provider applies:
 
-| Control | GitHub | GitLab | Forgejo / Gitea | Bitbucket Cloud | Azure DevOps |
-|---|---|---|---|---|---|
-| `titleTemplate`, `bodyTemplate` | Yes | Yes | Yes | Yes | Yes |
-| `labels` | Yes | Yes | Yes | No (no PR labels) | Yes (PR tags) |
-| `reviewers` | Usernames | Usernames | Usernames | Account IDs or `{UUID}`s | Identity IDs |
-| `teamReviewers` | Team slugs (organisation repos) | No | Team names (organisation repos) | No | Group identity IDs |
-| `assignees` | Usernames | Usernames | Usernames | No (no PR assignees) | No (no PR assignees) |
-| `merge.auto` | Auto-merge (GraphQL `enablePullRequestAutoMerge` / `disablePullRequestAutoMerge`) | Auto-merge (`auto_merge`, or `merge_when_pipeline_succeeds` before GitLab 17.11; cancelled with `cancel_merge_when_pipeline_succeeds`) | Scheduled merge (`merge_when_checks_succeed`; cancelled with `DELETE .../merge`) | No (no auto-merge API) | Auto-complete (cleared to turn it off) |
-| `merge.method` | `merge`, `squash`, `rebase` | `merge`, `squash` (a rebase merge is the project's merge method setting) | `merge`, `squash`, `rebase` | — | `merge` (no fast-forward), `squash`, `rebase` |
-| `merge.commitMessageTemplate` | Yes | Yes (merge and squash commits) | Yes | — | Yes |
+| Control | GitHub | GitLab | Forgejo / Gitea | Bitbucket Cloud | Azure DevOps | Bitbucket Data Center |
+|---|---|---|---|---|---|---|
+| `titleTemplate`, `bodyTemplate` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `labels` | Yes | Yes | Yes | No (no PR labels) | Yes (PR tags) | No (no PR labels) |
+| `reviewers` | Usernames | Usernames | Usernames | Account IDs or `{UUID}`s | Identity IDs | Usernames |
+| `teamReviewers` | Team slugs (organisation repos) | No | Team names (organisation repos) | No | Group identity IDs | No |
+| `assignees` | Usernames | Usernames | Usernames | No (no PR assignees) | No (no PR assignees) | No (no PR assignees) |
+| `merge.auto` | Auto-merge (GraphQL `enablePullRequestAutoMerge` / `disablePullRequestAutoMerge`) | Auto-merge (`auto_merge`, or `merge_when_pipeline_succeeds` before GitLab 17.11; cancelled with `cancel_merge_when_pipeline_succeeds`) | Scheduled merge (`merge_when_checks_succeed`; cancelled with `DELETE .../merge`) | No (no auto-merge API) | Auto-complete (cleared to turn it off) | Auto-merge (`POST .../merge` with `autoMerge: true`, 8.15 and later, enabled in the repository's auto-merge settings; `DELETE .../auto-merge` cancels it) |
+| `merge.method` | `merge`, `squash`, `rebase` | `merge`, `squash` (a rebase merge is the project's merge method setting) | `merge`, `squash`, `rebase` | — | `merge` (no fast-forward), `squash`, `rebase` | `merge` (`no-ff`), `squash`, `rebase` (`rebase-no-ff`); the strategy must be enabled on the repository |
+| `merge.commitMessageTemplate` | Yes | Yes (merge and squash commits) | Yes | — | Yes | Yes |
 
 A control the provider does not apply fails the step before the PR is opened, with a message
 such as `environment prod: pr.teamReviewers is not supported by the gitlab SCM provider`.
@@ -443,6 +494,12 @@ pending the SCM would merge at once, so kardinal leaves the PR for a merge by ha
 - **Forgejo / Gitea**: nothing pending: no commit status that is still pending or failing, and
   no base branch protection that requires approvals or status checks. Forgejo and Gitea run a
   scheduled merge when the checks succeed or an approval arrives.
+- **Bitbucket Data Center**: nothing pending: the mergeability check reports no merge check
+  vetoing the merge. Otherwise kardinal requests auto-merge (`autoMerge: true` on the merge
+  call), and Bitbucket merges the PR once its checks pass. Auto-merge needs Bitbucket Data
+  Center 8.15 or later with auto-merge turned on in the repository's (or project's) settings;
+  without it the call is refused (403, "auto-merge is disabled for this repository") and the PR
+  waits for a merge by hand (`prAutoMerge: failed`).
 - **Azure DevOps**: nothing pending: no branch policy evaluation queued, running or rejected.
   Auto-complete is set by the token's identity, which opened the PR, and completes the PR once
   its branch policies pass.
