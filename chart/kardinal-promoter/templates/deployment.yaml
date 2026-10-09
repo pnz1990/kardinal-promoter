@@ -149,6 +149,15 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # The container's memory limit in bytes: the controller sets the
+            # Go runtime's soft memory limit (GOMEMLIMIT) to 90% of it. A
+            # GOMEMLIMIT in controller.extraEnv takes precedence.
+            - name: KARDINAL_MEMORY_LIMIT
+              valueFrom:
+                resourceFieldRef:
+                  containerName: controller
+                  resource: limits.memory
+                  divisor: "1"
             {{- with include "kardinal-promoter.githubSecretName" . }}
             - name: GITHUB_TOKEN
               valueFrom:

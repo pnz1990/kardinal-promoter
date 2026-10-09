@@ -742,6 +742,70 @@ spec:
                   beyond this limit are deleted oldest-first on each new Bundle creation.
                 minimum: 1
                 type: integer
+              holds:
+                description: |-
+                  Holds pin environments to a rollback (kardinal rollback --hold): while
+                  an environment has a hold, no Bundle but the hold's own promotes into
+                  it, the hold's Bundle is never superseded or garbage-collected, and,
+                  when the controller can verify it restores artifacts Verified in the
+                  environment, it passes that environment's PolicyGates, each pass
+                  recorded (GateExempted). kardinal release-hold removes it, and so does
+                  the controller at expiresAt. At most one hold per environment. Changing
+                  spec.holds needs update on the virtual subresource pipelines/hold
+                  (chart: <release>-hold-writes ValidatingAdmissionPolicy).
+                items:
+                  description: EnvironmentHold pins one environment of a Pipeline
+                    to a rollback Bundle.
+                  properties:
+                    artifacts:
+                      description: |-
+                        Artifacts is the digest of the rollback Bundle's artifacts (type,
+                        images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+                        The gate exemption applies only while the Bundle still has them.
+                      type: string
+                    bundle:
+                      description: |-
+                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle that promotes into it while the hold lasts.
+                      minLength: 1
+                      type: string
+                    createdAt:
+                      description: CreatedAt is when.
+                      format: date-time
+                      type: string
+                    createdBy:
+                      description: |-
+                        CreatedBy is who held the environment: the Kubernetes user name of the
+                        request that added the hold (the admission policy refuses another
+                        value), or, for a hold added through the UI, the UI user the
+                        controller authenticated.
+                      type: string
+                    environment:
+                      description: Environment is the held environment.
+                      minLength: 1
+                      type: string
+                    expiresAt:
+                      description: ExpiresAt, when set, is when the controller removes
+                        the hold.
+                      format: date-time
+                      type: string
+                    reason:
+                      description: |-
+                        Reason says why the environment is held. It is shown wherever the hold
+                        or a gate it exempts is.
+                      maxLength: 1024
+                      minLength: 1
+                      type: string
+                  required:
+                  - bundle
+                  - environment
+                  - reason
+                  type: object
+                maxItems: 100
+                type: array
+                x-kubernetes-list-map-keys:
+                - environment
+                x-kubernetes-list-type: map
               maxConcurrentPromotions:
                 default: 0
                 description: |-
@@ -952,6 +1016,63 @@ spec:
                       Until a Bundle is Verified there, deploymentMetrics is not set at all.
                     type: integer
                 type: object
+              observedHolds:
+                description: |-
+                  ObservedHolds is spec.holds as the Pipeline reconciler last recorded
+                  it: the HoldCreated and HoldReleased AuditEvents are written from the
+                  difference, whichever client changed spec.holds.
+                items:
+                  description: EnvironmentHold pins one environment of a Pipeline
+                    to a rollback Bundle.
+                  properties:
+                    artifacts:
+                      description: |-
+                        Artifacts is the digest of the rollback Bundle's artifacts (type,
+                        images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+                        The gate exemption applies only while the Bundle still has them.
+                      type: string
+                    bundle:
+                      description: |-
+                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle that promotes into it while the hold lasts.
+                      minLength: 1
+                      type: string
+                    createdAt:
+                      description: CreatedAt is when.
+                      format: date-time
+                      type: string
+                    createdBy:
+                      description: |-
+                        CreatedBy is who held the environment: the Kubernetes user name of the
+                        request that added the hold (the admission policy refuses another
+                        value), or, for a hold added through the UI, the UI user the
+                        controller authenticated.
+                      type: string
+                    environment:
+                      description: Environment is the held environment.
+                      minLength: 1
+                      type: string
+                    expiresAt:
+                      description: ExpiresAt, when set, is when the controller removes
+                        the hold.
+                      format: date-time
+                      type: string
+                    reason:
+                      description: |-
+                        Reason says why the environment is held. It is shown wherever the hold
+                        or a gate it exempts is.
+                      maxLength: 1024
+                      minLength: 1
+                      type: string
+                  required:
+                  - bundle
+                  - environment
+                  - reason
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - environment
+                x-kubernetes-list-type: map
               phase:
                 default: Unknown
                 description: |-

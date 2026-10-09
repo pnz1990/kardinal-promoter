@@ -165,25 +165,31 @@ var allFeatures = []string{
 	"--set", "rbac.integrationTestJobs=true",
 }
 
-// ── C08-api-config-04, -16, -21: no ValidatingAdmissionPolicy ─────────────────
+// ── C08-api-config-04, -16, -21: only the hold admission policy ─────────────
 
-// TestChartRendersNoValidatingAdmissionPolicy: the chart's VAPs denied every
+// TestChartRendersOnlyHoldAdmissionPolicy: the chart's old VAPs denied every
 // Pipeline (spec.gitRepo does not exist), denied promote/rollback Bundles and
-// valid durations, needed Kubernetes 1.30, and collided across releases.
-// Validation lives in the CRD schema (api/v1alpha1/crd_schema_test.go);
-// validatingAdmissionPolicy.enabled is kept as a deprecated no-op so existing
-// `--set validatingAdmissionPolicy.enabled=false` installs keep working.
-func TestChartRendersNoValidatingAdmissionPolicy(t *testing.T) {
+// valid durations, and collided across releases. Validation lives in the CRD
+// schema (api/v1alpha1/crd_schema_test.go). The only admission objects are
+// the hold-writes policy and binding (hold-admission.yaml, #1528), named per
+// release and shipped whatever validatingAdmissionPolicy.enabled says, which
+// stays a deprecated no-op so existing --set values keep working.
+func TestChartRendersOnlyHoldAdmissionPolicy(t *testing.T) {
 	for _, args := range [][]string{
 		nil,
 		{"--set", "validatingAdmissionPolicy.enabled=true"},
 		{"--set", "validatingAdmissionPolicy.enabled=false"},
 	} {
-		docs := render(t, "kardinal-promoter", args...)
-		for _, d := range docs {
-			assert.NotContains(t, d.APIVersion, "admissionregistration.k8s.io",
-				"args %v: chart must not render %s %s", args, d.Kind, d.Name)
+		var got []string
+		for _, d := range render(t, "kardinal-promoter", args...) {
+			if strings.HasPrefix(d.APIVersion, "admissionregistration.k8s.io") {
+				got = append(got, d.Kind+"/"+d.Name)
+			}
 		}
+		assert.ElementsMatch(t, []string{
+			"ValidatingAdmissionPolicy/kardinal-promoter-hold-writes",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-hold-writes",
+		}, got, "args %v", args)
 	}
 }
 
@@ -1386,4 +1392,34 @@ func TestChartMetricCheckQuerySlots(t *testing.T) {
 		assert.Contains(t, out, "/metricCheck/querySlots/", bad)
 		assert.Regexp(t, `minimum|greater than or equal to 1`, out, bad)
 	}
+}
+
+// TestChartControllerMemoryDefaults (#1553): the default memory request and
+// limit fit the loads the scale suite measured (peak 409 MiB), so a default
+// install is not OOMKilled at 200 Pipelines as the old 128Mi limit was.
+func TestChartControllerMemoryDefaults(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	limit, request := c.Resources.Limits.Memory(), c.Resources.Requests.Memory()
+	assert.Equal(t, "1Gi", limit.String())
+	assert.Equal(t, "256Mi", request.String())
+	assert.GreaterOrEqual(t, limit.Value(), int64(2*409<<20), "at least twice the largest measured peak")
+}
+
+// TestChartControllerMemoryLimitEnv (#1553): the controller gets its memory
+// limit from the downward API, from which it sets GOMEMLIMIT to 90%.
+func TestChartControllerMemoryLimitEnv(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	var found bool
+	for _, e := range c.Env {
+		if e.Name != "KARDINAL_MEMORY_LIMIT" {
+			continue
+		}
+		found = true
+		require.NotNil(t, e.ValueFrom)
+		require.NotNil(t, e.ValueFrom.ResourceFieldRef)
+		assert.Equal(t, "limits.memory", e.ValueFrom.ResourceFieldRef.Resource)
+		assert.Equal(t, "controller", e.ValueFrom.ResourceFieldRef.ContainerName)
+		assert.Equal(t, "1", e.ValueFrom.ResourceFieldRef.Divisor.String())
+	}
+	assert.True(t, found, "KARDINAL_MEMORY_LIMIT env")
 }
