@@ -33,6 +33,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // ConditionGitCredentialMissing is True on a PromotionStep whose git-clone or
@@ -48,16 +49,22 @@ const (
 	reasonSecretNotFound   = "SecretNotFound"
 	reasonSecretHasNoToken = "SecretHasNoToken"
 	reasonSecretUnreadable = "SecretUnreadable"
-	reasonCredentialFound  = "CredentialFound"
+	// reasonGitHubAppToken: the git Secret holds GitHub App credentials and
+	// no installation token could be minted with them.
+	reasonGitHubAppToken  = "GitHubAppTokenFailed"
+	reasonCredentialFound = "CredentialFound"
 )
 
 // gitStepOps names what each step that uses the git token does with it.
 var gitStepOps = map[string]string{"git-clone": "clone", "git-push": "push"}
 
-// gitCredential is the token for Pipeline spec.git and, when an HTTP(S)
-// remote has none, why.
+// gitCredential is the token (or ssh key) for Pipeline spec.git and, when
+// an HTTP(S) remote has none, why.
 type gitCredential struct {
 	token string
+	// sshKey and knownHosts are the sshPrivateKey and knownHosts keys of the
+	// Secret, for an ssh remote.
+	sshKey, knownHosts []byte
 	// reason is a ConditionGitCredentialMissing reason, or "" when git has a
 	// token or needs none (ssh and file remotes, a password in the URL).
 	reason string
@@ -94,6 +101,21 @@ func (r *Reconciler) resolveGitCredential(ctx context.Context, log zerolog.Logge
 		}
 		return cred
 	}
+	cred.sshKey, cred.knownHosts = secret.Data[secretKeySSHPrivateKey], secret.Data[secretKeyKnownHosts]
+	// A Secret with GitHub App credentials gives git an installation token
+	// of the App, minted (and cached until shortly before it expires) by
+	// GitHubAppTokens. Only an HTTP(S) remote takes a token.
+	app, isApp, appErr := scm.GitHubAppCredentialsFromData(secret.Data)
+	if needsToken && (isApp || appErr != nil) {
+		if appErr == nil {
+			cred.token, appErr = r.githubAppTokens().Token(ctx, app)
+		}
+		if appErr != nil {
+			log.Warn().Err(appErr).Str("secret", cred.secret).Msg("cannot get a GitHub App installation token for git")
+			cred.reason, cred.readErr = reasonGitHubAppToken, appErr
+		}
+		return cred
+	}
 	// A token pasted with a trailing newline breaks every git and SCM call
 	// (C06-scm-health-27).
 	cred.token = strings.TrimSpace(string(secret.Data["token"]))
@@ -101,6 +123,23 @@ func (r *Reconciler) resolveGitCredential(ctx context.Context, log zerolog.Logge
 		cred.reason = reasonSecretHasNoToken
 	}
 	return cred
+}
+
+// The keys of the git Secret that authenticate an ssh remote.
+const (
+	secretKeySSHPrivateKey = "sshPrivateKey"
+	secretKeyKnownHosts    = "knownHosts"
+)
+
+// githubAppTokens returns GitHubAppTokens, or a cache for github.com when it
+// is nil (tests).
+func (r *Reconciler) githubAppTokens() *scm.AppTokenCache {
+	r.appTokensOnce.Do(func() {
+		if r.GitHubAppTokens == nil {
+			r.GitHubAppTokens = &scm.AppTokenCache{}
+		}
+	})
+	return r.GitHubAppTokens
 }
 
 // remoteNeedsToken reports whether git needs the Pipeline token for remote:
@@ -154,6 +193,8 @@ func (c gitCredential) note(step string) string {
 		return fmt.Sprintf("git Secret %s has no token key", c.secret)
 	case reasonSecretUnreadable:
 		return fmt.Sprintf("git Secret %s could not be read: %v", c.secret, c.readErr)
+	case reasonGitHubAppToken:
+		return fmt.Sprintf("git Secret %s has GitHub App credentials, and no installation token could be minted: %v", c.secret, c.readErr)
 	}
 	return ""
 }

@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
@@ -125,6 +126,12 @@ func TestGraph_ObjectsOnlyKardinal(t *testing.T) {
 // once the squatter is deleted kro creates the real instance, without the
 // pre-seeded override, which blocks as its template says.
 //
+// The Pipeline is pinned to the nodes shape: test promotes while prod's
+// instance cannot be applied only there. In the compact shape every gate
+// instance is an item of one collection, which is all-or-nothing on apply
+// errors (ledger G11), so the squatter holds test too (docs/pipeline-reference.md,
+// Large Pipelines; #1614).
+//
 // Covers GRAPH-OBJECTS-02.
 func TestGraph_GateSquatterRefused(t *testing.T) {
 	t.Parallel()
@@ -132,7 +139,9 @@ func TestGraph_GateSquatterRefused(t *testing.T) {
 	ctx := context.Background()
 	a := newArgoApp(t, e, "test", "prod")
 	e.CreateGate(t, framework.Gate(a.ns, "hold", "prod", "false", recheck))
-	a.apply(t, a.pipeline(nil))
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeNodes}
+	a.apply(t, p)
 
 	bundleName := fmt.Sprintf("squat-%d", time.Now().UnixNano()%1_000_000)
 	instance := fmt.Sprintf("hold-%s-prod--%s", a.ns, bundleName) // graph names.go gateNodeK8sName
