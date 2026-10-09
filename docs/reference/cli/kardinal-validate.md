@@ -18,7 +18,11 @@ Checks:
     Deployment). The controller reports the same fields as
     Ready=False/NotImplemented on the Pipeline. With metadata.namespace set,
     a git.secretRef in another namespace is an error too (the controller
-    reports it as Ready=False/ValidationFailed). spec.policyGates is an
+    reports it as Ready=False/ValidationFailed). With
+    --allowed-repositories (the controller's scm.allowedRepositories), a
+    Pipeline must point spec.git.url at one of them unless it never needs
+    the controller's SCM token: a git.secretRef and no pr-review
+    environment (the controller reports Ready=False/RepositoryNotAllowed). spec.policyGates is an
     error (the API server rejects it); spec.git.provider is a warning (the
     controller ignores it).
   - PolicyGate: spec.expression set and compiles with the controller's
@@ -40,8 +44,9 @@ kardinal validate [flags]
 ### Options
 
 ```
-  -f, --file string   Path to Pipeline or PolicyGate YAML file (required)
-  -h, --help          help for validate
+      --allowed-repositories strings   The controller's scm.allowedRepositories (comma-separated host/repository globs): report a Pipeline that would need the controller's SCM token for a spec.git.url that is not one of them
+  -f, --file string                    Path to Pipeline or PolicyGate YAML file (required)
+  -h, --help                           help for validate
 ```
 
 ### Options inherited from parent commands

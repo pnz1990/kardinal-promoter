@@ -335,7 +335,11 @@ func (r *Reconciler) stepComeback(ctx context.Context, ps *v1alpha1.PromotionSte
 	case promoting && !created.Before(ps.DeletionTimestamp):
 		return comebackReusesPR, nil // the Graph was recreated before ps was reconciled
 	}
-	// The Graph is there, so kro applies the step again once ps is gone.
+	// The Graph is there, so kro applies the step again once ps is gone. A
+	// step of a Pipeline whose repository is not allowed fails at once.
+	if msg, err := r.repositoryNotAllowed(ctx, &pl); err != nil || msg != "" {
+		return noComeback, err
+	}
 	pushes, err := newStepPushesAtOnce(ctx, reader, ps, &b, &pl, g)
 	if err != nil || !pushes {
 		return noComeback, err
