@@ -18,7 +18,8 @@ When --env is the pipeline's last environment and --days is 30 (the defaults,
 whether the flags are given or not), the controller's metrics from
 Pipeline.status.deploymentMetrics are shown instead when present: rollouts_last_30d, p50/p90_commit_to_prod,
 auto_rollback_rate, operator_intervention_rate and stale_prod_days, over
-the last 30 Bundles Verified in the last environment.
+the last 30 Bundles Verified in the last environment, and change_failure_rate
+and time_to_restore (DORA stability) over the last 30 deployments to it.
 
 Example:
   kardinal metrics --pipeline nginx-demo

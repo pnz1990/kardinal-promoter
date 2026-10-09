@@ -76,6 +76,9 @@ spec:
             - --cors-allowed-origins={{ join "," . }}
             {{- end }}
             - --ui-allowed-hosts={{ include "kardinal-promoter.uiAllowedHosts" . }}
+            {{- with (.Values.egress).allowlist }}
+            - --egress-allowlist={{ join "," . }}
+            {{- end }}
             {{- range .Values.controller.extraArgs }}
             - {{ . | quote }}
             {{- end }}
