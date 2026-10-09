@@ -80,7 +80,8 @@ func (r *Reconciler) cancelUnstarted(ctx context.Context, base, ps *v1alpha1.Pro
 
 // patchState sets state and message on ps and patches its status against
 // base. It reports whether the state changed; a step deleted while
-// reconciling reports no change and no error. The steps closed before the
+// reconciling, or changed since base was read (a stale cache), reports no
+// change and no error. The steps closed before the
 // call (closed) and by the state change are observed in
 // kardinal_step_duration_seconds only after the patch succeeds.
 func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.PromotionStep,
@@ -92,9 +93,19 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 		closed = append(closed, closeStepStatuses(ps, state)...)
 		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
 	}
-	if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+	// Locked on the resourceVersion base was read at: a reconcile that read
+	// the step from a stale cache would otherwise repeat a transition a newer
+	// reconcile already wrote, with a second Event, AuditEvent and metric.
+	if err := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Deleted while reconciling: nothing left to transition.
+			return false, nil
+		}
+		if apierrors.IsConflict(err) {
+			// Changed since it was read: the newer version's watch event
+			// reconciles it again, from what is stored.
+			zerolog.Ctx(ctx).Debug().Str("step", ps.Name).Str("state", state).
+				Msg("step changed since it was read; state not written")
 			return false, nil
 		}
 		return false, fmt.Errorf("patch state %s: %w", state, err)

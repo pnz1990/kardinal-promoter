@@ -851,7 +851,18 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		}
 		// More steps remain — persist index and requeue immediately.
 		ps.Status.Message = fmt.Sprintf("completed step %d/%d", nextIdx, len(seq))
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+		// Locked like the retry and state patches: a stale reconcile's
+		// progress would rewrite the step statuses a newer one wrote. (Not
+		// reached today: ExecuteFrom runs every remaining step and reports
+		// success only with nextIdx == len(seq).)
+		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+			if apierrors.IsNotFound(patchErr) {
+				return ctrl.Result{}, nil
+			}
+			if apierrors.IsConflict(patchErr) {
+				log.Debug().Str("step", ps.Name).Msg("step changed since it was read; progress not written, requeueing")
+				return ctrl.Result{Requeue: true}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("patch step progress: %w", patchErr)
 		}
 		closed.record()
