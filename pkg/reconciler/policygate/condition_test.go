@@ -57,6 +57,21 @@ func (gc *gateClock) eval(at time.Time) kardinalv1alpha1.PolicyGate {
 	return g
 }
 
+// TestPolicyGateReconciler_FirstAllowIsNotUnblocked: a gate that allows on
+// its first evaluation reads Allowed, not Unblocked, on that and later
+// evaluations.
+func TestPolicyGateReconciler_FirstAllowIsNotUnblocked(t *testing.T) {
+	mon := time.Date(2026, 4, 13, 9, 0, 0, 0, time.UTC)
+	gc := newGateClock(t)
+	for _, at := range []time.Time{mon, mon.Add(time.Minute), mon.Add(20 * time.Minute)} {
+		g := gc.eval(at)
+		cond := meta.FindStatusCondition(g.Status.Conditions, "Ready")
+		require.NotNil(t, cond)
+		assert.Equal(t, metav1.ConditionTrue, cond.Status)
+		assert.Equal(t, "Allowed", cond.Reason, "at %s", at)
+	}
+}
+
 // TestPolicyGateReconciler_ReadyConditionMarksTransitions: the Ready
 // condition's lastTransitionTime moves only when the gate flips, so it
 // identifies one blocking episode (C04-gates-09, C04-gates-10), while
@@ -79,8 +94,9 @@ func TestPolicyGateReconciler_ReadyConditionMarksTransitions(t *testing.T) {
 		{at: sat, wantEval: sat, wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat},
 		{at: sat.Add(5 * time.Minute), wantEval: sat, wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat},
 		{at: sat.Add(10 * time.Minute), wantEval: sat.Add(10 * time.Minute), wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat},
-		{at: mon, wantEval: mon, wantStatus: metav1.ConditionTrue, wantReason: "Allowed", wantLTT: mon},
-		{at: mon.Add(5 * time.Minute), wantEval: mon, wantStatus: metav1.ConditionTrue, wantReason: "Allowed", wantLTT: mon},
+		// Allowing after a block reads Unblocked for the whole allowed episode.
+		{at: mon, wantEval: mon, wantStatus: metav1.ConditionTrue, wantReason: "Unblocked", wantLTT: mon},
+		{at: mon.Add(5 * time.Minute), wantEval: mon, wantStatus: metav1.ConditionTrue, wantReason: "Unblocked", wantLTT: mon},
 		{at: sat.Add(7 * 24 * time.Hour), wantEval: sat.Add(7 * 24 * time.Hour), wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat.Add(7 * 24 * time.Hour)},
 	}
 	for _, s := range steps {
