@@ -119,10 +119,20 @@ var (
 			Buckets: prometheus.ExponentialBuckets(30, 2, 12), // 30s → ~34h in 12 buckets
 		},
 	)
+
+	// AuditEventsPrunedTotal counts the AuditEvents the retention pruner
+	// deleted (--audit-retention-max-age, --audit-retention-max-per-pipeline).
+	AuditEventsPrunedTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kardinal_auditevents_pruned_total",
+			Help: "AuditEvents deleted by retention (older than the max age, or past the max count per Pipeline).",
+		},
+	)
 )
 
 func init() {
 	ctrlmetrics.Registry.MustRegister(
+		AuditEventsPrunedTotal,
 		BundlesTotal,
 		StepsTotal,
 		GateEvaluationsTotal,

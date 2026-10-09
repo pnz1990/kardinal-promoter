@@ -106,6 +106,11 @@ type StepState struct {
 	// rollback). Empty when it is not recorded.
 	RequestedBy string
 
+	// CreatedBy is the Bundle's verified creator: its kardinal.io/created-by
+	// annotation, which the chart's bundle-creator admission policy pins to
+	// the creating user. Empty when it is not recorded.
+	CreatedBy string
+
 	// RollbackFrom names the Bundle a rollback Bundle replaces: its
 	// kardinal.io/rollback-from annotation. Empty for a promotion.
 	RollbackFrom string
