@@ -15,7 +15,6 @@
 //
 // These tests DO NOT require the kustomize binary in PATH.
 // The kustomize-set-image step is now implemented in pure Go (#494).
-// The kustomize-build step uses an injectable KustomizeBuilder for testing.
 package steps_test
 
 import (
