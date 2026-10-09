@@ -621,12 +621,26 @@ func TestChart_DeprecatedValues(t *testing.T) {
 	runningPod(t, r)
 
 	sel := metav1.ListOptions{LabelSelector: "app.kubernetes.io/instance=" + r.Name}
+	// Only the identity admission policies (identity-admission.yaml), which
+	// the chart always ships, whatever validatingAdmissionPolicy.enabled says.
+	identity := func(name string) bool {
+		for _, p := range []string{"scoped-writes", "bundle-rejection", "gate-overrides"} {
+			if name == r.Fullname+"-"+p {
+				return true
+			}
+		}
+		return false
+	}
 	vaps, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicies().List(ctx, sel)
 	require.NoError(t, err)
-	assert.Empty(t, vaps.Items, "validatingAdmissionPolicy.enabled creates no policy")
+	for _, v := range vaps.Items {
+		assert.True(t, identity(v.Name), "validatingAdmissionPolicy.enabled creates no policy but the identity ones: %s", v.Name)
+	}
 	bindings, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().List(ctx, sel)
 	require.NoError(t, err)
-	assert.Empty(t, bindings.Items)
+	for _, b := range bindings.Items {
+		assert.True(t, identity(b.Name), "binding %s", b.Name)
+	}
 	// The names the removed template gave its policies and bindings, in
 	// case one is created without the instance label.
 	for _, name := range []string{"kardinal-policygate-validation", "kardinal-pipeline-validation", "kardinal-bundle-validation"} {

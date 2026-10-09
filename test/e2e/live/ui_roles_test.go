@@ -318,12 +318,17 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 		who    roleUser
 		change func(*v1alpha1.Pipeline)
 		wantOK bool
+		msg    string
 	}{
-		{"pauser pauses", pauser, func(p *v1alpha1.Pipeline) { p.Spec.Paused = true }, true},
-		{"pauser resumes", pauser, func(p *v1alpha1.Pipeline) { p.Spec.Paused = false }, true},
-		{"pauser may not change the branch", pauser, func(p *v1alpha1.Pipeline) { p.Spec.Git.Branch = "other" }, false},
-		{"pauser may not change labels", pauser, func(p *v1alpha1.Pipeline) { p.Labels = map[string]string{"x": "y"} }, false},
-		{"editor changes the branch", editor, func(p *v1alpha1.Pipeline) { p.Spec.Git.Branch = "other" }, true},
+		{"pauser pauses", pauser, func(p *v1alpha1.Pipeline) { p.Spec.Paused = true }, true, ""},
+		{"pauser resumes", pauser, func(p *v1alpha1.Pipeline) { p.Spec.Paused = false }, true, ""},
+		{"pauser may not change the branch", pauser, func(p *v1alpha1.Pipeline) { p.Spec.Git.Branch = "other" }, false,
+			"you may change only spec.paused"},
+		{"pauser may not change labels", pauser, func(p *v1alpha1.Pipeline) { p.Labels = map[string]string{"x": "y"} }, false,
+			"you may not change the metadata"},
+		{"pauser may not add a finalizer", pauser, func(p *v1alpha1.Pipeline) { p.Finalizers = append(p.Finalizers, "e2e.kardinal.io/hold") }, false,
+			"you may not change the metadata"},
+		{"editor changes the branch", editor, func(p *v1alpha1.Pipeline) { p.Spec.Git.Branch = "other" }, true, ""},
 	}
 	for _, tt := range tests {
 		err := updatePipeline(tt.who, tt.change)
@@ -333,7 +338,7 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 		}
 		require.Error(t, err, tt.name)
 		assert.True(t, apierrors.IsForbidden(err) || apierrors.IsInvalid(err), "%s: %v", tt.name, err)
-		assert.Contains(t, err.Error(), "you may change only spec.paused", tt.name)
+		assert.Contains(t, err.Error(), tt.msg, tt.name)
 	}
 
 	gk := types.NamespacedName{Namespace: ns, Name: "hold"}
