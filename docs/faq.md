@@ -160,9 +160,10 @@ kardinal override <pipeline> --stage prod --gate <gate-name> \
   --reason "hotfix for INC-123" --expires-in 1h
 ```
 
-`kardinal approve` is deprecated: the label it set was never read by any gate,
-so it bypassed nothing. It now exits with an error that points to
-`kardinal override`. See [kardinal override](reference/cli/kardinal-override.md).
+`kardinal approve` does not bypass a gate: it records your approval for an
+[approval gate](policy-gates.md#approval-gates) (`spec.approval`), which passes once
+enough allowed people approved. To force-pass any gate, use `kardinal override`.
+See [kardinal override](reference/cli/kardinal-override.md).
 
 ### How do I pause a promotion mid-flight?
 

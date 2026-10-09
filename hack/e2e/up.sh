@@ -115,7 +115,12 @@ case "$SUITE" in
     # kro's chart default (1 GiB) is OOMKilled under the suite's load (#1492).
     export KARDINAL_E2E_KRO_MEMORY=${KARDINAL_E2E_KRO_MEMORY:-3Gi}
     export KARDINAL_E2E_GIT_ROOT_URL=http://toxiproxy.toxiproxy.svc.cluster.local:3000
+    # Graph retirement at the production default (1m): components/kardinal.sh
+    # keeps Superseded Bundles' Graphs for an hour for the other suites, and
+    # with that kro holds every Graph of a run and is OOMKilled at its 2 GiB
+    # default. The invariants read retired steps from status.retiredSteps.
     HELM_ARGS='--set serviceMonitor.enabled=true --set replicaCount=2 --set logLevel=info
+      --set graph.retire.superseded=1m
       --set resources.limits.cpu=4 --set resources.limits.memory=4Gi --set resources.requests.cpu=500m --set resources.requests.memory=512Mi' ;;
   *)
     echo "unknown suite $SUITE" >&2

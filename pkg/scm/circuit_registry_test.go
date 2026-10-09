@@ -201,3 +201,68 @@ func TestCircuitRegistry_Bounded(t *testing.T) {
 	assert.LessOrEqual(t, reg.Owners(), 257, "idle owners are dropped")
 	assert.True(t, isCircuitOpen(reg.Allow("failing")), "an open circuit is never dropped")
 }
+
+// TestCircuitRegistry_RateLimitBodyCounts: GitHub can send a secondary rate
+// limit as a 403 with no rate-limit header, only the message in the body
+// (APIError.Transient). Such responses count against the shared quota
+// circuit, so a stream of them stops calls for every owner; a plain 403
+// (missing permission) counts as an answer.
+func TestCircuitRegistry_RateLimitBodyCounts(t *testing.T) {
+	forbidden := &http.Response{StatusCode: http.StatusForbidden, Header: http.Header{}}
+	reg := scm.NewCircuitRegistry()
+	for i := 0; i < 10; i++ {
+		require.NoError(t, reg.Allow("acme"))
+		reg.RecordAPIError("acme", forbidden, &scm.APIError{StatusCode: http.StatusForbidden})
+	}
+	assert.NoError(t, reg.Allow("other"), "a permission 403 opens nothing")
+
+	opened := false
+	for i := 0; i < 10 && !opened; i++ {
+		if err := reg.Allow("acme"); err != nil {
+			opened = true
+			break
+		}
+		reg.RecordAPIError("acme", forbidden, &scm.APIError{StatusCode: http.StatusForbidden, Transient: true,
+			Body: `{"message":"You have exceeded a secondary rate limit"}`})
+	}
+	require.True(t, opened, "rate-limit 403s open the quota circuit")
+	assert.True(t, isCircuitOpen(reg.Allow("other")), "the quota circuit is shared by every owner")
+}
+
+// TestCircuitRegistry_RateLimitBodyGitHubOnly: only GitHub's 403 JSON
+// message is read for a rate limit. A GitHub body-only secondary limit opens
+// the shared quota circuit; the same 403 from Forgejo or GitLab is a
+// permission error and opens nothing.
+func TestCircuitRegistry_RateLimitBodyGitHubOnly(t *testing.T) {
+	for _, tc := range []struct {
+		typ, bad, good string
+		opens          bool
+	}{
+		{"github", "bad/r", "good/r", true},
+		{"forgejo", "bad/r", "good/r", false},
+		{"gitlab", "bad/p", "good/p", false},
+	} {
+		t.Run(tc.typ, func(t *testing.T) {
+			var goodHits atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.EscapedPath(), "/bad") {
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = w.Write([]byte(`{"message":"You have exceeded a secondary rate limit"}`))
+					return
+				}
+				goodHits.Add(1)
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+			}))
+			t.Cleanup(srv.Close)
+			prov, err := scm.NewProvider(tc.typ, "t", srv.URL, "")
+			require.NoError(t, err)
+			for i := 0; i < 10; i++ {
+				_, _, _ = prov.GetPRStatus(context.Background(), tc.bad, 1)
+			}
+			_, _, err = prov.GetPRStatus(context.Background(), tc.good, 1)
+			assert.Equal(t, tc.opens, isCircuitOpen(err), "%v", err)
+			assert.Equal(t, !tc.opens, goodHits.Load() == 1)
+		})
+	}
+}
