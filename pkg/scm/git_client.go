@@ -83,6 +83,17 @@ func isSSHRemote(remoteURL string) bool {
 	return err == nil && ep.Protocol == "ssh"
 }
 
+// sshScope returns, for ssh auth, the ProxyOptions that make go-git dial
+// through a dialScope bound to ctx (git_dial.go), and its release. Other
+// auth gets none: an HTTP proxy setting would be used as a proxy.
+func sshScope(ctx context.Context, am transport.AuthMethod) (transport.ProxyOptions, func()) {
+	if _, ok := am.(gogitssh.AuthMethod); !ok {
+		return transport.ProxyOptions{}, func() {}
+	}
+	opts, _, release := newDialScope(ctx)
+	return opts, release
+}
+
 // authMethod returns the go-git credentials of auth for remoteURL: HTTP basic
 // auth with the token for an http(s) remote (httpAuth), the private key with
 // a known_hosts host key check for an ssh remote, nil for other remotes
@@ -198,11 +209,14 @@ func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir string, auth G
 		return fmt.Errorf("git clone %s: %w", RedactURL(url), err)
 	}
 
+	proxyOpts, release := sshScope(ctx, am)
+	defer release()
 	opts := &gogit.CloneOptions{
 		URL:          url,
 		Depth:        1,
 		SingleBranch: true,
 		Auth:         am,
+		ProxyOptions: proxyOpts,
 	}
 	if branch != "" {
 		opts.ReferenceName = plumbing.NewBranchReferenceName(branch)
@@ -224,10 +238,13 @@ func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir string, a
 	if err != nil {
 		return fmt.Errorf("git clone %s: %w", RedactURL(url), err)
 	}
+	proxyOpts, release := sshScope(ctx, am)
+	defer release()
 	repo, err := gogit.PlainCloneContext(ctx, dir, false, &gogit.CloneOptions{
-		URL:        url,
-		NoCheckout: true,
-		Auth:       am,
+		URL:          url,
+		NoCheckout:   true,
+		Auth:         am,
+		ProxyOptions: proxyOpts,
 	})
 	if err != nil {
 		return fmt.Errorf("git clone %s: %s", RedactURL(url), gitErrorText(err))
@@ -330,11 +347,14 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch string, auth
 	if force {
 		refSpec = "+" + refSpec
 	}
+	proxyOpts, release := sshScope(ctx, am)
+	defer release()
 	pushOpts := &gogit.PushOptions{
-		RemoteName: remote,
-		RefSpecs:   []config.RefSpec{config.RefSpec(refSpec)},
-		Force:      force,
-		Auth:       am,
+		RemoteName:   remote,
+		RefSpecs:     []config.RefSpec{config.RefSpec(refSpec)},
+		Force:        force,
+		Auth:         am,
+		ProxyOptions: proxyOpts,
 	}
 
 	if err := repo.PushContext(ctx, pushOpts); err != nil {
@@ -413,7 +433,9 @@ func oneLine(s string) string {
 
 // remoteBranchHash returns the hash the remote advertises for ref.
 func remoteBranchHash(ctx context.Context, rem *gogit.Remote, auth transport.AuthMethod, ref plumbing.ReferenceName) (plumbing.Hash, bool, error) {
-	refs, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: auth})
+	proxyOpts, release := sshScope(ctx, auth)
+	defer release()
+	refs, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: auth, ProxyOptions: proxyOpts})
 	if err != nil {
 		return plumbing.ZeroHash, false, err
 	}

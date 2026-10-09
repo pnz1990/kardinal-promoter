@@ -15,6 +15,7 @@ package scm
 
 import (
 	"context"
+	"net"
 	"time"
 
 	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -69,3 +70,13 @@ func SetSSHTimeoutsForTest(dial, wait time.Duration) (restore func()) {
 	sshDialTimeout, receivePackWait = dial, wait
 	return func() { sshDialTimeout, receivePackWait = oldDial, oldWait }
 }
+
+// SetGitIdleTimeoutForTest shortens the git connection idle bound.
+func SetGitIdleTimeoutForTest(d time.Duration) (restore func()) {
+	old := gitIdleTimeout
+	gitIdleTimeout = d
+	return func() { gitIdleTimeout = old }
+}
+
+// NewIdleConnForTest wraps c in the git idle bound.
+func NewIdleConnForTest(c net.Conn, idle time.Duration) net.Conn { return newIdleConn(c, idle) }

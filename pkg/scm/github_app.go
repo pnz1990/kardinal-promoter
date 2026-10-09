@@ -205,6 +205,14 @@ func (s *GitHubAppTokenSource) Token(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("%w (not retried before %s)", s.lastErr, s.retryAt.UTC().Format(time.RFC3339))
 	}
 	tok, exp, err := s.mint(ctx)
+	if err != nil && ctx.Err() != nil {
+		// The caller gave up (its step was cancelled or timed out): that
+		// says nothing about GitHub, so it starts no backoff.
+		if s.token != "" && now.Before(s.expires) {
+			return s.token, nil
+		}
+		return "", err
+	}
 	if err != nil {
 		s.failures++
 		s.lastErr = err

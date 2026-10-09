@@ -388,11 +388,17 @@ kubectl create secret generic git-ssh -n <pipeline-namespace> \
 | `knownHosts` | `known_hosts` lines for the server. **Required**: kardinal never accepts an unknown host key, and only offers the host key algorithms recorded for the host (`[host]:port` for a port other than 22). |
 
 Connecting and the ssh handshake are bounded (30s), and a push waits at most a minute for the
-server's post-receive hooks before it closes the connection. A wrong or missing host key fails the step with a `knownhosts:` error, and a Secret with an ssh
+server's post-receive hooks before it closes the connection. A step that is cancelled or times
+out closes its ssh connection at once. A wrong or missing host key fails the step with a `knownhosts:` error, and a Secret with an ssh
 URL but no `sshPrivateKey` or `knownHosts` fails it with a message naming the missing key. The
 config source of a config Bundle on the same ssh host uses the same key. With the chart's
 `networkPolicy.enabled`, allow the ssh port (22, or the server's) in `networkPolicy.extraEgress`:
 the default egress rules allow 443 and 6443 only.
+
+Every git connection, ssh and HTTPS alike, fails after 5 minutes without a byte sent or
+received, so a server that stalls in the middle of a clone or push fails the step (with an
+`i/o timeout` error, retried like other git errors) instead of holding a controller worker.
+A transfer that keeps moving data is not cut, however long it takes.
 
 PRs, labels, merge detection and the other SCM API calls still use the controller's token or
 GitHub App (`--scm-provider`); ssh only replaces git's transport. The repository is read from

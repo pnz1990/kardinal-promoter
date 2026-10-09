@@ -423,3 +423,24 @@ func TestGitHubApp_MintBackoffAndShortTokens(t *testing.T) {
 	assert.Equal(t, tok, again)
 	assert.Equal(t, 4, attempts())
 }
+
+// TestGitHubApp_CancelledMintStartsNoBackoff: a mint that fails because the
+// caller's context ended says nothing about GitHub, so the next caller mints
+// at once instead of waiting out a backoff. Covers SCM-GHAPP-01.
+func TestGitHubApp_CancelledMintStartsNoBackoff(t *testing.T) {
+	c := &clock{t: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)}
+	k, pemKey := appKey(t, false)
+	f, srv := newFakeGitHubApp(t, &k.PublicKey, "", c.now)
+	src := appSource(t, pemKey, srv.URL, c)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := src.Token(cancelled)
+	require.Error(t, err)
+	tok, err := src.Token(context.Background())
+	require.NoError(t, err, "no backoff after a cancelled mint")
+	assert.NotEmpty(t, tok)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	assert.Equal(t, 1, f.mintCalls, "the cancelled mint never reached GitHub")
+}

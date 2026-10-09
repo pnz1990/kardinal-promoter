@@ -76,7 +76,14 @@ func (t sshTransport) NewReceivePackSession(ep *transport.Endpoint, auth transpo
 	if port <= 0 {
 		port = gogitssh.DefaultPort
 	}
-	conn, err := dialSSH(context.Background(), net.JoinHostPort(ep.Host, strconv.Itoa(port)), cfg)
+	// The push's context, when kardinal's git client made the endpoint
+	// (git_dial.go): a cancelled step closes the connection.
+	ctx := context.Background()
+	scope := scopeOf(ep)
+	if scope != nil {
+		ctx = scope.ctx
+	}
+	conn, err := dialSSH(ctx, scope, net.JoinHostPort(ep.Host, strconv.Itoa(port)), cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -104,15 +111,26 @@ func (t sshTransport) NewReceivePackSession(ep *transport.Endpoint, auth transpo
 // dialSSH connects to addr and runs the ssh handshake, both bounded by
 // sshDialTimeout (and ctx): the TCP dial with a context, the handshake with
 // a deadline on the connection, which is cleared once the client is up so a
-// long push is not cut.
-func dialSSH(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
+// long push is not cut. The connection then has the git idle bound
+// (gitIdleTimeout), and belongs to scope (when not nil), so the end of the
+// step's context closes it.
+func dialSSH(ctx context.Context, scope *dialScope, addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
 	ctx, cancel := context.WithTimeout(ctx, sshDialTimeout)
 	defer cancel()
-	var d net.Dialer
-	tcp, err := d.DialContext(ctx, "tcp", addr)
+	var raw net.Conn
+	var err error
+	if scope != nil {
+		raw, err = scopedDialer{id: scope.id}.DialContext(ctx, "tcp", addr)
+	} else {
+		var d net.Dialer
+		if raw, err = d.DialContext(ctx, "tcp", addr); err == nil {
+			raw = newIdleConn(raw, gitIdleTimeout)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("ssh: dial %s: %w", addr, err)
 	}
+	tcp := raw
 	deadline, _ := ctx.Deadline()
 	if err := tcp.SetDeadline(deadline); err != nil {
 		_ = tcp.Close()
@@ -135,7 +153,9 @@ func dialSSH(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*ssh.Clie
 // NewUploadPackSession is go-git's, bounded by sshDialTimeout: go-git's
 // ssh client runs the handshake without a deadline, so a server that
 // accepts the connection and never answers would hold the step for ever.
-// After the timeout the session, if it comes, is closed.
+// go-git dials through the endpoint's dialScope (git_dial.go), so on
+// timeout the connection is closed, the handshake fails at once, and the
+// goroutine running it returns before this does: nothing is left behind.
 func (t sshTransport) NewUploadPackSession(ep *transport.Endpoint, auth transport.AuthMethod) (transport.UploadPackSession, error) {
 	type result struct {
 		s   transport.UploadPackSession
@@ -148,17 +168,28 @@ func (t sshTransport) NewUploadPackSession(ep *transport.Endpoint, auth transpor
 	}()
 	timer := time.NewTimer(sshDialTimeout)
 	defer timer.Stop()
+	scope := scopeOf(ep)
 	select {
 	case r := <-done:
 		return r.s, r.err
 	case <-timer.C:
+	}
+	err := fmt.Errorf("ssh: connect and handshake with %s took longer than %s", ep.Host, sshDialTimeout)
+	if scope == nil {
+		// Not kardinal's endpoint: no connection to close; the session, if
+		// it comes, is closed.
 		go func() {
 			if r := <-done; r.err == nil && r.s != nil {
 				_ = r.s.Close()
 			}
 		}()
-		return nil, fmt.Errorf("ssh: connect and handshake with %s took longer than %s", ep.Host, sshDialTimeout)
+		return nil, err
 	}
+	scope.closeAll()
+	if r := <-done; r.err == nil && r.s != nil {
+		_ = r.s.Close()
+	}
+	return nil, err
 }
 
 // shellQuote quotes s for a POSIX shell, as git does (quote.c sq_quote_buf).

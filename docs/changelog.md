@@ -11,7 +11,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **GitHub App authentication** (#1460) — the controller's Secret (or `--github-app-id`, `--github-app-installation-id`, `--github-app-private-key-file`) can hold a GitHub App's ID, installation ID and private key instead of a PAT. Installation tokens are minted, cached and replaced 10 minutes before they expire; a key rotation in the Secret is picked up without a restart, as for a token; GitHub Enterprise Server works through `--scm-api-url`. A Pipeline's git Secret can hold the same keys for git. Chart: `github.app.enabled`. See [GitHub App](scm-providers.md#github-app)
-- **SSH git** (#1460) — `spec.git.url` can be an ssh URL with `sshPrivateKey` and `knownHosts` in the Pipeline's git Secret, for every provider; unknown host keys are refused. See [SSH git authentication](scm-providers.md#ssh-git-authentication)
+- **SSH git** (#1460) — `spec.git.url` can be an ssh URL with `sshPrivateKey` and `knownHosts` in the Pipeline's git Secret, for every provider; unknown host keys are refused. Every git connection, ssh or HTTPS, now fails after 5 minutes without data, so a stalled server cannot hold a worker. See [SSH git authentication](scm-providers.md#ssh-git-authentication)
 
 ### Changed
 
