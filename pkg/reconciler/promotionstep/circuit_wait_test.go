@@ -5,6 +5,7 @@ package promotionstep_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -21,40 +22,20 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
-// circuitGit fails every clone with an open SCM circuit while open is set,
-// then with a plain transient error while broken is set.
-type circuitGit struct {
-	mockGit
-	open, broken bool
-	until        time.Time
-	clones       int
-}
-
-func (g *circuitGit) Clone(_ context.Context, _, _, _, _ string) error {
-	g.clones++
-	switch {
-	case g.open:
-		return fmt.Errorf("git clone: forgejo scm: %w", &scm.ErrCircuitOpen{RetryAfter: g.until})
-	case g.broken:
-		return fmt.Errorf("git clone: %w", fmt.Errorf("503 Service Unavailable"))
-	}
-	return nil
-}
-
-// TestCircuitOpen_DoesNotSpendRetries covers #1476: a step that meets an
-// open SCM circuit waits until the circuit lets a call through and runs
-// again, without counting a retry, however long the outage: 30 waits leave
-// all five retries for real failures.
+// TestCircuitOpen_DoesNotSpendRetries covers #1476: a step whose open-pr
+// meets an open SCM circuit waits until the circuit lets a call through and
+// runs again, without counting a retry, however long the outage: 30 waits
+// leave all five retries for real failures.
 func TestCircuitOpen_DoesNotSpendRetries(t *testing.T) {
 	pipeline := makePipeline("nginx-demo")
-	ps := asPromoting(makeStep("step-cw", "nginx-demo", "b1", "test"), pipeline)
+	ps := asPromoting(makeStep("step-cw", "nginx-demo", "b1", "prod"), pipeline)
 	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
 		WithObjects(ps, pipeline, makeBundle("b1", "nginx-demo")).Build()
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	git := &circuitGit{open: true}
+	mock := &mockSCM{prURL: "https://github.com/org/repo/pull/7", prNumber: 7}
 	workDir := filepath.Join(t.TempDir(), "w")
-	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
+	r := &promotionstep.Reconciler{Client: c, SCM: mock, GitClient: &mockGit{},
 		Recorder: events.NewFakeRecorder(50), WorkDirFn: func(_, _ string) string { return workDir },
 		NowFn: func() time.Time { return now }}
 	reconcile := func() time.Duration {
@@ -63,9 +44,12 @@ func TestCircuitOpen_DoesNotSpendRetries(t *testing.T) {
 		require.NoError(t, err)
 		return res.RequeueAfter
 	}
+	circuit := func(until time.Time) error {
+		return fmt.Errorf("open PR: forgejo scm: %w", &scm.ErrCircuitOpen{RetryAfter: until})
+	}
 
 	for i := 0; i < 30; i++ {
-		git.until = now.Add(7 * time.Second)
+		mock.openPRErr = circuit(now.Add(7 * time.Second))
 		require.Equal(t, 7*time.Second, reconcile(), "wait %d: requeue when the circuit lets a call through", i)
 		got := getStep(t, c, "step-cw")
 		require.Equal(t, "Promoting", got.Status.State, got.Status.Message)
@@ -73,24 +57,24 @@ func TestCircuitOpen_DoesNotSpendRetries(t *testing.T) {
 		require.Contains(t, got.Status.Message, "not counted as a retry")
 		now = now.Add(7 * time.Second)
 	}
-	require.Equal(t, 30, git.clones)
+	require.Equal(t, 30, mock.openCalled)
 
-	// A circuit that says it is open for an hour (a rate-limit reset) is
-	// polled at most every retryMaxDelay.
-	git.until = now.Add(time.Hour)
+	// A circuit open for an hour (a rate-limit reset) is looked at again at
+	// least every retryMaxDelay.
+	mock.openPRErr = circuit(now.Add(time.Hour))
 	assert.Equal(t, 2*time.Minute, reconcile())
 	now = now.Add(2 * time.Minute)
 
-	// The outage turns into real failures: those count.
-	git.open, git.broken = false, true
+	// The outage turns into a real failure: that counts.
+	mock.openPRErr = fmt.Errorf("open PR: %w", errors.New("503 Service Unavailable"))
 	assert.Equal(t, 10*time.Second, reconcile())
 	assert.Equal(t, 1, getStep(t, c, "step-cw").Status.RetryCount)
 	now = now.Add(10 * time.Second)
 
-	git.broken = false
+	mock.openPRErr, mock.open = nil, true
 	reconcile()
 	got := getStep(t, c, "step-cw")
-	assert.Equal(t, "HealthChecking", got.Status.State, got.Status.Message)
+	assert.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
 }
 
 // TestCircuitOpen_SupersededCloseWaits covers the branches #1476 left

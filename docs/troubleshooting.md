@@ -484,10 +484,11 @@ GitHub's API rate limit (5000 req/hr for authenticated requests) or GitLab's rat
 **How the circuit breaker works:**
 1. Each repository owner (GitHub user or org, GitLab top-level group, Bitbucket workspace, Azure DevOps organization) has its own circuit. After 5 consecutive failures (5xx or a network error) for that owner's repositories, its circuit opens and its SCM calls are blocked for a cooldown period. Calls for other owners go on
 2. An exhausted rate limit (`X-RateLimit-Remaining: 0` or `RateLimit-Remaining: 0`, a 429, or a 403 with `Retry-After`) belongs to the token, so it opens one shared circuit at once and every owner waits for the reset
-3. The cooldown respects `X-RateLimit-Reset`, `RateLimit-Reset` and `Retry-After` response headers when present
-4. After the cooldown, one probe request is allowed (half-open state)
+3. The first cooldown is 5 seconds. Each failed probe doubles it, up to 2 minutes, so the circuit stays open about as long as the outage and closes at most 2 minutes after the SCM is back. Requests that were in flight when the circuit opened and fail afterwards are not counted. The cooldown respects `X-RateLimit-Reset`, `RateLimit-Reset` and `Retry-After` response headers when present
+4. After the cooldown, one probe request is allowed (half-open state). A probe that gets no answer frees the slot after 45 seconds (the providers' 30-second HTTP timeout and a margin)
 5. On probe success, the circuit closes and normal operation resumes
 6. A token rotation (a new value in the token Secret) keeps the circuits: the new token is first used by the probe
+7. A step that meets an open circuit waits for it and runs again: the wait does not count against the step's 5 retries (its message says "waiting ... for the SCM (not counted as a retry)"), so an outage does not fail promotions. A superseded step closing its PR waits the same way, so its PR and `kardinal/` branch are not left behind. PRStatus polls wait for the circuit too
 
 **Checking circuit state in logs:**
 

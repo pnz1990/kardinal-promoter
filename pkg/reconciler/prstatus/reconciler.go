@@ -238,7 +238,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if errors.As(err, &open) {
 			// No call was made (#1476): poll again when the circuit lets
 			// one through, not at the next interval.
-			wait := time.Until(open.RetryAfter)
+			wait := time.Until(open.RetryAfter).Round(time.Second)
 			if wait < time.Second {
 				wait = time.Second
 			}

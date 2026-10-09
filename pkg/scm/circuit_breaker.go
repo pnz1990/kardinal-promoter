@@ -103,9 +103,9 @@ type CircuitBreaker struct {
 	consecutiveFails int
 	// openings counts the failed probes since the circuit opened; the
 	// backoff is BaseBackoff * 2^openings.
-	openings int
-	openUntil        time.Time // when to transition Open → HalfOpen
-	probeStarted     time.Time // when the current half-open probe was admitted; zero if none
+	openings     int
+	openUntil    time.Time // when to transition Open → HalfOpen
+	probeStarted time.Time // when the current half-open probe was admitted; zero if none
 }
 
 // NewCircuitBreaker creates a circuit breaker with sensible defaults.

@@ -59,6 +59,13 @@ func TestPollError(t *testing.T) {
 			err: apiErr(502, "bad gateway", true), wantRequeue: 30 * time.Second},
 		{name: "network error is retried", pr: prAt(nil, v1alpha1.PRStatusStatus{}),
 			err: errors.New("connection reset by peer"), wantRequeue: 30 * time.Second},
+		// No call was made (#1476): poll when the circuit lets one through.
+		{name: "an open SCM circuit is waited for", pr: prAt(nil, v1alpha1.PRStatusStatus{}),
+			err:         fmt.Errorf("get PR status: %w", &scm.ErrCircuitOpen{RetryAfter: time.Now().Add(12 * time.Second)}),
+			wantRequeue: 12 * time.Second},
+		{name: "an open SCM circuit is looked at again within the poll interval", pr: prAt(nil, v1alpha1.PRStatusStatus{}),
+			err:         fmt.Errorf("get PR status: %w", &scm.ErrCircuitOpen{RetryAfter: time.Now().Add(time.Hour)}),
+			wantRequeue: 30 * time.Second},
 		{name: "a successful poll clears the error", pr: prAt(nil, v1alpha1.PRStatusStatus{PollError: "status 401"}),
 			open: true, wantRequeue: 30 * time.Second, wantPatched: true, wantOpen: true},
 	}
