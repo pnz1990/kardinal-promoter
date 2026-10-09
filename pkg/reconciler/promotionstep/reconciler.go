@@ -110,6 +110,11 @@ const (
 //	"WaitingForMerge" → "Failed": PR closed without merge, or waitForMergeTimeout
 //	"HealthChecking"  → "Verified": the health adapter reports the promoted
 //	                    revision healthy (and any bake window completed)
+//	"HealthChecking"  → "Verifying": the same, for a step with post-deploy
+//	                    hooks (spec.postHooks)
+//	"Verifying"       → "Verified": every post-deploy hook succeeded
+//	"Verifying"       → "Failed" / "AbortedByAlarm" / "RollingBack": a post-
+//	                    deploy hook failed (onHealthFailure)
 //	"HealthChecking"  → "Failed" / "AbortedByAlarm" / "RollingBack": health
 //	                    timeout, or a terminal failure under onHealthFailure
 //	non-terminal      → "Failed": the parent Bundle was superseded
@@ -268,6 +273,8 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 		return r.handleWaitingForMerge(ctx, log, ps)
 	case StateHealthChecking:
 		return r.handleHealthChecking(ctx, log, ps)
+	case StateVerifying:
+		return r.handleVerifying(ctx, log, ps)
 	case StateVerified, StateFailed:
 		// Terminal states — clean up workdir if present (ST-7/ST-8 short-term mitigation).
 		r.cleanWorkDir(log, ps)
@@ -296,7 +303,7 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 // supersession: every state that is not terminal.
 func isCancellable(state string) bool {
 	switch state {
-	case StatePending, StatePendingExplicit, StatePromoting, StateWaitingForMerge, StateHealthChecking:
+	case StatePending, StatePendingExplicit, StatePromoting, StateWaitingForMerge, StateHealthChecking, StateVerifying:
 		return true
 	}
 	return false
@@ -545,6 +552,12 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	}
 	if msg := unsupportedConfig(pipeline, findEnv(pipeline, ps.Spec.Environment), ps); msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	}
+
+	// Pre-deploy hooks (docs/hooks.md) run before the step starts: wait for
+	// every one to succeed, fail when one failed.
+	if held, res, holdErr := r.holdForPreHooks(ctx, log, base, ps); held {
+		return res, holdErr
 	}
 
 	// Re-check every required gate before any git or Argo CD write (#1300,
@@ -1151,7 +1164,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	if r.HealthDetector == nil {
 		// Both binaries always set HealthDetector; only unit tests of the
 		// earlier phases run without one.
-		return ctrl.Result{}, r.verify(ctx, base, ps, "Verified", "health check skipped: no health adapter configured")
+		return ctrl.Result{}, r.passHealth(ctx, base, ps, "Verified", "health check skipped: no health adapter configured")
 	}
 
 	// Parse timeout from environment config; default 10m.
@@ -1286,7 +1299,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	case result.Healthy:
 		log.Info().Str("env", ps.Spec.Environment).Str("adapter", adapter.Name()).Msg("health check passed, Verified")
 		ps.Status.ConsecutiveHealthFailures = 0 // reset on success
-		return ctrl.Result{}, r.verify(ctx, base, ps, "Verified",
+		return ctrl.Result{}, r.passHealth(ctx, base, ps, "Verified",
 			fmt.Sprintf("health check passed via %s: %s", adapter.Name(), result.Reason))
 	case result.Progressing:
 		// Rolling out or not synced yet: not a health failure.
@@ -1670,12 +1683,15 @@ func (r *Reconciler) handleBake(
 				Int64("elapsedMinutes", ps.Status.BakeElapsedMinutes).
 				Int("requiredMinutes", env.Bake.Minutes).
 				Msg("bake: complete, Verified")
+			msg := fmt.Sprintf("bake complete: %dm contiguous healthy via %s (resets=%d)",
+				env.Bake.Minutes, adapterName, ps.Status.BakeResets)
+			if len(ps.Spec.PostHooks) > 0 {
+				return ctrl.Result{}, r.passHealth(ctx, base, ps, "BakeComplete", msg)
+			}
 			ps.Status.Conditions = appendCondition(ps.Status.Conditions,
 				"Verified", metav1.ConditionTrue, "BakeComplete",
 				fmt.Sprintf("contiguous soak %dm complete", env.Bake.Minutes), now.Time)
-			return ctrl.Result{}, r.transition(ctx, base, ps, StateVerified, fmt.Sprintf(
-				"bake complete: %dm contiguous healthy via %s (resets=%d)",
-				env.Bake.Minutes, adapterName, ps.Status.BakeResets))
+			return ctrl.Result{}, r.transition(ctx, base, ps, StateVerified, msg)
 		}
 		remaining := int64(env.Bake.Minutes) - ps.Status.BakeElapsedMinutes
 		ps.Status.Message = fmt.Sprintf(

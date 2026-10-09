@@ -53,6 +53,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - metricchecks
     - scheduleclocks
     - notificationhooks
+    - hookruns
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["kardinal.io"]
   resources:
@@ -66,7 +67,14 @@ rules exist for. A new client call needs a row there and a rule here.
     - metricchecks/status
     - scheduleclocks/status
     - notificationhooks/status
+    - hookruns/status
   verbs: ["get", "update", "patch"]
+# Pipeline hooks (docs/hooks.md): the HookRun reconciler creates each hook's
+# Job, owned by the HookRun, and deletes one that ran past its timeout. The
+# informer caches only Jobs labelled kardinal.io/hookrun.
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "delete"]
 # Audit records are append-only.
 - apiGroups: ["kardinal.io"]
   resources: ["auditevents"]

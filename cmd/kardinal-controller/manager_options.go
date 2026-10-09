@@ -6,11 +6,16 @@ package main
 import (
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+
+	hookrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
 )
 
 // gracefulShutdownTimeout is how long the controller waits on shutdown for
@@ -18,6 +23,15 @@ import (
 // to return. It is half the pod's terminationGracePeriodSeconds (60s) to
 // leave room for cleanup. (#574)
 const gracefulShutdownTimeout = 30 * time.Second
+
+// hookJobSelector selects the Jobs of HookRuns.
+var hookJobSelector = func() labels.Selector {
+	req, err := labels.NewRequirement(hookrunrecon.LabelHookRun, selection.Exists, nil)
+	if err != nil {
+		panic(err) // a constant key: unreachable
+	}
+	return labels.NewSelector().Add(*req)
+}()
 
 // managerConfig holds the flags that shape the controller-runtime manager.
 type managerConfig struct {
@@ -61,8 +75,16 @@ func buildManagerOptions(cfg managerConfig) ctrl.Options {
 // This is the mechanism behind namespace-scoped install mode, where the Helm
 // chart renders a Role/RoleBinding instead of a ClusterRole/ClusterRoleBinding.
 // (docs/design/15-production-readiness.md §Lens 6)
+//
+// Jobs are cached only when they carry the kardinal.io/hookrun label: the
+// HookRun reconciler owns those (hook Jobs), and caching every Job in the
+// cluster would hold them all in memory for nothing.
 func buildCacheOpts(watchNamespace string) cache.Options {
-	opts := cache.Options{}
+	opts := cache.Options{
+		ByObject: map[sigs_client.Object]cache.ByObject{
+			&batchv1.Job{}: {Label: hookJobSelector},
+		},
+	}
 	if watchNamespace != "" {
 		opts.DefaultNamespaces = map[string]cache.Config{watchNamespace: {}}
 	}

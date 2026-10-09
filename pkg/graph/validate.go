@@ -143,6 +143,9 @@ func describeNode(n GraphNode) string {
 	if obj == nil {
 		obj = n.Ref
 	}
+	if obj == nil {
+		obj = n.Patch
+	}
 	kind, _ := obj["kind"].(string)
 	meta, _ := obj["metadata"].(map[string]interface{})
 	labels, _ := meta["labels"].(map[string]interface{})

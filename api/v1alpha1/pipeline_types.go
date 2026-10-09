@@ -266,6 +266,17 @@ type EnvironmentSpec struct {
 	// +optional
 	StepTimeoutSeconds int `json:"stepTimeoutSeconds,omitempty"`
 
+	// Hooks are Jobs that run for each Bundle in this environment: "pre"
+	// hooks before the promotion starts (database migrations), "post" hooks
+	// after the health check passed and before the environment is Verified
+	// (integration tests). Each runs once per Bundle, as a HookRun the
+	// Bundle's Graph creates. See docs/hooks.md.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	Hooks []HookSpec `json:"hooks,omitempty"`
+
 	// Regions is not supported: every region would edit the same path and push
 	// the same branch. With two or more regions the Pipeline is Ready=False
 	// (reason NotImplemented) and every Bundle fails when its Graph is built

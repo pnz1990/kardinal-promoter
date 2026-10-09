@@ -219,8 +219,9 @@ rbac:
   # (update.strategy: argocd).
   argocdApplicationsWrite: false
   # -- Deprecated, no effect, removed in v0.10. The integration-test step was
-  # removed, so the chart no longer grants batch Jobs access. Kept so existing
-  # --set rbac.integrationTestJobs=... keeps passing the values schema.
+  # removed; the Job access the chart grants is for hooks (hooks.serviceAccounts),
+  # whatever this says. Kept so existing --set rbac.integrationTestJobs=...
+  # keeps passing the values schema.
   integrationTestJobs: false
 
 # -- kro Graph integration.
@@ -249,6 +250,18 @@ graph:
   # -- Ship a ClusterRole aggregated into kro's controller role, for kro
   # installed with rbac.mode=aggregation (the hack/install-kro.sh default).
   aggregateToKro: true
+
+# -- Pipeline pre- and post-deploy hooks (spec.environments[].hooks,
+# docs/hooks.md). The controller runs each hook as a Job in the Pipeline
+# namespace.
+hooks:
+  # -- ServiceAccount names a hook's Job Pod may run as (--hook-service-accounts),
+  # in the Pipeline namespace. A hook whose Pod names another one fails
+  # without running. Anyone who can edit a Pipeline can run a Pod as one of
+  # these, so list only ServiceAccounts with the rights a hook needs. The
+  # Graph ServiceAccount (graph.serviceAccountName) is never allowed.
+  serviceAccounts:
+    - default
 
 # -- Deprecated, no effect. The chart no longer ships ValidatingAdmissionPolicies;
 # the CRD schemas validate these fields instead. Kept so existing
