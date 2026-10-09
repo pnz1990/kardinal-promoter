@@ -438,6 +438,9 @@ type validateCase struct {
 	want  string
 	// apiRejects is kubectl apply --dry-run=server's verdict.
 	apiRejects bool
+	// apiSays is part of validate's message the API server's rejection
+	// must contain word for word.
+	apiSays string
 }
 
 // TestCLI_Validate runs kardinal validate on files the API server rejects,
@@ -448,8 +451,10 @@ type validateCase struct {
 // validate does not check. For a file the API accepts, validate's error is
 // the controller's: the Pipeline's Ready=False message, or the template
 // PolicyGate's CEL error. Deprecated fields warn and still pass. Other kinds
-// are skipped, and the exit code is 1 on any error.
-// Covers CLI-VALIDATE-01.
+// are skipped, and the exit code is 1 on any error. A reserved environment
+// name, bundle included, gets the API server's message and nothing about
+// the Bundle validate builds internally (#1358).
+// Covers CLI-VALIDATE-01, CLI-VALIDATE-02.
 func TestCLI_Validate(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -465,6 +470,8 @@ func TestCLI_Validate(t *testing.T) {
 			"\nspec:\n" + spec
 	}
 	const envs = "  - name: test\n  - name: prod\n"
+	const reservedMsg = "reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro reserved IDs " +
+		"(spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; rename the environment"
 	cases := []validateCase{
 		{name: "valid", doc: pipeline("ok", "", envs) + "---\n" + gate("ok", "  expression: \"!schedule.isWeekend\"\n") +
 			"---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: other\n  namespace: " + ns + "\n",
@@ -484,7 +491,9 @@ func TestCLI_Validate(t *testing.T) {
 		{name: "gate selector", doc: gate("sel", "  expression: \"true\"\n  selector: {}\n"),
 			want: "  - spec.selector is not implemented; use the kardinal.io/applies-to label\n", apiRejects: true},
 		{name: "gate name of 64", doc: gate(strings.Repeat("g", 64), "  expression: \"true\"\n"),
-			want: "has 64 characters: PolicyGate names are at most 63 characters", apiRejects: true},
+			want: "has 64 characters: PolicyGate names are at most 63 characters, because the name is copied into the " +
+				"kardinal.io/gate-template label of every gate instance; use a name of at most 63 characters\n", apiRejects: true,
+			apiSays: "; use a name of at most 63 characters"},
 		{name: "gate name of 63", doc: gate(strings.Repeat("g", 63), "  expression: \"true\"\n"), valid: true},
 		{name: "deprecated when", doc: gate("when", "  expression: \"true\"\n  when: pre-deploy\n"), valid: true,
 			want: "  ! warning: spec.when is deprecated and has no effect"},
@@ -493,8 +502,16 @@ func TestCLI_Validate(t *testing.T) {
 		{name: "autoRollback", doc: pipeline("rollback", "", envs) + "    autoRollback:\n      failureThreshold: 2\n",
 			want: `  - environment "prod": environments[].autoRollback is not implemented; remove it`, apiRejects: true},
 		{name: "reserved environment name", doc: pipeline("reserved", "", "  - name: spec\n"),
-			want:       `  - build: PromotionStep for environment "spec" gets node id "spec", which kro reserves; rename it` + "\n",
-			apiRejects: true},
+			want: `  - environment "spec": reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro ` +
+				`reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; ` +
+				"rename the environment\n",
+			apiRejects: true, apiSays: reservedMsg},
+		{name: "environment named bundle", doc: pipeline("bundle", "", "  - name: test\n  - name: bundle\n"),
+			want: "✗ environment-named-bundle.yaml is invalid:\n" +
+				`  - environment "bundle": reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro ` +
+				`reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; ` +
+				"rename the environment\n",
+			apiRejects: true, apiSays: reservedMsg},
 		// The help: "This is not full CRD schema validation".
 		{name: "schema enum", doc: pipeline("enum", "", "  - name: test\n    approval: sometimes\n"), valid: true,
 			apiRejects: true},
@@ -540,9 +557,13 @@ func TestCLI_Validate(t *testing.T) {
 			assert.Equal(t, "validation failed\n", r.Stderr, c.name)
 		}
 		assert.Contains(t, r.Stdout, c.want, c.name)
+		assert.NotContains(t, r.Stdout, "validate-dummy", "%s: validate never names its internal Bundle", c.name)
 
 		out, err := cli.Kubectl(dir, "apply", "--dry-run=server", "-f", file)
 		assert.Equal(t, c.apiRejects, err != nil, "%s: the API server rejects it: %v\n%s", c.name, c.apiRejects, out)
+		if c.apiSays != "" {
+			assert.Contains(t, out, c.apiSays, "%s: validate words it as the API server does", c.name)
+		}
 		return r
 	}
 	for _, c := range cases {

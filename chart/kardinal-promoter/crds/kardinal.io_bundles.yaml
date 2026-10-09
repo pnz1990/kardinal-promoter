@@ -55,7 +55,12 @@ spec:
           metadata:
             type: object
           spec:
-            description: BundleSpec defines the desired state of a Bundle.
+            description: |-
+              BundleSpec defines the desired state of a Bundle.
+              An image Bundle deploys only its images, so a configRef on it is refused
+              instead of ignored (#1353). Bundles stored before the rule keep working:
+              CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
+              supported) lets an update through when spec is unchanged.
             properties:
               configRef:
                 description: |-
@@ -150,6 +155,11 @@ spec:
             - pipeline
             - type
             type: object
+            x-kubernetes-validations:
+            - message: 'spec.configRef is used only by config and mixed Bundles: an
+                image Bundle deploys only its images; set type config or mixed, or
+                remove configRef'
+              rule: '!(self.type == ''image'' && has(self.configRef))'
           status:
             description: BundleStatus defines the observed state of a Bundle.
             properties:
@@ -292,6 +302,14 @@ spec:
                   re-queued by a Pipeline watch event, it compares the current Pipeline spec
                   hash to this field. A mismatch re-translates the Graph in place with the
                   updated spec.
+                type: string
+              policyGatesHash:
+                description: |-
+                  PolicyGatesHash is the SHA-256 hash of the PolicyGate templates that
+                  apply to the Pipeline's environments, recorded when the Graph could not
+                  be built (InvalidSpec, reason GraphBuildFailed). A change to those
+                  templates retries the Bundle, as a Pipeline change does. Empty
+                  otherwise.
                 type: string
             type: object
         type: object

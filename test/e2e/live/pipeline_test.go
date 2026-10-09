@@ -275,7 +275,7 @@ func TestPipeline_RejectedFields(t *testing.T) {
 			name: "name " + name,
 			set:  func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) { env.Name = name },
 			want: "reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro reserved IDs (spec, " +
-				"status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed",
+				"status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; rename the environment",
 		})
 	}
 	for _, c := range cases {
