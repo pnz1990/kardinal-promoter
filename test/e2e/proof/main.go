@@ -5,9 +5,16 @@
 // live test covers must have passed in the suites that ran. It reads the
 // summary.json test/e2e/report wrote for each suite run and prints one line
 // per row: passed, failed, missing (the test should have run and did not),
-// not run (none of its suites ran here), unit (a contract row; ci.yml runs
-// its unit tests) or todo. It exits 1 when a row failed or is missing, and
-// with -complete also when a row is todo or not run.
+// not run (none of its suites ran here), known bug (its test is an expected
+// failure, scale.KnownBug, action "xfail": it reproduces an open bug), unit (a
+// contract row; ci.yml runs its unit tests) or todo. A known bug whose issue
+// is closed is failed: with GITHUB_TOKEN set, proof asks the GitHub API
+// whether each one is still open (CI has the token). A row marked covered
+// whose test is an expected failure is failed too: mark it known-bug. A
+// known-bug row whose test passed is passed, and proof says to mark it
+// covered. It
+// exits 1 when a row failed or is missing, and with -complete also when a
+// row is todo, not run or a known bug.
 //
 //	go run ./test/e2e/proof [-complete] [-out proof.json] results/*/summary.json
 package main
@@ -17,6 +24,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"sort"
@@ -29,8 +37,9 @@ import (
 type summary struct {
 	Suite   string `json:"suite"`
 	Results []struct {
-		Test   string `json:"test"`
-		Action string `json:"action"`
+		Test     string `json:"test"`
+		Action   string `json:"action"`
+		KnownBug int    `json:"knownBug,omitempty"`
 	} `json:"results"`
 }
 
@@ -39,6 +48,10 @@ type tally struct {
 	Name   string `json:"name"`
 	Passed int    `json:"passed"`
 	Failed int    `json:"failed"`
+	// KnownBugs counts expected failures (scale.KnownBug).
+	KnownBugs int `json:"knownBugs,omitempty"`
+	// ClosedBugs lists the issues of expected failures that are closed.
+	ClosedBugs []int `json:"closedBugs,omitempty"`
 	// Expected is set when a suite that ran selects the test.
 	Expected bool `json:"expected"`
 }
@@ -49,6 +62,7 @@ const (
 	failed  = "failed"
 	missing = "missing"
 	notRun  = "not run"
+	known   = "known bug"
 	unit    = "unit"
 	todo    = "todo"
 )
@@ -61,15 +75,36 @@ type rowResult struct {
 
 // prove gives each row its result. runs are the suites' -run patterns;
 // summaries are the suite runs of this CI run.
-func prove(rows []coverage.Row, tests []coverage.Test, runs map[string]*regexp.Regexp, summaries []summary) []rowResult {
+// isOpen, when not nil, says whether a known bug's issue is still open; an
+// error counts as closed, so a check that cannot run fails the proof.
+func prove(rows []coverage.Row, tests []coverage.Test, runs map[string]*regexp.Regexp, summaries []summary,
+	isOpen func(issue int) (bool, error)) []rowResult {
 	ran := map[string]bool{}
-	passes, fails := map[string]int{}, map[string]int{}
+	passes, fails, bugs := map[string]int{}, map[string]int{}, map[string]int{}
+	closed := map[string][]int{}
+	open := map[int]bool{}
+	checked := map[int]bool{}
 	for _, s := range summaries {
 		ran[s.Suite] = true
 		for _, r := range s.Results {
 			switch r.Action {
 			case "pass":
 				passes[r.Test]++
+			case "xfail":
+				bugs[r.Test]++
+				if isOpen == nil {
+					break
+				}
+				if !checked[r.KnownBug] {
+					ok, err := isOpen(r.KnownBug)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "proof: issue #%d: %v\n", r.KnownBug, err)
+					}
+					open[r.KnownBug], checked[r.KnownBug] = ok && err == nil, true
+				}
+				if !open[r.KnownBug] {
+					closed[r.Test] = append(closed[r.Test], r.KnownBug)
+				}
 			default: // fail, skip: a skipped live test proves nothing
 				fails[r.Test]++
 			}
@@ -85,7 +120,7 @@ func prove(rows []coverage.Row, tests []coverage.Test, runs map[string]*regexp.R
 	for _, row := range rows {
 		rr := rowResult{Row: row}
 		for _, t := range byRow[row.ID] {
-			ta := tally{Name: t.Name, Passed: passes[t.Name], Failed: fails[t.Name]}
+			ta := tally{Name: t.Name, Passed: passes[t.Name], Failed: fails[t.Name], KnownBugs: bugs[t.Name], ClosedBugs: closed[t.Name]}
 			for suite, re := range runs {
 				ta.Expected = ta.Expected || (t.Live && ran[suite] && re.MatchString(t.Name))
 			}
@@ -108,8 +143,15 @@ func result(row coverage.Row, tests []tally) string {
 	for _, t := range tests {
 		switch {
 		case !t.Expected:
-		case t.Failed > 0:
+		case t.Failed > 0, len(t.ClosedBugs) > 0:
 			return failed
+		case t.Passed == 0 && t.KnownBugs > 0:
+			if row.Status != "known-bug" {
+				return failed // a covered row's test must pass
+			}
+			if res == notRun {
+				res = known
+			}
 		case t.Passed == 0:
 			res = missing
 		case res == notRun:
@@ -125,7 +167,7 @@ func ok(results []rowResult, complete bool) bool {
 		switch r.Result {
 		case failed, missing:
 			return false
-		case todo, notRun:
+		case todo, notRun, known:
 			if complete && r.Tier != "contract" {
 				return false
 			}
@@ -155,7 +197,7 @@ func markdown(w io.Writer, results []rowResult, verdict bool) {
 		v = "FAILED"
 	}
 	_, _ = fmt.Fprintf(w, "### Coverage proof: %s\n\nRows of `%s` and what this run proved.\n\n", v, coverage.File)
-	cols := []string{passed, failed, missing, notRun, unit, todo}
+	cols := []string{passed, failed, missing, notRun, known, unit, todo}
 	_, _ = fmt.Fprintf(w, "| Tier | Rows | %s |\n|---|---|%s\n", strings.Join(cols, " | "), strings.Repeat("---|", len(cols)))
 	tiers, byTier := counts(results)
 	for _, tier := range tiers {
@@ -183,6 +225,37 @@ func main() {
 	if err := run(".", flag.Args(), *complete, *outFile); err != nil {
 		fmt.Fprintln(os.Stderr, "proof:", err)
 		os.Exit(1)
+	}
+}
+
+// knownBugRepo is the repository scale.KnownBug's issues are in.
+const knownBugRepo = "pnz1990/kardinal-promoter"
+
+// githubIssueOpen returns a check that asks the GitHub API whether an issue of
+// knownBugRepo is open.
+func githubIssueOpen(c *http.Client, api, token string) func(int) (bool, error) {
+	return func(n int) (bool, error) {
+		req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/repos/%s/issues/%d", api, knownBugRepo, n), nil)
+		if err != nil {
+			return false, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		resp, err := c.Do(req)
+		if err != nil {
+			return false, fmt.Errorf("get issue #%d: %w", n, err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			return false, fmt.Errorf("get issue #%d: HTTP %d", n, resp.StatusCode)
+		}
+		var issue struct {
+			State string `json:"state"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&issue); err != nil {
+			return false, fmt.Errorf("decode issue #%d: %w", n, err)
+		}
+		return issue.State == "open", nil
 	}
 }
 
@@ -217,16 +290,25 @@ func run(root string, files []string, complete bool, outFile string) error {
 		}
 		summaries = append(summaries, s)
 	}
-	results := prove(rows, tests, runs, summaries)
+	var isOpen func(int) (bool, error)
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		isOpen = githubIssueOpen(http.DefaultClient, "https://api.github.com", tok)
+	} else {
+		fmt.Println("GITHUB_TOKEN is not set: known bugs are not checked against their issues")
+	}
+	results := prove(rows, tests, runs, summaries, isOpen)
 	verdict := ok(results, complete)
 
 	tiers, byTier := counts(results)
 	for _, tier := range tiers {
-		fmt.Printf("%s: %d rows, %d passed here, %d not run here, %d unit, %d todo, %d failed, %d missing\n", tier,
-			byTier[tier]["rows"], byTier[tier][passed], byTier[tier][notRun], byTier[tier][unit], byTier[tier][todo],
+		fmt.Printf("%s: %d rows, %d passed here, %d not run here, %d known bugs, %d unit, %d todo, %d failed, %d missing\n", tier,
+			byTier[tier]["rows"], byTier[tier][passed], byTier[tier][notRun], byTier[tier][known], byTier[tier][unit], byTier[tier][todo],
 			byTier[tier][failed], byTier[tier][missing])
 	}
 	for _, r := range results {
+		if r.Status == "known-bug" && r.Result == passed {
+			fmt.Printf("    %s is marked known-bug but its tests passed: mark it covered in %s and remove scale.KnownBug\n", r.ID, coverage.File)
+		}
 		if r.Result == failed || r.Result == missing {
 			fmt.Printf("    %s %s %v\n", strings.ToUpper(r.Result), r.ID, r.Tests)
 		}
