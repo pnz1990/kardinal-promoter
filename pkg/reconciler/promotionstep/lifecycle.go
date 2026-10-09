@@ -11,10 +11,14 @@ import (
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -60,6 +64,66 @@ func (r *Reconciler) holdIfPaused(ctx context.Context, log zerolog.Logger, ps *v
 			Msg("pipeline paused — step held")
 	}
 	return true, ctrl.Result{RequeueAfter: requeuePaused}, nil
+}
+
+// holdForSlot keeps a Pending step Pending while its Bundle waits for a
+// maxConcurrentPromotions slot (#1349): the Bundle is Failed, and the Bundle
+// reconciler set its graph.CondBundleWaitingForSlot condition because other
+// Bundles of the Pipeline fill the cap. The Graph creates no new step of
+// such a Bundle (spec.bundleName does not resolve); this holds the steps that
+// already exist, before any git operation. Lifting the hold wakes the step
+// (bundleWakesSteps); requeueSlotHold is the fallback. The step writes only
+// its own status message.
+func (r *Reconciler) holdForSlot(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (bool, ctrl.Result, error) {
+	var b v1alpha1.Bundle
+	if err := r.Get(ctx, client.ObjectKey{Name: ps.Spec.BundleName, Namespace: ps.Namespace}, &b); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, ctrl.Result{}, nil // the orphan guard deletes the step
+		}
+		return true, ctrl.Result{}, fmt.Errorf("load bundle %s for the slot hold: %w", ps.Spec.BundleName, err)
+	}
+	if !slotHeld(&b) {
+		return false, ctrl.Result{}, nil
+	}
+	msg := fmt.Sprintf("held: Bundle %s waits for a maxConcurrentPromotions slot of pipeline %s",
+		ps.Spec.BundleName, ps.Spec.PipelineName)
+	if ps.Status.Message != msg {
+		patch := client.MergeFrom(ps.DeepCopy())
+		ps.Status.Message = msg
+		if err := r.Status().Patch(ctx, ps, patch); err != nil {
+			if apierrors.IsNotFound(err) {
+				return true, ctrl.Result{}, nil
+			}
+			return true, ctrl.Result{}, fmt.Errorf("patch slot hold message: %w", err)
+		}
+		log.Info().Str("bundle", ps.Spec.BundleName).Str("env", ps.Spec.Environment).
+			Msg("bundle waits for a maxConcurrentPromotions slot — step held")
+	}
+	return true, ctrl.Result{RequeueAfter: requeueSlotHold}, nil
+}
+
+// requeueSlotHold is the fallback re-check of a step held by holdForSlot.
+const requeueSlotHold = 30 * time.Second
+
+// slotHeld reports whether b waits for a maxConcurrentPromotions slot.
+func slotHeld(b *v1alpha1.Bundle) bool {
+	return meta.IsStatusConditionTrue(b.Status.Conditions, graph.CondBundleWaitingForSlot)
+}
+
+// bundleWakesSteps passes the Bundle events that steps act on: a Bundle that
+// is Superseded (the supersession guard) and a slot hold set or lifted.
+var bundleWakesSteps = predicate.Funcs{
+	CreateFunc:  func(e event.CreateEvent) bool { return isSuperseded(e.Object) },
+	DeleteFunc:  func(e event.DeleteEvent) bool { return isSuperseded(e.Object) },
+	GenericFunc: func(e event.GenericEvent) bool { return isSuperseded(e.Object) },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		if isSuperseded(e.ObjectNew) {
+			return true
+		}
+		oldB, okOld := e.ObjectOld.(*v1alpha1.Bundle)
+		newB, okNew := e.ObjectNew.(*v1alpha1.Bundle)
+		return okOld && okNew && slotHeld(oldB) != slotHeld(newB)
+	},
 }
 
 // createAutoRollback creates the onHealthFailure=rollback Bundle for a step

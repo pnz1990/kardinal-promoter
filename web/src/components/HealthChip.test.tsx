@@ -33,7 +33,7 @@ describe('kardinalStateToHealth', () => {
     ['Verified', 'Ready'],
     ['Failed', 'Error'],
     ['AbortedByAlarm', 'Error'],
-    ['RollingBack', 'Reconciling'],
+    ['RollingBack', 'Error'],
     ['NotStarted', 'Pending'],
     // Bundle phases.
     ['Available', 'Pending'],
