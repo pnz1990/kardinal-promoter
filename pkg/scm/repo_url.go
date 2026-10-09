@@ -20,6 +20,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/go-git/go-git/v5/plumbing/transport"
 )
 
 // scpLikeURL matches the scp-like git remote syntax "user@host:path".
@@ -129,6 +131,24 @@ func SameOrigin(a, b string) bool {
 	return okA && okB && oa == ob
 }
 
+// SameSSHHost reports whether two ssh git remotes (ssh:// or scp-like) are
+// on the same host and port, so the ssh key for a may be used for b.
+func SameSSHHost(a, b string) bool {
+	ea, errA := transport.NewEndpoint(strings.TrimSpace(a))
+	eb, errB := transport.NewEndpoint(strings.TrimSpace(b))
+	if errA != nil || errB != nil || ea.Protocol != "ssh" || eb.Protocol != "ssh" {
+		return false
+	}
+	pa, pb := ea.Port, eb.Port
+	if pa == 0 {
+		pa = 22
+	}
+	if pb == 0 {
+		pb = 22
+	}
+	return strings.EqualFold(ea.Host, eb.Host) && pa == pb
+}
+
 // httpOrigin returns "scheme://host:port" for an http or https URL.
 func httpOrigin(raw string) (string, bool) {
 	u, err := url.Parse(strings.TrimSpace(raw))
@@ -217,7 +237,7 @@ var webhookSignatureHeaders = []string{
 	"X-Forgejo-Signature", // Forgejo (bare hex)
 	"X-Gitlab-Token",      // GitLab (shared secret token)
 	"X-AzureDevOps-Token", // Azure DevOps service hook custom header
-	"X-Hub-Signature",     // Bitbucket Cloud ("sha256=<hex>")
+	"X-Hub-Signature",     // Bitbucket Cloud and Data Center ("sha256=<hex>")
 }
 
 // WebhookSignature returns the webhook signature or token carried by an SCM
@@ -253,6 +273,28 @@ var webhookEventHeaders = []string{
 	"X-Gitea-Event",   // Gitea and Forgejo
 	"X-Gitlab-Event",  // GitLab ("Merge Request Hook", "Push Hook", ...)
 	"X-GitHub-Event",  // GitHub ("pull_request", "push", "ping", ...)
+	"X-Event-Key",     // Bitbucket Cloud and Data Center ("pr:merged", "pullrequest:fulfilled", ...)
+}
+
+// RepoCanonicalizer is implemented by providers whose repository can be
+// named in more than one way (Bitbucket Data Center: an /scm/ clone path,
+// a browse path or an ssh path). CanonicalRepo returns one form for all.
+type RepoCanonicalizer interface {
+	CanonicalRepo(repo string) string
+}
+
+// SameRepo reports whether repositories a and b, as named by a Pipeline URL
+// (RepoFromURL) or a webhook payload, are the same for provider p: the
+// provider's canonical forms are equal, or, for other providers, a and b are
+// equal ignoring case.
+func SameRepo(p SCMProvider, a, b string) bool {
+	if d, ok := p.(*DynamicProvider); ok {
+		p = d.current()
+	}
+	if c, ok := p.(RepoCanonicalizer); ok {
+		return c.CanonicalRepo(a) == c.CanonicalRepo(b)
+	}
+	return strings.EqualFold(a, b)
 }
 
 // webhookEventType returns the event type named by an SCM webhook request's
@@ -285,3 +327,25 @@ func ParseWebhookRequest(p SCMProvider, payload []byte, h http.Header) (WebhookE
 	}
 	return p.ParseWebhookEvent(payload, signature)
 }
+
+// canonicalOf is p's canonical form of repo: its CanonicalRepo when it has
+// one, the repository in lower case otherwise (the SameRepo comparison).
+func canonicalOf(p SCMProvider, repo string) string {
+	if c, ok := p.(RepoCanonicalizer); ok {
+		return c.CanonicalRepo(repo)
+	}
+	return strings.ToLower(repo)
+}
+
+// CanonicalRepo implements RepoCanonicalizer for the provider DynamicProvider
+// holds, so a Data Center provider behind it still matches its webhooks and
+// allowlist however the URL names the repository.
+func (d *DynamicProvider) CanonicalRepo(repo string) string { return canonicalOf(d.current(), repo) }
+
+// CanonicalRepo implements RepoCanonicalizer for the guarded provider.
+func (g *guardedProvider) CanonicalRepo(repo string) string { return canonicalOf(g.inner, repo) }
+
+var (
+	_ RepoCanonicalizer = (*DynamicProvider)(nil)
+	_ RepoCanonicalizer = (*guardedProvider)(nil)
+)

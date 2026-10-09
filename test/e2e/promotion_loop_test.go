@@ -103,10 +103,12 @@ func (m *mockSCMForLoop) AddLabelsToPR(_ context.Context, _ string, _ int, _ []s
 
 type mockGitForLoop struct{}
 
-func (m *mockGitForLoop) Clone(_ context.Context, _, _, _, _ string) error        { return nil }
-func (m *mockGitForLoop) CloneAt(_ context.Context, _, _, _, _ string) error      { return nil }
-func (m *mockGitForLoop) CommitAll(_ context.Context, _, _, _, _ string) error    { return nil }
-func (m *mockGitForLoop) Push(_ context.Context, _, _, _, _ string, _ bool) error { return nil }
+func (m *mockGitForLoop) Clone(_ context.Context, _, _, _ string, _ scm.GitAuth) error   { return nil }
+func (m *mockGitForLoop) CloneAt(_ context.Context, _, _, _ string, _ scm.GitAuth) error { return nil }
+func (m *mockGitForLoop) CommitAll(_ context.Context, _, _, _, _ string) error           { return nil }
+func (m *mockGitForLoop) Push(_ context.Context, _, _, _ string, _ scm.GitAuth, _ bool) error {
+	return nil
+}
 
 func promotionLoopScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()

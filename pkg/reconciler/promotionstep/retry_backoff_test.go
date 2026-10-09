@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -54,7 +56,7 @@ type flakyGit struct {
 	clones int
 }
 
-func (g *flakyGit) Clone(_ context.Context, _, _, _, _ string) error {
+func (g *flakyGit) Clone(_ context.Context, _, _, _ string, _ scm.GitAuth) error {
 	g.clones++
 	if g.fail {
 		return errors.New("git clone: 503 Service Unavailable")

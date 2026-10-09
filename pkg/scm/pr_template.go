@@ -98,9 +98,15 @@ type PRBody struct {
 	// is unknown.
 	RollbackFromVersion string
 
-	// RolledBackBy is who asked for the rollback. Empty when it is not
-	// recorded.
+	// RolledBackBy is who asked for the rollback: the rollback Bundle's
+	// verified creator (kardinal.io/created-by), else its client-written
+	// kardinal.io/requested-by with RolledBackByUnverified set. Empty when
+	// neither is recorded.
 	RolledBackBy string
+
+	// RolledBackByUnverified marks RolledBackBy as the unverified
+	// requested-by annotation: the note says "(unverified)".
+	RolledBackByUnverified bool
 
 	// CreatedBy is the Bundle's verified creator (kardinal.io/created-by,
 	// pinned by admission), shown as "Created by" under the provenance table
@@ -182,7 +188,7 @@ const prBodySections = `
 > Rolling back FROM: {{if .RollbackFrom}}{{.RollbackFrom}}{{with .RollbackFromVersion}} ({{mdcell .}}){{end}}{{else}}the bundle deployed in {{.Environment}} now{{end}}
 > Rolling back TO: {{.RollbackOf}}{{with .RestoredVersion}} ({{mdcell .}}){{end}}
 {{- with .RolledBackBy}}
-> Rolled back by: {{mdcell .}}
+> Rolled back by: {{mdcell .}}{{if $.RolledBackByUnverified}} (unverified){{end}}
 {{- end}}
 {{- end}}
 {{- end}}
