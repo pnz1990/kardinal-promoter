@@ -8,6 +8,7 @@ edit_uri: edit/main/docs/
 # docs/aide/ holds the contributor vision and journey definition of done; they are not user documentation.
 exclude_docs: |
   aide/
+  requirements.txt
 
 # Design docs and the per-command CLI pages are reached through links, not the nav.
 not_in_nav: |
@@ -122,7 +123,6 @@ nav:
     - Migrating from Kargo: guides/migrating-from-kargo.md
   - Reference:
     - CLI Reference: cli-reference.md
-    - CLI Commands: reference/cli/kardinal.md
     - Pipeline CRD: pipeline-reference.md
     - API Reference: reference/api.md
     - REST API: reference/rest-api.md
