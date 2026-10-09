@@ -116,7 +116,22 @@ type HookRunSpec struct {
 	// when the earlier run was deleted while it ran (result unknown). It is
 	// not part of the spec hash.
 	// +optional
-	Recorded *HookRecord `json:"recorded,omitempty"`
+	Recorded HookRunRecorded `json:"recorded,omitempty"`
+}
+
+// HookRunRecorded is the step's record of an earlier run of the hook, as
+// strings ("" when there is none): kro renders each from the step's
+// status.hookRecords.
+type HookRunRecorded struct {
+	// SpecHash is the spec hash of the recorded run.
+	// +optional
+	SpecHash string `json:"specHash,omitempty"`
+	// Result is Running, Succeeded or Failed.
+	// +optional
+	Result string `json:"result,omitempty"`
+	// Message is the recorded run's last message.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // HookRunStatus is the observed state of a HookRun.

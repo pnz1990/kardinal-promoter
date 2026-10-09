@@ -336,14 +336,19 @@ func stepAdvanced(stepK8sName, phase string) string {
 	return fmt.Sprintf(`${%s.exists(s, s.metadata.name == %s && %s)}`, refStepsNodeID, strconv.Quote(stepK8sName), states)
 }
 
-// hookRecorded is the CEL expression of a HookRun's spec.recorded: the
-// step's status.hookRecords entry for hook in phase, or {} when the step
-// has none (or does not exist yet).
-func hookRecorded(stepK8sName, phase, hook string) string {
-	match := fmt.Sprintf(`r.hook == %s && r.phase == %s`, strconv.Quote(hook), strconv.Quote(phase))
-	step := fmt.Sprintf(`s.metadata.name == %s`, strconv.Quote(stepK8sName))
-	return fmt.Sprintf(`${%[1]s.exists(s, %[2]s && s.?status.?hookRecords.orValue([]).exists(r, %[3]s)) ? `+
-		`%[1]s.filter(s, %[2]s)[0].status.hookRecords.filter(r, %[3]s)[0] : {}}`, refStepsNodeID, step, match)
+// hookRecorded is a HookRun's spec.recorded: the step's
+// status.hookRecords entry for hook in phase, one string field at a time
+// ("" when the step has none or does not exist yet). Each is a join over
+// the (at most one) matching step and record, so every expression is a
+// string whatever matches: kro type-checks a conditional's branches
+// against the HookRun schema.
+func hookRecorded(stepK8sName, phase, hook string) map[string]interface{} {
+	field := func(f string) string {
+		return fmt.Sprintf(`${%s.filter(s, s.metadata.name == %s).map(s, s.?status.?hookRecords.orValue([]).filter(r, `+
+			`r.?hook.orValue("") == %s && r.?phase.orValue("") == %s).map(r, r.?%s.orValue(""))).map(l, l.join("")).join("")}`,
+			refStepsNodeID, strconv.Quote(stepK8sName), strconv.Quote(hook), strconv.Quote(phase), f)
+	}
+	return map[string]interface{}{"specHash": field("specHash"), "result": field("result"), "message": field("message")}
 }
 
 // The compact shape does not build HookRun nodes or the mirror patch node:

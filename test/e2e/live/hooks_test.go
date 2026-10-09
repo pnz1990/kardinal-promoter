@@ -433,9 +433,12 @@ func TestStep_HookRenamedMidFlight(t *testing.T) {
 	if err == nil {
 		assert.Equal(t, int32(1), old.Status.Succeeded, "the old Job completed")
 		require.NotNil(t, old.Status.CompletionTime)
-		require.NotNil(t, newRun.Status.StartedAt)
-		assert.False(t, newRun.Status.StartedAt.Before(old.Status.CompletionTime),
-			"the new hook started (%s) after the old one finished (%s)", newRun.Status.StartedAt, old.Status.CompletionTime)
+		// The new HookRun records its start at once and then waits for the
+		// old one: its Job is what must come after the old Job finished.
+		newJob, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, newRun.Status.JobName, metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.False(t, newJob.CreationTimestamp.Before(old.Status.CompletionTime),
+			"the new hook's Job was created (%s) after the old one finished (%s)", newJob.CreationTimestamp, old.Status.CompletionTime)
 	} else {
 		// The old HookRun was released once its Job ended; its Job went with it.
 		require.True(t, apierrors.IsNotFound(err), "get old Job: %v", err)
