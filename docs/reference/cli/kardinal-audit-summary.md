@@ -11,8 +11,9 @@ Rollbacks counts the rollback Bundles created in the window, from kardinal
 rollback, the UI, a RollbackPolicy or onHealthFailure=rollback, and how many
 of them succeeded: wrote RollbackSucceeded in the window in the environment
 they roll back.
-The success rate is succeeded / (succeeded + failed + superseded) among the
-promotions that finished inside the window. A rollback Bundle that reaches
+The success rate is succeeded / (succeeded + failed + superseded + rejected)
+among the promotions that finished inside the window; rejected (PromotionRejected,
+kardinal reject) is printed only when there are any. A rollback Bundle that reaches
 Verified in an environment writes PromotionSucceeded, counted as a succeeded
 promotion, and RollbackSucceeded, counted only as a succeeded rollback.
 

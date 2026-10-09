@@ -13,6 +13,8 @@ import (
 // CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
 // supported) lets an update through when spec is unchanged.
 // +kubebuilder:validation:XValidation:rule="!(self.type == 'image' && has(self.configRef))",message="spec.configRef is used only by config and mixed Bundles: an image Bundle deploys only its images; set type config or mixed, or remove configRef"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.rejected) || has(self.rejected)",message="spec.rejected cannot be removed: a rejected Bundle stays rejected"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.rejected) || !has(self.rejected) || self.rejected == oldSelf.rejected",message="spec.rejected is immutable once set"
 type BundleSpec struct {
 	// Type classifies the bundle content.
 	// Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
@@ -49,6 +51,53 @@ type BundleSpec struct {
 	// Intent declares optional targeting and skip overrides for this Bundle.
 	// +optional
 	Intent *BundleIntent `json:"intent,omitempty"`
+
+	// Rejected marks the Bundle as rejected (kardinal reject): it is never
+	// promoted again, its in-flight steps are cancelled, and rollback,
+	// promote and Subscriptions skip any Bundle carrying its artifacts.
+	// Setting it is one-way: it cannot be changed or removed. The chart's
+	// ValidatingAdmissionPolicy requires rejected.by to be the requesting
+	// user; without that policy nothing checks it.
+	// +optional
+	Rejected *BundleRejection `json:"rejected,omitempty"`
+}
+
+// BundleRejection records who rejected a Bundle and why.
+type BundleRejection struct {
+	// Reason says why the Bundle was rejected.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Reason string `json:"reason"`
+
+	// By is the Kubernetes username of whoever rejected the Bundle. The
+	// chart's ValidatingAdmissionPolicy (kardinal-identity) admits a new
+	// rejection only when by equals the requesting user's username.
+	// +kubebuilder:validation:MinLength=1
+	By string `json:"by"`
+
+	// At is when the Bundle was rejected.
+	// +optional
+	At *metav1.Time `json:"at,omitempty"`
+}
+
+// RejectedArtifactSet is the part of a rejected Bundle that the rejection
+// covers (BundleStatus.RejectedArtifacts).
+type RejectedArtifactSet struct {
+	// Images are the rejected images: those not Verified, with the same
+	// digest (or tag, without a digest), before this Bundle in every
+	// environment it reached.
+	// +optional
+	// +kubebuilder:validation:MaxItems=100
+	Images []ImageRef `json:"images,omitempty"`
+	// ConfigCommitSHA is the rejected config commit, when it differs.
+	// +optional
+	ConfigCommitSHA string `json:"configCommitSHA,omitempty"`
+	// ComparedWith names, per environment, the Verified Bundle the artifacts
+	// were compared with ("<env>=<bundle>"); empty when no environment had
+	// one, and then every artifact is rejected.
+	// +optional
+	// +kubebuilder:validation:MaxItems=100
+	ComparedWith []string `json:"comparedWith,omitempty"`
 }
 
 // ImageRef identifies a container image by repository, tag, and/or digest.
@@ -149,8 +198,9 @@ type BundleIntent struct {
 // BundleStatus defines the observed state of a Bundle.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.retiredAt) || has(self.retiredAt)",message="status.retiredAt cannot be removed: a retired Bundle stays retired"
 type BundleStatus struct {
-	// Phase is the bundle promotion phase.
-	// +kubebuilder:validation:Enum=Available;Promoting;Verified;Failed;Superseded
+	// Phase is the bundle promotion phase. Rejected is final: spec.rejected
+	// is set, and nothing of this Bundle is promoted again.
+	// +kubebuilder:validation:Enum=Available;Promoting;Verified;Failed;Superseded;Rejected
 	Phase string `json:"phase,omitempty"`
 
 	// Conditions holds status conditions.
@@ -203,6 +253,15 @@ type BundleStatus struct {
 	// +listMapKey=name
 	// +kubebuilder:validation:MaxItems=1000
 	RetiredSteps []RetiredStep `json:"retiredSteps,omitempty"`
+
+	// RejectedArtifacts is what a rejection (spec.rejected) rejects: the
+	// artifacts of this Bundle that differ from what was Verified before it
+	// in the environments it reached, written by the Bundle reconciler when
+	// it marks the Bundle Rejected. A sidecar the Bundle carries unchanged is
+	// not in it, so rolling back to the Bundle before stays possible. Unset
+	// (a rejection not processed yet) means all of the Bundle's artifacts.
+	// +optional
+	RejectedArtifacts *RejectedArtifactSet `json:"rejectedArtifacts,omitempty"`
 
 	// RetiredAt is when the Bundle's Graph was retired: set in the same
 	// write as RetiredSteps, and never cleared. A Bundle with RetiredAt is

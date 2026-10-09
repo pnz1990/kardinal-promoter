@@ -220,22 +220,10 @@ func fetchFilteredSteps(ctx context.Context, c sigs_client.Client, ns, pipeline,
 	if bundleFilter == "" {
 		var bundles v1alpha1.BundleList
 		if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err == nil {
-			activeBundles := make(map[string]bool)
-			for _, b := range bundles.Items {
-				if b.Spec.Pipeline == pipeline && b.Status.Phase != "Superseded" {
-					activeBundles[b.Name] = true
-				}
-			}
-			if len(activeBundles) > 0 {
-				var active []v1alpha1.PromotionStep
-				for _, s := range filtered {
-					if activeBundles[s.Labels["kardinal.io/bundle"]] {
-						active = append(active, s)
-					}
-				}
-				if len(active) > 0 {
-					filtered = active
-				}
+			// The current steps (currentSteps): not Halted, or a rejected
+			// change that is live.
+			if active, _ := currentSteps(pipeline, bundles.Items, filtered); len(active) > 0 {
+				filtered = active
 			}
 		}
 	}

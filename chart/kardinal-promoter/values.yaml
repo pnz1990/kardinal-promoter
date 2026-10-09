@@ -322,9 +322,11 @@ graph:
     # (--graph-retire-verified-after, default 1h).
     verified: ""
 
-# -- Deprecated, no effect. The chart no longer ships ValidatingAdmissionPolicies;
-# the CRD schemas validate these fields instead. Kept so existing
-# --set validatingAdmissionPolicy.enabled=... keeps working.
+# -- Deprecated, no effect. The CRD schemas validate the kardinal fields. The
+# chart always ships the identity ValidatingAdmissionPolicies
+# (templates/identity-admission.yaml), which pin the user a record names
+# (spec.rejected.by) to the requesting user; they cannot be turned off. Kept
+# so existing --set validatingAdmissionPolicy.enabled=... keeps working.
 validatingAdmissionPolicy:
   enabled: true
 

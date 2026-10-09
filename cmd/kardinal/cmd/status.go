@@ -290,6 +290,9 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 			marker, r.env, r.region, r.bundle, r.state, r.activeStep, prDisplay, r.age)
 	}
 	_ = tw.Flush()
+	for _, h := range rejectedLiveHints(pipeline, active, bundles.Items, steps.Items, "") {
+		_, _ = fmt.Fprintln(w, h)
+	}
 
 	// What runs in each environment now, whether or not the active Bundle
 	// has reached it (lifecycle.DeployedBundle, the Bundle rollback starts
