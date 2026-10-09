@@ -99,6 +99,10 @@ spec:
             {{- with (.Values.graph.retire).verified }}
             - --graph-retire-verified-after={{ . }}
             {{- end }}
+            - --override-identity-policy={{ include "kardinal-promoter.fullname" . }}-gate-overrides
+            {{- with .Values.controller.gateOverrideMaxMinutes }}
+            - --gate-override-max-minutes={{ . }}
+            {{- end }}
             {{- with .Values.controller.watchNamespace }}
             - --watch-namespace={{ . }}
             {{- end }}

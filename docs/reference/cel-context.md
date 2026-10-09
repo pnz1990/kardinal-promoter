@@ -18,6 +18,7 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | `upstream` | map | Per-environment soak data from upstream |
 | `metrics` | map | MetricCheck results from the gate's metrics namespace (the org policy namespace for an org gate, the gate's namespace otherwise) |
 | `changewindow` | map | ChangeWindow name → `true` while the window is active (blocking); also `changewindow.isBlocked("name")` and `changewindow.isAllowed("name")`. An unknown name blocks the gate. See [ChangeWindow attributes](../policy-gates.md#changewindow-attributes-k-04) |
+| `approvals` | map | The Approvals counted for this gate instance (`kardinal approve`). See [`approvals.*`](#approvals) |
 
 ---
 
@@ -26,6 +27,7 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | Field | Type | Example | When populated |
 |---|---|---|---|
 | `bundle.type` | string | `"image"` | Always |
+| `bundle.createdBy` | string | `"oidc:alice@example.com"` | The Bundle's verified creator (`kardinal.io/created-by`); `""` when it has none |
 | `bundle.version` | string | `"1.29.0"` | Always. `image` and `mixed` Bundles: the first image's tag (`""` when that image has only a digest). `config` Bundles: the first 8 characters of `configRef.commitSHA` |
 | `bundle.upstreamSoakMinutes` | int | `45` | Soak of the direct upstream environment(s) of the gated environment; minimum across them on fan-in; 0 for a root environment or an upstream that is not Verified |
 | `bundle.provenance.author` | string | `"engineer@co.com"` | When Bundle was created with `provenance.author` |
@@ -306,3 +308,22 @@ kardinal policy test my-gate.yaml
 
 - [Policy Gates](../policy-gates.md) — PolicyGate CRD reference
 - [CLI Reference: policy simulate](cli/kardinal-policy-simulate.md) — simulate gate evaluation
+
+---
+
+## `approvals.*`
+
+The decisions `kardinal approve` recorded for the gate instance's Bundle and environment (the Graph copies them into `spec.approvals`). With `spec.approval` set, only allowed approvers count (see [Approval gates](../policy-gates.md#approval-gates)); without it, every approval counts. Each user counts once.
+
+| Field | Type | Example | When populated |
+|---|---|---|---|
+| `approvals.count` | int | `2` | Always; `0` with no approval |
+| `approvals.required` | int | `2` | `spec.approval.required`; `0` without `spec.approval` |
+| `approvals.users` | list | `["alice@example.com"]` | Always; the users whose approval counts, sorted |
+| `approvals.rejected` | bool | `false` | Always; `true` when a counted user rejected |
+
+```yaml
+# Two approvals, outside the weekend
+expression: 'approvals.count >= 2 && !approvals.rejected && !schedule.isWeekend'
+```
+

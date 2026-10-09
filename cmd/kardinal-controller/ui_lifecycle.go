@@ -26,7 +26,7 @@ import (
 
 // uiActor is the requester the UI records when it does not know who the
 // caller is: with the static UI token (--ui-auth-token) or with no UI auth.
-const uiActor = "kardinal-ui"
+const uiActor = lifecycle.UICreator
 
 // uiRequester is who asked for a UI action: a promote, a rollback, a new
 // Bundle, a gate approval, a pause or a resume. With --ui-tokenreview-auth it
@@ -113,7 +113,7 @@ func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
 		s.writeLifecycleError(w, "promote", err)
 		return
 	}
-	if err := s.client.Create(r.Context(), plan.Bundle); err != nil {
+	if err := lifecycle.CreateBundleAs(r.Context(), s.client, plan.Bundle, requester); err != nil {
 		s.writeLifecycleError(w, "create promote bundle", err)
 		return
 	}
@@ -202,11 +202,12 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		plan, _, err = lifecycle.RollbackAndHold(r.Context(), s.client,
-			lifecycle.HoldRequest{RollbackRequest: rollbackReq, HoldReason: req.HoldReason, ExpiresIn: expiresIn})
+			lifecycle.HoldRequest{RollbackRequest: rollbackReq, HoldReason: req.HoldReason, ExpiresIn: expiresIn,
+				Creator: requester})
 	} else {
 		plan, err = lifecycle.PlanRollback(r.Context(), s.client, rollbackReq)
 		if err == nil {
-			if createErr := s.client.Create(r.Context(), plan.Bundle); createErr != nil {
+			if createErr := lifecycle.CreateBundleAs(r.Context(), s.client, plan.Bundle, requester); createErr != nil {
 				s.writeLifecycleError(w, "create rollback bundle", createErr)
 				return
 			}
