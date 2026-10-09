@@ -66,6 +66,7 @@ Rules:
 | [G12](#g12-delete-and-prune-orphan-the-pods-of-a-job) | kro deletes and prunes without a propagation policy, so a Job node orphans its Pods, and a deleted Job runs again | Medium | **Planned in #1493 (not on main)**: hooks use a `HookRun` CRD that owns its Job (#1443) | None filed |
 | [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | kardinal shards only its own controllers, by namespace (`--namespace-shard`, `pkg/shard`, #1462) | None filed |
 | [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | Mirror `patch` nodes with a literal target name | None filed |
+| [G15](#g15-kro-holds-every-graph-in-memory-and-a-graph-cannot-be-retired-without-its-children) | kro holds every live Graph in memory (3 to 6 MB each, whatever its size), and a Graph cannot be deleted without deleting its children | High at scale | `pkg/reconciler/bundle/retire.go` records the steps in `Bundle.status.retiredSteps`, then deletes the Graph | None filed (drafts: Graph suspend, kro#1445 comment) |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
