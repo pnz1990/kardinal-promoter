@@ -195,8 +195,8 @@ type Reconciler struct {
 // State machine:
 //  1. Not found → deleted, skip.
 //  2. List qualifying events from Bundles, PolicyGates and PromotionSteps.
-//  3. On the first reconcile of a hook, record all but the newest existing
-//     event as processed (no backfill).
+//  3. On the first reconcile of a hook, record every event from before the
+//     hook was created as processed (no backfill).
 //  4. Deliver every event not in status.processedEventKeys, oldest first,
 //     recording each key after its successful POST.
 //  5. On a failed POST, record the attempt and status.nextRetryAt and requeue
@@ -265,10 +265,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	switch {
 	case hook.Status.ObservedGeneration == 0:
-		// First reconcile: do not backfill history. Only the newest existing
-		// event is delivered, as before per-event tracking existed.
-		for i := 0; i+1 < len(events); i++ {
-			processed[events[i].eventKey] = true
+		// First reconcile: do not backfill history. An event from before
+		// the hook existed is recorded as processed and not delivered; one
+		// from the second the hook was created or later is delivered.
+		created := hook.CreationTimestamp.Time
+		for _, ev := range events {
+			if ev.at.Before(created) {
+				processed[ev.eventKey] = true
+			}
 		}
 	case hook.Status.ObservedGeneration != observed:
 		// The spec changed (for example a corrected URL): retry at once.
