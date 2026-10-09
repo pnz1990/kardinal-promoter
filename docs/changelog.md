@@ -17,6 +17,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Graph size limit** — a Bundle whose Graph would be over about 1.2 MB fails (`InvalidSpec` reason `GraphBuildFailed`) with a message naming the size, instead of a Graph the API server refuses to store (etcd keeps at most 1.5 MiB per object). The size grows with the PolicyGates per environment: 100 environments with 3 gates each make a Graph of about 0.6 MB, with 5 gates about 0.85 MB, and with 10 gates about 1.5 MB, which is refused
 - **`time` is a reserved environment name** — kro#1434 (KREP-025, `time.now()`, not merged yet) proposes reserving `time` as a Graph node ID, so the Pipeline CRD now rejects an environment named `time`, like `bundle`, before a kro upgrade could break such a Pipeline. Rename one before upgrading (see [Upgrade](https://pnz1990.github.io/kardinal-promoter/installation/#upgrade))
 
+### Fixed
+
+- **A fixed PolicyGate retries the Bundle it broke** — a Bundle that failed with `InvalidSpec` reason `GraphBuildFailed` is retried when a PolicyGate template that applies to one of its environments changes (for example the skip-permission gate it lacked), not only when the Pipeline changes. A newer Bundle still supersedes it instead (#1312)
+- **A Bundle rolled back by `onHealthFailure: rollback` ends `Superseded`** — when the controller saw the step turn `RollingBack` before the rollback Bundle, the failing Bundle stayed `Failed`. A Bundle whose only failing environments are `RollingBack` now yields to the newer Bundle (#1428)
+- **`maxConcurrentPromotions` holds a recovering Failed Bundle** — a Failed Bundle whose failed environment recovered went back to `Promoting` even when another Bundle had taken its slot. While the cap is full a Failed Bundle has the condition `WaitingForSlot=True`: its Graph creates no new step, its `Pending` steps wait, and it returns to `Promoting` only when a slot frees (#1349)
+
 ### Docs
 
 - **Comparison** — resurveyed Kargo v1.12.1 and GitOps Promoter v0.42.1 (2026-10-03). The matrix corrects cells that had gone stale, such as GitOps Promoter's CLI, PR body and Flux support, and Kargo's gates, steps and engines. It adds rows for pause, supersession, `explain`/`policy simulate` and audit trails, plus sections on what changed in 2026 and where Kargo or GitOps Promoter is ahead. The home table, the rollback page and the Kargo migration guide match it

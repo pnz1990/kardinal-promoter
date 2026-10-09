@@ -17,7 +17,8 @@ import (
 
 // supersededHold is the spec.bundleName every PromotionStep node must carry:
 // the Bundle name, but only while the Bundle is not Superseded.
-const supersededHold = `${[bundle.metadata.name].filter(x_, bundle.status.phase != "Superseded")[0]}`
+const supersededHold = `${[bundle.metadata.name].filter(x_, bundle.status.phase != "Superseded" && ` +
+	`!(has(bundle.status.conditions) && bundle.status.conditions.exists(c_, c_.type == "WaitingForSlot" && c_.status == "True")))[0]}`
 
 // TestBuilder_StepsHeldOnceBundleSuperseded verifies that every PromotionStep
 // node, including roots, resolves spec.bundleName only while
@@ -76,8 +77,16 @@ func TestBuilder_SupersededHoldIsDataPending(t *testing.T) {
 	prg, err := env.Program(ast)
 	require.NoError(t, err)
 
+	slot := func(status string) []interface{} {
+		return []interface{}{
+			map[string]interface{}{"type": "Ready", "status": "False"},
+			map[string]interface{}{"type": "WaitingForSlot", "status": status},
+		}
+	}
 	cases := []struct {
+		name    string
 		phase   string
+		conds   []interface{}
 		pending bool
 	}{
 		{phase: "Available"},
@@ -85,12 +94,24 @@ func TestBuilder_SupersededHoldIsDataPending(t *testing.T) {
 		{phase: "Verified"},
 		{phase: "Failed"},
 		{phase: "Superseded", pending: true},
+		// #1349: a Failed Bundle waiting for a maxConcurrentPromotions slot.
+		{name: "Failed waiting for a slot", phase: "Failed", conds: slot("True"), pending: true},
+		{name: "Failed with a free slot", phase: "Failed", conds: slot("False")},
+		{name: "Promoting with conditions", phase: "Promoting", conds: slot("False")[:1]},
 	}
 	for _, tc := range cases {
-		t.Run(tc.phase, func(t *testing.T) {
+		name := tc.name
+		if name == "" {
+			name = tc.phase
+		}
+		t.Run(name, func(t *testing.T) {
+			status := map[string]interface{}{"phase": tc.phase}
+			if tc.conds != nil {
+				status["conditions"] = tc.conds
+			}
 			out, _, err := prg.Eval(map[string]interface{}{"bundle": map[string]interface{}{
 				"metadata": map[string]interface{}{"name": "app-v1"},
-				"status":   map[string]interface{}{"phase": tc.phase},
+				"status":   status,
 			}})
 			if tc.pending {
 				require.Error(t, err)

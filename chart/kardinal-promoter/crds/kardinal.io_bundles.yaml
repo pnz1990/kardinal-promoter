@@ -293,6 +293,14 @@ spec:
                   hash to this field. A mismatch re-translates the Graph in place with the
                   updated spec.
                 type: string
+              policyGatesHash:
+                description: |-
+                  PolicyGatesHash is the SHA-256 hash of the PolicyGate templates that
+                  apply to the Pipeline's environments, recorded when the Graph could not
+                  be built (InvalidSpec, reason GraphBuildFailed). A change to those
+                  templates retries the Bundle, as a Pipeline change does. Empty
+                  otherwise.
+                type: string
             type: object
         type: object
     served: true
