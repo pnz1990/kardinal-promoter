@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -90,10 +91,15 @@ func TestRollback_Hold(t *testing.T) {
 	framework.Eventually(t, time.Minute, "a HoldCreated AuditEvent", holdAudit("HoldCreated"))
 
 	// The admission policy pins createdBy to the caller.
-	forged := p.DeepCopy()
-	forged.Spec.Holds = append(forged.Spec.Holds, v1alpha1.EnvironmentHold{Environment: "test", Bundle: rb,
-		Reason: "forged", CreatedBy: "mallory", CreatedAt: hold.CreatedAt})
-	err = e.Client.Update(ctx, forged)
+	for range 5 { // the controller writes the Pipeline's status meanwhile
+		var forged v1alpha1.Pipeline
+		require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &forged))
+		forged.Spec.Holds = append(forged.Spec.Holds, v1alpha1.EnvironmentHold{Environment: "test", Bundle: rb,
+			Reason: "forged", CreatedBy: "mallory", CreatedAt: hold.CreatedAt})
+		if err = e.Client.Update(ctx, &forged); !apierrors.IsConflict(err) {
+			break
+		}
+	}
 	require.Error(t, err, "a hold in someone else's name is refused")
 	assert.Contains(t, err.Error(), "createdBy")
 
