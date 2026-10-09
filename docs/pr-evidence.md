@@ -292,9 +292,9 @@ review.
 
 ## Branch Naming
 
-PR branches follow the pattern: `kardinal/<bundle>/<environment>`
+PR branches follow the pattern: `kardinal/<namespace hash>/<bundle>/<environment>`
 
-Example: `kardinal/my-app-x7k2p/prod`
+Example: `kardinal/3f9c2a1b/my-app-x7k2p/prod`. The namespace hash (the first 8 hex digits of the SHA-256 of the Bundle's namespace) keeps two namespaces with the same Bundle and environment names from sharing a branch. A PR opened before this change keeps its `kardinal/<bundle>/<environment>` branch until it merges or closes.
 
 When kardinal closes a PR without a merge, it deletes this branch. It also deletes the branch
 of a step that ended before it opened a PR. A merged PR keeps its branch.

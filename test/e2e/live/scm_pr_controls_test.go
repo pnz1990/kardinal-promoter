@@ -97,7 +97,7 @@ func scmPRControls(t *testing.T, e *framework.Env, scopes []string) {
 	assertEnvAt(t, a, "prod", fixtures.V2)
 
 	pr := e.WaitPR(t, a.repo, time.Minute, "the merged prod PR of "+bundle, func(pr gitserver.PR) bool {
-		return pr.State == "merged" && pr.Head == prHead(bundle, "prod")
+		return pr.State == "merged" && pr.Head == prHead(a.ns, bundle, "prod")
 	})
 	title := "Deploy " + fixtures.V2 + " to prod (0123456)"
 	assert.Equal(t, title, pr.Title)
