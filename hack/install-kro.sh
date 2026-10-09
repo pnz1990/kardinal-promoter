@@ -37,6 +37,7 @@ KRO_VERSION="${KRO_VERSION:-0.10.0-rc.0}"
 # G1, resolvableWhen), and kardinal's unit tests check that text with
 # kardinal's own cel-go. test/hack TestCelGoParity fails when go.mod's cel-go
 # differs from this. On a kro upgrade, copy it from kro's go.mod at the new tag.
+# shellcheck disable=SC2034 # read by test/hack TestCelGoParity, not by this script
 KRO_CEL_GO_VERSION="v0.31.0"
 KRO_NAMESPACE="${KRO_NAMESPACE:-kro-system}"
 KRO_RBAC_MODE="${KRO_RBAC_MODE:-aggregation}"
