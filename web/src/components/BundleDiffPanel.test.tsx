@@ -22,7 +22,7 @@ const makeBundle = (overrides: Partial<Bundle> = {}): Bundle => ({
   name: 'bundle-a',
   namespace: 'default',
   phase: 'Verified',
-  type: 'standard',
+  type: 'image',
   pipeline: 'my-app',
   createdAt: '2026-04-15T10:00:00Z',
   ...overrides,

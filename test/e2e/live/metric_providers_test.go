@@ -220,11 +220,23 @@ func TestMetric_WebProviderGate(t *testing.T) {
 // while the fake returns no data for that exact query the instance fails, the
 // gate blocks and prod gets no step. Once the query returns a passing value
 // the gate passes and prod is promoted, and once the Bundle is Verified the
-// Graph suspends the instance.
+// Graph suspends the instance. It runs in both Graph shapes.
 //
-// Covers METRIC-TMPL-01, METRIC-TMPL-02, METRIC-TMPL-03.
+// Covers METRIC-TMPL-01, METRIC-TMPL-02, METRIC-TMPL-03, GRAPH-COMPACT-04.
 func TestMetric_PerPromotionAnalysis(t *testing.T) {
 	t.Parallel()
+	for _, shape := range []string{"nodes", "compact"} {
+		t.Run(shape, func(t *testing.T) {
+			t.Parallel()
+			perPromotionAnalysis(t, shape)
+		})
+	}
+}
+
+// perPromotionAnalysis is TestMetric_PerPromotionAnalysis with the Pipeline's
+// Graph shape set to shape (kardinal.io/graph-shape): the compact shape
+// creates the instances from its MetricChecks collection.
+func perPromotionAnalysis(t *testing.T, shape string) {
 	e := framework.New(t)
 	ctx := context.Background()
 	a := newFluxApp(t, e, "test", "prod")
@@ -240,7 +252,9 @@ func TestMetric_PerPromotionAnalysis(t *testing.T) {
 
 	const expr = `metrics["canary"].result == "Pass"`
 	e.CreateGate(t, framework.Gate(a.ns, "canary-gate", "prod", expr, "5m"))
-	a.apply(t, a.pipeline(nil))
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{"kardinal.io/graph-shape": shape}
+	a.apply(t, p)
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
 	rendered := fmt.Sprintf("avg:e2e.errors{ns:%s,version:%s,env:prod,pipeline:%s}", a.ns, fixtures.V2, pipelineName)
 
