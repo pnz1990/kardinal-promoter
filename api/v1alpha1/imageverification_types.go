@@ -136,11 +136,14 @@ type CommitSignaturePolicy struct {
 	RequireSigned bool `json:"requireSigned"`
 
 	// AllowedSigners, when set, also requires the signer to be one of these:
-	// an SCM login, an email address, or a key ID or fingerprint, as the SCM
-	// reports them. Commits the SCM platform signed itself (GitHub web-flow
-	// for web UI edits and merges, GitLab verified_system) match only the
-	// entries "web-flow" (GitHub) and "gitlab-system" (GitLab). Empty means
-	// any signature the SCM verified, platform signatures included.
+	// an SCM login or an email address, as the SCM reports the verified
+	// signer (GitLab: the key owner's verified email, the committer's for
+	// SSH; never a key title). Commits the SCM platform signed itself, not a
+	// person, are refused unless listed here explicitly: "web-flow" (GitHub
+	// web UI edits and merges), "gitlab-system" (GitLab verified_system) and
+	// "forgejo-instance" (the Forgejo/Gitea instance key). To accept PRs
+	// merged in the web UI, list the platform identity. Empty means any
+	// person's signature the SCM verified.
 	// +kubebuilder:validation:MaxItems=50
 	// +optional
 	AllowedSigners []string `json:"allowedSigners,omitempty"`

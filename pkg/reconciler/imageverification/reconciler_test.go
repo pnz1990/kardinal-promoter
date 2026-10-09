@@ -65,11 +65,16 @@ func (f *fakeRegistry) Signatures(ctx context.Context, _, digest string, _ iv.Re
 // fakeSCM verifies commits from a table.
 type fakeSCM struct {
 	scm.SCMProvider
-	sig scm.CommitSignature
-	err error
+	sig  scm.CommitSignature
+	err  error
+	hang bool
 }
 
-func (f *fakeSCM) VerifyCommit(context.Context, string, string) (scm.CommitSignature, error) {
+func (f *fakeSCM) VerifyCommit(ctx context.Context, _, _ string) (scm.CommitSignature, error) {
+	if f.hang {
+		<-ctx.Done()
+		return scm.CommitSignature{}, ctx.Err()
+	}
 	return f.sig, f.err
 }
 
@@ -357,6 +362,9 @@ func TestImageVerification_Commits(t *testing.T) {
 	ok := func(identities ...string) scm.CommitSignature {
 		return scm.CommitSignature{Verified: true, Signer: identities[0], SHA: sha, Identities: identities}
 	}
+	platform := func(id string) scm.CommitSignature {
+		return scm.CommitSignature{Verified: true, Signer: id, SHA: sha, Identities: []string{id}, Platform: true}
+	}
 	cases := []struct {
 		name    string
 		scm     scm.SCMProvider
@@ -368,8 +376,11 @@ func TestImageVerification_Commits(t *testing.T) {
 		{name: "verified", scm: &fakeSCM{sig: ok("alice", "alice@example.com")}, phase: v1alpha1.ImageVerificationVerified, msg: "commit " + sha + " signed by alice"},
 		{name: "allowed signer by email", scm: &fakeSCM{sig: ok("alice", "Alice@Example.com")}, allowed: []string{"alice@example.com"}, phase: v1alpha1.ImageVerificationVerified, msg: "signed by alice"},
 		{name: "signer not allowed", scm: &fakeSCM{sig: ok("mallory", "m@example.com")}, allowed: []string{"alice"}, phase: v1alpha1.ImageVerificationFailed, msg: "who is not in commits.allowedSigners"},
-		{name: "web-flow not allowed", scm: &fakeSCM{sig: ok(scm.PlatformSignerGitHub)}, allowed: []string{"alice"}, phase: v1alpha1.ImageVerificationFailed, msg: "signed by web-flow"},
-		{name: "web-flow allowed when listed", scm: &fakeSCM{sig: ok(scm.PlatformSignerGitHub)}, allowed: []string{"web-flow"}, phase: v1alpha1.ImageVerificationVerified, msg: "signed by web-flow"},
+		{name: "web-flow refused by default", scm: &fakeSCM{sig: platform(scm.PlatformSignerGitHub)}, phase: v1alpha1.ImageVerificationFailed, msg: `signed by the SCM platform (web-flow`},
+		{name: "web-flow refused with other signers listed", scm: &fakeSCM{sig: platform(scm.PlatformSignerGitHub)}, allowed: []string{"alice"}, phase: v1alpha1.ImageVerificationFailed, msg: `list "web-flow" in commits.allowedSigners`},
+		{name: "web-flow allowed when listed", scm: &fakeSCM{sig: platform(scm.PlatformSignerGitHub)}, allowed: []string{"web-flow"}, phase: v1alpha1.ImageVerificationVerified, msg: "signed by web-flow"},
+		{name: "gitlab-system refused by default", scm: &fakeSCM{sig: platform(scm.PlatformSignerGitLab)}, phase: v1alpha1.ImageVerificationFailed, msg: "signed by the SCM platform (gitlab-system"},
+		{name: "forgejo instance key refused by default", scm: &fakeSCM{sig: platform(scm.PlatformSignerForgejo)}, phase: v1alpha1.ImageVerificationFailed, msg: "signed by the SCM platform (forgejo-instance"},
 		{name: "short SHA", scm: &fakeSCM{sig: ok("alice")}, commit: &v1alpha1.VerifiedCommit{Repo: commit.Repo, SHA: "abc123"}, phase: v1alpha1.ImageVerificationFailed, msg: "not a full 40- or 64-character commit SHA"},
 		{name: "SCM answered for another commit", scm: &fakeSCM{sig: scm.CommitSignature{Verified: true, Signer: "alice", SHA: strings.Repeat("f", 40)}}, phase: v1alpha1.ImageVerificationFailed, msg: "the SCM answered for commit"},
 		{name: "repository on another host", scm: &fakeSCM{sig: ok("alice")}, commit: &v1alpha1.VerifiedCommit{Repo: "https://gitlab.example/org/config", SHA: sha}, phase: v1alpha1.ImageVerificationFailed, msg: `is on gitlab.example, not on the controller's SCM host "github.com"`},
@@ -413,4 +424,34 @@ func TestImageVerification_RegistryCallsAreTimeBounded(t *testing.T) {
 	h.reconcile()
 	require.False(t, h.reg.deadline.IsZero(), "the fetch has a deadline")
 	assert.LessOrEqual(t, h.reg.deadline.Sub(start), time.Minute)
+}
+
+// TestImageVerification_HungRegistryTimesOut: a registry that never answers
+// is cut at the per-fetch timeout; the check records it and retries, and
+// the status write still happens (QA #1521 round 2).
+func TestImageVerification_HungRegistryTimesOut(t *testing.T) {
+	_, pem := signed(t)
+	h := newHarness(t, nil, newIV([]v1alpha1.VerifiedImage{{Repository: repo, Digest: digestA}}, nil, ""), keySecret("cosign", pem))
+	h.reg.hang = true
+	h.r.RegistryTimeout = 50 * time.Millisecond
+	start := time.Now()
+	got, res := h.reconcile()
+	assert.Less(t, time.Since(start), 5*time.Second)
+	assert.Equal(t, v1alpha1.ImageVerificationPending, got.Status.Phase)
+	assert.Contains(t, got.Status.Message, "context deadline exceeded")
+	assert.Positive(t, res.RequeueAfter)
+}
+
+// TestImageVerification_HungSCMTimesOut: an SCM that never answers is cut
+// at the check timeout; the commit check retries and the status is written.
+func TestImageVerification_HungSCMTimesOut(t *testing.T) {
+	commit := &v1alpha1.VerifiedCommit{Repo: "https://github.com/org/config", SHA: strings.Repeat("abc1", 10)}
+	h := newHarness(t, &fakeSCM{hang: true}, newIV(nil, commit, ""))
+	h.r.CheckTimeout = 50 * time.Millisecond
+	start := time.Now()
+	got, res := h.reconcile()
+	assert.Less(t, time.Since(start), 5*time.Second)
+	assert.Equal(t, v1alpha1.ImageVerificationPending, got.Status.Phase)
+	assert.Contains(t, got.Status.Message, "SCM: context deadline exceeded")
+	assert.Positive(t, res.RequeueAfter)
 }

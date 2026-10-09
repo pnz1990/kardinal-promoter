@@ -58,7 +58,7 @@ with `status.reason: SecretNotReferenceable` until the label is added or the tim
 | `authorities[].keyless.subject` / `subjectRegExp` | | The certificate's subject (exactly one of the two). `subjectRegExp` must match the whole subject: it is anchored as `^(?:...)$`. |
 | `authorities[].keyless.trustedRootRef` | public good | `{name, key}`: a Secret with a Sigstore `trusted_root.json`, for a private Sigstore. Without it the controller fetches the public-good trusted root through TUF (from `tuf-repo-cdn.sigstore.dev`) on first use and again once a day; a failed refresh keeps the previous root and is retried after 5 minutes. Each TUF request times out after 20s. |
 | `commits.requireSigned` | `false` | A config or mixed Bundle's `configRef.commitSHA` must be signed with a signature the SCM verified (GitHub, GitLab, Forgejo and Gitea report it; Bitbucket and Azure DevOps do not, and such a Bundle fails). See [Signed commits](#signed-commits). |
-| `commits.allowedSigners[]` | any | Also require the signer to be one of these SCM logins, emails or key IDs. |
+| `commits.allowedSigners[]` | any person | Also require the signer to be one of these SCM logins or emails. Platform signatures (`web-flow`, `gitlab-system`, `forgejo-instance`) are accepted only when listed. |
 | `signatureRepository` | next to the image | Where the signatures are, when they are not next to the images (cosign's `COSIGN_REPOSITORY`). |
 | `registrySecretRef.name` | anonymous | A `kubernetes.io/dockerconfigjson` Secret in the Pipeline namespace for private registries. |
 | `insecureRegistries[]` | | Registry hosts read over plain HTTP. Every other registry is HTTPS only. |
@@ -129,20 +129,23 @@ SCM host (`--scm-api-url`; `api.github.com` is `github.com`). The SCM is asked a
 commit, and the SHA it answers for must be the same.
 
 The SCM's verdict is about the key it holds for the signer; `allowedSigners` narrows it to the
-people (or keys) you accept. Two kinds of commits are signed by the platform rather than a person:
+people you accept, by login or email as the SCM reports the verified signer. GitLab is matched on
+the key owner's verified email (for SSH signatures, whose response names the key only by a title
+its owner chose, on the commit's committer email, which GitLab checked against the key's owner);
+it reports no full GPG fingerprint, so keys are not matched.
 
-- **GitHub `web-flow`**: commits made in the GitHub web UI (edits, merges, squash merges, reverts)
-  are signed with GitHub's key and reported as verified, with committer `web-flow`.
-- **GitLab `verified_system`**: commits GitLab created and signed itself (web UI, API) are
-  reported with status `verified_system`.
+Commits signed by the platform rather than a person are **refused** unless `allowedSigners`
+lists the platform identity explicitly:
 
-Without `allowedSigners`, both are accepted as verified: anyone who can push through the web UI
-gets a "signed" commit. With `allowedSigners`, they match only the entries `web-flow` (GitHub) and
-`gitlab-system` (GitLab); a person's login or email never matches them.
+| Platform | Identity | Which commits |
+|---|---|---|
+| GitHub | `web-flow` | web UI edits, merges, squash merges and reverts, signed with GitHub's key |
+| GitLab | `gitlab-system` | commits GitLab created and signed itself (status `verified_system`: web UI, API) |
+| Forgejo / Gitea | `forgejo-instance` | commits signed with the instance key (a verified signature with no user) |
 
-```bash
-kubectl get imageverification -n my-app my-app-my-app-x7k2p-verify -o jsonpath='{.status}'
-```
+To accept PRs merged in the web UI (the usual GitOps flow), list the identity, for example
+`allowedSigners: [web-flow, alice, bob@example.com]`. Anyone who can merge through the web UI then
+gets such a commit, so pair it with branch protection that requires reviews.
 
 ## What it cannot do
 

@@ -25,19 +25,27 @@ type CommitSignature struct {
 	// SHA is the commit the provider answered for; the caller checks it is
 	// the one it asked about.
 	SHA string
-	// Identities are what an allowed-signers list matches: the signer's
-	// login, email and key ID or fingerprint, as the provider reports them.
-	// A commit the platform signed itself has only PlatformSignerGitHub or
-	// PlatformSignerGitLab.
+	// Identities are what an allowed-signers list matches: the verified
+	// signer's login and email, as the provider reports them (never a key
+	// title, which the key's owner chooses). A commit the platform signed
+	// itself has only its platform identity.
 	Identities []string
+	// Platform is true when the SCM signed the commit with its own key (a
+	// web UI edit or merge), not a user: GitHub web-flow, GitLab
+	// verified_system, the Forgejo/Gitea instance key. Image verification
+	// refuses such a commit unless commits.allowedSigners lists the
+	// platform identity.
+	Platform bool
 }
 
 // Identities of commits an SCM platform signed with its own key: GitHub
 // signs web UI edits and merges as web-flow, GitLab reports verified_system
-// for commits it signed (web UI, API).
+// for commits it signed (web UI, API), Forgejo and Gitea sign with the
+// instance key (repository.signing).
 const (
-	PlatformSignerGitHub = "web-flow"
-	PlatformSignerGitLab = "gitlab-system"
+	PlatformSignerGitHub  = "web-flow"
+	PlatformSignerGitLab  = "gitlab-system"
+	PlatformSignerForgejo = "forgejo-instance"
 )
 
 func nonEmpty(v ...string) []string {
@@ -98,7 +106,7 @@ func (g *GitHubProvider) VerifyCommit(ctx context.Context, repo, sha string) (Co
 		sig.Signer = result.Commit.Committer.Email
 	}
 	if login == PlatformSignerGitHub {
-		sig.Identities = []string{PlatformSignerGitHub}
+		sig.Identities, sig.Platform = []string{PlatformSignerGitHub}, true
 	}
 	return sig, nil
 }
@@ -130,12 +138,16 @@ func (f *ForgejoProvider) VerifyCommit(ctx context.Context, repo, sha string) (C
 	}
 	v := result.Commit.Verification
 	sig := CommitSignature{Verified: v.Verified, Reason: v.Reason, SHA: result.SHA}
-	if v.Signer != nil {
+	switch {
+	case v.Signer != nil && v.Signer.Username != "":
 		sig.Signer = v.Signer.Username
-		if sig.Signer == "" {
-			sig.Signer = v.Signer.Email
-		}
 		sig.Identities = nonEmpty(v.Signer.Username, v.Signer.Email)
+	case v.Verified:
+		// A verified signature with no user behind it is the instance key
+		// (Forgejo/Gitea sign web UI commits and merges with it).
+		sig.Signer, sig.Identities, sig.Platform = PlatformSignerForgejo, []string{PlatformSignerForgejo}, true
+	case v.Signer != nil:
+		sig.Signer = v.Signer.Email
 	}
 	return sig, nil
 }
@@ -147,7 +159,8 @@ func (f *ForgejoProvider) VerifyCommit(ctx context.Context, repo, sha string) (C
 func (g *GitLabProvider) VerifyCommit(ctx context.Context, repo, sha string) (CommitSignature, error) {
 	project := encodeProjectID(repo)
 	var commit struct {
-		ID string `json:"id"`
+		ID             string `json:"id"`
+		CommitterEmail string `json:"committer_email"`
 	}
 	if err := g.do(ctx, http.MethodGet,
 		fmt.Sprintf("/api/v4/projects/%s/repository/commits/%s", project, url.PathEscape(sha)), nil, &commit); err != nil {
@@ -157,14 +170,8 @@ func (g *GitLabProvider) VerifyCommit(ctx context.Context, repo, sha string) (Co
 		SignatureType      string `json:"signature_type"`
 		VerificationStatus string `json:"verification_status"`
 		GPGKeyUserEmail    string `json:"gpg_key_user_email"`
-		GPGKeyPrimaryKeyID string `json:"gpg_key_primary_keyid"`
-		Key                *struct {
-			Title       string `json:"title"`
-			Fingerprint string `json:"fingerprint_sha256"`
-		} `json:"key"`
-		X509Certificate *struct {
-			Email                string `json:"email"`
-			SubjectKeyIdentifier string `json:"subject_key_identifier"`
+		X509Certificate    *struct {
+			Email string `json:"email"`
 		} `json:"x509_certificate"`
 		CommitSource string `json:"commit_source"`
 	}
@@ -181,18 +188,21 @@ func (g *GitLabProvider) VerifyCommit(ctx context.Context, repo, sha string) (Co
 	system := result.VerificationStatus == "verified_system"
 	sig := CommitSignature{Verified: result.VerificationStatus == "verified" || system,
 		Reason: result.VerificationStatus, SHA: commit.ID}
+	// GitLab verifies a signature only when the key's owner has the
+	// committer's email verified, so the identity is that email: the GPG
+	// key's user email, the X.509 certificate's email, or for SSH (whose
+	// response names only the key, by a title its owner chose) the commit's
+	// committer email. GitLab reports no full GPG fingerprint (only the
+	// 16-hex key ID, which is not unique), so keys are not identities.
 	switch {
 	case system:
-		sig.Signer, sig.Identities = PlatformSignerGitLab, []string{PlatformSignerGitLab}
+		sig.Signer, sig.Identities, sig.Platform = PlatformSignerGitLab, []string{PlatformSignerGitLab}, true
 	case result.GPGKeyUserEmail != "":
-		sig.Signer = result.GPGKeyUserEmail
-		sig.Identities = nonEmpty(result.GPGKeyUserEmail, result.GPGKeyPrimaryKeyID)
+		sig.Signer, sig.Identities = result.GPGKeyUserEmail, nonEmpty(result.GPGKeyUserEmail)
 	case result.X509Certificate != nil:
-		sig.Signer = result.X509Certificate.Email
-		sig.Identities = nonEmpty(result.X509Certificate.Email, result.X509Certificate.SubjectKeyIdentifier)
-	case result.Key != nil:
-		sig.Signer = result.Key.Title
-		sig.Identities = nonEmpty(result.Key.Title, result.Key.Fingerprint)
+		sig.Signer, sig.Identities = result.X509Certificate.Email, nonEmpty(result.X509Certificate.Email)
+	case result.SignatureType == "SSH" && sig.Verified:
+		sig.Signer, sig.Identities = commit.CommitterEmail, nonEmpty(commit.CommitterEmail)
 	}
 	return sig, nil
 }

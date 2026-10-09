@@ -38,13 +38,13 @@ func TestPublicGoodRoot_RefreshedOnTTL(t *testing.T) {
 			return nil, errors.New("tuf: 503")
 		}
 		return next, nil
-	}, func() time.Time { return now })
+	})
 
-	got, err := c.get(context.Background())
+	got, err := c.get(context.Background(), now)
 	require.NoError(t, err)
 	assert.Same(t, first, got)
 	now = now.Add(PublicGoodRootTTL - time.Minute)
-	got, _ = c.get(context.Background())
+	got, _ = c.get(context.Background(), now)
 	assert.Same(t, first, got)
 	assert.Equal(t, int32(1), calls.Load(), "cached within the TTL")
 
@@ -52,18 +52,18 @@ func TestPublicGoodRoot_RefreshedOnTTL(t *testing.T) {
 	// until publicGoodRetry.
 	now = now.Add(2 * time.Minute)
 	fail.Store(true)
-	got, err = c.get(context.Background())
+	got, err = c.get(context.Background(), now)
 	require.NoError(t, err)
 	assert.Same(t, first, got)
 	assert.Equal(t, int32(2), calls.Load())
-	got, _ = c.get(context.Background())
+	got, _ = c.get(context.Background(), now)
 	assert.Same(t, first, got)
 	assert.Equal(t, int32(2), calls.Load(), "backing off after a failed refresh")
 
 	now = now.Add(publicGoodRetry)
 	fail.Store(false)
 	next = second
-	got, err = c.get(context.Background())
+	got, err = c.get(context.Background(), now)
 	require.NoError(t, err)
 	assert.Same(t, second, got, "refreshed")
 }
@@ -72,6 +72,7 @@ func TestPublicGoodRoot_RefreshedOnTTL(t *testing.T) {
 // (singleflight), and a hung fetch does not hold them: they return when
 // their context ends (QA #1521: the fetch ran under a global mutex).
 func TestPublicGoodRoot_OneFetchNoLockHeld(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	release := make(chan struct{})
 	var calls atomic.Int32
 	vs, err := ca.NewVirtualSigstore()
@@ -80,7 +81,7 @@ func TestPublicGoodRoot_OneFetchNoLockHeld(t *testing.T) {
 		calls.Add(1)
 		<-release
 		return vs, nil
-	}, time.Now)
+	})
 
 	var wg sync.WaitGroup
 	errs := make([]error, 5)
@@ -90,7 +91,7 @@ func TestPublicGoodRoot_OneFetchNoLockHeld(t *testing.T) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 			defer cancel()
-			_, errs[i] = c.get(ctx)
+			_, errs[i] = c.get(ctx, now)
 		}(i)
 	}
 	wg.Wait()
@@ -101,7 +102,7 @@ func TestPublicGoodRoot_OneFetchNoLockHeld(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load(), "one fetch for every caller")
 	close(release)
 	require.Eventually(t, func() bool {
-		got, err := c.get(context.Background())
+		got, err := c.get(context.Background(), now)
 		return err == nil && got == root.TrustedMaterial(vs)
 	}, 5*time.Second, 10*time.Millisecond)
 	assert.Equal(t, int32(1), calls.Load())
@@ -117,11 +118,13 @@ func TestDockerConfigKeychain_DockerHub(t *testing.T) {
 		"Registry.Example:443":{"username":"ex","password":"p2"}}}`))
 	require.NoError(t, err)
 	for ref, user := range map[string]string{
-		"nginx":                    "hub",
-		"docker.io/myorg/app":      "hub",
-		"registry.example/app":     "ex",
-		"registry.example:443/app": "ex",
-		"other.example/app":        "",
+		"nginx":                          "hub",
+		"index.docker.io/library/nginx":  "hub",
+		"registry-1.docker.io/myorg/app": "hub",
+		"docker.io/myorg/app":            "hub",
+		"registry.example/app":           "ex",
+		"registry.example:443/app":       "ex",
+		"other.example/app":              "",
 	} {
 		r, err := name.NewRepository(ref)
 		require.NoError(t, err)
@@ -138,4 +141,24 @@ func TestDockerConfigKeychain_DockerHub(t *testing.T) {
 	_, err = dockerConfigKeychain([]byte(`{"auths": SECRET`))
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "SECRET")
+}
+
+// TestDockerConfigKeychain_DockerHubAliases: every spelling of Docker Hub in
+// a .dockerconfigjson (docker.io, registry-1.docker.io, index.docker.io,
+// with or without scheme and path) authenticates every spelling of a Docker
+// Hub image (QA #1521 round 2).
+func TestDockerConfigKeychain_DockerHubAliases(t *testing.T) {
+	for _, key := range []string{"docker.io", "registry-1.docker.io", "https://index.docker.io/v1/", "https://docker.io", "DOCKER.IO:443"} {
+		kc, err := dockerConfigKeychain([]byte(`{"auths":{"` + key + `":{"username":"hub","password":"p"}}}`))
+		require.NoError(t, err)
+		for _, ref := range []string{"nginx", "docker.io/library/nginx", "index.docker.io/myorg/app", "registry-1.docker.io/myorg/app"} {
+			r, err := name.NewRepository(ref)
+			require.NoError(t, err)
+			a, err := kc.Resolve(r)
+			require.NoError(t, err)
+			cfg, err := a.Authorization()
+			require.NoError(t, err)
+			assert.Equal(t, "hub", cfg.Username, "%s for %s", key, ref)
+		}
+	}
 }

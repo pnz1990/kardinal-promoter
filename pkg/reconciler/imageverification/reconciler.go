@@ -46,10 +46,11 @@ const (
 	// retryBase and retryMax space the checks that ended without a verdict.
 	retryBase = 10 * time.Second
 	retryMax  = 2 * time.Minute
-	// reconcileTimeout bounds one reconcile (every registry and SCM call
-	// in it); registryTimeout bounds the signature fetch of one image.
-	reconcileTimeout = 2 * time.Minute
-	registryTimeout  = 45 * time.Second
+	// DefaultCheckTimeout bounds the registry, SCM and Secret calls of one
+	// reconcile (not its status write); DefaultRegistryTimeout bounds the
+	// signature fetch of one image.
+	DefaultCheckTimeout    = 2 * time.Minute
+	DefaultRegistryTimeout = 45 * time.Second
 	// MaxConcurrentReconciles is how many ImageVerifications are checked at
 	// once: a slow registry holds one worker, not every Bundle's.
 	MaxConcurrentReconciles = 4
@@ -105,7 +106,12 @@ type Reconciler struct {
 	// PublicGoodRoot returns the Sigstore public-good trusted root (for
 	// keyless authorities without a trustedRootRef, and keys that require
 	// a transparency log entry). Nil: such authorities fail.
-	PublicGoodRoot func(ctx context.Context) (root.TrustedMaterial, error)
+	// now is the reconciler's clock (NowFn), which ages the cached root.
+	PublicGoodRoot func(ctx context.Context, now time.Time) (root.TrustedMaterial, error)
+
+	// CheckTimeout and RegistryTimeout override DefaultCheckTimeout and
+	// DefaultRegistryTimeout (tests); zero means the default.
+	CheckTimeout, RegistryTimeout time.Duration
 
 	// NowFn returns the current time; nil means time.Now.
 	NowFn func() time.Time
@@ -135,8 +141,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
-	defer cancel()
 	log := zerolog.Ctx(ctx).With().Str("imageverification", req.Name).Str("namespace", req.Namespace).Logger()
 	var iv v1alpha1.ImageVerification
 	if err := r.Get(ctx, req.NamespacedName, &iv); err != nil {
@@ -161,9 +165,13 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	iv.Status.LastCheckedAt = &now
 
-	o := r.checkImages(ctx, log, &iv)
+	// The registry, SCM and Secret calls share one deadline; the status
+	// write below uses ctx, so it still records what the checks found.
+	checkCtx, cancel := context.WithTimeout(ctx, durationOr(r.CheckTimeout, DefaultCheckTimeout))
+	defer cancel()
+	o := r.checkImages(checkCtx, log, &iv)
 	if o.failed == "" {
-		c := r.checkCommit(ctx, &iv)
+		c := r.checkCommit(checkCtx, &iv)
 		if c.failed != "" {
 			o.failed, o.reason = c.failed, c.reason
 		}
@@ -243,7 +251,7 @@ func (r *Reconciler) checkImages(ctx context.Context, log zerolog.Logger, iv *v1
 			wait(err.Error(), reasonOf(err))
 			continue
 		}
-		fetchCtx, cancel := context.WithTimeout(ctx, registryTimeout)
+		fetchCtx, cancel := context.WithTimeout(ctx, durationOr(r.RegistryTimeout, DefaultRegistryTimeout))
 		sigs, err := r.Registry.Signatures(fetchCtx, img.Repository, img.Digest, opts)
 		cancel()
 		if err != nil {
@@ -325,7 +333,13 @@ func (r *Reconciler) checkCommit(ctx context.Context, iv *v1alpha1.ImageVerifica
 		return outcome{failed: fmt.Sprintf("commit %s of %s is not signed with a verified signature (%s)", c.SHA, repo, reason),
 			reason: ReasonCommitNotVerified}
 	}
-	if allowed := commitAllowedSigners(iv); len(allowed) > 0 && !signerAllowed(sig, allowed) {
+	allowed := commitAllowedSigners(iv)
+	if sig.Platform && !signerAllowed(sig, allowed) {
+		iv.Status.Commit = &v1alpha1.CommitVerificationResult{Message: "platform signature", Signer: sig.Signer}
+		return outcome{failed: fmt.Sprintf("commit %s of %s is signed by the SCM platform (%s, a web UI edit or merge), not a person; "+
+			"list %q in commits.allowedSigners to accept such commits", c.SHA, repo, sig.Signer, sig.Signer), reason: ReasonCommitNotVerified}
+	}
+	if len(allowed) > 0 && !signerAllowed(sig, allowed) {
 		iv.Status.Commit = &v1alpha1.CommitVerificationResult{Message: "signer not allowed", Signer: sig.Signer}
 		return outcome{failed: fmt.Sprintf("commit %s of %s is signed by %s (%s), who is not in commits.allowedSigners",
 			c.SHA, repo, sig.Signer, strings.Join(sig.Identities, ", ")), reason: ReasonCommitNotVerified}
@@ -433,7 +447,7 @@ func (r *Reconciler) publicGood(ctx context.Context) (root.TrustedMaterial, erro
 	if r.PublicGoodRoot == nil {
 		return nil, fmt.Errorf("no Sigstore public-good trusted root is configured; set trustedRootRef")
 	}
-	tm, err := r.PublicGoodRoot(ctx)
+	tm, err := r.PublicGoodRoot(ctx, r.now())
 	if err != nil {
 		return nil, fmt.Errorf("fetch the Sigstore public-good trusted root: %w", err)
 	}
@@ -608,17 +622,24 @@ const (
 
 // PublicGoodRoot returns a function that fetches the Sigstore public-good
 // trusted root through TUF on first use and again once it is older than
-// PublicGoodRootTTL. One fetch runs at a time (singleflight), outside any
-// lock, and a caller waits for it at most publicGoodWait (or its context).
-// When a refresh fails, the previous root keeps being used and the fetch is
-// retried after publicGoodRetry.
-func PublicGoodRoot(fetch func() (root.TrustedMaterial, error)) func(context.Context) (root.TrustedMaterial, error) {
-	return newPublicGoodCache(fetch, time.Now).get
+// PublicGoodRootTTL, by the caller's clock (the reconciler's NowFn). One
+// fetch runs at a time (singleflight), outside any lock, and a caller waits
+// for it at most publicGoodWait (or its context). When a refresh fails, the
+// previous root keeps being used and the fetch is retried after
+// publicGoodRetry.
+//
+// Why an in-memory cache and not CRD state: the trusted root is public
+// Sigstore key material (the same for every ImageVerification), not a
+// decision. Every verdict is still written to ImageVerification.status, and
+// a restarted controller simply fetches the root again. Keeping it in a CRD
+// would add a cluster-scoped object for a few kilobytes of public keys that
+// TUF already authenticates on each fetch.
+func PublicGoodRoot(fetch func() (root.TrustedMaterial, error)) func(context.Context, time.Time) (root.TrustedMaterial, error) {
+	return newPublicGoodCache(fetch).get
 }
 
 type publicGoodCache struct {
 	fetch func() (root.TrustedMaterial, error)
-	now   func() time.Time
 	sf    singleflight.Group
 
 	mu        sync.Mutex
@@ -627,14 +648,14 @@ type publicGoodCache struct {
 	failedAt  time.Time
 }
 
-func newPublicGoodCache(fetch func() (root.TrustedMaterial, error), now func() time.Time) *publicGoodCache {
-	return &publicGoodCache{fetch: fetch, now: now}
+func newPublicGoodCache(fetch func() (root.TrustedMaterial, error)) *publicGoodCache {
+	return &publicGoodCache{fetch: fetch}
 }
 
-func (c *publicGoodCache) get(ctx context.Context) (root.TrustedMaterial, error) {
+func (c *publicGoodCache) get(ctx context.Context, now time.Time) (root.TrustedMaterial, error) {
 	c.mu.Lock()
-	got, fresh := c.got, c.got != nil && c.now().Sub(c.fetchedAt) < PublicGoodRootTTL
-	backingOff := !c.failedAt.IsZero() && c.now().Sub(c.failedAt) < publicGoodRetry
+	got, fresh := c.got, c.got != nil && now.Sub(c.fetchedAt) < PublicGoodRootTTL
+	backingOff := !c.failedAt.IsZero() && now.Sub(c.failedAt) < publicGoodRetry
 	c.mu.Unlock()
 	if fresh || (got != nil && backingOff) {
 		return got, nil
@@ -644,10 +665,10 @@ func (c *publicGoodCache) get(ctx context.Context) (root.TrustedMaterial, error)
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if err != nil {
-			c.failedAt = c.now()
+			c.failedAt = now
 			return nil, err
 		}
-		c.got, c.fetchedAt, c.failedAt = tm, c.now(), time.Time{}
+		c.got, c.fetchedAt, c.failedAt = tm, now, time.Time{}
 		return tm, nil
 	})
 	timer := time.NewTimer(publicGoodWait)
@@ -677,4 +698,11 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1alpha1.ImageVerification{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: MaxConcurrentReconciles})
 	return shard.Active().Complete(b, tracing.WrapReconciler("imageverification", r), &v1alpha1.ImageVerificationList{})
+}
+
+func durationOr(d, def time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return def
 }

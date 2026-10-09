@@ -88,3 +88,23 @@ func TestImageVerificationImagesMustMatch(t *testing.T) {
 		})
 	}
 }
+
+// TestImageVerificationRecheckedWhilePromoting: a Promoting step re-checks
+// the Bundle's images against the verified ones before its next git write
+// and fails on a difference (defense in depth behind the Bundle CRD's
+// immutability, QA #1521 round 2).
+func TestImageVerificationRecheckedWhilePromoting(t *testing.T) {
+	d1 := "sha256:" + strings.Repeat("1", 64)
+	d2 := "sha256:" + strings.Repeat("2", 64)
+	ps := labelled(makeStep("step", "p", "b1", "test"))
+	ps.Spec.ImageVerification = "app-v1-verify"
+	ps.Spec.Live = &v1alpha1.PromotionStepLive{ImageVerification: &v1alpha1.LiveImageVerification{
+		Name: "app-v1-verify", Phase: "Verified", Images: []string{"ghcr.io/org/app@" + d1}}}
+	ps.Status.State = "Promoting"
+	b := makeBundle("b1", "p")
+	b.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Digest: d2}}
+	c := newClient(t, ps, makePipeline("p"), b)
+	got, _ := reconcileHookStep(t, c, "step")
+	assert.Equal(t, "Failed", got.Status.State)
+	assert.Contains(t, got.Status.Message, "refusing to promote: the Bundle's image ghcr.io/org/app has digest")
+}

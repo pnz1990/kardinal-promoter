@@ -491,11 +491,53 @@ func TestCRDImageVerificationPhaseLatched(t *testing.T) {
 // keep the old verdict).
 func TestCRDImageVerificationSpecImmutable(t *testing.T) {
 	spec := loadCRDs(t)["ImageVerification"].structural.Properties["spec"]
-	var rules []string
+	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	require.NoError(t, err)
+	var prgs []cel.Program
 	for _, r := range spec.XValidations {
-		rules = append(rules, r.Rule)
+		if !strings.Contains(r.Rule, "oldSelf") {
+			continue
+		}
+		ast, iss := env.Compile(r.Rule)
+		require.NoError(t, iss.Err(), r.Rule)
+		prg, err := env.Program(ast)
+		require.NoError(t, err)
+		prgs = append(prgs, prg)
 	}
-	assert.Contains(t, rules, "self == oldSelf")
+	require.NotEmpty(t, prgs, "ImageVerification spec needs a transition rule")
+	base := func() map[string]interface{} {
+		return map[string]interface{}{"pipelineName": "app", "bundleName": "v1",
+			"images": []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "digest": "sha256:" + strings.Repeat("a", 64)}},
+			"policy": map[string]interface{}{"authorities": []interface{}{map[string]interface{}{"name": "release",
+				"key": map[string]interface{}{"secretRef": map[string]interface{}{"name": "cosign", "key": "cosign.pub"}}}}}}
+	}
+	cases := []struct {
+		name  string
+		edit  func(m map[string]interface{})
+		allow bool
+	}{
+		{"unchanged", func(map[string]interface{}) {}, true},
+		{"digest changed", func(m map[string]interface{}) {
+			m["images"] = []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "digest": "sha256:" + strings.Repeat("b", 64)}}
+		}, false},
+		{"authority key changed", func(m map[string]interface{}) {
+			m["policy"] = map[string]interface{}{"authorities": []interface{}{map[string]interface{}{"name": "release",
+				"key": map[string]interface{}{"secretRef": map[string]interface{}{"name": "other", "key": "cosign.pub"}}}}}
+		}, false},
+		{"commit added", func(m map[string]interface{}) { m["commit"] = map[string]interface{}{"repo": "r", "sha": "s"} }, false},
+	}
+	for _, c := range cases {
+		next := base()
+		c.edit(next)
+		allowed := true
+		for _, prg := range prgs {
+			out, _, err := prg.Eval(map[string]interface{}{"self": next, "oldSelf": base()})
+			require.NoError(t, err, c.name)
+			allowed = allowed && out.Value() == true
+		}
+		assert.Equal(t, c.allow, allowed, c.name)
+	}
+}
 
 // TestCRDBundleArtifactImmutable: a Bundle's artifact (type, pipeline,
 // images, configRef, provenance) cannot change after creation: gates and

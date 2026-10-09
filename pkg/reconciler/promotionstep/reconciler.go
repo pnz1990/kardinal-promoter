@@ -746,6 +746,20 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
+	// Defense in depth (the Bundle CRD already refuses an images edit):
+	// before every git or Argo CD write, the Bundle's images must still be
+	// the ones its ImageVerification verified.
+	if ps.Spec.ImageVerification != "" {
+		var verified []string
+		if ps.Spec.Live != nil && ps.Spec.Live.ImageVerification != nil {
+			verified = ps.Spec.Live.ImageVerification.Images
+		}
+		if why := verifiedImagesDiffer(bundle, verified); why != "" {
+			log.Warn().Str("imageVerification", ps.Spec.ImageVerification).Str("reason", why).Msg("the Bundle's images are not the verified ones")
+			return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, fmt.Sprintf(
+				"refusing to promote: %s (image verification %s)", why, ps.Spec.ImageVerification))
+		}
+	}
 	env := findEnv(pipeline, ps.Spec.Environment)
 	if msg := unsupportedConfig(pipeline, env, ps); msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)

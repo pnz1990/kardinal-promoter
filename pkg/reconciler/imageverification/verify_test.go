@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/sign"
@@ -264,7 +265,7 @@ func TestAuthorities_SubjectRegExpAnchored(t *testing.T) {
 	const issuer = "https://token.actions.githubusercontent.com"
 	digest, err := digestBytes(img.digest)
 	require.NoError(t, err)
-	r := &Reconciler{PublicGoodRoot: func(context.Context) (root.TrustedMaterial, error) { return vs, nil }}
+	r := &Reconciler{PublicGoodRoot: func(context.Context, time.Time) (root.TrustedMaterial, error) { return vs, nil }}
 	v := &v1alpha1.ImageVerification{Spec: v1alpha1.ImageVerificationSpec{Policy: v1alpha1.ImageVerificationPolicy{
 		Authorities: []v1alpha1.SignatureAuthority{{Name: "ci", Keyless: &v1alpha1.KeylessAuthority{
 			Issuer: issuer, SubjectRegExp: `https://github\.com/org/app/.*`}}}}}}
