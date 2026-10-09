@@ -266,7 +266,9 @@ func TestBundleCRDRejectedIsOneWay(t *testing.T) {
 	spec := crdSchema(t, "kardinal.io_bundles.yaml", "spec")
 	var rules []interface{}
 	for _, r := range spec["x-kubernetes-validations"].([]interface{}) {
-		if strings.Contains(r.(map[string]interface{})["rule"].(string), "oldSelf") {
+		// The transition rules on spec.rejected; the artifact immutability
+		// rules (#1526) are oldSelf rules too and have their own test.
+		if rule := r.(map[string]interface{})["rule"].(string); strings.Contains(rule, "oldSelf") && strings.Contains(rule, "rejected") {
 			rules = append(rules, r)
 		}
 	}
