@@ -368,7 +368,7 @@ Retention is **off by default**, so an upgrade never deletes an audit record. Tu
 |---|---|---|---|
 | `audit.retention.enabled` | `--audit-retention` | `false` | `true` turns retention on and grants the controller `delete` on AuditEvents |
 | `audit.retention.maxAge` | `--audit-retention-max-age` | `2160h` (90 days) | records created longer ago (`metadata.creationTimestamp`, set by the API server). `0s` keeps any age |
-| `audit.retention.maxPerPipeline` | `--audit-retention-max-per-pipeline` | `1000` | per Pipeline (namespace and `kardinal.io/pipeline` label), all but the newest records, newest by `metadata.creationTimestamp` and, within one second, `kardinal.io/created-at`. `0` keeps any number |
+| `audit.retention.maxPerPipeline` | `--audit-retention-max-per-pipeline` | `1000` | per Pipeline (namespace and `kardinal.io/pipeline` label), all but the newest records, newest by `metadata.creationTimestamp` and, within one second, `kardinal.io/created-at`. A record created in the last 10 minutes (one run's interval) is kept even past the limit, so a burst, such as an [audit outbox](#audit-outbox) flushed after an outage, stays at least that long for an export to read. `0` keeps any number |
 
 A run lists the records metadata-only, 500 at a time, and deletes at most 2000, the oldest
 first. It uses a client of its own limited to 5 API requests a second, so it never takes API
@@ -396,6 +396,36 @@ retention off.
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
+
+### Audit outbox
+
+A transition and its AuditEvent are two API writes, so an etcd timeout, a lost
+leader or a crash between them used to lose the record. Now every writer (the
+PromotionStep reconciler; the PolicyGate reconciler for gate results, approvals
+and overrides; the Pipeline reconciler for holds) records the AuditEvent in its own
+`status.pendingAuditEvents` in the same status patch as the transition. They then
+create it and remove the entry. An entry whose create fails stays in status, and
+the object is reconciled again every 5 seconds until the create succeeds. Each
+entry's name is fixed when it is stored, so a create that had already succeeded
+returns `AlreadyExists` and counts as written: there is one record per
+transition, never two. The record carries the time of the transition, not the
+time it was written.
+
+A failed write never blocks a promotion or a gate evaluation. A finished Bundle's
+Graph is not retired while one of its steps or gates still holds unwritten
+records, since retiring deletes them (the `GraphRetired` condition names the
+object). A record the CRD would refuse is not stored at all, so it cannot fail the
+status write, and messages are cut to 1 KiB. The outbox holds at
+most 32 entries. When it is full, the oldest entry is dropped and counted in
+`kardinal_audit_events_dropped_total`. A record the API server rejects as invalid
+is dropped too. `kardinal_audit_write_failures_total` counts the creates being
+retried ([Monitoring](monitoring.md#kardinal-metrics)). To see records not yet
+written:
+
+```bash
+kubectl get promotionsteps,policygates -A -o json \
+  | jq -r '.items[] | select(.status.pendingAuditEvents) | "\(.metadata.namespace)/\(.metadata.name): \(.status.pendingAuditEvents | length)"'
+```
 
 ### Fields on every event
 

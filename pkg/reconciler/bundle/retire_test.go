@@ -662,3 +662,69 @@ func (h *hookTranslator) Translate(_ context.Context, _ *kardinalv1alpha1.Pipeli
 	}
 	return "app-" + b.Name, nil
 }
+
+// TestRetire_WaitsForAuditOutboxes (#1552 QA): retiring deletes a Bundle's
+// PromotionSteps and gate instances with its Graph, so a step or a gate whose
+// status.pendingAuditEvents still holds records keeps the Graph until they
+// are written: the delay does not start.
+//
+// Covers AUDIT-OUTBOX-01.
+func TestRetire_WaitsForAuditOutboxes(t *testing.T) {
+	ctx := context.Background()
+	t0 := time.Now().UTC().Add(-2 * time.Hour)
+	pending := []kardinalv1alpha1.PendingAuditEvent{{Name: "s-test-succeeded",
+		Spec: kardinalv1alpha1.AuditEventSpec{Action: "PromotionSucceeded", Outcome: "Success"}}}
+	for _, tc := range []struct {
+		name, want string
+		step       bool
+	}{
+		{name: "a step's outbox", want: "PromotionStep s-test (1 AuditEvents not yet written)", step: true},
+		{name: "a gate's outbox", want: "PolicyGate prod-gate--app-v1 (1 AuditEvents not yet written)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v1 := lcBundle("app-v1", "image", "Superseded", t0)
+			v1.Status.GraphRef = "app-app-v1"
+			step := lcStep("app-v1", "test", "s-test", "Verified")
+			gate := &kardinalv1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "prod-gate--app-v1", Namespace: "default",
+				Labels: map[string]string{lifecycle.LabelBundle: "app-v1"}}}
+			if tc.step {
+				step.Status.PendingAuditEvents = pending
+			} else {
+				gate.Status.PendingAuditEvents = pending
+			}
+			c := lcClient(lcPipeline("app", lcEnvs("test")...), v1, step, gate,
+				lcBundle("app-v2", "image", "Promoting", t0.Add(time.Minute)))
+			checker := &deletingChecker{exists: true}
+			r := &bundle.Reconciler{Client: c, GraphChecker: checker, Retire: testRetire}
+
+			lcRetire(t, r, "app-v1")
+			cond := retireCond(t, c, "app-v1")
+			require.NotNil(t, cond)
+			assert.Equal(t, metav1.ConditionUnknown, cond.Status)
+			assert.Contains(t, cond.Message, tc.want)
+			backdateRetire(t, c, "app-v1", time.Hour)
+			lcRetire(t, r, "app-v1")
+			assert.Empty(t, checker.deleted, "kept while records are unwritten")
+
+			// The records are written: the delay starts.
+			if tc.step {
+				lcClearStepOutbox(t, c, "s-test")
+			} else {
+				var g kardinalv1alpha1.PolicyGate
+				require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(gate), &g))
+				g.Status.PendingAuditEvents = nil
+				require.NoError(t, c.Update(ctx, &g)) // lcClient has no status subresource for gates
+			}
+			lcRetire(t, r, "app-v1")
+			assert.Equal(t, "Scheduled", retireCond(t, c, "app-v1").Reason)
+		})
+	}
+}
+
+func lcClearStepOutbox(t *testing.T, c client.Client, name string) {
+	t.Helper()
+	var ps kardinalv1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: name}, &ps))
+	ps.Status.PendingAuditEvents = nil
+	require.NoError(t, c.Status().Update(context.Background(), &ps))
+}
