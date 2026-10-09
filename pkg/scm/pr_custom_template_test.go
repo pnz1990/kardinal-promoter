@@ -441,14 +441,16 @@ func TestRenderPR_EvidenceRenderedOnce(t *testing.T) {
 		// list cap of 50.
 		cfg.Labels = append(cfg.Labels, fmt.Sprintf("{{ if provenanceTable }}l%d{{ end }}", i%40))
 	}
+	counts, restore := scm.CountEvidenceRendersForTest()
+	defer restore()
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
-	start := time.Now()
 	_, err := scm.RenderPR(cfg, "t", body)
-	elapsed := time.Since(start)
 	runtime.ReadMemStats(&after)
 	require.NoError(t, err)
-	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20))
-	assert.Less(t, elapsed, 2*time.Second)
+	bodies, sections := counts()
+	assert.Equal(t, 1, bodies, "the evidence body is rendered once, however many templates use it")
+	assert.Equal(t, 1, sections, "provenanceTable is rendered once for the body and 80 label templates")
+	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(8<<20), "one render of the evidence, not one per template")
 }
