@@ -627,10 +627,12 @@ func TestChart_DeprecatedValues(t *testing.T) {
 	runningPod(t, r)
 
 	sel := metav1.ListOptions{LabelSelector: "app.kubernetes.io/instance=" + r.Name}
-	// Only the identity admission policies (identity-admission.yaml), which
-	// the chart always ships, whatever validatingAdmissionPolicy.enabled says.
+	// Only the identity admission policies (identity-admission.yaml) and
+	// the hold-writes policy (hold-admission.yaml, #1528), which the chart
+	// always ships, whatever validatingAdmissionPolicy.enabled says.
 	identity := func(name string) bool {
-		for _, p := range []string{"scoped-writes", "bundle-rejection", "gate-overrides"} {
+		for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals", "bundle-creator",
+			"graph-objects", "scoped-writes", "hold-writes"} {
 			if name == r.Fullname+"-"+p {
 				return true
 			}
@@ -924,7 +926,11 @@ func TestChart_WatchNamespace(t *testing.T) {
 		require.NoError(t, err)
 		for _, rule := range cs.Rules {
 			for _, res := range rule.Resources {
-				assert.Contains(t, []string{"changewindows", "changewindows/status", "namespaces"}, res,
+				// Cluster-scoped: ChangeWindows, Namespaces, Argo Rollouts'
+				// ClusterAnalysisTemplates (#1502) and the gate-overrides
+				// admission policy the reconciler reads (#1503).
+				assert.Contains(t, []string{"changewindows", "changewindows/status", "namespaces", "clusteranalysistemplates",
+					"validatingadmissionpolicies", "validatingadmissionpolicybindings"}, res,
 					"the ClusterRole holds only cluster-scoped kinds")
 				if res == "namespaces" {
 					assert.Equal(t, []string{"get"}, rule.Verbs, "namespaces: get only")

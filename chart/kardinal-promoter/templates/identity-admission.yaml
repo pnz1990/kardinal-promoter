@@ -502,6 +502,8 @@ spec:
   #     it first saw it (status.overrides) and does not count one created
   #     more than 5 minutes after that (condition OverrideIgnored).
   # Callers with neither subresource are not limited here: their RBAC decides.
+  # messageExpression cannot use the authorizer, so the messages use only
+  # the request.
   variables:
     - name: check
       expression: >-
@@ -526,18 +528,6 @@ spec:
         variables.pipeline ?
           (variables.mayPause ? ['paused'] : []) + (variables.mayHold ? ['holds'] : []) :
           ['overrides']
-    - name: fieldNames
-      expression: >-
-        variables.pipeline ?
-          (variables.mayPause && variables.mayHold ? 'spec.paused and spec.holds' :
-           variables.mayPause ? 'spec.paused' : 'spec.holds') :
-          'spec.overrides'
-    - name: scope
-      expression: >-
-        variables.pipeline ?
-          (variables.mayPause && variables.mayHold ? 'pipelines/pause and pipelines/hold' :
-           variables.mayPause ? 'pipelines/pause' : 'pipelines/hold') :
-          'policygates/override'
     - name: limited
       expression: >-
         !variables.exempt && (variables.mayPause || variables.mayHold || variables.mayOverride) &&
@@ -556,7 +546,8 @@ spec:
          oldObject.metadata.all(k, k in variables.serverSet || k in object.metadata))
       messageExpression: >-
         'you may not change the metadata (labels, annotations, finalizers, ownerReferences) of this ' +
-        request.resource.resource + ': you have ' + variables.scope + ' but not ' +
+        request.resource.resource + ': you have ' +
+        (variables.pipeline ? 'pipelines/pause or pipelines/hold' : 'policygates/override') + ' but not ' +
         request.resource.resource + '/edit'
       reason: Forbidden
     - expression: >-
@@ -564,8 +555,10 @@ spec:
         (object.spec.all(k, k in variables.fields || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) &&
          oldObject.spec.all(k, k in variables.fields || k in object.spec))
       messageExpression: >-
-        'you may change only ' + variables.fieldNames + ' of this ' + request.resource.resource +
-        ' (you have ' + variables.scope + ' but not ' + request.resource.resource + '/edit)'
+        (variables.pipeline ?
+          'you may change only spec.paused (with pipelines/pause) and spec.holds (with pipelines/hold) of this pipelines' :
+          'you may change only spec.overrides of this policygates') +
+        ' (you do not have ' + request.resource.resource + '/edit)'
       reason: Forbidden
     - expression: >-
         !variables.limited || variables.pipeline ||
