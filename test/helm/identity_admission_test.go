@@ -868,9 +868,9 @@ func TestHelmTemplateScopedWritesPolicy(t *testing.T) {
 }
 
 // scopedWritesPolicy is the rendered scoped-writes policy.
-func scopedWritesPolicy(t *testing.T) *admissionregistrationv1.ValidatingAdmissionPolicy {
+func scopedWritesPolicy(t *testing.T, args ...string) *admissionregistrationv1.ValidatingAdmissionPolicy {
 	t.Helper()
-	for _, d := range render(t, "kardinal-promoter") {
+	for _, d := range render(t, "kardinal-promoter", args...) {
 		if d.Kind == "ValidatingAdmissionPolicy" && d.Name == "kardinal-promoter-scoped-writes" {
 			var vap admissionregistrationv1.ValidatingAdmissionPolicy
 			decodeStrict(t, d, &vap)
@@ -1112,5 +1112,42 @@ func TestGateOverrideCapIsOneValue(t *testing.T) {
 		} else {
 			assert.NotContains(t, deploy, `--gate-override-max-minutes`, "the binary default applies")
 		}
+	}
+}
+
+// TestScopedWrites_ExemptUsers (#1511 QA): the controller, the usernames in
+// admission.controllerUsernames (other kardinal controllers) and the
+// namespace's Graph ServiceAccount are exempt; anyone else, a lookalike
+// included, is not.
+func TestScopedWrites_ExemptUsers(t *testing.T) {
+	const other = "system:serviceaccount:kardinal-system:kardinal-promoter-b"
+	vap := scopedWritesPolicy(t, "--set", "admission.controllerUsernames={"+other+"}")
+	var exempt string
+	for _, v := range vap.Spec.Variables {
+		if v.Name == "exempt" {
+			exempt = v.Expression
+		}
+	}
+	require.NotEmpty(t, exempt)
+	env, err := cel.NewEnv(cel.Variable("object", cel.DynType), cel.Variable("request", cel.DynType))
+	require.NoError(t, err)
+	ast, iss := env.Compile(exempt)
+	require.NoError(t, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	for user, want := range map[string]bool{
+		"system:serviceaccount:" + releaseNS + ":kardinal-promoter": true,
+		other: true,
+		"system:serviceaccount:team-a:kardinal-graph":               true,
+		"system:serviceaccount:team-b:kardinal-graph":               false,
+		"system:serviceaccount:kardinal-system:kardinal-promoter-c": false,
+		"alice": false,
+	} {
+		out, _, err := prg.Eval(map[string]interface{}{
+			"object":  map[string]interface{}{"metadata": map[string]interface{}{"namespace": "team-a"}},
+			"request": map[string]interface{}{"userInfo": map[string]interface{}{"username": user}},
+		})
+		require.NoError(t, err, user)
+		assert.Equal(t, want, out.Value(), user)
 	}
 }

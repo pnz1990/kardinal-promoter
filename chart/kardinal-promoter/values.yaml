@@ -278,7 +278,6 @@ bundleAPI:
   # The static token, when set, still works as a single-tenant admin token.
   tokenReview: false
 
-# -- Gate overrides (approvals) made through kardinal.
 # -- TokenReview settings shared by ui.auth.tokenReview and
 # bundleAPI.tokenReview.
 tokenReview:

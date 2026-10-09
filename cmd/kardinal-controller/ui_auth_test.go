@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
 // uiTestAssets stands in for the embedded React build.
@@ -463,6 +464,29 @@ func TestUIHandler_ActionsUseVirtualSubresources(t *testing.T) {
 // controller.gateOverrideMaxMinutes default (test/helm TestGateOverrideCapIsOneValue).
 func TestGateOverrideCapDefault(t *testing.T) {
 	assert.Equal(t, 1440, maxGateOverrideMinutes)
+	assert.Equal(t, policygaterecon.DefaultMaxOverride, time.Duration(maxGateOverrideMinutes)*time.Minute,
+		"the UI default is the reconciler default")
+}
+
+// TestApplyGateOverrideCap (#1511 QA): --gate-override-max-minutes sets the
+// reconciler's cap and the UI API's bound together: with 30 the UI accepts a
+// 30-minute override and refuses 31 minutes.
+func TestApplyGateOverrideCap(t *testing.T) {
+	saved := maxGateOverrideMinutes
+	t.Cleanup(func() { maxGateOverrideMinutes = saved })
+	r := &policygaterecon.Reconciler{}
+	applyGateOverrideCap(30, r)
+	assert.Equal(t, 30*time.Minute, r.MaxOverride)
+	assert.Equal(t, 30, maxGateOverrideMinutes)
+
+	for minutes, want := range map[int]int{30: http.StatusOK, 31: http.StatusBadRequest} {
+		c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+			&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "team-a"}}).Build()
+		h := newUIHandler(c, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
+		rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/gates/team-a/g/approve", "",
+			`{"reason":"r","expiresInMinutes":`+strconv.Itoa(minutes)+`}`)
+		assert.Equal(t, want, rec.Code, "%d minutes: %s", minutes, rec.Body.String())
+	}
 }
 
 // holdAccess allows every kardinal.io verb in team-a, and the hold
@@ -518,4 +542,78 @@ func TestUIHandler_HoldNeedsHoldSubresource(t *testing.T) {
 	var bundles v1alpha1.BundleList
 	require.NoError(t, c.List(context.Background(), &bundles))
 	assert.Empty(t, bundles.Items)
+}
+
+// holderAccess is a promoter: it may read every kardinal.io kind in team-a,
+// create Bundles and update pipelines/hold, but not update Pipelines.
+type holderAccess struct{}
+
+func (holderAccess) Allowed(_ context.Context, _ authv1.UserInfo, attrs authzv1.ResourceAttributes) (bool, string, error) {
+	if attrs.Group != "kardinal.io" || attrs.Namespace != "team-a" {
+		return false, "", nil
+	}
+	switch {
+	case attrs.Subresource == "hold":
+		return attrs.Resource == "pipelines" && attrs.Verb == "update", "", nil
+	case attrs.Subresource != "":
+		return false, "", nil
+	case attrs.Verb == "get", attrs.Verb == "list", attrs.Verb == "watch":
+		return true, "", nil
+	case attrs.Verb == "create":
+		return attrs.Resource == "bundles", "", nil
+	}
+	return false, "", nil
+}
+
+// TestUIHandler_HoldWithoutPipelineUpdate (#1511 QA): the promoter role holds
+// pipelines/hold but not update on Pipelines. Rolling back with a hold and
+// releasing it through the UI work: the controller writes spec.holds, the
+// plan's reads and the Bundle create go through the caller's client.
+func TestUIHandler_HoldWithoutPipelineUpdate(t *testing.T) {
+	tokens := &uiTestTokens{users: map[string]string{"p": "promoter"}}
+	ctx := context.Background()
+	t0 := time.Now().Add(-2 * time.Hour)
+	bundle := func(name, tag string, minute int) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a",
+				CreationTimestamp: metav1.NewTime(t0.Add(time.Duration(minute) * time.Minute))},
+			Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app",
+				Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: tag}}},
+			Status: v1alpha1.BundleStatus{Phase: "Verified"},
+		}
+	}
+	// The PromotionSteps that say v1, then v2, were Verified in prod.
+	step := func(b string, minute int) *v1alpha1.PromotionStep {
+		at := metav1.NewTime(t0.Add(time.Duration(minute) * time.Minute))
+		return &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: b + "-prod", Namespace: "team-a", CreationTimestamp: at,
+				Labels: map[string]string{"kardinal.io/pipeline": "app", "kardinal.io/bundle": b, "kardinal.io/environment": "prod"}},
+			Spec: v1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: b, Environment: "prod"},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified", Conditions: []metav1.Condition{
+				{Type: "Verified", Status: metav1.ConditionTrue, Reason: "Verified", LastTransitionTime: at}}},
+		}
+	}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
+			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}},
+		bundle("v1", "1.0", 0), bundle("v2", "2.0", 10), step("v1", 1), step("v2", 11),
+	).Build()
+	h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: holderAccess{}}, "", nil, zerolog.Nop())
+
+	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/rollback", "Bearer p",
+		`{"pipeline":"app","namespace":"team-a","environment":"prod","hold":true,"holdReason":"incident"}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var p v1alpha1.Pipeline
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "app"}, &p))
+	require.Len(t, p.Spec.Holds, 1, "the controller wrote the hold")
+	assert.Equal(t, "promoter", p.Spec.Holds[0].CreatedBy)
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(ctx, &bundles, client.InNamespace("team-a")))
+	assert.Len(t, bundles.Items, 3, "the rollback Bundle was created")
+
+	rec = uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/release-hold", "Bearer p",
+		`{"pipeline":"app","namespace":"team-a","environment":"prod"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "app"}, &p))
+	assert.Empty(t, p.Spec.Holds, "the controller released the hold")
 }

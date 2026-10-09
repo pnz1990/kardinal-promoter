@@ -192,7 +192,7 @@ func MiddlewareFor(next http.Handler, reviewer TokenReviewer, prefix, realm stri
 		entry.User, entry.Groups, entry.Auth = status.User.Username, status.User.Groups, "tokenreview"
 		ctx := WithUser(r.Context(), status.User)
 		ctx, state := withRequestAuth(ctx)
-		gw := &guardedWriter{ResponseWriter: w, state: state}
+		gw := &guardedWriter{ResponseWriter: w, state: state, challenge: challenge}
 		next.ServeHTTP(gw, r.WithContext(ctx))
 		gw.finish()
 	})
@@ -202,9 +202,12 @@ func MiddlewareFor(next http.Handler, reviewer TokenReviewer, prefix, realm stri
 // authorization failure, if there is one, the first time the handler writes.
 type guardedWriter struct {
 	http.ResponseWriter
-	state    *requestAuth
-	wrote    bool
-	replaced bool
+	state *requestAuth
+	// challenge is the WWW-Authenticate value of a 401: the realm of the
+	// API (kardinal-ui, kardinal-bundle-api).
+	challenge string
+	wrote     bool
+	replaced  bool
 }
 
 func (g *guardedWriter) check() {
@@ -215,7 +218,7 @@ func (g *guardedWriter) check() {
 	if d := g.state.get(); d != nil {
 		g.replaced = true
 		if d.code == http.StatusUnauthorized {
-			g.ResponseWriter.Header().Set("Www-Authenticate", `Bearer realm="kardinal-ui"`)
+			g.ResponseWriter.Header().Set("Www-Authenticate", g.challenge)
 		}
 		http.Error(g.ResponseWriter, d.msg, d.code)
 	}

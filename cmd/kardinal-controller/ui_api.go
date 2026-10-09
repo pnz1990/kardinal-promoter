@@ -41,6 +41,7 @@ import (
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
+	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -49,6 +50,15 @@ import (
 // scoped-writes admission policy applies the same bound to callers limited to
 // policygates/override.
 var maxGateOverrideMinutes = 24 * 60
+
+// applyGateOverrideCap sets the one override cap, --gate-override-max-minutes,
+// for the PolicyGate reconciler (how long an override counts) and the UI API
+// (the longest override it accepts). The chart's scoped-writes policy reads
+// the same Helm value (test/helm TestGateOverrideCapIsOneValue).
+func applyGateOverrideCap(minutes int, r *policygaterecon.Reconciler) {
+	maxGateOverrideMinutes = minutes
+	r.MaxOverride = time.Duration(minutes) * time.Minute
+}
 
 // uiPipelineResponse is the JSON shape for a Pipeline in the UI API.
 type uiPipelineResponse struct {

@@ -196,14 +196,6 @@ func (c *AuthorizingClient) authorize(ctx context.Context, verb string, obj runt
 	return nil
 }
 
-// AuthorizeSubresource checks that the request's user may verb the
-// (virtual) subresource of obj, such as update pipelines/hold, without
-// reading or writing anything. Handlers call it for a change the API server
-// would authorize against a subresource the controller's own write skips.
-func (c *AuthorizingClient) AuthorizeSubresource(ctx context.Context, verb string, obj client.Object, subresource string) error {
-	return c.authorize(ctx, verb, obj, obj.GetNamespace(), obj.GetName(), subresource)
-}
-
 // Get authorizes "get" and then reads through the wrapped client.
 func (c *AuthorizingClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 	if err := c.authorize(ctx, "get", obj, key.Namespace, key.Name, ""); err != nil {

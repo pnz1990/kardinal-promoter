@@ -550,13 +550,28 @@ func TestHelmTemplateUserRoles(t *testing.T) {
 			assert.True(t, rulesGrant(r, "kardinal.io", kind, "list"), "%v lists %s", dig(r, "metadata", "name"), kind)
 		}
 	}
+	// The viewer reads every kardinal kind: one per CRD in config/crd/bases.
+	crds, err := filepath.Glob(filepath.Join(repoRoot(t), "config", "crd", "bases", "kardinal.io_*.yaml"))
+	require.NoError(t, err)
+	require.NotEmpty(t, crds)
+	for _, f := range crds {
+		kind := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), "kardinal.io_"), ".yaml")
+		for _, verb := range []string{"get", "list", "watch"} {
+			assert.True(t, rulesGrant(viewer, "kardinal.io", kind, verb), "the viewer may %s %s", verb, kind)
+		}
+	}
 	assert.True(t, rulesGrant(viewer, "", "events", "list"))
 	assert.False(t, rulesGrant(viewer, "kardinal.io", "bundles", "create"), "the viewer cannot create")
 	assert.True(t, rulesGrant(promoter, "kardinal.io", "bundles", "create"))
 	assert.True(t, rulesGrant(promoter, "kardinal.io", "pipelines/pause", "update"))
+	assert.True(t, rulesGrant(promoter, "kardinal.io", "pipelines/hold", "update"), "a promoter rolls back and holds")
+	assert.False(t, rulesGrant(approver, "kardinal.io", "pipelines/hold", "update"), "an approver cannot hold")
+	assert.False(t, rulesGrant(viewer, "kardinal.io", "pipelines/hold", "update"))
 	assert.False(t, rulesGrant(promoter, "kardinal.io", "policygates/override", "update"), "a promoter cannot approve")
 	assert.True(t, rulesGrant(approver, "kardinal.io", "policygates/override", "update"))
 	assert.True(t, rulesGrant(approver, "kardinal.io", "approvals", "create"))
+	assert.True(t, rulesGrant(approver, "kardinal.io", "approvals", "delete"), "an approver revokes their approval")
+	assert.False(t, rulesGrant(promoter, "kardinal.io", "approvals", "create"), "a promoter cannot approve")
 	assert.False(t, rulesGrant(approver, "kardinal.io", "bundles", "create"), "an approver cannot promote")
 	// Least privilege: no update on the objects themselves by default.
 	for _, r := range []map[string]interface{}{viewer, promoter, approver} {
@@ -567,7 +582,7 @@ func TestHelmTemplateUserRoles(t *testing.T) {
 		}
 	}
 	assert.True(t, rulesGrant(roles["admin-extra"], "kardinal.io", "pipelines", "delete"))
-	for _, sub := range []string{"pipelines/pause", "pipelines/edit", "policygates/override", "policygates/edit"} {
+	for _, sub := range []string{"pipelines/pause", "pipelines/hold", "pipelines/edit", "policygates/override", "policygates/edit"} {
 		assert.True(t, rulesGrant(roles["admin-extra"], "kardinal.io", sub, "update"), "admin %s", sub)
 	}
 	assert.Equal(t, map[string]interface{}{"kardinal.io/aggregate-to-admin": "true", "app.kubernetes.io/instance": "kardinal-promoter"},

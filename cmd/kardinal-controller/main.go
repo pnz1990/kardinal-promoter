@@ -461,9 +461,6 @@ func main() {
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
-	// One cap for the reconciler, the UI API and the chart's scoped-writes
-	// policy (test/helm TestGateOverrideCapIsOneValue).
-	maxGateOverrideMinutes = gateOverrideMaxMinutes
 	graphIdentity.ReaderNamespaces = splitCSV(graphReaderNamespaces)
 	graphIdentity.OnlyNamespace = watchNamespace
 
@@ -751,7 +748,7 @@ func main() {
 	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
 	pgReconciler.StatusHeartbeat = gateStatusHeartbeat
 	pgReconciler.Workers = *workers["policygate"]
-	pgReconciler.MaxOverride = time.Duration(gateOverrideMaxMinutes) * time.Minute
+	applyGateOverrideCap(gateOverrideMaxMinutes, pgReconciler)
 	pgReconciler.IdentityPolicy = &policygaterecon.IdentityPolicyCheck{Reader: mgr.GetAPIReader(), Name: overrideIdentityPolicy}
 	if overrideIdentityPolicy == "" {
 		logger.Warn().Msg("--override-identity-policy is not set: gate overrides are recorded with an unverified createdBy")

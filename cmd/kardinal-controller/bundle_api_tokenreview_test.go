@@ -109,3 +109,32 @@ func TestBundleAPI_TokenReviewWithoutStaticToken(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Equal(t, `Bearer realm="kardinal-bundle-api"`, w.Header().Get("Www-Authenticate"))
 }
+
+// TestBundleAPI_RateLimitPerCaller (#1511 QA): the rate limit window is per
+// caller: a reviewed caller that spends its window gets 429, while another
+// caller and the static token (one shared window) still create Bundles.
+func TestBundleAPI_RateLimitPerCaller(t *testing.T) {
+	ci, other := "system:serviceaccount:team-a:ci", "system:serviceaccount:team-a:other"
+	rules := rbacRules{
+		ci + " get pipelines team-a": true, ci + " create bundles team-a": true,
+		other + " get pipelines team-a": true, other + " create bundles team-a": true,
+	}
+	srv := newBundleAPIServer(bundleAPIClient(), "static", "default")
+	srv.limiter = newTokenRateLimiter(2)
+	srv.enableTokenReview(tokenUsers{"ci-token": ci, "other-token": other}, rules)
+	post := func(token string) int {
+		body := `{"pipeline":"app","namespace":"team-a","type":"image","images":[{"repository":"r","tag":"1"}]}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/bundles", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		srv.Handler()(w, req)
+		return w.Code
+	}
+	assert.Equal(t, http.StatusCreated, post("ci-token"))
+	assert.Equal(t, http.StatusCreated, post("ci-token"))
+	assert.Equal(t, http.StatusTooManyRequests, post("ci-token"), "ci spent its window")
+	assert.Equal(t, http.StatusCreated, post("other-token"), "another caller has its own window")
+	assert.Equal(t, http.StatusCreated, post("static"), "the static token has its own window")
+	assert.Equal(t, http.StatusCreated, post("static"))
+	assert.Equal(t, http.StatusTooManyRequests, post("static"), "the static token's window is shared by its holders")
+}
