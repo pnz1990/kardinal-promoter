@@ -546,12 +546,24 @@ func TestStep_HookForgedHookRunIgnored(t *testing.T) {
 	require.Error(t, err, "the cluster admin cannot forge a HookRun")
 	assert.True(t, apierrors.IsForbidden(err), "%v", err)
 	assert.Contains(t, err.Error(), "only kardinal (the promotion Graph or the controller) creates or changes this object")
-	// kro's path: impersonating the namespace's Graph ServiceAccount.
-	require.NoError(t, impersonated(t, e, "system:serviceaccount:"+a.ns+":kardinal-graph",
-		"system:serviceaccounts", "system:serviceaccounts:"+a.ns, "system:authenticated").Create(ctx, forged))
+	// kro's path: impersonating the namespace's Graph ServiceAccount. Its
+	// RoleBinding is the controller's to create with the Bundle's Graph, so
+	// wait for the Graph's own HookRun (kro got through) and retry while
+	// the API server's RBAC cache catches up.
+	own := graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate")
+	framework.Eventually(t, promoteTimeout, "the Graph's own HookRun", func(ctx context.Context) (bool, string) {
+		_, ok, err := hookRun(ctx, e, a.ns, own)
+		return err == nil && ok, fmt.Sprint(err)
+	})
+	asGraph := impersonated(t, e, "system:serviceaccount:"+a.ns+":kardinal-graph",
+		"system:serviceaccounts", "system:serviceaccounts:"+a.ns, "system:authenticated")
+	framework.Eventually(t, time.Minute, "kro's identity creates the forged HookRun", func(ctx context.Context) (bool, string) {
+		err := asGraph.Create(ctx, forged.DeepCopy())
+		return err == nil || apierrors.IsAlreadyExists(err), fmt.Sprint(err)
+	})
 
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
-	waitHookRun(t, e, a.ns, graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate"), v1alpha1.HookRunSucceeded)
+	waitHookRun(t, e, a.ns, own, v1alpha1.HookRunSucceeded)
 	framework.Consistently(t, 10*time.Second, "the forged HookRun gets no Job and no status", func(ctx context.Context) (bool, string) {
 		_, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, forged.Name, metav1.GetOptions{})
 		if !apierrors.IsNotFound(err) {
