@@ -438,7 +438,7 @@ func TestGoGitClient_PushNotARepo(t *testing.T) {
 	}
 	// Push against a non-git directory should fail at PlainOpen (before any network call).
 	c := scm.NewGoGitClient()
-	err := c.Push(context.Background(), t.TempDir(), "origin", "main", "tok", false)
+	err := c.Push(context.Background(), t.TempDir(), "origin", "main", scm.TokenAuth("tok"), false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "open repo")
 }
@@ -995,6 +995,17 @@ func TestRenderPRBody_RollbackNote(t *testing.T) {
 				"> Rolling back FROM: demo-gitea-x7k2p\n" +
 				"> Rolling back TO: demo-gitea-bx5l8 (sha-a000001)\n" +
 				"> Rolled back by: mallory ## Approved",
+		},
+		{
+			name: "unverified actor is marked",
+			edit: func(d *scm.PRBody) {
+				d.RolledBackBy, d.RolledBackByUnverified = "bob", true
+			},
+			wantNote: "## ROLLBACK: demo-gitea-rollback-9c5q2 -> demo-gitea/prod\n\n" +
+				"> **This is a rollback PR.** It restores the images of bundle demo-gitea-bx5l8 in environment prod.\n" +
+				"> Rolling back FROM: the bundle deployed in prod now\n" +
+				"> Rolling back TO: demo-gitea-bx5l8 (sha-a000001)\n" +
+				"> Rolled back by: bob (unverified)",
 		},
 		{
 			name: "nothing recorded",
