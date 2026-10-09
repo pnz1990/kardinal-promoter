@@ -48,7 +48,7 @@ func currentBundleByEnv(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionSte
 			return
 		}
 		phase := b.Status.Phase
-		if gateOnly && (phase == "Failed" || phase == "Superseded") {
+		if gateOnly && (phase == "Failed" || phase == "Superseded" || phase == "Rejected") {
 			return
 		}
 		best := current

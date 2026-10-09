@@ -79,6 +79,7 @@ A gate's STATE is the one the UI shows, the first that applies:
                 and the environment has no step yet, or the gate holds
                 the environment's Pending step
     Superseded  the Bundle was superseded; the gate is not evaluated again
+    Rejected    the Bundle was rejected (kardinal reject); not evaluated again
     Pending     not evaluated yet
     Waiting     evaluated not ready, not holding the Bundle: the Bundle has
                 not reached the environment, or it failed (it can retry)

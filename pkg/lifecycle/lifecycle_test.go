@@ -87,6 +87,15 @@ func phase(b *v1alpha1.Bundle, p string) *v1alpha1.Bundle {
 	return b
 }
 
+// rejected marks b rejected (kardinal reject).
+func rejected(b *v1alpha1.Bundle) *v1alpha1.Bundle {
+	b.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "bad"}
+	if b.Status.Phase == "" {
+		b.Status.Phase = "Rejected"
+	}
+	return b
+}
+
 func named(s *v1alpha1.PromotionStep, name string) *v1alpha1.PromotionStep {
 	s.Name = name
 	return s

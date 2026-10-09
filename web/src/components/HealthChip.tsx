@@ -23,7 +23,7 @@ import '../styles/HealthChip.css'
 export type HealthState =
   | 'Ready'         // Verified / Pass / Pipeline Ready — green
   | 'Reconciling'   // Promoting / WaitingForMerge / HealthChecking — amber
-  | 'Error'         // Failed / AbortedByAlarm / Block — red
+  | 'Error'         // Failed / AbortedByAlarm / Block / Bundle Rejected — red
   | 'Pending'       // Pending / Available / NotStarted / gate Waiting — slate
   | 'Unknown'       // Superseded / unknown — gray
   | 'Degraded'      // Pipeline phase Degraded — orange
@@ -43,6 +43,7 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
       case 'Pending':
       case 'Waiting': return 'Pending' // not ready, not holding the bundle
       case 'Superseded': return 'Unknown' // bundle superseded; not evaluated again
+      case 'Rejected': return 'Unknown'   // bundle rejected; not evaluated again
       default:       return 'Unknown'
     }
   }
@@ -58,6 +59,7 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
     case 'Failed':
     case 'AbortedByAlarm':  // terminal: an alarm stopped the promotion; a human must act
     case 'RollingBack':     // terminal: health failed and a rollback Bundle took over (as the CLI shows it)
+    case 'Rejected':        // Bundle phase: kardinal reject; never promoted again
     case 'Block':
       return 'Error'
     case 'Degraded':
@@ -114,6 +116,7 @@ export function healthChipColors(state: HealthState): { bg: string; text: string
 const GATE_STATE_MEANING: Record<string, string> = {
   Waiting: 'not ready, not holding the bundle',
   Superseded: 'bundle superseded, not evaluated again',
+  Rejected: 'bundle rejected, not evaluated again',
 }
 
 interface HealthChipProps {

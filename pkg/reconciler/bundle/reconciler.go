@@ -68,6 +68,8 @@ const (
 	phaseVerified   = "Verified"
 	phaseFailed     = "Failed"
 	phaseSuperseded = "Superseded"
+	// phaseRejected is final: spec.rejected is set (kardinal reject).
+	phaseRejected = "Rejected"
 )
 
 // Bundle condition types.
@@ -88,6 +90,9 @@ const (
 	// fails, or (reason GraphDeleted) while the Graph of a Bundle that failed
 	// promoting is missing. It is only written once a sync has failed.
 	condGraphSynced = "GraphSynced"
+	// condRejected is True once spec.rejected is set; its message names who
+	// rejected the Bundle and why.
+	condRejected = "Rejected"
 )
 
 // errGraphDeletedAfterFailure is returned by syncGraph when the Graph of a
@@ -182,6 +187,8 @@ type Reconciler struct {
 //     retried step, an accepted Graph), or back to Available when a Pipeline
 //     that failed validation is changed. A newer sibling supersedes it instead.
 //   - Verified, Superseded: settled; only the evidence is synced.
+//   - any phase with spec.rejected set: Rejected (markRejected), which is
+//     final; only the evidence is synced after that.
 //
 // A Bundle deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -227,6 +234,13 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get bundle: %w", err)
 	}
 
+	// A rejection wins over every phase, Verified and Superseded included,
+	// and is recomputed from spec on every reconcile, so a crash between the
+	// spec write and this status write only delays it.
+	if b.Spec.Rejected != nil && b.Status.Phase != phaseRejected {
+		return r.markRejected(ctx, log, &b)
+	}
+
 	switch b.Status.Phase {
 	case "":
 		return r.handleNew(ctx, log, &b)
@@ -242,11 +256,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 }
 
-// handleBound reconciles a Bundle past Available: Promoting, Failed, Verified
-// or Superseded.
+// handleBound reconciles a Bundle past Available: Promoting, Failed, Verified,
+// Superseded or Rejected.
 func (r *Reconciler) handleBound(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
-	active := b.Status.Phase != phaseVerified && b.Status.Phase != phaseSuperseded
+	active := b.Status.Phase != phaseVerified && b.Status.Phase != phaseSuperseded &&
+		b.Status.Phase != phaseRejected
 
 	// A newer same-type Bundle that started while this one was in flight
 	// supersedes it (#281).
@@ -618,7 +633,7 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 	terminal := make([]*kardinalv1alpha1.Bundle, 0, len(allBundles.Items))
 	for i := range allBundles.Items {
 		switch allBundles.Items[i].Status.Phase {
-		case phaseVerified, phaseFailed, phaseSuperseded:
+		case phaseVerified, phaseFailed, phaseSuperseded, phaseRejected:
 			terminal = append(terminal, &allBundles.Items[i])
 		}
 	}
@@ -677,8 +692,11 @@ func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bund
 		if s.Name == b.Name || s.Spec.Type != b.Spec.Type {
 			continue // image bundles are only superseded by image bundles, etc.
 		}
+		if s.Spec.Rejected != nil {
+			continue // a rejected Bundle never promotes, so it supersedes nothing
+		}
 		switch s.Status.Phase {
-		case phaseSuperseded, phaseFailed:
+		case phaseSuperseded, phaseFailed, phaseRejected:
 			continue
 		case phaseVerified:
 			if !countVerified {
@@ -734,6 +752,42 @@ func (r *Reconciler) superseded(b *kardinalv1alpha1.Bundle) {
 	r.event(b, corev1.EventTypeNormal, "Superseded",
 		fmt.Sprintf("superseded by newer bundle for pipeline %s", b.Spec.Pipeline))
 	observability.BundlesTotal.WithLabelValues(phaseSuperseded).Inc()
+}
+
+// markRejected sets the phase of a Bundle whose spec.rejected is set to
+// Rejected, whatever the phase was. Nothing re-translates or recreates the
+// Graph of a Rejected Bundle (handleBound treats it as settled). The Graph is
+// kept: every PromotionStep template holds on the Bundle phase (graph
+// buildPromotionStepNode), so no new step is created and the existing steps
+// stay as history. The PromotionStep reconciler cancels the steps that have
+// not reached the environment yet.
+//
+// Graph-first: the Bundle reconciler writes only its own status, from its
+// own spec.
+func (r *Reconciler) markRejected(ctx context.Context, log zerolog.Logger,
+	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
+	from := b.Status.Phase
+	patch := client.MergeFrom(b.DeepCopy())
+	msg := rejectionMessage(b.Spec.Rejected)
+	b.Status.Phase = phaseRejected
+	setBundleCondition(b, condReady, metav1.ConditionFalse, "Rejected", msg)
+	setBundleCondition(b, condRejected, metav1.ConditionTrue, "Rejected", msg)
+	if err := r.Status().Patch(ctx, b, patch); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("patch bundle status Rejected: %w", err)
+	}
+	log.Info().Str("from", from).Str("by", b.Spec.Rejected.By).Str("reason", b.Spec.Rejected.Reason).
+		Msg("bundle rejected")
+	r.event(b, corev1.EventTypeWarning, "Rejected", msg)
+	observability.BundlesTotal.WithLabelValues(phaseRejected).Inc()
+	return ctrl.Result{}, nil
+}
+
+// rejectionMessage is the Rejected condition message.
+func rejectionMessage(rej *kardinalv1alpha1.BundleRejection) string {
+	return fmt.Sprintf("rejected by %s: %s; it is never promoted again", rej.By, rej.Reason)
 }
 
 // markPipelineNotFound records that the Bundle's Pipeline does not exist.
@@ -1380,6 +1434,7 @@ func setBundleCondition(b *kardinalv1alpha1.Bundle, condType string, status meta
 var eventActions = map[string]string{
 	"Available":        "Accept",
 	"Superseded":       "Supersede",
+	"Rejected":         "Reject",
 	"PipelineNotFound": "ResolvePipeline",
 	"TranslationError": "CreateGraph",
 	"Promoting":        "Promote",

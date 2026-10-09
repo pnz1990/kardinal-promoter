@@ -60,6 +60,41 @@ func TestPlanRollback(t *testing.T) {
 			wantTarget: "v1", wantFrom: "v2", wantTag: "1",
 		},
 		{
+			name: "a rejected bundle is never the target, also when it was Verified (#1451)",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 0), rejected(bundle("v2", "app", "2", 10)), bundle("v3", "app", "3", 20),
+				step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "Verified", 11),
+				step("v3", "app", "prod", "Verified", 21),
+			},
+			wantTarget: "v1", wantFrom: "v3", wantTag: "1",
+		},
+		{
+			name: "rolling back from a rejected bundle that reached the environment",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 0), rejected(bundle("v2", "app", "2", 10)),
+				step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "Verified", 11),
+			},
+			wantTarget: "v1", wantFrom: "v2", wantTag: "1",
+		},
+		{
+			name: "--to a rejected bundle is refused",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 0), rejected(bundle("v2", "app", "2", 10)), bundle("v3", "app", "3", 20),
+				step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "Verified", 11),
+				step("v3", "app", "prod", "Verified", 21),
+			},
+			req:     lifecycle.RollbackRequest{ToBundle: "v2"},
+			wantErr: lifecycle.ErrInvalid,
+		},
+		{
+			name: "only rejected bundles before the deployed one: nothing to roll back to",
+			objs: []client.Object{
+				phase(rejected(bundle("v1", "app", "1", 0)), "Verified"), bundle("v2", "app", "2", 10),
+				step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "Verified", 11),
+			},
+			wantErr: lifecycle.ErrConflict,
+		},
+		{
 			name: "a step that failed its health check is what is deployed",
 			objs: []client.Object{
 				bundle("v1", "app", "1", 0), bundle("v2", "app", "2", 10),

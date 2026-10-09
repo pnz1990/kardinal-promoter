@@ -361,6 +361,7 @@ spec is set at creation and never mutated. Kubernetes RBAC controls who can dele
 | `PromotionSucceeded` | Health check passed; PromotionStep reached Verified |
 | `PromotionFailed` | PromotionStep reached Failed or AbortedByAlarm |
 | `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion |
+| `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../rollback.md#reject-a-bundle)) |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
@@ -656,8 +657,24 @@ The CRDs do not check that `spec.expression` is valid CEL. Run `kardinal validat
 before you apply: it compiles each PolicyGate expression with the controller's CEL environment.
 After you apply a gate, the controller compiles it and writes the result to `status.reason`.
 
-The chart no longer installs a `ValidatingAdmissionPolicy`. The
-`validatingAdmissionPolicy.enabled` value is deprecated and has no effect.
+The chart's only `ValidatingAdmissionPolicy` objects are the identity policies below. The
+`validatingAdmissionPolicy.enabled` value is deprecated and has no effect: the identity
+policies are always installed.
+
+### Verified identity
+
+Records that name a person are checked by the API server, not trusted from the client. The
+chart installs a `ValidatingAdmissionPolicy` with a `Deny` binding, per release:
+
+| Policy | Checks |
+|---|---|
+| `<release>-bundle-rejection` | A Bundle's new `spec.rejected.by` ([`kardinal reject`](../rollback.md#reject-a-bundle)) equals the requesting user's `request.userInfo.username`. A rejection already set is immutable (CRD rule), so it is checked only when it is first written. |
+
+The CLI reads your username from the API server with a SelfSubjectReview (what
+`kubectl auth whoami` shows): an OIDC user is often `oidc:alice@example.com`, a ServiceAccount
+`system:serviceaccount:<namespace>:<name>`. The local OS user is not used. The policy has
+`failurePolicy: Fail`, so a policy that cannot be evaluated denies the write. It needs
+Kubernetes 1.30 or later, the chart's minimum.
 
 ---
 

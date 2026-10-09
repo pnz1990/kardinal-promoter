@@ -29,13 +29,13 @@ type AuditEventSpec struct {
 
 	// Action is a short verb describing what happened.
 	// Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
-	//               "PromotionSuperseded", "RollbackStarted", "RollbackSucceeded",
+	//               "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
 	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated".
 	// HealthCheckFailed and GateBlocked are accepted but never written: a
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.

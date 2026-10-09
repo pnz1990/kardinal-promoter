@@ -185,7 +185,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// A settled Bundle never promotes again, so its gate instances are left
 	// as they were: no evaluation, status write, audit record or requeue.
-	// Superseded is terminal (E2E-R20). A Verified Bundle whose GraphReady is
+	// Superseded and Rejected are terminal (E2E-R20, #1451). A Verified Bundle whose GraphReady is
 	// True is finished: its Graph is not read again, so a gate write would
 	// only wake the Graph and NotificationHook watchers for nothing (#1301).
 	// A Failed Bundle can recover, so its gates keep being evaluated.
@@ -369,7 +369,7 @@ func (r *Reconciler) markGenerated(ctx context.Context, gate *kardinalv1alpha1.P
 }
 
 // bundleSettled reports whether the gate's Bundle exists and is either
-// Superseded, or Verified with its GraphReady condition True. The Bundle
+// Superseded or Rejected (both final), or Verified with its GraphReady condition True. The Bundle
 // reconciler keeps a Verified Bundle's GraphReady up to date until it is True
 // and does not read the Graph after that. A read error is not treated as
 // settled: buildContext reports it and the gate fails closed as before.
@@ -379,7 +379,7 @@ func (r *Reconciler) bundleSettled(ctx context.Context, namespace, bundleName st
 		return false
 	}
 	switch bundle.Status.Phase {
-	case "Superseded":
+	case "Superseded", "Rejected":
 		return true
 	case "Verified":
 		return meta.IsStatusConditionTrue(bundle.Status.Conditions, condBundleGraphReady)

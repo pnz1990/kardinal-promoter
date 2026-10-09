@@ -13,6 +13,8 @@ import (
 // CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
 // supported) lets an update through when spec is unchanged.
 // +kubebuilder:validation:XValidation:rule="!(self.type == 'image' && has(self.configRef))",message="spec.configRef is used only by config and mixed Bundles: an image Bundle deploys only its images; set type config or mixed, or remove configRef"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.rejected) || has(self.rejected)",message="spec.rejected cannot be removed: a rejected Bundle stays rejected"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.rejected) || !has(self.rejected) || self.rejected == oldSelf.rejected",message="spec.rejected is immutable once set"
 type BundleSpec struct {
 	// Type classifies the bundle content.
 	// Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
@@ -49,6 +51,32 @@ type BundleSpec struct {
 	// Intent declares optional targeting and skip overrides for this Bundle.
 	// +optional
 	Intent *BundleIntent `json:"intent,omitempty"`
+
+	// Rejected marks the Bundle as rejected (kardinal reject): it is never
+	// promoted again, its in-flight steps are cancelled and rollback never
+	// picks it. Setting it is one-way: it cannot be changed or removed. The
+	// chart's ValidatingAdmissionPolicy requires rejected.by to be the
+	// requesting user.
+	// +optional
+	Rejected *BundleRejection `json:"rejected,omitempty"`
+}
+
+// BundleRejection records who rejected a Bundle and why.
+type BundleRejection struct {
+	// Reason says why the Bundle was rejected.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Reason string `json:"reason"`
+
+	// By is the Kubernetes username of whoever rejected the Bundle. The
+	// chart's ValidatingAdmissionPolicy (kardinal-identity) admits a new
+	// rejection only when by equals the requesting user's username.
+	// +kubebuilder:validation:MinLength=1
+	By string `json:"by"`
+
+	// At is when the Bundle was rejected.
+	// +optional
+	At *metav1.Time `json:"at,omitempty"`
 }
 
 // ImageRef identifies a container image by repository, tag, and/or digest.
@@ -149,8 +177,9 @@ type BundleIntent struct {
 // BundleStatus defines the observed state of a Bundle.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.retiredAt) || has(self.retiredAt)",message="status.retiredAt cannot be removed: a retired Bundle stays retired"
 type BundleStatus struct {
-	// Phase is the bundle promotion phase.
-	// +kubebuilder:validation:Enum=Available;Promoting;Verified;Failed;Superseded
+	// Phase is the bundle promotion phase. Rejected is final: spec.rejected
+	// is set, and nothing of this Bundle is promoted again.
+	// +kubebuilder:validation:Enum=Available;Promoting;Verified;Failed;Superseded;Rejected
 	Phase string `json:"phase,omitempty"`
 
 	// Conditions holds status conditions.

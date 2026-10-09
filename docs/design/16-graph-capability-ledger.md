@@ -104,9 +104,10 @@ classifies that as data-pending (`pkg/graphengine/runtime/errors.go:43-49`): the
 Unresolved, nothing is created or pruned, and kro retries on the next watch event.
 `spec.upstreamStates` and `spec.requiredGates` of each PromotionStep are built this way
 (`pkg/graph/builder.go` `resolvableWhen`, `verifiedCond`, `buildPromotionStepNode`).
-So is `spec.bundleName`, on `bundle.status.phase != "Superseded"` and no Bundle condition
-`WaitingForSlot=True`, which stops the Graph of a Superseded Bundle (E2E-R20), or of a
-Failed Bundle waiting for a `maxConcurrentPromotions` slot (#1349), from creating steps.
+So is `spec.bundleName`, on `bundle.status.phase != "Superseded" && bundle.status.phase !=
+"Rejected"` and no Bundle condition `WaitingForSlot=True`, which stops the Graph of a Superseded
+Bundle (E2E-R20), of a rejected one (`kardinal reject`, #1451), or of a Failed Bundle waiting for
+a `maxConcurrentPromotions` slot (#1349), from creating steps.
 The condition test is guarded with `has(bundle.status.conditions)`, since a missing key
 would be data-pending too. A node that already exists and
 turns Unresolved is neither re-applied nor pruned (`executor/simple.go:318-324`,

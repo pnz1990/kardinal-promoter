@@ -41,6 +41,14 @@ func TestPlanPromote(t *testing.T) {
 			env: "prod", wantSrc: "v2", wantTag: "2",
 		},
 		{
+			name: "a rejected bundle is never the source, also when it was Verified upstream (#1451)",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 0), rejected(bundle("v2", "app", "2", 10)),
+				step("v1", "app", "uat", "Verified", 1), step("v2", "app", "uat", "Verified", 11),
+			},
+			env: "prod", wantSrc: "v1", wantTag: "1",
+		},
+		{
 			name: "a failed attempt in the target environment can be promoted again",
 			objs: []client.Object{
 				bundle("v1", "app", "1", 0),

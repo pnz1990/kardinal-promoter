@@ -37,6 +37,7 @@ It communicates with the Kubernetes API server to read and write CRDs.
 * [kardinal policy](kardinal-policy.md)	 - Manage and evaluate promotion policy gates
 * [kardinal promote](kardinal-promote.md)	 - Promote the Bundle verified upstream into an environment
 * [kardinal refresh](kardinal-refresh.md)	 - Force re-reconciliation of a Pipeline
+* [kardinal reject](kardinal-reject.md)	 - Reject a Bundle: it is never promoted again, and rollback never picks it
 * [kardinal resume](kardinal-resume.md)	 - Resume a paused pipeline
 * [kardinal rollback](kardinal-rollback.md)	 - Roll back a pipeline environment to a previous Bundle
 * [kardinal status](kardinal-status.md)	 - Show controller health or per-pipeline in-flight promotion details
