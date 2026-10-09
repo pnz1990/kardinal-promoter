@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
@@ -993,8 +994,10 @@ func gateAudit(ctx context.Context, e *framework.Env, ns, bundle, env, gate stri
 	}); err != nil {
 		return nil, err
 	}
+	// spec.timestamp has one-second resolution; a gate can flip twice in a
+	// second under load (#1484).
 	sort.Slice(list.Items, func(i, j int) bool {
-		return list.Items[i].Spec.Timestamp.Before(&list.Items[j].Spec.Timestamp)
+		return lifecycle.CompareAuditEvents(&list.Items[i], &list.Items[j]) < 0
 	})
 	return list.Items, nil
 }
@@ -1115,6 +1118,7 @@ func TestGate_InvalidGatesRejected(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, apierrors.IsInvalid(err), "%v", err)
 	assert.Contains(t, err.Error(), "PolicyGate names are at most 63 characters")
+	assert.Contains(t, err.Error(), "; use a name of at most 63 characters", "the message says what to do (#1358)")
 
 	require.NoError(t, e.Client.Create(ctx, framework.Gate(ns, strings.Repeat("g", 63), "prod", "true", "")))
 }

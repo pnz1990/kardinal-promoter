@@ -118,7 +118,11 @@ type PolicyGateStatus struct {
 	// +optional
 	Reason string `json:"reason,omitempty"`
 
-	// LastEvaluatedAt is when the gate was last evaluated.
+	// LastEvaluatedAt is when the gate's result was last written. The
+	// controller re-evaluates more often, but writes the status only when the
+	// result or reason changes, when a PromotionStep that has not started
+	// needs a newer result, after a spec change, and otherwise at least every
+	// 10 minutes.
 	// +optional
 	LastEvaluatedAt *metav1.Time `json:"lastEvaluatedAt,omitempty"`
 
@@ -134,7 +138,7 @@ type PolicyGateStatus struct {
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.reason`,priority=1
 // +kubebuilder:printcolumn:name="Last-Evaluated",type=date,JSONPath=`.status.lastEvaluatedAt`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
-// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63 || (has(self.spec) && has(self.spec.generated) && self.spec.generated)",message="PolicyGate names are at most 63 characters: the name is copied into the kardinal.io/gate-template label of every gate instance"
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63 || (has(self.spec) && has(self.spec.generated) && self.spec.generated)",message="PolicyGate names are at most 63 characters: the name is copied into the kardinal.io/gate-template label of every gate instance; use a name of at most 63 characters"
 
 // PolicyGate is a CEL-powered policy check represented as a node in the
 // promotion Graph. Platform teams define org-level gates; teams add their own.

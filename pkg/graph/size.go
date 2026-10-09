@@ -6,6 +6,7 @@ package graph
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 )
 
 // MaxGraphBytes is the largest estimated Graph object kardinal creates.
@@ -29,7 +30,8 @@ const managedResourceBytes = 260
 
 // EstimateSize returns the estimated size in bytes of g once kro has applied
 // every template node: the JSON of the object kardinal writes plus one
-// status.managedResources entry per template node.
+// status.managedResources entry per object the template nodes create (one
+// per item for a collection over a def node's list).
 func EstimateSize(g *Graph) (int, error) {
 	if g == nil {
 		return 0, nil
@@ -38,16 +40,41 @@ func EstimateSize(g *Graph) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("marshal graph: %w", err)
 	}
-	// TODO(#1480 follow-up): a forEach node creates one object per item, so
-	// count the items once the builder emits collections.
-	// TestEstimateSize_NoCollections fails until then.
-	templates := 0
+	return len(data) + ObjectCount(g)*managedResourceBytes, nil
+}
+
+// reDefList matches a forEach expression that reads a def node's list field.
+var reDefList = regexp.MustCompile(`^\$\{([A-Za-z][A-Za-z0-9]*)\.([A-Za-z][A-Za-z0-9]*)\}$`)
+
+// ObjectCount is the number of objects g's template nodes create: one per
+// scalar template node, and one per item of a collection whose forEach reads
+// a def node's list (the builder's collections). A collection over anything
+// else counts as one.
+func ObjectCount(g *Graph) int {
+	defs := map[string]map[string]interface{}{}
 	for _, n := range g.Spec.Nodes {
-		if n.Template != nil {
-			templates++
+		if n.Def != nil {
+			defs[n.ID] = n.Def
 		}
 	}
-	return len(data) + templates*managedResourceBytes, nil
+	count := 0
+	for _, n := range g.Spec.Nodes {
+		if n.Template == nil {
+			continue
+		}
+		items := 1
+		if len(n.ForEach) == 1 {
+			for _, expr := range n.ForEach[0] {
+				if m := reDefList.FindStringSubmatch(expr); m != nil {
+					if list, ok := defs[m[1]][m[2]].([]interface{}); ok {
+						items = len(list)
+					}
+				}
+			}
+		}
+		count += items
+	}
+	return count
 }
 
 // CheckSize refuses a Graph whose estimated size exceeds MaxGraphBytes. The
@@ -62,7 +89,7 @@ func CheckSize(g *Graph) error {
 		return nil
 	}
 	return asInvalid(fmt.Errorf(
-		"graph size: the Graph for this Bundle would be about %d bytes with %d nodes, over kardinal's limit of %d bytes "+
+		"graph size: the Graph for this Bundle would be about %d bytes with %d nodes and %d objects, over kardinal's limit of %d bytes "+
 			"(etcd stores at most 1.5 MiB per object); reduce the environments, PolicyGates or health checks per environment, "+
-			"or split the Pipeline; a new Bundle or a Pipeline edit retries", size, len(g.Spec.Nodes), MaxGraphBytes))
+			"or split the Pipeline; a new Bundle or a Pipeline edit retries", size, len(g.Spec.Nodes), ObjectCount(g), MaxGraphBytes))
 }

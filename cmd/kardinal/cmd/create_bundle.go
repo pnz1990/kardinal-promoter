@@ -70,6 +70,8 @@ The pipeline name is a required positional argument; the Pipeline must exist.
 An image or mixed Bundle needs at least one --image. A config or mixed Bundle
 needs --config-commit, the commit of the config repository to promote;
 --config-repo names that repository and defaults to the Pipeline's git.url.
+An image Bundle with --config-repo or --config-commit is refused: it would
+deploy only its images and ignore them.
 
 --commit, --author and --ci-run-url set the Bundle's provenance, shown in the
 PR body and the UI. kardinal records them as given: they are what the caller
@@ -125,6 +127,15 @@ type createBundleOptions struct {
 // bundleSpec turns the flags into a Bundle spec for pipeline and checks it
 // with lifecycle.ValidateNewBundle, the Bundle API's rules (#1285).
 func (o createBundleOptions) bundleSpec(pipeline string) (v1alpha1.BundleSpec, error) {
+	// An image Bundle would ignore the config flags (#1353).
+	if o.Type == "" || o.Type == "image" {
+		switch {
+		case o.ConfigRepo != "":
+			return v1alpha1.BundleSpec{}, fmt.Errorf("create bundle: --config-repo needs --type config or mixed and --config-commit")
+		case o.ConfigCommit != "":
+			return v1alpha1.BundleSpec{}, fmt.Errorf("create bundle: --config-commit needs --type config or mixed")
+		}
+	}
 	imageRefs, err := parseImageRefs(o.Images)
 	if err != nil {
 		return v1alpha1.BundleSpec{}, err
@@ -242,15 +253,9 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 
 	// The gate instances the Graph would create, per environment.
 	gatesByEnv := map[string][]string{}
-	for _, node := range result.Graph.Spec.Nodes {
-		if node.Template["kind"] != "PolicyGate" {
-			continue
-		}
-		meta, _ := node.Template["metadata"].(map[string]interface{})
-		labels, _ := meta["labels"].(map[string]interface{})
-		env, _ := labels["kardinal.io/environment"].(string)
-		name, _ := labels["kardinal.io/gate-name"].(string)
-		gatesByEnv[env] = append(gatesByEnv[env], name)
+	for _, g := range result.GateInstances {
+		env := g.Labels["kardinal.io/environment"]
+		gatesByEnv[env] = append(gatesByEnv[env], g.Labels["kardinal.io/gate-name"])
 	}
 	// Promotion order is the dependsOn order the Graph follows, not the order
 	// the environments are declared in.

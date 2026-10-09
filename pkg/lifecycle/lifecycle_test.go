@@ -211,3 +211,35 @@ func TestStampCreatedAt(t *testing.T) {
 	lifecycle.StampCreatedAt(b, now.Add(time.Hour))
 	assert.Equal(t, "2026-09-01T10:00:00.123456789Z", b.Annotations[lifecycle.AnnotationCreatedAt], "an existing stamp is kept")
 }
+
+// TestCompareAuditEvents orders by spec.timestamp, then kardinal.io/created-at
+// (records without it first), then name.
+func TestCompareAuditEvents(t *testing.T) {
+	sec := metav1.NewTime(t0)
+	ae := func(name string, ts metav1.Time, createdAt string) *v1alpha1.AuditEvent {
+		a := &v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: v1alpha1.AuditEventSpec{Timestamp: ts}}
+		if createdAt != "" {
+			a.Annotations = map[string]string{lifecycle.AnnotationCreatedAt: createdAt}
+		}
+		return a
+	}
+	later := metav1.NewTime(t0.Add(time.Second))
+	tests := []struct {
+		name string
+		a, b *v1alpha1.AuditEvent
+		want int
+	}{
+		{"timestamp decides", ae("z", sec, "2099-01-01T00:00:00Z"), ae("a", later, ""), -1},
+		{"created-at within a second", ae("z-success", sec, t0.Add(100*time.Millisecond).Format(time.RFC3339Nano)),
+			ae("a-failure", sec, t0.Add(200*time.Millisecond).Format(time.RFC3339Nano)), -1},
+		{"no annotation first", ae("z", sec, ""), ae("a", sec, t0.Format(time.RFC3339Nano)), -1},
+		{"name last", ae("a", sec, ""), ae("b", sec, ""), -1},
+		{"same", ae("a", sec, ""), ae("a", sec, ""), 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, lifecycle.CompareAuditEvents(tt.a, tt.b))
+			assert.Equal(t, -tt.want, lifecycle.CompareAuditEvents(tt.b, tt.a))
+		})
+	}
+}

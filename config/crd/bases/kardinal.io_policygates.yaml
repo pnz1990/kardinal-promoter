@@ -284,7 +284,12 @@ spec:
                   type: object
                 type: array
               lastEvaluatedAt:
-                description: LastEvaluatedAt is when the gate was last evaluated.
+                description: |-
+                  LastEvaluatedAt is when the gate's result was last written. The
+                  controller re-evaluates more often, but writes the status only when the
+                  result or reason changes, when a PromotionStep that has not started
+                  needs a newer result, after a spec change, and otherwise at least every
+                  10 minutes.
                 format: date-time
                 type: string
               ready:
@@ -303,7 +308,8 @@ spec:
         type: object
         x-kubernetes-validations:
         - message: 'PolicyGate names are at most 63 characters: the name is copied
-            into the kardinal.io/gate-template label of every gate instance'
+            into the kardinal.io/gate-template label of every gate instance; use a
+            name of at most 63 characters'
           rule: size(self.metadata.name) <= 63 || (has(self.spec) && has(self.spec.generated)
             && self.spec.generated)
     served: true
