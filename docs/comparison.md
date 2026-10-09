@@ -37,8 +37,8 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **DORA metrics** | Yes — all four: deployment frequency, lead time, change failure rate and time to restore in `Pipeline.status.deploymentMetrics`, `kardinal metrics` and the UI; per-step timings in `PromotionStep.status.steps` | No — operational Prometheus metrics only (v1.12) | No — on its roadmap ([#574](https://github.com/argoproj-labs/gitops-promoter/issues/574), its most-requested open issue) |
 | **Distributed tracing** | Yes — OpenTelemetry over OTLP/HTTP, off by default: reconciles, promotion steps, git, SCM API calls, NotificationHook deliveries (with `traceparent`), inbound webhooks and Bundle API | On main, unreleased: OpenTelemetry tracing for control plane components ([kargo#7353](https://github.com/akuity/kargo/pull/7353), merged 2026-09-29); not in v1.12.1 | No |
 | **Audit trail** | `AuditEvent` CRD (promotions, rollbacks, supersession, gate results) and Kubernetes Events | Kubernetes Events; `record-audit-event` step in Kargo Enterprise (v1.12) | `ChangeTransferPolicyHistory` (last 20 promotions per environment, v0.41), git notes, Kubernetes Events |
-| **Custom promotion steps** | No — each environment runs a fixed sequence chosen by the Bundle type, `update.strategy` and `approval` ([Promotion Steps](pipeline-reference.md#promotion-steps)); `update.strategy: yaml` sets any YAML paths in several files (Kargo's `yaml-update`) | Yes — about 35 built-in steps composed in a Stage's `promotionTemplate`, reusable PromotionTasks, conditions and retries; container steps in Kargo Enterprise (v1.10+) | No |
-| **Integration test step** | No — run tests as an Argo CD PostSync hook with `health.type: argocd`, or gate on a `MetricCheck` ([how](pipeline-reference.md#image-signatures-and-tests)) | Yes — verification can run a Kubernetes Job (AnalysisTemplate); an `http` step can poll a test service | No (a Job gate is on its roadmap) |
+| **Custom promotion steps** | Partly — the sequence itself is fixed (Bundle type, `update.strategy`, `approval`; [Promotion Steps](pipeline-reference.md#promotion-steps)); `update.strategy: yaml` sets any YAML paths in several files (Kargo's `yaml-update`), and each environment can run its own Jobs before it starts and after its health check ([hooks](hooks.md)); no custom git or render steps | Yes — about 35 built-in steps composed in a Stage's `promotionTemplate`, reusable PromotionTasks, conditions and retries; container steps in Kargo Enterprise (v1.10+) | No |
+| **Integration test step** | Yes — a post-deploy [hook](hooks.md) Job runs after the health check; the environment is Verified, and the next one starts, only when it succeeded; a failure applies `onHealthFailure`. Pre-deploy hooks run migrations before the change | Yes — verification can run a Kubernetes Job (AnalysisTemplate); an `http` step can poll a test service | No (a Job gate is on its roadmap) |
 | **Image signature verification** | No — use admission-time verification in the workload cluster (Sigstore policy-controller or Kyverno `verifyImages`; [how](pipeline-reference.md#image-signatures-and-tests)) | No (Kargo Enterprise's `jfrog-evidence` step can verify signed JFrog evidence) | No (git commit signature checks are on its roadmap) |
 | **Emergency gate override** | Yes — `kardinal override`: time-limited, with a mandatory reason; recorded in the gate's `spec.overrides`, a `GateEvaluated` AuditEvent and the PR evidence (the user name is the CLI's local OS user) | Manual Freight approval (`kargo approve`), with no reason or expiry | Merge the PR by hand; nothing is recorded |
 | **Outbound event notifications** | Yes — `NotificationHook` CRD with native Slack (Block Kit) and Microsoft Teams (Adaptive Card) formats, JSON, or a templated body for any HTTP API; ten events (Bundle verified, failed, superseded, rollback started and done; gate blocked and unblocked; step failed, PR opened, waiting for approval); auth header and URL from a Secret; HMAC-signed requests with a replay-proof timestamp; CloudEvents 1.0 format; per-event dedupe key; controller egress allowlist; pipeline selector | Kargo Enterprise only: event routing to Slack, email or HTTP, and a `send-message` step (v1.8+). Open source emits Kubernetes Events, and an `http` step can call a webhook | Kubernetes Events only (a webhook CRD is in a draft PR) |
@@ -205,7 +205,7 @@ it with `dependsOn` on its environments.
 
 - **Composable promotion steps** (Kargo). About 35 built-in steps (git, Helm, Kustomize, YAML,
   OCI, HTTP, Argo CD), reusable PromotionTasks, conditions and retries. kardinal runs a fixed
-  sequence per environment.
+  sequence per environment, with your own Jobs only before and after it ([hooks](hooks.md)).
 - **Verification providers** (Kargo). AnalysisTemplates query Prometheus, Datadog, CloudWatch,
   New Relic and others, and can run a Job. A kardinal `MetricCheck` covers Prometheus, Datadog,
   CloudWatch, New Relic and JSON web APIs, per promotion with `perPromotion` (unreleased), but
@@ -232,8 +232,9 @@ rejects a Pipeline that sets `approval: pr-review` on the same environment. It p
 Bundles only. See [ArgoCD-Native Promotion](argocd-native-promotion.md).
 
 **You need custom promotion steps.**
-kardinal runs a fixed step sequence per environment. If each environment needs its own
-build, render or script steps, Kargo's promotion templates fit better.
+kardinal runs a fixed step sequence per environment. [Hooks](hooks.md) run Jobs before it
+starts and after the health check (migrations, tests), but not between its git steps. If each
+environment needs its own build, render or update steps, Kargo's promotion templates fit better.
 
 **You want zero state outside Git.**
 kardinal maintains state in Kubernetes CRDs (Pipeline, Bundle, PromotionStep, AuditEvent and others).

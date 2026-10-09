@@ -9,7 +9,7 @@ import (
 
 // DeployedBundle returns the Bundle whose change landed last in env of
 // pipeline, judged from steps: the Bundle of the newest PromotionStep there
-// that is past its merge (HealthChecking, Verified, AbortedByAlarm,
+// that is past its merge (HealthChecking, Verifying, Verified, AbortedByAlarm,
 // RollingBack, or Failed after its health check started). It is the Bundle a
 // rollback rolls back from. It returns "" when no change has landed there.
 // Steps of other pipelines or environments are ignored, so callers can pass

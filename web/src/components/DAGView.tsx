@@ -22,7 +22,7 @@ import { isHttpURL, prNumberFromURL } from '../prLink'
 import '../styles/DAGView.css'
 
 /** Active states that warrant an elapsed-time display (#330). */
-const ACTIVE_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking'])
+const ACTIVE_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
 
 /** Hook that ticks every second and returns elapsed string for an active PromotionStep node. */
 function useElapsedTick(startedAt: string | undefined, active: boolean): string {

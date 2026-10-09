@@ -313,6 +313,63 @@ spec:
                           - flagger
                           type: string
                       type: object
+                    hooks:
+                      description: |-
+                        Hooks are Jobs that run for each Bundle in this environment: "pre"
+                        hooks before the promotion starts (database migrations), "post" hooks
+                        after the health check passed and before the environment is Verified
+                        (integration tests). Each runs once per Bundle, as a HookRun the
+                        Bundle's Graph creates. See docs/hooks.md.
+                      items:
+                        description: |-
+                          HookSpec is one pre- or post-deploy hook of a Pipeline environment: a
+                          Kubernetes Job the controller runs once per Bundle and environment.
+                        properties:
+                          job:
+                            description: |-
+                              Job is a batch/v1 JobSpec. The controller creates the Job in the
+                              Pipeline namespace with the HookRun as its owner. The Pod's
+                              serviceAccountName (default "default") must be in the controller's
+                              --hook-service-accounts list. restartPolicy defaults to Never, and
+                              activeDeadlineSeconds to the timeout.
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                          name:
+                            description: |-
+                              Name identifies the hook within its environment and phase. It is part of
+                              the HookRun and Job names.
+                            maxLength: 40
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                          phase:
+                            description: |-
+                              Phase is when the hook runs. "pre": after the environment's upstreams
+                              are Verified and its gates are ready, before the promotion starts; the
+                              promotion starts only when every pre hook succeeded. "post": after the
+                              health check passed; the environment is Verified only when every post
+                              hook succeeded, and a failed post hook applies onHealthFailure. Hooks of
+                              one phase run one after another, in list order.
+                            enum:
+                            - pre
+                            - post
+                            type: string
+                          timeout:
+                            description: |-
+                              Timeout bounds the hook from the moment its HookRun starts: a hook that
+                              has not finished by then fails and its Job is deleted. Empty or "0" means 30m.
+                            pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                            type: string
+                        required:
+                        - job
+                        - name
+                        - phase
+                        type: object
+                      maxItems: 10
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - name
+                      x-kubernetes-list-type: map
                     layout:
                       default: directory
                       description: |-

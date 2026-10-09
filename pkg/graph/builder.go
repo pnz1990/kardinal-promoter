@@ -113,6 +113,9 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	if err := validateInput(input.Pipeline, input.Bundle); err != nil {
 		return nil, err
 	}
+	if err := ValidateHooks(input.Pipeline); err != nil {
+		return nil, err
+	}
 
 	// Step 1: resolve environment ordering
 	orderedEnvs, deps, err := resolveOrdering(input.Pipeline)
@@ -615,6 +618,9 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		// ReadyWhen intentionally omitted — ref: is read-only.
 	}
 	nodes = append(nodes, bundleWatchNode)
+	if hasHooks(pipeline, filteredEnvs) {
+		nodes = append(nodes, hookRefNodes(pipelineName, bundle.Name, bundle.Namespace)...)
+	}
 
 	gates := newGateCollections(pipelineName, bundle.Name)
 	var prItems []interface{}
@@ -694,10 +700,23 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			continue
 		}
 		// PromotionStep node — node ID must be a valid CEL identifier.
-		nodes = append(nodes, buildPromotionStepNode(
+		stepNode := buildPromotionStepNode(
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
 			heldCond(pipeline, envName),
-		))
+		)
+		hooks, err := buildHookNodes(hookNodesInput{
+			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
+			bundleUID:   string(bundle.UID),
+			env:         findEnvSpec(pipeline, envName),
+			stepK8sName: promotionStepK8sName(pipelineName, bundle.Name, envName),
+			conds:       stepConds(heldCond(pipeline, envName), upstreams, envGates, gates.readyCond),
+		})
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		attachHooks(stepNode, hooks)
+		nodes = append(nodes, stepNode)
+		nodes = append(nodes, hooks.nodes...)
 	}
 
 	nodes = append(nodes, gates.nodes()...)

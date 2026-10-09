@@ -743,7 +743,7 @@ func TestCLI_Doctor(t *testing.T) {
 	header := "\nkardinal-promoter pre-flight check\n" + strings.Repeat("=", 50) + "\n"
 	row := func(icon, label, detail string) string { return fmt.Sprintf("%s  %-32s  %s\n", icon, label, detail) }
 	checks := row("✅", "Controller reachable", fmt.Sprintf("kardinal-promoter %s in kardinal-system", controllerVersion(t, e))) +
-		row("✅", "CRDs installed", "all 12 kardinal.io/v1alpha1 resources served") +
+		row("✅", "CRDs installed", "all 13 kardinal.io/v1alpha1 resources served") +
 		row("✅", "kro running", fmt.Sprintf("kro %s in kro-system", kroTag(t, e))) +
 		row("✅", "kro Graph CRD installed", "kro.run/v1alpha1 graphs registered") +
 		row("✅", tokenLabel, "secret "+framework.GitSecretName+" (key token) present in kardinal-system")

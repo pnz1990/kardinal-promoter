@@ -70,10 +70,56 @@ spec:
                 description: Environment is the environment this step promotes into.
                 minLength: 1
                 type: string
+              live:
+                description: |-
+                  Live holds results the Graph mirrors onto the step while it runs (a
+                  patch node, not the step's template, so they keep updating after the
+                  step's own template stopped resolving). The reconciler reads only this
+                  copy, never the source objects.
+                properties:
+                  hooks:
+                    description: Hooks are the environment's HookRuns for this Bundle.
+                    items:
+                      description: LiveHookRun is the result of one HookRun.
+                      properties:
+                        hook:
+                          description: Hook is the hook's name in the Pipeline.
+                          type: string
+                        message:
+                          description: Message is the HookRun's status.message.
+                          type: string
+                        name:
+                          description: Name is the HookRun name.
+                          type: string
+                        phase:
+                          description: 'Phase is the hook phase: pre or post.'
+                          type: string
+                        result:
+                          description: Result is the HookRun's status.phase (Pending
+                            when it has none yet).
+                          type: string
+                        specHash:
+                          description: 'SpecHash is the HookRun''s status.specHash:
+                            which job and timeout ran.'
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                type: object
               pipelineName:
                 description: PipelineName is the Pipeline this step belongs to.
                 minLength: 1
                 type: string
+              postHooks:
+                description: |-
+                  PostHooks names the HookRuns of the environment's post-deploy hooks, in
+                  order. A step with post hooks goes from HealthChecking to Verifying,
+                  and is Verified only when every one of them Succeeded in
+                  spec.live.hooks; a Failed one applies onHealthFailure.
+                items:
+                  type: string
+                type: array
               prStatusRef:
                 description: |-
                   PRStatusRef is the name of the companion PRStatus CRD in the same namespace.
@@ -81,6 +127,16 @@ spec:
                   The PromotionStep reconciler reads the PRStatus CRD instead of polling GitHub
                   directly, eliminating the PS-4 / SCM-2 external API call on the reconcile hot path.
                 type: string
+              preHooks:
+                description: |-
+                  PreHooks names the HookRuns of the environment's pre-deploy hooks, in
+                  order. The step stays Pending until every one of them Succeeded in
+                  spec.live.hooks, and fails when one Failed. Set by the Graph: the first
+                  entry references the first HookRun node, so the step is created only
+                  after it.
+                items:
+                  type: string
+                type: array
               region:
                 description: |-
                   Region was set on the per-region PromotionSteps of a Pipeline
@@ -249,6 +305,36 @@ spec:
                   Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md).
                 format: date-time
                 type: string
+              hookRecords:
+                description: HookRecords records each hook that ran for this step
+                  (HookRecord).
+                items:
+                  description: |-
+                    HookRecord is the step's own record that a hook ran for it: once a
+                    HookRun's Job started, the step keeps its result here, so a HookRun
+                    recreated for the same hook (deleted and applied again by the Graph) does
+                    not run the Job a second time and takes the recorded result instead.
+                  properties:
+                    hook:
+                      description: Hook is the hook's name in the Pipeline.
+                      type: string
+                    message:
+                      description: Message is the HookRun's last message.
+                      type: string
+                    phase:
+                      description: Phase is pre or post.
+                      type: string
+                    result:
+                      description: Result is Running, Succeeded or Failed. Succeeded
+                        and Failed are final.
+                      type: string
+                    specHash:
+                      description: SpecHash is the HookRun's spec hash (job and timeout)
+                        that ran.
+                      type: string
+                  type: object
+                maxItems: 40
+                type: array
               lastHealthCheckAt:
                 description: |-
                   LastHealthCheckAt records when the health adapter was last called. Used to
@@ -294,11 +380,13 @@ spec:
                   State is the step execution state.
                   The Graph controller uses readyWhen expressions of the form
                   ${step.status.state == "Verified"} to advance the promotion DAG.
+                  Verifying: the health check passed and the post-deploy hooks run.
                 enum:
                 - Pending
                 - Promoting
                 - WaitingForMerge
                 - HealthChecking
+                - Verifying
                 - Verified
                 - Failed
                 - AbortedByAlarm
@@ -365,6 +453,13 @@ spec:
                   check a ProgressDeadlineExceeded when it cannot read the ReplicaSet the
                   condition names, only when set after this time: the earlier rollout's
                   condition or phase can outlast the Bundle's update.
+                format: date-time
+                type: string
+              verificationStartedAt:
+                description: |-
+                  VerificationStartedAt is when the step entered Verifying (its health
+                  check passed and its post-deploy hooks may start). Set once; the
+                  Graph creates the post-deploy HookRuns once it is set.
                 format: date-time
                 type: string
               waitForMergeExpiry:

@@ -127,6 +127,9 @@ func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.Promotio
 	case StateHealthChecking:
 		eventAction = "CheckHealth"
 		note = fmt.Sprintf("env %s: change delivered, running health check", env)
+	case StateVerifying:
+		eventAction = "RunHooks"
+		note = fmt.Sprintf("env %s: health check passed, running post-deploy hooks", env)
 	case StateVerified:
 		eventAction = "Verify"
 		note = fmt.Sprintf("env %s: step completed successfully", env)
@@ -234,7 +237,7 @@ func closeStepStatuses(ps *v1alpha1.PromotionStep, state string) stepObservation
 			}
 			complete(&steps[i])
 		}
-	case StateVerified:
+	case StateVerifying, StateVerified:
 		for i := range steps {
 			complete(&steps[i])
 		}
