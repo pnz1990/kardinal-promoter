@@ -778,7 +778,7 @@ func TestGate_RecheckInterval(t *testing.T) {
 		func(g *v1alpha1.PolicyGate) bool {
 			return g.Status.LastEvaluatedAt != nil && !g.Status.LastEvaluatedAt.Time.Before(settled)
 		})
-	evals, ticks := evaluationsAndTicks(t, e, a.ns, bundle, "prod", "fast-recheck", 35*time.Second)
+	evals, ticks := evaluationsAndTicks(t, e, a.ns, bundle, "prod", "fast-recheck", 45*time.Second)
 	end := time.Now()
 	clockMu.Unlock()
 	// Each evaluation after the first comes at least 10s after the one before
@@ -797,9 +797,13 @@ func TestGate_RecheckInterval(t *testing.T) {
 	t.Logf("evaluations %v to %s; clock ticks %v; at most %d", evals, end.Format(time.RFC3339), ticks, most)
 	assert.GreaterOrEqual(t, len(evals), 3, "the gate is re-evaluated periodically")
 	assert.LessOrEqual(t, len(evals), most, "1s is raised to the 10s minimum")
+	// Periodic at the 10s minimum: a requeue is never early (at least 9s:
+	// lastEvaluatedAt has whole seconds), but a loaded controller can run
+	// it seconds late, so a gap counts up to 20s: still far from the 5m
+	// default, and from 1s. (Under 65 parallel tests one gap was 13s.)
 	var tenSecondGaps int
 	for i := 1; i < len(evals); i++ {
-		if gap := evals[i].Sub(evals[i-1]); gap >= 9*time.Second && gap <= 12*time.Second {
+		if gap := evals[i].Sub(evals[i-1]); gap >= 9*time.Second && gap <= 20*time.Second {
 			tenSecondGaps++
 		}
 	}

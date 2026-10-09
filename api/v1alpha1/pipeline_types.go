@@ -428,11 +428,15 @@ type YAMLUpdate struct {
 	// +kubebuilder:validation:MaxLength=512
 	File string `json:"file"`
 
-	// Path is the key path of the scalar to set: keys separated by ".", with
-	// "[N]" to index a list, for example "image.tag" or
-	// "spec.template.spec.containers[0].image". Missing mapping keys are
-	// created; list elements are not. A key that contains "." is not supported.
-	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]+(\[[0-9]+\])*(\.[A-Za-z0-9_-]+(\[[0-9]+\])*)*$`
+	// Path is the key path of the scalar to set, in the grammar
+	// chartVersionPath uses too: keys separated by "." (a leading "." is
+	// optional), "[N]" to index a list and "[field=value]" for the list
+	// element whose field has that value, for example "image.tag",
+	// "spec.template.spec.containers[0].image" or
+	// "spec.template.spec.containers[name=app].image". A digits-only key
+	// indexes a list when it reaches one. Missing mapping keys are created;
+	// list elements are not. A key that contains "." is not supported.
+	// +kubebuilder:validation:Pattern=`^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$`
 	// +kubebuilder:validation:MaxLength=512
 	Path string `json:"path"`
 
@@ -471,15 +475,18 @@ type HelmUpdateConfig struct {
 	// +optional
 	ChartVersionFile string `json:"chartVersionFile,omitempty"`
 
-	// ChartVersionPath is the YAML dot-path of the chart version in
-	// chartVersionFile. A numeric segment indexes a list, and "[field=value]"
-	// selects the list element whose field has that value. Defaults to
+	// ChartVersionPath is the YAML path of the chart version in
+	// chartVersionFile, in the grammar of update.yaml.updates[].path: keys
+	// separated by ".", "[N]" (or a digits-only key) to index a list, and
+	// "[field=value]" for the list element whose field has that value. Defaults to
 	// ".dependencies[name=<chart>].version": the umbrella chart's dependency
 	// named after the Bundle's chart (an error when there is none). For
 	// example ".spec.source.targetRevision" (Argo CD Application),
 	// ".spec.chart.spec.version" (Flux HelmRelease) or
 	// ".helmCharts[name=podinfo].version" (kustomize).
 	// +optional
+	// +kubebuilder:validation:Pattern=`^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$`
+	// +kubebuilder:validation:MaxLength=512
 	ChartVersionPath string `json:"chartVersionPath,omitempty"`
 }
 

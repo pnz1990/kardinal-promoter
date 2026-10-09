@@ -302,6 +302,92 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 	}
 }
 
+// Node IDs and the iterator of the compact shape's per-promotion MetricCheck
+// instances (MetricChecks2, ... and so on for more than MaxCollectionItems).
+const (
+	// NodeMetricCheckData holds every instance's rendered object as data.
+	NodeMetricCheckData = "MetricCheckData"
+	// NodePromotionMetrics is the instances that may exist: those whose
+	// environment's upstreams are all Verified, or whose environment has
+	// started.
+	NodePromotionMetrics = "PromotionMetrics"
+	// NodeMetricChecks creates one MetricCheck per NodePromotionMetrics item.
+	NodeMetricChecks = "MetricChecks"
+
+	iterMetric = "Metric"
+)
+
+// compactMetric is one per-promotion MetricCheck instance of the compact
+// shape.
+type compactMetric struct {
+	name, env, template string
+	upstreams           []string // environment names
+	spec                map[string]interface{}
+}
+
+// compactMetricNodes builds the compact shape's per-promotion MetricCheck
+// instances: the rendered instances as data, a def that admits them, and a
+// collection per MaxCollectionItems instances.
+//
+// The node shape holds an instance's query until every upstream PromotionStep
+// is Verified (resolvableWhen, buildMetricCheckNode), so the analysis starts
+// when the upstream deployment is done and before the environment's own step
+// exists: its gates read the instance. A collection cannot hold one item
+// (G11), so the admission is data instead: PromotionMetrics keeps an instance
+// whose upstreams are all Verified (NodePromotionState.verified), or whose
+// environment has started, so a started environment never loses its
+// instance. spec.suspend, in the data, follows the Bundle's phase as in the
+// node shape.
+func compactMetricNodes(pipelineName, bundleName string, metrics []compactMetric) []GraphNode {
+	if len(metrics) == 0 {
+		return nil
+	}
+	data := map[string]interface{}{}
+	admit := map[string]interface{}{}
+	var collections []GraphNode
+	state := NodePromotionState + "."
+	for i := 0; i*MaxCollectionItems < len(metrics); i++ {
+		chunk := metrics[i*MaxCollectionItems : min(len(metrics), (i+1)*MaxCollectionItems)]
+		items := make([]interface{}, len(chunk))
+		for j, m := range chunk {
+			items[j] = map[string]interface{}{
+				"name":        m.name,
+				"environment": m.env,
+				"template":    m.template,
+				"upstreams":   toInterfaces(m.upstreams),
+				"spec":        m.spec,
+			}
+		}
+		field := chunkID("items", i)
+		data[field] = items
+		admit[field] = fmt.Sprintf("${%s.%s.filter(m, m.environment in %sstarted || m.upstreams.all(u, u in %sverified))}",
+			NodeMetricCheckData, field, state, state)
+		item := func(f string) string { return "${" + iterMetric + "." + f + "}" }
+		collections = append(collections, GraphNode{
+			ID:      chunkID(NodeMetricChecks, i),
+			ForEach: []map[string]string{{iterMetric: fmt.Sprintf("${%s.%s}", NodePromotionMetrics, field)}},
+			Template: map[string]interface{}{
+				"apiVersion": "kardinal.io/v1alpha1",
+				"kind":       "MetricCheck",
+				"metadata": map[string]interface{}{
+					"name": item("name"),
+					"labels": map[string]interface{}{
+						"kardinal.io/pipeline":    pipelineName,
+						"kardinal.io/bundle":      bundleName,
+						"kardinal.io/environment": item("environment"),
+						LabelMetricTemplate:       item("template"),
+					},
+				},
+				"spec": item("spec"),
+			},
+		})
+	}
+	return append([]GraphNode{
+		{ID: NodeMetricCheckData, Def: data},
+		{ID: NodePromotionMetrics, Def: admit},
+	}, collections...)
+}
+
 func toInterfaces(s []string) []interface{} {
 	out := make([]interface{}, len(s))
 	for i, v := range s {
