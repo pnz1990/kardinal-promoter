@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 )
 
@@ -43,7 +44,7 @@ func TestPipelineHolds(t *testing.T) {
 	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{
 		{Environment: "prod", Bundle: "app-rollback-1", Reason: "INC-42", CreatedBy: "alice", CreatedAt: &at, ExpiresAt: &exp},
 	}
-	c := newClientWithIndex(newPipelineScheme(), p)
+	c := newClientWithIndex(newPipelineScheme(), p, holdBundle("app-rollback-1"), holdBundle("app-rollback-2"))
 	r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return now }}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
 	get := func() *kardinalv1alpha1.Pipeline {
@@ -221,4 +222,118 @@ func TestPipelineHolds_StaleReadStoresNoSecondRecord(t *testing.T) {
 	assert.Empty(t, got.Status.PendingAuditEvents, "the stale reconcile stored nothing")
 	assert.Zero(t, c.creates, "and wrote no AuditEvent again")
 	assert.Len(t, holdAudits(t, c), 1, "one HoldCreated")
+}
+
+// holdBundle is a rollback Bundle of the app Pipeline in default.
+func holdBundle(name string) *kardinalv1alpha1.Bundle {
+	return &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"}}
+}
+
+// TestPipelineHolds_Orphaned (#1629): a hold whose rollback Bundle does not
+// exist is BundleMissing within the 2-minute grace after its createdAt (still
+// in effect), then Orphaned: it counts as absent (lifecycle.HoldOf), stays in
+// spec.holds, and is Active again once the Bundle exists. Release-hold still
+// removes it.
+//
+// Covers RB-HOLD-03.
+func TestPipelineHolds_Orphaned(t *testing.T) {
+	t0 := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	now := t0
+	lifecycle.HoldNow = func() time.Time { return now }
+	t.Cleanup(func() { lifecycle.HoldNow = time.Now })
+	at := metav1.NewTime(t0)
+	p := makePipelineWithEnvs("app", "default", "test", "prod")
+	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{
+		{Environment: "prod", Bundle: "app-rollback-gone", Reason: "INC-42", CreatedBy: "alice", CreatedAt: &at},
+	}
+	c := newClientWithIndex(newPipelineScheme(), p)
+	r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return now }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+	ctx := context.Background()
+	get := func() *kardinalv1alpha1.Pipeline {
+		var got kardinalv1alpha1.Pipeline
+		require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+		return &got
+	}
+	state := func() kardinalv1alpha1.EnvironmentHoldState {
+		got := get()
+		require.Len(t, got.Status.HoldStates, 1)
+		return got.Status.HoldStates[0]
+	}
+
+	// Within the grace: still in effect, back when it ends.
+	now = t0.Add(30 * time.Second)
+	res, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, kardinalv1alpha1.HoldStateBundleMissing, state().State)
+	assert.Equal(t, 90*time.Second, res.RequeueAfter, "back when the grace ends")
+	require.NotNil(t, lifecycle.HoldOf(get(), "prod"), "in effect within the grace")
+
+	// Past it: Orphaned, not in effect, still in the spec.
+	now = t0.Add(2 * time.Minute)
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	st := state()
+	assert.Equal(t, kardinalv1alpha1.HoldStateOrphaned, st.State)
+	assert.Contains(t, st.Message, "rollback Bundle app-rollback-gone does not exist, so the hold is not in effect")
+	assert.Contains(t, st.Message, "kardinal release-hold app --env prod")
+	got := get()
+	assert.Nil(t, lifecycle.HoldOf(got, "prod"), "an orphaned hold counts as absent")
+	assert.Nil(t, lifecycle.HeldFrom(got, "prod", "app-v2"), "other Bundles are not held back")
+	assert.Equal(t, []string{"prod/app-rollback-gone"}, got.OrphanedHolds())
+	require.Len(t, got.Spec.Holds, 1, "the controller does not edit spec.holds")
+
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, st, state(), "idempotent")
+
+	// The Bundle exists again: Active.
+	require.NoError(t, c.Create(ctx, holdBundle("app-rollback-gone")))
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, kardinalv1alpha1.HoldStateActive, state().State)
+	assert.NotNil(t, lifecycle.HoldOf(get(), "prod"))
+
+	// Gone again: Orphaned at once (createdAt is long past), and release-hold
+	// removes it.
+	require.NoError(t, c.Delete(ctx, holdBundle("app-rollback-gone")))
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, kardinalv1alpha1.HoldStateOrphaned, state().State)
+	released, err := lifecycle.ReleaseHold(ctx, c, "default", "app", "prod")
+	require.NoError(t, err)
+	assert.Equal(t, "app-rollback-gone", released.Bundle)
+	assert.Empty(t, get().Spec.Holds)
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Empty(t, get().Status.HoldStates)
+}
+
+// TestPipelineHolds_OrphanedWithoutCreatedAt: a hold with no createdAt
+// (written by hand) gets the grace from when the controller first found its
+// Bundle missing.
+//
+// Covers RB-HOLD-03.
+func TestPipelineHolds_OrphanedWithoutCreatedAt(t *testing.T) {
+	t0 := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	now := t0
+	p := makePipelineWithEnvs("app", "default", "test", "prod")
+	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-x", Reason: "r"}}
+	c := newClientWithIndex(newPipelineScheme(), p)
+	r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return now }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+	for _, step := range []struct {
+		at   time.Duration
+		want string
+	}{{0, kardinalv1alpha1.HoldStateBundleMissing}, {time.Minute, kardinalv1alpha1.HoldStateBundleMissing}, {2 * time.Minute, kardinalv1alpha1.HoldStateOrphaned}} {
+		now = t0.Add(step.at)
+		_, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		var got kardinalv1alpha1.Pipeline
+		require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+		require.Len(t, got.Status.HoldStates, 1)
+		assert.Equal(t, step.want, got.Status.HoldStates[0].State, "at %s", step.at)
+		assert.Equal(t, t0, got.Status.HoldStates[0].BundleMissingSince.UTC(), "the first time it was found missing")
+	}
 }

@@ -856,9 +856,13 @@ func heldCond(pipeline *kardinalv1alpha1.Pipeline, env string) string {
 }
 
 // heldBundle is the Bundle the Pipeline holds env on (spec.holds), or "".
+// An orphaned hold (status.holdStates: its Bundle does not exist past the
+// grace period, #1629) holds nothing; a change of that state rebuilds the
+// Graph like a spec change (bundle reconciler pipelineSpecHashFor).
 func heldBundle(pipeline *kardinalv1alpha1.Pipeline, env string) string {
-	for _, h := range pipeline.Spec.Holds {
-		if h.Environment == env {
+	for i := range pipeline.Spec.Holds {
+		h := &pipeline.Spec.Holds[i]
+		if h.Environment == env && !pipeline.HoldOrphaned(h) {
 			return h.Bundle
 		}
 	}

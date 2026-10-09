@@ -27,6 +27,65 @@ const (
 	AuditActionHoldReleased = "HoldReleased"
 )
 
+// holdBundleGrace is how long a hold may name a Bundle that does not exist
+// before it is Orphaned (#1629): kardinal rollback --hold writes the hold
+// first and creates the Bundle right after, and the cache may lag the
+// create.
+const holdBundleGrace = 2 * time.Minute
+
+// holdStates returns status.holdStates for p's holds, and how long until
+// the next BundleMissing hold turns Orphaned (0: none). A hold is Orphaned
+// when its Bundle does not exist and holdBundleGrace has passed since the
+// hold's createdAt, or, without createdAt, since the controller first found
+// the Bundle missing. A Bundle that exists again makes it Active again. The
+// controller never edits spec.holds for it: the hold stays visible until it
+// is released.
+func (r *Reconciler) holdStates(ctx context.Context, p *kardinalv1alpha1.Pipeline, now time.Time) ([]kardinalv1alpha1.EnvironmentHoldState, time.Duration, error) {
+	prev := map[string]*kardinalv1alpha1.EnvironmentHoldState{}
+	for i := range p.Status.HoldStates {
+		st := &p.Status.HoldStates[i]
+		prev[st.Environment+"/"+st.Bundle] = st
+	}
+	var states []kardinalv1alpha1.EnvironmentHoldState
+	var next time.Duration
+	for i := range p.Spec.Holds {
+		h := &p.Spec.Holds[i]
+		st := kardinalv1alpha1.EnvironmentHoldState{Environment: h.Environment, Bundle: h.Bundle, State: kardinalv1alpha1.HoldStateActive}
+		var b kardinalv1alpha1.Bundle
+		err := r.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: h.Bundle}, &b)
+		switch {
+		case err == nil:
+		case k8serrors.IsNotFound(err):
+			since := metav1.NewTime(now.UTC().Truncate(time.Second))
+			if old := prev[h.Environment+"/"+h.Bundle]; old != nil && old.BundleMissingSince != nil {
+				since = *old.BundleMissingSince
+			}
+			st.BundleMissingSince = &since
+			from := since.Time
+			if h.CreatedAt != nil {
+				from = h.CreatedAt.Time
+			}
+			if wait := from.Add(holdBundleGrace).Sub(now); wait > 0 {
+				st.State = kardinalv1alpha1.HoldStateBundleMissing
+				st.Message = fmt.Sprintf("rollback Bundle %s does not exist yet; the hold is not in effect from %s on unless it is created",
+					h.Bundle, from.Add(holdBundleGrace).UTC().Format(time.RFC3339))
+				if next == 0 || wait < next {
+					next = wait
+				}
+			} else {
+				st.State = kardinalv1alpha1.HoldStateOrphaned
+				st.Message = fmt.Sprintf("rollback Bundle %s does not exist, so the hold is not in effect: other Bundles promote into %s. "+
+					"Release it with kardinal release-hold %s --env %s, or hold again on another rollback",
+					h.Bundle, h.Environment, p.Name, h.Environment)
+			}
+		default:
+			return nil, 0, fmt.Errorf("get bundle %s of the hold of %s: %w", h.Bundle, h.Environment, err)
+		}
+		states = append(states, st)
+	}
+	return states, next, nil
+}
+
 // holdKey identifies one hold: the same environment held again on another
 // Bundle, or at another time, is another hold.
 func holdKey(h *kardinalv1alpha1.EnvironmentHold) string {
@@ -45,7 +104,8 @@ func holdKey(h *kardinalv1alpha1.EnvironmentHold) string {
 //     AuditEvent and every hold removed a HoldReleased one, whichever client
 //     changed spec.holds (CLI, UI, kubectl). The names are fixed per hold, so
 //     a reconcile that runs again after a crash writes nothing new;
-//   - status.observedHolds is set to spec.holds.
+//   - status.observedHolds is set to spec.holds;
+//   - status.holdStates says whether each hold is in effect (holdStates).
 //
 // It returns when to come back for the next expiry (0: none), and whether it
 // updated the spec (the caller then stops: the update is reconciled anew).
@@ -105,7 +165,19 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		entries = append(entries, r.holdAuditEntry(p, h, AuditActionHoldReleased, fmt.Sprintf(
 			"hold of %s on rollback %s (held by %s: %s) %s", h.Environment, h.Bundle, orUnknown(h.CreatedBy), h.Reason, why)))
 	}
-	if !equality.Semantic.DeepEqual(p.Status.ObservedHolds, p.Spec.Holds) {
+	states, orphanIn, err := r.holdStates(ctx, p, now)
+	if err != nil {
+		return 0, false, err
+	}
+	if orphanIn > 0 && (next == 0 || orphanIn < next) {
+		next = orphanIn
+	}
+	for _, st := range states {
+		if st.State == kardinalv1alpha1.HoldStateOrphaned && !p.HoldOrphaned(&kardinalv1alpha1.EnvironmentHold{Environment: st.Environment, Bundle: st.Bundle}) {
+			log.Warn().Str("env", st.Environment).Str("bundle", st.Bundle).Msg("hold orphaned: its rollback Bundle does not exist; the hold is not in effect")
+		}
+	}
+	if !equality.Semantic.DeepEqual(p.Status.ObservedHolds, p.Spec.Holds) || !equality.Semantic.DeepEqual(p.Status.HoldStates, states) {
 		// The records go in the same patch as observedHolds, so a crash or a
 		// failed create cannot lose them (#1552).
 		// Locked on the resourceVersion p was read at: a reconcile from a
@@ -113,6 +185,7 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		// and store its record again.
 		patch := client.MergeFromWithOptions(p.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		p.Status.ObservedHolds = append([]kardinalv1alpha1.EnvironmentHold(nil), p.Spec.Holds...)
+		p.Status.HoldStates = states
 		for _, e := range entries {
 			p.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, p.Status.PendingAuditEvents, e)
 		}

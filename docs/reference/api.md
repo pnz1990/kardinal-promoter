@@ -627,6 +627,12 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.deploymentMetrics.rolloutsLast30Days` | integer |  | RolloutsLast30Days is the number of successful (Verified) promotions to the final pipeline environment in the last 30 calendar days. |
 | `status.deploymentMetrics.sampleSize` | integer |  | SampleSize is the number of Bundles included in this computation. |
 | `status.deploymentMetrics.staleProdDays` | integer |  | StaleProdDays is the number of days since the last successful promotion to the final pipeline environment. 0 means a promotion completed today. Until a Bundle is Verified there, deploymentMetrics is not set at all. |
+| `status.holdStates` | []object |  | HoldStates says, per hold of spec.holds, whether it is in effect (#1629). A hold whose rollback Bundle does not exist past a grace period is Orphaned and counts as absent: a crash between the hold and the Bundle create, or the Bundle deleted by hand, must not block the environment for ever. The hold stays in spec.holds until it is released. |
+| `status.holdStates[].bundle` | string | yes | Bundle is the hold's Bundle the state was found for. |
+| `status.holdStates[].bundleMissingSince` | string (date-time) |  | BundleMissingSince is when the controller first found the Bundle missing. |
+| `status.holdStates[].environment` | string | yes | Environment is the held environment. |
+| `status.holdStates[].message` | string |  | Message says why the hold is not in effect. |
+| `status.holdStates[].state` | string | yes | State is Active, BundleMissing or Orphaned. |
 | `status.observedHolds` | []object |  | ObservedHolds is spec.holds as the Pipeline reconciler last recorded it: the HoldCreated and HoldReleased AuditEvents are written from the difference, whichever client changed spec.holds. |
 | `status.observedHolds[].artifacts` | string |  | Artifacts is the digest of the rollback Bundle's artifacts (type, images, configRef) when the hold was made (lifecycle.ArtifactDigest). The gate exemption applies only while the Bundle still has them. |
 | `status.observedHolds[].bundle` | string | yes | Bundle is the rollback Bundle the environment is held on: the only Bundle that promotes into it while the hold lasts. |

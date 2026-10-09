@@ -50,8 +50,18 @@ import (
 var HoldNow = time.Now
 
 // HoldOf returns the hold of env in p, or nil. A hold whose expiresAt has
-// passed counts as absent, also before the Pipeline reconciler removes it.
+// passed counts as absent, also before the Pipeline reconciler removes it,
+// and so does an orphaned one (its Bundle does not exist, #1629).
 func HoldOf(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentHold {
+	if h := holdEntry(p, env); h != nil && !p.HoldOrphaned(h) {
+		return h
+	}
+	return nil
+}
+
+// holdEntry is the unexpired hold of env in p, orphaned or not: what
+// release-hold removes.
+func holdEntry(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentHold {
 	if p == nil {
 		return nil
 	}
@@ -72,7 +82,7 @@ func HoldNaming(p *v1alpha1.Pipeline, bundle string) *v1alpha1.EnvironmentHold {
 	}
 	now := HoldNow()
 	for i := range p.Spec.Holds {
-		if p.Spec.Holds[i].Bundle == bundle && !p.Spec.Holds[i].Expired(now) {
+		if p.Spec.Holds[i].Bundle == bundle && !p.Spec.Holds[i].Expired(now) && !p.HoldOrphaned(&p.Spec.Holds[i]) {
 			return &p.Spec.Holds[i]
 		}
 	}
@@ -372,7 +382,8 @@ func ReleaseHold(ctx context.Context, c client.Client, ns, pipeline, env string)
 			}
 			return fmt.Errorf("get pipeline %s/%s: %w", ns, pipeline, err)
 		}
-		h := HoldOf(&p, env)
+		// An orphaned hold is released like any other.
+		h := holdEntry(&p, env)
 		if h == nil {
 			return fmt.Errorf("environment %s of pipeline %s is not held: %w", env, pipeline, ErrNotFound)
 		}

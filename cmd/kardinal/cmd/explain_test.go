@@ -651,3 +651,22 @@ func TestExplain_ShowsHold(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, out, "held on rollback")
 }
+
+// TestExplain_ShowsOrphanedHold (#1629): a hold whose rollback Bundle does
+// not exist is shown as not in effect.
+//
+// Covers RB-HOLD-03.
+func TestExplain_ShowsOrphanedHold(t *testing.T) {
+	created := policyTestNow.Add(-time.Hour)
+	p := policyPipeline("demo", "test", "prod")
+	p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "demo-rollback-gone", Reason: "INC-42", CreatedBy: "alice"}}
+	p.Status.HoldStates = []v1alpha1.EnvironmentHoldState{{Environment: "prod", Bundle: "demo-rollback-gone", State: v1alpha1.HoldStateOrphaned}}
+	c := policyClient(t, p,
+		explainBundle("b1", "Promoting", created),
+		explainStep("demo", "b1", "prod", "Promoting", "", created),
+	)
+	out, err := runExplain(t, c, "demo", "prod", false)
+	require.NoError(t, err)
+	assert.Contains(t, out, "prod: held on rollback demo-rollback-gone by alice (INC-42), but NOT IN EFFECT: the rollback Bundle does not exist")
+	assert.Contains(t, out, "Release with: kardinal release-hold demo --env prod")
+}

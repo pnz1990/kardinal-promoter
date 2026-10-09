@@ -863,6 +863,67 @@ func (h *EnvironmentHold) Expired(now time.Time) bool {
 	return h != nil && h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time)
 }
 
+// The states of a hold (PipelineStatus.HoldStates).
+const (
+	// HoldStateActive: the hold's Bundle exists; the hold is in effect.
+	HoldStateActive = "Active"
+	// HoldStateBundleMissing: the Bundle does not exist, within the grace
+	// period; the hold is still in effect (the Bundle may be about to be
+	// created).
+	HoldStateBundleMissing = "BundleMissing"
+	// HoldStateOrphaned: the Bundle has not existed for longer than the
+	// grace period; the hold counts as absent until the Bundle exists again
+	// or the hold is released.
+	HoldStateOrphaned = "Orphaned"
+)
+
+// EnvironmentHoldState is the state of one hold, written by the Pipeline
+// reconciler.
+type EnvironmentHoldState struct {
+	// Environment is the held environment.
+	Environment string `json:"environment"`
+	// Bundle is the hold's Bundle the state was found for.
+	Bundle string `json:"bundle"`
+	// State is Active, BundleMissing or Orphaned.
+	State string `json:"state"`
+	// BundleMissingSince is when the controller first found the Bundle
+	// missing.
+	// +optional
+	BundleMissingSince *metav1.Time `json:"bundleMissingSince,omitempty"`
+	// Message says why the hold is not in effect.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// HoldOrphaned reports whether status.holdStates marks h Orphaned: its
+// rollback Bundle has not existed for longer than the grace period, so the
+// hold counts as absent.
+func (p *Pipeline) HoldOrphaned(h *EnvironmentHold) bool {
+	if p == nil || h == nil {
+		return false
+	}
+	for i := range p.Status.HoldStates {
+		st := &p.Status.HoldStates[i]
+		if st.Environment == h.Environment && st.Bundle == h.Bundle {
+			return st.State == HoldStateOrphaned
+		}
+	}
+	return false
+}
+
+// OrphanedHolds lists "<environment>/<bundle>" of every hold of spec.holds
+// that HoldOrphaned marks, in spec order: what changes the effect of the
+// holds besides spec.holds itself.
+func (p *Pipeline) OrphanedHolds() []string {
+	var out []string
+	for i := range p.Spec.Holds {
+		if p.HoldOrphaned(&p.Spec.Holds[i]) {
+			out = append(out, p.Spec.Holds[i].Environment+"/"+p.Spec.Holds[i].Bundle)
+		}
+	}
+	return out
+}
+
 // EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.
 type EnvironmentHold struct {
 	// Environment is the held environment.
@@ -935,6 +996,17 @@ type PipelineStatus struct {
 	// +listMapKey=environment
 	// +optional
 	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
+
+	// HoldStates says, per hold of spec.holds, whether it is in effect
+	// (#1629). A hold whose rollback Bundle does not exist past a grace
+	// period is Orphaned and counts as absent: a crash between the hold and
+	// the Bundle create, or the Bundle deleted by hand, must not block the
+	// environment for ever. The hold stays in spec.holds until it is
+	// released.
+	// +listType=map
+	// +listMapKey=environment
+	// +optional
+	HoldStates []EnvironmentHoldState `json:"holdStates,omitempty"`
 
 	// PendingAuditEvents are the HoldCreated and HoldReleased AuditEvents not
 	// yet written (the audit outbox, #1552). Each entry is stored in the same

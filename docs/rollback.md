@@ -134,6 +134,28 @@ a second `--hold` on the same environment is refused until the first is released
 exemption ends, steps of other Bundles are no longer held, and the controller removes the entry
 and writes `HoldReleased`.
 
+#### A hold whose rollback Bundle does not exist
+
+The hold is written first, then the rollback Bundle. If the client or the controller stops
+between the two, or the Bundle is deleted later, the hold names a Bundle that does not exist.
+Without an `expiresAt`, nothing would end it, and no other Bundle could promote into the
+environment. The controller records each hold's state in the Pipeline's `status.holdStates`:
+
+| State | Meaning |
+|---|---|
+| `Active` | The rollback Bundle exists; the hold is in effect |
+| `BundleMissing` | The Bundle does not exist, but the hold is less than 2 minutes old (from `createdAt`, or from when the controller first found the Bundle missing if `createdAt` is not set). The hold is still in effect: the Bundle may be about to be created |
+| `Orphaned` | The Bundle has not existed for longer than that. The hold is **not in effect**: other Bundles promote into the environment again |
+
+The controller does not remove an orphaned hold: it stays in `spec.holds`, and
+`kardinal explain` shows it as `NOT IN EFFECT`, until you release it with
+`kardinal release-hold` or replace it with a new `--hold`. If the Bundle exists again, the
+hold is `Active` again.
+
+```bash
+kubectl get pipeline my-app -o jsonpath='{range .status.holdStates[*]}{.environment}={.state} {.message}{"\n"}{end}'
+```
+
 Release the hold when the fix is ready:
 
 ```bash
