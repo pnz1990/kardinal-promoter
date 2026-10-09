@@ -60,6 +60,7 @@ spec:
       bake:
         minutes: <int>                  # Contiguous healthy minutes before Verified, minimum 1
         policy: <string>                # "reset-on-alarm" (default) or "fail-on-alarm"
+        maxDuration: <duration>         # Deadline for one full window (default: minutes + health.timeout)
       onHealthFailure: <string>         # "none" (default), "abort" or "rollback"
       delivery:
         delegate: <string>              # "none" (default), "argoRollouts" (implemented), "flagger" (implemented)
@@ -134,8 +135,10 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR and deletes its head branch (`kardinal/<bundle>/<env>`), so a late merge cannot deliver the change: GitHub's API merges a closed PR whose branch is still there. Unset or `0` waits forever. |
 | `stepTimeoutSeconds` | No | (none) | Maximum seconds one built-in step (`git-clone`, `kustomize-set-image`, `open-pr`, ...) may run. The step is cancelled and the error is handled like any other step error: a retryable error is retried with backoff, then the PromotionStep is marked `Failed`. Minimum 1. Unset means no per-step timeout. |
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A check that is not healthy stops the window; it starts again at the next healthy check, and `health.timeout` bounds the wait for it. A Waiting check (the workload is changing, such as a canary paused at a step) is not an alarm under either policy. |
-| `bake.policy` | No | `reset-on-alarm` | What to do when a check is unhealthy during the bake window. `reset-on-alarm`: stop the window, increment `status.bakeResets`, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. A release that keeps flapping between healthy and unhealthy never fails under `reset-on-alarm`; `fail-on-alarm` bounds it. |
+| `bake.policy` | No | `reset-on-alarm` | What to do when a check is unhealthy during the bake window. `reset-on-alarm`: stop the window, increment `status.bakeResets`, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. A release that keeps flapping between healthy and unhealthy fails under `reset-on-alarm` when no full window completes by the first window's start + `bake.minutes` + `health.timeout` (see [Timings and failures](health-adapters.md#timings-and-failures)); `fail-on-alarm` fails it on the first unhealthy check. |
+| `bake.maxDuration` | No | `bake.minutes` + `health.timeout` | Go duration (`36h`). The longest time from the first bake window's start (`status.bakeFirstStartedAt`) to a complete window. A window that stops after it, on an alarm or a Waiting check such as a paused canary, applies `onHealthFailure`. A value shorter than `bake.minutes` counts as `bake.minutes`. |
 | `onHealthFailure` | No | `none` | What to do when `health.timeout` expires without a Healthy result, when the adapter reports a terminal failure (Deployment `ProgressDeadlineExceeded` from this promotion's rollout, Flagger `Failed`), or when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle with the artifacts of the Bundle verified before the failing one in this environment; step → RollingBack, or AbortedByAlarm when there is nothing safe to roll back to (a step of a rollback Bundle → AbortedByAlarm instead, so rollbacks do not chain). See [Automatic Rollback](rollback.md#automatic-rollback). |
+| `hooks` | No | (none) | Jobs run once per Bundle in this environment: `phase: pre` before the promotion starts (migrations), `phase: post` after the health check passed and before the environment is Verified (integration tests). Each is `{name, phase, job, timeout}`, `job` a `batch/v1` JobSpec. At most 10. A failed pre hook fails the step before it changes anything; a failed post hook applies `onHealthFailure`. See [Pre- and Post-Deploy Hooks](hooks.md). |
 | `regions` | No | (none) | **Deprecated, not supported.** Declare one environment per region instead (for example `prod-us` and `prod-eu`) and promote them in parallel with `wave` or `dependsOn`; each gets its own path, PR, gates and health check. Two or more regions set the Pipeline `Ready=False`, `kardinal validate` fails, and every Bundle fails when its Graph is built with `regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`. A single region is accepted and ignored. |
 
 **Reserved and unsupported fields.** A `health.resource.kind` other than `Deployment` is not
@@ -164,6 +167,8 @@ Default: `false`.
 ### spec.maxConcurrentPromotions
 
 Maximum number of this Pipeline's Bundles in the `Promoting` phase at once. A Bundle over the cap stays `Available` with the `Ready` condition reason `WaitingForSlot`, and starts when a promoting Bundle becomes Verified, Failed or Superseded. `0` means no cap.
+
+A `Failed` Bundle does not count, so it does not take a slot back while the cap is full. While the cap is full it has the condition `WaitingForSlot=True`: its Graph creates no new PromotionStep and its `Pending` steps do not start, so a failed step that is deleted is not recreated until a slot frees. A step that was already running keeps running. When a slot frees the condition is removed, and once nothing is failing the Bundle returns to `Promoting`. A `Failed` Bundle that a newer Bundle of its type replaced (one that is `Promoting` or `Verified`) is never held: it can only be superseded. A newer Bundle that is still `Available` does not count, since it may be waiting for the slot too. When several `Failed` Bundles wait and one slot frees, the hold is lifted on all of them at once, so a step recreated for each can start before the first of them returns to `Promoting`; the next ones are then held again, but their started steps keep running.
 
 Default: `0`.
 
@@ -321,7 +326,9 @@ describes each step.
 
 kardinal has no custom step engine. `spec.environments[].steps` and
 `spec.environments[].promotionTemplate` are deprecated and cannot change the sequence: the
-API server rejects a Pipeline that sets either, and `kardinal validate` reports it.
+API server rejects a Pipeline that sets either, and `kardinal validate` reports it. To run
+your own work around the sequence, use [hooks](hooks.md): Jobs before the step starts and
+after its health check.
 
 ### How `kustomize-set-image` matches images
 
@@ -349,7 +356,9 @@ Checks that must hold for the running workload belong where it runs, not in the 
   [Kyverno `verifyImages`](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/).
   A check in the promoter is bypassed by anyone who can push to the GitOps repository;
   admission is not.
-- **Tests after a deploy.** Run them as an Argo CD
+- **Tests after a deploy.** Run them as a [post-deploy hook](hooks.md): a Job kardinal runs
+  after the health check passed; the environment is Verified only when it succeeded. Or run
+  them as an Argo CD
   [PostSync hook](https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/) Job and
   set `health.type: argocd`. Argo CD keeps the sync operation open while the hook runs and
   marks it failed when a PostSync hook fails. The argocd adapter is healthy only when the

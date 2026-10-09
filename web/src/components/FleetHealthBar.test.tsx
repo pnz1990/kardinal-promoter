@@ -76,7 +76,7 @@ describe('computeFleetHealth', () => {
     ['an environment Promoting', { test: 'Verified', prod: 'Promoting' }, 1],
     ['an environment WaitingForMerge', { test: 'Verified', prod: 'WaitingForMerge' }, 1],
     ['an environment HealthChecking', { test: 'HealthChecking' }, 1],
-    ['an environment RollingBack', { prod: 'RollingBack' }, 1],
+    ['an environment RollingBack (an end state)', { prod: 'RollingBack' }, 0],
     ['all environments Verified', { test: 'Verified', prod: 'Verified' }, 0],
     ['environments not started or failed', { test: 'Failed', prod: 'NotStarted' }, 0],
     ['no environment states', undefined, 0],

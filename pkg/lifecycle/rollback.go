@@ -761,7 +761,7 @@ func (h *envHistory) verifiedIn(bundle string) bool {
 func (h *envHistory) inFlight(bundle string) bool {
 	for i := range h.byBundle[bundle] {
 		switch h.byBundle[bundle][i].Status.State {
-		case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking":
+		case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
 			return true
 		}
 	}
@@ -770,7 +770,7 @@ func (h *envHistory) inFlight(bundle string) bool {
 
 func stepLanded(s *v1alpha1.PromotionStep) bool {
 	switch s.Status.State {
-	case "HealthChecking", "Verified", "AbortedByAlarm", "RollingBack":
+	case "HealthChecking", "Verifying", "Verified", "AbortedByAlarm", "RollingBack":
 		return true
 	case "Failed":
 		return s.Status.HealthCheckExpiry != nil

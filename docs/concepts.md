@@ -26,7 +26,7 @@ kubectl apply -f bundle.yaml
 | Available | Discovered, not yet promoted to any environment |
 | Promoting | Actively being promoted through the pipeline |
 | Verified | Successfully promoted to all target environments |
-| Failed | A promotion step or health check failed, kro rejected the Graph, or the Pipeline, the Bundle (its intent, or no images or config commit for its type) or a PolicyGate cannot be built into a Graph (condition `InvalidSpec`, with the reason). A Failed Bundle promotes again when the failed step is retried or, for `InvalidSpec`, when the Pipeline changes |
+| Failed | A promotion step or health check failed, kro rejected the Graph, or the Pipeline, the Bundle (its intent, or no images or config commit for its type) or a PolicyGate cannot be built into a Graph (condition `InvalidSpec`, with the reason). A Failed Bundle promotes again when the failed step is retried or, for `InvalidSpec`, when the Pipeline changes or, for reason `GraphBuildFailed`, a PolicyGate that applies to one of its environments changes |
 | Superseded | Replaced by a newer Bundle |
 
 ### Bundle supersession
@@ -186,7 +186,7 @@ A PromotionStep represents one environment promotion for one Bundle. You do not 
 Each PromotionStep tracks:
 - Which environment it targets
 - Which Bundle it promotes
-- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verified, Failed, AbortedByAlarm, RollingBack)
+- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verifying, Verified, Failed, AbortedByAlarm, RollingBack). Verifying: the health check passed and the environment's [post-deploy hooks](hooks.md) run
 - The PR URL (for pr-review environments)
 - Per-step progress and timing (`status.steps`), the current message and conditions, and bake and retry counters. Promotion evidence (provenance, gate results, upstream verification) goes into the PR body.
 

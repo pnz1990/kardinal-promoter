@@ -51,6 +51,10 @@ spec:
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
             - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
+            - --hook-service-accounts={{ join "," .Values.hooks.serviceAccounts }}
+            {{- if .Values.hooks.allowPrivileged }}
+            - --hook-allow-privileged=true
+            {{- end }}
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
             {{- end }}

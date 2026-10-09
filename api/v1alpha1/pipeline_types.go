@@ -271,6 +271,17 @@ type EnvironmentSpec struct {
 	// +optional
 	StepTimeoutSeconds int `json:"stepTimeoutSeconds,omitempty"`
 
+	// Hooks are Jobs that run for each Bundle in this environment: "pre"
+	// hooks before the promotion starts (database migrations), "post" hooks
+	// after the health check passed and before the environment is Verified
+	// (integration tests). Each runs once per Bundle, as a HookRun the
+	// Bundle's Graph creates. See docs/hooks.md.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	Hooks []HookSpec `json:"hooks,omitempty"`
+
 	// Regions is not supported: every region would edit the same path and push
 	// the same branch. With two or more regions the Pipeline is Ready=False
 	// (reason NotImplemented) and every Bundle fails when its Graph is built
@@ -326,6 +337,17 @@ type BakeConfig struct {
 	// +kubebuilder:default=reset-on-alarm
 	// +optional
 	Policy string `json:"policy,omitempty"`
+
+	// MaxDuration bounds the time from the first bake window's start
+	// (status.bakeFirstStartedAt) to a complete window. A step that has not
+	// completed one full window by then applies onHealthFailure when its
+	// window stops, also on a Waiting check, so a release that keeps
+	// flapping under reset-on-alarm ends. Go duration format (e.g. "36h").
+	// Default: minutes + health.timeout. A value shorter than minutes counts
+	// as minutes.
+	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
+	// +optional
+	MaxDuration string `json:"maxDuration,omitempty"`
 }
 
 // WebhookConfig is the shape of the deprecated spec.environments[].steps[].webhook

@@ -30,10 +30,11 @@ describe('kardinalStateToHealth', () => {
     ['Promoting', 'Reconciling'],
     ['WaitingForMerge', 'Reconciling'],
     ['HealthChecking', 'Reconciling'],
+    ['Verifying', 'Reconciling'],      // post-deploy hooks running
     ['Verified', 'Ready'],
     ['Failed', 'Error'],
     ['AbortedByAlarm', 'Error'],
-    ['RollingBack', 'Reconciling'],
+    ['RollingBack', 'Error'],
     ['NotStarted', 'Pending'],
     // Bundle phases.
     ['Available', 'Pending'],

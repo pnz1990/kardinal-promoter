@@ -99,8 +99,11 @@ classifies that as data-pending (`pkg/graphengine/runtime/errors.go:43-49`): the
 Unresolved, nothing is created or pruned, and kro retries on the next watch event.
 `spec.upstreamStates` and `spec.requiredGates` of each PromotionStep are built this way
 (`pkg/graph/builder.go` `resolvableWhen`, `verifiedCond`, `buildPromotionStepNode`).
-So is `spec.bundleName`, on `bundle.status.phase != "Superseded"`, which stops a
-Superseded Bundle's Graph from creating steps (E2E-R20). A node that already exists and
+So is `spec.bundleName`, on `bundle.status.phase != "Superseded"` and no Bundle condition
+`WaitingForSlot=True`, which stops the Graph of a Superseded Bundle (E2E-R20), or of a
+Failed Bundle waiting for a `maxConcurrentPromotions` slot (#1349), from creating steps.
+The condition test is guarded with `has(bundle.status.conditions)`, since a missing key
+would be data-pending too. A node that already exists and
 turns Unresolved is neither re-applied nor pruned (`executor/simple.go:318-324`,
 `pkg/controller/graph/tracking.go:102-106`), so its object stays as history.
 
@@ -629,7 +632,8 @@ prune and release for the whole Graph until the change is reverted.
 **kardinal workaround.** Hooks are `HookRun` objects (a kardinal CRD) in the Graph. The HookRun
 reconciler creates the Job with a controller ownerReference, so garbage collection deletes the
 Pods, records a terminal phase once and never runs the Job again, and ignores spec changes after
-the Job started. Planned for v0.10.0 (#1443).
+the Job started (`pkg/reconciler/hookrun`, `pkg/graph/hooks.go`, #1443; live tests
+`TestStep_Hook*`).
 
 **Upstream work.** None filed.
 
@@ -672,7 +676,8 @@ name (not `${step.metadata.name}`, which is Unresolved with the step) writes the
 onto the step. A patch whose target does not exist yet is a soft not-ready, and a patch may
 target an object a template node of the same Graph owns; the two field managers coexist.
 Verified on kind: the mirrored gate result followed the gate (true, false, true) while the step
-node was Unresolved.
+node was Unresolved. Hooks use it (`live0<env>` writes `spec.live.hooks`, `pkg/graph/hooks.go`,
+#1443).
 
 **Upstream work.** None filed.
 

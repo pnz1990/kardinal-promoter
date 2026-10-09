@@ -93,6 +93,9 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	if err := ValidateRenderedBranches(input.Pipeline); err != nil {
 		return nil, fmt.Errorf("build: %w", err)
 	}
+	if err := ValidateHooks(input.Pipeline); err != nil {
+		return nil, err
+	}
 
 	// Step 1: resolve environment ordering
 	orderedEnvs, deps, err := resolveOrdering(input.Pipeline)
@@ -549,6 +552,9 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		// ReadyWhen intentionally omitted — ref: is read-only.
 	}
 	nodes = append(nodes, bundleWatchNode)
+	if hasHooks(pipeline, filteredEnvs) {
+		nodes = append(nodes, hookRefNodes(pipelineName, bundle.Name, bundle.Namespace)...)
+	}
 
 	gates := newGateCollections(pipelineName, bundle.Name)
 	var prItems []interface{}
@@ -592,9 +598,21 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		prItems = append(prItems, map[string]interface{}{"name": prName, "environment": envName})
 
 		// PromotionStep node — node ID must be a valid CEL identifier.
-		nodes = append(nodes, buildPromotionStepNode(
+		stepNode := buildPromotionStepNode(
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
-		))
+		)
+		hooks, err := buildHookNodes(hookNodesInput{
+			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
+			env:         findEnvSpec(pipeline, envName),
+			stepK8sName: promotionStepK8sName(pipelineName, bundle.Name, envName),
+			conds:       stepConds(upstreams, envGates, gates.readyCond),
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		attachHooks(stepNode, hooks)
+		nodes = append(nodes, stepNode)
+		nodes = append(nodes, hooks.nodes...)
 	}
 
 	nodes = append(nodes, gates.nodes()...)
@@ -643,6 +661,22 @@ func filteredDeps(envName string, deps map[string][]string, filteredSet map[stri
 func resolvableWhen(cond, value string) string {
 	return fmt.Sprintf("${[%s].filter(x_, %s)[0]}", value, cond)
 }
+
+// CondBundleWaitingForSlot is the Bundle condition that is True while a
+// Failed Bundle of a Pipeline with spec.maxConcurrentPromotions waits for a
+// slot (#1349). The Bundle reconciler writes it on its own Bundle; the Graph
+// holds the Bundle's steps on it (bundleHeld) and the PromotionStep
+// reconciler keeps the Bundle's Pending steps Pending. Without the hold, a
+// failed environment that recovers (its step deleted and recreated) would
+// promote while another Bundle has the slot.
+const CondBundleWaitingForSlot = "WaitingForSlot"
+
+// bundleHeld is the condition spec.bundleName of every PromotionStep node
+// resolves under: the Bundle is not Superseded and does not wait for a
+// maxConcurrentPromotions slot. has() keeps a Bundle without conditions
+// resolvable (a missing key would be data-pending, see resolvableWhen).
+const bundleHeld = `bundle.status.phase != "Superseded" && !(has(bundle.status.conditions) && ` +
+	`bundle.status.conditions.exists(c_, c_.type == "` + CondBundleWaitingForSlot + `" && c_.status == "True"))`
 
 // verifiedCond returns the CEL condition "upstream PromotionStep is Verified".
 func verifiedCond(upstreamID string) string {
@@ -697,8 +731,9 @@ func buildPromotionStepNode(
 		// re-applies nor prunes them (executor/simple.go Apply, controller/graph/
 		// tracking.go diffManagedResources), so they stay as history. includeWhen
 		// is not used because an excluded node is pruned. Failed is not held:
-		// a Failed Bundle can return to Promoting.
-		"bundleName":  resolvableWhen(`bundle.status.phase != "Superseded"`, "bundle.metadata.name"),
+		// a Failed Bundle can return to Promoting, unless it waits for a
+		// maxConcurrentPromotions slot (bundleHeld, #1349).
+		"bundleName":  resolvableWhen(bundleHeld, "bundle.metadata.name"),
 		"environment": envName,
 		"stepType":    stepType,
 		// prStatusRef names the environment's PRStatus. The PromotionStep

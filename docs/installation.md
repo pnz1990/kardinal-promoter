@@ -157,7 +157,9 @@ kardinal version
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
-| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed, so the chart grants no Job access |
+| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
+| `hooks.serviceAccounts` | `[default]` | ServiceAccounts a [hook](hooks.md)'s Pod may run as (`--hook-service-accounts`), in the Pipeline namespace. The Graph ServiceAccount is never allowed |
+| `hooks.allowPrivileged` | `false` | Allow privileged [hook](hooks.md) Pods (`--hook-allow-privileged`): privileged containers, privilege escalation, added capabilities, host namespaces and ports, hostPath volumes, nodeName |
 | `resources.limits.cpu` | `500m` | CPU limit |
 | `resources.limits.memory` | `128Mi` | Memory limit |
 | `resources.requests.cpu` | `10m` | CPU request |
@@ -502,7 +504,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
     ```
 
 - **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The chart ships no ValidatingAdmissionPolicy; the CRD schemas validate these fields.
-- **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart no longer grants `batch/jobs`.
+- **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart grants `batch/jobs` (create, get, list, watch, delete) for [hooks](hooks.md) whatever it says.
 - **`--reuse-values`** fails with `additional properties 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
 
 #### Other notes
@@ -655,6 +657,7 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 | `clusterroles` | `bind`, limited to `<fullname>-graph-applier` and `<fullname>-graph-reader` |
 | `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
 | `replicasets` | get only: the `resource` and `flux` adapters read the ReplicaSet a Deployment's `ProgressDeadlineExceeded` names |
+| `pods` | list only: while a Deployment's replicas are unavailable, the `resource` adapter lists the pods of its new ReplicaSet to name why one is not ready. In the default cluster mode `list` covers **every pod in the cluster** (pod specs, including literal `env` values, not Secrets); `controller.watchNamespace` limits it to one namespace. Without it, health messages leave the pod out |
 | `secrets` | get only: the controller reads each Secret by name and never lists or watches them. In the default cluster mode `get` covers **every Secret in the cluster**. The release-namespace Role adds `get` on the SCM token Secret by name |
 | `configmaps` | None in the watched namespaces. The leader-election Role reads and writes the `kardinal-version` ConfigMap by name |
 | `leases` | Leader election, through a Role in the release namespace |

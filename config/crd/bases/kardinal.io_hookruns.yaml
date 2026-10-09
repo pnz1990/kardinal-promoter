@@ -1,0 +1,229 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: hookruns.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    kind: HookRun
+    listKind: HookRunList
+    plural: hookruns
+    shortNames:
+    - hr
+    singular: hookrun
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.pipelineName
+      name: Pipeline
+      type: string
+    - jsonPath: .spec.environment
+      name: Env
+      type: string
+    - jsonPath: .spec.hook
+      name: Hook
+      type: string
+    - jsonPath: .spec.phase
+      name: When
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          HookRun is one run of a pre- or post-deploy hook (a Kubernetes Job) for
+          one Bundle and environment. Created by the Bundle's kro Graph; reconciled
+          by the HookRun reconciler, which creates the Job and records its result.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              HookRunSpec is one execution of a Pipeline hook for one Bundle and
+              environment. The kro Graph of the Bundle creates it; the HookRun
+              reconciler runs the Job.
+            properties:
+              bundleName:
+                description: BundleName is the Bundle being promoted.
+                minLength: 1
+                type: string
+              environment:
+                description: Environment is the environment the hook runs for.
+                minLength: 1
+                type: string
+              hook:
+                description: Hook is the hook's name in the Pipeline.
+                minLength: 1
+                type: string
+              job:
+                description: Job is the batch/v1 JobSpec to run (see HookSpec.Job).
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              phase:
+                description: Phase is "pre" or "post" (see HookSpec.Phase).
+                enum:
+                - pre
+                - post
+                type: string
+              pipelineName:
+                description: PipelineName is the Pipeline the hook belongs to.
+                minLength: 1
+                type: string
+              stepAdvanced:
+                description: |-
+                  StepAdvanced is set by the Graph from the step's state: true once the
+                  step passed the point this hook runs at (started, for a pre hook;
+                  finished, for a post hook). A HookRun that starts with it set is
+                  Skipped: a hook added to the Pipeline too late for this Bundle does not
+                  run out of order. It is not part of the spec hash.
+                type: boolean
+              timeout:
+                description: Timeout is the hook timeout (see HookSpec.Timeout).
+                pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                type: string
+            required:
+            - bundleName
+            - environment
+            - hook
+            - job
+            - phase
+            - pipelineName
+            type: object
+          status:
+            description: HookRunStatus is the observed state of a HookRun.
+            properties:
+              conditions:
+                description: |-
+                  Conditions: SpecChangedAfterStart is True when spec.job or spec.timeout
+                  changed after the Job was created.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              deadline:
+                description: Deadline is StartedAt plus the timeout.
+                format: date-time
+                type: string
+              finishedAt:
+                description: FinishedAt is when the HookRun reached Succeeded or Failed.
+                format: date-time
+                type: string
+              jobName:
+                description: JobName is the name of the Job the reconciler created.
+                type: string
+              jobUID:
+                description: |-
+                  JobUID is the UID of that Job. A Job of that name with another UID, or
+                  none at all, while the HookRun runs, fails the HookRun: it is not run
+                  again.
+                type: string
+              message:
+                description: Message says why the HookRun is in its phase.
+                type: string
+              phase:
+                description: |-
+                  Phase is Pending until the Job is created, Running while it runs, and
+                  Succeeded or Failed once it finished, or Skipped. Succeeded, Failed and
+                  Skipped are terminal: the API server refuses to change them, and the
+                  Job is never created again, even when it is deleted.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Skipped
+                type: string
+                x-kubernetes-validations:
+                - message: a finished HookRun's phase cannot change
+                  rule: '!(oldSelf in [''Succeeded'', ''Failed'', ''Skipped'']) ||
+                    self == oldSelf'
+              specHash:
+                description: |-
+                  SpecHash is a hash of spec.job and spec.timeout when the Job was
+                  created. A later spec change is not applied (condition
+                  SpecChangedAfterStart).
+                type: string
+              startedAt:
+                description: StartedAt is when the HookRun started (the Job was created).
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

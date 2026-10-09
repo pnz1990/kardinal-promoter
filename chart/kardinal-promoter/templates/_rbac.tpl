@@ -53,6 +53,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - metricchecks
     - scheduleclocks
     - notificationhooks
+    - hookruns
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["kardinal.io"]
   resources:
@@ -66,7 +67,14 @@ rules exist for. A new client call needs a row there and a rule here.
     - metricchecks/status
     - scheduleclocks/status
     - notificationhooks/status
+    - hookruns/status
   verbs: ["get", "update", "patch"]
+# Pipeline hooks (docs/hooks.md): the HookRun reconciler creates each hook's
+# Job, owned by the HookRun, and deletes one that ran past its timeout. The
+# informer caches only Jobs labelled kardinal.io/hookrun.
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "delete"]
 # Audit records are append-only.
 - apiGroups: ["kardinal.io"]
   resources: ["auditevents"]
@@ -105,6 +113,13 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["apps"]
   resources: ["replicasets"]
   verbs: ["get"]
+# The resource adapter lists the pods of a Deployment's new ReplicaSet,
+# uncached and only while replicas are unavailable, to name why a new pod is
+# not ready (ErrImagePull, CrashLoopBackOff). In cluster mode this covers
+# every pod in the cluster (docs/guides/security.md#controller-rbac).
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
 - apiGroups: ["argoproj.io"]
   resources: ["applications"]
   {{- if .Values.rbac.argocdApplicationsWrite }}

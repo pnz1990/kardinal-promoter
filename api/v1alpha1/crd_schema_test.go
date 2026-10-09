@@ -279,6 +279,11 @@ func baseObject(kind string) map[string]interface{} {
 			"provider": "prometheus", "prometheusURL": "http://prometheus:9090", "query": "up",
 			"threshold": map[string]interface{}{"value": int64(1), "operator": "gte"},
 		}
+	case "HookRun":
+		obj["spec"] = map[string]interface{}{
+			"pipelineName": "p", "bundleName": "b", "environment": "prod", "hook": "migrate", "phase": "pre",
+			"job": map[string]interface{}{"template": map[string]interface{}{}},
+		}
 	case "Subscription":
 		obj["spec"] = map[string]interface{}{
 			"type": "image", "pipeline": "p",
@@ -306,6 +311,7 @@ func TestCRDSchemaDurationFields(t *testing.T) {
 		{"MetricCheck", []string{"spec", "interval"}},
 		{"Subscription", []string{"spec", "image", "interval"}},
 		{"Subscription", []string{"spec", "git", "interval"}},
+		{"HookRun", []string{"spec", "timeout"}},
 	}
 	good := []string{"", "0", "30s", "5m", "1h", "1h30m", "1.5h", "500ms", "2h45m30s", "10us", "10µs"}
 	bad := []string{"15 minutes", "2 days", "5", "1d", "-5m", "5M", "1h 30m", "m"}
@@ -415,6 +421,44 @@ func TestCRDAuditEventSpecImmutable(t *testing.T) {
 	}
 }
 
+// TestCRDHookRunPhaseLatched: the API server refuses to change a HookRun's
+// phase once it is Succeeded, Failed or Skipped (regression, QA #1493: a
+// reconcile from a stale copy overwrote Succeeded with Failed).
+func TestCRDHookRunPhaseLatched(t *testing.T) {
+	phase := loadCRDs(t)["HookRun"].structural.Properties["status"].Properties["phase"]
+	var rule string
+	for _, r := range phase.XValidations {
+		if strings.Contains(r.Rule, "oldSelf") {
+			rule = r.Rule
+		}
+	}
+	require.NotEmpty(t, rule, "HookRun status.phase needs a transition rule")
+	env, err := cel.NewEnv(cel.Variable("self", cel.StringType), cel.Variable("oldSelf", cel.StringType))
+	require.NoError(t, err)
+	ast, iss := env.Compile(rule)
+	require.NoError(t, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	cases := []struct {
+		old, new string
+		allow    bool
+	}{
+		{"Pending", "Running", true},
+		{"Running", "Succeeded", true},
+		{"Running", "Failed", true},
+		{"Pending", "Skipped", true},
+		{"Succeeded", "Succeeded", true},
+		{"Succeeded", "Failed", false},
+		{"Failed", "Succeeded", false},
+		{"Skipped", "Running", false},
+	}
+	for _, c := range cases {
+		out, _, err := prg.Eval(map[string]interface{}{"self": c.new, "oldSelf": c.old})
+		require.NoError(t, err)
+		assert.Equal(t, c.allow, out.Value(), "%s -> %s", c.old, c.new)
+	}
+}
+
 // ── C08-api-config-24, -28: printer columns, enums, short names ──────────────
 
 // listFilter matches a JSONPath list filter such as [?(@.type=="Ready")],
@@ -481,7 +525,7 @@ func TestPromotionStepStateEnum(t *testing.T) {
 		got = append(got, fmt.Sprint(e.Object))
 	}
 	want := []string{
-		"Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verified",
+		"Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying", "Verified",
 		"Failed", "AbortedByAlarm", "RollingBack",
 	}
 	sort.Strings(got)
