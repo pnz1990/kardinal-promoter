@@ -43,8 +43,8 @@ spec:
   [Stale metric results](policy-gates.md#stale-metric-results)).
 - `suspend: true` stops the queries. The last result goes stale at `validUntil`, so gates that read
   it block.
-- Queries are rationed: at most one query per namespace and six in the cluster run at once, in
-  first-come order; a MetricCheck waiting for a slot shows `WaitingForSlot` and keeps its last
+- Queries are rationed: at most one query per namespace and twelve in the cluster run at once, in
+  first-come order; a MetricCheck that waits longer than its interval shows `WaitingForSlot` and keeps its last
   result, which goes stale as usual. A namespace with slow endpoints delays only its own checks.
 
 ## Credentials

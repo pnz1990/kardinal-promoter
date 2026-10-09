@@ -243,13 +243,15 @@ func TestReconciler_NonFiniteFails(t *testing.T) {
 	}
 }
 
-// TestReconciler_WaitsForSlot: a check that finds no free query slot writes
-// WaitingForSlot (keeping its last result, which still goes stale), sends
-// nothing, and asks again in 2s; once the slot is free it queries.
+// TestReconciler_WaitsForSlot: an overdue check that finds no free query
+// slot writes WaitingForSlot (keeping its last result, which still goes
+// stale), sends nothing, and asks again in 2s; once the slot is free it
+// queries. A check that is not overdue waits without writing.
 func TestReconciler_WaitsForSlot(t *testing.T) {
 	mc := newMetricCheck("m", "lt", 1)
 	until := metav1.NewTime(fixedNow.Add(time.Minute))
-	mc.Status = kardinalv1alpha1.MetricCheckStatus{Result: "Pass", LastValue: "0", ValidUntil: &until}
+	last := metav1.NewTime(fixedNow.Add(-time.Minute)) // overdue: the interval is 30s
+	mc.Status = kardinalv1alpha1.MetricCheckStatus{Result: "Pass", LastValue: "0", ValidUntil: &until, LastEvaluatedAt: &last}
 	c := fake.NewClientBuilder().WithScheme(schemeWithCore()).WithStatusSubresource(mc).WithObjects(mc).Build()
 	b := &valueBackend{value: metriccheck.NumberValue(0)}
 	lim := metriccheck.NewLimiter(1, 1)
@@ -266,6 +268,19 @@ func TestReconciler_WaitsForSlot(t *testing.T) {
 	assert.Equal(t, metriccheck.ReasonWaitingForSlot, got.Status.Reason)
 	assert.Equal(t, "Pass", got.Status.Result)
 	assert.True(t, got.Status.ValidUntil.Equal(&until), "validUntil is not extended")
+
+	fresh := newMetricCheck("fresh", "lt", 1)
+	recent := metav1.NewTime(fixedNow.Add(-5 * time.Second))
+	fresh.Status = kardinalv1alpha1.MetricCheckStatus{Result: "Pass", LastEvaluatedAt: &recent, ValidUntil: &until}
+	require.NoError(t, c.Create(context.Background(), fresh))
+	require.NoError(t, c.Status().Update(context.Background(), fresh))
+	var before kardinalv1alpha1.MetricCheck
+	require.NoError(t, c.Get(context.Background(), key(fresh), &before))
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(fresh)})
+	require.NoError(t, err)
+	var after kardinalv1alpha1.MetricCheck
+	require.NoError(t, c.Get(context.Background(), key(fresh), &after))
+	assert.Equal(t, before.ResourceVersion, after.ResourceVersion, "a short wait writes nothing")
 
 	hold()
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(mc)})

@@ -42,7 +42,7 @@ const (
 	// maxConcurrentReconciles is the reconcile worker count. Queries take at
 	// most DefaultGlobalSlots of them (Limiter), so the rest keep serving
 	// templates, suspended checks and checks waiting for a slot.
-	maxConcurrentReconciles = 8
+	maxConcurrentReconciles = 16
 	// staleAfterIntervals and minValidFor set status.validUntil: a result is
 	// valid for three intervals (two missed evaluations of margin), and at
 	// least minValidFor. PolicyGates treat a result past validUntil as stale.
@@ -53,8 +53,8 @@ const (
 	// a brief API server outage, is likely to work at once.
 	firstWriteRetry = 5 * time.Second
 	// DefaultGlobalSlots and DefaultNamespaceSlots are the Limiter caps the
-	// controller uses: one query per namespace at a time, six in the cluster.
-	DefaultGlobalSlots    = 6
+	// controller uses: one query per namespace at a time, twelve in the cluster.
+	DefaultGlobalSlots    = 12
 	DefaultNamespaceSlots = 1
 	// busyRetry is how soon a check that found no free query slot asks again.
 	busyRetry = 2 * time.Second
@@ -164,8 +164,13 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		release, ok := r.Limiter.TryAcquire(req.NamespacedName)
 		if !ok {
 			// No free slot: wait in the queue without a result. The last
-			// result still goes stale at its validUntil (fail closed).
-			return ctrl.Result{RequeueAfter: busyRetry}, r.markNotQueried(ctx, &mc, ReasonWaitingForSlot, false)
+			// result still goes stale at its validUntil (fail closed). The
+			// reason is written only once the check is overdue (no
+			// evaluation for an interval), so a short wait writes nothing.
+			if last := mc.Status.LastEvaluatedAt; last == nil || r.now().Sub(last.Time) >= interval {
+				return ctrl.Result{RequeueAfter: busyRetry}, r.markNotQueried(ctx, &mc, ReasonWaitingForSlot, false)
+			}
+			return ctrl.Result{RequeueAfter: busyRetry}, nil
 		}
 		defer release()
 	}
