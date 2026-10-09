@@ -1079,8 +1079,8 @@ func TestHealth_ArgoWaitsForRevision(t *testing.T) {
 // TestHealth_ArgoSharedBranch checks the shared-branch fallback: two
 // Pipelines push to one branch, and Argo CD (auto-sync off in test) never
 // syncs test's own commit, only the later one from the other Pipeline. The
-// adapter accepts that revision because the Application runs the Bundle
-// image, and says so. Covers HEALTH-ARGO-04.
+// adapter accepts that revision because the branch history shows it contains
+// test's commit, and says so. Covers HEALTH-ARGO-04.
 func TestHealth_ArgoSharedBranch(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -1115,7 +1115,7 @@ func TestHealth_ArgoSharedBranch(t *testing.T) {
 
 	e.SetArgoAutoSync(t, a.argoApp("test"), true)
 	ps = e.WaitStepState(t, a.ns, pipelineName, first, "test", "Verified", promoteTimeout)
-	assert.Equal(t, fmt.Sprintf("%s (synced revision %s is not %s, but the Application runs the Bundle images)",
+	assert.Equal(t, fmt.Sprintf("%s (synced revision %s contains %s)",
 		argoVerified, short(later), short(own)), ps.Status.Message)
 	assert.Equal(t, later, e.ArgoField(t, a.argoApp("test"), "status", "sync", "revision"))
 	assert.Equal(t, imageV2, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
