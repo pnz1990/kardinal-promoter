@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Deprecated
+
+- **An unlabeled Pipeline git Secret** — a Secret named by `spec.git.secretRef` should carry `kardinal.io/referenceable: "true"`, like every Secret a custom resource references: its token goes to the Pipeline's `git.url`, which the Pipeline's author chooses. In v0.10.0 an unlabeled Secret still works and the Pipeline gets the warning condition `SecretReferenceable=False` (reason `SecretNotReferenceable`); v0.11 will refuse it (#1506). Label your git Secrets: `kubectl label secret <name> kardinal.io/referenceable=true`
+
 ### Changed
 
 - **Smaller Graphs: gate instances and PRStatuses are collections** — a Bundle's Graph now creates its PolicyGate instances from one `PolicyGates` node (and `SkipPermissionGates` for skip permissions) and its PRStatuses from one `PRStatuses` node, each a `forEach` over the data in a `def` node, instead of one node per object. A 150-environment Pipeline with 3 gates per environment has 155 nodes instead of 751, and 471 KB of Graph spec instead of 647 KB. The objects keep their names and labels; kro adds `kro.run/node-id: PolicyGates` (or `PRStatuses`) and its collection labels. A Graph that is updated in place keeps its existing gates and PRStatuses

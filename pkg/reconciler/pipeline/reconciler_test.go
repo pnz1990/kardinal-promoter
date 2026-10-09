@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -28,6 +30,7 @@ import (
 func newScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	_ = kardinalv1alpha1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
 	return s
 }
 
@@ -450,4 +453,76 @@ func TestPipelineReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 		NamespacedName: types.NamespacedName{Name: "podinfo", Namespace: "default"},
 	})
 	objectgonetest.AssertQuiet(t, res, err, &logs)
+}
+
+// TestPipelineReconciler_GitSecretReferenceable: a git Secret without
+// kardinal.io/referenceable=true sets the SecretReferenceable=False warning
+// (the Secret is still used in v0.10.0, #1506) and requeues so a label added
+// later is seen; a labeled, missing or unnamed Secret sets nothing. Labeling
+// the Secret removes the warning; reconciling again changes nothing.
+func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
+	secret := func(labels map[string]string) *corev1.Secret {
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-token", Namespace: "default", Labels: labels}}
+	}
+	tests := []struct {
+		name     string
+		ref      bool
+		secret   *corev1.Secret
+		wantWarn bool
+	}{
+		{name: "unlabeled Secret", ref: true, secret: secret(nil), wantWarn: true},
+		{name: "label with another value", ref: true, secret: secret(map[string]string{"kardinal.io/referenceable": "yes"}), wantWarn: true},
+		{name: "labeled Secret", ref: true, secret: secret(map[string]string{"kardinal.io/referenceable": "true"})},
+		{name: "missing Secret", ref: true},
+		{name: "no secretRef", secret: secret(nil)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+			if tc.ref {
+				p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "git-token"}
+			}
+			objs := []client.Object{p}
+			if tc.secret != nil {
+				objs = append(objs, tc.secret)
+			}
+			c := newClientWithIndex(newScheme(), objs...)
+			r := &pipeline.Reconciler{Client: c}
+			key := types.NamespacedName{Name: "app", Namespace: "default"}
+			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+			var got kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			cond := meta.FindStatusCondition(got.Status.Conditions, "SecretReferenceable")
+			if !tc.wantWarn {
+				assert.Nil(t, cond)
+				assert.Zero(t, res.RequeueAfter)
+				return
+			}
+			require.NotNil(t, cond)
+			assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			assert.Equal(t, "SecretNotReferenceable", cond.Reason)
+			assert.Contains(t, cond.Message, "git Secret git-token is not labeled kardinal.io/referenceable=true")
+			assert.Equal(t, 5*time.Minute, res.RequeueAfter, "recheck: Secrets are not watched")
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, ready)
+			assert.Equal(t, metav1.ConditionTrue, ready.Status, "a warning, not a failure")
+
+			rv := got.ResourceVersion
+			_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			assert.Equal(t, rv, got.ResourceVersion, "idempotent")
+
+			var s corev1.Secret
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "git-token", Namespace: "default"}, &s))
+			s.Labels = map[string]string{"kardinal.io/referenceable": "true"}
+			require.NoError(t, c.Update(context.Background(), &s))
+			res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "SecretReferenceable"), "labeled: warning removed")
+			assert.Zero(t, res.RequeueAfter)
+		})
+	}
 }
