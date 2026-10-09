@@ -402,6 +402,14 @@ type PromotionStepStatus struct {
 	// +optional
 	NextRetryAt *metav1.Time `json:"nextRetryAt,omitempty"`
 
+	// SCMWaitSince is when the step started waiting for an open SCM circuit
+	// (condition SCMUnavailable): its SCM host failed, so the step makes no
+	// call and waits without spending retryCount. The wait ends when the
+	// SCM answers, or fails the step after the environment's
+	// stepTimeoutSeconds, else the controller's --scm-wait-timeout (30m).
+	// +optional
+	SCMWaitSince *metav1.Time `json:"scmWaitSince,omitempty"`
+
 	// LastHealthCheckAt records when the health adapter was last called. Used to
 	// space health checks at the health-check interval regardless of how often
 	// the step is reconciled.
