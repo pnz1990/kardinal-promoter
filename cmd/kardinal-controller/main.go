@@ -177,6 +177,16 @@ func main() {
 			"refused, and a Pipeline that would need the token for one is Ready=False/RepositoryNotAllowed "+
 			"and its steps fail. Empty allows every repository.")
 
+	gatesCommitStatus := true
+	flag.BoolVar(&gatesCommitStatus, "gates-commit-status", true,
+		"Post the gate results of a waiting pr-review step as a commit status on its PR (Helm "+
+			"scm.gatesCommitStatus.enabled). false posts none, for a token without the commit-status permission.")
+	var gatesStatusContext string
+	flag.StringVar(&gatesStatusContext, "gates-status-context", scm.GatesStatusContext,
+		"Commit status context (GitLab name, Bitbucket key, Azure DevOps genre/name) the gate results are "+
+			"posted under (Helm scm.gatesCommitStatus.context). Reserved for kardinal: branch protection "+
+			"requires it, so nothing else may post under it.")
+
 	var bundleToken string
 	flag.StringVar(&bundleToken, "bundle-api-token", os.Getenv("KARDINAL_BUNDLE_TOKEN"),
 		"Bearer token for authenticating POST /api/v1/bundles requests.")
@@ -646,6 +656,8 @@ func main() {
 		SCM:                 scmProvider,
 		AllowedRepositories: allowedRepos,
 		GitClient:           gitClient,
+		GatesStatusDisabled: !gatesCommitStatus,
+		GatesStatusContext:  gatesStatusContext,
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		RemoteClusters:      &healthpkg.RemoteClusters{},
 		Recorder:            eventRecorder,

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	eventsv1 "k8s.io/api/events/v1"
@@ -374,6 +375,13 @@ func (e *Env) ArgoAppSpec(t *testing.T, name string, spec map[string]interface{}
 // symlinks. It returns the new commit SHA.
 func (e *Env) PushTree(t *testing.T, repo gitserver.Repo, message string, change func(dir string)) string {
 	t.Helper()
+	return e.PushBranch(t, repo, "", message, change)
+}
+
+// PushBranch is PushTree on branch (the default branch when empty), for
+// example a PR branch someone pushes to by hand.
+func (e *Env) PushBranch(t *testing.T, repo gitserver.Repo, branch, message string, change func(dir string)) string {
+	t.Helper()
 	remote, token, err := gitserver.PushRemote(e.Git, repo)
 	if err != nil {
 		t.Fatalf("push remote: %v", err)
@@ -382,7 +390,11 @@ func (e *Env) PushTree(t *testing.T, repo gitserver.Repo, message string, change
 	defer cancel()
 	auth := &gogithttp.BasicAuth{Username: "x-access-token", Password: token}
 	dir := t.TempDir()
-	r, err := gogit.PlainCloneContext(ctx, dir, false, &gogit.CloneOptions{URL: remote, Auth: auth})
+	opts := &gogit.CloneOptions{URL: remote, Auth: auth}
+	if branch != "" {
+		opts.ReferenceName, opts.SingleBranch = plumbing.NewBranchReferenceName(branch), true
+	}
+	r, err := gogit.PlainCloneContext(ctx, dir, false, opts)
 	if err != nil {
 		t.Fatalf("clone %s: %v", repo.Name, err)
 	}
