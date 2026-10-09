@@ -15,3 +15,10 @@ func EnvironmentOrder(pipeline *kardinalv1alpha1.Pipeline) ([]string, error) {
 	order, _, err := resolveOrdering(pipeline)
 	return order, err
 }
+
+// Ordering is EnvironmentOrder and EnvironmentDependencies from one
+// resolution of the pipeline's ordering, for a caller that needs both (the
+// CLI's pipeline table, once per Pipeline).
+func Ordering(pipeline *kardinalv1alpha1.Pipeline) (order []string, deps map[string][]string, err error) {
+	return resolveOrdering(pipeline)
+}

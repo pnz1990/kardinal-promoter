@@ -89,8 +89,12 @@ across the pipelines listed. With more than 8 environment columns (one wide
 pipeline, or several with different environments), each pipeline gets one
 summary row instead: ENVS, the environment count, and PROGRESS, the current
 bundle's states with counts, most advanced first ("42 Verified, 108
-HealthChecking"). kardinal get pipelines <name> shows every environment of
-that pipeline.
+HealthChecking"), and FURTHEST, the last environment in DAG order where the
+bundle is Verified (in a wave, the last one in spec order). kardinal get
+pipelines <name> shows every environment of that pipeline.
+
+-o json and -o yaml print the Pipeline objects as the API server lists them
+(by namespace, then name), without the table's columns.
 
 The table needs list permission on bundles and promotionsteps; without it the
 command fails instead of showing dashes.
