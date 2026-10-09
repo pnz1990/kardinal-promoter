@@ -26,7 +26,7 @@ type contendedGit struct {
 	pushes int
 }
 
-func (m *contendedGit) Clone(_ context.Context, _, _, dir, _ string) error {
+func (m *contendedGit) Clone(_ context.Context, _, _, dir string, _ scm.GitAuth) error {
 	p := filepath.Join(dir, "environments", "test", "kustomization.yaml")
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
@@ -34,7 +34,7 @@ func (m *contendedGit) Clone(_ context.Context, _, _, dir, _ string) error {
 	return os.WriteFile(p, []byte("images:\n- name: ghcr.io/nginx/nginx\n  newTag: \"1.0\"\n"), 0o600)
 }
 
-func (m *contendedGit) Push(context.Context, string, string, string, string, bool) error {
+func (m *contendedGit) Push(context.Context, string, string, string, scm.GitAuth, bool) error {
 	m.pushes++
 	return fmt.Errorf("git push: %w", scm.ErrNonFastForward)
 }
@@ -89,7 +89,9 @@ type stuckGit struct {
 	rebases int
 }
 
-func (m *stuckGit) RebaseOnRemote(context.Context, string, string, string, string) ([]string, error) {
+var _ scm.Rebaser = (*stuckGit)(nil)
+
+func (m *stuckGit) RebaseOnRemote(context.Context, string, string, string, scm.GitAuth) ([]string, error) {
 	m.rebases++
 	return nil, fmt.Errorf("rebase onto main at abc: %w", scm.ErrBranchNotMoved)
 }

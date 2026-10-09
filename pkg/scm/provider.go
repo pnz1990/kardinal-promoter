@@ -112,20 +112,21 @@ type SCMProvider interface {
 // GitClient abstracts Git operations needed by the promotion steps engine.
 // All implementations must be safe for sequential use within a single step sequence.
 type GitClient interface {
-	// Clone performs a shallow (depth=1) clone of branch into dir, using token
-	// (when non-empty) for HTTP(S) authentication. Its error names the URL
-	// ("git clone <url>: <reason>"), so callers do not add it again.
-	Clone(ctx context.Context, url, branch, dir, token string) error
+	// Clone performs a shallow (depth=1) clone of branch into dir,
+	// authenticating with auth: its token over HTTP(S), or its ssh key and
+	// known_hosts over ssh. Its error names the URL ("git clone <url>:
+	// <reason>"), so callers do not add it again.
+	Clone(ctx context.Context, url, branch, dir string, auth GitAuth) error
 
 	// CloneAt clones the repository into dir and checks out commitSHA. Its
 	// error names the URL or the commit, as Clone's does.
-	CloneAt(ctx context.Context, url, commitSHA, dir, token string) error
+	CloneAt(ctx context.Context, url, commitSHA, dir string, auth GitAuth) error
 
 	// CommitAll stages all changes in dir and creates a commit with the given
 	// message. It returns ErrNothingToCommit when there is nothing to commit.
 	CommitAll(ctx context.Context, dir, message, authorName, authorEmail string) error
 
-	// Push pushes HEAD to branch on the remote using token for auth. With
-	// force=false it returns ErrNonFastForward when the remote branch moved.
-	Push(ctx context.Context, dir, remote, branch, token string, force bool) error
+	// Push pushes HEAD to branch on the remote using auth. With force=false
+	// it returns ErrNonFastForward when the remote branch moved.
+	Push(ctx context.Context, dir, remote, branch string, auth GitAuth, force bool) error
 }
