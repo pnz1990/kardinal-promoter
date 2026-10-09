@@ -117,4 +117,26 @@ describe('FleetBoard — keyboard', () => {
     await user.keyboard('{Enter}')
     expect(onSelect).toHaveBeenCalledWith('a', 'ns')
   })
+
+  it('arrow keys with Alt, Ctrl or Meta are left to the browser and screen readers', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+    const ps: Pipeline[] = [
+      { name: 'a', namespace: 'ns', phase: 'Ready', environmentCount: 2, environmentTopology: linear },
+      { name: 'b', namespace: 'ns', phase: 'Ready', environmentCount: 2, environmentTopology: linear },
+    ]
+    render(<FleetBoard pipelines={ps} total={2} onSelect={vi.fn()} now={now} />)
+    const station = (p: string, env: string) => screen.getByRole('button', { name: new RegExp(`^${p} ${env}:`) })
+    await user.click(screen.getByRole('button', { name: 'a' }))
+    await user.tab()
+    expect(station('a', 'test')).toHaveFocus()
+    for (const mod of ['Alt', 'Control', 'Meta']) {
+      for (const key of ['ArrowRight', 'ArrowDown', 'End']) {
+        await user.keyboard(`{${mod}>}{${key}}{/${mod}}`)
+        expect(station('a', 'test'), `${mod}+${key}`).toHaveFocus()
+      }
+    }
+    await user.keyboard('{Shift>}{ArrowRight}{/Shift}')
+    expect(station('a', 'prod'), 'Shift is not a command modifier').toHaveFocus()
+  })
 })

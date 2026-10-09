@@ -9,6 +9,11 @@
 
 import { useLayoutEffect, type RefObject, type KeyboardEvent, type FocusEvent } from 'react'
 
+/** Whether a key event carries Alt, Ctrl or Meta (Shift does not count). */
+export function hasCommandModifier(e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean }): boolean {
+  return e.altKey || e.ctrlKey || e.metaKey
+}
+
 /** The focusable items of a row. */
 export function rovingItems(row: HTMLElement | null, selector: string): HTMLElement[] {
   return row ? Array.from(row.querySelectorAll<HTMLElement>(selector)) : []
@@ -50,7 +55,9 @@ export function useRovingFocus(row: RefObject<HTMLElement | null>, selector: str
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     const items = rovingItems(row.current, selector)
     const i = items.indexOf(e.target as HTMLElement)
-    if (i < 0) return
+    // Alt/Ctrl/Meta + arrow belong to the browser and assistive technology
+    // (history, word moves, screen reader commands): leave them alone.
+    if (i < 0 || hasCommandModifier(e)) return
     let next = -1
     switch (e.key) {
       case 'ArrowRight': next = Math.min(i + 1, items.length - 1); break

@@ -9,7 +9,7 @@
 
 import { Fragment, useRef } from 'react'
 import '../styles/FleetBoard.css'
-import { rovingFocus, rovingItems, useRovingFocus } from '../useRovingFocus'
+import { hasCommandModifier, rovingFocus, rovingItems, useRovingFocus } from '../useRovingFocus'
 import type { Pipeline } from '../types'
 import { ageOf, fleetRow, type FleetRow, type Station } from '../fleetModel'
 
@@ -105,7 +105,7 @@ function FleetLine({ row, now, onSelect }: { row: FleetRow; now: number; onSelec
         aria-label={`${p.name} environments (arrow keys move between stations)`}
         onFocus={roving.onFocus}
         onKeyDown={e => {
-          if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !hasCommandModifier(e)) {
             if (moveLine(track.current, e.key === 'ArrowUp' ? -1 : 1, e.target as HTMLElement)) e.preventDefault()
             return
           }

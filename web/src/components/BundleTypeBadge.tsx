@@ -44,7 +44,6 @@ export function BundleTypeBadge({ type, compact }: Props) {
       data-bundle-type={LABELS[t] ? t : 'other'}
       role="img"
       aria-label={SPOKEN[t] ?? `${t} Bundle`}
-      title={SPOKEN[t] ?? `${t} Bundle`}
     >
       {bundleTypeLabel(t)}
     </span>
