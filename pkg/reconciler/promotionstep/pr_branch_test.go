@@ -37,7 +37,7 @@ import (
 // failed delete is retried, and the retry, which finds the PR closed, deletes
 // the branch without closing or commenting again.
 func TestClosedPRBranchIsDeleted(t *testing.T) {
-	const branch = "kardinal/b1/prod"
+	const branch = "kardinal/37a8eec1/b1/prod"
 	mergedPRS := openPRStatus("prs", "org/repo", 42)
 	mergedPRS.Status.Open, mergedPRS.Status.Merged = false, true
 	tests := []struct {
@@ -82,7 +82,7 @@ func TestClosedPRBranchIsDeleted(t *testing.T) {
 		{name: "a failed delete is retried, and the retry only deletes", prStatus: openPRStatus("prs", "org/repo", 42),
 			outputs:   map[string]string{"branch": branch},
 			scm:       mockSCM{open: true, deleteErrs: []error{errors.New("HTTP 502")}},
-			wantState: "WaitingForMerge", wantMsg: "PR #42 is closed, but deleting its branch kardinal/b1/prod failed: HTTP 502",
+			wantState: "WaitingForMerge", wantMsg: "PR #42 is closed, but deleting its branch kardinal/37a8eec1/b1/prod failed: HTTP 502",
 			wantClosed: []string{"org/repo#42"}, wantComments: 1, wantDeleted: []string{"org/repo:" + branch},
 			again: &struct {
 				state    string
@@ -103,7 +103,7 @@ func TestClosedPRBranchIsDeleted(t *testing.T) {
 		{name: "a delete that keeps failing says to delete the branch by hand", prStatus: openPRStatus("prs", "org/repo", 42),
 			outputs: map[string]string{"branch": branch}, retryCount: 5,
 			scm:       mockSCM{open: true, deleteErrs: []error{errors.New("HTTP 403")}},
-			wantState: "Failed", wantMsg: "— delete branch kardinal/b1/prod by hand",
+			wantState: "Failed", wantMsg: "— delete branch kardinal/37a8eec1/b1/prod by hand",
 			wantClosed: []string{"org/repo#42"}, wantComments: 1, wantDeleted: []string{"org/repo:" + branch}},
 	}
 	for _, tt := range tests {
@@ -152,7 +152,7 @@ func TestClosedPRBranchIsDeleted(t *testing.T) {
 // kardinal/. With the Pipeline gone nothing names the repository, so the
 // branch is left. A failed delete is retried, as for a closed PR.
 func TestBranchWithoutPRIsDeleted(t *testing.T) {
-	const branch = "test/repo:kardinal/b1/prod"
+	const branch = "test/repo:kardinal/37a8eec1/b1/prod"
 	type againWant struct {
 		state   string
 		deleted []string
@@ -179,7 +179,7 @@ func TestBranchWithoutPRIsDeleted(t *testing.T) {
 		{name: "a PRStatus not filled in yet does not stop the delete", started: true,
 			prStatus: openPRStatus("prs", "", 0), wantState: "Failed", wantDeleted: []string{branch}},
 		{name: "the branch git-push reported is deleted", started: true,
-			outputs:   map[string]string{"branch": "kardinal/b1/prod"},
+			outputs:   map[string]string{"branch": "kardinal/37a8eec1/b1/prod"},
 			wantState: "Failed", wantDeleted: []string{branch}},
 		{name: "a branch kardinal does not own is not deleted", started: true,
 			outputs: map[string]string{"branch": "main"}, wantState: "Failed"},
@@ -189,16 +189,16 @@ func TestBranchWithoutPRIsDeleted(t *testing.T) {
 		{name: "a failed delete is retried", started: true,
 			scm:         mockSCM{deleteErrs: []error{errors.New("HTTP 502")}},
 			wantState:   "Promoting",
-			wantMsg:     "the step opened no PR, but deleting its branch kardinal/b1/prod failed: HTTP 502",
+			wantMsg:     "the step opened no PR, but deleting its branch kardinal/37a8eec1/b1/prod failed: HTTP 502",
 			wantDeleted: []string{branch},
 			again:       &againWant{"Failed", []string{branch, branch}}},
 		{name: "a Pipeline git URL that names no repository is retried, not skipped", started: true,
 			gitURL:    "https://git.example.com/",
 			wantState: "Promoting",
-			wantMsg:   "deleting its branch kardinal/b1/prod failed: repository URL"},
+			wantMsg:   "deleting its branch kardinal/37a8eec1/b1/prod failed: repository URL"},
 		{name: "a delete that keeps failing says to delete the branch by hand", started: true, retryCount: 5,
 			scm:       mockSCM{deleteErrs: []error{errors.New("HTTP 403")}},
-			wantState: "Failed", wantMsg: "— delete branch kardinal/b1/prod by hand", wantDeleted: []string{branch}},
+			wantState: "Failed", wantMsg: "— delete branch kardinal/37a8eec1/b1/prod by hand", wantDeleted: []string{branch}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -287,7 +287,7 @@ func TestClosedPRBranchIsDeleted_EveryClose(t *testing.T) {
 		ps.Spec.PRStatusRef = "prs"
 		ps.Status.State = "WaitingForMerge"
 		ps.Status.WaitForMergeExpiry = &past
-		ps.Status.Outputs = map[string]string{"branch": "kardinal/b1/prod"}
+		ps.Status.Outputs = map[string]string{"branch": "kardinal/37a8eec1/b1/prod"}
 		c := newClient(t, pipeline, makeBundle("b1", "p"), openPRStatus("prs", "org/repo", 42), ps)
 		m := &mockSCM{open: true}
 		r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{}}
@@ -296,7 +296,7 @@ func TestClosedPRBranchIsDeleted_EveryClose(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "Failed", getStep(t, c, "step").Status.State)
 		assert.Equal(t, []string{"org/repo#42"}, m.closed)
-		assert.Equal(t, []string{"org/repo:kardinal/b1/prod"}, m.deleted)
+		assert.Equal(t, []string{"org/repo:kardinal/37a8eec1/b1/prod"}, m.deleted)
 	})
 
 	t.Run("a step that failed for good", func(t *testing.T) {
@@ -313,7 +313,7 @@ func TestClosedPRBranchIsDeleted_EveryClose(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "Failed", getStep(t, c, "step").Status.State)
 		assert.Equal(t, []string{"org/repo#7"}, m.closed)
-		assert.Equal(t, []string{"org/repo:kardinal/b1/prod"}, m.deleted)
+		assert.Equal(t, []string{"org/repo:kardinal/37a8eec1/b1/prod"}, m.deleted)
 	})
 
 	t.Run("a deleted step", func(t *testing.T) {
@@ -329,7 +329,7 @@ func TestClosedPRBranchIsDeleted_EveryClose(t *testing.T) {
 		_, err := r.Reconcile(context.Background(), reqFor("step"))
 		require.NoError(t, err)
 		assert.Equal(t, []string{"test/repo#5"}, m.closed)
-		assert.Equal(t, []string{"test/repo:kardinal/bundle-1/prod"}, m.deleted)
+		assert.Equal(t, []string{"test/repo:kardinal/37a8eec1/bundle-1/prod"}, m.deleted)
 	})
 
 	t.Run("a PR closed by a human inside the grace window keeps its branch", func(t *testing.T) {

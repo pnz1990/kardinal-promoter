@@ -148,6 +148,10 @@ Merged since v0.9.0; they ship with v0.10.0. See the [changelog](changelog.md) "
 - UI fleet board and step timings (#1519)
 - Subscriptions: private registries and repos, Helm charts, tag filters, `pathGlob`, inbound webhooks (#1478)
 - A compact Graph shape for large Pipelines; up to 500 environments (#1516)
+- Many Pipelines writing one repository and branch: rebase-and-retry pushes, PR branches rebuilt only when needed, `PathConflict` (#1504)
+- Controller sharding by namespace label (`controller.namespaceShard`) (#1505)
+- API access log for the UI API and the Bundle API (#1537)
+- HMAC-signed NotificationHook requests and a CloudEvents format (#1533)
 
 ## In progress for v0.10.0
 
@@ -156,10 +160,10 @@ Open pull requests; each moves to the list above when it merges.
 - Approval gates with quorum and verified identity (#1510); verified override identity (#1503); reject a Bundle (#1489)
 - Per-environment PR controls: templates, labels, reviewers, auto-merge (#1477); gate results as SCM commit statuses (#1518)
 - GitHub App and ssh git auth (#1491); Bitbucket Data Center (#1501); several SCM providers per controller (#1517)
-- Many Pipelines on one branch (#1504); controller sharding by namespace (#1505); retiring finished Graphs (#1527)
+- Retiring finished Graphs (#1527)
 - Pre- and post-deploy hooks (#1493); Argo Rollouts analysis (#1502); image signature verification (#1521)
 - Rendered manifests with `layout: branch` (#1515)
-- AuditEvent retention (#1523); SCM API and git metrics (#1540); rollback with an environment hold (#1542); an API access log (#1537); signed NotificationHook requests and CloudEvents (#1533)
+- AuditEvent retention (#1523); SCM API and git metrics (#1540); rollback with an environment hold (#1542)
 - UI: Bundle type badges and keyboard navigation (#1524), approvals and rejected Bundles (#1525)
 - Planned, no PR yet: fleets of targets (#1457)
 

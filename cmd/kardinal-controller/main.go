@@ -45,6 +45,7 @@ import (
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/accesslog"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
@@ -61,6 +62,7 @@ import (
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
@@ -159,6 +161,17 @@ func main() {
 			"Default (empty): same-origin only — cross-origin requests are rejected with 403. "+
 			"Set to '*' to allow all origins (development only). "+
 			"Also readable from KARDINAL_CORS_ORIGINS environment variable.")
+
+	var accessLogAll, accessLogSourceIP bool
+	var accessLogTrustedProxies string
+	flag.BoolVar(&accessLogAll, "access-log-all-requests", os.Getenv("KARDINAL_ACCESS_LOG_ALL_REQUESTS") == "true",
+		"Log every UI API and Bundle API request, not only logins (TokenReviews), refusals (401/403/429) and "+
+			"writes. Chart value: controller.accessLog.allRequests.")
+	flag.BoolVar(&accessLogSourceIP, "access-log-source-ip", os.Getenv("KARDINAL_ACCESS_LOG_SOURCE_IP") == "true",
+		"Add the client address to each access log line. Chart value: controller.accessLog.sourceIP.")
+	flag.StringVar(&accessLogTrustedProxies, "access-log-trusted-proxies", os.Getenv("KARDINAL_ACCESS_LOG_TRUSTED_PROXIES"),
+		"Comma-separated CIDRs of proxies (an Ingress controller) whose X-Forwarded-For gives the client address "+
+			"in the access log. Chart value: controller.accessLog.trustedProxies.")
 
 	var uiAllowedHosts string
 	flag.StringVar(&uiAllowedHosts, "ui-allowed-hosts", os.Getenv("KARDINAL_UI_ALLOWED_HOSTS"),
@@ -259,6 +272,15 @@ func main() {
 			"only reconciles resources in the given namespace and expects a Role/RoleBinding "+
 			"instead of a ClusterRole/ClusterRoleBinding. "+
 			"Also readable from KARDINAL_WATCH_NAMESPACE environment variable.")
+
+	// --namespace-shard splits the reconcilers across controller
+	// installations by the namespace label kardinal.io/shard (pkg/shard).
+	var namespaceShard string
+	flag.StringVar(&namespaceShard, "namespace-shard", os.Getenv("KARDINAL_NAMESPACE_SHARD"),
+		"Shard this controller reconciles: namespaces labelled kardinal.io/shard=<name>; \"default\" also "+
+			"takes namespaces without the label and the cluster-scoped kinds. Empty (the default): no sharding, "+
+			"every namespace. Every controller of a sharded cluster needs a shard name. "+
+			"Also readable from KARDINAL_NAMESPACE_SHARD.")
 
 	// Graph identity: kro applies each Graph as this ServiceAccount in the
 	// Pipeline's namespace. The controller creates it and binds it to the two
@@ -371,6 +393,13 @@ func main() {
 			Msg("the controller's SCM token is limited to the allowed repositories")
 	}
 
+	trustedProxies, err := accesslog.ParseCIDRs(splitCSV(accessLogTrustedProxies))
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --access-log-trusted-proxies")
+	}
+	accessLog := accesslog.New(accesslog.Config{AllRequests: accessLogAll, SourceIP: accessLogSourceIP,
+		TrustedProxies: trustedProxies}, logger.With().Str("component", "access").Logger())
+
 	uiHosts, err := parseUIAllowedHosts(uiAllowedHosts)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("invalid --ui-allowed-hosts")
@@ -380,15 +409,41 @@ func main() {
 		logger.Info().Str("watchNamespace", watchNamespace).
 			Msg("namespace-scoped mode: controller cache limited to single namespace")
 	}
+	if namespaceShard != "" {
+		if err := shard.ValidateName(namespaceShard); err != nil {
+			logger.Fatal().Err(err).Msg("invalid --namespace-shard")
+		}
+		if watchNamespace != "" {
+			logger.Fatal().Msg("--namespace-shard and --watch-namespace cannot be combined: " +
+				"a namespace-scoped controller already owns exactly one namespace")
+		}
+		logger.Info().Str("shard", namespaceShard).Msg("sharded: reconciling the namespaces of this shard only")
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), buildManagerOptions(managerConfig{
 		metricsBindAddress:     metricsBindAddress,
 		healthProbeBindAddress: healthProbeBindAddress,
 		leaderElect:            leaderElect,
 		watchNamespace:         watchNamespace,
+		namespaceShard:         namespaceShard,
 	}))
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create manager")
+	}
+	// The shard gate must be in place before the reconcilers are set up:
+	// each wraps itself in shard.Active().
+	shardHome := os.Getenv("POD_NAMESPACE")
+	if shardHome == "" {
+		shardHome = "kardinal-system"
+	}
+	gateClient, gateReader, err := shardClients(mgr, namespaceShard)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create the shard gate's clients")
+	}
+	gate := shard.New(shard.Options{Name: namespaceShard, Home: shardHome, Client: gateClient,
+		Reader: gateReader, Recorder: mgr.GetEventRecorder("kardinal-shard"), Log: logger})
+	if err := shard.Setup(mgr, gate); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up the shard gate")
 	}
 	graphIdentity.Writer = mgr.GetClient()
 	graphIdentity.Reader = mgr.GetAPIReader()
@@ -481,7 +536,8 @@ func main() {
 	// The sweep lists RoleBindings cluster-wide, which namespace mode does not
 	// grant; there the controller binds the reader role only in the watched
 	// namespace, and the reconciler's prune covers it.
-	if watchNamespace == "" {
+	// The sweep lists cluster-wide; in a sharded cluster the default shard runs it.
+	if watchNamespace == "" && gate.OwnsClusterScoped() {
 		if err := mgr.Add(&graphcleanup.Sweep{
 			APIReader: mgr.GetAPIReader(),
 			Graphs:    graphLister,
@@ -632,7 +688,7 @@ func main() {
 		bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
 		bundleAPI.onlyNamespace = watchNamespace
 		bundleAPI.reader = mgr.GetAPIReader()
-		mux.Handle("/api/v1/bundles", tracing.Handler("bundleapi.create", bundleAPI.Handler()))
+		mux.Handle("/api/v1/bundles", accessLog.Middleware("bundle-api", tracing.Handler("bundleapi.create", bundleAPI.Handler())))
 		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
 	}
 	// The webhook and UI servers are manager Runnables: they start after the
@@ -641,6 +697,10 @@ func main() {
 	webhookServer, err := newHTTPServer("webhook", webhookBindAddress, mux, tlsCertFile, tlsKeyFile, logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to configure webhook server")
+	}
+	// Reports access log lines dropped over their per-second budget.
+	if err := mgr.Add(accessLog); err != nil {
+		logger.Fatal().Err(err).Msg("unable to add the access log reporter")
 	}
 	if err := mgr.Add(webhookServer); err != nil {
 		logger.Fatal().Err(err).Msg("unable to add webhook server")
@@ -672,7 +732,7 @@ func main() {
 		distFS = nil
 	}
 	uiServer, err := newHTTPServer("ui", uiListenAddress,
-		newUIHandler(mgr.GetClient(), distFS, uiAuth, corsAllowedOrigins, uiHosts, logger),
+		accessLog.Middleware("ui", newUIHandler(mgr.GetClient(), distFS, uiAuth, corsAllowedOrigins, uiHosts, logger)),
 		tlsCertFile, tlsKeyFile, logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to configure UI server")
