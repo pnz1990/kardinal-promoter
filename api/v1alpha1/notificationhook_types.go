@@ -44,7 +44,7 @@ const (
 )
 
 // NotificationHookFormat is the shape of the body a NotificationHook POSTs.
-// +kubebuilder:validation:Enum=json;slack;teams;template
+// +kubebuilder:validation:Enum=json;slack;teams;template;cloudevents
 type NotificationHookFormat string
 
 const (
@@ -58,6 +58,10 @@ const (
 	// NotificationFormatTemplate renders spec.template.body, a Go text/template,
 	// over the event.
 	NotificationFormatTemplate NotificationHookFormat = "template"
+	// NotificationFormatCloudEvents is the kardinal JSON payload as the data of
+	// a CloudEvents 1.0 event in structured content mode
+	// (application/cloudevents+json).
+	NotificationFormatCloudEvents NotificationHookFormat = "cloudevents"
 )
 
 // NotificationSecretRef names a Secret in the NotificationHook's namespace
@@ -99,6 +103,25 @@ type NotificationWebhookConfig struct {
 	SecretRef *NotificationSecretRef `json:"secretRef,omitempty"`
 }
 
+// NotificationSigning configures HMAC signatures on a hook's requests.
+type NotificationSigning struct {
+	// SecretRef names the Secret, in the hook's namespace and labeled
+	// kardinal.io/referenceable=true, whose key holds the signing key.
+	SecretRef NotificationSigningSecretRef `json:"secretRef"`
+}
+
+// NotificationSigningSecretRef names a key of a Secret.
+type NotificationSigningSecretRef struct {
+	// Name of the Secret.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+	// Key of the signing key in the Secret. Defaults to signing-key.
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	Key string `json:"key,omitempty"`
+}
+
 // NotificationTemplate is a user-defined request body.
 type NotificationTemplate struct {
 	// Body is a Go text/template rendered over the event
@@ -131,14 +154,21 @@ type NotificationHookSpec struct {
 
 	// Format is the shape of the request body: json (the kardinal payload,
 	// the default), slack (an incoming-webhook message with blocks), teams (a
-	// Workflows webhook message with an Adaptive Card) or template
-	// (spec.template).
+	// Workflows webhook message with an Adaptive Card), template
+	// (spec.template) or cloudevents (the payload as a CloudEvents 1.0
+	// structured event).
 	// +optional
 	Format NotificationHookFormat `json:"format,omitempty"`
 
 	// Template is the request body for format: template.
 	// +optional
 	Template *NotificationTemplate `json:"template,omitempty"`
+
+	// Signing, when set, signs every request so the receiver can check that it
+	// comes from this controller, unchanged and not replayed
+	// (docs/notifications.md#signed-requests).
+	// +optional
+	Signing *NotificationSigning `json:"signing,omitempty"`
 
 	// PipelineSelector restricts notifications to events originating from the named Pipeline.
 	// When empty, events from all Pipelines are delivered.
