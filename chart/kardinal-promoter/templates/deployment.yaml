@@ -63,6 +63,11 @@ spec:
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
             {{- end }}
+            {{- if .Values.audit.retention.enabled }}
+            - --audit-retention=true
+            - --audit-retention-max-age={{ .Values.audit.retention.maxAge }}
+            - --audit-retention-max-per-pipeline={{ .Values.audit.retention.maxPerPipeline }}
+            {{- end }}
             {{- with .Values.controller.workers }}
             {{- with .promotionStep }}
             - --promotionstep-workers={{ . }}

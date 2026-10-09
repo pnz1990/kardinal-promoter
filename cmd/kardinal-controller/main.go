@@ -52,6 +52,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/auditretention"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	changewindowrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
@@ -109,11 +110,24 @@ func main() {
 		scmProviderType        string
 		scmAPIURL              string
 		gateStatusHeartbeat    time.Duration
+		auditRetention         bool
+		auditMaxAge            time.Duration
+		auditMaxPerPipeline    int
+		auditRetentionInterval time.Duration
 		workers                = map[string]*int{}
 		graphCompactAbove      int
 		retire                 bundlereconciler.RetirePolicy
 	)
 
+	flag.BoolVar(&auditRetention, "audit-retention", false,
+		"Delete AuditEvents past their retention (--audit-retention-max-age, --audit-retention-max-per-pipeline). "+
+			"Off by default: every record is kept until you opt in.")
+	flag.DurationVar(&auditMaxAge, "audit-retention-max-age", auditretention.DefaultMaxAge,
+		"Delete AuditEvents created (metadata.creationTimestamp) longer ago than this. 0 keeps records of any age.")
+	flag.IntVar(&auditMaxPerPipeline, "audit-retention-max-per-pipeline", auditretention.DefaultMaxPerPipeline,
+		"Keep at most this many newest AuditEvents per Pipeline. 0 keeps any number.")
+	flag.DurationVar(&auditRetentionInterval, "audit-retention-interval", auditretention.DefaultInterval,
+		"How often the leader applies AuditEvent retention.")
 	// Workers per controller: one object is never reconciled twice at once
 	// (the work queue serializes it), so these only let different objects
 	// run side by side. The defaults are measured with the scale suite
@@ -663,6 +677,30 @@ func main() {
 		}); err != nil {
 			logger.Fatal().Err(err).Msg("unable to register the reader RoleBinding sweep")
 		}
+	}
+
+	// AuditEvent retention: the leader deletes old records (they have no
+	// owner, so nothing else does).
+	if auditRetention {
+		// A client of its own, uncached and slow (5 requests a second), so a
+		// large backlog never takes API capacity from the reconcilers.
+		retentionCfg := rest.CopyConfig(mgr.GetConfig())
+		retentionCfg.QPS, retentionCfg.Burst = auditretention.QPS, auditretention.Burst
+		retentionClient, err := sigs_client.New(retentionCfg, sigs_client.Options{Scheme: mgr.GetScheme(), Mapper: mgr.GetRESTMapper()})
+		if err != nil {
+			logger.Fatal().Err(err).Msg("unable to create the AuditEvent retention client")
+		}
+		if err := mgr.Add(&auditretention.Pruner{
+			Client:         retentionClient,
+			Namespace:      watchNamespace,
+			MaxAge:         auditMaxAge,
+			MaxPerPipeline: auditMaxPerPipeline,
+			Interval:       auditRetentionInterval,
+		}); err != nil {
+			logger.Fatal().Err(err).Msg("unable to register AuditEvent retention")
+		}
+	} else {
+		logger.Info().Msg("AuditEvent retention off (--audit-retention=false): every record is kept")
 	}
 
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
