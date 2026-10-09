@@ -599,23 +599,6 @@ func containsInMapFunc(m map[string]interface{}, match func(string) bool) bool {
 	return false
 }
 
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr ||
-		len(s) > 0 && findSubstr(s, substr))
-}
-
-func findSubstr(s, sub string) bool {
-	if len(sub) == 0 {
-		return true
-	}
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
-
 // findUpstreamRefs returns all upstream state CEL references from the upstreamStates
 // list field. Returns empty slice if no upstreams are set.
 // Updated in #625: upstreamVerified/upstreamVerified2 → upstreamStates []string.
