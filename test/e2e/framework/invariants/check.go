@@ -202,11 +202,9 @@ func retiredSteps(bundles []v1alpha1.Bundle, live []v1alpha1.PromotionStep) []v1
 			if seen[r.Name] {
 				continue
 			}
-			s := v1alpha1.PromotionStep{}
-			s.Name, s.Namespace, s.CreationTimestamp = r.Name, b.Namespace, r.CreatedAt
-			s.Spec.BundleName, s.Spec.PipelineName, s.Spec.Environment, s.Spec.StepType = b.Name, b.Spec.Pipeline, r.Environment, r.StepType
-			s.Status.State, s.Status.Message, s.Status.PRURL = r.State, r.Message, r.PRURL
-			out = append(out, s)
+			// The controller's own rebuild, so a retired step reads as the
+			// CLI and the UI read it (its Verified time included).
+			out = append(out, lifecycle.StepFromRetired(b, r))
 		}
 	}
 	return out

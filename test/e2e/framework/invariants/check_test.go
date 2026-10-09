@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func TestTagIn(t *testing.T) {
@@ -202,10 +203,11 @@ func TestCheckSLO(t *testing.T) {
 // status.retiredSteps, so the phase and audit checks still see them, and a
 // step that still exists is not counted twice.
 func TestRetiredSteps(t *testing.T) {
+	verifiedAt := metav1.NewTime(time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC))
 	b := v1alpha1.Bundle{}
 	b.Name, b.Namespace, b.Spec.Pipeline = "app-v1", "ns", "app"
 	b.Status.RetiredSteps = []v1alpha1.RetiredStep{
-		{Name: "app-v1-test", Environment: "test", State: "Verified", PRURL: "https://x/pr/1"},
+		{Name: "app-v1-test", Environment: "test", State: "Verified", PRURL: "https://x/pr/1", VerifiedAt: &verifiedAt},
 		{Name: "app-v1-prod", Environment: "prod", State: "Failed", Message: "superseded"},
 	}
 	live := []v1alpha1.PromotionStep{{}}
@@ -218,5 +220,9 @@ func TestRetiredSteps(t *testing.T) {
 	if s.Name != "app-v1-test" || s.Spec.BundleName != "app-v1" || s.Spec.Environment != "test" ||
 		s.Status.State != "Verified" || s.Status.PRURL != "https://x/pr/1" || s.Namespace != "ns" {
 		t.Fatalf("rebuilt step %+v", s)
+	}
+	// The Verified time survives the rebuild (latency checks read it).
+	if at, ok := lifecycle.VerifiedTime(&s); !ok || !at.Equal(verifiedAt.Time) {
+		t.Fatalf("verifiedAt = %v, %v; want %v", at, ok, verifiedAt.Time)
 	}
 }
