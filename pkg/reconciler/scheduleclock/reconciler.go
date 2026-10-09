@@ -46,6 +46,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
@@ -122,9 +123,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // from RequeueAfter; a spec edit, or an annotation change such as
 // kardinal.io/manual-tick, still reconciles (and ticks) at once.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.ScheduleClock{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
-		Complete(tracing.WrapReconciler("scheduleclock", r))
+	b := ctrl.NewControllerManagedBy(mgr).
+		For(&kardinalv1alpha1.ScheduleClock{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged))
+	return shard.Active().Complete(b, tracing.WrapReconciler("scheduleclock", r), &kardinalv1alpha1.ScheduleClockList{})
 }
 
 // now returns the current time, using NowFn if set (for testing).

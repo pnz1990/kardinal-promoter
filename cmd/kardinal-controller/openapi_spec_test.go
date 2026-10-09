@@ -109,6 +109,9 @@ var apiRoutes = []apiRoute{
 	{method: "POST", path: "/api/v1/ui/rollback", server: serverUI, tag: "UI", id: "rollback",
 		summary: "Roll an environment back to an earlier Verified Bundle (kardinal rollback)",
 		request: uiRollbackRequest{}, status: 201, response: uiRollbackResponse{}, errors: []int{400, 401, 403, 404, 409, 500}, security: "uiAuth"},
+	{method: "POST", path: "/api/v1/ui/release-hold", server: serverUI, tag: "UI", id: "releaseHold",
+		summary: "Release the hold of a rollback on an environment (kardinal release-hold)",
+		request: uiReleaseHoldRequest{}, status: 200, response: uiMessageResponse{}, errors: []int{400, 401, 403, 404, 500}, security: "uiAuth"},
 	{method: "POST", path: "/api/v1/ui/pause", server: serverUI, tag: "UI", id: "pausePipeline",
 		summary: "Pause a Pipeline (kardinal pause)",
 		request: uiPipelineActionRequest{}, status: 200, response: uiMessageResponse{}, errors: []int{400, 401, 403, 404, 500}, security: "uiAuth"},
@@ -530,7 +533,9 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 	fixtures := func() []client.Object {
 		g := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "default"},
 			Spec: v1alpha1.PolicyGateSpec{Expression: "true"}}
-		return []client.Object{uiLcPipeline(), uiLcBundle("app-v1", "1", 0), uiLcBundle("app-v2", "2", 10),
+		p := uiLcPipeline()
+		p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "test", Bundle: "app-v1", Reason: "r"}}
+		return []client.Object{p, uiLcBundle("app-v1", "1", 0), uiLcBundle("app-v2", "2", 10),
 			uiLcStep("app-v1", "uat", "Verified", 3), uiLcStep("app-v1", "prod", "Verified", 5),
 			uiLcStep("app-v2", "prod", "Verified", 15),
 			// app-v3 is Verified in uat only: promote copies it to prod.
@@ -548,6 +553,7 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 		"promote":                 {"/api/v1/ui/promote", `{"pipeline":"app","environment":"prod"}`},
 		"rollback":                {"/api/v1/ui/rollback", `{"pipeline":"app","environment":"prod"}`},
 		"pausePipeline":           {"/api/v1/ui/pause", `{"pipeline":"app"}`},
+		"releaseHold":             {"/api/v1/ui/release-hold", `{"pipeline":"app","environment":"test"}`},
 		"resumePipeline":          {"/api/v1/ui/resume", `{"pipeline":"app"}`},
 		"validateCEL":             {"/api/v1/ui/validate-cel", `{"expression":"true"}`},
 		"listStepEvents":          {"/api/v1/ui/steps/default/app-v1-prod/events", ""},

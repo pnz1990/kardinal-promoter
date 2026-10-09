@@ -13,14 +13,15 @@
 # No other job sees the token.
 #
 #   -list    print the jobs this run would start and exit
-#   -matrix  print every job as the GitHub Actions matrix of e2e-live.yml
+#   -matrix  print every job (of SUITES, when set) as the GitHub Actions
+#            matrix of e2e-live.yml
 #
 # Env:
 #   JOBS        jobs at once (default 4; each cluster takes 2-3 GB of
 #               memory, gitlab's about 7 GB; multi-cluster's job has two)
 #   SUITES      only these suites, e.g. 'core gitea' (default every suite)
 #   COUNT       go test -count (default 1; the upgrade jobs always 1: the
-#               test upgrades its cluster). RUN is ignored: every job runs
+#               test upgrades its cluster; the scale job always 1). RUN is ignored: every job runs
 #               its whole suite (for some tests, use make test-e2e-live RUN=)
 #   KEEP        set to keep the clusters (default: each is deleted when its
 #               job ends)
@@ -70,10 +71,15 @@ while read -r suite k8s shard _ || [ -n "$suite" ]; do
 done <"$E2E_DIR/matrix.txt"
 
 if [ "$MODE" = -matrix ]; then
+  # SUITES (the e2e-live.yml dispatch input) keeps only those suites' jobs.
+  read -ra only <<<"${SUITES:-}"
   sep=
   printf '{"include":['
   for j in "${matrix[@]}"; do
     read -r id suite k8s shard <<<"$j"
+    if [ "${#only[@]}" -gt 0 ] && ! [[ " ${only[*]} " == *" $suite "* ]]; then
+      continue
+    fi
     [ "$shard" != - ] || shard=
     printf '%s{"id":"%s","suite":"%s","k8s":"%s","shard":"%s"}' "$sep" "$id" "$suite" "$k8s" "$shard"
     sep=,
@@ -151,8 +157,9 @@ run_job() {
     unset RUN
     [ "$suite" = github ] || unset KARDINAL_E2E_GITHUB_TOKEN_FILE DEMO_GITHUB_TOKEN
     export KIND_CLUSTER="$PREFIX-$id" KIND_K8S="$k8s" SHARD="$shard" COUNT="${COUNT:-1}"
-    # run.sh refuses COUNT above 1 for the upgrade suite.
-    [ "$suite" != upgrade ] || COUNT=1
+    # run.sh refuses COUNT above 1 for the upgrade suite; the scale suite's
+    # load and chaos tests are long, and repeat nothing a second run adds.
+    [ "$suite" != upgrade ] && [ "$suite" != scale ] || COUNT=1
     export E2E_OUT="$OUT/$id" KUBECONFIG="$OUT/$id/kubeconfig"
     mkdir -p "$E2E_OUT"
     bash "$E2E_DIR/up.sh" "$suite" && bash "$E2E_DIR/run.sh" "$suite"

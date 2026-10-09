@@ -37,7 +37,7 @@ import (
 func prHeadBranch(ps *v1alpha1.PromotionStep) string {
 	branch := ps.Status.Outputs["branch"]
 	if branch == "" && ps.Spec.BundleName != "" && ps.Spec.Environment != "" {
-		branch = builtinsteps.PRBranch(ps.Spec.BundleName, ps.Spec.Environment)
+		branch = builtinsteps.PRBranch(ps.Namespace, ps.Spec.BundleName, ps.Spec.Environment)
 	}
 	if !strings.HasPrefix(branch, builtinsteps.PRBranchPrefix) || len(branch) == len(builtinsteps.PRBranchPrefix) {
 		return ""

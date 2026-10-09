@@ -73,6 +73,8 @@ import (
 	"strconv"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -82,6 +84,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
@@ -153,6 +156,11 @@ func DescribesSpec(prs *v1alpha1.PRStatus) bool {
 // Reconciler watches PRStatus objects and polls the SCM provider to update
 // status.merged / status.open.
 type Reconciler struct {
+	// Workers is how many objects are reconciled at once (--prstatus-workers);
+	// 0 is the manager's default. One object is never reconciled twice at
+	// once: the work queue serializes it.
+	Workers int
+
 	client.Client
 
 	// SCM is the SCM provider for PR state queries.
@@ -572,7 +580,8 @@ func (r *Reconciler) fetchMergeCommit(ctx context.Context, log zerolog.Logger, p
 
 // SetupWithManager registers the PRStatus reconciler with controller-runtime.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.PRStatus{}).
-		Complete(tracing.WrapReconciler("prstatus", r))
+	b := ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
+		For(&v1alpha1.PRStatus{})
+	return shard.Active().Complete(b, tracing.WrapReconciler("prstatus", r), &v1alpha1.PRStatusList{})
 }
