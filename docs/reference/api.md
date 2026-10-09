@@ -92,6 +92,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.metrics.operatorInterventions` | integer |  | OperatorInterventions is the number of PolicyGate overrides recorded on this Bundle's gate instances (kardinal override), counted when the Bundle becomes Verified. |
 | `status.phase` | string |  | Phase is the bundle promotion phase. One of: `Available`, `Promoting`, `Verified`, `Failed`, `Superseded`. |
 | `status.pipelineSpecHash` | string |  | PipelineSpecHash is the SHA-256 hash of the Pipeline spec (spec.paused excluded) the Graph was last built from. When the Bundle reconciler is re-queued by a Pipeline watch event, it compares the current Pipeline spec hash to this field. A mismatch re-translates the Graph in place with the updated spec. |
+| `status.policyGatesHash` | string |  | PolicyGatesHash is the SHA-256 hash of the PolicyGate templates that apply to the Pipeline's environments, recorded when the Graph could not be built (InvalidSpec, reason GraphBuildFailed). A change to those templates retries the Bundle, as a Pipeline change does. Empty otherwise. |
 
 ## ChangeWindow
 

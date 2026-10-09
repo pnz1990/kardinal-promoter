@@ -665,6 +665,22 @@ func resolvableWhen(cond, value string) string {
 	return fmt.Sprintf("${[%s].filter(x_, %s)[0]}", value, cond)
 }
 
+// CondBundleWaitingForSlot is the Bundle condition that is True while a
+// Failed Bundle of a Pipeline with spec.maxConcurrentPromotions waits for a
+// slot (#1349). The Bundle reconciler writes it on its own Bundle; the Graph
+// holds the Bundle's steps on it (bundleHeld) and the PromotionStep
+// reconciler keeps the Bundle's Pending steps Pending. Without the hold, a
+// failed environment that recovers (its step deleted and recreated) would
+// promote while another Bundle has the slot.
+const CondBundleWaitingForSlot = "WaitingForSlot"
+
+// bundleHeld is the condition spec.bundleName of every PromotionStep node
+// resolves under: the Bundle is not Superseded and does not wait for a
+// maxConcurrentPromotions slot. has() keeps a Bundle without conditions
+// resolvable (a missing key would be data-pending, see resolvableWhen).
+const bundleHeld = `bundle.status.phase != "Superseded" && !(has(bundle.status.conditions) && ` +
+	`bundle.status.conditions.exists(c_, c_.type == "` + CondBundleWaitingForSlot + `" && c_.status == "True"))`
+
 // verifiedCond returns the CEL condition "upstream PromotionStep is Verified".
 func verifiedCond(upstreamID string) string {
 	return fmt.Sprintf(`%s.status.state == "Verified"`, upstreamID)
@@ -718,8 +734,9 @@ func buildPromotionStepNode(
 		// re-applies nor prunes them (executor/simple.go Apply, controller/graph/
 		// tracking.go diffManagedResources), so they stay as history. includeWhen
 		// is not used because an excluded node is pruned. Failed is not held:
-		// a Failed Bundle can return to Promoting.
-		"bundleName":  resolvableWhen(`bundle.status.phase != "Superseded"`, "bundle.metadata.name"),
+		// a Failed Bundle can return to Promoting, unless it waits for a
+		// maxConcurrentPromotions slot (bundleHeld, #1349).
+		"bundleName":  resolvableWhen(bundleHeld, "bundle.metadata.name"),
 		"environment": envName,
 		"stepType":    stepType,
 		// prStatusRef names the environment's PRStatus. The PromotionStep

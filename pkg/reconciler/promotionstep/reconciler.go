@@ -548,6 +548,9 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
 		return res, holdErr
 	}
+	if held, res, holdErr := r.holdForSlot(ctx, log, ps); held {
+		return res, holdErr
+	}
 	if msg := unsupportedConfig(pipeline, findEnv(pipeline, ps.Spec.Environment), ps); msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
@@ -1774,7 +1777,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1alpha1.PRStatus{}, handler.EnqueueRequestsFromMapFunc(r.prStatusMapper)).
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
 		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleMapper),
-			builderutil.WithPredicates(predicate.NewPredicateFuncs(isSuperseded))).
+			builderutil.WithPredicates(bundleWakesSteps)).
 		Complete(r)
 }
 
@@ -1785,7 +1788,8 @@ func isSuperseded(obj client.Object) bool {
 }
 
 // bundleMapper wakes the unfinished PromotionSteps of a superseded Bundle so
-// the supersession guard closes their PRs at once. Without it a step in
+// the supersession guard closes their PRs at once, and the steps of a Bundle
+// whose maxConcurrentPromotions hold was set or lifted (holdForSlot). Without it a step in
 // WaitingForMerge saw the new phase only at its next poll
 // (requeueWaitForMerge), and the superseded PR stayed open, and mergeable,
 // until then.
