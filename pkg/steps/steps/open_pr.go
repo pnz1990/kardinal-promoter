@@ -55,7 +55,7 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 
 	branch, ok := state.Outputs["branch"]
 	if !ok || branch == "" {
-		branch = PRBranch(state.BundleName, state.Environment.Name)
+		branch = PRBranch(state.Namespace, state.BundleName, state.Environment.Name)
 	}
 
 	data := scm.PRBody{

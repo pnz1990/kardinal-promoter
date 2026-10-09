@@ -41,6 +41,8 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -662,8 +664,10 @@ func specHash(spec *v1alpha1.HookRunSpec) string {
 
 // SetupWithManager registers the reconciler; Job events wake their owner.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	// Sharded like every namespaced reconciler (pkg/shard): only the shard
+	// that owns the namespace runs a hook's Job.
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.HookRun{}).
-		Owns(&batchv1.Job{}).
-		Complete(r)
+		Owns(&batchv1.Job{})
+	return shard.Active().Complete(b, tracing.WrapReconciler("hookrun", r), &v1alpha1.HookRunList{})
 }
