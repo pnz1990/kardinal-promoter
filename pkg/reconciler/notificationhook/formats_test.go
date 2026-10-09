@@ -214,7 +214,8 @@ func TestDelivery_SlackEscapesAndPRButton(t *testing.T) {
 }
 
 func webhookSecret(name string, data map[string]string) *corev1.Secret {
-	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Data: map[string][]byte{}}
+	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns,
+		Labels: map[string]string{"kardinal.io/notification-secret": "true"}}, Data: map[string][]byte{}}
 	for k, v := range data {
 		s.Data[k] = []byte(v)
 	}
@@ -321,6 +322,8 @@ func TestDelivery_InvalidTemplate(t *testing.T) {
 		"block":         `{{ block "b" . }}x{{ end }}`,
 		"unknown func":  `{{ env "HOME" }}`,
 		"nested range":  `{{ if .Event }}{{ range .Event }}{{ end }}{{ end }}`,
+		// The QA reproduction: 24 doublings to 256 MiB within 16 KiB.
+		"variable doubling": `{{$a := "xxxxxxxxxxxxxxxx"}}` + strings.Repeat(`{{$a = print $a $a}}`, 24),
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv, url := newRecorder(t)
@@ -527,4 +530,60 @@ func TestDocsTemplateExamples(t *testing.T) {
 		}
 	}
 	assert.Positive(t, found, "docs/notifications.md has a template example")
+}
+
+// TestDelivery_SecretRefRequiresLabel: a Secret without the
+// kardinal.io/notification-secret=true label is not used, so a user who can
+// create hooks but not read Secrets cannot send one to a URL of their own.
+// The hook is Ready=False SecretNotLabeled and sends nothing, no attempt is
+// counted; labeling the Secret delivers the waiting event; a label value
+// other than "true", or removing the label, stops it again.
+func TestDelivery_SecretRefRequiresLabel(t *testing.T) {
+	srv, url := newRecorder(t)
+	secret := webhookSecret("victim", map[string]string{"authorization": "Bearer stolen", "url": url})
+	secret.Labels = nil
+	hook := newHook("", v1alpha1.NotificationEventBundleFailed)
+	hook.Spec.Webhook.SecretRef = &v1alpha1.NotificationSecretRef{Name: "victim"}
+	f := newFixture(t, hook, secret, failedBundle("app-v0", saturday))
+
+	setLabel := func(v string) {
+		var s corev1.Secret
+		require.NoError(t, f.c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "victim"}, &s))
+		s.Labels = map[string]string{}
+		if v != "" {
+			s.Labels["kardinal.io/notification-secret"] = v
+		}
+		require.NoError(t, f.c.Update(context.Background(), &s))
+	}
+	notReady := func(why string) {
+		t.Helper()
+		res := f.reconcileHook()
+		assert.Equal(t, 30*time.Second, res.RequeueAfter, why)
+		h := f.hook()
+		c := readyCondition(t, h)
+		assert.Equal(t, metav1.ConditionFalse, c.Status, why)
+		assert.Equal(t, "SecretNotLabeled", c.Reason, why)
+		assert.Equal(t, "Secret victim named by spec.webhook.secretRef is not labeled kardinal.io/notification-secret=true; "+
+			"label it to allow NotificationHooks to send it", c.Message)
+		assert.Zero(t, h.Status.FailedAttempts, why)
+		status, err := json.Marshal(h.Status)
+		require.NoError(t, err)
+		assert.NotContains(t, string(status), "stolen", why)
+	}
+
+	notReady("no label")
+	setLabel("yes")
+	notReady("label value is not true")
+	assert.Empty(t, srv.all(), "nothing is sent while the Secret is not labeled")
+
+	setLabel("true")
+	f.reconcileHook()
+	reqs := srv.all()
+	require.Len(t, reqs, 1, "labeling the Secret delivers the waiting event")
+	assert.Equal(t, "Bearer stolen", reqs[0].header.Get("Authorization"))
+
+	setLabel("")
+	f.create(failedBundle("app-v2", saturday.Add(time.Hour)))
+	notReady("label removed")
+	assert.Len(t, srv.all(), 1, "the next event is not sent")
 }

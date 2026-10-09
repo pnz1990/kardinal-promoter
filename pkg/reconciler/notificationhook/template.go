@@ -52,18 +52,95 @@ type TemplateData struct {
 // the same event cannot help, so the reconciler gives up on it at once.
 var errTemplate = errors.New("template")
 
-// templateFuncs are the functions a body template may call on top of the
-// text/template builtins. printf replaces the builtin with one that bounds
-// widths.
-var templateFuncs = template.FuncMap{
-	"json": func(v interface{}) (string, error) {
-		b, err := json.Marshal(v)
-		return string(b), err
-	},
-	"lower":    strings.ToLower,
-	"upper":    strings.ToUpper,
-	"truncate": truncateRunes,
-	"printf":   boundedSprintf,
+// maxFuncOutput bounds the bytes all function calls of one render may
+// produce together. Without loops or variables a template cannot grow a
+// string geometrically, but nested calls can still each build a string; this
+// budget keeps the total allocation of a render to a few hundred KiB.
+const maxFuncOutput = 4 * maxRenderedBody
+
+// errFuncBudget is returned when a function call would exceed the budget.
+var errFuncBudget = fmt.Errorf("function output is over %d bytes in total", maxFuncOutput)
+
+// funcBudget counts the bytes the functions of one render have produced.
+// Nil (parse time only) means unlimited: the functions are not called then.
+type funcBudget struct{ used int }
+
+// argLen is the size of a function's input, checked before it builds its
+// result. Template data fields are strings; other values (numbers, bools)
+// are formatted to measure them, which is cheap for them.
+func argLen(args ...interface{}) int {
+	n := 0
+	for _, a := range args {
+		if s, ok := a.(string); ok {
+			n += len(s)
+		} else {
+			n += len(fmt.Sprint(a))
+		}
+	}
+	return n
+}
+
+// guard wraps a string-producing function: its input must be at most
+// maxRenderedBody bytes and its output must fit in the render's budget.
+func (b *funcBudget) guard(name string, args []interface{}, build func() (string, error)) (string, error) {
+	if n := argLen(args...); n > maxRenderedBody {
+		return "", fmt.Errorf("%s: input is %d bytes, over %d", name, n, maxRenderedBody)
+	}
+	out, err := build()
+	if err != nil {
+		return "", err
+	}
+	if b != nil {
+		b.used += len(out)
+		if b.used > maxFuncOutput {
+			return "", fmt.Errorf("%s: %w", name, errFuncBudget)
+		}
+	}
+	return out, nil
+}
+
+// templateFuncs are the functions a body template may call: json, lower,
+// upper, truncate, and every string-producing text/template builtin (print,
+// printf, println, html, js, urlquery), each replaced by a version that
+// bounds its input and charges its output to b. printf also bounds widths.
+func templateFuncs(b *funcBudget) template.FuncMap {
+	return template.FuncMap{
+		"json": func(v interface{}) (string, error) {
+			return b.guard("json", []interface{}{v}, func() (string, error) {
+				out, err := json.Marshal(v)
+				return string(out), err
+			})
+		},
+		"lower": func(s string) (string, error) {
+			return b.guard("lower", []interface{}{s}, func() (string, error) { return strings.ToLower(s), nil })
+		},
+		"upper": func(s string) (string, error) {
+			return b.guard("upper", []interface{}{s}, func() (string, error) { return strings.ToUpper(s), nil })
+		},
+		"truncate": func(n int, s string) (string, error) {
+			return b.guard("truncate", []interface{}{s}, func() (string, error) { return truncateRunes(n, s), nil })
+		},
+		"print": func(args ...interface{}) (string, error) {
+			return b.guard("print", args, func() (string, error) { return fmt.Sprint(args...), nil })
+		},
+		"println": func(args ...interface{}) (string, error) {
+			return b.guard("println", args, func() (string, error) { return fmt.Sprintln(args...), nil })
+		},
+		"printf": func(format string, args ...interface{}) (string, error) {
+			return b.guard("printf", append([]interface{}{format}, args...), func() (string, error) {
+				return boundedSprintf(format, args...)
+			})
+		},
+		"html": func(args ...interface{}) (string, error) {
+			return b.guard("html", args, func() (string, error) { return template.HTMLEscaper(args...), nil })
+		},
+		"js": func(args ...interface{}) (string, error) {
+			return b.guard("js", args, func() (string, error) { return template.JSEscaper(args...), nil })
+		},
+		"urlquery": func(args ...interface{}) (string, error) {
+			return b.guard("urlquery", args, func() (string, error) { return template.URLQueryEscaper(args...), nil })
+		},
+	}
 }
 
 // verbRe matches the flags, width and precision of a fmt verb.
@@ -99,10 +176,14 @@ func truncateRunes(n int, s string) string {
 
 // parseBodyTemplate parses a format: template body. To keep rendering
 // linear in the template size, range (loops, including over integers),
-// define, block and template (recursion) are refused. A missing field is an
-// error.
+// define, block and template (recursion) are refused, and so are variable
+// declarations and assignments, with which a template could double a string
+// on every action. A missing field is an error. text/template has no step
+// limit or cancellation; with these rules a render runs each action of the
+// (at most 16 KiB) template once, and the function budget bounds what the
+// actions allocate.
 func parseBodyTemplate(body string) (*template.Template, error) {
-	t, err := template.New("body").Option("missingkey=error").Funcs(templateFuncs).Parse(body)
+	t, err := template.New("body").Option("missingkey=error").Funcs(templateFuncs(nil)).Parse(body)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
 	}
@@ -131,6 +212,8 @@ func checkNodes(n parse.Node) error {
 				return err
 			}
 		}
+	case *parse.ActionNode:
+		return checkPipe(x.Pipe)
 	case *parse.IfNode:
 		return checkBranch(&x.BranchNode)
 	case *parse.WithNode:
@@ -143,7 +226,34 @@ func checkNodes(n parse.Node) error {
 	return nil
 }
 
+// checkPipe refuses variable declarations and assignments in a pipeline
+// and in the pipelines nested in its arguments.
+func checkPipe(p *parse.PipeNode) error {
+	if p == nil {
+		return nil
+	}
+	if len(p.Decl) > 0 {
+		if p.IsAssign {
+			return errors.New("variable assignment is not allowed")
+		}
+		return errors.New("variable declaration is not allowed")
+	}
+	for _, c := range p.Cmds {
+		for _, a := range c.Args {
+			if np, ok := a.(*parse.PipeNode); ok {
+				if err := checkPipe(np); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func checkBranch(b *parse.BranchNode) error {
+	if err := checkPipe(b.Pipe); err != nil {
+		return err
+	}
 	if err := checkNodes(b.List); err != nil {
 		return err
 	}
@@ -171,8 +281,14 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 // renderTemplate renders t over data. With a JSON content type the result
 // must be valid JSON.
 func renderTemplate(t *template.Template, data *TemplateData, contentType string) ([]byte, error) {
+	// A clone per render gets functions bound to this render's budget.
+	rt, err := t.Clone()
+	if err != nil {
+		return nil, fmt.Errorf("%w: clone: %w", errTemplate, err)
+	}
+	rt.Funcs(templateFuncs(&funcBudget{}))
 	buf := &limitedBuffer{max: maxRenderedBody}
-	if err := t.Execute(buf, data); err != nil {
+	if err := rt.Execute(buf, data); err != nil {
 		if errors.Is(err, errBodyTooLarge) {
 			return nil, fmt.Errorf("%w: %w", errTemplate, errBodyTooLarge)
 		}

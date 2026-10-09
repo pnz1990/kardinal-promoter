@@ -102,6 +102,9 @@ const (
 	// Secret keys of spec.webhook.secretRef.
 	secretKeyAuthorization = "authorization"
 	secretKeyURL           = "url"
+	// labelNotificationSecret must be "true" on a Secret a hook's secretRef
+	// names, or the hook does not use it (Ready=False, SecretNotLabeled).
+	labelNotificationSecret = "kardinal.io/notification-secret"
 
 	// Hook conditions.
 	conditionReady               = "Ready"
@@ -432,6 +435,14 @@ func (r *Reconciler) resolveConfig(ctx context.Context, reader client.Reader, ho
 			}
 			return nil, &configError{"SecretUnreadable",
 				fmt.Sprintf("cannot read Secret %s named by spec.webhook.secretRef: %v", ref.Name, apierrors.ReasonForError(err))}
+		}
+		// Opt-in: a user who may create hooks but not read Secrets must not be
+		// able to send an arbitrary Secret of the namespace to a URL of their
+		// choice. Only Secrets labeled for notifications are used.
+		if secret.Labels[labelNotificationSecret] != "true" {
+			return nil, &configError{"SecretNotLabeled",
+				fmt.Sprintf("Secret %s named by spec.webhook.secretRef is not labeled %s=true; label it to allow NotificationHooks to send it",
+					ref.Name, labelNotificationSecret)}
 		}
 		auth, hasAuth := secret.Data[secretKeyAuthorization]
 		u, hasURL := secret.Data[secretKeyURL]

@@ -19,6 +19,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -150,10 +151,12 @@ func TestNotify_SlackTeamsTemplate(t *testing.T) {
 // is the URL posted to (the spec has none) and its authorization key the
 // Authorization header, and neither shows in status. A hook whose Secret is
 // missing is Ready=False SecretNotFound and sends nothing; once the Secret
-// exists the waiting event is delivered. The deprecated authorizationHeader
-// still delivers, with PlaintextCredential=True.
+// exists the waiting event is delivered. A Secret without the
+// kardinal.io/notification-secret=true label is not used (Ready=False
+// SecretNotLabeled, nothing sent) until it is labeled. The deprecated
+// authorizationHeader still delivers, with PlaintextCredential=True.
 //
-// Covers NOTIF-SECRET-01, NOTIF-PLAINTEXT-01.
+// Covers NOTIF-SECRET-01, NOTIF-SECRET-LABEL-01, NOTIF-PLAINTEXT-01.
 func TestNotify_SecretRef(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -162,7 +165,8 @@ func TestNotify_SecretRef(t *testing.T) {
 	a := holdApp(t, e, e.Namespace(t), pipelineName)
 	ev := []v1alpha1.NotificationHookEventType{v1alpha1.NotificationEventPolicyGateBlocked}
 	secret := func(name, bucket string) *corev1.Secret {
-		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: a.ns}, StringData: map[string]string{
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: a.ns,
+			Labels: map[string]string{"kardinal.io/notification-secret": "true"}}, StringData: map[string]string{
 			"url":           rcv.URL(bucket, "services/T0E2E/B0E2E/SECRETPATH") + "\n",
 			"authorization": "Bearer SECRETTOKEN-" + name,
 		}}
@@ -172,6 +176,11 @@ func TestNotify_SecretRef(t *testing.T) {
 		Webhook: v1alpha1.NotificationWebhookConfig{SecretRef: &v1alpha1.NotificationSecretRef{Name: "creds"}}, Events: ev})
 	createHook(t, e, a.ns, "late", v1alpha1.NotificationHookSpec{
 		Webhook: v1alpha1.NotificationWebhookConfig{SecretRef: &v1alpha1.NotificationSecretRef{Name: "late-creds"}}, Events: ev})
+	unlabeled := secret("unlabeled-creds", a.ns+"-unlabeled")
+	unlabeled.Labels = nil
+	require.NoError(t, e.Client.Create(ctx, unlabeled))
+	createHook(t, e, a.ns, "unlabeled", v1alpha1.NotificationHookSpec{
+		Webhook: v1alpha1.NotificationWebhookConfig{SecretRef: &v1alpha1.NotificationSecretRef{Name: "unlabeled-creds"}}, Events: ev})
 	createHook(t, e, a.ns, "plaintext", v1alpha1.NotificationHookSpec{
 		Webhook: v1alpha1.NotificationWebhookConfig{URL: rcv.URL(a.ns+"-plain", "hook"), AuthorizationHeader: "Bearer PLAINTOKEN"},
 		Events:  ev})
@@ -211,7 +220,21 @@ func TestNotify_SecretRef(t *testing.T) {
 	waitHook(t, e, a.ns, "late", "the waiting event delivered", func(s v1alpha1.NotificationHookStatus) bool { return s.LastEventKey == key })
 	assert.Equal(t, metav1.ConditionTrue, hookCondition(t, e, a.ns, "late", "Ready").Status)
 
-	for _, name := range []string{"secret", "late", "plaintext"} {
+	framework.Eventually(t, time.Minute, "hook unlabeled to refuse its Secret", func(context.Context) (bool, string) {
+		c := hookCondition(t, e, a.ns, "unlabeled", "Ready")
+		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "SecretNotLabeled", fmt.Sprintf("%+v", c)
+	})
+	keepRecords(t, rcv, a.ns+"-unlabeled", 0, 10*time.Second)
+	assert.Zero(t, getHook(t, e, a.ns, "unlabeled").Status.FailedAttempts)
+	var us corev1.Secret
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: "unlabeled-creds"}, &us))
+	us.Labels = map[string]string{"kardinal.io/notification-secret": "true"}
+	require.NoError(t, e.Client.Update(ctx, &us))
+	ur := waitRecords(t, rcv, a.ns+"-unlabeled", 1, 90*time.Second)[0]
+	assert.Equal(t, "Bearer SECRETTOKEN-unlabeled-creds", ur.Header("Authorization"), "sent once labeled")
+	waitHook(t, e, a.ns, "unlabeled", "the waiting event delivered", func(s v1alpha1.NotificationHookStatus) bool { return s.LastEventKey == key })
+
+	for _, name := range []string{"secret", "late", "plaintext", "unlabeled"} {
 		status, err := json.Marshal(getHook(t, e, a.ns, name).Status)
 		require.NoError(t, err)
 		for _, s := range []string{"SECRETTOKEN", "SECRETPATH", "B0E2E", "PLAINTOKEN"} {
