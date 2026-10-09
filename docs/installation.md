@@ -316,6 +316,14 @@ release name other than `kardinal-promoter`, the Service is named
 - **Step timings.** Selecting an environment step lists the steps of that promotion
   (`git-clone` … `health-check`) with their durations, and a bar for each that shows where it
   ran in the promotion's time. A slow health check or push stands out at once.
+- **Bundle types.** The Bundle card names what the shown Bundle changes: `image`, `config`,
+  `image + config` (a mixed Bundle) or `chart`. In the Bundle history only the Bundles that are
+  not image Bundles carry the tag.
+- **Keyboard.** The first Tab stop skips to the main content. Each fleet line, and the Bundle
+  history, is a single Tab stop: the arrow keys move between its stations or Bundles (Home and
+  End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
+  the shortcuts (`/` filter, `r` refresh, `Esc` close a panel). Every view is checked against
+  WCAG 2.1 AA, colour contrast included, in both themes.
 - **Dark and light themes.** The UI follows the operating system's setting until you pick one
   with the ☀ / ☾ button next to the refresh indicator; the choice is kept in the browser.
 
@@ -646,7 +654,9 @@ With 1.5 s of latency on every git round trip and 2 Bundles a second over 40 Pip
 minutes, one worker brought 180 steps to `Verified` (step p99 67 s, PromotionStep queue 84);
 the defaults brought 597 (step p99 20 s, queue 22). The controller's memory was the same with
 one worker and with the defaults (peak resident about 700 MiB in that run with the race
-detector, which inflates it), so the workers add no memory of note.
+detector, which inflates it), so in that run the workers added no memory of note. That is not a
+sizing guide: the controller's memory grows with the number of Pipelines, Bundles and steps it
+caches, and the chart's default limit is too small for the `full` profile ([#1553](https://github.com/pnz1990/kardinal-promoter/issues/1553)).
 
 | Value | Flag | Default | Why |
 |---|---|---|---|

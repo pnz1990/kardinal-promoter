@@ -55,8 +55,9 @@ func (m *lockedSCM) CommentOnPR(ctx context.Context, repo string, n int, body st
 // TestReconciler_StepsRunSideBySide (#1509): one Reconciler, as with
 // --promotionstep-workers above 1, runs the steps of many Pipelines at once,
 // each through git and open-pr to WaitingForMerge with its own PR, and a
-// reconcile run again on each opens no second PR. Run with -race: it fails
-// on any state the reconciler shares between reconciles of different steps.
+// reconcile run again on each opens no second PR. Run with -race, it can
+// catch state the reconciler shares between reconciles of different steps
+// on the paths this test drives; it does not prove there is none.
 //
 // Covers PERF-WORKERS-01.
 func TestReconciler_StepsRunSideBySide(t *testing.T) {
