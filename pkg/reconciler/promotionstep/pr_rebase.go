@@ -36,8 +36,9 @@ const ReasonPRBranchRebuilt = "PRBranchRebuilt"
 // reads first to find the paths changed since the PR was built, and
 // deepHistoryDepth how many it reads when the PR's base is not among them (a
 // busy branch moves by more than historyDepth between two checks). Only when
-// it is not among those either (a force-push) is the PR rebuilt without
-// knowing which paths changed.
+// the whole branch was read without it (a force-push) is the PR rebuilt
+// without knowing which paths changed. A base older than deepHistoryDepth
+// commits tells nothing: the PR branch is kept (#1584).
 const (
 	historyDepth     = 20
 	deepHistoryDepth = 500
@@ -179,11 +180,13 @@ const outputPushedSHA = builtinsteps.OutputPushedSHA
 //     environment's path and a Helm valuesFile outside it), the PR still
 //     merges cleanly: only baseSHA is recorded. Rebuilding every PR on every
 //     move made each rebuild a move for the others' merges (livelock).
-//   - If they changed one of its paths, or baseSHA is not in the base
-//     branch's last deepHistoryDepth commits (a force-push), it
-//     reruns the step list up to open-pr on a fresh clone of the new head and
-//     force-pushes the PR branch, which is kardinal's own. The PR keeps its
-//     number and branch.
+//   - If they changed one of its paths, or the whole base branch was read
+//     and baseSHA is not in it (a force-push), it reruns the step list up to
+//     open-pr on a fresh clone of the new head and force-pushes the PR
+//     branch, which is kardinal's own. The PR keeps its number and branch.
+//   - If the history could not be read, or baseSHA is older than the last
+//     deepHistoryDepth commits, nothing is known: the PR branch is kept and
+//     checked again (#1584).
 //   - If the PR branch's head is not the commit kardinal pushed
 //     (status.outputs.pushedSHA), someone else committed to it: nothing is
 //     rebuilt, and the message says so.
@@ -328,8 +331,9 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	return true, nil
 }
 
-// prPaths are the paths a promotion of env writes: its directory and a Helm
-// valuesFile outside it.
+// prPaths are the paths a promotion of env writes: its directory, and a Helm
+// valuesFile or chartVersionFile outside it (both relative to the
+// directory, so "../shared/values.yaml" is outside).
 func prPaths(env v1alpha1.EnvironmentSpec) []string {
 	dir := env.Path
 	if dir == "" {
@@ -337,8 +341,12 @@ func prPaths(env v1alpha1.EnvironmentSpec) []string {
 	}
 	dir = path.Clean(strings.TrimPrefix(dir, "./"))
 	out := []string{dir}
-	if h := env.Update.Helm; env.Update.Strategy == "helm" && h != nil && h.ValuesFile != "" {
-		out = append(out, path.Clean(path.Join(dir, h.ValuesFile)))
+	if h := env.Update.Helm; env.Update.Strategy == "helm" && h != nil {
+		for _, f := range []string{h.ValuesFile, h.ChartVersionFile} {
+			if f != "" {
+				out = append(out, path.Clean(path.Join(dir, f)))
+			}
+		}
 	}
 	return out
 }
