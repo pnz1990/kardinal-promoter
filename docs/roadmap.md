@@ -158,19 +158,21 @@ Merged since v0.9.0; they ship with v0.10.0. See the [changelog](changelog.md) "
 - UI Bundle type badges and keyboard navigation (#1524)
 - Compact Graphs carry per-promotion MetricChecks (#1543)
 - Parallel reconciles, a per-namespace Graph identity lock and fewer Pipeline requeues (#1554); measured controller memory defaults (#1561)
+- Approval gates with quorum and verified identity (#1510); verified override identity and a GateOverridden AuditEvent (#1503); reject a Bundle so it is never promoted and rollback skips it (#1489)
+- Gate results as the `kardinal/gates` SCM commit status, re-checked while a PR waits (#1518)
+- Pre- and post-deploy hooks through a HookRun owned node (#1493); Argo Rollouts AnalysisTemplate verification (#1502)
+- Only kardinal writes the objects a promotion Graph makes (#1544); a Bundle's artifact is immutable (#1526)
 
 ## In progress for v0.10.0
 
 Open pull requests; each moves to the list above when it merges.
 
-- Approval gates with quorum and verified identity (#1510); verified override identity (#1503); reject a Bundle (#1489)
-- Per-environment PR controls: templates, labels, reviewers, auto-merge (#1477); gate results as SCM commit statuses (#1518)
+- Per-environment PR controls: templates, labels, reviewers, auto-merge (#1477)
 - GitHub App and ssh git auth (#1491); Bitbucket Data Center (#1501); several SCM providers per controller (#1517)
-- Pre- and post-deploy hooks (#1493); Argo Rollouts analysis (#1502); image signature verification (#1521)
+- Image signature verification (#1521)
 - Rendered manifests with `layout: branch` (#1515)
 - AuditEvent retention (#1523); AuditEvents through a status outbox (#1562)
-- UI: approvals (approve, reject and revoke as the TokenReview user) and rejected Bundles (#1525)
-- Only kardinal writes the objects a promotion Graph makes (#1544)
+- UI: approvals (approve, reject and revoke as the TokenReview user) and rejected Bundles (#1593)
 - Planned, no PR yet: fleets of targets (#1457)
 
 ## UI — Full Control Plane (shipped v0.5.0–v0.6.0)
