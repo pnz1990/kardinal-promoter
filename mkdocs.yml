@@ -100,6 +100,7 @@ nav:
     - Concepts: concepts.md
   - Guides:
     - Policy Gates: policy-gates.md
+    - Metric Checks: metric-checks.md
     - Health Verification: health-adapters.md
     - Rollback: rollback.md
     - CI Integration: ci-integration.md
