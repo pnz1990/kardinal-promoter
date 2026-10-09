@@ -173,6 +173,45 @@ When `true`, no PromotionStep of the Pipeline leaves `Pending`, and a step in `P
 
 Default: `false`.
 
+### spec.holds
+
+Environments pinned to a rollback. `kardinal rollback --hold` (or the UI) writes them, and
+`kardinal release-hold` (or the UI) removes them. The controller also removes a hold at its
+`expiresAt`. Each entry has these fields:
+
+- `environment`
+- `bundle`: the rollback Bundle
+- `reason`: required, up to 1024 characters
+- `createdBy` and `createdAt`
+- `expiresAt` (optional)
+- `artifacts`: the digest of the rollback's artifacts when the hold was made
+
+An environment has at most one hold. While it lasts:
+
+- only `bundle` promotes into the environment;
+- `bundle` is never superseded or garbage-collected;
+- if the controller verifies `bundle`, it passes the environment's PolicyGates, each pass with
+  an `EXEMPT` reason and audited.
+
+Changing `spec.holds` needs `update` on `pipelines/hold`, and the chart's admission policy pins
+`createdBy` to the caller. `status.observedHolds` is the controller's record, from which it
+writes the `HoldCreated` and `HoldReleased` AuditEvents. See
+[Roll back and hold](rollback.md#roll-back-and-hold).
+
+```yaml
+spec:
+  holds:
+  - environment: prod
+    bundle: my-app-rollback-3f9a1c
+    reason: "INC-4521: v1.29.0 leaks connections"
+    createdBy: alice
+    createdAt: "2026-10-09T08:12:00Z"
+    expiresAt: "2026-10-10T08:12:00Z"
+    artifacts: "sha256:5b0f..."
+```
+
+Default: none.
+
 ### spec.maxConcurrentPromotions
 
 Maximum number of this Pipeline's Bundles in the `Promoting` phase at once. A Bundle over the cap stays `Available` with the `Ready` condition reason `WaitingForSlot`, and starts when a promoting Bundle becomes Verified, Failed or Superseded. `0` means no cap.

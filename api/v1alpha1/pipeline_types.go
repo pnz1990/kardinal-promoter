@@ -4,6 +4,8 @@
 package v1alpha1
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -40,6 +42,21 @@ type PipelineSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+
+	// Holds pin environments to a rollback (kardinal rollback --hold): while
+	// an environment has a hold, no Bundle but the hold's own promotes into
+	// it, the hold's Bundle is never superseded or garbage-collected, and,
+	// when the controller can verify it restores artifacts Verified in the
+	// environment, it passes that environment's PolicyGates, each pass
+	// recorded (GateExempted). kardinal release-hold removes it, and so does
+	// the controller at expiresAt. At most one hold per environment. Changing
+	// spec.holds needs update on the virtual subresource pipelines/hold
+	// (chart: <release>-hold-writes ValidatingAdmissionPolicy).
+	// +listType=map
+	// +listMapKey=environment
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	Holds []EnvironmentHold `json:"holds,omitempty"`
 
 	// HistoryLimit is the number of completed Bundle promotions to retain.
 	// When unset or zero, defaults to 50. Terminal Bundles (Verified, Failed, Superseded)
@@ -734,6 +751,51 @@ type DeliveryConfig struct {
 	Delegate string `json:"delegate,omitempty"`
 }
 
+// Expired reports whether the hold's expiresAt has passed at now. An expired
+// hold counts as absent; the Pipeline reconciler removes it from spec.holds.
+func (h *EnvironmentHold) Expired(now time.Time) bool {
+	return h != nil && h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time)
+}
+
+// EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.
+type EnvironmentHold struct {
+	// Environment is the held environment.
+	// +kubebuilder:validation:MinLength=1
+	Environment string `json:"environment"`
+
+	// Bundle is the rollback Bundle the environment is held on: the only
+	// Bundle that promotes into it while the hold lasts.
+	// +kubebuilder:validation:MinLength=1
+	Bundle string `json:"bundle"`
+
+	// Reason says why the environment is held. It is shown wherever the hold
+	// or a gate it exempts is.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Reason string `json:"reason"`
+
+	// CreatedBy is who held the environment: the Kubernetes user name of the
+	// request that added the hold (the admission policy refuses another
+	// value), or, for a hold added through the UI, the UI user the
+	// controller authenticated.
+	// +optional
+	CreatedBy string `json:"createdBy,omitempty"`
+
+	// CreatedAt is when.
+	// +optional
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+
+	// ExpiresAt, when set, is when the controller removes the hold.
+	// +optional
+	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
+
+	// Artifacts is the digest of the rollback Bundle's artifacts (type,
+	// images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+	// The gate exemption applies only while the Bundle still has them.
+	// +optional
+	Artifacts string `json:"artifacts,omitempty"`
+}
+
 // PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
 // any promotion in this pipeline can proceed.
 type PipelinePolicyGateRef struct {
@@ -759,6 +821,14 @@ type PipelineStatus struct {
 	// Conditions holds status conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ObservedHolds is spec.holds as the Pipeline reconciler last recorded
+	// it: the HoldCreated and HoldReleased AuditEvents are written from the
+	// difference, whichever client changed spec.holds.
+	// +listType=map
+	// +listMapKey=environment
+	// +optional
+	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
 
 	// DeploymentMetrics holds aggregate DORA-style metrics computed from the
 	// last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler.

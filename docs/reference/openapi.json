@@ -394,6 +394,14 @@
               "null"
             ]
           },
+          "hold": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiHoldResponse"
+              }
+            ],
+            "description": "Hold is the environment's hold (spec.holds, kardinal rollback --hold), nil when it is not held."
+          },
           "name": {
             "description": "Name is the environment name (e.g. \"test\", \"uat\", \"prod\").",
             "type": "string"
@@ -1046,6 +1054,18 @@
             "description": "Environment is the environment to roll back.",
             "type": "string"
           },
+          "hold": {
+            "description": "Hold keeps the environment on the rollback until it is released (kardinal rollback --hold): no other Bundle promotes into it, and the rollback passes the gates that would block it, each pass audited.",
+            "type": "boolean"
+          },
+          "holdExpiresIn": {
+            "description": "HoldExpiresIn, a Go duration such as 24h, ends the hold that long after it is made. Empty: the hold lasts until it is released.",
+            "type": "string"
+          },
+          "holdReason": {
+            "description": "HoldReason says why the environment is held. Required with hold.",
+            "type": "string"
+          },
           "namespace": {
             "description": "Namespace of the Pipeline. Defaults to \"default\".",
             "type": "string"
@@ -1072,6 +1092,10 @@
           "bundle": {
             "description": "Bundle is the rollback Bundle created.",
             "type": "string"
+          },
+          "held": {
+            "description": "Held is true when the environment is held on the rollback.",
+            "type": "boolean"
           },
           "message": {
             "description": "Message describes the rollback.",
@@ -1264,6 +1288,60 @@
         },
         "required": [
           "bundle"
+        ],
+        "type": "object"
+      },
+      "uiHoldResponse": {
+        "additionalProperties": false,
+        "description": "uiHoldResponse is a Pipeline environment hold (spec.holds).",
+        "properties": {
+          "bundle": {
+            "description": "Bundle is the rollback Bundle the environment is held on.",
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "CreatedAt is when, RFC 3339.",
+            "type": "string"
+          },
+          "createdBy": {
+            "description": "CreatedBy is who held the environment.",
+            "type": "string"
+          },
+          "expiresAt": {
+            "description": "ExpiresAt is when the controller removes the hold, RFC 3339; empty: when it is released.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Reason says why.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "uiReleaseHoldRequest": {
+        "additionalProperties": false,
+        "description": "uiReleaseHoldRequest is the body of POST /api/v1/ui/release-hold.",
+        "properties": {
+          "environment": {
+            "description": "Environment is the held environment.",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Namespace of the Pipeline. Defaults to \"default\".",
+            "type": "string"
+          },
+          "pipeline": {
+            "description": "Pipeline is the Pipeline whose environment is held.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "pipeline"
         ],
         "type": "object"
       }
@@ -2020,6 +2098,64 @@
           {}
         ],
         "summary": "Promote the Bundle Verified upstream into an environment (kardinal promote)",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/release-hold": {
+      "post": {
+        "operationId": "releaseHold",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/uiReleaseHoldRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Release the hold of a rollback on an environment (kardinal release-hold)",
         "tags": [
           "UI"
         ]
