@@ -238,6 +238,18 @@ scm:
   # environment). Empty allows every repository the token can write to, and
   # the controller logs a warning at startup. See docs/guides/security.md.
   allowedRepositories: []
+  # -- Let ScmProviders and ClusterScmProviders use an http:// spec.apiURL
+  # (--scm-providers-allow-http), for an in-cluster SCM without TLS. Off, a
+  # provider must use https://, so its token never crosses the network in
+  # clear text. Their API requests always go through the egress guard
+  # (no loopback, link-local or cloud metadata addresses).
+  providersAllowInsecureHTTP: false
+  # -- Forgejo/Gitea only: the names or emails the instance signs commits
+  # with (its repository.signing SIGNING_NAME / SIGNING_EMAIL,
+  # --scm-instance-signers). Image verification treats such a commit as a
+  # platform signature (forgejo-instance). Without it, a verified signer that
+  # is not a user of the instance is taken as the instance key.
+  instanceSigners: []
   # -- The gate results of a waiting pr-review step as a commit status on the
   # commit kardinal pushed to its PR (docs/pr-evidence.md). enabled: false
   # (--gates-commit-status=false) posts none, for a token without the
@@ -417,6 +429,25 @@ networkPolicy:
   # -- Extra egress rules (NetworkPolicyEgressRule list), e.g. Prometheus on
   # :9090 for MetricChecks or a webhook receiver for NotificationHooks.
   extraEgress: []
+
+# -- AuditEvent retention, off by default: an upgrade never deletes audit
+# records. AuditEvents have no owner, so without retention they stay in etcd
+# for ever. With enabled: true the leader deletes, every 10 minutes, the
+# records older than maxAge and, per Pipeline, all but the maxPerPipeline
+# newest, at most 2000 a run at 5 API requests a second; the chart then
+# grants the controller delete on AuditEvents. Export the records first if
+# you must keep them. See docs/guides/security.md (Retention).
+audit:
+  retention:
+    enabled: false
+    # -- Delete records created longer ago than this
+    # (--audit-retention-max-age, a Go duration). "0s" keeps records of any
+    # age.
+    maxAge: "2160h"
+    # -- Keep this many newest records per Pipeline
+    # (--audit-retention-max-per-pipeline). 0 keeps any number. A gate that
+    # flips often writes a record per flip and reaches it quickly.
+    maxPerPipeline: 1000
 
 # -- MetricCheck providers.
 metricCheck:
