@@ -997,6 +997,17 @@ func TestRenderPRBody_RollbackNote(t *testing.T) {
 				"> Rolled back by: mallory ## Approved",
 		},
 		{
+			name: "unverified actor is marked",
+			edit: func(d *scm.PRBody) {
+				d.RolledBackBy, d.RolledBackByUnverified = "bob", true
+			},
+			wantNote: "## ROLLBACK: demo-gitea-rollback-9c5q2 -> demo-gitea/prod\n\n" +
+				"> **This is a rollback PR.** It restores the images of bundle demo-gitea-bx5l8 in environment prod.\n" +
+				"> Rolling back FROM: the bundle deployed in prod now\n" +
+				"> Rolling back TO: demo-gitea-bx5l8 (sha-a000001)\n" +
+				"> Rolled back by: bob (unverified)",
+		},
+		{
 			name: "nothing recorded",
 			edit: func(d *scm.PRBody) { d.RestoredVersion = "" },
 			wantNote: "## ROLLBACK: demo-gitea-rollback-9c5q2 -> demo-gitea/prod\n\n" +

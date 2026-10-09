@@ -79,7 +79,16 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		if state.RollbackFromBundle != nil {
 			data.RollbackFromVersion = scm.BundleVersion(*state.RollbackFromBundle)
 		}
-		data.RolledBackBy = state.RequestedBy
+		// The verified creator (kardinal.io/created-by, pinned by
+		// admission) when there is one; else the client-written
+		// requested-by, marked unverified.
+		switch {
+		case state.CreatedBy != "":
+			data.RolledBackBy = state.CreatedBy
+		case state.RequestedBy != "":
+			data.RolledBackBy = state.RequestedBy
+			data.RolledBackByUnverified = true
+		}
 		restores := data.RestoredVersion
 		if restores == "" {
 			restores = data.RollbackOf

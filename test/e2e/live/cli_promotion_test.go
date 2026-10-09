@@ -18,6 +18,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -128,6 +130,18 @@ func cliUser(t *testing.T) string {
 		name = name[:i]
 	}
 	return name
+}
+
+// kubeUser is the Kubernetes user name of the test's credentials (a
+// SelfSubjectReview): the kardinal.io/created-by the CLI records and the
+// bundle-creator admission policy pins.
+func kubeUser(t *testing.T, e *framework.Env) string {
+	t.Helper()
+	ssr, err := e.Kube.AuthenticationV1().SelfSubjectReviews().Create(context.Background(),
+		&authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	require.NotEmpty(t, ssr.Status.UserInfo.Username)
+	return ssr.Status.UserInfo.Username
 }
 
 // openPR waits for the one open PR on repo whose body names tag.

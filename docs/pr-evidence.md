@@ -85,10 +85,13 @@ FROM is the Bundle the rollback replaces (the `kardinal.io/rollback-from` annota
 version it deploys; the version is left out when that Bundle was deleted, and the line says
 "the bundle deployed in prod now" when the annotation is not set. TO is the rollback's target
 (`spec.provenance.rollbackOf`) and the version the rollback deploys.
-"Rolled back by" is the `kardinal.io/requested-by` annotation: the CLI or UI user, or the
-controller for an automatic rollback. The UI records the user only with TokenReview auth, and
-`kardinal-ui` otherwise (see [who asked](guides/security.md#fields-on-every-event)). The line is
-left out when it is not set.
+"Rolled back by" is the rollback Bundle's verified creator, the `kardinal.io/created-by`
+annotation that the `<release>-bundle-creator` admission policy pins: your Kubernetes user name
+for `kardinal rollback`, the UI user with TokenReview auth (`kardinal-ui` otherwise, see
+[who asked](guides/security.md#fields-on-every-event)), or `kardinal-controller` for an automatic
+rollback. A rollback
+Bundle without it shows the client-written `kardinal.io/requested-by` instead, marked
+"(unverified)". The line is left out when neither is set.
 
 ## Sections Explained
 
