@@ -415,6 +415,91 @@ func TestCRDAuditEventSpecImmutable(t *testing.T) {
 	}
 }
 
+// TestCRDBundleArtifactImmutable: a Bundle's artifact (type, pipeline,
+// images, configRef, provenance) cannot change after creation: gates and
+// image verification were checked against it, so an edit would promote
+// something nobody checked (QA #1521). spec.intent and metadata stay
+// mutable.
+func TestCRDBundleArtifactImmutable(t *testing.T) {
+	spec := loadCRDs(t)["Bundle"].structural.Properties["spec"]
+	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	require.NoError(t, err)
+	var prgs []cel.Program
+	for _, r := range spec.XValidations {
+		if !strings.Contains(r.Rule, "oldSelf") {
+			continue
+		}
+		ast, iss := env.Compile(r.Rule)
+		require.NoError(t, iss.Err(), r.Rule)
+		prg, err := env.Program(ast)
+		require.NoError(t, err)
+		prgs = append(prgs, prg)
+	}
+	require.GreaterOrEqual(t, len(prgs), 5, "one transition rule per artifact field")
+	base := func() map[string]interface{} {
+		return map[string]interface{}{
+			"type": "mixed", "pipeline": "app",
+			"images":     []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "tag": "1.0", "digest": "sha256:" + strings.Repeat("a", 64)}},
+			"configRef":  map[string]interface{}{"gitRepo": "https://github.com/org/cfg", "commitSHA": strings.Repeat("b", 40)},
+			"provenance": map[string]interface{}{"commitSHA": "abc1234", "author": "ci"},
+			"intent":     map[string]interface{}{"targetEnvironment": "uat"},
+		}
+	}
+	cases := []struct {
+		name  string
+		edit  func(m map[string]interface{})
+		allow bool
+	}{
+		{"unchanged", func(map[string]interface{}) {}, true},
+		{"intent changed", func(m map[string]interface{}) { m["intent"] = map[string]interface{}{"targetEnvironment": "prod"} }, true},
+		{"intent removed", func(m map[string]interface{}) { delete(m, "intent") }, true},
+		{"image tag changed", func(m map[string]interface{}) {
+			m["images"] = []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "tag": "evil", "digest": "sha256:" + strings.Repeat("a", 64)}}
+		}, false},
+		{"image digest changed", func(m map[string]interface{}) {
+			m["images"] = []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "tag": "1.0", "digest": "sha256:" + strings.Repeat("c", 64)}}
+		}, false},
+		{"image added", func(m map[string]interface{}) {
+			m["images"] = append(m["images"].([]interface{}), map[string]interface{}{"repository": "ghcr.io/org/other", "tag": "1"})
+		}, false},
+		{"images removed", func(m map[string]interface{}) { delete(m, "images") }, false},
+		{"configRef commit changed", func(m map[string]interface{}) {
+			m["configRef"] = map[string]interface{}{"gitRepo": "https://github.com/org/cfg", "commitSHA": strings.Repeat("d", 40)}
+		}, false},
+		{"configRef removed", func(m map[string]interface{}) { delete(m, "configRef") }, false},
+		{"provenance changed", func(m map[string]interface{}) {
+			m["provenance"] = map[string]interface{}{"commitSHA": "abc1234", "author": "someone"}
+		}, false},
+		{"provenance removed", func(m map[string]interface{}) { delete(m, "provenance") }, false},
+		{"type changed", func(m map[string]interface{}) { m["type"] = "image" }, false},
+		{"pipeline changed", func(m map[string]interface{}) { m["pipeline"] = "other" }, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			next := base()
+			c.edit(next)
+			allowed := true
+			for _, prg := range prgs {
+				out, _, err := prg.Eval(map[string]interface{}{"self": next, "oldSelf": base()})
+				require.NoError(t, err)
+				allowed = allowed && out.Value() == true
+			}
+			assert.Equal(t, c.allow, allowed)
+		})
+	}
+
+	// An artifact field added on update is refused too.
+	old := base()
+	delete(old, "provenance")
+	allowed := true
+	for _, prg := range prgs {
+		out, _, err := prg.Eval(map[string]interface{}{"self": base(), "oldSelf": old})
+		require.NoError(t, err)
+		allowed = allowed && out.Value() == true
+	}
+	assert.False(t, allowed, "provenance added after creation")
+}
+
 // ── C08-api-config-24, -28: printer columns, enums, short names ──────────────
 
 // listFilter matches a JSONPath list filter such as [?(@.type=="Ready")],

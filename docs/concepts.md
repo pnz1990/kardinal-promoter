@@ -4,6 +4,8 @@
 
 A Bundle is an immutable, versioned snapshot of what to deploy. It contains container image references (tag and digest), optionally a Helm chart version or Git commit SHA, and build provenance (who built it, what commit, which CI run).
 
+The API server enforces the immutability: an update that changes `spec.type`, `spec.pipeline`, `spec.images`, `spec.configRef` or `spec.provenance` is refused (`spec.<field> is immutable: create a new Bundle`), because gates and verifications were evaluated against them. `spec.intent`, labels and annotations stay editable. To promote a different artifact, create a new Bundle; it supersedes the older one.
+
 Bundles are created by your CI pipeline after building and pushing an image. All creation paths produce the same CRD in etcd:
 
 ```bash

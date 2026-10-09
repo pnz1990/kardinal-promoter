@@ -1076,3 +1076,61 @@ func TestBundle_ArtifactFieldsValidated(t *testing.T) {
 	})
 	require.NoError(t, e.Client.Create(ctx, ok), "valid tag, digest and a digest as provenance.commitSHA")
 }
+
+// TestBundle_ArtifactImmutable: the API server refuses an update that
+// changes a Bundle's images, provenance, type or pipeline (QA #1521: gates
+// and image verification were checked against them, so an edit would
+// promote an artifact nobody checked). spec.intent and metadata stay
+// editable, and the Bundle still promotes after those edits.
+//
+// Covers BUNDLE-IMMUTABLE-01.
+func TestBundle_ArtifactImmutable(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+
+	update := func(edit func(b *v1alpha1.Bundle)) error {
+		return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			var cur v1alpha1.Bundle
+			if err := e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: bundle}, &cur); err != nil {
+				return err
+			}
+			edit(&cur)
+			return e.Client.Update(ctx, &cur)
+		})
+	}
+	refused := []struct {
+		field string
+		edit  func(b *v1alpha1.Bundle)
+	}{
+		{"spec.images", func(b *v1alpha1.Bundle) { b.Spec.Images[0].Tag = fixtures.V3 }},
+		{"spec.images", func(b *v1alpha1.Bundle) {
+			b.Spec.Images = append(b.Spec.Images, v1alpha1.ImageRef{Repository: fixtures.Image, Tag: fixtures.V3})
+		}},
+		{"spec.provenance", func(b *v1alpha1.Bundle) {
+			b.Spec.Provenance = &v1alpha1.BundleProvenance{Author: "someone-else", CommitSHA: "abcdef0"}
+		}},
+		{"spec.type", func(b *v1alpha1.Bundle) { b.Spec.Type = "mixed" }},
+		{"spec.pipeline", func(b *v1alpha1.Bundle) { b.Spec.Pipeline = "other" }},
+	}
+	for _, c := range refused {
+		err := update(c.edit)
+		require.Error(t, err, c.field)
+		assert.True(t, apierrors.IsInvalid(err), "%s: %v", c.field, err)
+		assert.Contains(t, err.Error(), c.field+" is immutable", c.field)
+	}
+
+	require.NoError(t, update(func(b *v1alpha1.Bundle) {
+		if b.Annotations == nil {
+			b.Annotations = map[string]string{}
+		}
+		b.Annotations["e2e.kardinal.io/note"] = "metadata stays editable"
+		b.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "test"}
+	}), "metadata and spec.intent stay editable")
+
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	a.running(t, "test", imageV2, "the Bundle's original image")
+}
