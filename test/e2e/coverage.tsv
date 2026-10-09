@@ -374,15 +374,15 @@ UIAPI-REQUESTER-02	live	ui	covered	ui-api	no UI auth: a UI promote and rollback 
 UIAPI-REQUESTER-03	live	ui	covered	ui-api	no UI auth: a Bundle created from the UI records kardinal-ui as kardinal.io/requested-by	docs/guides/security.md:381-404; cmd/kardinal-controller/ui_api.go:1419-1428
 UIAPI-REQUESTER-04	live	ui	covered	ui-api	no UI auth: a UI gate approval records kardinal-ui as the override's createdBy, which the gate reason shows	docs/guides/security.md:381-404; cmd/kardinal-controller/ui_api.go:1102; pkg/reconciler/policygate/reconciler.go:202
 UI-STATIC-01	live	ui	covered	ui	/ui/ serves the embedded web app	docs/installation.md:193-232
-UI-LIST-01	live	ui	covered	ui	pipeline sidebar (PAUSED/Blocked/Degraded) and fleet health bar with filters	docs/roadmap.md:144-145
-UI-DAG-01	live	ui	covered	ui	promotion DAG with per-env state, PR badge and tooltip	docs/roadmap.md:139
-UI-GATES-01	live	ui	covered	ui	Policy Gates panel, blocking banner and Promotion Errors panel	docs/roadmap.md:150
-UI-NODE-01	live	ui	covered	ui	node detail: step progress, events, CEL validate	docs/roadmap.md:146; docs/roadmap.md:150
-UI-ACTIONS-01	live	ui	covered	ui	promote, rollback, pause and resume from the UI	docs/roadmap.md:147; docs/guides/security.md:693-694
-UI-CREATE-01	live	ui	covered	ui	Create Bundle dialog	docs/roadmap.md:147
-UI-TIMELINE-01	live	ui	covered	ui	bundle timeline select/compare and diff panel	docs/roadmap.md:140; docs/roadmap.md:149
+UI-LIST-01	live	ui	covered	ui	pipeline sidebar (PAUSED/Blocked/Degraded) and fleet health bar with filters	docs/roadmap.md:171-172
+UI-DAG-01	live	ui	covered	ui	promotion DAG with per-env state, PR badge and tooltip	docs/roadmap.md:166
+UI-GATES-01	live	ui	covered	ui	Policy Gates panel, blocking banner and Promotion Errors panel	docs/roadmap.md:177
+UI-NODE-01	live	ui	covered	ui	node detail: step progress, events, CEL validate	docs/roadmap.md:173; docs/roadmap.md:177
+UI-ACTIONS-01	live	ui	covered	ui	promote, rollback, pause and resume from the UI	docs/roadmap.md:174; docs/guides/security.md:693-694
+UI-CREATE-01	live	ui	covered	ui	Create Bundle dialog	docs/roadmap.md:174
+UI-TIMELINE-01	live	ui	covered	ui	bundle timeline select/compare and diff panel	docs/roadmap.md:167; docs/roadmap.md:176
 UI-INSECURE-01	live	ui	covered	ui	insecure-connection banner and port-forward hint	docs/guides/security.md:767-780
-UI-SHELL-01	live	ui	covered	ui	keyboard shortcuts, theme, URL deep links, refreshed-ago polling	docs/roadmap.md:143
+UI-SHELL-01	live	ui	covered	ui	keyboard shortcuts, theme, URL deep links, refreshed-ago polling	docs/roadmap.md:170
 UI-OVERRIDE-01	deprecated	ui	covered	ui	the web UI has no gate approve or override control (removed in #1245; use kardinal override)	docs/design/06-kardinal-ui.md:211; docs/comparison.md:35
 CIAPI-OFF-01	live	core	covered	ci-api	without --bundle-api-token / KARDINAL_BUNDLE_TOKEN, POST /api/v1/bundles is not mounted (404)	docs/ci-integration.md:233-259; cmd/kardinal-controller/main.go:580-593
 CIAPI-AUTH-01	live	core	covered	ci-api	wrong bearer gets 401; non-POST gets 405	cmd/kardinal-controller/bundle_api.go:138-156
