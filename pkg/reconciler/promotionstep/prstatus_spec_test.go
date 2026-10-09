@@ -26,6 +26,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 )
 
 // staleSpec is the PRStatus spec of PR #5, the PR of the step before it was
@@ -167,6 +168,53 @@ func TestRecreatedStepClosesItsOwnPR(t *testing.T) {
 			got := getStep(t, c, "step")
 			assert.Equal(t, "Failed", got.Status.State, got.Status.Message)
 			assert.Equal(t, []string{"test/repo#8"}, m.closed)
+		})
+	}
+}
+
+// TestCancelledStepMarksPRStatusClosedByKardinal covers #1351: when the
+// cancel path closes the step's PR and comments why, it records the PR number
+// in the PRStatus annotation prstatus.AnnotationClosedByKardinal, so the
+// PRStatus reconciler does not post a second, "stopped tracking" comment when
+// the grace window ends. A PR found already closed (a person closed it) is not
+// marked, and neither is a PRStatus that names another PR (B72).
+func TestCancelledStepMarksPRStatusClosedByKardinal(t *testing.T) {
+	checked := metav1.NewTime(time.Now().Add(-time.Minute))
+	tests := []struct {
+		name     string
+		prs      *v1alpha1.PRStatus
+		scmOpen  bool
+		wantMark string
+	}{
+		{name: "kardinal closes the open PR", prs: stepPRStatus(spec8, 1, 1, v1alpha1.PRStatusStatus{LastCheckedAt: &checked, Open: true}),
+			scmOpen: true, wantMark: "8"},
+		{name: "the PR was already closed by a person", prs: stepPRStatus(spec8, 1, 1, v1alpha1.PRStatusStatus{LastCheckedAt: &checked})},
+		{name: "the PRStatus still names the old PR", prs: stepPRStatus(staleSpec, 1, 1, v1alpha1.PRStatusStatus{LastCheckedAt: &checked, Open: true}),
+			scmOpen: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ps := prStep("WaitingForMerge", 8)
+			ps.Finalizers = []string{promotionstep.FinalizerClosePR}
+			bundle := makeBundle("bundle-1", "nginx-demo")
+			bundle.Status.Phase = "Superseded"
+			c := newClient(t, ps, tt.prs, makePipeline("nginx-demo"), bundle)
+			m := &mockSCM{open: tt.scmOpen}
+			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+			reconcileStep(t, r, "step")
+			assert.Equal(t, "Failed", getStep(t, c, "step").Status.State)
+			var got v1alpha1.PRStatus
+			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(tt.prs), &got))
+			assert.Equal(t, tt.wantMark, got.Annotations[prstatus.AnnotationClosedByKardinal])
+			if tt.wantMark != "" {
+				require.Len(t, m.comments, 1)
+				assert.Contains(t, m.comments[0], "kardinal closed this PR")
+				// Idempotent: reconciling the Failed step again changes nothing.
+				reconcileStep(t, r, "step")
+				assert.Len(t, m.comments, 1)
+			}
 		})
 	}
 }

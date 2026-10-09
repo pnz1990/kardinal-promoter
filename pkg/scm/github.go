@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // GitHubProvider implements SCMProvider against the GitHub REST API.
@@ -41,9 +40,10 @@ type GitHubProvider struct {
 	// Empty refuses every event (ErrNoWebhookSecret).
 	WebhookSecret string
 
-	// circuit guards all outbound GitHub API calls. Opened on 5 consecutive
-	// failures (429 or 5xx); respects X-RateLimit-Reset / Retry-After headers.
-	circuit *CircuitBreaker
+	// circuits guards all outbound API calls: one circuit per repository
+	// owner and one for the token's rate limit (CircuitRegistry). A
+	// DynamicProvider shares its registry with every provider it builds.
+	circuits *CircuitRegistry
 
 	client *http.Client
 }
@@ -58,7 +58,7 @@ func NewGitHubProvider(token, apiURL, webhookSecret string) *GitHubProvider {
 		Token:         token,
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
-		circuit:       NewCircuitBreaker(),
+		circuits:      NewCircuitRegistry(),
 		client:        &http.Client{Timeout: providerHTTPTimeout},
 	}
 }
@@ -304,7 +304,8 @@ func (g *GitHubProvider) AddLabelsToPR(ctx context.Context, repo string, prNumbe
 // do executes an authenticated GitHub API request.
 func (g *GitHubProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
 	// Check circuit breaker before making the call.
-	if err := g.circuit.Allow(); err != nil {
+	owner := ownerFromPath(path, "/repos/")
+	if err := g.circuits.Allow(owner); err != nil {
 		return fmt.Errorf("github scm: %w", err)
 	}
 
@@ -331,18 +332,18 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 	resp, err := g.client.Do(req)
 	if err != nil {
 		// Network error — record as failure with no retry-after hint.
-		g.circuit.RecordFailure(time.Time{})
+		g.circuits.Record(owner, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		g.circuit.RecordResponse(resp)
+		g.circuits.Record(owner, resp, nil)
 		return newAPIError("GitHub", method, path, resp, raw)
 	}
 
-	g.circuit.RecordSuccess()
+	g.circuits.Record(owner, resp, nil)
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)
