@@ -224,6 +224,33 @@
         },
         "type": "object"
       },
+      "ChartRef": {
+        "additionalProperties": false,
+        "description": "ChartRef identifies a Helm chart version.",
+        "properties": {
+          "digest": {
+            "description": "Digest is the chart package digest (index.yaml digest, or the OCI manifest digest).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name is the chart name: letters, digits, \".\", \"_\" and \"-\", starting and ending with a letter or digit. It is joined into the chart's index and OCI paths, so a \"/\", \"]\" or other path character would point the version lookup elsewhere.",
+            "type": "string"
+          },
+          "repoURL": {
+            "description": "RepoURL is the chart repository (https://... or oci://...).",
+            "type": "string"
+          },
+          "version": {
+            "description": "Version is the chart version.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "type": "object"
+      },
       "Condition": {
         "additionalProperties": false,
         "description": "uiCondition is the JSON shape for a Kubernetes condition.",
@@ -269,6 +296,14 @@
         "additionalProperties": false,
         "description": "bundleCreateRequest is the JSON body accepted by POST /api/v1/bundles.",
         "properties": {
+          "chart": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChartRef"
+              }
+            ],
+            "description": "Chart is the Helm chart version of a \"chart\" bundle."
+          },
           "configRef": {
             "allOf": [
               {
@@ -312,7 +347,7 @@
             "description": "Provenance carries build metadata."
           },
           "type": {
-            "description": "Type is the bundle type: \"image\", \"config\", or \"mixed\".",
+            "description": "Type is the bundle type: \"image\", \"config\", \"mixed\" or \"chart\".",
             "type": "string"
           }
         },
