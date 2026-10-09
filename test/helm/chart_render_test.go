@@ -857,6 +857,7 @@ var everyValue = []string{
 	"--set", "controller.policyNamespaces={platform-policies}",
 	"--set", "scm.provider=gitlab",
 	"--set", "scm.apiURL=https://gitlab.example.com",
+	"--set", "scm.allowedRepositories={gitlab.example.com/acme/*,gitlab.example.com/platform/**}",
 	"--set", "github.secretRef.name=scm-token",
 	"--set", "webhook.secretRef.name=webhook-secret",
 	"--set", "bundleAPI.tokenSecretRef.name=bundle-token",
@@ -889,11 +890,12 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 	env := envByName(c)
 
 	wantArgs := map[string]string{
-		"policy-namespaces":    "platform-policies",
-		"scm-provider":         "gitlab",
-		"scm-api-url":          "https://gitlab.example.com",
-		"ui-tokenreview-auth":  "true",
-		"cors-allowed-origins": "https://a.example.com,https://b.example.com",
+		"policy-namespaces":        "platform-policies",
+		"scm-provider":             "gitlab",
+		"scm-api-url":              "https://gitlab.example.com",
+		"scm-allowed-repositories": "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
+		"ui-tokenreview-auth":      "true",
+		"cors-allowed-origins":     "https://a.example.com,https://b.example.com",
 	}
 	for k, v := range wantArgs {
 		assert.Equal(t, v, args[k], "--%s", k)
