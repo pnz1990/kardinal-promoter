@@ -811,6 +811,8 @@ kubectl delete crd --ignore-not-found \
   changewindows.kardinal.io \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
+  scmproviders.kardinal.io \
+  clusterscmproviders.kardinal.io \
   promotiontemplates.kardinal.io \
   auditevents.kardinal.io \
   approvals.kardinal.io
@@ -832,7 +834,7 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 
 | Resources | Verbs |
 |---|---|
-| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create) and `changewindows` (get, list, watch; get, update, patch on `/status`) |
+| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create) `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
 | `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
 | `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |

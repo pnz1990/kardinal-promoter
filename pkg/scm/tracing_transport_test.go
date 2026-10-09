@@ -21,7 +21,8 @@ import (
 
 // TestProviders_HTTPClientsAreTraced builds every SCM provider each way the
 // controller does (the New*Provider constructors, NewProvider and the
-// DynamicProvider the controller runs with) and checks that an API request
+// DynamicProvider the controller runs with, and a provider whose transport
+// the Registry replaced with WithTransport) and checks that an API request
 // emits a client span: a provider whose HTTP client lost the tracing
 // transport fails here.
 func TestProviders_HTTPClientsAreTraced(t *testing.T) {
@@ -49,6 +50,14 @@ func TestProviders_HTTPClientsAreTraced(t *testing.T) {
 		typ := typ
 		build["NewProvider("+typ+")"] = func() (scm.SCMProvider, error) { return scm.NewProvider(typ, "t", srv.URL, "") }
 		build["NewDynamicProvider("+typ+")"] = func() (scm.SCMProvider, error) { return scm.NewDynamicProvider(typ, "t", srv.URL, "") }
+		// The Registry replaces a provider's transport with the egress one.
+		build["WithTransport("+typ+")"] = func() (scm.SCMProvider, error) {
+			p, err := scm.NewProvider(typ, "t", srv.URL, "")
+			if err != nil {
+				return nil, err
+			}
+			return scm.WithTransport(p, http.DefaultTransport.(*http.Transport).Clone()), nil
+		}
 	}
 	for name, newProvider := range build {
 		t.Run(name, func(t *testing.T) {

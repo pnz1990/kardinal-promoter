@@ -6,8 +6,8 @@ package promotionstep
 import (
 	"context"
 	"fmt"
-	"testing"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
