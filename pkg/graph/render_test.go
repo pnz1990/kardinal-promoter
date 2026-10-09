@@ -166,8 +166,17 @@ func renderedOf(t *testing.T, g *graph.Graph, kind string) []map[string]interfac
 // objName is metadata.name of a rendered object.
 func objName(o map[string]interface{}) string {
 	md, _ := o["metadata"].(map[string]interface{})
-	return fmt.Sprint(md["name"])
+	name := fmt.Sprint(md["name"])
+	// A gated name (resolvableWhen, ledger G1) renders the quoted literal
+	// once its condition holds.
+	if m := reGatedName.FindStringSubmatch(name); m != nil {
+		return m[1]
+	}
+	return name
 }
+
+// reGatedName matches a resolvableWhen name: ${["<name>"].filter(...)[0]}.
+var reGatedName = regexp.MustCompile(`^\$\{\["([^"]+)"\]\.filter\(.*\)\[0\]\}$`)
 
 // objLabels is metadata.labels of a rendered object.
 func objLabels(o map[string]interface{}) map[string]interface{} {

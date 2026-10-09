@@ -626,6 +626,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	gates := newGateCollections(pipelineName, bundle.Name)
 	var prItems []interface{}
 	var compactSteps []compactStep
+	var compactMetrics []compactMetric
 	upstreamEnvs := make(map[string][]string, len(filteredEnvs))
 
 	for _, envName := range filteredEnvs {
@@ -660,12 +661,22 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			envGates = append(envGates, name)
 		}
 
-		// Per-promotion MetricCheck instances the gates of this environment read.
+		// Per-promotion MetricCheck instances the gates of this environment
+		// read: a node each, or items of the compact shape's MetricChecks
+		// collection.
 		vars := MetricTemplateVars(pipeline, bundle, envName)
 		for _, mc := range metricTemplatesFor(gatesByEnv[envName], metricChecks, pipeline.Namespace, policyNamespaces) {
-			node, err := buildMetricCheckNode(
-				metricNodeName(bundleSlug, mc.Name, envName),
-				metricNodeK8sName(bundle.Name, mc.Name, envName),
+			k8sName := metricNodeK8sName(bundle.Name, mc.Name, envName)
+			if compact {
+				spec, _, _, _, err := metricCheckSpec(mc, vars)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				compactMetrics = append(compactMetrics, compactMetric{name: k8sName, env: envName,
+					template: mc.Name, upstreams: rawUpstreams, spec: spec})
+				continue
+			}
+			node, err := buildMetricCheckNode(metricNodeName(bundleSlug, mc.Name, envName), k8sName,
 				mc, vars, pipelineName, bundle.Name, envName, upstreams)
 			if err != nil {
 				return nil, nil, nil, err
@@ -713,6 +724,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		prStatusesNode(pipelineName, bundle.Name))
 	if compact {
 		nodes = append(nodes, compactNodes(pipeline, bundle, compactSteps, gates.collectionIDs())...)
+		nodes = append(nodes, compactMetricNodes(pipelineName, bundle.Name, compactMetrics)...)
 	}
 
 	return nodes, gates.instances, upstreamEnvs, nil
