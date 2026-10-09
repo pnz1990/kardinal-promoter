@@ -421,6 +421,44 @@ func TestCRDAuditEventSpecImmutable(t *testing.T) {
 	}
 }
 
+// TestCRDHookRunPhaseLatched: the API server refuses to change a HookRun's
+// phase once it is Succeeded, Failed or Skipped (regression, QA #1493: a
+// reconcile from a stale copy overwrote Succeeded with Failed).
+func TestCRDHookRunPhaseLatched(t *testing.T) {
+	phase := loadCRDs(t)["HookRun"].structural.Properties["status"].Properties["phase"]
+	var rule string
+	for _, r := range phase.XValidations {
+		if strings.Contains(r.Rule, "oldSelf") {
+			rule = r.Rule
+		}
+	}
+	require.NotEmpty(t, rule, "HookRun status.phase needs a transition rule")
+	env, err := cel.NewEnv(cel.Variable("self", cel.StringType), cel.Variable("oldSelf", cel.StringType))
+	require.NoError(t, err)
+	ast, iss := env.Compile(rule)
+	require.NoError(t, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	cases := []struct {
+		old, new string
+		allow    bool
+	}{
+		{"Pending", "Running", true},
+		{"Running", "Succeeded", true},
+		{"Running", "Failed", true},
+		{"Pending", "Skipped", true},
+		{"Succeeded", "Succeeded", true},
+		{"Succeeded", "Failed", false},
+		{"Failed", "Succeeded", false},
+		{"Skipped", "Running", false},
+	}
+	for _, c := range cases {
+		out, _, err := prg.Eval(map[string]interface{}{"self": c.new, "oldSelf": c.old})
+		require.NoError(t, err)
+		assert.Equal(t, c.allow, out.Value(), "%s -> %s", c.old, c.new)
+	}
+}
+
 // ── C08-api-config-24, -28: printer columns, enums, short names ──────────────
 
 // listFilter matches a JSONPath list filter such as [?(@.type=="Ready")],

@@ -12,8 +12,10 @@
 // re-creates a deleted Job, which runs the hook again; and an edited Job
 // template is an immutable-field error that stops the whole Graph. Here the
 // Job has the HookRun as its controller owner (garbage collection deletes it
-// and its Pods), a finished HookRun never creates a Job again, and a spec
-// edit after the start is reported, not applied.
+// and its Pods), a finished HookRun never creates a Job again (the CRD
+// refuses to change a terminal phase), a spec edit after the start is
+// reported, not applied, and a HookRun removed from the Graph while its Job
+// runs is held by a finalizer until the Job ends or times out.
 package hookrun
 
 import (
@@ -23,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -49,6 +52,12 @@ const (
 	// LabelHookRun is set on the Job and its Pods: the HookRun name.
 	LabelHookRun = "kardinal.io/hookrun"
 
+	// Finalizer holds a HookRun that is deleted (its Bundle deleted, or the
+	// hook renamed or removed from the Pipeline) while its Job runs, until the
+	// Job ends or passes its deadline: a migration is never cut off halfway,
+	// and the HookRun that replaces it waits for it (siblingRunning).
+	Finalizer = "kardinal.io/hookrun-job"
+
 	// DefaultServiceAccount is the only Pod ServiceAccount a hook may use
 	// when the controller is given no allowlist.
 	DefaultServiceAccount = "default"
@@ -56,11 +65,20 @@ const (
 	// requeueRunning is the fallback poll while the Job runs; the Job watch
 	// normally wakes the HookRun first.
 	requeueRunning = 30 * time.Second
+	// requeueSibling is the poll while another run of the same hook slot
+	// finishes.
+	requeueSibling = 10 * time.Second
 )
 
 // Reconciler runs HookRun Jobs.
 type Reconciler struct {
 	client.Client
+
+	// APIReader reads from the API server, uncached (mgr.GetAPIReader()). A
+	// Job the cache does not have is looked up there before it is taken as
+	// deleted: the cache can lag a Job just created, and it holds only Jobs
+	// labelled kardinal.io/hookrun. Nil means Client.
+	APIReader client.Reader
 
 	// AllowedServiceAccounts are the Pod ServiceAccount names a hook's Job
 	// may run as (--hook-service-accounts). Empty means only "default".
@@ -70,6 +88,15 @@ type Reconciler struct {
 	// A hook may never run as it, whatever the allowlist says: it can write
 	// every object a Graph renders.
 	GraphServiceAccount string
+
+	// ControllerNamespace is the controller's own namespace. A hook there is
+	// refused: it would run next to the controller's credentials.
+	ControllerNamespace string
+
+	// AllowPrivileged allows hook Pods to use privileged containers,
+	// privilege escalation, added capabilities, host namespaces, hostPath
+	// volumes and nodeName (--hook-allow-privileged). Off by default.
+	AllowPrivileged bool
 
 	// NowFn returns the current time; nil means time.Now.
 	NowFn func() time.Time
@@ -82,18 +109,30 @@ func (r *Reconciler) now() time.Time {
 	return time.Now()
 }
 
+func (r *Reconciler) reader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
 var hookRunsResource = v1alpha1.GroupVersion.WithResource("hookruns").GroupResource()
 
 // Reconcile runs one HookRun forward. It is idempotent: each step finds what
 // an earlier, possibly interrupted, reconcile did (the Job by its
-// deterministic name and owner) before it acts.
+// deterministic name and owner) before it acts, and every status write is
+// optimistic-locked, so a reconcile working from a stale copy fails and
+// retries instead of overwriting a newer phase.
 //
-//	no status.specHash      → validate, record specHash, startedAt, deadline
+//	being deleted            → hold (finalizer) while the Job runs and the deadline is ahead
+//	no status.specHash       → Skipped when spec.stepAdvanced; else validate,
+//	                           add the finalizer, record specHash, startedAt, deadline
+//	another run of the slot  → wait while a removed sibling's Job still runs
 //	no Job, no status.jobUID → create the Job (or adopt the one this HookRun owns)
-//	Job gone or replaced    → Failed (never re-run)
-//	Job Complete / Failed   → Succeeded / Failed
-//	deadline passed         → Failed, Job deleted with its Pods
-//	Succeeded / Failed      → nothing more (only SpecChangedAfterStart is kept current)
+//	Job gone or replaced     → Failed (never re-run)
+//	Job Complete / Failed    → Succeeded / Failed
+//	deadline passed          → Failed, Job deleted with its Pods
+//	terminal                 → nothing more (only SpecChangedAfterStart is kept current)
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	return objectgone.Reconcile(ctx, req, hookRunsResource, r.reconcile)
 }
@@ -108,7 +147,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get hookrun %s: %w", req.Name, err)
 	}
 	if !hr.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, nil // garbage collection deletes the Job and its Pods
+		return r.deleting(ctx, log, &hr)
 	}
 	base := hr.DeepCopy()
 	hash := specHash(&hr.Spec)
@@ -124,36 +163,120 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.start(ctx, log, base, &hr, hash)
 	}
 
-	var job batchv1.Job
-	err := r.Get(ctx, types.NamespacedName{Name: hr.Status.JobName, Namespace: hr.Namespace}, &job)
+	job, found, err := r.job(ctx, &hr)
 	switch {
-	case apierrors.IsNotFound(err) && hr.Status.JobUID == "":
+	case err != nil:
+		return ctrl.Result{}, err
+	case !found && hr.Status.JobUID == "":
+		if wait, who, err := r.siblingRunning(ctx, &hr); err != nil || wait {
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			hr.Status.Message = fmt.Sprintf("waiting for HookRun %s, removed from the Pipeline, to finish its Job", who)
+			return ctrl.Result{RequeueAfter: requeueSibling}, r.patch(ctx, base, &hr)
+		}
 		return r.createJob(ctx, log, base, &hr)
-	case apierrors.IsNotFound(err):
+	case !found:
 		r.finish(&hr, v1alpha1.HookRunFailed, fmt.Sprintf(
 			"Job %s was deleted before it finished; the hook is not run again", hr.Status.JobName))
 		return ctrl.Result{}, r.patch(ctx, base, &hr)
-	case err != nil:
-		return ctrl.Result{}, fmt.Errorf("get job %s: %w", hr.Status.JobName, err)
 	}
 	if hr.Status.JobUID == "" {
 		// A crash between the create and the status write: adopt the Job if
 		// it is this HookRun's.
-		return r.adopt(ctx, base, &hr, &job)
+		return r.adopt(ctx, base, &hr, job)
 	}
 	if string(job.UID) != hr.Status.JobUID {
 		r.finish(&hr, v1alpha1.HookRunFailed, fmt.Sprintf(
 			"Job %s was replaced by another Job of that name; the hook is not run again", job.Name))
 		return ctrl.Result{}, r.patch(ctx, base, &hr)
 	}
-	return r.observe(ctx, log, base, &hr, &job)
+	return r.observe(ctx, log, base, &hr, job)
 }
 
-// start validates the HookRun and records when it started. The Job is
-// created on the next reconcile, so a crash in between leaves a HookRun
-// that knows its deadline.
+// job returns the HookRun's Job, from the cache and, when the cache does not
+// have it, from the API server.
+func (r *Reconciler) job(ctx context.Context, hr *v1alpha1.HookRun) (*batchv1.Job, bool, error) {
+	key := types.NamespacedName{Name: hr.Status.JobName, Namespace: hr.Namespace}
+	var job batchv1.Job
+	err := r.Get(ctx, key, &job)
+	if apierrors.IsNotFound(err) {
+		err = r.reader().Get(ctx, key, &job)
+	}
+	if apierrors.IsNotFound(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("get job %s: %w", key.Name, err)
+	}
+	return &job, true, nil
+}
+
+// deleting holds a deleted HookRun while its Job runs and its deadline is
+// ahead, then lets it go (garbage collection deletes the Job and its Pods).
+func (r *Reconciler) deleting(ctx context.Context, log zerolog.Logger, hr *v1alpha1.HookRun) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(hr, Finalizer) {
+		return ctrl.Result{}, nil
+	}
+	if !terminal(hr.Status.Phase) && hr.Status.JobUID != "" && !r.expired(hr) {
+		job, found, err := r.job(ctx, hr)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if found && string(job.UID) == hr.Status.JobUID && jobCondition(job, batchv1.JobComplete) == nil &&
+			jobCondition(job, batchv1.JobFailed) == nil {
+			log.Info().Str("job", job.Name).Msg("HookRun deleted while its Job runs; holding it until the Job ends")
+			return ctrl.Result{RequeueAfter: r.untilDeadline(hr)}, nil
+		}
+	}
+	base := hr.DeepCopy()
+	controllerutil.RemoveFinalizer(hr, Finalizer)
+	if err := r.Patch(ctx, hr, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+		return ctrl.Result{}, fmt.Errorf("remove finalizer of hookrun %s: %w", hr.Name, err)
+	}
+	return ctrl.Result{}, nil
+}
+
+// siblingRunning reports whether another HookRun of the same Bundle,
+// environment and phase is being deleted while its Job still runs: the hook
+// was renamed or removed mid-flight. The new run waits for it rather than
+// overlap it.
+func (r *Reconciler) siblingRunning(ctx context.Context, hr *v1alpha1.HookRun) (bool, string, error) {
+	var list v1alpha1.HookRunList
+	if err := r.List(ctx, &list, client.InNamespace(hr.Namespace), client.MatchingLabels{
+		"kardinal.io/pipeline":    hr.Spec.PipelineName,
+		"kardinal.io/bundle":      hr.Spec.BundleName,
+		"kardinal.io/environment": hr.Spec.Environment,
+		graph.LabelHookPhase:      hr.Spec.Phase,
+	}); err != nil {
+		return false, "", fmt.Errorf("list hookruns: %w", err)
+	}
+	for _, other := range list.Items {
+		if other.Name == hr.Name || other.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if other.Status.Phase == v1alpha1.HookRunRunning && !r.expired(&other) {
+			return true, other.Name, nil
+		}
+	}
+	return false, "", nil
+}
+
+// start validates the HookRun, adds the finalizer and records when it
+// started. The Job is created on the next reconcile, so a crash in between
+// leaves a HookRun that knows its deadline.
 func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, hr *v1alpha1.HookRun, hash string) (ctrl.Result, error) {
 	now := metav1.NewTime(r.now())
+	if hr.Spec.StepAdvanced {
+		hr.Status.SpecHash, hr.Status.StartedAt = hash, &now
+		when := "the step had already started"
+		if hr.Spec.Phase == v1alpha1.HookPhasePost {
+			when = "the step had already finished"
+		}
+		r.finish(hr, v1alpha1.HookRunSkipped, fmt.Sprintf("not run: the hook was added to the Pipeline after %s", when))
+		log.Info().Msg("hook skipped: added after its step advanced")
+		return ctrl.Result{}, r.patch(ctx, base, hr)
+	}
 	timeout, err := graph.HookTimeout(hr.Spec.Timeout)
 	if err == nil {
 		_, err = r.jobFor(hr, timeout)
@@ -164,6 +287,17 @@ func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, hr *v1
 		r.finish(hr, v1alpha1.HookRunFailed, err.Error())
 		log.Warn().Err(err).Msg("hook rejected")
 		return ctrl.Result{}, r.patch(ctx, base, hr)
+	}
+	if !controllerutil.ContainsFinalizer(hr, Finalizer) {
+		before := hr.DeepCopy()
+		controllerutil.AddFinalizer(hr, Finalizer)
+		if err := r.Patch(ctx, hr, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			return ctrl.Result{}, fmt.Errorf("add finalizer to hookrun %s: %w", hr.Name, err)
+		}
+		// The patch returned the new resourceVersion; the status patch below
+		// is locked on it, from the status as it was read.
+		base = hr.DeepCopy()
+		base.Status = *before.Status.DeepCopy()
 	}
 	deadline := metav1.NewTime(now.Add(timeout))
 	hr.Status.SpecHash = hash
@@ -179,8 +313,7 @@ func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, hr *v1
 }
 
 // createJob creates the hook's Job, owned by the HookRun. It is built from
-// the spec recorded at start; a spec that changed since is reported and the
-// Job is built from the current spec only when the hash still matches.
+// the spec recorded at start: a spec that changed since fails the HookRun.
 func (r *Reconciler) createJob(ctx context.Context, log zerolog.Logger, base, hr *v1alpha1.HookRun) (ctrl.Result, error) {
 	if r.expired(hr) {
 		r.finish(hr, v1alpha1.HookRunFailed, "timed out before its Job was created")
@@ -221,8 +354,15 @@ func (r *Reconciler) createJob(ctx context.Context, log zerolog.Logger, base, hr
 	}
 	if err := r.Create(ctx, job); err != nil {
 		if apierrors.IsAlreadyExists(err) {
+			// The cache holds only kardinal's Jobs: read the existing one
+			// from the API server, so a foreign Job of the same name fails
+			// the HookRun instead of looping on AlreadyExists.
 			var existing batchv1.Job
-			if getErr := r.Get(ctx, client.ObjectKeyFromObject(job), &existing); getErr != nil {
+			getErr := r.reader().Get(ctx, client.ObjectKeyFromObject(job), &existing)
+			if apierrors.IsNotFound(getErr) {
+				return ctrl.Result{RequeueAfter: time.Second}, nil // deleted meanwhile: try again
+			}
+			if getErr != nil {
 				return ctrl.Result{}, fmt.Errorf("get existing job %s: %w", job.Name, getErr)
 			}
 			return r.adopt(ctx, base, hr, &existing)
@@ -250,7 +390,7 @@ func (r *Reconciler) adopt(ctx context.Context, base, hr *v1alpha1.HookRun, job 
 	owner := metav1.GetControllerOf(job)
 	if owner == nil || owner.UID != hr.UID {
 		r.finish(hr, v1alpha1.HookRunFailed, fmt.Sprintf(
-			"a Job named %s exists and is not owned by this HookRun", job.Name))
+			"a Job named %s exists and is not owned by this HookRun; delete or rename it", job.Name))
 		return ctrl.Result{}, r.patch(ctx, base, hr)
 	}
 	hr.Status.JobUID = string(job.UID)
@@ -298,10 +438,15 @@ func (r *Reconciler) observe(ctx context.Context, log zerolog.Logger, base, hr *
 	return ctrl.Result{RequeueAfter: r.untilDeadline(hr)}, nil
 }
 
-// jobFor returns the JobSpec to create for hr: spec.job with restartPolicy
-// Never and activeDeadlineSeconds the timeout when unset, after checking the
-// Pod's ServiceAccount against the allowlist.
+// jobFor returns the JobSpec to create for hr: spec.job checked against the
+// security rules, with restartPolicy Never, backoffLimit 0 and
+// activeDeadlineSeconds the timeout when they are unset, and
+// ttlSecondsAfterFinished dropped (a Job deleted as it finishes would read
+// as deleted before it finished; the HookRun owns its cleanup).
 func (r *Reconciler) jobFor(hr *v1alpha1.HookRun, timeout time.Duration) (*batchv1.JobSpec, error) {
+	if r.ControllerNamespace != "" && hr.Namespace == r.ControllerNamespace {
+		return nil, fmt.Errorf("hooks may not run in the controller's namespace %s", hr.Namespace)
+	}
 	spec, err := graph.DecodeHookJob(hr.Spec.Job.Raw)
 	if err != nil {
 		return nil, err
@@ -324,18 +469,80 @@ func (r *Reconciler) jobFor(hr *v1alpha1.HookRun, timeout time.Duration) (*batch
 	if !slices.Contains(allowed, sa) {
 		return nil, fmt.Errorf("the hook's Pod ServiceAccount %q is not in the controller's --hook-service-accounts (%v)", sa, allowed)
 	}
+	if spec.ManualSelector != nil && *spec.ManualSelector || spec.Selector != nil {
+		return nil, fmt.Errorf("the hook's Job may not set selector or manualSelector")
+	}
+	if !r.AllowPrivileged {
+		if why := privileged(pod); why != "" {
+			return nil, fmt.Errorf("the hook's Pod %s; the controller refuses it unless --hook-allow-privileged is set", why)
+		}
+	}
 	if pod.RestartPolicy == "" {
 		pod.RestartPolicy = corev1.RestartPolicyNever
+	}
+	if spec.BackoffLimit == nil {
+		zero := int32(0)
+		spec.BackoffLimit = &zero
 	}
 	if spec.ActiveDeadlineSeconds == nil {
 		secs := int64(timeout.Seconds())
 		spec.ActiveDeadlineSeconds = &secs
 	}
+	spec.TTLSecondsAfterFinished = nil
 	if spec.Template.Labels == nil {
 		spec.Template.Labels = map[string]string{}
 	}
 	spec.Template.Labels[LabelHookRun] = hr.Name
 	return spec, nil
+}
+
+// privileged returns what makes pod privileged, or "".
+func privileged(pod *corev1.PodSpec) string {
+	var why []string
+	if pod.HostNetwork {
+		why = append(why, "uses hostNetwork")
+	}
+	if pod.HostPID {
+		why = append(why, "uses hostPID")
+	}
+	if pod.HostIPC {
+		why = append(why, "uses hostIPC")
+	}
+	// hostUsers: false (a user namespace) is the safe setting; true is the
+	// default and is not refused.
+	if pod.NodeName != "" {
+		why = append(why, "sets nodeName")
+	}
+	for _, v := range pod.Volumes {
+		if v.HostPath != nil {
+			why = append(why, "mounts hostPath volume "+v.Name)
+		}
+	}
+	containers := append(append([]corev1.Container(nil), pod.InitContainers...), pod.Containers...)
+	for _, c := range pod.EphemeralContainers {
+		containers = append(containers, corev1.Container{Name: c.Name, SecurityContext: c.SecurityContext})
+	}
+	for _, c := range containers {
+		for _, p := range c.Ports {
+			if p.HostPort != 0 {
+				why = append(why, "uses a hostPort in container "+c.Name)
+			}
+		}
+		sc := c.SecurityContext
+		if sc == nil {
+			continue
+		}
+		if sc.Privileged != nil && *sc.Privileged {
+			why = append(why, "runs container "+c.Name+" privileged")
+		}
+		if sc.AllowPrivilegeEscalation != nil && *sc.AllowPrivilegeEscalation {
+			why = append(why, "allows privilege escalation in container "+c.Name)
+		}
+		if sc.Capabilities != nil && len(sc.Capabilities.Add) > 0 {
+			why = append(why, "adds capabilities to container "+c.Name)
+		}
+	}
+	return strings.Join(why, ", ")
 }
 
 // markSpecChange keeps ConditionSpecChangedAfterStart current.
@@ -383,12 +590,14 @@ func (r *Reconciler) untilDeadline(hr *v1alpha1.HookRun) time.Duration {
 	return d
 }
 
-// patch writes hr's status when it differs from base.
+// patch writes hr's status when it differs from base, optimistic-locked on
+// base's resourceVersion: a reconcile that read a stale copy gets a
+// conflict (and is retried) instead of overwriting a newer status.
 func (r *Reconciler) patch(ctx context.Context, base, hr *v1alpha1.HookRun) error {
 	if equalStatus(&base.Status, &hr.Status) {
 		return nil
 	}
-	if err := r.Status().Patch(ctx, hr, client.MergeFrom(base)); err != nil {
+	if err := r.Status().Patch(ctx, hr, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		return fmt.Errorf("patch hookrun %s status: %w", hr.Name, err)
 	}
 	return nil
@@ -415,7 +624,7 @@ func conditionsEqual(a, b []metav1.Condition) bool {
 }
 
 func terminal(phase string) bool {
-	return phase == v1alpha1.HookRunSucceeded || phase == v1alpha1.HookRunFailed
+	return phase == v1alpha1.HookRunSucceeded || phase == v1alpha1.HookRunFailed || phase == v1alpha1.HookRunSkipped
 }
 
 func jobCondition(job *batchv1.Job, t batchv1.JobConditionType) *batchv1.JobCondition {
@@ -427,9 +636,10 @@ func jobCondition(job *batchv1.Job, t batchv1.JobConditionType) *batchv1.JobCond
 	return nil
 }
 
-// specHash is a hash of what the Job is built from. The job is hashed in a
-// canonical form (sorted keys, no spaces): the API server and kro may
-// re-encode the same JSON differently.
+// specHash is a hash of what the Job is built from (not spec.stepAdvanced,
+// which follows the step). The job is hashed in a canonical form (sorted
+// keys, no spaces): the API server and kro may re-encode the same JSON
+// differently.
 func specHash(spec *v1alpha1.HookRunSpec) string {
 	h := sha256.New()
 	job := spec.Job.Raw

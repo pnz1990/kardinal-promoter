@@ -52,9 +52,9 @@ spec:
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `name` | Yes | | DNS label, at most 40 characters, unique within the environment. The HookRun and its Job are named `<pipeline>-<bundle>-<environment>-<phase>-<name>`, hash-suffixed when that is longer than 63 characters. |
+| `name` | Yes | | DNS label, at most 40 characters, unique within the environment. The HookRun and its Job are named `<pipeline>-<bundle>-<environment>-<phase>-<name>-<hash>`, the readable part cut to fit 63 characters. |
 | `phase` | Yes | | `pre` or `post`. |
-| `job` | Yes | | A `batch/v1` [JobSpec](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/job-v1/#JobSpec). The CRD keeps the field untyped; the controller rejects a job that is not a valid JobSpec (unknown fields included) or has no containers when it builds the Bundle's Graph, and the Bundle fails with `TranslationError`. `template.spec.restartPolicy` defaults to `Never` and `activeDeadlineSeconds` to the timeout. |
+| `job` | Yes | | A `batch/v1` [JobSpec](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/job-v1/#JobSpec). The CRD keeps the field untyped; the controller rejects a job that is not a valid JobSpec (unknown fields included) or has no containers when it builds the Bundle's Graph, and the Bundle fails with `TranslationError`. Defaults: `backoffLimit` **0** (a failed migration is not retried; set it to retry), `template.spec.restartPolicy` `Never`, `activeDeadlineSeconds` the timeout. `ttlSecondsAfterFinished` is dropped: the HookRun owns the Job's cleanup, and a Job deleted as it finishes would read as deleted before it finished. `selector` and `manualSelector` are refused, and so are privileged Pods ([Security](#security-which-serviceaccount-a-hook-runs-as)). |
 | `timeout` | No | `30m` | Go duration from the moment the hook starts. A hook still running then fails and its Job is deleted, with its Pods. |
 
 Strings in the job are passed to the Pod as written: `${HOME}` in a command is expanded by
@@ -92,14 +92,23 @@ Pending ──pre hooks succeeded──▶ Promoting ─▶ (WaitingForMerge) �
 ## Guarantees
 
 - **A hook runs once per Bundle and environment.** A finished HookRun never creates its Job
-  again: deleting the Job (by hand, a TTL, a cleanup tool) after it finished changes nothing.
-  A Job deleted, or replaced by another Job of that name, while it runs fails the HookRun; the
-  hook is not started a second time. Re-run a hook by promoting a new Bundle.
+  again, and the API server refuses to change a finished HookRun's phase: deleting the Job (by
+  hand, a cleanup tool) after it finished changes nothing. A Job deleted, or replaced by another
+  Job of that name, while it runs fails the HookRun; the hook is not started a second time. A Job
+  of the HookRun's name that kardinal did not create fails it with a message naming the Job.
+  Re-run a hook by promoting a new Bundle.
 - **Pipeline edits do not change a running hook.** An edit to a hook while it runs reaches
   the HookRun's spec, but the running Job keeps the spec it started with; the HookRun gets the
   condition `SpecChangedAfterStart`. The next Bundle runs the edited hook.
-- **Nothing is left running.** Deleting the Bundle deletes its Graph, its HookRuns, their Jobs
-  and Pods (garbage collection through the owner references).
+- **A hook is not cut off, and does not overlap itself.** A HookRun deleted while its Job runs
+  (its Bundle deleted, or the hook renamed or removed from the Pipeline) is held by the finalizer
+  `kardinal.io/hookrun-job` until the Job ends or its timeout passes. A renamed hook's new HookRun
+  waits for the old one's Job before it starts, so a migration does not run twice at once.
+- **A hook added too late is skipped.** A pre hook added to the Pipeline after the environment's
+  step started, or a post hook added after it finished, does not run for that Bundle: its HookRun
+  is `Skipped`, and the step gets the condition `HooksSkipped` naming it. The next Bundle runs it.
+- **Nothing is left running.** Deleting the Bundle deletes its Graph, its HookRuns (once their
+  Jobs ended), their Jobs and Pods (garbage collection through the owner references).
 - **A superseded Bundle starts no hooks.** A hook that is already running finishes; the
   superseded Bundle's step does not start, and the new Bundle runs its own hooks.
 
@@ -111,11 +120,21 @@ Pipeline's namespace. A hook with any other ServiceAccount fails without a Job a
 its step. The Graph ServiceAccount (`graph.serviceAccountName`, `kardinal-graph`) is never
 allowed, whatever the list says: it can write every object a Graph renders.
 
-Anyone who can edit a Pipeline can run a Pod in its namespace as one of these
-ServiceAccounts. List only ServiceAccounts that hold what the hooks need, and enforce Pod
-Security Admission on the namespace as for any workload. The controller needs `create`,
-`get`, `list`, `watch` and `delete` on `batch/jobs` in Pipeline namespaces (the chart grants
-it) and caches only Jobs labelled `kardinal.io/hookrun`.
+**Editing a Pipeline means running Pods.** Anyone who can edit a Pipeline can run a Pod in its
+namespace as one of these ServiceAccounts, and that Pod can mount every Secret and ConfigMap in
+the namespace. Grant Pipeline edit rights accordingly, list only ServiceAccounts that hold what
+the hooks need, and enforce
+[Pod Security Admission](https://kubernetes.io/docs/concepts/security/pod-security-admission/)
+`restricted` on Pipeline namespaces, as for any workload.
+
+The controller also refuses, unless it runs with `--hook-allow-privileged` (Helm
+`hooks.allowPrivileged`), a hook Pod with a privileged container, `allowPrivilegeEscalation:
+true`, added capabilities, `hostNetwork`, `hostPID`, `hostIPC`, a `hostPort`, a `hostPath`
+volume or `nodeName`. A hook in the controller's own namespace is always refused. A refused hook
+fails without a Job, and so does its step.
+
+The controller needs `create`, `get`, `list`, `watch` and `delete` on `batch/jobs` in Pipeline
+namespaces (the chart grants it) and caches only Jobs labelled `kardinal.io/hookrun`.
 
 ## What hooks cannot do
 

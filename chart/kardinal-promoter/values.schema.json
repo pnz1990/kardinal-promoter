@@ -336,6 +336,10 @@
           },
           "minItems": 1,
           "description": "ServiceAccount names a hook's Job Pod may run as (--hook-service-accounts)."
+        },
+        "allowPrivileged": {
+          "type": "boolean",
+          "description": "Allow privileged hook Pods (--hook-allow-privileged)."
         }
       }
     },
