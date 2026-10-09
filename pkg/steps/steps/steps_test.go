@@ -48,6 +48,9 @@ type mockGitClient struct {
 	cloneAtSHA   string
 	cloneAtDir   string
 	cloneAtToken string
+	cloneAtAuth  scm.GitAuth
+	cloneAuth    scm.GitAuth
+	pushAuth     scm.GitAuth
 	pushBranch   string
 	pushForce    bool
 	failClone    bool
@@ -61,9 +64,10 @@ type mockGitClient struct {
 	pushErrs   []error
 }
 
-func (m *mockGitClient) Clone(_ context.Context, url, _, dir, token string) error {
+func (m *mockGitClient) Clone(_ context.Context, url, _, dir string, auth scm.GitAuth) error {
+	token := auth.Token
 	m.cloneCalls++
-	m.cloneURL, m.cloneDir, m.cloneToken = url, dir, token
+	m.cloneURL, m.cloneDir, m.cloneToken, m.cloneAuth = url, dir, token, auth
 	if m.cloneErr != nil {
 		return m.cloneErr
 	}
@@ -73,9 +77,10 @@ func (m *mockGitClient) Clone(_ context.Context, url, _, dir, token string) erro
 	return os.MkdirAll(dir, 0o755)
 }
 
-func (m *mockGitClient) CloneAt(_ context.Context, url, sha, dir, token string) error {
+func (m *mockGitClient) CloneAt(_ context.Context, url, sha, dir string, auth scm.GitAuth) error {
+	token := auth.Token
 	m.cloneAtCalls++
-	m.cloneAtURL, m.cloneAtSHA, m.cloneAtDir, m.cloneAtToken = url, sha, dir, token
+	m.cloneAtURL, m.cloneAtSHA, m.cloneAtDir, m.cloneAtToken, m.cloneAtAuth = url, sha, dir, token, auth
 	if m.cloneAtErr != nil {
 		return m.cloneAtErr
 	}
@@ -93,8 +98,9 @@ func (m *mockGitClient) CommitAll(_ context.Context, _, _, _, _ string) error {
 	return nil
 }
 
-func (m *mockGitClient) Push(_ context.Context, _, _, branch, _ string, force bool) error {
+func (m *mockGitClient) Push(_ context.Context, _, _, branch string, auth scm.GitAuth, force bool) error {
 	m.pushCalls++
+	m.pushAuth = auth
 	m.pushBranch = branch
 	m.pushForce = force
 	if len(m.pushErrs) > 0 {
@@ -731,7 +737,8 @@ func TestOpenPRStep_RollbackTitleAndLabels(t *testing.T) {
 
 // TestOpenPRStep_RollbackBody checks that the rollback PR body names the
 // Bundle and version the rollback replaces (FROM), the Bundle and version it
-// restores (TO) and who asked for it (Rolled back by), from the StepState the
+// restores (TO) and who asked for it (Rolled back by: the verified creator,
+// else the requested-by annotation marked unverified), from the StepState the
 // reconciler fills in, and that the provenance Author is the restored build's
 // author (spike bug 6).
 func TestOpenPRStep_RollbackBody(t *testing.T) {
@@ -746,7 +753,8 @@ func TestOpenPRStep_RollbackBody(t *testing.T) {
 				s.RollbackFrom = "nginx-demo-v1-30-0"
 				s.RollbackFromBundle = &v1alpha1.BundleSpec{Type: "image",
 					Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.30.0"}}}
-				s.RequestedBy = "alice"
+				s.CreatedBy = "alice"
+				s.RequestedBy = "mallory"
 			},
 			wantNote: "> **This is a rollback PR.** It restores the images of bundle nginx-demo-v1-29-0 in environment prod.\n" +
 				"> Rolling back FROM: nginx-demo-v1-30-0 (1.30.0)\n" +
@@ -757,11 +765,20 @@ func TestOpenPRStep_RollbackBody(t *testing.T) {
 			name: "replaced bundle deleted",
 			setup: func(s *parentsteps.StepState) {
 				s.RollbackFrom = "nginx-demo-v1-30-0"
+				s.CreatedBy = "kardinal-controller"
 				s.RequestedBy = "kardinal-controller (auto-rollback via RollbackPolicy)"
 			},
 			wantNote: "> Rolling back FROM: nginx-demo-v1-30-0\n" +
 				"> Rolling back TO: nginx-demo-v1-29-0 (1.29.0)\n" +
-				"> Rolled back by: kardinal-controller (auto-rollback via RollbackPolicy)\n",
+				"> Rolled back by: kardinal-controller\n",
+		},
+		{
+			name: "only the unverified requester",
+			setup: func(s *parentsteps.StepState) {
+				s.RequestedBy = "bob"
+			},
+			wantNote: "> Rolling back TO: nginx-demo-v1-29-0 (1.29.0)\n" +
+				"> Rolled back by: bob (unverified)\n",
 		},
 		{
 			name:  "nothing recorded",

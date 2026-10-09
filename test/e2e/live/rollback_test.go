@@ -313,7 +313,8 @@ func TestRollback_PullRequest(t *testing.T) {
 	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("test"), fixtures.Image+":"+fixtures.V3, syncTimeout)
 
 	_, rb := rbRollback(t, a, "test")
-	actor := cliUser(t)
+	// The note names the verified creator (kardinal.io/created-by).
+	actor := kubeUser(t, e)
 	e.WaitStepState(t, a.ns, pipelineName, rb, "test", "WaitingForMerge", promoteTimeout)
 	head := prHead(a.ns, rb, "test")
 	pr := e.WaitPR(t, a.repo, time.Minute, "the rollback PR", func(pr gitserver.PR) bool { return pr.Head == head })

@@ -167,15 +167,15 @@ func TestGitMetrics_CloneAndPush(t *testing.T) {
 	}
 	clones, pushes, nonFF := ok("clone", "ok"), ok("push", "ok"), ok("push", "non_fast_forward")
 	a, b := t.TempDir()+"/a", t.TempDir()+"/b"
-	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", a, ""))
-	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", b, ""))
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", a, GitAuth{}))
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", b, GitAuth{}))
 	assert.Equal(t, clones+2, ok("clone", "ok"))
 	for _, d := range []string{a, b} {
 		require.NoError(t, writeFile(d, "f-"+filepath.Base(d), "x\n"))
 		require.NoError(t, c.CommitAll(ctx, d, "change", "t", "t@example.com"))
 	}
-	require.NoError(t, c.Push(ctx, a, "origin", "main", "", false))
-	require.ErrorIs(t, c.Push(ctx, b, "origin", "main", "", false), ErrNonFastForward)
+	require.NoError(t, c.Push(ctx, a, "origin", "main", GitAuth{}, false))
+	require.ErrorIs(t, c.Push(ctx, b, "origin", "main", GitAuth{}, false), ErrNonFastForward)
 	assert.Equal(t, pushes+1, ok("push", "ok"))
 	assert.Equal(t, nonFF+1, ok("push", "non_fast_forward"))
 }

@@ -197,12 +197,18 @@ func (g *guardSCM) GetPRMergeCommit(_ context.Context, repo string, _ int) (stri
 	g.calls = append(g.calls, "merge "+repo)
 	return "sha", nil
 }
+func (g *guardSCM) VerifyCommit(_ context.Context, repo, sha string) (scm.CommitSignature, error) {
+	g.calls = append(g.calls, "verify "+repo+"@"+sha)
+	return scm.CommitSignature{}, nil
+}
 
 // TestGuard covers QA #1483: every SCM call the shared token makes is
 // checked against the allowlist, whichever code path makes it, so a call for
 // a repository that is not allowed never reaches the provider and fails with
 // a permanent ErrRepositoryNotAllowed. Calls for an allowed repository and
 // webhook parsing pass through; an unset allowlist returns the provider.
+//
+// Covers SCM-GUARD-VERIFY-01.
 func TestGuard(t *testing.T) {
 	a, err := scm.ParseRepositoryAllowlist([]string{"github.com/acme/*"})
 	require.NoError(t, err)
@@ -217,7 +223,10 @@ func TestGuard(t *testing.T) {
 		e7 := p.(scm.BranchDeleter).DeleteBranch(ctx, repo, "kardinal/b/prod")
 		_, e8 := p.(scm.MergeCommitGetter).GetPRMergeCommit(ctx, repo, 1)
 		e9 := p.(scm.CommitStatusSetter).SetPRCommitStatus(ctx, repo, 1, "abc", scm.CommitStatus{State: "success"})
-		return []error{e1, e2, e3, e4, e5, e6, e7, e8, e9}
+		// Image verification's signed-commit check (#1521) goes through the
+		// guard too: forwarded, and checked.
+		_, e10 := p.(scm.CommitVerifier).VerifyCommit(ctx, repo, "abc")
+		return []error{e1, e2, e3, e4, e5, e6, e7, e8, e9, e10}
 	}
 
 	inner := &guardSCM{}
@@ -232,7 +241,7 @@ func TestGuard(t *testing.T) {
 	for i, err := range calls(g, "acme/gitops") {
 		assert.NoError(t, err, "call %d", i)
 	}
-	assert.Len(t, inner.calls, 9)
+	assert.Len(t, inner.calls, 10)
 	_, err = g.ParseWebhookEvent(nil, "")
 	assert.NoError(t, err)
 
@@ -246,7 +255,7 @@ func TestGuard(t *testing.T) {
 		assert.True(t, errors.Is(err, scm.ErrRepositoryNotAllowed), "%q: %v", repo, err)
 		assert.False(t, a.AllowsRepo("github.com", repo), "%q", repo)
 	}
-	assert.Len(t, inner.calls, 10, "none of them reached the provider")
+	assert.Len(t, inner.calls, 11, "none of them reached the provider")
 
 	// Azure DevOps: single spaces in the project and repository names only.
 	ado, err := scm.ParseRepositoryAllowlist([]string{"dev.azure.com/acme/**"})
@@ -332,6 +341,71 @@ func TestRepositoryAllowlist_IPv6Host(t *testing.T) {
 	host, err := scm.WebHost("forgejo", "http://[fd00::1]:3000")
 	require.NoError(t, err)
 	assert.True(t, a.AllowsRepo(host, "acme/gitops"))
+}
+
+// TestRepositoryAllowlist_DataCenter (#1501 with #1483): a Bitbucket Data
+// Center repository is matched as KEY/slug in any case, whether the Pipeline
+// URL is an /scm/ clone URL or an ssh URL, by CheckPipeline and by the Guard
+// on every call, also behind a DynamicProvider; its host comes from the
+// API URL.
+func TestRepositoryAllowlist_DataCenter(t *testing.T) {
+	host, err := scm.WebHost("bitbucket-datacenter", "https://git.example.com/bitbucket")
+	require.NoError(t, err)
+	assert.Equal(t, "git.example.com", host)
+	_, err = scm.WebHost("bitbucket-datacenter", "")
+	assert.Error(t, err, "Data Center has no public host")
+
+	base, err := scm.ParseRepositoryAllowlist([]string{"git.example.com/PLAT/*"})
+	require.NoError(t, err)
+	dyn, err := scm.NewDynamicProvider("bitbucket-datacenter", "t", "https://git.example.com/bitbucket", "")
+	require.NoError(t, err)
+	a := base.WithCanonicalRepo(dyn)
+	pipeline := func(url string) *v1alpha1.Pipeline {
+		p := &v1alpha1.Pipeline{}
+		p.Spec.Git.URL = url
+		p.Spec.Environments = []v1alpha1.EnvironmentSpec{{Name: "prod", Approval: "pr-review"}}
+		return p
+	}
+	for _, url := range []string{"https://git.example.com/bitbucket/scm/PLAT/web-app.git", "ssh://git@git.example.com:7999/plat/web-app.git"} {
+		assert.NoError(t, a.CheckPipeline(pipeline(url), false), url)
+	}
+	assert.ErrorIs(t, a.CheckPipeline(pipeline("https://git.example.com/bitbucket/scm/OTHER/web-app.git"), false), scm.ErrRepositoryNotAllowed)
+	assert.Error(t, base.CheckPipeline(pipeline("https://git.example.com/bitbucket/scm/PLAT/web-app.git"), false),
+		"without the canonical form the /scm/ path does not match KEY/*")
+
+	g := a.Guard(dyn, host)
+	_, _, err = g.GetPRStatus(context.Background(), "scm/OTHER/web-app", 1)
+	assert.ErrorIs(t, err, scm.ErrRepositoryNotAllowed)
+	assert.True(t, scm.SameRepo(g, "scm/PLAT/web-app", "plat/web-app"), "the Guard keeps the canonical form for webhooks")
+
+	// WithProviderType (kardinal validate) matches the same way without a
+	// provider.
+	v := base.WithProviderType("bitbucket-datacenter")
+	assert.NoError(t, v.CheckPipeline(pipeline("https://git.example.com/bitbucket/scm/PLAT/web-app.git"), false))
+	assert.ErrorIs(t, v.CheckPipeline(pipeline("https://git.example.com/bitbucket/scm/OTHER/web-app.git"), false), scm.ErrRepositoryNotAllowed)
+	assert.Same(t, base, base.WithProviderType("github"))
+}
+
+// TestRepositoryAllowlist_DataCenterPersonal: a Data Center personal
+// repository is ~user/slug; its pattern and its URLs (/scm/~user, the
+// /users/ browse path, ssh) match, and only one leading ~ in the first
+// segment is accepted.
+//
+// Covers SCM-BBDC-06.
+func TestRepositoryAllowlist_DataCenterPersonal(t *testing.T) {
+	base, err := scm.ParseRepositoryAllowlist([]string{"git.example.com/~alice/*"})
+	require.NoError(t, err)
+	a := base.WithProviderType("bitbucket-datacenter")
+	for _, repo := range []string{"~alice/tools", "scm/~ALICE/tools", "users/alice/repos/tools/browse"} {
+		assert.True(t, a.AllowsRepo("git.example.com", repo), repo)
+	}
+	for _, url := range []string{"https://git.example.com/scm/~alice/tools.git", "ssh://git@git.example.com:7999/~alice/tools.git",
+		"https://git.example.com/users/alice/repos/tools/browse"} {
+		assert.True(t, a.Allows(url), url)
+	}
+	for _, repo := range []string{"~bob/tools", "~~alice/tools", "~/tools", "~../tools", "plat/~alice", "a/~alice/tools"} {
+		assert.False(t, a.AllowsRepo("git.example.com", repo), repo)
+	}
 }
 
 // TestGuard_ForwardsPRControls (#1483 with #1453): with
