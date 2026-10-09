@@ -39,9 +39,10 @@ const (
 	// minInterval is the shortest re-evaluation interval: a smaller
 	// spec.interval would poll Prometheus in a hot loop (C04-gates-17).
 	minInterval = 10 * time.Second
-	// maxConcurrentReconciles lets one slow or unreachable Prometheus endpoint
-	// stall only its own MetricChecks, not every MetricCheck in the cluster.
-	maxConcurrentReconciles = 4
+	// maxConcurrentReconciles is the reconcile worker count. Queries take at
+	// most DefaultGlobalSlots of them (Limiter), so the rest keep serving
+	// templates, suspended checks and checks waiting for a slot.
+	maxConcurrentReconciles = 8
 	// staleAfterIntervals and minValidFor set status.validUntil: a result is
 	// valid for three intervals (two missed evaluations of margin), and at
 	// least minValidFor. PolicyGates treat a result past validUntil as stale.
@@ -51,7 +52,11 @@ const (
 	// status write: a write that failed once, for example on a conflict or
 	// a brief API server outage, is likely to work at once.
 	firstWriteRetry = 5 * time.Second
-	// busyRetry is how soon a check whose provider had no free slot runs.
+	// DefaultGlobalSlots and DefaultNamespaceSlots are the Limiter caps the
+	// controller uses: one query per namespace at a time, six in the cluster.
+	DefaultGlobalSlots    = 6
+	DefaultNamespaceSlots = 1
+	// busyRetry is how soon a check that found no free query slot asks again.
 	busyRetry = 2 * time.Second
 )
 
@@ -79,6 +84,9 @@ type Reconciler struct {
 	SecretReader client.Reader
 	// NowFn returns the current time. Overridable for testing.
 	NowFn func() time.Time
+	// Limiter shares the query slots fairly between namespaces (every
+	// provider dials a user-chosen address). Nil means no limit (tests).
+	Limiter *Limiter
 }
 
 // Status reasons of MetricChecks that are not queried.
@@ -86,6 +94,10 @@ const (
 	// ReasonTemplate is the reason of a per-promotion MetricCheck.
 	ReasonTemplate = "Template: spec.perPromotion is set, so this MetricCheck is not queried itself; " +
 		"each Bundle's Graph creates an instance per environment whose gates read it"
+	// ReasonWaitingForSlot is the reason of a MetricCheck waiting for a
+	// query slot (Limiter).
+	ReasonWaitingForSlot = "WaitingForSlot: other MetricChecks of this namespace or the cluster are querying; " +
+		"this one queries when a slot is free"
 	// ReasonSuspended is the reason of a suspended MetricCheck.
 	ReasonSuspended = "Suspended: spec.suspend is set; the last result goes stale at validUntil"
 )
@@ -144,16 +156,21 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// send it.
 	if ph := unrenderedPlaceholders(&mc.Spec); len(ph) > 0 {
 		reason := fmt.Sprintf("unrendered placeholder {{ %s }}: only a per-promotion MetricCheck's instances "+
-			"have their placeholders replaced, with values made of [A-Za-z0-9._:@+-]", strings.Join(ph, " }}, {{ "))
+			"have their placeholders replaced, with values made of [A-Za-z0-9._+-] or a digest", strings.Join(ph, " }}, {{ "))
 		return r.record(ctx, log, &mc, interval, "", "Fail", reason)
 	}
 
-	value, queryErr := r.evaluate(ctx, &mc)
-	if errors.Is(queryErr, ErrBusy) {
-		// Every slot of the provider is taken (web): try again soon, without
-		// a result. The last one still goes stale at its validUntil.
-		return ctrl.Result{RequeueAfter: busyRetry}, nil
+	if r.Limiter != nil {
+		release, ok := r.Limiter.TryAcquire(req.NamespacedName)
+		if !ok {
+			// No free slot: wait in the queue without a result. The last
+			// result still goes stale at its validUntil (fail closed).
+			return ctrl.Result{RequeueAfter: busyRetry}, r.markNotQueried(ctx, &mc, ReasonWaitingForSlot, false)
+		}
+		defer release()
 	}
+
+	value, queryErr := r.evaluate(ctx, &mc)
 	if queryErr != nil {
 		log.Warn().Err(queryErr).Str("provider", mc.Spec.Provider).Msg("metric query failed")
 		return r.record(ctx, log, &mc, interval, "", "Fail", fmt.Sprintf("%s query error: %s", providerName(&mc.Spec), queryErr))

@@ -303,13 +303,13 @@ func TestCloudWatchProvider(t *testing.T) {
 		assert.Contains(t, rec.req.Header.Get("Authorization"), "Credential=AKIDAMBIENT/")
 
 		// QA #1479: the controller's own credentials never go to another host.
-		for _, endpoint := range []string{srv.URL, "https://evil.example.com", "http://monitoring.eu-west-1.amazonaws.com",
+		for _, endpoint := range []string{srv.URL, "https://evil.example.com", "http://monitoring.eu-west-1.amazonaws.com", "https://s3.eu-west-1.amazonaws.com",
 			"https://amazonaws.com.evil.example"} {
 			before := rec.req
 			_, err := p.Evaluate(context.Background(),
 				metriccheck.Query{Spec: spec(endpoint, false), Secret: keys, Now: queryNow})
 			require.Error(t, err, endpoint)
-			assert.Contains(t, err.Error(), "must be an https *.amazonaws.com", endpoint)
+			assert.Contains(t, err.Error(), "must be an https monitoring.<region>.amazonaws.com(.cn) host", endpoint)
 			assert.Same(t, before, rec.req, "%s: nothing was sent", endpoint)
 		}
 	})
@@ -442,9 +442,8 @@ func TestDefaultBackends_RefuseLoopback(t *testing.T) {
 }
 
 // TestWebProvider_CostBounds covers the QA findings on #1479: the response is
-// capped at 64 KiB, a JSONPath error never quotes the document, a request
-// never outlives half the interval, and at most two web checks run at once
-// (the rest get ErrBusy instead of holding a worker).
+// capped at 64 KiB, a JSONPath error never quotes the document, and a
+// request never outlives half the interval.
 func TestWebProvider_CostBounds(t *testing.T) {
 	spec := func(url, path string) *kardinalv1alpha1.MetricCheckSpec {
 		return &kardinalv1alpha1.MetricCheckSpec{Provider: "web", Interval: "10s",
@@ -478,27 +477,5 @@ func TestWebProvider_CostBounds(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "timed out")
 		assert.Less(t, time.Since(start), 8*time.Second, "timeoutSeconds 60 is cut to half the 10s interval")
-	})
-	t.Run("at most two at once", func(t *testing.T) {
-		block, arrived := make(chan struct{}), make(chan struct{}, 2)
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			arrived <- struct{}{}
-			<-block
-			_, _ = io.WriteString(w, `{"a":1}`)
-		}))
-		t.Cleanup(srv.Close)
-		p := &metriccheck.WebProvider{HTTPClient: plainClient}
-		var wg sync.WaitGroup
-		for range 2 {
-			wg.Add(1)
-			go func() { defer wg.Done(); _ = eval(p, spec(srv.URL, "{.a}")) }()
-		}
-		<-arrived
-		<-arrived
-		err := eval(p, spec(srv.URL, "{.a}"))
-		assert.ErrorIs(t, err, metriccheck.ErrBusy)
-		close(block)
-		wg.Wait()
-		assert.NoError(t, eval(p, spec(srv.URL, "{.a}")), "a slot is free again")
 	})
 }

@@ -52,10 +52,10 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 |---|---|---|---|
 | `spec` | object |  | BundleSpec defines the desired state of a Bundle. |
 | `spec.configRef` | object |  | ConfigRef points to the GitOps repository commit this Bundle represents when the bundle type is "config" or "mixed". |
-| `spec.configRef.commitSHA` | string |  | CommitSHA is the exact commit SHA for this config snapshot. |
+| `spec.configRef.commitSHA` | string |  | CommitSHA is the exact commit SHA for this config snapshot: 4 to 64 hex characters. |
 | `spec.configRef.gitRepo` | string |  | GitRepo is the GitOps repository URL. |
 | `spec.images` | []object |  | Images lists the container images included in this Bundle. |
-| `spec.images[].digest` | string |  | Digest is the image digest (sha256:...). |
+| `spec.images[].digest` | string |  | Digest is the image digest (sha256:...), in the OCI digest grammar. |
 | `spec.images[].repository` | string | yes | Repository is the image repository (e.g. "ghcr.io/nginx/nginx"). |
 | `spec.images[].tag` | string |  | Tag is the image tag, in the OCI distribution grammar: up to 128 characters of [A-Za-z0-9_.-], not starting with "." or "-". |
 | `spec.intent` | object |  | Intent declares optional targeting and skip overrides for this Bundle. |
@@ -65,7 +65,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.provenance` | object |  | Provenance carries build metadata for audit and rollback. |
 | `spec.provenance.author` | string |  | Author is the committer or triggering actor for this build. |
 | `spec.provenance.ciRunURL` | string |  | CIRunURL is the URL of the CI run that built this Bundle. |
-| `spec.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle. |
+| `spec.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle: 4 to 64 hex characters, or an image digest (a Subscription records the digest it found). |
 | `spec.provenance.rollbackOf` | string |  | RollbackOf is the name of the Bundle this Bundle rolls back (if any). |
 | `spec.provenance.timestamp` | string (date-time) |  | Timestamp is when the bundle was built. |
 | `spec.type` | string | yes | Type classifies the bundle content. Supersession rule (BU-4): each bundle type supersedes only bundles of the same type. An image bundle does NOT supersede a config bundle and vice versa. This allows image and config promotions to coexist independently in the same pipeline. One of: `image`, `config`, `mixed`. |

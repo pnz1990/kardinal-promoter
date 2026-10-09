@@ -6,6 +6,7 @@ package graph
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -30,11 +31,16 @@ var placeholderRE = regexp.MustCompile(`\{\{\s*([A-Za-z][A-Za-z.]*)\s*\}\}`)
 // empty value is not substituted either: `commit=""` matches nothing, and a
 // count over nothing (NRQL count(*), PromQL `or vector(0)`) is 0, which would
 // pass a gate that should fail. A leading "." and ".." are refused too.
-var safeValueRE = regexp.MustCompile(`^[A-Za-z0-9_:@+-][A-Za-z0-9._:@+-]*$`)
+var safeValueRE = regexp.MustCompile(`^[A-Za-z0-9_+-][A-Za-z0-9._+-]*$`)
 
-// safeValue reports whether v may be substituted for a placeholder.
+// digestRE is an OCI digest (sha256:<hex>), the one value with a ":".
+var digestRE = regexp.MustCompile(`^[a-z0-9]+:[a-f0-9]{32,128}$`)
+
+// safeValue reports whether v may be substituted for a placeholder: a
+// version, tag, name or commit of [A-Za-z0-9._+-] (no "@" or ":", which
+// would let a value change the host of a URL), or a digest.
 func safeValue(v string) bool {
-	return safeValueRE.MatchString(v) && !strings.Contains(v, "..")
+	return (safeValueRE.MatchString(v) && !strings.Contains(v, "..")) || digestRE.MatchString(v)
 }
 
 // MetricPlaceholders returns the placeholder names in s ("bundle.version"),
@@ -83,7 +89,8 @@ func KnownMetricPlaceholder(name string) bool {
 
 // RenderMetricText replaces the placeholders in s with vars. An unknown
 // placeholder, or one whose value is empty, starts with ".", contains "..",
-// or has a character outside [A-Za-z0-9._:@+-], is left as it is: the MetricCheck reconciler refuses to query a text with a
+// or has a character outside [A-Za-z0-9._+-] (a digest excepted), is left
+// as it is: the MetricCheck reconciler refuses to query a text with a
 // placeholder left in it.
 func RenderMetricText(s string, vars map[string]string) string {
 	return placeholderRE.ReplaceAllStringFunc(s, func(m string) string {
@@ -198,7 +205,7 @@ func buildMetricCheckNode(nodeID, k8sName string, tmpl kardinalv1alpha1.MetricCh
 	spec.Suspend = false
 	spec.Query = RenderMetricText(spec.Query, vars)
 	if spec.Web != nil {
-		spec.Web.URL = RenderMetricText(spec.Web.URL, vars)
+		spec.Web.URL = renderURL(spec.Web.URL, vars)
 		spec.Web.Body = RenderMetricText(spec.Web.Body, vars)
 		for i := range spec.Web.Headers {
 			if v := spec.Web.Headers[i].Value; v != nil {
@@ -248,6 +255,23 @@ func buildMetricCheckNode(nodeID, k8sName string, tmpl kardinalv1alpha1.MetricCh
 			"spec": specMap,
 		},
 	}, nil
+}
+
+// renderURL renders a web URL template. The host must be literal in the
+// template and must not change: a placeholder in the host, or a value that
+// would move the request to another host (userinfo "x@evil", a port), leaves
+// the URL unrendered, so the instance fails closed.
+func renderURL(tmpl string, vars map[string]string) string {
+	before, err := url.Parse(tmpl)
+	if err != nil || strings.Contains(before.Host, "{{") || strings.Contains(before.Scheme, "{{") {
+		return tmpl
+	}
+	out := RenderMetricText(tmpl, vars)
+	after, err := url.Parse(out)
+	if err != nil || after.Host != before.Host || after.Scheme != before.Scheme || after.User != nil {
+		return tmpl
+	}
+	return out
 }
 
 // quoteKroStrings rewrites, in place, every string in v that contains "${"

@@ -63,8 +63,10 @@ spec:
                   when the bundle type is "config" or "mixed".
                 properties:
                   commitSHA:
-                    description: CommitSHA is the exact commit SHA for this config
-                      snapshot.
+                    description: |-
+                      CommitSHA is the exact commit SHA for this config snapshot: 4 to 64
+                      hex characters.
+                    pattern: ^[0-9a-fA-F]{4,64}$
                     type: string
                   gitRepo:
                     description: GitRepo is the GitOps repository URL.
@@ -77,7 +79,9 @@ spec:
                     tag, and/or digest.
                   properties:
                     digest:
-                      description: Digest is the image digest (sha256:...).
+                      description: Digest is the image digest (sha256:...), in the
+                        OCI digest grammar.
+                      pattern: ^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$
                       type: string
                     repository:
                       description: Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
@@ -126,8 +130,11 @@ spec:
                       Bundle.
                     type: string
                   commitSHA:
-                    description: CommitSHA is the application source commit that produced
-                      this Bundle.
+                    description: |-
+                      CommitSHA is the application source commit that produced this Bundle:
+                      4 to 64 hex characters, or an image digest (a Subscription records
+                      the digest it found).
+                    pattern: ^([0-9a-fA-F]{4,64}|[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,})$
                     type: string
                   rollbackOf:
                     description: RollbackOf is the name of the Bundle this Bundle

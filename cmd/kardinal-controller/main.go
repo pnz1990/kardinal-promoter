@@ -431,6 +431,7 @@ func main() {
 	if err := (&metriccheckrecon.Reconciler{
 		Client:   mgr.GetClient(),
 		Backends: metriccheckrecon.DefaultBackends(cloudWatchAmbient),
+		Limiter:  metriccheckrecon.NewLimiter(metriccheckrecon.DefaultGlobalSlots, metriccheckrecon.DefaultNamespaceSlots),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up MetricCheckReconciler")
 	}

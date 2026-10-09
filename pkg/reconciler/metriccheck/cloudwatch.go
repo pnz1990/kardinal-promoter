@@ -98,7 +98,7 @@ func (p *CloudWatchProvider) Evaluate(ctx context.Context, q Query) (Value, erro
 	ambient := cw.AccessKeyIDSecretRef == nil || cw.SecretAccessKeySecretRef == nil
 	if ambient && p.AmbientCredentials && (endpoint.Scheme != "https" || !awsHostRE.MatchString(endpoint.Hostname())) {
 		return Value{}, errors.New("cloudwatch endpoint: with the controller's own AWS identity the endpoint " +
-			"must be an https *.amazonaws.com or *.amazonaws.com.cn host")
+			"must be an https monitoring.<region>.amazonaws.com(.cn) host or its VPC endpoint")
 	}
 	creds, err := p.credentials(ctx, q)
 	if err != nil {
@@ -197,8 +197,11 @@ func (p *CloudWatchProvider) credentials(ctx context.Context, q Query) (aws.Cred
 	return c, nil
 }
 
-// awsHostRE matches AWS service hosts, VPC endpoints included.
-var awsHostRE = regexp.MustCompile(`^([a-z0-9-]+\.)+amazonaws\.com(\.cn)?$`)
+// awsHostRE matches the CloudWatch API hosts: the regional and FIPS
+// endpoints and their VPC endpoint (PrivateLink) forms, in the aws and
+// aws-cn partitions.
+var awsHostRE = regexp.MustCompile(`^(monitoring(-fips)?\.[a-z0-9-]+\.amazonaws\.com(\.cn)?|` +
+	`vpce-[a-z0-9-]+\.monitoring\.[a-z0-9-]+\.vpce\.amazonaws\.com(\.cn)?)$`)
 
 // cloudWatchValue returns the latest point of the single result.
 func cloudWatchValue(resp cloudWatchResponse) (Value, error) {

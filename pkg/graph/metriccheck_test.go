@@ -65,6 +65,13 @@ func TestRenderMetricText(t *testing.T) {
 		})
 	}
 	assert.Equal(t, []string{"bundle.version", "x"}, graph.MetricPlaceholders("{{ bundle.version }} {{x}}"))
+
+	// QA #1479: no "@" or ":" from a value, except a digest.
+	q := map[string]string{"bundle.imageTag": "x@evil.example", "bundle.version": "1:2",
+		"bundle.imageDigest": "sha256:" + strings.Repeat("a", 64)}
+	assert.Equal(t, "t={{ bundle.imageTag }}", graph.RenderMetricText("t={{ bundle.imageTag }}", q))
+	assert.Equal(t, "v={{ bundle.version }}", graph.RenderMetricText("v={{ bundle.version }}", q))
+	assert.Equal(t, "d=sha256:"+strings.Repeat("a", 64), graph.RenderMetricText("d={{ bundle.imageDigest }}", q))
 	assert.True(t, graph.KnownMetricPlaceholder("pipeline.name"))
 	assert.False(t, graph.KnownMetricPlaceholder("bundle.nope"))
 }
@@ -240,3 +247,29 @@ func TestBuilder_MetricExpressionsEvaluate(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestBuilder_WebURLHostIsFixed (QA #1479): a web URL keeps the template's
+// host. A placeholder in the host, or a value that would change it, leaves
+// the URL unrendered, so the instance fails closed.
+func TestBuilder_WebURLHostIsFixed(t *testing.T) {
+	build := func(url, tag string) string {
+		b := makeBundle("app-v1", "app")
+		b.Spec.Images[0].Tag = tag
+		mc := kardinalv1alpha1.MetricCheck{
+			ObjectMeta: metav1.ObjectMeta{Name: "smoke", Namespace: "default"},
+			Spec: kardinalv1alpha1.MetricCheckSpec{Provider: "web", PerPromotion: true,
+				Web:       &kardinalv1alpha1.WebProviderSpec{URL: url, JSONPath: "{.ok}"},
+				Threshold: kardinalv1alpha1.MetricThreshold{Operator: "eq", Text: strPtr("true")}},
+		}
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: makeLinearPipeline("app", "prod"), Bundle: b,
+			PolicyGates:  []kardinalv1alpha1.PolicyGate{makePolicyGate("g", "default", "prod", `metrics.smoke.result == "Pass"`)},
+			MetricChecks: []kardinalv1alpha1.MetricCheck{mc}})
+		require.NoError(t, err)
+		return metricNodes(t, res.Graph)["smoke-prod--app-v1"].Template["spec"].(map[string]interface{})["web"].(map[string]interface{})["url"].(string)
+	}
+	assert.Equal(t, "https://svc.example/check?v=v2", build("https://svc.example/check?v={{ bundle.imageTag }}", "v2"))
+	assert.Equal(t, "https://{{ bundle.imageTag }}.example/x", build("https://{{ bundle.imageTag }}.example/x", "v2"),
+		"a placeholder in the host is never rendered")
+	assert.Equal(t, "https://svc.example{{ bundle.imageTag }}/x", build("https://svc.example{{ bundle.imageTag }}/x", "v2"),
+		"a value that changes the host is not rendered")
+}

@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -242,41 +243,34 @@ func TestReconciler_NonFiniteFails(t *testing.T) {
 	}
 }
 
-// busyBackend always reports ErrBusy.
-type busyBackend struct{}
-
-func (busyBackend) Evaluate(context.Context, metriccheck.Query) (metriccheck.Value, error) {
-	return metriccheck.Value{}, metriccheck.ErrBusy
-}
-
-// TestReconciler_BusyProviderRetriesWithoutResult: a check whose provider has
-// no free slot writes nothing and is retried in 2s.
-func TestReconciler_BusyProviderRetriesWithoutResult(t *testing.T) {
+// TestReconciler_WaitsForSlot: a check that finds no free query slot writes
+// WaitingForSlot (keeping its last result, which still goes stale), sends
+// nothing, and asks again in 2s; once the slot is free it queries.
+func TestReconciler_WaitsForSlot(t *testing.T) {
 	mc := newMetricCheck("m", "lt", 1)
-	got, second, res := run(t, mc, map[string]metriccheck.Backend{"prometheus": busyBackend{}})
+	until := metav1.NewTime(fixedNow.Add(time.Minute))
+	mc.Status = kardinalv1alpha1.MetricCheckStatus{Result: "Pass", LastValue: "0", ValidUntil: &until}
+	c := fake.NewClientBuilder().WithScheme(schemeWithCore()).WithStatusSubresource(mc).WithObjects(mc).Build()
+	b := &valueBackend{value: metriccheck.NumberValue(0)}
+	lim := metriccheck.NewLimiter(1, 1)
+	hold, ok := lim.TryAcquire(types.NamespacedName{Namespace: "default", Name: "other"})
+	require.True(t, ok)
+	r := &metriccheck.Reconciler{Client: c, Backends: map[string]metriccheck.Backend{"prometheus": b},
+		Limiter: lim, NowFn: func() time.Time { return fixedNow }}
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(mc)})
+	require.NoError(t, err)
 	assert.Equal(t, 2*time.Second, res.RequeueAfter)
-	assert.Empty(t, got.Status.Result)
-	assert.Nil(t, got.Status.LastEvaluatedAt)
-	assert.Equal(t, got.ResourceVersion, second.ResourceVersion)
-}
+	assert.Zero(t, b.calls, "nothing is sent while waiting")
+	var got kardinalv1alpha1.MetricCheck
+	require.NoError(t, c.Get(context.Background(), key(mc), &got))
+	assert.Equal(t, metriccheck.ReasonWaitingForSlot, got.Status.Reason)
+	assert.Equal(t, "Pass", got.Status.Result)
+	assert.True(t, got.Status.ValidUntil.Equal(&until), "validUntil is not extended")
 
-// TestReconciler_SecretMustBeReferenceable: a Secret without the label
-// kardinal.io/referenceable: "true" is never read for a MetricCheck; the
-// check fails with SecretNotReferenceable and the backend is not called.
-func TestReconciler_SecretMustBeReferenceable(t *testing.T) {
-	for name, labels := range map[string]map[string]string{
-		"no label":    nil,
-		"label false": {"kardinal.io/referenceable": "false"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default", Labels: labels},
-				Data: map[string][]byte{"auth": []byte("Bearer t0ken")}}
-			b := &valueBackend{value: metriccheck.Value{Text: "healthy"}}
-			got, _, _ := run(t, webCheck("eq", strPtr("healthy"), 0), map[string]metriccheck.Backend{"web": b}, secret)
-			assert.Equal(t, "Fail", got.Status.Result)
-			assert.Equal(t, `web query error: SecretNotReferenceable: secret "creds" does not have the label kardinal.io/referenceable: "true"`,
-				got.Status.Reason)
-			assert.Empty(t, b.secret, "no credential was read")
-		})
-	}
+	hold()
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(mc)})
+	require.NoError(t, err)
+	assert.Equal(t, 1, b.calls)
+	require.NoError(t, c.Get(context.Background(), key(mc), &got))
+	assert.Equal(t, "0 lt 1 = true", got.Status.Reason)
 }

@@ -743,3 +743,32 @@ func TestCRDBundleImageTag(t *testing.T) {
 		assert.NotEmpty(t, validateCR(t, crds, bundle(bad)), "tag %q must be rejected", bad)
 	}
 }
+
+// TestCRDBundleDigestAndCommit (QA #1479): digests follow the OCI digest
+// grammar and commit SHAs are hex (provenance also takes a digest, which a
+// Subscription records), so a placeholder never gets "@", a quote or a
+// space from them.
+func TestCRDBundleDigestAndCommit(t *testing.T) {
+	crds := loadCRDs(t)
+	bundle := func(digest, prov, config string) map[string]interface{} {
+		spec := map[string]interface{}{"type": "mixed", "pipeline": "p",
+			"images":     []interface{}{map[string]interface{}{"repository": "ghcr.io/a/b", "tag": "1", "digest": digest}},
+			"provenance": map[string]interface{}{"commitSHA": prov},
+			"configRef":  map[string]interface{}{"commitSHA": config}}
+		return map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Bundle",
+			"metadata": map[string]interface{}{"name": "b", "namespace": "default"}, "spec": spec}
+	}
+	d := "sha256:" + strings.Repeat("a", 64)
+	assert.Empty(t, validateCR(t, crds, bundle(d, "abc1234", "0123456789abcdef0123456789abcdef01234567")))
+	assert.Empty(t, validateCR(t, crds, bundle(d, d, "abcd")), "provenance may hold a digest")
+	for name, b := range map[string]map[string]interface{}{
+		"digest with @":        bundle("sha256:x@evil", "abc1234", "abcd"),
+		"short digest":         bundle("sha256:abc", "abc1234", "abcd"),
+		"commit with a space":  bundle(d, "abc 123", "abcd"),
+		"commit with @":        bundle(d, "abc@evil.example", "abcd"),
+		"configRef not hex":    bundle(d, "abc1234", "main"),
+		"configRef with colon": bundle(d, "abc1234", d),
+	} {
+		assert.NotEmpty(t, validateCR(t, crds, b), "%s must be rejected", name)
+	}
+}

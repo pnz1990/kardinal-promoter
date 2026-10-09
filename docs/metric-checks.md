@@ -43,6 +43,9 @@ spec:
   [Stale metric results](policy-gates.md#stale-metric-results)).
 - `suspend: true` stops the queries. The last result goes stale at `validUntil`, so gates that read
   it block.
+- Queries are rationed: at most one query per namespace and six in the cluster run at once, in
+  first-come order; a MetricCheck waiting for a slot shows `WaitingForSlot` and keeps its last
+  result, which goes stale as usual. A namespace with slow endpoints delays only its own checks.
 
 ## Credentials
 
@@ -119,8 +122,9 @@ spec:
 The query is a `GetMetricData` expression; it must return one result, and the value is its latest
 point. `cloudWatch.endpoint` replaces `https://monitoring.<region>.amazonaws.com`, for example
 with a VPC endpoint. The request is signed with SigV4. With the controller's own identity (below)
-an `endpoint` must be an `https` host under `amazonaws.com` or `amazonaws.com.cn` (VPC endpoints
-included), so the controller's session token is never sent anywhere else.
+an `endpoint` must be `https://monitoring[-fips].<region>.amazonaws.com[.cn]` or its VPC endpoint
+(`vpce-...monitoring.<region>.vpce.amazonaws.com[.cn]`), so the controller's session token is never
+sent anywhere else.
 
 Without the two Secret refs the check fails, unless the controller may use its own AWS identity:
 install with `--set metricCheck.cloudWatch.ambientCredentials=true` (controller flag
@@ -237,11 +241,15 @@ How the Graph runs it:
   which has no result, and blocks.
 - Once the Bundle is no longer promoting (Verified, Failed or Superseded) the Graph sets the
   instance's `spec.suspend`, and it stops querying. A Failed Bundle that promotes again resumes it.
-- A value with a character outside `A-Z a-z 0-9 . _ : @ + -`, an empty value, a value that starts
-  with `.`, and a value containing `..` are not put into a query (a Bundle's tag comes from CI, and
+- A value with a character outside `A-Z a-z 0-9 . _ + -` (a digest such as `sha256:<hex>`
+  excepted), an empty value, a value that starts with `.`, and a value containing `..` are not put
+  into a query (a Bundle's tag comes from CI, and
   `"} or vector(1)` would rewrite a PromQL query; an empty commit matches nothing, and a count over
   nothing is 0, which would pass). The placeholder stays, and the instance fails with
   `unrendered placeholder {{ ... }}`. Bundle image tags must also follow the OCI tag grammar.
+- In `web.url` the scheme and host must be literal: a placeholder in the host, or a rendered URL
+  whose scheme, host or port differs from the template's, leaves the URL unrendered, and the
+  instance fails.
 - Put placeholders inside quoted literals (`version="{{ bundle.version }}"`,
   `WHERE version = '{{ bundle.version }}'`), never inside a regular expression (`=~`, `LIKE`,
   `RLIKE`): there `.` and `+` are operators, and a value can match more than its own release. An unknown placeholder does the same,

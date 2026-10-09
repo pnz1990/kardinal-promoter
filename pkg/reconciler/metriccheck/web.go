@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"k8s.io/client-go/util/jsonpath"
@@ -28,15 +27,7 @@ const (
 	// JSONPath walks the whole document, so its size bounds the CPU a check
 	// can take; metric APIs answer far less.
 	maxWebResponseBytes = 64 << 10
-	// maxWebConcurrent is how many web checks run at once. Web endpoints are
-	// arbitrary, so a slow one must not take every MetricCheck worker: a
-	// check that finds no slot is retried shortly (ErrBusy).
-	maxWebConcurrent = 2
 )
-
-// ErrBusy means the provider has no free slot: the check is retried shortly
-// without recording a result.
-var ErrBusy = errors.New("provider busy")
 
 // webHTTPClient is egress-guarded like defaultHTTPClient. It has no client
 // timeout (the request context carries web.timeoutSeconds) and does not
@@ -57,22 +48,10 @@ type WebProvider struct {
 	// HTTPClient is used for the calls; nil means the egress-guarded default
 	// client. Its Timeout is replaced by web.timeoutSeconds.
 	HTTPClient *http.Client
-
-	slotsOnce sync.Once
-	slots     chan struct{}
 }
 
-// Evaluate implements Backend. At most maxWebConcurrent web checks run at
-// once; when every slot is taken it returns ErrBusy at once instead of
-// holding the reconcile worker.
+// Evaluate implements Backend. The reconciler's Limiter decides when it runs.
 func (p *WebProvider) Evaluate(ctx context.Context, q Query) (Value, error) {
-	p.slotsOnce.Do(func() { p.slots = make(chan struct{}, maxWebConcurrent) })
-	select {
-	case p.slots <- struct{}{}:
-		defer func() { <-p.slots }()
-	default:
-		return Value{}, ErrBusy
-	}
 	w := q.Spec.Web
 	if w == nil {
 		return Value{}, errors.New("web: spec.web is required")
