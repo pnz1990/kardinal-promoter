@@ -328,6 +328,29 @@ func TestHelmTemplateTracing(t *testing.T) {
 	}
 }
 
+// TestHelmTemplateEgressAllowlist verifies egress.allowlist renders
+// --egress-allowlist (and nothing when empty, which keeps the default of no
+// allowlist), and that the schema rejects a URL instead of a host or CIDR.
+func TestHelmTemplateEgressAllowlist(t *testing.T) {
+	helm := helmBin(t)
+	chartDir := filepath.Join(repoRoot(t), "chart", "kardinal-promoter")
+
+	out, err := exec.Command(helm, "template", "kardinal-promoter", chartDir).CombinedOutput()
+	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
+	assert.NotContains(t, string(out), "--egress-allowlist", "no allowlist by default")
+
+	out, err = exec.Command(helm, "template", "kardinal-promoter", chartDir,
+		"--set", "egress.allowlist={hooks.slack.com,*.webhook.office.com,10.0.0.0/8,fd00::/8}").CombinedOutput()
+	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
+	assert.Contains(t, string(out), "- --egress-allowlist=hooks.slack.com,*.webhook.office.com,10.0.0.0/8,fd00::/8\n")
+
+	for _, bad := range []string{"https://hooks.slack.com", "hooks.slack.com/path", "a b", "*"} {
+		out, err = exec.Command(helm, "template", "kardinal-promoter", chartDir,
+			"--set-json", `egress.allowlist=["`+bad+`"]`).CombinedOutput()
+		assert.Error(t, err, "%q in egress.allowlist must fail the schema:\n%s", bad, string(out))
+	}
+}
+
 func TestDockerignoreExists(t *testing.T) {
 	root := repoRoot(t)
 	dockerignore := filepath.Join(root, ".dockerignore")

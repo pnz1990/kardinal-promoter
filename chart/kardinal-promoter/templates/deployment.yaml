@@ -88,6 +88,9 @@ spec:
             - --tracing-sampling-ratio={{ if kindIs "invalid" .samplingRatio }}0.1{{ else }}{{ .samplingRatio }}{{ end }}
             {{- end }}
             {{- end }}
+            {{- with (.Values.egress).allowlist }}
+            - --egress-allowlist={{ join "," . }}
+            {{- end }}
             {{- range .Values.controller.extraArgs }}
             - {{ . | quote }}
             {{- end }}

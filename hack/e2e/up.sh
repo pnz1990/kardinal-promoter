@@ -18,7 +18,8 @@
 #   flux    Forgejo + Flux + Prometheus Operator, Prometheus, Pushgateway,
 #           Grafana
 #   chart   Forgejo + Argo CD + cert-manager + podinfo on the node, the webhook
-#           receiver and Jaeger (TestChart_Tracing), and no controller release:
+#           receiver (TestChart_EgressAllowlist) and Jaeger (TestChart_Tracing), and no
+#           controller release:
 #           each TestChart_ test installs the chart from this checkout itself
 #   upgrade Forgejo + Argo CD + kardinal-promoter v0.8.1 (kardinal-v081.sh) and
 #           no kro: the TestUpgrade_ test upgrades v0.8.1 to this checkout,

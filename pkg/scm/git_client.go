@@ -39,6 +39,13 @@ import (
 // changes. Callers treat it as "the environment is already at the target".
 var ErrNothingToCommit = errors.New("nothing to commit, working tree clean")
 
+// ErrAlreadyCommitted is returned by CommitAll when the work tree has no
+// changes because HEAD is already a commit with the same message: an earlier
+// attempt of the same promotion committed and pushed it, and its result was
+// lost (for example a status write that failed after the push). It wraps
+// ErrNothingToCommit.
+var ErrAlreadyCommitted = fmt.Errorf("%w: HEAD is this promotion's commit from an earlier attempt", ErrNothingToCommit)
+
 // ErrNonFastForward is returned by Push when the remote branch has moved and
 // the push would not be a fast-forward (another writer pushed first).
 var ErrNonFastForward = errors.New("non-fast-forward: remote branch has new commits")
@@ -161,6 +168,12 @@ func (c *GoGitClient) CommitAll(ctx context.Context, dir, message, authorName, a
 		return fmt.Errorf("git status: %w", err)
 	}
 	if status.IsClean() {
+		if head, err := repo.Head(); err == nil {
+			if commit, err := repo.CommitObject(head.Hash()); err == nil &&
+				strings.TrimSpace(commit.Message) == strings.TrimSpace(message) {
+				return ErrAlreadyCommitted
+			}
+		}
 		return ErrNothingToCommit
 	}
 

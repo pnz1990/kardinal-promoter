@@ -45,6 +45,7 @@ import (
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
@@ -278,6 +279,15 @@ func main() {
 			"request: an inbound traceparent is linked, not trusted, so it does not force sampling). "+
 			"Chart value: tracing.samplingRatio.")
 
+	var egressAllowlist string
+	flag.StringVar(&egressAllowlist, "egress-allowlist", os.Getenv("KARDINAL_EGRESS_ALLOWLIST"),
+		"Comma-separated destinations NotificationHook, MetricCheck and Subscription requests may reach: "+
+			"host names (hooks.slack.com), wildcards (*.example.com, any name under it) and CIDRs or addresses "+
+			"(10.0.0.0/8, 10.1.2.3). A request is allowed when its host matches a name entry or every address "+
+			"it connects to is in a CIDR entry. Empty (the default): every destination except loopback, "+
+			"link-local, cloud metadata, unspecified and multicast addresses, which stay refused whatever "+
+			"this lists. Chart value: egress.allowlist. Also readable from KARDINAL_EGRESS_ALLOWLIST.")
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -312,6 +322,16 @@ func main() {
 	if tracingCfg.Enabled {
 		logger.Info().Str("endpoint", tracingCfg.Endpoint).Float64("samplingRatio", tracingCfg.SamplingRatio).
 			Msg("OpenTelemetry tracing enabled")
+	}
+
+	allowlist, err := egress.ParseAllowlist(splitCSV(egressAllowlist))
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --egress-allowlist")
+	}
+	egress.SetAllowlist(allowlist)
+	if allowlist != nil {
+		logger.Info().Str("egressAllowlist", allowlist.String()).
+			Msg("egress allowlist set: NotificationHook, MetricCheck and Subscription requests reach only these destinations")
 	}
 
 	allowedRepos, err := scm.ParseRepositoryAllowlist(splitCSV(scmAllowedRepositories))

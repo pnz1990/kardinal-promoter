@@ -57,6 +57,46 @@ const (
 	reasonFreezeGateNameConflict = "FreezeGateNameConflict"
 )
 
+// The SecretReferenceable condition warns that the git Secret
+// (spec.git.secretRef) lacks the kardinal.io/referenceable: "true" label
+// (docs/guides/security.md#secrets-referenced-by-custom-resources). In
+// v0.10.0 the Secret is still used; v0.11 refuses it (#1506). The condition is
+// absent when no Secret is named, when the Secret does not exist (the steps
+// report that), and when it is labeled.
+const (
+	conditionSecretReferenceable = "SecretReferenceable"
+	reasonSecretNotReferenceable = "SecretNotReferenceable"
+	labelReferenceable           = "kardinal.io/referenceable"
+	// secretRecheck re-reads an unlabeled git Secret: Secrets are not
+	// watched, so labeling one is seen at the next recheck or Pipeline event.
+	secretRecheck = 5 * time.Minute
+)
+
+// gitSecretCondition returns the SecretReferenceable warning for p, or nil.
+// The Secret is read from the API server (Secrets are not cached).
+func (r *Reconciler) gitSecretCondition(ctx context.Context, p *kardinalv1alpha1.Pipeline) (*metav1.Condition, error) {
+	ref := p.Spec.Git.SecretRef
+	if ref == nil || ref.Name == "" {
+		return nil, nil
+	}
+	var secret corev1.Secret
+	if err := r.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: ref.Name}, &secret); err != nil {
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get git secret %s: %w", ref.Name, err)
+	}
+	if secret.Labels[labelReferenceable] == "true" {
+		return nil, nil
+	}
+	return &metav1.Condition{
+		Type: conditionSecretReferenceable, Status: metav1.ConditionFalse, Reason: reasonSecretNotReferenceable,
+		ObservedGeneration: p.Generation,
+		Message: fmt.Sprintf("git Secret %s is not labeled %s=true; it is still used in v0.10.0 but will be refused "+
+			"in v0.11: label it (kubectl label secret %s %s=true)", ref.Name, labelReferenceable, ref.Name, labelReferenceable),
+	}, nil
+}
+
 // Reconciler watches Pipeline objects, validates them, and sets status.conditions
 // and status.phase.
 type Reconciler struct {
@@ -120,9 +160,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 	desired := r.validate(&p, ownSecret)
-	// Nothing watches Secrets: a git.secretRef Secret created later is seen
-	// by this periodic re-check.
+	desiredSecret, err := r.gitSecretCondition(ctx, &p)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// Nothing watches Secrets: a git.secretRef Secret created later, or a
+	// label added to one, is seen by these periodic re-checks.
 	var result ctrl.Result
+	if desiredSecret != nil {
+		result.RequeueAfter = secretRecheck
+	}
 	if desired.Reason == scm.ReasonRepositoryNotAllowed && p.Spec.Git.SecretRef != nil && !ownSecret {
 		result.RequeueAfter = secretRecheckInterval
 	}
@@ -158,7 +205,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredPaused != nil {
 		pausedMatch = conditionMatches(p.Status.Conditions, *desiredPaused)
 	}
-	if condMatch && phaseMatch && metricsMatch && pausedMatch {
+	secretMatch := meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil
+	if desiredSecret != nil {
+		secretMatch = conditionMatches(p.Status.Conditions, *desiredSecret)
+	}
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && secretMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -174,6 +225,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		meta.SetStatusCondition(&p.Status.Conditions, *desiredPaused)
 	} else {
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPaused)
+	}
+	if desiredSecret != nil {
+		if meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil {
+			log.Warn().Str("secret", p.Spec.Git.SecretRef.Name).Msg(desiredSecret.Message)
+		}
+		meta.SetStatusCondition(&p.Status.Conditions, *desiredSecret)
+	} else {
+		meta.RemoveStatusCondition(&p.Status.Conditions, conditionSecretReferenceable)
 	}
 	p.Status.DeploymentMetrics = desiredMetrics
 
@@ -497,5 +556,10 @@ func deploymentMetricsEqual(a, b *kardinalv1alpha1.PipelineDeploymentMetrics) bo
 		a.AutoRollbackRateMillis == b.AutoRollbackRateMillis &&
 		a.OperatorInterventionRateMillis == b.OperatorInterventionRateMillis &&
 		a.StaleProdDays == b.StaleProdDays &&
-		a.SampleSize == b.SampleSize
+		a.SampleSize == b.SampleSize &&
+		a.Deployments == b.Deployments &&
+		a.FailedDeployments == b.FailedDeployments &&
+		a.ChangeFailureRateMillis == b.ChangeFailureRateMillis &&
+		a.MeanTimeToRestoreMinutes == b.MeanTimeToRestoreMinutes &&
+		a.RestoredFailures == b.RestoredFailures
 }
