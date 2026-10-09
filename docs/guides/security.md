@@ -466,6 +466,51 @@ rules:
     # Intentionally no "delete" or "update"
 ```
 
+### API access log
+
+The controller logs access to the UI API (`:8082/api/v1/ui/*`) and the Bundle API
+(`POST :8083/api/v1/bundles`). Each access is one structured log line with
+`component=access`, written to the controller's log next to its other lines. By default
+these accesses are logged:
+
+| `access` | When |
+|----------|------|
+| `login` | A token was checked with the API server (a TokenReview). Repeated requests within the 30-second review cache are not logins |
+| `denied` | The request was answered `401`, `403` or `429`. `reason` holds kardinal's message, for example `forbidden: user "…" cannot update pipelines.kardinal.io in namespace team-a` |
+| `write` | Any request that is not `GET`, `HEAD` or `OPTIONS`: promote, roll back, pause, resume, approve, create Bundle |
+| `request` | Any other request, only with `controller.accessLog.allRequests=true` (`--access-log-all-requests`) |
+
+```json
+{"level":"warn","component":"access","access":"denied","server":"ui","method":"POST","path":"/api/v1/ui/pause","status":403,"durationMs":4,"user":"system:serviceaccount:team-a:dashboard","groups":["system:serviceaccounts","system:serviceaccounts:team-a","system:authenticated"],"auth":"tokenreview","reason":"forbidden: user \"system:serviceaccount:team-a:dashboard\" cannot update pipelines.kardinal.io in namespace team-a","message":"api access"}
+```
+
+**Fields:**
+
+- `server`: `ui` or `bundle-api`.
+- `method`, `path`, `status` and `durationMs`.
+- `user` and `groups`: the authenticated caller, in TokenReview mode.
+- `auth`: `tokenreview` or `static-token`. A shared static token has no user, so its line says only `static-token`.
+
+**Source address.** With `controller.accessLog.sourceIP=true` (`--access-log-source-ip`), each
+line also has `sourceIP`, the address of the connecting peer. Behind an Ingress, list the
+Ingress controller's addresses in `controller.accessLog.trustedProxies`
+(`--access-log-trusted-proxies`, CIDRs). kardinal then takes the client address from the
+nearest `X-Forwarded-For` entry that is not a trusted proxy. It ignores `X-Forwarded-For`
+from any other peer, so clients cannot forge it.
+
+**What is never logged.** Tokens, request headers, request bodies and query strings are never
+logged. Only kardinal's own refusal message is logged: at most 256 bytes of the response, and
+only for `401`, `403` and `429`.
+
+**Rate limit.** At most 50 access lines are written per second. Lines over the limit are
+counted, and one line with `dropped` reports how many, so a flood of refused requests cannot
+fill the log.
+
+The access log covers the HTTP APIs. What the controller then does (promotions, gate
+results, rollbacks) is in the AuditEvents above, with the caller in `kardinal.io/requested-by`
+where the UI or Bundle API made the change. Ship the controller's log to your SIEM to keep
+both records.
+
 ---
 
 ## NetworkPolicy

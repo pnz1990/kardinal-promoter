@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/accesslog"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -154,6 +155,7 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		accesslog.FromContext(r.Context()).Auth = "static-token"
 
 		// Rate limit (one token, so one shared window for all callers).
 		if !s.limiter.Allow(providedToken) {

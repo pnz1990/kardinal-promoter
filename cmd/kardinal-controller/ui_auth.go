@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/accesslog"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
 
@@ -117,6 +118,7 @@ func staticTokenMiddleware(next http.Handler, token string) http.Handler {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
+			accesslog.FromContext(r.Context()).Auth = "static-token"
 		}
 		next.ServeHTTP(w, r)
 	})
