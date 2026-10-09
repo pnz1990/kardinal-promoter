@@ -17,6 +17,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
@@ -94,15 +96,35 @@ type remoteGit struct {
 	landed, refused  int
 	clones, inFlight int
 	maxInFlight      int
+	// nextClone is closed by the next Clone (barrier).
+	nextClone chan struct{}
 }
 
-func (g *remoteGit) Clone(_ context.Context, _, _, dir, _ string) error {
+// cloneBarrier is how long a Clone waits for another checkout to be cloned
+// before it returns (remoteGit.Clone).
+const cloneBarrier = 100 * time.Millisecond
+
+// Clone records the checkout, then waits until another one is cloned or
+// cloneBarrier passes: steps that clone together all hold a checkout of the
+// same head before any pushes, so without turns all but one push is refused
+// every time, not only when the scheduler happens to interleave them.
+func (g *remoteGit) Clone(ctx context.Context, _, _, dir, _ string) error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	g.cloned[dir] = g.head
 	g.clones++
 	g.inFlight++
 	g.maxInFlight = max(g.maxInFlight, g.inFlight)
+	if g.nextClone != nil {
+		close(g.nextClone)
+	}
+	next := make(chan struct{})
+	g.nextClone = next
+	g.mu.Unlock()
+	select {
+	case <-next:
+	case <-time.After(cloneBarrier):
+	case <-ctx.Done():
+	}
 	return nil
 }
 
@@ -124,7 +146,8 @@ func (g *remoteGit) Push(_ context.Context, dir, _, _, _ string, _ bool) error {
 // do, against a server that refuses stale pushes: every one lands with N
 // pushes in all and none refused, and never more than one checkout is
 // between clone and push at a time. Without turns each step raced the
-// others and most pushes were refused.
+// others and most pushes were refused; the server's clone barrier makes
+// that certain, so the test fails whenever turns are off.
 //
 // Covers PERF-PUSH-QUEUE-01.
 func TestBranchTurn_ConcurrentWave(t *testing.T) {
@@ -177,4 +200,63 @@ func TestBranchTurn_ConcurrentWave(t *testing.T) {
 	for i := 0; i < n; i++ {
 		assert.Equal(t, "HealthChecking", getStep(t, c, fmt.Sprintf("s%02d", i)).Status.State)
 	}
+}
+
+// TestBranchTurn_NextStepTakesTurnAfterPush (#1578): the turn ends once
+// git-push has landed, not when the reconcile does. A second step asking
+// for the branch takes it, clones and pushes while the first is still in
+// the reconcile that pushed (here: in its status write). Were the turn held
+// to the end of the reconcile, the second step would be told to wait.
+//
+// Covers PERF-PUSH-QUEUE-01.
+func TestBranchTurn_NextStepTakesTurnAfterPush(t *testing.T) {
+	pa, pb := makePipeline("p-a"), makePipeline("p-b")
+	ba, bb := makeBundle("b-a", "p-a"), makeBundle("b-b", "p-b")
+	sa, sb := asPromoting(makeStep("s-a", "p-a", "b-a", "test"), pa), asPromoting(makeStep("s-b", "p-b", "b-b", "test"), pb)
+	git := &remoteGit{cloned: map[string]int{}}
+	root := t.TempDir()
+	var r *promotionstep.Reconciler
+	var duringA struct {
+		ran     bool
+		bClones int
+		bState  string
+		bErr    error
+	}
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}, &v1alpha1.Bundle{}).
+		WithObjects(pa, pb, ba, bb, sa, sb).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				git.mu.Lock()
+				aPushed := git.landed > 0
+				git.mu.Unlock()
+				if obj.GetName() == "s-a" && aPushed && !duringA.ran {
+					// s-a has pushed and its reconcile has not ended.
+					duringA.ran = true
+					_, duringA.bErr = r.Reconcile(ctx, reqFor("s-b"))
+					git.mu.Lock()
+					duringA.bClones = git.clones - 1
+					git.mu.Unlock()
+					var b v1alpha1.PromotionStep
+					if err := cl.Get(ctx, client.ObjectKey{Namespace: "default", Name: "s-b"}, &b); err == nil {
+						duringA.bState = b.Status.State
+					}
+				}
+				return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+	r = &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
+		HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme())),
+		WorkDirFn:      func(p, b string) string { return filepath.Join(root, p, b) }}
+
+	// s-a takes the turn; s-b asks for it from inside s-a's reconcile.
+	_, err := r.Reconcile(context.Background(), reqFor("s-a"))
+	require.NoError(t, err)
+	require.True(t, duringA.ran, "s-a wrote its status after its push")
+	require.NoError(t, duringA.bErr)
+	assert.Equal(t, 1, duringA.bClones, "s-b cloned while s-a's reconcile was still running")
+	assert.Equal(t, "HealthChecking", duringA.bState, "and pushed")
+	assert.Equal(t, 2, git.landed)
+	assert.Zero(t, git.refused)
+	assert.Equal(t, "HealthChecking", getStep(t, c, "s-a").Status.State)
 }
