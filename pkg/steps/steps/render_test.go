@@ -136,7 +136,7 @@ func promote(t *testing.T, state *parentsteps.StepState) (parentsteps.StepResult
 func branchFiles(t *testing.T, url, branch string) (map[string]string, string) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "check")
-	require.NoError(t, scm.NewGoGitClient().Clone(context.Background(), url, branch, dir, ""))
+	require.NoError(t, scm.NewGoGitClient().Clone(context.Background(), url, branch, dir, scm.GitAuth{}))
 	out := map[string]string{}
 	require.NoError(t, filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -236,10 +236,10 @@ func TestRenderBranch_Drift(t *testing.T) {
 	// Someone pushes to env/prod directly.
 	c := scm.NewGoGitClient()
 	dir := filepath.Join(t.TempDir(), "hand")
-	require.NoError(t, c.Clone(context.Background(), url, "env/prod", dir, ""))
+	require.NoError(t, c.Clone(context.Background(), url, "env/prod", dir, scm.GitAuth{}))
 	writeFiles(t, dir, map[string]string{"web-prod_deployment-web.yaml": "edited by hand\n", "CODEOWNERS": "* @team\n"})
 	require.NoError(t, c.CommitAll(context.Background(), dir, "hotfix", "h", "h@example.com"))
-	require.NoError(t, c.Push(context.Background(), dir, "origin", "env/prod", "", false))
+	require.NoError(t, c.Push(context.Background(), dir, "origin", "env/prod", scm.GitAuth{}, false))
 
 	state := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v3", "3.0.0")
 	res, err := promote(t, state)
@@ -273,7 +273,7 @@ func TestRenderBranch_RollbackRendersOldDryCommit(t *testing.T) {
 	c := scm.NewGoGitClient()
 	writeFiles(t, seed, map[string]string{"base/deployment.yaml": strings.Replace(dryRepo["base/deployment.yaml"], "replicas: 1", "replicas: 5", 1)})
 	require.NoError(t, c.CommitAll(context.Background(), seed, "scale up", "t", "t@example.com"))
-	require.NoError(t, c.Push(context.Background(), seed, "origin", "main", "", false))
+	require.NoError(t, c.Push(context.Background(), seed, "origin", "main", scm.GitAuth{}, false))
 	_, err = promote(t, renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v3", "3.0.0"))
 	require.NoError(t, err)
 	files, _ := branchFiles(t, url, "env/prod")
@@ -342,7 +342,7 @@ func pushFiles(t *testing.T, url, branch string, files map[string]*string) {
 	t.Helper()
 	c := scm.NewGoGitClient()
 	dir := filepath.Join(t.TempDir(), "hand")
-	require.NoError(t, c.Clone(context.Background(), url, branch, dir, ""))
+	require.NoError(t, c.Clone(context.Background(), url, branch, dir, scm.GitAuth{}))
 	for p, content := range files {
 		full := filepath.Join(dir, p)
 		if content == nil {
@@ -353,7 +353,7 @@ func pushFiles(t *testing.T, url, branch string, files map[string]*string) {
 		require.NoError(t, os.WriteFile(full, []byte(*content), 0o600))
 	}
 	require.NoError(t, c.CommitAll(context.Background(), dir, "by hand", "h", "h@example.com"))
-	require.NoError(t, c.Push(context.Background(), dir, "origin", branch, "", false))
+	require.NoError(t, c.Push(context.Background(), dir, "origin", branch, scm.GitAuth{}, false))
 }
 
 func strp(s string) *string { return &s }
@@ -474,7 +474,7 @@ func TestRenderBranch_RollbackTrustsOnlyKardinalRenders(t *testing.T) {
 	require.NoError(t, wt.Checkout(&gogit.CheckoutOptions{Branch: plumbing.NewBranchReferenceName("evil"), Create: true}))
 	writeFiles(t, seed, map[string]string{"base/deployment.yaml": strings.Replace(dryRepo["base/deployment.yaml"], "replicas: 1", "replicas: 99", 1)})
 	require.NoError(t, c.CommitAll(context.Background(), seed, "evil", "e", "e@example.com"))
-	require.NoError(t, c.Push(context.Background(), seed, "origin", "evil", "", false))
+	require.NoError(t, c.Push(context.Background(), seed, "origin", "evil", scm.GitAuth{}, false))
 	head, err := repo.Head()
 	require.NoError(t, err)
 	evil := head.Hash().String()
@@ -482,12 +482,12 @@ func TestRenderBranch_RollbackTrustsOnlyKardinalRenders(t *testing.T) {
 	forge := func(t *testing.T, msg string, files map[string]*string) {
 		t.Helper()
 		dir := filepath.Join(t.TempDir(), "forge")
-		require.NoError(t, c.Clone(context.Background(), url, "env/prod", dir, ""))
+		require.NoError(t, c.Clone(context.Background(), url, "env/prod", dir, scm.GitAuth{}))
 		for p, content := range files {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, p), []byte(*content), 0o600))
 		}
 		require.NoError(t, c.CommitAll(context.Background(), dir, msg, "h", "h@example.com"))
-		require.NoError(t, c.Push(context.Background(), dir, "origin", "env/prod", "", false))
+		require.NoError(t, c.Push(context.Background(), dir, "origin", "env/prod", scm.GitAuth{}, false))
 	}
 	rollback := func(t *testing.T) (parentsteps.StepResult, error) {
 		st := renderState(t, url, filepath.Join(t.TempDir(), "w"), v1alpha1.EnvironmentSpec{Name: "prod", Path: "environments/prod",

@@ -232,9 +232,21 @@ github:
     # secretKeyRef, which only reads the Pod's namespace.
     namespace: ""
     key: "token"
+  # -- Authenticate as a GitHub App: the github.secretRef Secret holds
+  # githubAppID, githubAppInstallationID and githubAppPrivateKey instead of a
+  # token. The controller mints installation tokens, refreshes them before
+  # they expire, and reloads the App credentials when the Secret changes.
+  # Needs scm.provider github (or empty) and github.secretRef.name.
+  #
+  #   kubectl create secret generic github-app -n kardinal-system \
+  #     --from-literal=githubAppID=123456 --from-literal=githubAppInstallationID=7890123 \
+  #     --from-file=githubAppPrivateKey=app.private-key.pem
+  #   helm install ... --set github.secretRef.name=github-app --set github.app.enabled=true
+  app:
+    enabled: false
 
 # -- SCM provider (--scm-provider): github (default when empty), gitlab,
-# forgejo, gitea, bitbucket or azuredevops, and its API base URL
+# forgejo, gitea, bitbucket, azuredevops or bitbucket-datacenter, and its API base URL
 # (--scm-api-url) for self-hosted instances. See docs/scm-providers.md.
 
 # Identity admission policies (templates/identity-admission.yaml,

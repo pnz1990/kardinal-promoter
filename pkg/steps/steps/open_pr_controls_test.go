@@ -375,3 +375,44 @@ func TestOpenPRControls_Failures(t *testing.T) {
 		assert.Empty(t, v)
 	})
 }
+
+// TestOpenPRControls_BitbucketDC: open-pr on Bitbucket Data Center opens the
+// PR on the project and slug of an HTTP clone URL with the rendered title,
+// sends no label request (Data Center PRs have none), adds the reviewers as
+// participants and leaves auto-merge pending for the reconciler; labels and
+// assignees are refused before a PR is opened. Covers SCM-BBDC-05.
+func TestOpenPRControls_BitbucketDC(t *testing.T) {
+	const prs = "/rest/api/1.0/projects/PLAT/repos/web/pull-requests"
+	srv, calls := routedAPI(t, map[string][]apiReply{
+		"POST " + prs:                      {{201, `{"id":12,"version":0,"links":{"self":[{"href":"https://git.example.com/projects/PLAT/repos/web/pull-requests/12"}]}}`}},
+		"POST " + prs + "/12/participants": {{200, `{}`}},
+	})
+	p, err := scm.NewProvider("bitbucket-datacenter", "tok", srv.URL, "")
+	require.NoError(t, err)
+	cfg := &v1alpha1.PRConfig{
+		TitleTemplate: "deploy {{ .Bundle.Version }} to {{ .Environment }}",
+		Reviewers:     []string{"alice"},
+		Merge:         &v1alpha1.PRMergeConfig{Auto: true, Method: "squash", CommitMessageTemplate: "{{ .PR.Title }} (#{{ .PR.Number }})"},
+	}
+	result, err := runOpenPR(t, controlsState(t, "https://git.example.com/scm/PLAT/web.git", p, cfg))
+	require.NoError(t, err)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status, result.Message)
+	assert.Equal(t, "https://git.example.com/projects/PLAT/repos/web/pull-requests/12", result.Outputs["prURL"])
+	assertMergePending(t, result.Outputs, scm.MergeOptions{Method: "squash", CommitTitle: "deploy 1.29.0 to prod (#12)"})
+	got := calls()
+	assert.Equal(t, []string{"POST " + prs, "POST " + prs + "/12/participants"}, routes(got))
+	assert.Equal(t, "deploy 1.29.0 to prod", got[0].Body["title"])
+	assert.Equal(t, map[string]interface{}{"user": map[string]interface{}{"name": "alice"}, "role": "REVIEWER"}, got[1].Body)
+
+	for name, cfg := range map[string]*v1alpha1.PRConfig{"labels": {Labels: []string{"x"}}, "assignees": {Assignees: []string{"x"}}} {
+		t.Run(name+" refused", func(t *testing.T) {
+			srv, calls := routedAPI(t, nil)
+			p, err := scm.NewProvider("bitbucket-datacenter", "tok", srv.URL, "")
+			require.NoError(t, err)
+			result, err := runOpenPR(t, controlsState(t, "https://git.example.com/scm/PLAT/web.git", p, cfg))
+			assert.ErrorIs(t, err, parentsteps.ErrPermanent)
+			assert.Contains(t, result.Message, "pr."+name+" is not supported by the bitbucket-datacenter SCM provider")
+			assert.Empty(t, calls())
+		})
+	}
+}

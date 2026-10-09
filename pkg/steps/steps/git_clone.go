@@ -70,7 +70,7 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("clean work dir: %v", err)},
 			fmt.Errorf("clean work dir: %w", err)
 	}
-	if err := state.GitClient.Clone(ctx, state.Git.URL, state.Git.Branch, state.WorkDir, state.Git.Token); err != nil {
+	if err := state.GitClient.Clone(ctx, state.Git.URL, state.Git.Branch, state.WorkDir, state.Git.Auth()); err != nil {
 		// The GitClient names the operation and the URL ("git clone <url>:
 		// <reason>"), as for git-push; adding them here named the URL twice.
 		msg := scm.RedactText(err.Error())
@@ -100,12 +100,16 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 				fmt.Errorf("clean config source dir: %w", err)
 		}
 		// Only send the pipeline token to the origin (scheme, host and port)
-		// it belongs to: never over plain http or to another port.
-		srcToken := ""
-		if scm.SameOrigin(state.Git.URL, srcURL) {
-			srcToken = state.Git.Token
+		// it belongs to: never over plain http or to another port. The ssh
+		// key is only used for the same ssh host.
+		var srcAuth scm.GitAuth
+		switch {
+		case scm.SameOrigin(state.Git.URL, srcURL):
+			srcAuth = scm.TokenAuth(state.Git.Token)
+		case scm.SameSSHHost(state.Git.URL, srcURL):
+			srcAuth = state.Git.Auth()
 		}
-		if err := state.GitClient.CloneAt(ctx, srcURL, ref.CommitSHA, srcDir, srcToken); err != nil {
+		if err := state.GitClient.CloneAt(ctx, srcURL, ref.CommitSHA, srcDir, srcAuth); err != nil {
 			msg := "config source: " + scm.RedactText(err.Error())
 			return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg},
 				errors.New(msg)

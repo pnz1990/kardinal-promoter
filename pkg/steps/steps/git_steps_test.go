@@ -191,6 +191,35 @@ func TestGitCloneStep_Hardening(t *testing.T) {
 			},
 		},
 		{
+			name: "ssh pipeline: the ssh key goes to the clone and to a config source on the same ssh host only",
+			setup: func(state *parentsteps.StepState, _ *mockGitClient) {
+				state.Git.URL = "ssh://git@git.example.com/owner/repo.git"
+				state.Git.Token = ""
+				state.Git.SSHPrivateKey, state.Git.SSHKnownHosts = []byte("KEY"), []byte("git.example.com ssh-ed25519 AAAA")
+				state.Bundle.Type = "config"
+				state.Bundle.ConfigRef = &v1alpha1.ConfigRef{GitRepo: "git@git.example.com:owner/config.git", CommitSHA: "abc123"}
+			},
+			check: func(t *testing.T, state *parentsteps.StepState, git *mockGitClient, _ parentsteps.StepResult, err error) {
+				require.NoError(t, err)
+				want := scm.GitAuth{SSHPrivateKey: []byte("KEY"), SSHKnownHosts: []byte("git.example.com ssh-ed25519 AAAA")}
+				assert.Equal(t, want, git.cloneAuth)
+				assert.Equal(t, want, git.cloneAtAuth, "same ssh host")
+			},
+		},
+		{
+			name: "ssh pipeline: no key for a config source on another ssh host",
+			setup: func(state *parentsteps.StepState, _ *mockGitClient) {
+				state.Git.URL = "ssh://git@git.example.com/owner/repo.git"
+				state.Git.SSHPrivateKey, state.Git.SSHKnownHosts = []byte("KEY"), []byte("k")
+				state.Bundle.Type = "config"
+				state.Bundle.ConfigRef = &v1alpha1.ConfigRef{GitRepo: "git@evil.example:owner/config.git", CommitSHA: "abc123"}
+			},
+			check: func(t *testing.T, _ *parentsteps.StepState, git *mockGitClient, _ parentsteps.StepResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, scm.GitAuth{}, git.cloneAtAuth)
+			},
+		},
+		{
 			name: "config source defaults to the pipeline repo",
 			setup: func(state *parentsteps.StepState, _ *mockGitClient) {
 				state.Bundle.Type = "config"

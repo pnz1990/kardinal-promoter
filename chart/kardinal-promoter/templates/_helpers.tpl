@@ -109,6 +109,9 @@ Install-mode checks. Rendered from deployment.yaml so a bad combination fails
 {{- if and .Values.github.token .Values.github.secretRef.name -}}
 {{- fail "set github.token or github.secretRef.name, not both" -}}
 {{- end -}}
+{{- if and .Values.github.app.enabled (not .Values.github.secretRef.name) -}}
+{{- fail "github.app.enabled needs github.secretRef.name: the Secret that holds githubAppID, githubAppInstallationID and githubAppPrivateKey" -}}
+{{- end -}}
 {{- $cert := .Values.controller.tlsCertFile -}}
 {{- $key := .Values.controller.tlsKeyFile -}}
 {{- if or (and $cert (not $key)) (and $key (not $cert)) -}}

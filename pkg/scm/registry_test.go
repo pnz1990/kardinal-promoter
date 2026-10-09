@@ -410,3 +410,18 @@ func TestRegistry_ClientCacheBounded(t *testing.T) {
 	use("p2")
 	assert.Equal(t, 2, builds["p2"], "p2 was dropped past the bound and is built again")
 }
+
+// TestRepositoryAllowed_DataCenter: a bitbucket-datacenter ScmProvider's
+// allowedRepositories match the repository as KEY/slug, however the
+// Pipeline's URL names it (/scm/, browse, ssh path).
+//
+// Covers SCM-BBDC-06.
+func TestRepositoryAllowed_DataCenter(t *testing.T) {
+	spec := scm.ProviderSpec{Identity: v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindScmProvider, Name: "dc"},
+		Spec: v1alpha1.ScmProviderSpec{Type: "bitbucket-datacenter", APIURL: "https://git.example.com",
+			AllowedRepositories: []string{"PLAT/*", "~alice/*"}}}
+	for _, repo := range []string{"PLAT/web", "scm/plat/web", "projects/PLAT/repos/web/browse", "scm/~ALICE/tools"} {
+		assert.NoError(t, scm.RepositoryAllowed(spec, repo), repo)
+	}
+	assert.ErrorIs(t, scm.RepositoryAllowed(spec, "scm/OTHER/web"), scm.ErrRepositoryNotAllowed)
+}

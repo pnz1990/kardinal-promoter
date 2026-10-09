@@ -121,7 +121,7 @@ func TestRun(t *testing.T) {
 	prBranch := stepsimpl.PRBranch("team", "web-v3", "prod")
 	assert.Equal(t, prBranch, res3.Branch, "pr-review pushes to the promotion branch")
 	dir := filepath.Join(t.TempDir(), "check")
-	require.NoError(t, git.Clone(ctx, url, prBranch, dir, ""))
+	require.NoError(t, git.Clone(ctx, url, prBranch, dir, scm.GitAuth{}))
 	b, err := os.ReadFile(filepath.Join(dir, "web-prod_deployment-web.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(b), "ghcr.io/org/web:3.0.0")

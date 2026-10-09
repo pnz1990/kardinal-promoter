@@ -57,7 +57,7 @@ func (r *Reconciler) renderedBranchConflict(ctx context.Context, p *kardinalv1al
 	var found []string
 	for i := range list.Items {
 		q := &list.Items[i]
-		if q.UID == p.UID || !older(q, p) || !scm.SameRepo(q.Spec.Git.URL, p.Spec.Git.URL) {
+		if q.UID == p.UID || !older(q, p) || !scm.SameRepoURL(q.Spec.Git.URL, p.Spec.Git.URL) {
 			continue
 		}
 		for branch, theirs := range renderedBranches(q) {
@@ -93,7 +93,7 @@ func (r *Reconciler) renderingPipelinesSharingRepo(ctx context.Context, obj clie
 	var out []ctrl.Request
 	for i := range list.Items {
 		q := &list.Items[i]
-		if q.UID != p.UID && len(renderedBranches(q)) > 0 && scm.SameRepo(q.Spec.Git.URL, p.Spec.Git.URL) {
+		if q.UID != p.UID && len(renderedBranches(q)) > 0 && scm.SameRepoURL(q.Spec.Git.URL, p.Spec.Git.URL) {
 			out = append(out, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(q)})
 		}
 	}

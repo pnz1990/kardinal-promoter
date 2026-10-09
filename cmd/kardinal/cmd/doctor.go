@@ -352,6 +352,7 @@ var scmTokenLabels = map[string]string{
 	"": "GitHub token", "github": "GitHub token", "gitlab": "GitLab token",
 	"forgejo": "Forgejo token", "gitea": "Gitea token",
 	"bitbucket": "Bitbucket token", "azuredevops": "Azure DevOps token",
+	"bitbucket-datacenter": "Bitbucket Data Center token",
 }
 
 // scmProvider returns the SCM provider a controller container runs with, as

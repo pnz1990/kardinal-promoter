@@ -64,7 +64,7 @@ func cloneRendered(ctx context.Context, state *parentsteps.StepState) (parentste
 			state.Git.Branch, state.Git.SourceBranch))
 		return fail(err.Error(), err)
 	}
-	if ref := state.Bundle.ConfigRef; ref != nil && ref.GitRepo != "" && !scm.SameRepo(ref.GitRepo, state.Git.URL) {
+	if ref := state.Bundle.ConfigRef; ref != nil && ref.GitRepo != "" && !scm.SameRepoURL(ref.GitRepo, state.Git.URL) {
 		err := parentsteps.Permanent(fmt.Errorf("layout: branch renders the Pipeline's repository: configRef.gitRepo %s "+
 			"must be empty or the Pipeline's spec.git.url", scm.RedactURL(ref.GitRepo)))
 		return fail(err.Error(), err)
@@ -101,9 +101,9 @@ func cloneRendered(ctx context.Context, state *parentsteps.StepState) (parentste
 		return fail(err.Error(), err)
 	}
 	if commit != "" {
-		err = state.GitClient.CloneAt(ctx, state.Git.URL, commit, dryDir, state.Git.Token)
+		err = state.GitClient.CloneAt(ctx, state.Git.URL, commit, dryDir, state.Git.Auth())
 	} else {
-		err = state.GitClient.Clone(ctx, state.Git.URL, state.Git.SourceBranch, dryDir, state.Git.Token)
+		err = state.GitClient.Clone(ctx, state.Git.URL, state.Git.SourceBranch, dryDir, state.Git.Auth())
 	}
 	if err != nil {
 		msg := "DRY source: " + scm.RedactText(err.Error())
@@ -158,7 +158,7 @@ func createRenderedBranch(ctx context.Context, state *parentsteps.StepState) err
 	if err := state.GitClient.CommitAll(ctx, state.WorkDir, msg, authorName(state), authorEmail(state)); err != nil {
 		return fmt.Errorf("create rendered branch %s: %w", state.Git.Branch, err)
 	}
-	if err := state.GitClient.Push(ctx, state.WorkDir, "origin", state.Git.Branch, state.Git.Token, false); err != nil &&
+	if err := state.GitClient.Push(ctx, state.WorkDir, "origin", state.Git.Branch, state.Git.Auth(), false); err != nil &&
 		!errors.Is(err, scm.ErrNonFastForward) {
 		return fmt.Errorf("create rendered branch %s: %w", state.Git.Branch, err)
 	}

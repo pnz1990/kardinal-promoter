@@ -19,7 +19,7 @@ import (
 )
 
 // NewProvider constructs an SCMProvider for the given provider type.
-// Supported types: "github" (default), "gitlab", "forgejo", "gitea", "bitbucket", "azuredevops".
+// Supported types: "github" (default), "gitlab", "forgejo", "gitea", "bitbucket", "azuredevops", "bitbucket-datacenter".
 // Returns an error for unknown provider types.
 //
 // Surrounding whitespace is trimmed from the token: a Secret written with
@@ -54,7 +54,57 @@ func newProvider(providerType, token, apiURL, webhookSecret string, circuits *Ci
 		p := NewAzureDevOpsProvider(token, apiURL, webhookSecret)
 		p.circuits = circuits
 		return p, nil
+	case "bitbucket-datacenter":
+		if apiURL == "" {
+			return nil, fmt.Errorf("SCM provider bitbucket-datacenter needs --scm-api-url, the server's base URL")
+		}
+		p := NewBitbucketDCProvider(token, apiURL, webhookSecret)
+		p.circuits = circuits
+		return p, nil
 	default:
-		return nil, fmt.Errorf("unknown SCM provider type %q: supported types are \"github\", \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\", \"azuredevops\"", providerType)
+		return nil, fmt.Errorf("unknown SCM provider type %q: supported types are \"github\", \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\", \"azuredevops\", \"bitbucket-datacenter\"", providerType)
 	}
+}
+
+// Credentials are what a provider authenticates with: a token, or for
+// GitHub, GitHub App credentials.
+type Credentials struct {
+	// Token is the PAT or access token. Ignored when GitHubApp is set.
+	Token string
+	// GitHubApp, when set, authenticates as a GitHub App installation.
+	GitHubApp *GitHubAppCredentials
+}
+
+// fingerprint identifies the credentials without revealing them.
+func (c Credentials) fingerprint() string {
+	if c.GitHubApp != nil {
+		return c.GitHubApp.Fingerprint()
+	}
+	return "token:" + strings.TrimSpace(c.Token)
+}
+
+// NewProviderWithCredentials is NewProvider for cred. GitHub App credentials
+// need providerType github (or ""); the provider mints installation tokens
+// at apiURL, so --scm-api-url points it at GitHub Enterprise Server too.
+func NewProviderWithCredentials(providerType string, cred Credentials, apiURL, webhookSecret string) (SCMProvider, error) {
+	return newProviderWithCredentials(providerType, cred, apiURL, webhookSecret, NewCircuitRegistry())
+}
+
+// newProviderWithCredentials is NewProviderWithCredentials with the circuit
+// registry the provider uses, so a DynamicProvider keeps its circuits across
+// reloads (#1274).
+func newProviderWithCredentials(providerType string, cred Credentials, apiURL, webhookSecret string, circuits *CircuitRegistry) (SCMProvider, error) {
+	if cred.GitHubApp == nil {
+		return newProvider(providerType, cred.Token, apiURL, webhookSecret, circuits)
+	}
+	if providerType != "github" && providerType != "" {
+		return nil, fmt.Errorf("GitHub App credentials need SCM provider github, not %q", providerType)
+	}
+	src, err := NewGitHubAppTokenSource(*cred.GitHubApp, apiURL)
+	if err != nil {
+		return nil, err
+	}
+	p := NewGitHubAppProvider(src, apiURL, webhookSecret)
+	p.circuits = circuits
+	return p, nil
 }
