@@ -732,6 +732,86 @@ spec:
                       - message: update.strategy yaml requires update.yaml.updates
                         rule: '!has(self.strategy) || self.strategy != ''yaml'' ||
                           (has(self.yaml) && size(self.yaml.updates) > 0)'
+                    verification:
+                      description: |-
+                        Verification runs Argo Rollouts analyses after the environment passed
+                        its health check: one AnalysisRun per template, with the Bundle's
+                        version and environment as args. The environment is Verified only when
+                        every analysis is Successful. Needs Argo Rollouts' CRDs: without them
+                        the Bundle fails (it never promotes unverified). See docs/analysis.md.
+                      properties:
+                        analysisTemplates:
+                          description: AnalysisTemplates are the templates to run,
+                            each as its own AnalysisRun.
+                          items:
+                            description: |-
+                              AnalysisTemplateRef names an Argo Rollouts AnalysisTemplate (in the
+                              Pipeline namespace) or ClusterAnalysisTemplate.
+                            properties:
+                              kind:
+                                description: Kind is AnalysisTemplate (default) or
+                                  ClusterAnalysisTemplate.
+                                enum:
+                                - AnalysisTemplate
+                                - ClusterAnalysisTemplate
+                                type: string
+                              name:
+                                description: Name is the template name.
+                                maxLength: 63
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          maxItems: 10
+                          minItems: 1
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                        args:
+                          description: |-
+                            Args set template args by name. They take precedence over the args
+                            kardinal sets (bundle, pipeline, environment, image, tag, digest,
+                            commit) and over the template's defaults. Only args a template declares
+                            are passed to its AnalysisRun.
+                          items:
+                            description: AnalysisArg is one AnalysisRun arg.
+                            properties:
+                              name:
+                                description: Name is the arg name the template declares.
+                                minLength: 1
+                                type: string
+                              value:
+                                description: Value is the arg value.
+                                type: string
+                            required:
+                            - name
+                            - value
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                        inconclusive:
+                          description: |-
+                            Inconclusive is what an Inconclusive AnalysisRun counts as: "fail"
+                            (default) or "pass".
+                          enum:
+                          - fail
+                          - pass
+                          type: string
+                        timeout:
+                          description: |-
+                            Timeout bounds the analyses from the moment the environment entered
+                            Verifying. An analysis still running then fails the environment.
+                            Empty or "0" means 30m.
+                          pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                          type: string
+                      required:
+                      - analysisTemplates
+                      type: object
                     waitForMergeTimeout:
                       description: |-
                         WaitForMergeTimeout is the maximum duration a PromotionStep will wait

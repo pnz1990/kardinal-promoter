@@ -63,10 +63,29 @@ type PromotionStepSpec struct {
 	// +optional
 	PostHooks []string `json:"postHooks,omitempty"`
 
-	// Live holds results the Graph mirrors onto the step while it runs (a
-	// patch node, not the step's template, so they keep updating after the
-	// step's own template stopped resolving). The reconciler reads only this
-	// copy, never the source objects.
+	// Analyses names the AnalysisTemplates of the environment's
+	// verification. A step with analyses goes from HealthChecking to
+	// Verifying and is Verified only when, for every template, the newest
+	// AnalysisRun in spec.live.analyses is Successful: a run that a later
+	// translation replaced (the template changed) is not waited for, and the
+	// timeout keeps counting from status.verificationStartedAt.
+	// +optional
+	Analyses []string `json:"analyses,omitempty"`
+
+	// AnalysisPolicy is the verification's verdict policy, copied from the
+	// Pipeline when the Graph was built, so a Pipeline edit does not change
+	// the verdict of a step in flight.
+	// +optional
+	AnalysisPolicy *StepAnalysisPolicy `json:"analysisPolicy,omitempty"`
+
+	// Live holds results the Graph mirrors onto the step while it runs, each
+	// part with its own patch node (its own field manager), not the step's
+	// template, so they keep updating after the step's own template stopped
+	// resolving: the environment's hook and analysis runs, and the current
+	// results of its gates. The reconciler reads only this copy, never the
+	// source objects; while the step's PR waits for its merge it mirrors the
+	// gates to the PR's head commit as the kardinal/gates commit status. Do
+	// not set it.
 	// +optional
 	Live *PromotionStepLive `json:"live,omitempty"`
 
@@ -81,11 +100,31 @@ type PromotionStepSpec struct {
 	Region string `json:"region,omitempty"`
 }
 
+// LiveGate is one gate instance's current result.
+type LiveGate struct {
+	// Name is the gate instance name.
+	Name string `json:"name"`
+	// Ready is the instance's status.ready.
+	Ready bool `json:"ready"`
+	// Reason is the instance's status.reason.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+}
+
 // PromotionStepLive is what the Graph mirrors onto a PromotionStep.
 type PromotionStepLive struct {
 	// Hooks are the environment's HookRuns for this Bundle.
 	// +optional
 	Hooks []LiveHookRun `json:"hooks,omitempty"`
+
+	// Analyses are the environment's AnalysisRuns for this Bundle.
+	// +optional
+	Analyses []LiveAnalysisRun `json:"analyses,omitempty"`
+
+	// Gates are the gate instances of the step's environment for its Bundle,
+	// with their current result.
+	// +optional
+	Gates []LiveGate `json:"gates,omitempty"`
 
 	// Renders is the environment's RenderRun for this Bundle (layout:
 	// branch), at most one.
@@ -113,6 +152,36 @@ type LiveRenderRun struct {
 	KnownMarkerDigests []string `json:"knownMarkerDigests,omitempty"`
 }
 
+// StepAnalysisPolicy is a step's copy of spec.verification's verdict policy.
+type StepAnalysisPolicy struct {
+	// Inconclusive is "fail" (default) or "pass".
+	// +optional
+	Inconclusive string `json:"inconclusive,omitempty"`
+	// Timeout is the verification timeout (default 30m).
+	// +optional
+	Timeout string `json:"timeout,omitempty"`
+}
+
+// LiveAnalysisRun is the result of one Argo Rollouts AnalysisRun.
+type LiveAnalysisRun struct {
+	// Name is the AnalysisRun name.
+	Name string `json:"name"`
+	// Created is the AnalysisRun's creationTimestamp (RFC 3339). The newest
+	// run of a template is the one the step waits for.
+	// +optional
+	Created string `json:"created,omitempty"`
+	// Template is the AnalysisTemplate or ClusterAnalysisTemplate it runs.
+	// +optional
+	Template string `json:"template,omitempty"`
+	// Phase is the AnalysisRun's status.phase (Pending when it has none
+	// yet): Pending, Running, Successful, Failed, Error or Inconclusive.
+	// +optional
+	Phase string `json:"phase,omitempty"`
+	// Message is the AnalysisRun's status.message.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
 // LiveHookRun is the result of one HookRun.
 type LiveHookRun struct {
 	// Name is the HookRun name.
@@ -127,6 +196,31 @@ type LiveHookRun struct {
 	// +optional
 	Result string `json:"result,omitempty"`
 	// Message is the HookRun's status.message.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// SpecHash is the HookRun's status.specHash: which job and timeout ran.
+	// +optional
+	SpecHash string `json:"specHash,omitempty"`
+}
+
+// HookRecord is the step's own record that a hook ran for it: once a
+// HookRun's Job started, the step keeps its result here, so a HookRun
+// recreated for the same hook (deleted and applied again by the Graph) does
+// not run the Job a second time and takes the recorded result instead.
+type HookRecord struct {
+	// Hook is the hook's name in the Pipeline.
+	// +optional
+	Hook string `json:"hook,omitempty"`
+	// Phase is pre or post.
+	// +optional
+	Phase string `json:"phase,omitempty"`
+	// SpecHash is the HookRun's spec hash (job and timeout) that ran.
+	// +optional
+	SpecHash string `json:"specHash,omitempty"`
+	// Result is Running, Succeeded or Failed. Succeeded and Failed are final.
+	// +optional
+	Result string `json:"result,omitempty"`
+	// Message is the HookRun's last message.
 	// +optional
 	Message string `json:"message,omitempty"`
 }
@@ -178,7 +272,8 @@ type PromotionStepStatus struct {
 	// State is the step execution state.
 	// The Graph controller uses readyWhen expressions of the form
 	// ${step.status.state == "Verified"} to advance the promotion DAG.
-	// Verifying: the health check passed and the post-deploy hooks run.
+	// Verifying: the health check passed and the post-deploy hooks and
+	// analyses run.
 	// +kubebuilder:validation:Enum=Pending;Promoting;WaitingForMerge;HealthChecking;Verifying;Verified;Failed;AbortedByAlarm;RollingBack
 	State string `json:"state,omitempty"`
 
@@ -325,6 +420,11 @@ type PromotionStepStatus struct {
 	// Graph creates the post-deploy HookRuns once it is set.
 	// +optional
 	VerificationStartedAt *metav1.Time `json:"verificationStartedAt,omitempty"`
+
+	// HookRecords records each hook that ran for this step (HookRecord).
+	// +kubebuilder:validation:MaxItems=40
+	// +optional
+	HookRecords []HookRecord `json:"hookRecords,omitempty"`
 
 	// Steps is the per-step execution history for this PromotionStep.
 	// Populated by the reconciler as each step in the sequence starts, completes, or fails.

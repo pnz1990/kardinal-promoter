@@ -227,6 +227,8 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `scm.provider` | `""` | `--scm-provider`: `github` (default), `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops` |
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |
 | `scm.allowedRepositories` | `[]` | `--scm-allowed-repositories`: `host/repository` globs (`github.com/acme/*`, `gitlab.example.com/team/**`) the controller's SCM token may act on. Every SCM call for another repository is refused, and a Pipeline that would need the token for one is `Ready=False/RepositoryNotAllowed`. Empty allows every repository. See [Security](guides/security.md#the-shared-scm-token-and-scmallowedrepositories) |
+| `scm.gatesCommitStatus.enabled` | `true` | `--gates-commit-status`: post the gate results of a waiting pr-review step as the commit status on the commit kardinal pushed to its PR ([Gate status check](pr-evidence.md#gate-status-check-kardinalgates)). `false` posts none. |
+| `scm.gatesCommitStatus.context` | `kardinal/gates` | `--gates-status-context`: the status name branch protection requires; reserved for kardinal. |
 | `webhook.secretRef.name` / `.key` | `""` / `secret` | Secret with the SCM webhook secret (`KARDINAL_WEBHOOK_SECRET`): the HMAC key, or for GitLab and Azure DevOps the plain token |
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
@@ -249,7 +251,7 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
 | `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
 | `hooks.serviceAccounts` | `[default]` | ServiceAccounts a [hook](hooks.md)'s Pod may run as (`--hook-service-accounts`), in the Pipeline namespace. The Graph ServiceAccount is never allowed |
-| `hooks.allowPrivileged` | `false` | Allow privileged [hook](hooks.md) Pods (`--hook-allow-privileged`): privileged containers, privilege escalation, added capabilities, host namespaces and ports, hostPath volumes, nodeName |
+| `hooks.podSecurityLevel` | `baseline` | Pod Security Standard a [hook](hooks.md) Pod must meet (`--hook-pod-security-level`): `baseline`, `restricted` or `privileged` (no Pod checks); below `privileged`, `nodeName` and `hostPort` are refused too |
 | `render.image.repository`, `render.image.tag`, `render.image.digest` | `ghcr.io/pnz1990/kardinal-promoter/render`, the chart's appVersion, none | The `kardinal-render` image the render Jobs of [`layout: branch`](rendered-manifests.md#the-render-job) run (`--render-image`); with a digest, `repository@digest`. Renders never run in the controller. `image.digest` pins the controller image the same way. The render Pods get the chart's `imagePullSecrets`, which must exist in the Pipeline namespaces |
 | `render.serviceAccountName` | `kardinal-render` | ServiceAccount of the render Pods; the controller creates it, without a token, in a Pipeline namespace that has none. Bind no role to it |
 | `render.resources.limits.cpu`, `.memory` | `1`, `512Mi` | Limits of a render Job; a render that needs more memory fails |
@@ -642,7 +644,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
     yq 'del(.krocodile)' values.yaml > values-new.yaml
     ```
 
-- **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The chart ships no ValidatingAdmissionPolicy; the CRD schemas validate these fields.
+- **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The CRD schemas validate the kardinal fields; the chart's only ValidatingAdmissionPolicies are the identity policies ([Verified identity](guides/security.md#verified-identity)) and the hold-writes policy (only `pipelines/hold` may change `spec.holds`), which are always installed.
 - **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart grants `batch/jobs` (create, get, list, watch, delete) for [hooks](hooks.md) whatever it says.
 - **`--reuse-values`** fails with `additional properties 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
 
@@ -816,7 +818,8 @@ kubectl delete crd --ignore-not-found \
   hookruns.kardinal.io \
   renderruns.kardinal.io \
   promotiontemplates.kardinal.io \
-  auditevents.kardinal.io
+  auditevents.kardinal.io \
+  approvals.kardinal.io
 
 # Optional: remove kro and its CRDs (only if nothing else uses kro)
 helm uninstall kro -n kro-system

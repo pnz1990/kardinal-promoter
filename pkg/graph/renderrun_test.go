@@ -67,7 +67,9 @@ func TestBuilder_RenderRunNode(t *testing.T) {
 
 	live := hookNode(t, g, "live0prod")
 	l := live.Patch["spec"].(map[string]interface{})["live"].(map[string]interface{})
-	assert.Contains(t, l["renders"], "refRenderRuns.filter(r, r.spec.environment == \"prod\")")
+	assert.Contains(t, l["renders"], "refRenderRuns.filter(r, r.metadata.name in [\""+graph.RenderRunName("app", "app-v1", "prod")+"\"]")
+	assert.Contains(t, l["renders"], `kro.run/node-id`, "only a RenderRun kro applied")
+	assert.Contains(t, l["renders"], `r.spec.environment == "prod"`)
 	assert.NotContains(t, l, "hooks")
 }
 
@@ -123,7 +125,7 @@ func TestCompact_RefusesRendersAndHooks(t *testing.T) {
 		feature  string
 	}{
 		{name: "layout branch", pipeline: renderPipeline(), feature: "rendered manifests (layout: branch)"},
-		{name: "hooks", pipeline: hookPipeline(), feature: "hooks (environments[].hooks)"},
+		{name: "hooks", pipeline: hookPipeline(), feature: "pre- and post-deploy hooks (spec.environments[].hooks)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, []string{tc.feature}, graph.CompactUnsupported(graph.BuildInput{Pipeline: tc.pipeline}))
@@ -151,22 +153,27 @@ func TestBuilder_LiveRendersMirrorsKnownDigests(t *testing.T) {
 	require.NoError(t, err)
 	l := hookNode(t, res.Graph, "live0prod").Patch["spec"].(map[string]interface{})["live"].(map[string]interface{})
 	expr := l["renders"].(string)
+	rendered := graph.RenderRunName("app", "app-v1", "prod")
 	run := func(name string, status map[string]interface{}) map[string]interface{} {
-		return map[string]interface{}{"metadata": map[string]interface{}{"name": name},
+		return map[string]interface{}{"metadata": map[string]interface{}{"name": name,
+			"labels": map[string]interface{}{"kro.run/node-id": "render0prod"}},
 			"spec": map[string]interface{}{"environment": "prod"}, "status": status}
 	}
 	out, err := celEval(t, expr, map[string]interface{}{"refRenderRuns": []interface{}{
-		run("rr1", map[string]interface{}{"phase": "Succeeded", "knownMarkerDigests": []interface{}{"m1", "m0"},
+		run(rendered, map[string]interface{}{"phase": "Succeeded", "knownMarkerDigests": []interface{}{"m1", "m0"},
 			"result": map[string]interface{}{"commitSHA": "c", "noChanges": true}}),
-		run("rr2", map[string]interface{}{}),
+		run("forged-by-hand", map[string]interface{}{"phase": "Succeeded"}),
 	}})
 	require.NoError(t, err)
 	renders := out.([]interface{})
-	require.Len(t, renders, 2)
-	first, second := renders[0].(map[string]interface{}), renders[1].(map[string]interface{})
+	require.Len(t, renders, 1, "only the RenderRun this Graph rendered")
+	first := renders[0].(map[string]interface{})
 	assert.Equal(t, []interface{}{"m1", "m0"}, first["knownMarkerDigests"])
 	assert.Equal(t, "c", first["result"].(map[string]interface{})["commitSHA"])
 	assert.Equal(t, true, first["result"].(map[string]interface{})["noChanges"])
+	out, err = celEval(t, expr, map[string]interface{}{"refRenderRuns": []interface{}{run(rendered, map[string]interface{}{})}})
+	require.NoError(t, err)
+	second := out.([]interface{})[0].(map[string]interface{})
 	assert.Equal(t, []interface{}{}, second["knownMarkerDigests"], "none yet")
 	assert.Equal(t, "Pending", second["phase"])
 }

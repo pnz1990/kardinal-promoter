@@ -62,6 +62,30 @@ spec:
               PromotionStepSpec defines the desired state of a PromotionStep.
               PromotionStep objects are created by the Graph controller — not by users.
             properties:
+              analyses:
+                description: |-
+                  Analyses names the AnalysisTemplates of the environment's
+                  verification. A step with analyses goes from HealthChecking to
+                  Verifying and is Verified only when, for every template, the newest
+                  AnalysisRun in spec.live.analyses is Successful: a run that a later
+                  translation replaced (the template changed) is not waited for, and the
+                  timeout keeps counting from status.verificationStartedAt.
+                items:
+                  type: string
+                type: array
+              analysisPolicy:
+                description: |-
+                  AnalysisPolicy is the verification's verdict policy, copied from the
+                  Pipeline when the Graph was built, so a Pipeline edit does not change
+                  the verdict of a step in flight.
+                properties:
+                  inconclusive:
+                    description: Inconclusive is "fail" (default) or "pass".
+                    type: string
+                  timeout:
+                    description: Timeout is the verification timeout (default 30m).
+                    type: string
+                type: object
               bundleName:
                 description: BundleName is the Bundle being promoted.
                 minLength: 1
@@ -72,11 +96,67 @@ spec:
                 type: string
               live:
                 description: |-
-                  Live holds results the Graph mirrors onto the step while it runs (a
-                  patch node, not the step's template, so they keep updating after the
-                  step's own template stopped resolving). The reconciler reads only this
-                  copy, never the source objects.
+                  Live holds results the Graph mirrors onto the step while it runs, each
+                  part with its own patch node (its own field manager), not the step's
+                  template, so they keep updating after the step's own template stopped
+                  resolving: the environment's hook and analysis runs, and the current
+                  results of its gates. The reconciler reads only this copy, never the
+                  source objects; while the step's PR waits for its merge it mirrors the
+                  gates to the PR's head commit as the kardinal/gates commit status. Do
+                  not set it.
                 properties:
+                  analyses:
+                    description: Analyses are the environment's AnalysisRuns for this
+                      Bundle.
+                    items:
+                      description: LiveAnalysisRun is the result of one Argo Rollouts
+                        AnalysisRun.
+                      properties:
+                        created:
+                          description: |-
+                            Created is the AnalysisRun's creationTimestamp (RFC 3339). The newest
+                            run of a template is the one the step waits for.
+                          type: string
+                        message:
+                          description: Message is the AnalysisRun's status.message.
+                          type: string
+                        name:
+                          description: Name is the AnalysisRun name.
+                          type: string
+                        phase:
+                          description: |-
+                            Phase is the AnalysisRun's status.phase (Pending when it has none
+                            yet): Pending, Running, Successful, Failed, Error or Inconclusive.
+                          type: string
+                        template:
+                          description: Template is the AnalysisTemplate or ClusterAnalysisTemplate
+                            it runs.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  gates:
+                    description: |-
+                      Gates are the gate instances of the step's environment for its Bundle,
+                      with their current result.
+                    items:
+                      description: LiveGate is one gate instance's current result.
+                      properties:
+                        name:
+                          description: Name is the gate instance name.
+                          type: string
+                        ready:
+                          description: Ready is the instance's status.ready.
+                          type: boolean
+                        reason:
+                          description: Reason is the instance's status.reason.
+                          type: string
+                      required:
+                      - name
+                      - ready
+                      type: object
+                    type: array
                   hooks:
                     description: Hooks are the environment's HookRuns for this Bundle.
                     items:
@@ -97,6 +177,10 @@ spec:
                         result:
                           description: Result is the HookRun's status.phase (Pending
                             when it has none yet).
+                          type: string
+                        specHash:
+                          description: 'SpecHash is the HookRun''s status.specHash:
+                            which job and timeout ran.'
                           type: string
                       required:
                       - name
@@ -368,6 +452,36 @@ spec:
                   Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md).
                 format: date-time
                 type: string
+              hookRecords:
+                description: HookRecords records each hook that ran for this step
+                  (HookRecord).
+                items:
+                  description: |-
+                    HookRecord is the step's own record that a hook ran for it: once a
+                    HookRun's Job started, the step keeps its result here, so a HookRun
+                    recreated for the same hook (deleted and applied again by the Graph) does
+                    not run the Job a second time and takes the recorded result instead.
+                  properties:
+                    hook:
+                      description: Hook is the hook's name in the Pipeline.
+                      type: string
+                    message:
+                      description: Message is the HookRun's last message.
+                      type: string
+                    phase:
+                      description: Phase is pre or post.
+                      type: string
+                    result:
+                      description: Result is Running, Succeeded or Failed. Succeeded
+                        and Failed are final.
+                      type: string
+                    specHash:
+                      description: SpecHash is the HookRun's spec hash (job and timeout)
+                        that ran.
+                      type: string
+                  type: object
+                maxItems: 40
+                type: array
               lastHealthCheckAt:
                 description: |-
                   LastHealthCheckAt records when the health adapter was last called. Used to
@@ -420,7 +534,8 @@ spec:
                   State is the step execution state.
                   The Graph controller uses readyWhen expressions of the form
                   ${step.status.state == "Verified"} to advance the promotion DAG.
-                  Verifying: the health check passed and the post-deploy hooks run.
+                  Verifying: the health check passed and the post-deploy hooks and
+                  analyses run.
                 enum:
                 - Pending
                 - Promoting

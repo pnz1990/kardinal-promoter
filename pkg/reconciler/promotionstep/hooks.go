@@ -6,6 +6,7 @@ package promotionstep
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -126,52 +127,6 @@ func (r *Reconciler) holdForPreHooks(ctx context.Context, log zerolog.Logger, ba
 	return true, ctrl.Result{RequeueAfter: requeueGateWait}, nil
 }
 
-// passHealth is called when the health check (and bake window) passed: a
-// step with post-deploy hooks enters Verifying, every other step is
-// Verified. reason and message are those of the Verified condition and state
-// message.
-func (r *Reconciler) passHealth(ctx context.Context, base, ps *v1alpha1.PromotionStep, reason, message string) error {
-	if len(ps.Spec.PostHooks) == 0 {
-		return r.verify(ctx, base, ps, reason, message)
-	}
-	if ps.Status.VerificationStartedAt == nil {
-		now := metav1.NewTime(r.now().UTC())
-		ps.Status.VerificationStartedAt = &now
-	}
-	return r.transition(ctx, base, ps, StateVerifying,
-		fmt.Sprintf("%s; running %d post-deploy hook(s): %s", message, len(ps.Spec.PostHooks),
-			strings.Join(ps.Spec.PostHooks, ", ")))
-}
-
-// handleVerifying waits for the post-deploy hooks. All succeeded: Verified.
-// One failed: onHealthFailure applies (none: Failed; abort: AbortedByAlarm;
-// rollback: a rollback Bundle), as for a failed health check.
-func (r *Reconciler) handleVerifying(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
-	base := ps.DeepCopy()
-	v := hookResults(ps, ps.Spec.PostHooks)
-	switch {
-	case v.succeeded():
-		log.Info().Str("env", ps.Spec.Environment).Msg("post-deploy hooks succeeded, Verified")
-		return ctrl.Result{}, r.verify(ctx, base, ps, "PostHooksSucceeded",
-			fmt.Sprintf("post-deploy hooks succeeded: %s", strings.Join(ps.Spec.PostHooks, ", ")))
-	case v.failed != nil:
-		pipeline, err := r.loadPipeline(ctx, ps)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
-		}
-		env := findEnv(pipeline, ps.Spec.Environment)
-		log.Info().Str("hook", v.failed.String()).Str("onHealthFailure", env.OnHealthFailure).Msg("post-deploy hook failed")
-		return r.applyHealthFailurePolicy(ctx, log, base, ps, env, "post-deploy hooks", v.failMessage("post"))
-	}
-	if msg := v.waitMessage("post"); ps.Status.Message != msg {
-		ps.Status.Message = msg
-		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("patch post-hook wait message: %w", err)
-		}
-	}
-	return ctrl.Result{RequeueAfter: requeueGateWait}, nil
-}
-
 // ConditionHooksSkipped is True when hooks were added to the Pipeline after
 // this step passed the point they run at; they were not run for this
 // Bundle (their HookRuns are Skipped).
@@ -206,4 +161,46 @@ func recordSkippedHooks(ps *v1alpha1.PromotionStep, now time.Time) bool {
 		ObservedGeneration: ps.Generation, LastTransitionTime: metav1.NewTime(now),
 	})
 	return true
+}
+
+// recordHookRuns copies onto status.hookRecords each hook whose HookRun has
+// started (spec.live.hooks with a spec hash and Running, Succeeded or
+// Failed). The Graph renders the record into the hook's HookRun
+// (spec.recorded), so a HookRun deleted and applied again does not run its
+// Job a second time. A final result is never changed for the same spec hash.
+// It reports whether the records changed.
+func recordHookRuns(ps *v1alpha1.PromotionStep) bool {
+	if ps.Spec.Live == nil {
+		return false
+	}
+	changed := false
+	for _, h := range ps.Spec.Live.Hooks {
+		switch h.Result {
+		case v1alpha1.HookRunRunning, v1alpha1.HookRunSucceeded, v1alpha1.HookRunFailed:
+		default:
+			continue
+		}
+		if h.SpecHash == "" || h.Hook == "" {
+			continue
+		}
+		rec := v1alpha1.HookRecord{Hook: h.Hook, Phase: h.Phase, SpecHash: h.SpecHash, Result: h.Result, Message: h.Message}
+		i := slices.IndexFunc(ps.Status.HookRecords, func(r v1alpha1.HookRecord) bool { return r.Hook == h.Hook && r.Phase == h.Phase })
+		switch {
+		case i < 0:
+			ps.Status.HookRecords = append(ps.Status.HookRecords, rec)
+			changed = true
+		case ps.Status.HookRecords[i] == rec:
+		case ps.Status.HookRecords[i].SpecHash == rec.SpecHash && finalHookResult(ps.Status.HookRecords[i].Result):
+			// Final for this job: a later HookRun that took the recorded
+			// result reports the same, nothing to change.
+		default:
+			ps.Status.HookRecords[i] = rec
+			changed = true
+		}
+	}
+	return changed
+}
+
+func finalHookResult(r string) bool {
+	return r == v1alpha1.HookRunSucceeded || r == v1alpha1.HookRunFailed
 }

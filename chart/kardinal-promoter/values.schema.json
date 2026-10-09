@@ -159,6 +159,12 @@
             }
           }
         },
+        "gateOverrideMaxMinutes": {
+          "type": ["string", "integer"],
+          "pattern": "^$|^[1-9][0-9]*$",
+          "minimum": 1,
+          "description": "--gate-override-max-minutes: the override cap in minutes; empty keeps 1440."
+        },
         "extraArgs": {
           "type": "array",
           "items": {
@@ -262,6 +268,23 @@
             "minLength": 1
           },
           "description": "--scm-allowed-repositories: host/repository globs the controller's SCM token may act on."
+        },
+        "gatesCommitStatus": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "--gates-commit-status: post the gate results as a commit status on pr-review PRs."
+            },
+            "context": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "pattern": "^[^\\s,]+$",
+              "description": "--gates-status-context: the reserved commit status name branch protection requires."
+            }
+          }
         }
       }
     },
@@ -415,9 +438,10 @@
           "minItems": 1,
           "description": "ServiceAccount names a hook's Job Pod may run as (--hook-service-accounts)."
         },
-        "allowPrivileged": {
-          "type": "boolean",
-          "description": "Allow privileged hook Pods (--hook-allow-privileged)."
+        "podSecurityLevel": {
+          "type": "string",
+          "enum": ["baseline", "restricted", "privileged"],
+          "description": "Pod Security Standard a hook's Pod must meet (--hook-pod-security-level)."
         }
       }
     },
@@ -430,6 +454,17 @@
         }
       },
       "description": "Deprecated, no effect."
+    },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "controllerUsernames": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "pattern": "^[^*]+$"},
+          "description": "Exact usernames, besides this release's controller ServiceAccount, that run a kardinal controller."
+        }
+      }
     },
     "tracing": {
       "type": "object",

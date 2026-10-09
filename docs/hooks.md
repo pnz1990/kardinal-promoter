@@ -77,7 +77,7 @@ the shell in the container, not by kardinal or kro.
       deployed. A failed pre hook fails the step (`pre-deploy hook <name> (HookRun <run>)
       failed: ...`) and the Bundle;
     - after the health check (and any `bake` window) passed, a step with post hooks is
-      `Verifying` until they finish. All succeeded: `Verified`. One failed: the environment's
+      `Verifying` until they finish (and any [analyses](analysis.md)). All succeeded: `Verified`. One failed: the environment's
       `onHealthFailure` applies, as for a failed health check (`none` fails the step, `abort`
       stops it for a human, `rollback` rolls the environment back). The change is already
       deployed when a post hook runs; a failed post hook does not revert it by itself.
@@ -97,6 +97,12 @@ Pending ──pre hooks succeeded──▶ Promoting ─▶ (WaitingForMerge) �
   Job of that name, while it runs fails the HookRun; the hook is not started a second time. A Job
   of the HookRun's name that kardinal did not create fails it with a message naming the Job.
   Re-run a hook by promoting a new Bundle.
+- **A deleted HookRun does not run its hook again.** Deleting a HookRun while its Job runs
+  (by hand, or a namespace cleanup) holds it until the Job ends, records the result in its status
+  for 30 seconds, and only then lets it go. The step keeps each hook that ran in
+  `status.hookRecords` (hook, phase, spec hash, result). The HookRun the Graph applies again
+  takes that recorded result and creates no Job; when the earlier run's result was never seen, it
+  is `Failed` ("result unknown"), never run a second time. An edited hook (a new spec hash) runs.
 - **Pipeline edits do not change a running hook.** An edit to a hook while it runs reaches
   the HookRun's spec, but the running Job keeps the spec it started with; the HookRun gets the
   condition `SpecChangedAfterStart`. The next Bundle runs the edited hook.
@@ -127,17 +133,44 @@ the hooks need, and enforce
 [Pod Security Admission](https://kubernetes.io/docs/concepts/security/pod-security-admission/)
 `restricted` on Pipeline namespaces, as for any workload.
 
-The controller also refuses, unless it runs with `--hook-allow-privileged` (Helm
-`hooks.allowPrivileged`), a hook Pod with a privileged container, `allowPrivilegeEscalation:
-true`, added capabilities, `hostNetwork`, `hostPID`, `hostIPC`, a `hostPort`, a `hostPath`
-volume or `nodeName`. A hook in the controller's own namespace is always refused. A refused hook
-fails without a Job, and so does its step.
+The controller checks every hook Pod against a
+[Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/),
+with the same checks as the API server's PodSecurity admission
+(`k8s.io/pod-security-admission`), at the level `--hook-pod-security-level` (Helm
+`hooks.podSecurityLevel`) sets:
+
+| Level | Refuses |
+|---|---|
+| `baseline` (default) | privileged containers, `hostNetwork`, `hostPID`, `hostIPC`, `hostPath` volumes, host ports, capabilities beyond the baseline set, `/proc` mount, AppArmor, SELinux, seccomp and sysctl settings outside the baseline |
+| `restricted` | everything `baseline` refuses, plus running as root, `allowPrivilegeEscalation` not `false`, capabilities not dropped to `ALL` (only `NET_BIND_SERVICE` added back), seccomp not `RuntimeDefault` or `Localhost`, and volume types other than ConfigMap, Secret, projected, downward API, emptyDir, CSI, PVC and ephemeral |
+| `privileged` | nothing (no Pod checks) |
+
+Below `privileged`, `nodeName` (which bypasses the scheduler) and `hostPort` are refused too. A
+Job `selector` or `manualSelector`, and a hook in the controller's own namespace, are refused at
+every level. A refused hook fails without a Job, and so does its step.
+
+Ephemeral volumes (`volumes[].ephemeral`) are allowed at every level, and the Pod's
+`volumeClaimTemplate` creates a PersistentVolumeClaim in the Pipeline namespace through the
+Kubernetes ephemeral-volume controller (not as the hook's ServiceAccount), which is deleted with
+the Pod. Limit storage with a ResourceQuota on the namespace if that matters.
+
+Only HookRuns the Bundle's Graph created count. kro labels what it applies `kro.run/node-id`,
+and the Graph labels each HookRun `kardinal.io/bundle-uid` with its Bundle's UID. The controller
+never runs a HookRun without both (or whose UID is not its Bundle's), and the step reads results
+only from HookRuns with those labels whose names this Graph rendered. Labels can be copied, so
+this stops HookRuns created by mistake or by a naive script, not someone who can create HookRuns
+and reads the Bundle's UID: grant `create` on `hookruns` only to those you would let run hooks.
 
 The controller needs `create`, `get`, `list`, `watch` and `delete` on `batch/jobs` in Pipeline
 namespaces (the chart grants it) and caches only Jobs labelled `kardinal.io/hookrun`.
 
 ## What hooks cannot do
 
+- Hooks need the node Graph shape. A Pipeline whose Bundles get a
+  [compact Graph](pipeline-reference.md#large-pipelines) (more than `--graph-compact-above`
+  environments, default 100, or the annotation `kardinal.io/graph-shape: compact`) is
+  `Ready=False` and its Bundles fail with `GraphBuildFailed`, naming hooks, instead of promoting
+  without them.
 - Hooks run in the Pipeline's namespace in the cluster kardinal runs in, not in the target
   cluster of a remote environment. Reach the target through its Service or API from the Pod.
 - A pre hook runs before the step starts. When a PolicyGate turns false after the migration

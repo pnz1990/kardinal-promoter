@@ -50,14 +50,18 @@ import (
 // Node IDs of the per-Graph read-back refs. ValidateNodeIDs rejects an
 // environment whose node ID collides with them.
 const (
-	refHookRunsNodeID = "refHookRuns"
-	refStepsNodeID    = "refSteps"
+	refHookRunsNodeID     = "refHookRuns"
+	refStepsNodeID        = "refSteps"
+	refAnalysisRunsNodeID = "refAnalysisRuns"
 )
 
 // Labels on HookRuns.
 const (
 	LabelHookPhase = "kardinal.io/hook-phase"
 	LabelHook      = "kardinal.io/hook"
+	// LabelKRONodeID is the label kro's Graph executor stamps on every object
+	// it applies (kro.run/node-id, pkg/metadata/labels.go).
+	LabelKRONodeID = "kro.run/node-id"
 )
 
 // DefaultHookTimeout is the timeout of a hook that sets none.
@@ -94,16 +98,6 @@ func hooksOf(env kardinalv1alpha1.EnvironmentSpec, phase string) []kardinalv1alp
 		}
 	}
 	return out
-}
-
-// hasHooks reports whether any of envs has a hook.
-func hasHooks(pipeline *kardinalv1alpha1.Pipeline, envs []string) bool {
-	for _, name := range envs {
-		if len(findEnvSpec(pipeline, name).Hooks) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func findEnvSpec(pipeline *kardinalv1alpha1.Pipeline, name string) kardinalv1alpha1.EnvironmentSpec {
@@ -178,6 +172,7 @@ func DecodeHookJob(raw []byte) (*batchv1.JobSpec, error) {
 // hookNodesInput is what buildHookNodes needs about one environment.
 type hookNodesInput struct {
 	pipeline, bundle, namespace string
+	bundleUID                   string
 	env                         kardinalv1alpha1.EnvironmentSpec
 	stepK8sName                 string
 	// conds are the conditions under which the environment's step may be
@@ -190,16 +185,18 @@ type hookNodes struct {
 	nodes     []GraphNode
 	preHooks  []interface{} // spec.preHooks of the step
 	postHooks []interface{} // spec.postHooks of the step
+	names     []string      // the HookRun names rendered
 }
 
-// buildHookNodes returns the HookRun nodes and the mirror patch node of one
-// environment, and the step's spec.preHooks and spec.postHooks. It returns
-// nothing for an environment without hooks.
+// buildHookNodes returns the HookRun nodes of one environment, and the
+// step's spec.preHooks and spec.postHooks. It returns nothing for an
+// environment without hooks. The mirror patch node is buildLiveMirrorNode's.
 func buildHookNodes(in hookNodesInput) (hookNodes, error) {
 	var out hookNodes
 	if len(in.env.Hooks) == 0 {
 		return out, nil
 	}
+	var names []string
 	for _, phase := range []string{kardinalv1alpha1.HookPhasePre, kardinalv1alpha1.HookPhasePost} {
 		prevID := ""
 		for i, h := range hooksOf(in.env, phase) {
@@ -209,13 +206,12 @@ func buildHookNodes(in hookNodesInput) (hookNodes, error) {
 			if phase == kardinalv1alpha1.HookPhasePre {
 				conds = append(conds, in.conds...)
 			} else {
-				conds = append(conds, `bundle.status.phase != "Superseded"`,
-					fmt.Sprintf(`%s.exists(s, s.metadata.name == %s && s.?status.?verificationStartedAt.hasValue())`,
-						refStepsNodeID, strconv.Quote(in.stepK8sName)))
+				conds = append(conds, `bundle.status.phase != "Superseded"`, verifyingCond(in.stepK8sName))
 			}
 			if prevID != "" {
 				conds = append(conds, fmt.Sprintf(`%s.?status.?phase.orValue("") == "Succeeded"`, prevID))
 			}
+			names = append(names, name)
 			node, err := buildHookRunNode(id, name, in, phase, h, conds)
 			if err != nil {
 				return hookNodes{}, err
@@ -233,6 +229,7 @@ func buildHookNodes(in hookNodesInput) (hookNodes, error) {
 			prevID = id
 		}
 	}
+	out.names = names
 	return out, nil
 }
 
@@ -256,6 +253,9 @@ func buildHookRunNode(id, name string, in hookNodesInput, phase string,
 		// A hook added to the Pipeline after its step passed the point it
 		// runs at is Skipped by its reconciler, not run out of order.
 		"stepAdvanced": stepAdvanced(in.stepK8sName, phase),
+		// What the step recorded for this hook, when one ran before (a
+		// HookRun deleted and applied again does not run its Job twice).
+		"recorded": hookRecorded(in.stepK8sName, phase, h.Name),
 	}
 	if h.Timeout != "" {
 		spec["timeout"] = h.Timeout
@@ -273,61 +273,13 @@ func buildHookRunNode(id, name string, in hookNodesInput, phase string,
 					"kardinal.io/environment": in.env.Name,
 					LabelHookPhase:            phase,
 					LabelHook:                 h.Name,
+					LabelBundleUID:            in.bundleUID,
 				},
 			},
 			"spec": spec,
 		},
 		ReadyWhen: []string{fmt.Sprintf(`${%s.?status.?phase.orValue("") == "Succeeded"}`, id)},
 	}, nil
-}
-
-// buildLiveMirrorNode builds the patch node that writes env's HookRun
-// results (spec.live.hooks) and RenderRun (spec.live.renders) onto its
-// PromotionStep.
-func buildLiveMirrorNode(env, stepK8sName string, withHooks, withRenders bool) GraphNode {
-	live := map[string]interface{}{}
-	if withHooks {
-		live["hooks"] = fmt.Sprintf(`${%s.filter(h, h.spec.environment == %s).map(h, {"name": h.metadata.name, "hook": h.spec.hook, `+
-			`"phase": h.spec.phase, "result": h.?status.?phase.orValue("Pending"), "message": h.?status.?message.orValue("")})}`,
-			refHookRunsNodeID, strconv.Quote(env))
-	}
-	if withRenders {
-		live["renders"] = liveRendersExpr(env)
-	}
-	return GraphNode{
-		ID: liveNodeID(env),
-		Patch: map[string]interface{}{
-			"apiVersion": "kardinal.io/v1alpha1",
-			"kind":       "PromotionStep",
-			"metadata":   map[string]interface{}{"name": stepK8sName},
-			"spec":       map[string]interface{}{"live": live},
-		},
-	}
-}
-
-// hookRefNodes returns the selector refs that read the Bundle's HookRuns and
-// PromotionSteps back into the Graph.
-func hookRefNodes(pipeline, bundle, namespace string) []GraphNode {
-	ref := func(id, kind string) GraphNode {
-		return GraphNode{ID: id, Ref: map[string]interface{}{
-			"apiVersion": "kardinal.io/v1alpha1",
-			"kind":       kind,
-			"metadata": map[string]interface{}{
-				"namespace": namespace,
-				"selector": map[string]interface{}{"matchLabels": map[string]interface{}{
-					"kardinal.io/pipeline": pipeline,
-					"kardinal.io/bundle":   bundle,
-				}},
-			},
-		}}
-	}
-	return []GraphNode{ref(refHookRunsNodeID, "HookRun"), ref(refStepsNodeID, "PromotionStep")}
-}
-
-// stepsRefNode is the selector ref that reads the Bundle's PromotionSteps
-// back (refSteps), for a Graph that renders but has no hooks.
-func stepsRefNode(pipeline, bundle, namespace string) GraphNode {
-	return hookRefNodes(pipeline, bundle, namespace)[1]
 }
 
 // literalStrings returns v with every string that contains "${" replaced by
@@ -376,21 +328,6 @@ func stepConds(held string, upstreams, gateNames []string, gateReady func(name s
 	return conds
 }
 
-// attachHooks writes spec.preHooks and spec.postHooks onto a PromotionStep
-// node.
-func attachHooks(step GraphNode, hooks hookNodes) {
-	spec, ok := step.Template["spec"].(map[string]interface{})
-	if !ok {
-		return
-	}
-	if len(hooks.preHooks) > 0 {
-		spec["preHooks"] = hooks.preHooks
-	}
-	if len(hooks.postHooks) > 0 {
-		spec["postHooks"] = hooks.postHooks
-	}
-}
-
 // stepAdvanced is the HookRun's spec.stepAdvanced: whether the step already
 // passed the point a hook of phase runs at (started, for a pre hook;
 // finished, for a post hook), read through refSteps.
@@ -402,23 +339,38 @@ func stepAdvanced(stepK8sName, phase string) string {
 	return fmt.Sprintf(`${%s.exists(s, s.metadata.name == %s && %s)}`, refStepsNodeID, strconv.Quote(stepK8sName), states)
 }
 
-// The compact shape does not build HookRun nodes or the live mirror patch: a
-// hook waits on its PromotionStep node, which the compact shape folds into
-// the PromotionSteps collection. A Pipeline with hooks is built in the node
-// shape, or refused (compactUnsupported).
+// hookRecorded is a HookRun's spec.recorded: the step's
+// status.hookRecords entry for hook in phase, one string field at a time
+// ("" when the step has none or does not exist yet). Each is a join over
+// the (at most one) matching step and record, so every expression is a
+// string whatever matches: kro type-checks a conditional's branches
+// against the HookRun schema.
+func hookRecorded(stepK8sName, phase, hook string) map[string]interface{} {
+	field := func(f string) string {
+		return fmt.Sprintf(`${%s.filter(s, s.metadata.name == %s).map(s, s.?status.?hookRecords.orValue([]).filter(r, `+
+			`r.?hook.orValue("") == %s && r.?phase.orValue("") == %s).map(r, r.?%s.orValue(""))).map(l, l.join("")).join("")}`,
+			refStepsNodeID, strconv.Quote(stepK8sName), strconv.Quote(hook), strconv.Quote(phase), f)
+	}
+	return map[string]interface{}{"specHash": field("specHash"), "result": field("result"), "message": field("message")}
+}
+
+// The compact shape does not build HookRun nodes or the mirror patch node:
+// both are per environment and read the environment's step node, which the
+// compact shape folds into the PromotionSteps collection. A Pipeline with
+// hooks is built in the node shape, or refused (compactUnsupported).
 func init() {
 	RegisterCompactUnsupported(hooksUsed)
 }
 
-// hooksUsed returns the feature name when an environment of the Pipeline has
-// hooks.
+// hooksUsed returns the feature name when an environment of the Pipeline
+// has hooks.
 func hooksUsed(in BuildInput) string {
 	if in.Pipeline == nil {
 		return ""
 	}
-	for _, e := range in.Pipeline.Spec.Environments {
-		if len(e.Hooks) > 0 {
-			return "hooks (environments[].hooks)"
+	for _, env := range in.Pipeline.Spec.Environments {
+		if len(env.Hooks) > 0 {
+			return "pre- and post-deploy hooks (spec.environments[].hooks)"
 		}
 	}
 	return ""

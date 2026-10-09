@@ -165,6 +165,7 @@ func buildRenderRunNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1a
 					"kardinal.io/pipeline":    pipeline.Name,
 					"kardinal.io/bundle":      bundle.Name,
 					"kardinal.io/environment": env.Name,
+					LabelBundleUID:            string(bundle.UID),
 				},
 			},
 			"spec": spec,
@@ -172,32 +173,20 @@ func buildRenderRunNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1a
 	}, nil
 }
 
-// renderRefNode is the selector ref that reads the Bundle's RenderRuns.
-func renderRefNode(pipeline, bundle, namespace string) GraphNode {
-	return GraphNode{ID: refRenderRunsNodeID, Ref: map[string]interface{}{
-		"apiVersion": "kardinal.io/v1alpha1",
-		"kind":       "RenderRun",
-		"metadata": map[string]interface{}{
-			"namespace": namespace,
-			"selector": map[string]interface{}{"matchLabels": map[string]interface{}{
-				"kardinal.io/pipeline": pipeline,
-				"kardinal.io/bundle":   bundle,
-			}},
-		},
-	}}
-}
-
-// liveRendersExpr is the spec.live.renders value of env's mirror node.
-func liveRendersExpr(env string) string {
+// liveRendersExpr is the spec.live.renders value of env's mirror node: the
+// RenderRun this build rendered (name), applied by kro for this Bundle
+// (genuineFilter), so a RenderRun created by hand is not a result.
+func liveRendersExpr(env, name, bundleUID string) string {
 	res := func(field, zero string) string {
 		return fmt.Sprintf(`"%s": r.?status.?result.?%s.orValue(%s)`, field, field, zero)
 	}
 	result := "{" + strings.Join([]string{res("commitSHA", `""`), res("branch", `""`), res("dryCommit", `""`),
 		res("renderer", `""`), res("objects", "0"), res("markerDigest", `""`), res("noChanges", "false"),
 		res("driftOverwritten", `""`)}, ", ") + "}"
-	return fmt.Sprintf(`${%s.filter(r, r.spec.environment == %s).map(r, {"name": r.metadata.name, `+
+	return fmt.Sprintf(`${%s.filter(r, %s && r.spec.environment == %s).map(r, {"name": r.metadata.name, `+
 		`"phase": r.?status.?phase.orValue("Pending"), "message": r.?status.?message.orValue(""), `+
-		`"knownMarkerDigests": r.?status.?knownMarkerDigests.orValue([]), "result": %s})}`, refRenderRunsNodeID, strconv.Quote(env), result)
+		`"knownMarkerDigests": r.?status.?knownMarkerDigests.orValue([]), "result": %s})}`,
+		refRenderRunsNodeID, genuineFilter("r", []string{name}, bundleUID), strconv.Quote(env), result)
 }
 
 // The compact shape does not build RenderRun nodes or the live mirror patch:

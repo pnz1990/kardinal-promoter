@@ -4,6 +4,8 @@
 
 A Bundle is an immutable, versioned snapshot of what to deploy. It contains container image references (tag and digest), optionally a Helm chart version or Git commit SHA, and build provenance (who built it, what commit, which CI run).
 
+The API server enforces the immutability: an update that changes `spec.type`, `spec.pipeline`, `spec.images`, `spec.chart`, `spec.configRef`, `spec.provenance` or `spec.intent` is refused (`spec.<field> is immutable: create a new Bundle`), because gates and verifications were evaluated against the artifact, and an intent edit would take effect only at a later re-translation. Labels and annotations stay editable. To promote a different artifact, or to another target, create a new Bundle; it supersedes the older one.
+
 Bundles are created by your CI pipeline after building and pushing an image. All creation paths produce the same CRD in etcd:
 
 ```bash
@@ -28,6 +30,7 @@ kubectl apply -f bundle.yaml
 | Verified | Successfully promoted to all target environments |
 | Failed | A promotion step or health check failed, kro rejected the Graph, or the Pipeline, the Bundle (its intent, or no images or config commit for its type) or a PolicyGate cannot be built into a Graph (condition `InvalidSpec`, with the reason). A Failed Bundle promotes again when the failed step is retried or, for `InvalidSpec`, when the Pipeline changes or, for reason `GraphBuildFailed`, a PolicyGate that applies to one of its environments changes |
 | Superseded | Replaced by a newer Bundle |
+| Rejected | Rejected with `kardinal reject` (`spec.rejected`): never promoted again, its unfinished steps are cancelled, and rollback never picks it. Final. See [Reject a Bundle](rollback.md#reject-a-bundle) |
 
 ### Bundle supersession
 
@@ -160,6 +163,9 @@ spec:
   intent:
     skipEnvironments: [staging]  # skip staging (if an org gate applies to staging, a skip-permission gate in an org policy namespace must allow it; see Skip permissions)
 ```
+
+The intent is set when the Bundle is created and cannot be changed afterwards. To change the
+target, create a new Bundle (or use `kardinal promote`, which creates one).
 
 ## Pipeline
 
@@ -295,7 +301,7 @@ kardinal explain my-app --env prod
 ```
 
 Gates that are not ready come first. STATE is Pass, Block (holding the
-Bundle), Superseded, Pending or Waiting; REASON is the controller's latest
+Bundle), Superseded, Rejected, Pending or Waiting; REASON is the controller's latest
 evaluation. See [Inspecting PolicyGates](policy-gates.md#inspecting-policygates).
 
 ### Skip permissions
@@ -455,6 +461,9 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 | `PromotionSucceeded` | Health check passes and the step reaches Verified |
 | `PromotionFailed` | The step reaches Failed or AbortedByAlarm |
 | `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion (a step that had not started writes none) |
+| `PromotionRejected` | `kardinal reject` cancels an in-flight promotion (a step that had not started writes none) |
+| `GateOverridden` | An override is recorded on a gate instance (`kardinal override` or the UI), once per override, with its verified author |
+| `ApprovalRecorded` / `ApprovalRevoked` | A decision (`kardinal approve`) appears in, or leaves, an approval gate instance, with the approver and whether it counts |
 | `GateEvaluated` | A PolicyGate instance is first evaluated, and each later change of readiness (outcome `Failure` when blocked, `Success` when allowed) |
 | `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
 | `RollbackSucceeded` | A step of a rollback Bundle (from any rollback path) reaches Verified, besides `PromotionSucceeded`; one per step |

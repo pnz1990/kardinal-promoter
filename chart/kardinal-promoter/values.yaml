@@ -135,6 +135,11 @@ controller:
     # the client address (--access-log-trusted-proxies). Other clients'
     # X-Forwarded-For is ignored.
     trustedProxies: []
+
+  # -- Longest a gate override counts, in minutes from when the controller
+  # first saw it (--gate-override-max-minutes): an override ends at the
+  # earlier of its expiresAt and this cap. Empty keeps the default, 1440 (24h).
+  gateOverrideMaxMinutes: ""
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).
@@ -212,6 +217,18 @@ github:
 # -- SCM provider (--scm-provider): github (default when empty), gitlab,
 # forgejo, gitea, bitbucket or azuredevops, and its API base URL
 # (--scm-api-url) for self-hosted instances. See docs/scm-providers.md.
+
+# Identity admission policies (templates/identity-admission.yaml,
+# docs/guides/security.md#verified-identity).
+admission:
+  # -- Usernames, besides this release's controller ServiceAccount, that run
+  # a kardinal controller: they may name any Bundle's kardinal.io/created-by
+  # and write the objects a promotion Graph manages. Exact usernames only,
+  # for example "system:serviceaccount:kardinal-system:kardinal-promoter-b";
+  # there are no wildcards. Never list a ServiceAccount of a tenant's
+  # namespace: whoever can mint tokens for a listed ServiceAccount passes
+  # these checks.
+  controllerUsernames: []
 scm:
   provider: ""
   apiURL: ""
@@ -225,6 +242,14 @@ scm:
   # environment). Empty allows every repository the token can write to, and
   # the controller logs a warning at startup. See docs/guides/security.md.
   allowedRepositories: []
+  # -- The gate results of a waiting pr-review step as a commit status on the
+  # commit kardinal pushed to its PR (docs/pr-evidence.md). enabled: false
+  # (--gates-commit-status=false) posts none, for a token without the
+  # commit-status permission. context (--gates-status-context) is the status
+  # name branch protection requires; it is reserved for kardinal.
+  gatesCommitStatus:
+    enabled: true
+    context: kardinal/gates
 
 # -- Webhook secret for :8083/webhook/scm (KARDINAL_WEBHOOK_SECRET): the HMAC
 # key, or for GitLab and Azure DevOps the plain token the SCM sends.
@@ -338,11 +363,13 @@ hooks:
   # Graph ServiceAccount (graph.serviceAccountName) is never allowed.
   serviceAccounts:
     - default
-  # -- Allow hook Pods to be privileged: privileged containers, privilege
-  # escalation, added capabilities, host namespaces and ports, hostPath
-  # volumes, nodeName (--hook-allow-privileged). A hook that uses one fails
-  # while this is false.
-  allowPrivileged: false
+  # -- Pod Security Standard a hook's Pod must meet (--hook-pod-security-level):
+  # baseline (no privileged containers, host namespaces, hostPath volumes,
+  # added capabilities beyond the baseline set...), restricted (also non-root,
+  # no privilege escalation, seccomp RuntimeDefault, all capabilities
+  # dropped), or privileged (no Pod checks). Below privileged, nodeName and
+  # hostPort are refused too. A hook that breaks it fails without running.
+  podSecurityLevel: baseline
 
 # -- Rendered manifests (layout: branch, docs/rendered-manifests.md). Each
 # render runs as a Job in the Pipeline's namespace from this image, never in
@@ -383,9 +410,11 @@ render:
     # e.g. [{to: [{ipBlock: {cidr: 140.82.112.0/20}}], ports: [{port: 443, protocol: TCP}]}].
     gitEgress: []
 
-# -- Deprecated, no effect. The chart no longer ships ValidatingAdmissionPolicies;
-# the CRD schemas validate these fields instead. Kept so existing
-# --set validatingAdmissionPolicy.enabled=... keeps working.
+# -- Deprecated, no effect. The CRD schemas validate the kardinal fields. The
+# chart always ships the identity ValidatingAdmissionPolicies
+# (templates/identity-admission.yaml), which pin the user a record names
+# (spec.rejected.by) to the requesting user; they cannot be turned off. Kept
+# so existing --set validatingAdmissionPolicy.enabled=... keeps working.
 validatingAdmissionPolicy:
   enabled: true
 

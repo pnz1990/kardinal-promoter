@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
 )
 
@@ -49,12 +50,25 @@ func jobJSON(sa string) string {
 
 func newHookRun(job string) *v1alpha1.HookRun {
 	return &v1alpha1.HookRun{
-		ObjectMeta: metav1.ObjectMeta{Name: "app-v1-prod-pre-migrate", Namespace: ns, UID: types.UID("hr-uid")},
+		ObjectMeta: metav1.ObjectMeta{Name: "app-v1-prod-pre-migrate", Namespace: ns, UID: types.UID("hr-uid"),
+			Labels: genuine(nil)},
 		Spec: v1alpha1.HookRunSpec{
 			PipelineName: "app", BundleName: "v1", Environment: "prod", Hook: "migrate", Phase: "pre",
 			Job: runtime.RawExtension{Raw: []byte(job)}, Timeout: "10m",
 		},
 	}
+}
+
+// testBundleUID is the UID of the Bundle "v1" every harness has.
+const testBundleUID = "bundle-uid"
+
+// genuine adds the labels kro and the Graph put on a HookRun to labels.
+func genuine(labels map[string]string) map[string]string {
+	out := map[string]string{graph.LabelKRONodeID: "hook0pre0prod0migrate", graph.LabelBundleUID: testBundleUID}
+	for k, v := range labels {
+		out[k] = v
+	}
+	return out
 }
 
 type harness struct {
@@ -70,7 +84,8 @@ func newHarness(t *testing.T, objs ...client.Object) *harness {
 	h := &harness{t: t, now: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)}
 	h.c = fake.NewClientBuilder().WithScheme(scheme(t)).
 		WithStatusSubresource(&v1alpha1.HookRun{}, &batchv1.Job{}).
-		WithObjects(objs...).
+		WithObjects(append(objs, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "v1", Namespace: ns, UID: testBundleUID},
+			Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app"}})...).
 		WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			if _, ok := obj.(*batchv1.Job); ok {
 				obj.SetUID(uuid.NewUUID())

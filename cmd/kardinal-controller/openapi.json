@@ -136,6 +136,16 @@
           "provenance": {
             "$ref": "#/components/schemas/BundleProvenance"
           },
+          "rejectedLiveEnvironments": {
+            "description": "RejectedLiveEnvironments are the environments where this Rejected Bundle's change is live (lifecycle.RejectedLiveEnvs): the UI keeps it current there, marked Rejected, with a roll-back hint.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "type": {
             "type": "string"
           }
@@ -891,6 +901,10 @@
           "createdBy": {
             "type": "string"
           },
+          "createdByVerified": {
+            "description": "CreatedByVerified is true when the chart's identity admission policy checked createdBy (status.overrides): false for an override recorded while the policy was not bound, or before the upgrade that added it.",
+            "type": "boolean"
+          },
           "expiresAt": {
             "type": "string"
           },
@@ -902,6 +916,7 @@
           }
         },
         "required": [
+          "createdByVerified",
           "reason"
         ],
         "type": "object"

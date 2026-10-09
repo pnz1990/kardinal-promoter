@@ -12,6 +12,7 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 
 | Kind | Resource | Scope | Short names |
 |---|---|---|---|
+| [Approval](#approval) | `approvals.kardinal.io` | Namespaced | `appr` |
 | [AuditEvent](#auditevent) | `auditevents.kardinal.io` | Namespaced | `ae`, `audit` |
 | [Bundle](#bundle) | `bundles.kardinal.io` | Namespaced | `bnd` |
 | [ChangeWindow](#changewindow) | `changewindows.kardinal.io` | Cluster | `cw` |
@@ -27,6 +28,23 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [ScheduleClock](#scheduleclock) | `scheduleclocks.kardinal.io` | Namespaced | `sclock` |
 | [Subscription](#subscription) | `subscriptions.kardinal.io` | Namespaced | `sub` |
 
+## Approval
+
+`kardinal.io/v1alpha1`
+
+Approval records that a person approved, or rejected, a Bundle for an environment. The promotion Graph copies the Approvals of its Bundle into the approval gates of that environment (PolicyGate spec.approvals), and the PolicyGate reconciler counts them against spec.approval.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object | yes | ApprovalSpec is one person's decision on one Bundle in one environment. An Approval is created by kardinal approve and never changed: delete it to revoke the decision. The chart's ValidatingAdmissionPolicy admits it only when spec.user is the requesting user, spec.groups are among the requester's groups, and the kardinal.io/bundle and kardinal.io/environment labels match spec.bundle and spec.environment. |
+| `spec.bundle` | string | yes | Bundle is the name of the Bundle the decision is about, in the Approval's namespace. |
+| `spec.bundleUID` | string | yes | BundleUID is the UID of that Bundle: the Graph counts the Approval only for the Bundle with this UID, so an Approval cannot carry over to a new Bundle that reuses the name. |
+| `spec.comment` | string |  | Comment is a free-form note shown with the decision. Default: ``. |
+| `spec.decision` | string | yes | Decision is approve, or reject: a reject from an allowed approver blocks the gate whatever the other approvals. One of: `approve`, `reject`. Default: `approve`. |
+| `spec.environment` | string | yes | Environment is the Pipeline environment the decision is for. |
+| `spec.groups` | []string |  | Groups are the approver's Kubernetes groups that count for the gate's approval.allowedGroups. Each must be one of the requester's groups. Default: `[]`. |
+| `spec.user` | string | yes | User is the Kubernetes username of the approver, as the API server authenticates them (kubectl auth whoami). |
+
 ## AuditEvent
 
 `kardinal.io/v1alpha1`
@@ -36,7 +54,7 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | AuditEventSpec defines the immutable record of a single promotion event. AuditEvents are created by the PromotionStep and PolicyGate reconcilers at key lifecycle transitions (started, succeeded, failed). The spec is set at creation; the CRD rejects any later change to it. |
-| `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "HoldCreated", "HoldReleased". HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `HoldCreated`, `HoldReleased`. |
+| `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`. |
 | `spec.bundleName` | string | yes | BundleName is the name of the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment name where the event occurred. |
 | `spec.message` | string |  | Message is a human-readable description of the event. |
@@ -52,7 +70,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `spec` | object |  | BundleSpec defines the desired state of a Bundle. An image Bundle deploys only its images, so a configRef on it is refused instead of ignored (#1353). Bundles stored before the rule keep working: CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest supported) lets an update through when spec is unchanged. |
+| `spec` | object |  | BundleSpec defines the desired state of a Bundle. An image Bundle deploys only its images, so a configRef on it is refused instead of ignored (#1353). Bundles stored before the rule keep working: CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest supported) lets an update through when spec is unchanged. A Bundle's spec is immutable: spec.type, spec.pipeline, spec.images, spec.chart, spec.configRef, spec.provenance and spec.intent cannot change after creation. The artifact is what gates, verifications and evidence were checked against, and an intent edit would apply only at some later, unrelated re-translation of the Graph; to promote something else, or to another target, create a new Bundle. The rules are transition rules, so they run only on update. |
 | `spec.chart` | object |  | Chart is the Helm chart version a "chart" Bundle promotes. The helm-set-image step writes chart.version at update.helm.chartVersionPath. |
 | `spec.chart.digest` | string |  | Digest is the chart package digest (index.yaml digest, or the OCI manifest digest). |
 | `spec.chart.name` | string | yes | Name is the chart name: letters, digits, ".", "_" and "-", starting and ending with a letter or digit. It is joined into the chart's index and OCI paths, so a "/", "]" or other path character would point the version lookup elsewhere. |
@@ -75,6 +93,10 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle: 4 to 64 hex characters, or an image digest (a Subscription records the digest it found). |
 | `spec.provenance.rollbackOf` | string |  | RollbackOf is the name of the Bundle this Bundle rolls back (if any). |
 | `spec.provenance.timestamp` | string (date-time) |  | Timestamp is when the bundle was built. |
+| `spec.rejected` | object |  | Rejected marks the Bundle as rejected (kardinal reject): it is never promoted again, its in-flight steps are cancelled, and rollback, promote and Subscriptions skip any Bundle carrying its artifacts. Setting it is one-way: it cannot be changed or removed. The chart's ValidatingAdmissionPolicy requires rejected.by to be the requesting user; without that policy nothing checks it. |
+| `spec.rejected.at` | string (date-time) |  | At is when the Bundle was rejected. |
+| `spec.rejected.by` | string | yes | By is the Kubernetes username of whoever rejected the Bundle. The chart's ValidatingAdmissionPolicy (kardinal-identity) admits a new rejection only when by equals the requesting user's username. |
+| `spec.rejected.reason` | string | yes | Reason says why the Bundle was rejected. |
 | `spec.type` | string | yes | Type classifies the bundle content. Supersession rule (BU-4): each bundle type supersedes only bundles of the same type. An image bundle does NOT supersede a config bundle and vice versa. This allows image and config promotions to coexist independently in the same pipeline. A chart Bundle promotes a Helm chart version (spec.chart) with update.strategy helm. One of: `image`, `config`, `mixed`, `chart`. |
 | `status` | object |  | BundleStatus defines the observed state of a Bundle. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
@@ -95,9 +117,16 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.metrics.bakeResets` | integer |  | BakeResets is the total number of bake timer resets across all environments. High bake reset count indicates flaky health or over-sensitive bake windows. |
 | `status.metrics.commitToProductionMinutes` | integer (int64) |  | CommitToProductionMinutes is the time from Bundle creation to the last environment reaching Verified. Indicates total promotion pipeline latency. |
 | `status.metrics.operatorInterventions` | integer |  | OperatorInterventions is the number of PolicyGate overrides recorded on this Bundle's gate instances (kardinal override), counted when the Bundle becomes Verified. |
-| `status.phase` | string |  | Phase is the bundle promotion phase. One of: `Available`, `Promoting`, `Verified`, `Failed`, `Superseded`. |
+| `status.phase` | string |  | Phase is the bundle promotion phase. Rejected is final: spec.rejected is set, and nothing of this Bundle is promoted again. One of: `Available`, `Promoting`, `Verified`, `Failed`, `Superseded`, `Rejected`. |
 | `status.pipelineSpecHash` | string |  | PipelineSpecHash is the SHA-256 hash of the Pipeline spec (spec.paused excluded) the Graph was last built from. When the Bundle reconciler is re-queued by a Pipeline watch event, it compares the current Pipeline spec hash to this field. A mismatch re-translates the Graph in place with the updated spec. |
 | `status.policyGatesHash` | string |  | PolicyGatesHash is the SHA-256 hash of the PolicyGate templates that apply to the Pipeline's environments, recorded when the Graph could not be built (InvalidSpec, reason GraphBuildFailed). A change to those templates retries the Bundle, as a Pipeline change does. Empty otherwise. |
+| `status.rejectedArtifacts` | object |  | RejectedArtifacts is what a rejection (spec.rejected) rejects: the artifacts of this Bundle that differ from what was Verified before it in the environments it reached, written by the Bundle reconciler when it marks the Bundle Rejected. A sidecar the Bundle carries unchanged is not in it, so rolling back to the Bundle before stays possible. Unset (a rejection not processed yet) means all of the Bundle's artifacts. |
+| `status.rejectedArtifacts.comparedWith` | []string |  | ComparedWith names, per environment, the Verified Bundle the artifacts were compared with ("&lt;env&gt;=&lt;bundle&gt;"); empty when no environment had one, and then every artifact is rejected. |
+| `status.rejectedArtifacts.configCommitSHA` | string |  | ConfigCommitSHA is the rejected config commit, when it differs. |
+| `status.rejectedArtifacts.images` | []object |  | Images are the rejected images: those not Verified, with the same digest (or tag, without a digest), before this Bundle in every environment it reached. |
+| `status.rejectedArtifacts.images[].digest` | string |  | Digest is the image digest (sha256:...), in the OCI digest grammar. |
+| `status.rejectedArtifacts.images[].repository` | string | yes | Repository is the image repository (e.g. "ghcr.io/nginx/nginx"). |
+| `status.rejectedArtifacts.images[].tag` | string |  | Tag is the image tag, in the OCI distribution grammar: up to 128 characters of [A-Za-z0-9_.-], not starting with "." or "-". |
 | `status.retiredAt` | string (date-time) |  | RetiredAt is when the Bundle's Graph was retired: set in the same write as RetiredSteps, and never cleared. A Bundle with RetiredAt is final; the GraphRetired condition only shows the retirement's progress. |
 | `status.retiredSteps` | []object |  | RetiredSteps records the PromotionSteps of a Bundle whose Graph was retired (condition GraphRetired=True). Deleting a finished Bundle's Graph deletes the PromotionSteps, PolicyGate instances and PRStatuses it created, so kro does not hold every finished Graph in memory (#1492). Rollback, promote, history, metrics, the CLI and the UI read these records where they read the steps of a Bundle that is still promoting. |
 | `status.retiredSteps[].createdAt` | string (date-time) | yes | CreatedAt is the PromotionStep's creationTimestamp. |
@@ -155,6 +184,10 @@ HookRun is one run of a pre- or post-deploy hook (a Kubernetes Job) for one Bund
 | `spec.job` | object | yes | Job is the batch/v1 JobSpec to run (see HookSpec.Job). |
 | `spec.phase` | string | yes | Phase is "pre" or "post" (see HookSpec.Phase). One of: `pre`, `post`. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline the hook belongs to. |
+| `spec.recorded` | object |  | Recorded is set by the Graph from the step's status.hookRecords: the result the step recorded for this hook, when one ran before. A HookRun that starts with a record of its own spec hash does not run the Job again: it takes the recorded result (Succeeded or Failed), or Failed when the earlier run was deleted while it ran (result unknown). It is not part of the spec hash. |
+| `spec.recorded.message` | string |  | Message is the recorded run's last message. |
+| `spec.recorded.result` | string |  | Result is Running, Succeeded or Failed. |
+| `spec.recorded.specHash` | string |  | SpecHash is the spec hash of the recorded run. |
 | `spec.stepAdvanced` | boolean |  | StepAdvanced is set by the Graph from the step's state: true once the step passed the point this hook runs at (started, for a pre hook; finished, for a post hook). A HookRun that starts with it set is Skipped: a hook added to the Pipeline too late for this Bundle does not run out of order. It is not part of the spec hash. |
 | `spec.timeout` | string |  | Timeout is the hook timeout (see HookSpec.Timeout). |
 | `status` | object |  | HookRunStatus is the observed state of a HookRun. |
@@ -407,6 +440,15 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].update.yaml.updates[].image` | string |  | Image is the repository of the Bundle image whose value is written, for example "ghcr.io/org/app". It may be empty when the Bundle has exactly one image. |
 | `spec.environments[].update.yaml.updates[].path` | string | yes | Path is the key path of the scalar to set, in the grammar chartVersionPath uses too: keys separated by "." (a leading "." is optional), "[N]" to index a list and "[field=value]" for the list element whose field has that value, for example "image.tag", "spec.template.spec.containers[0].image" or "spec.template.spec.containers[name=app].image". A digits-only key indexes a list when it reaches one. Missing mapping keys are created; list elements are not. A key that contains "." is not supported. |
 | `spec.environments[].update.yaml.updates[].value` | string |  | Value is what to write: tag (default), digest, tagWithDigest ("&lt;tag&gt;@&lt;digest&gt;"), image ("&lt;repository&gt;:&lt;tag&gt;"), or imageWithDigest ("&lt;repository&gt;:&lt;tag&gt;@&lt;digest&gt;", or "&lt;repository&gt;@&lt;digest&gt;" without a tag). A value the image does not have (a digest of a tag-only image) fails the step. One of: `tag`, `digest`, `tagWithDigest`, `image`, `imageWithDigest`. |
+| `spec.environments[].verification` | object |  | Verification runs Argo Rollouts analyses after the environment passed its health check: one AnalysisRun per template, with the Bundle's version and environment as args. The environment is Verified only when every analysis is Successful. Needs Argo Rollouts' CRDs: without them the Bundle fails (it never promotes unverified). See docs/analysis.md. |
+| `spec.environments[].verification.analysisTemplates` | []object | yes | AnalysisTemplates are the templates to run, each as its own AnalysisRun. |
+| `spec.environments[].verification.analysisTemplates[].kind` | string |  | Kind is AnalysisTemplate (default) or ClusterAnalysisTemplate. One of: `AnalysisTemplate`, `ClusterAnalysisTemplate`. |
+| `spec.environments[].verification.analysisTemplates[].name` | string | yes | Name is the template name. |
+| `spec.environments[].verification.args` | []object |  | Args set template args by name. They take precedence over the args kardinal sets (bundle, pipeline, environment, image, tag, digest, commit) and over the template's defaults. Only args a template declares are passed to its AnalysisRun. |
+| `spec.environments[].verification.args[].name` | string | yes | Name is the arg name the template declares. |
+| `spec.environments[].verification.args[].value` | string | yes | Value is the arg value. |
+| `spec.environments[].verification.inconclusive` | string |  | Inconclusive is what an Inconclusive AnalysisRun counts as: "fail" (default) or "pass". One of: `fail`, `pass`. |
+| `spec.environments[].verification.timeout` | string |  | Timeout bounds the analyses from the moment the environment entered Verifying. An analysis still running then fails the environment. Empty or "0" means 30m. |
 | `spec.environments[].waitForMergeTimeout` | string |  | WaitForMergeTimeout is the maximum duration a PromotionStep will wait in the WaitingForMerge state before transitioning to Failed. When not set or zero, the step waits indefinitely (no timeout). Accepts Go duration strings: "24h", "72h", "168h", etc. |
 | `spec.environments[].wave` | integer |  | Wave assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. An environment of a wave depends on every environment of the next lower wave present; gaps in the numbering (10, 20, 30) are allowed and create no roots. Without DependsOn, a wave also follows the last environment without a wave listed before its first environment, so a wave after "staging" starts once staging is verified, and an environment without a wave follows the environment listed before it, or every environment of that one's wave. DependsOn replaces these list-order edges but never the edges to the previous wave. Only the first listed environment is a root unless DependsOn says otherwise. |
 | `spec.git` | object | yes | Git holds the shared GitOps repository configuration for all environments in this pipeline. |
@@ -473,12 +515,25 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | PolicyGateSpec defines the desired state of a PolicyGate. |
+| `spec.approval` | object |  | Approval makes the gate wait for people: it is ready only when its expression is true and at least approval.required allowed people have approved the Bundle for the environment (kardinal approve), and none of them rejected it. Copied from the template to every gate instance. For a gate that only waits for approvals, use the expression "true". |
+| `spec.approval.allowedGroups` | []string |  | AllowedGroups are Kubernetes groups: an approval counts when one of the approval's groups is listed. With neither allowedUsers nor allowedGroups, every approval counts; who may approve is then decided by RBAC on approvals. |
+| `spec.approval.allowedUsers` | []string |  | AllowedUsers are Kubernetes usernames whose approvals count. |
+| `spec.approval.excludeAuthor` | boolean |  | ExcludeAuthor does not count an approval whose user created the Bundle (no self-approval): the kardinal.io/created-by annotation, which the chart's admission policy pins to the creating user (kardinal create bundle, the Bundle API and the UI set it). A Bundle without it blocks the gate: the rule cannot be enforced. |
+| `spec.approval.required` | integer |  | Required is how many distinct allowed people must approve. Default: `1`. |
+| `spec.approvals` | []object |  | Approvals is written by the promotion Graph on gate instances: the Approvals of the instance's Bundle and environment, copied from the Approval objects, at most 101 (more than 100 blocks the gate). Do not set it; on a template it is ignored. |
+| `spec.approvals[].bundle` | string | yes | Bundle is the Bundle the decision is about. |
+| `spec.approvals[].bundleUID` | string | yes | BundleUID is that Bundle's UID. |
+| `spec.approvals[].comment` | string |  | Comment is the approver's note. |
+| `spec.approvals[].decision` | string | yes | Decision is approve or reject. |
+| `spec.approvals[].environment` | string | yes | Environment is the environment the decision is for. |
+| `spec.approvals[].groups` | []string |  | Groups are the approver's groups that count for allowedGroups. |
+| `spec.approvals[].user` | string | yes | User is the approver's Kubernetes username. |
 | `spec.expression` | string | yes | Expression is the CEL expression evaluated to determine if promotion is allowed. Must evaluate to a boolean. |
 | `spec.generated` | boolean |  | Generated is set by kardinal on the PolicyGates it creates: the gate instances a promotion Graph makes from a template, and the freeze gate of a paused Pipeline. Kardinal never uses a generated PolicyGate as a template, so only a generated PolicyGate may have a name longer than 63 characters. Do not set it on a gate you write: a generated gate never applies to an environment. |
 | `spec.message` | string |  | Message is a human-readable explanation shown when the gate blocks. |
 | `spec.overrides` | []object |  | Overrides holds time-limited emergency overrides (K-09). When any non-expired override exists (matching Stage or with empty Stage), the gate passes immediately. Expired overrides are kept as audit records. |
 | `spec.overrides[].createdAt` | string (date-time) |  | CreatedAt is when the override was created (set by the CLI). |
-| `spec.overrides[].createdBy` | string |  | CreatedBy is the user who created the override (informational). |
+| `spec.overrides[].createdBy` | string |  | CreatedBy is the Kubernetes username of whoever created the override. The chart's ValidatingAdmissionPolicy admits a new override only when createdBy equals the requesting user (kardinal override reads it with a SelfSubjectReview), or when the controller writes it for the UI. |
 | `spec.overrides[].expiresAt` | string (date-time) | yes | ExpiresAt is when this override stops being effective. After this time the gate evaluates CEL normally. |
 | `spec.overrides[].reason` | string | yes | Reason is the mandatory human-readable justification for the override. |
 | `spec.overrides[].stage` | string |  | Stage is the environment name this override applies to. An empty string applies to all environments. |
@@ -492,6 +547,13 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.skipPermission` | boolean |  | SkipPermission marks a skip-permission gate as granting skips. A Bundle may skip (intent.skipEnvironments) an environment an org gate applies to only when a gate labelled kardinal.io/type=skip-permission, with skipPermission true, in an org policy namespace, applies to that environment. Gates in other namespaces never grant a skip. The permission gate's expression is evaluated like any gate, in front of the next environment the Bundle promotes, so that environment waits until it is true. On any other gate this field has no effect. Default: `false`. |
 | `spec.when` | string |  | When has no effect. Every gate on an environment is re-checked right before that environment's PromotionStep starts: the step stays in Pending, with no git operation, until each gate it requires exists, is ready, and was evaluated at or after the step was created. A step that has started is not stopped by a gate that turns false later. Deprecated: remove this field. Every gate is re-checked before its PromotionStep starts, whatever the value; pre-deploy and post-deploy behave the same. One of: `pre-deploy`, `post-deploy`. Default: `post-deploy`. |
 | `status` | object |  | PolicyGateStatus defines the observed state of a PolicyGate. |
+| `status.approvals` | []object |  | Approvals records each decision in spec.approvals and whether the gate counted it (spec.approval), for kardinal explain, the PR evidence and the UI. |
+| `status.approvals[].comment` | string |  | Comment is the approver's comment. |
+| `status.approvals[].counted` | boolean | yes | Counted reports whether the decision counts for the gate. |
+| `status.approvals[].decision` | string | yes | Decision is approve or reject. |
+| `status.approvals[].firstSeenAt` | string (date-time) |  | FirstSeenAt is when the gate first saw the decision. |
+| `status.approvals[].reason` | string |  | Reason says why a decision does not count. |
+| `status.approvals[].user` | string | yes | User is the approver. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
@@ -500,6 +562,12 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is when the gate's result was last written. The controller re-evaluates more often, but writes the status only when the result or reason changes, when a PromotionStep that has not started needs a newer result, after a spec change, and otherwise at least every 10 minutes. |
+| `status.overrides` | []object |  | Overrides records each spec.overrides entry the controller has seen: when it first saw it, whether its createdBy was checked by the chart's identity admission policy, and whether its GateOverridden AuditEvent is written. An override counts from firstSeen: it ends at the earlier of its expiresAt and firstSeen plus the override cap (--gate-override-max-minutes). Records are never dropped, so an entry removed and added again keeps its firstSeen; past 200 records new overrides are not counted (condition OverrideIgnored). |
+| `status.overrides[].audited` | boolean |  | Audited is true once the GateOverridden AuditEvent is written. |
+| `status.overrides[].firstSeen` | string (date-time) | yes | FirstSeen is when the controller first saw the override. It is the AuditEvent timestamp and the start of the override cap. |
+| `status.overrides[].key` | string | yes | Key identifies the override: a hash of its stage, reason, createdBy, createdAt and expiresAt, so an edited entry is a new override. |
+| `status.overrides[].verified` | boolean |  | Verified is true when createdBy was checked: the chart's identity admission policy was bound when the controller first saw the override, on a gate it was already checking. |
+| `status.overridesVerifiedSince` | string (date-time) |  | OverridesVerifiedSince is when the controller first reconciled this gate with override identity checks (the chart's admission policy). Overrides already on the gate then were not checked: their createdBy is shown as unverified. |
 | `status.ready` | boolean | yes | Ready indicates whether the gate is currently allowing promotion. The kro Graph gates downstream nodes on status.ready == true. Default: `false`. |
 | `status.reason` | string |  | Reason explains the current ready state in human-readable form. |
 
@@ -512,15 +580,30 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | PromotionStepSpec defines the desired state of a PromotionStep. PromotionStep objects are created by the Graph controller — not by users. |
+| `spec.analyses` | []string |  | Analyses names the AnalysisTemplates of the environment's verification. A step with analyses goes from HealthChecking to Verifying and is Verified only when, for every template, the newest AnalysisRun in spec.live.analyses is Successful: a run that a later translation replaced (the template changed) is not waited for, and the timeout keeps counting from status.verificationStartedAt. |
+| `spec.analysisPolicy` | object |  | AnalysisPolicy is the verification's verdict policy, copied from the Pipeline when the Graph was built, so a Pipeline edit does not change the verdict of a step in flight. |
+| `spec.analysisPolicy.inconclusive` | string |  | Inconclusive is "fail" (default) or "pass". |
+| `spec.analysisPolicy.timeout` | string |  | Timeout is the verification timeout (default 30m). |
 | `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment this step promotes into. |
-| `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs (a patch node, not the step's template, so they keep updating after the step's own template stopped resolving). The reconciler reads only this copy, never the source objects. |
+| `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs, each part with its own patch node (its own field manager), not the step's template, so they keep updating after the step's own template stopped resolving: the environment's hook and analysis runs, and the current results of its gates. The reconciler reads only this copy, never the source objects; while the step's PR waits for its merge it mirrors the gates to the PR's head commit as the kardinal/gates commit status. Do not set it. |
+| `spec.live.analyses` | []object |  | Analyses are the environment's AnalysisRuns for this Bundle. |
+| `spec.live.analyses[].created` | string |  | Created is the AnalysisRun's creationTimestamp (RFC 3339). The newest run of a template is the one the step waits for. |
+| `spec.live.analyses[].message` | string |  | Message is the AnalysisRun's status.message. |
+| `spec.live.analyses[].name` | string | yes | Name is the AnalysisRun name. |
+| `spec.live.analyses[].phase` | string |  | Phase is the AnalysisRun's status.phase (Pending when it has none yet): Pending, Running, Successful, Failed, Error or Inconclusive. |
+| `spec.live.analyses[].template` | string |  | Template is the AnalysisTemplate or ClusterAnalysisTemplate it runs. |
+| `spec.live.gates` | []object |  | Gates are the gate instances of the step's environment for its Bundle, with their current result. |
+| `spec.live.gates[].name` | string | yes | Name is the gate instance name. |
+| `spec.live.gates[].ready` | boolean | yes | Ready is the instance's status.ready. |
+| `spec.live.gates[].reason` | string |  | Reason is the instance's status.reason. |
 | `spec.live.hooks` | []object |  | Hooks are the environment's HookRuns for this Bundle. |
 | `spec.live.hooks[].hook` | string |  | Hook is the hook's name in the Pipeline. |
 | `spec.live.hooks[].message` | string |  | Message is the HookRun's status.message. |
 | `spec.live.hooks[].name` | string | yes | Name is the HookRun name. |
 | `spec.live.hooks[].phase` | string |  | Phase is the hook phase: pre or post. |
 | `spec.live.hooks[].result` | string |  | Result is the HookRun's status.phase (Pending when it has none yet). |
+| `spec.live.hooks[].specHash` | string |  | SpecHash is the HookRun's status.specHash: which job and timeout ran. |
 | `spec.live.renders` | []object |  | Renders is the environment's RenderRun for this Bundle (layout: branch), at most one. |
 | `spec.live.renders[].knownMarkerDigests` | []string |  | KnownMarkerDigests is the RenderRun's status.knownMarkerDigests: a result that pushed nothing (noChanges) must name one of them. |
 | `spec.live.renders[].message` | string |  | Message is the RenderRun's status.message. |
@@ -560,6 +643,12 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.currentStepIndex` | integer |  | CurrentStepIndex is the index into the step sequence that the reconciler is currently executing. Persisted to etcd for idempotent crash recovery (spec 003 FR-002). |
 | `status.gitCredentialRetries` | integer |  | GitCredentialRetries is the number of consecutive retries of a git-clone or git-push that the remote refused while git had no credentials because spec.git.secretRef is not set, or names a Secret that does not exist or has no token key (condition GitCredentialMissing). These retries have no limit, so creating the Secret is enough for the step to continue, and they do not use up the retries of retryCount. Reset with retryCount, and when git has a token. |
 | `status.healthCheckExpiry` | string (date-time) |  | HealthCheckExpiry is the deadline for a healthy check: health.timeout after the health check began, moved to health.timeout after the moment a bake window stops. It does not apply while a bake window runs. A Graph CEL expression can observe this field to detect a stale health check. Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md). |
+| `status.hookRecords` | []object |  | HookRecords records each hook that ran for this step (HookRecord). |
+| `status.hookRecords[].hook` | string |  | Hook is the hook's name in the Pipeline. |
+| `status.hookRecords[].message` | string |  | Message is the HookRun's last message. |
+| `status.hookRecords[].phase` | string |  | Phase is pre or post. |
+| `status.hookRecords[].result` | string |  | Result is Running, Succeeded or Failed. Succeeded and Failed are final. |
+| `status.hookRecords[].specHash` | string |  | SpecHash is the HookRun's spec hash (job and timeout) that ran. |
 | `status.lastHealthCheckAt` | string (date-time) |  | LastHealthCheckAt records when the health adapter was last called. Used to space health checks at the health-check interval regardless of how often the step is reconciled. |
 | `status.message` | string |  | Message provides human-readable detail about the current state. |
 | `status.nextRetryAt` | string (date-time) |  | NextRetryAt is when a step that failed with a retryable error runs again, or when a superseded step whose PR close failed retries the close (condition SupersededCloseFailed). A reconcile before then waits for it, so the retry backoff holds however often the step is reconciled (a gate re-evaluation, a PRStatus change, a controller restart). Cleared when the step runs again. |
@@ -567,7 +656,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.prURL` | string |  | PRURL is the GitHub pull request URL opened for this promotion. Set when the step enters WaitingForMerge state. |
 | `status.renderRequestedAt` | string (date-time) |  | RenderRequestedAt is when the step reached its render step (layout: branch). Set once; the Graph creates the environment's RenderRun once it is set. |
 | `status.retryCount` | integer |  | RetryCount is the number of consecutive step-engine errors retried in the current state. Reset when a step makes progress. When it reaches the retry limit the PromotionStep fails. Retries counted in gitCredentialRetries are not counted here. |
-| `status.state` | string |  | State is the step execution state. The Graph controller uses readyWhen expressions of the form ${step.status.state == "Verified"} to advance the promotion DAG. Verifying: the health check passed and the post-deploy hooks run. One of: `Pending`, `Promoting`, `WaitingForMerge`, `HealthChecking`, `Verifying`, `Verified`, `Failed`, `AbortedByAlarm`, `RollingBack`. |
+| `status.state` | string |  | State is the step execution state. The Graph controller uses readyWhen expressions of the form ${step.status.state == "Verified"} to advance the promotion DAG. Verifying: the health check passed and the post-deploy hooks and analyses run. One of: `Pending`, `Promoting`, `WaitingForMerge`, `HealthChecking`, `Verifying`, `Verified`, `Failed`, `AbortedByAlarm`, `RollingBack`. |
 | `status.steps` | []object |  | Steps is the per-step execution history for this PromotionStep. Populated by the reconciler as each step in the sequence starts, completes, or fails. Provides fine-grained visibility into which sub-step is running without reading controller logs. Initialized when the step sequence starts (state → Promoting). |
 | `status.steps[].completedAt` | string (date-time) |  | CompletedAt is when the step finished (success or failure). |
 | `status.steps[].durationMs` | integer (int64) |  | DurationMs is the wall-clock duration in milliseconds from startedAt to completedAt. Zero when the step has not completed. |

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/ext"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -97,7 +98,7 @@ func TestBuilder_HookNodes(t *testing.T) {
 	md := hr["metadata"].(map[string]interface{})
 	assert.Equal(t, map[string]interface{}{
 		"kardinal.io/pipeline": "app", "kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod",
-		"kardinal.io/hook-phase": "pre", "kardinal.io/hook": "migrate",
+		"kardinal.io/hook-phase": "pre", "kardinal.io/hook": "migrate", "kardinal.io/bundle-uid": "",
 	}, md["labels"])
 	hrSpec := hr["spec"].(map[string]interface{})
 	assert.Equal(t, "pre", hrSpec["phase"])
@@ -136,7 +137,9 @@ func celEval(t *testing.T, expr string, vars map[string]interface{}) (interface{
 	t.Helper()
 	require.True(t, strings.HasPrefix(expr, "${") && strings.HasSuffix(expr, "}"), "expression %q", expr)
 	var opts []cel.EnvOption
-	opts = append(opts, cel.OptionalTypes())
+	// As kro's environment (pkg/cel/environment.go): optionals, lists and
+	// strings extensions.
+	opts = append(opts, cel.OptionalTypes(), ext.Lists(), ext.Strings())
 	for k := range vars {
 		opts = append(opts, cel.Variable(k, cel.DynType))
 	}
@@ -244,28 +247,41 @@ func TestBuilder_HookGating(t *testing.T) {
 // TestBuilder_HookMirror evaluates the mirror expression: the environment's
 // HookRuns, with "Pending" for one that has no status yet.
 func TestBuilder_HookMirror(t *testing.T) {
-	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: hookPipeline(), Bundle: makeBundle("app-v1", "app")})
+	b := makeBundle("app-v1", "app")
+	b.UID = "bundle-uid"
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: hookPipeline(), Bundle: b})
 	require.NoError(t, err)
+	tmpl := hookNode(t, res.Graph, "hook0pre0prod0migrate").Template
+	assert.Equal(t, "bundle-uid", tmpl["metadata"].(map[string]interface{})["labels"].(map[string]interface{})[graph.LabelBundleUID])
 	patch := hookNode(t, res.Graph, "live0prod").Patch
 	expr := patch["spec"].(map[string]interface{})["live"].(map[string]interface{})["hooks"].(string)
-	hr := func(name, env, phase string, status map[string]interface{}) map[string]interface{} {
-		o := map[string]interface{}{"metadata": map[string]interface{}{"name": name},
-			"spec": map[string]interface{}{"environment": env, "phase": phase, "hook": "h-" + name}}
+	migrate := graph.HookRunName("app", "app-v1", "prod", "pre", "migrate")
+	smoke := graph.HookRunName("app", "app-v1", "prod", "post", "smoke")
+	hr := func(name, env, phase, hook string, labels map[string]interface{}, status map[string]interface{}) map[string]interface{} {
+		o := map[string]interface{}{"metadata": map[string]interface{}{"name": name, "labels": labels},
+			"spec": map[string]interface{}{"environment": env, "phase": phase, "hook": hook}}
 		if status != nil {
 			o["status"] = status
 		}
 		return o
 	}
+	ok := map[string]interface{}{graph.LabelKRONodeID: "x", graph.LabelBundleUID: "bundle-uid"}
 	out, err := celEval(t, expr, map[string]interface{}{"refHookRuns": []interface{}{
-		hr("a", "prod", "pre", map[string]interface{}{"phase": "Succeeded", "message": "done"}),
-		hr("b", "test", "pre", map[string]interface{}{"phase": "Failed"}),
-		hr("c", "prod", "post", nil),
+		hr(migrate, "prod", "pre", "migrate", ok, map[string]interface{}{"phase": "Succeeded", "message": "done"}),
+		hr(graph.HookRunName("app", "app-v1", "test", "pre", "migrate"), "test", "pre", "migrate", ok, map[string]interface{}{"phase": "Failed"}),
+		hr(smoke, "prod", "post", "smoke", ok, nil),
+		// Forged: a name this Graph did not render, no kro label, another Bundle's UID, no labels.
+		hr("app-app-v1-prod-pre-forged", "prod", "pre", "migrate", ok, map[string]interface{}{"phase": "Succeeded"}),
+		hr(migrate, "prod", "pre", "migrate", map[string]interface{}{graph.LabelBundleUID: "bundle-uid"}, map[string]interface{}{"phase": "Succeeded"}),
+		hr(smoke, "prod", "post", "smoke", map[string]interface{}{graph.LabelKRONodeID: "x", graph.LabelBundleUID: "other"}, map[string]interface{}{"phase": "Succeeded"}),
+		hr(smoke, "prod", "post", "smoke", nil, map[string]interface{}{"phase": "Succeeded"}),
 	}})
 	require.NoError(t, err)
-	b, err := json.Marshal(out)
+	got, err := json.Marshal(out)
 	require.NoError(t, err)
-	assert.JSONEq(t, `[{"name":"a","hook":"h-a","phase":"pre","result":"Succeeded","message":"done"},
-		{"name":"c","hook":"h-c","phase":"post","result":"Pending","message":""}]`, string(b))
+	assert.JSONEq(t, `[{"name":"`+migrate+`","hook":"migrate","phase":"pre","result":"Succeeded","message":"done","specHash":""},
+		{"name":"`+smoke+`","hook":"smoke","phase":"post","result":"Pending","message":"","specHash":""}]`, string(got),
+		"only the HookRuns this Graph rendered, applied by kro for this Bundle (regression, QA #1493 round 2)")
 }
 
 // TestBuilder_HookJobStringsAreLiteral: a job string containing "${" (a
@@ -401,12 +417,48 @@ func TestHookRunName(t *testing.T) {
 	}
 }
 
-// TestBuilder_HeldEnvironmentHoldsItsHooks: a pre hook resolves under the
-// step's own conditions (stepCond), so it does not run for a Bundle waiting
-// for a maxConcurrentPromotions slot, nor, while the environment is held on
-// a rollback Bundle (spec.holds), for another Bundle: a pre hook (a
-// migration) never runs for a Bundle that cannot promote there.
-func TestBuilder_HeldEnvironmentHoldsItsHooks(t *testing.T) {
+// TestBuilder_HookRecorded evaluates a HookRun's spec.recorded: the step's
+// record of the hook (by name and phase), or {} without a step or a record
+// (regression, #1544 review: a recreated HookRun ran its migration again).
+func TestBuilder_HookRecorded(t *testing.T) {
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: hookPipeline(), Bundle: makeBundle("app-v1", "app")})
+	require.NoError(t, err)
+	exprs := hookNode(t, res.Graph, "hook0pre0prod0migrate").Template["spec"].(map[string]interface{})["recorded"].(map[string]interface{})
+	step := func(records ...interface{}) map[string]interface{} {
+		return map[string]interface{}{"metadata": map[string]interface{}{"name": "app-app-v1-prod"},
+			"status": map[string]interface{}{"hookRecords": records}}
+	}
+	rec := map[string]interface{}{"hook": "migrate", "phase": "pre", "specHash": "abc", "result": "Succeeded", "message": "done"}
+	cases := []struct {
+		name  string
+		steps []interface{}
+		want  map[string]string
+	}{
+		{"no step", []interface{}{}, map[string]string{"specHash": "", "result": "", "message": ""}},
+		{"no records", []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "app-app-v1-prod"}}},
+			map[string]string{"specHash": "", "result": "", "message": ""}},
+		{"other hook", []interface{}{step(map[string]interface{}{"hook": "seed", "phase": "pre", "specHash": "x", "result": "Failed"})},
+			map[string]string{"specHash": "", "result": "", "message": ""}},
+		{"recorded", []interface{}{step(rec)}, map[string]string{"specHash": "abc", "result": "Succeeded", "message": "done"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for f, want := range tc.want {
+				out, err := celEval(t, exprs[f].(string), map[string]interface{}{"refSteps": tc.steps})
+				require.NoError(t, err, f)
+				assert.Equal(t, want, out, f)
+			}
+		})
+	}
+}
+
+// TestBuilder_PreHookHeldAndSlot: a pre hook resolves under the step's own
+// conditions, so it does not run for a Bundle waiting for a
+// maxConcurrentPromotions slot, nor for another Bundle while the
+// environment is held on a rollback (spec.holds) (merge of #1542).
+func TestBuilder_PreHookHeldAndSlot(t *testing.T) {
+	p := makeLinearPipeline("app", "prod")
+	p.Spec.Environments[0].Hooks = []kardinalv1alpha1.HookSpec{hook("migrate", "pre", hookJob)}
 	build := func(p *kardinalv1alpha1.Pipeline) string {
 		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app")})
 		require.NoError(t, err)
@@ -419,22 +471,16 @@ func TestBuilder_HeldEnvironmentHoldsItsHooks(t *testing.T) {
 		}
 		return map[string]interface{}{"metadata": map[string]interface{}{"name": name}, "status": st}
 	}
-	slot := map[string]interface{}{"type": graph.CondBundleWaitingForSlot, "status": "True"}
-	upstreams := []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "x"}}}
-	eval := func(expr string, b map[string]interface{}) error {
-		_, err := celEval(t, expr, map[string]interface{}{"bundle": b, "refSteps": []interface{}{},
-			"test": map[string]interface{}{"status": map[string]interface{}{"state": "Verified"}}, "upstreams": upstreams})
-		return err
-	}
+	expr := build(p)
+	_, err := celEval(t, expr, map[string]interface{}{"bundle": bundle("app-v1"), "refSteps": []interface{}{}})
+	require.NoError(t, err, "resolves for a promoting Bundle")
+	_, err = celEval(t, expr, map[string]interface{}{"refSteps": []interface{}{},
+		"bundle": bundle("app-v1", map[string]interface{}{"type": graph.CondBundleWaitingForSlot, "status": "True"})})
+	require.Error(t, err, "not while the Bundle waits for a slot")
 
-	expr := build(hookPipeline())
-	require.NoError(t, eval(expr, bundle("app-v1")), "resolves for a promoting Bundle")
-	require.Error(t, eval(expr, bundle("app-v1", slot)), "not while the Bundle waits for a slot")
-
-	held := hookPipeline()
-	held.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rb", Reason: "incident"}}
+	held := p.DeepCopy()
+	held.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-1"}}
 	expr = build(held)
-	require.Error(t, eval(expr, bundle("app-v1")), "not for another Bundle while prod is held")
-	require.NoError(t, eval(expr, bundle("app-rb")), "the held Bundle's hooks run")
-	require.Error(t, eval(expr, bundle("app-rb", slot)), "not while the held Bundle waits for a slot")
+	_, err = celEval(t, expr, map[string]interface{}{"bundle": bundle("app-v1"), "refSteps": []interface{}{}})
+	require.Error(t, err, "not for another Bundle while prod is held")
 }

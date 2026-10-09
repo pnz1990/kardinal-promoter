@@ -22,7 +22,7 @@ import (
 // does not allow on host (WebHost) fails with an error wrapping
 // ErrRepositoryNotAllowed, before any request is sent: opening, closing,
 // commenting on, labelling and polling PRs, reading reviews and merge
-// commits, and deleting branches. Whatever code path makes the call (a
+// commits, setting the kardinal/gates commit status, and deleting branches. Whatever code path makes the call (a
 // superseded step deleting its branch, a PRStatus poll, a webhook
 // confirmation), the shared token cannot reach another repository (#1332).
 // Webhook parsing, which names no repository, passes through. A nil
@@ -35,8 +35,9 @@ func (a *RepositoryAllowlist) Guard(p SCMProvider, host string) SCMProvider {
 }
 
 // guardedProvider is the SCMProvider Guard returns. It implements the
-// optional BranchDeleter and MergeCommitGetter too; when the inner provider
-// does not, they do nothing, as callers do without them.
+// optional BranchDeleter, MergeCommitGetter and CommitStatusSetter too; when
+// the inner provider does not, the first two do nothing, as callers do
+// without them, and SetPRCommitStatus returns ErrCommitStatusUnsupported.
 type guardedProvider struct {
 	inner SCMProvider
 	allow *RepositoryAllowlist
@@ -136,9 +137,31 @@ func (g *guardedProvider) GetPRMergeCommit(ctx context.Context, repo string, prN
 	return mg.GetPRMergeCommit(ctx, repo, prNumber)
 }
 
+// SetPRCommitStatus implements CommitStatusSetter.
+func (g *guardedProvider) SetPRCommitStatus(ctx context.Context, repo string, prNumber int, sha string, st CommitStatus) error {
+	if err := g.check("set PR commit status in", repo); err != nil {
+		return err
+	}
+	cs, ok := g.inner.(CommitStatusSetter)
+	if !ok {
+		return ErrCommitStatusUnsupported
+	}
+	return cs.SetPRCommitStatus(ctx, repo, prNumber, sha, st)
+}
+
+// TokenID implements TokenIdentifier when the inner provider does.
+func (g *guardedProvider) TokenID() string {
+	if ti, ok := g.inner.(TokenIdentifier); ok {
+		return ti.TokenID()
+	}
+	return ""
+}
+
 var (
-	_ SCMProvider       = (*guardedProvider)(nil)
-	_ BranchDeleter     = (*guardedProvider)(nil)
-	_ MergeCommitGetter = (*guardedProvider)(nil)
-	_ eventTypeParser   = (*guardedProvider)(nil)
+	_ TokenIdentifier    = (*guardedProvider)(nil)
+	_ CommitStatusSetter = (*guardedProvider)(nil)
+	_ SCMProvider        = (*guardedProvider)(nil)
+	_ BranchDeleter      = (*guardedProvider)(nil)
+	_ MergeCommitGetter  = (*guardedProvider)(nil)
+	_ eventTypeParser    = (*guardedProvider)(nil)
 )

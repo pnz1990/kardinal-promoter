@@ -433,9 +433,12 @@ func TestStep_HookRenamedMidFlight(t *testing.T) {
 	if err == nil {
 		assert.Equal(t, int32(1), old.Status.Succeeded, "the old Job completed")
 		require.NotNil(t, old.Status.CompletionTime)
-		require.NotNil(t, newRun.Status.StartedAt)
-		assert.False(t, newRun.Status.StartedAt.Before(old.Status.CompletionTime),
-			"the new hook started (%s) after the old one finished (%s)", newRun.Status.StartedAt, old.Status.CompletionTime)
+		// The new HookRun records its start at once and then waits for the
+		// old one: its Job is what must come after the old Job finished.
+		newJob, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, newRun.Status.JobName, metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.False(t, newJob.CreationTimestamp.Before(old.Status.CompletionTime),
+			"the new hook's Job was created (%s) after the old one finished (%s)", newJob.CreationTimestamp, old.Status.CompletionTime)
 	} else {
 		// The old HookRun was released once its Job ended; its Job went with it.
 		require.True(t, apierrors.IsNotFound(err), "get old Job: %v", err)
@@ -486,7 +489,8 @@ func TestStep_HookAddedAfterStart(t *testing.T) {
 }
 
 // TestStep_HookPrivilegedRefused: a hook Pod with a privileged container
-// fails without a Job (no --hook-allow-privileged), and so does the step.
+// breaks Pod Security baseline (the default --hook-pod-security-level): the
+// HookRun fails without a Job, and so does the step.
 //
 // Covers HOOK-PRIV-01.
 func TestStep_HookPrivilegedRefused(t *testing.T) {
@@ -501,9 +505,117 @@ func TestStep_HookPrivilegedRefused(t *testing.T) {
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	name := graph.HookRunName(pipelineName, bundle, "prod", "pre", "migrate")
 	hr := waitHookRun(t, e, a.ns, name, v1alpha1.HookRunFailed)
-	assert.Contains(t, hr.Status.Message, "--hook-allow-privileged")
+	assert.Contains(t, hr.Status.Message, `violates Pod Security "baseline"`)
+	assert.Contains(t, hr.Status.Message, "--hook-pod-security-level")
 	_, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, name, metav1.GetOptions{})
 	assert.True(t, apierrors.IsNotFound(err), "no Job: %v", err)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Failed", 2*time.Minute)
 	a.fileHas(t, "prod", fixtures.V1, "prod in git")
+}
+
+// TestStep_HookForgedHookRunIgnored: a HookRun created by hand for a
+// Bundle, with its selector labels and the Bundle's UID but without kro's
+// kro.run/node-id label, never gets a Job, while the Graph's own hook runs
+// and the environment is promoted (regression, QA #1493 round 2).
+//
+// Covers HOOK-FORGED-01.
+func TestStep_HookForgedHookRunIgnored(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{{Name: "migrate", Phase: "pre", Job: hookJob(t, `echo migrated`, "")}}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	var b v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: bundle}, &b))
+
+	forged := &v1alpha1.HookRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "forged-" + bundle, Namespace: a.ns, Labels: map[string]string{
+			"kardinal.io/pipeline": pipelineName, "kardinal.io/bundle": bundle, "kardinal.io/environment": "test",
+			graph.LabelHookPhase: "pre", graph.LabelHook: "migrate", graph.LabelBundleUID: string(b.UID)}},
+		Spec: v1alpha1.HookRunSpec{PipelineName: pipelineName, BundleName: bundle, Environment: "test",
+			Hook: "migrate", Phase: "pre", Job: hookJob(t, `echo forged`, "")},
+	}
+	require.NoError(t, e.Client.Create(ctx, forged))
+
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	waitHookRun(t, e, a.ns, graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate"), v1alpha1.HookRunSucceeded)
+	framework.Consistently(t, 10*time.Second, "the forged HookRun gets no Job and no status", func(ctx context.Context) (bool, string) {
+		_, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, forged.Name, metav1.GetOptions{})
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Sprintf("job: %v", err)
+		}
+		hr, ok, err := hookRun(ctx, e, a.ns, forged.Name)
+		if err != nil || !ok {
+			return false, fmt.Sprint(err)
+		}
+		return hr.Status.Phase == "" && len(hr.Finalizers) == 0, fmt.Sprintf("phase=%q finalizers=%v", hr.Status.Phase, hr.Finalizers)
+	})
+}
+
+// TestStep_HooksRefusedInCompactGraph: the compact Graph shape does not
+// carry hooks, so a Pipeline with hooks and kardinal.io/graph-shape: compact
+// is Ready=False naming them, and its Bundle fails with GraphBuildFailed
+// instead of promoting without its hooks.
+//
+// Covers HOOK-COMPACT-01.
+func TestStep_HooksRefusedInCompactGraph(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{{Name: "migrate", Phase: "pre", Job: hookJob(t, `echo migrated`, "")}}
+	a.apply(t, p)
+	const feature = "pre- and post-deploy hooks (spec.environments[].hooks)"
+	e.WaitPipeline(t, a.ns, pipelineName, time.Minute, "Ready=False naming hooks", func(p *v1alpha1.Pipeline) bool {
+		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+		return c != nil && c.Status == metav1.ConditionFalse && strings.Contains(c.Message, feature)
+	})
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitBundle(t, a.ns, bundle, time.Minute, "Failed with GraphBuildFailed", failedWith("GraphBuildFailed", feature))
+	_, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+	require.NoError(t, err)
+	assert.False(t, ok, "nothing promoted without its hooks")
+	a.fileHas(t, "test", fixtures.V1, "test in git")
+}
+
+// TestStep_HookDeletedWhileRunningRunsOnce: deleting a pre-hook HookRun
+// while its Job runs does not run the migration twice. The finalizer holds
+// the HookRun until the Job ends and records its result, the step keeps the
+// result in status.hookRecords, and the HookRun the Graph applies again
+// takes the recorded result without a Job (regression, #1544 review).
+//
+// Covers HOOK-RECREATE-01.
+func TestStep_HookDeletedWhileRunningRunsOnce(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{{Name: "migrate", Phase: "pre", Job: hookJob(t, `sleep 20; echo migrated`, "")}}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	name := graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate")
+	first := waitHookRun(t, e, a.ns, name, v1alpha1.HookRunRunning)
+	require.NoError(t, e.Client.Delete(ctx, first))
+
+	var again *v1alpha1.HookRun
+	framework.Eventually(t, 3*time.Minute, "the HookRun applied again", func(ctx context.Context) (bool, string) {
+		hr, ok, err := hookRun(ctx, e, a.ns, name)
+		if err != nil || !ok {
+			return false, fmt.Sprint(err)
+		}
+		again = hr
+		return hr.UID != first.UID && hr.Status.Phase != "", fmt.Sprintf("uid=%s phase=%q", hr.UID, hr.Status.Phase)
+	})
+	assert.Equal(t, v1alpha1.HookRunSucceeded, again.Status.Phase, again.Status.Message)
+	assert.Contains(t, again.Status.Message, "not run again")
+	assert.Empty(t, again.Status.JobUID, "no second Job")
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	require.NotEmpty(t, ps.Status.HookRecords)
+	assert.Equal(t, "Succeeded", ps.Status.HookRecords[0].Result)
 }
