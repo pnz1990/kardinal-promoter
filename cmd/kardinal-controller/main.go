@@ -523,7 +523,9 @@ func main() {
 		logger.Info().Str("shard", namespaceShard).Msg("sharded: reconciling the namespaces of this shard only")
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), buildManagerOptions(managerConfig{
+	restConfig := ctrl.GetConfigOrDie()
+	mgr, err := ctrl.NewManager(restConfig, buildManagerOptions(managerConfig{
+		restConfig:             restConfig,
 		metricsBindAddress:     metricsBindAddress,
 		healthProbeBindAddress: healthProbeBindAddress,
 		leaderElect:            leaderElect,
