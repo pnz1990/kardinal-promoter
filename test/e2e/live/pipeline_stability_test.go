@@ -132,8 +132,8 @@ func TestPipeline_StabilityMetrics(t *testing.T) {
 	assert.Equal(t, b1, mm[2], "the rollback restores V2")
 	restored2 := verified(rb)
 	a.running(t, "prod", imageV2, "the rollback is deployed")
-	m = metricsWith(4, 2)
-	assert.Equal(t, 500, m.ChangeFailureRateMillis, "the broken Bundle and V3, rolled back from")
+	m = metricsWith(3, 2)
+	assert.Equal(t, 666, m.ChangeFailureRateMillis, "the broken Bundle and V3, rolled back from; the rollback is not a deployment")
 	assert.Equal(t, 2, m.RestoredFailures)
 	mean := (restored1.Sub(brokenDeployed) + restored2.Sub(b3Deployed)) / 2
 	assert.Equal(t, int64(mean.Minutes()), m.MeanTimeToRestoreMinutes)
@@ -143,7 +143,7 @@ func TestPipeline_StabilityMetrics(t *testing.T) {
 	for _, r := range rows {
 		byMetric[r[0]] = r
 	}
-	assert.Equal(t, []string{"change_failure_rate", "50.0%", "(2 of 4 deployments failed)"}, byMetric["change_failure_rate"])
+	assert.Equal(t, []string{"change_failure_rate", "66.6%", "(2 of 3 deployments failed)"}, byMetric["change_failure_rate"])
 	assert.Equal(t, []string{"time_to_restore", fmt.Sprintf("%dm", m.MeanTimeToRestoreMinutes), "(mean of 2 restored failures)"},
 		byMetric["time_to_restore"])
 
@@ -158,9 +158,9 @@ func TestPipeline_StabilityMetrics(t *testing.T) {
 		if p.Namespace == a.ns && p.Name == pipelineName {
 			found = true
 			require.NotNil(t, p.DeploymentMetrics, "the UI API carries deploymentMetrics")
-			assert.Equal(t, 500, p.DeploymentMetrics.ChangeFailureRateMillis)
+			assert.Equal(t, 666, p.DeploymentMetrics.ChangeFailureRateMillis)
 			assert.Equal(t, m.MeanTimeToRestoreMinutes, p.DeploymentMetrics.MeanTimeToRestoreMinutes)
-			assert.Equal(t, 4, p.DeploymentMetrics.Deployments)
+			assert.Equal(t, 3, p.DeploymentMetrics.Deployments)
 		}
 	}
 	assert.True(t, found, "the UI API lists %s/%s", a.ns, pipelineName)

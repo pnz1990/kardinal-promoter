@@ -208,14 +208,16 @@ the flags are given or not), the command prints the controller's own figures fro
 ### Change failure rate and time to restore
 
 The PipelineReconciler computes the two DORA stability metrics from PromotionStep and Bundle
-status into `Pipeline.status.deploymentMetrics`, for the Pipeline's last environment:
+status into `Pipeline.status.deploymentMetrics`, over the Pipeline's final environments: every
+environment nothing depends on (one for a chain, several for a fan-out such as `prod-eu` and
+`prod-us`):
 
 | Field | Meaning |
 |-------|---------|
-| `deployments` | Deployments in the sample: the last 30 Bundles whose change reached the environment (the step's `health-check` entry in `status.steps` started: after `git-push`, or after the merge for `pr-review`). A failure before that (a refused push, a closed PR) is not a deployment, nor is a promotion with nothing to change (`outputs.noChanges`). A multi-region environment counts once per Bundle |
-| `failedDeployments` | Deployments that failed there: a step ended `Failed`, `AbortedByAlarm` or `RollingBack` after its health check started, or a rollback Bundle for the environment later rolled back from it (`kardinal rollback`, the UI, RollbackPolicy or `onHealthFailure: rollback`; annotation `kardinal.io/rollback-from`) |
+| `deployments` | Deployments in the sample: the last 30 Bundles whose change reached a final environment (the step's `health-check` entry in `status.steps` started: after `git-push`, or after the merge for `pr-review`). A Bundle counts once, however many final environments and regions it reaches. Not deployments: a failure before that (a refused push, a closed PR), a promotion with nothing to change (`outputs.noChanges`), the steps of a superseded Bundle that never reached Verified, and rollback Bundles (they count only as restores) |
+| `failedDeployments` | Deployments that failed: a step in any final environment ended `Failed`, `AbortedByAlarm` or `RollingBack` after its health check started, a rollback Bundle for a final environment later rolled back from it (`kardinal rollback`, the UI, RollbackPolicy or `onHealthFailure: rollback`; annotation `kardinal.io/rollback-from`), or the Bundle was rejected after it was deployed |
 | `changeFailureRateMillis` | `failedDeployments / deployments` in thousandths (`250` = 25%) |
-| `meanTimeToRestoreMinutes` | Mean whole minutes from each failed deployment reaching the environment (its health check started: when users got the change) to the first later deployment Verified there, rollback Bundles included. A later deployment counts once every one of its steps in the environment (all regions) is Verified; a region of the failed Bundle itself never restores it |
+| `meanTimeToRestoreMinutes` | Mean whole minutes from each failed deployment reaching a final environment (its health check started: when users got the change) to the first later Bundle Verified in every final environment it targets: all of them, or, for a rollback of one environment, that one. Every one of its steps there (all regions) must be Verified; the last gives the time. A region of the failed Bundle itself, or an older Bundle, never restores it |
 | `restoredFailures` | Failures counted in `meanTimeToRestoreMinutes`; one not restored yet is left out |
 
 `deploymentMetrics` is set once a Bundle has been Verified in the last environment, or a

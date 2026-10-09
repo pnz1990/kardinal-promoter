@@ -602,18 +602,21 @@ type PipelineDeploymentMetrics struct {
 	// +optional
 	SampleSize int `json:"sampleSize,omitempty"`
 
-	// Deployments is the number of deployments to the final environment
-	// the change failure rate and time to restore are computed over: the
-	// last 30 Bundles whose change reached it (its health check started),
-	// whatever the outcome. A no-op promotion (outputs.noChanges) is not a
-	// deployment. A multi-region environment counts once per Bundle.
+	// Deployments is the number of deployments the change failure rate and
+	// time to restore are computed over: the last 30 Bundles whose change
+	// reached a final environment (one nothing depends on; its health check
+	// started), whatever the outcome, once per Bundle. Not deployments: a
+	// no-op promotion (outputs.noChanges), the unverified steps of a
+	// superseded Bundle, and rollback Bundles (they count only as restores).
 	// +optional
 	Deployments int `json:"deployments,omitempty"`
 
-	// FailedDeployments is how many of those deployments failed in the final
-	// environment: a PromotionStep there ended Failed, AbortedByAlarm or
-	// RollingBack after its health check started, or a rollback Bundle later
-	// rolled the environment back from it (annotation kardinal.io/rollback-from).
+	// FailedDeployments is how many of those deployments failed: a
+	// PromotionStep in a final environment ended Failed, AbortedByAlarm or
+	// RollingBack after its health check started, a rollback Bundle later
+	// rolled a final environment back from it (annotation
+	// kardinal.io/rollback-from), or the Bundle was rejected after it was
+	// deployed.
 	// +optional
 	FailedDeployments int `json:"failedDeployments,omitempty"`
 
@@ -623,9 +626,9 @@ type PipelineDeploymentMetrics struct {
 	ChangeFailureRateMillis int `json:"changeFailureRateMillis,omitempty"`
 
 	// MeanTimeToRestoreMinutes is the mean, in whole minutes, from each failed
-	// deployment reaching the environment to the first later deployment
-	// Verified there in every region (DORA time to restore). Failures not
-	// restored yet are not counted.
+	// deployment reaching a final environment to the first later Bundle
+	// Verified in every final environment it targets, in every region (DORA
+	// time to restore). Failures not restored yet are not counted.
 	// +optional
 	MeanTimeToRestoreMinutes int64 `json:"meanTimeToRestoreMinutes,omitempty"`
 

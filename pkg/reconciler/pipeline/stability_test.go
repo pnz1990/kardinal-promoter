@@ -113,7 +113,7 @@ func TestComputeDeploymentMetrics_ChangeFailureRateAndMTTR(t *testing.T) {
 			deployments: 1,
 		},
 		{
-			name: "a Verified Bundle rolled back later failed; the rollback restores it",
+			name: "a Verified Bundle rolled back later failed; the rollback restores it and is not a deployment",
 			bundles: []kardinalv1alpha1.Bundle{bundleAt("v1", t0), bundleAt("v2", t0.Add(time.Hour)),
 				rollbackBundle("rb", "v2", "prod", t0.Add(3*time.Hour)),
 				// A rollback of another environment does not count.
@@ -123,7 +123,7 @@ func TestComputeDeploymentMetrics_ChangeFailureRateAndMTTR(t *testing.T) {
 				deployedStep("v2", "Verified", t0.Add(65*time.Minute), t0.Add(70*time.Minute)),
 				deployedStep("rb", "Verified", t0.Add(3*time.Hour+5*time.Minute), t0.Add(3*time.Hour+20*time.Minute)),
 			},
-			deployments: 3, failed: 1, cfr: 333, restored: 1, mttr: 135, // from v2 deployed (65m) to the rollback Verified (200m)
+			deployments: 2, failed: 1, cfr: 500, restored: 1, mttr: 135, // the rollback is a restore, not a deployment; from v2 deployed (65m) to the rollback Verified (200m)
 		},
 		{
 			name:    "multi-region prod counts once per Bundle, failed when one region fails",
@@ -228,4 +228,107 @@ func TestComputeDeploymentMetrics_StabilitySampleIsTheLast30Deployments(t *testi
 	assert.Equal(t, 30, m.Deployments)
 	assert.Zero(t, m.FailedDeployments, "the failure is older than the sample")
 	assert.Zero(t, m.ChangeFailureRateMillis)
+}
+
+// fanOut is the J2 layout: test feeds two final environments, prod-eu and
+// prod-us; both are measured.
+func fanOut() *kardinalv1alpha1.Pipeline {
+	p := makePipelineWithEnvs("app", "default", "test", "prod-eu", "prod-us")
+	p.Spec.Environments[1].DependsOn = []string{"test"}
+	p.Spec.Environments[2].DependsOn = []string{"test"}
+	return p
+}
+
+func envStep(bundle, env, state string, deployed, end time.Time) kardinalv1alpha1.PromotionStep {
+	s := deployedStep(bundle, state, deployed, end)
+	s.Name = bundle + "-" + env + "-" + state
+	s.Spec.Environment = env
+	return s
+}
+
+// TestComputeDeploymentMetrics_FanOutAndQADecisions covers the second QA
+// round on #1488: every final environment of a fan-out counts, a failure in
+// any of them fails the Bundle and only a later Bundle Verified in all of
+// them restores it; superseded steps and rollback Bundles are not
+// deployments; a deployed Bundle later rejected is a failure.
+func TestComputeDeploymentMetrics_FanOutAndQADecisions(t *testing.T) {
+	p := fanOut()
+	at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
+	t.Run("a failure in one final environment fails the Bundle; a later Bundle Verified in both restores it", func(t *testing.T) {
+		m := pipeline.ComputeDeploymentMetrics(p,
+			[]kardinalv1alpha1.Bundle{bundleAt("v1", at(0)), bundleAt("v2", at(60))},
+			[]kardinalv1alpha1.PromotionStep{
+				envStep("v1", "prod-eu", "Verified", at(5), at(10)),
+				envStep("v1", "prod-us", "Failed", at(6), at(20)),
+				envStep("v2", "prod-eu", "Verified", at(65), at(70)),
+				envStep("v2", "prod-us", "Verified", at(66), at(95)),
+			}, at(24*60))
+		require.NotNil(t, m)
+		assert.Equal(t, 2, m.Deployments)
+		assert.Equal(t, 1, m.FailedDeployments)
+		assert.Equal(t, 1, m.RestoredFailures)
+		assert.Equal(t, int64(90), m.MeanTimeToRestoreMinutes, "from v1 deployed (5m) to v2 Verified in the last region (95m)")
+	})
+	t.Run("a later Bundle Verified in one final environment only does not restore", func(t *testing.T) {
+		m := pipeline.ComputeDeploymentMetrics(p,
+			[]kardinalv1alpha1.Bundle{bundleAt("v0", at(-120)), bundleAt("v1", at(0)), bundleAt("v2", at(60))},
+			[]kardinalv1alpha1.PromotionStep{
+				envStep("v0", "prod-eu", "Verified", at(-115), at(-110)),
+				envStep("v0", "prod-us", "Verified", at(-114), at(-109)),
+				envStep("v1", "prod-us", "Failed", at(6), at(20)),
+				envStep("v2", "prod-eu", "Verified", at(65), at(70)),
+				envStep("v2", "prod-us", "HealthChecking", at(66), at(70)),
+			}, at(24*60))
+		require.NotNil(t, m)
+		assert.Equal(t, 1, m.FailedDeployments)
+		assert.Zero(t, m.RestoredFailures, "v2 is not Verified in prod-us yet")
+	})
+	t.Run("a rollback of one final environment restores it", func(t *testing.T) {
+		rb := rollbackBundle("rb", "v1", "prod-us", at(30))
+		m := pipeline.ComputeDeploymentMetrics(p,
+			[]kardinalv1alpha1.Bundle{bundleAt("v0", at(-120)), bundleAt("v1", at(0)), rb},
+			[]kardinalv1alpha1.PromotionStep{
+				envStep("v0", "prod-eu", "Verified", at(-115), at(-110)),
+				envStep("v0", "prod-us", "Verified", at(-114), at(-109)),
+				envStep("v1", "prod-eu", "Verified", at(5), at(10)),
+				envStep("v1", "prod-us", "Verified", at(6), at(12)),
+				envStep("rb", "prod-us", "Verified", at(35), at(45)),
+			}, at(24*60))
+		require.NotNil(t, m)
+		assert.Equal(t, 2, m.Deployments, "v0 and v1; the rollback is not a deployment")
+		assert.Equal(t, 1, m.FailedDeployments, "v1, rolled back from")
+		assert.Equal(t, 1, m.RestoredFailures)
+		assert.Equal(t, int64(40), m.MeanTimeToRestoreMinutes, "from v1 deployed (5m) to the rollback Verified in prod-us (45m)")
+	})
+	t.Run("the steps of a superseded Bundle are not deployments", func(t *testing.T) {
+		sup := bundleAt("v2", at(60))
+		sup.Status.Phase = "Superseded"
+		m := pipeline.ComputeDeploymentMetrics(p,
+			[]kardinalv1alpha1.Bundle{bundleAt("v1", at(0)), sup},
+			[]kardinalv1alpha1.PromotionStep{
+				envStep("v1", "prod-eu", "Verified", at(5), at(10)),
+				envStep("v1", "prod-us", "Verified", at(6), at(12)),
+				envStep("v2", "prod-eu", "Failed", at(65), at(66)), // cancelled while health checking
+			}, at(24*60))
+		require.NotNil(t, m)
+		assert.Equal(t, 1, m.Deployments)
+		assert.Zero(t, m.FailedDeployments)
+	})
+	t.Run("a deployed Bundle rejected later is a failure", func(t *testing.T) {
+		rej := bundleAt("v1", at(0))
+		rej.Status.Phase = "Rejected"
+		m := pipeline.ComputeDeploymentMetrics(p,
+			[]kardinalv1alpha1.Bundle{rej, bundleAt("v2", at(60))},
+			[]kardinalv1alpha1.PromotionStep{
+				envStep("v1", "prod-eu", "Verified", at(5), at(10)),
+				envStep("v1", "prod-us", "Verified", at(6), at(12)),
+				envStep("v2", "prod-eu", "Verified", at(65), at(70)),
+				envStep("v2", "prod-us", "Verified", at(66), at(72)),
+			}, at(24*60))
+		require.NotNil(t, m)
+		assert.Equal(t, 2, m.Deployments)
+		assert.Equal(t, 1, m.FailedDeployments)
+		assert.Equal(t, 1, m.RestoredFailures)
+		assert.Equal(t, int64(67), m.MeanTimeToRestoreMinutes, "from v1 deployed (5m) to v2 Verified in both (72m)")
+	})
 }

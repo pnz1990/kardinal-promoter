@@ -94,7 +94,7 @@ func ComputeDeploymentMetrics(
 		verified = append(verified, verifiedBundle{b, vt})
 	}
 
-	stability := computeStability(pipeline.Name, finalEnv, bundles, steps)
+	stability := computeStability(pipeline.Name, finalEnvironments(pipeline), bundles, steps)
 	if len(verified) == 0 {
 		if stability.deployments == 0 {
 			return nil
@@ -215,6 +215,20 @@ func finalEnvironment(p *kardinalv1alpha1.Pipeline) string {
 	return sinks[len(sinks)-1]
 }
 
+// finalEnvironments returns every environment nothing depends on (the DAG
+// sinks): the stability metrics cover all of them. An invalid ordering falls
+// back to the last list entry.
+func finalEnvironments(p *kardinalv1alpha1.Pipeline) []string {
+	if len(p.Spec.Environments) == 0 {
+		return nil
+	}
+	sinks, err := graph.SinkEnvironments(p)
+	if err != nil || len(sinks) == 0 {
+		return []string{p.Spec.Environments[len(p.Spec.Environments)-1].Name}
+	}
+	return sinks
+}
+
 // extractVerifiedTime returns the time at which a PromotionStep reached
 // Verified: the Verified condition's transition time, else its creation time
 // (which understates lead time but is never zero).
@@ -294,48 +308,91 @@ func stepDeployedAt(s *kardinalv1alpha1.PromotionStep) (time.Time, bool) {
 }
 
 // computeStability computes the change failure rate and the time to restore
-// in finalEnv from PromotionStep and Bundle status, both written by their own
-// reconcilers.
+// over finalEnvs, every environment nothing depends on (a fan-out pipeline
+// has several), from PromotionStep and Bundle status, both written by their
+// own reconcilers.
 //
-// A deployment is a Bundle at least one of whose finalEnv steps started its
-// health check with a change to apply (not outputs.noChanges). It failed when
-// such a step ended Failed, AbortedByAlarm or RollingBack, or when a rollback
-// Bundle targeting finalEnv names it in kardinal.io/rollback-from (rolled back
-// by a human or a RollbackPolicy).
+// A deployment is a Bundle at least one of whose final-environment steps
+// started its health check with a change to apply (not outputs.noChanges).
+// Not deployments: rollback Bundles, which count only as restore events, and
+// the steps of a superseded Bundle that never reached Verified (cancelled by
+// the supersession). A deployment failed when one of its final-environment
+// steps ended Failed, AbortedByAlarm or RollingBack, when a rollback Bundle
+// for one of those environments names it in kardinal.io/rollback-from, or
+// when the Bundle was rejected (phase Rejected) after it was deployed.
 //
 // Time to restore runs from the failed deployment's deployedAt (when users
-// got the change) to the first time a later deployment is Verified in
-// finalEnv: every one of that Bundle's finalEnv steps (all regions) is
-// Verified, and the last of them gives the time. A region of the failed
-// Bundle itself, or an older Bundle, never restores it.
-func computeStability(pipelineName, finalEnv string, bundles []kardinalv1alpha1.Bundle,
+// got the change) to the first time a later Bundle is Verified in every
+// final environment it targets: all of them, or its
+// spec.intent.targetEnvironment (a rollback of one environment). Every one
+// of its steps there (all regions) must be Verified; the last gives the
+// time. A region of the failed Bundle itself, or an older Bundle, never
+// restores it.
+func computeStability(pipelineName string, finalEnvs []string, bundles []kardinalv1alpha1.Bundle,
 	steps []kardinalv1alpha1.PromotionStep) stability {
+	final := map[string]bool{}
+	for _, e := range finalEnvs {
+		final[e] = true
+	}
+	byName := map[string]*kardinalv1alpha1.Bundle{}
+	for i := range bundles {
+		if bundles[i].Spec.Pipeline == pipelineName {
+			byName[bundles[i].Name] = &bundles[i]
+		}
+	}
+	isRollback := func(b *kardinalv1alpha1.Bundle) bool {
+		return b != nil && (b.Labels[lifecycle.LabelRollback] == "true" ||
+			(b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != ""))
+	}
+
+	// firstDeployed is when any final-environment step of a Bundle started
+	// its health check, for every Bundle (rollbacks included: restores must
+	// come later than the failure).
+	firstDeployed := map[string]time.Time{}
 	byBundle := map[string]*deployment{}
-	// verifiedAt is when every finalEnv step of a Bundle was Verified; a
-	// Bundle with any step not Verified is absent.
+	// verifiedAt is when every final-environment step of a Bundle was
+	// Verified; envsVerified lists the environments; notVerified marks a
+	// Bundle with any final-environment step not Verified.
 	verifiedAt := map[string]time.Time{}
+	envsVerified := map[string]map[string]bool{}
 	notVerified := map[string]bool{}
 	for i := range steps {
 		s := &steps[i]
-		if s.Spec.Environment != finalEnv || s.Spec.PipelineName != pipelineName {
+		if !final[s.Spec.Environment] || s.Spec.PipelineName != pipelineName {
 			continue
 		}
-		b := s.Spec.BundleName
+		name := s.Spec.BundleName
+		b := byName[name]
+		verified := false
 		if t, ok := lifecycle.VerifiedTime(s); ok && s.Status.State == "Verified" {
-			if t.After(verifiedAt[b]) {
-				verifiedAt[b] = t
+			verified = true
+			if t.After(verifiedAt[name]) {
+				verifiedAt[name] = t
 			}
+			if envsVerified[name] == nil {
+				envsVerified[name] = map[string]bool{}
+			}
+			envsVerified[name][s.Spec.Environment] = true
 		} else {
-			notVerified[b] = true
+			notVerified[name] = true
+		}
+		if b != nil && b.Status.Phase == "Superseded" && !verified {
+			continue // cancelled by the supersession
 		}
 		at, ok := stepDeployedAt(s)
 		if !ok {
 			continue
 		}
-		d := byBundle[b]
+		if t, seen := firstDeployed[name]; !seen || at.Before(t) {
+			firstDeployed[name] = at
+		}
+		if isRollback(b) {
+			continue // a restore event, not a deployment
+		}
+		d := byBundle[name]
 		if d == nil {
-			d = &deployment{bundle: b, deployedAt: at}
-			byBundle[b] = d
+			d = &deployment{bundle: name, deployedAt: at}
+			byBundle[name] = d
 		}
 		if at.Before(d.deployedAt) {
 			d.deployedAt = at
@@ -345,15 +402,16 @@ func computeStability(pipelineName, finalEnv string, bundles []kardinalv1alpha1.
 			d.failed = true
 		}
 	}
-	for b := range notVerified {
-		delete(verifiedAt, b)
+	for name, d := range byBundle {
+		if b := byName[name]; b != nil && b.Status.Phase == "Rejected" {
+			d.failed = true
+		}
 	}
-	for i := range bundles {
-		b := &bundles[i]
-		if b.Spec.Pipeline != pipelineName || b.Labels[lifecycle.LabelRollback] != "true" {
+	for _, b := range byName {
+		if !isRollback(b) {
 			continue
 		}
-		if b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != "" && b.Spec.Intent.TargetEnvironment != finalEnv {
+		if b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != "" && !final[b.Spec.Intent.TargetEnvironment] {
 			continue
 		}
 		if d := byBundle[b.Annotations[lifecycle.AnnotationRollbackFrom]]; d != nil {
@@ -375,13 +433,29 @@ func computeStability(pipelineName, finalEnv string, bundles []kardinalv1alpha1.
 		deps = deps[:metricsLookbackBundles]
 	}
 
+	// Restore candidates: Bundles Verified in every final environment they
+	// target, in time order.
 	type verified struct {
-		bundle string
-		at     time.Time
+		bundle     string
+		at         time.Time
+		deployedAt time.Time
 	}
-	restores := make([]verified, 0, len(verifiedAt))
-	for b, t := range verifiedAt {
-		restores = append(restores, verified{b, t})
+	var restores []verified
+	for name, t := range verifiedAt {
+		if notVerified[name] {
+			continue
+		}
+		targets := finalEnvs
+		if b := byName[name]; b != nil && b.Spec.Intent != nil && final[b.Spec.Intent.TargetEnvironment] {
+			targets = []string{b.Spec.Intent.TargetEnvironment}
+		}
+		all := true
+		for _, e := range targets {
+			all = all && envsVerified[name][e]
+		}
+		if all {
+			restores = append(restores, verified{name, t, firstDeployed[name]})
+		}
 	}
 	sort.Slice(restores, func(i, j int) bool {
 		if !restores[i].at.Equal(restores[j].at) {
@@ -400,8 +474,7 @@ func computeStability(pipelineName, finalEnv string, bundles []kardinalv1alpha1.
 		for _, r := range restores {
 			// Only a later deployment restores: not the failed Bundle's own
 			// regions, and not an older Bundle whose last region finished late.
-			later := byBundle[r.bundle]
-			if r.bundle != d.bundle && later != nil && later.deployedAt.After(d.deployedAt) && r.at.After(d.deployedAt) {
+			if r.bundle != d.bundle && r.deployedAt.After(d.deployedAt) && r.at.After(d.deployedAt) {
 				out.restored++
 				restoreSum += r.at.Sub(d.deployedAt)
 				break
