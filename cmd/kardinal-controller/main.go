@@ -62,7 +62,6 @@ import (
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
@@ -103,11 +102,15 @@ func main() {
 		scmProviderType        string
 		scmAPIURL              string
 		gateStatusHeartbeat    time.Duration
+		graphCompactAbove      int
 	)
 
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
 		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
 			"re-check the gate's whole Graph. 0 writes the status on every evaluation.")
+	flag.IntVar(&graphCompactAbove, "graph-compact-above", graphpkg.DefaultCompactAbove,
+		"Environment count above which a Bundle's Graph uses the compact shape (one PromotionStep collection) "+
+			"when the Pipeline's kardinal.io/graph-shape annotation does not choose one. 0 makes every Graph compact.")
 	flag.BoolVar(&leaderElect, "leader-elect", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&zerologLevel, "log-level", "info",
@@ -474,7 +477,7 @@ func main() {
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
 		APIReader:        mgr.GetAPIReader(),
-		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
+		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), graphCompactAbove, logger),
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),
@@ -507,7 +510,8 @@ func main() {
 		}
 	}
 
-	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos}).
+	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
+		CompactAbove: &graphCompactAbove}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}
@@ -592,26 +596,12 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up NotificationHookReconciler")
 	}
 
-	// SubscriptionReconciler: polls OCI registries and Git repositories on an interval
-	// and creates Bundle CRDs when new artifacts are detected.
+	// SubscriptionReconciler: polls OCI registries, Git repositories and Helm
+	// chart repositories on an interval (or at once on a kardinal.io/refresh
+	// request from the webhook receiver) and creates Bundle CRDs when new
+	// artifacts are detected. WatcherFn nil is subscriptionrecon.NewWatcher.
 	if err := (&subscriptionrecon.Reconciler{
 		Client: mgr.GetClient(),
-		WatcherFn: func(sub *kardinalv1alpha1.Subscription) (source.Watcher, error) {
-			switch sub.Spec.Type {
-			case kardinalv1alpha1.SubscriptionTypeImage:
-				if sub.Spec.Image == nil {
-					return nil, fmt.Errorf("image subscription missing spec.image")
-				}
-				return source.NewOCIWatcher(sub.Spec.Image.Registry, sub.Spec.Image.TagFilter), nil
-			case kardinalv1alpha1.SubscriptionTypeGit:
-				if sub.Spec.Git == nil {
-					return nil, fmt.Errorf("git subscription missing spec.git")
-				}
-				return source.NewGitWatcher(sub.Spec.Git.RepoURL, sub.Spec.Git.Branch, sub.Spec.Git.PathGlob), nil
-			default:
-				return nil, fmt.Errorf("unknown subscription type %q", sub.Spec.Type)
-			}
-		},
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up SubscriptionReconciler")
 	}
@@ -646,6 +636,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/webhook/scm", tracing.Handler("webhook.scm", webhookSrv.Handler()))
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
+	// Registry and SCM webhooks that make a Subscription poll at once. Each
+	// Subscription opts in with spec.webhook and its own token.
+	mux.HandleFunc(subscriptionWebhookPrefix, newSubscriptionWebhook(mgr.GetClient(), logger).Handler())
 	mux.HandleFunc(openAPIPath, handleOpenAPI)
 	// Bundle API endpoint — only mounted if a token is configured.
 	if bundleAPIToken != "" {
@@ -821,7 +814,7 @@ func newHealthDetector(cfg *rest.Config, k8s sigs_client.Client, log zerolog.Log
 // newTranslator constructs the Translator wired with a GraphClient, Builder,
 // and the Graph identity provisioner.
 func newTranslator(mgr ctrl.Manager, identity *graphpkg.IdentityProvisioner,
-	policyNS []string, log zerolog.Logger) *translator.Translator {
+	policyNS []string, compactAbove int, log zerolog.Logger) *translator.Translator {
 	dynClient, err := dynamic.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		log.Fatal().Err(err).Msg("unable to create dynamic client for graph")
@@ -829,6 +822,7 @@ func newTranslator(mgr ctrl.Manager, identity *graphpkg.IdentityProvisioner,
 	graphClient := graphpkg.NewGraphClient(dynClient, log)
 	builder := graphpkg.NewBuilder()
 	builder.ServiceAccountName = identity.ServiceAccountName
+	builder.CompactAbove = compactAbove
 	return translator.New(graphClient, builder, mgr.GetClient(), policyNS, log).
 		WithIdentity(identity).
 		WithRESTMapper(mgr.GetRESTMapper())

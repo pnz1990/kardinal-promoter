@@ -271,6 +271,11 @@ graph:
   # -- Ship a ClusterRole aggregated into kro's controller role, for kro
   # installed with rbac.mode=aggregation (the hack/install-kro.sh default).
   aggregateToKro: true
+  # -- Environment count above which a Bundle's Graph uses the compact shape
+  # (--graph-compact-above): one PromotionStep collection instead of one node
+  # per environment. null keeps the controller default, 100; 0 makes every
+  # Graph compact. A Pipeline's kardinal.io/graph-shape annotation overrides it.
+  compactAbove: null
 
 # -- Deprecated, no effect. The chart no longer ships ValidatingAdmissionPolicies;
 # the CRD schemas validate these fields instead. Kept so existing

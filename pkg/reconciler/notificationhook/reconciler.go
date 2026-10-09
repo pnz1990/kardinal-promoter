@@ -48,6 +48,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -157,6 +158,8 @@ type deliveryConfig struct {
 	format        v1alpha1.NotificationHookFormat
 	tmpl          *template.Template
 	contentType   string
+	// signingKey, when set, signs every request (spec.signing).
+	signingKey []byte
 }
 
 // configError is why a hook cannot deliver: the Ready=False reason and a
@@ -471,6 +474,16 @@ func (r *Reconciler) resolveConfig(ctx context.Context, reader client.Reader, ho
 	if strings.ContainsAny(cfg.authorization, "\r\n") {
 		return nil, &configError{"InvalidAuthorization", "the Authorization header value contains a line break"}
 	}
+	if cfg.format == v1alpha1.NotificationFormatCloudEvents {
+		cfg.contentType = contentTypeCloudEvents
+	}
+	if sg := hook.Spec.Signing; sg != nil {
+		key, cerr := signingKey(ctx, reader, hook.Namespace, sg.SecretRef)
+		if cerr != nil {
+			return nil, cerr
+		}
+		cfg.signingKey = key
+	}
 	if cfg.format == v1alpha1.NotificationFormatTemplate {
 		if hook.Spec.Template == nil {
 			return nil, &configError{"InvalidTemplate", "format: template needs spec.template"}
@@ -485,6 +498,39 @@ func (r *Reconciler) resolveConfig(ctx context.Context, reader client.Reader, ho
 		}
 	}
 	return cfg, nil
+}
+
+// signingKey reads the signing key spec.signing names. The Secret must be
+// labeled referenceable, like the webhook Secret, and the key at least
+// minSigningKey bytes. Errors never contain the key.
+func signingKey(ctx context.Context, reader client.Reader, namespace string, ref v1alpha1.NotificationSigningSecretRef) ([]byte, *configError) {
+	keyName := ref.Key
+	if keyName == "" {
+		keyName = secretKeySigning
+	}
+	var secret corev1.Secret
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ref.Name}, &secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, &configError{"SecretNotFound",
+				fmt.Sprintf("Secret %s named by spec.signing.secretRef does not exist in namespace %s", ref.Name, namespace)}
+		}
+		return nil, &configError{"SecretUnreadable",
+			fmt.Sprintf("cannot read Secret %s named by spec.signing.secretRef: %v", ref.Name, apierrors.ReasonForError(err))}
+	}
+	if secret.Labels[labelReferenceable] != "true" {
+		return nil, &configError{"SecretNotReferenceable",
+			fmt.Sprintf("Secret %s named by spec.signing.secretRef is not labeled %s=true; label it to let custom resources reference it",
+				ref.Name, labelReferenceable)}
+	}
+	key := secret.Data[keyName]
+	if len(key) == 0 {
+		return nil, &configError{"SecretKeyMissing", fmt.Sprintf("Secret %s has no %q key for spec.signing", ref.Name, keyName)}
+	}
+	if len(key) < minSigningKey {
+		return nil, &configError{"SigningKeyTooShort",
+			fmt.Sprintf("the signing key in Secret %s (key %q) is %d bytes; use at least %d random bytes", ref.Name, keyName, len(key), minSigningKey)}
+	}
+	return key, nil
 }
 
 // setConditions writes the Ready and PlaintextCredential conditions.
@@ -528,6 +574,8 @@ func body(hook *v1alpha1.NotificationHook, cfg *deliveryConfig, ev *pendingEvent
 		return teamsBody(templateData(hook, ev))
 	case v1alpha1.NotificationFormatTemplate:
 		return renderTemplate(cfg.tmpl, templateData(hook, ev), cfg.contentType)
+	case v1alpha1.NotificationFormatCloudEvents:
+		return cloudEventsBody(hook.Namespace, ev.eventKey, ev.at, ev.payload)
 	default:
 		b, err := json.Marshal(ev.payload)
 		if err != nil {
@@ -569,6 +617,12 @@ func (r *Reconciler) deliver(ctx context.Context, hook *v1alpha1.NotificationHoo
 	req.Header.Set(headerEventKey, ev.eventKey)
 	if cfg.authorization != "" {
 		req.Header.Set("Authorization", cfg.authorization)
+	}
+	if cfg.signingKey != nil {
+		// Signed at send time, so a retry carries a new timestamp.
+		signedAt := r.now()
+		req.Header.Set(HeaderTimestamp, strconv.FormatInt(signedAt.Unix(), 10))
+		req.Header.Set(HeaderSignature, Sign(cfg.signingKey, payload, signedAt))
 	}
 
 	resp, err := httpClient.Do(req)

@@ -307,3 +307,32 @@ func kroLiteral(s string) string {
 	}
 	return "${" + strconv.Quote(s) + "}"
 }
+
+// The compact shape does not build per-promotion MetricCheck instances: an
+// instance waits on its environment's upstream step nodes (buildMetricCheckNode),
+// which the compact shape folds into the PromotionSteps collection. A Graph
+// that needs one is built in the node shape, or refused (compactUnsupported).
+func init() {
+	RegisterCompactUnsupported(perPromotionMetricChecksUsed)
+}
+
+// perPromotionMetricChecksUsed returns the feature name when a gate of one of
+// the Pipeline's environments reads a per-promotion MetricCheck template in
+// in.MetricChecks. It needs the gates and the templates: with only the
+// Pipeline (the Pipeline reconciler's call) it returns "", and the Bundle's
+// build refuses the compact Graph instead.
+func perPromotionMetricChecksUsed(in BuildInput) string {
+	if in.Pipeline == nil || len(in.MetricChecks) == 0 || len(in.PolicyGates) == 0 {
+		return ""
+	}
+	envs := make([]string, 0, len(in.Pipeline.Spec.Environments))
+	for _, e := range in.Pipeline.Spec.Environments {
+		envs = append(envs, e.Name)
+	}
+	for _, gates := range matchGatesByEnv(envs, in.PolicyGates) {
+		if len(metricTemplatesFor(gates, in.MetricChecks, in.Pipeline.Namespace, in.PolicyNamespaces)) > 0 {
+			return "per-promotion MetricChecks (spec.perPromotion)"
+		}
+	}
+	return ""
+}

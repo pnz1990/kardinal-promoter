@@ -320,7 +320,7 @@ func TestCIAPI_Validate(t *testing.T) {
 			"configRef": map[string]string{"commitSHA": ciCommit}}),
 			`type "image" does not use configRef; set type config or mixed with configRef.commitSHA, or drop configRef`, nil},
 		{"unknown type", ciBody(t, a.ns, fixtures.V2, map[string]interface{}{"type": "helm"}),
-			`type must be one of image, config, mixed (got "helm")`, nil},
+			`type must be one of image, config, mixed, chart (got "helm")`, nil},
 		{"body over 1 MiB", ciBody(t, a.ns, fixtures.V2, map[string]interface{}{
 			"provenance": map[string]string{"author": strings.Repeat("a", 1<<20)}}),
 			"request body too large or unreadable", nil},

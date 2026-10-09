@@ -332,6 +332,10 @@
         "aggregateToKro": {
           "type": "boolean"
         },
+        "compactAbove": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
         "readerNamespaces": {
           "type": "array",
           "items": {
