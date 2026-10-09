@@ -12,10 +12,12 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 
 | Kind | Resource | Scope | Short names |
 |---|---|---|---|
+| [Approval](#approval) | `approvals.kardinal.io` | Namespaced | `appr` |
 | [AuditEvent](#auditevent) | `auditevents.kardinal.io` | Namespaced | `ae`, `audit` |
 | [Bundle](#bundle) | `bundles.kardinal.io` | Namespaced | `bnd` |
 | [ChangeWindow](#changewindow) | `changewindows.kardinal.io` | Cluster | `cw` |
 | [HookRun](#hookrun) | `hookruns.kardinal.io` | Namespaced | `hr` |
+| [ImageVerification](#imageverification) | `imageverifications.kardinal.io` | Namespaced | `iv` |
 | [MetricCheck](#metriccheck) | `metricchecks.kardinal.io` | Namespaced |  |
 | [NotificationHook](#notificationhook) | `notificationhooks.kardinal.io` | Namespaced | `nhook` |
 | [PRStatus](#prstatus) | `prstatuses.kardinal.io` | Namespaced | `prs` |
@@ -26,6 +28,23 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [ScheduleClock](#scheduleclock) | `scheduleclocks.kardinal.io` | Namespaced | `sclock` |
 | [Subscription](#subscription) | `subscriptions.kardinal.io` | Namespaced | `sub` |
 
+## Approval
+
+`kardinal.io/v1alpha1`
+
+Approval records that a person approved, or rejected, a Bundle for an environment. The promotion Graph copies the Approvals of its Bundle into the approval gates of that environment (PolicyGate spec.approvals), and the PolicyGate reconciler counts them against spec.approval.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object | yes | ApprovalSpec is one person's decision on one Bundle in one environment. An Approval is created by kardinal approve and never changed: delete it to revoke the decision. The chart's ValidatingAdmissionPolicy admits it only when spec.user is the requesting user, spec.groups are among the requester's groups, and the kardinal.io/bundle and kardinal.io/environment labels match spec.bundle and spec.environment. |
+| `spec.bundle` | string | yes | Bundle is the name of the Bundle the decision is about, in the Approval's namespace. |
+| `spec.bundleUID` | string | yes | BundleUID is the UID of that Bundle: the Graph counts the Approval only for the Bundle with this UID, so an Approval cannot carry over to a new Bundle that reuses the name. |
+| `spec.comment` | string |  | Comment is a free-form note shown with the decision. Default: ``. |
+| `spec.decision` | string | yes | Decision is approve, or reject: a reject from an allowed approver blocks the gate whatever the other approvals. One of: `approve`, `reject`. Default: `approve`. |
+| `spec.environment` | string | yes | Environment is the Pipeline environment the decision is for. |
+| `spec.groups` | []string |  | Groups are the approver's Kubernetes groups that count for the gate's approval.allowedGroups. Each must be one of the requester's groups. Default: `[]`. |
+| `spec.user` | string | yes | User is the Kubernetes username of the approver, as the API server authenticates them (kubectl auth whoami). |
+
 ## AuditEvent
 
 `kardinal.io/v1alpha1`
@@ -35,7 +54,7 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | AuditEventSpec defines the immutable record of a single promotion event. AuditEvents are created by the PromotionStep and PolicyGate reconcilers at key lifecycle transitions (started, succeeded, failed). The spec is set at creation; the CRD rejects any later change to it. |
-| `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "HoldCreated", "HoldReleased". GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `HoldCreated`, `HoldReleased`. |
+| `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`. |
 | `spec.bundleName` | string | yes | BundleName is the name of the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment name where the event occurred. |
 | `spec.message` | string |  | Message is a human-readable description of the event. |
@@ -185,6 +204,66 @@ HookRun is one run of a pre- or post-deploy hook (a Kubernetes Job) for one Bund
 | `status.phase` | string |  | Phase is Pending until the Job is created, Running while it runs, and Succeeded or Failed once it finished, or Skipped. Succeeded, Failed and Skipped are terminal: the API server refuses to change them, and the Job is never created again, even when it is deleted. One of: `Pending`, `Running`, `Succeeded`, `Failed`, `Skipped`. |
 | `status.specHash` | string |  | SpecHash is a hash of spec.job and spec.timeout when the Job was created. A later spec change is not applied (condition SpecChangedAfterStart). |
 | `status.startedAt` | string (date-time) |  | StartedAt is when the HookRun started (the Job was created). |
+
+## ImageVerification
+
+`kardinal.io/v1alpha1`
+
+ImageVerification checks the signatures of one Bundle's images (and of its config commit) before the Bundle is promoted. Created by the Bundle's kro Graph; reconciled by the ImageVerification reconciler.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object |  | ImageVerificationSpec is what one Bundle must prove before its first environments are promoted. The Bundle's Graph creates it from the Pipeline's spec.imageVerification and the Bundle's images. It is immutable: a policy change gives a new ImageVerification (its name carries a hash of the spec), so a verdict is never reused for another policy. |
+| `spec.bundleName` | string | yes | BundleName is the Bundle. |
+| `spec.commit` | object |  | Commit is the config commit to verify, when commits.requireSigned. |
+| `spec.commit.repo` | string | yes | Repo is the git repository URL. |
+| `spec.commit.sha` | string | yes | SHA is the commit. |
+| `spec.images` | []object |  | Images are the images to verify, pinned by digest. |
+| `spec.images[].digest` | string | yes | Digest is the sha256 digest the Bundle pins. |
+| `spec.images[].repository` | string | yes | Repository is the image repository, without tag or digest. |
+| `spec.pipelineName` | string | yes | PipelineName is the Pipeline. |
+| `spec.policy` | object | yes | Policy is the Pipeline's policy (its images selector already applied). |
+| `spec.policy.authorities` | []object |  | Authorities are the signers an image may be signed by: an image is verified when one of its signatures verifies against any authority. |
+| `spec.policy.authorities[].key` | object |  | Key is a PEM public key (cosign.pub) in a Secret of the Pipeline namespace. |
+| `spec.policy.authorities[].key.requireTransparencyLog` | boolean |  | RequireTransparencyLog requires a Rekor entry (and its inclusion proof) in the Sigstore bundle. Default false: a key signature is verified against the key alone, like cosign --insecure-ignore-tlog. |
+| `spec.policy.authorities[].key.secretRef` | object | yes | SecretRef names the Secret and key holding the PEM public key. |
+| `spec.policy.authorities[].key.secretRef.key` | string | yes | Key is the data key. |
+| `spec.policy.authorities[].key.secretRef.name` | string | yes | Name is the object name. |
+| `spec.policy.authorities[].keyless` | object |  | Keyless is a Sigstore keyless identity: the OIDC issuer and subject of the Fulcio certificate that signed. |
+| `spec.policy.authorities[].keyless.issuer` | string | yes | Issuer is the OIDC issuer, for example https://token.actions.githubusercontent.com. |
+| `spec.policy.authorities[].keyless.subject` | string |  | Subject is the certificate's subject (SAN), for example https://github.com/myorg/app/.github/workflows/release.yml@refs/heads/main. |
+| `spec.policy.authorities[].keyless.subjectRegExp` | string |  | SubjectRegExp is a regular expression the subject must match. |
+| `spec.policy.authorities[].keyless.trustedRootRef` | object |  | TrustedRootRef names a Secret key in the Pipeline namespace holding a Sigstore trusted_root.json (a private Sigstore). Empty means the Sigstore public-good instance, whose trusted root the controller fetches through TUF. |
+| `spec.policy.authorities[].keyless.trustedRootRef.key` | string | yes | Key is the data key. |
+| `spec.policy.authorities[].keyless.trustedRootRef.name` | string | yes | Name is the object name. |
+| `spec.policy.authorities[].name` | string | yes | Name identifies the authority in results. |
+| `spec.policy.commits` | object |  | Commits, when requireSigned is true, requires the commit of a config or mixed Bundle (spec.configRef.commitSHA) to be signed, as the SCM provider reports it (GitHub, GitLab, Forgejo, Gitea). |
+| `spec.policy.commits.allowedSigners` | []string |  | AllowedSigners, when set, also requires the signer to be one of these: an SCM login or an email address, as the SCM reports the verified signer (GitLab: the key owner's verified email, the committer's for SSH; never a key title). Commits the SCM platform signed itself, not a person, are refused unless listed here explicitly: "web-flow" (GitHub web UI edits and merges), "gitlab-system" (GitLab verified_system) and "forgejo-instance" (the Forgejo/Gitea instance key). To accept PRs merged in the web UI, list the platform identity. Empty means any person's signature the SCM verified. |
+| `spec.policy.commits.requireSigned` | boolean | yes | RequireSigned requires the config Bundle's commit to be signed with a signature the SCM provider verified. configRef.commitSHA must then be a full 40- or 64-character SHA, and configRef.gitRepo must be on the controller's SCM host. |
+| `spec.policy.images` | []string |  | Images selects the Bundle images to verify by repository, with "*" matching any characters ("ghcr.io/myorg/*"). Empty means every image. Every selected image must be pinned by digest in the Bundle. |
+| `spec.policy.insecureRegistries` | []string |  | InsecureRegistries are registry hosts ("registry.local:5000") read over plain HTTP. Every other registry is read over HTTPS. |
+| `spec.policy.registrySecretRef` | object |  | RegistrySecretRef names a kubernetes.io/dockerconfigjson Secret in the Pipeline namespace with credentials for the registries holding the images and their signatures. Without it registries are read anonymously. |
+| `spec.policy.registrySecretRef.name` | string | yes | Name is the object name. |
+| `spec.policy.signatureRepository` | string |  | SignatureRepository is the repository that holds the signatures, when they are not stored next to the images (cosign's COSIGN_REPOSITORY), for example "registry.example.com/signatures". Signatures are looked up there by image digest. |
+| `spec.policy.timeout` | string |  | Timeout bounds how long a missing signature is waited for (CI may sign after it pushes), from the moment the ImageVerification starts. A signature that does not verify fails at once. Empty or "0" means 10m. |
+| `status` | object |  | ImageVerificationStatus is the observed state. |
+| `status.attempts` | integer |  | Attempts counts checks that ended without a verdict (registry or SCM unreachable, signature not there yet); it spaces the retries. |
+| `status.commit` | object |  | Commit is the commit result. |
+| `status.commit.message` | string |  | Message is the SCM's reason when not verified. |
+| `status.commit.signer` | string |  | Signer is who signed, as the SCM reports it. |
+| `status.commit.verified` | boolean | yes | Verified is true when the SCM verified the commit's signature. |
+| `status.deadline` | string (date-time) |  | Deadline is StartedAt plus the policy timeout. |
+| `status.images` | []object |  | Images has one result per spec.images entry. |
+| `status.images[].authority` | string |  | Authority is the authority that verified it. |
+| `status.images[].image` | string | yes | Image is "repository@digest". |
+| `status.images[].message` | string |  | Message says why the image is not verified yet, or failed. |
+| `status.images[].signer` | string |  | Signer is the key's authority name or the certificate identity. |
+| `status.images[].verified` | boolean | yes | Verified is true once a signature verified. |
+| `status.lastCheckedAt` | string (date-time) |  | LastCheckedAt is when the registry or SCM was last asked. |
+| `status.message` | string |  | Message summarizes the phase. |
+| `status.phase` | string |  | Phase is Pending, Verified or Failed. Verified and Failed are terminal: a verified signature is not checked again (revocation after the verification is not seen). One of: `Pending`, `Verified`, `Failed`. |
+| `status.reason` | string |  | Reason is a machine-readable reason for a Failed or waiting verification: SecretNotReferenceable, SecretNotFound, InvalidPublicKey, InvalidTrustedRoot, InvalidRegistryCredentials, SignatureNotVerified, CommitNotVerified, Timeout. |
+| `status.startedAt` | string (date-time) |  | StartedAt is when the verification started. |
 
 ## MetricCheck
 
@@ -479,6 +558,30 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.holds[].environment` | string | yes | Environment is the held environment. |
 | `spec.holds[].expiresAt` | string (date-time) |  | ExpiresAt, when set, is when the controller removes the hold. |
 | `spec.holds[].reason` | string | yes | Reason says why the environment is held. It is shown wherever the hold or a gate it exempts is. |
+| `spec.imageVerification` | object |  | ImageVerification requires the signatures of the Bundle's images (and of a config Bundle's commit) to verify before the Bundle is promoted into its first environments. Selected images must be pinned by digest. See docs/image-verification.md. |
+| `spec.imageVerification.authorities` | []object |  | Authorities are the signers an image may be signed by: an image is verified when one of its signatures verifies against any authority. |
+| `spec.imageVerification.authorities[].key` | object |  | Key is a PEM public key (cosign.pub) in a Secret of the Pipeline namespace. |
+| `spec.imageVerification.authorities[].key.requireTransparencyLog` | boolean |  | RequireTransparencyLog requires a Rekor entry (and its inclusion proof) in the Sigstore bundle. Default false: a key signature is verified against the key alone, like cosign --insecure-ignore-tlog. |
+| `spec.imageVerification.authorities[].key.secretRef` | object | yes | SecretRef names the Secret and key holding the PEM public key. |
+| `spec.imageVerification.authorities[].key.secretRef.key` | string | yes | Key is the data key. |
+| `spec.imageVerification.authorities[].key.secretRef.name` | string | yes | Name is the object name. |
+| `spec.imageVerification.authorities[].keyless` | object |  | Keyless is a Sigstore keyless identity: the OIDC issuer and subject of the Fulcio certificate that signed. |
+| `spec.imageVerification.authorities[].keyless.issuer` | string | yes | Issuer is the OIDC issuer, for example https://token.actions.githubusercontent.com. |
+| `spec.imageVerification.authorities[].keyless.subject` | string |  | Subject is the certificate's subject (SAN), for example https://github.com/myorg/app/.github/workflows/release.yml@refs/heads/main. |
+| `spec.imageVerification.authorities[].keyless.subjectRegExp` | string |  | SubjectRegExp is a regular expression the subject must match. |
+| `spec.imageVerification.authorities[].keyless.trustedRootRef` | object |  | TrustedRootRef names a Secret key in the Pipeline namespace holding a Sigstore trusted_root.json (a private Sigstore). Empty means the Sigstore public-good instance, whose trusted root the controller fetches through TUF. |
+| `spec.imageVerification.authorities[].keyless.trustedRootRef.key` | string | yes | Key is the data key. |
+| `spec.imageVerification.authorities[].keyless.trustedRootRef.name` | string | yes | Name is the object name. |
+| `spec.imageVerification.authorities[].name` | string | yes | Name identifies the authority in results. |
+| `spec.imageVerification.commits` | object |  | Commits, when requireSigned is true, requires the commit of a config or mixed Bundle (spec.configRef.commitSHA) to be signed, as the SCM provider reports it (GitHub, GitLab, Forgejo, Gitea). |
+| `spec.imageVerification.commits.allowedSigners` | []string |  | AllowedSigners, when set, also requires the signer to be one of these: an SCM login or an email address, as the SCM reports the verified signer (GitLab: the key owner's verified email, the committer's for SSH; never a key title). Commits the SCM platform signed itself, not a person, are refused unless listed here explicitly: "web-flow" (GitHub web UI edits and merges), "gitlab-system" (GitLab verified_system) and "forgejo-instance" (the Forgejo/Gitea instance key). To accept PRs merged in the web UI, list the platform identity. Empty means any person's signature the SCM verified. |
+| `spec.imageVerification.commits.requireSigned` | boolean | yes | RequireSigned requires the config Bundle's commit to be signed with a signature the SCM provider verified. configRef.commitSHA must then be a full 40- or 64-character SHA, and configRef.gitRepo must be on the controller's SCM host. |
+| `spec.imageVerification.images` | []string |  | Images selects the Bundle images to verify by repository, with "*" matching any characters ("ghcr.io/myorg/*"). Empty means every image. Every selected image must be pinned by digest in the Bundle. |
+| `spec.imageVerification.insecureRegistries` | []string |  | InsecureRegistries are registry hosts ("registry.local:5000") read over plain HTTP. Every other registry is read over HTTPS. |
+| `spec.imageVerification.registrySecretRef` | object |  | RegistrySecretRef names a kubernetes.io/dockerconfigjson Secret in the Pipeline namespace with credentials for the registries holding the images and their signatures. Without it registries are read anonymously. |
+| `spec.imageVerification.registrySecretRef.name` | string | yes | Name is the object name. |
+| `spec.imageVerification.signatureRepository` | string |  | SignatureRepository is the repository that holds the signatures, when they are not stored next to the images (cosign's COSIGN_REPOSITORY), for example "registry.example.com/signatures". Signatures are looked up there by image digest. |
+| `spec.imageVerification.timeout` | string |  | Timeout bounds how long a missing signature is waited for (CI may sign after it pushes), from the moment the ImageVerification starts. A signature that does not verify fails at once. Empty or "0" means 10m. |
 | `spec.maxConcurrentPromotions` | integer |  | MaxConcurrentPromotions caps the number of Bundles in Promoting phase for this pipeline at any given time. When 0 or unset (default), there is no cap and all Available Bundles are promoted concurrently. When set to a positive value, Bundles that exceed the cap are requeued until a promotion slot becomes available. This prevents promotion storms (e.g. a CI burst creating 50 Bundles simultaneously) from saturating git hosts, exhausting GitHub API rate limits, or creating merge conflicts in the GitOps repository. Example: maxConcurrentPromotions: 2 allows at most 2 active promotions at once. Additional Available Bundles wait in a 30-second polling loop. Default: `0`. |
 | `spec.paused` | boolean |  | Paused suspends all promotions in this pipeline when true. Default: `false`. |
 | `spec.policyGates` | []object |  | PolicyGates is not implemented, and the API server rejects a non-empty list. Org gates apply through the kardinal.io/applies-to label. Deprecated: remove the field; label org PolicyGates with kardinal.io/applies-to instead. |
@@ -558,6 +661,19 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | PolicyGateSpec defines the desired state of a PolicyGate. |
+| `spec.approval` | object |  | Approval makes the gate wait for people: it is ready only when its expression is true and at least approval.required allowed people have approved the Bundle for the environment (kardinal approve), and none of them rejected it. Copied from the template to every gate instance. For a gate that only waits for approvals, use the expression "true". |
+| `spec.approval.allowedGroups` | []string |  | AllowedGroups are Kubernetes groups: an approval counts when one of the approval's groups is listed. With neither allowedUsers nor allowedGroups, every approval counts; who may approve is then decided by RBAC on approvals. |
+| `spec.approval.allowedUsers` | []string |  | AllowedUsers are Kubernetes usernames whose approvals count. |
+| `spec.approval.excludeAuthor` | boolean |  | ExcludeAuthor does not count an approval whose user created the Bundle (no self-approval): the kardinal.io/created-by annotation, which the chart's admission policy pins to the creating user (kardinal create bundle, the Bundle API and the UI set it). A Bundle without it blocks the gate: the rule cannot be enforced. |
+| `spec.approval.required` | integer |  | Required is how many distinct allowed people must approve. Default: `1`. |
+| `spec.approvals` | []object |  | Approvals is written by the promotion Graph on gate instances: the Approvals of the instance's Bundle and environment, copied from the Approval objects, at most 101 (more than 100 blocks the gate). Do not set it; on a template it is ignored. |
+| `spec.approvals[].bundle` | string | yes | Bundle is the Bundle the decision is about. |
+| `spec.approvals[].bundleUID` | string | yes | BundleUID is that Bundle's UID. |
+| `spec.approvals[].comment` | string |  | Comment is the approver's note. |
+| `spec.approvals[].decision` | string | yes | Decision is approve or reject. |
+| `spec.approvals[].environment` | string | yes | Environment is the environment the decision is for. |
+| `spec.approvals[].groups` | []string |  | Groups are the approver's groups that count for allowedGroups. |
+| `spec.approvals[].user` | string | yes | User is the approver's Kubernetes username. |
 | `spec.expression` | string | yes | Expression is the CEL expression evaluated to determine if promotion is allowed. Must evaluate to a boolean. |
 | `spec.generated` | boolean |  | Generated is set by kardinal on the PolicyGates it creates: the gate instances a promotion Graph makes from a template, and the freeze gate of a paused Pipeline. Kardinal never uses a generated PolicyGate as a template, so only a generated PolicyGate may have a name longer than 63 characters. Do not set it on a gate you write: a generated gate never applies to an environment. |
 | `spec.message` | string |  | Message is a human-readable explanation shown when the gate blocks. |
@@ -577,6 +693,13 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.skipPermission` | boolean |  | SkipPermission marks a skip-permission gate as granting skips. A Bundle may skip (intent.skipEnvironments) an environment an org gate applies to only when a gate labelled kardinal.io/type=skip-permission, with skipPermission true, in an org policy namespace, applies to that environment. Gates in other namespaces never grant a skip. The permission gate's expression is evaluated like any gate, in front of the next environment the Bundle promotes, so that environment waits until it is true. On any other gate this field has no effect. Default: `false`. |
 | `spec.when` | string |  | When has no effect. Every gate on an environment is re-checked right before that environment's PromotionStep starts: the step stays in Pending, with no git operation, until each gate it requires exists, is ready, and was evaluated at or after the step was created. A step that has started is not stopped by a gate that turns false later. Deprecated: remove this field. Every gate is re-checked before its PromotionStep starts, whatever the value; pre-deploy and post-deploy behave the same. One of: `pre-deploy`, `post-deploy`. Default: `post-deploy`. |
 | `status` | object |  | PolicyGateStatus defines the observed state of a PolicyGate. |
+| `status.approvals` | []object |  | Approvals records each decision in spec.approvals and whether the gate counted it (spec.approval), for kardinal explain, the PR evidence and the UI. |
+| `status.approvals[].comment` | string |  | Comment is the approver's comment. |
+| `status.approvals[].counted` | boolean | yes | Counted reports whether the decision counts for the gate. |
+| `status.approvals[].decision` | string | yes | Decision is approve or reject. |
+| `status.approvals[].firstSeenAt` | string (date-time) |  | FirstSeenAt is when the gate first saw the decision. |
+| `status.approvals[].reason` | string |  | Reason says why a decision does not count. |
+| `status.approvals[].user` | string | yes | User is the approver. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
@@ -609,13 +732,18 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.analysisPolicy.timeout` | string |  | Timeout is the verification timeout (default 30m). |
 | `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment this step promotes into. |
-| `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs (a patch node, not the step's template, so they keep updating after the step's own template stopped resolving). The reconciler reads only this copy, never the source objects. |
+| `spec.imageVerification` | string |  | ImageVerification names the Bundle's ImageVerification when this step must wait for it: a step with no upstream in the Graph stays Pending until spec.live.imageVerification.phase is Verified, and fails when it is Failed. |
+| `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs, each part with its own patch node (its own field manager), not the step's template, so they keep updating after the step's own template stopped resolving: the environment's hook and analysis runs, the current results of its gates, and the Bundle's image verification. The reconciler reads only this copy, never the source objects; while the step's PR waits for its merge it mirrors the gates to the PR's head commit as the kardinal/gates commit status. Do not set it. |
 | `spec.live.analyses` | []object |  | Analyses are the environment's AnalysisRuns for this Bundle. |
 | `spec.live.analyses[].created` | string |  | Created is the AnalysisRun's creationTimestamp (RFC 3339). The newest run of a template is the one the step waits for. |
 | `spec.live.analyses[].message` | string |  | Message is the AnalysisRun's status.message. |
 | `spec.live.analyses[].name` | string | yes | Name is the AnalysisRun name. |
 | `spec.live.analyses[].phase` | string |  | Phase is the AnalysisRun's status.phase (Pending when it has none yet): Pending, Running, Successful, Failed, Error or Inconclusive. |
 | `spec.live.analyses[].template` | string |  | Template is the AnalysisTemplate or ClusterAnalysisTemplate it runs. |
+| `spec.live.gates` | []object |  | Gates are the gate instances of the step's environment for its Bundle, with their current result. |
+| `spec.live.gates[].name` | string | yes | Name is the gate instance name. |
+| `spec.live.gates[].ready` | boolean | yes | Ready is the instance's status.ready. |
+| `spec.live.gates[].reason` | string |  | Reason is the instance's status.reason. |
 | `spec.live.hooks` | []object |  | Hooks are the environment's HookRuns for this Bundle. |
 | `spec.live.hooks[].hook` | string |  | Hook is the hook's name in the Pipeline. |
 | `spec.live.hooks[].message` | string |  | Message is the HookRun's status.message. |
@@ -623,6 +751,11 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.live.hooks[].phase` | string |  | Phase is the hook phase: pre or post. |
 | `spec.live.hooks[].result` | string |  | Result is the HookRun's status.phase (Pending when it has none yet). |
 | `spec.live.hooks[].specHash` | string |  | SpecHash is the HookRun's status.specHash: which job and timeout ran. |
+| `spec.live.imageVerification` | object |  | ImageVerification is the Bundle's ImageVerification result. |
+| `spec.live.imageVerification.images` | []string |  | Images are the images it verifies, "repository@digest" (repository normalized). The step refuses to promote a Bundle whose images differ. |
+| `spec.live.imageVerification.message` | string |  | Message is its status.message. |
+| `spec.live.imageVerification.name` | string |  | Name is the ImageVerification's name. |
+| `spec.live.imageVerification.phase` | string |  | Phase is its status.phase (Pending when it has none yet). |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this step belongs to. |
 | `spec.postHooks` | []string |  | PostHooks names the HookRuns of the environment's post-deploy hooks, in order. A step with post hooks goes from HealthChecking to Verifying, and is Verified only when every one of them Succeeded in spec.live.hooks; a Failed one applies onHealthFailure. |
 | `spec.prStatusRef` | string |  | PRStatusRef is the name of the companion PRStatus CRD in the same namespace. Set by the Graph controller from the PRStatus Watch node's metadata.name CEL reference. The PromotionStep reconciler reads the PRStatus CRD instead of polling GitHub directly, eliminating the PS-4 / SCM-2 external API call on the reconcile hot path. |

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -20,6 +21,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // ControllerServiceAccount is the controller's ServiceAccount in
@@ -94,6 +97,19 @@ func (e *Env) ControllerCan(t *testing.T, verb, name string) bool {
 	return review.Status.Allowed
 }
 
+// WaitControllerCan waits until the controller may verb the Application
+// name (ControllerCan). The API server authorizes from an informer cache of
+// Roles and RoleBindings, so a binding created a moment ago may not count
+// yet (#1556); it logs how long the wait took.
+func (e *Env) WaitControllerCan(t *testing.T, verb, name string, timeout time.Duration) {
+	t.Helper()
+	start := time.Now()
+	Eventually(t, timeout, fmt.Sprintf("the controller may %s Application %q", verb, name), func(context.Context) (bool, string) {
+		return e.ControllerCan(t, verb, name), "SubjectAccessReview: not allowed"
+	})
+	t.Logf("the controller may %s Application %q after %s", verb, name, time.Since(start).Round(time.Millisecond))
+}
+
 // ChartApplicationRules renders the repo's chart with helm template and the
 // given --set values and returns the rules on Argo CD Applications in the
 // controller's ClusterRole (the chart's manager role; its graph-reader and
@@ -137,4 +153,21 @@ func ChartApplicationRules(t *testing.T, set ...string) []rbacv1.PolicyRule {
 		}
 	}
 	return rules
+}
+
+// AsController returns a client that acts as the controller's ServiceAccount
+// (impersonation). The chart's graph-objects admission policy lets only the
+// promotion Graph and kardinal's controllers create or change PromotionSteps
+// and PRStatuses, cluster admins included, so a test that stands in for the
+// controller writes through it.
+func (e *Env) AsController(t *testing.T) client.Client {
+	t.Helper()
+	cfg := rest.CopyConfig(e.Config)
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:" + ControllerNamespace + ":" + ControllerServiceAccount,
+		Groups: []string{"system:serviceaccounts", "system:serviceaccounts:" + ControllerNamespace, "system:authenticated"}}
+	c, err := client.New(cfg, client.Options{Scheme: e.Client.Scheme()})
+	if err != nil {
+		t.Fatalf("controller client: %v", err)
+	}
+	return c
 }

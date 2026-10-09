@@ -393,7 +393,7 @@ type apiAccess struct {
 var kardinalNamespacedKinds = []string{
 	"pipelines", "bundles", "policygates", "rollbackpolicies", "subscriptions",
 	"promotionsteps", "prstatuses", "metricchecks",
-	"scheduleclocks", "notificationhooks", "hookruns",
+	"scheduleclocks", "notificationhooks", "hookruns", "imageverifications",
 }
 
 var rwVerbs = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
@@ -867,6 +867,8 @@ var everyValue = []string{
 	"--set", "scm.provider=gitlab",
 	"--set", "scm.apiURL=https://gitlab.example.com",
 	"--set", "scm.allowedRepositories={gitlab.example.com/acme/*,gitlab.example.com/platform/**}",
+	"--set", "scm.gatesCommitStatus.enabled=false",
+	"--set", "scm.gatesCommitStatus.context=acme/gates",
 	"--set", "github.secretRef.name=scm-token",
 	"--set", "webhook.secretRef.name=webhook-secret",
 	"--set", "bundleAPI.tokenSecretRef.name=bundle-token",
@@ -903,6 +905,8 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 		"scm-provider":             "gitlab",
 		"scm-api-url":              "https://gitlab.example.com",
 		"scm-allowed-repositories": "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
+		"gates-commit-status":      "false",
+		"gates-status-context":     "acme/gates",
 		"ui-tokenreview-auth":      "true",
 		"cors-allowed-origins":     "https://a.example.com,https://b.example.com",
 	}

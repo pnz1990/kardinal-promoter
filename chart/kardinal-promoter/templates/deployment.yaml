@@ -119,8 +119,19 @@ spec:
             {{- with .Values.scm.apiURL }}
             - --scm-api-url={{ . }}
             {{- end }}
+            {{- with .Values.scm.instanceSigners }}
+            - --scm-instance-signers={{ join "," . }}
+            {{- end }}
             {{- with .Values.scm.allowedRepositories }}
             - --scm-allowed-repositories={{ join "," . }}
+            {{- end }}
+            {{- with .Values.scm.gatesCommitStatus }}
+            {{- if eq (toString .enabled) "false" }}
+            - --gates-commit-status=false
+            {{- end }}
+            {{- if and .context (ne .context "kardinal/gates") }}
+            - --gates-status-context={{ .context }}
+            {{- end }}
             {{- end }}
             {{- if .Values.ui.auth.tokenReview }}
             - --ui-tokenreview-auth=true

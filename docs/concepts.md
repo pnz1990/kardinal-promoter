@@ -460,6 +460,7 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 | `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion (a step that had not started writes none) |
 | `PromotionRejected` | `kardinal reject` cancels an in-flight promotion (a step that had not started writes none) |
 | `GateOverridden` | An override is recorded on a gate instance (`kardinal override` or the UI), once per override, with its verified author |
+| `ApprovalRecorded` / `ApprovalRevoked` | A decision (`kardinal approve`) appears in, or leaves, an approval gate instance, with the approver and whether it counts |
 | `GateEvaluated` | A PolicyGate instance is first evaluated, and each later change of readiness (outcome `Failure` when blocked, `Success` when allowed) |
 | `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
 | `RollbackSucceeded` | A step of a rollback Bundle (from any rollback path) reaches Verified, besides `PromotionSucceeded`; one per step |

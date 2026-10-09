@@ -1745,7 +1745,7 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 	}
 	lifecycle.StampCreatedAt(bundle, time.Now())
 
-	if err := s.client.Create(r.Context(), bundle); err != nil {
+	if err := lifecycle.CreateBundleAs(r.Context(), s.client, bundle, requester); err != nil {
 		if apierrors.IsInvalid(err) {
 			http.Error(w, "bundle rejected by validation: "+err.Error(), http.StatusBadRequest)
 			return
