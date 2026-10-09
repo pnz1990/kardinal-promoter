@@ -400,21 +400,8 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 	skip.Labels["kardinal.io/type"] = "skip-permission"
 	gates = append(gates, skip)
 	policyNamespaces := []string{"platform-policies"}
-	// An image policy: the node shape creates an ImageVerification (the
-	// Bundle images below are pinned by digest).
-	p.Spec.ImageVerification = &kardinalv1alpha1.ImageVerificationPolicy{
-		Authorities: []kardinalv1alpha1.SignatureAuthority{{Name: "release",
-			Key: &kardinalv1alpha1.KeyAuthority{SecretRef: kardinalv1alpha1.SecretKeyName{Name: "cosign", Key: "cosign.pub"}}}},
-		Commits: &kardinalv1alpha1.CommitSignaturePolicy{RequireSigned: true}}
-	// A post-deploy hook on prod: the node shape creates a HookRun.
-	for i := range p.Spec.Environments {
-		if p.Spec.Environments[i].Name == "prod" {
-			p.Spec.Environments[i].Hooks = []kardinalv1alpha1.HookSpec{hook("smoke", "post", hookJob)}
-			// And an analysis: the node shape creates an AnalysisRun.
-			p.Spec.Environments[i].Verification = &kardinalv1alpha1.VerificationSpec{
-				AnalysisTemplates: []kardinalv1alpha1.AnalysisTemplateRef{{Name: "smoke"}}}
-		}
-	}
+	// Hooks, analyses and image verification are not in the fixture: the
+	// compact shape refuses them (compactUnsupported, TestCompact_Refuses*).
 
 	kinds := func(g *graph.Graph) map[string]bool {
 		out := map[string]bool{}
@@ -461,16 +448,26 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 			}
 			nodes, err := build(graph.GraphShapeNodes)
 			require.NoError(t, err)
-			for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus", "MetricCheck", "HookRun", "AnalysisRun", "ImageVerification"} {
+			// Every expression of both shapes reads only nodes they have
+			// (assertKroValid runs assertRefsResolve).
+			assertKroValid(t, nodes.Graph)
+			for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus", "MetricCheck"} {
 				require.True(t, kinds(nodes.Graph)[k], "the fixture exercises %s", k)
 			}
 			require.True(t, hasNode(nodes.Graph, graph.NodeSkipPermissionGates),
 				"the fixture exercises %s", graph.NodeSkipPermissionGates)
 			compact, err := build(graph.GraphShapeCompact)
-			if err != nil {
-				require.ErrorIs(t, err, graph.ErrInvalid, "the compact shape either builds or refuses with ErrInvalid")
-				return
+			require.NoError(t, err, "the compact shape carries every feature of the fixture: no refusal")
+			assertKroValid(t, compact.Graph)
+			var compactMetrics []string
+			for _, n := range compact.Graph.Spec.Nodes {
+				if n.ID == graph.NodeMetricCheckData {
+					for _, it := range n.Def["items"].([]interface{}) {
+						compactMetrics = append(compactMetrics, it.(map[string]interface{})["name"].(string))
+					}
+				}
 			}
+			assert.ElementsMatch(t, mapKeys(metricNodes(t, nodes.Graph)), compactMetrics, "the same MetricCheck instances")
 			assert.Equal(t, kinds(nodes.Graph), kinds(compact.Graph), "the compact Graph creates the same object kinds")
 			assert.Equal(t, nodes.Environments, compact.Environments)
 			assert.ElementsMatch(t, gateNames(nodes.GateInstances), gateNames(compact.GateInstances), "the same gate instances")
@@ -513,15 +510,87 @@ func TestCompact_RefusesVerification(t *testing.T) {
 	assert.Contains(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}), "Argo Rollouts analysis (spec.environments[].verification)")
 }
 
-// TestCompact_RefusesImageVerification: a compact Graph is refused for a
-// Pipeline with spec.imageVerification, naming the feature, and the
-// Pipeline reconciler's Pipeline-only check reports it.
-func TestCompact_RefusesImageVerification(t *testing.T) {
-	p := ivPipeline()
-	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
-	_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p,
-		Bundle: ivBundle(kardinalv1alpha1.ImageRef{Repository: "ghcr.io/org/app", Digest: ivDigest})})
-	require.ErrorIs(t, err, graph.ErrInvalid)
-	assert.Contains(t, err.Error(), "does not support image signature verification (spec.imageVerification) yet")
-	assert.Contains(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}), "image signature verification (spec.imageVerification)")
+func mapKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// TestCompact_MetricCheckAdmission checks the compact shape's per-promotion
+// MetricCheck instances (#1479): an instance is created once its
+// environment's upstreams are all Verified, as in the node shape (before the
+// environment's step, whose gate reads it), and stays once the environment
+// has started even if an upstream is no longer Verified. Its rendered spec
+// matches the node shape's, without the node shape's hold.
+func TestCompact_MetricCheckAdmission(t *testing.T) {
+	p := compactPipeline(
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", DependsOn: []string{"test"}},
+	)
+	gates := []kardinalv1alpha1.PolicyGate{
+		makePolicyGate("errors", "default", "prod", `metrics["error-rate"].result == "Pass"`),
+		makePolicyGate("errors-test", "default", "test", `metrics["error-rate"].result == "Pass"`),
+	}
+	metrics := []kardinalv1alpha1.MetricCheck{metricTemplate("error-rate", `rate(errors{v="{{ bundle.version }}"}[5m])`)}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app"),
+		PolicyGates: gates, MetricChecks: metrics})
+	require.NoError(t, err)
+	assertKroValid(t, res.Graph)
+	sim := newCompactSim(t, res.Graph)
+	admitted := func() []string {
+		vars := sim.vars()
+		vars[graph.NodePromotionState] = sim.def(graph.NodePromotionState, vars)
+		var envs []string
+		for _, m := range sim.def(graph.NodePromotionMetrics, vars)["items"].([]interface{}) {
+			envs = append(envs, m.(map[string]interface{})["environment"].(string))
+		}
+		sort.Strings(envs)
+		return envs
+	}
+	assert.Equal(t, []string{"test"}, admitted(), "the root has no upstreams")
+	sim.steps["test"] = ""
+	assert.Equal(t, []string{"test"}, admitted(), "prod waits for test to be Verified")
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"prod", "test"}, admitted(), "prod's instance exists before prod's step")
+	// Before prod's step starts, test leaving Verified takes prod's instance
+	// out of the collection, so kro prunes it (QA #1543; documented in
+	// pipeline-reference).
+	sim.steps["test"] = "Failed"
+	assert.Equal(t, []string{"test"}, admitted(), "an instance of an environment not started yet is deleted")
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"prod", "test"}, admitted(), "and created again once test is Verified again")
+	sim.steps["prod"] = ""
+	sim.steps["test"] = "Failed"
+	assert.Equal(t, []string{"prod", "test"}, admitted(), "a started environment keeps its instance")
+
+	// The rendered spec is the node shape's, without the hold.
+	nodesP := p.DeepCopy()
+	nodesP.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeNodes}
+	nodesRes, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: nodesP, Bundle: makeBundle("app-x7k2m", "app"),
+		PolicyGates: gates, MetricChecks: metrics})
+	require.NoError(t, err)
+	var items []interface{}
+	for _, n := range res.Graph.Spec.Nodes {
+		if n.ID == graph.NodeMetricCheckData {
+			items = n.Def["items"].([]interface{})
+		}
+	}
+	require.Len(t, items, 2)
+	assert.Equal(t, graph.ObjectCount(nodesRes.Graph), graph.ObjectCount(res.Graph),
+		"the size guard counts the compact instances as the node shape's")
+	for _, it := range items {
+		item := it.(map[string]interface{})
+		node := metricNodes(t, nodesRes.Graph)[item["name"].(string)]
+		require.NotNil(t, node.Template, item["name"])
+		want := node.Template["spec"].(map[string]interface{})
+		got := item["spec"].(map[string]interface{})
+		assert.Equal(t, want["suspend"], got["suspend"])
+		assert.Equal(t, want["threshold"], got["threshold"])
+		assert.Contains(t, got["query"], `v="v1"`, "placeholders rendered")
+		if item["environment"] == "test" {
+			assert.Equal(t, want["query"], got["query"], "no hold on the root in either shape")
+		}
+	}
 }

@@ -26,6 +26,7 @@ import { BlockedBanner } from './components/BlockedBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
 import { BundleTimeline } from './components/BundleTimeline'
 import { BundleDiffPanel } from './components/BundleDiffPanel'
+import { BundleTypeBadge } from './components/BundleTypeBadge'
 import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { PipelineLaneView } from './components/PipelineLaneView'
 import { FleetHealthBar, filterPipelines, type FleetFilter } from './components/FleetHealthBar'
@@ -435,6 +436,11 @@ export function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
+      {/* The first Tab stop: past the sidebar to the main content. */}
+      <a className="skip-link" href="#main-content"
+        onClick={e => { e.preventDefault(); document.getElementById('main-content')?.focus() }}>
+        Skip to main content
+      </a>
       {/* #746: Keyboard shortcuts help panel — rendered at root level so it overlays all content. */}
       {showShortcutsPanel && (
         <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
@@ -592,7 +598,7 @@ export function App() {
 
       {/* Ops table mode — full-width table replaces the main content area */}
       {viewMode === 'ops-table' ? (
-        <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg-deep)' }}>
+        <main id="main-content" tabIndex={-1} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg-deep)' }}>
           {insecureBanner}
           <PipelineOpsTable
             pipelines={pipelines}
@@ -605,7 +611,7 @@ export function App() {
         </main>
       ) : (
         <>{/* Main area — column layout for header + content row */}
-        <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg)' }}>
+        <main id="main-content" tabIndex={-1} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg)' }}>
         {insecureBanner}
         {!selectedPipeline ? (
           <div style={pipelines.length > 0
@@ -659,6 +665,7 @@ export function App() {
                       {/* #763: copy bundle name */}
                       <CopyButton text={activeBundle.name} title={`Copy bundle name "${activeBundle.name}"`} />
                     </span>
+                    <BundleTypeBadge type={activeBundle.type} />
                     <span style={{ color: 'var(--color-text-faint)' }}>·</span>
                     <HealthChip state={activeBundle.phase} size="sm" />
                     {activeBundle.provenance?.commitSHA && (
