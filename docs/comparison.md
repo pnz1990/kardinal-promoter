@@ -215,9 +215,6 @@ it with `dependsOn` on its environments.
   sequence per environment, with your own Jobs only before and after it ([hooks](hooks.md)).
 - **Access control and API** (Kargo). Projects with per-project roles, OIDC claim mapping,
   API tokens and a REST API.
-- **Gates mirrored to the SCM** (GitOps Promoter). Commit statuses appear as SCM checks and are
-  re-checked for every new commit until the PR merges. A kardinal gate is checked before the
-  step starts, not after.
 - **Pluggable gates** (GitOps Promoter). Any controller can write a `CommitStatus`.
 
 ## Known limitations
