@@ -510,13 +510,14 @@ func TestBuilder_PRStatusWatchNode(t *testing.T) {
 	require.Contains(t, byEnv, "test", "a PRStatus for 'test'")
 	require.Contains(t, byEnv, "prod", "a PRStatus for 'prod'")
 
-	// The PromotionStep's prStatusRef resolves to its PRStatus once the
-	// collection is applied.
+	// The PromotionStep names its PRStatus literally: no reference to the
+	// PRStatuses collection, so a PRStatus that cannot be created holds only
+	// its own environment (G11).
 	testStepNode, ok := nodeMap["test"]
 	require.True(t, ok, "PromotionStep node for 'test' must exist")
 	spec, _ := testStepNode.Template["spec"].(map[string]interface{})
-	assert.Equal(t, fmt.Sprintf("${PRStatuses.filter(p, p.metadata.name == %q)[0].metadata.name}", objName(byEnv["test"])),
-		spec["prStatusRef"])
+	assert.Equal(t, objName(byEnv["test"]), spec["prStatusRef"])
+	assert.False(t, containsCELRef(testStepNode.Template, graph.NodePRStatuses), "no edge to the PRStatuses collection")
 }
 
 // TestBuilder_PRStatusNodeHasNoReadyWhen checks that no PRStatus node has a

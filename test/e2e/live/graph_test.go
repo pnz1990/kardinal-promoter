@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -334,6 +335,57 @@ func TestGraph_GateAndPRStatusCollections(t *testing.T) {
 	}
 	assert.Equal(t, map[string]int{"PolicyGates": 2, "PRStatuses": 2, "test": 1, "prod": 1}, byNode,
 		"managedResources by node")
+}
+
+// TestGraph_GateApplyFailureSurfaced checks what an operator sees when a gate
+// instance cannot be created (ledger gap G11): with a ResourceQuota that allows
+// one PolicyGate in the namespace, the second instance is refused, kro does
+// not publish the PolicyGates collection, and prod waits. The Bundle's
+// GatesCreated condition is False and names the missing instance and the
+// quota error, and the Bundle does not fail. Once the quota is gone the
+// instance is created, the condition turns True and prod promotes.
+//
+// Covers GRAPH-COLLECTIONS-02.
+func TestGraph_GateApplyFailureSurfaced(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "first", "prod", "true", recheck))
+	e.CreateGate(t, framework.Gate(a.ns, "second", "prod", "true", recheck))
+	quota := &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: "one-gate-instance", Namespace: a.ns},
+		// The two templates count too: room for them and one instance.
+		Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{"count/policygates.kardinal.io": resource.MustParse("3")}},
+	}
+	require.NoError(t, e.Client.Create(ctx, quota))
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+
+	b := e.WaitBundle(t, a.ns, bundle, 2*time.Minute, "GatesCreated False naming the refused instance",
+		func(b *v1alpha1.Bundle) (bool, string) {
+			c := findCond(b.Status.Conditions, "GatesCreated")
+			if c.Type == "" {
+				return false, "no GatesCreated condition"
+			}
+			return c.Status == metav1.ConditionFalse && c.Reason == "ApplyFailed" &&
+				strings.Contains(c.Message, "1 of 2 PolicyGate instances are not created") &&
+				strings.Contains(c.Message, "exceeded quota"), string(c.Status) + " " + c.Reason + ": " + c.Message
+		})
+	assert.NotEqual(t, "Failed", b.Status.Phase, "a gate that cannot be created holds the Bundle; it does not fail it")
+	e.NoStep(t, a.ns, pipelineName, bundle, "prod", holdFor)
+	assertEnvAt(t, a, "prod", fixtures.V1)
+
+	require.NoError(t, e.Client.Delete(ctx, quota))
+	e.WaitBundle(t, a.ns, bundle, 3*time.Minute, "GatesCreated True", func(b *v1alpha1.Bundle) (bool, string) {
+		c := findCond(b.Status.Conditions, "GatesCreated")
+		if c.Type == "" {
+			return false, "no GatesCreated condition"
+		}
+		return c.Status == metav1.ConditionTrue, string(c.Status) + " " + c.Message
+	})
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
 }
 
 // TestGraph_SkipEnvironmentsBridges checks intent.skipEnvironments: a Bundle

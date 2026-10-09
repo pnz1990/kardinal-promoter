@@ -297,6 +297,22 @@ kubectl describe bundle <name>
 
 Please open an issue with that message and the Pipeline.
 
+### Symptom: Bundle condition "GatesCreated" is False
+
+kro creates a Bundle's PolicyGate instances from one collection and makes them available to the
+promotion only when every instance was created. One instance the API server refuses (a
+`ResourceQuota` on `count/policygates.kardinal.io`, an admission policy, throttling) holds every
+gated environment of the Bundle. The condition names the missing instances and kro's error:
+
+```bash
+kubectl get bundle <name> -o jsonpath='{.status.conditions[?(@.type=="GatesCreated")].message}'
+```
+
+Fix what refuses the instance (raise the quota, allow it in the policy); kro retries on its own and
+the Bundle continues. A PRStatus that cannot be created holds only its own environment: its
+PromotionStep waits in `WaitingForMerge` with `waiting for PRStatus <name>: the Graph has not
+created it yet`.
+
 ## Debugging commands
 
 ```bash

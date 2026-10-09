@@ -58,7 +58,7 @@ Rules:
 | [G8](#g8-logic-still-outside-the-graph) | Logic still outside the Graph (time, CEL gates, git/SCM) | High | reconcilers; see `11-graph-purity-tech-debt.md` | Time: Partial (KREP-025, in review). Everything else: none |
 | [G9](#g9-a-graph-reconcile-costs-three-api-calls-per-object) | A Graph reconcile costs about three uncached API calls per object, and kro reconciles one Graph at a time by default | High at scale | `hack/install-kro.sh` raises the worker count and client QPS; smaller Graphs | None filed; kro#1324 is related |
 | [G10](#g10-a-graph-is-one-etcd-object) | A Graph's spec and inventory share one etcd object (1.5 MiB) | Medium | `pkg/graph/size.go` `CheckSize` refuses a Graph over 1.2 MB | None filed |
-| [G11](#g11-collections-are-all-or-nothing) | A `forEach` collection is all-or-nothing on pending data, and every growth relabels every item | Medium | pacing by choosing the list; label-only events ignored | None filed |
+| [G11](#g11-collections-are-all-or-nothing) | A `forEach` collection is all-or-nothing on pending data and on apply errors, and every growth relabels every item | Medium | pacing by choosing the list; label-only events ignored | None filed |
 | [G12](#g12-delete-and-prune-orphan-the-pods-of-a-job) | kro deletes and prunes without a propagation policy, so a Job node orphans its Pods, and a deleted Job runs again | Medium | hooks use a `HookRun` CRD that owns its Job (#1443) | None filed |
 | [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | kardinal shards only its own controllers (#1462) | None filed |
 | [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | mirror `patch` nodes with a literal target name | None filed |
@@ -577,7 +577,11 @@ gate and PRStatus instances in collections (G10).
 `Resolve` (`runtime/node.go:311-316`, `:358-372`), so one pending item leaves the whole
 collection Unresolved: no item is applied or pruned. There is no per-item gating. Every item is
 stamped with `kro.run/collection-size` (`executor/simple.go:1129-1137`), so a collection that
-grows by one item rewrites every item's labels.
+grows by one item rewrites every item's labels. The same holds for apply errors: when one item
+cannot be applied (a ResourceQuota, a denying admission policy, throttling), `applyTemplate`
+returns before `publishScope` (`executor/simple.go:375-400`, `applyCollectionTemplate`
+`:945-973`), so the collection is not in scope and every node that references it stays
+data-pending, however many items did apply.
 
 Measured on kind: the first item's `resourceVersion` changed each time a 300-item step
 collection grew (sizes 91, 95, 99), and kro routed 45,814 PromotionStep events over one
@@ -589,11 +593,21 @@ cycle), and items already admitted stay in the list, so pacing never prunes. Ver
 with `maxConcurrent` and `maxUnavailable`. kardinal's reconcilers must ignore label-only updates
 on the objects they own, or they reconcile every item on each growth.
 
+For apply errors, the builder keeps the blast radius to what must wait anyway: steps reference
+the PolicyGates collection (a gated step waits on its gates), so one gate instance that cannot be
+created holds every gated environment of the Bundle; the Bundle reconciler then sets
+`GatesCreated=False` with the missing instance names and kro's message
+(`pkg/reconciler/bundle/gates_created.go`). Steps name their PRStatus literally, not through the
+PRStatuses collection, so a PRStatus that cannot be created holds only its own environment, whose
+step waits in WaitingForMerge with a message that names it.
+
 **Upstream work.** None filed.
 
 **Smallest changes, no upstream work yet.** A per-item option to skip an item whose fields are
-pending (keep its existing object); make the `collection-size` label optional or drop it, since
-`collection-index` and `node-id` already identify the item.
+pending (keep its existing object); publish a collection's scope with the items that applied and
+report the failed items (or an opt-in to skip failed items), so one bad item does not hold every
+dependent; make the `collection-size` label optional or drop it, since `collection-index` and
+`node-id` already identify the item.
 
 ---
 

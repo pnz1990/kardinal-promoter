@@ -1028,8 +1028,11 @@ func TestChart_PolicyNamespaces(t *testing.T) {
 // resourceVersion and lastEvaluatedAt stay put over several recheck
 // intervals, while a change of result is written at the next evaluation. A
 // re-evaluation forced with the kardinal.io/force-recheck annotation (an
-// annotation, not a spec change) writes nothing either. The suites' main
-// release sets 0s so other tests see every evaluation.
+// annotation, not a spec change) writes nothing either. An always-true gate
+// on prod, true since long before prod's PromotionStep exists, is written
+// again when the step is created, so the step starts on a fresh result under
+// the default too (lastEvaluatedAt at or after the step's creation). The
+// suites' main release sets 0s so other tests see every evaluation.
 //
 // Covers GATE-WRITES-01.
 func TestChart_GateStatusHeartbeat(t *testing.T) {
@@ -1037,16 +1040,19 @@ func TestChart_GateStatusHeartbeat(t *testing.T) {
 	clusterScoped(t)
 	e := framework.New(t)
 	ctx := context.Background()
-	a := newArgoApp(t, e, "prod")
+	a := newArgoApp(t, e, "test", "prod")
 	deleteReaderBindingAtEnd(t, e, framework.ChartFullname(releaseName(a.ns))+"-graph-reader-"+a.ns)
 	r := e.InstallChart(t, releaseName(a.ns), a.ns, framework.Values{})
 	assert.NotContains(t, strings.Join(r.Deployment(t).Spec.Template.Spec.Containers[0].Args, " "),
 		"--gate-status-heartbeat", "the chart leaves the controller default")
 
 	e.CreateGate(t, framework.Gate(a.ns, "needs-open-label", "prod", openExpr, recheck))
+	e.CreateGate(t, framework.Gate(a.ns, "always-open", "prod", "true", recheck))
 	a.apply(t, a.pipeline(nil))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
 	first := e.WaitGateReady(t, a.ns, bundle, "prod", "needs-open-label", false, "= false", gateTimeout)
+	open := e.WaitGateReady(t, a.ns, bundle, "prod", "always-open", true, "= true", gateTimeout)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 
 	// Three recheck intervals (10s) and a forced re-evaluation: same result, no write.
 	// A merge patch of the annotation only: a full Update would rewrite the
@@ -1064,12 +1070,24 @@ func TestChart_GateStatusHeartbeat(t *testing.T) {
 			framework.DescribeGate(got) + " resourceVersion " + got.ResourceVersion
 	})
 
+	// The always-true gate kept its first result all along.
+	still, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", "always-open")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.True(t, still.Status.LastEvaluatedAt.Equal(open.Status.LastEvaluatedAt), "an unchanged result is not rewritten")
+
 	// A new result is written at the next evaluation, and prod promotes.
 	e.SetBundleLabel(t, a.ns, bundle, openLabel, "true")
 	opened := e.WaitGateReady(t, a.ns, bundle, "prod", "needs-open-label", true, "= true", gateTimeout)
 	assert.True(t, opened.Status.LastEvaluatedAt.After(first.Status.LastEvaluatedAt.Time))
-	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	prod := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
+	fresh, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", "always-open")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.False(t, fresh.Status.LastEvaluatedAt.Before(&prod.CreationTimestamp),
+		"the always-true gate was written again for prod's step: lastEvaluatedAt %s, step created %s",
+		fresh.Status.LastEvaluatedAt, prod.CreationTimestamp)
 }
 
 // TestChart_SCMCredentials checks the chart's SCM settings: the token the

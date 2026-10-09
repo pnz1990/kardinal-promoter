@@ -507,6 +507,15 @@ func matchGatesByEnv(filteredEnvs []string,
 // PromotionSteps stay one node each: a collection is all-or-nothing on
 // pending data (G11), and each step is held back on its own upstreams and
 // gates.
+//
+// A collection is also all-or-nothing on apply errors: when one item cannot
+// be applied (a ResourceQuota, an admission policy that denies it,
+// throttling) kro does not publish the collection, so nothing that
+// references it resolves (G11). Steps reference the PolicyGates collection,
+// because they must wait on their gates anyway: one gate instance that cannot
+// be created holds every gated step, and the Bundle's GatesCreated condition
+// names it. Steps name their PRStatus literally, so a PRStatus that cannot be
+// created holds only its own environment.
 func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
@@ -691,11 +700,12 @@ func buildPromotionStepNode(
 		"stepType":    stepType,
 		// prStatusRef names the environment's PRStatus. The PromotionStep
 		// reconciler reads it to find the PRStatus CRD instead of polling the
-		// SCM (eliminates PS-4, SCM-2). The expression resolves once kro has
-		// applied the PRStatuses collection, so the PRStatus exists before
-		// the step does.
-		"prStatusRef": fmt.Sprintf("${%s.filter(p, p.metadata.name == %s)[0].metadata.name}",
-			NodePRStatuses, celString(prStatusName)),
+		// SCM (eliminates PS-4, SCM-2). It is a literal name, not a reference
+		// to the PRStatuses collection: kro publishes a collection only when
+		// every item applied (G11), so one PRStatus that cannot be created
+		// would hold every step of the Bundle. The step waits in
+		// WaitingForMerge until its PRStatus exists.
+		"prStatusRef": prStatusName,
 	}
 
 	// Upstream states as a list — creates CEL dependency edges and gates this
