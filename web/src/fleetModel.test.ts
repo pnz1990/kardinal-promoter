@@ -69,7 +69,12 @@ describe('fleetRow', () => {
     {
       name: 'falls back to the bundle name without a version',
       p: base({ environmentTopology: linear, activeBundleName: 'app-9', environmentStates: { test: 'WaitingForMerge' } }),
-      states: ['arriving', 'empty', 'empty'], liveGroup: 0, live: 'arriving', incoming: 'app-9',
+      states: ['arriving', 'ahead', 'ahead'], liveGroup: 0, live: 'arriving', incoming: 'app-9',
+    },
+    {
+      name: 'held before an environment the Bundle has no state for yet',
+      p: base({ environmentTopology: linear, deployed, blockerCount: 1, activeBundleName: 'app-2', activeBundleVersion: '2.0.0', environmentStates: { test: 'Verified' } }),
+      states: ['settled', 'held', 'ahead'], liveGroup: 1, live: 'held', incoming: '2.0.0',
     },
   ]
   for (const c of cases) {

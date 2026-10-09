@@ -94,7 +94,9 @@ export function fleetRow(p: Pipeline): FleetRow {
     if (incoming && FAILED.has(incoming)) state = 'failed'
     else if (incoming && ARRIVING.has(incoming)) state = 'arriving'
     else if (incoming === 'Verified' || (d && (!active || d.bundle === active))) state = 'settled'
-    else if (active && incoming !== undefined) state = 'ahead'
+    // The active Bundle lists only the environments it has reached, so one
+    // with no state there is still ahead of it.
+    else if (active) state = 'ahead'
     else state = d ? 'settled' : 'empty'
     return { env, version: d?.version ?? '', bundle: d?.bundle ?? '', verifiedAt: d?.verifiedAt, state, incomingState: incoming }
   }))
