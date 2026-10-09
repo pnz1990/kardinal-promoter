@@ -175,6 +175,34 @@ func TestHookRun_WaitsForRemovedSibling(t *testing.T) {
 	assert.Contains(t, h.hookRun().Status.Message, "waiting for HookRun app-v1-prod-pre-old")
 }
 
+// TestHookRun_WaitsForSiblingNotYetDeleted: kro creates a renamed hook's new
+// HookRun before it prunes the old one; the new run waits for the old Job
+// even before the old HookRun is deleted (regression found live).
+func TestHookRun_WaitsForSiblingNotYetDeleted(t *testing.T) {
+	old := newHookRun(jobJSON(""))
+	old.Name = "app-v1-prod-pre-old"
+	old.Labels = map[string]string{"kardinal.io/pipeline": "app", "kardinal.io/bundle": "v1",
+		"kardinal.io/environment": "prod", "kardinal.io/hook-phase": "pre"}
+	deadline := metav1.NewTime(time.Date(2026, 10, 9, 13, 0, 0, 0, time.UTC))
+	old.Status = v1alpha1.HookRunStatus{Phase: v1alpha1.HookRunRunning, JobUID: "u", Deadline: &deadline}
+	cur := newHookRun(jobJSON(""))
+	cur.Labels = old.Labels
+	h := newHarness(t, old, cur)
+	h.reconcile()
+	h.reconcile()
+	_, exists := h.job()
+	assert.False(t, exists, "no Job while the sibling runs")
+
+	// The sibling finished: the new run starts.
+	var o v1alpha1.HookRun
+	require.NoError(t, h.c.Get(context.Background(), types.NamespacedName{Name: old.Name, Namespace: ns}, &o))
+	o.Status.Phase = v1alpha1.HookRunSucceeded
+	require.NoError(t, h.c.Status().Update(context.Background(), &o))
+	h.reconcile()
+	_, exists = h.job()
+	assert.True(t, exists)
+}
+
 // TestHookRun_SkippedWhenStepAdvanced: a hook added after its step started
 // is Skipped, with no Job.
 func TestHookRun_SkippedWhenStepAdvanced(t *testing.T) {

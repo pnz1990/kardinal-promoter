@@ -172,7 +172,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			if err != nil {
 				return ctrl.Result{}, err
 			}
-			hr.Status.Message = fmt.Sprintf("waiting for HookRun %s, removed from the Pipeline, to finish its Job", who)
+			hr.Status.Message = fmt.Sprintf("waiting for HookRun %s (same environment and phase) to finish its Job", who)
 			return ctrl.Result{RequeueAfter: requeueSibling}, r.patch(ctx, base, &hr)
 		}
 		return r.createJob(ctx, log, base, &hr)
@@ -238,9 +238,11 @@ func (r *Reconciler) deleting(ctx context.Context, log zerolog.Logger, hr *v1alp
 }
 
 // siblingRunning reports whether another HookRun of the same Bundle,
-// environment and phase is being deleted while its Job still runs: the hook
-// was renamed or removed mid-flight. The new run waits for it rather than
-// overlap it.
+// environment and phase has a Job running. Hooks of one phase run one after
+// another, so this happens only when the hook list changed mid-flight (a
+// hook renamed or reordered): kro creates the new HookRun in the same walk
+// that prunes the old one, before the old one is even deleted. The new run
+// waits for it rather than overlap it.
 func (r *Reconciler) siblingRunning(ctx context.Context, hr *v1alpha1.HookRun) (bool, string, error) {
 	var list v1alpha1.HookRunList
 	if err := r.List(ctx, &list, client.InNamespace(hr.Namespace), client.MatchingLabels{
@@ -252,7 +254,7 @@ func (r *Reconciler) siblingRunning(ctx context.Context, hr *v1alpha1.HookRun) (
 		return false, "", fmt.Errorf("list hookruns: %w", err)
 	}
 	for _, other := range list.Items {
-		if other.Name == hr.Name || other.DeletionTimestamp.IsZero() {
+		if other.Name == hr.Name {
 			continue
 		}
 		if other.Status.Phase == v1alpha1.HookRunRunning && !r.expired(&other) {
