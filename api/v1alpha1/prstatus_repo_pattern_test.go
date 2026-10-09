@@ -49,6 +49,10 @@ func TestPRStatusRepoPattern(t *testing.T) {
 		"acme/my-service":              true,
 		"group/sub/project.name":       true,
 		"acme/My Project/gitops":       true, // an Azure DevOps project with a space
+		"acme/Project/my gitops":       true, // an Azure DevOps repository with a space
+		"acme/My Project/my gitops":    true,
+		"acme/My  Project/gitops":      false, // a double space
+		"acme/Project/gitops ":         false, // a trailing space
 		"acme/%2e%2e%2fvictim%2frepo":  false,
 		`acme\victim`:                  false,
 		"acme/x?y":                     false,

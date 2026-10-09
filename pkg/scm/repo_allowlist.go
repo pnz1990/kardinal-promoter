@@ -198,20 +198,21 @@ func (a *RepositoryAllowlist) AllowsRepo(host, repo string) bool {
 // repoSegment is a segment of a repository name every SCM accepts.
 var repoSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-// azureProjectSegment is an Azure DevOps project name: words of repoSegment
-// characters separated by single spaces.
-var azureProjectSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$`)
+// azureNameSegment is an Azure DevOps project or repository name: words of
+// repoSegment characters separated by single spaces.
+var azureNameSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$`)
 
 // validRepoSegment reports whether segs[i] may be a segment of a repository
-// on host: repoSegment and not "." or "..". Only the project of an Azure DevOps
-// repository (dev.azure.com, organization/project/repo) may hold spaces.
+// on host: repoSegment and not "." or "..". Only the project and repository
+// names of an Azure DevOps repository (dev.azure.com, organization/project/repo)
+// may hold single spaces; its organization may not.
 func validRepoSegment(host string, segs []string, i int) bool {
 	s := segs[i]
 	if s == "." || s == ".." {
 		return false
 	}
-	if host == "dev.azure.com" && len(segs) == 3 && i == 1 {
-		return azureProjectSegment.MatchString(s)
+	if host == "dev.azure.com" && len(segs) == 3 && i >= 1 {
+		return azureNameSegment.MatchString(s)
 	}
 	return repoSegment.MatchString(s)
 }

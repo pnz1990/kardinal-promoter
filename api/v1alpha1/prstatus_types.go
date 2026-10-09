@@ -24,8 +24,8 @@ type PRStatusSpec struct {
 
 	// Repo is the repository as the SCM API names it: "owner/repo" (GitHub,
 	// Forgejo, Gitea, Bitbucket), the project path with subgroups (GitLab), or
-	// "organization/project/repo" (Azure DevOps, whose project names may hold
-	// single spaces). Each segment is letters, digits, ".", "_" and "-": no
+	// "organization/project/repo" (Azure DevOps, whose project and repository
+	// names may hold single spaces). Each segment is letters, digits, ".", "_" and "-": no
 	// percent escapes, backslashes, "?", "#" or control characters, which the
 	// SCM API would read as another path.
 	// Example: acme/my-service

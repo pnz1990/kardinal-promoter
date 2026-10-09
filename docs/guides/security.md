@@ -190,7 +190,7 @@ Each entry is `host/repository`: the SCM host, and the repository as the SCM API
 `.git` in the entry (an IPv6 host may keep its brackets). `*` matches one path segment, and an
 entry ending in `/**` matches every repository below it. A `spec.git.url` that does not parse to
 a host and a repository never matches, and neither does a repository with a segment other than
-letters, digits, `.`, `_` and `-` (only an Azure DevOps project name may hold single spaces), so
+letters, digits, `.`, `_` and `-` (only Azure DevOps project and repository names may hold single spaces), so
 a percent escape, backslash, `?`, `#` or control character cannot smuggle in another path. The
 PRStatus CRD refuses such a `spec.repo` too.
 

@@ -231,6 +231,38 @@ func TestGuard(t *testing.T) {
 	}
 	assert.Len(t, inner.calls, 9, "none of them reached the provider")
 
+	// Azure DevOps: single spaces in the project and repository names only.
+	ado, err := scm.ParseRepositoryAllowlist([]string{"dev.azure.com/acme/**"})
+	require.NoError(t, err)
+	adoInner := &guardSCM{}
+	adoGuard := ado.Guard(adoInner, "dev.azure.com")
+	for repo, want := range map[string]bool{
+		"acme/My Project/gitops":    true,
+		"acme/Project/my gitops":    true,
+		"acme/My Project/my gitops": true,
+		"acme/My  Project/gitops":   false,
+		"acme/Project/my  gitops":   false,
+		"acme/ Project/gitops":      false,
+		"acme/Project /gitops":      false,
+		"acme/Project/ gitops":      false,
+		"acme/Project/gitops ":      false,
+		"ac me/Project/gitops":      false,
+		"acme/Pro\tject/gitops":     false,
+		"acme/Project/git%20ops":    false,
+	} {
+		_, _, err := adoGuard.GetPRStatus(ctx, repo, 1)
+		assert.Equal(t, want, err == nil, "%q: %v", repo, err)
+		if !want {
+			assert.True(t, errors.Is(err, scm.ErrRepositoryNotAllowed), "%q", repo)
+		}
+	}
+	assert.Len(t, adoInner.calls, 3, "only the three allowed repositories reached the provider")
+	// A space outside Azure DevOps is refused, also where Azure allows one.
+	for _, repo := range []string{"acme/my repo", "acme/My Project/gitops", "acme/sub group/proj"} {
+		_, _, err := g.GetPRStatus(ctx, repo, 1)
+		assert.True(t, errors.Is(err, scm.ErrRepositoryNotAllowed), "github.com %q: %v", repo, err)
+	}
+
 	other := &guardSCM{}
 	for _, err := range calls(a.Guard(other, "github.example.com"), "acme/gitops") {
 		assert.Error(t, err, "the same repository on another SCM host is not allowed")
@@ -242,8 +274,8 @@ func TestGuard(t *testing.T) {
 }
 
 // TestRepositoryAllowlist_Segments: a repository segment is
-// [A-Za-z0-9._-]+, except an Azure DevOps project name, which may hold
-// spaces; a percent sign, backslash, ?, # or a control character is never
+// [A-Za-z0-9._-]+, except Azure DevOps project and repository names, which
+// may hold single spaces; a percent sign, backslash, ?, # or a control character is never
 // allowed (QA #1483). Covers SCM-ALLOWREPO-02.
 func TestRepositoryAllowlist_Segments(t *testing.T) {
 	a, err := scm.ParseRepositoryAllowlist([]string{"github.com/acme/**", "dev.azure.com/acme/**"})
@@ -257,7 +289,9 @@ func TestRepositoryAllowlist_Segments(t *testing.T) {
 		{"github.com", "acme/my repo", false},
 		{"github.com", "acme/my%20repo", false},
 		{"dev.azure.com", "acme/My Project/gitops", true},
-		{"dev.azure.com", "acme/My Project/git ops", false},
+		{"dev.azure.com", "acme/My Project/git ops", true},
+		{"dev.azure.com", "acme/Project/git  ops", false},
+		{"dev.azure.com", "acme/Project/gitops ", false},
 		{"dev.azure.com", "ac me/Project/gitops", false},
 		{"dev.azure.com", "acme/ Project/gitops", false},
 		{"dev.azure.com", "acme/Pro\tject/gitops", false},
