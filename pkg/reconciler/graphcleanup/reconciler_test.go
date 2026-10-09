@@ -347,7 +347,13 @@ func TestReconciler_PrunesOnGraphDelete(t *testing.T) {
 			r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: lister,
 				Identity: &graph.IdentityProvisioner{Writer: c, Reader: c, ReaderNamespaces: graph.DefaultReaderNamespaces}}
 
+			// The deleted Graph itself, by name: its delete event queued the
+			// prune, so the gone Graph does not prune again.
 			_, err := reconcile(t, r, "team-a")
+			require.NoError(t, err)
+			assert.Zero(t, lister.calls, "a gone Graph's own request does not prune")
+
+			_, err = r.Reconcile(context.Background(), graphcleanup.PruneRequest("team-a"))
 			require.NoError(t, err)
 			assert.Equal(t, 1, lister.calls, "the remaining Graphs are listed")
 			assert.ElementsMatch(t, tt.wantLeft, readerBindingKeys(t, c))
@@ -444,7 +450,7 @@ func TestReconciler_PruneListError(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(readerBinding("argocd", "team-a")).Build()
 	r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: &graphLister{err: errors.New("boom")},
 		Identity: &graph.IdentityProvisioner{Writer: c, Reader: c, ReaderNamespaces: graph.DefaultReaderNamespaces}}
-	_, err := reconcile(t, r, "team-a")
+	_, err := r.Reconcile(context.Background(), graphcleanup.PruneRequest("team-a"))
 	require.ErrorContains(t, err, "boom")
 	assert.Len(t, readerBindingKeys(t, c), 1, "nothing is pruned without the Graph list")
 }

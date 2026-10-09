@@ -119,7 +119,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	g.SetGroupVersionKind(graph.GraphGVK)
 	if err := r.Client.Get(ctx, req.NamespacedName, g); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, r.prune(ctx, log, req.Namespace)
+			// Gone: its delete event queued the namespace's prune
+			// (pruneOnDelete), and a delete missed during a restart is
+			// pruned by the startup sweep. Pruning here as well ran one
+			// uncached prune per deleted Graph again.
+			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get graph %s: %w", req, err)
 	}
