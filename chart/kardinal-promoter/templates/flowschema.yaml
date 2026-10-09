@@ -1,0 +1,28 @@
+{{- if and .Values.leaderElect .Values.leaderElectionFlowSchema.enabled (.Capabilities.APIVersions.Has "flowcontrol.apiserver.k8s.io/v1") }}
+# The controller's leader election Lease requests get their own API Priority
+# and Fairness priority level (#1592), so its reconcile traffic, or a
+# throttle on it, cannot delay a renewal past the renew deadline.
+apiVersion: flowcontrol.apiserver.k8s.io/v1
+kind: FlowSchema
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-{{ .Release.Namespace }}-leader-election
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  matchingPrecedence: {{ .Values.leaderElectionFlowSchema.matchingPrecedence }}
+  priorityLevelConfiguration:
+    name: {{ .Values.leaderElectionFlowSchema.priorityLevel }}
+  distinguisherMethod:
+    type: ByUser
+  rules:
+    - subjects:
+        - kind: ServiceAccount
+          serviceAccount:
+            name: {{ include "kardinal-promoter.serviceAccountName" . }}
+            namespace: {{ .Release.Namespace }}
+      resourceRules:
+        - apiGroups: ["coordination.k8s.io"]
+          resources: ["leases"]
+          verbs: ["get", "create", "update"]
+          namespaces: [{{ .Release.Namespace | quote }}]
+{{- end }}
