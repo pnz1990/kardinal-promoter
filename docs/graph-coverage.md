@@ -17,7 +17,7 @@ feature or by contributing it ourselves.
 
 | What | How the Graph does it |
 |------|------------------------|
-| Promotion order (`test` → `uat` → `prod`, fan-out, fan-in) | Each environment is a PromotionStep node. kro creates a node only after the nodes it depends on are Verified. |
+| Promotion order (`test` → `uat` → `prod`, fan-out, fan-in) | Each environment is a PromotionStep node. kro creates a node only after the nodes it depends on are Verified. Above 100 environments the Graph is compact: the order is data, and one collection node creates each PromotionStep once its upstreams are Verified and its gates ready. |
 | Gates block an environment | The Bundle's PolicyGate instances are one collection node (`forEach` over the gate data in a `def` node). The environment's step is created only after each of its gates in that collection is ready. |
 | PR review tracking | Each environment gets a PRStatus, from one PRStatuses collection node, which the step fills in when it opens a PR. The collection has no `readyWhen`: the step node is ready only once the step is Verified, which for a step that opened a PR is after the merge. |
 | Per-promotion metric analysis | A `perPromotion` MetricCheck read by an environment's gate becomes a MetricCheck node for that Bundle and environment, with the Bundle's version in its query. Its query only resolves once the upstream steps are Verified, so kro creates it then; its `spec.suspend` is `${!(bundle.status.phase in ["Available", "Promoting"])}`, so kro stops it when the Bundle finishes. The MetricCheck controller reads only its own spec. See [Metric Checks](metric-checks.md#per-promotion-analysis). |
