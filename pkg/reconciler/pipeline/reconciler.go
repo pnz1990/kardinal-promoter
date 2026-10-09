@@ -30,6 +30,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
@@ -557,7 +558,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index PromotionStep by spec.pipelineName: %w", err)
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Pipeline{}).
 		// A Pipeline on the same repository and branch changed: re-check
 		// PathConflict on the others.
@@ -583,8 +584,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 					},
 				}}
 			}),
-		).
-		Complete(tracing.WrapReconciler("pipeline", r))
+		)
+	return shard.Active().Complete(b, tracing.WrapReconciler("pipeline", r), &kardinalv1alpha1.PipelineList{})
 }
 
 // deploymentMetricsEqual returns true when a and b represent the same metrics.

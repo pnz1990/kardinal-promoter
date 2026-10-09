@@ -64,7 +64,7 @@ Rules:
 | [G10](#g10-a-graph-is-one-etcd-object) | A Graph's spec and inventory share one etcd object (1.5 MiB) | Medium | `pkg/graph/size.go` `CheckSize` refuses a Graph over 1.2 MB | None filed |
 | [G11](#g11-collections-are-all-or-nothing) | A `forEach` collection is all-or-nothing on pending data and on apply errors, and every growth relabels every item | Medium | pacing by choosing the list; label-only events ignored | None filed |
 | [G12](#g12-delete-and-prune-orphan-the-pods-of-a-job) | kro deletes and prunes without a propagation policy, so a Job node orphans its Pods, and a deleted Job runs again | Medium | **Planned in #1493 (not on main)**: hooks use a `HookRun` CRD that owns its Job (#1443) | None filed |
-| [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | **Planned in #1505 (not on main)**: kardinal shards only its own controllers (#1462). On main the controller does not shard (`--shard` was removed) | None filed |
+| [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | kardinal shards only its own controllers, by namespace (`--namespace-shard`, `pkg/shard`, #1462) | None filed |
 | [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | **Planned in #1518 (not on main)**: mirror `patch` nodes with a literal target name | None filed |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
@@ -686,10 +686,12 @@ the Job started. The HookRun CRD is not on main: no hooks run today (issue #1443
 (`controller/graph/controller.go` `SetupWithManager`); there is no label selector or shard flag
 for Graphs.
 
-**kardinal workaround. Planned in #1505 (not on main).** kardinal shards only its own
-controllers, by namespace label (#1462). Graph throughput stays bounded by the one kro
-instance (G9). On main one controller replica reconciles everything (the old `--shard` flag
-and `shard` field were removed and are refused).
+**kardinal workaround.** kardinal shards only its own controllers, by namespace label
+(`--namespace-shard`, `pkg/shard`, #1462): a per-namespace token Lease `kardinal-shard` decides which
+installation reconciles the namespace, and a per-shard heartbeat Lease says whether that
+installation is alive. Every shard's Graphs still go through the one kro leader and
+its one queue, so Graph throughput stays bounded by that instance (G9) and its
+`graphConcurrentReconciles`.
 
 **Upstream work.** None filed. Ask: a `--graph-selector` label selector on the Graph
 controller, so several kro installations can split Graphs.
