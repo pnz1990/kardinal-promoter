@@ -16,6 +16,8 @@ package scm_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -351,4 +353,39 @@ func TestRepositoryAllowlist_DataCenter(t *testing.T) {
 	_, _, err = g.GetPRStatus(context.Background(), "scm/OTHER/web-app", 1)
 	assert.ErrorIs(t, err, scm.ErrRepositoryNotAllowed)
 	assert.True(t, scm.SameRepo(g, "scm/PLAT/web-app", "plat/web-app"), "the Guard keeps the canonical form for webhooks")
+}
+
+// TestGuard_ForwardsPRControls (#1483 with #1453): with
+// scm.allowedRepositories set, the controller's provider is wrapped in the
+// Guard; its pr controls (labels, reviewers, assignees, auto-merge) still
+// reach the provider for an allowed repository and are refused for any
+// other, and PRSupport reports the provider's.
+func TestGuard_ForwardsPRControls(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	a, err := scm.ParseRepositoryAllowlist([]string{"github.com/acme/*"})
+	require.NoError(t, err)
+	g := a.Guard(scm.NewGitHubProvider("t", srv.URL, ""), "github.com")
+	ctl, ok := g.(scm.PRController)
+	require.True(t, ok, "the Guard is a PRController")
+	assert.True(t, ctl.PRSupport().Reviewers, "the provider's support")
+	ctx := context.Background()
+	require.NoError(t, g.AddLabelsToPR(ctx, "acme/app", 1, []string{"env/prod"}))
+	require.NoError(t, ctl.RequestReviewers(ctx, "acme/app", 1, []string{"alice"}, nil))
+	require.NoError(t, ctl.AddAssignees(ctx, "acme/app", 1, []string{"bob"}))
+	assert.Len(t, calls, 3, "labels, reviewers and assignees reached the provider: %v", calls)
+	for _, err := range []error{
+		ctl.RequestReviewers(ctx, "evil/app", 1, []string{"alice"}, nil),
+		ctl.AddAssignees(ctx, "evil/app", 1, []string{"bob"}),
+		ctl.EnableAutoMerge(ctx, "evil/app", 1, scm.MergeOptions{}),
+		ctl.DisableAutoMerge(ctx, "evil/app", 1),
+	} {
+		assert.ErrorIs(t, err, scm.ErrRepositoryNotAllowed)
+	}
+	assert.Len(t, calls, 3, "nothing for another repository reached the provider")
 }
