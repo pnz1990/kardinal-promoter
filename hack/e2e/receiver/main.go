@@ -17,6 +17,13 @@
 //	POST /<bucket>/teams/...  also validated as a Teams Workflows webhook
 //	                        message with an Adaptive Card, answered 202, or
 //	                        400 with the reason
+//	POST /<bucket>/cloudevents/...  also validated as a CloudEvents 1.0
+//	                        structured event, answered 200, or 400 with the reason
+//	POST /_signing/<bucket> {"secret":"...","maxSkewSeconds":300}: verify
+//	                        X-Kardinal-Signature on the bucket's requests as
+//	                        docs/notifications.md#signed-requests says, and
+//	                        answer 401 with the reason when it fails
+//	                        (record.signature: "valid" or the reason)
 //	GET  /_records/<bucket> the bucket's records, oldest first, as JSON
 //	POST /_mode/<bucket>    {"status":503,"times":2,"location":"...",
 //	                        "retryAfter":"600"}: answer the next times
@@ -28,11 +35,15 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +64,15 @@ type record struct {
 	Body    string              `json:"body"`
 	// Status is what the receiver answered.
 	Status int `json:"status"`
+	// Signature is "valid" or why verification failed, when the bucket
+	// verifies signatures.
+	Signature string `json:"signature,omitempty"`
+}
+
+// signing makes the receiver verify a bucket's request signatures.
+type signing struct {
+	Secret         string `json:"secret"`
+	MaxSkewSeconds int64  `json:"maxSkewSeconds"`
 }
 
 // mode makes the receiver answer a bucket's requests with Status.
@@ -68,12 +88,13 @@ type receiver struct {
 	mu      sync.Mutex
 	records map[string][]record
 	modes   map[string]*mode
+	signing map[string]*signing
 }
 
 func main() {
 	addr := flag.String("listen", ":8080", "listen address")
 	flag.Parse()
-	r := &receiver{records: map[string][]record{}, modes: map[string]*mode{}}
+	r := &receiver{records: map[string][]record{}, modes: map[string]*mode{}, signing: map[string]*signing{}}
 	srv := &http.Server{Addr: *addr, Handler: r, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("receiver listening on %s", *addr)
 	log.Fatal(srv.ListenAndServe())
@@ -104,6 +125,19 @@ func (r *receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 		r.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
+	case parts[0] == "_signing" && len(parts) > 1 && req.Method == http.MethodPost:
+		var sg signing
+		if err := json.NewDecoder(io.LimitReader(req.Body, maxBody)).Decode(&sg); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if sg.MaxSkewSeconds <= 0 {
+			sg.MaxSkewSeconds = 300
+		}
+		r.mu.Lock()
+		r.signing[parts[1]] = &sg
+		r.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	case parts[0] == "" || strings.HasPrefix(parts[0], "_"):
 		http.NotFound(w, req)
 	default:
@@ -122,9 +156,19 @@ func (r *receiver) record(w http.ResponseWriter, req *http.Request, bucket strin
 			status, answer = validateSlack(req, body)
 		case "teams":
 			status, answer = validateTeams(req, body)
+		case "cloudevents":
+			status, answer = validateCloudEvent(req, body)
 		}
 	}
 	r.mu.Lock()
+	sigResult := ""
+	if sg := r.signing[bucket]; sg != nil {
+		sigResult = "valid"
+		if err := verifySignature([]byte(sg.Secret), body, req.Header.Get("X-Kardinal-Timestamp"),
+			req.Header.Get("X-Kardinal-Signature"), time.Duration(sg.MaxSkewSeconds)*time.Second); err != "" {
+			sigResult, status, answer = err, http.StatusUnauthorized, err
+		}
+	}
 	if m := r.modes[bucket]; m != nil {
 		status, location, retryAfter = m.Status, m.Location, m.RetryAfter
 		if m.Times > 0 {
@@ -137,7 +181,7 @@ func (r *receiver) record(w http.ResponseWriter, req *http.Request, bucket strin
 	recs := r.records[bucket]
 	recs = append(recs, record{
 		Time: time.Now().UTC(), Method: req.Method, Path: req.URL.Path, Query: req.URL.RawQuery,
-		Headers: req.Header.Clone(), Body: string(body), Status: status,
+		Headers: req.Header.Clone(), Body: string(body), Status: status, Signature: sigResult,
 	})
 	if len(recs) > maxRecords {
 		recs = recs[len(recs)-maxRecords:]
@@ -150,7 +194,8 @@ func (r *receiver) record(w http.ResponseWriter, req *http.Request, bucket strin
 	if retryAfter != "" {
 		w.Header().Set("Retry-After", retryAfter)
 	}
-	if answer == "" || status != http.StatusOK && status != http.StatusAccepted && status != http.StatusBadRequest {
+	if answer == "" || status != http.StatusOK && status != http.StatusAccepted && status != http.StatusBadRequest &&
+		status != http.StatusUnauthorized {
 		answer = http.StatusText(status)
 	}
 	w.WriteHeader(status)
@@ -240,4 +285,51 @@ func validateTeams(req *http.Request, body []byte) (int, string) {
 		}
 	}
 	return http.StatusAccepted, ""
+}
+
+// verifySignature is the receiver side of docs/notifications.md#signed-requests:
+// the timestamp is fresh and X-Kardinal-Signature is the HMAC-SHA256 of
+// "<timestamp>.<body>". It returns "" or the reason.
+func verifySignature(key, body []byte, timestamp, signature string, maxSkew time.Duration) string {
+	sec, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return "X-Kardinal-Timestamp is not a Unix time"
+	}
+	if d := time.Since(time.Unix(sec, 0)); d > maxSkew || d < -maxSkew {
+		return "X-Kardinal-Timestamp is too old or in the future"
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(timestamp + "."))
+	mac.Write(body)
+	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(want), []byte(signature)) {
+		return "X-Kardinal-Signature does not match"
+	}
+	return ""
+}
+
+// validateCloudEvent checks a CloudEvents 1.0 structured-mode event: the
+// media type and the required context attributes.
+func validateCloudEvent(req *http.Request, body []byte) (int, string) {
+	if !strings.HasPrefix(req.Header.Get("Content-Type"), "application/cloudevents+json") {
+		return http.StatusBadRequest, "content type is not application/cloudevents+json"
+	}
+	var ev map[string]interface{}
+	if err := json.Unmarshal(body, &ev); err != nil {
+		return http.StatusBadRequest, "body is not JSON"
+	}
+	for _, k := range []string{"specversion", "id", "source", "type"} {
+		if v, _ := ev[k].(string); v == "" {
+			return http.StatusBadRequest, "missing " + k
+		}
+	}
+	if ev["specversion"] != "1.0" {
+		return http.StatusBadRequest, "specversion is not 1.0"
+	}
+	if t, ok := ev["time"].(string); ok {
+		if _, err := time.Parse(time.RFC3339, t); err != nil {
+			return http.StatusBadRequest, "time is not RFC 3339"
+		}
+	}
+	return http.StatusOK, "ok"
 }
