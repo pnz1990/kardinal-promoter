@@ -536,7 +536,7 @@ func TestStep_SupersededCloseRetriesWithBackoff(t *testing.T) {
 	ok, cond := framework.CondIs(ps.Status.Conditions, "SupersededCloseFailed", metav1.ConditionTrue, "CloseFailed")
 	assert.True(t, ok, "SupersededCloseFailed: %s", cond)
 	assert.Contains(t, ps.Status.Message, "deleting its branch "+prHead(a.ns, older, "test")+" failed")
-	e.WaitPRState(t, a.repo, pr.Number, "closed", time.Second)
+	e.WaitPRState(t, a.repo, pr.Number, "closed", 30*time.Second) // already closed: one PR list can take seconds on a loaded server
 	_, err := brancher.BranchHead(ctx, a.repo, prHead(a.ns, older, "test"))
 	require.NoError(t, err, "the branch is kept while the repository is archived")
 
