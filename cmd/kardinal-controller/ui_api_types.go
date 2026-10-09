@@ -39,6 +39,25 @@ type uiRollbackRequest struct {
 	// ToBundle is the Bundle to go back to. Empty means the most recent Bundle,
 	// other than the one deployed now, that was Verified in the environment.
 	ToBundle string `json:"toBundle,omitempty"`
+	// Hold keeps the environment on the rollback until it is released
+	// (kardinal rollback --hold): no other Bundle promotes into it, and the
+	// rollback passes the gates that would block it, each pass audited.
+	Hold bool `json:"hold,omitempty"`
+	// HoldReason says why the environment is held. Required with hold.
+	HoldReason string `json:"holdReason,omitempty"`
+	// HoldExpiresIn, a Go duration such as 24h, ends the hold that long after
+	// it is made. Empty: the hold lasts until it is released.
+	HoldExpiresIn string `json:"holdExpiresIn,omitempty"`
+}
+
+// uiReleaseHoldRequest is the body of POST /api/v1/ui/release-hold.
+type uiReleaseHoldRequest struct {
+	// Pipeline is the Pipeline whose environment is held.
+	Pipeline string `json:"pipeline"`
+	// Environment is the held environment.
+	Environment string `json:"environment"`
+	// Namespace of the Pipeline. Defaults to "default".
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // uiRollbackResponse is the 201 response of POST /api/v1/ui/rollback.
@@ -49,6 +68,8 @@ type uiRollbackResponse struct {
 	RollbackOf string `json:"rollbackOf"`
 	// Message describes the rollback.
 	Message string `json:"message"`
+	// Held is true when the environment is held on the rollback.
+	Held bool `json:"held,omitempty"`
 }
 
 // uiPipelineActionRequest is the body of POST /api/v1/ui/pause and

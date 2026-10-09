@@ -626,8 +626,12 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 		return fmt.Errorf("enforceHistoryLimit: list bundles: %w", err)
 	}
 
+	keep := heldHistory(pipeline, allBundles.Items)
 	terminal := make([]*kardinalv1alpha1.Bundle, 0, len(allBundles.Items))
 	for i := range allBundles.Items {
+		if keep[allBundles.Items[i].Name] {
+			continue
+		}
 		switch allBundles.Items[i].Status.Phase {
 		case phaseVerified, phaseFailed, phaseSuperseded:
 			terminal = append(terminal, &allBundles.Items[i])
@@ -658,6 +662,45 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 	return nil
 }
 
+// heldHistory is the Bundles history GC keeps while a hold lasts (spec.holds,
+// #1528): the Bundle each hold names, its rollbackOf, and every Bundle that
+// deploys one of its artifacts (an image, config commit or chart). The gate
+// exemption checks the held Bundle against them (lifecycle.VerifyHeldRollback),
+// and none of them counts toward historyLimit.
+func heldHistory(p *kardinalv1alpha1.Pipeline, bundles []kardinalv1alpha1.Bundle) map[string]bool {
+	keep := map[string]bool{}
+	for i := range bundles {
+		held := &bundles[i]
+		if lifecycle.HoldNaming(p, held.Name) == nil {
+			continue
+		}
+		keep[held.Name] = true
+		if held.Spec.Provenance != nil && held.Spec.Provenance.RollbackOf != "" {
+			keep[held.Spec.Provenance.RollbackOf] = true
+		}
+		images := map[kardinalv1alpha1.ImageRef]bool{}
+		for _, img := range held.Spec.Images {
+			images[img] = true
+		}
+		for j := range bundles {
+			o := &bundles[j]
+			for _, img := range o.Spec.Images {
+				if images[img] {
+					keep[o.Name] = true
+				}
+			}
+			if c, oc := held.Spec.ConfigRef, o.Spec.ConfigRef; c != nil && oc != nil && c.CommitSHA != "" &&
+				c.GitRepo == oc.GitRepo && c.CommitSHA == oc.CommitSHA {
+				keep[o.Name] = true
+			}
+			if ch, och := held.Spec.Chart, o.Spec.Chart; ch != nil && och != nil && *ch == *och {
+				keep[o.Name] = true
+			}
+		}
+	}
+	return keep
+}
+
 // hasNewerSibling reports whether the pipeline has a Bundle of the same type
 // created after b (lifecycle.CompareCreation) that is still in flight: new,
 // Available or Promoting. With countVerified, a Verified sibling counts too;
@@ -679,6 +722,14 @@ func (r *Reconciler) hasNewerSibling(ctx context.Context, b *kardinalv1alpha1.Bu
 // or Available may itself wait for the slot, so it does not count.
 func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bundle,
 	countVerified bool) (newer, replaced bool, err error) {
+	// The Bundle an environment is held on (spec.holds, kardinal rollback
+	// --hold) is never superseded: the hold pins the environment to it until
+	// it is released.
+	var p kardinalv1alpha1.Pipeline
+	if getErr := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pipeline}, &p); getErr == nil &&
+		lifecycle.HoldNaming(&p, b.Name) != nil {
+		return false, false, nil
+	}
 	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
 	if err != nil {
 		return false, false, fmt.Errorf("list bundles for supersession check: %w", err)

@@ -305,7 +305,35 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	if _, err := fmt.Fprint(w, output); err != nil {
 		return fmt.Errorf("write explain output: %w", err)
 	}
-	return writeExplainDeployed(w, pipeline, envNames, envFilter, current, steps.Items, bundleByName)
+	if err := writeExplainDeployed(w, pipeline, envNames, envFilter, current, steps.Items, bundleByName); err != nil {
+		return err
+	}
+	return writeExplainHolds(w, pipe, envFilter)
+}
+
+// writeExplainHolds prints the holds (spec.holds, kardinal rollback --hold)
+// of the shown environments: the rollback each is held on, who held it and
+// why, and how to release it.
+func writeExplainHolds(w io.Writer, p *v1alpha1.Pipeline, envFilter string) error {
+	var buf strings.Builder
+	for _, h := range p.Spec.Holds {
+		if (envFilter != "" && h.Environment != envFilter) || h.Expired(time.Now()) {
+			continue
+		}
+		by := h.CreatedBy
+		if by == "" {
+			by = "unknown"
+		}
+		fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other Bundles do not promote here, and its gates here pass as EXEMPT while the controller verifies it. Release with: kardinal release-hold %s --env %s\n",
+			h.Environment, h.Bundle, by, h.Reason, p.Name, h.Environment)
+	}
+	if buf.Len() == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprint(w, "\n"+buf.String()); err != nil {
+		return fmt.Errorf("write holds: %w", err)
+	}
+	return nil
 }
 
 // writeExplainDeployed prints, for each environment with a current Bundle

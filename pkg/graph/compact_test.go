@@ -580,3 +580,27 @@ func TestCompact_MetricCheckAdmission(t *testing.T) {
 		}
 	}
 }
+
+// TestCompact_HeldEnvironment (#1528): in the compact shape, an environment
+// the Pipeline holds on another Bundle's rollback is not admitted, however
+// ready its upstreams and gates; the hold's own Bundle is admitted there.
+func TestCompact_HeldEnvironment(t *testing.T) {
+	p := compactPipeline(
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", DependsOn: []string{"test"}},
+	)
+	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-abc123", Reason: "INC-42"}}
+	for bundle, want := range map[string][]string{
+		"app-x7k2m":           {"test"},
+		"app-rollback-abc123": {"prod", "test"},
+	} {
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle(bundle, "app")})
+		require.NoError(t, err)
+		assertKroValid(t, res.Graph)
+		sim := newCompactSim(t, res.Graph)
+		sim.advance()
+		sim.steps["test"] = "Verified"
+		envs, _ := sim.wave()
+		assert.Equal(t, want, envs, bundle)
+	}
+}
