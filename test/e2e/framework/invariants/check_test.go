@@ -162,3 +162,30 @@ func TestLeaks(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckSLO(t *testing.T) {
+	t0 := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
+	pl := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "p"}, Spec: v1alpha1.PipelineSpec{
+		Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod", Approval: "pr-review"}}}}
+	mk := func(env string, d time.Duration) v1alpha1.PromotionStep {
+		s := step("a", env, "Verified", "")
+		s.CreationTimestamp = metav1.NewTime(t0)
+		s.Status.Conditions = []metav1.Condition{{Type: "Verified", Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(t0.Add(d))}}
+		return s
+	}
+	b := bundle("a", "Verified")
+	b.CreationTimestamp = metav1.NewTime(t0)
+	st := testState([]v1alpha1.Bundle{b}, []v1alpha1.PromotionStep{mk("test", 4*time.Second), mk("prod", 10*time.Minute)})
+	o := Options{Targets: []Target{{Pipeline: pl}}}
+
+	o.SLO = &SLO{StepP50: 5 * time.Second, StepP99: 15 * time.Second}
+	assert.Empty(t, checkSLO(st, o).Violations, "the pr-review step's wait for its reviewer does not count")
+
+	o.SLO = &SLO{StepP99: 3 * time.Second, BundleP99: time.Minute}
+	v := checkSLO(st, o).Violations
+	require.Len(t, v, 2)
+	assert.Contains(t, v[0], "auto step p99 is 4s")
+	assert.Contains(t, v[1], "Bundle end to end p99 is 600s")
+
+	assert.Contains(t, checkSLO(testState(nil, nil), o).Violations[0], "nothing to measure")
+}

@@ -72,6 +72,8 @@ type Options struct {
 	Allow []*regexp.Regexp
 	// Extra are the test's own numbers, copied into the report.
 	Extra map[string]interface{}
+	// SLO, when set, fails the run when promotion latency exceeds it.
+	SLO *SLO
 	// AllowEmpty lets the namespace have no Bundle (a test deleted them).
 	AllowEmpty bool
 	// Skip names checks not to run, each with the reason, for a test whose
@@ -108,6 +110,9 @@ func Check(t *testing.T, e *framework.Env, o Options) *Report {
 		r.Bundles = PhaseCount(st.bundles)
 		r.Steps = stepCount(st.steps)
 		r.Latency = latency(st)
+		if o.SLO != nil {
+			r.add(checkSLO(st, o))
+		}
 		r.add(checkTerminal(st))
 		r.add(checkPhases(st))
 		r.add(checkEnvContent(ctx, e, o, st))

@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/invariants"
 )
 
 // EnvProfile names the profile: ci (the default, sized for a 4-CPU CI
@@ -73,6 +75,12 @@ type Profile struct {
 	// Settle bounds how long every Bundle of a test may take to reach a
 	// terminal phase once the test stops creating them.
 	Settle time.Duration
+
+	// SLOPipelines Pipelines of PipelineEnvs automatic environments get one
+	// Bundle each at once in TestScale_LatencySLO, which holds the
+	// controller to SLO (test/e2e/README.md#latency-slo).
+	SLOPipelines int
+	SLO          invariants.SLO
 }
 
 // profiles are the named profiles. ci is sized for a GitHub-hosted runner
@@ -88,7 +96,9 @@ var profiles = map[string]Profile{
 		Pipelines: 20, PipelineEnvs: 3, BurstBundles: 100, BurstPipelines: 10,
 		SustainedRate: 0.5, SustainedFor: 2 * time.Minute, SustainedPipelines: 8,
 		RapidFire: 10, ChaosFor: 3 * time.Minute, ChaosPipelines: 8,
-		Settle: 10 * time.Minute,
+		Settle:       10 * time.Minute,
+		SLOPipelines: 20,
+		SLO:          invariants.SLO{StepP50: 5 * time.Second, StepP99: 15 * time.Second, BundleP99: 45 * time.Second},
 	},
 	"full": {
 		ChainStages: 100, LongChainStages: 120,
@@ -97,7 +107,9 @@ var profiles = map[string]Profile{
 		Pipelines: 200, PipelineEnvs: 3, BurstBundles: 1000, BurstPipelines: 100,
 		SustainedRate: 2, SustainedFor: 10 * time.Minute, SustainedPipelines: 50,
 		RapidFire: 40, ChaosFor: 10 * time.Minute, ChaosPipelines: 40,
-		Settle: 45 * time.Minute,
+		Settle:       45 * time.Minute,
+		SLOPipelines: 200,
+		SLO:          invariants.SLO{StepP50: 10 * time.Second, StepP99: 30 * time.Second, BundleP99: 2 * time.Minute},
 	},
 }
 
@@ -146,10 +158,11 @@ func overrides(p *Profile) []override {
 		"SHARED_PIPELINES": &p.SharedPipelines, "PIPELINES": &p.Pipelines, "PIPELINE_ENVS": &p.PipelineEnvs,
 		"BURST_BUNDLES": &p.BurstBundles, "BURST_PIPELINES": &p.BurstPipelines,
 		"SUSTAINED_PIPELINES": &p.SustainedPipelines, "RAPID_FIRE": &p.RapidFire,
-		"CHAOS_PIPELINES": &p.ChaosPipelines,
+		"CHAOS_PIPELINES": &p.ChaosPipelines, "SLO_PIPELINES": &p.SLOPipelines,
 	}
 	durations := map[string]*time.Duration{
 		"SUSTAINED_FOR": &p.SustainedFor, "CHAOS_FOR": &p.ChaosFor, "SETTLE": &p.Settle,
+		"SLO_STEP_P50": &p.SLO.StepP50, "SLO_STEP_P99": &p.SLO.StepP99, "SLO_BUNDLE_P99": &p.SLO.BundleP99,
 	}
 	var out []override
 	for name, ptr := range ints {

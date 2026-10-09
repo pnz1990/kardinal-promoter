@@ -144,7 +144,7 @@ in upper snake case (`KARDINAL_E2E_SCALE_SUSTAINED_RATE=5`,
 | Tests | What they do |
 |---|---|
 | `TestScale_Topology*` | a 100-stage chain, the 120-stage chain and 150-environment fan-out a large company asks for, waves, a diamond lattice, a fan-in, mixed auto and pr-review approval, several Pipelines writing one repo and branch |
-| `TestScale_Load*` | 200 Pipelines with a Bundle each, a burst of 1,000 Bundles (the newest per Pipeline must end Verified), a sustained rate for a duration |
+| `TestScale_Load*`, `TestScale_LatencySLO` | 200 Pipelines with a Bundle each, a burst of 1,000 Bundles (the newest per Pipeline must end Verified), a sustained rate for a duration, the latency objective ([Latency SLO](#latency-slo)) |
 | `TestScale_Race*` | rapid-fire Bundles, Pipeline edits, gate flapping, a ChangeWindow switched on while a step waits for merge, pause/resume storms, rollback during a promotion, PRs closed, reopened and merged from outside, a force-pushed branch, a namespace deleted mid-flight, duplicate, forged and out-of-order webhooks |
 | `TestScale_Chaos*` | the leader killed every 20-60 s, kro restarted, git latency and outages, API Priority and Fairness throttling the controller to one seat, the SCM token rotated mid-flight |
 
@@ -168,6 +168,29 @@ Each test writes `diagnostics/scale/<test>/report.json` (every number:
 latency per stage, Bundle end to end, Graph sizes, reconcile errors, queue
 depth, memory and goroutines per Pod) and `report.md`, and keeps the raw
 controller and kro logs next to them.
+
+### Latency SLO
+
+`TestScale_LatencySLO` gives each of `SLOPipelines` Pipelines, with three
+automatic environments each, one Bundle at once, as a monorepo release
+does. It then holds the controller to the profile's objective: the
+`latency-slo` invariant (`invariants.SLO`, any test can set
+`Options.SLO`). Step latency runs from a PromotionStep's creation, once its
+upstream environments are Verified and its gates have passed, to its
+Verified condition, for automatic environments only. Bundle latency runs
+from the Bundle's creation to its last environment Verified. The
+objectives allow for the `-race` build, which makes each reconcile about
+5x slower:
+
+| Profile | Pipelines | Auto step p50 | Auto step p99 | Bundle end to end p99 |
+|---|---|---|---|---|
+| `ci` | 20 | 5 s | 15 s | 45 s |
+| `full`, `soak` | 200 | 10 s | 30 s | 2 min |
+
+`KARDINAL_E2E_SCALE_SLO_STEP_P50`, `_SLO_STEP_P99`, `_SLO_BUNDLE_P99` and
+`_SLO_PIPELINES` override them. The test is a known bug (#1509) until the
+reconcilers run more than one worker: today the `ci` run measures a step
+p50 of 11-14 s, and the `full` run 65 s.
 
 A test that reproduces an open bug calls `scale.KnownBug(t, issue, ...)`
 and runs on: it is an expected failure. When it fails, `test/e2e/report`
