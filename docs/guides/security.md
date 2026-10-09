@@ -27,7 +27,7 @@ What the namespaced rules grant:
 | `events.k8s.io` `events` | create, patch | Events from every reconciler (the events.k8s.io/v1 API) |
 | `events` (core) | get, list, watch, create, patch | The UI step event list reads Events through core/v1; leader election writes core Events |
 | All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
-| `auditevents` | get, list, watch, create | Audit records are append-only |
+| `auditevents` | get, list, watch, create; delete only with `audit.retention.enabled: true` (off by default) | Records are never changed; opt-in retention deletes old ones |
 | `graphs.kro.run` | full CRUD; get on `graphs/status` | One Graph per Bundle |
 | `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the two Graph ClusterRoles) | get, create; get, list, create, update, delete; bind | The Graph identity. `list` is for the sweep that deletes reader bindings no Graph reads through; it runs in cluster mode only and touches only RoleBindings labeled `app.kubernetes.io/managed-by=kardinal-promoter` |
 | `deployments`, `argoproj.io` `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch | Health adapters. `rbac.argocdApplicationsWrite=true` adds `patch` on Applications for `update.strategy: argocd` |
@@ -219,6 +219,10 @@ Also:
    repositories, so a team's clones and pushes are limited by its own token.
 3. Grant `create` on `pipelines.kardinal.io` only to people you trust with the controller
    token's reach.
+4. Give a team its own SCM token with a [ScmProvider](../scm-providers.md#several-scm-providers-scmprovider-and-clusterscmprovider)
+   in its namespace. Its Pipelines name it in `spec.git.providerRef`, and its
+   `allowedRepositories` limits that token the way `scm.allowedRepositories` limits the
+   controller's. The Secrets a ScmProvider names must be labeled `kardinal.io/referenceable: "true"`.
 
 #### Stronger isolation: one install per team namespace
 
@@ -353,6 +357,31 @@ lifecycle transition, in the Pipeline's namespace. AuditEvents are append-only â
 spec is set at creation and never mutated. Kubernetes RBAC controls who can delete them (see
 [RBAC: read-only access to audit records](#rbac-read-only-access-to-audit-records)).
 
+### Retention
+
+An AuditEvent has no owner, so it outlives the Bundle and the step it records, and nothing
+else deletes it. Without retention a busy cluster keeps every record in etcd for ever.
+Retention is **off by default**, so an upgrade never deletes an audit record. Turn it on with
+`audit.retention.enabled: true`. The controller's leader then applies it every 10 minutes:
+
+| Value | Flag | Default | Deletes |
+|---|---|---|---|
+| `audit.retention.enabled` | `--audit-retention` | `false` | `true` turns retention on and grants the controller `delete` on AuditEvents |
+| `audit.retention.maxAge` | `--audit-retention-max-age` | `2160h` (90 days) | records created longer ago (`metadata.creationTimestamp`, set by the API server). `0s` keeps any age |
+| `audit.retention.maxPerPipeline` | `--audit-retention-max-per-pipeline` | `1000` | per Pipeline (namespace and `kardinal.io/pipeline` label), all but the newest records, newest by `metadata.creationTimestamp` and, within one second, `kardinal.io/created-at`. `0` keeps any number |
+
+A run lists the records metadata-only, 500 at a time, and deletes at most 2000, the oldest
+first. It uses a client of its own limited to 5 API requests a second, so it never takes API
+capacity from the reconcilers: clearing 2000 records takes about 7 minutes, and a larger
+backlog is cleared over several runs. `kardinal_auditevents_pruned_total` counts the
+deletions.
+
+A gate whose result changes often writes a record at each change, and can reach
+`maxPerPipeline` quickly. If you must keep every record, export them
+([SIEM integration](#siem-integration)) more often than the effective retention (the age
+limit, or the time a busy Pipeline takes to write `maxPerPipeline` records), or leave
+retention off.
+
 ### Events written automatically
 
 | Action | Trigger |
@@ -471,17 +500,22 @@ kubectl get auditevents -A -o json \
       env: .spec.environment,
       action: .spec.action,
       outcome: .spec.outcome,
-      message: .spec.message
+      message: .spec.message,
+      uid: .metadata.uid
     }'
 ```
 
 Log forwarders such as Fluent Bit and Vector read container logs, not custom resources. Run
 the command above on a schedule (for example a CronJob) and forward its output to your SIEM
-(Splunk, Datadog, OpenSearch, etc.).
+(Splunk, Datadog, OpenSearch, etc.). Each run exports every record still there, so include
+`uid: .metadata.uid` and deduplicate by it in the SIEM. With retention on, run the export more
+often than the effective retention (see [Retention](#retention)), or records are deleted before
+they are exported.
 
 ### RBAC: read-only access to audit records
 
-The controller's ServiceAccount can create AuditEvents but cannot update or delete them.
+The controller's ServiceAccount can create AuditEvents but cannot update them, and cannot
+delete them unless you turn on [retention](#retention).
 Kubernetes RBAC only grants access; it cannot deny it. A user can delete AuditEvents only if a
 role grants `delete` (or `*`) on `auditevents`, as `cluster-admin` does. Grant users read-only
 access like the role below, and do not grant `delete` or `*` on `kardinal.io` resources. The API
@@ -591,9 +625,11 @@ the Pipeline's git and SCM hosts.
 ### Outbound requests to user URLs
 
 NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`,
-`datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`)
-and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`,
-`spec.helm.repoURL`) send HTTP requests from the controller to a URL a user wrote into a resource. The controller
+`datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`),
+Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`,
+`spec.helm.repoURL`) and the API calls of ScmProviders and ClusterScmProviders
+(`spec.apiURL`, `https://` only unless `scm.providersAllowInsecureHTTP` is set)
+send HTTP requests from the controller to a URL a user wrote into a resource. The controller
 refuses to connect when the address is one of these:
 
 - loopback (`127.0.0.0/8`, `::1`), which includes the controller's own UI API;

@@ -16,7 +16,9 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [AuditEvent](#auditevent) | `auditevents.kardinal.io` | Namespaced | `ae`, `audit` |
 | [Bundle](#bundle) | `bundles.kardinal.io` | Namespaced | `bnd` |
 | [ChangeWindow](#changewindow) | `changewindows.kardinal.io` | Cluster | `cw` |
+| [ClusterScmProvider](#clusterscmprovider) | `clusterscmproviders.kardinal.io` | Cluster | `cscmp` |
 | [HookRun](#hookrun) | `hookruns.kardinal.io` | Namespaced | `hr` |
+| [ImageVerification](#imageverification) | `imageverifications.kardinal.io` | Namespaced | `iv` |
 | [MetricCheck](#metriccheck) | `metricchecks.kardinal.io` | Namespaced |  |
 | [NotificationHook](#notificationhook) | `notificationhooks.kardinal.io` | Namespaced | `nhook` |
 | [PRStatus](#prstatus) | `prstatuses.kardinal.io` | Namespaced | `prs` |
@@ -25,6 +27,7 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [PromotionStep](#promotionstep) | `promotionsteps.kardinal.io` | Namespaced | `ps` |
 | [RollbackPolicy](#rollbackpolicy) | `rollbackpolicies.kardinal.io` | Namespaced | `rbp` |
 | [ScheduleClock](#scheduleclock) | `scheduleclocks.kardinal.io` | Namespaced | `sclock` |
+| [ScmProvider](#scmprovider) | `scmproviders.kardinal.io` | Namespaced | `scmp` |
 | [Subscription](#subscription) | `subscriptions.kardinal.io` | Namespaced | `sub` |
 
 ## Approval
@@ -166,6 +169,42 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.reason` | string |  | Reason explains the current active/inactive state. |
 
+## ClusterScmProvider
+
+`kardinal.io/v1alpha1`
+
+ClusterScmProvider is a cluster-scoped ScmProvider: Pipelines of the namespaces spec.allowedNamespaces selects may use it.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object | yes | ClusterScmProviderSpec is a ScmProviderSpec that Pipelines of several namespaces may use. |
+| `spec.allowedNamespaces` | object |  | AllowedNamespaces selects the namespaces whose Pipelines may use the provider, by namespace labels. Empty allows none: a cluster-wide token is shared only on purpose. |
+| `spec.allowedNamespaces.matchExpressions` | []object |  | matchExpressions is a list of label selector requirements. The requirements are ANDed. |
+| `spec.allowedNamespaces.matchExpressions[].key` | string | yes | key is the label key that the selector applies to. |
+| `spec.allowedNamespaces.matchExpressions[].operator` | string | yes | operator represents a key's relationship to a set of values. Valid operators are In, NotIn, Exists and DoesNotExist. |
+| `spec.allowedNamespaces.matchExpressions[].values` | []string |  | values is an array of string values. If the operator is In or NotIn, the values array must be non-empty. If the operator is Exists or DoesNotExist, the values array must be empty. This array is replaced during a strategic merge patch. |
+| `spec.allowedNamespaces.matchLabels` | map[string]string |  | matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels map is equivalent to an element of matchExpressions, whose key field is "key", the operator is "In", and the values array contains only "value". The requirements are ANDed. |
+| `spec.allowedRepositories` | []string |  | AllowedRepositories, when set, are the only repositories this provider's token is used for: globs over the repository the SCM API names ("acme/*", "group/sub/**"). "*" matches one path segment and a trailing "/**" any depth. A Bundle of a Pipeline whose repository is not allowed fails when its Graph is built. |
+| `spec.apiURL` | string |  | APIURL is the SCM's API base URL (the --scm-api-url value). Empty uses the provider's public default (api.github.com, gitlab.com, ...). |
+| `spec.secretRef` | object | yes | SecretRef names the Secret that holds the API token. A ScmProvider's Secret is in its own namespace; a ClusterScmProvider names the namespace. |
+| `spec.secretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
+| `spec.secretRef.name` | string | yes | Name is the Secret name. |
+| `spec.secretRef.namespace` | string |  | Namespace is the Secret's namespace: required on a ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in its own namespace (a Pipeline author cannot borrow another namespace's token). |
+| `spec.type` | string | yes | Type is the SCM: github, gitlab, forgejo, gitea, bitbucket or azuredevops (the --scm-provider values). One of: `github`, `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops`. |
+| `spec.webhookSecretRef` | object |  | WebhookSecretRef names the Secret that holds the webhook secret this provider's webhook deliveries are checked with (key "secret" when unset). Without it the provider's webhook endpoint refuses every delivery, and merges are seen by polling. |
+| `spec.webhookSecretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
+| `spec.webhookSecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.webhookSecretRef.namespace` | string |  | Namespace is the Secret's namespace: required on a ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in its own namespace (a Pipeline author cannot borrow another namespace's token). |
+| `status` | object |  | ScmProviderStatus is what the controller found when it checked the provider. |
+| `status.conditions` | []object |  | Conditions: Ready is True when the spec is valid and its Secrets have their keys. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation the conditions describe. |
+
 ## HookRun
 
 `kardinal.io/v1alpha1`
@@ -203,6 +242,66 @@ HookRun is one run of a pre- or post-deploy hook (a Kubernetes Job) for one Bund
 | `status.phase` | string |  | Phase is Pending until the Job is created, Running while it runs, and Succeeded or Failed once it finished, or Skipped. Succeeded, Failed and Skipped are terminal: the API server refuses to change them, and the Job is never created again, even when it is deleted. One of: `Pending`, `Running`, `Succeeded`, `Failed`, `Skipped`. |
 | `status.specHash` | string |  | SpecHash is a hash of spec.job and spec.timeout when the Job was created. A later spec change is not applied (condition SpecChangedAfterStart). |
 | `status.startedAt` | string (date-time) |  | StartedAt is when the HookRun started (the Job was created). |
+
+## ImageVerification
+
+`kardinal.io/v1alpha1`
+
+ImageVerification checks the signatures of one Bundle's images (and of its config commit) before the Bundle is promoted. Created by the Bundle's kro Graph; reconciled by the ImageVerification reconciler.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object |  | ImageVerificationSpec is what one Bundle must prove before its first environments are promoted. The Bundle's Graph creates it from the Pipeline's spec.imageVerification and the Bundle's images. It is immutable: a policy change gives a new ImageVerification (its name carries a hash of the spec), so a verdict is never reused for another policy. |
+| `spec.bundleName` | string | yes | BundleName is the Bundle. |
+| `spec.commit` | object |  | Commit is the config commit to verify, when commits.requireSigned. |
+| `spec.commit.repo` | string | yes | Repo is the git repository URL. |
+| `spec.commit.sha` | string | yes | SHA is the commit. |
+| `spec.images` | []object |  | Images are the images to verify, pinned by digest. |
+| `spec.images[].digest` | string | yes | Digest is the sha256 digest the Bundle pins. |
+| `spec.images[].repository` | string | yes | Repository is the image repository, without tag or digest. |
+| `spec.pipelineName` | string | yes | PipelineName is the Pipeline. |
+| `spec.policy` | object | yes | Policy is the Pipeline's policy (its images selector already applied). |
+| `spec.policy.authorities` | []object |  | Authorities are the signers an image may be signed by: an image is verified when one of its signatures verifies against any authority. |
+| `spec.policy.authorities[].key` | object |  | Key is a PEM public key (cosign.pub) in a Secret of the Pipeline namespace. |
+| `spec.policy.authorities[].key.requireTransparencyLog` | boolean |  | RequireTransparencyLog requires a Rekor entry (and its inclusion proof) in the Sigstore bundle. Default false: a key signature is verified against the key alone, like cosign --insecure-ignore-tlog. |
+| `spec.policy.authorities[].key.secretRef` | object | yes | SecretRef names the Secret and key holding the PEM public key. |
+| `spec.policy.authorities[].key.secretRef.key` | string | yes | Key is the data key. |
+| `spec.policy.authorities[].key.secretRef.name` | string | yes | Name is the object name. |
+| `spec.policy.authorities[].keyless` | object |  | Keyless is a Sigstore keyless identity: the OIDC issuer and subject of the Fulcio certificate that signed. |
+| `spec.policy.authorities[].keyless.issuer` | string | yes | Issuer is the OIDC issuer, for example https://token.actions.githubusercontent.com. |
+| `spec.policy.authorities[].keyless.subject` | string |  | Subject is the certificate's subject (SAN), for example https://github.com/myorg/app/.github/workflows/release.yml@refs/heads/main. |
+| `spec.policy.authorities[].keyless.subjectRegExp` | string |  | SubjectRegExp is a regular expression the subject must match. |
+| `spec.policy.authorities[].keyless.trustedRootRef` | object |  | TrustedRootRef names a Secret key in the Pipeline namespace holding a Sigstore trusted_root.json (a private Sigstore). Empty means the Sigstore public-good instance, whose trusted root the controller fetches through TUF. |
+| `spec.policy.authorities[].keyless.trustedRootRef.key` | string | yes | Key is the data key. |
+| `spec.policy.authorities[].keyless.trustedRootRef.name` | string | yes | Name is the object name. |
+| `spec.policy.authorities[].name` | string | yes | Name identifies the authority in results. |
+| `spec.policy.commits` | object |  | Commits, when requireSigned is true, requires the commit of a config or mixed Bundle (spec.configRef.commitSHA) to be signed, as the SCM provider reports it (GitHub, GitLab, Forgejo, Gitea). |
+| `spec.policy.commits.allowedSigners` | []string |  | AllowedSigners, when set, also requires the signer to be one of these: an SCM login or an email address, as the SCM reports the verified signer (GitLab: the key owner's verified email, the committer's for SSH; never a key title). Commits the SCM platform signed itself, not a person, are refused unless listed here explicitly: "web-flow" (GitHub web UI edits and merges), "gitlab-system" (GitLab verified_system) and "forgejo-instance" (the Forgejo/Gitea instance key). To accept PRs merged in the web UI, list the platform identity. Empty means any person's signature the SCM verified. |
+| `spec.policy.commits.requireSigned` | boolean | yes | RequireSigned requires the config Bundle's commit to be signed with a signature the SCM provider verified. configRef.commitSHA must then be a full 40- or 64-character SHA, and configRef.gitRepo must be on the controller's SCM host. |
+| `spec.policy.images` | []string |  | Images selects the Bundle images to verify by repository, with "*" matching any characters ("ghcr.io/myorg/*"). Empty means every image. Every selected image must be pinned by digest in the Bundle. |
+| `spec.policy.insecureRegistries` | []string |  | InsecureRegistries are registry hosts ("registry.local:5000") read over plain HTTP. Every other registry is read over HTTPS. |
+| `spec.policy.registrySecretRef` | object |  | RegistrySecretRef names a kubernetes.io/dockerconfigjson Secret in the Pipeline namespace with credentials for the registries holding the images and their signatures. Without it registries are read anonymously. |
+| `spec.policy.registrySecretRef.name` | string | yes | Name is the object name. |
+| `spec.policy.signatureRepository` | string |  | SignatureRepository is the repository that holds the signatures, when they are not stored next to the images (cosign's COSIGN_REPOSITORY), for example "registry.example.com/signatures". Signatures are looked up there by image digest. |
+| `spec.policy.timeout` | string |  | Timeout bounds how long a missing signature is waited for (CI may sign after it pushes), from the moment the ImageVerification starts. A signature that does not verify fails at once. Empty or "0" means 10m. |
+| `status` | object |  | ImageVerificationStatus is the observed state. |
+| `status.attempts` | integer |  | Attempts counts checks that ended without a verdict (registry or SCM unreachable, signature not there yet); it spaces the retries. |
+| `status.commit` | object |  | Commit is the commit result. |
+| `status.commit.message` | string |  | Message is the SCM's reason when not verified. |
+| `status.commit.signer` | string |  | Signer is who signed, as the SCM reports it. |
+| `status.commit.verified` | boolean | yes | Verified is true when the SCM verified the commit's signature. |
+| `status.deadline` | string (date-time) |  | Deadline is StartedAt plus the policy timeout. |
+| `status.images` | []object |  | Images has one result per spec.images entry. |
+| `status.images[].authority` | string |  | Authority is the authority that verified it. |
+| `status.images[].image` | string | yes | Image is "repository@digest". |
+| `status.images[].message` | string |  | Message says why the image is not verified yet, or failed. |
+| `status.images[].signer` | string |  | Signer is the key's authority name or the certificate identity. |
+| `status.images[].verified` | boolean | yes | Verified is true once a signature verified. |
+| `status.lastCheckedAt` | string (date-time) |  | LastCheckedAt is when the registry or SCM was last asked. |
+| `status.message` | string |  | Message summarizes the phase. |
+| `status.phase` | string |  | Phase is Pending, Verified or Failed. Verified and Failed are terminal: a verified signature is not checked again (revocation after the verification is not seen). One of: `Pending`, `Verified`, `Failed`. |
+| `status.reason` | string |  | Reason is a machine-readable reason for a Failed or waiting verification: SecretNotReferenceable, SecretNotFound, InvalidPublicKey, InvalidTrustedRoot, InvalidRegistryCredentials, SignatureNotVerified, CommitNotVerified, Timeout. |
+| `status.startedAt` | string (date-time) |  | StartedAt is when the verification started. |
 
 ## MetricCheck
 
@@ -331,6 +430,10 @@ PRStatus is a controller-internal CRD that tracks the merge state of a GitHub pu
 | `spec.prNumber` | integer |  | PRNumber is the pull request number (numeric ID within the repo). Set by the open-pr step after the PR is created. Zero in the placeholder. The PromotionStep sets it again when it opened another PR (a recreated step whose PR was closed): the spec always names the step's PR. |
 | `spec.prURL` | string |  | PRURL is the full GitHub pull request URL. Example: https://github.com/owner/repo/pull/42 Set by the open-pr step after the PR is created. Empty in the placeholder. |
 | `spec.repo` | string |  | Repo is the repository as the SCM API names it: "owner/repo" (GitHub, Forgejo, Gitea, Bitbucket), the project path with subgroups (GitLab), or "organization/project/repo" (Azure DevOps, whose project and repository names may hold single spaces). Each segment is letters, digits, ".", "_" and "-": no percent escapes, backslashes, "?", "#" or control characters, which the SCM API would read as another path. Example: acme/my-service Set by the open-pr step after the PR is created. Empty in the placeholder. |
+| `spec.scmProvider` | object |  | ScmProvider is the provider the PR was opened on, copied from the PromotionStep. Unset uses the controller's --scm-provider. |
+| `spec.scmProvider.kind` | string | yes | Kind is ScmProvider or ClusterScmProvider. One of: `ScmProvider`, `ClusterScmProvider`. |
+| `spec.scmProvider.name` | string | yes | Name is the provider's name; a ScmProvider is in the step's namespace. |
+| `spec.scmProvider.uid` | string | yes | UID is the provider's metadata.uid when the Graph was built. |
 | `status` | object |  | PRStatusStatus holds the observed state of the pull request. Written exclusively by the PRStatusReconciler. |
 | `status.approvalCount` | integer |  | ApprovalCount is the number of distinct approved reviews on this PR. Written by PRStatusReconciler. CEL: bundle.pr["staging"].approvalCount &gt;= 2 |
 | `status.approved` | boolean |  | Approved is true when the pull request has at least one approved review and no outstanding change-request reviews. Written by PRStatusReconciler. CEL: bundle.pr["staging"].isApproved |
@@ -444,6 +547,9 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.git.branch` | string |  | Branch is the base branch: git-clone checks it out, approval: auto pushes to it, and pr-review PRs target it. Defaults to main. Default: `main`. |
 | `spec.git.layout` | string |  | Layout controls how environment paths are organized in the repository. "directory": environments as subdirectories on one branch (default). "branch": environments as separate branches. One of: `directory`, `branch`. Default: `directory`. |
 | `spec.git.provider` | string |  | Provider is ignored. One controller serves one SCM, chosen with its --scm-provider flag. Deprecated: ignored; the controller's --scm-provider flag selects the provider. One of: `github`, `gitlab`. |
+| `spec.git.providerRef` | object |  | ProviderRef names the ScmProvider (in the Pipeline's namespace) or the ClusterScmProvider the Pipeline opens its PRs on and reads their state from. Unset uses the controller's --scm-provider. Git clone and push still use secretRef. |
+| `spec.git.providerRef.kind` | string |  | Kind is ScmProvider (in the Pipeline's namespace, the default) or ClusterScmProvider. One of: `ScmProvider`, `ClusterScmProvider`. Default: `ScmProvider`. |
+| `spec.git.providerRef.name` | string | yes | Name is the provider's name. |
 | `spec.git.secretRef` | object |  | SecretRef references a Kubernetes Secret containing the SCM token. |
 | `spec.git.secretRef.name` | string | yes | Name is the Secret name. |
 | `spec.git.secretRef.namespace` | string |  | Namespace is the Secret namespace. If empty, the Pipeline's namespace is used. For spec.git.secretRef it must be empty or equal to the Pipeline's namespace: the controller refuses to read a Secret from another namespace and fails the PromotionStep with a clear message, so a Pipeline author cannot borrow another team's credentials. |
@@ -457,6 +563,30 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.holds[].environment` | string | yes | Environment is the held environment. |
 | `spec.holds[].expiresAt` | string (date-time) |  | ExpiresAt, when set, is when the controller removes the hold. |
 | `spec.holds[].reason` | string | yes | Reason says why the environment is held. It is shown wherever the hold or a gate it exempts is. |
+| `spec.imageVerification` | object |  | ImageVerification requires the signatures of the Bundle's images (and of a config Bundle's commit) to verify before the Bundle is promoted into its first environments. Selected images must be pinned by digest. See docs/image-verification.md. |
+| `spec.imageVerification.authorities` | []object |  | Authorities are the signers an image may be signed by: an image is verified when one of its signatures verifies against any authority. |
+| `spec.imageVerification.authorities[].key` | object |  | Key is a PEM public key (cosign.pub) in a Secret of the Pipeline namespace. |
+| `spec.imageVerification.authorities[].key.requireTransparencyLog` | boolean |  | RequireTransparencyLog requires a Rekor entry (and its inclusion proof) in the Sigstore bundle. Default false: a key signature is verified against the key alone, like cosign --insecure-ignore-tlog. |
+| `spec.imageVerification.authorities[].key.secretRef` | object | yes | SecretRef names the Secret and key holding the PEM public key. |
+| `spec.imageVerification.authorities[].key.secretRef.key` | string | yes | Key is the data key. |
+| `spec.imageVerification.authorities[].key.secretRef.name` | string | yes | Name is the object name. |
+| `spec.imageVerification.authorities[].keyless` | object |  | Keyless is a Sigstore keyless identity: the OIDC issuer and subject of the Fulcio certificate that signed. |
+| `spec.imageVerification.authorities[].keyless.issuer` | string | yes | Issuer is the OIDC issuer, for example https://token.actions.githubusercontent.com. |
+| `spec.imageVerification.authorities[].keyless.subject` | string |  | Subject is the certificate's subject (SAN), for example https://github.com/myorg/app/.github/workflows/release.yml@refs/heads/main. |
+| `spec.imageVerification.authorities[].keyless.subjectRegExp` | string |  | SubjectRegExp is a regular expression the subject must match. |
+| `spec.imageVerification.authorities[].keyless.trustedRootRef` | object |  | TrustedRootRef names a Secret key in the Pipeline namespace holding a Sigstore trusted_root.json (a private Sigstore). Empty means the Sigstore public-good instance, whose trusted root the controller fetches through TUF. |
+| `spec.imageVerification.authorities[].keyless.trustedRootRef.key` | string | yes | Key is the data key. |
+| `spec.imageVerification.authorities[].keyless.trustedRootRef.name` | string | yes | Name is the object name. |
+| `spec.imageVerification.authorities[].name` | string | yes | Name identifies the authority in results. |
+| `spec.imageVerification.commits` | object |  | Commits, when requireSigned is true, requires the commit of a config or mixed Bundle (spec.configRef.commitSHA) to be signed, as the SCM provider reports it (GitHub, GitLab, Forgejo, Gitea). |
+| `spec.imageVerification.commits.allowedSigners` | []string |  | AllowedSigners, when set, also requires the signer to be one of these: an SCM login or an email address, as the SCM reports the verified signer (GitLab: the key owner's verified email, the committer's for SSH; never a key title). Commits the SCM platform signed itself, not a person, are refused unless listed here explicitly: "web-flow" (GitHub web UI edits and merges), "gitlab-system" (GitLab verified_system) and "forgejo-instance" (the Forgejo/Gitea instance key). To accept PRs merged in the web UI, list the platform identity. Empty means any person's signature the SCM verified. |
+| `spec.imageVerification.commits.requireSigned` | boolean | yes | RequireSigned requires the config Bundle's commit to be signed with a signature the SCM provider verified. configRef.commitSHA must then be a full 40- or 64-character SHA, and configRef.gitRepo must be on the controller's SCM host. |
+| `spec.imageVerification.images` | []string |  | Images selects the Bundle images to verify by repository, with "*" matching any characters ("ghcr.io/myorg/*"). Empty means every image. Every selected image must be pinned by digest in the Bundle. |
+| `spec.imageVerification.insecureRegistries` | []string |  | InsecureRegistries are registry hosts ("registry.local:5000") read over plain HTTP. Every other registry is read over HTTPS. |
+| `spec.imageVerification.registrySecretRef` | object |  | RegistrySecretRef names a kubernetes.io/dockerconfigjson Secret in the Pipeline namespace with credentials for the registries holding the images and their signatures. Without it registries are read anonymously. |
+| `spec.imageVerification.registrySecretRef.name` | string | yes | Name is the object name. |
+| `spec.imageVerification.signatureRepository` | string |  | SignatureRepository is the repository that holds the signatures, when they are not stored next to the images (cosign's COSIGN_REPOSITORY), for example "registry.example.com/signatures". Signatures are looked up there by image digest. |
+| `spec.imageVerification.timeout` | string |  | Timeout bounds how long a missing signature is waited for (CI may sign after it pushes), from the moment the ImageVerification starts. A signature that does not verify fails at once. Empty or "0" means 10m. |
 | `spec.maxConcurrentPromotions` | integer |  | MaxConcurrentPromotions caps the number of Bundles in Promoting phase for this pipeline at any given time. When 0 or unset (default), there is no cap and all Available Bundles are promoted concurrently. When set to a positive value, Bundles that exceed the cap are requeued until a promotion slot becomes available. This prevents promotion storms (e.g. a CI burst creating 50 Bundles simultaneously) from saturating git hosts, exhausting GitHub API rate limits, or creating merge conflicts in the GitOps repository. Example: maxConcurrentPromotions: 2 allows at most 2 active promotions at once. Additional Available Bundles wait in a 30-second polling loop. Default: `0`. |
 | `spec.paused` | boolean |  | Paused suspends all promotions in this pipeline when true. Default: `false`. |
 | `spec.policyGates` | []object |  | PolicyGates is not implemented, and the API server rejects a non-empty list. Org gates apply through the kardinal.io/applies-to label. Deprecated: remove the field; label org PolicyGates with kardinal.io/applies-to instead. |
@@ -563,8 +693,8 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is when the gate's result was last written. The controller re-evaluates more often, but writes the status only when the result or reason changes, when a PromotionStep that has not started needs a newer result, after a spec change, and otherwise at least every 10 minutes. |
-| `status.overrides` | []object |  | Overrides records each spec.overrides entry the controller has seen: when it first saw it, whether its createdBy was checked by the chart's identity admission policy, and whether its GateOverridden AuditEvent is written. An override counts from firstSeen: it ends at the earlier of its expiresAt and firstSeen plus the override cap (--gate-override-max-minutes). Records are never dropped, so an entry removed and added again keeps its firstSeen; past 200 records new overrides are not counted (condition OverrideIgnored). |
-| `status.overrides[].audited` | boolean |  | Audited is true once the GateOverridden AuditEvent is written. |
+| `status.overrides` | []object |  | Overrides records each spec.overrides entry the controller has seen: when it first saw it, whether its createdBy was checked by the chart's identity admission policy, and whether its GateOverridden AuditEvent is recorded. An override counts from firstSeen: it ends at the earlier of its expiresAt and firstSeen plus the override cap (--gate-override-max-minutes). Records are never dropped, so an entry removed and added again keeps its firstSeen; past 200 records new overrides are not counted (condition OverrideIgnored). |
+| `status.overrides[].audited` | boolean |  | Audited is true once the GateOverridden record is stored: in status.pendingAuditEvents until the AuditEvent is written (#1552). |
 | `status.overrides[].firstSeen` | string (date-time) | yes | FirstSeen is when the controller first saw the override. It is the AuditEvent timestamp and the start of the override cap. |
 | `status.overrides[].key` | string | yes | Key identifies the override: a hash of its stage, reason, createdBy, createdAt and expiresAt, so an edited entry is a new override. |
 | `status.overrides[].verified` | boolean |  | Verified is true when createdBy was checked: the chart's identity admission policy was bound when the controller first saw the override, on a gate it was already checking. |
@@ -599,7 +729,8 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.analysisPolicy.timeout` | string |  | Timeout is the verification timeout (default 30m). |
 | `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment this step promotes into. |
-| `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs, each part with its own patch node (its own field manager), not the step's template, so they keep updating after the step's own template stopped resolving: the environment's hook and analysis runs, and the current results of its gates. The reconciler reads only this copy, never the source objects; while the step's PR waits for its merge it mirrors the gates to the PR's head commit as the kardinal/gates commit status. Do not set it. |
+| `spec.imageVerification` | string |  | ImageVerification names the Bundle's ImageVerification when this step must wait for it: a step with no upstream in the Graph stays Pending until spec.live.imageVerification.phase is Verified, and fails when it is Failed. |
+| `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs, each part with its own patch node (its own field manager), not the step's template, so they keep updating after the step's own template stopped resolving: the environment's hook and analysis runs, the current results of its gates, and the Bundle's image verification. The reconciler reads only this copy, never the source objects; while the step's PR waits for its merge it mirrors the gates to the PR's head commit as the kardinal/gates commit status. Do not set it. |
 | `spec.live.analyses` | []object |  | Analyses are the environment's AnalysisRuns for this Bundle. |
 | `spec.live.analyses[].created` | string |  | Created is the AnalysisRun's creationTimestamp (RFC 3339). The newest run of a template is the one the step waits for. |
 | `spec.live.analyses[].message` | string |  | Message is the AnalysisRun's status.message. |
@@ -617,12 +748,21 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.live.hooks[].phase` | string |  | Phase is the hook phase: pre or post. |
 | `spec.live.hooks[].result` | string |  | Result is the HookRun's status.phase (Pending when it has none yet). |
 | `spec.live.hooks[].specHash` | string |  | SpecHash is the HookRun's status.specHash: which job and timeout ran. |
+| `spec.live.imageVerification` | object |  | ImageVerification is the Bundle's ImageVerification result. |
+| `spec.live.imageVerification.images` | []string |  | Images are the images it verifies, "repository@digest" (repository normalized). The step refuses to promote a Bundle whose images differ. |
+| `spec.live.imageVerification.message` | string |  | Message is its status.message. |
+| `spec.live.imageVerification.name` | string |  | Name is the ImageVerification's name. |
+| `spec.live.imageVerification.phase` | string |  | Phase is its status.phase (Pending when it has none yet). |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this step belongs to. |
 | `spec.postHooks` | []string |  | PostHooks names the HookRuns of the environment's post-deploy hooks, in order. A step with post hooks goes from HealthChecking to Verifying, and is Verified only when every one of them Succeeded in spec.live.hooks; a Failed one applies onHealthFailure. |
 | `spec.prStatusRef` | string |  | PRStatusRef is the name of the companion PRStatus CRD in the same namespace. Set by the Graph controller from the PRStatus Watch node's metadata.name CEL reference. The PromotionStep reconciler reads the PRStatus CRD instead of polling GitHub directly, eliminating the PS-4 / SCM-2 external API call on the reconcile hot path. |
 | `spec.preHooks` | []string |  | PreHooks names the HookRuns of the environment's pre-deploy hooks, in order. The step stays Pending until every one of them Succeeded in spec.live.hooks, and fails when one Failed. Set by the Graph: the first entry references the first HookRun node, so the step is created only after it. |
 | `spec.region` | string |  | Region was set on the per-region PromotionSteps of a Pipeline environment with two or more spec.regions. The Graph builder no longer sets it; the reconciler fails a step that still has one (created by a Graph built before the upgrade) with "regions is not supported". Deprecated: declare one environment per region (prod-us, prod-eu) and use wave. |
 | `spec.requiredGates` | []string |  | RequiredGates holds the names of PolicyGate instances that must be ready before this PromotionStep can be promoted. Set by the Graph controller via CEL. |
+| `spec.scmProvider` | object |  | ScmProvider is the provider of the Pipeline's spec.git.providerRef, as the translator resolved it when it built the Graph. Unset uses the controller's --scm-provider. |
+| `spec.scmProvider.kind` | string | yes | Kind is ScmProvider or ClusterScmProvider. One of: `ScmProvider`, `ClusterScmProvider`. |
+| `spec.scmProvider.name` | string | yes | Name is the provider's name; a ScmProvider is in the step's namespace. |
+| `spec.scmProvider.uid` | string | yes | UID is the provider's metadata.uid when the Graph was built. |
 | `spec.stepType` | string | yes | StepType identifies the built-in step to execute. Examples: git-clone, kustomize-set-image, git-commit, open-pr, wait-for-merge, health-check. |
 | `spec.upstreamStates` | []string |  | UpstreamStates holds the resolved state of all upstream PromotionSteps. Each entry is a string like "Verified", set by the kro Graph controller via CEL expression substitution. Replaces the N-field upstreamVerified/upstreamVerified2 pattern (issue 625) -- a single list scales to any number of upstream environments. kro scans list items for CEL references, so each entry creates a DAG edge. |
 | `status` | object |  | PromotionStepStatus defines the observed state of a PromotionStep. |
@@ -717,6 +857,36 @@ ScheduleClock writes a timestamp to status.tick on a configurable interval, gene
 | `spec.interval` | string |  | Interval is how often the ScheduleClock updates status.tick. Uses Go duration format (e.g. "1m", "30s"). Minimum recommended value is 30s; sub-minute precision is rarely needed for business-hour gates. Default: `1m`. |
 | `status` | object |  | ScheduleClockStatus defines the observed state of a ScheduleClock. |
 | `status.tick` | string |  | Tick is the RFC3339 timestamp written by the reconciler on every interval. The PolicyGate reconciler watches every ScheduleClock: each time Tick changes, it re-evaluates every PolicyGate instance in the cluster except those of finished Bundles, so time-based expressions such as schedule.isWeekend see time pass. A gate does not reference the clock. This is the sole purpose of this field. |
+
+## ScmProvider
+
+`kardinal.io/v1alpha1`
+
+ScmProvider is an SCM that Pipelines in its namespace open their PRs on (spec.git.providerRef). With it, one controller serves several SCMs, or several tokens of one: a Pipeline without providerRef keeps the controller's --scm-provider.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object | yes | ScmProviderSpec is the SCM a Pipeline opens its PRs on: its type, API and credentials. |
+| `spec.allowedRepositories` | []string |  | AllowedRepositories, when set, are the only repositories this provider's token is used for: globs over the repository the SCM API names ("acme/*", "group/sub/**"). "*" matches one path segment and a trailing "/**" any depth. A Bundle of a Pipeline whose repository is not allowed fails when its Graph is built. |
+| `spec.apiURL` | string |  | APIURL is the SCM's API base URL (the --scm-api-url value). Empty uses the provider's public default (api.github.com, gitlab.com, ...). |
+| `spec.secretRef` | object | yes | SecretRef names the Secret that holds the API token. A ScmProvider's Secret is in its own namespace; a ClusterScmProvider names the namespace. |
+| `spec.secretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
+| `spec.secretRef.name` | string | yes | Name is the Secret name. |
+| `spec.secretRef.namespace` | string |  | Namespace is the Secret's namespace: required on a ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in its own namespace (a Pipeline author cannot borrow another namespace's token). |
+| `spec.type` | string | yes | Type is the SCM: github, gitlab, forgejo, gitea, bitbucket or azuredevops (the --scm-provider values). One of: `github`, `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops`. |
+| `spec.webhookSecretRef` | object |  | WebhookSecretRef names the Secret that holds the webhook secret this provider's webhook deliveries are checked with (key "secret" when unset). Without it the provider's webhook endpoint refuses every delivery, and merges are seen by polling. |
+| `spec.webhookSecretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
+| `spec.webhookSecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.webhookSecretRef.namespace` | string |  | Namespace is the Secret's namespace: required on a ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in its own namespace (a Pipeline author cannot borrow another namespace's token). |
+| `status` | object |  | ScmProviderStatus is what the controller found when it checked the provider. |
+| `status.conditions` | []object |  | Conditions: Ready is True when the spec is valid and its Secrets have their keys. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation the conditions describe. |
 
 ## Subscription
 

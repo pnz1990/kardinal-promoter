@@ -74,6 +74,13 @@ type PipelineSpec struct {
 	// +optional
 	PolicyNamespaces []string `json:"policyNamespaces,omitempty"`
 
+	// ImageVerification requires the signatures of the Bundle's images (and
+	// of a config Bundle's commit) to verify before the Bundle is promoted
+	// into its first environments. Selected images must be pinned by digest.
+	// See docs/image-verification.md.
+	// +optional
+	ImageVerification *ImageVerificationPolicy `json:"imageVerification,omitempty"`
+
 	// MaxConcurrentPromotions caps the number of Bundles in Promoting phase for this
 	// pipeline at any given time. When 0 or unset (default), there is no cap and all
 	// Available Bundles are promoted concurrently. When set to a positive value, Bundles
@@ -122,6 +129,13 @@ type PipelineGit struct {
 	// SecretRef references a Kubernetes Secret containing the SCM token.
 	// +optional
 	SecretRef *SecretRef `json:"secretRef,omitempty"`
+
+	// ProviderRef names the ScmProvider (in the Pipeline's namespace) or the
+	// ClusterScmProvider the Pipeline opens its PRs on and reads their state
+	// from. Unset uses the controller's --scm-provider. Git clone and push
+	// still use secretRef.
+	// +optional
+	ProviderRef *ScmProviderRef `json:"providerRef,omitempty"`
 }
 
 // SecretRef is a reference to a Kubernetes Secret by name and optional namespace.

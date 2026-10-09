@@ -38,6 +38,11 @@ type BuildInput struct {
 	// DefaultPolicyNamespace.
 	PolicyNamespaces []string
 
+	// ScmProvider is the provider of the Pipeline's spec.git.providerRef, as
+	// the translator resolved it. Every PromotionStep gets it in
+	// spec.scmProvider; nil leaves the controller's --scm-provider.
+	ScmProvider *kardinalv1alpha1.ScmProviderIdentity
+
 	// Analyses are the Argo Rollouts analysis templates the environments'
 	// spec.verification names, as the translator read them.
 	Analyses AnalysisInput
@@ -103,7 +108,26 @@ func (b *Builder) Build(input BuildInput) (*BuildResult, error) {
 	if err != nil {
 		return nil, asInvalid(err)
 	}
+	if id := input.ScmProvider; id != nil {
+		setScmProvider(res.Graph, *id)
+	}
 	return res, nil
+}
+
+// setScmProvider writes the provider identity into the spec of every
+// PromotionStep template: a static field (no Watch node), which the
+// PromotionStep reconciler reads to pick the SCM and copies into the
+// PRStatus spec with the PR.
+func setScmProvider(g *Graph, id kardinalv1alpha1.ScmProviderIdentity) {
+	for i := range g.Spec.Nodes {
+		t := g.Spec.Nodes[i].Template
+		if t == nil || t["kind"] != "PromotionStep" {
+			continue
+		}
+		if spec, ok := t["spec"].(map[string]interface{}); ok {
+			spec["scmProvider"] = map[string]interface{}{"kind": id.Kind, "name": id.Name, "uid": id.UID}
+		}
+	}
 }
 
 func (b *Builder) build(input BuildInput) (*BuildResult, error) {
@@ -622,6 +646,13 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 	nodes = append(nodes, bundleWatchNode)
 	nodes = append(nodes, readBackRefs(pipeline, filteredEnvs, bundle)...)
+	ivNode, ivName, err := buildImageVerificationNode(pipeline, bundle)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if ivNode != nil {
+		nodes = append(nodes, *ivNode)
+	}
 	if anyNeedsApprovals(gatesByEnv) {
 		nodes = append(nodes, approvalsRefNode(bundle)) // approval gates (approvals.go)
 	}
@@ -714,13 +745,20 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
 			heldCond(pipeline, envName),
 		)
-		extras, err := buildEnvExtras(hookNodesInput{
+		in := hookNodesInput{
 			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
 			bundleUID:   string(bundle.UID),
 			env:         findEnvSpec(pipeline, envName),
 			stepK8sName: promotionStepK8sName(pipelineName, bundle.Name, envName),
 			conds:       stepConds(heldCond(pipeline, envName), upstreams, envGates, gates.readyCond),
-		}, analyses, bundle)
+		}
+		if ivName != "" && len(upstreams) == 0 {
+			// A root step waits for the image verification, and so do its
+			// pre-deploy hooks (a migration must not run for an unverified image).
+			in.imageVerification = ivName
+			in.conds = append(in.conds, imageVerifiedCond())
+		}
+		extras, err := buildEnvExtras(in, analyses, bundle)
 		if err != nil {
 			return nil, nil, nil, err
 		}

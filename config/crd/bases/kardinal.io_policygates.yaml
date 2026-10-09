@@ -419,7 +419,7 @@ spec:
                   Overrides records each spec.overrides entry the controller has seen:
                   when it first saw it, whether its createdBy was checked by the chart's
                   identity admission policy, and whether its GateOverridden AuditEvent
-                  is written. An override counts from firstSeen: it ends at the earlier
+                  is recorded. An override counts from firstSeen: it ends at the earlier
                   of its expiresAt and firstSeen plus the override cap
                   (--gate-override-max-minutes). Records are never dropped, so an entry
                   removed and added again keeps its firstSeen; past 200 records new
@@ -429,8 +429,9 @@ spec:
                     entry.
                   properties:
                     audited:
-                      description: Audited is true once the GateOverridden AuditEvent
-                        is written.
+                      description: |-
+                        Audited is true once the GateOverridden record is stored: in
+                        status.pendingAuditEvents until the AuditEvent is written (#1552).
                       type: boolean
                     firstSeen:
                       description: |-
