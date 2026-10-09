@@ -430,9 +430,9 @@ func TestForgejo_CircuitBreakerHonorsRateLimit(t *testing.T) {
 // an API that answers 503 with Retry-After: 600, waits for the repository
 // owner's circuit to open, then rotates the controller's token Secret. The
 // controller reloads the token without a restart and keeps the open circuit:
-// no request reaches the API after the rotation. A rotation used to build a
-// provider with a closed circuit, so the polls hit the failing API again at
-// once (#1274). Not parallel: it changes the controller's --scm-api-url and
+// no request reaches the API from before the rotation until 45s after it. A
+// rotation used to build a provider with a closed circuit, so the next polls
+// hit the failing API again at once (#1274). Not parallel: it changes the controller's --scm-api-url and
 // token.
 //
 // Covers SCM-BREAKER-02.
@@ -466,27 +466,32 @@ func TestForgejo_CircuitBreakerSurvivesTokenRotation(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, until.After(time.Now().Add(9*time.Minute)), "the circuit stays open for Retry-After's 600s: until %s", until)
 
-	pod := e.ControllerPod(t).Name
-	since = time.Now()
-	e.SetSecretValue(t, framework.ControllerNamespace, framework.GitSecretName, "token", []byte(fakeToken))
-	rotated := framework.LogMessage("SCM credentials rotated", "secret", framework.ControllerNamespace+"/"+framework.GitSecretName, "key", "token")
-	e.WaitControllerLog(t, since, 50*time.Second, "the controller to load the new token", rotated)
-	assert.Equal(t, pod, e.ControllerPod(t).Name, "no restart")
-
+	// The count is taken before the rotation: the token watcher and the
+	// PRStatus polls both run every 30s, so a reset circuit is hit by the
+	// next poll within a second of the reload.
 	n := len(r.MustRecords(t, bucket))
-	// The PRStatuses are polled again every 30s while the error is transient.
-	framework.Consistently(t, 45*time.Second, "no request after the rotation while the circuit is open", func(context.Context) (bool, string) {
+	require.NotZero(t, n, "the API was called before the circuit opened")
+	noNewRequest := func(context.Context) (bool, string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		recs, err := r.Records(ctx, bucket)
 		if err != nil {
 			return false, err.Error()
 		}
-		return len(recs) == n, fmt.Sprintf("%d requests, %d when the token was rotated", len(recs), n)
-	})
-	e.WaitControllerLog(t, since, time.Minute, "a poll after the rotation refused by the still-open circuit", func(l framework.LogLine) bool {
-		return framework.LogMessage("GetPRStatus failed, will retry", "namespace", ns)(l) && open.MatchString(l.Str("error"))
-	})
+		return len(recs) == n, fmt.Sprintf("%d requests, %d before the rotation", len(recs), n)
+	}
+
+	pod := e.ControllerPod(t).Name
+	since = time.Now()
+	e.SetSecretValue(t, framework.ControllerNamespace, framework.GitSecretName, "token", []byte(fakeToken))
+	rotated := framework.LogMessage("SCM credentials rotated", "secret", framework.ControllerNamespace+"/"+framework.GitSecretName, "key", "token")
+	e.WaitControllerLog(t, since, 50*time.Second, "the controller to load the new token", rotated)
+	assert.Equal(t, pod, e.ControllerPod(t).Name, "no restart")
+	ok, msg := noNewRequest(context.Background())
+	require.True(t, ok, "no request reached the API across the rotation: %s", msg)
+
+	// The PRStatuses are polled again every 30s while the error is transient.
+	framework.Consistently(t, 45*time.Second, "no request after the rotation while the circuit is open", noNewRequest)
 }
 
 // TestForgejo_AllowedRepositories runs the controller with
