@@ -107,6 +107,10 @@ type LiveRenderRun struct {
 	// Result is the RenderRun's status.result.
 	// +optional
 	Result *RenderRunResult `json:"result,omitempty"`
+	// KnownMarkerDigests is the RenderRun's status.knownMarkerDigests: a
+	// result that pushed nothing (noChanges) must name one of them.
+	// +optional
+	KnownMarkerDigests []string `json:"knownMarkerDigests,omitempty"`
 }
 
 // LiveHookRun is the result of one HookRun.

@@ -231,10 +231,11 @@ func (r *Reconciler) start(ctx context.Context, base, run *v1alpha1.RenderRun) (
 // environment and rendered branch. known are the marker digests of the
 // newest Succeeded ones: the rendered branch's marker must be one of them (a
 // push that rewrites the files and the marker together is drift too).
-// unconfirmed are the Bundles of the ones that Failed after the newest
-// Succeeded one: a Job may have pushed and then lost its result (its Pod
-// deleted, the controller past its deadline), so the branch's marker may
-// name one of them. None of either means the first render, or an
+// unconfirmed is the Bundle of the newest one, when it Failed after the
+// newest Succeeded one: its Job may have pushed and then lost its result
+// (its Pod deleted, the controller past its deadline), so the branch's
+// marker may name it. Older lost renders are not adopted: the newest one ran
+// after them on the same branch. None of either means the first render, or an
 // environment whose earlier RenderRuns are gone: the branch's own marker is
 // used.
 func (r *Reconciler) earlierRenders(ctx context.Context, run *v1alpha1.RenderRun) (known, unconfirmed []string, err error) {
@@ -256,7 +257,9 @@ func (r *Reconciler) earlierRenders(ctx context.Context, run *v1alpha1.RenderRun
 	confirmed := false
 	for _, o := range done {
 		if o.Status.Phase == v1alpha1.RenderRunFailed {
-			if !confirmed && !slices.Contains(unconfirmed, o.Spec.BundleName) {
+			// Only the newest: a push of an older lost render was
+			// overwritten by the newer one, or is not on the branch's head.
+			if !confirmed && len(unconfirmed) == 0 {
 				unconfirmed = append(unconfirmed, o.Spec.BundleName)
 			}
 			continue

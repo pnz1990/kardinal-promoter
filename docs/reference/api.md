@@ -493,6 +493,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.live.hooks[].phase` | string |  | Phase is the hook phase: pre or post. |
 | `spec.live.hooks[].result` | string |  | Result is the HookRun's status.phase (Pending when it has none yet). |
 | `spec.live.renders` | []object |  | Renders is the environment's RenderRun for this Bundle (layout: branch), at most one. |
+| `spec.live.renders[].knownMarkerDigests` | []string |  | KnownMarkerDigests is the RenderRun's status.knownMarkerDigests: a result that pushed nothing (noChanges) must name one of them. |
 | `spec.live.renders[].message` | string |  | Message is the RenderRun's status.message. |
 | `spec.live.renders[].name` | string | yes | Name is the RenderRun name. |
 | `spec.live.renders[].phase` | string |  | Phase is the RenderRun's status.phase (Pending when it has none yet). |
@@ -622,7 +623,7 @@ RenderRun is one render of a layout: branch environment for one Bundle: a Kubern
 | `status.result.renderer` | string |  | Renderer is kustomize or helm. |
 | `status.specHash` | string |  | SpecHash is a hash of the spec when the Job was created. A later spec change is not applied. |
 | `status.startedAt` | string (date-time) |  | StartedAt is when the Job was created. |
-| `status.unconfirmedBundles` | []string |  | UnconfirmedBundles are the Bundles of the environment's RenderRuns that Failed after its last Succeeded one: their Job may have pushed before its result was lost. A rendered branch whose marker names one of them, and whose files match that marker, is accepted as kardinal's. |
+| `status.unconfirmedBundles` | []string |  | UnconfirmedBundles holds the Bundle of the environment's newest RenderRun when it Failed after the last Succeeded one (at most one entry): its Job may have pushed before its result was lost. A rendered branch whose marker names it, and whose files match that marker, is accepted as kardinal's; so is a rollback to it. |
 
 ## RollbackPolicy
 

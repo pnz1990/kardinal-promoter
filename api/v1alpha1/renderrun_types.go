@@ -174,10 +174,11 @@ type RenderRunStatus struct {
 	// +optional
 	KnownMarkerDigests []string `json:"knownMarkerDigests,omitempty"`
 
-	// UnconfirmedBundles are the Bundles of the environment's RenderRuns that
-	// Failed after its last Succeeded one: their Job may have pushed before
-	// its result was lost. A rendered branch whose marker names one of them,
-	// and whose files match that marker, is accepted as kardinal's.
+	// UnconfirmedBundles holds the Bundle of the environment's newest
+	// RenderRun when it Failed after the last Succeeded one (at most one
+	// entry): its Job may have pushed before its result was lost. A rendered
+	// branch whose marker names it, and whose files match that marker, is
+	// accepted as kardinal's; so is a rollback to it.
 	// +optional
 	UnconfirmedBundles []string `json:"unconfirmedBundles,omitempty"`
 

@@ -695,3 +695,41 @@ func TestRenderBranch_RollbackUsesKnownDigests(t *testing.T) {
 	_, err = rollback([]string{first.Outputs["markerDigest"], second.Outputs["markerDigest"]})
 	assert.NoError(t, err, "web-v2's recorded render is trusted")
 }
+
+// TestRenderBranch_RetriedJobAdoptsItsOwnPush (QA round 3 on #1515, M): a
+// render Job Pod that pushed and was then retried (killed before it wrote
+// its result) finds its own marker on the branch, a digest no recorded
+// render has. The same Bundle's marker for the same DRY commit, with its
+// files unchanged, is adopted: the retry succeeds and reports the commit the
+// first attempt pushed. The same Bundle's marker for another DRY commit is
+// still drift.
+func TestRenderBranch_RetriedJobAdoptsItsOwnPush(t *testing.T) {
+	url, _ := seedRemote(t, dryRepo)
+	env := v1alpha1.EnvironmentSpec{Name: "prod", Path: "environments/prod"}
+	first := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v2", "2.0.0")
+	_, err := promote(t, first)
+	require.NoError(t, err)
+	known := []string{first.Outputs["markerDigest"]}
+
+	attempt := func() (*parentsteps.StepState, parentsteps.StepResult, error) {
+		st := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v3", "3.0.0")
+		st.Render.KnownMarkerDigests = known // the RenderRun's: without web-v3's own
+		res, err := promote(t, st)
+		return st, res, err
+	}
+	pushed, _, err := attempt() // pushed; the Pod is retried before its result
+	require.NoError(t, err)
+	_, head := branchFiles(t, url, "env/prod")
+
+	retry, _, err := attempt()
+	require.NoError(t, err, "the retry adopts its own push")
+	assert.Equal(t, "web-v3", retry.Outputs["markerAdopted"])
+	assert.Equal(t, pushed.Outputs["markerDigest"], retry.Outputs["markerDigest"])
+	_, after := branchFiles(t, url, "env/prod")
+	assert.Equal(t, head, after, "nothing new is pushed")
+
+	pushFiles(t, url, "main", map[string]*string{"README.md": strp("a new DRY commit\n")})
+	_, res, err := attempt()
+	require.Error(t, err, "its marker is for another DRY commit")
+	assert.Contains(t, res.Message, "is not one kardinal wrote")
+}

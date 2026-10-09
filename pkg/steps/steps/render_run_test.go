@@ -123,3 +123,51 @@ func TestRenderStep_ChecksTheRemoteHead(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, parentsteps.ErrPermanent), "an ls-remote error is retried")
 }
+
+// TestRenderStep_NoChangesChecksTheHead (QA round 3 on #1515): a result
+// that pushed nothing must name the rendered branch's head, checked with git
+// ls-remote, and a marker digest kardinal recorded for the environment; a
+// report that skips the push cannot skip the checks.
+func TestRenderStep_NoChangesChecksTheHead(t *testing.T) {
+	step, err := parentsteps.Lookup(parentsteps.RenderStepName)
+	require.NoError(t, err)
+	commit := strings.Repeat("c", 40)
+	run := func(head string, known []string, res v1alpha1.RenderRunResult) (parentsteps.StepResult, error) {
+		res.NoChanges = true
+		st := &parentsteps.StepState{Outputs: map[string]string{"renderRequested": "true"}, GitClient: headGit{head: head},
+			Sequence: []string{"render", "health-check"}, Git: parentsteps.GitConfig{URL: "https://git.example.com/r.git", Branch: "env/prod"},
+			LiveRenders: []v1alpha1.LiveRenderRun{{Name: "rr", Phase: "Succeeded", KnownMarkerDigests: known, Result: &res}}}
+		return step.Execute(context.Background(), st)
+	}
+	tests := []struct {
+		name    string
+		head    string
+		known   []string
+		result  v1alpha1.RenderRunResult
+		wantErr string
+	}{
+		{name: "head and known marker", head: commit, known: []string{"m0", "m1"},
+			result: v1alpha1.RenderRunResult{CommitSHA: commit, MarkerDigest: "m1"}},
+		{name: "no recorded renders yet", head: commit, result: v1alpha1.RenderRunResult{CommitSHA: commit, MarkerDigest: "m1"}},
+		{name: "unknown marker", head: commit, known: []string{"m0"},
+			result: v1alpha1.RenderRunResult{CommitSHA: commit, MarkerDigest: "m9"}, wantErr: "is not one of kardinal's recorded renders"},
+		{name: "branch moved", head: strings.Repeat("e", 40), known: []string{"m1"},
+			result: v1alpha1.RenderRunResult{CommitSHA: commit, MarkerDigest: "m1"}, wantErr: "but the branch is at \"eeeeeeee\""},
+		{name: "no commit reported", head: commit, known: []string{"m1"},
+			result: v1alpha1.RenderRunResult{MarkerDigest: "m1"}, wantErr: "but the branch is at"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := run(tc.head, tc.known, tc.result)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				assert.Equal(t, "true", res.Outputs["noChanges"])
+				assert.Empty(t, res.Outputs["commitSHA"], "an unchanged render sets no commit to health check")
+				return
+			}
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, parentsteps.ErrPermanent))
+			assert.Contains(t, res.Message, tc.wantErr)
+		})
+	}
+}

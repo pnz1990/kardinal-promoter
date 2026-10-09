@@ -167,13 +167,19 @@ The result comes back through the Pod's termination message, which the RenderRun
 copies to `status.result` only from a Pod the Job owns, and only when it can be true: a full
 commit id on the rendered branch (or the promotion branch of a `pr-review` step), rendered from a
 full DRY commit. The step then reads the branch head on the remote (`git ls-remote`) and fails if
-it is not the reported commit. A finished RenderRun never runs again; a RenderRun is never run in
+it is not the reported commit. A result that pushed nothing (the branch already held the render)
+names the rendered branch's head too, which is checked the same way, and its marker digest must
+be one of the environment's recorded renders (`status.knownMarkerDigests`). A finished RenderRun never runs again; a RenderRun is never run in
 the controller's own namespace.
 
 A render whose Job pushed but whose result was lost (its Pod gone, or a result that could not be
 read) fails, and the next render of the environment knows that Bundle as unconfirmed
-(`status.unconfirmedBundles`): if the rendered branch's marker names it and its files are
-unchanged, the marker is accepted as kardinal's instead of failing as drift.
+(`status.unconfirmedBundles`, only the newest such render): if the rendered branch's marker names
+it and its files are unchanged, the marker is accepted as kardinal's instead of failing as drift,
+and a rollback to that Bundle trusts its render. A Job Pod that pushed and was retried before it
+wrote its result (its node drained, say) finds its own marker in the same way: the marker of the
+same Bundle and DRY commit, with its files unchanged, is accepted, and the retry reports the commit
+the first attempt pushed.
 
 The rendered commit's message ends with:
 

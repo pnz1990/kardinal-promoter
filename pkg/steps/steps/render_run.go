@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -87,16 +88,27 @@ func (s *renderStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	// The Job's report is checked against the remote: the branch it names
 	// must point at the commit it names (git ls-remote), so a report that is
 	// not true never reaches open-pr or the health check.
-	if !res.NoChanges {
+	// A result that pushed nothing names the rendered branch's head, and that
+	// head's marker must be one kardinal recorded.
+	branch := res.Branch
+	if res.NoChanges {
+		branch = state.Git.Branch
+		if known := run.KnownMarkerDigests; len(known) > 0 && !slices.Contains(known, res.MarkerDigest) {
+			err := parentsteps.Permanent(fmt.Errorf("RenderRun %s reported %s already holds its render, but its marker "+
+				"(sha256 %s) is not one of kardinal's recorded renders", run.Name, branch, shortSHA(res.MarkerDigest)))
+			return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
+		}
+	}
+	{
 		if rh, ok := state.GitClient.(scm.RemoteHeadReader); ok {
-			head, err := rh.RemoteBranchHead(ctx, state.Git.URL, res.Branch, state.Git.Token)
+			head, err := rh.RemoteBranchHead(ctx, state.Git.URL, branch, state.Git.Token)
 			if err != nil {
 				msg := "check the rendered commit: " + scm.RedactText(err.Error())
 				return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, errors.New(msg)
 			}
 			if head != res.CommitSHA {
-				err := parentsteps.Permanent(fmt.Errorf("RenderRun %s reported %s pushed to %s, but the branch is at %q",
-					run.Name, shortSHA(res.CommitSHA), res.Branch, shortSHA(head)))
+				err := parentsteps.Permanent(fmt.Errorf("RenderRun %s reported %s on %s, but the branch is at %q",
+					run.Name, shortSHA(res.CommitSHA), branch, shortSHA(head)))
 				return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 			}
 		}
@@ -118,7 +130,7 @@ func (s *renderStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	}
 	// The commit the health check must see deployed: what the Job pushed to
 	// the rendered branch. A pr-review step takes the merge commit instead.
-	if res.CommitSHA != "" && !state.OpensPR() {
+	if res.CommitSHA != "" && !res.NoChanges && !state.OpensPR() {
 		outputs["commitSHA"] = res.CommitSHA
 	}
 	msg := fmt.Sprintf("rendered %d objects from %s with %s into %s (RenderRun %s)", res.Objects,

@@ -111,6 +111,13 @@ spec:
                         LiveRenderRun is the result of the RenderRun of a layout: branch
                         environment.
                       properties:
+                        knownMarkerDigests:
+                          description: |-
+                            KnownMarkerDigests is the RenderRun's status.knownMarkerDigests: a
+                            result that pushed nothing (noChanges) must name one of them.
+                          items:
+                            type: string
+                          type: array
                         message:
                           description: Message is the RenderRun's status.message.
                           type: string

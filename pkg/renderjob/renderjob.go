@@ -134,7 +134,10 @@ func Run(ctx context.Context, cfg Config, workDir, token string, git scm.GitClie
 		Branch:           state.Outputs["branch"],
 	}}
 	out.Objects, _ = strconv.Atoi(state.Outputs["renderedObjects"])
-	if !out.NoChanges {
+	// The commit the rendered branch is at: the one pushed, or, when the
+	// branch already held this render (noChanges), its head, which the
+	// controller checks against the remote too.
+	{
 		if hr, ok := git.(scm.HeadCommitReader); ok {
 			sha, err := hr.HeadCommit(ctx, state.WorkDir)
 			if err != nil {
@@ -178,11 +181,23 @@ func ParseMessage(msg string) (Result, error) {
 	return r, nil
 }
 
+// The process seams Main uses; tests replace them.
+var (
+	lockNetwork = LockNetwork
+	runRender   = Run
+	newGit      = func() scm.GitClient { return scm.NewGoGitClient() }
+	messagePath = TerminationMessagePath
+	tokenPath   = TokenFile
+	workDir     = WorkDir
+)
+
 // Main is the kardinal-render entry point: it reads the Config and the
-// token, renders, writes the termination message and returns the exit code.
+// token, locks the process's network to the Pipeline's git host, renders,
+// writes the termination message and returns the exit code: 0, ExitPermanent
+// for a render that failed for good (the Job does not retry it), 1 otherwise.
 func Main(ctx context.Context) int {
 	write := func(r Result) {
-		_ = os.WriteFile(TerminationMessagePath, Message(r), 0o600)
+		_ = os.WriteFile(messagePath, Message(r), 0o600)
 	}
 	var cfg Config
 	if err := json.Unmarshal([]byte(os.Getenv(ConfigEnv)), &cfg); err != nil {
@@ -190,10 +205,10 @@ func Main(ctx context.Context) int {
 		return 1
 	}
 	token := ""
-	if b, err := os.ReadFile(TokenFile); err == nil {
+	if b, err := os.ReadFile(tokenPath); err == nil {
 		token = strings.TrimSpace(string(b))
 	}
-	if err := LockNetwork(cfg.Git.URL); err != nil {
+	if err := lockNetwork(cfg.Git.URL); err != nil {
 		write(Result{Error: err.Error()})
 		return 1
 	}
@@ -201,7 +216,7 @@ func Main(ctx context.Context) int {
 		write(Result{Error: err.Error()})
 		return 1
 	}
-	res, err := Run(ctx, cfg, WorkDir, token, scm.NewGoGitClient())
+	res, err := runRender(ctx, cfg, workDir, token, newGit())
 	if err != nil {
 		write(Result{Error: scm.RedactText(err.Error())})
 		if errors.Is(err, steps.ErrPermanent) {

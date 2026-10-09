@@ -366,6 +366,12 @@ which also meets the `restricted` standard:
   DNS and the git host only, so even a process that escaped the renderer reaches no cloud
   metadata endpoint, no Kubernetes API and no other Service.
 
+The render Job's result (its termination message) is trusted as far as the controller checks it:
+the commit is read back from the remote, and its marker must be a recorded one. Whoever can create
+Pods in the Pipeline's namespace can mount the namespace's git Secret, push to the rendered branch
+and create a Pod that names a render Job as its owner, so that permission is trusted as much as push access to
+the rendered branch: grant it only to the namespace's owners.
+
 Inside the Job the renderer refuses remote references in any kustomization field, symbolic links
 anywhere in the DRY source, overlay diamonds past the object limit, oversized Helm template values
 and nondeterministic Helm functions; see [Determinism and limits](../rendered-manifests.md#determinism-and-limits).

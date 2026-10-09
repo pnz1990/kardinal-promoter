@@ -394,3 +394,37 @@ func TestRenderRun_LostResult(t *testing.T) {
 	assert.Empty(t, got.Status.UnconfirmedBundles, "confirmed by the later Succeeded render")
 	assert.Equal(t, []string{"m2"}, got.Status.KnownMarkerDigests)
 }
+
+// TestRenderRun_OnlyTheNewestLostResultIsUnconfirmed (QA round 3 on #1515):
+// of two renders whose results were lost, only the newer one's Bundle is
+// unconfirmed: the older one's push, if any, is not the branch's head, so
+// neither a render nor a rollback adopts its marker.
+func TestRenderRun_OnlyTheNewestLostResultIsUnconfirmed(t *testing.T) {
+	ctx := context.Background()
+	lose := func(e *env, name string) {
+		t.Helper()
+		e.reconcile(t, name)
+		e.reconcile(t, name)
+		job := e.job(t, name)
+		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+		require.NoError(t, e.c.Status().Update(ctx, job))
+		_, got := e.reconcile(t, name)
+		require.Equal(t, "Failed", got.Status.Phase)
+	}
+	first := run("rr1")
+	first.Spec.BundleName = "web-v2"
+	e := newEnv(t, first)
+	lose(e, "rr1")
+	e.now = e.now.Add(time.Minute)
+	second := run("rr2")
+	second.Spec.BundleName = "web-v3"
+	require.NoError(t, e.c.Create(ctx, second))
+	lose(e, "rr2")
+
+	e.now = e.now.Add(time.Minute)
+	third := run("rr3")
+	third.Spec.BundleName = "web-v4"
+	require.NoError(t, e.c.Create(ctx, third))
+	_, got := e.reconcile(t, "rr3")
+	assert.Equal(t, []string{"web-v3"}, got.Status.UnconfirmedBundles)
+}

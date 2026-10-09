@@ -197,7 +197,7 @@ func liveRendersExpr(env string) string {
 		res("driftOverwritten", `""`)}, ", ") + "}"
 	return fmt.Sprintf(`${%s.filter(r, r.spec.environment == %s).map(r, {"name": r.metadata.name, `+
 		`"phase": r.?status.?phase.orValue("Pending"), "message": r.?status.?message.orValue(""), `+
-		`"result": %s})}`, refRenderRunsNodeID, strconv.Quote(env), result)
+		`"knownMarkerDigests": r.?status.?knownMarkerDigests.orValue([]), "result": %s})}`, refRenderRunsNodeID, strconv.Quote(env), result)
 }
 
 // The compact shape does not build RenderRun nodes or the live mirror patch:

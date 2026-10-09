@@ -89,6 +89,16 @@ func TestRun(t *testing.T) {
 	assert.False(t, res2.NoChanges)
 	assert.Equal(t, res.CommitSHA, res2.CommitSHA, "the same render pushes no new commit")
 
+	// The realistic retry: the Job's Pod pushed and was retried before it
+	// wrote its result, so the RenderRun's known digests lack its own marker.
+	retry := config(url, false)
+	retry.KnownMarkerDigests = []string{strings.Repeat("0", 64)}
+	res4, err := renderjob.Run(ctx, retry, t.TempDir(), "", git)
+	require.NoError(t, err, "the retry adopts its own push")
+	assert.False(t, res4.NoChanges)
+	assert.Equal(t, res.CommitSHA, res4.CommitSHA, "the commit the first attempt pushed")
+	assert.Equal(t, res.MarkerDigest, res4.MarkerDigest)
+
 	pr := config(url, true)
 	pr.BundleName = "web-v3"
 	pr.Bundle.Images[0].Tag = "3.0.0"
