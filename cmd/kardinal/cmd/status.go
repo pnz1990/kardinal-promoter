@@ -52,7 +52,9 @@ last 40 characters of the step's PR URL, open or merged; REGION is - unless the
 step was created by a Graph built before multi-region fan-out was removed;
 spec.regions is deprecated), the Bundle deployed in every environment (the
 one whose change landed there last, as kardinal rollback judges it, with its
-image tags or config commit; "none" when no change has landed yet), and the
+image tags or config commit, and, as in kardinal explain, the config or
+image Bundle the rest of what runs there came from; "none" when no change has
+landed yet), and the
 PolicyGates holding it back (with their CEL expression cut to 40 characters,
 current reason and when each was last checked). A gate is listed as blocking only while it holds the bundle back: it
 is not ready and either every upstream environment is Verified for that bundle
@@ -290,14 +292,14 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 	// has reached it (lifecycle.DeployedBundle, the Bundle rollback starts
 	// from).
 	envs := slices.Sorted(slices.Values(pipelineEnvNames(&pl)))
-	deployed := deployedBundles(steps.Items, pipeline, envs)
+	deployed := deployedBundles(steps.Items, pipeline, envs, byName)
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "Deployed")
 	_, _ = fmt.Fprintln(w, strings.Repeat("─", 72))
 	dtw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(dtw, "ENVIRONMENT\tBUNDLE")
 	for _, env := range envs {
-		_, _ = fmt.Fprintf(dtw, "%s\t%s\n", env, deployedLabel(deployed[env], byName))
+		_, _ = fmt.Fprintf(dtw, "%s\t%s\n", env, deployedLabelOf(deployed[env], byName))
 	}
 	_ = dtw.Flush()
 
