@@ -334,6 +334,9 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 	}
 	if g != nil {
 		mirrorGraphConditions(b, g)
+		if err := r.checkGatesCreated(ctx, b, g); err != nil {
+			log.Warn().Err(err).Str("graph", name).Msg("check gate instances (non-fatal)")
+		}
 	}
 	return nil
 }

@@ -992,8 +992,18 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	var prs v1alpha1.PRStatus
 	if err := r.Get(ctx, types.NamespacedName{Name: prStatusName, Namespace: ps.Namespace}, &prs); err != nil {
 		if apierrors.IsNotFound(err) {
-			// PRStatus not yet created by the Graph — requeue.
+			// PRStatus not yet created by the Graph — requeue. The step names
+			// its PRStatus literally (not through the PRStatuses collection),
+			// so the step can get here first; say so in the message.
 			log.Debug().Str("prStatusRef", prStatusName).Msg("PRStatus not found yet, requeueing")
+			msg := fmt.Sprintf("waiting for PRStatus %s: the Graph has not created it yet "+
+				"(see the Bundle's GraphReady condition)", prStatusName)
+			if ps.Status.Message != msg {
+				ps.Status.Message = msg
+				if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+					return ctrl.Result{}, fmt.Errorf("patch waiting for prstatus: %w", patchErr)
+				}
+			}
 			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get prstatus %s: %w", prStatusName, err)
