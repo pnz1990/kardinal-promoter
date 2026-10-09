@@ -16,6 +16,7 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [AuditEvent](#auditevent) | `auditevents.kardinal.io` | Namespaced | `ae`, `audit` |
 | [Bundle](#bundle) | `bundles.kardinal.io` | Namespaced | `bnd` |
 | [ChangeWindow](#changewindow) | `changewindows.kardinal.io` | Cluster | `cw` |
+| [ClusterScmProvider](#clusterscmprovider) | `clusterscmproviders.kardinal.io` | Cluster | `cscmp` |
 | [HookRun](#hookrun) | `hookruns.kardinal.io` | Namespaced | `hr` |
 | [ImageVerification](#imageverification) | `imageverifications.kardinal.io` | Namespaced | `iv` |
 | [MetricCheck](#metriccheck) | `metricchecks.kardinal.io` | Namespaced |  |
@@ -26,6 +27,7 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [PromotionStep](#promotionstep) | `promotionsteps.kardinal.io` | Namespaced | `ps` |
 | [RollbackPolicy](#rollbackpolicy) | `rollbackpolicies.kardinal.io` | Namespaced | `rbp` |
 | [ScheduleClock](#scheduleclock) | `scheduleclocks.kardinal.io` | Namespaced | `sclock` |
+| [ScmProvider](#scmprovider) | `scmproviders.kardinal.io` | Namespaced | `scmp` |
 | [Subscription](#subscription) | `subscriptions.kardinal.io` | Namespaced | `sub` |
 
 ## Approval
@@ -166,6 +168,42 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.reason` | string |  | Reason explains the current active/inactive state. |
+
+## ClusterScmProvider
+
+`kardinal.io/v1alpha1`
+
+ClusterScmProvider is a cluster-scoped ScmProvider: Pipelines of the namespaces spec.allowedNamespaces selects may use it.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object | yes | ClusterScmProviderSpec is a ScmProviderSpec that Pipelines of several namespaces may use. |
+| `spec.allowedNamespaces` | object |  | AllowedNamespaces selects the namespaces whose Pipelines may use the provider, by namespace labels. Empty allows none: a cluster-wide token is shared only on purpose. |
+| `spec.allowedNamespaces.matchExpressions` | []object |  | matchExpressions is a list of label selector requirements. The requirements are ANDed. |
+| `spec.allowedNamespaces.matchExpressions[].key` | string | yes | key is the label key that the selector applies to. |
+| `spec.allowedNamespaces.matchExpressions[].operator` | string | yes | operator represents a key's relationship to a set of values. Valid operators are In, NotIn, Exists and DoesNotExist. |
+| `spec.allowedNamespaces.matchExpressions[].values` | []string |  | values is an array of string values. If the operator is In or NotIn, the values array must be non-empty. If the operator is Exists or DoesNotExist, the values array must be empty. This array is replaced during a strategic merge patch. |
+| `spec.allowedNamespaces.matchLabels` | map[string]string |  | matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels map is equivalent to an element of matchExpressions, whose key field is "key", the operator is "In", and the values array contains only "value". The requirements are ANDed. |
+| `spec.allowedRepositories` | []string |  | AllowedRepositories, when set, are the only repositories this provider's token is used for: globs over the repository the SCM API names ("acme/*", "group/sub/**"). "*" matches one path segment and a trailing "/**" any depth. A Bundle of a Pipeline whose repository is not allowed fails when its Graph is built. |
+| `spec.apiURL` | string |  | APIURL is the SCM's API base URL (the --scm-api-url value). Empty uses the provider's public default (api.github.com, gitlab.com, ...). |
+| `spec.secretRef` | object | yes | SecretRef names the Secret that holds the API token. A ScmProvider's Secret is in its own namespace; a ClusterScmProvider names the namespace. |
+| `spec.secretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
+| `spec.secretRef.name` | string | yes | Name is the Secret name. |
+| `spec.secretRef.namespace` | string |  | Namespace is the Secret's namespace: required on a ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in its own namespace (a Pipeline author cannot borrow another namespace's token). |
+| `spec.type` | string | yes | Type is the SCM: github, gitlab, forgejo, gitea, bitbucket or azuredevops (the --scm-provider values). One of: `github`, `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops`. |
+| `spec.webhookSecretRef` | object |  | WebhookSecretRef names the Secret that holds the webhook secret this provider's webhook deliveries are checked with (key "secret" when unset). Without it the provider's webhook endpoint refuses every delivery, and merges are seen by polling. |
+| `spec.webhookSecretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
+| `spec.webhookSecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.webhookSecretRef.namespace` | string |  | Namespace is the Secret's namespace: required on a ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in its own namespace (a Pipeline author cannot borrow another namespace's token). |
+| `status` | object |  | ScmProviderStatus is what the controller found when it checked the provider. |
+| `status.conditions` | []object |  | Conditions: Ready is True when the spec is valid and its Secrets have their keys. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation the conditions describe. |
 
 ## HookRun
 
@@ -392,6 +430,10 @@ PRStatus is a controller-internal CRD that tracks the merge state of a GitHub pu
 | `spec.prNumber` | integer |  | PRNumber is the pull request number (numeric ID within the repo). Set by the open-pr step after the PR is created. Zero in the placeholder. The PromotionStep sets it again when it opened another PR (a recreated step whose PR was closed): the spec always names the step's PR. |
 | `spec.prURL` | string |  | PRURL is the full GitHub pull request URL. Example: https://github.com/owner/repo/pull/42 Set by the open-pr step after the PR is created. Empty in the placeholder. |
 | `spec.repo` | string |  | Repo is the repository as the SCM API names it: "owner/repo" (GitHub, Forgejo, Gitea, Bitbucket), the project path with subgroups (GitLab), or "organization/project/repo" (Azure DevOps, whose project and repository names may hold single spaces). Each segment is letters, digits, ".", "_" and "-": no percent escapes, backslashes, "?", "#" or control characters, which the SCM API would read as another path. Example: acme/my-service Set by the open-pr step after the PR is created. Empty in the placeholder. |
+| `spec.scmProvider` | object |  | ScmProvider is the provider the PR was opened on, copied from the PromotionStep. Unset uses the controller's --scm-provider. |
+| `spec.scmProvider.kind` | string | yes | Kind is ScmProvider or ClusterScmProvider. One of: `ScmProvider`, `ClusterScmProvider`. |
+| `spec.scmProvider.name` | string | yes | Name is the provider's name; a ScmProvider is in the step's namespace. |
+| `spec.scmProvider.uid` | string | yes | UID is the provider's metadata.uid when the Graph was built. |
 | `status` | object |  | PRStatusStatus holds the observed state of the pull request. Written exclusively by the PRStatusReconciler. |
 | `status.approvalCount` | integer |  | ApprovalCount is the number of distinct approved reviews on this PR. Written by PRStatusReconciler. CEL: bundle.pr["staging"].approvalCount &gt;= 2 |
 | `status.approved` | boolean |  | Approved is true when the pull request has at least one approved review and no outstanding change-request reviews. Written by PRStatusReconciler. CEL: bundle.pr["staging"].isApproved |
@@ -505,6 +547,9 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.git.branch` | string |  | Branch is the base branch: git-clone checks it out, approval: auto pushes to it, and pr-review PRs target it. Defaults to main. Default: `main`. |
 | `spec.git.layout` | string |  | Layout controls how environment paths are organized in the repository. "directory": environments as subdirectories on one branch (default). "branch": environments as separate branches. One of: `directory`, `branch`. Default: `directory`. |
 | `spec.git.provider` | string |  | Provider is ignored. One controller serves one SCM, chosen with its --scm-provider flag. Deprecated: ignored; the controller's --scm-provider flag selects the provider. One of: `github`, `gitlab`. |
+| `spec.git.providerRef` | object |  | ProviderRef names the ScmProvider (in the Pipeline's namespace) or the ClusterScmProvider the Pipeline opens its PRs on and reads their state from. Unset uses the controller's --scm-provider. Git clone and push still use secretRef. |
+| `spec.git.providerRef.kind` | string |  | Kind is ScmProvider (in the Pipeline's namespace, the default) or ClusterScmProvider. One of: `ScmProvider`, `ClusterScmProvider`. Default: `ScmProvider`. |
+| `spec.git.providerRef.name` | string | yes | Name is the provider's name. |
 | `spec.git.secretRef` | object |  | SecretRef references a Kubernetes Secret containing the SCM token. |
 | `spec.git.secretRef.name` | string | yes | Name is the Secret name. |
 | `spec.git.secretRef.namespace` | string |  | Namespace is the Secret namespace. If empty, the Pipeline's namespace is used. For spec.git.secretRef it must be empty or equal to the Pipeline's namespace: the controller refuses to read a Secret from another namespace and fails the PromotionStep with a clear message, so a Pipeline author cannot borrow another team's credentials. |
@@ -690,6 +735,10 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.preHooks` | []string |  | PreHooks names the HookRuns of the environment's pre-deploy hooks, in order. The step stays Pending until every one of them Succeeded in spec.live.hooks, and fails when one Failed. Set by the Graph: the first entry references the first HookRun node, so the step is created only after it. |
 | `spec.region` | string |  | Region was set on the per-region PromotionSteps of a Pipeline environment with two or more spec.regions. The Graph builder no longer sets it; the reconciler fails a step that still has one (created by a Graph built before the upgrade) with "regions is not supported". Deprecated: declare one environment per region (prod-us, prod-eu) and use wave. |
 | `spec.requiredGates` | []string |  | RequiredGates holds the names of PolicyGate instances that must be ready before this PromotionStep can be promoted. Set by the Graph controller via CEL. |
+| `spec.scmProvider` | object |  | ScmProvider is the provider of the Pipeline's spec.git.providerRef, as the translator resolved it when it built the Graph. Unset uses the controller's --scm-provider. |
+| `spec.scmProvider.kind` | string | yes | Kind is ScmProvider or ClusterScmProvider. One of: `ScmProvider`, `ClusterScmProvider`. |
+| `spec.scmProvider.name` | string | yes | Name is the provider's name; a ScmProvider is in the step's namespace. |
+| `spec.scmProvider.uid` | string | yes | UID is the provider's metadata.uid when the Graph was built. |
 | `spec.stepType` | string | yes | StepType identifies the built-in step to execute. Examples: git-clone, kustomize-set-image, git-commit, open-pr, wait-for-merge, health-check. |
 | `spec.upstreamStates` | []string |  | UpstreamStates holds the resolved state of all upstream PromotionSteps. Each entry is a string like "Verified", set by the kro Graph controller via CEL expression substitution. Replaces the N-field upstreamVerified/upstreamVerified2 pattern (issue 625) -- a single list scales to any number of upstream environments. kro scans list items for CEL references, so each entry creates a DAG edge. |
 | `status` | object |  | PromotionStepStatus defines the observed state of a PromotionStep. |
@@ -773,6 +822,36 @@ ScheduleClock writes a timestamp to status.tick on a configurable interval, gene
 | `spec.interval` | string |  | Interval is how often the ScheduleClock updates status.tick. Uses Go duration format (e.g. "1m", "30s"). Minimum recommended value is 30s; sub-minute precision is rarely needed for business-hour gates. Default: `1m`. |
 | `status` | object |  | ScheduleClockStatus defines the observed state of a ScheduleClock. |
 | `status.tick` | string |  | Tick is the RFC3339 timestamp written by the reconciler on every interval. The PolicyGate reconciler watches every ScheduleClock: each time Tick changes, it re-evaluates every PolicyGate instance in the cluster except those of finished Bundles, so time-based expressions such as schedule.isWeekend see time pass. A gate does not reference the clock. This is the sole purpose of this field. |
+
+## ScmProvider
+
+`kardinal.io/v1alpha1`
+
+ScmProvider is an SCM that Pipelines in its namespace open their PRs on (spec.git.providerRef). With it, one controller serves several SCMs, or several tokens of one: a Pipeline without providerRef keeps the controller's --scm-provider.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object | yes | ScmProviderSpec is the SCM a Pipeline opens its PRs on: its type, API and credentials. |
+| `spec.allowedRepositories` | []string |  | AllowedRepositories, when set, are the only repositories this provider's token is used for: globs over the repository the SCM API names ("acme/*", "group/sub/**"). "*" matches one path segment and a trailing "/**" any depth. A Bundle of a Pipeline whose repository is not allowed fails when its Graph is built. |
+| `spec.apiURL` | string |  | APIURL is the SCM's API base URL (the --scm-api-url value). Empty uses the provider's public default (api.github.com, gitlab.com, ...). |
+| `spec.secretRef` | object | yes | SecretRef names the Secret that holds the API token. A ScmProvider's Secret is in its own namespace; a ClusterScmProvider names the namespace. |
+| `spec.secretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
+| `spec.secretRef.name` | string | yes | Name is the Secret name. |
+| `spec.secretRef.namespace` | string |  | Namespace is the Secret's namespace: required on a ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in its own namespace (a Pipeline author cannot borrow another namespace's token). |
+| `spec.type` | string | yes | Type is the SCM: github, gitlab, forgejo, gitea, bitbucket or azuredevops (the --scm-provider values). One of: `github`, `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops`. |
+| `spec.webhookSecretRef` | object |  | WebhookSecretRef names the Secret that holds the webhook secret this provider's webhook deliveries are checked with (key "secret" when unset). Without it the provider's webhook endpoint refuses every delivery, and merges are seen by polling. |
+| `spec.webhookSecretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
+| `spec.webhookSecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.webhookSecretRef.namespace` | string |  | Namespace is the Secret's namespace: required on a ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in its own namespace (a Pipeline author cannot borrow another namespace's token). |
+| `status` | object |  | ScmProviderStatus is what the controller found when it checked the provider. |
+| `status.conditions` | []object |  | Conditions: Ready is True when the spec is valid and its Secrets have their keys. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation the conditions describe. |
 
 ## Subscription
 
