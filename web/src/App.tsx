@@ -770,6 +770,7 @@ export function App() {
               <ReleaseMetricsBar
                 bundles={bundles}
                 finalEnvironment={activePipeline?.environmentTopology?.at(-1)?.name}
+                deploymentMetrics={activePipeline?.deploymentMetrics}
               />
 
               {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).

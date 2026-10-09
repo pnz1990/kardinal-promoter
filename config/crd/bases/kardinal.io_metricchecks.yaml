@@ -31,8 +31,9 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          MetricCheck is a Prometheus-backed metric gate.
-          The MetricCheckReconciler queries Prometheus, evaluates the threshold,
+          MetricCheck is a metric gate backed by Prometheus, Datadog, CloudWatch,
+          New Relic or any HTTP JSON API (web).
+          The MetricCheckReconciler queries the backend, evaluates the threshold,
           and writes the result to status. PolicyGate CEL expressions reference
           these results via `metrics.<name>.value`, `metrics.<name>.result` and
           `metrics.<name>.stale`.
@@ -61,11 +62,156 @@ spec:
             type: object
           spec:
             description: |-
-              MetricCheckSpec defines a Prometheus-backed metric gate.
-              The MetricCheckReconciler queries Prometheus at spec.interval, evaluates
-              the threshold, and writes results to status. PolicyGate CEL expressions
-              can reference these results via the metrics.* context variable.
+              MetricCheckSpec defines a metric gate: a query against a metrics backend
+              (or any HTTP JSON API) and a threshold. The MetricCheckReconciler queries
+              the backend at spec.interval, evaluates the threshold, and writes the result
+              to status. PolicyGate CEL expressions reference these results via the
+              metrics.* context variable.
+
+              Credentials are read from Secrets in the MetricCheck's namespace
+              (*SecretRef fields); a spec never holds a token.
             properties:
+              cloudWatch:
+                description: CloudWatch configures provider cloudwatch.
+                properties:
+                  accessKeyIDSecretRef:
+                    description: AccessKeyIDSecretRef names the Secret key holding
+                      the AWS access key ID.
+                    properties:
+                      key:
+                        description: Key is the key in the Secret's data.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the Secret name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  endpoint:
+                    description: |-
+                      Endpoint overrides the CloudWatch API URL (http or https), for example
+                      a VPC endpoint. Defaults to https://monitoring.<region>.amazonaws.com.
+                    type: string
+                  period:
+                    description: |-
+                      Period is the granularity of the returned points, in seconds. Defaults
+                      to 60.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  region:
+                    description: Region is the AWS region, for example us-east-1.
+                    pattern: ^[a-z]{2}(-[a-z]+)+-[0-9]+$
+                    type: string
+                  secretAccessKeySecretRef:
+                    description: |-
+                      SecretAccessKeySecretRef names the Secret key holding the AWS secret
+                      access key.
+                    properties:
+                      key:
+                        description: Key is the key in the Secret's data.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the Secret name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  sessionTokenSecretRef:
+                    description: |-
+                      SessionTokenSecretRef names the Secret key holding an AWS session token,
+                      for temporary credentials.
+                    properties:
+                      key:
+                        description: Key is the key in the Secret's data.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the Secret name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  window:
+                    description: Window is how far back the query looks. Defaults
+                      to 5m.
+                    pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                    type: string
+                required:
+                - region
+                type: object
+                x-kubernetes-validations:
+                - message: set both accessKeyIDSecretRef and secretAccessKeySecretRef,
+                    or neither
+                  rule: has(self.accessKeyIDSecretRef) == has(self.secretAccessKeySecretRef)
+                - message: sessionTokenSecretRef requires accessKeyIDSecretRef and
+                    secretAccessKeySecretRef
+                  rule: '!has(self.sessionTokenSecretRef) || has(self.accessKeyIDSecretRef)'
+              datadog:
+                description: Datadog configures provider datadog.
+                properties:
+                  address:
+                    description: Address overrides the API base URL (http or https),
+                      for example a proxy.
+                    type: string
+                  apiKeySecretRef:
+                    description: |-
+                      APIKeySecretRef names the Secret key holding the Datadog API key
+                      (DD-API-KEY header).
+                    properties:
+                      key:
+                        description: Key is the key in the Secret's data.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the Secret name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  applicationKeySecretRef:
+                    description: |-
+                      ApplicationKeySecretRef names the Secret key holding the Datadog
+                      application key (DD-APPLICATION-KEY header).
+                    properties:
+                      key:
+                        description: Key is the key in the Secret's data.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the Secret name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  site:
+                    description: |-
+                      Site is the Datadog site: datadoghq.com (default), datadoghq.eu,
+                      us3.datadoghq.com, us5.datadoghq.com, ap1.datadoghq.com or
+                      ddog-gov.com. The API is https://api.<site>.
+                    pattern: ^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$
+                    type: string
+                  window:
+                    description: Window is how far back the query looks. Defaults
+                      to 5m.
+                    pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                    type: string
+                required:
+                - apiKeySecretRef
+                - applicationKeySecretRef
+                type: object
               interval:
                 description: |-
                   Interval is how often to re-evaluate the metric (e.g. "1m", "5m").
@@ -73,32 +219,131 @@ spec:
                   to "10s".
                 pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                 type: string
+              newRelic:
+                description: NewRelic configures provider newrelic.
+                properties:
+                  accountID:
+                    description: AccountID is the New Relic account the NRQL query
+                      runs in.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  address:
+                    description: Address overrides the NerdGraph URL (http or https).
+                    type: string
+                  apiKeySecretRef:
+                    description: |-
+                      APIKeySecretRef names the Secret key holding a New Relic user API key
+                      (API-Key header).
+                    properties:
+                      key:
+                        description: Key is the key in the Secret's data.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the Secret name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  region:
+                    description: |-
+                      Region selects the NerdGraph endpoint: US (default,
+                      https://api.newrelic.com/graphql) or EU (https://api.eu.newrelic.com/graphql).
+                    enum:
+                    - US
+                    - EU
+                    type: string
+                  resultField:
+                    description: |-
+                      ResultField is the field of the result row to read, for example
+                      "count" or "average.duration". Empty means the row must have exactly
+                      one field.
+                    type: string
+                required:
+                - accountID
+                - apiKeySecretRef
+                type: object
+              perPromotion:
+                description: |-
+                  PerPromotion makes this MetricCheck a template that is evaluated once
+                  per promotion instead of on its own. It is never queried itself. When a
+                  Bundle's Graph is built, every PolicyGate in the Pipeline namespace that
+                  reads metrics.<name> of this MetricCheck gets an instance: a MetricCheck
+                  the Graph owns, labelled with the Bundle, environment and template name,
+                  whose query, web.url, web.body and web.headers[].value have the
+                  placeholders replaced: {{ bundle.name }}, {{ bundle.version }},
+                  {{ bundle.imageTag }}, {{ bundle.imageDigest }}, {{ bundle.commitSHA }},
+                  {{ pipeline.name }}, {{ environment.name }}, {{ namespace }}. The gate of
+                  that Bundle and environment reads the instance's result as
+                  metrics.<name>. The instance is created once the environment's upstream
+                  environments are Verified, and suspended once the Bundle stops
+                  promoting.
+                type: boolean
+              prometheus:
+                description: Prometheus holds optional settings for provider prometheus.
+                properties:
+                  authorizationSecretRef:
+                    description: |-
+                      AuthorizationSecretRef names a Secret key whose value is sent as the
+                      Authorization header, for example "Bearer <token>" or "Basic <base64>".
+                    properties:
+                      key:
+                        description: Key is the key in the Secret's data.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the Secret name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                type: object
               prometheusURL:
                 description: |-
                   PrometheusURL is the base URL of the Prometheus HTTP API (http or https).
                   A path is kept as a prefix: the query goes to <prometheusURL>/api/v1/query.
+                  Required when provider is prometheus.
                   Example: http://prometheus.monitoring.svc:9090
-                minLength: 1
                 type: string
               provider:
                 default: prometheus
-                description: Provider is the metrics backend. Currently only "prometheus"
-                  is supported.
+                description: |-
+                  Provider is the metrics backend: prometheus (default), datadog,
+                  cloudwatch, newrelic, or web (any HTTP API that answers JSON).
                 enum:
                 - prometheus
+                - datadog
+                - cloudwatch
+                - newrelic
+                - web
                 type: string
               query:
                 description: |-
-                  Query is the PromQL query string to evaluate.
-                  The query must return a scalar or a single-element vector.
-                minLength: 1
+                  Query is the query to evaluate, in the provider's language: PromQL
+                  (prometheus), a Datadog metrics query (datadog), a CloudWatch metric
+                  math or Metrics Insights expression (cloudwatch), or NRQL (newrelic).
+                  It must return a single value (one series; the latest point is used).
+                  Required for every provider except web. It may contain placeholders such
+                  as {{ bundle.version }}; see PerPromotion.
                 type: string
+              suspend:
+                description: |-
+                  Suspend stops evaluation. The last result stays in status and goes
+                  stale at status.validUntil, so gates that read it block (fail closed).
+                  The Graph sets it on per-promotion instances once their Bundle is no
+                  longer promoting.
+                type: boolean
               threshold:
                 description: Threshold defines how to compare the metric value.
                 properties:
                   operator:
                     description: |-
-                      Operator is the comparison operator: lt, gt, lte, gte, eq.
+                      Operator is the comparison operator: lt, gt, lte, gte, eq, ne.
                       The gate passes when: metric_value <operator> threshold.value
                       Example: operator=lt, value=0.01 → gate passes if metric < 0.01
                     enum:
@@ -107,20 +352,132 @@ spec:
                     - lte
                     - gte
                     - eq
+                    - ne
+                    type: string
+                  text:
+                    description: |-
+                      Text, when set, compares the value as a string instead of a number,
+                      with operator eq or ne. For provider web, for example
+                      {jsonPath: "{.status}", threshold: {operator: eq, text: "healthy"}}.
                     type: string
                   value:
-                    description: Value is the numeric threshold to compare against.
+                    description: |-
+                      Value is the numeric threshold to compare against. Ignored when text is
+                      set.
                     type: number
                 required:
                 - operator
-                - value
                 type: object
+                x-kubernetes-validations:
+                - message: 'threshold.text compares strings: use operator eq or ne'
+                  rule: '!has(self.text) || self.operator in [''eq'', ''ne'']'
+              web:
+                description: |-
+                  Web configures provider web: an HTTP request whose JSON response is read
+                  with a JSONPath expression.
+                properties:
+                  body:
+                    description: Body is the request body, for POST. It may contain
+                      placeholders.
+                    type: string
+                  headers:
+                    description: |-
+                      Headers are sent with the request. A header takes its value from value
+                      or, for credentials, from valueFromSecret.
+                    items:
+                      description: WebHeader is one HTTP header of a web MetricCheck.
+                      properties:
+                        name:
+                          description: Name is the header name.
+                          pattern: ^[A-Za-z0-9-]+$
+                          type: string
+                        value:
+                          description: |-
+                            Value is the header value. It may contain placeholders. Do not put
+                            credentials here: use valueFromSecret.
+                          type: string
+                        valueFromSecret:
+                          description: |-
+                            ValueFromSecret names a Secret key whose value is sent as the header
+                            value.
+                          properties:
+                            key:
+                              description: Key is the key in the Secret's data.
+                              minLength: 1
+                              type: string
+                            name:
+                              description: Name is the Secret name.
+                              minLength: 1
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                      required:
+                      - name
+                      type: object
+                      x-kubernetes-validations:
+                      - message: set exactly one of value and valueFromSecret
+                        rule: has(self.value) != has(self.valueFromSecret)
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  jsonPath:
+                    description: |-
+                      JSONPath selects the value from the JSON response, in kubectl syntax,
+                      for example {.data.errorRate} or {.checks[0].status}. It must select
+                      exactly one string, number or boolean. Recursive descent (..) is not
+                      supported, and the response may be at most 64 KiB.
+                    pattern: ^\{.*\}$
+                    type: string
+                  method:
+                    description: Method is GET (default) or POST.
+                    enum:
+                    - GET
+                    - POST
+                    type: string
+                  timeoutSeconds:
+                    description: |-
+                      TimeoutSeconds bounds the request. Defaults to 10, at most 60, and
+                      never more than half of spec.interval.
+                    format: int32
+                    maximum: 60
+                    minimum: 1
+                    type: integer
+                  url:
+                    description: |-
+                      URL is the http or https URL to call. It may contain placeholders such
+                      as {{ bundle.version }}; see MetricCheckSpec.PerPromotion.
+                    minLength: 1
+                    type: string
+                required:
+                - jsonPath
+                - url
+                type: object
+                x-kubernetes-validations:
+                - message: 'web.jsonPath: recursive descent (..) is not supported'
+                  rule: '!self.jsonPath.contains(''..'')'
             required:
-            - prometheusURL
             - provider
-            - query
             - threshold
             type: object
+            x-kubernetes-validations:
+            - message: provider prometheus requires prometheusURL
+              rule: self.provider != 'prometheus' || (has(self.prometheusURL) && size(self.prometheusURL)
+                > 0)
+            - message: query is required for every provider except web
+              rule: self.provider == 'web' || (has(self.query) && size(self.query)
+                > 0)
+            - message: provider datadog requires datadog
+              rule: self.provider != 'datadog' || has(self.datadog)
+            - message: provider cloudwatch requires cloudWatch
+              rule: self.provider != 'cloudwatch' || has(self.cloudWatch)
+            - message: provider newrelic requires newRelic
+              rule: self.provider != 'newrelic' || has(self.newRelic)
+            - message: provider web requires web
+              rule: self.provider != 'web' || has(self.web)
           status:
             description: MetricCheckStatus records the most recent metric evaluation
               result.
@@ -131,7 +488,7 @@ spec:
                 type: string
               lastValue:
                 description: |-
-                  LastValue is the most recent metric value returned by the Prometheus query.
+                  LastValue is the most recent value the query returned.
                   Empty string means no evaluation has completed yet.
                 type: string
               reason:

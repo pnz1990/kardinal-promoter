@@ -594,6 +594,38 @@ func TestUIAPI_ListPipelines_PausedBadge(t *testing.T) {
 	assert.Equal(t, "my-app", resp[0].Name)
 }
 
+// TestUIAPI_ListPipelines_DeploymentMetrics: the pipeline list carries the
+// controller's status.deploymentMetrics (change failure rate and time to
+// restore included) as written, and omits it when the Pipeline has none.
+func TestUIAPI_ListPipelines_DeploymentMetrics(t *testing.T) {
+	dm := &v1alpha1.PipelineDeploymentMetrics{SampleSize: 4, Deployments: 4, FailedDeployments: 1,
+		ChangeFailureRateMillis: 250, MeanTimeToRestoreMinutes: 42, RestoredFailures: 1}
+	with := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"},
+		Spec:   v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}},
+		Status: v1alpha1.PipelineStatus{Phase: "Ready", DeploymentMetrics: dm}}
+	without := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(with, without).Build()
+	mux := http.NewServeMux()
+	newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var raw []map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	require.Len(t, raw, 2)
+	byName := map[string]map[string]interface{}{}
+	for _, p := range raw {
+		byName[p["name"].(string)] = p
+	}
+	got, ok := byName["a"]["deploymentMetrics"].(map[string]interface{})
+	require.True(t, ok, "deploymentMetrics: %v", byName["a"])
+	assert.Equal(t, map[string]interface{}{"sampleSize": 4.0, "deployments": 4.0, "failedDeployments": 1.0,
+		"changeFailureRateMillis": 250.0, "meanTimeToRestoreMinutes": 42.0, "restoredFailures": 1.0}, got)
+	assert.NotContains(t, byName["b"], "deploymentMetrics")
+}
+
 // TestUIAPI_ListPipelines_OpsFields verifies that the operations table fields
 // (blockerCount, failedStepCount, inventoryAgeDays, lastMergedAt) are
 // populated correctly from active Bundle, PolicyGate, and PromotionStep CRDs (#462).

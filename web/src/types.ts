@@ -44,6 +44,8 @@ export interface Pipeline {
   activeBundleVersion?: string
   /** Per environment, the Bundle it runs (fleet board). Absent: never deployed. */
   deployed?: Record<string, DeployedRelease>
+  /** Pipeline.status.deploymentMetrics, computed by the controller (DORA). */
+  deploymentMetrics?: DeploymentMetrics
 }
 
 /** What one environment runs: the newest PromotionStep there that landed its change. */
@@ -61,6 +63,25 @@ export interface DeployedRelease {
   /** Under a config Bundle: the last Bundle that deployed images here, and their tags. */
   imagesFrom?: string
   imagesVersion?: string
+}
+
+/** Pipeline.status.deploymentMetrics: DORA metrics for the last environment. */
+export interface DeploymentMetrics {
+  rolloutsLast30Days?: number
+  p50CommitToProdMinutes?: number
+  p90CommitToProdMinutes?: number
+  autoRollbackRateMillis?: number
+  operatorInterventionRateMillis?: number
+  staleProdDays?: number
+  sampleSize?: number
+  /** Deployments the stability pair is computed over (last 30). */
+  deployments?: number
+  failedDeployments?: number
+  /** failedDeployments / deployments, thousandths. */
+  changeFailureRateMillis?: number
+  meanTimeToRestoreMinutes?: number
+  restoredFailures?: number
+  computedAt?: string
 }
 
 /** #525: one environment in the static Pipeline spec topology. */

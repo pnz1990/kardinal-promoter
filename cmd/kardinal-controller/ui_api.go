@@ -78,6 +78,10 @@ type uiPipelineResponse struct {
 	// LastMergedAt is the RFC3339 timestamp of the last env that reached Verified.
 	// Empty string when no environment has been verified yet.
 	LastMergedAt string `json:"lastMergedAt,omitempty"`
+	// DeploymentMetrics is the Pipeline's status.deploymentMetrics, written by
+	// the PipelineReconciler (DORA throughput and stability for the last
+	// environment). Nil until a Bundle is Verified there.
+	DeploymentMetrics *v1alpha1.PipelineDeploymentMetrics `json:"deploymentMetrics,omitempty"`
 	// ActiveBundleVersion is what the active Bundle ships (scm.BundleVersion:
 	// the image tag, or "config <sha>"), for the fleet board.
 	ActiveBundleVersion string `json:"activeBundleVersion,omitempty"`
@@ -585,6 +589,7 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 			byName[bundlesByPipeline[key][i].Name] = &bundlesByPipeline[key][i]
 		}
 		resp.Deployed = deployedByEnv(&p, stepsByEnv(steps, stepsByPipeline[nsName{p.Namespace, p.Name}]), byName)
+		resp.DeploymentMetrics = p.Status.DeploymentMetrics
 		if ab := activeBundles[key]; ab != nil {
 			resp.ActiveBundleName = ab.name
 			resp.ActiveBundleVersion = scm.BundleVersion(ab.bundle.Spec)

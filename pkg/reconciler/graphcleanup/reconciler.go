@@ -29,6 +29,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // KroFinalizer is the finalizer kro keeps on a Graph until it has deleted the
@@ -288,5 +289,5 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 			DeleteFunc:  func(e event.DeleteEvent) bool { return IsKardinalGraph(e.Object) },
 			GenericFunc: func(event.GenericEvent) bool { return false },
 		})).
-		Complete(r)
+		Complete(tracing.WrapReconciler("graphcleanup", r))
 }

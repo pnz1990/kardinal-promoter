@@ -42,7 +42,7 @@ Config and mixed Bundles run the `config-merge` step, which copies the environme
 
 **Gates and policies**
 - CEL context: schedule, bundle metadata, upstream soak time, metrics, changewindow
-- MetricCheck CRD (PromQL-based metric injection into CEL)
+- MetricCheck CRD: Prometheus, Datadog, CloudWatch, New Relic and JSON web checks, Secret-backed credentials, per-promotion templated queries (unreleased)
 - Org-level gates (mandatory: a team Pipeline cannot remove or weaken them; `kardinal override` can force-pass one for a limited time with a recorded reason, so restrict `patch` on PolicyGates in team namespaces)
 - Team-level gates (additive)
 - SkipPermission gates
@@ -159,7 +159,6 @@ Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, 
 - `layout: branch`: promote rendered manifests (#1271)
 - `scm.allowedRepositories`: limit the repositories the SCM token may open PRs in (#1332)
 - `kardinal override` writes an AuditEvent with the cluster identity (#1286)
-- Secret-backed auth header for NotificationHook and MetricCheck (#1267)
 - `rollback` and `promote --env` without re-running upstream environments (#1311)
 - `kardinal approve`: a real gate bypass, or removal (#1309)
 
