@@ -458,3 +458,9 @@ func TestUIHandler_ActionsUseVirtualSubresources(t *testing.T) {
 		})
 	}
 }
+
+// TestGateOverrideCapDefault: the UI's default cap is the chart's
+// gateOverrides.maxMinutes default (test/helm TestGateOverrideCapIsOneValue).
+func TestGateOverrideCapDefault(t *testing.T) {
+	assert.Equal(t, 1440, maxGateOverrideMinutes)
+}

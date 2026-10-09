@@ -235,3 +235,30 @@ func TestScopedWrites_Rules(t *testing.T) {
 		}
 	}
 }
+
+// TestGateOverrideCapIsOneValue: gateOverrides.maxMinutes sets both the
+// controller flag the UI API and the PolicyGate reconciler read
+// (--gate-override-max-minutes, default 1440 as in ui_api.go) and the
+// scoped-writes policy's bound, so the three never differ.
+func TestGateOverrideCapIsOneValue(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "1440"},
+		{[]string{"--set", "gateOverrides.maxMinutes=30"}, "30"},
+	} {
+		docs := render(t, "kardinal-promoter", tc.args...)
+		var vap, deploy string
+		for _, d := range docs {
+			switch {
+			case d.Kind == "ValidatingAdmissionPolicy" && d.Name == "kardinal-promoter-scoped-writes":
+				vap = string(d.raw)
+			case d.Kind == "Deployment":
+				deploy = string(d.raw)
+			}
+		}
+		assert.Contains(t, vap, "duration('"+tc.want+"m')")
+		assert.Contains(t, deploy, `"--gate-override-max-minutes=`+tc.want+`"`)
+	}
+}
