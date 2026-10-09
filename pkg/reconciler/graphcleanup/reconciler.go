@@ -120,9 +120,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.Client.Get(ctx, req.NamespacedName, g); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Gone: its delete event queued the namespace's prune
-			// (pruneOnDelete), and a delete missed during a restart is
-			// pruned by the startup sweep. Pruning here as well ran one
-			// uncached prune per deleted Graph again.
+			// (pruneOnDelete). A delete missed during a restart is pruned
+			// by the startup sweep, which runs only when --watch-namespace
+			// is empty, on the default shard (cmd/kardinal-controller); in
+			// namespace mode the next prune of the namespace covers it.
+			// Pruning here as well ran one uncached prune per deleted Graph
+			// again.
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get graph %s: %w", req, err)
