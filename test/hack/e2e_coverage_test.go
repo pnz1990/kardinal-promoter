@@ -33,7 +33,7 @@ func TestE2ECoverage(t *testing.T) {
 		assert.NotContains(t, byID, r.ID, "duplicate row")
 		byID[r.ID] = r
 		assert.Contains(t, []string{"live", "contract", "deprecated"}, r.Tier, r.ID)
-		assert.Contains(t, []string{"covered", "todo"}, r.Status, r.ID)
+		assert.Contains(t, []string{"covered", "todo", "known-bug"}, r.Status, r.ID)
 		assert.NotEmpty(t, r.Suite, r.ID)
 		assert.NotEmpty(t, r.Feature, r.ID)
 		assert.NotEmpty(t, r.Source, r.ID)
@@ -89,8 +89,9 @@ func TestE2ECoverage(t *testing.T) {
 	counts := map[string][2]int{}
 	for _, r := range rows {
 		_, has := coveredBy[r.ID]
-		if r.Status == "covered" {
-			assert.True(t, has, "%s is marked covered but no test covers it", r.ID)
+		if r.Status == "covered" || r.Status == "known-bug" {
+			// A known-bug row's test reproduces an open bug (scale.KnownBug).
+			assert.True(t, has, "%s is marked %s but no test covers it", r.ID, r.Status)
 		} else {
 			assert.False(t, has, "%s is marked todo but %v covers it; mark it covered", r.ID, coveredBy[r.ID])
 		}

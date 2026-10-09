@@ -394,14 +394,19 @@ func (f *ForgejoProvider) ensureLabels(ctx context.Context, owner, repo string, 
 // do executes an authenticated Forgejo/Gitea API request.
 func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
 	owner := ownerFromPath(path, "/api/v1/repos/")
+	call := startSCMCall("forgejo", owner, method, path)
 	if err := f.circuits.Allow(owner); err != nil {
+		call.circuitOpen(f.circuits, owner)
 		return fmt.Errorf("forgejo scm: %w", err)
 	}
 	// When the call started: a failure of a call that started before the
 	// circuit opened is not counted (CircuitBreaker.RecordFailureFrom).
 	started := time.Now()
 	resp, err := f.send(ctx, method, path, body, result)
-	f.circuits.Record(owner, started, resp, callError(resp, err))
+	callErr := callError(resp, err)
+	f.circuits.Record(owner, started, resp, callErr)
+	// After Record: the metric reads the circuit states the call left.
+	call.done(resp, callErr, f.circuits, owner)
 	return err
 }
 

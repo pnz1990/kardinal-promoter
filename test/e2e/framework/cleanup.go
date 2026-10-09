@@ -179,3 +179,12 @@ func (e *Env) promotionStepsLeft(ctx context.Context, ns string) ([]string, erro
 	}
 	return left, nil
 }
+
+// DrainNamespaces drains the test's namespaces, as the cleanup of a repo
+// framework.Env.Repo created does before it deletes the repo: for repos a
+// test creates through Env.Git itself (the scale suite creates hundreds
+// concurrently).
+func (e *Env) DrainNamespaces(t *testing.T) {
+	t.Helper()
+	e.beforeRepoDelete(t)
+}

@@ -119,20 +119,37 @@ func (f *ForgejoProvider) DeleteBranch(ctx context.Context, repo, branch string)
 	}
 	path := fmt.Sprintf("/api/v1/repos/%s/%s/branches/%s", owner, name, branchPath(branch))
 	if err := f.circuits.Allow(owner); err != nil {
+		startSCMCall("forgejo", owner, http.MethodDelete, path).circuitOpen(f.circuits, owner)
 		return fmt.Errorf("forgejo scm: %w", err)
 	}
+	// Each request counts in kardinal_scm_requests_total. The metrics are
+	// written at return, after the pair is recorded for the circuit, so they
+	// read the circuit state it left.
+	var done []func()
+	defer func() {
+		for _, d := range done {
+			d()
+		}
+	}()
+	send := func(method string) (*http.Response, error) {
+		call := startSCMCall("forgejo", owner, method, path)
+		resp, err := f.send(ctx, method, path, nil, nil)
+		callErr := callError(resp, err)
+		done = append(done, func() { call.done(resp, callErr, f.circuits, owner) })
+		return resp, err
+	}
 	started := time.Now()
-	resp, err := f.send(ctx, http.MethodGet, path, nil, nil)
+	resp, err := send(http.MethodGet)
 	if _, gone := statusIs(err, http.StatusNotFound); gone {
 		f.circuits.Record(owner, started, resp, nil)
 		return nil
 	}
-	resp, err = f.send(ctx, http.MethodDelete, path, nil, nil)
+	resp, err = send(http.MethodDelete)
 	if _, gone := statusIs(err, http.StatusNotFound); gone || err == nil {
 		f.circuits.Record(owner, started, resp, nil)
 		return nil
 	}
-	if readResp, readErr := f.send(ctx, http.MethodGet, path, nil, nil); readResp != nil {
+	if readResp, readErr := send(http.MethodGet); readResp != nil {
 		if _, gone := statusIs(readErr, http.StatusNotFound); gone {
 			f.circuits.Record(owner, started, readResp, nil)
 			return nil
