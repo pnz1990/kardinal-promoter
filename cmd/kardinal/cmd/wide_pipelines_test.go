@@ -152,8 +152,8 @@ func TestGetBundles_SameSecond(t *testing.T) {
 		return b
 	}
 	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithObjects(
-		mk("app-zzz", sec, 100), // same second, created first
-		mk("app-aaa", sec, 900), // same second, created last
+		mk("app-zzz", sec, 100),                          // same second, created first
+		mk("app-aaa", sec, 900),                          // same second, created last
 		mk("app-bbb", sec, 500), mk("app-ccc", sec, 500), // same instant: by name
 		mk("app-old", sec.Add(-time.Second), 999), // an earlier second wins over created-at
 	).Build()
