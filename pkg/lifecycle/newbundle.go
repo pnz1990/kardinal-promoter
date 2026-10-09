@@ -36,9 +36,9 @@ func ValidateNewBundle(spec *v1alpha1.BundleSpec) error {
 		spec.Type = "image"
 	}
 	switch spec.Type {
-	case "image", "config", "mixed":
+	case "image", "config", "mixed", "chart":
 	default:
-		return fmt.Errorf("type must be one of image, config, mixed (got %q)", spec.Type)
+		return fmt.Errorf("type must be one of image, config, mixed, chart (got %q)", spec.Type)
 	}
 	if err := graph.ValidateBundleArtifacts(spec); err != nil {
 		return err

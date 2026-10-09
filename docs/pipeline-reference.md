@@ -30,6 +30,8 @@ spec:
         helm:                           # When strategy: helm
           imagePathTemplate: <string>   # Dot path of the image tag (default: ".image.tag")
           valuesFile: <string>          # Relative to path (default: "values.yaml")
+          chartVersionFile: <string>    # chart Bundles: file with the chart version (default: "Chart.yaml")
+          chartVersionPath: <string>    # chart Bundles: its dot path (default: ".dependencies[name=<chart>].version")
         argocd:                         # When strategy: argocd
           application: <string>         # Argo CD Application to patch (required)
           namespace: <string>           # Default: "argocd"
@@ -101,7 +103,8 @@ spec:
 
 ### spec.environments[]
 
-A Pipeline has 1 to 100 environments. The CRD rejects, at `kubectl apply` time:
+A Pipeline has 1 to 500 environments (see [Large Pipelines](#large-pipelines) for what fits in
+one Bundle's Graph). The CRD rejects, at `kubectl apply` time:
 
 - a name that is not a DNS label: lowercase letters, digits and `-`, starting and ending
   with a letter or digit, at most 63 characters. The name is used as a namespace
@@ -124,6 +127,8 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches the image tag at `update.helm.imagePathTemplate` in `update.helm.valuesFile`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). `yaml`: sets any YAML paths, in any files of the environment directory, to a Bundle image's tag, digest or reference; see [The yaml update strategy](#the-yaml-update-strategy). |
 | `update.helm.imagePathTemplate` | No | `.image.tag` | `helm` only. Dot path of the image tag in the values file. |
 | `update.helm.valuesFile` | No | `values.yaml` | `helm` only. Values file to patch, relative to the environment `path`. |
+| `update.helm.chartVersionFile` | No | `Chart.yaml` | `helm` only, for `chart` Bundles (from a [Helm Subscription](subscription.md#promoting-a-chart-version)). File the chart version is written to, relative to the environment `path`. A chart Bundle fails at build in an environment whose strategy is not `helm`. |
+| `update.helm.chartVersionPath` | No | `.dependencies[name=<chart>].version` | `helm` only. Dot path of the chart version in `chartVersionFile`; a numeric segment indexes a list and `[field=value]` selects a list element (`.helmCharts[name=podinfo].version`, `.spec.chart.spec.version`, `.spec.source.targetRevision`). The default is the umbrella chart's dependency named after the Bundle's chart; the step fails when there is none. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
 | `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. |
@@ -179,6 +184,41 @@ Default: `0`.
 Extra namespaces to read PolicyGates from. It only adds: the org policy namespaces (the controller's `--policy-namespaces`, default `platform-policies`) and the Pipeline's namespace are always read. A gate found only through it is a team gate unless it is labelled `kardinal.io/scope: org`, and it never grants a skip. See [Policy Gates](policy-gates.md).
 
 Default: none.
+
+### Large Pipelines
+
+Each Bundle is promoted by one kro Graph, and a Graph is one Kubernetes object, which etcd stores
+only up to 1.5 MiB. Two Graph shapes keep it in bounds:
+
+- **nodes** (Pipelines with up to 100 environments): one Graph node per environment. `kubectl get
+  graph -o yaml` shows each environment's PromotionStep as a node.
+- **compact** (above 100 environments): the promotion order is data in the Graph, and one node
+  creates every PromotionStep the order allows (upstream environments Verified, gates ready, the
+  Bundle not superseded, rejected or waiting for a `maxConcurrentPromotions` slot). A step that exists is not removed when a gate later closes or
+  the Bundle is superseded. The Graph has about a dozen nodes whatever the number of environments,
+  and no health ref nodes (health is checked by the PromotionStep as in the nodes shape).
+
+Both shapes promote the same way: the same PromotionSteps, PolicyGate instances and PRStatuses,
+with the same names. Choose one for a Pipeline with the annotation `kardinal.io/graph-shape:
+compact` or `nodes`; the controller's `--graph-compact-above` (chart `graph.compactAbove`) moves
+the threshold. A Bundle keeps the shape its Graph was created with: a later Pipeline edit, a changed
+annotation or threshold applies to new Bundles only, because switching the shape of a Graph in
+flight would delete its PromotionSteps. The shape is read from the Graph's nodes; the Graph's
+`kardinal.io/graph-shape` label only shows it.
+
+In the compact shape every PromotionStep comes from one collection, so a PolicyGate instance or a
+PromotionStep that kro cannot apply holds every environment of the Bundle, not only its own (the
+Bundle's `GatesCreated` condition names a gate that cannot be created). A feature the compact shape
+does not carry yet fails the Bundle with `GraphBuildFailed` naming the feature, and sets the
+Pipeline `Ready=False` while its new Bundles would get a compact Graph. Per-promotion MetricChecks
+(`spec.perPromotion`) are one: use the node shape (`kardinal.io/graph-shape: nodes`) for a Pipeline
+whose gates read one. Only the Bundle reports this one; the Pipeline condition does not, because
+the Pipeline reconciler does not read the gates and MetricChecks.
+
+The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
+each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be
+over 1.2 MB, or create more than 4,500 objects, fails with `GraphBuildFailed` and the size in the
+message.
 
 ## Health Check Defaults
 
