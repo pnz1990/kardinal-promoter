@@ -208,9 +208,11 @@ func TestTranslate_EndToEnd(t *testing.T) {
 
 	var gateTemplates, health []string
 	for _, n := range g.Spec.Nodes {
-		if n.Template != nil && n.Template["kind"] == "PolicyGate" {
-			labels := n.Template["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
-			gateTemplates = append(gateTemplates, labels["kardinal.io/gate-template"].(string))
+		if n.ID == graph.NodePolicyGateData {
+			templates, _ := n.Def["templates"].([]interface{})
+			for _, tmpl := range templates {
+				gateTemplates = append(gateTemplates, tmpl.(map[string]interface{})["template"].(string))
+			}
 		}
 		if n.Ref != nil && n.ID != "bundle" {
 			health = append(health, n.ID)
@@ -281,7 +283,7 @@ func TestTranslate_PermanentErrors(t *testing.T) {
 	t.Run("graph over the size limit (G10)", func(t *testing.T) {
 		var envs []kardinalv1alpha1.EnvironmentSpec
 		var gates []client.Object
-		for i := 0; i < 300; i++ {
+		for i := 0; i < 400; i++ {
 			name := fmt.Sprintf("region%03d", i)
 			envs = append(envs, kardinalv1alpha1.EnvironmentSpec{Name: name})
 			for g := 0; g < 3; g++ {

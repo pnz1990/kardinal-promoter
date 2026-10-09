@@ -102,16 +102,14 @@ func TestValidateSkipPermissions(t *testing.T) {
 	}
 }
 
-// gateInstances returns the PolicyGate nodes of a Graph by environment label.
-func gateInstances(g *graph.Graph) map[string][]graph.GraphNode {
-	out := map[string][]graph.GraphNode{}
-	for _, n := range g.Spec.Nodes {
-		if n.Template == nil || n.Template["kind"] != "PolicyGate" {
-			continue
-		}
-		labels := n.Template["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
-		env, _ := labels["kardinal.io/environment"].(string)
-		out[env] = append(out[env], n)
+// gateInstances returns the PolicyGate instances a Graph creates, by
+// environment label.
+func gateInstances(t *testing.T, g *graph.Graph) map[string][]map[string]interface{} {
+	t.Helper()
+	out := map[string][]map[string]interface{}{}
+	for _, o := range renderedOf(t, g, "PolicyGate") {
+		env, _ := objLabels(o)["kardinal.io/environment"].(string)
+		out[env] = append(out[env], o)
 	}
 	return out
 }
@@ -133,23 +131,23 @@ func TestBuild_SkipPermissionHoldsNextEnvironment(t *testing.T) {
 	assertKroValid(t, res.Graph)
 	assert.Equal(t, []string{"test", "prod"}, res.Environments)
 
-	instances := gateInstances(res.Graph)
+	instances := gateInstances(t, res.Graph)
 	require.Len(t, instances["prod"], 1, "prod must be held by the permission instance")
 	assert.Empty(t, instances["test"])
 	inst := instances["prod"][0]
-	meta := inst.Template["metadata"].(map[string]interface{})
+	meta := inst["metadata"].(map[string]interface{})
 	labels := meta["labels"].(map[string]interface{})
 	assert.Equal(t, graph.GateTypeSkipPermission, labels[graph.LabelGateType])
 	assert.Equal(t, "allow-staging-skip-for-hotfix", labels["kardinal.io/gate-template"])
 	assert.Equal(t, "platform-policies", labels[graph.LabelGateTemplateNamespace])
 	assert.Equal(t, "app-x7k2m", labels["kardinal.io/bundle"], "an instance, not a template")
 	assert.Equal(t, map[string]interface{}{graph.AnnotationSkippedEnvironments: "staging"}, meta["annotations"])
-	assert.Equal(t, `bundle.version.startsWith("hotfix-")`, inst.Template["spec"].(map[string]interface{})["expression"])
+	assert.Equal(t, `bundle.version.startsWith("hotfix-")`, inst["spec"].(map[string]interface{})["expression"])
 
 	prodSpec := nodeByID(res.Graph.Spec.Nodes)["prod"].Template["spec"].(map[string]interface{})
 	required, _ := prodSpec["requiredGates"].([]interface{})
 	require.Len(t, required, 1)
-	assert.Contains(t, required[0], inst.ID+".status.ready == true")
+	assert.Contains(t, required[0], fmt.Sprintf("g.metadata.name == %q && g.?status.?ready.orValue(false) == true", objName(inst)))
 }
 
 // TestBuild_SkipPermissionPlacement verifies where permission instances go
@@ -213,10 +211,10 @@ func TestBuild_SkipPermissionPlacement(t *testing.T) {
 			require.NoError(t, err)
 			assertKroValid(t, res.Graph)
 			got := map[string]string{}
-			for env, nodes := range gateInstances(res.Graph) {
+			for env, objs := range gateInstances(t, res.Graph) {
 				var skipped []string
-				for _, n := range nodes {
-					ann, _ := n.Template["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+				for _, o := range objs {
+					ann, _ := o["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
 					skipped = append(skipped, fmt.Sprint(ann[graph.AnnotationSkippedEnvironments]))
 				}
 				got[env] = joinSorted(skipped)
