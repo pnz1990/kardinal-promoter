@@ -103,7 +103,7 @@ Azure DevOps) and every git clone and push is measured (`pkg/scm/metrics.go`):
 | `kardinal_scm_circuit_state` | Gauge | `provider`, `owner` | Circuit breaker state: `0` closed, `1` half-open (one probe allowed), `2` open (calls refused). `owner="_quota"` is the circuit that opens when the token's rate limit is used up |
 | `kardinal_git_operations_total` | Counter | `operation` (`clone`, `push`), `result` (`ok`, `error`, `non_fast_forward`) | Git clones and pushes. `non_fast_forward` is a push that lost to another writer of the branch (it is rebased and retried) |
 | `kardinal_git_operation_duration_seconds` | Histogram | `operation` | Duration of git clones and pushes |
-| `kardinal_git_transfer_bytes_total` | Counter | `service` (`fetch`, `push`), `direction` (`sent`, `received`) | Bytes git transferred over HTTP(S). `fetch` covers clones and fetches (git-upload-pack), `push` covers git-receive-pack. Git over ssh is not counted |
+| `kardinal_git_transfer_bytes_total` | Counter | `git_service` (`fetch`, `push`), `direction` (`sent`, `received`) | Bytes git transferred over HTTP(S). `fetch` covers clones and fetches (git-upload-pack), `push` covers git-receive-pack. Git over ssh is not counted |
 
 **Cardinality is bounded.** The `owner` label is the repository owner (organization, user,
 top-level GitLab group, Bitbucket workspace or Azure DevOps organization). It is never the

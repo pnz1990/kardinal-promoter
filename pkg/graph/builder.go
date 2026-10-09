@@ -626,6 +626,13 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 	nodes = append(nodes, bundleWatchNode)
 	nodes = append(nodes, readBackRefs(pipeline, filteredEnvs, bundle)...)
+	ivNode, ivName, err := buildImageVerificationNode(pipeline, bundle)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if ivNode != nil {
+		nodes = append(nodes, *ivNode)
+	}
 	if anyNeedsApprovals(gatesByEnv) {
 		nodes = append(nodes, approvalsRefNode(bundle)) // approval gates (approvals.go)
 	}
@@ -718,13 +725,20 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
 			heldCond(pipeline, envName),
 		)
-		extras, err := buildEnvExtras(hookNodesInput{
+		in := hookNodesInput{
 			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
 			bundleUID:   string(bundle.UID),
 			env:         findEnvSpec(pipeline, envName),
 			stepK8sName: promotionStepK8sName(pipelineName, bundle.Name, envName),
 			conds:       stepConds(heldCond(pipeline, envName), upstreams, envGates, gates.readyCond),
-		}, analyses, bundle)
+		}
+		if ivName != "" && len(upstreams) == 0 {
+			// A root step waits for the image verification, and so do its
+			// pre-deploy hooks (a migration must not run for an unverified image).
+			in.imageVerification = ivName
+			in.conds = append(in.conds, imageVerifiedCond())
+		}
+		extras, err := buildEnvExtras(in, analyses, bundle)
 		if err != nil {
 			return nil, nil, nil, err
 		}
