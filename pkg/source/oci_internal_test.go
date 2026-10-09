@@ -105,7 +105,7 @@ func TestTokenRealmIsGuarded(t *testing.T) {
 	base, name, err := parseRegistryRef("ghcr.io/a/b")
 	require.NoError(t, err)
 	s := &registrySession{client: newHTTPClient(), base: base, name: name}
-	err = s.fetchAnonymousToken(t.Context(), `Bearer realm="`+srv.URL+`/token",service="ghcr.io"`)
+	err = s.answerChallenge(t.Context(), `Bearer realm="`+srv.URL+`/token",service="ghcr.io"`)
 	require.ErrorIs(t, err, egress.ErrBlockedAddress)
 	assert.Contains(t, err.Error(), "is loopback")
 	assert.Zero(t, hits.Load(), "no request reaches the loopback realm")
@@ -116,7 +116,7 @@ func TestRealmMustBeHTTPS(t *testing.T) {
 	base, name, err := parseRegistryRef("ghcr.io/a/b")
 	require.NoError(t, err)
 	s := &registrySession{client: newHTTPClient(), base: base, name: name}
-	err = s.fetchAnonymousToken(t.Context(), `Bearer realm="http://ghcr.io/token",service="ghcr.io"`)
+	err = s.answerChallenge(t.Context(), `Bearer realm="http://ghcr.io/token",service="ghcr.io"`)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not https")
 	assert.Empty(t, s.token)
