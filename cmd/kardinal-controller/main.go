@@ -119,6 +119,10 @@ func main() {
 		retire                 bundlereconciler.RetirePolicy
 	)
 
+	var scmWaitTimeout time.Duration
+	flag.DurationVar(&scmWaitTimeout, "scm-wait-timeout", psreconciler.DefaultSCMWaitTimeout,
+		"Longest a PromotionStep waits for an open SCM circuit (its SCM host keeps failing) before it fails, "+
+			"when its environment sets no stepTimeoutSeconds.")
 	flag.BoolVar(&auditRetention, "audit-retention", false,
 		"Delete AuditEvents past their retention (--audit-retention-max-age, --audit-retention-max-per-pipeline). "+
 			"Off by default: every record is kept until you opt in.")
@@ -735,6 +739,7 @@ func main() {
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		RemoteClusters:      &healthpkg.RemoteClusters{},
 		Recorder:            eventRecorder,
+		SCMWaitTimeout:      scmWaitTimeout,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}
