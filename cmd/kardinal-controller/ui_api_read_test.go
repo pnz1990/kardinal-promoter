@@ -934,3 +934,25 @@ func TestUIAPI_Bundles_RejectedLiveEnvironments(t *testing.T) {
 	assert.Equal(t, []string{"prod", "test"}, resp[0].RejectedLiveEnvironments)
 	assert.Empty(t, resp[1].RejectedLiveEnvironments)
 }
+
+// TestUIAPI_Bundles_RejectedLiveRetired (QA #1489, #1492): a Bundle rejected
+// after its Graph was retired has no PromotionSteps any more; its
+// status.retiredSteps still say where its change is live.
+func TestUIAPI_Bundles_RejectedLiveRetired(t *testing.T) {
+	at := metav1.NewTime(time.Now().Add(-time.Hour).Truncate(time.Second))
+	bad := rejectedUIBundle(&v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-2", Namespace: "default", CreationTimestamp: metav1.NewTime(time.Now())},
+		Spec:       v1alpha1.BundleSpec{Pipeline: "app"},
+		Status: v1alpha1.BundleStatus{Phase: "Rejected", RetiredAt: &at, RetiredSteps: []v1alpha1.RetiredStep{
+			{Name: "app-2-test", Environment: "test", State: "Verified", CreatedAt: at, VerifiedAt: &at},
+			{Name: "app-2-prod", Environment: "prod", State: "Verified", CreatedAt: at, VerifiedAt: &at},
+		}},
+	})
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(bad).Build()
+	rec := uiReadGet(t, c, "/api/v1/ui/pipelines/app/bundles")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var resp []uiBundleResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	assert.Equal(t, []string{"prod", "test"}, resp[0].RejectedLiveEnvironments)
+}

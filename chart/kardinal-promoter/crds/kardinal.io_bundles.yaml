@@ -392,6 +392,58 @@ spec:
                   templates retries the Bundle, as a Pipeline change does. Empty
                   otherwise.
                 type: string
+              rejectedArtifacts:
+                description: |-
+                  RejectedArtifacts is what a rejection (spec.rejected) rejects: the
+                  artifacts of this Bundle that differ from what was Verified before it
+                  in the environments it reached, written by the Bundle reconciler when
+                  it marks the Bundle Rejected. A sidecar the Bundle carries unchanged is
+                  not in it, so rolling back to the Bundle before stays possible. Unset
+                  (a rejection not processed yet) means all of the Bundle's artifacts.
+                properties:
+                  comparedWith:
+                    description: |-
+                      ComparedWith names, per environment, the Verified Bundle the artifacts
+                      were compared with ("<env>=<bundle>"); empty when no environment had
+                      one, and then every artifact is rejected.
+                    items:
+                      type: string
+                    maxItems: 100
+                    type: array
+                  configCommitSHA:
+                    description: ConfigCommitSHA is the rejected config commit, when
+                      it differs.
+                    type: string
+                  images:
+                    description: |-
+                      Images are the rejected images: those not Verified, with the same
+                      digest (or tag, without a digest), before this Bundle in every
+                      environment it reached.
+                    items:
+                      description: ImageRef identifies a container image by repository,
+                        tag, and/or digest.
+                      properties:
+                        digest:
+                          description: Digest is the image digest (sha256:...), in
+                            the OCI digest grammar.
+                          pattern: ^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$
+                          type: string
+                        repository:
+                          description: Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
+                          minLength: 1
+                          type: string
+                        tag:
+                          description: |-
+                            Tag is the image tag, in the OCI distribution grammar: up to 128
+                            characters of [A-Za-z0-9_.-], not starting with "." or "-".
+                          pattern: ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$
+                          type: string
+                      required:
+                      - repository
+                      type: object
+                    maxItems: 100
+                    type: array
+                type: object
               retiredAt:
                 description: |-
                   RetiredAt is when the Bundle's Graph was retired: set in the same

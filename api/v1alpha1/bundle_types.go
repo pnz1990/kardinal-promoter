@@ -80,6 +80,26 @@ type BundleRejection struct {
 	At *metav1.Time `json:"at,omitempty"`
 }
 
+// RejectedArtifactSet is the part of a rejected Bundle that the rejection
+// covers (BundleStatus.RejectedArtifacts).
+type RejectedArtifactSet struct {
+	// Images are the rejected images: those not Verified, with the same
+	// digest (or tag, without a digest), before this Bundle in every
+	// environment it reached.
+	// +optional
+	// +kubebuilder:validation:MaxItems=100
+	Images []ImageRef `json:"images,omitempty"`
+	// ConfigCommitSHA is the rejected config commit, when it differs.
+	// +optional
+	ConfigCommitSHA string `json:"configCommitSHA,omitempty"`
+	// ComparedWith names, per environment, the Verified Bundle the artifacts
+	// were compared with ("<env>=<bundle>"); empty when no environment had
+	// one, and then every artifact is rejected.
+	// +optional
+	// +kubebuilder:validation:MaxItems=100
+	ComparedWith []string `json:"comparedWith,omitempty"`
+}
+
 // ImageRef identifies a container image by repository, tag, and/or digest.
 type ImageRef struct {
 	// Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
@@ -233,6 +253,15 @@ type BundleStatus struct {
 	// +listMapKey=name
 	// +kubebuilder:validation:MaxItems=1000
 	RetiredSteps []RetiredStep `json:"retiredSteps,omitempty"`
+
+	// RejectedArtifacts is what a rejection (spec.rejected) rejects: the
+	// artifacts of this Bundle that differ from what was Verified before it
+	// in the environments it reached, written by the Bundle reconciler when
+	// it marks the Bundle Rejected. A sidecar the Bundle carries unchanged is
+	// not in it, so rolling back to the Bundle before stays possible. Unset
+	// (a rejection not processed yet) means all of the Bundle's artifacts.
+	// +optional
+	RejectedArtifacts *RejectedArtifactSet `json:"rejectedArtifacts,omitempty"`
 
 	// RetiredAt is when the Bundle's Graph was retired: set in the same
 	// write as RetiredSteps, and never cleared. A Bundle with RetiredAt is

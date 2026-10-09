@@ -42,6 +42,19 @@ func TestPlanRollback(t *testing.T) {
 		return b
 	}
 
+	// twoImages gives b the app image at tag app and a sidecar at side.
+	twoImages := func(b *v1alpha1.Bundle, app, side string) *v1alpha1.Bundle {
+		b.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/x/app", Tag: app}, {Repository: "ghcr.io/x/sidecar", Tag: side}}
+		return b
+	}
+	// onlyApp records, as the Bundle reconciler does (RejectedSetOf), that
+	// the rejection of b rejects only its app image: its sidecar was already
+	// Verified before it.
+	onlyApp := func(b *v1alpha1.Bundle) *v1alpha1.Bundle {
+		b.Status.RejectedArtifacts = &v1alpha1.RejectedArtifactSet{Images: b.Spec.Images[:1], ComparedWith: []string{"prod=v1"}}
+		return b
+	}
+
 	tests := []struct {
 		name       string
 		objs       []client.Object
@@ -95,6 +108,27 @@ func TestPlanRollback(t *testing.T) {
 				step("v3", "app", "prod", "Verified", 21),
 			},
 			wantTarget: "v1", wantFrom: "v3", wantTag: "latest",
+		},
+		{
+			name: "two images: rejecting the changed app does not block the predecessor with the same sidecar (QA #1489)",
+			objs: []client.Object{
+				twoImages(bundle("v1", "app", "1", 0), "1", "s1"),
+				onlyApp(rejected(twoImages(bundle("v2", "app", "2", 10), "2", "s1"))),
+				step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "Verified", 11),
+			},
+			wantTarget: "v1", wantFrom: "v2", wantTag: "1",
+		},
+		{
+			name: "two images: a bundle reusing the rejected app image is still refused",
+			objs: []client.Object{
+				twoImages(bundle("v1", "app", "1", 0), "1", "s1"),
+				onlyApp(rejected(twoImages(bundle("v2", "app", "2", 10), "2", "s1"))),
+				twoImages(bundle("v3", "app", "2", 20), "2", "s2"), twoImages(bundle("v4", "app", "4", 30), "4", "s2"),
+				step("v1", "app", "prod", "Verified", 1), step("v3", "app", "prod", "Verified", 21),
+				step("v4", "app", "prod", "Verified", 31),
+			},
+			req:     lifecycle.RollbackRequest{ToBundle: "v3"},
+			wantErr: lifecycle.ErrInvalid,
 		},
 		{
 			name: "--to a bundle carrying the image of a rejected bundle is refused",
@@ -366,7 +400,7 @@ func TestPlanRollback(t *testing.T) {
 			assert.Equal(t, tc.wantTarget, plan.Target.Name)
 			assert.Equal(t, tc.wantTarget, b.Spec.Provenance.RollbackOf, "rollbackOf names the bundle restored")
 			assert.Equal(t, tc.wantFrom, b.Annotations[lifecycle.AnnotationRollbackFrom])
-			require.Len(t, b.Spec.Images, 1, "the rollback bundle carries the target's images")
+			require.Len(t, b.Spec.Images, len(plan.Target.Spec.Images), "the rollback bundle carries the target's images")
 			assert.Equal(t, tc.wantTag, b.Spec.Images[0].Tag)
 			assert.Equal(t, "prod", b.Spec.Intent.TargetEnvironment)
 			assert.Equal(t, "app", b.Spec.Pipeline)

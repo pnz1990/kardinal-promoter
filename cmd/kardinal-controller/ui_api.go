@@ -700,7 +700,9 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			steps = append(steps, stepList.Items...)
+			// A retired Bundle (#1492) keeps its steps in status.retiredSteps.
+			steps = lifecycle.AddRetiredSteps(stepList.Items, items,
+				map[string]string{"kardinal.io/pipeline": pipelineName})
 			break
 		}
 	}

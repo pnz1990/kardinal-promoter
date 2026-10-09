@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -653,4 +654,14 @@ func TestDerivePhase_RejectedLive(t *testing.T) {
 			assert.Equal(t, tc.want, pipeline.DerivePhase("app", tc.bundles, tc.steps))
 		})
 	}
+
+	// A Bundle rejected after its Graph was retired (#1492) has only
+	// status.retiredSteps; with them (AddRetiredSteps, as the reconciler
+	// reads steps) its live change still makes the Pipeline Degraded.
+	retired := rejected("v2", t1)
+	retired.Status.RetiredAt = &t1
+	retired.Status.RetiredSteps = []kardinalv1alpha1.RetiredStep{{Name: "v2-prod", Environment: "prod", State: "Verified", CreatedAt: t1, VerifiedAt: &t1}}
+	bundles := []kardinalv1alpha1.Bundle{phaseBundle("v1", "Verified", t0), retired}
+	steps := lifecycle.AddRetiredSteps([]kardinalv1alpha1.PromotionStep{st("v1", "prod", "Verified")}, bundles, nil)
+	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", bundles, steps), "a retired rejected change that is live")
 }

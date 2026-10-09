@@ -15,7 +15,9 @@ import (
 // RejectedArtifacts holds the artifacts of a Pipeline's rejected Bundles
 // (kardinal reject, #1451). A rejection is about what a Bundle deploys, not
 // the Bundle object: another Bundle with the same image or config commit is
-// just as unwanted. Rollback, promote and Subscriptions skip any Bundle that
+// just as unwanted. Only what the rejection rejects counts: the artifacts
+// that changed against the Bundle Verified before it (RejectedSetOf,
+// status.rejectedArtifacts), so an unchanged sidecar stays promotable. Rollback, promote and Subscriptions skip any Bundle that
 // carries one of them (Carries).
 type RejectedArtifacts struct {
 	// digests holds repository@digest keys of rejected images that have a
@@ -42,18 +44,41 @@ func LoadRejectedArtifacts(ctx context.Context, c client.Reader, ns, pipeline st
 // Bundle the controller rejected because it carries a rejected artifact adds
 // nothing new.
 func RejectedArtifactsOf(bundles []v1alpha1.Bundle, pipeline string) *RejectedArtifacts {
+	return rejectedArtifactsOf(bundles, pipeline, false)
+}
+
+// RecordedRejectedArtifactsOf is RejectedArtifactsOf without the rejections
+// whose set the Bundle reconciler has not recorded yet. Rejecting a Bundle
+// because it carries a rejected artifact is final, so it waits for the
+// recorded set rather than take every artifact of the rejected Bundle; the
+// sibling's status write re-queues the Bundle.
+func RecordedRejectedArtifactsOf(bundles []v1alpha1.Bundle, pipeline string) *RejectedArtifacts {
+	return rejectedArtifactsOf(bundles, pipeline, true)
+}
+
+func rejectedArtifactsOf(bundles []v1alpha1.Bundle, pipeline string, recordedOnly bool) *RejectedArtifacts {
 	r := &RejectedArtifacts{digests: map[string]string{}, tags: map[string]string{}, commits: map[string]string{}}
 	for i := range bundles {
 		b := &bundles[i]
-		if b.Spec.Pipeline == pipeline && b.Spec.Rejected != nil {
+		if b.Spec.Pipeline == pipeline && b.Spec.Rejected != nil && (!recordedOnly || b.Status.RejectedArtifacts != nil) {
 			r.add(b)
 		}
 	}
 	return r
 }
 
+// add records what b's rejection rejects: status.rejectedArtifacts once the
+// Bundle reconciler wrote it (RejectedSetOf), else every artifact of b.
 func (r *RejectedArtifacts) add(b *v1alpha1.Bundle) {
-	for _, img := range b.Spec.Images {
+	images := b.Spec.Images
+	commit := ""
+	if b.Spec.ConfigRef != nil {
+		commit = b.Spec.ConfigRef.CommitSHA
+	}
+	if set := b.Status.RejectedArtifacts; set != nil {
+		images, commit = set.Images, set.ConfigCommitSHA
+	}
+	for _, img := range images {
 		switch {
 		case img.Digest != "":
 			r.digests[img.Repository+"@"+img.Digest] = b.Name
@@ -61,8 +86,8 @@ func (r *RejectedArtifacts) add(b *v1alpha1.Bundle) {
 			r.tags[img.Repository+":"+img.Tag] = b.Name
 		}
 	}
-	if b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != "" {
-		r.commits[b.Spec.ConfigRef.CommitSHA] = b.Name
+	if commit != "" {
+		r.commits[commit] = b.Name
 	}
 }
 

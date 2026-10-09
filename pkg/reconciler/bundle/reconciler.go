@@ -237,7 +237,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// A rejection wins over every phase, Verified and Superseded included,
 	// and is recomputed from spec on every reconcile, so a crash between the
 	// spec write and this status write only delays it.
-	if b.Spec.Rejected != nil && b.Status.Phase != phaseRejected {
+	// It runs on a retired Bundle too (#1492): rejecting a Verified Bundle
+	// whose Graph is gone is the usual case, and the early return for
+	// retired Bundles comes later. A rejection recorded before the
+	// rejected-artifact set existed gets the set now.
+	if b.Spec.Rejected != nil && (b.Status.Phase != phaseRejected || b.Status.RejectedArtifacts == nil) {
 		return r.markRejected(ctx, log, &b)
 	}
 	// A rejection is about the artifacts: a Bundle that has not finished and
@@ -667,6 +671,13 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 	if len(terminal) <= limit {
 		return nil
 	}
+	terminal, err := r.withoutLiveCarriers(ctx, namespace, pipeline.Name, allBundles.Items, terminal)
+	if err != nil {
+		return err
+	}
+	if len(terminal) <= limit {
+		return nil
+	}
 
 	slices.SortFunc(terminal, lifecycle.CompareCreation)
 	excess := len(terminal) - limit
@@ -687,6 +698,36 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 		Int("remaining", limit).
 		Msg("history GC: complete")
 	return nil
+}
+
+// withoutLiveCarriers drops from terminal the Bundles rejected for carrying
+// a rejected artifact whose change is still live in an environment
+// (lifecycle.RejectedLiveEnvs, retired steps included): they are what that
+// environment runs, and the views show them with the roll-back hint, so
+// history GC keeps them. The steps are listed only when there is a carrier.
+func (r *Reconciler) withoutLiveCarriers(ctx context.Context, namespace, pipeline string,
+	bundles []kardinalv1alpha1.Bundle, terminal []*kardinalv1alpha1.Bundle) ([]*kardinalv1alpha1.Bundle, error) {
+	var steps []kardinalv1alpha1.PromotionStep
+	listed := false
+	out := terminal[:0:0]
+	for _, b := range terminal {
+		if b.Status.Phase == phaseRejected {
+			if !listed {
+				var list kardinalv1alpha1.PromotionStepList
+				if err := r.List(ctx, &list, client.InNamespace(namespace),
+					client.MatchingLabels{lifecycle.LabelPipeline: pipeline}); err != nil {
+					return nil, fmt.Errorf("enforceHistoryLimit: list promotion steps: %w", err)
+				}
+				steps = lifecycle.AddRetiredSteps(list.Items, bundles, map[string]string{lifecycle.LabelPipeline: pipeline})
+				listed = true
+			}
+			if len(lifecycle.RejectedLiveEnvs(b, steps)) > 0 {
+				continue
+			}
+		}
+		out = append(out, b)
+	}
+	return out, nil
 }
 
 // hasNewerSibling reports whether the pipeline has a Bundle of the same type
@@ -795,8 +836,17 @@ func (r *Reconciler) superseded(b *kardinalv1alpha1.Bundle) {
 func (r *Reconciler) markRejected(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
 	from := b.Status.Phase
-	patch := client.MergeFrom(b.DeepCopy())
+	// What the rejection rejects: the artifacts not already Verified before
+	// this Bundle where it went (lifecycle.RejectedSetOf), so an unchanged
+	// sidecar does not block a rollback to the Bundle before.
+	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", b.Spec.Pipeline, err)
+	}
+	set := lifecycle.RejectedSetOf(b, siblings)
+	patch := statusPatch(b.DeepCopy())
 	msg := rejectionMessage(b.Spec.Rejected)
+	b.Status.RejectedArtifacts = &set
 	b.Status.Phase = phaseRejected
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "Rejected", msg)
 	setBundleCondition(b, condRejected, metav1.ConditionTrue, "Rejected", msg)
@@ -806,8 +856,11 @@ func (r *Reconciler) markRejected(ctx context.Context, log zerolog.Logger,
 		}
 		return ctrl.Result{}, fmt.Errorf("patch bundle status Rejected: %w", err)
 	}
+	if from == phaseRejected {
+		return ctrl.Result{}, nil // only the rejected-artifact set was added
+	}
 	log.Info().Str("from", from).Str("by", b.Spec.Rejected.By).Str("reason", b.Spec.Rejected.Reason).
-		Msg("bundle rejected")
+		Int("rejectedImages", len(set.Images)).Msg("bundle rejected")
 	r.event(b, corev1.EventTypeWarning, "Rejected", msg)
 	observability.BundlesTotal.WithLabelValues(phaseRejected).Inc()
 	return ctrl.Result{}, nil
@@ -830,7 +883,7 @@ func (r *Reconciler) rejectedArtifactOf(ctx context.Context, b *kardinalv1alpha1
 	if err != nil {
 		return "", err
 	}
-	name, _ := lifecycle.RejectedArtifactsOf(siblings, b.Spec.Pipeline).Carries(b)
+	name, _ := lifecycle.RecordedRejectedArtifactsOf(siblings, b.Spec.Pipeline).Carries(b)
 	return name, nil
 }
 
@@ -840,7 +893,7 @@ func (r *Reconciler) rejectedArtifactOf(ctx context.Context, b *kardinalv1alpha1
 // b itself; everything that skips Rejected Bundles skips it.
 func (r *Reconciler) markRejectedArtifact(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle, from string) (ctrl.Result, error) {
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	msg := fmt.Sprintf("carries an image or config commit of the rejected bundle %s; it is never promoted", from)
 	b.Status.Phase = phaseRejected
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "RejectedArtifact", msg)
