@@ -9,6 +9,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -222,4 +223,61 @@ func TestReconciler_OverrideRequeuesAtExpiry(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPolicyGateReconciler_AuditOutboxEtcdTimeout proves #1552 for gates: a
+// GateEvaluated create that fails with an etcd timeout is kept in
+// status.pendingAuditEvents, stored with the flip, and the reconcile is
+// requeued. Once creates succeed the next reconcile writes it, even though
+// the result is unchanged and nothing else would be written, and empties
+// the outbox.
+//
+// Covers AUDIT-OUTBOX-01.
+func TestPolicyGateReconciler_AuditOutboxEtcdTimeout(t *testing.T) {
+	tue := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	gate := makeGateInstance("prod-no-weekend", "default", "nginx-demo-v1", "!schedule.isWeekend", "5m")
+	var failing atomic.Bool
+	failing.Store(true)
+	c := fake.NewClientBuilder().WithScheme(newScheme()).
+		WithObjects(gate, makeBundle("nginx-demo-v1", "default")).
+		WithStatusSubresource(gate).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*kardinalv1alpha1.AuditEvent); ok && failing.Load() {
+					return apierrors.NewInternalError(errors.New("etcdserver: request timed out"))
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	now := tue
+	r.NowFn = func() time.Time { return now }
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: gate.Name}}
+	get := func() kardinalv1alpha1.PolicyGate {
+		var got kardinalv1alpha1.PolicyGate
+		require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+		return got
+	}
+
+	res, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	got := get()
+	assert.True(t, got.Status.Ready, "the audit write never blocks the evaluation")
+	require.Len(t, got.Status.PendingAuditEvents, 1, "the record is stored with the flip")
+	assert.Equal(t, "Success", got.Status.PendingAuditEvents[0].Spec.Outcome)
+	assert.True(t, tue.Equal(got.Status.PendingAuditEvents[0].Spec.Timestamp.Time))
+	assert.Empty(t, auditEvents(t, c))
+	assert.LessOrEqual(t, res.RequeueAfter, 5*time.Second, "requeued to retry the record")
+	assert.Positive(t, res.RequeueAfter)
+
+	failing.Store(false)
+	now = tue.Add(time.Minute) // a recheck with the same result
+	res, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	events := auditEvents(t, c)
+	require.Len(t, events, 1)
+	assert.True(t, tue.Equal(events[0].Spec.Timestamp.Time), "the record carries the flip's time, not the write's")
+	assert.Empty(t, get().Status.PendingAuditEvents)
+	assert.Greater(t, res.RequeueAfter, 5*time.Second, "back to the recheck interval")
 }

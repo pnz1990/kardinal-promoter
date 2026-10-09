@@ -168,6 +168,8 @@ type Reconciler struct {
 	// plumbing without a live GitHub connection).
 	SCM scm.SCMProvider
 
+	// NowFn returns the current time; nil uses time.Now (tests inject it).
+	NowFn func() time.Time
 	// Providers builds the clients of ScmProviders and ClusterScmProviders
 	// (spec.scmProvider). Nil serves only the controller's SCM.
 	Providers *scm.Registry
@@ -273,11 +275,27 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if scm.IsPermanentError(err) {
 			return r.recordPollError(ctx, log, &prs, err)
 		}
-		log.Error().Err(err).
+		var open *scm.ErrCircuitOpen
+		if errors.As(err, &open) {
+			// No call was made (#1476): poll again when the circuit lets
+			// one through, not at the next interval.
+			wait := open.RetryAfter.Sub(r.now()).Round(time.Second)
+			if wait < time.Second {
+				wait = time.Second
+			}
+			if wait > requeuePollInterval {
+				wait = requeuePollInterval
+			}
+			log.Info().Err(err).Int("prNumber", prs.Spec.PRNumber).Dur("wait", wait).
+				Msg("SCM circuit open, PR status poll waits")
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
+		// Transient (429, 5xx, network): requeue to retry. An outage is
+		// expected now and then, so this is a warning.
+		log.Warn().Err(err).
 			Str("prURL", prs.Spec.PRURL).
 			Int("prNumber", prs.Spec.PRNumber).
 			Msg("GetPRStatus failed, will retry")
-		// Transient (429, 5xx, network): requeue to retry.
 		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 	}
 
@@ -584,4 +602,12 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&v1alpha1.PRStatus{})
 	return shard.Active().Complete(b, tracing.WrapReconciler("prstatus", r), &v1alpha1.PRStatusList{})
+}
+
+// now is NowFn, or time.Now.
+func (r *Reconciler) now() time.Time {
+	if r.NowFn != nil {
+		return r.NowFn()
+	}
+	return time.Now()
 }

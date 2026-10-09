@@ -27,7 +27,7 @@ What the namespaced rules grant:
 | `events.k8s.io` `events` | create, patch | Events from every reconciler (the events.k8s.io/v1 API) |
 | `events` (core) | get, list, watch, create, patch | The UI step event list reads Events through core/v1; leader election writes core Events |
 | All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
-| `auditevents` | get, list, watch, create | Audit records are append-only |
+| `auditevents` | get, list, watch, create; delete only with `audit.retention.enabled: true` (off by default) | Records are never changed; opt-in retention deletes old ones |
 | `graphs.kro.run` | full CRUD; get on `graphs/status` | One Graph per Bundle |
 | `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the two Graph ClusterRoles) | get, create; get, list, create, update, delete; bind | The Graph identity. `list` is for the sweep that deletes reader bindings no Graph reads through; it runs in cluster mode only and touches only RoleBindings labeled `app.kubernetes.io/managed-by=kardinal-promoter` |
 | `deployments`, `argoproj.io` `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch | Health adapters. `rbac.argocdApplicationsWrite=true` adds `patch` on Applications for `update.strategy: argocd` |
@@ -357,6 +357,31 @@ lifecycle transition, in the Pipeline's namespace. AuditEvents are append-only â
 spec is set at creation and never mutated. Kubernetes RBAC controls who can delete them (see
 [RBAC: read-only access to audit records](#rbac-read-only-access-to-audit-records)).
 
+### Retention
+
+An AuditEvent has no owner, so it outlives the Bundle and the step it records, and nothing
+else deletes it. Without retention a busy cluster keeps every record in etcd for ever.
+Retention is **off by default**, so an upgrade never deletes an audit record. Turn it on with
+`audit.retention.enabled: true`. The controller's leader then applies it every 10 minutes:
+
+| Value | Flag | Default | Deletes |
+|---|---|---|---|
+| `audit.retention.enabled` | `--audit-retention` | `false` | `true` turns retention on and grants the controller `delete` on AuditEvents |
+| `audit.retention.maxAge` | `--audit-retention-max-age` | `2160h` (90 days) | records created longer ago (`metadata.creationTimestamp`, set by the API server). `0s` keeps any age |
+| `audit.retention.maxPerPipeline` | `--audit-retention-max-per-pipeline` | `1000` | per Pipeline (namespace and `kardinal.io/pipeline` label), all but the newest records, newest by `metadata.creationTimestamp` and, within one second, `kardinal.io/created-at`. A record created in the last 10 minutes (one run's interval) is kept even past the limit, so a burst, such as an [audit outbox](#audit-outbox) flushed after an outage, stays at least that long for an export to read. `0` keeps any number |
+
+A run lists the records metadata-only, 500 at a time, and deletes at most 2000, the oldest
+first. It uses a client of its own limited to 5 API requests a second, so it never takes API
+capacity from the reconcilers: clearing 2000 records takes about 7 minutes, and a larger
+backlog is cleared over several runs. `kardinal_auditevents_pruned_total` counts the
+deletions.
+
+A gate whose result changes often writes a record at each change, and can reach
+`maxPerPipeline` quickly. If you must keep every record, export them
+([SIEM integration](#siem-integration)) more often than the effective retention (the age
+limit, or the time a busy Pipeline takes to write `maxPerPipeline` records), or leave
+retention off.
+
 ### Events written automatically
 
 | Action | Trigger |
@@ -371,6 +396,36 @@ spec is set at creation and never mutated. Kubernetes RBAC controls who can dele
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
+
+### Audit outbox
+
+A transition and its AuditEvent are two API writes, so an etcd timeout, a lost
+leader or a crash between them used to lose the record. Now every writer (the
+PromotionStep reconciler; the PolicyGate reconciler for gate results, approvals
+and overrides; the Pipeline reconciler for holds) records the AuditEvent in its own
+`status.pendingAuditEvents` in the same status patch as the transition. They then
+create it and remove the entry. An entry whose create fails stays in status, and
+the object is reconciled again every 5 seconds until the create succeeds. Each
+entry's name is fixed when it is stored, so a create that had already succeeded
+returns `AlreadyExists` and counts as written: there is one record per
+transition, never two. The record carries the time of the transition, not the
+time it was written.
+
+A failed write never blocks a promotion or a gate evaluation. A finished Bundle's
+Graph is not retired while one of its steps or gates still holds unwritten
+records, since retiring deletes them (the `GraphRetired` condition names the
+object). A record the CRD would refuse is not stored at all, so it cannot fail the
+status write, and messages are cut to 1 KiB. The outbox holds at
+most 32 entries. When it is full, the oldest entry is dropped and counted in
+`kardinal_audit_events_dropped_total`. A record the API server rejects as invalid
+is dropped too. `kardinal_audit_write_failures_total` counts the creates being
+retried ([Monitoring](monitoring.md#kardinal-metrics)). To see records not yet
+written:
+
+```bash
+kubectl get promotionsteps,policygates -A -o json \
+  | jq -r '.items[] | select(.status.pendingAuditEvents) | "\(.metadata.namespace)/\(.metadata.name): \(.status.pendingAuditEvents | length)"'
+```
 
 ### Fields on every event
 
@@ -445,17 +500,22 @@ kubectl get auditevents -A -o json \
       env: .spec.environment,
       action: .spec.action,
       outcome: .spec.outcome,
-      message: .spec.message
+      message: .spec.message,
+      uid: .metadata.uid
     }'
 ```
 
 Log forwarders such as Fluent Bit and Vector read container logs, not custom resources. Run
 the command above on a schedule (for example a CronJob) and forward its output to your SIEM
-(Splunk, Datadog, OpenSearch, etc.).
+(Splunk, Datadog, OpenSearch, etc.). Each run exports every record still there, so include
+`uid: .metadata.uid` and deduplicate by it in the SIEM. With retention on, run the export more
+often than the effective retention (see [Retention](#retention)), or records are deleted before
+they are exported.
 
 ### RBAC: read-only access to audit records
 
-The controller's ServiceAccount can create AuditEvents but cannot update or delete them.
+The controller's ServiceAccount can create AuditEvents but cannot update them, and cannot
+delete them unless you turn on [retention](#retention).
 Kubernetes RBAC only grants access; it cannot deny it. A user can delete AuditEvents only if a
 role grants `delete` (or `*`) on `auditevents`, as `cluster-admin` does. Grant users read-only
 access like the role below, and do not grant `delete` or `*` on `kardinal.io` resources. The API

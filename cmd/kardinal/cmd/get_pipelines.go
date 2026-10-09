@@ -84,6 +84,18 @@ explain instead pick the current bundle per environment, so for an
 environment the newest bundle has not reached they describe the bundle that
 was there before.
 
+Environment columns follow the pipeline's DAG (waves and dependsOn), merged
+across the pipelines listed. With more than 8 environment columns (one wide
+pipeline, or several with different environments), each pipeline gets one
+summary row instead: ENVS, the environment count, and PROGRESS, the current
+bundle's states with counts, most advanced first ("42 Verified, 108
+HealthChecking"), and FURTHEST, the last environment in DAG order where the
+bundle is Verified (in a wave, the last one in spec order). kardinal get
+pipelines <name> shows every environment of that pipeline.
+
+-o json and -o yaml print the Pipeline objects as the API server lists them
+(by namespace, then name), without the table's columns.
+
 The table needs list permission on bundles and promotionsteps; without it the
 command fails instead of showing dashes.
 
@@ -177,7 +189,8 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		if err := c.List(ctx, &subsList, opts...); err == nil {
 			subsItems = subsList.Items
 		}
-		if err := FormatPipelineTableFull(w, items, bundles.Items, steps.Items, subsItems, allNamespaces); err != nil {
+		// kardinal get pipelines <name> shows every environment of it.
+		if err := formatPipelines(w, items, bundles.Items, steps.Items, subsItems, allNamespaces, len(args) == 1); err != nil {
 			return err
 		}
 		// Bundle errors are listed for the shown pipelines only.

@@ -12,14 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 )
 
 // AuditActionGateOverridden is the AuditEvent action written once for each
@@ -207,11 +205,14 @@ func (r *Reconciler) recordOverrides(ctx context.Context, gate *kardinalv1alpha1
 	return r.auditRecordedOverrides(ctx, gate)
 }
 
-// auditRecordedOverrides writes the AuditEvent of every recorded, unaudited
-// override still in spec.overrides and marks the records audited.
+// auditRecordedOverrides stores the GateOverridden record of every
+// recorded, unaudited override still in spec.overrides in the gate's audit
+// outbox (#1552), in the same optimistic-locked patch that marks the
+// override audited, then writes the outbox.
 func (r *Reconciler) auditRecordedOverrides(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) error {
 	records := overrideRecords(gate)
 	audited := map[string]bool{}
+	var entries []kardinalv1alpha1.PendingAuditEvent
 	for i := range gate.Spec.Overrides {
 		o := &gate.Spec.Overrides[i]
 		key := overrideKey(o)
@@ -219,10 +220,8 @@ func (r *Reconciler) auditRecordedOverrides(ctx context.Context, gate *kardinalv
 		if !ok || rec.Audited || audited[key] {
 			continue
 		}
-		if err := r.writeOverrideAuditEvent(ctx, gate, o, rec); err != nil {
-			zerolog.Ctx(ctx).Warn().Err(err).Str("gate", gate.Name).Str("override", key).
-				Msg("failed to write the GateOverridden AuditEvent; retrying on the next reconcile")
-			continue
+		if e, ok := r.overrideAuditEntry(gate, o, rec); ok {
+			entries = append(entries, e)
 		}
 		audited[key] = true
 	}
@@ -235,9 +234,13 @@ func (r *Reconciler) auditRecordedOverrides(ctx context.Context, gate *kardinalv
 			gate.Status.Overrides[i].Audited = true
 		}
 	}
+	for _, e := range entries {
+		gate.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, gate.Status.PendingAuditEvents, e)
+	}
 	if err := r.Status().Patch(ctx, gate, patch); err != nil {
 		return fmt.Errorf("mark overrides audited: %w", err)
 	}
+	_ = r.flushAudit(ctx, gate)
 	return nil
 }
 
@@ -258,18 +261,16 @@ func stampVerifiedSince(gate *kardinalv1alpha1.PolicyGate, now time.Time) {
 	}
 }
 
-// writeOverrideAuditEvent creates the GateOverridden AuditEvent of override o
-// of gate. Its timestamp is the record's firstSeen, not the createdAt the
-// writer supplied, and it names the capped end. AlreadyExists is success: an
-// earlier attempt wrote it.
-func (r *Reconciler) writeOverrideAuditEvent(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
-	o *kardinalv1alpha1.PolicyGateOverride, rec kardinalv1alpha1.OverrideRecord) error {
+// overrideAuditEntry is the outbox entry of the GateOverridden AuditEvent
+// of override o of gate, and false for a gate a Graph did not create. Its
+// timestamp is the record's firstSeen, not the createdAt the writer
+// supplied, and it names the capped end.
+func (r *Reconciler) overrideAuditEntry(gate *kardinalv1alpha1.PolicyGate,
+	o *kardinalv1alpha1.PolicyGateOverride, rec kardinalv1alpha1.OverrideRecord) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	labels := gate.GetLabels()
 	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" {
-		return nil // not a gate instance a Graph created: nothing to attribute the record to
+		return kardinalv1alpha1.PendingAuditEvent{}, false // nothing to attribute the record to
 	}
-	key := rec.Key
-	at := rec.FirstSeen
 	end := overrideEnd(o, rec.FirstSeen.Time, r.maxOverride())
 	stage := o.Stage
 	if stage == "" {
@@ -282,35 +283,19 @@ func (r *Reconciler) writeOverrideAuditEvent(ctx context.Context, gate *kardinal
 	if !rec.Verified {
 		by += " (unverified: the identity admission policy did not check it)"
 	}
-	suffix := "-override-" + key
+	suffix := "-override-" + rec.Key
 	base := gate.Name
 	if limit := maxObjectNameLength - len(suffix); len(base) > limit {
 		base = base[:limit]
 	}
-	ae := &kardinalv1alpha1.AuditEvent{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      sanitizeGateName(base + suffix),
-			Namespace: gate.Namespace,
-			Labels:    gateAuditLabels(labels, AuditActionGateOverridden),
-		},
-		Spec: kardinalv1alpha1.AuditEventSpec{
-			Timestamp:    at,
+	return audit.Entry(sanitizeGateName(base+suffix), gateAuditLabels(labels, AuditActionGateOverridden),
+		kardinalv1alpha1.AuditEventSpec{
 			BundleName:   labels[labelBundle],
 			PipelineName: labels[labelPipeline],
 			Environment:  labels[labelEnvironment],
 			Action:       AuditActionGateOverridden,
 			Outcome:      "Success",
-			Message: truncateMessage(fmt.Sprintf("gate %s overridden by %s for %s until %s: %s",
-				gate.Name, by, stage, end.UTC().Format(time.RFC3339), o.Reason)),
-		},
-	}
-	err := r.Create(ctx, ae)
-	switch {
-	case client.IgnoreAlreadyExists(err) == nil:
-		return nil
-	case apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause):
-		return nil // the namespace deletion removes the gate next
-	default:
-		return fmt.Errorf("create AuditEvent %s: %w", ae.Name, err)
-	}
+			Message: fmt.Sprintf("gate %s overridden by %s for %s until %s: %s",
+				gate.Name, by, stage, end.UTC().Format(time.RFC3339), o.Reason),
+		}, rec.FirstSeen), true
 }

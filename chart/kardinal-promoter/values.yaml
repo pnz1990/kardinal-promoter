@@ -66,6 +66,25 @@ logLevel: info
 # -- Enable leader election for controller manager
 leaderElect: true
 
+# API Priority and Fairness for the leader election Lease (#1592): a
+# FlowSchema sends the controller ServiceAccount's Lease requests in its
+# namespace to the built-in leader-election priority level, so a busy
+# controller (or a cluster that throttles it) cannot starve its own lease
+# renewals and lose leadership. Needs flowcontrol.apiserver.k8s.io/v1
+# (Kubernetes 1.30, kardinal's minimum); skipped when the API is missing.
+# Cluster-scoped: the installer needs create/get/update/delete on
+# flowschemas.flowcontrol.apiserver.k8s.io. Set enabled: false for GitOps
+# installs that may not manage cluster resources.
+leaderElectionFlowSchema:
+  # -- Create the FlowSchema.
+  enabled: true
+  # -- Its matchingPrecedence. It must be lower (matched first) than any
+  # FlowSchema that matches the controller's other requests; the built-in
+  # workload ones are 9000 and above.
+  matchingPrecedence: 90
+  # -- The priority level the Lease requests use.
+  priorityLevel: leader-election
+
 controller:
   # TLS for the UI (:8082) and webhook/Bundle API (:8083) servers.
   # When both tlsCertFile and tlsKeyFile are set, both servers use HTTPS; one alone fails the install.
@@ -209,6 +228,18 @@ github:
     # secretKeyRef, which only reads the Pod's namespace.
     namespace: ""
     key: "token"
+  # -- Authenticate as a GitHub App: the github.secretRef Secret holds
+  # githubAppID, githubAppInstallationID and githubAppPrivateKey instead of a
+  # token. The controller mints installation tokens, refreshes them before
+  # they expire, and reloads the App credentials when the Secret changes.
+  # Needs scm.provider github (or empty) and github.secretRef.name.
+  #
+  #   kubectl create secret generic github-app -n kardinal-system \
+  #     --from-literal=githubAppID=123456 --from-literal=githubAppInstallationID=7890123 \
+  #     --from-file=githubAppPrivateKey=app.private-key.pem
+  #   helm install ... --set github.secretRef.name=github-app --set github.app.enabled=true
+  app:
+    enabled: false
 
 # -- SCM provider (--scm-provider): github (default when empty), gitlab,
 # forgejo, gitea, bitbucket or azuredevops, and its API base URL
@@ -429,6 +460,26 @@ networkPolicy:
   # -- Extra egress rules (NetworkPolicyEgressRule list), e.g. Prometheus on
   # :9090 for MetricChecks or a webhook receiver for NotificationHooks.
   extraEgress: []
+
+# -- AuditEvent retention, off by default: an upgrade never deletes audit
+# records. AuditEvents have no owner, so without retention they stay in etcd
+# for ever. With enabled: true the leader deletes, every 10 minutes, the
+# records older than maxAge and, per Pipeline, all but the maxPerPipeline
+# newest, at most 2000 a run at 5 API requests a second; the chart then
+# grants the controller delete on AuditEvents. Export the records first if
+# you must keep them. See docs/guides/security.md (Retention).
+audit:
+  retention:
+    enabled: false
+    # -- Delete records created longer ago than this
+    # (--audit-retention-max-age, a Go duration). "0s" keeps records of any
+    # age.
+    maxAge: "2160h"
+    # -- Keep this many newest records per Pipeline
+    # (--audit-retention-max-per-pipeline). 0 keeps any number. A gate that
+    # flips often writes a record per flip and reaches it quickly. A record
+    # created in the last 10 minutes is kept even past it.
+    maxPerPipeline: 1000
 
 # -- MetricCheck providers.
 metricCheck:
