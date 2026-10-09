@@ -276,8 +276,8 @@ func TestBuilder_HookMirror(t *testing.T) {
 	require.NoError(t, err)
 	got, err := json.Marshal(out)
 	require.NoError(t, err)
-	assert.JSONEq(t, `[{"name":"`+migrate+`","hook":"migrate","phase":"pre","result":"Succeeded","message":"done"},
-		{"name":"`+smoke+`","hook":"smoke","phase":"post","result":"Pending","message":""}]`, string(got),
+	assert.JSONEq(t, `[{"name":"`+migrate+`","hook":"migrate","phase":"pre","result":"Succeeded","message":"done","specHash":""},
+		{"name":"`+smoke+`","hook":"smoke","phase":"post","result":"Pending","message":"","specHash":""}]`, string(got),
 		"only the HookRuns this Graph rendered, applied by kro for this Bundle (regression, QA #1493 round 2)")
 }
 
@@ -411,5 +411,40 @@ func TestHookRunName(t *testing.T) {
 	assert.NotEqual(t, a, b)
 	for _, n := range []string{a, b, graph.HookRunName("app", "V1.2", "prod", "pre", "m")} {
 		assert.Empty(t, validation.IsDNS1123Label(n), n)
+	}
+}
+
+// TestBuilder_HookRecorded evaluates a HookRun's spec.recorded: the step's
+// record of the hook (by name and phase), or {} without a step or a record
+// (regression, #1544 review: a recreated HookRun ran its migration again).
+func TestBuilder_HookRecorded(t *testing.T) {
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: hookPipeline(), Bundle: makeBundle("app-v1", "app")})
+	require.NoError(t, err)
+	expr := hookNode(t, res.Graph, "hook0pre0prod0migrate").Template["spec"].(map[string]interface{})["recorded"].(string)
+	step := func(records ...interface{}) map[string]interface{} {
+		return map[string]interface{}{"metadata": map[string]interface{}{"name": "app-app-v1-prod"},
+			"status": map[string]interface{}{"hookRecords": records}}
+	}
+	rec := map[string]interface{}{"hook": "migrate", "phase": "pre", "specHash": "abc", "result": "Succeeded"}
+	cases := []struct {
+		name  string
+		steps []interface{}
+		want  interface{}
+	}{
+		{"no step", []interface{}{}, map[string]interface{}{}},
+		{"no record", []interface{}{step()}, map[string]interface{}{}},
+		{"other hook", []interface{}{step(map[string]interface{}{"hook": "seed", "phase": "pre", "specHash": "x", "result": "Failed"})}, map[string]interface{}{}},
+		{"recorded", []interface{}{step(rec)}, rec},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := celEval(t, expr, map[string]interface{}{"refSteps": tc.steps})
+			require.NoError(t, err)
+			got, err := json.Marshal(out)
+			require.NoError(t, err)
+			want, err := json.Marshal(tc.want)
+			require.NoError(t, err)
+			assert.JSONEq(t, string(want), string(got))
+		})
 	}
 }

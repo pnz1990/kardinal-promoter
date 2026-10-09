@@ -97,6 +97,12 @@ Pending ──pre hooks succeeded──▶ Promoting ─▶ (WaitingForMerge) �
   Job of that name, while it runs fails the HookRun; the hook is not started a second time. A Job
   of the HookRun's name that kardinal did not create fails it with a message naming the Job.
   Re-run a hook by promoting a new Bundle.
+- **A deleted HookRun does not run its hook again.** Deleting a HookRun while its Job runs
+  (by hand, or a namespace cleanup) holds it until the Job ends, records the result in its status
+  for 30 seconds, and only then lets it go. The step keeps each hook that ran in
+  `status.hookRecords` (hook, phase, spec hash, result). The HookRun the Graph applies again
+  takes that recorded result and creates no Job; when the earlier run's result was never seen, it
+  is `Failed` ("result unknown"), never run a second time. An edited hook (a new spec hash) runs.
 - **Pipeline edits do not change a running hook.** An edit to a hook while it runs reaches
   the HookRun's spec, but the running Job keeps the spec it started with; the HookRun gets the
   condition `SpecChangedAfterStart`. The next Bundle runs the edited hook.

@@ -104,6 +104,31 @@ type LiveHookRun struct {
 	// Message is the HookRun's status.message.
 	// +optional
 	Message string `json:"message,omitempty"`
+	// SpecHash is the HookRun's status.specHash: which job and timeout ran.
+	// +optional
+	SpecHash string `json:"specHash,omitempty"`
+}
+
+// HookRecord is the step's own record that a hook ran for it: once a
+// HookRun's Job started, the step keeps its result here, so a HookRun
+// recreated for the same hook (deleted and applied again by the Graph) does
+// not run the Job a second time and takes the recorded result instead.
+type HookRecord struct {
+	// Hook is the hook's name in the Pipeline.
+	// +optional
+	Hook string `json:"hook,omitempty"`
+	// Phase is pre or post.
+	// +optional
+	Phase string `json:"phase,omitempty"`
+	// SpecHash is the HookRun's spec hash (job and timeout) that ran.
+	// +optional
+	SpecHash string `json:"specHash,omitempty"`
+	// Result is Running, Succeeded or Failed. Succeeded and Failed are final.
+	// +optional
+	Result string `json:"result,omitempty"`
+	// Message is the HookRun's last message.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // StepExecutionState is the execution state of a single step within a PromotionStep.
@@ -294,6 +319,11 @@ type PromotionStepStatus struct {
 	// Graph creates the post-deploy HookRuns once it is set.
 	// +optional
 	VerificationStartedAt *metav1.Time `json:"verificationStartedAt,omitempty"`
+
+	// HookRecords records each hook that ran for this step (HookRecord).
+	// +kubebuilder:validation:MaxItems=40
+	// +optional
+	HookRecords []HookRecord `json:"hookRecords,omitempty"`
 
 	// Steps is the per-step execution history for this PromotionStep.
 	// Populated by the reconciler as each step in the sequence starts, completes, or fails.
