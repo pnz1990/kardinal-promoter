@@ -182,6 +182,10 @@ type hookNodesInput struct {
 	// conds are the conditions under which the environment's step may be
 	// created (Bundle not Superseded, upstreams Verified, gates ready).
 	conds []string
+	// imageVerification is the Bundle's ImageVerification name when this
+	// step waits for it (a root step of a Pipeline with
+	// spec.imageVerification).
+	imageVerification string
 }
 
 // hookNodes is the result of buildHookNodes for one environment.

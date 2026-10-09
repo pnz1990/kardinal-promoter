@@ -62,6 +62,13 @@ func (r *Registry) Repository(repo string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(r.Ref(repo), "http://"), "https://")
 }
 
+// HostRepository is repo's image repository as the test process reaches it
+// (the registry's NodePort, plain HTTP). It is the same storage as
+// Repository(repo).
+func (r *Registry) HostRepository(repo string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(r.api, "http://"), "https://") + "/" + repo
+}
+
 // Copy pushes seed tag src into repo as tag dst (mounting the seed's blobs,
 // then putting the same manifest) and returns the manifest digest. The digest
 // depends only on src: every copy of a tag has the same one.

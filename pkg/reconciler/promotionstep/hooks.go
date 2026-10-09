@@ -97,6 +97,46 @@ func (v hookVerdict) failMessage(phase string) string {
 	return msg
 }
 
+// holdForImageVerification keeps a Pending step that waits for the
+// Bundle's ImageVerification (spec.imageVerification, a root step of a
+// Pipeline with spec.imageVerification) Pending until the mirror shows it
+// Verified, and fails it when it Failed (docs/image-verification.md).
+func (r *Reconciler) holdForImageVerification(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep) (held bool, res ctrl.Result, err error) {
+	if ps.Spec.ImageVerification == "" {
+		return false, ctrl.Result{}, nil
+	}
+	var live v1alpha1.LiveImageVerification
+	if ps.Spec.Live != nil && ps.Spec.Live.ImageVerification != nil {
+		live = *ps.Spec.Live.ImageVerification
+	}
+	switch live.Phase {
+	case v1alpha1.ImageVerificationVerified:
+		return false, ctrl.Result{}, nil
+	case v1alpha1.ImageVerificationFailed:
+		log.Info().Str("imageVerification", ps.Spec.ImageVerification).Msg("image verification failed — step failed before promoting")
+		msg := fmt.Sprintf("image verification %s failed", ps.Spec.ImageVerification)
+		if live.Message != "" {
+			msg += ": " + live.Message
+		}
+		return true, ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	}
+	msg := fmt.Sprintf("waiting for image verification %s", ps.Spec.ImageVerification)
+	if live.Message != "" {
+		msg += ": " + live.Message
+	}
+	if ps.Status.Message != msg {
+		ps.Status.Message = msg
+		patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base))
+		if apierrors.IsNotFound(patchErr) {
+			return true, ctrl.Result{}, nil
+		}
+		if patchErr != nil {
+			return true, ctrl.Result{}, fmt.Errorf("patch image verification wait message: %w", patchErr)
+		}
+	}
+	return true, ctrl.Result{RequeueAfter: requeueGateWait}, nil
+}
+
 // holdForPreHooks keeps a Pending step Pending until every pre-deploy hook
 // succeeded, and fails it when one failed. held reports that the caller must
 // return res and err.

@@ -751,6 +751,177 @@ spec:
                   beyond this limit are deleted oldest-first on each new Bundle creation.
                 minimum: 1
                 type: integer
+              imageVerification:
+                description: |-
+                  ImageVerification requires the signatures of the Bundle's images (and
+                  of a config Bundle's commit) to verify before the Bundle is promoted
+                  into its first environments. Selected images must be pinned by digest.
+                  See docs/image-verification.md.
+                properties:
+                  authorities:
+                    description: |-
+                      Authorities are the signers an image may be signed by: an image is
+                      verified when one of its signatures verifies against any authority.
+                    items:
+                      description: |-
+                        SignatureAuthority is one accepted signer: a public key, or a keyless
+                        (Sigstore Fulcio) identity. Exactly one of key and keyless is set.
+                      properties:
+                        key:
+                          description: |-
+                            Key is a PEM public key (cosign.pub) in a Secret of the Pipeline
+                            namespace.
+                          properties:
+                            requireTransparencyLog:
+                              description: |-
+                                RequireTransparencyLog requires a Rekor entry (and its inclusion
+                                proof) in the Sigstore bundle. Default false: a key signature is
+                                verified against the key alone, like cosign --insecure-ignore-tlog.
+                              type: boolean
+                            secretRef:
+                              description: SecretRef names the Secret and key holding
+                                the PEM public key.
+                              properties:
+                                key:
+                                  description: Key is the data key.
+                                  minLength: 1
+                                  type: string
+                                name:
+                                  description: Name is the object name.
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                          required:
+                          - secretRef
+                          type: object
+                        keyless:
+                          description: |-
+                            Keyless is a Sigstore keyless identity: the OIDC issuer and subject
+                            of the Fulcio certificate that signed.
+                          properties:
+                            issuer:
+                              description: |-
+                                Issuer is the OIDC issuer, for example
+                                https://token.actions.githubusercontent.com.
+                              minLength: 1
+                              type: string
+                            subject:
+                              description: |-
+                                Subject is the certificate's subject (SAN), for example
+                                https://github.com/myorg/app/.github/workflows/release.yml@refs/heads/main.
+                              type: string
+                            subjectRegExp:
+                              description: SubjectRegExp is a regular expression the
+                                subject must match.
+                              type: string
+                            trustedRootRef:
+                              description: |-
+                                TrustedRootRef names a Secret key in the Pipeline namespace holding a
+                                Sigstore trusted_root.json (a private Sigstore). Empty means the
+                                Sigstore public-good instance, whose trusted root the controller
+                                fetches through TUF.
+                              properties:
+                                key:
+                                  description: Key is the data key.
+                                  minLength: 1
+                                  type: string
+                                name:
+                                  description: Name is the object name.
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                          required:
+                          - issuer
+                          type: object
+                          x-kubernetes-validations:
+                          - message: set exactly one of subject and subjectRegExp
+                            rule: has(self.subject) != has(self.subjectRegExp)
+                        name:
+                          description: Name identifies the authority in results.
+                          maxLength: 63
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                      x-kubernetes-validations:
+                      - message: set exactly one of key and keyless
+                        rule: has(self.key) != has(self.keyless)
+                    maxItems: 10
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  commits:
+                    description: |-
+                      Commits, when requireSigned is true, requires the commit of a config or
+                      mixed Bundle (spec.configRef.commitSHA) to be signed, as the SCM
+                      provider reports it (GitHub, GitLab, Forgejo, Gitea).
+                    properties:
+                      requireSigned:
+                        description: |-
+                          RequireSigned requires the config Bundle's commit to be signed with a
+                          signature the SCM provider verified.
+                        type: boolean
+                    required:
+                    - requireSigned
+                    type: object
+                  images:
+                    description: |-
+                      Images selects the Bundle images to verify by repository, with "*"
+                      matching any characters ("ghcr.io/myorg/*"). Empty means every image.
+                      Every selected image must be pinned by digest in the Bundle.
+                    items:
+                      type: string
+                    maxItems: 20
+                    type: array
+                  insecureRegistries:
+                    description: |-
+                      InsecureRegistries are registry hosts ("registry.local:5000") read over
+                      plain HTTP. Every other registry is read over HTTPS.
+                    items:
+                      type: string
+                    maxItems: 10
+                    type: array
+                  registrySecretRef:
+                    description: |-
+                      RegistrySecretRef names a kubernetes.io/dockerconfigjson Secret in the
+                      Pipeline namespace with credentials for the registries holding the
+                      images and their signatures. Without it registries are read
+                      anonymously.
+                    properties:
+                      name:
+                        description: Name is the object name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  signatureRepository:
+                    description: |-
+                      SignatureRepository is the repository that holds the signatures, when
+                      they are not stored next to the images (cosign's COSIGN_REPOSITORY),
+                      for example "registry.example.com/signatures". Signatures are looked
+                      up there by image digest.
+                    type: string
+                  timeout:
+                    description: |-
+                      Timeout bounds how long a missing signature is waited for (CI may sign
+                      after it pushes), from the moment the ImageVerification starts. A
+                      signature that does not verify fails at once. Empty or "0" means 10m.
+                    pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: set authorities, commits.requireSigned, or both
+                  rule: (has(self.authorities) && size(self.authorities) > 0) || (has(self.commits)
+                    && self.commits.requireSigned)
               maxConcurrentPromotions:
                 default: 0
                 description: |-

@@ -78,6 +78,13 @@ type PromotionStepSpec struct {
 	// +optional
 	AnalysisPolicy *StepAnalysisPolicy `json:"analysisPolicy,omitempty"`
 
+	// ImageVerification names the Bundle's ImageVerification when this step
+	// must wait for it: a step with no upstream in the Graph stays Pending
+	// until spec.live.imageVerification.phase is Verified, and fails when it
+	// is Failed.
+	// +optional
+	ImageVerification string `json:"imageVerification,omitempty"`
+
 	// Live holds results the Graph mirrors onto the step while it runs (a
 	// patch node, not the step's template, so they keep updating after the
 	// step's own template stopped resolving). The reconciler reads only this
@@ -105,6 +112,20 @@ type PromotionStepLive struct {
 	// Analyses are the environment's AnalysisRuns for this Bundle.
 	// +optional
 	Analyses []LiveAnalysisRun `json:"analyses,omitempty"`
+
+	// ImageVerification is the Bundle's ImageVerification result.
+	// +optional
+	ImageVerification *LiveImageVerification `json:"imageVerification,omitempty"`
+}
+
+// LiveImageVerification is the result of the Bundle's ImageVerification.
+type LiveImageVerification struct {
+	// Phase is its status.phase (Pending when it has none yet).
+	// +optional
+	Phase string `json:"phase,omitempty"`
+	// Message is its status.message.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // StepAnalysisPolicy is a step's copy of spec.verification's verdict policy.

@@ -618,8 +618,12 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 
-	// Pre-deploy hooks (docs/hooks.md) run before the step starts: wait for
-	// every one to succeed, fail when one failed.
+	// A root step waits for the Bundle's image verification
+	// (docs/image-verification.md), then for its pre-deploy hooks
+	// (docs/hooks.md): every one must succeed, and a failure fails the step.
+	if held, res, holdErr := r.holdForImageVerification(ctx, log, base, ps); held {
+		return res, holdErr
+	}
 	if held, res, holdErr := r.holdForPreHooks(ctx, log, base, ps); held {
 		return res, holdErr
 	}

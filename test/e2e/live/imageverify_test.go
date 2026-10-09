@@ -1,0 +1,259 @@
+//go:build e2e
+
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+
+package live
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification/signtest"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
+)
+
+// signatures is a test's signature repository in the suite's registry:
+// signatures are pushed from the test process (host) and read by the
+// controller (in cluster), as with cosign's COSIGN_REPOSITORY.
+type signatures struct {
+	host, inCluster string
+}
+
+func newSignatures(t *testing.T, ns string) signatures {
+	t.Helper()
+	r := framework.NewRegistry(t)
+	repo := "e2e/signatures-" + ns[len(ns)-8:]
+	return signatures{host: r.HostRepository(repo), inCluster: r.Repository(repo)}
+}
+
+func (s signatures) registryHost() string { return strings.SplitN(s.inCluster, "/", 2)[0] }
+
+func (s signatures) pushBundle(t *testing.T, digest string, bundle []byte) {
+	t.Helper()
+	require.NoError(t, signtest.PushBundle(context.Background(), s.host, digest, bundle,
+		[]name.Option{name.Insecure}, remote.WithTransport(http.DefaultTransport)))
+}
+
+func (s signatures) pushLegacy(t *testing.T, digest string, payload, sig []byte) {
+	t.Helper()
+	require.NoError(t, signtest.PushLegacy(context.Background(), s.host, digest, payload, sig,
+		[]name.Option{name.Insecure}, remote.WithTransport(http.DefaultTransport)))
+}
+
+// keyPolicy is an image policy with one key authority whose PEM public key
+// is in Secret cosign (created here), signatures in s.
+func keyPolicy(t *testing.T, e *framework.Env, ns string, s signatures, pem []byte, timeout string) *v1alpha1.ImageVerificationPolicy {
+	t.Helper()
+	require.NoError(t, e.Client.Create(context.Background(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cosign", Namespace: ns},
+		Data:       map[string][]byte{"cosign.pub": pem},
+	}))
+	return &v1alpha1.ImageVerificationPolicy{
+		Authorities: []v1alpha1.SignatureAuthority{{Name: "release",
+			Key: &v1alpha1.KeyAuthority{SecretRef: v1alpha1.SecretKeyName{Name: "cosign", Key: "cosign.pub"}}}},
+		SignatureRepository: s.inCluster,
+		InsecureRegistries:  []string{s.registryHost()},
+		Timeout:             timeout,
+	}
+}
+
+// imageVerification reads a Bundle's ImageVerification.
+func imageVerification(ctx context.Context, e *framework.Env, ns, bundle string) (*v1alpha1.ImageVerification, error) {
+	var iv v1alpha1.ImageVerification
+	err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: graph.ImageVerificationName(pipelineName, bundle)}, &iv)
+	return &iv, err
+}
+
+func waitImageVerification(t *testing.T, e *framework.Env, ns, bundle, phase string) *v1alpha1.ImageVerification {
+	t.Helper()
+	var got *v1alpha1.ImageVerification
+	framework.Eventually(t, 3*time.Minute, "ImageVerification "+phase, func(ctx context.Context) (bool, string) {
+		iv, err := imageVerification(ctx, e, ns, bundle)
+		if err != nil {
+			return false, err.Error()
+		}
+		got = iv
+		if p := iv.Status.Phase; p != phase && (p == "Verified" || p == "Failed") {
+			t.Fatalf("ImageVerification is %s, want %s: %s", p, phase, iv.Status.Message)
+		}
+		return iv.Status.Phase == phase, fmt.Sprintf("phase=%q message=%q", iv.Status.Phase, iv.Status.Message)
+	})
+	return got
+}
+
+// TestStep_ImageVerificationPromotesSigned signs podinfo's digest with a
+// key into a Sigstore bundle, attached as an OCI referrer in the suite's
+// registry, and promotes it by digest through test and prod with a policy
+// naming that key: the Bundle's ImageVerification is Verified (signed by the
+// release authority) and both environments run the digest.
+//
+// Covers IMGV-KEY-01, IMGV-SIGREPO-01.
+func TestStep_ImageVerificationPromotesSigned(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test", "prod")
+	s := newSignatures(t, a.ns)
+	bundleJSON, pem, err := signtest.Bundle(fixtures.Image, fixtures.V2Digest)
+	require.NoError(t, err)
+	s.pushBundle(t, fixtures.V2Digest, bundleJSON)
+	p := a.pipeline(nil)
+	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, pem, "")
+	a.apply(t, p)
+	byDigest := fixtures.Image + "@" + fixtures.V2Digest
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", byDigest)
+
+	iv := waitImageVerification(t, e, a.ns, bundle, "Verified")
+	require.Len(t, iv.Status.Images, 1)
+	assert.Equal(t, byDigest, iv.Status.Images[0].Image)
+	assert.Equal(t, "release", iv.Status.Images[0].Authority)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("prod"), byDigest, syncTimeout)
+}
+
+// TestStep_ImageVerificationLegacySignature verifies a cosign v2-style
+// signature (the sha256-<digest>.sig tag) made with the policy's key.
+//
+// Covers IMGV-LEGACY-01.
+func TestStep_ImageVerificationLegacySignature(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	s := newSignatures(t, a.ns)
+	key, err := signtest.NewKey()
+	require.NoError(t, err)
+	payload := signtest.LegacyPayload(fixtures.Image, fixtures.V2Digest)
+	sig, err := key.SignLegacy(payload)
+	require.NoError(t, err)
+	s.pushLegacy(t, fixtures.V2Digest, payload, sig)
+	pem, err := key.PublicPEM()
+	require.NoError(t, err)
+	p := a.pipeline(nil)
+	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, pem, "")
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
+	waitImageVerification(t, e, a.ns, bundle, "Verified")
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+}
+
+// TestStep_ImageVerificationBlocksUnsigned: with no signature the first
+// environment's step waits in Pending (nothing in git, nothing deployed)
+// until the policy timeout; then the ImageVerification, the step and the
+// Bundle fail.
+//
+// Covers IMGV-UNSIGNED-01.
+func TestStep_ImageVerificationBlocksUnsigned(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	s := newSignatures(t, a.ns)
+	_, pem, err := signtest.Bundle(fixtures.Image, fixtures.V2Digest)
+	require.NoError(t, err)
+	p := a.pipeline(nil)
+	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, pem, "40s")
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
+
+	framework.Eventually(t, time.Minute, "test waits for the verification", func(ctx context.Context) (bool, string) {
+		ps, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+		if err != nil || !ok {
+			return false, fmt.Sprintf("%v %v", ok, err)
+		}
+		return ps.Status.State == "" && strings.Contains(ps.Status.Message, "no signature found yet"),
+			fmt.Sprintf("state=%q message=%q", ps.Status.State, ps.Status.Message)
+	})
+	a.fileHas(t, "test", fixtures.V1, "test in git while unverified")
+	iv := waitImageVerification(t, e, a.ns, bundle, "Failed")
+	assert.Contains(t, iv.Status.Message, "not verified within the 40s timeout")
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", time.Minute)
+	assert.Contains(t, ps.Status.Message, "image verification")
+	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
+	a.fileHas(t, "test", fixtures.V1, "test in git after the failure")
+	a.running(t, "test", fixtures.Image+":"+fixtures.V1, "test after the failure")
+}
+
+// TestStep_ImageVerificationWrongKeyFails: a signature by another key fails
+// at once, without waiting for the timeout.
+//
+// Covers IMGV-WRONGKEY-01.
+func TestStep_ImageVerificationWrongKeyFails(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	s := newSignatures(t, a.ns)
+	signed, _, err := signtest.Bundle(fixtures.Image, fixtures.V2Digest)
+	require.NoError(t, err)
+	s.pushBundle(t, fixtures.V2Digest, signed)
+	_, otherPEM, err := signtest.Bundle(fixtures.Image, fixtures.V2Digest)
+	require.NoError(t, err)
+	p := a.pipeline(nil)
+	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, otherPEM, "10m")
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
+	iv := waitImageVerification(t, e, a.ns, bundle, "Failed")
+	assert.Contains(t, iv.Status.Message, "no signature verifies against the policy's authorities")
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", time.Minute)
+	a.fileHas(t, "test", fixtures.V1, "test in git")
+}
+
+// TestStep_ImageVerificationNeedsDigest: an image policy refuses a Bundle
+// that names its image by tag (InvalidSpec, GraphBuildFailed).
+//
+// Covers IMGV-DIGEST-01.
+func TestStep_ImageVerificationNeedsDigest(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	s := newSignatures(t, a.ns)
+	_, pem, err := signtest.Bundle(fixtures.Image, fixtures.V2Digest)
+	require.NoError(t, err)
+	p := a.pipeline(nil)
+	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, pem, "")
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitBundle(t, a.ns, bundle, time.Minute, "Failed with InvalidSpec",
+		failedWith("GraphBuildFailed", "is not pinned by digest"))
+	_, ok, err := e.Step(context.Background(), a.ns, pipelineName, bundle, "test")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+// TestStep_ImageVerificationUnsignedCommit: with commits.requireSigned, a
+// config Bundle whose commit is not signed (Forgejo reports it unverified)
+// fails before its first environment changes.
+//
+// Covers IMGV-COMMIT-01.
+func TestStep_ImageVerificationUnsignedCommit(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	p := a.pipeline(nil)
+	p.Spec.ImageVerification = &v1alpha1.ImageVerificationPolicy{
+		Commits: &v1alpha1.CommitSignaturePolicy{RequireSigned: true}}
+	a.apply(t, p)
+	cfg, sha := a.configRepo(t, "test")
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
+	iv := waitImageVerification(t, e, a.ns, bundle, "Failed")
+	assert.Contains(t, iv.Status.Message, "is not signed with a verified signature")
+	require.NotNil(t, iv.Status.Commit)
+	assert.False(t, iv.Status.Commit.Verified)
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", time.Minute)
+	assert.Contains(t, ps.Status.Message, "image verification")
+	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
+}

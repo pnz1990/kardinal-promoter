@@ -38,7 +38,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Audit trail** | `AuditEvent` CRD (promotions, rollbacks, supersession, gate results) and Kubernetes Events | Kubernetes Events; `record-audit-event` step in Kargo Enterprise (v1.12) | `ChangeTransferPolicyHistory` (last 20 promotions per environment, v0.41), git notes, Kubernetes Events |
 | **Custom promotion steps** | Partly — the sequence itself is fixed (Bundle type, `update.strategy`, `approval`; [Promotion Steps](pipeline-reference.md#promotion-steps)), but each environment can run its own Jobs before it starts and after its health check ([hooks](hooks.md)); no custom git, render or update steps | Yes — about 35 built-in steps composed in a Stage's `promotionTemplate`, reusable PromotionTasks, conditions and retries; container steps in Kargo Enterprise (v1.10+) | No |
 | **Integration test step** | Yes — a post-deploy [hook](hooks.md) Job runs after the health check; the environment is Verified, and the next one starts, only when it succeeded; a failure applies `onHealthFailure`. Pre-deploy hooks run migrations before the change | Yes — verification can run a Kubernetes Job (AnalysisTemplate); an `http` step can poll a test service | No (a Job gate is on its roadmap) |
-| **Image signature verification** | No — use admission-time verification in the workload cluster (Sigstore policy-controller or Kyverno `verifyImages`; [how](pipeline-reference.md#image-signatures-and-tests)) | No (Kargo Enterprise's `jfrog-evidence` step can verify signed JFrog evidence) | No (git commit signature checks are on its roadmap) |
+| **Image signature verification** | Yes — `spec.imageVerification` checks cosign key and Sigstore keyless signatures (sigstore-go) before a Bundle is promoted, requires digest-pinned images, and can require the config commit to be signed (SCM-verified); pair it with admission-time verification in the workload cluster ([Image Signature Verification](image-verification.md)) | No (Kargo Enterprise's `jfrog-evidence` step can verify signed JFrog evidence) | No (git commit signature checks are on its roadmap) |
 | **Emergency gate override** | Yes — `kardinal override`: time-limited, with a mandatory reason; recorded in the gate's `spec.overrides`, a `GateEvaluated` AuditEvent and the PR evidence (the user name is the CLI's local OS user) | Manual Freight approval (`kargo approve`), with no reason or expiry | Merge the PR by hand; nothing is recorded |
 | **Outbound event notifications** | Yes — `NotificationHook` CRD fires HTTP webhooks on Bundle.Verified, Bundle.Failed, PolicyGate.Blocked, PromotionStep.Failed; optional auth header (plain text in the spec); pipeline selector | Kargo Enterprise only: event routing to Slack, email or HTTP, and a `send-message` step (v1.8+). Open source emits Kubernetes Events, and an `http` step can call a webhook | Kubernetes Events only (a webhook CRD is in a draft PR) |
 | **Multi-cluster** | Argo CD or Flux hub (health read from the hub's Applications or Kustomizations); `health.cluster` kubeconfig Secrets are not supported | Yes — through Argo CD; controllers can be sharded across clusters | Yes — the Argo CD gate reads remote clusters through kubeconfig Secrets |
@@ -196,6 +196,13 @@ test ──► uat ──► staging ──┬──► prod-us ──┐
 All three tools can run this. kardinal models it natively, and `wave:` can generate the edges.
 Kargo builds it from Stages that request Freight from upstream Stages. GitOps Promoter builds
 it with `dependsOn` on its environments.
+
+### Signed artifacts only
+
+`spec.imageVerification` refuses to promote a Bundle whose images are not signed by an accepted
+key or Sigstore keyless identity, or whose config commit is not signed. Neither Kargo (open
+source) nor GitOps Promoter verifies signatures today; GitOps Promoter has commit signature checks
+on its roadmap. See [Image Signature Verification](image-verification.md).
 
 ---
 

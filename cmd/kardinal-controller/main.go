@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	sigroot "github.com/sigstore/sigstore-go/pkg/root"
+	sigtuf "github.com/sigstore/sigstore-go/pkg/tuf"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -51,6 +53,7 @@ import (
 	changewindowrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
 	hookrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
+	ivrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification"
 	metriccheckrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
 	nhookrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
@@ -478,6 +481,18 @@ func main() {
 		PodSecurityLevel:       hookPodSecurityLevel,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up HookRunReconciler")
+	}
+
+	if err := (&ivrecon.Reconciler{
+		Client:   mgr.GetClient(),
+		Registry: &ivrecon.OCIRegistry{},
+		SCM:      scmProvider,
+		PublicGoodRoot: ivrecon.PublicGoodRoot(func() (sigroot.TrustedMaterial, error) {
+			// In memory: the controller's root file system is read-only.
+			return sigroot.FetchTrustedRootWithOptions(sigtuf.DefaultOptions().WithDisableLocalCache())
+		}),
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up ImageVerificationReconciler")
 	}
 
 	if err := (&metriccheckrecon.Reconciler{
