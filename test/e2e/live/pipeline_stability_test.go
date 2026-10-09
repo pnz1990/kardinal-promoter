@@ -67,8 +67,9 @@ func assertStepTimings(t *testing.T, ps *v1alpha1.PromotionStep) {
 // one-environment Pipeline (prod) gets: V2 Verified; a Bundle of a missing
 // image whose health check times out (a failed deployment); V3 Verified,
 // which restores it; then `kardinal rollback`, which rolls back from V3 (a
-// second failure) and restores it when the rollback is Verified. The rate
-// and the mean time to restore are what the step and Bundle timestamps give.
+// second failure) and restores it when the rollback is Verified. The rate,
+// and the mean time from each failed change reaching prod to the next
+// Verified deployment, are what the step timestamps give.
 // A Verified step records every step's timing in status.steps.
 //
 // Covers PIPE-DORA-02, STEP-TIMINGS-01.
@@ -110,7 +111,7 @@ func TestPipeline_StabilityMetrics(t *testing.T) {
 	require.NotNil(t, hc.StartedAt, "the broken image reached prod: its health check started")
 	require.NotNil(t, hc.CompletedAt)
 	assert.Equal(t, v1alpha1.StepExecutionFailed, hc.State)
-	failedAt := hc.CompletedAt.Time
+	brokenDeployed := hc.StartedAt.Time
 	m = metricsWith(2, 1)
 	assert.Equal(t, 500, m.ChangeFailureRateMillis)
 	assert.Zero(t, m.RestoredFailures, "not restored yet")
@@ -120,20 +121,21 @@ func TestPipeline_StabilityMetrics(t *testing.T) {
 	m = metricsWith(3, 1)
 	assert.Equal(t, 333, m.ChangeFailureRateMillis)
 	assert.Equal(t, 1, m.RestoredFailures)
-	assert.Equal(t, int64(restored1.Sub(failedAt).Minutes()), m.MeanTimeToRestoreMinutes)
+	assert.Equal(t, int64(restored1.Sub(brokenDeployed).Minutes()), m.MeanTimeToRestoreMinutes,
+		"from the broken change reaching prod to V3 Verified")
+	b3Deployed := stepTiming(t, prodStep(t, a, b3), "health-check").StartedAt.Time
 
 	out := e.MustKardinal(t, a.ns, "rollback", pipelineName, "--env", "prod")
 	mm := regexp.MustCompile(`Bundle (\S+) created \(rollbackOf=(\S+)\)`).FindStringSubmatch(out)
 	require.NotNil(t, mm, "rollback output:\n%s", out)
 	rb := mm[1]
 	assert.Equal(t, b1, mm[2], "the rollback restores V2")
-	rolledBackAt := a.bundle(t, rb).CreationTimestamp.Time
 	restored2 := verified(rb)
 	a.running(t, "prod", imageV2, "the rollback is deployed")
 	m = metricsWith(4, 2)
 	assert.Equal(t, 500, m.ChangeFailureRateMillis, "the broken Bundle and V3, rolled back from")
 	assert.Equal(t, 2, m.RestoredFailures)
-	mean := (restored1.Sub(failedAt) + restored2.Sub(rolledBackAt)) / 2
+	mean := (restored1.Sub(brokenDeployed) + restored2.Sub(b3Deployed)) / 2
 	assert.Equal(t, int64(mean.Minutes()), m.MeanTimeToRestoreMinutes)
 
 	rows := cells(e.MustKardinal(t, a.ns, "metrics", "--pipeline", pipelineName))

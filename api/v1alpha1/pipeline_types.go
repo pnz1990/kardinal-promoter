@@ -605,7 +605,8 @@ type PipelineDeploymentMetrics struct {
 	// Deployments is the number of deployments to the final environment
 	// the change failure rate and time to restore are computed over: the
 	// last 30 Bundles whose change reached it (its health check started),
-	// whatever the outcome. A multi-region environment counts once per Bundle.
+	// whatever the outcome. A no-op promotion (outputs.noChanges) is not a
+	// deployment. A multi-region environment counts once per Bundle.
 	// +optional
 	Deployments int `json:"deployments,omitempty"`
 
@@ -622,9 +623,9 @@ type PipelineDeploymentMetrics struct {
 	ChangeFailureRateMillis int `json:"changeFailureRateMillis,omitempty"`
 
 	// MeanTimeToRestoreMinutes is the mean, in whole minutes, from each failed
-	// deployment's failure (its step's failure, or the rollback Bundle's
-	// creation) to the next Bundle Verified in the final environment (DORA
-	// time to restore). Failures not restored yet are not counted.
+	// deployment reaching the environment to the first later deployment
+	// Verified there in every region (DORA time to restore). Failures not
+	// restored yet are not counted.
 	// +optional
 	MeanTimeToRestoreMinutes int64 `json:"meanTimeToRestoreMinutes,omitempty"`
 

@@ -251,13 +251,22 @@ func renderFromCRD(w interface{ Write([]byte) (int, error) }, pipelineName, env 
 		pipelineName, dm.SampleSize, env)
 	_, _ = fmt.Fprintf(tw, "target_env\t%s\t\n", env)
 	_, _ = fmt.Fprintf(tw, "rollouts_last_30d\t%d\t\n", dm.RolloutsLast30Days)
-	_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t%dm\t\n", dm.P50CommitToProdMinutes)
-	_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t%dm\t\n", dm.P90CommitToProdMinutes)
+	if dm.SampleSize > 0 {
+		_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t%dm\t\n", dm.P50CommitToProdMinutes)
+		_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t%dm\t\n", dm.P90CommitToProdMinutes)
+	} else {
+		_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t-\t(nothing Verified yet)\n")
+		_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t-\t(nothing Verified yet)\n")
+	}
 	_, _ = fmt.Fprintf(tw, "auto_rollback_rate\t%.1f%%\t(%d per thousand)\n",
 		float64(dm.AutoRollbackRateMillis)/10, dm.AutoRollbackRateMillis)
 	_, _ = fmt.Fprintf(tw, "operator_intervention_rate\t%.1f%%\t(%d per thousand)\n",
 		float64(dm.OperatorInterventionRateMillis)/10, dm.OperatorInterventionRateMillis)
-	_, _ = fmt.Fprintf(tw, "stale_prod_days\t%d\t\n", dm.StaleProdDays)
+	if dm.SampleSize > 0 {
+		_, _ = fmt.Fprintf(tw, "stale_prod_days\t%d\t\n", dm.StaleProdDays)
+	} else {
+		_, _ = fmt.Fprintf(tw, "stale_prod_days\t-\t(nothing Verified yet)\n")
+	}
 	_, _ = fmt.Fprintf(tw, "change_failure_rate\t%.1f%%\t(%d of %d deployments failed)\n",
 		float64(dm.ChangeFailureRateMillis)/10, dm.FailedDeployments, dm.Deployments)
 	if dm.RestoredFailures > 0 {

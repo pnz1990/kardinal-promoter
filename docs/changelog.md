@@ -10,7 +10,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Change failure rate and time to restore** — `Pipeline.status.deploymentMetrics` gains the DORA stability pair for the last environment: `deployments`, `failedDeployments`, `changeFailureRateMillis`, `meanTimeToRestoreMinutes` and `restoredFailures`, over the last 30 deployments. A failure is a step that ends `Failed`, `AbortedByAlarm` or `RollingBack` after its change reached the environment, or a Bundle a later rollback rolled back from. `kardinal metrics` prints `change_failure_rate` and `time_to_restore`, and the UI release metrics bar shows both ([Change failure rate and time to restore](guides/monitoring.md#change-failure-rate-and-time-to-restore))
+- **Change failure rate and time to restore** — `Pipeline.status.deploymentMetrics` gains the DORA stability pair for the last environment: `deployments`, `failedDeployments`, `changeFailureRateMillis`, `meanTimeToRestoreMinutes` and `restoredFailures`, over the last 30 deployments. A failure is a step that ends `Failed`, `AbortedByAlarm` or `RollingBack` after its change reached the environment, or a Bundle a later rollback rolled back from; time to restore runs from the failed deployment to the next deployment Verified in every region. No-op promotions are not deployments, and a Pipeline whose every deployment failed reports 100%. `kardinal metrics` prints `change_failure_rate` and `time_to_restore`, and the UI release metrics bar shows both ([Change failure rate and time to restore](guides/monitoring.md#change-failure-rate-and-time-to-restore))
 
 ### Docs
 

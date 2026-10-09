@@ -94,8 +94,22 @@ func ComputeDeploymentMetrics(
 		verified = append(verified, verifiedBundle{b, vt})
 	}
 
+	stability := computeStability(pipeline.Name, finalEnv, bundles, steps)
 	if len(verified) == 0 {
-		return nil
+		if stability.deployments == 0 {
+			return nil
+		}
+		// Every deployment so far failed: report the stability pair (a
+		// 100% change failure rate) and leave the throughput fields unset.
+		computedAt := metav1.NewTime(now)
+		return &kardinalv1alpha1.PipelineDeploymentMetrics{
+			Deployments:              stability.deployments,
+			FailedDeployments:        stability.failed,
+			ChangeFailureRateMillis:  ratioMillis(stability.failed, stability.deployments),
+			MeanTimeToRestoreMinutes: stability.mttrMinutes,
+			RestoredFailures:         stability.restored,
+			ComputedAt:               &computedAt,
+		}
 	}
 
 	// Sort newest-first by verified time.
@@ -161,8 +175,6 @@ func ComputeDeploymentMetrics(
 	if staleProdDays < 0 {
 		staleProdDays = 0
 	}
-
-	stability := computeStability(pipeline.Name, finalEnv, bundles, steps, finalVerifiedAt)
 
 	computedAt := metav1.NewTime(now)
 	return &kardinalv1alpha1.PipelineDeploymentMetrics{
@@ -262,13 +274,16 @@ type deployment struct {
 	bundle     string
 	deployedAt time.Time
 	failed     bool
-	failedAt   time.Time
 }
 
 // stepDeployedAt returns when s's change reached its environment: the
 // startedAt of its health-check step. ok is false when it never did (the
-// step failed or is still before git-push or the merge).
+// step failed or is still before git-push or the merge), and for a no-op
+// promotion (outputs.noChanges: the environment already had the change).
 func stepDeployedAt(s *kardinalv1alpha1.PromotionStep) (time.Time, bool) {
+	if s.Status.Outputs["noChanges"] == "true" {
+		return time.Time{}, false
+	}
 	for i := range s.Status.Steps {
 		st := &s.Status.Steps[i]
 		if st.Name == healthCheckStepName && st.StartedAt != nil {
@@ -278,65 +293,60 @@ func stepDeployedAt(s *kardinalv1alpha1.PromotionStep) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// stepFailedAt is when a failed step failed: the completedAt of its failed
-// step entry, else its health-check's, else its creation time.
-func stepFailedAt(s *kardinalv1alpha1.PromotionStep) time.Time {
-	var hc time.Time
-	for i := range s.Status.Steps {
-		st := &s.Status.Steps[i]
-		if st.CompletedAt == nil {
-			continue
-		}
-		if st.State == kardinalv1alpha1.StepExecutionFailed {
-			return st.CompletedAt.UTC()
-		}
-		if st.Name == healthCheckStepName {
-			hc = st.CompletedAt.UTC()
-		}
-	}
-	if !hc.IsZero() {
-		return hc
-	}
-	return s.CreationTimestamp.UTC()
-}
-
 // computeStability computes the change failure rate and the time to restore
 // in finalEnv from PromotionStep and Bundle status, both written by their own
 // reconcilers.
 //
 // A deployment is a Bundle at least one of whose finalEnv steps started its
-// health check. It failed when such a step ended Failed, AbortedByAlarm or
-// RollingBack, or when a rollback Bundle targeting finalEnv names it in
-// kardinal.io/rollback-from (rolled back by a human or a RollbackPolicy).
-// Its restore is the first Verified time in finalEnv, of any Bundle, after
-// the failure.
+// health check with a change to apply (not outputs.noChanges). It failed when
+// such a step ended Failed, AbortedByAlarm or RollingBack, or when a rollback
+// Bundle targeting finalEnv names it in kardinal.io/rollback-from (rolled back
+// by a human or a RollbackPolicy).
+//
+// Time to restore runs from the failed deployment's deployedAt (when users
+// got the change) to the first time a later deployment is Verified in
+// finalEnv: every one of that Bundle's finalEnv steps (all regions) is
+// Verified, and the last of them gives the time. A region of the failed
+// Bundle itself, or an older Bundle, never restores it.
 func computeStability(pipelineName, finalEnv string, bundles []kardinalv1alpha1.Bundle,
-	steps []kardinalv1alpha1.PromotionStep, finalVerifiedAt map[string]time.Time) stability {
+	steps []kardinalv1alpha1.PromotionStep) stability {
 	byBundle := map[string]*deployment{}
+	// verifiedAt is when every finalEnv step of a Bundle was Verified; a
+	// Bundle with any step not Verified is absent.
+	verifiedAt := map[string]time.Time{}
+	notVerified := map[string]bool{}
 	for i := range steps {
 		s := &steps[i]
 		if s.Spec.Environment != finalEnv || s.Spec.PipelineName != pipelineName {
 			continue
 		}
+		b := s.Spec.BundleName
+		if t, ok := lifecycle.VerifiedTime(s); ok && s.Status.State == "Verified" {
+			if t.After(verifiedAt[b]) {
+				verifiedAt[b] = t
+			}
+		} else {
+			notVerified[b] = true
+		}
 		at, ok := stepDeployedAt(s)
 		if !ok {
 			continue
 		}
-		d := byBundle[s.Spec.BundleName]
+		d := byBundle[b]
 		if d == nil {
-			d = &deployment{bundle: s.Spec.BundleName, deployedAt: at}
-			byBundle[s.Spec.BundleName] = d
+			d = &deployment{bundle: b, deployedAt: at}
+			byBundle[b] = d
 		}
 		if at.Before(d.deployedAt) {
 			d.deployedAt = at
 		}
 		switch s.Status.State {
 		case "Failed", "AbortedByAlarm", "RollingBack":
-			f := stepFailedAt(s)
-			if !d.failed || f.Before(d.failedAt) {
-				d.failed, d.failedAt = true, f
-			}
+			d.failed = true
 		}
+	}
+	for b := range notVerified {
+		delete(verifiedAt, b)
 	}
 	for i := range bundles {
 		b := &bundles[i]
@@ -346,13 +356,8 @@ func computeStability(pipelineName, finalEnv string, bundles []kardinalv1alpha1.
 		if b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != "" && b.Spec.Intent.TargetEnvironment != finalEnv {
 			continue
 		}
-		from := b.Annotations[lifecycle.AnnotationRollbackFrom]
-		d := byBundle[from]
-		if from == "" || d == nil {
-			continue
-		}
-		if at := b.CreationTimestamp.UTC(); !d.failed || at.Before(d.failedAt) {
-			d.failed, d.failedAt = true, at
+		if d := byBundle[b.Annotations[lifecycle.AnnotationRollbackFrom]]; d != nil {
+			d.failed = true
 		}
 	}
 
@@ -370,11 +375,20 @@ func computeStability(pipelineName, finalEnv string, bundles []kardinalv1alpha1.
 		deps = deps[:metricsLookbackBundles]
 	}
 
-	verifiedTimes := make([]time.Time, 0, len(finalVerifiedAt))
-	for _, t := range finalVerifiedAt {
-		verifiedTimes = append(verifiedTimes, t)
+	type verified struct {
+		bundle string
+		at     time.Time
 	}
-	sort.Slice(verifiedTimes, func(i, j int) bool { return verifiedTimes[i].Before(verifiedTimes[j]) })
+	restores := make([]verified, 0, len(verifiedAt))
+	for b, t := range verifiedAt {
+		restores = append(restores, verified{b, t})
+	}
+	sort.Slice(restores, func(i, j int) bool {
+		if !restores[i].at.Equal(restores[j].at) {
+			return restores[i].at.Before(restores[j].at)
+		}
+		return restores[i].bundle < restores[j].bundle
+	})
 
 	out := stability{deployments: len(deps)}
 	var restoreSum time.Duration
@@ -383,12 +397,16 @@ func computeStability(pipelineName, finalEnv string, bundles []kardinalv1alpha1.
 			continue
 		}
 		out.failed++
-		k := sort.Search(len(verifiedTimes), func(i int) bool { return verifiedTimes[i].After(d.failedAt) })
-		if k == len(verifiedTimes) {
-			continue // not restored yet
+		for _, r := range restores {
+			// Only a later deployment restores: not the failed Bundle's own
+			// regions, and not an older Bundle whose last region finished late.
+			later := byBundle[r.bundle]
+			if r.bundle != d.bundle && later != nil && later.deployedAt.After(d.deployedAt) && r.at.After(d.deployedAt) {
+				out.restored++
+				restoreSum += r.at.Sub(d.deployedAt)
+				break
+			}
 		}
-		out.restored++
-		restoreSum += verifiedTimes[k].Sub(d.failedAt)
 	}
 	if out.restored > 0 {
 		out.mttrMinutes = int64((restoreSum / time.Duration(out.restored)).Minutes())

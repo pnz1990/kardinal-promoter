@@ -212,14 +212,16 @@ status into `Pipeline.status.deploymentMetrics`, for the Pipeline's last environ
 
 | Field | Meaning |
 |-------|---------|
-| `deployments` | Deployments in the sample: the last 30 Bundles whose change reached the environment (the step's `health-check` entry in `status.steps` started: after `git-push`, or after the merge for `pr-review`). A failure before that (a refused push, a closed PR) is not a deployment. A multi-region environment counts once per Bundle |
+| `deployments` | Deployments in the sample: the last 30 Bundles whose change reached the environment (the step's `health-check` entry in `status.steps` started: after `git-push`, or after the merge for `pr-review`). A failure before that (a refused push, a closed PR) is not a deployment, nor is a promotion with nothing to change (`outputs.noChanges`). A multi-region environment counts once per Bundle |
 | `failedDeployments` | Deployments that failed there: a step ended `Failed`, `AbortedByAlarm` or `RollingBack` after its health check started, or a rollback Bundle for the environment later rolled back from it (`kardinal rollback`, the UI, RollbackPolicy or `onHealthFailure: rollback`; annotation `kardinal.io/rollback-from`) |
 | `changeFailureRateMillis` | `failedDeployments / deployments` in thousandths (`250` = 25%) |
-| `meanTimeToRestoreMinutes` | Mean whole minutes from each failure (the failed step's end, or the rollback Bundle's creation) to the next Bundle Verified in the environment, rollback Bundles included |
+| `meanTimeToRestoreMinutes` | Mean whole minutes from each failed deployment reaching the environment (its health check started: when users got the change) to the first later deployment Verified there, rollback Bundles included. A later deployment counts once every one of its steps in the environment (all regions) is Verified; a region of the failed Bundle itself never restores it |
 | `restoredFailures` | Failures counted in `meanTimeToRestoreMinutes`; one not restored yet is left out |
 
-Like the other fields, `deploymentMetrics` is set only once a Bundle has been Verified in the
-last environment.
+`deploymentMetrics` is set once a Bundle has been Verified in the last environment, or a
+deployment there has failed. While every deployment has failed, it holds only the stability
+fields (a 100% change failure rate); the lead-time and staleness fields stay unset, and
+`kardinal metrics` prints `-` for them.
 
 ### Step timings
 

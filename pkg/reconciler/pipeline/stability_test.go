@@ -82,7 +82,7 @@ func TestComputeDeploymentMetrics_ChangeFailureRateAndMTTR(t *testing.T) {
 			deployments: 2,
 		},
 		{
-			name: "a health failure restored by the next Verified Bundle 40 minutes later",
+			name: "a health failure restored by the next Verified Bundle",
 			bundles: []kardinalv1alpha1.Bundle{bundleAt("v1", t0), bundleAt("v2", t0.Add(time.Hour)),
 				bundleAt("v3", t0.Add(2*time.Hour))},
 			steps: []kardinalv1alpha1.PromotionStep{
@@ -90,7 +90,7 @@ func TestComputeDeploymentMetrics_ChangeFailureRateAndMTTR(t *testing.T) {
 				deployedStep("v2", "Failed", t0.Add(65*time.Minute), t0.Add(80*time.Minute)),
 				deployedStep("v3", "Verified", t0.Add(115*time.Minute), t0.Add(120*time.Minute)),
 			},
-			deployments: 3, failed: 1, cfr: 333, restored: 1, mttr: 40,
+			deployments: 3, failed: 1, cfr: 333, restored: 1, mttr: 55, // from v2 deployed (65m) to v3 Verified (120m)
 		},
 		{
 			name: "AbortedByAlarm and RollingBack count as failures; an unrestored failure has no restore time",
@@ -123,7 +123,7 @@ func TestComputeDeploymentMetrics_ChangeFailureRateAndMTTR(t *testing.T) {
 				deployedStep("v2", "Verified", t0.Add(65*time.Minute), t0.Add(70*time.Minute)),
 				deployedStep("rb", "Verified", t0.Add(3*time.Hour+5*time.Minute), t0.Add(3*time.Hour+20*time.Minute)),
 			},
-			deployments: 3, failed: 1, cfr: 333, restored: 1, mttr: 20,
+			deployments: 3, failed: 1, cfr: 333, restored: 1, mttr: 135, // from v2 deployed (65m) to the rollback Verified (200m)
 		},
 		{
 			name:    "multi-region prod counts once per Bundle, failed when one region fails",
@@ -135,7 +135,7 @@ func TestComputeDeploymentMetrics_ChangeFailureRateAndMTTR(t *testing.T) {
 				return []kardinalv1alpha1.PromotionStep{eu, us,
 					deployedStep("v2", "Verified", t0.Add(65*time.Minute), t0.Add(90*time.Minute))}
 			}(),
-			deployments: 2, failed: 1, cfr: 500, restored: 1, mttr: 60,
+			deployments: 2, failed: 1, cfr: 500, restored: 1, mttr: 85, // from v1 deployed (5m) to v2 Verified (90m)
 		},
 	}
 	for _, tt := range tests {
@@ -149,6 +149,62 @@ func TestComputeDeploymentMetrics_ChangeFailureRateAndMTTR(t *testing.T) {
 			assert.Equal(t, tt.mttr, m.MeanTimeToRestoreMinutes, "time to restore")
 		})
 	}
+}
+
+// TestComputeDeploymentMetrics_StabilityEdgeCases covers the QA findings on
+// #1488: a region of the failed Bundle (in either order) or an older Bundle
+// never restores it, a Pipeline whose every deployment failed reports 100%,
+// and a no-op promotion is not a deployment.
+func TestComputeDeploymentMetrics_StabilityEdgeCases(t *testing.T) {
+	p := makePipelineWithEnvs("app", "default", "test", "prod")
+	region := func(s kardinalv1alpha1.PromotionStep, suffix string) kardinalv1alpha1.PromotionStep {
+		s.Name += "-" + suffix
+		return s
+	}
+	t.Run("the failed Bundle's other region Verified later does not restore it", func(t *testing.T) {
+		us := region(deployedStep("v1", "Failed", t0.Add(5*time.Minute), t0.Add(10*time.Minute)), "us")
+		eu := region(deployedStep("v1", "Verified", t0.Add(6*time.Minute), t0.Add(30*time.Minute)), "eu")
+		base := deployedStep("v0", "Verified", t0.Add(-time.Hour), t0.Add(-50*time.Minute))
+		m := pipeline.ComputeDeploymentMetrics(p, []kardinalv1alpha1.Bundle{bundleAt("v0", t0.Add(-2*time.Hour)), bundleAt("v1", t0)},
+			[]kardinalv1alpha1.PromotionStep{base, us, eu}, t0.Add(24*time.Hour))
+		require.NotNil(t, m)
+		assert.Equal(t, 1, m.FailedDeployments)
+		assert.Zero(t, m.RestoredFailures)
+		assert.Zero(t, m.MeanTimeToRestoreMinutes)
+	})
+	t.Run("an older Bundle whose last region finishes after the failure does not restore it", func(t *testing.T) {
+		oldEU := region(deployedStep("v1", "Verified", t0, t0.Add(5*time.Minute)), "eu")
+		oldUS := region(deployedStep("v1", "Verified", t0.Add(time.Minute), t0.Add(2*time.Hour)), "us") // slow region
+		bad := deployedStep("v2", "Failed", t0.Add(30*time.Minute), t0.Add(40*time.Minute))
+		m := pipeline.ComputeDeploymentMetrics(p, []kardinalv1alpha1.Bundle{bundleAt("v1", t0), bundleAt("v2", t0.Add(25*time.Minute))},
+			[]kardinalv1alpha1.PromotionStep{oldEU, oldUS, bad}, t0.Add(24*time.Hour))
+		require.NotNil(t, m)
+		assert.Equal(t, 1, m.FailedDeployments)
+		assert.Zero(t, m.RestoredFailures, "v1 is older than v2")
+	})
+	t.Run("every deployment failed: 100%, not nil", func(t *testing.T) {
+		m := pipeline.ComputeDeploymentMetrics(p, []kardinalv1alpha1.Bundle{bundleAt("v1", t0), bundleAt("v2", t0.Add(time.Hour))},
+			[]kardinalv1alpha1.PromotionStep{
+				deployedStep("v1", "Failed", t0.Add(5*time.Minute), t0.Add(10*time.Minute)),
+				deployedStep("v2", "AbortedByAlarm", t0.Add(65*time.Minute), t0.Add(70*time.Minute)),
+			}, t0.Add(24*time.Hour))
+		require.NotNil(t, m)
+		assert.Equal(t, 2, m.Deployments)
+		assert.Equal(t, 2, m.FailedDeployments)
+		assert.Equal(t, 1000, m.ChangeFailureRateMillis)
+		assert.Zero(t, m.SampleSize, "nothing Verified: the throughput fields stay unset")
+		assert.Zero(t, m.RolloutsLast30Days)
+		assert.NotNil(t, m.ComputedAt)
+	})
+	t.Run("a no-op promotion is not a deployment", func(t *testing.T) {
+		noop := deployedStep("v2", "Verified", t0.Add(65*time.Minute), t0.Add(70*time.Minute))
+		noop.Status.Outputs = map[string]string{"noChanges": "true"}
+		m := pipeline.ComputeDeploymentMetrics(p, []kardinalv1alpha1.Bundle{bundleAt("v1", t0), bundleAt("v2", t0.Add(time.Hour))},
+			[]kardinalv1alpha1.PromotionStep{deployedStep("v1", "Verified", t0.Add(5*time.Minute), t0.Add(10*time.Minute)), noop},
+			t0.Add(24*time.Hour))
+		require.NotNil(t, m)
+		assert.Equal(t, 1, m.Deployments)
+	})
 }
 
 // TestComputeDeploymentMetrics_StabilitySampleIsTheLast30Deployments: only

@@ -49,9 +49,9 @@ PIPE-REJECT-01	live	core	covered	pipeline	API server rejects non-empty steps, pr
 PIPE-NAME-01	live	core	covered	pipeline	environment name must be a DNS label, unique; Go duration syntax enforced for health.timeout and waitForMergeTimeout	docs/pipeline-reference.md:97-109; api/v1alpha1/pipeline_types.go:139
 PIPE-PATH-01	live	core	covered	pipeline	environment path must stay inside the repo: absolute paths, .. segments and escaping symlinks fail the step	docs/pipeline-reference.md:114
 PIPE-PHASE-01	live	core	covered	pipeline	Pipeline status.phase is Promoting while a Bundle is in flight or held by a gate	docs/changelog.md:191
-PIPE-DORA-01	live	core	covered	pipeline	status.deploymentMetrics: rolloutsLast30Days, p50/p90 commit-to-prod, autoRollbackRateMillis, operatorInterventionRateMillis, staleProdDays	api/v1alpha1/pipeline_types.go:563-639
-PIPE-DORA-02	live	core	covered	pipeline	status.deploymentMetrics change failure rate and mean time to restore (health failure, rollback), kardinal metrics rows, UI API	docs/guides/monitoring.md:208-222; api/v1alpha1/pipeline_types.go:605-634; pkg/reconciler/pipeline/metrics.go:313-397
-STEP-TIMINGS-01	live	core	covered	pipeline	PromotionStep status.steps records startedAt, completedAt and durationMs for every step	docs/guides/monitoring.md:224-230
+PIPE-DORA-01	live	core	covered	pipeline	status.deploymentMetrics: rolloutsLast30Days, p50/p90 commit-to-prod, autoRollbackRateMillis, operatorInterventionRateMillis, staleProdDays	api/v1alpha1/pipeline_types.go:563-640
+PIPE-DORA-02	live	core	covered	pipeline	status.deploymentMetrics change failure rate and mean time to restore (health failure, rollback), kardinal metrics rows, UI API	docs/guides/monitoring.md:208-222; api/v1alpha1/pipeline_types.go:605-635; pkg/reconciler/pipeline/metrics.go:311-415
+STEP-TIMINGS-01	live	core	covered	pipeline	PromotionStep status.steps records startedAt, completedAt and durationMs for every step	docs/guides/monitoring.md:226-232
 STEP-SM-01	live	core	covered	step	PromotionStep state machine Pending -> Promoting -> (WaitingForMerge) -> HealthChecking -> Verified	api/v1alpha1/promotionstep_types.go:106-110; docs/concepts.md:189
 STEP-AUTO-01	live	core	covered	step	approval: auto clones, commits and pushes straight to the base branch; no PR	docs/pipeline-reference.md:120; docs/pr-evidence.md:150-152
 STEP-BASEBRANCH-01	live	core	covered	step	a Pipeline that omits spec.git.branch gets main from the CRD default; a pr-review step opens its PR into main and reaches Verified once it is merged	docs/pipeline-reference.md:16; docs/pipeline-reference.md:89; docs/changelog.md:151; api/v1alpha1/pipeline_types.go:83-87; pkg/reconciler/promotionstep/base_branch.go:16-21; pkg/reconciler/promotionstep/reconciler.go:693; pkg/steps/steps/open_pr.go:101
@@ -305,7 +305,7 @@ CLI-POLICY-TEST-01	live	core	covered	cli	policy test evaluates an expression loc
 CLI-HISTORY-01	live	core	covered	cli	history <pipeline> --env --limit	cmd/kardinal/cmd/history.go:37
 CLI-LOGS-01	live	core	covered	cli	logs <pipeline> --env --bundle [-f] follows until a terminal state	cmd/kardinal/cmd/logs.go:42; docs/reference/cli/kardinal-logs.md:16
 CLI-DIFF-01	live	core	covered	cli	diff <bundleA> <bundleB>	cmd/kardinal/cmd/diff.go:32
-CLI-METRICS-01	live	core	covered	cli	metrics --pipeline [--env] [--days] prints DORA metrics	cmd/kardinal/cmd/metrics.go:28; docs/guides/monitoring.md:169-233
+CLI-METRICS-01	live	core	covered	cli	metrics --pipeline [--env] [--days] prints DORA metrics	cmd/kardinal/cmd/metrics.go:28; docs/guides/monitoring.md:169-235
 CLI-AUDIT-01	live	core	covered	cli	audit summary --pipeline --since	cmd/kardinal/cmd/audit.go:48
 CLI-REFRESH-01	live	core	covered	cli	refresh forces a re-reconcile via annotation	cmd/kardinal/cmd/refresh_dashboard.go:24
 CLI-DASHBOARD-01	live	core	covered	cli	dashboard [--address] [--no-open] opens the UI	cmd/kardinal/cmd/refresh_dashboard.go:81
@@ -386,8 +386,8 @@ CHART-GRAPH-01	live	chart	covered	chart	graph.serviceAccountName, kroNamespace, 
 CHART-NETPOL-01	live	chart	covered	chart	networkPolicy allows metrics/UI/webhook ingress and API/SCM egress only	chart/kardinal-promoter/values.yaml:254-269; docs/guides/security.md:399-417
 CHART-CLOCK-01	live	chart	covered	chart	scheduleClock creates kardinal-clock	chart/kardinal-promoter/values.yaml:271-277
 CHART-DEMO-01	live	chart	covered	chart	demo values	chart/kardinal-promoter/values.yaml:294-327
-CHART-MON-01	live	flux	covered	chart	serviceMonitor and prometheusRule are picked up by Prometheus Operator: the controller target is up and the alerts are loaded	chart/kardinal-promoter/values.yaml:329-354; docs/guides/monitoring.md:22-42; docs/guides/monitoring.md:234-267
-CHART-MON-02	live	flux	covered	chart	grafanaDashboard is imported by Grafana's dashboard sidecar, and its panels query the default Prometheus datasource and show data	chart/kardinal-promoter/values.yaml:356-378; chart/kardinal-promoter/templates/grafana-dashboard.yaml; chart/kardinal-promoter/dashboards/kardinal-promoter-dashboard.json:825-839; docs/guides/monitoring.md:312-359
+CHART-MON-01	live	flux	covered	chart	serviceMonitor and prometheusRule are picked up by Prometheus Operator: the controller target is up and the alerts are loaded	chart/kardinal-promoter/values.yaml:329-354; docs/guides/monitoring.md:22-42; docs/guides/monitoring.md:236-269
+CHART-MON-02	live	flux	covered	chart	grafanaDashboard is imported by Grafana's dashboard sidecar, and its panels query the default Prometheus datasource and show data	chart/kardinal-promoter/values.yaml:356-378; chart/kardinal-promoter/templates/grafana-dashboard.yaml; chart/kardinal-promoter/dashboards/kardinal-promoter-dashboard.json:825-839; docs/guides/monitoring.md:314-361
 CHART-SCHEMA-01	live	chart	covered	chart	values schema rejects removed keys (controller.shard, v0.8.1 krocodile block) with a clear error	chart/kardinal-promoter/values.schema.json:6; chart/kardinal-promoter/values.schema.json:93; docs/changelog.md:170; docs/installation.md:487
 CHART-INTEGJOBS-01	deprecated	chart	covered	chart	rbac.integrationTestJobs has no effect	chart/kardinal-promoter/values.yaml:216-219; docs/changelog.md:209; docs/installation.md:486
 CHART-VAP-01	deprecated	chart	covered	chart	validatingAdmissionPolicy.enabled has no effect	chart/kardinal-promoter/values.yaml:248-252; docs/changelog.md:209; docs/installation.md:485

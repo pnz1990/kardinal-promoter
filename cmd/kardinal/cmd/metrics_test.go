@@ -120,3 +120,16 @@ func TestRenderFromCRD_Stability(t *testing.T) {
 		})
 	}
 }
+
+// TestRenderFromCRD_NothingVerified: when every deployment failed, the
+// lead-time and staleness rows read "-" instead of 0.
+func TestRenderFromCRD_NothingVerified(t *testing.T) {
+	var buf bytes.Buffer
+	dm := v1alpha1.PipelineDeploymentMetrics{Deployments: 2, FailedDeployments: 2, ChangeFailureRateMillis: 1000}
+	require.NoError(t, renderFromCRD(&buf, "demo", "prod", &dm, time.Now()))
+	out := buf.String()
+	for _, row := range []string{"p50_commit_to_prod", "p90_commit_to_prod", "stale_prod_days"} {
+		assert.Equal(t, "-", metricValue(out, row), row)
+	}
+	assert.Equal(t, "100.0%", metricValue(out, "change_failure_rate"))
+}
