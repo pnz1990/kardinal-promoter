@@ -190,7 +190,7 @@ func main() {
 	flag.StringVar(&webhookSecret, "webhook-secret", os.Getenv("KARDINAL_WEBHOOK_SECRET"),
 		"Secret for validating incoming SCM webhooks (an HMAC key or a shared token, depending on the provider; see docs/scm-providers.md).")
 	flag.StringVar(&scmProviderType, "scm-provider", os.Getenv("KARDINAL_SCM_PROVIDER"),
-		"SCM provider type for the whole controller: \"github\" (default), \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\" or \"azuredevops\".")
+		"SCM provider type for the whole controller: \"github\" (default), \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\", \"azuredevops\" or \"bitbucket-datacenter\" (needs --scm-api-url).")
 	flag.StringVar(&scmAPIURL, "scm-api-url", os.Getenv("KARDINAL_SCM_API_URL"),
 		"SCM API base URL override (e.g. for GitHub Enterprise or self-managed GitLab).")
 	var scmAllowedRepositories string
@@ -200,6 +200,19 @@ func main() {
 			"refused, and a Pipeline that would need the token for one is Ready=False/RepositoryNotAllowed "+
 			"and its steps fail. Empty allows every repository.")
 
+	// GitHub App authentication (static mode). With --scm-token-secret-name
+	// the watched Secret may hold the App credentials instead (githubAppID,
+	// githubAppInstallationID, githubAppPrivateKey), and the flags are not
+	// needed.
+	var githubAppID, githubAppInstallationID int64
+	var githubAppPrivateKeyFile string
+	flag.Int64Var(&githubAppID, "github-app-id", envInt64("GITHUB_APP_ID"),
+		"GitHub App ID: authenticate as a GitHub App installation instead of with --github-token. "+
+			"Needs --github-app-installation-id and --github-app-private-key-file. Also readable from GITHUB_APP_ID.")
+	flag.Int64Var(&githubAppInstallationID, "github-app-installation-id", envInt64("GITHUB_APP_INSTALLATION_ID"),
+		"GitHub App installation ID. Also readable from GITHUB_APP_INSTALLATION_ID.")
+	flag.StringVar(&githubAppPrivateKeyFile, "github-app-private-key-file", os.Getenv("GITHUB_APP_PRIVATE_KEY_FILE"),
+		"File holding the GitHub App private key (PEM). Also readable from GITHUB_APP_PRIVATE_KEY_FILE.")
 	gatesCommitStatus := true
 	flag.BoolVar(&gatesCommitStatus, "gates-commit-status", true,
 		"Post the gate results of a waiting pr-review step as a commit status on its PR (Helm "+
@@ -530,7 +543,9 @@ func main() {
 		logger.Info().Str("shard", namespaceShard).Msg("sharded: reconciling the namespaces of this shard only")
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), buildManagerOptions(managerConfig{
+	restConfig := ctrl.GetConfigOrDie()
+	mgr, err := ctrl.NewManager(restConfig, buildManagerOptions(managerConfig{
+		restConfig:             restConfig,
 		metricsBindAddress:     metricsBindAddress,
 		healthProbeBindAddress: healthProbeBindAddress,
 		leaderElect:            leaderElect,
@@ -561,8 +576,26 @@ func main() {
 	// SCM provider — scm.NewProvider dispatches on the --scm-provider flag.
 	// When --scm-token-secret-name is set, a DynamicProvider is used so that
 	// credential rotation (Secret update) reloads the provider without a restart.
-	var scmProvider scm.SCMProvider
-	if scmTokenSecretName != "" {
+	// Static GitHub App credentials (--github-app-*); the dynamic provider
+	// reads a token from --scm-token-secret-name instead.
+	var githubApp *scm.GitHubAppCredentials
+	if scmTokenSecretName == "" {
+		cred, credErr := staticSCMCredentials(githubToken, githubAppID, githubAppInstallationID, githubAppPrivateKeyFile)
+		if credErr != nil {
+			logger.Fatal().Err(credErr).Msg("invalid GitHub App flags")
+		}
+		githubApp = cred.GitHubApp
+	}
+	scmProvider, dynProvider, canonicalRepos, err := buildControllerSCM(controllerSCMConfig{
+		providerType: scmProviderType, token: githubToken, apiURL: scmAPIURL, webhookSecret: webhookSecret,
+		dynamic: scmTokenSecretName != "", allowed: allowedRepos, githubApp: githubApp,
+		onGitHubApp: func(p scm.SCMProvider) { go checkGitHubAppAtStartup(context.Background(), logger, p) },
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up the SCM provider")
+	}
+	allowedRepos = canonicalRepos
+	if dynProvider != nil {
 		// Resolve the namespace: flag > env > controller namespace.
 		if scmTokenSecretNamespace == "" {
 			scmTokenSecretNamespace = os.Getenv("POD_NAMESPACE")
@@ -573,12 +606,6 @@ func main() {
 		if scmTokenSecretKey == "" {
 			scmTokenSecretKey = "token"
 		}
-
-		dynProvider, dynErr := scm.NewDynamicProvider(scmProviderType, githubToken, scmAPIURL, webhookSecret)
-		if dynErr != nil {
-			logger.Fatal().Err(dynErr).Msg("unable to create dynamic SCM provider")
-		}
-		scmProvider = dynProvider
 
 		// Register the SecretWatcher as a manager.Runnable — starts after caches are synced.
 		watcher := scm.NewSecretWatcher(
@@ -596,21 +623,6 @@ func main() {
 			Str("secret", scmTokenSecretNamespace+"/"+scmTokenSecretName).
 			Str("key", scmTokenSecretKey).
 			Msg("SCM credential watcher enabled — token will be reloaded on Secret change")
-	} else {
-		var provErr error
-		scmProvider, provErr = scm.NewProvider(scmProviderType, githubToken, scmAPIURL, webhookSecret)
-		if provErr != nil {
-			logger.Fatal().Err(provErr).Msg("unable to create SCM provider")
-		}
-	}
-	// Every SCM call the shared token makes is checked against
-	// --scm-allowed-repositories, whichever code path makes it (#1332).
-	if allowedRepos != nil {
-		scmHost, hostErr := scm.WebHost(scmProviderType, scmAPIURL)
-		if hostErr != nil {
-			logger.Fatal().Err(hostErr).Msg("--scm-allowed-repositories needs the SCM host")
-		}
-		scmProvider = allowedRepos.Guard(scmProvider, scmHost)
 	}
 	gitClient := scm.NewGoGitClient()
 
@@ -747,7 +759,10 @@ func main() {
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		RemoteClusters:      &healthpkg.RemoteClusters{},
 		Recorder:            eventRecorder,
-		SCMWaitTimeout:      scmWaitTimeout,
+		// A git Secret with GitHub App credentials gets its installation
+		// tokens from the controller's GitHub API.
+		GitHubAppTokens: &scm.AppTokenCache{APIURL: githubAPIURL(scmProviderType, scmAPIURL)},
+		SCMWaitTimeout:  scmWaitTimeout,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}

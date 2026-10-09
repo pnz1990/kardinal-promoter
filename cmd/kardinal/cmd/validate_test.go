@@ -168,6 +168,20 @@ func TestValidate_Documents(t *testing.T) {
 				"      argocd:\n        application: web-prod\n",
 			wantOut: []string{"✓ f.yaml is valid"},
 		},
+		// #1453: a pr template that does not parse is refused, as the
+		// Pipeline's Ready=False/ValidationFailed condition does.
+		{
+			name:    "pr template that does not parse",
+			content: validPipelineDoc + "    approval: pr-review\n    pr:\n      titleTemplate: \"{{ .Bundle.Name \"\n",
+			wantOut: []string{"✗ f.yaml is invalid:", `environment "prod": pr.titleTemplate:`},
+			wantErr: true,
+		},
+		{
+			name: "pr templates that render",
+			content: validPipelineDoc + "    approval: pr-review\n    pr:\n      titleTemplate: \"deploy {{ .Bundle.Version }}\"\n" +
+				"      assignees: [\"{{ .Bundle.Author }}\"]\n",
+			wantOut: []string{"✓ f.yaml is valid"},
+		},
 		// E2E-R24: the API server rejects these, so validate must too.
 		{
 			name:    "spec.policyGates",
@@ -298,6 +312,14 @@ func TestValidate_AllowedRepositories(t *testing.T) {
 		{name: "flag not set", content: validPipelineDoc, wantOut: "✓ f.yaml is valid"},
 		{name: "bad pattern", args: []string{"--allowed-repositories", "github.com/[x"}, content: validPipelineDoc,
 			wantOut: "", wantErr: true},
+		// --scm-provider bitbucket-datacenter matches KEY/slug, as the
+		// controller does; without it the /scm/ path is not KEY/slug.
+		{name: "data center", args: []string{"--allowed-repositories", "git.example.com/PLAT/*", "--scm-provider", "bitbucket-datacenter"},
+			content: strings.ReplaceAll(validPipelineDoc, "https://github.com/o/r", "https://git.example.com/scm/PLAT/web.git"), wantOut: "✓ f.yaml is valid"},
+		{name: "data center other project", args: []string{"--allowed-repositories", "git.example.com/OTHER/*", "--scm-provider", "bitbucket-datacenter"},
+			content: strings.ReplaceAll(validPipelineDoc, "https://github.com/o/r", "https://git.example.com/scm/PLAT/web.git"), wantOut: "is not in the controller's allowed repositories", wantErr: true},
+		{name: "data center without --scm-provider", args: []string{"--allowed-repositories", "git.example.com/PLAT/*"},
+			content: strings.ReplaceAll(validPipelineDoc, "https://github.com/o/r", "https://git.example.com/scm/PLAT/web.git"), wantOut: "is not in the controller's allowed repositories", wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

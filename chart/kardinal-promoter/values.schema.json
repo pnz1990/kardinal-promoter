@@ -88,6 +88,24 @@
     "leaderElect": {
       "type": "boolean"
     },
+    "leaderElectionFlowSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "matchingPrecedence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "priorityLevel": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "controller": {
       "type": "object",
       "additionalProperties": false,
@@ -241,6 +259,16 @@
             },
             "key": {
               "type": "string"
+            }
+          }
+        },
+        "app": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "The github.secretRef Secret holds githubAppID, githubAppInstallationID and githubAppPrivateKey instead of a token."
             }
           }
         }
