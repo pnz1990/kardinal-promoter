@@ -18,7 +18,9 @@ type BundleSpec struct {
 	// Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
 	// An image bundle does NOT supersede a config bundle and vice versa.
 	// This allows image and config promotions to coexist independently in the same pipeline.
-	// +kubebuilder:validation:Enum=image;config;mixed
+	// A chart Bundle promotes a Helm chart version (spec.chart) with
+	// update.strategy helm.
+	// +kubebuilder:validation:Enum=image;config;mixed;chart
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`
 
@@ -35,6 +37,11 @@ type BundleSpec struct {
 	// +optional
 	ConfigRef *ConfigRef `json:"configRef,omitempty"`
 
+	// Chart is the Helm chart version a "chart" Bundle promotes. The
+	// helm-set-image step writes chart.version at update.helm.chartVersionPath.
+	// +optional
+	Chart *ChartRef `json:"chart,omitempty"`
+
 	// Provenance carries build metadata for audit and rollback.
 	// +optional
 	Provenance *BundleProvenance `json:"provenance,omitempty"`
@@ -50,11 +57,14 @@ type ImageRef struct {
 	// +kubebuilder:validation:MinLength=1
 	Repository string `json:"repository"`
 
-	// Tag is the image tag.
+	// Tag is the image tag, in the OCI distribution grammar: up to 128
+	// characters of [A-Za-z0-9_.-], not starting with "." or "-".
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`
 	// +optional
 	Tag string `json:"tag,omitempty"`
 
-	// Digest is the image digest (sha256:...).
+	// Digest is the image digest (sha256:...), in the OCI digest grammar.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$`
 	// +optional
 	Digest string `json:"digest,omitempty"`
 }
@@ -65,14 +75,44 @@ type ConfigRef struct {
 	// +optional
 	GitRepo string `json:"gitRepo,omitempty"`
 
-	// CommitSHA is the exact commit SHA for this config snapshot.
+	// CommitSHA is the exact commit SHA for this config snapshot: 4 to 64
+	// hex characters.
+	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F]{4,64}$`
 	// +optional
 	CommitSHA string `json:"commitSHA,omitempty"`
 }
 
+// ChartRef identifies a Helm chart version.
+type ChartRef struct {
+	// RepoURL is the chart repository (https://... or oci://...).
+	// +optional
+	RepoURL string `json:"repoURL,omitempty"`
+
+	// Name is the chart name: letters, digits, ".", "_" and "-", starting
+	// and ending with a letter or digit. It is joined into the chart's
+	// index and OCI paths, so a "/", "]" or other path character would
+	// point the version lookup elsewhere.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=250
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`
+	Name string `json:"name"`
+
+	// Version is the chart version.
+	// +kubebuilder:validation:MinLength=1
+	Version string `json:"version"`
+
+	// Digest is the chart package digest (index.yaml digest, or the OCI
+	// manifest digest).
+	// +optional
+	Digest string `json:"digest,omitempty"`
+}
+
 // BundleProvenance carries build origin metadata.
 type BundleProvenance struct {
-	// CommitSHA is the application source commit that produced this Bundle.
+	// CommitSHA is the application source commit that produced this Bundle:
+	// 4 to 64 hex characters, or an image digest (a Subscription records
+	// the digest it found).
+	// +kubebuilder:validation:Pattern=`^([0-9a-fA-F]{4,64}|[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,})$`
 	// +optional
 	CommitSHA string `json:"commitSHA,omitempty"`
 
@@ -107,6 +147,7 @@ type BundleIntent struct {
 }
 
 // BundleStatus defines the observed state of a Bundle.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.retiredAt) || has(self.retiredAt)",message="status.retiredAt cannot be removed: a retired Bundle stays retired"
 type BundleStatus struct {
 	// Phase is the bundle promotion phase.
 	// +kubebuilder:validation:Enum=Available;Promoting;Verified;Failed;Superseded
@@ -149,6 +190,64 @@ type BundleStatus struct {
 	// otherwise.
 	// +optional
 	PolicyGatesHash string `json:"policyGatesHash,omitempty"`
+
+	// RetiredSteps records the PromotionSteps of a Bundle whose Graph was
+	// retired (condition GraphRetired=True). Deleting a finished Bundle's
+	// Graph deletes the PromotionSteps, PolicyGate instances and PRStatuses
+	// it created, so kro does not hold every finished Graph in memory
+	// (#1492). Rollback, promote, history, metrics, the CLI and the UI read
+	// these records where they read the steps of a Bundle that is still
+	// promoting.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=1000
+	RetiredSteps []RetiredStep `json:"retiredSteps,omitempty"`
+
+	// RetiredAt is when the Bundle's Graph was retired: set in the same
+	// write as RetiredSteps, and never cleared. A Bundle with RetiredAt is
+	// final; the GraphRetired condition only shows the retirement's progress.
+	// +optional
+	RetiredAt *metav1.Time `json:"retiredAt,omitempty"`
+}
+
+// RetiredStep is what a retired Bundle keeps of one of its PromotionSteps.
+type RetiredStep struct {
+	// Name is the PromotionStep's name.
+	Name string `json:"name"`
+
+	// Environment is the PromotionStep's spec.environment.
+	Environment string `json:"environment"`
+
+	// StepType is the PromotionStep's spec.stepType.
+	// +optional
+	StepType string `json:"stepType,omitempty"`
+
+	// State is the PromotionStep's final status.state.
+	// +optional
+	State string `json:"state,omitempty"`
+
+	// Message is the PromotionStep's final status.message, cut to 512 bytes.
+	// +optional
+	// +kubebuilder:validation:MaxLength=512
+	Message string `json:"message,omitempty"`
+
+	// PRURL is the PromotionStep's status.prURL.
+	// +optional
+	// +kubebuilder:validation:MaxLength=2048
+	PRURL string `json:"prURL,omitempty"`
+
+	// CreatedAt is the PromotionStep's creationTimestamp.
+	CreatedAt metav1.Time `json:"createdAt"`
+
+	// VerifiedAt is when the PromotionStep became Verified.
+	// +optional
+	VerifiedAt *metav1.Time `json:"verifiedAt,omitempty"`
+
+	// HealthCheckExpiry is the PromotionStep's status.healthCheckExpiry: set
+	// once its change merged and the health check started.
+	// +optional
+	HealthCheckExpiry *metav1.Time `json:"healthCheckExpiry,omitempty"`
 }
 
 // BundleMetrics holds deployment efficiency metrics for a single Bundle (K-05).

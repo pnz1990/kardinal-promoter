@@ -948,6 +948,7 @@ var kroReservedNodeIDs = map[string]bool{
 // is valid; and the Graph name and labels are valid label values.
 func assertKroValid(t *testing.T, g *graph.Graph) {
 	t.Helper()
+	assertRefsResolve(t, g)
 	assert.Empty(t, validation.IsValidLabelValue(g.Name), "Graph name %q", g.Name)
 	for k, v := range g.Labels {
 		assert.Empty(t, validation.IsValidLabelValue(v), "Graph label %s=%q", k, v)

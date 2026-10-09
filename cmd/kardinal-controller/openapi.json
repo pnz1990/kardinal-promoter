@@ -206,7 +206,7 @@
             "type": "string"
           },
           "commitSHA": {
-            "description": "CommitSHA is the application source commit that produced this Bundle.",
+            "description": "CommitSHA is the application source commit that produced this Bundle: 4 to 64 hex characters, or an image digest (a Subscription records the digest it found).",
             "type": "string"
           },
           "rollbackOf": {
@@ -222,6 +222,33 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "ChartRef": {
+        "additionalProperties": false,
+        "description": "ChartRef identifies a Helm chart version.",
+        "properties": {
+          "digest": {
+            "description": "Digest is the chart package digest (index.yaml digest, or the OCI manifest digest).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name is the chart name: letters, digits, \".\", \"_\" and \"-\", starting and ending with a letter or digit. It is joined into the chart's index and OCI paths, so a \"/\", \"]\" or other path character would point the version lookup elsewhere.",
+            "type": "string"
+          },
+          "repoURL": {
+            "description": "RepoURL is the chart repository (https://... or oci://...).",
+            "type": "string"
+          },
+          "version": {
+            "description": "Version is the chart version.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
         "type": "object"
       },
       "Condition": {
@@ -255,7 +282,7 @@
         "description": "ConfigRef identifies a GitOps repository commit.",
         "properties": {
           "commitSHA": {
-            "description": "CommitSHA is the exact commit SHA for this config snapshot.",
+            "description": "CommitSHA is the exact commit SHA for this config snapshot: 4 to 64 hex characters.",
             "type": "string"
           },
           "gitRepo": {
@@ -269,6 +296,14 @@
         "additionalProperties": false,
         "description": "bundleCreateRequest is the JSON body accepted by POST /api/v1/bundles.",
         "properties": {
+          "chart": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChartRef"
+              }
+            ],
+            "description": "Chart is the Helm chart version of a \"chart\" bundle."
+          },
           "configRef": {
             "allOf": [
               {
@@ -312,7 +347,7 @@
             "description": "Provenance carries build metadata."
           },
           "type": {
-            "description": "Type is the bundle type: \"image\", \"config\", or \"mixed\".",
+            "description": "Type is the bundle type: \"image\", \"config\", \"mixed\" or \"chart\".",
             "type": "string"
           }
         },
@@ -362,6 +397,16 @@
           "name": {
             "description": "Name is the environment name (e.g. \"test\", \"uat\", \"prod\").",
             "type": "string"
+          },
+          "upstreams": {
+            "description": "Upstreams are the environments this one waits for as the controller resolves them (dependsOn, waves, or the previous entry), sorted; empty for a root. Absent when the Pipeline's ordering is invalid.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -546,7 +591,7 @@
         "description": "ImageRef identifies a container image by repository, tag, and/or digest.",
         "properties": {
           "digest": {
-            "description": "Digest is the image digest (sha256:...).",
+            "description": "Digest is the image digest (sha256:...), in the OCI digest grammar.",
             "type": "string"
           },
           "repository": {
@@ -554,7 +599,7 @@
             "type": "string"
           },
           "tag": {
-            "description": "Tag is the image tag.",
+            "description": "Tag is the image tag, in the OCI distribution grammar: up to 128 characters of [A-Za-z0-9_.-], not starting with \".\" or \"-\".",
             "type": "string"
           }
         },
@@ -584,10 +629,24 @@
           "activeBundleName": {
             "type": "string"
           },
+          "activeBundleVersion": {
+            "description": "ActiveBundleVersion is what the active Bundle ships (scm.BundleVersion: the image tag, or \"config <sha>\"), for the fleet board.",
+            "type": "string"
+          },
           "blockerCount": {
             "description": "Operations table columns: derived from active Bundle + steps + gates. BlockerCount is the number of the active bundle's PolicyGates with ready=false in environments it has reached (every upstream Verified) but not started; see blockingGateCount.",
             "format": "int32",
             "type": "integer"
+          },
+          "deployed": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/uiDeployed"
+            },
+            "description": "Deployed is, per environment, the Bundle whose change the environment runs: the newest PromotionStep there that landed its change (lifecycle.DeployedBundle, as kardinal status reports). Environments that never received one are absent.",
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "deploymentMetrics": {
             "allOf": [
@@ -1171,6 +1230,40 @@
           "mergedPREvents",
           "status",
           "webhookConfigured"
+        ],
+        "type": "object"
+      },
+      "uiDeployed": {
+        "additionalProperties": false,
+        "description": "uiDeployed is what one environment runs, for the fleet board.",
+        "properties": {
+          "bundle": {
+            "type": "string"
+          },
+          "configFrom": {
+            "description": "ConfigFrom, under an image Bundle, is the last Bundle that deployed a config commit there, and ConfigVersion that commit (\"config abc1234\"). ImagesFrom, under a config Bundle, is the last Bundle that deployed images, and ImagesVersion their tags. Image and config Bundles do not supersede each other, so the environment runs both, as kardinal status reports.",
+            "type": "string"
+          },
+          "configVersion": {
+            "type": "string"
+          },
+          "imagesFrom": {
+            "type": "string"
+          },
+          "imagesVersion": {
+            "type": "string"
+          },
+          "verifiedAt": {
+            "description": "VerifiedAt is the RFC 3339 time its step in the environment was Verified (the latest region); empty while it is still health checking.",
+            "type": "string"
+          },
+          "version": {
+            "description": "Version is scm.BundleVersion of that Bundle; empty when the Bundle is gone.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle"
         ],
         "type": "object"
       }

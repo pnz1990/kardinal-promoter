@@ -76,6 +76,10 @@ args=(
   # evaluation in status.lastEvaluatedAt. TestChart_GateStatusHeartbeat covers
   # the default (10m).
   --set controller.gateStatusHeartbeat=0s
+  # Keep the Graphs and PromotionSteps of Superseded Bundles for the length of
+  # a run: tests read them. TestGraph_RetiresFinishedBundles sets a short delay
+  # on its Pipeline (kardinal.io/graph-retire-after).
+  --set graph.retire.superseded=1h
   --set github.secretRef.name=git-token
   --set "scm.provider=${KARDINAL_E2E_SCM_PROVIDER:?git server component must run first}"
   --set "scm.apiURL=${KARDINAL_E2E_SCM_API:-}"

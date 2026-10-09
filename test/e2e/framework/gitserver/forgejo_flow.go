@@ -62,15 +62,26 @@ func Commits(ctx context.Context, s Server, r Repo, branch string, limit int) ([
 			} `json:"author"`
 		} `json:"commit"`
 	}
-	path := fmt.Sprintf("%s/commits?sha=%s&limit=%d&stat=false&verification=false&files=false",
-		f.repoPath(r), url.QueryEscape(branch), limit)
-	if err := f.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
-		return nil, err
+	// The server returns at most 50 commits a page.
+	const pageSize = 50
+	var out []Commit
+	for page := 1; len(out) < limit; page++ {
+		raw = raw[:0]
+		path := fmt.Sprintf("%s/commits?sha=%s&limit=%d&page=%d&stat=false&verification=false&files=false",
+			f.repoPath(r), url.QueryEscape(branch), min(pageSize, limit), page)
+		if err := f.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+			return nil, err
+		}
+		for _, c := range raw {
+			out = append(out, Commit{SHA: c.SHA, Message: c.Commit.Message,
+				AuthorName: c.Commit.Author.Name, AuthorEmail: c.Commit.Author.Email})
+		}
+		if len(raw) < min(pageSize, limit) {
+			break
+		}
 	}
-	out := make([]Commit, 0, len(raw))
-	for _, c := range raw {
-		out = append(out, Commit{SHA: c.SHA, Message: c.Commit.Message,
-			AuthorName: c.Commit.Author.Name, AuthorEmail: c.Commit.Author.Email})
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }
@@ -147,4 +158,55 @@ func PushRemote(s Server, r Repo) (remote, token string, err error) {
 		return "", "", err
 	}
 	return fmt.Sprintf("%s/%s/%s.git", f.api, r.Owner, r.Name), f.token, nil
+}
+
+// AddDeployKey adds a read-only deploy key (an authorized_keys line) to r,
+// so a client with the private key can fetch r over SSH.
+func AddDeployKey(ctx context.Context, s Server, r Repo, title, publicKey string) error {
+	f, err := asForgejo(s)
+	if err != nil {
+		return err
+	}
+	return f.do(ctx, http.MethodPost, f.repoPath(r)+"/keys",
+		map[string]interface{}{"title": title, "key": publicKey, "read_only": true}, nil)
+}
+
+// RawURL is the URL Forgejo serves r's files at on branch, in the cluster:
+// <RawURL>/<path> is the file's content. Basic auth with a token reads a
+// private repo's files.
+func RawURL(s Server, r Repo, branch string) (string, error) {
+	f, err := asForgejo(s)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s/%s/%s/raw/branch/%s", f.cloneBase, r.Owner, r.Name, branch), nil
+}
+
+// UpdateFile replaces the content of an existing file on r.Branch in one
+// commit and returns its SHA.
+func UpdateFile(ctx context.Context, s Server, r Repo, path, message string, content []byte) (string, error) {
+	f, err := asForgejo(s)
+	if err != nil {
+		return "", err
+	}
+	var cur struct {
+		SHA string `json:"sha"`
+	}
+	if err := f.do(ctx, http.MethodGet, f.repoPath(r)+"/contents/"+path+"?ref="+url.QueryEscape(r.Branch), nil, &cur); err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	var out struct {
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := f.do(ctx, http.MethodPut, f.repoPath(r)+"/contents/"+path, map[string]interface{}{
+		"branch": r.Branch, "message": message, "sha": cur.SHA, "content": base64.StdEncoding.EncodeToString(content),
+	}, &out); err != nil {
+		return "", fmt.Errorf("update %s: %w", path, err)
+	}
+	if out.Commit.SHA == "" {
+		return "", fmt.Errorf("update %s: no commit SHA in the response", path)
+	}
+	return out.Commit.SHA, nil
 }

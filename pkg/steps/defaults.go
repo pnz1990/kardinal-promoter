@@ -16,8 +16,8 @@ package steps
 // DefaultSequenceForBundle returns the default step sequence based on approval mode,
 // bundle type, update strategy, and layout.
 //
-// bundleType: "image" | "config" | "mixed" | "" (defaults to image behaviour)
-// updateStrategy: "kustomize" | "helm" | "argocd" | "" (defaults to kustomize)
+// bundleType: "image" | "config" | "mixed" | "chart" | "" (defaults to image behaviour)
+// updateStrategy: "kustomize" | "helm" | "argocd" | "yaml" | "" (defaults to kustomize)
 // layout: "directory" | "branch" | "" (defaults to directory)
 //
 // Routing rules:
@@ -26,6 +26,9 @@ package steps
 //     the config commit is merged first, so the Bundle's images win over the image pins it carries
 //   - image + argocd → argocd-set-image, health-check (no git operations)
 //   - image + helm  → git-clone, helm-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
+//   - chart (helm)  → the same: helm-set-image writes the chart version (graph.Build
+//     refuses a chart Bundle in an environment whose strategy is not helm)
+//   - image + yaml  → git-clone, yaml-update, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 //   - layout:branch → git-clone, kustomize-set-image, kustomize-build, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 //     (layout: branch is not implemented yet: git-clone fails the promotion, C05-steps-10)
 //   - image + kustomize (default) → git-clone, kustomize-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
@@ -45,8 +48,10 @@ func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, layout s
 	switch {
 	case bundleType == "config":
 		// No image to update.
-	case updateStrategy == "helm":
+	case updateStrategy == "helm" || bundleType == "chart":
 		updateSteps = append(updateSteps, "helm-set-image")
+	case updateStrategy == "yaml":
+		updateSteps = append(updateSteps, "yaml-update")
 	case layout == "branch":
 		// Rendered manifests: run kustomize-set-image then kustomize-build.
 		// kustomize-build renders the overlay to a file; git-commit picks it up.

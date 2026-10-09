@@ -17,8 +17,11 @@ package source_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/cgi"
@@ -35,6 +38,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
@@ -217,14 +221,6 @@ func TestGitWatcher_ShortReads(t *testing.T) {
 	assert.Equal(t, sha, r.Digest)
 }
 
-// TestGitWatcher_PathGlobIsRejected verifies that the unimplemented pathGlob is
-// reported instead of being ignored (C05-steps-27).
-func TestGitWatcher_PathGlobIsRejected(t *testing.T) {
-	_, err := source.NewGitWatcher("https://example.invalid/repo", "main", "config/**").Watch(context.Background(), "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "path filtering is not implemented")
-}
-
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
@@ -339,6 +335,10 @@ type testRegistry struct {
 	pageSize       int
 	auth           string // "", "bearer" or "basic"
 	noDigestHeader bool
+	// user and pass, when set, are the only login the registry accepts: for
+	// basic on every request, for bearer at the token endpoint (Basic auth,
+	// or pass as an OAuth2 refresh token).
+	user, pass string
 
 	mu            sync.Mutex
 	tokenRequests int
@@ -356,6 +356,19 @@ func (reg *testRegistry) start(t *testing.T) *httptest.Server {
 			reg.tokenQueries = append(reg.tokenQueries, r.URL.RawQuery)
 			reg.tokenAuthz = append(reg.tokenAuthz, r.Header.Get("Authorization"))
 			reg.mu.Unlock()
+			if reg.user != "" || reg.pass != "" {
+				u, p, ok := r.BasicAuth()
+				refresh := r.Method == http.MethodPost && r.FormValue("grant_type") == "refresh_token" &&
+					r.FormValue("refresh_token") == reg.pass
+				if !refresh && (!ok || u != reg.user || p != reg.pass) {
+					http.Error(w, "bad login", http.StatusUnauthorized)
+					return
+				}
+				if refresh {
+					fmt.Fprintf(w, `{"access_token":%q}`, testToken) //nolint:errcheck
+					return
+				}
+			}
 			fmt.Fprintf(w, `{"token":%q}`, testToken) //nolint:errcheck
 			return
 		}
@@ -368,9 +381,11 @@ func (reg *testRegistry) start(t *testing.T) *httptest.Server {
 				return
 			}
 		case "basic":
-			w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
+			if u, p, ok := r.BasicAuth(); !ok || reg.user == "" || u != reg.user || p != reg.pass {
+				w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 		prefix := "/v2/" + reg.name + "/"
 		if !strings.HasPrefix(r.URL.Path, prefix) {
@@ -630,7 +645,7 @@ func TestOCIWatcher_CredentialsRequiredIsReported(t *testing.T) {
 	_, err := source.NewOCIWatcher(srv.URL+"/myorg/myapp", "").WithHTTPClient(srv.Client()).Watch(context.Background(), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requires credentials")
-	assert.Contains(t, err.Error(), "public repositories")
+	assert.Contains(t, err.Error(), "set secretRef")
 }
 
 // TestOCIWatcher_FollowsPagination verifies that tags after the first
@@ -734,5 +749,32 @@ func TestWatchers_RefuseLoopback(t *testing.T) {
 	require.ErrorIs(t, err, egress.ErrBlockedAddress)
 	assert.Contains(t, err.Error(), "is loopback")
 
+	for _, repo := range []string{srv.URL, "oci+http://" + strings.TrimPrefix(srv.URL, "http://")} {
+		_, err = source.NewHelmWatcher(repo, "podinfo").Watch(context.Background(), "")
+		require.ErrorIs(t, err, egress.ErrBlockedAddress, repo)
+		assert.Contains(t, err.Error(), "is loopback")
+	}
+
+	// SSH: the address is checked before the dial.
+	ssh := source.NewGitWatcher("ssh://git@"+strings.TrimPrefix(srv.URL, "http://")+"/repo.git", "main", "")
+	key := testSSHKey(t)
+	signer, err := gossh.ParsePrivateKey(key)
+	require.NoError(t, err)
+	ssh.Credentials = source.Credentials{SSHPrivateKey: key,
+		SSHKnownHosts: []byte("x " + string(gossh.MarshalAuthorizedKey(signer.PublicKey())))}
+	_, err = ssh.Watch(context.Background(), "")
+	require.ErrorIs(t, err, egress.ErrBlockedAddress)
+	assert.Contains(t, err.Error(), "is loopback")
+
 	assert.Zero(t, hits.Load(), "no request reaches the loopback server")
+}
+
+// testSSHKey returns an unencrypted OpenSSH private key.
+func testSSHKey(t *testing.T) []byte {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	block, err := gossh.MarshalPrivateKey(priv, "")
+	require.NoError(t, err)
+	return pem.EncodeToMemory(block)
 }
