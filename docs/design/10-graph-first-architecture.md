@@ -156,7 +156,7 @@ writes its result to PolicyGate status (pattern 1). See Known Exceptions below.
 
 ## Upstream Contribution Policy
 
-The Graph gaps that force kardinal workarounds are G1-G8 in
+The Graph gaps that force kardinal workarounds are G1-G14 in
 [16-graph-capability-ledger.md](16-graph-capability-ledger.md), each with its proposed
 upstream contribution. The two items below are from the original design; the
 `recheckAfter` one was resolved without kro.

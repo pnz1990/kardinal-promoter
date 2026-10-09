@@ -92,6 +92,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "accessLog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allRequests": {"type": "boolean"},
+            "sourceIP": {"type": "boolean"},
+            "trustedProxies": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": "^[0-9a-fA-F.:/]+$"}}
+          }
+        },
         "tlsCertFile": {
           "type": "string"
         },
@@ -322,6 +331,10 @@
         },
         "aggregateToKro": {
           "type": "boolean"
+        },
+        "compactAbove": {
+          "type": ["integer", "null"],
+          "minimum": 0
         },
         "readerNamespaces": {
           "type": "array",

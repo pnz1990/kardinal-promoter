@@ -28,7 +28,7 @@ func TestValidateNewBundle(t *testing.T) {
 		{name: "pipeline not an object name", spec: v1alpha1.BundleSpec{Pipeline: "My_App", Images: images},
 			wantErr: "pipeline must be a valid Kubernetes object name"},
 		{name: "unknown type", spec: v1alpha1.BundleSpec{Pipeline: "app", Type: "helm", Images: images},
-			wantErr: `type must be one of image, config, mixed (got "helm")`},
+			wantErr: `type must be one of image, config, mixed, chart (got "helm")`},
 		{name: "empty type defaults to image", spec: v1alpha1.BundleSpec{Pipeline: "app", Images: images}, wantType: "image"},
 		{name: "image without images", spec: v1alpha1.BundleSpec{Pipeline: "app", Type: "image"},
 			wantErr: `type "image" requires at least one entry in images`},

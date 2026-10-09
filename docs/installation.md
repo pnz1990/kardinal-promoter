@@ -146,6 +146,8 @@ kardinal version
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
+| `controller.accessLog.allRequests` | `false` | `--access-log-all-requests`: log every UI API and Bundle API request, not only logins, refusals and writes ([API access log](guides/security.md#api-access-log)) |
+| `controller.accessLog.sourceIP` / `.trustedProxies` | `false` / `[]` | `--access-log-source-ip`, `--access-log-trusted-proxies`: add the client address; believe `X-Forwarded-For` only from these proxy CIDRs |
 | `ui.corsAllowedOrigins` | `[]` | `--cors-allowed-origins` |
 | `ui.allowedHosts` | `[]` | Extra host names for `--ui-allowed-hosts` (Ingress host, node IP). localhost and the Service DNS names are always allowed |
 | `service.uiPort` | `8082` | UI and UI API port (container and Service) |
@@ -154,6 +156,7 @@ kardinal version
 | `metricsBindAddress` / `healthProbeBindAddress` | `:8080` / `:8081` | `--metrics-bind-address` / `--health-probe-bind-address` (the container ports) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
+| `graph.compactAbove` | `null` | Environment count above which a Bundle's Graph uses the compact shape (`--graph-compact-above`; default `100`; `0` makes every Graph compact). See [Large Pipelines](pipeline-reference.md#large-pipelines) |
 | `controller.gateStatusHeartbeat` | `""` | Longest a PolicyGate's status goes unwritten while its result does not change (`--gate-status-heartbeat`; default `10m`; `0s` writes on every evaluation). See [Policy gates](policy-gates.md#re-evaluation) |
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
@@ -301,6 +304,13 @@ Graph and its namespace then never finish deleting. After you downgrade, remove 
 from every step that holds it with the command under [Uninstall](#uninstall). The older
 controller does not close the PR of a deleted step, so close by hand the PRs of the steps you
 delete after the downgrade.
+
+A controller older than this release does not know the compact Graph shape (Pipelines with more
+than 100 environments, or the `kardinal.io/graph-shape: compact` annotation; see
+[Large Pipelines](pipeline-reference.md#large-pipelines)). When it rebuilds the Graph of a
+Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it builds the node
+shape, and kro then deletes every PromotionStep the compact Graph created: the Bundle promotes
+again from its first environment. Before you downgrade, let the Bundles of those Pipelines finish, or delete them.
 
 ### Upgrading from v0.8.1
 

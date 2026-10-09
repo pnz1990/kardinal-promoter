@@ -403,3 +403,68 @@ func TestNotify_Rollback(t *testing.T) {
 		assert.Equal(t, want, p)
 	}
 }
+
+// TestNotify_SignedCloudEvents checks spec.signing and format: cloudevents
+// against the receiver, which verifies the signature the way the docs tell a
+// receiver to (HMAC-SHA256 of "<timestamp>.<body>", timestamp within 5
+// minutes) and validates the CloudEvents 1.0 structured event. A hook signed
+// with another key gets 401 from the receiver, so the delivery fails and is
+// retried.
+//
+// Covers NOTIF-SIGNING-01, NOTIF-CLOUDEVENTS-01.
+func TestNotify_SignedCloudEvents(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	rcv := framework.NewReceiver(t)
+	a := holdApp(t, e, e.Namespace(t), pipelineName)
+	const key = "e2e-signing-key-0123456789abcdef0123"
+	signing := func(name, value string) {
+		require.NoError(t, e.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: a.ns,
+			Labels: map[string]string{"kardinal.io/referenceable": "true"}}, StringData: map[string]string{"signing-key": value}}))
+	}
+	signing("signing", key)
+	signing("wrong-signing", "another-key-that-the-receiver-does-not-know")
+	good, bad := a.ns+"-signed", a.ns+"-badsig"
+	rcv.VerifySignatures(t, good, key)
+	rcv.VerifySignatures(t, bad, key)
+	ev := []v1alpha1.NotificationHookEventType{v1alpha1.NotificationEventPolicyGateBlocked}
+	createHook(t, e, a.ns, "signed", v1alpha1.NotificationHookSpec{
+		Webhook: v1alpha1.NotificationWebhookConfig{URL: rcv.URL(good, "cloudevents/hook")}, Events: ev,
+		Format:  v1alpha1.NotificationFormatCloudEvents,
+		Signing: &v1alpha1.NotificationSigning{SecretRef: v1alpha1.NotificationSigningSecretRef{Name: "signing"}},
+	})
+	createHook(t, e, a.ns, "badsig", v1alpha1.NotificationHookSpec{
+		Webhook: v1alpha1.NotificationWebhookConfig{URL: rcv.URL(bad, "hook")}, Events: ev,
+		Signing: &v1alpha1.NotificationSigning{SecretRef: v1alpha1.NotificationSigningSecretRef{Name: "wrong-signing"}},
+	})
+
+	bundle, gate := holdBundle(t, a, pipelineName)
+	evKey := gateKey(gate)
+
+	got := waitRecords(t, rcv, good, 1, time.Minute)[0]
+	assert.Equal(t, "valid", got.Signature, "the receiver verified the signature")
+	assert.Equal(t, http.StatusOK, got.Status, "a valid CloudEvent: %s", got.Body)
+	assert.Equal(t, "application/cloudevents+json; charset=utf-8", got.Header("Content-Type"))
+	var ce struct {
+		SpecVersion, ID, Source, Type, Subject, Time, DataContentType string
+		Data                                                          struct{ Event, Pipeline, Bundle, Environment string }
+	}
+	require.NoError(t, json.Unmarshal([]byte(got.Body), &ce), got.Body)
+	assert.Equal(t, "1.0", ce.SpecVersion)
+	assert.Equal(t, evKey, ce.ID)
+	assert.Equal(t, "io.kardinal.policygate.blocked", ce.Type)
+	assert.Equal(t, "/apis/kardinal.io/v1alpha1/namespaces/"+a.ns+"/pipelines/"+pipelineName, ce.Source)
+	assert.Equal(t, bundle+"/test", ce.Subject)
+	assert.Equal(t, "PolicyGate.Blocked", ce.Data.Event)
+	assert.Equal(t, bundle, ce.Data.Bundle)
+	h := waitHook(t, e, a.ns, "signed", "the delivery recorded", func(s v1alpha1.NotificationHookStatus) bool { return s.LastEventKey == evKey })
+	assert.Empty(t, h.Status.FailureMessage)
+
+	rejected := waitRecords(t, rcv, bad, 1, time.Minute)[0]
+	assert.Equal(t, http.StatusUnauthorized, rejected.Status)
+	assert.Equal(t, "X-Kardinal-Signature does not match", rejected.Signature)
+	hb := waitHook(t, e, a.ns, "badsig", "the refused delivery", func(s v1alpha1.NotificationHookStatus) bool { return s.FailedAttempts >= 1 })
+	assert.Contains(t, hb.Status.FailureMessage, "webhook returned HTTP 401")
+	assert.NotContains(t, hb.Status.FailureMessage, "another-key")
+}
