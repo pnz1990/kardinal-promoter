@@ -56,6 +56,14 @@ rules exist for. A new client call needs a row there and a rule here.
     - hookruns
     - imageverifications
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# ScmProviders: read (the translator, reconcilers and the webhook endpoint)
+# and their Ready condition written; the controller never creates them.
+- apiGroups: ["kardinal.io"]
+  resources: ["scmproviders"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["kardinal.io"]
+  resources: ["scmproviders/status"]
+  verbs: ["get", "update", "patch"]
 - apiGroups: ["kardinal.io"]
   resources:
     - pipelines/status
@@ -165,6 +173,14 @@ rules exist for. A new client call needs a row there and a rule here.
   verbs: ["get", "list", "watch"]
 - apiGroups: ["kardinal.io"]
   resources: ["changewindows/status"]
+  verbs: ["get", "update", "patch"]
+# ClusterScmProviders, read like ScmProviders and their Ready condition
+# written.
+- apiGroups: ["kardinal.io"]
+  resources: ["clusterscmproviders"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["kardinal.io"]
+  resources: ["clusterscmproviders/status"]
   verbs: ["get", "update", "patch"]
 # The Graph cleanup reconciler reads the namespace of a deleted Graph, the
 # Bundle reconciler the namespace of a Bundle before translating it, and the
