@@ -114,10 +114,10 @@ dependency. Each test ends with the invariants checker
 (`test/e2e/framework/invariants`), which any live test can run.
 
 ```bash
-KIND_CLUSTER=kp-scale KARDINAL_E2E_BUILD=host KARDINAL_E2E_NODE_MEMORY=24g make e2e-up SUITE=scale
+KIND_CLUSTER=kp-scale KARDINAL_E2E_BUILD=host KARDINAL_E2E_NODE_MEMORY=24g KARDINAL_E2E_KRO_MEMORY=8Gi make e2e-up SUITE=scale
 KIND_CLUSTER=kp-scale make test-e2e-live SUITE=scale                          # the ci profile
-KIND_CLUSTER=kp-scale KARDINAL_E2E_SCALE_PROFILE=full make test-e2e-live SUITE=scale
-KIND_CLUSTER=kp-scale KARDINAL_E2E_SCALE_PROFILE=soak RUN='^TestScale_LoadSustained$' make test-e2e-live SUITE=scale
+KIND_CLUSTER=kp-scale KARDINAL_E2E_SCALE_PROFILE=full TIMEOUT=4h make test-e2e-live SUITE=scale
+KIND_CLUSTER=kp-scale KARDINAL_E2E_SCALE_PROFILE=soak TIMEOUT=3h RUN='^TestScale_LoadSustained$' make test-e2e-live SUITE=scale
 ```
 
 The controller is built with `-race` (`KARDINAL_E2E_RACE=1`, the suite's
@@ -133,8 +133,8 @@ environments: the invariants read what kardinal wrote to git.
 
 | Profile | Sizes | Time |
 |---|---|---|
-| `ci` (default) | 50-stage chain, 4 waves x 5 regions, 30 Pipelines, a burst of 150 Bundles, 0.5 Bundles/s for 2 min, chaos for 3 min | about 40 min on a 4-CPU runner |
-| `full` | 100-stage chain, canary and 9 waves x 11 regions (100 environments, the cap), fan-in of 50, 200 Pipelines, a burst of 1,000 Bundles over 100 Pipelines, 2 Bundles/s for 10 min, chaos for 10 min | about 2 h; give the kind node 24 GB (`KARDINAL_E2E_NODE_MEMORY`) |
+| `ci` (default) | 50-stage chain, 4 waves x 5 regions, 30 Pipelines, a burst of 150 Bundles, 0.5 Bundles/s for 2 min, chaos for 3 min | 25 min on a 32-core host |
+| `full` | 100-stage chain, canary and 9 waves x 11 regions (100 environments, the cap), fan-in of 50, 200 Pipelines, a burst of 1,000 Bundles over 100 Pipelines, 2 Bundles/s for 10 min, chaos for 10 min | 2 h on a 32-core host; give the kind node 24 GB (`KARDINAL_E2E_NODE_MEMORY=24g`) and kro 8 GB (`KARDINAL_E2E_KRO_MEMORY=8Gi`) until #1492 is fixed |
 | `soak` | `full`, with 5 Bundles/s for 30 min over 100 Pipelines | `full` plus 40 min |
 
 Any size can be set on its own: `KARDINAL_E2E_SCALE_<FIELD>`, the field name
