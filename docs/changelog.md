@@ -19,6 +19,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **CI and demo hygiene** (#1354) — the license-header checks (`hack/check-license-headers.sh`) fail when a file cannot be read instead of passing silently; every `uses:` in the workflows must stay pinned to a commit SHA (`test/hack`); docs-lint pins PyYAML; `demo/scripts/setup.sh` installs the Argo CD, Flux, Argo Rollouts and Flagger versions the live e2e suites test (`hack/e2e/versions.env`) instead of older defaults of its own, and pins the Flagger chart; a test mock shared by 100 goroutines is locked
 - **Gate audit records within one second** — a PolicyGate that flipped twice in one second lost a record (two flips to the same outcome got the same AuditEvent name), and `kardinal get auditevents` listed same-second records in name order instead of the order they happened. Gate AuditEvent names now carry milliseconds, every AuditEvent carries a `kardinal.io/created-at` annotation with nanoseconds, and `kardinal get auditevents` orders by it within a second (#1484)
 
 ### Docs
