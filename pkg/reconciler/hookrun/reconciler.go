@@ -25,7 +25,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -93,10 +92,11 @@ type Reconciler struct {
 	// refused: it would run next to the controller's credentials.
 	ControllerNamespace string
 
-	// AllowPrivileged allows hook Pods to use privileged containers,
-	// privilege escalation, added capabilities, host namespaces, hostPath
-	// volumes and nodeName (--hook-allow-privileged). Off by default.
-	AllowPrivileged bool
+	// PodSecurityLevel is the Pod Security Standard a hook Pod must meet
+	// (--hook-pod-security-level): baseline (the default, ""), restricted,
+	// or privileged (no Pod checks). Below privileged, nodeName and hostPort
+	// are refused as well.
+	PodSecurityLevel string
 
 	// NowFn returns the current time; nil means time.Now.
 	NowFn func() time.Time
@@ -127,7 +127,7 @@ var hookRunsResource = v1alpha1.GroupVersion.WithResource("hookruns").GroupResou
 //	being deleted            → hold (finalizer) while the Job runs and the deadline is ahead
 //	no status.specHash       → Skipped when spec.stepAdvanced; else validate,
 //	                           add the finalizer, record specHash, startedAt, deadline
-//	another run of the slot  → wait while a removed sibling's Job still runs
+//	another run of the slot  → wait while a sibling's Job runs, or an older sibling is Pending
 //	no Job, no status.jobUID → create the Job (or adopt the one this HookRun owns)
 //	Job gone or replaced     → Failed (never re-run)
 //	Job Complete / Failed    → Succeeded / Failed
@@ -148,6 +148,15 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	if !hr.DeletionTimestamp.IsZero() {
 		return r.deleting(ctx, log, &hr)
+	}
+	if why, err := r.notGenuine(ctx, &hr); err != nil || why != "" {
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		// Not created by a Bundle's Graph: never run its Job. The mirror
+		// ignores it too, so it is no result for any step.
+		log.Warn().Str("reason", why).Msg("ignoring HookRun not created by its Bundle's Graph")
+		return ctrl.Result{}, nil
 	}
 	base := hr.DeepCopy()
 	hash := specHash(&hr.Spec)
@@ -237,8 +246,30 @@ func (r *Reconciler) deleting(ctx context.Context, log zerolog.Logger, hr *v1alp
 	return ctrl.Result{}, nil
 }
 
+// notGenuine returns why hr was not created by its Bundle's Graph, or "":
+// kro stamps kro.run/node-id on what it applies, and the Graph renders
+// kardinal.io/bundle-uid as the UID of the Bundle it belongs to.
+func (r *Reconciler) notGenuine(ctx context.Context, hr *v1alpha1.HookRun) (string, error) {
+	if _, ok := hr.Labels[graph.LabelKRONodeID]; !ok {
+		return "no " + graph.LabelKRONodeID + " label: not applied by kro", nil
+	}
+	var b v1alpha1.Bundle
+	err := r.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: hr.Spec.BundleName}, &b)
+	if apierrors.IsNotFound(err) {
+		return fmt.Sprintf("Bundle %s does not exist", hr.Spec.BundleName), nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get bundle %s: %w", hr.Spec.BundleName, err)
+	}
+	if got := hr.Labels[graph.LabelBundleUID]; got == "" || got != string(b.UID) {
+		return fmt.Sprintf("%s %q is not the UID of Bundle %s", graph.LabelBundleUID, got, b.Name), nil
+	}
+	return "", nil
+}
+
 // siblingRunning reports whether another HookRun of the same Bundle,
-// environment and phase has a Job running. Hooks of one phase run one after
+// environment and phase has a Job running, or is an older one about to
+// create its Job. Hooks of one phase run one after
 // another, so this happens only when the hook list changed mid-flight (a
 // hook renamed or reordered): kro creates the new HookRun in the same walk
 // that prunes the old one, before the old one is even deleted. The new run
@@ -254,14 +285,37 @@ func (r *Reconciler) siblingRunning(ctx context.Context, hr *v1alpha1.HookRun) (
 		return false, "", fmt.Errorf("list hookruns: %w", err)
 	}
 	for _, other := range list.Items {
-		if other.Name == hr.Name {
+		if other.Name == hr.Name || other.Labels[graph.LabelBundleUID] != hr.Labels[graph.LabelBundleUID] {
 			continue
 		}
-		if other.Status.Phase == v1alpha1.HookRunRunning && !r.expired(&other) {
+		if _, ok := other.Labels[graph.LabelKRONodeID]; !ok {
+			continue // not applied by kro: it never runs, so it does not hold this one
+		}
+		if r.expired(&other) {
+			continue
+		}
+		switch other.Status.Phase {
+		case v1alpha1.HookRunRunning:
 			return true, other.Name, nil
+		case "", v1alpha1.HookRunPending:
+			// A sibling that has not created its Job yet: the older one goes
+			// first, so two Pending runs never both start (and never wait for
+			// each other). A deleted one without a Job never starts.
+			if other.DeletionTimestamp.IsZero() && older(&other, hr) {
+				return true, other.Name, nil
+			}
 		}
 	}
 	return false, "", nil
+}
+
+// older reports whether a was created before b (by name when in the same
+// second).
+func older(a, b *v1alpha1.HookRun) bool {
+	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
+		return a.CreationTimestamp.Before(&b.CreationTimestamp)
+	}
+	return a.Name < b.Name
 }
 
 // start validates the HookRun, adds the finalizer and records when it
@@ -474,10 +528,8 @@ func (r *Reconciler) jobFor(hr *v1alpha1.HookRun, timeout time.Duration) (*batch
 	if spec.ManualSelector != nil && *spec.ManualSelector || spec.Selector != nil {
 		return nil, fmt.Errorf("the hook's Job may not set selector or manualSelector")
 	}
-	if !r.AllowPrivileged {
-		if why := privileged(pod); why != "" {
-			return nil, fmt.Errorf("the hook's Pod %s; the controller refuses it unless --hook-allow-privileged is set", why)
-		}
+	if why := podSecurityViolation(r.PodSecurityLevel, spec.Template.Labels, pod); why != "" {
+		return nil, fmt.Errorf("the hook's Pod %s; the controller's --hook-pod-security-level refuses it", why)
 	}
 	if pod.RestartPolicy == "" {
 		pod.RestartPolicy = corev1.RestartPolicyNever
@@ -496,55 +548,6 @@ func (r *Reconciler) jobFor(hr *v1alpha1.HookRun, timeout time.Duration) (*batch
 	}
 	spec.Template.Labels[LabelHookRun] = hr.Name
 	return spec, nil
-}
-
-// privileged returns what makes pod privileged, or "".
-func privileged(pod *corev1.PodSpec) string {
-	var why []string
-	if pod.HostNetwork {
-		why = append(why, "uses hostNetwork")
-	}
-	if pod.HostPID {
-		why = append(why, "uses hostPID")
-	}
-	if pod.HostIPC {
-		why = append(why, "uses hostIPC")
-	}
-	// hostUsers: false (a user namespace) is the safe setting; true is the
-	// default and is not refused.
-	if pod.NodeName != "" {
-		why = append(why, "sets nodeName")
-	}
-	for _, v := range pod.Volumes {
-		if v.HostPath != nil {
-			why = append(why, "mounts hostPath volume "+v.Name)
-		}
-	}
-	containers := append(append([]corev1.Container(nil), pod.InitContainers...), pod.Containers...)
-	for _, c := range pod.EphemeralContainers {
-		containers = append(containers, corev1.Container{Name: c.Name, SecurityContext: c.SecurityContext})
-	}
-	for _, c := range containers {
-		for _, p := range c.Ports {
-			if p.HostPort != 0 {
-				why = append(why, "uses a hostPort in container "+c.Name)
-			}
-		}
-		sc := c.SecurityContext
-		if sc == nil {
-			continue
-		}
-		if sc.Privileged != nil && *sc.Privileged {
-			why = append(why, "runs container "+c.Name+" privileged")
-		}
-		if sc.AllowPrivilegeEscalation != nil && *sc.AllowPrivilegeEscalation {
-			why = append(why, "allows privilege escalation in container "+c.Name)
-		}
-		if sc.Capabilities != nil && len(sc.Capabilities.Add) > 0 {
-			why = append(why, "adds capabilities to container "+c.Name)
-		}
-	}
-	return strings.Join(why, ", ")
 }
 
 // markSpecChange keeps ConditionSpecChangedAfterStart current.

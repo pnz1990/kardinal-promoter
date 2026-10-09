@@ -600,6 +600,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		)
 		hooks, err := buildHookNodes(hookNodesInput{
 			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
+			bundleUID:   string(bundle.UID),
 			env:         findEnvSpec(pipeline, envName),
 			stepK8sName: promotionStepK8sName(pipelineName, bundle.Name, envName),
 			conds:       stepConds(upstreams, envGates, gates.readyCond),

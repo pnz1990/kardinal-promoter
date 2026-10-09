@@ -268,11 +268,11 @@ func main() {
 			"namespace). A hook whose Pod names another ServiceAccount fails without running. The Graph "+
 			"ServiceAccount (--graph-service-account) is never allowed. See docs/hooks.md.")
 
-	var hookAllowPrivileged bool
-	flag.BoolVar(&hookAllowPrivileged, "hook-allow-privileged", false,
-		"Allow hook Job Pods to use privileged containers, privilege escalation, added capabilities, "+
-			"host namespaces and ports, hostPath volumes and nodeName. Off by default: a hook that sets one fails. "+
-			"See docs/hooks.md.")
+	var hookPodSecurityLevel string
+	flag.StringVar(&hookPodSecurityLevel, "hook-pod-security-level", hookrunrecon.DefaultPodSecurityLevel,
+		"Pod Security Standard a hook Job Pod must meet: baseline (default), restricted or privileged "+
+			"(no Pod checks). Below privileged, nodeName and hostPort are refused too. A hook that breaks it fails "+
+			"without running. See docs/hooks.md.")
 
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
@@ -462,6 +462,9 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}
 
+	if _, err := hookrunrecon.ParsePodSecurityLevel(hookPodSecurityLevel); err != nil {
+		logger.Fatal().Err(err).Msg("invalid --hook-pod-security-level")
+	}
 	hookControllerNS := os.Getenv("POD_NAMESPACE")
 	if hookControllerNS == "" {
 		hookControllerNS = "kardinal-system"
@@ -472,7 +475,7 @@ func main() {
 		AllowedServiceAccounts: splitCSV(hookServiceAccounts),
 		GraphServiceAccount:    graphIdentity.ServiceAccountName,
 		ControllerNamespace:    hookControllerNS,
-		AllowPrivileged:        hookAllowPrivileged,
+		PodSecurityLevel:       hookPodSecurityLevel,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up HookRunReconciler")
 	}

@@ -58,6 +58,13 @@ const (
 const (
 	LabelHookPhase = "kardinal.io/hook-phase"
 	LabelHook      = "kardinal.io/hook"
+	// LabelBundleUID is the UID of the Bundle whose Graph created the
+	// object. The HookRun reconciler and the mirror ignore a HookRun whose
+	// value is not the Bundle's UID (a HookRun someone created by hand).
+	LabelBundleUID = "kardinal.io/bundle-uid"
+	// LabelKRONodeID is the label kro's Graph executor stamps on every object
+	// it applies (kro.run/node-id, pkg/metadata/labels.go).
+	LabelKRONodeID = "kro.run/node-id"
 )
 
 // DefaultHookTimeout is the timeout of a hook that sets none.
@@ -178,6 +185,7 @@ func DecodeHookJob(raw []byte) (*batchv1.JobSpec, error) {
 // hookNodesInput is what buildHookNodes needs about one environment.
 type hookNodesInput struct {
 	pipeline, bundle, namespace string
+	bundleUID                   string
 	env                         kardinalv1alpha1.EnvironmentSpec
 	stepK8sName                 string
 	// conds are the conditions under which the environment's step may be
@@ -200,6 +208,7 @@ func buildHookNodes(in hookNodesInput) (hookNodes, error) {
 	if len(in.env.Hooks) == 0 {
 		return out, nil
 	}
+	var names []string
 	for _, phase := range []string{kardinalv1alpha1.HookPhasePre, kardinalv1alpha1.HookPhasePost} {
 		prevID := ""
 		for i, h := range hooksOf(in.env, phase) {
@@ -216,6 +225,7 @@ func buildHookNodes(in hookNodesInput) (hookNodes, error) {
 			if prevID != "" {
 				conds = append(conds, fmt.Sprintf(`%s.?status.?phase.orValue("") == "Succeeded"`, prevID))
 			}
+			names = append(names, name)
 			node, err := buildHookRunNode(id, name, in, phase, h, conds)
 			if err != nil {
 				return hookNodes{}, err
@@ -233,7 +243,7 @@ func buildHookNodes(in hookNodesInput) (hookNodes, error) {
 			prevID = id
 		}
 	}
-	out.nodes = append(out.nodes, buildLiveMirrorNode(in.env.Name, in.stepK8sName))
+	out.nodes = append(out.nodes, buildLiveMirrorNode(in.env.Name, in.stepK8sName, in.bundleUID, names))
 	return out, nil
 }
 
@@ -274,6 +284,7 @@ func buildHookRunNode(id, name string, in hookNodesInput, phase string,
 					"kardinal.io/environment": in.env.Name,
 					LabelHookPhase:            phase,
 					LabelHook:                 h.Name,
+					LabelBundleUID:            in.bundleUID,
 				},
 			},
 			"spec": spec,
@@ -283,11 +294,14 @@ func buildHookRunNode(id, name string, in hookNodesInput, phase string,
 }
 
 // buildLiveMirrorNode builds the patch node that writes env's HookRun results
-// onto its PromotionStep (spec.live.hooks).
-func buildLiveMirrorNode(env, stepK8sName string) GraphNode {
-	hooks := fmt.Sprintf(`${%s.filter(h, h.spec.environment == %s).map(h, {"name": h.metadata.name, "hook": h.spec.hook, `+
+// onto its PromotionStep (spec.live.hooks). It copies only the HookRuns this
+// build rendered (names, a literal list rebuilt at every translation) that
+// kro applied (kro.run/node-id) for this Bundle (kardinal.io/bundle-uid), so
+// a HookRun created by hand with a matching selector label is not a result.
+func buildLiveMirrorNode(env, stepK8sName, bundleUID string, names []string) GraphNode {
+	hooks := fmt.Sprintf(`${%s.filter(h, %s).map(h, {"name": h.metadata.name, "hook": h.spec.hook, `+
 		`"phase": h.spec.phase, "result": h.?status.?phase.orValue("Pending"), "message": h.?status.?message.orValue("")})}`,
-		refHookRunsNodeID, strconv.Quote(env))
+		refHookRunsNodeID, genuineFilter("h", names, bundleUID)+" && h.spec.environment == "+strconv.Quote(env))
 	return GraphNode{
 		ID: liveNodeID(env),
 		Patch: map[string]interface{}{
@@ -297,6 +311,19 @@ func buildLiveMirrorNode(env, stepK8sName string) GraphNode {
 			"spec":       map[string]interface{}{"live": map[string]interface{}{"hooks": hooks}},
 		},
 	}
+}
+
+// genuineFilter is the CEL condition on v (an object read through a
+// selector ref) that it is one of names, applied by kro, for the Bundle
+// whose UID is bundleUID.
+func genuineFilter(v string, names []string, bundleUID string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = strconv.Quote(n)
+	}
+	return fmt.Sprintf(`%[1]s.metadata.name in [%[2]s] && %[1]s.metadata.?labels[?%[3]q].hasValue() && `+
+		`%[1]s.metadata.?labels[?%[4]q].orValue("") == %[5]s`,
+		v, strings.Join(quoted, ", "), LabelKRONodeID, LabelBundleUID, strconv.Quote(bundleUID))
 }
 
 // hookRefNodes returns the selector refs that read the Bundle's HookRuns and

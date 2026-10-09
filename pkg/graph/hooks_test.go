@@ -97,7 +97,7 @@ func TestBuilder_HookNodes(t *testing.T) {
 	md := hr["metadata"].(map[string]interface{})
 	assert.Equal(t, map[string]interface{}{
 		"kardinal.io/pipeline": "app", "kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod",
-		"kardinal.io/hook-phase": "pre", "kardinal.io/hook": "migrate",
+		"kardinal.io/hook-phase": "pre", "kardinal.io/hook": "migrate", "kardinal.io/bundle-uid": "",
 	}, md["labels"])
 	hrSpec := hr["spec"].(map[string]interface{})
 	assert.Equal(t, "pre", hrSpec["phase"])
@@ -244,28 +244,41 @@ func TestBuilder_HookGating(t *testing.T) {
 // TestBuilder_HookMirror evaluates the mirror expression: the environment's
 // HookRuns, with "Pending" for one that has no status yet.
 func TestBuilder_HookMirror(t *testing.T) {
-	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: hookPipeline(), Bundle: makeBundle("app-v1", "app")})
+	b := makeBundle("app-v1", "app")
+	b.UID = "bundle-uid"
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: hookPipeline(), Bundle: b})
 	require.NoError(t, err)
+	tmpl := hookNode(t, res.Graph, "hook0pre0prod0migrate").Template
+	assert.Equal(t, "bundle-uid", tmpl["metadata"].(map[string]interface{})["labels"].(map[string]interface{})[graph.LabelBundleUID])
 	patch := hookNode(t, res.Graph, "live0prod").Patch
 	expr := patch["spec"].(map[string]interface{})["live"].(map[string]interface{})["hooks"].(string)
-	hr := func(name, env, phase string, status map[string]interface{}) map[string]interface{} {
-		o := map[string]interface{}{"metadata": map[string]interface{}{"name": name},
-			"spec": map[string]interface{}{"environment": env, "phase": phase, "hook": "h-" + name}}
+	migrate := graph.HookRunName("app", "app-v1", "prod", "pre", "migrate")
+	smoke := graph.HookRunName("app", "app-v1", "prod", "post", "smoke")
+	hr := func(name, env, phase, hook string, labels map[string]interface{}, status map[string]interface{}) map[string]interface{} {
+		o := map[string]interface{}{"metadata": map[string]interface{}{"name": name, "labels": labels},
+			"spec": map[string]interface{}{"environment": env, "phase": phase, "hook": hook}}
 		if status != nil {
 			o["status"] = status
 		}
 		return o
 	}
+	ok := map[string]interface{}{graph.LabelKRONodeID: "x", graph.LabelBundleUID: "bundle-uid"}
 	out, err := celEval(t, expr, map[string]interface{}{"refHookRuns": []interface{}{
-		hr("a", "prod", "pre", map[string]interface{}{"phase": "Succeeded", "message": "done"}),
-		hr("b", "test", "pre", map[string]interface{}{"phase": "Failed"}),
-		hr("c", "prod", "post", nil),
+		hr(migrate, "prod", "pre", "migrate", ok, map[string]interface{}{"phase": "Succeeded", "message": "done"}),
+		hr(graph.HookRunName("app", "app-v1", "test", "pre", "migrate"), "test", "pre", "migrate", ok, map[string]interface{}{"phase": "Failed"}),
+		hr(smoke, "prod", "post", "smoke", ok, nil),
+		// Forged: a name this Graph did not render, no kro label, another Bundle's UID, no labels.
+		hr("app-app-v1-prod-pre-forged", "prod", "pre", "migrate", ok, map[string]interface{}{"phase": "Succeeded"}),
+		hr(migrate, "prod", "pre", "migrate", map[string]interface{}{graph.LabelBundleUID: "bundle-uid"}, map[string]interface{}{"phase": "Succeeded"}),
+		hr(smoke, "prod", "post", "smoke", map[string]interface{}{graph.LabelKRONodeID: "x", graph.LabelBundleUID: "other"}, map[string]interface{}{"phase": "Succeeded"}),
+		hr(smoke, "prod", "post", "smoke", nil, map[string]interface{}{"phase": "Succeeded"}),
 	}})
 	require.NoError(t, err)
-	b, err := json.Marshal(out)
+	got, err := json.Marshal(out)
 	require.NoError(t, err)
-	assert.JSONEq(t, `[{"name":"a","hook":"h-a","phase":"pre","result":"Succeeded","message":"done"},
-		{"name":"c","hook":"h-c","phase":"post","result":"Pending","message":""}]`, string(b))
+	assert.JSONEq(t, `[{"name":"`+migrate+`","hook":"migrate","phase":"pre","result":"Succeeded","message":"done"},
+		{"name":"`+smoke+`","hook":"smoke","phase":"post","result":"Pending","message":""}]`, string(got),
+		"only the HookRuns this Graph rendered, applied by kro for this Bundle (regression, QA #1493 round 2)")
 }
 
 // TestBuilder_HookJobStringsAreLiteral: a job string containing "${" (a
