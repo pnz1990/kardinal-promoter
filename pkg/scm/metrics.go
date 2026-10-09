@@ -99,8 +99,8 @@ var (
 	// for pushes). Git over ssh is not counted.
 	GitTransferBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "kardinal_git_transfer_bytes_total",
-		Help: "Bytes git sent and received over HTTP(S) by service (fetch, push) and direction (sent, received).",
-	}, []string{"service", "direction"})
+		Help: "Bytes git sent and received over HTTP(S) by git_service (fetch, push) and direction (sent, received).",
+	}, []string{"git_service", "direction"})
 )
 
 func init() {

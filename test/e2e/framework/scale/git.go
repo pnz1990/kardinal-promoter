@@ -43,17 +43,28 @@ func ForcePush(t *testing.T, e *framework.Env, repo gitserver.Repo, sha string) 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	auth := &gogithttp.BasicAuth{Username: "x-access-token", Password: token}
-	r, err := gogit.PlainCloneContext(ctx, t.TempDir(), false, &gogit.CloneOptions{URL: remote, Auth: auth})
-	if err != nil {
-		t.Fatalf("clone %s: %v", repo.Name, err)
+	// The push carries the head the clone saw, and the server refuses it
+	// ("incorrect old value provided") when kardinal pushed in between: clone
+	// again and retry, as a person force-pushing would.
+	var pushErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		r, err := gogit.PlainCloneContext(ctx, t.TempDir(), false, &gogit.CloneOptions{URL: remote, Auth: auth})
+		if err != nil {
+			t.Fatalf("clone %s: %v", repo.Name, err)
+		}
+		local := plumbing.NewBranchReferenceName("rewind")
+		if err := r.Storer.SetReference(plumbing.NewHashReference(local, plumbing.NewHash(sha))); err != nil {
+			t.Fatalf("branch at %s: %v", sha, err)
+		}
+		spec := config.RefSpec(fmt.Sprintf("+%s:refs/heads/%s", local, repo.Branch))
+		pushErr = r.PushContext(ctx, &gogit.PushOptions{Auth: auth, RefSpecs: []config.RefSpec{spec}, Force: true})
+		if pushErr == nil || !strings.Contains(pushErr.Error(), "incorrect old value") {
+			break
+		}
+		t.Logf("force-push %s raced a push (%v); cloning again", repo.Branch, pushErr)
 	}
-	local := plumbing.NewBranchReferenceName("rewind")
-	if err := r.Storer.SetReference(plumbing.NewHashReference(local, plumbing.NewHash(sha))); err != nil {
-		t.Fatalf("branch at %s: %v", sha, err)
-	}
-	spec := config.RefSpec(fmt.Sprintf("+%s:refs/heads/%s", local, repo.Branch))
-	if err := r.PushContext(ctx, &gogit.PushOptions{Auth: auth, RefSpecs: []config.RefSpec{spec}, Force: true}); err != nil {
-		t.Fatalf("force-push %s to %s: %v", repo.Branch, sha, err)
+	if pushErr != nil {
+		t.Fatalf("force-push %s to %s: %v", repo.Branch, sha, pushErr)
 	}
 	t.Logf("force-pushed %s/%s %s back to %s", repo.Owner, repo.Name, repo.Branch, sha)
 }
