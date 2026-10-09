@@ -91,7 +91,9 @@ spec:
             - {name: ${PFX}__database__DB_TYPE, value: sqlite3}
             - {name: ${PFX}__server__ROOT_URL, value: "$INCLUSTER/"}
             - {name: ${PFX}__server__HTTP_PORT, value: "3000"}
-            # The built-in SSH server, for Subscriptions on ssh:// repoURLs.
+            # The built-in SSH server: git over ssh for the SSH tests
+            # (TestForgejo_SSHGit, TestGitea_SSHGit) and Subscriptions on
+            # ssh:// repoURLs.
             - {name: ${PFX}__server__DISABLE_SSH, value: "false"}
             - {name: ${PFX}__server__START_SSH_SERVER, value: "true"}
             - {name: ${PFX}__server__SSH_DOMAIN, value: "$FLAVOR.$NS.svc.cluster.local"}
@@ -206,6 +208,8 @@ env_set KARDINAL_E2E_SCM_API "$INCLUSTER"
 env_set KARDINAL_E2E_GIT_KIND "$FLAVOR"
 env_set KARDINAL_E2E_GIT_API "$BASE"
 env_set KARDINAL_E2E_GIT_CLONE_BASE "$INCLUSTER"
+env_set KARDINAL_E2E_GIT_SSH_BASE "ssh://git@$FLAVOR.$NS.svc.cluster.local:2222"
+env_set KARDINAL_E2E_GIT_SSH_ADDR "$(node_ip):$(nodeport "$NS" "$FLAVOR" ssh)"
 env_set KARDINAL_E2E_GIT_SSH "$FLAVOR.$NS.svc.cluster.local:2222"
 env_set KARDINAL_E2E_GIT_SSH_API "$(node_ip):$(nodeport "$NS" "$FLAVOR" ssh)"
 env_set KARDINAL_E2E_GIT_OWNER "$ORG"

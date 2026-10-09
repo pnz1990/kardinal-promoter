@@ -31,10 +31,16 @@ import (
 )
 
 // GitHubProvider implements SCMProvider against the GitHub REST API.
-// Requests are authenticated with a personal access token.
+// Requests are authenticated with a personal access token, or with GitHub
+// App installation tokens (NewGitHubAppProvider).
 type GitHubProvider struct {
-	// Token is the GitHub personal access token or fine-grained PAT.
+	// Token is the GitHub personal access token or fine-grained PAT. It is
+	// not used when tokens is set.
 	Token string
+
+	// tokens, when set, gives the token of each request: a
+	// GitHubAppTokenSource minting installation tokens.
+	tokens TokenSource
 
 	// APIURL is the GitHub API base URL. Defaults to "https://api.github.com" if empty.
 	APIURL string
@@ -64,6 +70,26 @@ func NewGitHubProvider(token, apiURL, webhookSecret string) *GitHubProvider {
 		circuits:      NewCircuitRegistry(),
 		client:        &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 	}
+}
+
+// NewGitHubAppProvider constructs a GitHubProvider that authenticates every
+// request with an installation token from tokens.
+func NewGitHubAppProvider(tokens TokenSource, apiURL, webhookSecret string) *GitHubProvider {
+	g := NewGitHubProvider("", apiURL, webhookSecret)
+	g.tokens = tokens
+	return g
+}
+
+// requestToken is the token of one request.
+func (g *GitHubProvider) requestToken(ctx context.Context) (string, error) {
+	if g.tokens == nil {
+		return g.Token, nil
+	}
+	tok, err := g.tokens.Token(ctx)
+	if err != nil {
+		return "", fmt.Errorf("github scm: %w", err)
+	}
+	return tok, nil
 }
 
 // OpenPR creates a pull request and returns the PR URL and number.
@@ -306,6 +332,12 @@ func (g *GitHubProvider) AddLabelsToPR(ctx context.Context, repo string, prNumbe
 
 // do executes an authenticated GitHub API request.
 func (g *GitHubProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
+	return g.doURL(ctx, method, g.APIURL+path, path, body, result)
+}
+
+// doURL executes an authenticated GitHub API request to rawURL. path names
+// the request in errors.
+func (g *GitHubProvider) doURL(ctx context.Context, method, rawURL, path string, body, result interface{}) error {
 	// Check circuit breaker before making the call.
 	owner := ownerFromPath(path, "/repos/")
 	call := startSCMCall("github", owner, method, path)
@@ -326,11 +358,15 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 		bodyReader = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, g.APIURL+path, bodyReader)
+	token, err := g.requestToken(ctx)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+g.Token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	if body != nil {
