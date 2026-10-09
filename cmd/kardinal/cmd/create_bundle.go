@@ -242,15 +242,9 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 
 	// The gate instances the Graph would create, per environment.
 	gatesByEnv := map[string][]string{}
-	for _, node := range result.Graph.Spec.Nodes {
-		if node.Template["kind"] != "PolicyGate" {
-			continue
-		}
-		meta, _ := node.Template["metadata"].(map[string]interface{})
-		labels, _ := meta["labels"].(map[string]interface{})
-		env, _ := labels["kardinal.io/environment"].(string)
-		name, _ := labels["kardinal.io/gate-name"].(string)
-		gatesByEnv[env] = append(gatesByEnv[env], name)
+	for _, g := range result.GateInstances {
+		env := g.Labels["kardinal.io/environment"]
+		gatesByEnv[env] = append(gatesByEnv[env], g.Labels["kardinal.io/gate-name"])
 	}
 	// Promotion order is the dependsOn order the Graph follows, not the order
 	// the environments are declared in.

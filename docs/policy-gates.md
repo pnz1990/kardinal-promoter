@@ -508,7 +508,13 @@ PolicyGates are re-evaluated when any of the following occurs:
 6. **PromotionStep created** — When a PromotionStep that has not started is created, the gates in
    its `spec.requiredGates` are re-evaluated at once, so the step can start on a fresh result.
 
-The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph reads only
+The controller writes the gate's status (`ready`, `reason`, `lastEvaluatedAt`) when the result or
+reason changes, when a PromotionStep that has not started waits for a result newer than the stored
+one, when the gate's spec changed, and otherwise at least every 10 minutes (the chart's
+`controller.gateStatusHeartbeat`, `--gate-status-heartbeat`; `0s` writes on every evaluation). A
+re-evaluation that changes nothing writes nothing: every status write makes kro re-check the
+Bundle's whole Graph. So `lastEvaluatedAt` can be up to 10 minutes older than the last evaluation.
+The Graph reads only
 `status.ready`; the PromotionStep also checks that the result is not older than the step before it
 starts (see [When a gate holds a step](#when-a-gate-holds-a-step)). While the controller is down,
 every gate keeps its last result and no step starts. The controller re-evaluates every gate when it

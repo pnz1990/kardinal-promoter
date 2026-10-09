@@ -381,7 +381,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
-| `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is when the gate was last evaluated. |
+| `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is when the gate's result was last written. The controller re-evaluates more often, but writes the status only when the result or reason changes, when a PromotionStep that has not started needs a newer result, after a spec change, and otherwise at least every 10 minutes. |
 | `status.ready` | boolean | yes | Ready indicates whether the gate is currently allowing promotion. The kro Graph gates downstream nodes on status.ready == true. Default: `false`. |
 | `status.reason` | string |  | Reason explains the current ready state in human-readable form. |
 
