@@ -633,9 +633,10 @@ type timelineEntry struct {
 // Shift-clicking the newer one opens the comparison of the two, the one on
 // screen as A: the images, authors and commit SHAs differ, and the other
 // fields print the same on both sides. Close and Esc close it; a link with
-// bundle= opens it.
+// bundle= opens it. The Bundle card names the Bundle type, and the timeline
+// is one Tab stop moved through with the arrow keys.
 //
-// Covers UI-TIMELINE-01.
+// Covers UI-TIMELINE-01, UI-BUNDLETYPE-01, UI-KEYBOARD-01.
 func TestUI_BrowserTimeline(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -679,9 +680,10 @@ func TestUI_BrowserTimeline(t *testing.T) {
 // polling, whose indicator tells how old the data is and why it is old (an
 // API that never answers, one that fails). podinfo has one Verified Bundle;
 // a second pipeline has none, and the spec pauses it through the API while
-// the page is open, which the page shows without a reload.
+// the page is open, which the page shows without a reload. The first Tab
+// stop skips to the main content, and a fleet line is one Tab stop.
 //
-// Covers UI-SHELL-01.
+// Covers UI-SHELL-01, UI-KEYBOARD-01.
 func TestUI_BrowserShell(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)

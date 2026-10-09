@@ -152,6 +152,12 @@ Merged since v0.9.0; they ship with v0.10.0. See the [changelog](changelog.md) "
 - Controller sharding by namespace label (`controller.namespaceShard`) (#1505)
 - API access log for the UI API and the Bundle API (#1537)
 - HMAC-signed NotificationHook requests and a CloudEvents format (#1533)
+- Retiring the Graph of a finished Bundle, its steps kept in status (#1527)
+- SCM API and git metrics with bounded labels, and a Grafana row (#1540)
+- Roll back and hold an environment until `kardinal release-hold` (#1542)
+- UI Bundle type badges and keyboard navigation (#1524)
+- Compact Graphs carry per-promotion MetricChecks (#1543)
+- Parallel reconciles, a per-namespace Graph identity lock and fewer Pipeline requeues (#1554); measured controller memory defaults (#1561)
 
 ## In progress for v0.10.0
 
@@ -160,11 +166,11 @@ Open pull requests; each moves to the list above when it merges.
 - Approval gates with quorum and verified identity (#1510); verified override identity (#1503); reject a Bundle (#1489)
 - Per-environment PR controls: templates, labels, reviewers, auto-merge (#1477); gate results as SCM commit statuses (#1518)
 - GitHub App and ssh git auth (#1491); Bitbucket Data Center (#1501); several SCM providers per controller (#1517)
-- Retiring finished Graphs (#1527)
 - Pre- and post-deploy hooks (#1493); Argo Rollouts analysis (#1502); image signature verification (#1521)
 - Rendered manifests with `layout: branch` (#1515)
-- AuditEvent retention (#1523); SCM API and git metrics (#1540); rollback with an environment hold (#1542)
-- UI: Bundle type badges and keyboard navigation (#1524), approvals and rejected Bundles (#1525)
+- AuditEvent retention (#1523); AuditEvents through a status outbox (#1562)
+- UI: approvals (approve, reject and revoke as the TokenReview user) and rejected Bundles (#1525)
+- Only kardinal writes the objects a promotion Graph makes (#1544)
 - Planned, no PR yet: fleets of targets (#1457)
 
 ## UI — Full Control Plane (shipped v0.5.0–v0.6.0)

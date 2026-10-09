@@ -199,13 +199,12 @@ func allTerminal(steps []v1alpha1.PromotionStep) bool {
 
 // fetchFilteredSteps retrieves and filters PromotionSteps for the given pipeline.
 func fetchFilteredSteps(ctx context.Context, c sigs_client.Client, ns, pipeline, envFilter, bundleFilter string) ([]v1alpha1.PromotionStep, error) {
-	var stepList v1alpha1.PromotionStepList
-	if err := c.List(ctx, &stepList,
-		sigs_client.InNamespace(ns),
-		sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline},
-	); err != nil {
+	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+	items, err := lifecycle.ListPromotionSteps(ctx, c, ns, sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline})
+	if err != nil {
 		return nil, fmt.Errorf("list promotion steps: %w", err)
 	}
+	stepList := v1alpha1.PromotionStepList{Items: items}
 
 	var filtered []v1alpha1.PromotionStep
 	for _, s := range stepList.Items {

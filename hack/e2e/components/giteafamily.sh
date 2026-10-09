@@ -14,6 +14,9 @@
 #     kardinal-system/scm-webhook (key secret)
 # Webhooks go to the controller's ClusterIP, which the webhook allow list
 # must let through; each test registers its own.
+# KARDINAL_E2E_GIT_ROOT_URL, when set, is the URL in-cluster clients use
+# instead of the server's Service (the scale suite's Toxiproxy in front of
+# it): the server's ROOT_URL, so its clone URLs, and the controller's SCM API.
 # Idempotent.
 #
 # Copyright 2026 The kardinal-promoter Authors.
@@ -33,7 +36,7 @@ case "$FLAVOR" in
   *) die "flavor must be forgejo or gitea" ;;
 esac
 NS=$FLAVOR
-INCLUSTER="http://$FLAVOR.$NS.svc.cluster.local:3000"
+INCLUSTER=${KARDINAL_E2E_GIT_ROOT_URL:-"http://$FLAVOR.$NS.svc.cluster.local:3000"}
 ORG=kardinal
 
 load_image "$IMAGE"

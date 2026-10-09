@@ -1278,9 +1278,9 @@ func TestLifecycle_UnboundBundleWithoutPipelineNotDeleted(t *testing.T) {
 func TestLifecycle_WatchMappers(t *testing.T) {
 	t0 := time.Now().UTC()
 	objs := []client.Object{
-		lcBundle("app-new", "image", "", t0),
-		lcBundle("app-avail", "image", "Available", t0),
-		lcBundle("app-prom", "config", "Promoting", t0),
+		lcBundle("app-new", "image", "", t0.Add(-3*time.Minute)),
+		lcBundle("app-avail", "image", "Available", t0.Add(-2*time.Minute)),
+		lcBundle("app-prom", "config", "Promoting", t0.Add(-time.Minute)),
 		lcBundle("app-ver", "image", "Verified", t0),
 		lcBundle("app-fail", "image", "Failed", t0),
 		lcBundle("app-sup", "image", "Superseded", t0),
@@ -1300,7 +1300,15 @@ func TestLifecycle_WatchMappers(t *testing.T) {
 
 	self := lcGet(t, c, "app-ver")
 	assert.ElementsMatch(t, []string{"app-new", "app-avail", "app-prom"}, names(r.WaitingSiblings(context.Background(), &self)),
-		"a phase change re-queues the siblings that are waiting or in flight")
+		"a phase change re-queues the older siblings that are waiting or in flight")
+	oldest := lcBundle("app-old", "image", "Verified", t0.Add(-time.Hour))
+	assert.Empty(t, names(r.WaitingSiblings(context.Background(), oldest)),
+		"an uncapped Pipeline: nothing an older Bundle does changes a newer one")
+	capped := lcPipeline("app")
+	capped.Spec.MaxConcurrentPromotions = 1
+	require.NoError(t, c.Create(context.Background(), capped))
+	assert.ElementsMatch(t, []string{"app-new", "app-avail", "app-prom"}, names(r.WaitingSiblings(context.Background(), oldest)),
+		"under maxConcurrentPromotions every waiting sibling can get the slot")
 	assert.ElementsMatch(t, []string{"app-new", "app-avail", "app-prom", "app-ver", "app-fail", "app-sup"},
 		names(r.PipelineBundles(context.Background(), lcPipeline("app"))),
 		"a Pipeline change re-queues all its Bundles: failed ones retry, finished ones self-delete when the Pipeline is gone")

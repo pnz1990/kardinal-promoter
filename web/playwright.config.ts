@@ -28,6 +28,8 @@
 //   009 — accessibility:   WCAG 2.1 AA axe-core scan (#748)
 //   010 — responsive:      No horizontal overflow at 1280×800 (#799)
 //   011 — rollback-button: Rollback asks first, then calls the API
+//   012 — fleet-board:     Stations show what each environment runs; a station opens its pipeline
+//   013 — keyboard-types:  Skip link, arrow keys on the fleet and the history, type badges, axe in light
 
 import { defineConfig, devices } from '@playwright/test'
 
