@@ -541,8 +541,8 @@ the Pipeline's git and SCM hosts.
 
 NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`,
 `datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`)
-and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`)
-send HTTP requests from the controller to a URL a user wrote into a resource. The controller
+and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`,
+`spec.helm.repoURL`) send HTTP requests from the controller to a URL a user wrote into a resource. The controller
 refuses to connect when the address is one of these:
 
 - loopback (`127.0.0.0/8`, `::1`), which includes the controller's own UI API;
@@ -553,7 +553,9 @@ refuses to connect when the address is one of these:
 - unspecified (`0.0.0.0/8`, `::`) and multicast addresses.
 
 The check runs when the connection is opened, on the resolved address, for every
-connection including redirects. A host name that resolves, or later re-resolves, to one of
+connection including redirects. An SSH `spec.git.repoURL` is checked the same way: the host
+is resolved and every address checked before the connection, which then goes to the address
+that was checked, and the host key is verified against the Secret's `known_hosts`. A host name that resolves, or later re-resolves, to one of
 these addresses is refused too. The failure reads `destination address is not allowed:
 127.0.0.1 is loopback` and appears where that resource reports errors: NotificationHook
 `status.failureMessage`, MetricCheck `status.reason` or Subscription `status.message`.
@@ -592,8 +594,19 @@ The allowlist works at the HTTP level and on any CNI. To enforce egress at the n
 level as well, enable the NetworkPolicy and list the allowed destinations in
 `networkPolicy.extraEgress`.
 
-NotificationHook, MetricCheck and Subscription requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
-`NO_PROXY`.
+NotificationHook, MetricCheck and Subscription HTTP requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY` (SSH connections do not use a proxy).
+
+Subscription credentials (`spec.*.secretRef`) and webhook tokens (`spec.webhook.secretRef`)
+are read only from the Subscription's own namespace, so whoever can create a Subscription
+can use only the Secrets of that namespace. The controller reads them with `get` on every
+poll or delivery; it never lists Secrets. The webhook receiver
+(`/webhook/subscriptions/...`, see [Subscription webhooks](../subscription-webhooks.md))
+answers every authentication failure, and a Subscription that does not exist, with the
+same 401, limits requests per source address and per Subscription, and writes only the
+`kardinal.io/refresh` annotation. Any Secret a Subscription reads (credentials and the
+webhook token) must be labelled `kardinal.io/referenceable: "true"`; an unlabelled Secret
+is not read and nothing is sent.
 Through a proxy, the controller connects to the proxy, so before it sends a request there it
 checks the target itself: an IP address against the list above, and a host name by resolving
 it and checking every address it resolves to. This applies to every request, including

@@ -49,7 +49,7 @@ const (
 type bundleCreateRequest struct {
 	// Pipeline is the target Pipeline name.
 	Pipeline string `json:"pipeline"`
-	// Type is the bundle type: "image", "config", or "mixed".
+	// Type is the bundle type: "image", "config", "mixed" or "chart".
 	Type string `json:"type"`
 	// Namespace is the target namespace. Defaults to the server's default namespace.
 	Namespace string `json:"namespace,omitempty"`
@@ -57,6 +57,8 @@ type bundleCreateRequest struct {
 	Images []v1alpha1.ImageRef `json:"images,omitempty"`
 	// ConfigRef is the GitOps commit for "config" and "mixed" bundles.
 	ConfigRef *v1alpha1.ConfigRef `json:"configRef,omitempty"`
+	// Chart is the Helm chart version of a "chart" bundle.
+	Chart *v1alpha1.ChartRef `json:"chart,omitempty"`
 	// Provenance carries build metadata.
 	Provenance *v1alpha1.BundleProvenance `json:"provenance,omitempty"`
 	// Intent limits or shapes the promotion (targetEnvironment, skipEnvironments).
@@ -182,6 +184,7 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 			Pipeline:   req.Pipeline,
 			Images:     req.Images,
 			ConfigRef:  req.ConfigRef,
+			Chart:      req.Chart,
 			Provenance: req.Provenance,
 			Intent:     req.Intent,
 		}

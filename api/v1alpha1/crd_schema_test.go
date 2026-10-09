@@ -660,6 +660,44 @@ spec:
 	}
 }
 
+// TestCRDSchemaEnvironmentCount: a Pipeline may have 1 to 500 environments
+// (#1473; it was 100).
+func TestCRDSchemaEnvironmentCount(t *testing.T) {
+	crds := loadCRDs(t)
+	envs := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("region-%03d", i)
+		}
+		return out
+	}
+	for _, n := range []int{1, 101, 300, 500} {
+		assert.Empty(t, validateCR(t, crds, pipelineWithEnvs(envs(n)...)), "%d environments must be accepted", n)
+	}
+	errs := validateCR(t, crds, pipelineWithEnvs(envs(501)...))
+	require.NotEmpty(t, errs, "501 environments must be rejected")
+	assert.Contains(t, strings.Join(errs, "\n"), "at most 500 items")
+}
+
+// TestCRDYAMLUpdateFile (#1448 QA): update.yaml.updates[].file is a path
+// inside the environment directory.
+func TestCRDYAMLUpdateFile(t *testing.T) {
+	crds := loadCRDs(t)
+	withFile := func(file string) map[string]interface{} {
+		p := pipelineWithEnvs("test")
+		env := p["spec"].(map[string]interface{})["environments"].([]interface{})[0].(map[string]interface{})
+		env["update"] = map[string]interface{}{"strategy": "yaml", "yaml": map[string]interface{}{
+			"updates": []interface{}{map[string]interface{}{"file": file, "path": "image.tag"}}}}
+		return p
+	}
+	for _, ok := range []string{"values.yaml", "deploy/deployment.yaml", "_x.yml"} {
+		assert.Empty(t, validateCR(t, crds, withFile(ok)), "file %q must be accepted", ok)
+	}
+	for _, bad := range []string{"/etc/passwd", "../other/values.yaml", "deploy/../../x.yaml", ".hidden/x.yaml", "a b.yaml"} {
+		assert.NotEmpty(t, validateCR(t, crds, withFile(bad)), "file %q must be rejected", bad)
+	}
+}
+
 // ── MetricCheck providers (#1445, #1446) ─────────────────────────────────────
 
 // TestCRDMetricCheckProviders: each provider needs its block (and query, but

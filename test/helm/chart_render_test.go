@@ -1320,6 +1320,20 @@ func TestChartAuditRetention(t *testing.T) {
 	}
 }
 
+// TestChartGraphCompactAbove: graph.compactAbove sets --graph-compact-above
+// (0 included); null keeps the controller default, and a negative value is
+// refused by the schema.
+func TestChartGraphCompactAbove(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	assert.NotContains(t, argValues(c), "graph-compact-above")
+	for _, v := range []string{"0", "50", "200"} {
+		c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "graph.compactAbove="+v))
+		assert.Equal(t, v, argValues(c)["graph-compact-above"])
+	}
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "graph.compactAbove=-1")
+	assert.Error(t, err, "a negative value must fail:\n%s", out)
+}
+
 // TestChartMetricCheckQuerySlots: metricCheck.querySlots sets the
 // controller's MetricCheck query caps, 12 and 1 by default; 0 is refused by
 // the schema.
