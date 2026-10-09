@@ -120,6 +120,7 @@ nav:
     - CLI Commands: reference/cli/kardinal.md
     - Pipeline CRD: pipeline-reference.md
     - API Reference: reference/api.md
+    - REST API: reference/rest-api.md
     - CEL Context: reference/cel-context.md
     - Troubleshooting: troubleshooting.md
     - FAQ: faq.md
