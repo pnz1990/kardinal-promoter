@@ -207,7 +207,9 @@ func listedPipeline(t *testing.T, c framework.UIClient, ns, name string) (uiPipe
 // name; the fleet bar counts what the API lists, and its Blocked, CI Red and
 // Healthy badges filter the list. Selecting a row opens that pipeline.
 //
-// Covers UI-LIST-01.
+// It also checks the fleet board drawn from the same pipelines.
+//
+// Covers UI-LIST-01, UI-FLEET-01.
 func TestUI_BrowserPipelineList(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -391,9 +393,10 @@ func subSteps(t *testing.T, ps *v1alpha1.PromotionStep) string {
 // running one "waiting for merge"), an elapsed time that ticks, the merge
 // link and its events; the test step shows its finished sub-steps and its
 // events. A gate shows its CEL expression checked as valid; a gate whose
-// expression does not compile shows the compile error.
+// expression does not compile shows the compile error. The test step's
+// finished sub-steps are timing bars in the order they ran.
 //
-// Covers UI-NODE-01.
+// Covers UI-NODE-01, UI-STEPTIME-01.
 func TestUI_BrowserNodeDetail(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)

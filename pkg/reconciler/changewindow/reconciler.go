@@ -35,6 +35,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // maxRequeue bounds the wait between evaluations, as a safety net for clock
@@ -118,7 +119,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.ChangeWindow{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
-		Complete(r)
+		Complete(tracing.WrapReconciler("changewindow", r))
 }
 
 // ConditionValid is the ChangeWindow condition that reports whether the spec

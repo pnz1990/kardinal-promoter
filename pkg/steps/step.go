@@ -99,6 +99,9 @@ type StepState struct {
 	// PipelineName is the Pipeline resource name.
 	PipelineName string
 
+	// Namespace is the namespace of the Pipeline, Bundle and PromotionStep.
+	Namespace string
+
 	// Environment is the target environment configuration.
 	Environment v1alpha1.EnvironmentSpec
 

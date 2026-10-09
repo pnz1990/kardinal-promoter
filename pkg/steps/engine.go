@@ -19,6 +19,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // Engine executes a named sequence of steps, accumulating outputs between steps.
@@ -91,7 +94,15 @@ func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex i
 		log.Info().Str("step", name).Int("index", i).Msg("executing step")
 
 		started := e.now()
-		result, err = executeStep(ctx, step, state)
+		stepCtx, span := tracing.Start(ctx, "step "+name,
+			attribute.String("kardinal.step", name), attribute.Int("kardinal.step.index", i),
+			attribute.String("kardinal.environment", state.Environment.Name))
+		result, err = executeStep(stepCtx, step, state)
+		span.SetAttributes(attribute.String("kardinal.step.status", string(result.Status)))
+		if err == nil && result.Status == StepFailed {
+			tracing.Fail(span, result.Message)
+		}
+		tracing.End(span, err)
 		e.timings[i] = StepTiming{Started: started, Finished: e.now()}
 		if err != nil {
 			return i, result, fmt.Errorf("step %s: %w", name, err)

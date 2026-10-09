@@ -634,3 +634,20 @@ func TestInjectHealthWatchNodes_FollowsOptionsForEnv(t *testing.T) {
 		})
 	}
 }
+
+// TestInjectHealthWatchNodes_RemoteClusterSkipped (#1458): an environment
+// whose health is read from another cluster (health.kubeconfigSecretRef) gets
+// no ref node: its object is not in this cluster, and a ref to a missing
+// object would hold the Graph.
+func TestInjectHealthWatchNodes_RemoteClusterSkipped(t *testing.T) {
+	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "test", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
+		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "resource",
+			KubeconfigSecretRef: &kardinalv1alpha1.KubeconfigSecretRef{Name: "prod-kubeconfig"}}},
+	})
+	g := makeTestGraph("test", "prod")
+	assert.Equal(t, 1, injectAll(pipeline, g), "only test gets a ref node")
+	for _, n := range g.Spec.Nodes {
+		assert.NotEqual(t, "healthProd", n.ID)
+	}
+}

@@ -25,6 +25,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // GitHubProvider implements SCMProvider against the GitHub REST API.
@@ -65,7 +67,7 @@ func NewGitHubProvider(token, apiURL, webhookSecret string) *GitHubProvider {
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuits:      NewCircuitRegistry(),
-		client:        &http.Client{Timeout: providerHTTPTimeout},
+		client:        &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 	}
 }
 

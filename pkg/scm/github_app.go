@@ -31,10 +31,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-
 	"time"
 
 	"golang.org/x/sync/singleflight"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // The keys of a Secret that holds GitHub App credentials instead of a token,
@@ -189,7 +190,7 @@ func NewGitHubAppTokenSource(creds GitHubAppCredentials, apiURL string) (*GitHub
 	return &GitHubAppTokenSource{
 		appID: creds.AppID, installationID: creds.InstallationID, key: key,
 		apiURL: strings.TrimRight(apiURL, "/"),
-		client: &http.Client{Timeout: providerHTTPTimeout},
+		client: &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 		now:    time.Now,
 	}, nil
 }

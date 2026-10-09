@@ -488,6 +488,33 @@ func TestGoGitClient_CommitAllNothingToCommit(t *testing.T) {
 	assert.Equal(t, before.Hash(), after.Hash(), "no empty commit may be created")
 }
 
+// TestGoGitClient_CommitAllAlreadyCommitted: a clean tree whose HEAD is a
+// commit with the same message (an earlier attempt of the same promotion
+// pushed it) yields ErrAlreadyCommitted, which is also ErrNothingToCommit; a
+// different message yields plain ErrNothingToCommit.
+func TestGoGitClient_CommitAllAlreadyCommitted(t *testing.T) {
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	remote := seedBareRemote(t, map[string]string{"a.txt": "a\n"})
+	first := filepath.Join(t.TempDir(), "first")
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", first, scm.GitAuth{}))
+	require.NoError(t, os.WriteFile(filepath.Join(first, "a.txt"), []byte("b\n"), 0o644))
+	const msg = "[kardinal] Promote app-1 to prod\n\nBundle: app-1\nPipeline: app"
+	require.NoError(t, c.CommitAll(ctx, first, msg, "t", "t@example.com"))
+	require.NoError(t, c.Push(ctx, first, "origin", "main", scm.GitAuth{}, false))
+
+	retry := filepath.Join(t.TempDir(), "retry")
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", retry, scm.GitAuth{}))
+	require.NoError(t, os.WriteFile(filepath.Join(retry, "a.txt"), []byte("b\n"), 0o644))
+	err := c.CommitAll(ctx, retry, msg, "t", "t@example.com")
+	require.ErrorIs(t, err, scm.ErrAlreadyCommitted)
+	require.ErrorIs(t, err, scm.ErrNothingToCommit)
+
+	err = c.CommitAll(ctx, retry, "[kardinal] Promote app-2 to prod", "t", "t@example.com")
+	require.ErrorIs(t, err, scm.ErrNothingToCommit)
+	assert.NotErrorIs(t, err, scm.ErrAlreadyCommitted)
+}
+
 // TestGoGitClient_CommitAllStagesDeletions verifies deleted files are committed.
 func TestGoGitClient_CommitAllStagesDeletions(t *testing.T) {
 	ctx := context.Background()
