@@ -680,11 +680,12 @@ type envHistory struct {
 }
 
 func loadEnvHistory(ctx context.Context, c client.Reader, ns, pipeline, env string) (*envHistory, error) {
-	var steps v1alpha1.PromotionStepList
-	if err := c.List(ctx, &steps, client.InNamespace(ns), client.MatchingLabels{LabelPipeline: pipeline}); err != nil {
-		return nil, fmt.Errorf("list promotion steps of pipeline %s: %w", pipeline, err)
+	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+	steps, err := ListPromotionSteps(ctx, c, ns, client.MatchingLabels{LabelPipeline: pipeline})
+	if err != nil {
+		return nil, fmt.Errorf("steps of pipeline %s: %w", pipeline, err)
 	}
-	return historyOf(steps.Items, pipeline, env), nil
+	return historyOf(steps, pipeline, env), nil
 }
 
 // deployed returns the Bundle whose change landed last in the environment: the

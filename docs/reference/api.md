@@ -98,6 +98,17 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.phase` | string |  | Phase is the bundle promotion phase. One of: `Available`, `Promoting`, `Verified`, `Failed`, `Superseded`. |
 | `status.pipelineSpecHash` | string |  | PipelineSpecHash is the SHA-256 hash of the Pipeline spec (spec.paused excluded) the Graph was last built from. When the Bundle reconciler is re-queued by a Pipeline watch event, it compares the current Pipeline spec hash to this field. A mismatch re-translates the Graph in place with the updated spec. |
 | `status.policyGatesHash` | string |  | PolicyGatesHash is the SHA-256 hash of the PolicyGate templates that apply to the Pipeline's environments, recorded when the Graph could not be built (InvalidSpec, reason GraphBuildFailed). A change to those templates retries the Bundle, as a Pipeline change does. Empty otherwise. |
+| `status.retiredAt` | string (date-time) |  | RetiredAt is when the Bundle's Graph was retired: set in the same write as RetiredSteps, and never cleared. A Bundle with RetiredAt is final; the GraphRetired condition only shows the retirement's progress. |
+| `status.retiredSteps` | []object |  | RetiredSteps records the PromotionSteps of a Bundle whose Graph was retired (condition GraphRetired=True). Deleting a finished Bundle's Graph deletes the PromotionSteps, PolicyGate instances and PRStatuses it created, so kro does not hold every finished Graph in memory (#1492). Rollback, promote, history, metrics, the CLI and the UI read these records where they read the steps of a Bundle that is still promoting. |
+| `status.retiredSteps[].createdAt` | string (date-time) | yes | CreatedAt is the PromotionStep's creationTimestamp. |
+| `status.retiredSteps[].environment` | string | yes | Environment is the PromotionStep's spec.environment. |
+| `status.retiredSteps[].healthCheckExpiry` | string (date-time) |  | HealthCheckExpiry is the PromotionStep's status.healthCheckExpiry: set once its change merged and the health check started. |
+| `status.retiredSteps[].message` | string |  | Message is the PromotionStep's final status.message, cut to 512 bytes. |
+| `status.retiredSteps[].name` | string | yes | Name is the PromotionStep's name. |
+| `status.retiredSteps[].prURL` | string |  | PRURL is the PromotionStep's status.prURL. |
+| `status.retiredSteps[].state` | string |  | State is the PromotionStep's final status.state. |
+| `status.retiredSteps[].stepType` | string |  | StepType is the PromotionStep's spec.stepType. |
+| `status.retiredSteps[].verifiedAt` | string (date-time) |  | VerifiedAt is when the PromotionStep became Verified. |
 
 ## ChangeWindow
 
