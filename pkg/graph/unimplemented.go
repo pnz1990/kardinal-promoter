@@ -19,7 +19,7 @@ const layoutBranchNotImplemented = "layout: branch is not implemented: kardinal 
 // ShardNotSupported is the reason a Pipeline environment may not set shard:
 // distributed mode (the kardinal-agent binary and --shard) was removed.
 const ShardNotSupported = "shard is not supported: distributed mode was removed; remove shard from the " +
-	"environment and the controller reconciles it (see docs/distributed-mode.md)"
+	"environment and the controller reconciles it (see docs/multi-cluster.md)"
 
 // HealthClusterNotSupported is the reason a Pipeline environment may not set
 // the deprecated health.cluster string: health.kubeconfigSecretRef replaced it.

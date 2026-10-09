@@ -165,7 +165,7 @@ func TestPipeline_NotImplemented(t *testing.T) {
 		},
 		ready: `environment "test": shard is not supported: distributed mode was removed`,
 		step: "shard is not supported: distributed mode was removed; remove shard from the environment and the " +
-			"controller reconciles it (see docs/distributed-mode.md)",
+			"controller reconciles it (see docs/multi-cluster.md)",
 	}, {
 		name: "cluster",
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {

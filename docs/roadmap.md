@@ -101,7 +101,7 @@ Config and mixed Bundles run the `config-merge` step, which copies the environme
 - `RollbackPolicy` CRD + automated rollback PR
 - Pause/resume (`Pipeline.spec.paused`)
 - Supersession for concurrent Bundles
-- Multi-cluster through an Argo CD or Flux hub (see [Multi-Cluster](distributed-mode.md); `health.cluster` kubeconfig Secrets are not supported)
+- Multi-cluster health through a kubeconfig Secret (`health.kubeconfigSecretRef`) or an Argo CD or Flux hub (see [Multi-Cluster](multi-cluster.md))
 
 **CLI** — `get`, `explain`, `status`, `create`, `promote`, `rollback`, `pause`, `resume`, `override`, `history`, `audit`, `diff`, `logs`, `metrics`, `policy`, `validate`, `doctor`, `init`, `refresh`, `delete`, `dashboard`, `completion`, `version` (see [CLI Reference](cli-reference.md))
 

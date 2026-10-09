@@ -15,8 +15,6 @@ import (
 // It runs the same resolveOrdering that Build uses. The Pipeline reconciler
 // calls it to set Ready=False/ValidationFailed, and the Bundle reconciler
 // calls it to name the reason a Bundle failed.
-//
-// Design ref: docs/design/15-production-readiness.md §Lens 4
 func DetectCycle(pipeline *kardinalv1alpha1.Pipeline) error {
 	_, _, err := resolveOrdering(pipeline)
 	return err

@@ -218,8 +218,8 @@ type EnvironmentSpec struct {
 	// supported".
 	//
 	// Deprecated: remove shard; the controller reconciles every environment.
-	// For workloads in other clusters, use the Argo CD or Flux hub (see
-	// docs/distributed-mode.md).
+	// For workloads in other clusters, use health.kubeconfigSecretRef or the
+	// Argo CD or Flux hub (see docs/multi-cluster.md).
 	// +optional
 	Shard string `json:"shard,omitempty"`
 

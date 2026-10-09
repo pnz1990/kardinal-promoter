@@ -629,8 +629,7 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 		fmt.Sprintf("bundle received for pipeline %s; awaiting promotion", b.Spec.Pipeline))
 
 	// 500ms is the minimum safe floor: avoids a hot loop that bypasses
-	// controller-runtime rate limiting under concurrent Bundle load
-	// (design doc 15-production-readiness.md).
+	// controller-runtime rate limiting under concurrent Bundle load.
 	return ctrl.Result{RequeueAfter: 500 * time.Millisecond}, nil
 }
 

@@ -113,7 +113,7 @@ nav:
     - Subscriptions: subscription.md
     - Subscription Webhooks: subscription-webhooks.md
     - Notifications: notifications.md
-    - Multi-Cluster: distributed-mode.md
+    - Multi-Cluster: multi-cluster.md
     - Sharding Controllers: sharding.md
     - SCM Providers: scm-providers.md
     - Advanced Patterns: advanced-patterns.md

@@ -215,7 +215,7 @@ kardinal has no custom step engine. The API server rejects a Pipeline that sets 
 
 ### Multiple clusters
 
-kardinal runs in one cluster, next to the Argo CD or Flux hub that manages your workload clusters. Declare one environment per cluster or region (for example `prod-eu` and `prod-us`) and promote them in parallel with `wave` or `dependsOn`. Each environment reads its health from the hub: `health.type: argocd` on its Application, or `health.type: flux` on a hub Kustomization that targets the remote cluster. A spoke the hub cannot reach has no kardinal health check. See [Multi-Cluster](distributed-mode.md) and [Remote Clusters](health-adapters.md#remote-clusters).
+kardinal runs in one cluster, next to the Argo CD or Flux hub that manages your workload clusters. Declare one environment per cluster or region (for example `prod-eu` and `prod-us`) and promote them in parallel with `wave` or `dependsOn`. Each environment reads its health from its cluster through a kubeconfig Secret (`health.kubeconfigSecretRef`), or from the hub: `health.type: argocd` on its Application, or `health.type: flux` on a hub Kustomization that targets the remote cluster. See [Multi-Cluster](multi-cluster.md) and [Remote Clusters](health-adapters.md#remote-clusters).
 
 Distributed mode (`shard` and `kardinal-agent`) was removed. The API server accepts a Pipeline environment that sets `shard`, but the Pipeline is `Ready=False` (reason `NotImplemented`) and that environment's PromotionSteps fail with `shard is not supported`. Remove it; the controller reconciles every environment.
 
@@ -339,7 +339,7 @@ After a promotion is applied (manifests written to Git), kardinal-promoter verif
 
 When `health.type` is omitted the adapter is `resource`, or the `delivery.delegate` value when that is set. kardinal does not probe the cluster for installed CRDs. See [Health Adapters](health-adapters.md) for the target defaults and overrides.
 
-`health.cluster` (checking a workload in another cluster through a kubeconfig Secret) is not supported; a non-empty value fails the step. Adapters read objects in the cluster that holds the PromotionSteps; to verify a workload in another cluster, check its Argo CD Application in the hub (`type: argocd`).
+Adapters read objects in the cluster that holds the PromotionSteps, unless `health.kubeconfigSecretRef` names a kubeconfig Secret for another cluster; a workload in another cluster can also be checked through its Argo CD Application or Flux Kustomization in the hub. The deprecated `health.cluster` string is not supported: a non-empty value fails the step. See [Remote Clusters](health-adapters.md#remote-clusters).
 
 ## Subscription
 

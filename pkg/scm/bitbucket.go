@@ -36,8 +36,6 @@ const bitbucketDefaultAPIURL = "https://api.bitbucket.org"
 // Requests are authenticated with a Bearer token, so use a repository, project
 // or workspace access token. App passwords need Basic auth and do not work here.
 // All methods are safe for concurrent use.
-//
-// Design ref: docs/design/15-production-readiness.md §Lens 1 (Kargo parity)
 type BitbucketProvider struct {
 	// Token is the Bitbucket Cloud access token or app password.
 	Token string

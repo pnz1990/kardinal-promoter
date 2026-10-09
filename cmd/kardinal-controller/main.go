@@ -260,9 +260,8 @@ func main() {
 	// existing kubeconfig credentials — no shared static secret to leak.
 	//
 	// Priority (O4): --ui-auth-token takes precedence. If both are set, only the static
-	// token check is applied and TokenReview is not called.
-	//
-	// Design ref: docs/design/15-production-readiness.md §Lens 4
+	// token check is applied and TokenReview is not called
+	// (docs/guides/security.md, UI API Access Control).
 	var uiTokenReviewAuth bool
 	flag.BoolVar(&uiTokenReviewAuth, "ui-tokenreview-auth",
 		os.Getenv("KARDINAL_UI_TOKENREVIEW_AUTH") == "true",
@@ -340,8 +339,8 @@ func main() {
 	// When empty (default), the controller watches all namespaces (cluster-wide mode).
 	// When set, the controller watches only that namespace — suitable for multi-tenant
 	// clusters where a ClusterRole with cluster-wide access is not acceptable.
-	// Also readable from KARDINAL_WATCH_NAMESPACE environment variable.
-	// Design ref: docs/design/15-production-readiness.md §Lens 6
+	// Also readable from KARDINAL_WATCH_NAMESPACE environment variable
+	// (docs/installation.md, namespace-scoped install).
 	var watchNamespace string
 	flag.StringVar(&watchNamespace, "watch-namespace",
 		os.Getenv("KARDINAL_WATCH_NAMESPACE"),
