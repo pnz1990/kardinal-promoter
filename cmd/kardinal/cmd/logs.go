@@ -47,7 +47,7 @@ func newLogsCmd() *cobra.Command {
 It shows the PromotionSteps of every Bundle of the pipeline that is not
 Superseded (all of them if those have none), or of the Bundle --bundle names.
 For each PromotionStep, it shows:
-  - Current state (Promoting, WaitingForMerge, HealthChecking, Verified, Failed)
+  - Current state (Promoting, WaitingForMerge, HealthChecking, Verifying, Verified, Failed)
   - Step message (error details, health check results, PR URLs)
   - Step outputs (branch name, PR URL, PR number)
   - Conditions from the status

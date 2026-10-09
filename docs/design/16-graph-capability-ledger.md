@@ -63,9 +63,9 @@ Rules:
 | [G9](#g9-a-graph-reconcile-costs-three-api-calls-per-object) | A Graph reconcile costs about three uncached API calls per object, and kro reconciles one Graph at a time by default | High at scale | `hack/install-kro.sh` raises the worker count and client QPS; smaller Graphs | None filed; kro#1324 is related |
 | [G10](#g10-a-graph-is-one-etcd-object) | A Graph's spec and inventory share one etcd object (1.5 MiB) | Medium | `pkg/graph/size.go` `CheckSize` refuses a Graph over 1.2 MB | None filed |
 | [G11](#g11-collections-are-all-or-nothing) | A `forEach` collection is all-or-nothing on pending data and on apply errors, and every growth relabels every item | Medium | pacing by choosing the list; label-only events ignored | None filed |
-| [G12](#g12-delete-and-prune-orphan-the-pods-of-a-job) | kro deletes and prunes without a propagation policy, so a Job node orphans its Pods, and a deleted Job runs again | Medium | **Planned in #1493 (not on main)**: hooks use a `HookRun` CRD that owns its Job (#1443) | None filed |
+| [G12](#g12-delete-and-prune-orphan-the-pods-of-a-job) | kro deletes and prunes without a propagation policy, so a Job node orphans its Pods, and a deleted Job runs again | Medium | Hooks use a `HookRun` CRD that owns its Job (#1443) | None filed |
 | [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | kardinal shards only its own controllers, by namespace (`--namespace-shard`, `pkg/shard`, #1462) | None filed |
-| [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | Mirror `patch` nodes with a literal target name | None filed |
+| [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | Mirror `patch` nodes with a literal target name (hooks, #1443; gate commit statuses, #1452) | None filed |
 | [G15](#g15-kro-holds-every-graph-in-memory-and-a-graph-cannot-be-retired-without-its-children) | kro holds every live Graph in memory (3 to 6 MB each, whatever its size), and a Graph cannot be deleted without deleting its children | High at scale | `pkg/reconciler/bundle/retire.go` records the steps in `Bundle.status.retiredSteps`, then deletes the Graph | None filed (drafts: Graph suspend, kro#1445 comment) |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
@@ -364,10 +364,10 @@ Graph cannot grant itself RBAC while running as that identity. So `IdentityProvi
   on kro#1464 anyway ([Engagement](#engagement)).
 - **G5-c: cluster-scoped reads (2026-10-08).** A `ref` to a cluster-scoped object needs a
   ClusterRole and ClusterRoleBinding for the Graph ServiceAccount of every namespace that uses
-  it, and `IdentityProvisioner` creates only RoleBindings. Two v0.10.0 features avoid it, both
-  **planned (not on main)**: the translator inlines a `ClusterAnalysisTemplate` into the
-  AnalysisRun template (#1444, planned in #1502), and resolves a `ClusterScmProvider` into a
-  static spec field (#1459, planned in #1517), the same way it copies PolicyGate templates
+  it, and `IdentityProvisioner` creates only RoleBindings. Two v0.10.0 features avoid it: the
+  translator inlines a `ClusterAnalysisTemplate` into the AnalysisRun template (#1444,
+  `pkg/translator/analysis.go`), and resolves a `ClusterScmProvider` into a static spec field
+  (#1459, **planned in #1517 (not on main)**), the same way it copies PolicyGate templates
   into instances. No upstream ask: the grant is kardinal's to make, and
   a static copy also gives the Bundle a snapshot.
 
@@ -667,10 +667,11 @@ Pods; deleting a completed Job made kro create it again, and it ran again; chang
 command in the Graph failed with `spec.template: ... field is immutable`, a hard error that stops
 prune and release for the whole Graph until the change is reverted.
 
-**kardinal workaround. Planned in #1493 (not on main).** Hooks are `HookRun` objects (a kardinal CRD) in the Graph. The HookRun
+**kardinal workaround.** Hooks are `HookRun` objects (a kardinal CRD) in the Graph. The HookRun
 reconciler creates the Job with a controller ownerReference, so garbage collection deletes the
 Pods, records a terminal phase once and never runs the Job again, and ignores spec changes after
-the Job started. The HookRun CRD is not on main: no hooks run today (issue #1443).
+the Job started (`pkg/reconciler/hookrun`, `pkg/graph/hooks.go`, #1443; live tests
+`TestStep_Hook*`).
 
 **Upstream work.** None filed.
 
@@ -717,7 +718,8 @@ name (not `${step.metadata.name}`, which is Unresolved with the step) writes the
 onto the step. A patch whose target does not exist yet is a soft not-ready, and a patch may
 target an object a template node of the same Graph owns; the two field managers coexist.
 Verified on kind: the mirrored gate result followed the gate (true, false, true) while the step
-node was Unresolved.
+node was Unresolved. Hooks use it (`live0<env>` writes `spec.live.hooks`, `pkg/graph/hooks.go`,
+#1443); gate commit statuses (#1452) use it as well.
 
 **Upstream work.** None filed.
 

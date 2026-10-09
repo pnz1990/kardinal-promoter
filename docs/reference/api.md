@@ -16,6 +16,7 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [AuditEvent](#auditevent) | `auditevents.kardinal.io` | Namespaced | `ae`, `audit` |
 | [Bundle](#bundle) | `bundles.kardinal.io` | Namespaced | `bnd` |
 | [ChangeWindow](#changewindow) | `changewindows.kardinal.io` | Cluster | `cw` |
+| [HookRun](#hookrun) | `hookruns.kardinal.io` | Namespaced | `hr` |
 | [MetricCheck](#metriccheck) | `metricchecks.kardinal.io` | Namespaced |  |
 | [NotificationHook](#notificationhook) | `notificationhooks.kardinal.io` | Namespaced | `nhook` |
 | [PRStatus](#prstatus) | `prstatuses.kardinal.io` | Namespaced | `prs` |
@@ -68,7 +69,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `spec` | object |  | BundleSpec defines the desired state of a Bundle. An image Bundle deploys only its images, so a configRef on it is refused instead of ignored (#1353). Bundles stored before the rule keep working: CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest supported) lets an update through when spec is unchanged. |
+| `spec` | object |  | BundleSpec defines the desired state of a Bundle. An image Bundle deploys only its images, so a configRef on it is refused instead of ignored (#1353). Bundles stored before the rule keep working: CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest supported) lets an update through when spec is unchanged. A Bundle's spec is immutable: spec.type, spec.pipeline, spec.images, spec.chart, spec.configRef, spec.provenance and spec.intent cannot change after creation. The artifact is what gates, verifications and evidence were checked against, and an intent edit would apply only at some later, unrelated re-translation of the Graph; to promote something else, or to another target, create a new Bundle. The rules are transition rules, so they run only on update. |
 | `spec.chart` | object |  | Chart is the Helm chart version a "chart" Bundle promotes. The helm-set-image step writes chart.version at update.helm.chartVersionPath. |
 | `spec.chart.digest` | string |  | Digest is the chart package digest (index.yaml digest, or the OCI manifest digest). |
 | `spec.chart.name` | string | yes | Name is the chart name: letters, digits, ".", "_" and "-", starting and ending with a letter or digit. It is joined into the chart's index and OCI paths, so a "/", "]" or other path character would point the version lookup elsewhere. |
@@ -164,6 +165,44 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.reason` | string |  | Reason explains the current active/inactive state. |
+
+## HookRun
+
+`kardinal.io/v1alpha1`
+
+HookRun is one run of a pre- or post-deploy hook (a Kubernetes Job) for one Bundle and environment. Created by the Bundle's kro Graph; reconciled by the HookRun reconciler, which creates the Job and records its result.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object |  | HookRunSpec is one execution of a Pipeline hook for one Bundle and environment. The kro Graph of the Bundle creates it; the HookRun reconciler runs the Job. |
+| `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
+| `spec.environment` | string | yes | Environment is the environment the hook runs for. |
+| `spec.hook` | string | yes | Hook is the hook's name in the Pipeline. |
+| `spec.job` | object | yes | Job is the batch/v1 JobSpec to run (see HookSpec.Job). |
+| `spec.phase` | string | yes | Phase is "pre" or "post" (see HookSpec.Phase). One of: `pre`, `post`. |
+| `spec.pipelineName` | string | yes | PipelineName is the Pipeline the hook belongs to. |
+| `spec.recorded` | object |  | Recorded is set by the Graph from the step's status.hookRecords: the result the step recorded for this hook, when one ran before. A HookRun that starts with a record of its own spec hash does not run the Job again: it takes the recorded result (Succeeded or Failed), or Failed when the earlier run was deleted while it ran (result unknown). It is not part of the spec hash. |
+| `spec.recorded.message` | string |  | Message is the recorded run's last message. |
+| `spec.recorded.result` | string |  | Result is Running, Succeeded or Failed. |
+| `spec.recorded.specHash` | string |  | SpecHash is the spec hash of the recorded run. |
+| `spec.stepAdvanced` | boolean |  | StepAdvanced is set by the Graph from the step's state: true once the step passed the point this hook runs at (started, for a pre hook; finished, for a post hook). A HookRun that starts with it set is Skipped: a hook added to the Pipeline too late for this Bundle does not run out of order. It is not part of the spec hash. |
+| `spec.timeout` | string |  | Timeout is the hook timeout (see HookSpec.Timeout). |
+| `status` | object |  | HookRunStatus is the observed state of a HookRun. |
+| `status.conditions` | []object |  | Conditions: SpecChangedAfterStart is True when spec.job or spec.timeout changed after the Job was created. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.deadline` | string (date-time) |  | Deadline is StartedAt plus the timeout. |
+| `status.finishedAt` | string (date-time) |  | FinishedAt is when the HookRun reached Succeeded or Failed. |
+| `status.jobName` | string |  | JobName is the name of the Job the reconciler created. |
+| `status.jobUID` | string |  | JobUID is the UID of that Job. A Job of that name with another UID, or none at all, while the HookRun runs, fails the HookRun: it is not run again. |
+| `status.message` | string |  | Message says why the HookRun is in its phase. |
+| `status.phase` | string |  | Phase is Pending until the Job is created, Running while it runs, and Succeeded or Failed once it finished, or Skipped. Succeeded, Failed and Skipped are terminal: the API server refuses to change them, and the Job is never created again, even when it is deleted. One of: `Pending`, `Running`, `Succeeded`, `Failed`, `Skipped`. |
+| `status.specHash` | string |  | SpecHash is a hash of spec.job and spec.timeout when the Job was created. A later spec change is not applied (condition SpecChangedAfterStart). |
+| `status.startedAt` | string (date-time) |  | StartedAt is when the HookRun started (the Job was created). |
 
 ## MetricCheck
 
@@ -350,6 +389,11 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].health.resource.namespace` | string |  | Namespace is the resource namespace. Defaults to the environment name when unset. |
 | `spec.environments[].health.timeout` | string |  | Timeout is the maximum time to wait for a healthy check: from the start of health checking, and again whenever a bake window stops. When it expires, onHealthFailure applies. It does not cut a running bake window short. Uses Go duration format (e.g. "30m", "1h"). Defaults to "10m". |
 | `spec.environments[].health.type` | string |  | Type selects the health check backend. Supported values: resource, argocd, flux, argoRollouts, flagger. When empty the PromotionStep reconciler uses "resource" (a Deployment named after the Pipeline in the environment namespace, unless health.resource overrides it). delivery.delegate, when set, takes precedence. One of: `resource`, `argocd`, `flux`, `argoRollouts`, `flagger`. |
+| `spec.environments[].hooks` | []object |  | Hooks are Jobs that run for each Bundle in this environment: "pre" hooks before the promotion starts (database migrations), "post" hooks after the health check passed and before the environment is Verified (integration tests). Each runs once per Bundle, as a HookRun the Bundle's Graph creates. See docs/hooks.md. |
+| `spec.environments[].hooks[].job` | object | yes | Job is a batch/v1 JobSpec. The controller creates the Job in the Pipeline namespace with the HookRun as its owner. The Pod's serviceAccountName (default "default") must be in the controller's --hook-service-accounts list. restartPolicy defaults to Never, and activeDeadlineSeconds to the timeout. |
+| `spec.environments[].hooks[].name` | string | yes | Name identifies the hook within its environment and phase. It is part of the HookRun and Job names. |
+| `spec.environments[].hooks[].phase` | string | yes | Phase is when the hook runs. "pre": after the environment's upstreams are Verified and its gates are ready, before the promotion starts; the promotion starts only when every pre hook succeeded. "post": after the health check passed; the environment is Verified only when every post hook succeeded, and a failed post hook applies onHealthFailure. Hooks of one phase run one after another, in list order. One of: `pre`, `post`. |
+| `spec.environments[].hooks[].timeout` | string |  | Timeout bounds the hook from the moment its HookRun starts: a hook that has not finished by then fails and its Job is deleted. Empty or "0" means 30m. |
 | `spec.environments[].layout` | string |  | Layout configures how the promotion interacts with the Git repo layout. "directory" (default): env manifests are in a subdirectory of the main branch. "branch": rendered manifests are committed to a separate env-specific branch. In this mode the step sequence includes kustomize-build to render templates before committing to the target branch. One of: `directory`, `branch`. Default: `directory`. |
 | `spec.environments[].name` | string | yes | Name is the environment identifier (e.g. "test", "uat", "prod"). It must be a DNS label (lower-case letters, digits and '-', at most 63 characters): it names a Graph node, derived objects and, for the resource, argoRollouts and flagger health checks, a namespace. |
 | `spec.environments[].onHealthFailure` | string |  | OnHealthFailure controls what the reconciler does when health fails during bake or health checking (K-03). "rollback": create a rollback Bundle at the previous version; step → RollingBack. "abort": freeze the step; state → AbortedByAlarm; requires human intervention. "none" (default): step → Failed; downstream stops. One of: `rollback`, `abort`, `none`. Default: `none`. |
@@ -385,6 +429,15 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].update.yaml.updates[].image` | string |  | Image is the repository of the Bundle image whose value is written, for example "ghcr.io/org/app". It may be empty when the Bundle has exactly one image. |
 | `spec.environments[].update.yaml.updates[].path` | string | yes | Path is the key path of the scalar to set, in the grammar chartVersionPath uses too: keys separated by "." (a leading "." is optional), "[N]" to index a list and "[field=value]" for the list element whose field has that value, for example "image.tag", "spec.template.spec.containers[0].image" or "spec.template.spec.containers[name=app].image". A digits-only key indexes a list when it reaches one. Missing mapping keys are created; list elements are not. A key that contains "." is not supported. |
 | `spec.environments[].update.yaml.updates[].value` | string |  | Value is what to write: tag (default), digest, tagWithDigest ("&lt;tag&gt;@&lt;digest&gt;"), image ("&lt;repository&gt;:&lt;tag&gt;"), or imageWithDigest ("&lt;repository&gt;:&lt;tag&gt;@&lt;digest&gt;", or "&lt;repository&gt;@&lt;digest&gt;" without a tag). A value the image does not have (a digest of a tag-only image) fails the step. One of: `tag`, `digest`, `tagWithDigest`, `image`, `imageWithDigest`. |
+| `spec.environments[].verification` | object |  | Verification runs Argo Rollouts analyses after the environment passed its health check: one AnalysisRun per template, with the Bundle's version and environment as args. The environment is Verified only when every analysis is Successful. Needs Argo Rollouts' CRDs: without them the Bundle fails (it never promotes unverified). See docs/analysis.md. |
+| `spec.environments[].verification.analysisTemplates` | []object | yes | AnalysisTemplates are the templates to run, each as its own AnalysisRun. |
+| `spec.environments[].verification.analysisTemplates[].kind` | string |  | Kind is AnalysisTemplate (default) or ClusterAnalysisTemplate. One of: `AnalysisTemplate`, `ClusterAnalysisTemplate`. |
+| `spec.environments[].verification.analysisTemplates[].name` | string | yes | Name is the template name. |
+| `spec.environments[].verification.args` | []object |  | Args set template args by name. They take precedence over the args kardinal sets (bundle, pipeline, environment, image, tag, digest, commit) and over the template's defaults. Only args a template declares are passed to its AnalysisRun. |
+| `spec.environments[].verification.args[].name` | string | yes | Name is the arg name the template declares. |
+| `spec.environments[].verification.args[].value` | string | yes | Value is the arg value. |
+| `spec.environments[].verification.inconclusive` | string |  | Inconclusive is what an Inconclusive AnalysisRun counts as: "fail" (default) or "pass". One of: `fail`, `pass`. |
+| `spec.environments[].verification.timeout` | string |  | Timeout bounds the analyses from the moment the environment entered Verifying. An analysis still running then fails the environment. Empty or "0" means 30m. |
 | `spec.environments[].waitForMergeTimeout` | string |  | WaitForMergeTimeout is the maximum duration a PromotionStep will wait in the WaitingForMerge state before transitioning to Failed. When not set or zero, the step waits indefinitely (no timeout). Accepts Go duration strings: "24h", "72h", "168h", etc. |
 | `spec.environments[].wave` | integer |  | Wave assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. An environment of a wave depends on every environment of the next lower wave present; gaps in the numbering (10, 20, 30) are allowed and create no roots. Without DependsOn, a wave also follows the last environment without a wave listed before its first environment, so a wave after "staging" starts once staging is verified, and an environment without a wave follows the environment listed before it, or every environment of that one's wave. DependsOn replaces these list-order edges but never the edges to the previous wave. Only the first listed environment is a root unless DependsOn says otherwise. |
 | `spec.git` | object | yes | Git holds the shared GitOps repository configuration for all environments in this pipeline. |
@@ -516,15 +569,34 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | PromotionStepSpec defines the desired state of a PromotionStep. PromotionStep objects are created by the Graph controller — not by users. |
+| `spec.analyses` | []string |  | Analyses names the AnalysisTemplates of the environment's verification. A step with analyses goes from HealthChecking to Verifying and is Verified only when, for every template, the newest AnalysisRun in spec.live.analyses is Successful: a run that a later translation replaced (the template changed) is not waited for, and the timeout keeps counting from status.verificationStartedAt. |
+| `spec.analysisPolicy` | object |  | AnalysisPolicy is the verification's verdict policy, copied from the Pipeline when the Graph was built, so a Pipeline edit does not change the verdict of a step in flight. |
+| `spec.analysisPolicy.inconclusive` | string |  | Inconclusive is "fail" (default) or "pass". |
+| `spec.analysisPolicy.timeout` | string |  | Timeout is the verification timeout (default 30m). |
 | `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment this step promotes into. |
-| `spec.live` | object |  | Live is written by the promotion Graph with a patch node, not by the step's template: the current results of the gates of the step's environment, which keep changing after the step started. While the step's PR waits for its merge, the reconciler mirrors them to the PR's head commit as the kardinal/gates commit status. Do not set it. |
+| `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs, each part with its own patch node (its own field manager), not the step's template, so they keep updating after the step's own template stopped resolving: the environment's hook and analysis runs, and the current results of its gates. The reconciler reads only this copy, never the source objects; while the step's PR waits for its merge it mirrors the gates to the PR's head commit as the kardinal/gates commit status. Do not set it. |
+| `spec.live.analyses` | []object |  | Analyses are the environment's AnalysisRuns for this Bundle. |
+| `spec.live.analyses[].created` | string |  | Created is the AnalysisRun's creationTimestamp (RFC 3339). The newest run of a template is the one the step waits for. |
+| `spec.live.analyses[].message` | string |  | Message is the AnalysisRun's status.message. |
+| `spec.live.analyses[].name` | string | yes | Name is the AnalysisRun name. |
+| `spec.live.analyses[].phase` | string |  | Phase is the AnalysisRun's status.phase (Pending when it has none yet): Pending, Running, Successful, Failed, Error or Inconclusive. |
+| `spec.live.analyses[].template` | string |  | Template is the AnalysisTemplate or ClusterAnalysisTemplate it runs. |
 | `spec.live.gates` | []object |  | Gates are the gate instances of the step's environment for its Bundle, with their current result. |
 | `spec.live.gates[].name` | string | yes | Name is the gate instance name. |
 | `spec.live.gates[].ready` | boolean | yes | Ready is the instance's status.ready. |
 | `spec.live.gates[].reason` | string |  | Reason is the instance's status.reason. |
+| `spec.live.hooks` | []object |  | Hooks are the environment's HookRuns for this Bundle. |
+| `spec.live.hooks[].hook` | string |  | Hook is the hook's name in the Pipeline. |
+| `spec.live.hooks[].message` | string |  | Message is the HookRun's status.message. |
+| `spec.live.hooks[].name` | string | yes | Name is the HookRun name. |
+| `spec.live.hooks[].phase` | string |  | Phase is the hook phase: pre or post. |
+| `spec.live.hooks[].result` | string |  | Result is the HookRun's status.phase (Pending when it has none yet). |
+| `spec.live.hooks[].specHash` | string |  | SpecHash is the HookRun's status.specHash: which job and timeout ran. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this step belongs to. |
+| `spec.postHooks` | []string |  | PostHooks names the HookRuns of the environment's post-deploy hooks, in order. A step with post hooks goes from HealthChecking to Verifying, and is Verified only when every one of them Succeeded in spec.live.hooks; a Failed one applies onHealthFailure. |
 | `spec.prStatusRef` | string |  | PRStatusRef is the name of the companion PRStatus CRD in the same namespace. Set by the Graph controller from the PRStatus Watch node's metadata.name CEL reference. The PromotionStep reconciler reads the PRStatus CRD instead of polling GitHub directly, eliminating the PS-4 / SCM-2 external API call on the reconcile hot path. |
+| `spec.preHooks` | []string |  | PreHooks names the HookRuns of the environment's pre-deploy hooks, in order. The step stays Pending until every one of them Succeeded in spec.live.hooks, and fails when one Failed. Set by the Graph: the first entry references the first HookRun node, so the step is created only after it. |
 | `spec.region` | string |  | Region was set on the per-region PromotionSteps of a Pipeline environment with two or more spec.regions. The Graph builder no longer sets it; the reconciler fails a step that still has one (created by a Graph built before the upgrade) with "regions is not supported". Deprecated: declare one environment per region (prod-us, prod-eu) and use wave. |
 | `spec.requiredGates` | []string |  | RequiredGates holds the names of PolicyGate instances that must be ready before this PromotionStep can be promoted. Set by the Graph controller via CEL. |
 | `spec.stepType` | string | yes | StepType identifies the built-in step to execute. Examples: git-clone, kustomize-set-image, git-commit, open-pr, wait-for-merge, health-check. |
@@ -546,13 +618,19 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.currentStepIndex` | integer |  | CurrentStepIndex is the index into the step sequence that the reconciler is currently executing. Persisted to etcd for idempotent crash recovery (spec 003 FR-002). |
 | `status.gitCredentialRetries` | integer |  | GitCredentialRetries is the number of consecutive retries of a git-clone or git-push that the remote refused while git had no credentials because spec.git.secretRef is not set, or names a Secret that does not exist or has no token key (condition GitCredentialMissing). These retries have no limit, so creating the Secret is enough for the step to continue, and they do not use up the retries of retryCount. Reset with retryCount, and when git has a token. |
 | `status.healthCheckExpiry` | string (date-time) |  | HealthCheckExpiry is the deadline for a healthy check: health.timeout after the health check began, moved to health.timeout after the moment a bake window stops. It does not apply while a bake window runs. A Graph CEL expression can observe this field to detect a stale health check. Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md). |
+| `status.hookRecords` | []object |  | HookRecords records each hook that ran for this step (HookRecord). |
+| `status.hookRecords[].hook` | string |  | Hook is the hook's name in the Pipeline. |
+| `status.hookRecords[].message` | string |  | Message is the HookRun's last message. |
+| `status.hookRecords[].phase` | string |  | Phase is pre or post. |
+| `status.hookRecords[].result` | string |  | Result is Running, Succeeded or Failed. Succeeded and Failed are final. |
+| `status.hookRecords[].specHash` | string |  | SpecHash is the HookRun's spec hash (job and timeout) that ran. |
 | `status.lastHealthCheckAt` | string (date-time) |  | LastHealthCheckAt records when the health adapter was last called. Used to space health checks at the health-check interval regardless of how often the step is reconciled. |
 | `status.message` | string |  | Message provides human-readable detail about the current state. |
 | `status.nextRetryAt` | string (date-time) |  | NextRetryAt is when a step that failed with a retryable error runs again, or when a superseded step whose PR close failed retries the close (condition SupersededCloseFailed). A reconcile before then waits for it, so the retry backoff holds however often the step is reconciled (a gate re-evaluation, a PRStatus change, a controller restart). Cleared when the step runs again. |
 | `status.outputs` | map[string]string |  | Outputs accumulates key/value results from completed steps in the sequence (e.g. prURL from the open-pr step). |
 | `status.prURL` | string |  | PRURL is the GitHub pull request URL opened for this promotion. Set when the step enters WaitingForMerge state. |
 | `status.retryCount` | integer |  | RetryCount is the number of consecutive step-engine errors retried in the current state. Reset when a step makes progress. When it reaches the retry limit the PromotionStep fails. Retries counted in gitCredentialRetries are not counted here. |
-| `status.state` | string |  | State is the step execution state. The Graph controller uses readyWhen expressions of the form ${step.status.state == "Verified"} to advance the promotion DAG. One of: `Pending`, `Promoting`, `WaitingForMerge`, `HealthChecking`, `Verified`, `Failed`, `AbortedByAlarm`, `RollingBack`. |
+| `status.state` | string |  | State is the step execution state. The Graph controller uses readyWhen expressions of the form ${step.status.state == "Verified"} to advance the promotion DAG. Verifying: the health check passed and the post-deploy hooks and analyses run. One of: `Pending`, `Promoting`, `WaitingForMerge`, `HealthChecking`, `Verifying`, `Verified`, `Failed`, `AbortedByAlarm`, `RollingBack`. |
 | `status.steps` | []object |  | Steps is the per-step execution history for this PromotionStep. Populated by the reconciler as each step in the sequence starts, completes, or fails. Provides fine-grained visibility into which sub-step is running without reading controller logs. Initialized when the step sequence starts (state → Promoting). |
 | `status.steps[].completedAt` | string (date-time) |  | CompletedAt is when the step finished (success or failure). |
 | `status.steps[].durationMs` | integer (int64) |  | DurationMs is the wall-clock duration in milliseconds from startedAt to completedAt. Zero when the step has not completed. |
@@ -561,6 +639,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.steps[].startedAt` | string (date-time) |  | StartedAt is when the step began executing. |
 | `status.steps[].state` | string | yes | State is the execution state of this step. |
 | `status.targetUpdatedAt` | string (date-time) |  | TargetUpdatedAt is when a health check of this step first found the workload's target running the Bundle images (health.type resource: the Deployment's pod template; flagger: the Canary's target Deployment). Set once. The flagger check counts a Failed phase, and the resource check a ProgressDeadlineExceeded when it cannot read the ReplicaSet the condition names, only when set after this time: the earlier rollout's condition or phase can outlast the Bundle's update. |
+| `status.verificationStartedAt` | string (date-time) |  | VerificationStartedAt is when the step entered Verifying (its health check passed and its post-deploy hooks may start). Set once; the Graph creates the post-deploy HookRuns once it is set. |
 | `status.waitForMergeExpiry` | string (date-time) |  | WaitForMergeExpiry is the deadline for the PR merge, computed as (time step entered WaitingForMerge) + env.waitForMergeTimeout. Set once on the first reconcile in WaitingForMerge state when the environment configures a non-zero waitForMergeTimeout. Nil when no timeout is configured. Graph-purity: same pattern as HealthCheckExpiry — time.Now() called only when writing to CRD status. |
 | `status.workDir` | string |  | WorkDir is the working directory on the controller node used for git operations (clone, commit, push) and kustomize builds. Persisted to etcd so that a restarted controller can re-use the same directory and resume in-flight git work. ST-7/ST-8/ST-9 short-term mitigation: the workdir path is made observable via CRD status, enabling crash-recovery without re-cloning. Long-term: git operations become Kubernetes Jobs (owned nodes in the Graph). |
 

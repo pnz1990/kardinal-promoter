@@ -98,6 +98,13 @@ func (t *Translator) Translate(ctx context.Context,
 
 	log.Debug().Int("gates", len(gates)).Msg("collected policy gates")
 
+	// Argo Rollouts analysis templates named by spec.verification
+	// (analysis.go). An API error is retried; a missing template or kind is
+	// recorded and fails Build for an environment that verifies.
+	analyses, err := t.collectAnalyses(ctx, pipeline)
+	if err != nil {
+		return "", fmt.Errorf("translator.Translate: collect analysis templates: %w", err)
+	}
 	// Per-promotion MetricChecks of the Pipeline namespace: the builder adds
 	// an instance for each one a gate reads.
 	metricChecks, err := t.collectMetricTemplates(ctx, pipeline.Namespace)
@@ -121,6 +128,7 @@ func (t *Translator) Translate(ctx context.Context,
 		Bundle:           bundle,
 		PolicyGates:      gates,
 		PolicyNamespaces: t.policyNS,
+		Analyses:         analyses,
 		Shape:            shape,
 		MetricChecks:     metricChecks,
 	})
