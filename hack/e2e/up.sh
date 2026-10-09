@@ -16,7 +16,7 @@
 #   delivery Forgejo + Argo CD + Argo Rollouts + Flagger
 #   ui      Forgejo + Argo CD + the UI auth, CORS and TLS releases (ui.sh)
 #   flux    Forgejo + Flux + Prometheus Operator, Prometheus, Pushgateway,
-#           Grafana
+#           Grafana, and fake Datadog/New Relic/CloudWatch/web metrics APIs
 #   chart   Forgejo + Argo CD + cert-manager + podinfo on the node, the webhook
 #           receiver (TestChart_EgressAllowlist) and Jaeger (TestChart_Tracing), and no
 #           controller release:
@@ -74,7 +74,7 @@ case "$SUITE" in
     HELM_ARGS='--set ui.allowedHosts={kardinal-ui.test}' ;;
   # Flux health checks, MetricChecks against Prometheus, and the chart's
   # ServiceMonitor, PrometheusRule and Grafana dashboard.
-  flux) COMPONENTS=("giteafamily.sh forgejo" flux.sh prometheus.sh grafana.sh) RUN='^Test(Flux|Metric|Obs)_'
+  flux) COMPONENTS=("giteafamily.sh forgejo" flux.sh prometheus.sh grafana.sh metrics-api.sh) RUN='^Test(Flux|Metric|Obs)_'
     HELM_ARGS='--set serviceMonitor.enabled=true --set prometheusRule.enabled=true --set grafanaDashboard.enabled=true' ;;
   chart) COMPONENTS=("giteafamily.sh forgejo" argocd.sh cert-manager.sh podinfo.sh webhook-receiver.sh jaeger.sh) RUN='^Test(Chart|Deprecated)_'
     export KARDINAL_E2E_INSTALL=0 ;;
