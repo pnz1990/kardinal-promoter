@@ -26,23 +26,41 @@ import (
 // --from-file or echo ends in a newline, which net/http refuses to send in a
 // header (C06-scm-health-27).
 func NewProvider(providerType, token, apiURL, webhookSecret string) (SCMProvider, error) {
+	return newProvider(providerType, token, apiURL, webhookSecret, NewCircuitRegistry())
+}
+
+// newProvider is NewProvider with the circuit registry the provider uses, so
+// a DynamicProvider can keep its circuits across token reloads (#1274).
+func newProvider(providerType, token, apiURL, webhookSecret string, circuits *CircuitRegistry) (SCMProvider, error) {
 	token = strings.TrimSpace(token)
 	switch providerType {
 	case "github", "":
-		return NewGitHubProvider(token, apiURL, webhookSecret), nil
+		p := NewGitHubProvider(token, apiURL, webhookSecret)
+		p.circuits = circuits
+		return p, nil
 	case "gitlab":
-		return NewGitLabProvider(token, apiURL, webhookSecret), nil
+		p := NewGitLabProvider(token, apiURL, webhookSecret)
+		p.circuits = circuits
+		return p, nil
 	case "forgejo", "gitea":
-		return NewForgejoProvider(token, apiURL, webhookSecret), nil
+		p := NewForgejoProvider(token, apiURL, webhookSecret)
+		p.circuits = circuits
+		return p, nil
 	case "bitbucket":
-		return NewBitbucketProvider(token, apiURL, webhookSecret), nil
+		p := NewBitbucketProvider(token, apiURL, webhookSecret)
+		p.circuits = circuits
+		return p, nil
 	case "azuredevops":
-		return NewAzureDevOpsProvider(token, apiURL, webhookSecret), nil
+		p := NewAzureDevOpsProvider(token, apiURL, webhookSecret)
+		p.circuits = circuits
+		return p, nil
 	case "bitbucket-datacenter":
 		if apiURL == "" {
 			return nil, fmt.Errorf("SCM provider bitbucket-datacenter needs --scm-api-url, the server's base URL")
 		}
-		return NewBitbucketDCProvider(token, apiURL, webhookSecret), nil
+		p := NewBitbucketDCProvider(token, apiURL, webhookSecret)
+		p.circuits = circuits
+		return p, nil
 	default:
 		return nil, fmt.Errorf("unknown SCM provider type %q: supported types are \"github\", \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\", \"azuredevops\", \"bitbucket-datacenter\"", providerType)
 	}

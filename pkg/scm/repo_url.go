@@ -307,3 +307,25 @@ func ParseWebhookRequest(p SCMProvider, payload []byte, h http.Header) (WebhookE
 	}
 	return p.ParseWebhookEvent(payload, signature)
 }
+
+// canonicalOf is p's canonical form of repo: its CanonicalRepo when it has
+// one, the repository in lower case otherwise (the SameRepo comparison).
+func canonicalOf(p SCMProvider, repo string) string {
+	if c, ok := p.(RepoCanonicalizer); ok {
+		return c.CanonicalRepo(repo)
+	}
+	return strings.ToLower(repo)
+}
+
+// CanonicalRepo implements RepoCanonicalizer for the provider DynamicProvider
+// holds, so a Data Center provider behind it still matches its webhooks and
+// allowlist however the URL names the repository.
+func (d *DynamicProvider) CanonicalRepo(repo string) string { return canonicalOf(d.current(), repo) }
+
+// CanonicalRepo implements RepoCanonicalizer for the guarded provider.
+func (g *guardedProvider) CanonicalRepo(repo string) string { return canonicalOf(g.inner, repo) }
+
+var (
+	_ RepoCanonicalizer = (*DynamicProvider)(nil)
+	_ RepoCanonicalizer = (*guardedProvider)(nil)
+)

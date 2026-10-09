@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // BitbucketDCProvider implements SCMProvider against the REST API 1.0 of
@@ -51,7 +50,10 @@ type BitbucketDCProvider struct {
 	// ("sha256=<hex>"). Empty refuses every event (ErrNoWebhookSecret).
 	WebhookSecret string
 
-	circuit *CircuitBreaker
+	// circuits guards the API calls, one circuit per project (key, in upper
+	// case: keys are case-insensitive), as the other providers have one per
+	// owner (#1274).
+	circuits *CircuitRegistry
 	client  *http.Client
 }
 
@@ -62,7 +64,7 @@ func NewBitbucketDCProvider(token, apiURL, webhookSecret string) *BitbucketDCPro
 		Token:         token,
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
-		circuit:       NewCircuitBreaker(),
+		circuits:      NewCircuitRegistry(),
 		client:        &http.Client{Timeout: providerHTTPTimeout},
 	}
 }
@@ -405,7 +407,8 @@ func (b *BitbucketDCProvider) do(ctx context.Context, method, path string, body,
 	if b.APIURL == "" {
 		return errors.New("bitbucket-datacenter scm: --scm-api-url (the server's base URL) is not set")
 	}
-	if err := b.circuit.Allow(); err != nil {
+	owner := dcProjectOf(path)
+	if err := b.circuits.Allow(owner); err != nil {
 		return fmt.Errorf("bitbucket-datacenter scm: %w", err)
 	}
 	var bodyReader io.Reader
@@ -430,16 +433,16 @@ func (b *BitbucketDCProvider) do(ctx context.Context, method, path string, body,
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
-		b.circuit.RecordFailure(time.Time{})
+		b.circuits.Record(owner, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		b.circuit.RecordResponse(resp)
+		b.circuits.Record(owner, resp, nil)
 		return newAPIError("bitbucket-datacenter", method, path, resp, raw)
 	}
-	b.circuit.RecordSuccess()
+	b.circuits.Record(owner, resp, nil)
 	if result != nil && resp.StatusCode != http.StatusNoContent {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil && !errors.Is(err, io.EOF) {
 			return fmt.Errorf("decode response: %w", err)
@@ -454,3 +457,15 @@ var (
 	_ MergeCommitGetter = (*BitbucketDCProvider)(nil)
 	_ eventTypeParser   = (*BitbucketDCProvider)(nil)
 )
+
+// dcProjectOf is the circuit owner of a request path: the project key of
+// /rest/api/1.0/projects/{key}/... and /rest/branch-utils/1.0/projects/{key}/...,
+// in upper case.
+func dcProjectOf(path string) string {
+	for _, prefix := range []string{"/rest/api/1.0/projects/", "/rest/branch-utils/1.0/projects/"} {
+		if owner := ownerFromPath(path, prefix); owner != "" {
+			return strings.ToUpper(owner)
+		}
+	}
+	return ""
+}

@@ -5,6 +5,7 @@ package scm_test
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func TestRenderPR_Templates(t *testing.T) {
 	got, err := scm.RenderPR(&v1alpha1.PRConfig{
 		TitleTemplate: "deploy {{ .Bundle.Version }}\nto {{ .Environment | upper }} ({{ .Bundle.CommitSHA | truncate 7 }})",
 		BodyTemplate:  "Release {{ .Bundle.Name }} by @{{ .Bundle.Author }}\n\n{{ provenanceTable }}\n\n{{ gatesTable }}\n\n{{ upstreamTable }}",
-		Labels:        []string{"env/{{ .Environment }}", "{{ range .Bundle.Images }}image/{{ .Tag }}\n{{ end }}", "kardinal", "  ", "env/prod"},
+		Labels:        []string{"env/{{ .Environment }}", "image/{{ (index .Bundle.Images 0).Tag }}", "kardinal", "  ", "env/prod"},
 		Reviewers:     []string{"alice", "{{ .Bundle.Author }}"},
 		TeamReviewers: []string{"platform"},
 		Assignees:     []string{"{{ .Bundle.Author }}", "{{ if .IsRollback }}oncall{{ end }}"},
@@ -178,14 +179,11 @@ func TestPRTemplates_Sandbox(t *testing.T) {
 		{"doubling message", v1alpha1.PRConfig{Merge: &v1alpha1.PRMergeConfig{Auto: true, CommitMessageTemplate: doubling}},
 			"pr.merge.commitMessageTemplate: variables are not allowed"},
 		{"recursion", v1alpha1.PRConfig{BodyTemplate: `{{ define "r" }}{{ template "r" }}{{ end }}{{ template "r" }}`}, "pr.bodyTemplate: define and block are not allowed"},
-		{"range over a number", v1alpha1.PRConfig{BodyTemplate: `{{ range 100000000 }}{{ end }}`}, "range takes a data path only"},
-		{"range over a parenthesised number", v1alpha1.PRConfig{BodyTemplate: `{{ range (1000000000) }}{{ range (1000000000) }}{{ end }}{{ end }}`}, "range takes a data path only"},
-		{"range over a function", v1alpha1.PRConfig{BodyTemplate: `{{ range len .Bundle.Name }}{{ end }}`}, "range takes a data path only"},
+		{"range over a number", v1alpha1.PRConfig{BodyTemplate: `{{ range 100000000 }}{{ end }}`}, "range is not allowed"},
+		{"range over the images", v1alpha1.PRConfig{Labels: []string{`{{ range .Bundle.Images }}{{ .Tag }}{{ end }}`}}, "pr.labels[0]: range is not allowed"},
 		{"printf", v1alpha1.PRConfig{TitleTemplate: `{{ printf "%999999999d" 1 }}`}, "printf is not available in this template"},
 		{"printf argument indexes", v1alpha1.PRConfig{BodyTemplate: `{{ printf "%[1]s%[1]s%[1]s%[1]s" .Bundle.Name }}`}, "printf is not available in this template"},
 		{"replace with an empty old", v1alpha1.PRConfig{TitleTemplate: `{{ replace "" "x" .Bundle.Name }}`}, "replace: the string to replace is empty"},
-		{"deep ranges", v1alpha1.PRConfig{BodyTemplate: `{{ range .Bundle.Images }}{{ range $.Bundle.Images }}{{ range $.Bundle.Images }}{{ end }}{{ end }}{{ end }}`},
-			"ranges nested more than 2 deep"},
 		{"output too long", v1alpha1.PRConfig{TitleTemplate: strings.Repeat("{{ evidence }}", 8)}, "pr.titleTemplate: template output is too large"},
 	}
 	for _, tt := range tests {
@@ -373,4 +371,62 @@ func TestPRTemplateData_Bounded(t *testing.T) {
 	got, err := scm.RenderPR(&v1alpha1.PRConfig{TitleTemplate: "by {{ .Bundle.Author }}"}, "t", body)
 	require.NoError(t, err, "a title is one line anyway")
 	assert.Equal(t, "by alice bob", got.Title)
+}
+
+// TestNewPRTemplateData_Bounded: every string of the template data, the
+// image fields included, is cut to 1024 characters and the images to 20, so
+// what a template reads is bounded whatever the Bundle holds; imageList
+// lists them one per line; a line break in any string refuses a list.
+//
+// Covers SCM-PRCTL-TPL-01.
+func TestNewPRTemplateData_Bounded(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	body := prTemplateBody()
+	body.PipelineName, body.Environment, body.BundleName = long, long, long
+	body.Bundle.Images = nil
+	for i := 0; i < 30; i++ {
+		body.Bundle.Images = append(body.Bundle.Images, v1alpha1.ImageRef{Repository: long, Tag: long, Digest: long})
+	}
+	d := scm.NewPRTemplateData(body)
+	require.Len(t, d.Bundle.Images, 20)
+	for _, s := range []string{d.Pipeline, d.Environment, d.Bundle.Name, d.Bundle.Version,
+		d.Bundle.Images[0].Repository, d.Bundle.Images[0].Tag, d.Bundle.Images[19].Digest} {
+		assert.LessOrEqual(t, len([]rune(s)), 1024)
+	}
+
+	body = prTemplateBody()
+	body.Bundle.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/a/web", Tag: "2.0.0"}, {Repository: "ghcr.io/a/api", Tag: "1.1", Digest: "sha256:ab"}}
+	got, err := scm.RenderPR(&v1alpha1.PRConfig{BodyTemplate: "{{ imageList }}"}, "t", body)
+	require.NoError(t, err)
+	assert.Equal(t, "<!-- kardinal-promoter auto-generated PR -->\nghcr.io/a/web:2.0.0\nghcr.io/a/api:1.1@sha256:ab", got.Body)
+
+	body.Bundle.Images[1].Tag = "1.1\nevil"
+	_, err = scm.RenderPR(&v1alpha1.PRConfig{Labels: []string{"x"}}, "t", body)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has a line break")
+	body = prTemplateBody()
+	body.BundleName = "web\nv2"
+	_, err = scm.RenderPR(&v1alpha1.PRConfig{Reviewers: []string{"x"}}, "t", body)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), ".Bundle.Name has a line break")
+}
+
+// TestRenderPR_PrintTheDataIsRefused (#1474 review): {{print . . ...}} with
+// 8000 dots passes the whole data struct to print 8000 times. It is refused
+// before anything formats it, fast and without a large allocation.
+//
+// Covers SCM-PRCTL-TPL-01.
+func TestRenderPR_PrintTheDataIsRefused(t *testing.T) {
+	text := "{{ print" + strings.Repeat(" .", 8000) + " }}"
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	_, err := scm.RenderPR(&v1alpha1.PRConfig{BodyTemplate: text}, "t", prTemplateBody())
+	elapsed := time.Since(start)
+	runtime.ReadMemStats(&after)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "print: takes strings, numbers and bools only")
+	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20), "no formatting of the data")
+	assert.Less(t, elapsed, 2*time.Second)
 }

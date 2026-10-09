@@ -57,7 +57,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.images` | []object |  | Images lists the container images included in this Bundle. |
 | `spec.images[].digest` | string |  | Digest is the image digest (sha256:...). |
 | `spec.images[].repository` | string | yes | Repository is the image repository (e.g. "ghcr.io/nginx/nginx"). |
-| `spec.images[].tag` | string |  | Tag is the image tag. |
+| `spec.images[].tag` | string |  | Tag is the image tag (at most 128 characters, the OCI limit). |
 | `spec.intent` | object |  | Intent declares optional targeting and skip overrides for this Bundle. |
 | `spec.intent.skipEnvironments` | []string |  | SkipEnvironments lists environment names to exclude from this promotion, subject to the PolicyGate SkipPermission check. |
 | `spec.intent.targetEnvironment` | string |  | TargetEnvironment restricts this Bundle to promoting only up to and including this environment. Empty means promote through all environments. |
@@ -178,7 +178,7 @@ PRStatus is a controller-internal CRD that tracks the merge state of a GitHub pu
 | `spec` | object |  | PRStatusSpec defines the desired state of a PRStatus object. PRStatus objects are created by the PromotionStep reconciler's open-pr step, and updated by the PRStatus reconciler via polling or webhook events. |
 | `spec.prNumber` | integer |  | PRNumber is the pull request number (numeric ID within the repo). Set by the open-pr step after the PR is created. Zero in the placeholder. The PromotionStep sets it again when it opened another PR (a recreated step whose PR was closed): the spec always names the step's PR. |
 | `spec.prURL` | string |  | PRURL is the full GitHub pull request URL. Example: https://github.com/owner/repo/pull/42 Set by the open-pr step after the PR is created. Empty in the placeholder. |
-| `spec.repo` | string |  | Repo is the "owner/repo" slug identifying the GitHub repository. Example: acme/my-service Set by the open-pr step after the PR is created. Empty in the placeholder. |
+| `spec.repo` | string |  | Repo is the repository as the SCM API names it: "owner/repo" (GitHub, Forgejo, Gitea, Bitbucket), the project path with subgroups (GitLab), or "organization/project/repo" (Azure DevOps, whose project and repository names may hold single spaces). Each segment is letters, digits, ".", "_" and "-": no percent escapes, backslashes, "?", "#" or control characters, which the SCM API would read as another path. Example: acme/my-service Set by the open-pr step after the PR is created. Empty in the placeholder. |
 | `status` | object |  | PRStatusStatus holds the observed state of the pull request. Written exclusively by the PRStatusReconciler. |
 | `status.approvalCount` | integer |  | ApprovalCount is the number of distinct approved reviews on this PR. Written by PRStatusReconciler. CEL: bundle.pr["staging"].approvalCount &gt;= 2 |
 | `status.approved` | boolean |  | Approved is true when the pull request has at least one approved review and no outstanding change-request reviews. Written by PRStatusReconciler. CEL: bundle.pr["staging"].isApproved |

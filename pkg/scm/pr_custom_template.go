@@ -41,8 +41,7 @@ const maxPRTitle = 255
 const maxPRLabel = 50
 
 // maxPRListEntries bounds how many labels, reviewers or assignees one list
-// renders to: a template with a range over a long list must not fan out
-// into hundreds of API calls.
+// renders to: a list must not fan out into hundreds of API calls.
 const maxPRListEntries = 50
 
 // PRTemplateData is the data of every pr template.
@@ -104,21 +103,27 @@ type PRTemplatePR struct {
 }
 
 // NewPRTemplateData returns the template data of the PR whose default body
-// is body.
+// is body. Every string is cut to maxTemplateValue characters and the image
+// list to maxTemplateImages entries, so what a template reads is bounded
+// whatever the Bundle holds.
 func NewPRTemplateData(body PRBody) PRTemplateData {
+	short := func(s string) string { return tmplsafe.TruncateRunes(s, maxTemplateValue) }
 	images := body.Bundle.Images
 	if len(images) > maxTemplateImages {
 		images = images[:maxTemplateImages]
 	}
-	short := func(s string) string { return tmplsafe.TruncateRunes(s, maxTemplateValue) }
+	cut := make([]v1alpha1.ImageRef, len(images))
+	for i, img := range images {
+		cut[i] = v1alpha1.ImageRef{Repository: short(img.Repository), Tag: short(img.Tag), Digest: short(img.Digest)}
+	}
 	d := PRTemplateData{
-		Pipeline:    body.PipelineName,
-		Environment: body.Environment,
+		Pipeline:    short(body.PipelineName),
+		Environment: short(body.Environment),
 		Bundle: PRTemplateBundle{
-			Name:    body.BundleName,
-			Type:    body.Bundle.Type,
+			Name:    short(body.BundleName),
+			Type:    short(body.Bundle.Type),
 			Version: short(BundleVersion(body.Bundle)),
-			Images:  images,
+			Images:  cut,
 		},
 		IsRollback: body.RollbackOf != "",
 	}
@@ -129,14 +134,14 @@ func NewPRTemplateData(body PRBody) PRTemplateData {
 		d.Bundle.Author, d.Bundle.CommitSHA, d.Bundle.CIRunURL = short(p.Author), short(p.CommitSHA), short(p.CIRunURL)
 	}
 	if d.IsRollback {
-		d.Rollback = PRTemplateRollback{Of: body.RollbackOf, From: body.RollbackFrom, By: short(body.RolledBackBy), Restores: short(body.RestoredVersion)}
+		d.Rollback = PRTemplateRollback{Of: short(body.RollbackOf), From: short(body.RollbackFrom),
+			By: short(body.RolledBackBy), Restores: short(body.RestoredVersion)}
 	}
 	return d
 }
 
-// The template data is bounded: a range over .Bundle.Images runs at most
-// maxTemplateImages times, and each string value is at most
-// maxTemplateValue characters.
+// The template data is bounded: at most maxTemplateImages images, and each
+// string value at most maxTemplateValue characters.
 const (
 	maxTemplateImages = 20
 	maxTemplateValue  = 1024
@@ -144,14 +149,21 @@ const (
 
 // multiLineValue names a data value with a line break. A list template
 // renders one entry per line, so such a value (an author "alice\nbob")
-// would make two entries; the list is refused instead.
+// would make two entries; the list is refused instead. Every string of the
+// data is checked.
 func multiLineValue(d PRTemplateData) string {
-	for name, v := range map[string]string{
-		".Bundle.Author": d.Bundle.Author, ".Bundle.CommitSHA": d.Bundle.CommitSHA, ".Bundle.CIRunURL": d.Bundle.CIRunURL,
-		".Bundle.Version": d.Bundle.Version, ".Rollback.By": d.Rollback.By, ".Rollback.Restores": d.Rollback.Restores,
-	} {
-		if strings.ContainsAny(v, "\r\n") {
-			return name
+	values := []struct{ name, v string }{
+		{".Pipeline", d.Pipeline}, {".Environment", d.Environment},
+		{".Bundle.Name", d.Bundle.Name}, {".Bundle.Type", d.Bundle.Type}, {".Bundle.Version", d.Bundle.Version},
+		{".Bundle.ConfigCommitSHA", d.Bundle.ConfigCommitSHA},
+		{".Bundle.Author", d.Bundle.Author}, {".Bundle.CommitSHA", d.Bundle.CommitSHA}, {".Bundle.CIRunURL", d.Bundle.CIRunURL},
+		{".Rollback.Of", d.Rollback.Of}, {".Rollback.From", d.Rollback.From},
+		{".Rollback.By", d.Rollback.By}, {".Rollback.Restores", d.Rollback.Restores},
+		{".PR.URL", d.PR.URL}, {".PR.Title", d.PR.Title},
+	}
+	for _, x := range values {
+		if strings.ContainsAny(x.v, "\r\n") {
+			return x.name
 		}
 	}
 	for _, img := range d.Bundle.Images {
@@ -162,12 +174,31 @@ func multiLineValue(d PRTemplateData) string {
 	return ""
 }
 
+// imageList is one line per image of d: <repository>:<tag>, with
+// @<digest> when the image has one. The template language has no loop, so
+// this is how a template lists the images.
+func imageList(d PRTemplateData) string {
+	lines := make([]string, 0, len(d.Bundle.Images))
+	for _, img := range d.Bundle.Images {
+		ref := img.Repository
+		if img.Tag != "" {
+			ref += ":" + img.Tag
+		}
+		if img.Digest != "" {
+			ref += "@" + img.Digest
+		}
+		lines = append(lines, ref)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // prTemplateFuncs returns the functions of a pr template. The evidence
 // functions return the sections of the default body for body, rendered once
 // before the template (their size is known before a call). The text helpers
 // are tmplsafe.StringFuncs.
-func prTemplateFuncs(body PRBody) (tmplsafe.FuncMap, error) {
+func prTemplateFuncs(body PRBody, data PRTemplateData) (tmplsafe.FuncMap, error) {
 	funcs := tmplsafe.StringFuncs()
+	funcs["imageList"] = tmplsafe.Const(imageList(data))
 	whole, err := RenderPRBody(body)
 	if err != nil {
 		return nil, err
@@ -208,12 +239,12 @@ func prLimits(maxOutput int) tmplsafe.Limits {
 
 // renderPRTemplate parses and executes one pr template in the tmplsafe
 // sandbox: a template written in a Pipeline runs in the controller, so it
-// may not declare variables, recurse, loop over a number or grow past lim.
+// may not declare variables, recurse, loop or grow past lim.
 // A template is parsed per render, with its functions bound to body:
 // parsing is cheap, and it keeps the shared state of a render out of the
 // template.
 func renderPRTemplate(field, text string, lim tmplsafe.Limits, body PRBody, data PRTemplateData) (string, error) {
-	funcs, err := prTemplateFuncs(body)
+	funcs, err := prTemplateFuncs(body, data)
 	if err != nil {
 		return "", fmt.Errorf("pr.%s: %w", field, err)
 	}

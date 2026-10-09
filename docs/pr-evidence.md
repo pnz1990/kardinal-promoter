@@ -171,8 +171,8 @@ environments:
 | `merge.commitMessageTemplate` | The merge (or squash) commit message: the first line is the title, the rest the body. Needs `merge.auto: true`. Empty leaves the SCM's message. |
 
 Each list entry is a template too. Each line it renders is one entry, and blank lines and
-repeats are dropped, so `{{ range .Bundle.Images }}image/{{ .Tag }}{{ "\n" }}{{ end }}` adds a
-label per image. Which controls each provider applies is in
+repeats are dropped, so `image/{{ (index .Bundle.Images 0).Tag }}` adds a label for the first
+image, and an entry that renders nothing adds nothing. Which controls each provider applies is in
 [SCM Providers](scm-providers.md#pr-controls); a control the provider does not apply fails the
 step before the PR is opened.
 
@@ -186,7 +186,7 @@ Every template is a Go [text/template](https://pkg.go.dev/text/template) with th
 | `.Environment` | Environment name |
 | `.Bundle.Name`, `.Bundle.Type` | Bundle name and type (`image`, `config`, `mixed`) |
 | `.Bundle.Version` | What the Bundle deploys: the tag of a one-image Bundle, `<image>:<tag>` for each of several images, `config <commit>` for a config Bundle (as in the rollback title) |
-| `.Bundle.Images` | The images: `.Repository`, `.Tag`, `.Digest` |
+| `.Bundle.Images` | The images: `.Repository`, `.Tag`, `.Digest`. Read one with `index`: `{{ (index .Bundle.Images 0).Tag }}`; list them with `imageList` |
 | `.Bundle.ConfigCommitSHA` | The config commit of a config or mixed Bundle |
 | `.Bundle.Author`, `.Bundle.CommitSHA`, `.Bundle.CIRunURL` | `spec.provenance`; empty when the Bundle has none |
 | `.IsRollback` | `true` for a rollback PR |
@@ -205,23 +205,28 @@ Every field is a plain value, so a Bundle without provenance renders empty strin
 | `provenanceTable` | `### Artifact Provenance` and its table |
 | `gatesTable` | `### Policy Gate Compliance` and its table |
 | `upstreamTable` | `### Upstream Verification` and its table |
+| `imageList` | One line per image: `<repository>:<tag>`, with `@<digest>` when the image has one |
 | `mdcell` | Escapes a value for a markdown table cell |
 | `truncate N`, `lower`, `upper`, `trimSpace`, `trimPrefix P`, `replace OLD NEW`, `contains S`, `hasPrefix P`, `join SEP`, `default D` | String helpers; the string comes last, so they work in a pipeline: `{{ .Bundle.CommitSHA \| truncate 7 }}`. `printf` is not available; use `print` or the helpers |
+| `if`/`else if`/`else`, `with`, `and`, `or`, `not`, `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `len`, `index`, `slice`, `print`, `println`, `html`, `js`, `urlquery` | As in text/template; `slice` takes at most two indexes |
 
 ### Template limits
 
-The templates run in the controller, so they are restricted: variables (`{{ $x := ... }}`,
-`{{ $x = ... }}`, `range $i, $v := ...`), `define`, `block`, `template`, `printf` and `call` are
-refused; `range` takes a data path only (`.Bundle.Images`, `$.Bundle.Images`, `.`), not a
-number, a function or a pipeline, at most 8 ranges nested at most two deep, and at most 1000
-iterations per render. `$` and `.` work as usual. `print`, `println`, `html`, `js` and
-`urlquery` take strings, numbers and bools only, and `replace` refuses an empty string to
-replace. Every function's result size is computed from its arguments before it runs: one call
-builds at most 64 KiB and a whole render at most 1 MiB, in at most 2000 calls and one second. A
-body renders at most 64 KiB, a title or list entry 4 KiB and a commit message 16 KiB. The data is
-bounded too: at most 20 images, 1024 characters per value. A template that breaks a rule is
-refused like one that does not parse. A list template refuses a value with a line break (an
-author `alice\nbob` would make two entries).
+The templates run in the controller, so the language is restricted and has no loops: `range`,
+variables (`{{ $x := ... }}`, `{{ $x = ... }}`), `define`, `block`, `template`, `printf` and
+`call` are refused. Without loops, a render runs each part of the template at most once, so its
+work is bounded by the template's length, not by the Bundle. The lists a body shows (images,
+gates, upstream environments) come from `imageList` and the evidence functions. `$` and `.`
+work as usual. `print`, `println`, `html`, `js` and `urlquery` take strings, numbers and bools
+only: a struct, map, list or pointer argument, such as `.`, is refused before it is formatted.
+`replace` refuses an empty string to replace. Every function, the comparisons
+included, is counted, and its result size (for a comparison, what it reads) is computed from
+its arguments before it runs: one call builds at most 64 KiB and a whole render at most 1 MiB,
+in at most 2000 calls and one second, after which every call and write fails at once. A body
+renders at most 64 KiB, a title or list entry 4 KiB and a commit message 16 KiB. The data is
+bounded too: at most 20 images and 1024 characters per value, image fields included. A
+template that breaks a rule is refused like one that does not parse. A list template refuses a
+value with a line break (an author `alice\nbob` would make two entries).
 
 ### Invalid templates and failed controls
 

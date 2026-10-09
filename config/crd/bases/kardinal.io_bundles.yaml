@@ -83,13 +83,17 @@ spec:
                   properties:
                     digest:
                       description: Digest is the image digest (sha256:...).
+                      maxLength: 256
                       type: string
                     repository:
                       description: Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
+                      maxLength: 512
                       minLength: 1
                       type: string
                     tag:
-                      description: Tag is the image tag.
+                      description: Tag is the image tag (at most 128 characters, the
+                        OCI limit).
+                      maxLength: 128
                       type: string
                   required:
                   - repository
