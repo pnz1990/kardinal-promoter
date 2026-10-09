@@ -26,12 +26,14 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -39,6 +41,7 @@ import (
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // maxGateOverrideMinutes bounds a UI gate override to one day.
@@ -75,6 +78,112 @@ type uiPipelineResponse struct {
 	// LastMergedAt is the RFC3339 timestamp of the last env that reached Verified.
 	// Empty string when no environment has been verified yet.
 	LastMergedAt string `json:"lastMergedAt,omitempty"`
+	// DeploymentMetrics is the Pipeline's status.deploymentMetrics, written by
+	// the PipelineReconciler (DORA throughput and stability for the last
+	// environment). Nil until a Bundle is Verified there.
+	DeploymentMetrics *v1alpha1.PipelineDeploymentMetrics `json:"deploymentMetrics,omitempty"`
+	// ActiveBundleVersion is what the active Bundle ships (scm.BundleVersion:
+	// the image tag, or "config <sha>"), for the fleet board.
+	ActiveBundleVersion string `json:"activeBundleVersion,omitempty"`
+	// Deployed is, per environment, the Bundle whose change the environment
+	// runs: the newest PromotionStep there that landed its change
+	// (lifecycle.DeployedBundle, as kardinal status reports). Environments
+	// that never received one are absent.
+	Deployed map[string]uiDeployed `json:"deployed,omitempty"`
+}
+
+// uiDeployed is what one environment runs, for the fleet board.
+type uiDeployed struct {
+	Bundle string `json:"bundle"`
+	// Version is scm.BundleVersion of that Bundle; empty when the Bundle is
+	// gone.
+	Version string `json:"version,omitempty"`
+	// VerifiedAt is the RFC 3339 time its step in the environment was
+	// Verified (the latest region); empty while it is still health checking.
+	VerifiedAt string `json:"verifiedAt,omitempty"`
+	// ConfigFrom, under an image Bundle, is the last Bundle that deployed a
+	// config commit there, and ConfigVersion that commit ("config abc1234").
+	// ImagesFrom, under a config Bundle, is the last Bundle that deployed
+	// images, and ImagesVersion their tags. Image and config Bundles do not
+	// supersede each other, so the environment runs both (#1353), as
+	// kardinal status reports.
+	ConfigFrom    string `json:"configFrom,omitempty"`
+	ConfigVersion string `json:"configVersion,omitempty"`
+	ImagesFrom    string `json:"imagesFrom,omitempty"`
+	ImagesVersion string `json:"imagesVersion,omitempty"`
+}
+
+// pick returns pointers to the steps at idx.
+func pick(steps []v1alpha1.PromotionStep, idx []int) []*v1alpha1.PromotionStep {
+	out := make([]*v1alpha1.PromotionStep, len(idx))
+	for j, i := range idx {
+		out[j] = &steps[i]
+	}
+	return out
+}
+
+// stepsByEnv groups the steps at idx (one Pipeline's) by environment, as
+// pointers into steps.
+func stepsByEnv(steps []v1alpha1.PromotionStep, idx []int) map[string][]*v1alpha1.PromotionStep {
+	out := map[string][]*v1alpha1.PromotionStep{}
+	for _, i := range idx {
+		env := steps[i].Spec.Environment
+		out[env] = append(out[env], &steps[i])
+	}
+	return out
+}
+
+// deployedByEnv returns, per environment of p, the Bundles it runs. byEnv
+// holds p's steps by environment (stepsByEnv), so the cost is linear in the
+// steps.
+func deployedByEnv(p *v1alpha1.Pipeline, byEnv map[string][]*v1alpha1.PromotionStep, bundles map[string]*v1alpha1.Bundle) map[string]uiDeployed {
+	out := make(map[string]uiDeployed, len(p.Spec.Environments))
+	// Most environments run the same few Bundles: name each version once.
+	versions := map[string]string{}
+	version := func(name string, spec v1alpha1.BundleSpec) string {
+		v, ok := versions[name]
+		if !ok {
+			v = scm.BundleVersion(spec)
+			versions[name] = v
+		}
+		return v
+	}
+	for _, env := range p.Spec.Environments {
+		envSteps := byEnv[env.Name]
+		dep := lifecycle.DeployedInSteps(envSteps, p.Name, env.Name, bundles)
+		if dep.Bundle == "" {
+			continue
+		}
+		d := uiDeployed{Bundle: dep.Bundle}
+		if b := bundles[dep.Bundle]; b != nil {
+			d.Version = version(dep.Bundle, b.Spec)
+		}
+		if b := bundles[dep.ConfigFrom]; b != nil {
+			d.ConfigFrom = dep.ConfigFrom
+			d.ConfigVersion = version("config/"+dep.ConfigFrom, v1alpha1.BundleSpec{Type: "config", ConfigRef: b.Spec.ConfigRef})
+		}
+		if b := bundles[dep.ImagesFrom]; b != nil {
+			d.ImagesFrom = dep.ImagesFrom
+			d.ImagesVersion = version("images/"+dep.ImagesFrom, v1alpha1.BundleSpec{Type: "image", Images: b.Spec.Images})
+		}
+		var at time.Time
+		for _, s := range envSteps {
+			if s.Spec.BundleName != dep.Bundle {
+				continue
+			}
+			if t, ok := lifecycle.VerifiedTime(s); ok && t.After(at) {
+				at = t
+			}
+		}
+		if !at.IsZero() {
+			d.VerifiedAt = at.UTC().Format(time.RFC3339)
+		}
+		out[env.Name] = d
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // uiEnvironmentNode is the static topology shape for one environment in a Pipeline.
@@ -87,6 +196,10 @@ type uiEnvironmentNode struct {
 	DependsOn []string `json:"dependsOn,omitempty"`
 	// Approval is "auto" or "pr-review" — shown as a badge on the node.
 	Approval string `json:"approval,omitempty"`
+	// Upstreams are the environments this one waits for as the controller
+	// resolves them (dependsOn, waves, or the previous entry), sorted; empty
+	// for a root. Absent when the Pipeline's ordering is invalid.
+	Upstreams []string `json:"upstreams,omitempty"`
 }
 
 // uiBundleResponse is the JSON shape for a Bundle in the UI API.
@@ -236,6 +349,65 @@ type uiGateOverride struct {
 type uiAPIServer struct {
 	client client.Client
 	log    zerolog.Logger
+	// upstreams caches each Pipeline's resolved environment upstreams by
+	// generation: the list is polled every few seconds and a Pipeline's
+	// ordering changes only with its spec.
+	upstreams upstreamCache
+}
+
+// upstreamCache memoizes graph.AllEnvironmentUpstreams per Pipeline UID and
+// generation. It is a read-side cache of a pure function of the spec, so a
+// stale or empty cache only costs time. Entries of Pipelines absent from a
+// list are dropped (prune).
+type upstreamCache struct {
+	mu      sync.Mutex
+	entries map[types.UID]upstreamEntry
+}
+
+type upstreamEntry struct {
+	generation int64
+	ups        map[string][]string
+	err        error
+}
+
+// get returns the upstreams of p, computing them on a miss. A nil cache
+// computes every time.
+func (c *upstreamCache) get(p *v1alpha1.Pipeline) (map[string][]string, error) {
+	if c == nil || p.UID == "" {
+		return graphpkg.AllEnvironmentUpstreams(p)
+	}
+	c.mu.Lock()
+	e, ok := c.entries[p.UID]
+	c.mu.Unlock()
+	if ok && e.generation == p.Generation {
+		return e.ups, e.err
+	}
+	ups, err := graphpkg.AllEnvironmentUpstreams(p)
+	c.mu.Lock()
+	if c.entries == nil {
+		c.entries = map[types.UID]upstreamEntry{}
+	}
+	c.entries[p.UID] = upstreamEntry{generation: p.Generation, ups: ups, err: err}
+	c.mu.Unlock()
+	return ups, err
+}
+
+// prune drops the entries of Pipelines not in pipelines.
+func (c *upstreamCache) prune(pipelines []v1alpha1.Pipeline) {
+	if c == nil {
+		return
+	}
+	live := make(map[types.UID]bool, len(pipelines))
+	for i := range pipelines {
+		live[pipelines[i].UID] = true
+	}
+	c.mu.Lock()
+	for uid := range c.entries {
+		if !live[uid] {
+			delete(c.entries, uid)
+		}
+	}
+	c.mu.Unlock()
 }
 
 func newUIAPIServer(k8s client.Client, log zerolog.Logger) *uiAPIServer {
@@ -256,6 +428,7 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/resume", s.handleResume)
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
 	mux.HandleFunc("/api/v1/ui/steps/", s.handleStepsSubpath)
+	mux.HandleFunc(openAPIPath, handleOpenAPI)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
@@ -278,15 +451,36 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build per-pipeline active bundle index (#342): the pipeline's current
-	// bundle, whose per-environment states feed the health bar and whose steps
-	// and gates feed the ops counts.
 	var bundleList v1alpha1.BundleList
 	if err := s.client.List(r.Context(), &bundleList); err != nil {
 		s.log.Error().Err(err).Msg("ui: list bundles")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	var stepList v1alpha1.PromotionStepList
+	if err := s.client.List(r.Context(), &stepList); err != nil {
+		s.log.Error().Err(err).Msg("ui: list promotion steps")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	var gateList v1alpha1.PolicyGateList
+	if err := s.client.List(r.Context(), &gateList); err != nil {
+		s.log.Error().Err(err).Msg("ui: list policy gates")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, pipelineListResponse(list.Items, bundleList.Items, stepList.Items, gateList.Items, time.Now().UTC(), &s.upstreams))
+	s.upstreams.prune(list.Items)
+}
+
+// pipelineListResponse builds GET /api/v1/ui/pipelines from the listed
+// objects. It indexes them once, so its cost is linear in the objects
+// (BenchmarkPipelineListResponse).
+func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionStep,
+	gates []v1alpha1.PolicyGate, now time.Time, cache *upstreamCache) []uiPipelineResponse {
+	// Build per-pipeline active bundle index (#342): the pipeline's current
+	// bundle, whose per-environment states feed the health bar and whose steps
+	// and gates feed the ops counts.
 	// Index: namespace/pipeline → current bundle (lifecycle.CurrentBundle): the
 	// newest non-Superseded bundle (lifecycle.CompareCreation), whatever its
 	// phase, so a newer Failed bundle is never hidden behind an older Verified
@@ -301,7 +495,7 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		lastVerified time.Time // most recent HealthCheckedAt across all envs in this bundle
 	}
 	bundlesByPipeline := make(map[string][]v1alpha1.Bundle)
-	for _, b := range bundleList.Items {
+	for _, b := range bundles {
 		if b.Spec.Pipeline != "" {
 			key := b.Namespace + "/" + b.Spec.Pipeline
 			bundlesByPipeline[key] = append(bundlesByPipeline[key], b)
@@ -332,17 +526,19 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 
 	// PromotionSteps feed the failed step count and, with the gates, the
 	// blocker count (ops table #462). Index both by namespace/bundle.
-	var stepList v1alpha1.PromotionStepList
-	if err := s.client.List(r.Context(), &stepList); err != nil {
-		s.log.Error().Err(err).Msg("ui: list promotion steps")
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	failedStepsByBundle := make(map[string]int, len(stepList.Items))
-	stepsByBundle := make(map[string][]v1alpha1.PromotionStep, len(stepList.Items))
-	for _, ps := range stepList.Items {
-		key := ps.Namespace + "/" + ps.Spec.BundleName
-		stepsByBundle[key] = append(stepsByBundle[key], ps)
+	// Indexes hold positions in steps, not copies: a PromotionStep is large,
+	// and copying 100 000 of them several times dominated the request.
+	// Keys are namespace/name pairs, not concatenated strings.
+	type nsName struct{ ns, name string }
+	failedStepsByBundle := make(map[nsName]int)
+	stepsByBundle := make(map[nsName][]int, len(bundles))
+	stepsByPipeline := make(map[nsName][]int, len(pipelines))
+	for i := range steps {
+		ps := &steps[i]
+		key := nsName{ps.Namespace, ps.Spec.BundleName}
+		stepsByBundle[key] = append(stepsByBundle[key], i)
+		pk := nsName{ps.Namespace, ps.Spec.PipelineName}
+		stepsByPipeline[pk] = append(stepsByPipeline[pk], i)
 		// AbortedByAlarm is a failure too: the health alarm stopped the promotion.
 		if ps.Status.State == "Failed" || ps.Status.State == "AbortedByAlarm" {
 			failedStepsByBundle[key]++
@@ -350,24 +546,16 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Index: namespace/bundle → the bundle's gate instances that are not ready.
-	var gateList v1alpha1.PolicyGateList
-	if err := s.client.List(r.Context(), &gateList); err != nil {
-		s.log.Error().Err(err).Msg("ui: list policy gates")
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
 	notReadyByBundle := make(map[string][]v1alpha1.PolicyGate)
-	for _, g := range gateList.Items {
+	for _, g := range gates {
 		if bundleLabel := g.Labels["kardinal.io/bundle"]; bundleLabel != "" && !g.Status.Ready {
 			key := g.Namespace + "/" + bundleLabel
 			notReadyByBundle[key] = append(notReadyByBundle[key], g)
 		}
 	}
 
-	now := time.Now().UTC()
-
-	result := make([]uiPipelineResponse, 0, len(list.Items))
-	for _, p := range list.Items {
+	result := make([]uiPipelineResponse, 0, len(pipelines))
+	for _, p := range pipelines {
 		key := fmt.Sprintf("%s/%s", p.Namespace, p.Name)
 		resp := uiPipelineResponse{
 			Name:             p.Name,
@@ -380,27 +568,40 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		// the DAG even when no Bundle is actively promoting.
 		if len(p.Spec.Environments) > 0 {
 			topo := make([]uiEnvironmentNode, 0, len(p.Spec.Environments))
+			// One ordering resolution per Pipeline: per environment it was
+			// cubic in the environment count.
+			upstreams, upErr := cache.get(&p)
 			for _, env := range p.Spec.Environments {
 				node := uiEnvironmentNode{
 					Name:      env.Name,
 					DependsOn: env.DependsOn,
 					Approval:  env.Approval,
 				}
+				if upErr == nil && len(upstreams[env.Name]) > 0 {
+					node.Upstreams = upstreams[env.Name]
+				}
 				topo = append(topo, node)
 			}
 			resp.EnvironmentTopology = topo
 		}
+		byName := make(map[string]*v1alpha1.Bundle, len(bundlesByPipeline[key]))
+		for i := range bundlesByPipeline[key] {
+			byName[bundlesByPipeline[key][i].Name] = &bundlesByPipeline[key][i]
+		}
+		resp.Deployed = deployedByEnv(&p, stepsByEnv(steps, stepsByPipeline[nsName{p.Namespace, p.Name}]), byName)
+		resp.DeploymentMetrics = p.Status.DeploymentMetrics
 		if ab := activeBundles[key]; ab != nil {
 			resp.ActiveBundleName = ab.name
+			resp.ActiveBundleVersion = scm.BundleVersion(ab.bundle.Spec)
 			if len(ab.envStates) > 0 {
 				resp.EnvironmentStates = ab.envStates
 			}
 			// Ops table: blocker + failed step counts derived from active bundle.
 			bundleKey := p.Namespace + "/" + ab.name
-			if n := blockingGateCount(&p, ab.bundle, notReadyByBundle[bundleKey], stepsByBundle[bundleKey]); n > 0 {
+			if n := blockingGateCount(&p, ab.bundle, notReadyByBundle[bundleKey], pick(steps, stepsByBundle[nsName{p.Namespace, ab.name}])); n > 0 {
 				resp.BlockerCount = n
 			}
-			if n := failedStepsByBundle[p.Namespace+"/"+ab.name]; n > 0 {
+			if n := failedStepsByBundle[nsName{p.Namespace, ab.name}]; n > 0 {
 				resp.FailedStepCount = n
 			}
 			// Inventory age: days since the active bundle was created.
@@ -415,7 +616,7 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		}
 		result = append(result, resp)
 	}
-	writeJSON(w, result)
+	return result
 }
 
 // blockingGateCount counts the not-ready gate instances of bundle that hold it
@@ -426,10 +627,10 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 // counted, and neither is a gate of a Failed or Superseded bundle. kardinal
 // status lists the same gates as Blocking Policy Gates.
 func blockingGateCount(p *v1alpha1.Pipeline, bundle *v1alpha1.Bundle, notReady []v1alpha1.PolicyGate,
-	steps []v1alpha1.PromotionStep) int {
+	steps []*v1alpha1.PromotionStep) int {
 	n := 0
 	for i := range notReady {
-		if graphpkg.GateHolds(p, bundle, &notReady[i], steps) {
+		if graphpkg.GateHoldsSteps(p, bundle, &notReady[i], steps) {
 			n++
 		}
 	}
@@ -1008,9 +1209,7 @@ func (s *uiAPIServer) handleValidateCEL(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var req struct {
-		Expression string `json:"expression"`
-	}
+	var req uiValidateCELRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Expression == "" {
 		http.Error(w, "expression field required", http.StatusBadRequest)
 		return
@@ -1024,15 +1223,10 @@ func (s *uiAPIServer) handleValidateCEL(w http.ResponseWriter, r *http.Request) 
 		if len(msg) > 200 {
 			msg = msg[:197] + "…"
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"valid": false,
-			"error": fmt.Sprintf("CEL compile error: %s", msg),
-		})
+		_ = json.NewEncoder(w).Encode(uiValidateCELResponse{Valid: false, Error: fmt.Sprintf("CEL compile error: %s", msg)})
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"valid": true,
-	})
+	_ = json.NewEncoder(w).Encode(uiValidateCELResponse{Valid: true})
 }
 
 // handleGatesSubpath handles:
@@ -1080,12 +1274,7 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var req struct {
-		Reason           string `json:"reason"`
-		Namespace        string `json:"namespace"`
-		Stage            string `json:"stage"`
-		ExpiresInMinutes int    `json:"expiresInMinutes"`
-	}
+	var req uiGateOverrideRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -1145,9 +1334,7 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		Msg("ui: gate approved via override")
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"message": "gate overridden until " + expiresAt.UTC().Format(time.RFC3339),
-	})
+	_ = json.NewEncoder(w).Encode(uiMessageResponse{Message: "gate overridden until " + expiresAt.UTC().Format(time.RFC3339)})
 }
 
 // buildUIConditions converts Kubernetes metav1.Condition slice to UI-friendly shape (#341).
@@ -1375,13 +1562,7 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Pipeline  string `json:"pipeline"`
-		Image     string `json:"image"`
-		CommitSHA string `json:"commitSHA"`
-		Author    string `json:"author"`
-		Namespace string `json:"namespace"`
-	}
+	var req uiCreateBundleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -1462,9 +1643,9 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"bundle":  bundle.Name,
-		"message": "bundle created — track with kardinal get bundles " + req.Pipeline,
+	_ = json.NewEncoder(w).Encode(uiCreateBundleResponse{
+		Bundle:  bundle.Name,
+		Message: "bundle created — track with kardinal get bundles " + req.Pipeline,
 	})
 }
 

@@ -129,7 +129,7 @@ func (s *helmSetImageStep) Execute(_ context.Context, state *parentsteps.StepSta
 			// The umbrella chart's dependency of that name, not the first one.
 			chartPath = fmt.Sprintf(".dependencies[name=%s].version", chart.Name)
 		}
-		segs, err := parseYAMLPath(chartPath)
+		segs, err := parseChartVersionPath(chartPath)
 		if err != nil {
 			return fail(parentsteps.Permanent(fmt.Errorf("invalid chartVersionPath %q: %w", chartPath, err)))
 		}
@@ -213,10 +213,10 @@ func (g yamlPathSeg) String() string {
 	}
 }
 
-// parseYAMLPath parses ".a.b.0.c" and ".dependencies[name=podinfo].version":
+// parseChartVersionPath parses ".a.b.0.c" and ".dependencies[name=podinfo].version":
 // segments separated by dots; a numeric segment indexes a list; "[f=v]"
 // after a segment selects the list element whose field f is v.
-func parseYAMLPath(path string) ([]yamlPathSeg, error) {
+func parseChartVersionPath(path string) ([]yamlPathSeg, error) {
 	p := strings.TrimPrefix(path, ".")
 	var segs []yamlPathSeg
 	for p != "" {

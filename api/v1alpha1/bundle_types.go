@@ -57,11 +57,14 @@ type ImageRef struct {
 	// +kubebuilder:validation:MinLength=1
 	Repository string `json:"repository"`
 
-	// Tag is the image tag.
+	// Tag is the image tag, in the OCI distribution grammar: up to 128
+	// characters of [A-Za-z0-9_.-], not starting with "." or "-".
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`
 	// +optional
 	Tag string `json:"tag,omitempty"`
 
-	// Digest is the image digest (sha256:...).
+	// Digest is the image digest (sha256:...), in the OCI digest grammar.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$`
 	// +optional
 	Digest string `json:"digest,omitempty"`
 }
@@ -72,7 +75,9 @@ type ConfigRef struct {
 	// +optional
 	GitRepo string `json:"gitRepo,omitempty"`
 
-	// CommitSHA is the exact commit SHA for this config snapshot.
+	// CommitSHA is the exact commit SHA for this config snapshot: 4 to 64
+	// hex characters.
+	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F]{4,64}$`
 	// +optional
 	CommitSHA string `json:"commitSHA,omitempty"`
 }
@@ -104,7 +109,10 @@ type ChartRef struct {
 
 // BundleProvenance carries build origin metadata.
 type BundleProvenance struct {
-	// CommitSHA is the application source commit that produced this Bundle.
+	// CommitSHA is the application source commit that produced this Bundle:
+	// 4 to 64 hex characters, or an image digest (a Subscription records
+	// the digest it found).
+	// +kubebuilder:validation:Pattern=`^([0-9a-fA-F]{4,64}|[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,})$`
 	// +optional
 	CommitSHA string `json:"commitSHA,omitempty"`
 

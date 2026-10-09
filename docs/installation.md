@@ -172,6 +172,11 @@ kardinal version
 | `networkPolicy.enabled` | `false` | NetworkPolicy for the controller Pod |
 | `networkPolicy.ingressFrom.{metrics,health,ui,webhook}` | `[]` | Allowed peers per ingress port (empty admits any source) |
 | `networkPolicy.extraEgress` | `[]` | Extra egress rules (e.g. Prometheus for MetricChecks) |
+| `tracing.enabled` | `false` | Export OpenTelemetry traces over OTLP/HTTP ([Tracing](guides/monitoring.md#tracing-opentelemetry)) |
+| `tracing.endpoint` | `""` | OTLP/HTTP endpoint URL or `host:port`; empty uses `OTEL_EXPORTER_OTLP_ENDPOINT` |
+| `tracing.insecure` | `false` | Plain HTTP to a `host:port` endpoint |
+| `tracing.samplingRatio` | `0.1` | Fraction of traces recorded, decided at each trace's root; an inbound `traceparent` does not force recording |
+| `egress.allowlist` | `[]` | Destinations NotificationHook, MetricCheck and Subscription requests may reach (`--egress-allowlist`): host names, `*.` wildcards, CIDRs. Empty allows any destination outside the always-refused loopback, link-local and metadata addresses. See [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls) |
 | `scheduleClock.enabled` / `.interval` | `true` / `"1m"` | ScheduleClock `kardinal-clock` in the release namespace. Each tick re-evaluates every PolicyGate instance |
 | `validatingAdmissionPolicy.enabled` | `true` | Deprecated, no effect. The CRD schemas validate these fields |
 
@@ -229,6 +234,27 @@ release name other than `kardinal-promoter`, the Service is named
     DNS names. If you browse to an Ingress host or a node IP, add it to
     `ui.allowedHosts` (`--ui-allowed-hosts`) as well as setting an auth mode. See
     [Host names (DNS rebinding)](guides/security.md#host-names-dns-rebinding).
+
+### What the UI shows
+
+- **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
+  line of stations, one per environment in promotion order; environments promoted in parallel
+  are stacked. A station shows the version the environment runs and when it was Verified.
+  That is the newest promotion there whose change landed, the Bundle `kardinal status` reports
+  as deployed. Image and config Bundles do not replace each other, so a station also shows, under
+  `+`, what the environment runs from another Bundle: the config commit of the last config Bundle
+  under an image Bundle, or the image tags of the last image Bundle under a config Bundle, as
+  `kardinal status` does. A lit rail marks the active Bundle's version on its way into an environment:
+  amber and moving while it promotes, waits for its PR or is health checked; amber and still
+  while a PolicyGate holds it; red where it failed. A station opens its Pipeline. The board
+  follows the sidebar's health filter.
+- **Pipeline view.** The lane, the promotion graph, policy gates with their CEL expressions,
+  the Bundle history and comparison, and pause, resume, promote, roll back and create bundle.
+- **Step timings.** Selecting an environment step lists the steps of that promotion
+  (`git-clone` … `health-check`) with their durations, and a bar for each that shows where it
+  ran in the promotion's time. A slow health check or push stands out at once.
+- **Dark and light themes.** The UI follows the operating system's setting until you pick one
+  with the ☀ / ☾ button next to the refresh indicator; the choice is kept in the browser.
 
 ### With TLS (production)
 

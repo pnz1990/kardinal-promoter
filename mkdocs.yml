@@ -100,6 +100,7 @@ nav:
     - Concepts: concepts.md
   - Guides:
     - Policy Gates: policy-gates.md
+    - Metric Checks: metric-checks.md
     - Health Verification: health-adapters.md
     - Rollback: rollback.md
     - CI Integration: ci-integration.md
@@ -120,6 +121,7 @@ nav:
     - CLI Commands: reference/cli/kardinal.md
     - Pipeline CRD: pipeline-reference.md
     - API Reference: reference/api.md
+    - REST API: reference/rest-api.md
     - CEL Context: reference/cel-context.md
     - Troubleshooting: troubleshooting.md
     - FAQ: faq.md

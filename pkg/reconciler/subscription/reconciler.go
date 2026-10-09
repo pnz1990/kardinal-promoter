@@ -58,6 +58,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -642,5 +643,5 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// watchTimeout) does not delay every other Subscription. The
 		// workqueue never hands one Subscription to two workers at once.
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentPolls}).
-		Complete(r)
+		Complete(tracing.WrapReconciler("subscription", r))
 }

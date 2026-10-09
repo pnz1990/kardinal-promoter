@@ -183,7 +183,7 @@ func TestDeprecated_HealthCluster(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
 	a := deprecatedApp(t, e, "test")
-	want := `environment "test": health.cluster is not supported: kardinal checks health only in the cluster it runs in`
+	want := `environment "test": health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef`
 
 	p := a.resourcePipeline(nil)
 	p.Spec.Environments[0].Health.Cluster = "spoke" //nolint:staticcheck // SA1019: the deprecated field under test
@@ -198,7 +198,7 @@ func TestDeprecated_HealthCluster(t *testing.T) {
 
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
 	e.WaitStepMessage(t, a.ns, pipelineName, bundle, "test", "Failed",
-		"health.cluster is not supported: kardinal checks health only in the cluster it runs in", promoteTimeout)
+		"health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef", promoteTimeout)
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
 	prs, err := e.Git.PullRequests(ctx, a.repo)
 	require.NoError(t, err)

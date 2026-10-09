@@ -23,7 +23,7 @@ What the namespaced rules grant:
 
 | Resources | Verbs | Why |
 |---|---|---|
-| `secrets` | get | Pipeline `spec.git.secretRef` and the SCM token Secret. The controller reads Secrets straight from the API server, one by name, and never lists or watches them. In cluster mode `get` still reaches **every Secret in the cluster** by name, because the rule is in a ClusterRole |
+| `secrets` | get | Pipeline `spec.git.secretRef`, NotificationHook `spec.webhook.secretRef` (only Secrets labeled `kardinal.io/referenceable: "true"` are used, see [Secrets referenced by custom resources](#secrets-referenced-by-custom-resources)) and the SCM token Secret. The controller reads Secrets straight from the API server, one by name, and never lists or watches them. In cluster mode `get` still reaches **every Secret in the cluster** by name, because the rule is in a ClusterRole |
 | `events.k8s.io` `events` | create, patch | Events from every reconciler (the events.k8s.io/v1 API) |
 | `events` (core) | get, list, watch, create, patch | The UI step event list reads Events through core/v1; leader election writes core Events |
 | All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
@@ -269,6 +269,36 @@ install next to the per-namespace ones: it would reconcile every team's Pipeline
 
 ## Secret Management
 
+### Secrets referenced by custom resources
+
+Some custom resources name a Secret whose values the controller sends somewhere the resource's
+author chose: NotificationHook `spec.webhook.secretRef` sends its `authorization` key to the
+hook URL. The controller can read every Secret of the namespace (`get` on `secrets`, above), so
+without a guard anyone allowed to create such a resource could have the controller send them a
+Secret they cannot read themselves.
+
+**One rule:** the controller uses a Secret a custom resource names only when the Secret carries
+the label `kardinal.io/referenceable: "true"`. The label is the Secret owner's consent; set it
+on the Secrets meant for these resources only:
+
+```bash
+kubectl label secret alerting-webhook -n team-a kardinal.io/referenceable=true
+```
+
+| Reference | With an unlabeled Secret |
+|-----------|--------------------------|
+| NotificationHook `spec.webhook.secretRef` | Not used: `Ready=False`, reason `SecretNotReferenceable`, nothing is sent |
+
+Other Secret references adopt the rule as they are added. A resource that refuses a Secret
+reports reason `SecretNotReferenceable` where it reports errors. Labeling the Secret takes
+effect at the next reconcile; removing the label stops its use again. Whoever may `update` or
+`patch` Secrets in the namespace may set the label, so grant that as narrowly as reading them.
+
+Pipeline `spec.git.secretRef` has the same exposure (its token goes to the Pipeline's git URL)
+and will follow the rule in v0.11 ([#1506](https://github.com/pnz1990/kardinal-promoter/issues/1506));
+label your git Secrets now. The controller's own SCM token Secret is set by the operator and
+is not covered.
+
 ### Recommended: External Secrets Operator
 
 Use [External Secrets Operator](https://external-secrets.io/) to sync tokens from Vault, AWS Secrets Manager, or GCP Secret Manager:
@@ -457,9 +487,30 @@ The policy allows:
 
 Disable with `--set networkPolicy.enabled=false` if your CNI does not support NetworkPolicy.
 
+### Secrets that kardinal may send
+
+A MetricCheck, NotificationHook or Subscription names a Secret in its own namespace, and the
+controller sends that Secret's value to a URL the object's author chose. The controller can read
+every Secret, so a user who can create one of these objects but cannot read Secrets could
+otherwise have any Secret of the namespace sent to a server they run (a confused deputy).
+
+**Rule:** the controller reads a Secret for these kinds only when the Secret carries the label
+`kardinal.io/referenceable: "true"`. Without the label the object reports `SecretNotReferenceable`
+(a MetricCheck fails with that reason, which blocks gates on it) and no request with a credential
+is sent. Label a Secret only when it is meant to leave the cluster through kardinal:
+
+```bash
+kubectl -n my-app label secret datadog kardinal.io/referenceable=true
+```
+
+Who may set the label is who may `update` (or `patch`) Secrets in the namespace. Pipeline
+`spec.git.secretRef` is not covered: it must be in the Pipeline's namespace and is sent only to
+the Pipeline's git and SCM hosts.
+
 ### Outbound requests to user URLs
 
-NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`)
+NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`,
+`datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`)
 and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`,
 `spec.helm.repoURL`) send HTTP requests from the controller to a URL a user wrote into a resource. The controller
 refuses to connect when the address is one of these:
@@ -482,7 +533,35 @@ these addresses is refused too. The failure reads `destination address is not al
 Private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and public
 addresses are allowed, because in-cluster Services, Prometheus, registries and Git servers
 are the normal targets.
-To narrow egress further, enable the NetworkPolicy and list the allowed destinations in
+
+To allow only the destinations you expect, set the controller's egress allowlist (chart value
+`egress.allowlist`, flag `--egress-allowlist`, environment variable `KARDINAL_EGRESS_ALLOWLIST`):
+
+```yaml
+egress:
+  allowlist:
+    - hooks.slack.com                      # exactly this host
+    - "*.logic.azure.com"                  # any name under it (Teams Workflows)
+    - "*.monitoring.svc.cluster.local"     # in-cluster Prometheus
+    - 10.20.0.0/16                         # addresses in this range
+```
+
+With an allowlist, a NotificationHook, MetricCheck or Subscription request is allowed when
+its URL's host name matches a host entry, or when every address the controller connects to
+is inside a CIDR entry (an address entry is a `/32` or `/128`). Anything else is refused
+before connecting, with `destination address is not allowed: not in the controller egress
+allowlist: <host> (<address>) matches no entry` where that resource reports errors. A name
+entry matches the name in the URL, whatever it resolves to; a CIDR entry is checked on the
+resolved address of every connection, so a name that re-resolves outside the range is
+refused. The list above never opens the deny list: loopback, link-local, metadata,
+unspecified and multicast addresses stay refused even when an entry covers them. The default
+(empty) keeps the behavior above: every other destination is allowed. Through a proxy, the
+target is checked against the allowlist before the request goes to the proxy; the proxy's
+own address does not need an entry. The controller logs the allowlist at startup and fails
+to start on an invalid entry.
+
+The allowlist works at the HTTP level and on any CNI. To enforce egress at the network
+level as well, enable the NetworkPolicy and list the allowed destinations in
 `networkPolicy.extraEgress`.
 
 NotificationHook, MetricCheck and Subscription HTTP requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
@@ -507,6 +586,15 @@ also enforce its own egress policy. The proxy's own address is checked too: a pr
 loopback address is refused.
 
 ---
+
+**MetricCheck `web` reads from wherever the controller can reach.** A `web` MetricCheck sends a
+GET or POST to a URL its author chooses and copies one JSONPath value of the answer into
+`status.lastValue` (at most 256 bytes, a string, number or boolean). The egress guard keeps it off
+loopback, link-local and metadata addresses, but private addresses stay allowed, so anyone who can
+create a MetricCheck can read a field from an in-cluster Service that answers JSON. Give `create`
+on MetricChecks only to people who may read those Services, and restrict the targets with the
+controller egress allowlist (`--egress-allowlist`, #1474) or the chart NetworkPolicy
+(`networkPolicy.enabled`, `networkPolicy.extraEgress`).
 
 ## Admission Validation
 

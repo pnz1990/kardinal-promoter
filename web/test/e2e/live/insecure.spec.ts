@@ -60,7 +60,7 @@ test('an allowed host name over plain HTTP warns in the pipeline view', async ({
 for (const host of ['127.0.0.1', 'localhost']) {
   test(`the documented port-forward on ${host} shows no warning`, async ({ page }) => {
     await page.goto(`http://${host}:${forwardPort}/ui/`)
-    await expect(page.getByText('Select a pipeline to view its promotion DAG.')).toBeVisible()
+    await expect(page.getByRole('heading', { level: 2, name: 'Fleet' })).toBeVisible()
     await openPipeline(page, `http://${host}:${forwardPort}`, ns)
     await expect(banner(page)).toHaveCount(0)
   })
