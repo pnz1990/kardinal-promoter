@@ -7,8 +7,8 @@
 //
 // In KARDINAL_UI_NAMESPACE, podinfo's Bundle KARDINAL_UI_BUNDLE waits at
 // gate two-approvers on prod (2 approvals from release-managers):
-// KARDINAL_UI_APPROVER approved (counted), KARDINAL_UI_OUTSIDER approved but
-// is not in the group (not counted).
+// KARDINAL_UI_APPROVER approved (counted), KARDINAL_UI_OUTSIDER, the
+// Bundle's creator, approved but excludeAuthor does not count it.
 
 import { test, expect } from '@playwright/test'
 import { need, openPipeline } from './live'

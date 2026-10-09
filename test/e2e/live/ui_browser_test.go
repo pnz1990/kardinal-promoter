@@ -794,14 +794,17 @@ func TestUI_BrowserApprovals(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	e.WaitGateReady(t, a.ns, bundle, "prod", "two-approvers", false, "waiting for approvals: 0 of 2", gateTimeout)
 
-	const approver, outsider = "alice@example.com", "mallory@example.com"
+	// The not-counted decision is the Bundle's creator's (excludeAuthor): an
+	// approval from outside the allowed group is not copied into the gate.
+	const approver = "alice@example.com"
+	outsider := whoAmI(t, e)
 	as := func(path string, args ...string) {
 		t.Helper()
 		r := c.Exec(framework.CLIOptions{Kubeconfig: path}, c.Args(a.ns, args...)...)
 		require.Equal(t, 0, r.Code, r.Output())
 	}
 	as(userKubeconfig(t, e, a.ns, approver, "release-managers"), "approve", bundle, "--env", "prod", "--comment", "canary looks clean")
-	as(userKubeconfig(t, e, a.ns, outsider, "devs"), "approve", bundle, "--env", "prod")
+	as(userKubeconfig(t, e, a.ns, outsider, "release-managers"), "approve", bundle, "--env", "prod")
 	e.WaitGate(t, a.ns, bundle, "prod", "two-approvers", gateTimeout, "two decisions, one counted", func(g *v1alpha1.PolicyGate) bool {
 		return len(g.Status.Approvals) == 2 && !g.Status.Ready
 	})
