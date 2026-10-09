@@ -45,6 +45,7 @@ import (
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
@@ -60,12 +61,12 @@ import (
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
 	// Import built-in steps to register them via init().
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 
 	// Embed the IANA timezone database. The runtime image has no tzdata, and
 	// ChangeWindow spec.schedule.timezone ("America/Los_Angeles") needs it:
@@ -186,6 +187,23 @@ func main() {
 			"validated via authenticationv1.TokenReview. Fail-closed: API errors return 503. "+
 			"Also readable from KARDINAL_UI_TOKENREVIEW_AUTH environment variable (set to 'true').")
 
+	// --metriccheck-cloudwatch-ambient-credentials lets cloudwatch MetricChecks
+	// that name no credential Secret use the controller's own AWS identity
+	// (IRSA, EKS Pod Identity, environment). Off by default: any user who can
+	// create a MetricCheck could read CloudWatch with that identity.
+	var cloudWatchAmbient bool
+	flag.BoolVar(&cloudWatchAmbient, "metriccheck-cloudwatch-ambient-credentials", false,
+		"Let cloudwatch MetricChecks without credential Secret refs use the controller's own AWS identity "+
+			"(SDK default chain: environment, IRSA, EKS Pod Identity). Off by default.")
+
+	// --metriccheck-global-slots and --metriccheck-namespace-slots cap the
+	// outbound MetricCheck queries (metriccheckrecon.Limiter).
+	var metricGlobalSlots, metricNamespaceSlots int
+	flag.IntVar(&metricGlobalSlots, "metriccheck-global-slots", metriccheckrecon.DefaultGlobalSlots,
+		"Most MetricCheck queries running at once in the cluster (at least 1). The rest wait, first come, first served.")
+	flag.IntVar(&metricNamespaceSlots, "metriccheck-namespace-slots", metriccheckrecon.DefaultNamespaceSlots,
+		"Most MetricCheck queries of one namespace running at once (at least 1).")
+
 	var tlsCertFile string
 	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
 		"Path to the TLS certificate file (PEM). When set together with --tls-key-file, "+
@@ -265,6 +283,31 @@ func main() {
 			"except kube-system, kube-public and kube-node-lease. Health checks in other namespaces "+
 			"get no Graph ref.")
 
+	var tracingCfg tracing.Config
+	flag.BoolVar(&tracingCfg.Enabled, "tracing-enabled", os.Getenv("KARDINAL_TRACING_ENABLED") == "true",
+		"Export OpenTelemetry traces over OTLP/HTTP: a span per reconcile, promotion step, git clone and push, "+
+			"SCM API request and NotificationHook delivery, and server spans for /webhook/scm and /api/v1/bundles. "+
+			"Off by default. Chart value: tracing.enabled. Also readable from KARDINAL_TRACING_ENABLED.")
+	flag.StringVar(&tracingCfg.Endpoint, "tracing-endpoint", os.Getenv("KARDINAL_TRACING_ENDPOINT"),
+		"OTLP/HTTP endpoint: a URL (http://otel-collector.observability:4318; /v1/traces is added) or host:port. "+
+			"Empty uses OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT, else localhost:4318. "+
+			"Chart value: tracing.endpoint.")
+	flag.BoolVar(&tracingCfg.Insecure, "tracing-insecure", os.Getenv("KARDINAL_TRACING_INSECURE") == "true",
+		"Send traces over plain HTTP to a host:port --tracing-endpoint. Chart value: tracing.insecure.")
+	flag.Float64Var(&tracingCfg.SamplingRatio, "tracing-sampling-ratio", 0.1,
+		"Fraction of traces recorded, 0 to 1, decided once per trace at its root (a reconcile, or an inbound "+
+			"request: an inbound traceparent is linked, not trusted, so it does not force sampling). "+
+			"Chart value: tracing.samplingRatio.")
+
+	var egressAllowlist string
+	flag.StringVar(&egressAllowlist, "egress-allowlist", os.Getenv("KARDINAL_EGRESS_ALLOWLIST"),
+		"Comma-separated destinations NotificationHook, MetricCheck and Subscription requests may reach: "+
+			"host names (hooks.slack.com), wildcards (*.example.com, any name under it) and CIDRs or addresses "+
+			"(10.0.0.0/8, 10.1.2.3). A request is allowed when its host matches a name entry or every address "+
+			"it connects to is in a CIDR entry. Empty (the default): every destination except loopback, "+
+			"link-local, cloud metadata, unspecified and multicast addresses, which stay refused whatever "+
+			"this lists. Chart value: egress.allowlist. Also readable from KARDINAL_EGRESS_ALLOWLIST.")
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -279,6 +322,10 @@ func main() {
 	}
 	zerolog.SetGlobalLevel(level)
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	if metricGlobalSlots < 1 || metricNamespaceSlots < 1 {
+		logger.Fatal().Int("globalSlots", metricGlobalSlots).Int("namespaceSlots", metricNamespaceSlots).
+			Msg("--metriccheck-global-slots and --metriccheck-namespace-slots must be at least 1")
+	}
 	// Reconcilers log through zerolog.Ctx(ctx). controller-runtime does not put a
 	// zerolog logger in the reconcile context, so without this default every
 	// reconciler line, errors included, goes to a disabled logger.
@@ -289,6 +336,27 @@ func main() {
 	}
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
+
+	tracingCfg.ServiceVersion = ControllerVersion
+	tracingCfg.OnError = func(err error) { logger.Warn().Err(err).Msg("OpenTelemetry: span export failed") }
+	shutdownTracing, err := tracing.Setup(context.Background(), tracingCfg)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid tracing configuration")
+	}
+	if tracingCfg.Enabled {
+		logger.Info().Str("endpoint", tracingCfg.Endpoint).Float64("samplingRatio", tracingCfg.SamplingRatio).
+			Msg("OpenTelemetry tracing enabled")
+	}
+
+	allowlist, err := egress.ParseAllowlist(splitCSV(egressAllowlist))
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --egress-allowlist")
+	}
+	egress.SetAllowlist(allowlist)
+	if allowlist != nil {
+		logger.Info().Str("egressAllowlist", allowlist.String()).
+			Msg("egress allowlist set: NotificationHook, MetricCheck and Subscription requests reach only these destinations")
+	}
 
 	allowedRepos, err := scm.ParseRepositoryAllowlist(splitCSV(scmAllowedRepositories))
 	if err != nil {
@@ -449,6 +517,7 @@ func main() {
 		AllowedRepositories: allowedRepos,
 		GitClient:           gitClient,
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
+		RemoteClusters:      &healthpkg.RemoteClusters{},
 		Recorder:            eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
@@ -456,7 +525,8 @@ func main() {
 
 	if err := (&metriccheckrecon.Reconciler{
 		Client:   mgr.GetClient(),
-		Provider: metriccheckrecon.NewPrometheusProvider(),
+		Backends: metriccheckrecon.DefaultBackends(cloudWatchAmbient),
+		Limiter:  metriccheckrecon.NewLimiter(metricGlobalSlots, metricNamespaceSlots),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up MetricCheckReconciler")
 	}
@@ -507,26 +577,12 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up NotificationHookReconciler")
 	}
 
-	// SubscriptionReconciler: polls OCI registries and Git repositories on an interval
-	// and creates Bundle CRDs when new artifacts are detected.
+	// SubscriptionReconciler: polls OCI registries, Git repositories and Helm
+	// chart repositories on an interval (or at once on a kardinal.io/refresh
+	// request from the webhook receiver) and creates Bundle CRDs when new
+	// artifacts are detected. WatcherFn nil is subscriptionrecon.NewWatcher.
 	if err := (&subscriptionrecon.Reconciler{
 		Client: mgr.GetClient(),
-		WatcherFn: func(sub *kardinalv1alpha1.Subscription) (source.Watcher, error) {
-			switch sub.Spec.Type {
-			case kardinalv1alpha1.SubscriptionTypeImage:
-				if sub.Spec.Image == nil {
-					return nil, fmt.Errorf("image subscription missing spec.image")
-				}
-				return source.NewOCIWatcher(sub.Spec.Image.Registry, sub.Spec.Image.TagFilter), nil
-			case kardinalv1alpha1.SubscriptionTypeGit:
-				if sub.Spec.Git == nil {
-					return nil, fmt.Errorf("git subscription missing spec.git")
-				}
-				return source.NewGitWatcher(sub.Spec.Git.RepoURL, sub.Spec.Git.Branch, sub.Spec.Git.PathGlob), nil
-			default:
-				return nil, fmt.Errorf("unknown subscription type %q", sub.Spec.Type)
-			}
-		},
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up SubscriptionReconciler")
 	}
@@ -559,8 +615,11 @@ func main() {
 	}
 	bundleAPIToken := bundleToken
 	mux := http.NewServeMux()
-	mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
+	mux.Handle("/webhook/scm", tracing.Handler("webhook.scm", webhookSrv.Handler()))
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
+	// Registry and SCM webhooks that make a Subscription poll at once. Each
+	// Subscription opts in with spec.webhook and its own token.
+	mux.HandleFunc(subscriptionWebhookPrefix, newSubscriptionWebhook(mgr.GetClient(), logger).Handler())
 	mux.HandleFunc(openAPIPath, handleOpenAPI)
 	// Bundle API endpoint — only mounted if a token is configured.
 	if bundleAPIToken != "" {
@@ -573,7 +632,7 @@ func main() {
 		bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
 		bundleAPI.onlyNamespace = watchNamespace
 		bundleAPI.reader = mgr.GetAPIReader()
-		mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
+		mux.Handle("/api/v1/bundles", tracing.Handler("bundleapi.create", bundleAPI.Handler()))
 		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
 	}
 	// The webhook and UI servers are manager Runnables: they start after the
@@ -646,9 +705,13 @@ func main() {
 		logger.Warn().Err(err).Msg("failed to register version ConfigMap runnable")
 	}
 
-	// Nothing may run after Start returns: a leader has released its Lease by
-	// then (LeaderElectionReleaseOnCancel), and a standby may already lead.
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	// Nothing may reconcile after Start returns: a leader has released its
+	// Lease by then (LeaderElectionReleaseOnCancel), and a standby may
+	// already lead. Flushing buffered spans is not reconciling: it runs
+	// after every reconciler and HTTP server has drained, so their last
+	// spans are exported too.
+	signals := ctrl.SetupSignalHandler()
+	if err := runThenFlush(func() error { return mgr.Start(signals) }, shutdownTracing, logger); err != nil {
 		logger.Fatal().Err(err).Msg("problem running manager")
 	}
 }

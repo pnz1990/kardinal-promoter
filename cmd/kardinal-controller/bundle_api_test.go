@@ -321,6 +321,10 @@ func TestBundleAPI_ValidatesRequest(t *testing.T) {
 			wantCode: http.StatusCreated},
 		{name: "config bundle", body: `{"pipeline":"app","type":"config","configRef":{"commitSHA":"abc"}}`,
 			wantCode: http.StatusCreated},
+		{name: "chart bundle", body: `{"pipeline":"app","type":"chart","chart":{"name":"podinfo","version":"6.15.0"}}`,
+			wantCode: http.StatusCreated},
+		{name: "chart bundle without a version", body: `{"pipeline":"app","type":"chart","chart":{"name":"podinfo"}}`,
+			wantCode: http.StatusBadRequest, wantBody: `type "chart" requires chart.name and chart.version`},
 		{name: "other namespace with the pipeline, cluster-wide mode", body: `{"pipeline":"app","namespace":"team-a",` + image + `}`,
 			wantCode: http.StatusCreated},
 	}

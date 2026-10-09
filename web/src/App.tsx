@@ -29,6 +29,7 @@ import { BundleDiffPanel } from './components/BundleDiffPanel'
 import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { PipelineLaneView } from './components/PipelineLaneView'
 import { FleetHealthBar, filterPipelines, type FleetFilter } from './components/FleetHealthBar'
+import { FleetBoard } from './components/FleetBoard'
 import { ReleaseMetricsBar } from './components/ReleaseMetricsBar'
 import { ActionBar } from './components/ActionBar'
 import { CreateBundleButton } from './components/CreateBundleDialog'
@@ -455,8 +456,14 @@ export function App() {
           justifyContent: 'space-between',
           alignItems: 'center',
         }}>
-          {/* Brand: logo + wordmark */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {/* Brand: logo + wordmark; it opens the fleet board. */}
+          <button
+            type="button"
+            onClick={() => { setSelectedNodeLocal(null); setUrlState({ pipeline: undefined, ns: undefined, node: undefined, bundle: undefined }); setViewMode('list') }}
+            title="Show the fleet"
+            aria-label="Show the fleet"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'none', border: 'none', padding: 0, cursor: 'pointer', borderRadius: '4px' }}
+          >
             <img
               src={`${import.meta.env.BASE_URL}logo.png`}
               alt="Kardinal"
@@ -470,7 +477,7 @@ export function App() {
             }}>
               KARDINAL
             </span>
-          </div>
+          </button>
           {/* Staleness indicator with manual refresh button (#362) */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <button
@@ -601,14 +608,11 @@ export function App() {
         <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg)' }}>
         {insecureBanner}
         {!selectedPipeline ? (
-          <div style={{ color: 'var(--color-text-faint)', padding: '3rem 2rem', textAlign: 'center' }}>
+          <div style={pipelines.length > 0
+            ? { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+            : { color: 'var(--color-text-faint)', padding: '3rem 2rem', textAlign: 'center' }}>
             {pipelines.length > 0 ? (
-              <>
-                <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>←</div>
-                <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem' }}>
-                  Select a pipeline to view its promotion DAG.
-                </p>
-              </>
+              <FleetBoard pipelines={filteredPipelines} total={pipelines.length} onSelect={handleSelectPipeline} />
             ) : (
               /* #530: Improved empty state with copy button, docs link, expected output */
               <EmptyState />
@@ -766,6 +770,7 @@ export function App() {
               <ReleaseMetricsBar
                 bundles={bundles}
                 finalEnvironment={activePipeline?.environmentTopology?.at(-1)?.name}
+                deploymentMetrics={activePipeline?.deploymentMetrics}
               />
 
               {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).

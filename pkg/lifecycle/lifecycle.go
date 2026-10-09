@@ -177,15 +177,16 @@ func createdAtOf(obj metav1.Object) (time.Time, bool) {
 }
 
 // HasArtifacts reports whether the Bundle carries something to deploy: at
-// least one image, or a config commit.
+// least one image, a config commit, or a chart version.
 func HasArtifacts(b *v1alpha1.Bundle) bool {
-	return len(b.Spec.Images) > 0 || (b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != "")
+	return len(b.Spec.Images) > 0 || (b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != "") ||
+		(b.Spec.Chart != nil && b.Spec.Chart.Version != "")
 }
 
 // SameArtifacts reports whether two Bundles deploy the same images and config
 // commit, ignoring image order.
 func SameArtifacts(a, b *v1alpha1.Bundle) bool {
-	return slices.Equal(imageKeys(a), imageKeys(b)) && configKey(a) == configKey(b)
+	return slices.Equal(imageKeys(a), imageKeys(b)) && configKey(a) == configKey(b) && chartKey(a) == chartKey(b)
 }
 
 func imageKeys(b *v1alpha1.Bundle) []string {
@@ -209,7 +210,15 @@ func configKey(b *v1alpha1.Bundle) string {
 	return b.Spec.ConfigRef.GitRepo + "@" + b.Spec.ConfigRef.CommitSHA
 }
 
-// copyArtifacts deep-copies the images and config ref of src into dst. An
+// chartKey identifies a chart Bundle's chart version.
+func chartKey(b *v1alpha1.Bundle) string {
+	if b.Spec.Chart == nil {
+		return ""
+	}
+	return b.Spec.Chart.RepoURL + "/" + b.Spec.Chart.Name + ":" + b.Spec.Chart.Version + "@" + b.Spec.Chart.Digest
+}
+
+// copyArtifacts deep-copies the images, config ref and chart of src into dst. An
 // image Bundle stored before the CRD refused a configRef on it may carry one
 // it never deployed; it is not copied, so the copy passes the CRD (#1353).
 func copyArtifacts(dst *v1alpha1.BundleSpec, src *v1alpha1.Bundle) {
@@ -220,6 +229,10 @@ func copyArtifacts(dst *v1alpha1.BundleSpec, src *v1alpha1.Bundle) {
 	if src.Spec.ConfigRef != nil && src.Spec.Type != "image" {
 		ref := *src.Spec.ConfigRef
 		dst.ConfigRef = &ref
+	}
+	if src.Spec.Chart != nil {
+		chart := *src.Spec.Chart
+		dst.Chart = &chart
 	}
 }
 
@@ -264,4 +277,26 @@ func VerifiedTime(s *v1alpha1.PromotionStep) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return cond.LastTransitionTime.Time, true
+}
+
+// SupersededMessage starts the message of every PromotionStep the
+// supersession of its Bundle cancels (the PromotionStep reconciler writes
+// it), so readers can tell such a step from one that failed on its own.
+func SupersededMessage(bundle string) string {
+	return "bundle " + bundle + " was superseded"
+}
+
+// CancelledBySupersession reports whether s ended because its Bundle was
+// superseded, not because its promotion failed: it is Failed with
+// SupersededMessage, or still in a state the supersession guard cancels
+// (it has not run yet). A RollingBack or AbortedByAlarm step, or one that
+// failed before the supersession, is not.
+func CancelledBySupersession(s *v1alpha1.PromotionStep) bool {
+	switch s.Status.State {
+	case "Failed":
+		return strings.HasPrefix(s.Status.Message, SupersededMessage(s.Spec.BundleName))
+	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking":
+		return true
+	}
+	return false
 }

@@ -24,6 +24,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -72,7 +74,7 @@ func NewAzureDevOpsProvider(token, apiURL, webhookSecret string) *AzureDevOpsPro
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuits:      NewCircuitRegistry(),
-		client:        &http.Client{Timeout: providerHTTPTimeout},
+		client:        &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 	}
 }
 

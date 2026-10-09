@@ -390,7 +390,11 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 		// An org gate on the skipped canary: skipping it needs a
 		// SkipPermission gate, so the Graph gets SkipPermissionGates.
 		makePolicyGate("canary-freeze", "platform-policies", "canary", "!schedule.isWeekend"),
+		// Reads a per-promotion MetricCheck template: the node shape creates a
+		// MetricCheck instance for prod.
+		makePolicyGate("error-budget", "app-ns", "prod", `metrics["error-rate"].result == "Pass"`),
 	}
+	checks := []kardinalv1alpha1.MetricCheck{metricTemplate("error-rate", "up")}
 	skip := makePolicyGate("allow-skip-canary", "platform-policies", "canary", "true")
 	skip.Spec.SkipPermission = true
 	skip.Labels["kardinal.io/type"] = "skip-permission"
@@ -435,12 +439,12 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 				pp := p.DeepCopy()
 				pp.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
 				return graph.NewBuilder().Build(graph.BuildInput{
-					Pipeline: pp, Bundle: b, PolicyGates: gates, PolicyNamespaces: policyNamespaces,
+					Pipeline: pp, Bundle: b, PolicyGates: gates, PolicyNamespaces: policyNamespaces, MetricChecks: checks,
 				})
 			}
 			nodes, err := build(graph.GraphShapeNodes)
 			require.NoError(t, err)
-			for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus"} {
+			for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus", "MetricCheck"} {
 				require.True(t, kinds(nodes.Graph)[k], "the fixture exercises %s", k)
 			}
 			require.True(t, hasNode(nodes.Graph, graph.NodeSkipPermissionGates),

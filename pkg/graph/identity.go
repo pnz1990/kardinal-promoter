@@ -23,7 +23,8 @@ import (
 // the Helm chart (templates/graph-rbac.yaml).
 const (
 	// DefaultApplierClusterRole grants what a kardinal Graph applies in its own
-	// namespace: PromotionSteps, PolicyGates, PRStatuses, and read on Bundles.
+	// namespace: PromotionSteps, PolicyGates, PRStatuses, MetricChecks, and read
+	// on Bundles.
 	DefaultApplierClusterRole = "kardinal-graph-applier"
 	// DefaultReaderClusterRole grants read/watch on the health kinds a Graph
 	// references (Deployments, Argo CD Applications, Flux Kustomizations,

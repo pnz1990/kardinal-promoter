@@ -260,7 +260,7 @@ func TestCreateBundle_SharesBundleAPIRules(t *testing.T) {
 			wantErr: "create bundle: --config-commit needs --type config or mixed"},
 		{name: "unknown type",
 			opts:    createBundleOptions{Images: []string{img}, Type: "helm"},
-			wantErr: `create bundle: type must be one of image, config, mixed (got "helm")`},
+			wantErr: `create bundle: type must be one of image, config, mixed, chart (got "helm")`},
 		{name: "ci run url with another scheme",
 			opts:    createBundleOptions{Images: []string{img}, Type: "image", CIRunURL: "javascript:alert(1)"},
 			wantErr: "create bundle: --ci-run-url must be an absolute http or https URL"},

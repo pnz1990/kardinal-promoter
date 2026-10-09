@@ -393,7 +393,7 @@ describe('App insecure connection banner', () => {
     at('http://10.0.0.1:30082/ui/')
     render(<App />)
     await flush()
-    expect(screen.getByText('Select a pipeline to view its promotion DAG.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: 'Fleet' })).toBeInTheDocument()
     expect(banners()).toHaveLength(1)
   })
 
@@ -423,7 +423,7 @@ describe('App insecure connection banner', () => {
     at('http://127.0.0.1:8082/ui/')
     render(<App />)
     await flush()
-    expect(screen.getByText('Select a pipeline to view its promotion DAG.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: 'Fleet' })).toBeInTheDocument()
     expect(banners()).toHaveLength(0)
   })
 })
