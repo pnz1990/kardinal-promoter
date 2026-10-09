@@ -34,6 +34,11 @@ type Metrics struct {
 	StepSeconds map[string]Quantiles `json:"stepDurationSeconds"`
 	// Pods holds each controller Pod's memory and goroutines over the run.
 	Pods []PodSeries `json:"pods"`
+	// PushesLanded and PushesRefused are the git pushes over the run that
+	// landed and that the server refused as non-fast-forward
+	// (kardinal_git_operations_total).
+	PushesLanded  float64 `json:"pushesLanded"`
+	PushesRefused float64 `json:"pushesRefused"`
 }
 
 // Quantiles are p50 and p99 in seconds.
@@ -145,7 +150,35 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 
 	m.Pods = podSeries(ctx, e, start, end)
 	leak.Violations = leaks(m.Pods, start, end, memoryLimitMiB(ctx, e), o.SharedController, o.RaceBuild)
-	return m, []Result{errs, queue, leak}
+
+	push := Result{Name: "metrics-push-efficiency"}
+	pushSel := `kardinal_git_operations_total{` + ctrlSel + `,operation="push"}`
+	pushes := countsFromZero(
+		samples(ctx, e, `max_over_time(`+pushSel+`[`+window+`])`),
+		samples(ctx, e, fmt.Sprintf("%s @ %d", pushSel, start.Unix())), "result")
+	m.PushesLanded, m.PushesRefused = round(pushes["ok"]), round(pushes["non_fast_forward"])
+	push.Violations = pushEfficiency(m.PushesLanded, m.PushesRefused, o.MaxRefusedPushRatio, o.SharedController)
+	push.Note = fmt.Sprintf("%.0f pushes landed, %.0f refused as non-fast-forward", m.PushesLanded, m.PushesRefused)
+	if o.SharedController {
+		push.Note += " (shared with parallel tests: reported only)"
+	}
+	return m, []Result{errs, queue, leak, push}
+}
+
+// pushEfficiency fails a run whose git pushes were refused more than
+// maxRatio times per push that landed (#1578): the promotions of one
+// controller that write one branch take turns, so a refusal means another
+// writer moved the branch. Each environment of a wave racing the others
+// for the branch made 13 refusals per landed push at 150 environments.
+func pushEfficiency(landed, refused, maxRatio float64, shared bool) []string {
+	if shared || refused == 0 {
+		return nil
+	}
+	if refused > maxRatio*math.Max(landed, 1) {
+		return []string{fmt.Sprintf("%.0f pushes refused as non-fast-forward for %.0f that landed (%.2f per landed push; limit %.2f)",
+			refused, landed, refused/math.Max(landed, 1), maxRatio)}
+	}
+	return nil
 }
 
 func round(v float64) float64 {
@@ -168,6 +201,59 @@ func byLabel(ctx context.Context, e *framework.Env, q, label string) map[string]
 			continue
 		}
 		out[x.Metric[label]] = v
+	}
+	return out
+}
+
+// samples runs an instant query, nil on error.
+func samples(ctx context.Context, e *framework.Env, q string) []framework.PromSample {
+	s, err := e.PromQuery(ctx, q)
+	if err != nil {
+		return nil
+	}
+	return s
+}
+
+// countsFromZero sums, by label, how much each counter series grew over a
+// window: its highest value in the window (end) minus its value at the
+// window's start (start), or minus nothing when the series did not exist
+// then. increase() measures from a series' first sample instead, so a
+// series that appeared in the window (a fresh controller, a new result, a
+// new leader) lost the count it already had when first scraped: TwoTenants
+// reported 121 pushes for 151 environments. A series lower at the end than
+// at the start was reset (its container restarted) and counts its end
+// value.
+func countsFromZero(end, start []framework.PromSample, label string) map[string]float64 {
+	key := func(m map[string]string) string {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			if k != "__name__" {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		var b strings.Builder
+		for _, k := range keys {
+			b.WriteString(k + "=" + m[k] + ",")
+		}
+		return b.String()
+	}
+	base := map[string]float64{}
+	for _, x := range start {
+		if v, err := strconv.ParseFloat(x.Value, 64); err == nil && !math.IsNaN(v) {
+			base[key(x.Metric)] = v
+		}
+	}
+	out := map[string]float64{}
+	for _, x := range end {
+		v, err := strconv.ParseFloat(x.Value, 64)
+		if err != nil || math.IsNaN(v) {
+			continue
+		}
+		if b := base[key(x.Metric)]; v >= b {
+			v -= b
+		}
+		out[x.Metric[label]] += v
 	}
 	return out
 }

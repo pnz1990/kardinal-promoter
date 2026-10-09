@@ -41,10 +41,10 @@ func (m *loopSCM) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, 
 
 type loopGit struct{}
 
-func (loopGit) Clone(_ context.Context, _, _, _, _ string) error        { return nil }
-func (loopGit) CloneAt(_ context.Context, _, _, _, _ string) error      { return nil }
-func (loopGit) CommitAll(_ context.Context, _, _, _, _ string) error    { return nil }
-func (loopGit) Push(_ context.Context, _, _, _, _ string, _ bool) error { return nil }
+func (loopGit) Clone(_ context.Context, _, _, _ string, _ scm.GitAuth) error        { return nil }
+func (loopGit) CloneAt(_ context.Context, _, _, _ string, _ scm.GitAuth) error      { return nil }
+func (loopGit) CommitAll(_ context.Context, _, _, _, _ string) error                { return nil }
+func (loopGit) Push(_ context.Context, _, _, _ string, _ scm.GitAuth, _ bool) error { return nil }
 
 // TestPromotionLoop_PRReview_ViaWebhook drives a pr-review environment through
 // the real SCM webhook handler: the PromotionStep reconciler opens the PR and

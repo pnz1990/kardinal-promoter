@@ -462,6 +462,9 @@ var optionalAccess = []struct {
 		{"coordination.k8s.io", "leases", []string{"create"}, inCluster, "", "pkg/shard Gate.take (first token of a namespace)"},
 		{"coordination.k8s.io", "leases", []string{"get", "list"}, inCluster, "kardinal-shard-heartbeat-b", "pkg/shard Gate.heartbeatStopped/warnUnrunShards"},
 	}, true},
+	{"audit.retention.enabled=true", []apiAccess{
+		{"kardinal.io", "auditevents", []string{"delete"}, inWatched, "", "auditretention retention.go"},
+	}, false},
 	{"rbac.argocdApplicationsWrite=true", []apiAccess{
 		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"},
 	}, false},
@@ -1300,6 +1303,23 @@ func TestChartRequiresKubernetes130(t *testing.T) {
 	}
 }
 
+// TestChartGitHubApp: with github.app.enabled the controller watches the
+// github.secretRef Secret, which holds the App credentials, and gets no
+// GITHUB_TOKEN (the Secret has no token key, and a secretKeyRef to a missing
+// key would keep the Pod from starting). It needs github.secretRef.name.
+func TestChartGitHubApp(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter",
+		"--set", "github.secretRef.name=github-app", "--set", "github.app.enabled=true"))
+	env := envByName(c)
+	assert.NotContains(t, env, "GITHUB_TOKEN")
+	assert.Equal(t, "github-app", env["KARDINAL_SCM_TOKEN_SECRET_NAME"].Value)
+	assert.Equal(t, releaseNS, env["KARDINAL_SCM_TOKEN_SECRET_NAMESPACE"].Value)
+
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "github.app.enabled=true")
+	require.Error(t, err)
+	assert.Contains(t, out, "github.app.enabled needs github.secretRef.name")
+}
+
 // TestChartNamespaceShard: controller.namespaceShard passes --namespace-shard,
 // and cannot be combined with namespace mode or be an invalid label value.
 func TestChartNamespaceShard(t *testing.T) {
@@ -1347,6 +1367,42 @@ func TestChartGateStatusHeartbeat(t *testing.T) {
 	}
 	out, err := helmTemplate(t, "kardinal-promoter", "--set", "controller.gateStatusHeartbeat=10 minutes")
 	assert.Error(t, err, "a value that is not a Go duration must fail:\n%s", out)
+}
+
+// TestChartAuditRetention: audit.retention is off by default (no flag, no
+// delete on AuditEvents, so an upgrade deletes no record); enabled: true
+// passes --audit-retention=true with the limits (90 days, 1000) and grants
+// delete; the schema refuses a maxAge that is not a Go duration and a
+// negative count.
+func TestChartAuditRetention(t *testing.T) {
+	def := render(t, "kardinal-promoter")
+	c := controllerContainer(t, def)
+	for _, f := range []string{"audit-retention", "audit-retention-max-age", "audit-retention-max-per-pipeline"} {
+		assert.NotContains(t, argValues(c), f)
+	}
+	v := newRBACView(t, def)
+	for _, ns := range []string{"team-a", releaseNS} {
+		assert.False(t, v.allowed(releaseNS, "kardinal-promoter", ns, "kardinal.io", "auditevents", "delete", ""),
+			"retention off by default: no delete on AuditEvents in %s", ns)
+		assert.True(t, v.allowed(releaseNS, "kardinal-promoter", ns, "kardinal.io", "auditevents", "create", ""))
+	}
+
+	on := render(t, "kardinal-promoter", "--set", "audit.retention.enabled=true")
+	c = controllerContainer(t, on)
+	assert.Equal(t, "true", argValues(c)["audit-retention"])
+	assert.Equal(t, "2160h", argValues(c)["audit-retention-max-age"])
+	assert.Equal(t, "1000", argValues(c)["audit-retention-max-per-pipeline"])
+	assert.True(t, newRBACView(t, on).allowed(releaseNS, "kardinal-promoter", "team-a", "kardinal.io", "auditevents", "delete", ""))
+
+	c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "audit.retention.enabled=true",
+		"--set", "audit.retention.maxAge=720h", "--set", "audit.retention.maxPerPipeline=0"))
+	assert.Equal(t, "720h", argValues(c)["audit-retention-max-age"])
+	assert.Equal(t, "0", argValues(c)["audit-retention-max-per-pipeline"])
+
+	for _, bad := range [][]string{{"--set", "audit.retention.maxAge=90 days"}, {"--set", "audit.retention.maxPerPipeline=-1"}} {
+		out, err := helmTemplate(t, "kardinal-promoter", bad...)
+		assert.Error(t, err, "%v must fail:\n%s", bad, out)
+	}
 }
 
 // TestChartControllerWorkers: controller.workers sets the workers of each

@@ -215,6 +215,9 @@ func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.Repo
 	if err := graph.ValidateUpdateStrategy(&pipeline); err != nil {
 		errs = append(errs, err.Error())
 	}
+	if err := scm.ValidatePipelinePR(&pipeline); err != nil {
+		errs = append(errs, err.Error())
+	}
 	// #1332: the controller's shared token may act only on the allowed
 	// repositories (Ready=False/RepositoryNotAllowed). Offline, a
 	// git.secretRef is taken to name a Secret that exists; the controller
