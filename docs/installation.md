@@ -587,7 +587,7 @@ is bounded at **30 seconds**: when a request is still open then, the controller 
 `failed waiting for all runnables to end within grace period of 30s` and exits.
 
 This leaves no inconsistent state. After the restart the step runs again from its last saved
-step. A `pr-review` step force-pushes its branch `kardinal/<bundle>/<env>`, so a step stopped
+step. A `pr-review` step force-pushes its branch `kardinal/<namespace hash>/<bundle>/<env>`, so a step stopped
 after its push and before its PR opens one PR with one commit, and the base branch changes
 only when the PR is merged.
 

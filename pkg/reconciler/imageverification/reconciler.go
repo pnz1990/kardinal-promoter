@@ -36,6 +36,8 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -670,8 +672,9 @@ func (c *publicGoodCache) get(ctx context.Context) (root.TrustedMaterial, error)
 
 // SetupWithManager registers the reconciler.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	// Sharded like every namespaced reconciler (pkg/shard).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.ImageVerification{}).
-		WithOptions(controller.Options{MaxConcurrentReconciles: MaxConcurrentReconciles}).
-		Complete(r)
+		WithOptions(controller.Options{MaxConcurrentReconciles: MaxConcurrentReconciles})
+	return shard.Active().Complete(b, tracing.WrapReconciler("imageverification", r), &v1alpha1.ImageVerificationList{})
 }
