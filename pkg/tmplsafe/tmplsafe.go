@@ -70,10 +70,13 @@ type Limits struct {
 	MaxExecTime time.Duration
 }
 
-// DefaultLimits suit a PR body or a notification body.
+// DefaultLimits suit a PR body or a notification body. The call and byte
+// budgets are what stop a hostile template; the time limit is a backstop
+// set high enough (500 ms) that CPU throttling of the controller (a 500m
+// limit) never fails a normal template.
 var DefaultLimits = Limits{
 	MaxOutput: 64 << 10, MaxFuncOutput: 64 << 10, MaxBuild: 1 << 20,
-	MaxFuncCalls: 2000, MaxExecTime: time.Second,
+	MaxFuncCalls: 2000, MaxExecTime: 500 * time.Millisecond,
 }
 
 // Func is a template function and the bound on what it builds.

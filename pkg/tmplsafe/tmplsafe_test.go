@@ -16,12 +16,12 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tmplsafe"
 )
 
-var lim = tmplsafe.Limits{MaxOutput: 1 << 10, MaxFuncOutput: 512, MaxBuild: 4 << 10, MaxFuncCalls: 50, MaxExecTime: 200 * time.Millisecond}
+var lim = tmplsafe.Limits{MaxOutput: 1 << 10, MaxFuncOutput: 512, MaxBuild: 4 << 10, MaxFuncCalls: 50, MaxExecTime: 500 * time.Millisecond}
 
 func funcs() tmplsafe.FuncMap {
 	f := tmplsafe.StringFuncs()
 	f["fails"] = tmplsafe.Func{Fn: func() (string, error) { return "", assert.AnError }}
-	f["slow"] = tmplsafe.Func{Fn: func() string { time.Sleep(300 * time.Millisecond); return "" }}
+	f["slow"] = tmplsafe.Func{Fn: func() string { time.Sleep(700 * time.Millisecond); return "" }}
 	f["section"] = tmplsafe.Const("## Section")
 	return f
 }
@@ -101,8 +101,8 @@ func TestExecute_Bounds(t *testing.T) {
 		{name: "output cap", text: strings.Repeat(`{{ .Big }}`, 4), wantErr: "template output is too large (more than 1024 bytes)"},
 		{name: "function error", text: `{{ fails }}`, wantErr: assert.AnError.Error()},
 		{name: "too many calls", text: strings.Repeat(`{{ not true }}`, 51), wantErr: "more than 50 function calls"},
-		{name: "too slow", text: `{{ slow }}{{ not true }}`, wantErr: "template took longer than 200ms"},
-		{name: "too slow, then a write", text: `{{ slow }}x`, wantErr: "template took longer than 200ms"},
+		{name: "too slow", text: `{{ slow }}{{ not true }}`, wantErr: "template took longer than 500ms"},
+		{name: "too slow, then a write", text: `{{ slow }}x`, wantErr: "template took longer than 500ms"},
 		{name: "missing field", text: `{{ .Nope }}`, wantErr: "map has no entry for key"},
 	}
 	for _, tt := range tests {
@@ -315,11 +315,13 @@ func TestRandomTemplatesAreBounded(t *testing.T) {
 	assert.Greater(t, parsed, n*9/10, "almost every generated template is allowed, so its render is measured")
 }
 
-// TestWorstCaseTemplate is the slowest template found at the CRD's largest
-// size (16 KiB): every action an expensive call on the largest data. Parse
-// and Execute together must take under 50 ms (the fastest of 5 runs, so a
-// busy machine does not fail it; times 10 under the race detector), on the
-// calling goroutine, and stay under checkBounded's allocation bound.
+// TestWorstCaseTemplate renders the most expensive templates found at the
+// CRD's largest size (16 KiB), every action an expensive call on the
+// largest data. What bounds them is the call and byte budget, not the
+// clock: each render finishes, or stops with a budget error, and never by
+// its time limit; checkBounded bounds its allocations and leaves no
+// goroutine. (A wall-clock bound flakes under CPU throttling and -race;
+// the deadline itself has one test, with a blocking call.)
 func TestWorstCaseTemplate(t *testing.T) {
 	cases := map[string]string{
 		"escapes":                    `{{ html $.Big }}`,
@@ -327,24 +329,27 @@ func TestWorstCaseTemplate(t *testing.T) {
 		"case":                       `{{ upper (index $.Many 19) }}`,
 		"join":                       `{{ join "," $.Many }}`,
 		"cheap calls":                `{{ not $.Yes }}`,
+		"writes":                     `{{ $.Name }}`,
 		"print the data":             `{{ print` + strings.Repeat(" .", 8000) + ` }}`,
 		"print data in every action": `{{ print . . . . . . . . }}`,
-		"writes":                     `{{ $.Name }}`,
 	}
+	budget := []string{"would build", "function calls", "output is too large", "takes strings, numbers and bools only"}
 	for name, action := range cases {
 		t.Run(name, func(t *testing.T) {
 			text := strings.Repeat(action, (16<<10)/len(action))
 			require.LessOrEqual(t, len(text), 16<<10)
 			checkBounded(t, text, 2*time.Second)
-			fastest := time.Hour
-			for range 5 {
-				start := time.Now()
-				tmpl, err := tmplsafe.Parse("t", text, fuzzFuncs(), tmplsafe.DefaultLimits)
-				require.NoError(t, err)
-				_, _ = tmpl.Execute(largeData())
-				fastest = min(fastest, time.Since(start))
+			tmpl, err := tmplsafe.Parse("t", text, fuzzFuncs(), tmplsafe.DefaultLimits)
+			require.NoError(t, err)
+			_, err = tmpl.Execute(largeData())
+			if err != nil {
+				assert.NotContains(t, err.Error(), "took longer", "stopped by a budget, not the clock")
+				found := false
+				for _, b := range budget {
+					found = found || strings.Contains(err.Error(), b)
+				}
+				assert.True(t, found, "a budget stopped it: %v", err)
 			}
-			assert.Less(t, fastest, 50*time.Millisecond*raceSlowdown)
 		})
 	}
 }

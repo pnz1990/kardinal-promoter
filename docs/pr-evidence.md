@@ -222,7 +222,7 @@ only: a struct, map, list or pointer argument, such as `.`, is refused before it
 `replace` refuses an empty string to replace. Every function, the comparisons
 included, is counted, and its result size (for a comparison, what it reads) is computed from
 its arguments before it runs: one call builds at most 64 KiB and a whole render at most 1 MiB,
-in at most 2000 calls and one second, after which every call and write fails at once. A body
+in at most 2000 calls and 500 ms, after which every call and write fails at once. A body
 renders at most 64 KiB, a title or list entry 4 KiB and a commit message 16 KiB. The data is
 bounded too: a Bundle holds at most 100 images, a template sees at most 20 of them, and each value is at most 1024 characters, image fields included. A
 template that breaks a rule is refused like one that does not parse. A list template refuses a
