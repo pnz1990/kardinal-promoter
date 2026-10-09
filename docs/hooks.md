@@ -164,13 +164,13 @@ and reads the Bundle's UID: grant `create` on `hookruns` only to those you would
 The controller needs `create`, `get`, `list`, `watch` and `delete` on `batch/jobs` in Pipeline
 namespaces (the chart grants it) and caches only Jobs labelled `kardinal.io/hookrun`.
 
+In a [compact Graph](pipeline-reference.md#large-pipelines) (above `--graph-compact-above`
+environments) hooks behave the same: the HookRuns are items of one collection, a pre hook is
+created with its environment's PromotionStep and the next one once the previous succeeded, a post
+hook once the step entered `Verifying`, and a HookRun that exists stays whatever changes after.
+
 ## What hooks cannot do
 
-- Hooks need the node Graph shape. A Pipeline whose Bundles get a
-  [compact Graph](pipeline-reference.md#large-pipelines) (more than `--graph-compact-above`
-  environments, default 100, or the annotation `kardinal.io/graph-shape: compact`) is
-  `Ready=False` and its Bundles fail with `GraphBuildFailed`, naming hooks, instead of promoting
-  without them.
 - Hooks run in the Pipeline's namespace in the cluster kardinal runs in, not in the target
   cluster of a remote environment. Reach the target through its Service or API from the Pod.
 - A pre hook runs before the step starts. When a PolicyGate turns false after the migration

@@ -695,11 +695,21 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		prItems = append(prItems, map[string]interface{}{"name": prName, "environment": envName})
 
 		if compact {
+			stepName := promotionStepK8sName(pipelineName, bundle.Name, envName)
+			held := heldBundle(pipeline, envName) != "" && heldBundle(pipeline, envName) != bundle.Name
+			extras, err := buildCompactEnvExtras(hookNodesInput{
+				pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
+				bundleUID: string(bundle.UID), env: findEnvSpec(pipeline, envName), stepK8sName: stepName,
+			}, analyses, bundle, rawUpstreams, envGates, held)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			compactSteps = append(compactSteps, compactStep{env: envName,
-				name:      promotionStepK8sName(pipelineName, bundle.Name, envName),
+				name:      stepName,
 				prStatus:  prName,
 				upstreams: rawUpstreams,
 				gates:     envGates,
+				extras:    extras,
 			})
 			continue
 		}
@@ -729,6 +739,13 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	if compact {
 		nodes = append(nodes, compactNodes(pipeline, bundle, compactSteps, gates.collectionIDs())...)
 		nodes = append(nodes, compactMetricNodes(pipelineName, bundle.Name, compactMetrics)...)
+		var hooks []compactHook
+		var runs []compactRun
+		for _, s := range compactSteps {
+			hooks = append(hooks, s.extras.hooks...)
+			runs = append(runs, s.extras.runs...)
+		}
+		nodes = append(nodes, compactRunNodes(pipeline, bundle, hooks, runs)...)
 	}
 
 	return nodes, gates.instances, upstreamEnvs, nil

@@ -400,9 +400,15 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 	skip.Labels["kardinal.io/type"] = "skip-permission"
 	gates = append(gates, skip)
 	policyNamespaces := []string{"platform-policies"}
-	// Hooks and analyses are not in the fixture: the compact shape refuses
-	// them (compactUnsupported, TestCompact_RefusesHooks and
-	// TestCompact_RefusesVerification).
+	// Pre and post hooks and an analysis on prod: HookRuns and AnalysisRuns
+	// in both shapes.
+	for i := range p.Spec.Environments {
+		if p.Spec.Environments[i].Name == "prod" {
+			p.Spec.Environments[i].Hooks = []kardinalv1alpha1.HookSpec{hook("migrate", "pre", hookJob), hook("smoke", "post", hookJob)}
+			p.Spec.Environments[i].Verification = &kardinalv1alpha1.VerificationSpec{
+				AnalysisTemplates: []kardinalv1alpha1.AnalysisTemplateRef{{Name: "smoke"}}}
+		}
+	}
 
 	kinds := func(g *graph.Graph) map[string]bool {
 		out := map[string]bool{}
@@ -451,7 +457,7 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 			// Every expression of both shapes reads only nodes they have
 			// (assertKroValid runs assertRefsResolve).
 			assertKroValid(t, nodes.Graph)
-			for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus", "MetricCheck"} {
+			for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus", "MetricCheck", "HookRun", "AnalysisRun"} {
 				require.True(t, kinds(nodes.Graph)[k], "the fixture exercises %s", k)
 			}
 			require.True(t, hasNode(nodes.Graph, graph.NodeSkipPermissionGates),
@@ -485,29 +491,155 @@ func gateNames(gs []kardinalv1alpha1.PolicyGate) []string {
 	return out
 }
 
-// TestCompact_RefusesHooks: a compact Graph is refused for a Pipeline with
-// hooks, naming the feature, and the Pipeline reconciler's Pipeline-only
-// check reports it.
-func TestCompact_RefusesHooks(t *testing.T) {
-	p := hookPipeline()
-	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
-	_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app")})
-	require.ErrorIs(t, err, graph.ErrInvalid)
-	assert.Contains(t, err.Error(), "does not support pre- and post-deploy hooks (spec.environments[].hooks) yet")
-	assert.Contains(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}), "pre- and post-deploy hooks (spec.environments[].hooks)")
-	assert.Empty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: makeLinearPipeline("app", "test")}))
+// compactRunVars is the scope of the compact hook and analysis admissions:
+// the steps (name → state, verifying), HookRuns (name → phase) and
+// AnalysisRuns that exist.
+func compactRunVars(t *testing.T, g *graph.Graph, steps map[string]string, verifying map[string]bool,
+	hookRuns map[string]string, runs []string) map[string]interface{} {
+	t.Helper()
+	sim := newCompactSim(t, g)
+	for _, n := range g.Spec.Nodes {
+		for _, o := range renderObjects(t, g) {
+			if o.NodeID == n.ID && o.Object["kind"] == "PolicyGate" {
+				sim.gatesReady[objName(o.Object)] = true
+			}
+		}
+	}
+	vars := sim.vars()
+	var observed []interface{}
+	for name, state := range steps {
+		st := map[string]interface{}{"state": state}
+		if verifying[name] {
+			st["verificationStartedAt"] = "2026-10-09T00:00:00Z"
+		}
+		env := name[strings.LastIndex(name, "-")+1:]
+		observed = append(observed, map[string]interface{}{"metadata": map[string]interface{}{"name": name,
+			"labels": map[string]interface{}{"kardinal.io/environment": env}}, "status": st})
+	}
+	vars[graph.NodeStepsObserved] = observed
+	vars["refSteps"] = observed
+	var hr []interface{}
+	for name, phase := range hookRuns {
+		hr = append(hr, map[string]interface{}{"metadata": map[string]interface{}{"name": name}, "status": map[string]interface{}{"phase": phase}})
+	}
+	vars["refHookRuns"] = hr
+	var ar []interface{}
+	for _, name := range runs {
+		ar = append(ar, map[string]interface{}{"metadata": map[string]interface{}{"name": name}})
+	}
+	vars["refAnalysisRuns"] = ar
+	vars[graph.NodePromotionState] = sim.def(graph.NodePromotionState, vars)
+	vars[graph.NodeRunState] = sim.def(graph.NodeRunState, vars)
+	return vars
 }
 
-// TestCompact_RefusesVerification: a compact Graph is refused for a
-// Pipeline with spec.verification, naming the feature, and the Pipeline
-// reconciler's Pipeline-only check reports it.
-func TestCompact_RefusesVerification(t *testing.T) {
+func admittedNames(t *testing.T, g *graph.Graph, id string, vars map[string]interface{}) []string {
+	t.Helper()
+	var out []string
+	for _, it := range newCompactSim(t, g).def(id, vars)["items"].([]interface{}) {
+		out = append(out, it.(map[string]interface{})["name"].(string))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestCompact_Hooks: the compact shape carries hooks (#1493): no refusal,
+// a HookRuns collection, and the admission follows the node shape's gating.
+// A pre hook comes with its environment's step (upstreams Verified), the
+// next one once the previous Succeeded; a post hook once the step entered
+// Verifying; a HookRun that exists stays; nothing new for a Superseded
+// Bundle's post hooks.
+func TestCompact_Hooks(t *testing.T) {
+	p := compactPipeline(
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", DependsOn: []string{"test"},
+			Hooks: []kardinalv1alpha1.HookSpec{hook("migrate", "pre", hookJob), hook("seed", "pre", hookJob), hook("smoke", "post", hookJob)}},
+	)
+	b := makeBundle("app-v1", "app")
+	b.UID = "uid-1"
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b})
+	require.NoError(t, err, "no refusal")
+	assertKroValid(t, res.Graph)
+	assert.Empty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}))
+	g := res.Graph
+	migrate := graph.HookRunName("app", "app-v1", "prod", "pre", "migrate")
+	seed := graph.HookRunName("app", "app-v1", "prod", "pre", "seed")
+	smoke := graph.HookRunName("app", "app-v1", "prod", "post", "smoke")
+	prodStep, testStep := "app-app-v1-prod", "app-app-v1-test"
+
+	admitted := func(steps map[string]string, verifying map[string]bool, runs map[string]string) []string {
+		return admittedNames(t, g, graph.NodePromotionHooks, compactRunVars(t, g, steps, verifying, runs, nil))
+	}
+	assert.Empty(t, admitted(map[string]string{testStep: "Promoting"}, nil, nil), "prod's upstream is not Verified")
+	assert.Equal(t, []string{migrate}, admitted(map[string]string{testStep: "Verified"}, nil, nil), "the first pre hook with prod's step")
+	assert.Equal(t, []string{migrate}, admitted(map[string]string{testStep: "Verified"}, nil, map[string]string{migrate: "Running"}))
+	assert.ElementsMatch(t, []string{migrate, seed}, admitted(map[string]string{testStep: "Verified"}, nil,
+		map[string]string{migrate: "Succeeded"}), "the second once the first succeeded")
+	assert.ElementsMatch(t, []string{migrate, seed}, admitted(map[string]string{testStep: "Verified", prodStep: "HealthChecking"}, nil,
+		map[string]string{migrate: "Succeeded", seed: "Succeeded"}), "no post hook before Verifying")
+	assert.ElementsMatch(t, []string{migrate, seed, smoke}, admitted(map[string]string{testStep: "Verified", prodStep: "Verifying"},
+		map[string]bool{prodStep: true}, map[string]string{migrate: "Succeeded", seed: "Succeeded"}), "the post hook in Verifying")
+	assert.ElementsMatch(t, []string{migrate, smoke}, admitted(map[string]string{testStep: "Failed"}, nil,
+		map[string]string{migrate: "Succeeded", smoke: "Running"}), "existing HookRuns stay whatever changes")
+
+	// The HookRun template and the step's spec.
+	var tmpl, step map[string]interface{}
+	for _, n := range g.Spec.Nodes {
+		if n.ID == graph.NodeHookRuns {
+			tmpl = n.Template
+		}
+		if n.ID == graph.NodePromotionSteps {
+			step = n.Template["spec"].(map[string]interface{})
+		}
+	}
+	require.NotNil(t, tmpl)
+	assert.Equal(t, "HookRun", tmpl["kind"])
+	assert.Equal(t, "uid-1", tmpl["metadata"].(map[string]interface{})["labels"].(map[string]interface{})[graph.LabelBundleUID])
+	for _, f := range []string{"preHooks", "postHooks", "live"} {
+		assert.Contains(t, step, f)
+	}
+	live := step["live"].(map[string]interface{})
+	assert.Contains(t, live, "hooks")
+	assert.NotContains(t, live, "analyses")
+}
+
+// TestCompact_Analyses: the compact shape carries Argo Rollouts analyses
+// (#1502): an AnalysisRuns collection admitted once the step entered
+// Verifying, kept once it exists, with spec.terminate in the template.
+func TestCompact_Analyses(t *testing.T) {
 	p := analysisPipeline(kardinalv1alpha1.AnalysisTemplateRef{Name: "smoke"})
 	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
-	_, err := buildAnalysis(t, p, analysisInput(smokeTemplate("AnalysisTemplate", "smoke", "1")))
-	require.ErrorIs(t, err, graph.ErrInvalid)
-	assert.Contains(t, err.Error(), "does not support Argo Rollouts analysis (spec.environments[].verification) yet")
-	assert.Contains(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}), "Argo Rollouts analysis (spec.environments[].verification)")
+	res, err := buildAnalysis(t, p, analysisInput(smokeTemplate("AnalysisTemplate", "smoke", "1")))
+	require.NoError(t, err, "no refusal")
+	assertKroValid(t, res.Graph)
+	g := res.Graph
+	prodStep := "app-app-v1-prod"
+	vars := func(verifying bool, runs []string, phase string) map[string]interface{} {
+		v := compactRunVars(t, g, map[string]string{"app-app-v1-test": "Verified", prodStep: "HealthChecking"},
+			map[string]bool{prodStep: verifying}, nil, runs)
+		v["bundle"] = map[string]interface{}{"status": map[string]interface{}{"phase": phase}}
+		v[graph.NodeRunState] = newCompactSim(t, g).def(graph.NodeRunState, v)
+		return v
+	}
+	assert.Empty(t, admittedNames(t, g, graph.NodePromotionAnalyses, vars(false, nil, "Promoting")))
+	got := admittedNames(t, g, graph.NodePromotionAnalyses, vars(true, nil, "Promoting"))
+	require.Len(t, got, 1)
+	assert.True(t, strings.HasPrefix(got[0], "app-app-v1-prod-smoke-"), got[0])
+	assert.Empty(t, admittedNames(t, g, graph.NodePromotionAnalyses, vars(true, nil, "Superseded")), "none new for a Superseded Bundle")
+	assert.Equal(t, got, admittedNames(t, g, graph.NodePromotionAnalyses, vars(false, got, "Superseded")), "an existing run stays")
+
+	for _, n := range g.Spec.Nodes {
+		if n.ID == graph.NodeAnalysisRuns {
+			spec := n.Template["spec"].(map[string]interface{})
+			assert.Contains(t, spec, "terminate")
+			assert.Contains(t, spec, "metrics")
+		}
+		if n.ID == graph.NodePromotionSteps {
+			step := n.Template["spec"].(map[string]interface{})
+			assert.Contains(t, step["live"], "analyses")
+			assert.Contains(t, step, "analysisPolicy")
+		}
+	}
 }
 
 func mapKeys[V any](m map[string]V) []string {

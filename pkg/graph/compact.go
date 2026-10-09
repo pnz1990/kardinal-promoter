@@ -173,6 +173,7 @@ type compactStep struct {
 	env, name, prStatus string
 	upstreams           []string // environment names
 	gates               []string // gate instance names
+	extras              compactEnvExtras
 }
 
 // compactNodes builds the compact shape's PromotionStep nodes: the DAG as data
@@ -192,6 +193,11 @@ type compactStep struct {
 // otherwise ready as soon as they are.
 func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	steps []compactStep, gateCollections []string) []GraphNode {
+	var anyHooks, anyAnalyses bool
+	for _, s := range steps {
+		anyHooks = anyHooks || len(s.extras.hookRuns) > 0
+		anyAnalyses = anyAnalyses || len(s.extras.analysisRuns) > 0
+	}
 	entries := make([]interface{}, len(steps))
 	for i, s := range steps {
 		upstreamStates := make([]interface{}, len(s.upstreams))
@@ -209,6 +215,17 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 			// rollback (spec.holds, #1528; the node shape's heldCond): it
 			// is not admitted. A hold change rebuilds the Graph in place.
 			"held": heldBundle(pipeline, s.env) != "" && heldBundle(pipeline, s.env) != bundle.Name,
+		}
+		if anyHooks || anyAnalyses {
+			// Hooks and analyses (compact_extras.go): the step's lists, and
+			// the runs its spec.live reads.
+			e := entries[i].(map[string]interface{})
+			e["preHooks"] = toInterfaces(s.extras.preHooks)
+			e["postHooks"] = toInterfaces(s.extras.postHooks)
+			e["analyses"] = toInterfaces(s.extras.analyses)
+			e["analysisPolicy"] = s.extras.policy
+			e["hookRuns"] = toInterfaces(s.extras.hookRuns)
+			e["analysisRuns"] = toInterfaces(s.extras.analysisRuns)
 		}
 	}
 
@@ -233,6 +250,22 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		NodePromotionDAG, state, state, state, state)
 
 	step := func(f string) string { return "${" + iterStep + "." + f + "}" }
+	stepSpec := map[string]interface{}{
+		"pipelineName":   pipeline.Name,
+		"bundleName":     bundle.Name,
+		"environment":    step("environment"),
+		"stepType":       defaultStepType(bundle.Spec.Type),
+		"prStatusRef":    step("prStatus"),
+		"upstreamStates": step("upstreamStates"),
+		"requiredGates":  step("gates"),
+	}
+	if anyHooks || anyAnalyses {
+		stepSpec["preHooks"] = step("preHooks")
+		stepSpec["postHooks"] = step("postHooks")
+		stepSpec["analyses"] = step("analyses")
+		stepSpec["analysisPolicy"] = step("analysisPolicy")
+		stepSpec["live"] = compactLive(bundle, anyHooks, anyAnalyses)
+	}
 	return []GraphNode{
 		{ID: NodePromotionDAG, Def: map[string]interface{}{"steps": entries}},
 		{
@@ -284,15 +317,7 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 						LabelBundleUID:            string(bundle.UID),
 					},
 				},
-				"spec": map[string]interface{}{
-					"pipelineName":   pipeline.Name,
-					"bundleName":     bundle.Name,
-					"environment":    step("environment"),
-					"stepType":       defaultStepType(bundle.Spec.Type),
-					"prStatusRef":    step("prStatus"),
-					"upstreamStates": step("upstreamStates"),
-					"requiredGates":  step("gates"),
-				},
+				"spec": stepSpec,
 			},
 			ReadyWhen: []string{`${each.?status.?state.orValue("") == "Verified"}`},
 		},

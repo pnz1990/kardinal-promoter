@@ -257,9 +257,8 @@ once its upstream environments are Verified, as the nodes shape does. One differ
 an upstream leaves Verified before the environment's step starts, the compact shape deletes that
 environment's instances (they leave the collection, so kro prunes them) and creates them again once
 the upstreams are Verified; once the step has started, its instances are kept.
-[Hooks](hooks.md) (`spec.environments[].hooks`) and [analysis](analysis.md)
-(`spec.environments[].verification`) are not carried yet: both the Bundle and the Pipeline
-condition report them.
+[Hooks](hooks.md) and [analysis](analysis.md) are carried too: HookRuns and AnalysisRuns are
+collections admitted with the same conditions as in the nodes shape, and kept once they exist.
 
 The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
 each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be
