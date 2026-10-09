@@ -131,6 +131,12 @@ func (t *Translator) Translate(ctx context.Context,
 	if err := graph.ValidateNodeIDs(result.Graph.Spec.Nodes); err != nil {
 		return "", fmt.Errorf("translator.Translate: health nodes: %w", err)
 	}
+	// A Graph is one etcd object (1.5 MiB). Refuse it here, with a reason on
+	// the Bundle, instead of letting the API server fail every write
+	// (ledger gap G10).
+	if err := graph.CheckSize(result.Graph); err != nil {
+		return "", fmt.Errorf("translator.Translate: %w", err)
+	}
 
 	// kro applies the Graph as spec.serviceAccountName; it must exist and be
 	// bound before kro's first reconcile or every apply is forbidden. A ref

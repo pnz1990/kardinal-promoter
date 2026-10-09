@@ -266,7 +266,7 @@ func TestPipeline_RejectedFields(t *testing.T) {
 		},
 		want: "spec.policyGates is not implemented; remove it (org gates use the kardinal.io/applies-to label)",
 	}}
-	for _, name := range []string{"bundle", "spec", "self", "true", "kro"} {
+	for _, name := range []string{"bundle", "time", "spec", "self", "true", "kro"} {
 		cases = append(cases, struct {
 			name string
 			set  func(p *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec)
@@ -274,7 +274,7 @@ func TestPipeline_RejectedFields(t *testing.T) {
 		}{
 			name: "name " + name,
 			set:  func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) { env.Name = name },
-			want: "reserved environment name: the name becomes a kro Graph node ID; bundle, kro reserved IDs (spec, " +
+			want: "reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro reserved IDs (spec, " +
 				"status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed",
 		})
 	}

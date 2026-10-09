@@ -100,7 +100,7 @@ A Pipeline has 1 to 100 environments. The CRD rejects, at `kubectl apply` time:
   with a letter or digit, at most 63 characters. The name is used as a namespace
   (`resource.namespace` default, below) and in object names;
 - two environments with the same name;
-- a name that is reserved in kro Graph node IDs or CEL: `bundle`, `api-version`, `kind`,
+- a name that is reserved in kro Graph node IDs or CEL: `bundle`, `time`, `api-version`, `kind`,
   `metadata`, `namespace`, `spec`, `status`, `graph`, `graphengine`, `kro`, `each`,
   `item`, `items`, `object`, `self`, `this`, `context`, and CEL keywords such as `true`,
   `false`, `null`, `in`, `if`, `for`, `let`, `var`, `while`.
