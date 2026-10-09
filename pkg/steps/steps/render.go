@@ -4,7 +4,6 @@
 package steps
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -295,10 +294,12 @@ type renderedFile struct {
 	content []byte
 }
 
-// manifestFiles turns rendered documents into one file per object:
-// <kind>-<name>.yaml at the root for cluster-scoped objects, under
-// <namespace>/ for namespaced ones. Two objects that would share a file (the
-// same kind and name in two API groups) get the group in the name.
+// manifestFiles turns rendered documents into one file per object, all at
+// the root of the rendered branch (Argo CD's directory source does not
+// recurse by default): <kind>-<name>.yaml for cluster-scoped objects,
+// <namespace>_<kind>-<name>.yaml for namespaced ones. Two objects that would
+// share a file (the same kind and name in two API groups) get the group in
+// the name.
 func manifestFiles(docs [][]byte) ([]renderedFile, error) {
 	if len(docs) > maxRenderedObjects {
 		return nil, parentsteps.Permanent(fmt.Errorf("the render produced %d objects, more than the limit of %d",
@@ -323,15 +324,14 @@ func manifestFiles(docs [][]byte) ([]renderedFile, error) {
 		if m.Kind == "" || m.Metadata.Name == "" {
 			return nil, parentsteps.Permanent(errors.New("rendered object has no kind or metadata.name"))
 		}
-		dir := ""
-		if m.Metadata.Namespace != "" {
-			dir = fileSafe(m.Metadata.Namespace)
-		}
 		name := fileSafe(strings.ToLower(m.Kind)) + "-" + fileSafe(m.Metadata.Name)
-		if group := strings.Split(m.APIVersion, "/"); len(group) == 2 && used[dirJoin(dir, name+".yaml")] > 0 {
+		if m.Metadata.Namespace != "" {
+			name = fileSafe(m.Metadata.Namespace) + "_" + name
+		}
+		if group := strings.Split(m.APIVersion, "/"); len(group) == 2 && used[name+".yaml"] > 0 {
 			name += "." + fileSafe(group[0])
 		}
-		p := dirJoin(dir, name+".yaml")
+		p := name + ".yaml"
 		if used[p] > 0 {
 			return nil, parentsteps.Permanent(fmt.Errorf("two rendered objects map to %s", p))
 		}
@@ -344,13 +344,6 @@ func manifestFiles(docs [][]byte) ([]renderedFile, error) {
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
 	return files, nil
-}
-
-func dirJoin(dir, name string) string {
-	if dir == "" {
-		return name
-	}
-	return dir + "/" + name
 }
 
 // fileSafe keeps [a-z0-9._-] and replaces anything else with "_".
@@ -393,6 +386,3 @@ func renderWithTimeout(ctx context.Context, fn func(context.Context) ([][]byte, 
 		return nil, fmt.Errorf("render did not finish within %s", renderTimeout)
 	}
 }
-
-// bytesEqual is bytes.Equal, named for the marker comparison.
-var bytesEqual = bytes.Equal

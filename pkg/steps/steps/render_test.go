@@ -40,7 +40,7 @@ spec:
         - name: web
           image: ghcr.io/org/web:1.0.0
 `,
-	"base/service.yaml": "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\nspec:\n  ports: [{port: 80}]\n",
+	"base/service.yaml":                    "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\nspec:\n  ports: [{port: 80}]\n",
 	"environments/prod/kustomization.yaml": "namespace: web-prod\nresources:\n  - ../../base\nimages:\n  - name: ghcr.io/org/web\n    newTag: 1.0.0\n",
 	"charts/web/Chart.yaml":                "apiVersion: v2\nname: web\nversion: 0.1.0\n",
 	"charts/web/values.yaml":               "image:\n  repository: ghcr.io/org/web\n  tag: 1.0.0\nreplicas: 1\n",
@@ -171,9 +171,9 @@ func TestRenderBranch_Kustomize(t *testing.T) {
 	assert.Equal(t, "true", state.Outputs["renderedBranchCreated"])
 
 	files, msg := branchFiles(t, url, "env/prod")
-	require.Contains(t, files, "web-prod/deployment-web.yaml")
-	assert.Contains(t, files["web-prod/deployment-web.yaml"], "image: ghcr.io/org/web:2.0.0")
-	assert.Contains(t, files, "web-prod/service-web.yaml")
+	require.Contains(t, files, "web-prod_deployment-web.yaml")
+	assert.Contains(t, files["web-prod_deployment-web.yaml"], "image: ghcr.io/org/web:2.0.0")
+	assert.Contains(t, files, "web-prod_service-web.yaml")
 	assert.NotContains(t, files, "kustomization.yaml", "the rendered branch holds plain manifests")
 	assert.Contains(t, files[".kardinal/rendered.yaml"], "dryCommit: "+state.Outputs["dryCommit"])
 	assert.Contains(t, msg, "Kardinal-Dry-Commit: "+state.Outputs["dryCommit"])
@@ -188,7 +188,7 @@ func TestRenderBranch_Kustomize(t *testing.T) {
 	require.NoError(t, err, res.Message)
 	assert.Empty(t, state.Outputs["renderedBranchCreated"])
 	files, _ = branchFiles(t, url, "env/prod")
-	assert.Contains(t, files["web-prod/deployment-web.yaml"], "ghcr.io/org/web:3.0.0")
+	assert.Contains(t, files["web-prod_deployment-web.yaml"], "ghcr.io/org/web:3.0.0")
 
 	// The same Bundle again changes nothing.
 	state = renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v3", "3.0.0")
@@ -209,7 +209,7 @@ func TestRenderBranch_Helm(t *testing.T) {
 	require.NoError(t, err, res.Message)
 	assert.Equal(t, "helm", state.Outputs["renderer"])
 	files, _ := branchFiles(t, url, "env/prod")
-	dep := files["web-prod/deployment-web.yaml"]
+	dep := files["web-prod_deployment-web.yaml"]
 	assert.Contains(t, dep, "image: ghcr.io/org/web:2.0.0", "helm-set-image edited the DRY values before the render")
 	assert.Contains(t, dep, "replicas: 3", "prod-values.yaml applies over values.yaml")
 	for p := range files {
@@ -231,7 +231,7 @@ func TestRenderBranch_Drift(t *testing.T) {
 	c := scm.NewGoGitClient()
 	dir := filepath.Join(t.TempDir(), "hand")
 	require.NoError(t, c.Clone(context.Background(), url, "env/prod", dir, ""))
-	writeFiles(t, dir, map[string]string{"web-prod/deployment-web.yaml": "edited by hand\n", "CODEOWNERS": "* @team\n"})
+	writeFiles(t, dir, map[string]string{"web-prod_deployment-web.yaml": "edited by hand\n", "CODEOWNERS": "* @team\n"})
 	require.NoError(t, c.CommitAll(context.Background(), dir, "hotfix", "h", "h@example.com"))
 	require.NoError(t, c.Push(context.Background(), dir, "origin", "env/prod", "", false))
 
@@ -239,17 +239,17 @@ func TestRenderBranch_Drift(t *testing.T) {
 	res, err := promote(t, state)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, parentsteps.ErrPermanent))
-	assert.Contains(t, res.Message, "rendered branch env/prod was changed outside kardinal: web-prod/deployment-web.yaml changed")
+	assert.Contains(t, res.Message, "rendered branch env/prod was changed outside kardinal: web-prod_deployment-web.yaml changed")
 	files, _ := branchFiles(t, url, "env/prod")
-	assert.Equal(t, "edited by hand\n", files["web-prod/deployment-web.yaml"], "nothing pushed")
+	assert.Equal(t, "edited by hand\n", files["web-prod_deployment-web.yaml"], "nothing pushed")
 
 	env.Render = &v1alpha1.RenderConfig{OnDrift: "overwrite"}
 	state = renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v3", "3.0.0")
 	_, err = promote(t, state)
 	require.NoError(t, err)
-	assert.Contains(t, state.Outputs["driftOverwritten"], "web-prod/deployment-web.yaml changed")
+	assert.Contains(t, state.Outputs["driftOverwritten"], "web-prod_deployment-web.yaml changed")
 	files, _ = branchFiles(t, url, "env/prod")
-	assert.Contains(t, files["web-prod/deployment-web.yaml"], "ghcr.io/org/web:3.0.0")
+	assert.Contains(t, files["web-prod_deployment-web.yaml"], "ghcr.io/org/web:3.0.0")
 	assert.Equal(t, "* @team\n", files["CODEOWNERS"], "files kardinal never wrote are kept")
 }
 
@@ -271,7 +271,7 @@ func TestRenderBranch_RollbackRendersOldDryCommit(t *testing.T) {
 	_, err = promote(t, renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v3", "3.0.0"))
 	require.NoError(t, err)
 	files, _ := branchFiles(t, url, "env/prod")
-	require.Contains(t, files["web-prod/deployment-web.yaml"], "replicas: 5")
+	require.Contains(t, files["web-prod_deployment-web.yaml"], "replicas: 5")
 
 	rb := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-rollback", "2.0.0")
 	rb.Bundle.Provenance = &v1alpha1.BundleProvenance{RollbackOf: "web-v2"}
@@ -279,8 +279,8 @@ func TestRenderBranch_RollbackRendersOldDryCommit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first.Outputs["dryCommit"], rb.Outputs["dryCommit"], "the rollback renders web-v2's DRY commit")
 	files, _ = branchFiles(t, url, "env/prod")
-	assert.Contains(t, files["web-prod/deployment-web.yaml"], "replicas: 1")
-	assert.Contains(t, files["web-prod/deployment-web.yaml"], "ghcr.io/org/web:2.0.0")
+	assert.Contains(t, files["web-prod_deployment-web.yaml"], "replicas: 1")
+	assert.Contains(t, files["web-prod_deployment-web.yaml"], "ghcr.io/org/web:2.0.0")
 
 	unknown := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-rollback-2", "1.0.0")
 	unknown.Bundle.Provenance = &v1alpha1.BundleProvenance{RollbackOf: "never-rendered"}

@@ -28,8 +28,8 @@ func TestManifestFiles(t *testing.T) {
 	for _, f := range files {
 		paths = append(paths, f.path)
 	}
-	assert.Equal(t, []string{"namespace-prod.yaml", "prod/deployment-web.example.com.yaml", "prod/deployment-web.yaml",
-		"prod/service-web.yaml"}, paths)
+	assert.Equal(t, []string{"namespace-prod.yaml", "prod_deployment-web.example.com.yaml", "prod_deployment-web.yaml",
+		"prod_service-web.yaml"}, paths)
 
 	_, err = manifestFiles([][]byte{[]byte("kind: ConfigMap\n")})
 	assert.ErrorContains(t, err, "no kind or metadata.name")

@@ -156,7 +156,6 @@ Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, 
 ## Planned
 
 - kro v0.10.0 (v0.9.1, #1424)
-- `layout: branch`: promote rendered manifests (#1271)
 - `scm.allowedRepositories`: limit the repositories the SCM token may open PRs in (#1332)
 - `kardinal override` writes an AuditEvent with the cluster identity (#1286)
 - Secret-backed auth header for NotificationHook and MetricCheck (#1267)

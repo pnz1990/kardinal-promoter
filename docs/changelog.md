@@ -8,8 +8,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Rendered manifests: `layout: branch`** (#1447, closes #1271) — an environment's path on `spec.git.branch` (a Kustomize overlay, or a Helm chart) is rendered at promotion time and committed as plain manifests, one file per object, to its rendered branch (`render.branch`, default `env/<name>`), which Argo CD or Flux syncs. kustomize and Helm run in the controller (`sigs.k8s.io/kustomize/api`, `helm.sh/helm/v4`), with plugins, remote resources, `helmCharts` and symbolic links refused and input, output and time limits. The rendered commit carries `Kardinal-Dry-Commit`, `Kardinal-Dry-Path` and `Kardinal-Bundle` trailers; a `pr-review` PR targets the rendered branch, so its diff is the rendered YAML; a change made to the rendered branch outside kardinal fails the next promotion (`render.onDrift: fail`, or `overwrite`); a rollback re-renders the DRY commit of the Bundle it restores. See [Rendered Manifests](rendered-manifests.md)
+
 ### Changed
 
+- **The controller image no longer ships the kustomize binary** — nothing runs it: `kustomize-set-image` edits YAML in Go and `layout: branch` renders in process. The `kustomize-build` step, which was never reachable, is replaced by `render-manifests`
 - **kro tuning for large promotions** — `hack/install-kro.sh` now installs kro with 8 Graph workers (`config.graphConcurrentReconciles`, kro's default is 1) and client QPS 300 / burst 500 (`KRO_GRAPH_CONCURRENT_RECONCILES`, `KRO_CLIENT_QPS`, `KRO_CLIENT_BURST` override them). With one worker, one 150-environment promotion delayed every other Graph in the cluster by up to about 30 seconds. Re-run the script to apply it to an existing kro, or set the same Helm values if you install kro another way. See [Install kro](https://pnz1990.github.io/kardinal-promoter/installation/#install-kro)
 - **Graph size limit** — a Bundle whose Graph would be over about 1.2 MB fails (`InvalidSpec` reason `GraphBuildFailed`) with a message naming the size, instead of a Graph the API server refuses to store (etcd keeps at most 1.5 MiB per object). The size grows with the PolicyGates per environment: 100 environments with 3 gates each make a Graph of about 0.6 MB, with 5 gates about 0.85 MB, and with 10 gates about 1.5 MB, which is refused
 - **`time` is a reserved environment name** — kro#1434 (KREP-025, `time.now()`, not merged yet) proposes reserving `time` as a Graph node ID, so the Pipeline CRD now rejects an environment named `time`, like `bundle`, before a kro upgrade could break such a Pipeline. Rename one before upgrading (see [Upgrade](https://pnz1990.github.io/kardinal-promoter/installation/#upgrade))
