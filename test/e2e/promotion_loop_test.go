@@ -18,6 +18,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,8 +37,11 @@ import (
 )
 
 // mockSCMForLoop simulates a GitHub SCM provider.
-// A PR is "open" until setMerged() is called.
+// OpenPR opens the PR; merged is set by the test that builds the mock. One
+// mock is shared by the goroutines of runPromotionLoops, so mu guards every
+// field the methods touch.
 type mockSCMForLoop struct {
+	mu         sync.Mutex
 	merged     bool
 	open       bool
 	prURL      string
@@ -46,15 +50,26 @@ type mockSCMForLoop struct {
 }
 
 func (m *mockSCMForLoop) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.openCalled++
 	m.open = true
 	return m.prURL, m.prNumber, nil
+}
+
+// openCount returns how many times OpenPR was called.
+func (m *mockSCMForLoop) openCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.openCalled
 }
 func (m *mockSCMForLoop) ClosePR(_ context.Context, _ string, _ int) error { return nil }
 func (m *mockSCMForLoop) CommentOnPR(_ context.Context, _ string, _ int, _ string) error {
 	return nil
 }
 func (m *mockSCMForLoop) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.merged, m.open, nil
 }
 func (m *mockSCMForLoop) GetPRReviewStatus(_ context.Context, _ string, _ int) (bool, int, error) {
@@ -270,5 +285,35 @@ func TestPromotionLoop_Idempotency(t *testing.T) {
 	require.NoError(t, c.Get(ctx, req.NamespacedName, &final))
 	assert.Equal(t, "Verified", final.Status.State)
 	// OpenPR must not be called (PR was already open).
-	assert.Equal(t, 0, mockSCM.openCalled, "open-pr must not be called when prURL is already in outputs")
+	assert.Equal(t, 0, mockSCM.openCount(), "open-pr must not be called when prURL is already in outputs")
+}
+
+// TestMockSCMForLoop_ConcurrentUse checks that the mock is safe to share
+// between goroutines, as runPromotionLoops shares one reconciler (and so one
+// mock) across 100 of them. go test -race fails it when the counter or the
+// PR state is written without the lock (#1354).
+func TestMockSCMForLoop_ConcurrentUse(t *testing.T) {
+	m := &mockSCMForLoop{prURL: "https://github.com/test/repo/pull/1", prNumber: 1}
+	ctx := context.Background()
+	const n = 50
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _, err := m.OpenPR(ctx, "", "", "", "", "")
+			assert.NoError(t, err)
+		}()
+		go func() {
+			defer wg.Done()
+			_, _, err := m.GetPRStatus(ctx, "", 1)
+			assert.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, n, m.openCount())
+	merged, open, err := m.GetPRStatus(ctx, "", 1)
+	require.NoError(t, err)
+	assert.False(t, merged)
+	assert.True(t, open)
 }
