@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -702,6 +703,52 @@ func TestGate_PolicyNamespacesAddGates(t *testing.T) {
 	never, err := e.GateInstances(context.Background(), a.ns, bundle, "prod", "unlisted-never")
 	require.NoError(t, err)
 	assert.Empty(t, never, "a namespace the Pipeline does not list adds no gate")
+}
+
+// TestGate_PREvidenceNamesTemplates checks the promotion PR's evidence for a
+// Bundle created with kardinal create bundle and no --author (#1581): a gate
+// from a spec.policyNamespaces namespace is listed with that namespace, not
+// the Pipeline namespace its instance lives in; a team gate with the
+// Pipeline's; and the body names the Bundle's verified creator, the
+// Kubernetes user the CLI records as kardinal.io/created-by and admission
+// pins, without an "(unverified)" requester line.
+//
+// Covers GATE-PREVIDENCE-01.
+func TestGate_PREvidenceNamesTemplates(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	listed := e.Namespace(t)
+	e.CreateGate(t, framework.Gate(listed, "shared-pass", "prod", "true", recheck))
+	e.CreateGate(t, framework.Gate(a.ns, "team-pass", "prod", "true", recheck))
+	p := a.pipeline(map[string]string{"prod": "pr-review"})
+	p.Spec.PolicyNamespaces = []string{listed}
+	a.apply(t, p)
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	ssr, err := e.Kube.AuthenticationV1().SelfSubjectReviews().Create(ctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	user := ssr.Status.UserInfo.Username
+	require.NotEmpty(t, user)
+	var b v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: bundle}, &b))
+	assert.Equal(t, user, b.Annotations[lifecycle.AnnotationCreatedBy], "the CLI records who created the Bundle")
+	assert.Nil(t, b.Spec.Provenance, "without --author there is no provenance")
+
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "WaitingForMerge", promoteTimeout)
+	pr := a.openPR(t, bundle, "prod")
+	for _, want := range []string{
+		"| shared-pass | " + listed + " | Pass |",
+		"| team-pass | " + a.ns + " | Pass |",
+		"| " + fixtures.Image + " | " + fixtures.V2 + " | — | — | — | — |\n\nCreated by: " + user + "\n",
+	} {
+		assert.Contains(t, pr.Body, want)
+	}
+	assert.NotContains(t, pr.Body, "| shared-pass | "+a.ns+" |", "the org gate is not listed in the instance's namespace")
+	assert.NotContains(t, pr.Body, "(unverified)")
+	a.merge(t, pr)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 }
 
 // TestGate_HoldsStepBeforeStart checks the pre-start gate check. A paused

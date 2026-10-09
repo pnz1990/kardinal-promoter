@@ -48,6 +48,12 @@ type PromotionStepSpec struct {
 	// +optional
 	PRStatusRef string `json:"prStatusRef,omitempty"`
 
+	// ScmProvider is the provider of the Pipeline's spec.git.providerRef,
+	// as the translator resolved it when it built the Graph. Unset uses the
+	// controller's --scm-provider.
+	// +optional
+	ScmProvider *ScmProviderIdentity `json:"scmProvider,omitempty"`
+
 	// PreHooks names the HookRuns of the environment's pre-deploy hooks, in
 	// order. The step stays Pending until every one of them Succeeded in
 	// spec.live.hooks, and fails when one Failed. Set by the Graph: the first

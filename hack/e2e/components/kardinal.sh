@@ -105,6 +105,9 @@ args=(
   # Off by default; TestUI_UserRoles checks the opt-in (a binding to the
   # built-in view role grants the viewer rules). test/helm covers the default.
   --set rbac.userRoles.aggregateToDefaultRoles=true
+  # The suites' git servers are in-cluster Services without TLS: let
+  # ScmProviders use their http:// API (TestForgejo_ScmProvider*).
+  --set scm.providersAllowInsecureHTTP=true
   # The live tests' controller variants (framework.ControllerVariant) run as
   # ServiceAccounts variant-1 ... variant-<framework.MaxVariants> in the
   # release namespace: they are kardinal controllers for the identity

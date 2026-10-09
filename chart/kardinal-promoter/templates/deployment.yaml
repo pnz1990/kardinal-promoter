@@ -121,6 +121,9 @@ spec:
             {{- with .Values.scm.allowedRepositories }}
             - --scm-allowed-repositories={{ join "," . }}
             {{- end }}
+            {{- if .Values.scm.providersAllowInsecureHTTP }}
+            - --scm-providers-allow-http=true
+            {{- end }}
             {{- with .Values.scm.gatesCommitStatus }}
             {{- if eq (toString .enabled) "false" }}
             - --gates-commit-status=false
