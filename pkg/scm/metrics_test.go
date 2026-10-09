@@ -119,7 +119,9 @@ func TestGitMetrics_CloneAndPush(t *testing.T) {
 	require.NoError(t, c.CommitAll(ctx, seed, "seed", "t", "t@example.com"))
 	require.NoError(t, cloneBare(seed, remote))
 
-	ok := func(op, result string) float64 { return testutil.ToFloat64(GitOperationsTotal.WithLabelValues(op, result)) }
+	ok := func(op, result string) float64 {
+		return testutil.ToFloat64(GitOperationsTotal.WithLabelValues(op, result))
+	}
 	clones, pushes, nonFF := ok("clone", "ok"), ok("push", "ok"), ok("push", "non_fast_forward")
 	a, b := t.TempDir()+"/a", t.TempDir()+"/b"
 	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", a, ""))
@@ -150,7 +152,9 @@ func (f fakeRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
 // requests are not counted.
 func TestCountingTransport(t *testing.T) {
 	tr := &countingTransport{base: fakeRoundTripper{body: "0123456789"}}
-	bytes := func(svc, dir string) float64 { return testutil.ToFloat64(GitTransferBytesTotal.WithLabelValues(svc, dir)) }
+	bytes := func(svc, dir string) float64 {
+		return testutil.ToFloat64(GitTransferBytesTotal.WithLabelValues(svc, dir))
+	}
 	fetchIn, pushOut, pushIn := bytes("fetch", "received"), bytes("push", "sent"), bytes("push", "received")
 	do := func(method, url, body string) {
 		req, err := http.NewRequest(method, url, strings.NewReader(body))

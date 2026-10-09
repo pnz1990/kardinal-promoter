@@ -18,7 +18,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
 
-// TestObservability_SCMAndGitMetrics promotes a pr-review environment and
+// TestSCM_MetricsAfterPromotion promotes a pr-review environment and
 // reads the controller's /metrics: the PR the step opened counts as a
 // successful SCM call of the cluster's provider, the clone and the push
 // count with their durations, the bytes of both are counted (the e2e git
@@ -26,7 +26,7 @@ import (
 // and the owner and operation labels stay within their caps.
 //
 // Covers OBS-SCM-01.
-func TestObservability_SCMAndGitMetrics(t *testing.T) {
+func TestSCM_MetricsAfterPromotion(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	ctx := context.Background()
@@ -38,8 +38,12 @@ func TestObservability_SCMAndGitMetrics(t *testing.T) {
 		provider = "forgejo"
 	}
 	require.NotEmpty(t, provider)
+	openPR := "POST pulls" // GitHub, Forgejo, Gitea
+	if provider == "gitlab" {
+		openPR = "POST merge_requests"
+	}
 	opened := func(m framework.Metrics) float64 {
-		return m.Sum("kardinal_scm_requests_total", map[string]string{"provider": provider, "operation": "POST pulls", "result": "ok"})
+		return m.Sum("kardinal_scm_requests_total", map[string]string{"provider": provider, "operation": openPR, "result": "ok"})
 	}
 
 	a := newArgoApp(t, e, "test")
@@ -53,7 +57,7 @@ func TestObservability_SCMAndGitMetrics(t *testing.T) {
 		if err != nil {
 			return false, err.Error()
 		}
-		return opened(after) > opened(before), fmt.Sprintf("POST pulls ok %v -> %v", opened(before), opened(after))
+		return opened(after) > opened(before), fmt.Sprintf("%s ok %v -> %v", openPR, opened(before), opened(after))
 	})
 	for _, op := range []string{"clone", "push"} {
 		assert.Greater(t, after.Sum("kardinal_git_operations_total", map[string]string{"operation": op, "result": "ok"}),
