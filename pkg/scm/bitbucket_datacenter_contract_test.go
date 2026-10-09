@@ -94,7 +94,7 @@ func TestBitbucketDCContract_OpenPR(t *testing.T) {
 		other := mustJSON(t, map[string]interface{}{"id": 3, "fromRef": map[string]string{"id": "refs/heads/" + dcBranch},
 			"toRef": map[string]string{"id": "refs/heads/release"}})
 		f := newFakeAPI(t, map[string]apiReply{
-			"POST " + dcPRs: {409, `{"errors":[{"exceptionName":"com.atlassian.bitbucket.pull.DuplicatePullRequestException","message":"Only one pull request may be open for a given source and target branch"}]}`},
+			"POST " + dcPRs: {409, `{"errors":[{"exceptionName":"com.atlassian.bitbucket.pull.DuplicatePullRequestException","message":"Only one pull request may be open for a given source and target branch","existingPullRequest":{"id":12}}]}`},
 		})
 		f.queue("GET "+dcPRs,
 			apiReply{200, `{"values":[` + other + `],"isLastPage":false,"nextPageStart":1}`},
@@ -109,6 +109,15 @@ func TestBitbucketDCContract_OpenPR(t *testing.T) {
 		assert.Equal(t, "OUTGOING", calls[1].Query.Get("direction"))
 		assert.Equal(t, "refs/heads/"+dcBranch, calls[1].Query.Get("at"))
 		assert.Equal(t, "1", calls[2].Query.Get("start"))
+	})
+
+	t.Run("another 409", func(t *testing.T) {
+		f := newFakeAPI(t, map[string]apiReply{
+			"POST " + dcPRs: {409, `{"errors":[{"exceptionName":"com.atlassian.bitbucket.pull.InvalidPullRequestReviewersException","message":"Errors encountered while adding some reviewers to this pull request."}]}`},
+		})
+		_, _, err := dcProvider(t, f, "").OpenPR(context.Background(), "PLAT/web-app", "t", "b", dcBranch, "main")
+		assert.ErrorContains(t, err, "InvalidPullRequestReviewersException")
+		assert.Len(t, f.Calls(), 1, "not taken for a duplicate")
 	})
 
 	t.Run("no server URL", func(t *testing.T) {
@@ -247,11 +256,13 @@ func TestBitbucketDCContract_Webhook(t *testing.T) {
 }
 
 // TestBitbucketDCContract_PRControls: reviewers are added as REVIEWER
-// participants; while a merge check vetoes the merge, auto-merge turns on
-// Bitbucket's auto-merge with the strategy and message, and says the server
-// is too old when it has none (404); a PR whose checks pass (nothing
-// pending) is merged only with allowImmediate; DisableAutoMerge deletes it;
-// team reviewers, assignees and labels are not supported.
+// participants; while a merge check vetoes the merge, auto-merge is requested
+// with POST .../merge?version=N and autoMerge true, the strategy and the
+// message (a 403 means auto-merge is disabled for the repository); a PR with
+// no veto (nothing pending) is merged only with allowImmediate, without
+// autoMerge; DisableAutoMerge deletes the request, 404 and 409 (not open)
+// included; team reviewers, assignees and labels are not supported. The
+// request and response shapes follow the Bitbucket Data Center 9.6 OpenAPI.
 // Covers SCM-BBDC-05.
 func TestBitbucketDCContract_PRControls(t *testing.T) {
 	ctx := context.Background()
@@ -267,38 +278,67 @@ func TestBitbucketDCContract_PRControls(t *testing.T) {
 
 	opts := scm.MergeOptions{Method: "squash", CommitTitle: "deploy 2.0", CommitBody: "Bundle web-app-v2"}
 	auto := "/bitbucket/rest/api/latest/projects/PLAT/repos/web-app/pull-requests/12/auto-merge"
-	vetoed := apiReply{200, `{"canMerge":false,"conflicted":false,"outcome":"CLEAN","vetoes":[{"summaryMessage":"Requires 1 approval"}]}`}
-	clean := apiReply{200, `{"canMerge":true,"conflicted":false,"outcome":"CLEAN","vetoes":[]}`}
-	t.Run("vetoed: auto-merge", func(t *testing.T) {
-		f := newFakeAPI(t, map[string]apiReply{"GET " + dcPR12 + "/merge": vetoed, "POST " + auto: {200, `{"autoMergeEnabled":true}`}})
-		require.NoError(t, dcProvider(t, f, "").EnableAutoMerge(ctx, "PLAT/web-app", 12, scm.MergeOptions{Method: "rebase", CommitTitle: "deploy"}))
+	// RestPullRequestMergeability (Bitbucket Data Center 9.6 OpenAPI).
+	vetoed := apiReply{200, `{"conflicted":false,"outcome":"CLEAN","vetoes":[{"summaryMessage":"Requires 1 approval","detailedMessage":"You need 1 approval"}]}`}
+	clean := apiReply{200, `{"conflicted":false,"outcome":"CLEAN","vetoes":[]}`}
+	routes := func(merge apiReply, extra map[string]apiReply) map[string]apiReply {
+		r := map[string]apiReply{"GET " + dcPR12 + "/merge": merge, "GET " + dcPR12: {200, dcPRJSON(t, "OPEN", 5)},
+			"POST " + dcPR12 + "/merge": {200, dcPRJSON(t, "OPEN", 6)}}
+		for k, v := range extra {
+			r[k] = v
+		}
+		return r
+	}
+	lastMerge := func(f *fakeAPI) apiCall {
 		calls := f.Calls()
-		assert.Equal(t, auto, calls[len(calls)-1].Path)
-		assert.JSONEq(t, `{"strategyId":"rebase-no-ff","commitMessage":"deploy"}`, calls[len(calls)-1].Body)
+		for i := len(calls) - 1; i >= 0; i-- {
+			if calls[i].Method == http.MethodPost && calls[i].Path == dcPR12+"/merge" {
+				return calls[i]
+			}
+		}
+		t.Fatal("no merge call")
+		return apiCall{}
+	}
+	t.Run("vetoed: autoMerge", func(t *testing.T) {
+		f := newFakeAPI(t, routes(vetoed, nil))
+		require.NoError(t, dcProvider(t, f, "").EnableAutoMerge(ctx, "PLAT/web-app", 12, scm.MergeOptions{Method: "rebase", CommitTitle: "deploy"}))
+		c := lastMerge(f)
+		assert.Equal(t, "5", c.Query.Get("version"))
+		assert.JSONEq(t, `{"autoMerge":true,"strategyId":"rebase-no-ff","message":"deploy","autoSubject":false}`, c.Body)
+	})
+	t.Run("auto-merge disabled in the repository", func(t *testing.T) {
+		f := newFakeAPI(t, routes(vetoed, map[string]apiReply{"POST " + dcPR12 + "/merge": {403, `{"errors":[{"message":"Auto-merge is not enabled for this repository"}]}`}}))
+		err := dcProvider(t, f, "").EnableAutoMerge(ctx, "PLAT/web-app", 12, scm.MergeOptions{Method: "merge"})
+		assert.ErrorContains(t, err, "auto-merge is disabled for this repository")
+		assert.False(t, scm.IsRetryableMergeError(err))
 	})
 	t.Run("nothing pending", func(t *testing.T) {
-		f := newFakeAPI(t, map[string]apiReply{"GET " + dcPR12 + "/merge": clean})
+		f := newFakeAPI(t, routes(clean, nil))
 		err := dcProvider(t, f, "").EnableAutoMerge(ctx, "PLAT/web-app", 12, opts)
 		assert.ErrorIs(t, err, scm.ErrNothingPending)
 		assert.Len(t, f.Calls(), 1, "no merge without allowImmediate")
 	})
 	t.Run("nothing pending, allowImmediate", func(t *testing.T) {
-		f := newFakeAPI(t, map[string]apiReply{"GET " + dcPR12 + "/merge": clean, "GET " + dcPR12: {200, dcPRJSON(t, "OPEN", 5)},
-			"POST " + dcPR12 + "/merge": {200, dcPRJSON(t, "MERGED", 6)}})
+		f := newFakeAPI(t, routes(clean, nil))
 		o := opts
 		o.AllowImmediate = true
 		require.NoError(t, dcProvider(t, f, "").EnableAutoMerge(ctx, "PLAT/web-app", 12, o))
-		c := f.Calls()[2]
+		c := lastMerge(f)
 		assert.Equal(t, "5", c.Query.Get("version"))
-		assert.JSONEq(t, `{"strategyId":"squash","message":"deploy 2.0\n\nBundle web-app-v2"}`, c.Body)
+		assert.JSONEq(t, `{"strategyId":"squash","message":"deploy 2.0\n\nBundle web-app-v2","autoSubject":false}`, c.Body, "merged at once: no autoMerge")
 	})
-	t.Run("a server without auto-merge", func(t *testing.T) {
-		f := newFakeAPI(t, map[string]apiReply{"GET " + dcPR12 + "/merge": vetoed, "POST " + auto: {404, `{}`}})
-		err := dcProvider(t, f, "").EnableAutoMerge(ctx, "PLAT/web-app", 12, scm.MergeOptions{Method: "merge"})
-		assert.ErrorContains(t, err, "this server has no auto-merge (Bitbucket Data Center 8.15 or later)")
+	t.Run("conflicts and unknown", func(t *testing.T) {
+		f := newFakeAPI(t, routes(apiReply{200, `{"conflicted":true,"outcome":"CONFLICTED","vetoes":[]}`}, nil))
+		assert.ErrorContains(t, dcProvider(t, f, "").EnableAutoMerge(ctx, "PLAT/web-app", 12, opts), "the PR has conflicts")
+		f = newFakeAPI(t, routes(apiReply{200, `{"conflicted":false,"outcome":"UNKNOWN","vetoes":[]}`}, nil))
+		assert.ErrorIs(t, dcProvider(t, f, "").EnableAutoMerge(ctx, "PLAT/web-app", 12, opts), scm.ErrMergeabilityUnknown)
 	})
 	t.Run("disable", func(t *testing.T) {
-		f := newFakeAPI(t, map[string]apiReply{"DELETE " + auto: {404, `{}`}})
-		require.NoError(t, dcProvider(t, f, "").DisableAutoMerge(ctx, "PLAT/web-app", 12))
+		for _, code := range []int{204, 404, 409} {
+			f := newFakeAPI(t, map[string]apiReply{"DELETE " + auto: {code, ``}})
+			require.NoError(t, dcProvider(t, f, "").DisableAutoMerge(ctx, "PLAT/web-app", 12), "status %d", code)
+		}
+		f := newFakeAPI(t, map[string]apiReply{"DELETE " + auto: {401, `{}`}})
+		assert.Error(t, dcProvider(t, f, "").DisableAutoMerge(ctx, "PLAT/web-app", 12))
 	})
 }

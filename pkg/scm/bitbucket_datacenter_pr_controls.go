@@ -15,6 +15,7 @@ package scm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -62,13 +63,14 @@ var bbdcMergeStrategies = map[string]string{
 	MergeMethodMerge: "no-ff", MergeMethodSquash: "squash", MergeMethodRebase: "rebase-no-ff",
 }
 
-// EnableAutoMerge turns on Bitbucket's auto-merge (Bitbucket Data Center
-// 8.15 and later), which merges the PR with the strategy and message once
-// its merge checks (approvals, builds, tasks) pass. The merge endpoint's
-// GET says first whether a check still vetoes the merge: when none does,
-// nothing is pending, and the PR is merged at once only with
-// opts.AllowImmediate (otherwise ErrNothingPending). A server without
-// auto-merge answers 404; the PR then waits for a merge by hand.
+// EnableAutoMerge asks Bitbucket Data Center to merge the PR with the
+// strategy and message once its merge checks (approvals, builds, tasks)
+// pass: POST .../merge?version=N with autoMerge true (RestPullRequestMergeRequest,
+// Bitbucket Data Center 8.15 and later, with auto-merge enabled in the
+// repository's settings). The mergeability GET says first whether a check
+// still vetoes the merge: when none does, nothing is pending, and the PR is
+// merged at once (the same call without autoMerge) only with
+// opts.AllowImmediate; otherwise ErrNothingPending.
 func (b *BitbucketDCProvider) EnableAutoMerge(ctx context.Context, repo string, prNumber int, opts MergeOptions) error {
 	strategy, ok := bbdcMergeStrategies[opts.Method]
 	if !ok {
@@ -78,55 +80,56 @@ func (b *BitbucketDCProvider) EnableAutoMerge(ctx context.Context, repo string, 
 	if err != nil {
 		return err
 	}
+	// RestPullRequestMergeability.
 	var check struct {
-		CanMerge   bool `json:"canMerge"`
-		Conflicted bool `json:"conflicted"`
+		Conflicted bool              `json:"conflicted"`
+		Outcome    string            `json:"outcome"`
+		Vetoes     []json.RawMessage `json:"vetoes"`
 	}
 	if err := b.do(ctx, http.MethodGet, fmt.Sprintf("%s/%d/merge", path, prNumber), nil, &check); err != nil {
 		return fmt.Errorf("merge Bitbucket Data Center PR %s#%d: read merge checks: %w", repo, prNumber, err)
 	}
-	if check.Conflicted {
+	switch {
+	case check.Conflicted || check.Outcome == "CONFLICTED":
 		return fmt.Errorf("merge Bitbucket Data Center PR %s#%d: the PR has conflicts", repo, prNumber)
+	case check.Outcome == "UNKNOWN":
+		return fmt.Errorf("merge Bitbucket Data Center PR %s#%d: %w", repo, prNumber, ErrMergeabilityUnknown)
 	}
-	if check.CanMerge {
-		if !opts.AllowImmediate {
-			return fmt.Errorf("merge Bitbucket Data Center PR %s#%d: %w", repo, prNumber, ErrNothingPending)
-		}
-		body := map[string]interface{}{"strategyId": strategy}
-		if opts.CommitTitle != "" {
-			body["message"] = commitMessage(opts)
-		}
-		err := b.withVersion(ctx, repo, prNumber, func(version int) error {
-			return b.do(ctx, http.MethodPost, fmt.Sprintf("%s/%d/merge?version=%d", path, prNumber, version), body, nil)
-		})
-		if err != nil {
-			return fmt.Errorf("merge Bitbucket Data Center PR %s#%d: %w", repo, prNumber, err)
-		}
-		return nil
+	immediate := len(check.Vetoes) == 0
+	if immediate && !opts.AllowImmediate {
+		return fmt.Errorf("merge Bitbucket Data Center PR %s#%d: %w", repo, prNumber, ErrNothingPending)
 	}
-	autoBody := map[string]interface{}{"strategyId": strategy}
+	// RestPullRequestMergeRequest.
+	body := map[string]interface{}{"strategyId": strategy}
+	if !immediate {
+		body["autoMerge"] = true
+	}
 	if opts.CommitTitle != "" {
-		autoBody["commitMessage"] = commitMessage(opts)
+		body["message"] = commitMessage(opts)
+		body["autoSubject"] = false
 	}
-	err = b.do(ctx, http.MethodPost, b.autoMergePath(path, prNumber), autoBody, nil)
-	if _, old := statusIs(err, http.StatusNotFound); old {
-		return fmt.Errorf("enable auto-merge on Bitbucket Data Center PR %s#%d: this server has no auto-merge (Bitbucket Data Center 8.15 or later)", repo, prNumber)
+	err = b.withVersion(ctx, repo, prNumber, func(version int) error {
+		return b.do(ctx, http.MethodPost, fmt.Sprintf("%s/%d/merge?version=%d", path, prNumber, version), body, nil)
+	})
+	if _, disabled := statusIs(err, http.StatusForbidden); disabled && !immediate {
+		return fmt.Errorf("enable auto-merge on Bitbucket Data Center PR %s#%d: auto-merge is disabled for this repository (Repository settings > Auto-merge): %w", repo, prNumber, err)
 	}
 	if err != nil {
-		return fmt.Errorf("enable auto-merge on Bitbucket Data Center PR %s#%d: %w", repo, prNumber, err)
+		return fmt.Errorf("merge Bitbucket Data Center PR %s#%d: %w", repo, prNumber, err)
 	}
 	return nil
 }
 
-// DisableAutoMerge cancels Bitbucket's auto-merge of the PR. A PR without
-// one, or a server without auto-merge (404), is not an error.
+// DisableAutoMerge cancels the PR's auto-merge request (DELETE
+// .../auto-merge). No request (404) or a PR that is not open any more (409)
+// is not an error.
 func (b *BitbucketDCProvider) DisableAutoMerge(ctx context.Context, repo string, prNumber int) error {
 	path, err := b.prPath(repo)
 	if err != nil {
 		return err
 	}
 	err = b.do(ctx, http.MethodDelete, b.autoMergePath(path, prNumber), nil, nil)
-	if _, none := statusIs(err, http.StatusNotFound); err != nil && !none {
+	if _, none := statusIs(err, http.StatusNotFound, http.StatusConflict); err != nil && !none {
 		return fmt.Errorf("disable auto-merge on Bitbucket Data Center PR %s#%d: %w", repo, prNumber, err)
 	}
 	return nil

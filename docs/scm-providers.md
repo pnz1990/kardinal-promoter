@@ -330,7 +330,10 @@ Keys and slugs are matched without case, so the ssh URL's lower-case key matches
   title.
 - **Approvals**: reviewers with status `APPROVED` count; one with `NEEDS_WORK` blocks
   `bundle.pr.<env>.isApproved`.
-- **Merge commit**: read from the PR's `properties.mergeCommit` (the webhook carries it too).
+- **Merge commit**: read from the PR's `properties.mergeCommit`, which Bitbucket Data Center
+  returns for a merged PR though its OpenAPI description leaves it out (the webhook carries it
+  too). Without it the `argocd` and `flux` health checks fall back as described in
+  [When the merge commit is not known yet](health-adapters.md#when-the-merge-commit-is-not-known-yet).
 
 Webhook: **Repository settings → Webhooks → Create webhook**, URL
 `http://<controller-host>:8083/webhook/scm`, **Secret** the value of `--webhook-secret`, events
@@ -375,7 +378,7 @@ provider applies:
 | `reviewers` | Usernames | Usernames | Usernames | Account IDs or `{UUID}`s | Identity IDs | User slugs |
 | `teamReviewers` | Team slugs (organisation repos) | No | Team names (organisation repos) | No | Group identity IDs | No |
 | `assignees` | Usernames | Usernames | Usernames | No (no PR assignees) | No (no PR assignees) | No (no PR assignees) |
-| `merge.auto` | Auto-merge (GraphQL `enablePullRequestAutoMerge` / `disablePullRequestAutoMerge`) | Auto-merge (`auto_merge`, or `merge_when_pipeline_succeeds` before GitLab 17.11; cancelled with `cancel_merge_when_pipeline_succeeds`) | Scheduled merge (`merge_when_checks_succeed`; cancelled with `DELETE .../merge`) | No (no auto-merge API) | Auto-complete (cleared to turn it off) | Bitbucket auto-merge (8.15 and later; `DELETE .../auto-merge` to turn it off) |
+| `merge.auto` | Auto-merge (GraphQL `enablePullRequestAutoMerge` / `disablePullRequestAutoMerge`) | Auto-merge (`auto_merge`, or `merge_when_pipeline_succeeds` before GitLab 17.11; cancelled with `cancel_merge_when_pipeline_succeeds`) | Scheduled merge (`merge_when_checks_succeed`; cancelled with `DELETE .../merge`) | No (no auto-merge API) | Auto-complete (cleared to turn it off) | Auto-merge (`POST .../merge` with `autoMerge: true`, 8.15 and later, enabled in the repository's auto-merge settings; `DELETE .../auto-merge` cancels it) |
 | `merge.method` | `merge`, `squash`, `rebase` | `merge`, `squash` (a rebase merge is the project's merge method setting) | `merge`, `squash`, `rebase` | — | `merge` (no fast-forward), `squash`, `rebase` | `merge` (`no-ff`), `squash`, `rebase` (`rebase-no-ff`); the strategy must be enabled on the repository |
 | `merge.commitMessageTemplate` | Yes | Yes (merge and squash commits) | Yes | — | Yes | Yes |
 
@@ -397,10 +400,12 @@ pending the SCM would merge at once, so kardinal leaves the PR for a merge by ha
 - **Forgejo / Gitea**: nothing pending: no commit status that is still pending or failing, and
   no base branch protection that requires approvals or status checks. Forgejo and Gitea run a
   scheduled merge when the checks succeed or an approval arrives.
-- **Bitbucket Data Center**: nothing pending: the merge endpoint's `canMerge` is true (no merge
-  check vetoes the merge). Otherwise kardinal turns on Bitbucket's auto-merge, which merges the
-  PR once its checks pass; a server older than 8.15 has none, and the PR waits for a merge by
-  hand (`prAutoMerge: failed`).
+- **Bitbucket Data Center**: nothing pending: the mergeability check reports no merge check
+  vetoing the merge. Otherwise kardinal requests auto-merge (`autoMerge: true` on the merge
+  call), and Bitbucket merges the PR once its checks pass. Auto-merge needs Bitbucket Data
+  Center 8.15 or later with auto-merge turned on in the repository's (or project's) settings;
+  without it the call is refused (403, "auto-merge is disabled for this repository") and the PR
+  waits for a merge by hand (`prAutoMerge: failed`).
 - **Azure DevOps**: nothing pending: no branch policy evaluation queued, running or rejected.
   Auto-complete is set by the token's identity, which opened the PR, and completes the PR once
   its branch policies pass.

@@ -158,7 +158,8 @@ func (p bbdcPR) webURL() string {
 }
 
 // OpenPR creates a pull request from head into base. A pull request that is
-// open between the same branches already (409) is returned instead.
+// open between the same branches already (409 with a
+// DuplicatePullRequestException) is returned instead.
 func (b *BitbucketDCProvider) OpenPR(ctx context.Context, repo, title, body, head, base string) (string, int, error) {
 	project, slug, err := splitBitbucketDCRepo(repo)
 	if err != nil {
@@ -176,7 +177,10 @@ func (b *BitbucketDCProvider) OpenPR(ctx context.Context, repo, title, body, hea
 	}
 	var pr bbdcPR
 	if err := b.do(ctx, http.MethodPost, path, payload, &pr); err != nil {
-		if _, ok := statusIs(err, http.StatusConflict); ok {
+		// 409 has several causes (reviewers that do not resolve, the same
+		// branch twice, an archived repository); only a duplicate is reused.
+		if apiErr, ok := statusIs(err, http.StatusConflict); ok &&
+			(strings.Contains(apiErr.Body, "DuplicatePullRequestException") || strings.Contains(apiErr.Body, "existingPullRequest")) {
 			return b.findExistingPR(ctx, repo, head, base)
 		}
 		return "", 0, fmt.Errorf("open Bitbucket Data Center PR %s: %w", repo, err)
