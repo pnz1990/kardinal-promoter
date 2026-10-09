@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +29,8 @@ type fakeAPI struct {
 	header http.Header
 	// fail holds, per route, status codes to answer before the canned body.
 	fail map[string][]int
+	// failBody is the body of those answers, per route (default "not yet").
+	failBody map[string]string
 }
 
 func newFake(t *testing.T, routes map[string]string) (*fakeAPI, *httptest.Server) {
@@ -51,7 +54,11 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if codes := f.fail[key]; len(codes) > 0 {
 		f.fail[key] = codes[1:]
-		http.Error(w, `{"message":"not yet"}`, codes[0])
+		body := `{"message":"not yet"}`
+		if b, ok := f.failBody[key]; ok {
+			body = b
+		}
+		http.Error(w, body, codes[0])
 		return
 	}
 	body, ok := f.routes[key]
@@ -280,4 +287,69 @@ func TestFromEnv(t *testing.T) {
 	t.Setenv(EnvOwner, "o")
 	_, err = FromEnv()
 	require.Error(t, err)
+}
+
+// TestForgejoCreateRepoRetries (#1557): a create or seed that fails on a
+// timeout or a 5xx is retried from scratch, deleting the half-made repo
+// first; a 4xx is not retried, and the tries are bounded.
+func TestForgejoCreateRepoRetries(t *testing.T) {
+	const create, seed, del = "POST /api/v1/orgs/e2e/repos", "POST /api/v1/repos/e2e/r/contents", "DELETE /api/v1/repos/e2e/r"
+	for name, tc := range map[string]struct {
+		fail    map[string][]int
+		want    []string
+		wantErr string
+	}{
+		"seed 500, then ok": {fail: map[string][]int{seed: {500}},
+			want: []string{create, seed, del, create, seed}},
+		"create 502 twice, then ok": {fail: map[string][]int{create: {502, 502}},
+			want: []string{create, del, create, del, create, seed}},
+		"every try fails": {fail: map[string][]int{create: {503, 503, 503}},
+			want: []string{create, del, create, del, create}, wantErr: "HTTP 503"},
+		"4xx is not retried": {fail: map[string][]int{create: {422}},
+			want: []string{create}, wantErr: "HTTP 422"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, srv := newFake(t, map[string]string{create: `{}`, seed: `{}`, del: ``})
+			f.fail = tc.fail
+			s := server(t, "forgejo", srv.URL, "").(*forgejo)
+			s.retry = time.Millisecond
+			_, err := s.CreateRepo(context.Background(), "r", map[string][]byte{"a.yaml": []byte("a")})
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+			assert.Equal(t, tc.want, f.seen)
+		})
+	}
+
+	t.Run("a create that times out", func(t *testing.T) {
+		var (
+			mu   sync.Mutex
+			seen []string
+			slow = true
+		)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			seen = append(seen, r.Method+" "+r.URL.Path)
+			wait := r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/orgs/e2e/repos") && slow
+			slow = slow && !wait
+			mu.Unlock()
+			if wait {
+				time.Sleep(200 * time.Millisecond) // past the client timeout; the repo is made anyway
+			}
+			_, _ = io.WriteString(w, `{}`)
+		}))
+		t.Cleanup(srv.Close)
+		s, err := newServer("forgejo", client{api: srv.URL, cloneBase: "http://git.example", owner: "e2e", token: "tok",
+			http: &http.Client{Timeout: 50 * time.Millisecond}}, "")
+		require.NoError(t, err)
+		s.(*forgejo).retry = time.Millisecond
+		_, err = s.CreateRepo(context.Background(), "r", nil)
+		require.NoError(t, err)
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Equal(t, []string{"POST /api/v1/orgs/e2e/repos", "DELETE /api/v1/repos/e2e/r",
+			"POST /api/v1/orgs/e2e/repos", "POST /api/v1/repos/e2e/r/contents"}, seen)
+	})
 }

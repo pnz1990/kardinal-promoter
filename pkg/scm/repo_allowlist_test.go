@@ -173,6 +173,10 @@ func (g *guardSCM) AddLabelsToPR(_ context.Context, repo string, _ int, _ []stri
 	g.calls = append(g.calls, "labels "+repo)
 	return nil
 }
+func (g *guardSCM) SetPRCommitStatus(_ context.Context, repo string, _ int, _ string, _ scm.CommitStatus) error {
+	g.calls = append(g.calls, "commit status "+repo)
+	return nil
+}
 func (g *guardSCM) DeleteBranch(_ context.Context, repo, branch string) error {
 	g.calls = append(g.calls, "delete "+repo+":"+branch)
 	return nil
@@ -200,7 +204,8 @@ func TestGuard(t *testing.T) {
 		e6 := p.AddLabelsToPR(ctx, repo, 1, []string{"l"})
 		e7 := p.(scm.BranchDeleter).DeleteBranch(ctx, repo, "kardinal/b/prod")
 		_, e8 := p.(scm.MergeCommitGetter).GetPRMergeCommit(ctx, repo, 1)
-		return []error{e1, e2, e3, e4, e5, e6, e7, e8}
+		e9 := p.(scm.CommitStatusSetter).SetPRCommitStatus(ctx, repo, 1, "abc", scm.CommitStatus{State: "success"})
+		return []error{e1, e2, e3, e4, e5, e6, e7, e8, e9}
 	}
 
 	inner := &guardSCM{}
@@ -215,7 +220,7 @@ func TestGuard(t *testing.T) {
 	for i, err := range calls(g, "acme/gitops") {
 		assert.NoError(t, err, "call %d", i)
 	}
-	assert.Len(t, inner.calls, 8)
+	assert.Len(t, inner.calls, 9)
 	_, err = g.ParseWebhookEvent(nil, "")
 	assert.NoError(t, err)
 
@@ -229,7 +234,7 @@ func TestGuard(t *testing.T) {
 		assert.True(t, errors.Is(err, scm.ErrRepositoryNotAllowed), "%q: %v", repo, err)
 		assert.False(t, a.AllowsRepo("github.com", repo), "%q", repo)
 	}
-	assert.Len(t, inner.calls, 9, "none of them reached the provider")
+	assert.Len(t, inner.calls, 10, "none of them reached the provider")
 
 	// Azure DevOps: single spaces in the project and repository names only.
 	ado, err := scm.ParseRepositoryAllowlist([]string{"dev.azure.com/acme/**"})

@@ -622,6 +622,13 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 	nodes = append(nodes, bundleWatchNode)
 	nodes = append(nodes, readBackRefs(pipeline, filteredEnvs, bundle)...)
+	ivNode, ivName, err := buildImageVerificationNode(pipeline, bundle)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if ivNode != nil {
+		nodes = append(nodes, *ivNode)
+	}
 	if anyNeedsApprovals(gatesByEnv) {
 		nodes = append(nodes, approvalsRefNode(bundle)) // approval gates (approvals.go)
 	}
@@ -631,6 +638,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	var compactSteps []compactStep
 	var compactMetrics []compactMetric
 	upstreamEnvs := make(map[string][]string, len(filteredEnvs))
+	var mirrorSteps []interface{} // pr-review steps with gates (mirror.go)
 
 	for _, envName := range filteredEnvs {
 		// Compute upstream deps for this env (filtered to only include surviving envs)
@@ -694,6 +702,11 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		prName := prStatusNodeK8sName(bundle.Name, envName)
 		prItems = append(prItems, map[string]interface{}{"name": prName, "environment": envName})
 
+		if len(envGates) > 0 && envApproval(pipeline, envName) == "pr-review" {
+			mirrorSteps = append(mirrorSteps, map[string]interface{}{
+				"name": promotionStepK8sName(pipelineName, bundle.Name, envName), "environment": envName})
+		}
+
 		if compact {
 			compactSteps = append(compactSteps, compactStep{env: envName,
 				name:      promotionStepK8sName(pipelineName, bundle.Name, envName),
@@ -708,13 +721,20 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
 			heldCond(pipeline, envName),
 		)
-		extras, err := buildEnvExtras(hookNodesInput{
+		in := hookNodesInput{
 			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
 			bundleUID:   string(bundle.UID),
 			env:         findEnvSpec(pipeline, envName),
 			stepK8sName: promotionStepK8sName(pipelineName, bundle.Name, envName),
 			conds:       stepConds(heldCond(pipeline, envName), upstreams, envGates, gates.readyCond),
-		}, analyses, bundle)
+		}
+		if ivName != "" && len(upstreams) == 0 {
+			// A root step waits for the image verification, and so do its
+			// pre-deploy hooks (a migration must not run for an unverified image).
+			in.imageVerification = ivName
+			in.conds = append(in.conds, imageVerifiedCond())
+		}
+		extras, err := buildEnvExtras(in, analyses, bundle)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -724,6 +744,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 
 	nodes = append(nodes, gates.nodes()...)
+	nodes = append(nodes, gateMirrorNodes(mirrorSteps, gates.collectionIDs())...)
 	nodes = append(nodes, GraphNode{ID: NodePRStatusData, Def: map[string]interface{}{"items": prItems}},
 		prStatusesNode(pipelineName, bundle.Name))
 	if compact {

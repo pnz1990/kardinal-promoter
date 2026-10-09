@@ -30,6 +30,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	sigroot "github.com/sigstore/sigstore-go/pkg/root"
+	sigtuf "github.com/sigstore/sigstore-go/pkg/tuf"
+	tuffetcher "github.com/theupdateframework/go-tuf/v2/metadata/fetcher"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -53,6 +56,7 @@ import (
 	changewindowrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
 	hookrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
+	ivrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification"
 	metriccheckrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
 	nhookrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
@@ -176,6 +180,16 @@ func main() {
 			"repositories the controller's SCM token may act on. Every SCM call for another repository is "+
 			"refused, and a Pipeline that would need the token for one is Ready=False/RepositoryNotAllowed "+
 			"and its steps fail. Empty allows every repository.")
+
+	gatesCommitStatus := true
+	flag.BoolVar(&gatesCommitStatus, "gates-commit-status", true,
+		"Post the gate results of a waiting pr-review step as a commit status on its PR (Helm "+
+			"scm.gatesCommitStatus.enabled). false posts none, for a token without the commit-status permission.")
+	var gatesStatusContext string
+	flag.StringVar(&gatesStatusContext, "gates-status-context", scm.GatesStatusContext,
+		"Commit status context (GitLab name, Bitbucket key, Azure DevOps genre/name) the gate results are "+
+			"posted under (Helm scm.gatesCommitStatus.context). Reserved for kardinal: branch protection "+
+			"requires it, so nothing else may post under it.")
 
 	var bundleToken string
 	flag.StringVar(&bundleToken, "bundle-api-token", os.Getenv("KARDINAL_BUNDLE_TOKEN"),
@@ -343,6 +357,13 @@ func main() {
 			"may be bound to the reader ClusterRole for health checks. \"*\" allows every namespace "+
 			"except kube-system, kube-public and kube-node-lease. Health checks in other namespaces "+
 			"get no Graph ref.")
+
+	var scmInstanceSigners string
+	flag.StringVar(&scmInstanceSigners, "scm-instance-signers", "",
+		"Comma-separated names or emails the Forgejo/Gitea instance signs commits with (repository.signing "+
+			"SIGNING_NAME / SIGNING_EMAIL). Image verification treats a commit signed by one as a platform "+
+			"signature (forgejo-instance), refused unless commits.allowedSigners lists forgejo-instance. Without "+
+			"it, a verified signer that is not a user of the instance is the instance key.")
 
 	var hookServiceAccounts string
 	flag.StringVar(&hookServiceAccounts, "hook-service-accounts", hookrunrecon.DefaultServiceAccount,
@@ -646,6 +667,8 @@ func main() {
 		SCM:                 scmProvider,
 		AllowedRepositories: allowedRepos,
 		GitClient:           gitClient,
+		GatesStatusDisabled: !gatesCommitStatus,
+		GatesStatusContext:  gatesStatusContext,
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		RemoteClusters:      &healthpkg.RemoteClusters{},
 		Recorder:            eventRecorder,
@@ -669,6 +692,30 @@ func main() {
 		PodSecurityLevel:       hookPodSecurityLevel,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up HookRunReconciler")
+	}
+
+	ivSCMHost, ivHostErr := scm.WebHost(scmProviderType, scmAPIURL)
+	if ivHostErr != nil {
+		logger.Warn().Err(ivHostErr).Msg("no SCM host: image policies with commits.requireSigned will fail")
+	}
+	if err := (&ivrecon.Reconciler{
+		Client:          mgr.GetClient(),
+		Registry:        &ivrecon.OCIRegistry{},
+		SCM:             scmProvider,
+		SCMHost:         ivSCMHost,
+		InstanceSigners: splitCSV(scmInstanceSigners),
+		PublicGoodRoot: ivrecon.PublicGoodRoot(func() (sigroot.TrustedMaterial, error) {
+			// In memory: the controller's root file system is read-only.
+			// Every TUF request is time-bounded and egress-guarded.
+			opts := sigtuf.DefaultOptions().WithDisableLocalCache()
+			opts.Fetcher = tuffetcher.NewDefaultFetcher().NewFetcherWithHTTPClient(&http.Client{
+				Timeout:   ivrecon.PublicGoodFetchTimeout,
+				Transport: egress.NewTransport(http.ProxyFromEnvironment),
+			})
+			return sigroot.FetchTrustedRootWithOptions(opts)
+		}),
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up ImageVerificationReconciler")
 	}
 
 	if err := (&metriccheckrecon.Reconciler{

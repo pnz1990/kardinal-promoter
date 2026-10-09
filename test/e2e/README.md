@@ -248,6 +248,10 @@ lists every row's result. `-complete` also fails on rows still todo.
   `KARDINAL_E2E_KEEP=1` keeps namespaces and repos for debugging.
   `KARDINAL_E2E_WAVE_ENVS=150` runs `TestHealth_ArgoCDWaveOnSharedBranch` (core) with a wave of
   150 environments on one branch, the size of the #1575 acceptance case, instead of 30.
+- Repos are created at most 4 at a time (`KARDINAL_E2E_GIT_CREATE_SLOTS`), and a
+  Forgejo or Gitea create that times out or gets a 5xx is retried from scratch:
+  when a shard's parallel tests start together, about 100 creates at once
+  queued past the client's 30s timeout (#1557).
 
 ## Test app
 
