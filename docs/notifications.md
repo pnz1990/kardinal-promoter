@@ -309,8 +309,9 @@ the next event is delivered.
   newest qualifying events are tracked.
 - If the controller restarts between a POST and the status write that records
   it, that one event is sent again.
-- When a hook is created, only the newest event that already exists is
-  delivered; older ones are recorded as processed and not backfilled.
+- A new hook delivers no event from before it was created: those are recorded as
+  processed and not backfilled. Events from the second the hook was created on are
+  delivered.
 - One reconcile sends at most 10 events; the rest follow straight away.
 - A failed delivery (non-2xx response, connection error, timeout) is retried
   with exponential backoff: 30s, 1m, 2m, 4m, 8m, then every 10m. The time of
@@ -359,7 +360,7 @@ What is not guaranteed:
   allows again before the controller sees the block, or a Bundle deleted before its event
   is sent, sends nothing. Steps, Bundles and gate flips normally last far longer than a
   reconcile (milliseconds after the watch event).
-- **History.** A new hook sends only the newest event that already exists. Only the 100
+- **History.** A new hook sends nothing from before it existed. Only the 100
   newest qualifying events are tracked per hook.
 - **A broken hook.** While the hook is `Ready=False` (a missing Secret, a bad URL or
   template), events wait and none is sent; they are delivered once it is fixed, if they

@@ -155,6 +155,46 @@ instead, which this check does not see. */ -}}
 {{- fail (printf "github.secretRef.namespace (%s) must be empty or the release namespace (%s): GITHUB_TOKEN is read with a secretKeyRef, which only reads the Pod's namespace, so the startup token and the rotation watcher would read different Secrets." . $.Release.Namespace) -}}
 {{- end -}}
 {{- end -}}
+{{- include "kardinal-promoter.validateSecrets" . -}}
+{{- end }}
+
+{{/*
+Each Secret the controller container reads with a secretKeyRef must exist,
+with its key, in the release namespace. Else the Pod waits in
+CreateContainerConfigError and `helm install --wait` times out without saying
+why (#1581). Only when Helm talks to a cluster (install, upgrade,
+--dry-run=server): `helm template` and client-side dry runs have no cluster,
+lookup returns nothing for kube-system too, and the check is skipped. The
+chart's own <fullname>-github-token (github.token) is not checked.
+*/}}
+{{- define "kardinal-promoter.validateSecrets" -}}
+{{- if lookup "v1" "Namespace" "" "kube-system" -}}
+{{- $refs := list -}}
+{{- if and .Values.github.secretRef.name (not .Values.github.token) -}}
+{{- $refs = append $refs (list "github.secretRef" .Values.github.secretRef.name (include "kardinal-promoter.githubSecretKey" .)) -}}
+{{- end -}}
+{{- with .Values.webhook.secretRef.name -}}
+{{- $refs = append $refs (list "webhook.secretRef" . ($.Values.webhook.secretRef.key | default "secret")) -}}
+{{- end -}}
+{{- with .Values.bundleAPI.tokenSecretRef.name -}}
+{{- $refs = append $refs (list "bundleAPI.tokenSecretRef" . ($.Values.bundleAPI.tokenSecretRef.key | default "token")) -}}
+{{- end -}}
+{{- with .Values.ui.auth.tokenSecretRef.name -}}
+{{- $refs = append $refs (list "ui.auth.tokenSecretRef" . ($.Values.ui.auth.tokenSecretRef.key | default "token")) -}}
+{{- end -}}
+{{- range $refs -}}
+{{- $value := index . 0 -}}
+{{- $name := index . 1 -}}
+{{- $key := index . 2 -}}
+{{- $secret := lookup "v1" "Secret" $.Release.Namespace $name -}}
+{{- if not $secret -}}
+{{- fail (printf "%s.name: Secret %q does not exist in namespace %s. Create it before installing (docs/installation.md, step 1): the controller reads it at startup and would wait in CreateContainerConfigError." $value $name $.Release.Namespace) -}}
+{{- end -}}
+{{- if not (hasKey (default (dict) $secret.data) $key) -}}
+{{- fail (printf "%s: Secret %s/%s has no key %q. Add the key, or set %s.key to the key that holds the value." $value $.Release.Namespace $name $key $value) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end }}
 
 {{/*

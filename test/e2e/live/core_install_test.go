@@ -43,7 +43,7 @@ var crdGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version:
 var (
 	primaryKinds   = []string{"Pipeline", "Bundle", "PolicyGate", "PromotionStep"}
 	secondaryKinds = []string{"Subscription", "NotificationHook", "MetricCheck", "ChangeWindow",
-		"ScheduleClock", "RollbackPolicy", "AuditEvent", "PRStatus", "HookRun", "Approval", "ImageVerification"}
+		"ScheduleClock", "RollbackPolicy", "AuditEvent", "PRStatus", "HookRun", "Approval", "ImageVerification", "ScmProvider", "ClusterScmProvider"}
 )
 
 // TestCore_KroInstalled checks the kro hack/install-kro.sh installs
@@ -303,8 +303,8 @@ func crdFiles(t *testing.T) map[string]*unstructured.Unstructured {
 }
 
 // TestCore_CRDsInstalled checks the kardinal CRDs in config/crd/bases
-// (docs/installation.md: the chart's crds/ and the 13 CRDs an upgrade
-// applies). The directory holds exactly the 13 kardinal.io CRDs. Each of the
+// (docs/installation.md: the chart's crds/ and the CRDs an upgrade
+// applies). The directory holds exactly the 17 kardinal.io CRDs. Each of the
 // four core ones (Pipeline, Bundle, PolicyGate, PromotionStep) is accepted by
 // a server-side apply, and the installed CRD is the file: Established, its
 // names accepted, the same group, names, scope and versions (schema, printer
@@ -330,7 +330,8 @@ func TestCore_CRDsInstalled(t *testing.T) {
 
 // TestCore_SecondaryCRDsServed checks the ten secondary kardinal CRDs
 // (Subscription, NotificationHook, MetricCheck, ChangeWindow, ScheduleClock,
-// RollbackPolicy, AuditEvent, PRStatus, HookRun, Approval, ImageVerification) the same way: config/crd/bases has
+// RollbackPolicy, AuditEvent, PRStatus, HookRun, Approval, ImageVerification,
+// ScmProvider, ClusterScmProvider) the same way: config/crd/bases has
 // each, a server-side apply accepts it, the installed CRD is the file, and the
 // API serves the resource (discovery, kubectl get with the printer columns, a
 // list).

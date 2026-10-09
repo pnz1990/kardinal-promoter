@@ -87,3 +87,18 @@ func SetDialTCPForTest(f func(ctx context.Context, network, addr string) (net.Co
 	dialTCP = f
 	return func() { dialTCP = old }
 }
+
+// SetMaxRegistryClientsForTest bounds the client cache of the Registries
+// created after it, and returns a function that restores it.
+func SetMaxRegistryClientsForTest(n int) func() {
+	prev := maxRegistryClients
+	maxRegistryClients = n
+	return func() { maxRegistryClients = prev }
+}
+
+// CacheSizesForTest returns the number of cached Secrets and Namespaces.
+func (r *Registry) CacheSizesForTest() (secrets, namespaces int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.secrets), len(r.namespaces)
+}
