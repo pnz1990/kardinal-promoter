@@ -632,7 +632,8 @@ prune and release for the whole Graph until the change is reverted.
 **kardinal workaround.** Hooks are `HookRun` objects (a kardinal CRD) in the Graph. The HookRun
 reconciler creates the Job with a controller ownerReference, so garbage collection deletes the
 Pods, records a terminal phase once and never runs the Job again, and ignores spec changes after
-the Job started. Planned for v0.10.0 (#1443).
+the Job started (`pkg/reconciler/hookrun`, `pkg/graph/hooks.go`, #1443; live tests
+`TestStep_Hook*`).
 
 **Upstream work.** None filed.
 
@@ -675,7 +676,8 @@ name (not `${step.metadata.name}`, which is Unresolved with the step) writes the
 onto the step. A patch whose target does not exist yet is a soft not-ready, and a patch may
 target an object a template node of the same Graph owns; the two field managers coexist.
 Verified on kind: the mirrored gate result followed the gate (true, false, true) while the step
-node was Unresolved.
+node was Unresolved. Hooks use it (`live0<env>` writes `spec.live.hooks`, `pkg/graph/hooks.go`,
+#1443).
 
 **Upstream work.** None filed.
 
