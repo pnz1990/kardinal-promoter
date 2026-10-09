@@ -37,11 +37,16 @@ With controller TLS set (`controller.tlsCertFile`), both listeners use `https://
 | `POST` | `/api/v1/ui/resume` | Resume a Pipeline |
 | `POST` | `/api/v1/ui/validate-cel` | Compile a PolicyGate CEL expression |
 | `GET` | `/api/v1/ui/steps/{namespace}/{step}/events` | The Kubernetes Events of a PromotionStep |
-| `POST` | `/api/v1/bundles` | Create a Bundle from CI |
+| `POST` | `/api/v1/bundles` | Create a Bundle from CI (served only when a Bundle API token is set) |
 | `GET` | `/webhook/scm/health` | SCM webhook configuration and counters |
 | `GET` | `/api/v1/openapi.json` | The OpenAPI description |
 
-Errors are `text/plain` with the HTTP status the OpenAPI document lists for each operation.
+Errors are `text/plain` with the HTTP status the OpenAPI document lists for each operation:
+`400` invalid request, `401` no valid credentials, `403` refused (with no UI auth mode: a
+client that is not local, or a cross-origin request from an origin not allowed; in
+TokenReview mode: RBAC denied it), `404` not found (also `POST /api/v1/bundles` when no Bundle
+API token is set), `405` wrong method, `409` conflict, `429` rate limited, `503` the
+TokenReview or SubjectAccessReview API is unreachable (TokenReview mode fails closed).
 Write endpoints record the caller as the requester (`kardinal.io/requested-by` on the Bundles
 they create, `createdBy` on gate overrides): the Kubernetes user with TokenReview, else
 `kardinal-ui`.
@@ -58,27 +63,58 @@ and you revoke it like any Kubernetes identity.
 
 1. Create a ServiceAccount and bind the permissions it needs (the table in
    [Option 2](../guides/security.md#option-2-kubernetes-tokens-tokenreview) lists them per
-   action). A read-only dashboard:
+   action). A read-only dashboard for one team's namespace needs a Role and RoleBinding
+   there:
 
-    ```bash
-    kubectl create serviceaccount release-dashboard -n tools
-    kubectl create clusterrole kardinal-api-viewer \
-      --verb=get,list --resource=pipelines.kardinal.io,bundles.kardinal.io,policygates.kardinal.io,promotionsteps.kardinal.io
-    kubectl create clusterrolebinding release-dashboard-kardinal \
-      --clusterrole=kardinal-api-viewer --serviceaccount=tools:release-dashboard
+    ```yaml
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: release-dashboard
+      namespace: team-a
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: kardinal-api-viewer
+      namespace: team-a
+    rules:
+      - apiGroups: ["kardinal.io"]
+        resources: ["pipelines", "bundles", "policygates", "promotionsteps"]
+        verbs: ["get", "list"]
+      - apiGroups: [""]
+        resources: ["events"]          # step events
+        verbs: ["list"]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: release-dashboard-kardinal
+      namespace: team-a
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: kardinal-api-viewer
+    subjects:
+      - kind: ServiceAccount
+        name: release-dashboard
+        namespace: team-a
     ```
 
-    With `--watch-namespace`, a Role and RoleBinding in the watched namespace are enough.
+    The list endpoints read all namespaces, so with a namespaced binding they are checked
+    against all namespaces and refused, unless the controller runs with
+    `--watch-namespace` set to that namespace. For a dashboard over every team, use the same
+    rules in a ClusterRole bound with a ClusterRoleBinding.
 
 2. Mint a short-lived token with the TokenRequest API. `kubectl create token` calls it:
 
     ```bash
-    TOKEN=$(kubectl create token release-dashboard -n tools --duration=1h)
+    TOKEN=$(kubectl create token release-dashboard -n team-a --duration=1h)
     curl -s -H "Authorization: Bearer $TOKEN" https://kardinal.example.com/api/v1/ui/pipelines
     ```
 
-    Programs call `POST /api/v1/namespaces/tools/serviceaccounts/release-dashboard/token`
-    (client-go: `CoreV1().ServiceAccounts("tools").CreateToken`) and request a new token
+    Programs call `POST /api/v1/namespaces/team-a/serviceaccounts/release-dashboard/token`
+    (client-go: `CoreV1().ServiceAccounts("team-a").CreateToken`) and request a new token
     before `status.expirationTimestamp`. Inside the cluster, mount a projected
     ServiceAccount token instead: the kubelet rotates it.
 

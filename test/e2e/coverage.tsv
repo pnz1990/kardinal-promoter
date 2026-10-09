@@ -335,7 +335,7 @@ UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS r
 UIAPI-TOKEN-01	live	ui	covered	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:509-532
 UIAPI-TR-01	live	ui	covered	ui-api	TokenReview mode: 401 invalid token, 403 when SubjectAccessReview denies, 503 when review fails; 30s cache	docs/guides/security.md:541-552; pkg/uiauth/tokenreview.go:83-136; pkg/uiauth/cache.go:18-22
 API-OPENAPI-01	live	ui	covered	ui-api	GET /api/v1/openapi.json serves docs/reference/openapi.json on both listeners and every UI read conforms to it	docs/reference/rest-api.md:1-20; cmd/kardinal-controller/openapi.go:11-32
-API-SATOKEN-01	live	ui	covered	ui-api	a ServiceAccount TokenRequest token with the viewer rules calls the UI API; another audience is refused	docs/reference/rest-api.md:49-101
+API-SATOKEN-01	live	ui	covered	ui-api	a ServiceAccount TokenRequest token with the viewer rules calls the UI API; another audience is refused	docs/reference/rest-api.md:54-137
 UIAPI-CORS-01	live	ui	covered	ui-api	CORS: allowed origin reflected, others 403, OPTIONS preflight 200	docs/guides/security.md:616-622
 UIAPI-TLS-01	live	ui	covered	ui-api	TLS on UI and webhook servers; cert without key is a startup error	docs/guides/security.md:696-700
 UIAPI-HEADERS-01	live	ui	covered	ui-api	browser security headers (CSP, nosniff, frame deny)	docs/guides/security.md:681-695; cmd/kardinal-controller/ui_security_headers.go:31-60

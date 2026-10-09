@@ -23,7 +23,10 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
 // The OpenAPI spec (openapi.json, served at /api/v1/openapi.json and copied
@@ -122,7 +125,8 @@ var apiRoutes = []apiRoute{
 		status: 200, response: []uiEventResponse{}, errors: []int{400, 401, 403, 404, 500}, security: "uiAuth"},
 	{method: "POST", path: "/api/v1/bundles", server: serverBundle, tag: "Bundle API", id: "createBundle",
 		summary: "Create a Bundle from CI",
-		desc: "Requires the Bundle API token (bundleAPI.tokenSecretRef). The same validation as kardinal create bundle; " +
+		desc: "Served only when a Bundle API token is configured (bundleAPI.tokenSecretRef, --bundle-api-token); " +
+			"without one the path is not mounted and answers 404. The same validation as kardinal create bundle; " +
 			"at most 60 requests a minute.",
 		request: bundleCreateRequest{}, status: 201, response: bundleCreateResponse{}, errors: []int{400, 401, 403, 404, 405, 409, 429, 500},
 		security: "bundleToken"},
@@ -303,12 +307,15 @@ func (b *specBuilder) object(t reflect.Type) map[string]interface{} {
 var statusText = map[int]string{
 	400: "The request is invalid; the body says why.",
 	401: "No valid credentials (Www-Authenticate: Bearer).",
-	403: "The caller may not do this (TokenReview mode: Kubernetes RBAC denied it), or the namespace is not watched.",
+	403: "Refused: with no UI auth mode, a client that is not local (only kubectl port-forward is served) or a cross-origin " +
+		"request from an origin not in --cors-allowed-origins; in TokenReview mode, Kubernetes RBAC denied an object the " +
+		"request reads or writes; for the Bundle API, a namespace this controller does not watch.",
 	404: "The object does not exist.",
 	405: "Method not allowed.",
 	409: "Conflict: an ambiguous name, an object that already exists, or nothing to promote or roll back to.",
 	429: "Rate limit exceeded.",
 	500: "Internal error.",
+	503: "TokenReview mode: the TokenReview or SubjectAccessReview API cannot be reached, so the request is refused (fail closed).",
 }
 
 func buildOpenAPI(t *testing.T) []byte {
@@ -350,7 +357,17 @@ func buildOpenAPI(t *testing.T) []byte {
 			itoa(r.status): map[string]interface{}{"description": "OK", "content": map[string]interface{}{
 				"application/json": map[string]interface{}{"schema": okSchema}}},
 		}
-		for _, code := range r.errors {
+		codes := append([]int{}, r.errors...)
+		codes = append(codes, 405)
+		if r.security == "uiAuth" {
+			codes = append(codes, 403, 503)
+		}
+		seen := map[int]bool{}
+		for _, code := range codes {
+			if seen[code] {
+				continue
+			}
+			seen[code] = true
 			responses[itoa(code)] = map[string]interface{}{"$ref": "#/components/responses/Error" + itoa(code)}
 		}
 		op["responses"] = responses
@@ -501,4 +518,69 @@ func TestRESTAPIDocsListEveryOperation(t *testing.T) {
 	sort.Strings(got)
 	sort.Strings(want)
 	require.Equal(t, want, got)
+}
+
+// TestOpenAPIRoutesSucceed sends a valid request for every operation and
+// checks the handler answers the documented success status with a body
+// that is the documented JSON shape (it decodes into the response type
+// with no unknown field).
+func TestOpenAPIRoutesSucceed(t *testing.T) {
+	fixtures := func() []client.Object {
+		g := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "default"},
+			Spec: v1alpha1.PolicyGateSpec{Expression: "true"}}
+		return []client.Object{uiLcPipeline(), uiLcBundle("app-v1", "1", 0), uiLcBundle("app-v2", "2", 10),
+			uiLcStep("app-v1", "uat", "Verified", 3), uiLcStep("app-v1", "prod", "Verified", 5),
+			uiLcStep("app-v2", "prod", "Verified", 15),
+			// app-v3 is Verified in uat only: promote copies it to prod.
+			uiLcBundle("app-v3", "3", 20), uiLcStep("app-v3", "uat", "Verified", 25), g}
+	}
+	requests := map[string]struct{ path, body string }{
+		"listPipelines":           {"/api/v1/ui/pipelines", ""},
+		"listPipelineBundles":     {"/api/v1/ui/pipelines/app/bundles?namespace=default", ""},
+		"createBundleFromUI":      {"/api/v1/ui/bundles", `{"pipeline":"app","image":"ghcr.io/org/app:3"}`},
+		"getBundleGraph":          {"/api/v1/ui/bundles/app-v1/graph?namespace=default", ""},
+		"listBundleSteps":         {"/api/v1/ui/bundles/app-v1/steps?namespace=default", ""},
+		"listGates":               {"/api/v1/ui/gates", ""},
+		"overrideGate":            {"/api/v1/ui/gates/g/approve", `{"reason":"r","namespace":"default"}`},
+		"overrideGateInNamespace": {"/api/v1/ui/gates/default/g/approve", `{"reason":"r"}`},
+		"promote":                 {"/api/v1/ui/promote", `{"pipeline":"app","environment":"prod"}`},
+		"rollback":                {"/api/v1/ui/rollback", `{"pipeline":"app","environment":"prod"}`},
+		"pausePipeline":           {"/api/v1/ui/pause", `{"pipeline":"app"}`},
+		"resumePipeline":          {"/api/v1/ui/resume", `{"pipeline":"app"}`},
+		"validateCEL":             {"/api/v1/ui/validate-cel", `{"expression":"true"}`},
+		"listStepEvents":          {"/api/v1/ui/steps/default/app-v1-prod/events", ""},
+		"createBundle":            {"/api/v1/bundles", `{"pipeline":"app","type":"image","images":[{"repository":"r","tag":"1"}]}`},
+		"webhookHealth":           {"/webhook/scm/health", ""},
+		"getOpenAPI":              {openAPIPath, ""},
+	}
+	for _, r := range apiRoutes {
+		t.Run(r.id, func(t *testing.T) {
+			req, ok := requests[r.id]
+			require.True(t, ok, "no valid request for %s: add one", r.id)
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(fixtures()...).Build()
+			mux := http.NewServeMux()
+			newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
+			mux.HandleFunc("/api/v1/bundles", newBundleAPIServer(c, "token", "default").Handler())
+			mux.HandleFunc("/webhook/scm/health", newWebhookServerWithConfig(nil, c, zerolog.Nop(), false).HealthHandler())
+			var body *strings.Reader
+			if req.body != "" {
+				body = strings.NewReader(req.body)
+			} else {
+				body = strings.NewReader("")
+			}
+			hr := httptest.NewRequest(r.method, req.path, body)
+			hr.Header.Set("Content-Type", "application/json")
+			hr.Header.Set("Authorization", "Bearer token")
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, hr)
+			require.Equal(t, r.status, w.Code, "%s %s answers the documented status: %s", r.method, req.path, w.Body.String())
+			if r.response == "openapi" {
+				return
+			}
+			out := reflect.New(reflect.TypeOf(r.response)).Interface()
+			dec := json.NewDecoder(strings.NewReader(w.Body.String()))
+			dec.DisallowUnknownFields()
+			require.NoError(t, dec.Decode(out), "the body is the documented type: %s", w.Body.String())
+		})
+	}
 }

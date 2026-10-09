@@ -29,7 +29,7 @@
             }
           }
         },
-        "description": "The caller may not do this (TokenReview mode: Kubernetes RBAC denied it), or the namespace is not watched."
+        "description": "Refused: with no UI auth mode, a client that is not local (only kubectl port-forward is served) or a cross-origin request from an origin not in --cors-allowed-origins; in TokenReview mode, Kubernetes RBAC denied an object the request reads or writes; for the Bundle API, a namespace this controller does not watch."
       },
       "Error404": {
         "content": {
@@ -80,6 +80,16 @@
           }
         },
         "description": "Internal error."
+      },
+      "Error503": {
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "TokenReview mode: the TokenReview or SubjectAccessReview API cannot be reached, so the request is refused (fail closed)."
       }
     },
     "schemas": {
@@ -1108,7 +1118,7 @@
   "paths": {
     "/api/v1/bundles": {
       "post": {
-        "description": "Requires the Bundle API token (bundleAPI.tokenSecretRef). The same validation as kardinal create bundle; at most 60 requests a minute.",
+        "description": "Served only when a Bundle API token is configured (bundleAPI.tokenSecretRef, --bundle-api-token); without one the path is not mounted and answers 404. The same validation as kardinal create bundle; at most 60 requests a minute.",
         "operationId": "createBundle",
         "requestBody": {
           "content": {
@@ -1192,6 +1202,9 @@
               }
             },
             "description": "OK"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
           }
         },
         "security": [],
@@ -1238,11 +1251,17 @@
           "404": {
             "$ref": "#/components/responses/Error404"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "409": {
             "$ref": "#/components/responses/Error409"
           },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1300,11 +1319,17 @@
           "404": {
             "$ref": "#/components/responses/Error404"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "409": {
             "$ref": "#/components/responses/Error409"
           },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1368,11 +1393,17 @@
           "404": {
             "$ref": "#/components/responses/Error404"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "409": {
             "$ref": "#/components/responses/Error409"
           },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1413,8 +1444,14 @@
           "403": {
             "$ref": "#/components/responses/Error403"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1477,8 +1514,14 @@
           "404": {
             "$ref": "#/components/responses/Error404"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1549,8 +1592,14 @@
           "404": {
             "$ref": "#/components/responses/Error404"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1601,8 +1650,14 @@
           "404": {
             "$ref": "#/components/responses/Error404"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1643,8 +1698,14 @@
           "403": {
             "$ref": "#/components/responses/Error403"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1705,8 +1766,14 @@
           "403": {
             "$ref": "#/components/responses/Error403"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1757,11 +1824,17 @@
           "404": {
             "$ref": "#/components/responses/Error404"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "409": {
             "$ref": "#/components/responses/Error409"
           },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1812,8 +1885,14 @@
           "404": {
             "$ref": "#/components/responses/Error404"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1864,11 +1943,17 @@
           "404": {
             "$ref": "#/components/responses/Error404"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "409": {
             "$ref": "#/components/responses/Error409"
           },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1935,8 +2020,14 @@
           "404": {
             "$ref": "#/components/responses/Error404"
           },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
           "500": {
             "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -1980,6 +2071,15 @@
           },
           "401": {
             "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
           }
         },
         "security": [
@@ -2007,6 +2107,9 @@
               }
             },
             "description": "OK"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
           }
         },
         "security": [],
