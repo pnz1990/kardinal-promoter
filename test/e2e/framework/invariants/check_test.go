@@ -197,3 +197,26 @@ func TestCheckSLO(t *testing.T) {
 
 	assert.Contains(t, checkSLO(testState(nil, nil), o).Violations[0], "nothing to measure")
 }
+
+// TestRetiredSteps: the steps of a retired Graph come back from the Bundle's
+// status.retiredSteps, so the phase and audit checks still see them, and a
+// step that still exists is not counted twice.
+func TestRetiredSteps(t *testing.T) {
+	b := v1alpha1.Bundle{}
+	b.Name, b.Namespace, b.Spec.Pipeline = "app-v1", "ns", "app"
+	b.Status.RetiredSteps = []v1alpha1.RetiredStep{
+		{Name: "app-v1-test", Environment: "test", State: "Verified", PRURL: "https://x/pr/1"},
+		{Name: "app-v1-prod", Environment: "prod", State: "Failed", Message: "superseded"},
+	}
+	live := []v1alpha1.PromotionStep{{}}
+	live[0].Name = "app-v1-prod"
+	got := retiredSteps([]v1alpha1.Bundle{b}, live)
+	if len(got) != 1 {
+		t.Fatalf("got %d steps, want 1 (app-v1-prod still exists)", len(got))
+	}
+	s := got[0]
+	if s.Name != "app-v1-test" || s.Spec.BundleName != "app-v1" || s.Spec.Environment != "test" ||
+		s.Status.State != "Verified" || s.Status.PRURL != "https://x/pr/1" || s.Namespace != "ns" {
+		t.Fatalf("rebuilt step %+v", s)
+	}
+}

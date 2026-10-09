@@ -174,6 +174,7 @@ func load(ctx context.Context, e *framework.Env, o Options) (*state, error) {
 	for i := range st.bundles {
 		st.byName[st.bundles[i].Name] = &st.bundles[i]
 	}
+	st.steps = append(st.steps, retiredSteps(st.bundles, st.steps)...)
 	for i := range st.steps {
 		s := &st.steps[i]
 		b := s.Spec.BundleName
@@ -183,6 +184,32 @@ func load(ctx context.Context, e *framework.Env, o Options) (*state, error) {
 		st.stepsOf[b][s.Spec.Environment] = s
 	}
 	return st, nil
+}
+
+// retiredSteps are the PromotionSteps of retired Graphs (#1492), rebuilt
+// from their Bundles' status.retiredSteps: retirement deletes a finished
+// Bundle's Graph and its steps, and the checks cover them all the same.
+// A step that still exists is not added twice.
+func retiredSteps(bundles []v1alpha1.Bundle, live []v1alpha1.PromotionStep) []v1alpha1.PromotionStep {
+	seen := map[string]bool{}
+	for i := range live {
+		seen[live[i].Name] = true
+	}
+	var out []v1alpha1.PromotionStep
+	for i := range bundles {
+		b := &bundles[i]
+		for _, r := range b.Status.RetiredSteps {
+			if seen[r.Name] {
+				continue
+			}
+			s := v1alpha1.PromotionStep{}
+			s.Name, s.Namespace, s.CreationTimestamp = r.Name, b.Namespace, r.CreatedAt
+			s.Spec.BundleName, s.Spec.PipelineName, s.Spec.Environment, s.Spec.StepType = b.Name, b.Spec.Pipeline, r.Environment, r.StepType
+			s.Status.State, s.Status.Message, s.Status.PRURL = r.State, r.Message, r.PRURL
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func terminal(phase string) bool {
