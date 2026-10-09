@@ -39,7 +39,7 @@ func TestSubscriptionReconciler_RejectedArtifactNotPromoted(t *testing.T) {
 	digest := "sha256:bad"
 	r := &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			return &forcedChangeWatcher{digest: digest, tag: "sha-retag"}, nil
 		},
 		NowFn: func() time.Time { return time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC) },
@@ -86,7 +86,7 @@ func TestSubscriptionReconciler_RejectedMovingTag(t *testing.T) {
 	digest := "sha256:bad"
 	r := &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			return &forcedChangeWatcher{digest: digest, tag: "latest"}, nil
 		},
 		NowFn: func() time.Time { return time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC) },

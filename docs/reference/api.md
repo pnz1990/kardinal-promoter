@@ -51,13 +51,18 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | BundleSpec defines the desired state of a Bundle. An image Bundle deploys only its images, so a configRef on it is refused instead of ignored (#1353). Bundles stored before the rule keep working: CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest supported) lets an update through when spec is unchanged. |
+| `spec.chart` | object |  | Chart is the Helm chart version a "chart" Bundle promotes. The helm-set-image step writes chart.version at update.helm.chartVersionPath. |
+| `spec.chart.digest` | string |  | Digest is the chart package digest (index.yaml digest, or the OCI manifest digest). |
+| `spec.chart.name` | string | yes | Name is the chart name: letters, digits, ".", "_" and "-", starting and ending with a letter or digit. It is joined into the chart's index and OCI paths, so a "/", "]" or other path character would point the version lookup elsewhere. |
+| `spec.chart.repoURL` | string |  | RepoURL is the chart repository (https://... or oci://...). |
+| `spec.chart.version` | string | yes | Version is the chart version. |
 | `spec.configRef` | object |  | ConfigRef points to the GitOps repository commit this Bundle represents when the bundle type is "config" or "mixed". |
-| `spec.configRef.commitSHA` | string |  | CommitSHA is the exact commit SHA for this config snapshot. |
+| `spec.configRef.commitSHA` | string |  | CommitSHA is the exact commit SHA for this config snapshot: 4 to 64 hex characters. |
 | `spec.configRef.gitRepo` | string |  | GitRepo is the GitOps repository URL. |
 | `spec.images` | []object |  | Images lists the container images included in this Bundle. |
-| `spec.images[].digest` | string |  | Digest is the image digest (sha256:...). |
+| `spec.images[].digest` | string |  | Digest is the image digest (sha256:...), in the OCI digest grammar. |
 | `spec.images[].repository` | string | yes | Repository is the image repository (e.g. "ghcr.io/nginx/nginx"). |
-| `spec.images[].tag` | string |  | Tag is the image tag. |
+| `spec.images[].tag` | string |  | Tag is the image tag, in the OCI distribution grammar: up to 128 characters of [A-Za-z0-9_.-], not starting with "." or "-". |
 | `spec.intent` | object |  | Intent declares optional targeting and skip overrides for this Bundle. |
 | `spec.intent.skipEnvironments` | []string |  | SkipEnvironments lists environment names to exclude from this promotion, subject to the PolicyGate SkipPermission check. |
 | `spec.intent.targetEnvironment` | string |  | TargetEnvironment restricts this Bundle to promoting only up to and including this environment. Empty means promote through all environments. |
@@ -65,14 +70,14 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.provenance` | object |  | Provenance carries build metadata for audit and rollback. |
 | `spec.provenance.author` | string |  | Author is the committer or triggering actor for this build. |
 | `spec.provenance.ciRunURL` | string |  | CIRunURL is the URL of the CI run that built this Bundle. |
-| `spec.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle. |
+| `spec.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle: 4 to 64 hex characters, or an image digest (a Subscription records the digest it found). |
 | `spec.provenance.rollbackOf` | string |  | RollbackOf is the name of the Bundle this Bundle rolls back (if any). |
 | `spec.provenance.timestamp` | string (date-time) |  | Timestamp is when the bundle was built. |
 | `spec.rejected` | object |  | Rejected marks the Bundle as rejected (kardinal reject): it is never promoted again, its in-flight steps are cancelled, and rollback, promote and Subscriptions skip any Bundle carrying its artifacts. Setting it is one-way: it cannot be changed or removed. The chart's ValidatingAdmissionPolicy requires rejected.by to be the requesting user; without that policy nothing checks it. |
 | `spec.rejected.at` | string (date-time) |  | At is when the Bundle was rejected. |
 | `spec.rejected.by` | string | yes | By is the Kubernetes username of whoever rejected the Bundle. The chart's ValidatingAdmissionPolicy (kardinal-identity) admits a new rejection only when by equals the requesting user's username. |
 | `spec.rejected.reason` | string | yes | Reason says why the Bundle was rejected. |
-| `spec.type` | string | yes | Type classifies the bundle content. Supersession rule (BU-4): each bundle type supersedes only bundles of the same type. An image bundle does NOT supersede a config bundle and vice versa. This allows image and config promotions to coexist independently in the same pipeline. One of: `image`, `config`, `mixed`. |
+| `spec.type` | string | yes | Type classifies the bundle content. Supersession rule (BU-4): each bundle type supersedes only bundles of the same type. An image bundle does NOT supersede a config bundle and vice versa. This allows image and config promotions to coexist independently in the same pipeline. A chart Bundle promotes a Helm chart version (spec.chart) with update.strategy helm. One of: `image`, `config`, `mixed`, `chart`. |
 | `status` | object |  | BundleStatus defines the observed state of a Bundle. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
@@ -128,21 +133,72 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 
 `kardinal.io/v1alpha1`
 
-MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the namespace of the PolicyGate template that uses it: an org policy namespace for an org gate, the Pipeline namespace for a team gate.
+MetricCheck is a metric gate backed by Prometheus, Datadog, CloudWatch, New Relic or any HTTP JSON API (web). The MetricCheckReconciler queries the backend, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the namespace of the PolicyGate template that uses it: an org policy namespace for an org gate, the Pipeline namespace for a team gate.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `spec` | object |  | MetricCheckSpec defines a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus at spec.interval, evaluates the threshold, and writes results to status. PolicyGate CEL expressions can reference these results via the metrics.* context variable. |
+| `spec` | object |  | MetricCheckSpec defines a metric gate: a query against a metrics backend (or any HTTP JSON API) and a threshold. The MetricCheckReconciler queries the backend at spec.interval, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via the metrics.* context variable. Credentials are read from Secrets in the MetricCheck's namespace (*SecretRef fields); a spec never holds a token. |
+| `spec.cloudWatch` | object |  | CloudWatch configures provider cloudwatch. |
+| `spec.cloudWatch.accessKeyIDSecretRef` | object |  | AccessKeyIDSecretRef names the Secret key holding the AWS access key ID. |
+| `spec.cloudWatch.accessKeyIDSecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.cloudWatch.accessKeyIDSecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.cloudWatch.endpoint` | string |  | Endpoint overrides the CloudWatch API URL (http or https), for example a VPC endpoint. Defaults to https://monitoring.&lt;region&gt;.amazonaws.com. |
+| `spec.cloudWatch.period` | integer (int32) |  | Period is the granularity of the returned points, in seconds. Defaults to 60. |
+| `spec.cloudWatch.region` | string | yes | Region is the AWS region, for example us-east-1. |
+| `spec.cloudWatch.secretAccessKeySecretRef` | object |  | SecretAccessKeySecretRef names the Secret key holding the AWS secret access key. |
+| `spec.cloudWatch.secretAccessKeySecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.cloudWatch.secretAccessKeySecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.cloudWatch.sessionTokenSecretRef` | object |  | SessionTokenSecretRef names the Secret key holding an AWS session token, for temporary credentials. |
+| `spec.cloudWatch.sessionTokenSecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.cloudWatch.sessionTokenSecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.cloudWatch.window` | string |  | Window is how far back the query looks. Defaults to 5m. |
+| `spec.datadog` | object |  | Datadog configures provider datadog. |
+| `spec.datadog.address` | string |  | Address overrides the API base URL (http or https), for example a proxy. |
+| `spec.datadog.apiKeySecretRef` | object | yes | APIKeySecretRef names the Secret key holding the Datadog API key (DD-API-KEY header). |
+| `spec.datadog.apiKeySecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.datadog.apiKeySecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.datadog.applicationKeySecretRef` | object | yes | ApplicationKeySecretRef names the Secret key holding the Datadog application key (DD-APPLICATION-KEY header). |
+| `spec.datadog.applicationKeySecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.datadog.applicationKeySecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.datadog.site` | string |  | Site is the Datadog site: datadoghq.com (default), datadoghq.eu, us3.datadoghq.com, us5.datadoghq.com, ap1.datadoghq.com or ddog-gov.com. The API is https://api.&lt;site&gt;. |
+| `spec.datadog.window` | string |  | Window is how far back the query looks. Defaults to 5m. |
 | `spec.interval` | string |  | Interval is how often to re-evaluate the metric (e.g. "1m", "5m"). Defaults to "1m" if empty or "0". Other values below "10s" are raised to "10s". |
-| `spec.prometheusURL` | string | yes | PrometheusURL is the base URL of the Prometheus HTTP API (http or https). A path is kept as a prefix: the query goes to &lt;prometheusURL&gt;/api/v1/query. Example: http://prometheus.monitoring.svc:9090 |
-| `spec.provider` | string | yes | Provider is the metrics backend. Currently only "prometheus" is supported. One of: `prometheus`. Default: `prometheus`. |
-| `spec.query` | string | yes | Query is the PromQL query string to evaluate. The query must return a scalar or a single-element vector. |
+| `spec.newRelic` | object |  | NewRelic configures provider newrelic. |
+| `spec.newRelic.accountID` | integer (int64) | yes | AccountID is the New Relic account the NRQL query runs in. |
+| `spec.newRelic.address` | string |  | Address overrides the NerdGraph URL (http or https). |
+| `spec.newRelic.apiKeySecretRef` | object | yes | APIKeySecretRef names the Secret key holding a New Relic user API key (API-Key header). |
+| `spec.newRelic.apiKeySecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.newRelic.apiKeySecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.newRelic.region` | string |  | Region selects the NerdGraph endpoint: US (default, https://api.newrelic.com/graphql) or EU (https://api.eu.newrelic.com/graphql). One of: `US`, `EU`. |
+| `spec.newRelic.resultField` | string |  | ResultField is the field of the result row to read, for example "count" or "average.duration". Empty means the row must have exactly one field. |
+| `spec.perPromotion` | boolean |  | PerPromotion makes this MetricCheck a template that is evaluated once per promotion instead of on its own. It is never queried itself. When a Bundle's Graph is built, every PolicyGate in the Pipeline namespace that reads metrics.&lt;name&gt; of this MetricCheck gets an instance: a MetricCheck the Graph owns, labelled with the Bundle, environment and template name, whose query, web.url, web.body and web.headers[].value have the placeholders replaced: {{ bundle.name }}, {{ bundle.version }}, {{ bundle.imageTag }}, {{ bundle.imageDigest }}, {{ bundle.commitSHA }}, {{ pipeline.name }}, {{ environment.name }}, {{ namespace }}. The gate of that Bundle and environment reads the instance's result as metrics.&lt;name&gt;. The instance is created once the environment's upstream environments are Verified, and suspended once the Bundle stops promoting. |
+| `spec.prometheus` | object |  | Prometheus holds optional settings for provider prometheus. |
+| `spec.prometheus.authorizationSecretRef` | object |  | AuthorizationSecretRef names a Secret key whose value is sent as the Authorization header, for example "Bearer &lt;token&gt;" or "Basic &lt;base64&gt;". |
+| `spec.prometheus.authorizationSecretRef.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.prometheus.authorizationSecretRef.name` | string | yes | Name is the Secret name. |
+| `spec.prometheusURL` | string |  | PrometheusURL is the base URL of the Prometheus HTTP API (http or https). A path is kept as a prefix: the query goes to &lt;prometheusURL&gt;/api/v1/query. Required when provider is prometheus. Example: http://prometheus.monitoring.svc:9090 |
+| `spec.provider` | string | yes | Provider is the metrics backend: prometheus (default), datadog, cloudwatch, newrelic, or web (any HTTP API that answers JSON). One of: `prometheus`, `datadog`, `cloudwatch`, `newrelic`, `web`. Default: `prometheus`. |
+| `spec.query` | string |  | Query is the query to evaluate, in the provider's language: PromQL (prometheus), a Datadog metrics query (datadog), a CloudWatch metric math or Metrics Insights expression (cloudwatch), or NRQL (newrelic). It must return a single value (one series; the latest point is used). Required for every provider except web. It may contain placeholders such as {{ bundle.version }}; see PerPromotion. |
+| `spec.suspend` | boolean |  | Suspend stops evaluation. The last result stays in status and goes stale at status.validUntil, so gates that read it block (fail closed). The Graph sets it on per-promotion instances once their Bundle is no longer promoting. |
 | `spec.threshold` | object | yes | Threshold defines how to compare the metric value. |
-| `spec.threshold.operator` | string | yes | Operator is the comparison operator: lt, gt, lte, gte, eq. The gate passes when: metric_value &lt;operator&gt; threshold.value Example: operator=lt, value=0.01 → gate passes if metric &lt; 0.01 One of: `lt`, `gt`, `lte`, `gte`, `eq`. |
-| `spec.threshold.value` | number | yes | Value is the numeric threshold to compare against. |
+| `spec.threshold.operator` | string | yes | Operator is the comparison operator: lt, gt, lte, gte, eq, ne. The gate passes when: metric_value &lt;operator&gt; threshold.value Example: operator=lt, value=0.01 → gate passes if metric &lt; 0.01 One of: `lt`, `gt`, `lte`, `gte`, `eq`, `ne`. |
+| `spec.threshold.text` | string |  | Text, when set, compares the value as a string instead of a number, with operator eq or ne. For provider web, for example {jsonPath: "{.status}", threshold: {operator: eq, text: "healthy"}}. |
+| `spec.threshold.value` | number |  | Value is the numeric threshold to compare against. Ignored when text is set. |
+| `spec.web` | object |  | Web configures provider web: an HTTP request whose JSON response is read with a JSONPath expression. |
+| `spec.web.body` | string |  | Body is the request body, for POST. It may contain placeholders. |
+| `spec.web.headers` | []object |  | Headers are sent with the request. A header takes its value from value or, for credentials, from valueFromSecret. |
+| `spec.web.headers[].name` | string | yes | Name is the header name. |
+| `spec.web.headers[].value` | string |  | Value is the header value. It may contain placeholders. Do not put credentials here: use valueFromSecret. |
+| `spec.web.headers[].valueFromSecret` | object |  | ValueFromSecret names a Secret key whose value is sent as the header value. |
+| `spec.web.headers[].valueFromSecret.key` | string | yes | Key is the key in the Secret's data. |
+| `spec.web.headers[].valueFromSecret.name` | string | yes | Name is the Secret name. |
+| `spec.web.jsonPath` | string | yes | JSONPath selects the value from the JSON response, in kubectl syntax, for example {.data.errorRate} or {.checks[0].status}. It must select exactly one string, number or boolean. Recursive descent (..) is not supported, and the response may be at most 64 KiB. |
+| `spec.web.method` | string |  | Method is GET (default) or POST. One of: `GET`, `POST`. |
+| `spec.web.timeoutSeconds` | integer (int32) |  | TimeoutSeconds bounds the request. Defaults to 10, at most 60, and never more than half of spec.interval. |
+| `spec.web.url` | string | yes | URL is the http or https URL to call. It may contain placeholders such as {{ bundle.version }}; see MetricCheckSpec.PerPromotion. |
 | `status` | object |  | MetricCheckStatus records the most recent metric evaluation result. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is the timestamp of the most recent evaluation. |
-| `status.lastValue` | string |  | LastValue is the most recent metric value returned by the Prometheus query. Empty string means no evaluation has completed yet. |
+| `status.lastValue` | string |  | LastValue is the most recent value the query returned. Empty string means no evaluation has completed yet. |
 | `status.reason` | string |  | Reason is a human-readable explanation of the current result. On a query error it holds the HTTP status and, for a Prometheus API error, its error text; the response body is never copied here. |
 | `status.result` | string |  | Result is the evaluation result: "Pass" or "Fail". Empty when no evaluation has completed. One of: `Pass`, `Fail`. |
 | `status.validUntil` | string (date-time) |  | ValidUntil is when the current result goes stale: lastEvaluatedAt plus three intervals, and at least 30s. The MetricCheck reconciler writes it with each evaluation. A PolicyGate evaluated after this time, or when it is unset, sees metrics.&lt;name&gt;.result as "Stale" and metrics.&lt;name&gt;.stale as true, so a result that is no longer refreshed cannot pass a gate. |
@@ -157,8 +213,12 @@ NotificationHook defines an outbound webhook that is triggered when specific pro
 |---|---|---|---|
 | `spec` | object |  | NotificationHookSpec defines the desired state of a NotificationHook. |
 | `spec.events` | []string | yes | Events is the list of event types that trigger delivery. At least one event type is required. See docs/notifications.md#events. |
-| `spec.format` | string |  | Format is the shape of the request body: json (the kardinal payload, the default), slack (an incoming-webhook message with blocks), teams (a Workflows webhook message with an Adaptive Card) or template (spec.template). One of: `json`, `slack`, `teams`, `template`. |
+| `spec.format` | string |  | Format is the shape of the request body: json (the kardinal payload, the default), slack (an incoming-webhook message with blocks), teams (a Workflows webhook message with an Adaptive Card), template (spec.template) or cloudevents (the payload as a CloudEvents 1.0 structured event). One of: `json`, `slack`, `teams`, `template`, `cloudevents`. |
 | `spec.pipelineSelector` | string |  | PipelineSelector restricts notifications to events originating from the named Pipeline. When empty, events from all Pipelines are delivered. |
+| `spec.signing` | object |  | Signing, when set, signs every request so the receiver can check that it comes from this controller, unchanged and not replayed (docs/notifications.md#signed-requests). |
+| `spec.signing.secretRef` | object | yes | SecretRef names the Secret, in the hook's namespace and labeled kardinal.io/referenceable=true, whose key holds the signing key. |
+| `spec.signing.secretRef.key` | string |  | Key of the signing key in the Secret. Defaults to signing-key. |
+| `spec.signing.secretRef.name` | string | yes | Name of the Secret. |
 | `spec.template` | object |  | Template is the request body for format: template. |
 | `spec.template.body` | string | yes | Body is a Go text/template rendered over the event (docs/notifications.md#templated-body). range, define, template and block are not allowed; the rendered body is at most 64 KiB. |
 | `spec.template.contentType` | string |  | ContentType is the Content-Type header of the POST. Defaults to application/json, in which case the rendered body must be valid JSON. |
@@ -218,7 +278,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | PipelineSpec defines the desired state of a Pipeline. |
-| `spec.environments` | []object | yes | Environments lists the promotion path. Sequential ordering (GB-1): when an environment does not specify dependsOn, it implicitly depends on the previous entry in this list. The first environment has no upstream dependency. This sequential default means a list of N environments without dependsOn fields produces a linear chain. Override with dependsOn to express parallel fan-out or explicit DAG structure. Environment names must be unique; at most 100 environments (a bound the API server needs to cost the CEL rules on each entry). |
+| `spec.environments` | []object | yes | Environments lists the promotion path. Sequential ordering (GB-1): when an environment does not specify dependsOn, it implicitly depends on the previous entry in this list. The first environment has no upstream dependency. This sequential default means a list of N environments without dependsOn fields produces a linear chain. Override with dependsOn to express parallel fan-out or explicit DAG structure. Environment names must be unique; at most 500 environments (a bound the API server needs to cost the CEL rules on each entry). |
 | `spec.environments[].approval` | string |  | Approval controls whether promotion into this environment requires a PR review. One of: `auto`, `pr-review`. Default: `auto`. |
 | `spec.environments[].autoRollback` | object |  | AutoRollback is reserved and rejected by the API server: consecutive-failure auto-rollback is not implemented. See OnHealthFailure. |
 | `spec.environments[].autoRollback.failureThreshold` | integer |  | FailureThreshold is the number of consecutive health-check failures that trigger an automatic rollback Bundle creation. Default: 3. Default: `3`. |
@@ -236,13 +296,16 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].health.argocd` | object |  | ArgoCD overrides the Argo CD Application checked by health.type=argocd. Defaults: name "&lt;pipeline&gt;-&lt;environment&gt;", namespace "argocd". |
 | `spec.environments[].health.argocd.name` | string |  | Name is the object name. |
 | `spec.environments[].health.argocd.namespace` | string |  | Namespace is the object namespace. |
-| `spec.environments[].health.cluster` | string |  | Cluster is not supported: kardinal checks health only in the cluster it runs in. A non-empty value sets the Pipeline Ready=False (reason NotImplemented) and fails the PromotionStep with "health.cluster is not supported" instead of silently checking the local cluster. Deprecated: remove cluster. To verify a workload in another cluster, check its Argo CD Application (health.type: argocd) or Flux Kustomization (health.type: flux) in the hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters. |
+| `spec.environments[].health.cluster` | string |  | Cluster is not supported: kardinal checks health only in the cluster it runs in. A non-empty value sets the Pipeline Ready=False (reason NotImplemented) and fails the PromotionStep with "health.cluster is not supported" instead of silently checking the local cluster. Deprecated: remove cluster. To verify a workload in another cluster, set kubeconfigSecretRef, or check its Argo CD Application (health.type: argocd) or Flux Kustomization (health.type: flux) in the hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters. |
 | `spec.environments[].health.flagger` | object |  | Flagger overrides the Canary checked by health.type=flagger (or delivery.delegate=flagger). Defaults: name "&lt;pipeline&gt;", namespace "&lt;environment&gt;". |
 | `spec.environments[].health.flagger.name` | string |  | Name is the object name. |
 | `spec.environments[].health.flagger.namespace` | string |  | Namespace is the object namespace. |
 | `spec.environments[].health.flux` | object |  | Flux overrides the Flux Kustomization checked by health.type=flux. Defaults: name "&lt;pipeline&gt;-&lt;environment&gt;", namespace "flux-system". |
 | `spec.environments[].health.flux.name` | string |  | Name is the object name. |
 | `spec.environments[].health.flux.namespace` | string |  | Namespace is the object namespace. |
+| `spec.environments[].health.kubeconfigSecretRef` | object |  | KubeconfigSecretRef runs the health check against another cluster: the one the kubeconfig in this Secret key selects (its current context). The Secret must be in the Pipeline's namespace. Every health type reads its object (Deployment, Application, Kustomization, Rollout, Canary) in that cluster instead of the controller's. Only inline credentials are accepted: a bearer token, a client certificate and key (-data fields), or a username and password. A kubeconfig with exec, auth-provider, tokenFile or any file path is refused and the step fails: it would run a command, or read a file, in the controller. The API server address goes through the controller's egress guard (no loopback, link-local or metadata addresses) and is dialled directly, not through HTTP(S)_PROXY. A cluster that cannot be reached is not unhealthy: the step reports ClusterUnreachable and keeps checking until health.timeout. Remote health is polled, not watched. |
+| `spec.environments[].health.kubeconfigSecretRef.key` | string |  | Key is the key holding the kubeconfig. Defaults to "kubeconfig". |
+| `spec.environments[].health.kubeconfigSecretRef.name` | string | yes | Name is the Secret name. |
 | `spec.environments[].health.labelSelector` | map[string]string |  | LabelSelector enables WatchKind mode for health.type=resource. When set, the health node watches ALL Deployments in the environment namespace that match the given labels (a kro Graph collection ref node). When unset, a single named Deployment is watched (a kro Graph ref node). Example: {"app": "my-service", "kardinal.io/pipeline": "nginx-demo"} Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger (those resource types are always single-named). |
 | `spec.environments[].health.resource` | object |  | Resource specifies the exact Kubernetes resource to watch for health.type=resource. When set, overrides the default behavior (which watches a Deployment named after the pipeline in the environment namespace). Use this when the health target is in a different namespace or has a different name than the pipeline. Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger. |
 | `spec.environments[].health.resource.condition` | string |  | Condition is the Deployment condition type that must be True. Defaults to "Available". |
@@ -275,9 +338,17 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].update.argocd.imageKey` | string |  | ImageKey is the dot-separated key path within spec.source.helm.valuesObject where the image tag should be written. Example: "image.tag" writes to spec.source.helm.valuesObject.image.tag. Defaults to "image.tag" if empty. |
 | `spec.environments[].update.argocd.namespace` | string |  | Namespace is the Kubernetes namespace where the ArgoCD Application lives. Defaults to "argocd" if empty. |
 | `spec.environments[].update.helm` | object |  | Helm holds Helm-specific update configuration. Used when Strategy is "helm". |
+| `spec.environments[].update.helm.chartVersionFile` | string |  | ChartVersionFile is the file a chart Bundle's version is written to, relative to the environment path: an umbrella Chart.yaml, an Argo CD Application, a Flux HelmRelease or a kustomization.yaml with helmCharts. Defaults to "Chart.yaml". |
+| `spec.environments[].update.helm.chartVersionPath` | string |  | ChartVersionPath is the YAML dot-path of the chart version in chartVersionFile. A numeric segment indexes a list, and "[field=value]" selects the list element whose field has that value. Defaults to ".dependencies[name=&lt;chart&gt;].version": the umbrella chart's dependency named after the Bundle's chart (an error when there is none). For example ".spec.source.targetRevision" (Argo CD Application), ".spec.chart.spec.version" (Flux HelmRelease) or ".helmCharts[name=podinfo].version" (kustomize). |
 | `spec.environments[].update.helm.imagePathTemplate` | string |  | ImagePathTemplate is the YAML dot-path to the image tag in values.yaml. Example: ".image.tag" updates the `image.tag` key. If empty, defaults to ".image.tag". |
 | `spec.environments[].update.helm.valuesFile` | string |  | ValuesFile is the name of the values file to update (relative to the environment path). Defaults to "values.yaml". |
-| `spec.environments[].update.strategy` | string |  | Strategy selects the manifest update strategy. One of: `kustomize`, `helm`, `argocd`. Default: `kustomize`. |
+| `spec.environments[].update.strategy` | string |  | Strategy selects the manifest update strategy: kustomize (default, kustomization.yaml images), helm (one values key), argocd (patch the Application, no git), or yaml (any YAML paths in any files of the environment directory). One of: `kustomize`, `helm`, `argocd`, `yaml`. Default: `kustomize`. |
+| `spec.environments[].update.yaml` | object |  | YAML holds the edits of the yaml strategy. Used when Strategy is "yaml". |
+| `spec.environments[].update.yaml.updates` | []object | yes | Updates are the values to set. |
+| `spec.environments[].update.yaml.updates[].file` | string | yes | File is the YAML file, relative to the environment path, for example "values.yaml" or "deploy/deployment.yaml". It must stay inside the repository. A file with several documents (---) is not supported. Each path segment starts with a letter, digit or "_" and has single dots only, so the file can neither be absolute nor leave the environment path. |
+| `spec.environments[].update.yaml.updates[].image` | string |  | Image is the repository of the Bundle image whose value is written, for example "ghcr.io/org/app". It may be empty when the Bundle has exactly one image. |
+| `spec.environments[].update.yaml.updates[].path` | string | yes | Path is the key path of the scalar to set: keys separated by ".", with "[N]" to index a list, for example "image.tag" or "spec.template.spec.containers[0].image". Missing mapping keys are created; list elements are not. A key that contains "." is not supported. |
+| `spec.environments[].update.yaml.updates[].value` | string |  | Value is what to write: tag (default), digest, tagWithDigest ("&lt;tag&gt;@&lt;digest&gt;"), image ("&lt;repository&gt;:&lt;tag&gt;"), or imageWithDigest ("&lt;repository&gt;:&lt;tag&gt;@&lt;digest&gt;", or "&lt;repository&gt;@&lt;digest&gt;" without a tag). A value the image does not have (a digest of a tag-only image) fails the step. One of: `tag`, `digest`, `tagWithDigest`, `image`, `imageWithDigest`. |
 | `spec.environments[].waitForMergeTimeout` | string |  | WaitForMergeTimeout is the maximum duration a PromotionStep will wait in the WaitingForMerge state before transitioning to Failed. When not set or zero, the step waits indefinitely (no timeout). Accepts Go duration strings: "24h", "72h", "168h", etc. |
 | `spec.environments[].wave` | integer |  | Wave assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. An environment of a wave depends on every environment of the next lower wave present; gaps in the numbering (10, 20, 30) are allowed and create no roots. Without DependsOn, a wave also follows the last environment without a wave listed before its first environment, so a wave after "staging" starts once staging is verified, and an environment without a wave follows the environment listed before it, or every environment of that one's wave. DependsOn replaces these list-order edges but never the edges to the previous wave. Only the first listed environment is a root unless DependsOn says otherwise. |
 | `spec.git` | object | yes | Git holds the shared GitOps repository configuration for all environments in this pipeline. |
@@ -453,26 +524,62 @@ ScheduleClock writes a timestamp to status.tick on a configurable interval, gene
 
 `kardinal.io/v1alpha1`
 
-Subscription watches an OCI registry or Git repository for new artifacts and automatically creates Bundle CRDs when new tags or commits are detected. Architecture: this is an Owned node (Q2 in Graph-first question stack). The reconciler polls an external source, writes the result to its own CRD status, and creates Bundle objects as child resources. It never mutates other CRDs' status. Stage 18 implementation. Removes the CI dependency for artifact discovery.
+Subscription watches an OCI registry, a Git repository or a Helm chart repository for new artifacts and automatically creates Bundle CRDs when new tags, commits or chart versions are detected. Architecture: this is an Owned node (Q2 in Graph-first question stack). The reconciler polls an external source, writes the result to its own CRD status, and creates Bundle objects, which enter the normal Graph flow. It never mutates other CRDs' status. The webhook receiver only sets the kardinal.io/refresh annotation; the reconciler does the poll.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | SubscriptionSpec defines the desired state of a Subscription. |
 | `spec.git` | object |  | Git holds Git repository watching parameters. Required when type=git. |
 | `spec.git.branch` | string |  | Branch is the branch to watch. Defaults to "main". Default: `main`. |
+| `spec.git.discoveryLimit` | integer (int32) |  | DiscoveryLimit is the most commits a pathGlob poll reads back from the branch head (a shallow fetch of that depth). Default 20. |
 | `spec.git.interval` | string |  | Interval is how often to poll the repository. Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised to 30s; empty or "0" means the 5m default. Default: `5m`. |
-| `spec.git.pathGlob` | string |  | PathGlob is reserved for path filtering, which is not implemented. A non-empty value puts the Subscription in phase Error; leave it empty (every new commit on the branch creates a Bundle). |
-| `spec.git.repoURL` | string | yes | RepoURL is the HTTPS Git repository URL. Loopback (the controller's own pod), link-local, cloud metadata, unspecified and multicast addresses are refused. |
+| `spec.git.pathGlob` | string |  | PathGlob limits the commits that create a Bundle to those that change a file matching the glob ("apps/web/**", "*.yaml", "{base,overlays}/**"). "**" matches any number of directories. Matching walks the branch's first-parent history back from its head, at most discoveryLimit commits, and the Bundle is for the newest matching commit. |
+| `spec.git.repoURL` | string | yes | RepoURL is the Git repository URL: https:// (or http:// for an in-cluster server), ssh://user@host[:port]/path, or the scp-like user@host:path. Loopback (the controller's own pod), link-local, cloud metadata, unspecified and multicast addresses are refused. |
+| `spec.git.secretRef` | object |  | SecretRef names a Secret with Git credentials, in the Subscription's namespace. HTTPS: key token (sent as the password, with key username or "git" as the user), or keys username and password. SSH: key ssh-privatekey (a kubernetes.io/ssh-auth Secret) and key known_hosts, which is required: the host key is always verified. |
+| `spec.git.secretRef.name` | string | yes | Name is the Secret name. |
+| `spec.helm` | object |  | Helm holds Helm chart watching parameters. Required when type=helm. |
+| `spec.helm.allowTags` | []string |  | AllowTags, when not empty, keeps only the listed tags. |
+| `spec.helm.chart` | string | yes | Chart is the chart name: letters, digits, ".", "_" and "-", starting and ending with a letter or digit (Bundle spec.chart.name takes it as is, with the same rule). |
+| `spec.helm.excludeTagFilter` | string |  | ExcludeTagFilter is an optional regular expression (RE2): tags that match it are dropped (for example "-rc\\.\|-debug$"). |
+| `spec.helm.ignoreTags` | []string |  | IgnoreTags drops the listed tags. |
+| `spec.helm.interval` | string |  | Interval is how often to poll the repository. Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised to 30s; empty or "0" means the 5m default. Default: `5m`. |
+| `spec.helm.repoURL` | string | yes | RepoURL is the chart repository: an HTTP(S) repository that serves index.yaml ("https://charts.example.com"), or an OCI registry path ("oci://ghcr.io/myorg/charts"), under which the chart is a repository named after it. Loopback, link-local, cloud metadata, unspecified and multicast addresses are refused. |
+| `spec.helm.secretRef` | object |  | SecretRef names a Secret with repository credentials, in the Subscription's namespace: keys username and password (HTTP basic auth, or an OCI registry login), or a kubernetes.io/dockerconfigjson Secret for an OCI repository. |
+| `spec.helm.secretRef.name` | string | yes | Name is the Secret name. |
+| `spec.helm.semverConstraint` | string |  | SemverConstraint keeps only tags that are semantic versions satisfying the constraint, such as "&gt;=1.4.0 &lt;2.0.0", "^1.4" or "~1.4.2" (github.com/Masterminds/semver syntax). A constraint without a pre-release part excludes pre-releases. Tags that are not semantic versions are dropped. |
+| `spec.helm.tagFilter` | string |  | TagFilter is an optional regular expression (RE2) that tags must match. Empty matches every tag. |
 | `spec.image` | object |  | Image holds OCI registry watching parameters. Required when type=image. |
+| `spec.image.allowTags` | []string |  | AllowTags, when not empty, keeps only the listed tags. |
+| `spec.image.discoveryLimit` | integer (int32) |  | DiscoveryLimit is the most tags newest-build ordering inspects; it reads each tag's manifest and image config on every poll. More remaining tags is an error. Default 50. |
+| `spec.image.excludeTagFilter` | string |  | ExcludeTagFilter is an optional regular expression (RE2): tags that match it are dropped (for example "-rc\\.\|-debug$"). |
+| `spec.image.ignoreTags` | []string |  | IgnoreTags drops the listed tags. |
 | `spec.image.interval` | string |  | Interval is how often to poll the registry. Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised to 30s; empty or "0" means the 5m default. Default: `5m`. |
-| `spec.image.registry` | string | yes | Registry is the image repository to poll, without a tag or digest (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or "http://registry.registry.svc.cluster.local:5000/myapp" for a plain-HTTP in-cluster registry). Only public repositories are supported: the watcher uses the registry's anonymous token flow and sends no credentials. Loopback (the controller's own pod), link-local, cloud metadata, unspecified and multicast addresses are refused. |
-| `spec.image.tagFilter` | string |  | TagFilter is an optional regular expression that image tags must match. Empty string matches all tags. With one matching tag its digest is tracked (a moving tag such as "^main$"); when every matching tag is a semantic version the highest wins; otherwise the most recently built image wins (at most 50 matching tags). No matching tag is an error. |
+| `spec.image.registry` | string | yes | Registry is the image repository to poll, without a tag or digest (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or "http://registry.registry.svc.cluster.local:5000/myapp" for a plain-HTTP in-cluster registry). Loopback (the controller's own pod), link-local, cloud metadata, unspecified and multicast addresses are refused. |
+| `spec.image.secretRef` | object |  | SecretRef names a Secret with registry credentials, in the Subscription's namespace: a kubernetes.io/dockerconfigjson Secret (the entry for the registry host is used; username/password, auth, identitytoken and registrytoken are understood) or a Secret with keys username and password. Without it only anonymous pulls are made. |
+| `spec.image.secretRef.name` | string | yes | Name is the Secret name. |
+| `spec.image.semverConstraint` | string |  | SemverConstraint keeps only tags that are semantic versions satisfying the constraint, such as "&gt;=1.4.0 &lt;2.0.0", "^1.4" or "~1.4.2" (github.com/Masterminds/semver syntax). A constraint without a pre-release part excludes pre-releases. Tags that are not semantic versions are dropped. |
+| `spec.image.strategy` | string |  | Strategy orders the remaining tags. Auto (the default): the only tag; the highest semantic version when every tag is one; otherwise the most recently built image. SemVer: the highest semantic version, other tags ignored. Lexical: the tag that sorts last. NewestBuild: the most recently built image. One of: `Auto`, `SemVer`, `Lexical`, `NewestBuild`. Default: `Auto`. |
+| `spec.image.tagFilter` | string |  | TagFilter is an optional regular expression (RE2) that tags must match. Empty matches every tag. |
 | `spec.namespace` | string |  | Namespace must be empty or equal to the Subscription's own namespace. Bundles are always created in the Subscription's namespace; any other value puts the Subscription in phase Error and creates no Bundle. Leave it empty: the field is kept only so existing manifests still apply. |
 | `spec.pipeline` | string | yes | Pipeline is the name of the Pipeline CRD that Bundles should target. |
-| `spec.type` | string | yes | Type identifies the artifact source: "image" (OCI) or "git". |
+| `spec.type` | string | yes | Type identifies the artifact source: "image" (OCI), "git" or "helm" (a Helm chart repository). |
+| `spec.webhook` | object |  | Webhook enables the inbound webhook receiver for this Subscription: a registry or SCM that posts to /webhook/subscriptions/&lt;namespace&gt;/&lt;name&gt;/&lt;provider&gt; makes the controller poll at once. Without it the receiver refuses every request for the Subscription. |
+| `spec.webhook.secretRef` | object | yes | SecretRef names a Secret in the Subscription's namespace whose key "token" (at least 16 characters) authenticates webhook deliveries: as the last path segment of the receiver URL (Docker Hub, Quay, Harbor, Artifactory, generic), as the Authorization header (Harbor's auth header), the X-JFrog-Event-Auth header (Artifactory), or as the HMAC-SHA256 key of the X-Hub-Signature-256 (GitHub) or X-Kardinal-Signature-256 (generic) header. |
+| `spec.webhook.secretRef.name` | string | yes | Name is the Secret name. |
 | `status` | object |  | SubscriptionStatus defines the observed state of a Subscription. |
+| `status.conditions` | []object |  | Conditions: Ready is True while the Subscription polls its source (phase Watching) and False with the reason otherwise, for example SecretNotReferenceable, SecretNotFound or WatchFailed. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.lastBundleCreated` | string |  | LastBundleCreated is the name of the last Bundle created by this Subscription. |
 | `status.lastCheckedAt` | string |  | LastCheckedAt is the RFC3339 timestamp of the last poll. |
-| `status.lastSeenDigest` | string |  | LastSeenDigest is the OCI digest or Git commit SHA from the last successful check. The first check only records it (no Bundle); a later check that sees a different value creates a Bundle. |
+| `status.lastRefreshRequest` | string |  | LastRefreshRequest is the kardinal.io/refresh annotation value the last poll answered. |
+| `status.lastSeenDigest` | string |  | LastSeenDigest is the OCI digest, Git commit SHA or chart digest from the last successful check. The first check only records it (no Bundle); a later check that sees a different value creates a Bundle. |
+| `status.lastSeenRevision` | string |  | LastSeenRevision is the branch head the last pathGlob poll read up to. The next poll only reads commits after it. Empty without pathGlob. |
+| `status.lastSeenTag` | string |  | LastSeenTag is the image tag, short commit SHA or chart version of lastSeenDigest. |
 | `status.message` | string |  | Message provides a human-readable reason for the current phase (e.g. error details). |
+| `status.observedPathGlob` | string |  | ObservedPathGlob is the spec.git.pathGlob the last successful poll used. When the glob changes, the next poll records a new baseline and creates no Bundle. |
 | `status.phase` | string |  | Phase is the current subscription state. One of: `Watching`, `Idle`, `Error`. |
