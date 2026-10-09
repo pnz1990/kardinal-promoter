@@ -10,6 +10,13 @@
 // own (its namespace name):
 //
 //	ANY  /<bucket>/...      recorded; answered 200 "OK" unless a mode is set
+//	POST /<bucket>/slack/...  also validated as a Slack incoming-webhook
+//	                        message, answered 200 "ok", or 400 with Slack's
+//	                        error code (invalid_payload, no_text,
+//	                        invalid_blocks)
+//	POST /<bucket>/teams/...  also validated as a Teams Workflows webhook
+//	                        message with an Adaptive Card, answered 202, or
+//	                        400 with the reason
 //	GET  /_records/<bucket> the bucket's records, oldest first, as JSON
 //	POST /_mode/<bucket>    {"status":503,"times":2,"location":"...",
 //	                        "retryAfter":"600"}: answer the next times
@@ -108,6 +115,15 @@ func (r *receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 func (r *receiver) record(w http.ResponseWriter, req *http.Request, bucket string) {
 	body, _ := io.ReadAll(io.LimitReader(req.Body, maxBody))
 	status, location, retryAfter := http.StatusOK, "", ""
+	answer := ""
+	if parts := strings.SplitN(strings.TrimPrefix(req.URL.Path, "/"), "/", 3); len(parts) > 1 {
+		switch parts[1] {
+		case "slack":
+			status, answer = validateSlack(req, body)
+		case "teams":
+			status, answer = validateTeams(req, body)
+		}
+	}
 	r.mu.Lock()
 	if m := r.modes[bucket]; m != nil {
 		status, location, retryAfter = m.Status, m.Location, m.RetryAfter
@@ -134,6 +150,94 @@ func (r *receiver) record(w http.ResponseWriter, req *http.Request, bucket strin
 	if retryAfter != "" {
 		w.Header().Set("Retry-After", retryAfter)
 	}
+	if answer == "" || status != http.StatusOK && status != http.StatusAccepted && status != http.StatusBadRequest {
+		answer = http.StatusText(status)
+	}
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, http.StatusText(status))
+	_, _ = io.WriteString(w, answer)
+}
+
+// validateSlack checks body the way Slack's incoming webhooks do for the
+// parts kardinal uses: a JSON object with a text or blocks; every block has a
+// known type and its texts are within Slack's limits.
+// https://api.slack.com/messaging/webhooks, https://api.slack.com/reference/block-kit/blocks
+func validateSlack(req *http.Request, body []byte) (int, string) {
+	if !strings.HasPrefix(req.Header.Get("Content-Type"), "application/json") {
+		return http.StatusBadRequest, "invalid_payload"
+	}
+	var msg struct {
+		Text   string                   `json:"text"`
+		Blocks []map[string]interface{} `json:"blocks"`
+	}
+	if err := json.Unmarshal(body, &msg); err != nil {
+		return http.StatusBadRequest, "invalid_payload"
+	}
+	if msg.Text == "" && len(msg.Blocks) == 0 {
+		return http.StatusBadRequest, "no_text"
+	}
+	limits := map[string]int{"header": 150, "section": 3000, "context": 2000, "actions": 0}
+	for _, b := range msg.Blocks {
+		typ, _ := b["type"].(string)
+		limit, ok := limits[typ]
+		if !ok {
+			return http.StatusBadRequest, "invalid_blocks"
+		}
+		if t, ok := b["text"].(map[string]interface{}); ok {
+			tt, _ := t["type"].(string)
+			text, _ := t["text"].(string)
+			if (tt != "plain_text" && tt != "mrkdwn") || text == "" || len([]rune(text)) > limit {
+				return http.StatusBadRequest, "invalid_blocks"
+			}
+			if typ == "header" && tt != "plain_text" {
+				return http.StatusBadRequest, "invalid_blocks"
+			}
+		}
+		if f, ok := b["fields"].([]interface{}); ok && len(f) > 10 {
+			return http.StatusBadRequest, "invalid_blocks"
+		}
+		if typ == "actions" || typ == "context" {
+			if els, _ := b["elements"].([]interface{}); len(els) == 0 {
+				return http.StatusBadRequest, "invalid_blocks"
+			}
+		}
+	}
+	return http.StatusOK, "ok"
+}
+
+// validateTeams checks body is what a Teams Workflows webhook ("When a Teams
+// webhook request is received") posts to a channel: a message whose
+// attachments are Adaptive Cards with a version and a body.
+func validateTeams(req *http.Request, body []byte) (int, string) {
+	if !strings.HasPrefix(req.Header.Get("Content-Type"), "application/json") {
+		return http.StatusBadRequest, "content type is not application/json"
+	}
+	var msg struct {
+		Type        string `json:"type"`
+		Attachments []struct {
+			ContentType string `json:"contentType"`
+			Content     struct {
+				Type    string                   `json:"type"`
+				Version string                   `json:"version"`
+				Body    []map[string]interface{} `json:"body"`
+			} `json:"content"`
+		} `json:"attachments"`
+	}
+	if err := json.Unmarshal(body, &msg); err != nil {
+		return http.StatusBadRequest, "body is not JSON: " + err.Error()
+	}
+	if msg.Type != "message" || len(msg.Attachments) == 0 {
+		return http.StatusBadRequest, "not a message with attachments"
+	}
+	for _, a := range msg.Attachments {
+		if a.ContentType != "application/vnd.microsoft.card.adaptive" || a.Content.Type != "AdaptiveCard" ||
+			a.Content.Version == "" || len(a.Content.Body) == 0 {
+			return http.StatusBadRequest, "attachment is not an Adaptive Card"
+		}
+		for _, el := range a.Content.Body {
+			if t, _ := el["type"].(string); t == "" {
+				return http.StatusBadRequest, "card element without a type"
+			}
+		}
+	}
+	return http.StatusAccepted, ""
 }

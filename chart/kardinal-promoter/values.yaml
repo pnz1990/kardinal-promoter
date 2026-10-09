@@ -266,6 +266,16 @@ graph:
 validatingAdmissionPolicy:
   enabled: true
 
+egress:
+  # -- Destinations NotificationHook, MetricCheck and Subscription requests may
+  # reach (--egress-allowlist): host names (hooks.slack.com), wildcards
+  # (*.example.com: any name under it) and CIDRs or addresses (10.0.0.0/8).
+  # A request is allowed when its host matches a name or every address it
+  # connects to is in a CIDR. Empty: any destination except loopback,
+  # link-local, cloud metadata, unspecified and multicast addresses, which stay
+  # refused whatever this lists. See docs/guides/security.md.
+  allowlist: []
+
 # -- NetworkPolicy for the controller Pod. Needs a CNI that enforces
 # NetworkPolicy. Egress: DNS, :443/:6443 (API server, SCM, git, registries),
 # graph.kroNamespace and extraEgress. Ingress: the four Service ports.
