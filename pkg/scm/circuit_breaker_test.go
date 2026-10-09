@@ -221,3 +221,23 @@ func TestRetryAfterFromResponse_ResetOnlyWhenExhausted(t *testing.T) {
 	assert.Greater(t, delta, 45*time.Minute)
 	assert.Less(t, delta, 55*time.Minute)
 }
+
+// TestDCProjectOf: the circuit owner of a Data Center path is its project
+// key, in upper case, for the 1.0 and latest versions of every REST API.
+//
+// Covers SCM-BBDC-06.
+func TestDCProjectOf(t *testing.T) {
+	for path, want := range map[string]string{
+		"/rest/api/1.0/projects/plat/repos/web/pull-requests":      "PLAT",
+		"/rest/api/latest/projects/Plat/repos/web/pull-requests/1": "PLAT",
+		"/rest/branch-utils/1.0/projects/PLAT/repos/web/branches":  "PLAT",
+		"/rest/branch-utils/latest/projects/plat/repos/web":        "PLAT",
+		"/rest/api/latest/projects/~alice/repos/web?limit=1":       "~ALICE",
+		"/rest/api/1.0/projects/%7Ealice/repos/web":                "~ALICE",
+		"/rest/api/1.0/application-properties":                     "",
+		"/rest/api/latest/users/alice":                             "",
+		"/projects/PLAT/repos/web":                                 "",
+	} {
+		assert.Equal(t, want, dcProjectOf(path), path)
+	}
+}

@@ -26,6 +26,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // BitbucketDCProvider implements SCMProvider against the REST API 1.0 of
@@ -65,7 +67,7 @@ func NewBitbucketDCProvider(token, apiURL, webhookSecret string) *BitbucketDCPro
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuits:      NewCircuitRegistry(),
-		client:        &http.Client{Timeout: providerHTTPTimeout},
+		client:        &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 	}
 }
 
@@ -99,6 +101,12 @@ func splitBitbucketDCRepo(repo string) (project, slug string, err error) {
 // an https, ssh or browse URL of the repository and a webhook payload name
 // the same repository. Project keys and slugs are case-insensitive.
 func (b *BitbucketDCProvider) CanonicalRepo(repo string) string {
+	return canonicalBitbucketDCRepo(repo)
+}
+
+// canonicalBitbucketDCRepo is the Data Center canonical form, "key/slug" in
+// lower case ("~user/slug" for a personal repository).
+func canonicalBitbucketDCRepo(repo string) string {
 	project, slug, err := splitBitbucketDCRepo(repo)
 	if err != nil {
 		return strings.ToLower(repo)
@@ -459,13 +467,14 @@ var (
 )
 
 // dcProjectOf is the circuit owner of a request path: the project key of
-// /rest/api/1.0/projects/{key}/... and /rest/branch-utils/1.0/projects/{key}/...,
-// in upper case.
+// /rest/{api}/{version}/projects/{key}/... in upper case, for any REST API
+// (api, branch-utils, ...) and version (1.0, latest), so one project's
+// failures open one circuit whichever path reached them. "" (the shared
+// circuit) for any other path.
 func dcProjectOf(path string) string {
-	for _, prefix := range []string{"/rest/api/1.0/projects/", "/rest/branch-utils/1.0/projects/"} {
-		if owner := ownerFromPath(path, prefix); owner != "" {
-			return strings.ToUpper(owner)
-		}
+	segs := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 6)
+	if len(segs) < 5 || segs[0] != "rest" || segs[3] != "projects" {
+		return ""
 	}
-	return ""
+	return strings.ToUpper(ownerFromPath(path, "/"+strings.Join(segs[:4], "/")+"/"))
 }

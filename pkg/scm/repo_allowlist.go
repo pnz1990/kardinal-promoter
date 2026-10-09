@@ -88,6 +88,21 @@ func (a *RepositoryAllowlist) WithCanonicalRepo(p SCMProvider) *RepositoryAllowl
 	return &out
 }
 
+// WithProviderType returns a copy of a that matches repositories in the
+// canonical form of the SCM providerType, as WithCanonicalRepo does with a
+// built provider: for "bitbucket-datacenter" a repository is matched as
+// key/slug however the URL names it. Other types keep a. A nil allowlist
+// stays nil. kardinal validate uses it, so it reports what the controller
+// enforces.
+func (a *RepositoryAllowlist) WithProviderType(providerType string) *RepositoryAllowlist {
+	if a == nil || providerType != "bitbucket-datacenter" {
+		return a
+	}
+	out := *a
+	out.canon = canonicalBitbucketDCRepo
+	return &out
+}
+
 type repoPattern struct {
 	host, repo string // repo may end in "/**"
 }
@@ -225,11 +240,17 @@ var azureNameSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$`
 // validRepoSegment reports whether segs[i] may be a segment of a repository
 // on host: repoSegment and not "." or "..". Only the project and repository
 // names of an Azure DevOps repository (dev.azure.com, organization/project/repo)
-// may hold single spaces; its organization may not.
+// may hold single spaces; its organization may not. The first of two
+// segments may start with one "~": a Bitbucket Data Center personal
+// repository, ~user/slug.
 func validRepoSegment(host string, segs []string, i int) bool {
 	s := segs[i]
 	if s == "." || s == ".." {
 		return false
+	}
+	if i == 0 && len(segs) == 2 && strings.HasPrefix(s, "~") {
+		s = s[1:]
+		return s != "." && s != ".." && repoSegment.MatchString(s)
 	}
 	if host == "dev.azure.com" && len(segs) == 3 && i >= 1 {
 		return azureNameSegment.MatchString(s)

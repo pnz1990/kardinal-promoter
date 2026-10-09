@@ -323,6 +323,11 @@ The repository is the project key and slug from `spec.git.url`: an HTTP clone UR
 (`/scm/PLAT/web-app.git`), a browse URL (`/projects/PLAT/repos/web-app/...`) or an ssh URL all
 work, and personal repositories (`/scm/~alice/web-app.git`, `/users/alice/repos/web-app`) too.
 Keys and slugs are matched without case, so the ssh URL's lower-case key matches webhooks.
+In `scm.allowedRepositories`, name a repository as `host/KEY/slug` on the host of `scm.apiURL`
+(`bitbucket.example.com/PLAT/*`, `bitbucket.example.com/~alice/*` for personal repositories):
+every URL form of the repository matches it ([the shared SCM token](guides/security.md#the-shared-scm-token-and-scmallowedrepositories)).
+`kardinal validate --allowed-repositories <list> --scm-provider bitbucket-datacenter` checks a
+file the same way.
 
 - **PRs**: opened from `kardinal/<bundle>/<env>`; a PR that is open between the same branches is
   reused. Closing declines it (with the PR's current version) and deletes the branch with the

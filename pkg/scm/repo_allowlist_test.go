@@ -353,6 +353,35 @@ func TestRepositoryAllowlist_DataCenter(t *testing.T) {
 	_, _, err = g.GetPRStatus(context.Background(), "scm/OTHER/web-app", 1)
 	assert.ErrorIs(t, err, scm.ErrRepositoryNotAllowed)
 	assert.True(t, scm.SameRepo(g, "scm/PLAT/web-app", "plat/web-app"), "the Guard keeps the canonical form for webhooks")
+
+	// WithProviderType (kardinal validate) matches the same way without a
+	// provider.
+	v := base.WithProviderType("bitbucket-datacenter")
+	assert.NoError(t, v.CheckPipeline(pipeline("https://git.example.com/bitbucket/scm/PLAT/web-app.git"), false))
+	assert.ErrorIs(t, v.CheckPipeline(pipeline("https://git.example.com/bitbucket/scm/OTHER/web-app.git"), false), scm.ErrRepositoryNotAllowed)
+	assert.Same(t, base, base.WithProviderType("github"))
+}
+
+// TestRepositoryAllowlist_DataCenterPersonal: a Data Center personal
+// repository is ~user/slug; its pattern and its URLs (/scm/~user, the
+// /users/ browse path, ssh) match, and only one leading ~ in the first
+// segment is accepted.
+//
+// Covers SCM-BBDC-06.
+func TestRepositoryAllowlist_DataCenterPersonal(t *testing.T) {
+	base, err := scm.ParseRepositoryAllowlist([]string{"git.example.com/~alice/*"})
+	require.NoError(t, err)
+	a := base.WithProviderType("bitbucket-datacenter")
+	for _, repo := range []string{"~alice/tools", "scm/~ALICE/tools", "users/alice/repos/tools/browse"} {
+		assert.True(t, a.AllowsRepo("git.example.com", repo), repo)
+	}
+	for _, url := range []string{"https://git.example.com/scm/~alice/tools.git", "ssh://git@git.example.com:7999/~alice/tools.git",
+		"https://git.example.com/users/alice/repos/tools/browse"} {
+		assert.True(t, a.Allows(url), url)
+	}
+	for _, repo := range []string{"~bob/tools", "~~alice/tools", "~/tools", "~../tools", "plat/~alice", "a/~alice/tools"} {
+		assert.False(t, a.AllowsRepo("git.example.com", repo), repo)
+	}
 }
 
 // TestGuard_ForwardsPRControls (#1483 with #1453): with

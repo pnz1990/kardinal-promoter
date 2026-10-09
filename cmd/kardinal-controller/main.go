@@ -396,8 +396,15 @@ func main() {
 	// SCM provider — scm.NewProvider dispatches on the --scm-provider flag.
 	// When --scm-token-secret-name is set, a DynamicProvider is used so that
 	// credential rotation (Secret update) reloads the provider without a restart.
-	var scmProvider scm.SCMProvider
-	if scmTokenSecretName != "" {
+	scmProvider, dynProvider, canonicalRepos, err := buildControllerSCM(controllerSCMConfig{
+		providerType: scmProviderType, token: githubToken, apiURL: scmAPIURL, webhookSecret: webhookSecret,
+		dynamic: scmTokenSecretName != "", allowed: allowedRepos,
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up the SCM provider")
+	}
+	allowedRepos = canonicalRepos
+	if dynProvider != nil {
 		// Resolve the namespace: flag > env > controller namespace.
 		if scmTokenSecretNamespace == "" {
 			scmTokenSecretNamespace = os.Getenv("POD_NAMESPACE")
@@ -408,12 +415,6 @@ func main() {
 		if scmTokenSecretKey == "" {
 			scmTokenSecretKey = "token"
 		}
-
-		dynProvider, dynErr := scm.NewDynamicProvider(scmProviderType, githubToken, scmAPIURL, webhookSecret)
-		if dynErr != nil {
-			logger.Fatal().Err(dynErr).Msg("unable to create dynamic SCM provider")
-		}
-		scmProvider = dynProvider
 
 		// Register the SecretWatcher as a manager.Runnable — starts after caches are synced.
 		watcher := scm.NewSecretWatcher(
@@ -431,24 +432,6 @@ func main() {
 			Str("secret", scmTokenSecretNamespace+"/"+scmTokenSecretName).
 			Str("key", scmTokenSecretKey).
 			Msg("SCM credential watcher enabled — token will be reloaded on Secret change")
-	} else {
-		var provErr error
-		scmProvider, provErr = scm.NewProvider(scmProviderType, githubToken, scmAPIURL, webhookSecret)
-		if provErr != nil {
-			logger.Fatal().Err(provErr).Msg("unable to create SCM provider")
-		}
-	}
-	// Every SCM call the shared token makes is checked against
-	// --scm-allowed-repositories, whichever code path makes it (#1332).
-	// A provider with a canonical repository form (Bitbucket Data Center:
-	// KEY/slug, whatever the URL) is matched in that form.
-	allowedRepos = allowedRepos.WithCanonicalRepo(scmProvider)
-	if allowedRepos != nil {
-		scmHost, hostErr := scm.WebHost(scmProviderType, scmAPIURL)
-		if hostErr != nil {
-			logger.Fatal().Err(hostErr).Msg("--scm-allowed-repositories needs the SCM host")
-		}
-		scmProvider = allowedRepos.Guard(scmProvider, scmHost)
 	}
 	gitClient := scm.NewGoGitClient()
 
