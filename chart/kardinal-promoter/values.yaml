@@ -285,6 +285,23 @@ graph:
   # per environment. null keeps the controller default, 100; 0 makes every
   # Graph compact. A Pipeline's kardinal.io/graph-shape annotation overrides it.
   compactAbove: null
+  # -- When the Graph of a finished Bundle is retired: deleted, with the
+  # Bundle's PromotionSteps kept in status.retiredSteps. kro holds every Graph
+  # in memory (3 to 6 MB each), so keeping the Graph of every finished Bundle
+  # until spec.historyLimit prunes it runs kro out of memory. Go durations;
+  # empty keeps the controller default; "0s" keeps those Graphs. A Pipeline's
+  # kardinal.io/graph-retire-after annotation replaces all three for its
+  # Bundles. See docs/installation.md#sizing-kro.
+  retire:
+    # -- A Superseded Bundle, or a Verified one that a newer Bundle replaced
+    # in every environment (--graph-retire-superseded-after, default 1m).
+    superseded: ""
+    # -- A Failed Bundle (--graph-retire-failed-after, default 24h). A retired
+    # Failed Bundle no longer recovers.
+    failed: ""
+    # -- A Verified Bundle still deployed in an environment
+    # (--graph-retire-verified-after, default 1h).
+    verified: ""
 
 # -- Deprecated, no effect. The chart no longer ships ValidatingAdmissionPolicies;
 # the CRD schemas validate these fields instead. Kept so existing

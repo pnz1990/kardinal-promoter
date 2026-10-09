@@ -40,3 +40,29 @@ var GateTemplateChanged = gateTemplateChanged
 func (r *Reconciler) GateBundles(ctx context.Context, obj client.Object) []reconcile.Request {
 	return r.gateBundles(ctx, obj)
 }
+
+// ReconcileRetire runs the retirement controller's reconcile.
+func (r *Reconciler) ReconcileRetire(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	return r.reconcileRetire(ctx, req)
+}
+
+// FinishedPhase is the retirement controller's event filter.
+var FinishedPhase = finishedPhase
+
+// Retirement internals for package bundle_test.
+var (
+	UnsettledStep          = unsettledStep
+	TooManySteps           = tooManySteps
+	BecameVerified         = becameVerified
+	RetireAnnotationChange = retireAnnotationChanged
+)
+
+// OlderVerified exposes the retirement controller's Verified-sibling mapping.
+func (r *Reconciler) OlderVerified(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.olderVerified(ctx, obj)
+}
+
+// FinishedBundles exposes the retirement controller's Pipeline mapping.
+func (r *Reconciler) FinishedBundles(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.finishedBundles(ctx, obj)
+}
