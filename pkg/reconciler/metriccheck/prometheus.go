@@ -49,7 +49,14 @@ type PrometheusProvider struct {
 // trace context is sent to the metrics API.
 var defaultHTTPClient = &http.Client{
 	Timeout:   10 * time.Second,
-	Transport: tracing.Transport(egress.NewTransport(http.ProxyFromEnvironment), false),
+	Transport: metricTransport(egress.NewTransport(http.ProxyFromEnvironment)),
+}
+
+// metricTransport wraps base (the egress-guarded transport) with a client
+// span per request. It sends no trace headers (traceparent, tracestate,
+// baggage): a metrics API is a third party.
+func metricTransport(base http.RoundTripper) http.RoundTripper {
+	return tracing.Transport(base, false)
 }
 
 // NewPrometheusProvider creates a PrometheusProvider with the default,

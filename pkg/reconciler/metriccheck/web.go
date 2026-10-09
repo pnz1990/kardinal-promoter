@@ -17,7 +17,6 @@ import (
 	"k8s.io/client-go/util/jsonpath"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -35,7 +34,7 @@ const (
 // follow redirects: a 3xx answer fails the check. Requests are traced like
 // defaultHTTPClient's, without sending trace context.
 var webHTTPClient = &http.Client{
-	Transport: tracing.Transport(egress.NewTransport(http.ProxyFromEnvironment), false),
+	Transport: metricTransport(egress.NewTransport(http.ProxyFromEnvironment)),
 	CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	},
