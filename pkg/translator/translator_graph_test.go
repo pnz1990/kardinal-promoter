@@ -441,13 +441,16 @@ func TestTranslate_ShapeIsPinned(t *testing.T) {
 		name               string
 		first, second      int
 		secondAnnotation   string
-		dropLabel          bool
+		label              string // replaces the Graph's shape label after the first translation; "-" removes it
 		wantFirst, wantEnd string
 	}{
 		{name: "nodes Graph grows past the threshold", first: 100, second: 101, wantFirst: "nodes", wantEnd: "nodes"},
 		{name: "compact Graph shrinks under the threshold", first: 101, second: 100, wantFirst: "compact", wantEnd: "compact"},
 		{name: "annotation added to a nodes Graph", first: 3, second: 4, secondAnnotation: "compact", wantFirst: "nodes", wantEnd: "nodes"},
-		{name: "Graph without a shape label", first: 101, second: 101, dropLabel: true, wantFirst: "compact", wantEnd: "nodes"},
+		{name: "compact Graph without a shape label", first: 101, second: 100, label: "-", wantFirst: "compact", wantEnd: "compact"},
+		{name: "compact Graph labelled nodes", first: 101, second: 100, label: "nodes", wantFirst: "compact", wantEnd: "compact"},
+		{name: "nodes Graph labelled compact", first: 100, second: 101, label: "compact", wantFirst: "nodes", wantEnd: "nodes"},
+		{name: "garbage label", first: 100, second: 101, label: "flat", wantFirst: "nodes", wantEnd: "nodes"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -464,11 +467,15 @@ func TestTranslate_ShapeIsPinned(t *testing.T) {
 			g, err := gc.Get(ctx, "team-a", name)
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantFirst, g.Labels[graph.LabelGraphShape])
-			if tc.dropLabel {
+			if tc.label != "" {
 				u, err := dyn.Resource(graph.GraphGVR).Namespace("team-a").Get(ctx, name, metav1.GetOptions{})
 				require.NoError(t, err)
 				labels := u.GetLabels()
-				delete(labels, graph.LabelGraphShape)
+				if tc.label == "-" {
+					delete(labels, graph.LabelGraphShape)
+				} else {
+					labels[graph.LabelGraphShape] = tc.label
+				}
 				u.SetLabels(labels)
 				_, err = dyn.Resource(graph.GraphGVR).Namespace("team-a").Update(ctx, u, metav1.UpdateOptions{})
 				require.NoError(t, err)
@@ -482,7 +489,7 @@ func TestTranslate_ShapeIsPinned(t *testing.T) {
 			require.NoError(t, err)
 			g, err = gc.Get(ctx, "team-a", name)
 			require.NoError(t, err)
-			assert.Equal(t, tc.wantEnd, g.Labels[graph.LabelGraphShape])
+			assert.Equal(t, tc.wantEnd, g.Labels[graph.LabelGraphShape], "the label is written again from the spec")
 			compact := false
 			for _, n := range g.Spec.Nodes {
 				compact = compact || n.ID == graph.NodePromotionSteps

@@ -191,10 +191,14 @@ func (t *Translator) Translate(ctx context.Context,
 }
 
 // existingShape returns the shape of the Bundle's Graph when it exists, so a
-// re-translation keeps it: the label the builder sets, or the node shape for
-// a Graph built before the compact shape existed. It returns "" when the
-// Bundle has no Graph yet. Switching the shape of a Graph in flight would
-// make kro prune every PromotionStep the old shape's nodes created.
+// re-translation keeps it. It returns "" when the Bundle has no Graph yet.
+// Switching the shape of a Graph in flight would make kro prune every
+// PromotionStep the old shape's nodes created.
+//
+// The shape is read from the Graph's spec (graph.ShapeOf: a PromotionSteps
+// collection node means compact), not from its kardinal.io/graph-shape label,
+// which anyone may edit: the label is informational, and the builder writes
+// it again from the shape it keeps.
 func (t *Translator) existingShape(ctx context.Context, pipeline *kardinalv1alpha1.Pipeline,
 	bundle *kardinalv1alpha1.Bundle) (string, error) {
 	g, err := t.graphClient.Get(ctx, pipeline.Namespace, graph.GraphNameFrom(pipeline.Name, bundle.Name))
@@ -208,10 +212,7 @@ func (t *Translator) existingShape(ctx context.Context, pipeline *kardinalv1alph
 		// Another owner's Graph: Create refuses it (ErrGraphOwnedByOther).
 		return "", nil
 	}
-	if shape := g.Labels[graph.LabelGraphShape]; shape != "" {
-		return shape, nil
-	}
-	return graph.GraphShapeNodes, nil
+	return graph.ShapeOf(g), nil
 }
 
 // servedKind reports whether the cluster serves apiVersion/kind. Without a

@@ -53,9 +53,22 @@ const (
 // the Bundle's UID; the Graph reads back only the steps that carry it.
 const LabelBundleUID = "kardinal.io/bundle-uid"
 
-// LabelGraphShape is the label on a Graph that records its shape, so a
-// re-translation keeps it (BuildInput.Shape).
+// LabelGraphShape is the label on a Graph that shows its shape. It is
+// informational: a re-translation keeps the shape the Graph's spec has
+// (ShapeOf), and the builder writes the label again from it.
 const LabelGraphShape = "kardinal.io/graph-shape"
+
+// ShapeOf returns the shape of g from its spec: GraphShapeCompact when it has
+// the NodePromotionSteps collection, GraphShapeNodes otherwise. Its
+// LabelGraphShape label is not read: it is informational.
+func ShapeOf(g *Graph) string {
+	for _, n := range g.Spec.Nodes {
+		if n.ID == NodePromotionSteps {
+			return GraphShapeCompact
+		}
+	}
+	return GraphShapeNodes
+}
 
 // compactShape reports whether the Graph for pipeline, promoting envs
 // environments, uses the compact shape. pinned, the shape of the Bundle's
@@ -84,29 +97,69 @@ func (b *Builder) compactShape(pipeline *kardinalv1alpha1.Pipeline, envs int, pi
 }
 
 // compactUnsupported holds a check per feature the compact shape does not
-// carry yet. Each returns the feature's name when the Pipeline uses it, and
-// "" otherwise. A feature that adds Graph nodes in the node shape (hooks,
-// analyses, per-promotion MetricChecks, mirror patches) adds its check here
-// until it has a compact implementation, so a compact Graph never silently
-// drops it: the Bundle fails with GraphBuildFailed instead.
-var compactUnsupported []func(*kardinalv1alpha1.Pipeline) string
+// carry yet. Each returns the feature's name when the build input (the
+// Pipeline, the Bundle, the PolicyGates, and whatever later inputs a feature
+// adds to BuildInput: analyses, MetricCheck templates) uses it, and ""
+// otherwise. A feature that adds Graph nodes or objects in the node shape
+// (hooks, analyses, per-promotion MetricChecks, mirror patches) adds its
+// check here until it has a compact implementation, so a compact Graph never
+// silently drops it: the Bundle fails with GraphBuildFailed instead.
+// TestCompact_SameObjectKinds fails for a feature that does neither.
+var compactUnsupported []func(BuildInput) string
 
-// checkCompactSupport refuses a compact Graph for a Pipeline that uses a
-// feature the compact shape does not carry yet (compactUnsupported).
-func checkCompactSupport(p *kardinalv1alpha1.Pipeline) error {
+// RegisterCompactUnsupported adds check to compactUnsupported and returns a
+// function that removes it again (for tests). Not safe for concurrent use:
+// register from package init or test setup.
+func RegisterCompactUnsupported(check func(BuildInput) string) (unregister func()) {
+	compactUnsupported = append(compactUnsupported, check)
+	n := len(compactUnsupported) - 1
+	return func() {
+		compactUnsupported = append(compactUnsupported[:n:n], compactUnsupported[n+1:]...)
+	}
+}
+
+// CompactUnsupported returns the features in in that the compact shape does
+// not carry yet (compactUnsupported). The Pipeline reconciler reports them on
+// a Pipeline whose new Bundles would get a compact Graph.
+func CompactUnsupported(in BuildInput) []string {
 	var features []string
 	for _, check := range compactUnsupported {
-		if f := check(p); f != "" {
+		if f := check(in); f != "" {
 			features = append(features, f)
 		}
 	}
+	return features
+}
+
+// checkCompactSupport refuses a compact Graph for an input that uses a
+// feature the compact shape does not carry yet (compactUnsupported). The
+// message for a Bundle whose Graph is already compact (in.Shape) says that
+// only new Bundles can get the node shape.
+func checkCompactSupport(in BuildInput) error {
+	features := CompactUnsupported(in)
 	if len(features) == 0 {
 		return nil
+	}
+	list := strings.Join(features, ", ")
+	if in.Shape == GraphShapeCompact {
+		return fmt.Errorf("build: this Bundle's Graph is compact, and a Bundle keeps the shape its Graph was "+
+			"created with; the compact shape does not support %s yet. Remove the feature for this Bundle, or "+
+			"create a new Bundle once the Pipeline uses the node shape (fewer environments than "+
+			"--graph-compact-above, or the annotation %s: %s): only new Bundles can switch", list,
+			AnnotationGraphShape, GraphShapeNodes)
 	}
 	return fmt.Errorf("build: this Bundle's Graph is compact (more environments than --graph-compact-above, or the %s "+
 		"annotation), and the compact shape does not support %s yet; use the node shape for this Pipeline (fewer "+
 		"environments, or the annotation %s: %s) or remove the feature",
-		AnnotationGraphShape, strings.Join(features, ", "), AnnotationGraphShape, GraphShapeNodes)
+		AnnotationGraphShape, list, AnnotationGraphShape, GraphShapeNodes)
+}
+
+// WouldBeCompact reports whether a new Bundle of pipeline promoting envs
+// environments would get a compact Graph from b: the annotation, or more
+// environments than b.CompactAbove. An invalid annotation reports false.
+func (b *Builder) WouldBeCompact(pipeline *kardinalv1alpha1.Pipeline, envs int) bool {
+	compact, err := b.compactShape(pipeline, envs, "")
+	return err == nil && compact
 }
 
 // compactStep is one environment of the compact shape's promotion DAG.
@@ -196,9 +249,13 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 				NodeStepsObserved),
 			"readyGates": "${" + readyGates + "}",
 			// A Superseded or Rejected Bundle starts no new environment
-			// (E2E-R20, #1451); the steps it has keep running or stay as
+			// (E2E-R20, #1451), nor does a Failed one waiting for a
+			// maxConcurrentPromotions slot (WaitingForSlot, #1349; the node
+			// shape's bundleHeld). The steps it has keep running or stay as
 			// history.
-			"hold": `${bundle.?status.?phase.orValue("") in ["Superseded", "Rejected"]}`,
+			"hold": `${bundle.?status.?phase.orValue("") in ["Superseded", "Rejected"] || ` +
+				`bundle.?status.?conditions.orValue([]).exists(c_, c_.type == "` + CondBundleWaitingForSlot +
+				`" && c_.status == "True")}`,
 		}},
 		{ID: NodePromotionWave, Def: map[string]interface{}{"steps": wave}},
 		{

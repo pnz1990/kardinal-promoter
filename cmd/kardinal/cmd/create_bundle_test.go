@@ -447,7 +447,6 @@ func TestCreateBundle_DryRun_ListsEnvironmentsAndGates(t *testing.T) {
 		"  • prod (gates: no-weekend-deploys)\n", buf.String())
 }
 
-
 // TestCreateBundle_DryRun_CompactShape: the dry run uses the controller's
 // compact threshold given with --graph-compact-above (default 100) and says
 // when the Graph would be compact.

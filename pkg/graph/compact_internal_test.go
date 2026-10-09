@@ -21,8 +21,8 @@ import (
 func TestCompactUnsupportedFeature(t *testing.T) {
 	saved := compactUnsupported
 	t.Cleanup(func() { compactUnsupported = saved })
-	compactUnsupported = append(compactUnsupported, func(p *kardinalv1alpha1.Pipeline) string {
-		if p.Annotations["feature"] == "on" {
+	compactUnsupported = append(compactUnsupported, func(in BuildInput) string {
+		if in.Pipeline.Annotations["feature"] == "on" {
 			return "pre-deploy hooks"
 		}
 		return ""
@@ -45,4 +45,18 @@ func TestCompactUnsupportedFeature(t *testing.T) {
 
 	_, err = NewBuilder().Build(BuildInput{Pipeline: pipeline(GraphShapeNodes), Bundle: bundle})
 	assert.NoError(t, err, "the node shape carries the feature")
+
+	// A Bundle whose Graph is already compact is told only new Bundles can
+	// switch.
+	_, err = NewBuilder().Build(BuildInput{Pipeline: pipeline(GraphShapeNodes), Bundle: bundle, Shape: GraphShapeCompact})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalid))
+	assert.Contains(t, err.Error(), "a Bundle keeps the shape its Graph was created with")
+	assert.Contains(t, err.Error(), "only new Bundles can switch")
+
+	assert.Equal(t, []string{"pre-deploy hooks"}, CompactUnsupported(BuildInput{Pipeline: pipeline("")}))
+	assert.True(t, NewBuilder().WouldBeCompact(pipeline(GraphShapeCompact), 2))
+	assert.False(t, NewBuilder().WouldBeCompact(pipeline(GraphShapeNodes), 200))
+	assert.True(t, NewBuilder().WouldBeCompact(pipeline(""), 101))
+	assert.False(t, NewBuilder().WouldBeCompact(pipeline("flat"), 101), "an invalid annotation is reported on its own")
 }

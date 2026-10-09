@@ -29,6 +29,8 @@ type compactSim struct {
 	gatesReady map[string]bool
 	prs        bool
 	phase      string
+	// waitingForSlot sets the Bundle's WaitingForSlot condition True.
+	waitingForSlot bool
 }
 
 func newCompactSim(t *testing.T, g *graph.Graph) *compactSim {
@@ -77,7 +79,14 @@ func (s *compactSim) vars() map[string]interface{} {
 		}
 	}
 	v[graph.NodePRStatuses] = prs
-	v["bundle"] = map[string]interface{}{"status": map[string]interface{}{"phase": s.phase}}
+	status := map[string]interface{}{"phase": s.phase}
+	if s.waitingForSlot {
+		status["conditions"] = []interface{}{
+			map[string]interface{}{"type": "Ready", "status": "False"},
+			map[string]interface{}{"type": graph.CondBundleWaitingForSlot, "status": "True"},
+		}
+	}
+	v["bundle"] = map[string]interface{}{"status": status}
 	return v
 }
 
@@ -254,6 +263,14 @@ func TestCompact_Admission(t *testing.T) {
 	envs, _ = sim.wave()
 	assert.Equal(t, []string{"eu", "test", "us"}, envs, "a Rejected Bundle starts nothing new")
 
+	// A Failed Bundle waiting for a maxConcurrentPromotions slot (#1349)
+	// starts nothing new either.
+	sim.phase = "Failed"
+	sim.waitingForSlot = true
+	envs, _ = sim.wave()
+	assert.Equal(t, []string{"eu", "test", "us"}, envs, "a Bundle waiting for a slot starts nothing new")
+	sim.waitingForSlot = false
+
 	sim.phase = "Promoting"
 	assert.Equal(t, []string{"eu", "prod", "test", "us"}, sim.advance())
 	_, done = sim.wave()
@@ -349,4 +366,68 @@ func TestCompact_ChunksGateCollections(t *testing.T) {
 	assert.Contains(t, state, "PolicyGates.filter(")
 	assert.Contains(t, state, "PolicyGates2.filter(")
 	assert.Equal(t, 1040+260+260, graph.ObjectCount(res.Graph))
+}
+
+// TestCompact_SameObjectKinds is the guard for features added later: a
+// feature-rich Pipeline (dependsOn, waves, pr-review, org and team gates, a
+// skip-permission gate, a Bundle intent) is built in both shapes, and the
+// compact Graph must create objects of the same kinds as the node shape, or
+// refuse with ErrInvalid (compactUnsupported). A feature that adds an object
+// kind or a node to the node shape only fails here until it either has a
+// compact implementation or registers a refusal. Extend the fixture with each
+// new feature.
+func TestCompact_SameObjectKinds(t *testing.T) {
+	p := pipelineOf("app",
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "uat-eu", Wave: 1, DependsOn: []string{"test"}},
+		kardinalv1alpha1.EnvironmentSpec{Name: "uat-us", Wave: 1, DependsOn: []string{"test"}},
+		kardinalv1alpha1.EnvironmentSpec{Name: "canary", DependsOn: []string{"uat-eu", "uat-us"}},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review", DependsOn: []string{"canary"}},
+	)
+	gates := []kardinalv1alpha1.PolicyGate{
+		makePolicyGate("no-weekend", "platform-policies", "prod", "!schedule.isWeekend"),
+		makePolicyGate("soak", "app-ns", "uat-eu", "upstream.test.soakMinutes >= 30"),
+	}
+	b := makeBundle("app-x7k2m", "app")
+	b.Spec.Intent = &kardinalv1alpha1.BundleIntent{SkipEnvironments: []string{"canary"}}
+	skip := makePolicyGate("allow-skip-canary", "platform-policies", "canary", "true")
+	skip.Spec.SkipPermission = true
+	skip.Labels["kardinal.io/type"] = "skip-permission"
+	gates = append(gates, skip)
+
+	kinds := func(g *graph.Graph) map[string]bool {
+		out := map[string]bool{}
+		for _, n := range g.Spec.Nodes {
+			if n.Template != nil {
+				out[fmt.Sprint(n.Template["kind"])] = true
+			}
+		}
+		return out
+	}
+	build := func(shape string) (*graph.BuildResult, error) {
+		pp := p.DeepCopy()
+		pp.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
+		return graph.NewBuilder().Build(graph.BuildInput{Pipeline: pp, Bundle: b, PolicyGates: gates})
+	}
+	nodes, err := build(graph.GraphShapeNodes)
+	require.NoError(t, err)
+	for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus"} {
+		require.True(t, kinds(nodes.Graph)[k], "the fixture exercises %s", k)
+	}
+	compact, err := build(graph.GraphShapeCompact)
+	if err != nil {
+		require.ErrorIs(t, err, graph.ErrInvalid, "the compact shape either builds or refuses with ErrInvalid")
+		return
+	}
+	assert.Equal(t, kinds(nodes.Graph), kinds(compact.Graph), "the compact Graph creates the same object kinds")
+	assert.Equal(t, nodes.Environments, compact.Environments)
+	assert.ElementsMatch(t, gateNames(nodes.GateInstances), gateNames(compact.GateInstances), "the same gate instances")
+}
+
+func gateNames(gs []kardinalv1alpha1.PolicyGate) []string {
+	out := make([]string, len(gs))
+	for i := range gs {
+		out[i] = gs[i].Name
+	}
+	return out
 }

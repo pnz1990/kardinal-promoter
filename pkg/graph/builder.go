@@ -151,7 +151,7 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 		return nil, err
 	}
 	if compact {
-		if err := checkCompactSupport(input.Pipeline); err != nil {
+		if err := checkCompactSupport(input); err != nil {
 			return nil, err
 		}
 	}

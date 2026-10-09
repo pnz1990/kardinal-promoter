@@ -277,6 +277,13 @@ from every step that holds it with the command under [Uninstall](#uninstall). Th
 controller does not close the PR of a deleted step, so close by hand the PRs of the steps you
 delete after the downgrade.
 
+A controller older than this release does not know the compact Graph shape (Pipelines with more
+than 100 environments, or the `kardinal.io/graph-shape: compact` annotation; see
+[Large Pipelines](pipeline-reference.md#large-pipelines)). When it rebuilds the Graph of a
+Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it builds the node
+shape, and kro then deletes every PromotionStep the compact Graph created: the Bundle promotes
+again from its first environment. Before you downgrade, let the Bundles of those Pipelines finish, or delete them.
+
 ### Upgrading from v0.8.1
 
 v0.8.1 ran its own Graph controller (krocodile, `experimental.kro.run`) from the kardinal chart. This release runs on upstream kro (`kro.run`), which you install separately. `helm upgrade --reuse-values` fails. A `helm upgrade` that gets past the values check deletes the `kro-system` namespace. Follow the steps below instead.
