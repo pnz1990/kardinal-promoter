@@ -183,6 +183,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.reconcileTemplate(ctx, &gate)
 	}
 
+	// Every override is audited once (GateOverridden), whatever the Bundle's
+	// phase, before anything else reads it.
+	if err := r.auditOverrides(ctx, &gate); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// A settled Bundle never promotes again, so its gate instances are left
 	// as they were: no evaluation, status write, audit record or requeue.
 	// Superseded and Rejected are terminal (E2E-R20, #1451). A Verified Bundle whose GraphReady is

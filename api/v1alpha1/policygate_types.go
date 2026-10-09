@@ -102,7 +102,10 @@ type PolicyGateOverride struct {
 	// +optional
 	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
 
-	// CreatedBy is the user who created the override (informational).
+	// CreatedBy is the Kubernetes username of whoever created the override.
+	// The chart's ValidatingAdmissionPolicy admits a new override only when
+	// createdBy equals the requesting user (kardinal override reads it with a
+	// SelfSubjectReview), or when the controller writes it for the UI.
 	// +optional
 	CreatedBy string `json:"createdBy,omitempty"`
 }
@@ -129,6 +132,13 @@ type PolicyGateStatus struct {
 	// Conditions holds status conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ObservedOverrides lists a key for each spec.overrides entry the
+	// controller has recorded with a GateOverridden AuditEvent, so each
+	// override is audited once.
+	// +optional
+	// +listType=set
+	ObservedOverrides []string `json:"observedOverrides,omitempty"`
 }
 
 // +kubebuilder:object:root=true

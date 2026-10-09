@@ -9,6 +9,7 @@ optional: without them anyone with write access could record someone else's
 name. Kubernetes 1.30+ serves admissionregistration.k8s.io/v1
 ValidatingAdmissionPolicy (the chart's kubeVersion).
 */}}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -45,3 +46,76 @@ metadata:
 spec:
   policyName: {{ include "kardinal-promoter.fullname" . }}-bundle-rejection
   validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-gate-overrides
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["policygates"]
+  variables:
+    # The controller writes overrides for the UI, which authenticates its
+    # callers itself (docs/guides/security.md, UI API Access Control).
+    - name: controller
+      expression: request.userInfo.username == {{ $controller | quote }}
+    # kro applies gate instances as the Graph ServiceAccount of the namespace.
+    - name: graph
+      expression: >-
+        request.userInfo.username == 'system:serviceaccount:' + object.metadata.namespace +
+        ':' + {{ .Values.graph.serviceAccountName | squote }}
+    - name: instance
+      expression: >-
+        oldObject != null && has(oldObject.metadata.labels) &&
+        'kardinal.io/bundle' in oldObject.metadata.labels
+  validations:
+    # kardinal override (spec.overrides[]) records who overrode the gate.
+    # Every entry that is new, or changed, must name the requester.
+    - expression: >-
+        variables.controller || !has(object.spec.overrides) ||
+        object.spec.overrides.all(o,
+          (oldObject != null && has(oldObject.spec.overrides) && o in oldObject.spec.overrides) ||
+          (has(o.createdBy) && o.createdBy == request.userInfo.username))
+      messageExpression: >-
+        'every new spec.overrides entry must have createdBy "' + request.userInfo.username +
+        '", your own username; kardinal override sets it for you'
+      reason: Forbidden
+    # A gate instance (label kardinal.io/bundle) is what a Graph made from a
+    # gate template: only kro and the controller change what it evaluates.
+    # Overriding it is the audited way to pass it.
+    - expression: >-
+        !variables.instance || variables.graph || variables.controller ||
+        (object.spec.expression == oldObject.spec.expression &&
+         (has(object.spec.skipPermission) && object.spec.skipPermission) ==
+           (has(oldObject.spec.skipPermission) && oldObject.spec.skipPermission) &&
+         has(object.metadata.labels) && object.metadata.labels == oldObject.metadata.labels)
+      message: >-
+        only kardinal changes the expression, skipPermission or labels of a gate instance
+        (label kardinal.io/bundle); change the gate template, or record an override with
+        kardinal override
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-gate-overrides
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kardinal-promoter.fullname" . }}-gate-overrides
+  validationActions: ["Deny"]
+  {{- with .Values.controller.watchNamespace }}
+  # Namespace mode: the controller exemption above is this release's, so the
+  # policy applies only to the namespace this release's controller manages.
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ . | quote }}
+  {{- end }}

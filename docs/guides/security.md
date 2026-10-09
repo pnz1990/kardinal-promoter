@@ -362,6 +362,7 @@ spec is set at creation and never mutated. Kubernetes RBAC controls who can dele
 | `PromotionFailed` | PromotionStep reached Failed or AbortedByAlarm |
 | `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion |
 | `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../rollback.md#reject-a-bundle)) |
+| `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
@@ -669,6 +670,7 @@ chart installs a `ValidatingAdmissionPolicy` with a `Deny` binding, per release:
 | Policy | Checks |
 |---|---|
 | `<release>-bundle-rejection` | A Bundle's new `spec.rejected.by` ([`kardinal reject`](../rollback.md#reject-a-bundle)) equals the requesting user's `request.userInfo.username`. A rejection already set is immutable (CRD rule), so it is checked only when it is first written. |
+| `<release>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../policy-gates.md#emergency-overrides-k-09)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. On a gate instance (label `kardinal.io/bundle`), only the namespace's Graph ServiceAccount (kro) and the controller may change `spec.expression`, `spec.skipPermission` or the labels. |
 
 The checks exist only where the chart's policies are installed: the CRDs do not check the
 names. Installing the CRDs alone (`kubectl apply -f config/crd/bases`) or deleting a policy

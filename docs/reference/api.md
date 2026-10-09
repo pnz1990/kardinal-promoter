@@ -34,7 +34,7 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | AuditEventSpec defines the immutable record of a single promotion event. AuditEvents are created by the PromotionStep and PolicyGate reconcilers at key lifecycle transitions (started, succeeded, failed). The spec is set at creation; the CRD rejects any later change to it. |
-| `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated". HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`. |
+| `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden". GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`. |
 | `spec.bundleName` | string | yes | BundleName is the name of the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment name where the event occurred. |
 | `spec.message` | string |  | Message is a human-readable description of the event. |
@@ -422,7 +422,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.message` | string |  | Message is a human-readable explanation shown when the gate blocks. |
 | `spec.overrides` | []object |  | Overrides holds time-limited emergency overrides (K-09). When any non-expired override exists (matching Stage or with empty Stage), the gate passes immediately. Expired overrides are kept as audit records. |
 | `spec.overrides[].createdAt` | string (date-time) |  | CreatedAt is when the override was created (set by the CLI). |
-| `spec.overrides[].createdBy` | string |  | CreatedBy is the user who created the override (informational). |
+| `spec.overrides[].createdBy` | string |  | CreatedBy is the Kubernetes username of whoever created the override. The chart's ValidatingAdmissionPolicy admits a new override only when createdBy equals the requesting user (kardinal override reads it with a SelfSubjectReview), or when the controller writes it for the UI. |
 | `spec.overrides[].expiresAt` | string (date-time) | yes | ExpiresAt is when this override stops being effective. After this time the gate evaluates CEL normally. |
 | `spec.overrides[].reason` | string | yes | Reason is the mandatory human-readable justification for the override. |
 | `spec.overrides[].stage` | string |  | Stage is the environment name this override applies to. An empty string applies to all environments. |
@@ -443,7 +443,8 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
-| `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is when the gate's result was last written. The controller re-evaluates more often, but writes the status only when the result or reason changes, when a PromotionStep that has not started needs a newer result, after a spec change, and otherwise at least every 10 minutes. |
+| `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is when the gate was last evaluated. |
+| `status.observedOverrides` | []string |  | ObservedOverrides lists a key for each spec.overrides entry the controller has recorded with a GateOverridden AuditEvent, so each override is audited once. |
 | `status.ready` | boolean | yes | Ready indicates whether the gate is currently allowing promotion. The kro Graph gates downstream nodes on status.ready == true. Default: `false`. |
 | `status.reason` | string |  | Reason explains the current ready state in human-readable form. |
 

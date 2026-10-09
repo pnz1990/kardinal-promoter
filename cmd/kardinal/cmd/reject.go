@@ -78,7 +78,7 @@ func rejectFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, name, 
 	if r := b.Spec.Rejected; r != nil {
 		return fmt.Errorf("reject: bundle %s was already rejected by %s: %s", name, r.By, r.Reason)
 	}
-	id, err := whoAmI(ctx, c)
+	id, err := identityOf(ctx, c)
 	if err != nil {
 		return fmt.Errorf("reject: %w", err)
 	}
