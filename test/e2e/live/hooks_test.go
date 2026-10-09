@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -514,9 +515,11 @@ func TestStep_HookPrivilegedRefused(t *testing.T) {
 }
 
 // TestStep_HookForgedHookRunIgnored: a HookRun created by hand for a
-// Bundle, with its selector labels and the Bundle's UID but without kro's
-// kro.run/node-id label, never gets a Job, while the Graph's own hook runs
-// and the environment is promoted (regression, QA #1493 round 2).
+// Bundle, with its selector labels and the Bundle's UID, is refused by the
+// chart's graph-objects policy (only kro and kardinal create HookRuns,
+// #1544), and the Graph's own hook runs and the environment is promoted.
+// The HookRun reconciler's own check (no kro.run/node-id label: no Job) is
+// the layer below it, unit-tested in pkg/reconciler/hookrun (QA #1493).
 //
 // Covers HOOK-FORGED-01.
 func TestStep_HookForgedHookRunIgnored(t *testing.T) {
@@ -538,21 +541,18 @@ func TestStep_HookForgedHookRunIgnored(t *testing.T) {
 		Spec: v1alpha1.HookRunSpec{PipelineName: pipelineName, BundleName: bundle, Environment: "test",
 			Hook: "migrate", Phase: "pre", Job: hookJob(t, `echo forged`, "")},
 	}
-	require.NoError(t, e.Client.Create(ctx, forged))
+	err := e.Client.Create(ctx, forged)
+	require.Error(t, err, "the cluster admin cannot forge a HookRun")
+	assert.True(t, apierrors.IsForbidden(err), "%v", err)
+	assert.Contains(t, err.Error(), "graph-objects")
 
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	waitHookRun(t, e, a.ns, graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate"), v1alpha1.HookRunSucceeded)
-	framework.Consistently(t, 10*time.Second, "the forged HookRun gets no Job and no status", func(ctx context.Context) (bool, string) {
-		_, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, forged.Name, metav1.GetOptions{})
-		if !apierrors.IsNotFound(err) {
-			return false, fmt.Sprintf("job: %v", err)
-		}
-		hr, ok, err := hookRun(ctx, e, a.ns, forged.Name)
-		if err != nil || !ok {
-			return false, fmt.Sprint(err)
-		}
-		return hr.Status.Phase == "" && len(hr.Finalizers) == 0, fmt.Sprintf("phase=%q finalizers=%v", hr.Status.Phase, hr.Finalizers)
-	})
+	_, ok, err := hookRun(ctx, e, a.ns, forged.Name)
+	require.NoError(t, err)
+	assert.False(t, ok, "no forged HookRun")
+	_, err = e.Kube.BatchV1().Jobs(a.ns).Get(ctx, forged.Name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "no forged Job: %v", err)
 }
 
 // TestStep_HooksRefusedInCompactGraph: the compact Graph shape does not
@@ -583,8 +583,9 @@ func TestStep_HooksRefusedInCompactGraph(t *testing.T) {
 	a.fileHas(t, "test", fixtures.V1, "test in git")
 }
 
-// TestStep_HookDeletedWhileRunningRunsOnce: deleting a pre-hook HookRun
-// while its Job runs does not run the migration twice. The finalizer holds
+// TestStep_HookDeletedWhileRunningRunsOnce: a pre-hook HookRun deleted
+// (by the garbage collector) while its Job runs does not run the migration
+// twice. The finalizer holds
 // the HookRun until the Job ends and records its result, the step keeps the
 // result in status.hookRecords, and the HookRun the Graph applies again
 // takes the recorded result without a Job (regression, #1544 review).
@@ -601,7 +602,19 @@ func TestStep_HookDeletedWhileRunningRunsOnce(t *testing.T) {
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	name := graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate")
 	first := waitHookRun(t, e, a.ns, name, v1alpha1.HookRunRunning)
-	require.NoError(t, e.Client.Delete(ctx, first))
+	// Only kardinal, kro, the garbage collector and the namespace controller
+	// delete HookRuns (graph-objects policy, #1544): the cluster admin is
+	// refused, and the delete comes from the garbage collector, as when the
+	// Graph drops the HookRun or its Bundle goes.
+	err := e.Client.Delete(ctx, first.DeepCopy())
+	require.Error(t, err, "a user cannot delete a HookRun")
+	assert.True(t, apierrors.IsForbidden(err), "%v", err)
+	gc := rest.CopyConfig(e.Config)
+	gc.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:kube-system:generic-garbage-collector",
+		Groups: []string{"system:serviceaccounts", "system:serviceaccounts:kube-system", "system:authenticated"}}
+	asGC, err := client.New(gc, client.Options{Scheme: e.Client.Scheme()})
+	require.NoError(t, err)
+	require.NoError(t, asGC.Delete(ctx, first))
 
 	var again *v1alpha1.HookRun
 	framework.Eventually(t, 3*time.Minute, "the HookRun applied again", func(ctx context.Context) (bool, string) {

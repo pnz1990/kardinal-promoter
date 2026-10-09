@@ -97,8 +97,10 @@ Pending ──pre hooks succeeded──▶ Promoting ─▶ (WaitingForMerge) �
   Job of that name, while it runs fails the HookRun; the hook is not started a second time. A Job
   of the HookRun's name that kardinal did not create fails it with a message naming the Job.
   Re-run a hook by promoting a new Bundle.
-- **A deleted HookRun does not run its hook again.** Deleting a HookRun while its Job runs
-  (by hand, or a namespace cleanup) holds it until the Job ends, records the result in its status
+- **A deleted HookRun does not run its hook again.** Only kardinal, kro, the garbage collector
+  and the namespace controller may delete a HookRun (the chart's `graph-objects` policy refuses
+  everyone else, see [Admission Validation](guides/security.md#admission-validation)). One deleted while its Job runs
+  (its Graph dropped it, or a namespace cleanup) is held until the Job ends, records the result in its status
   for 30 seconds, and only then lets it go. The step keeps each hook that ran in
   `status.hookRecords` (hook, phase, spec hash, result). The HookRun the Graph applies again
   takes that recorded result and creates no Job; when the earlier run's result was never seen, it

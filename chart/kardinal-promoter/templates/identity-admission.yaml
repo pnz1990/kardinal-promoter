@@ -363,9 +363,10 @@ spec:
           - {{ . }}
           - {{ . }}/status
           {{- end }}
-      # A HookRun records that a hook ran: deleting one would let the Graph
-      # recreate it and run the hook again, so only kardinal deletes them
-      # (with the garbage collector and the namespace controller).
+      # A HookRun records that a hook ran: only kardinal deletes them (with
+      # the garbage collector and the namespace controller). The step's
+      # status.hookRecords keeps a recreated HookRun from running again once
+      # the step saw the run; this keeps it from depending on that timing.
       - apiGroups: ["kardinal.io"]
         apiVersions: ["*"]
         operations: ["DELETE"]
