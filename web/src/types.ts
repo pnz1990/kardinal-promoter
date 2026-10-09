@@ -108,6 +108,10 @@ export interface Bundle {
   environments?: BundleEnvStatus[]
   /** #563: Container images in this Bundle — used by NodeDetail diff preview. */
   images?: ImageRef[]
+  /** Environments where this Rejected bundle's change is live (its step is
+   *  HealthChecking or Verified there): it stays current, marked Rejected,
+   *  with a roll-back hint (RejectedLiveBanner). */
+  rejectedLiveEnvironments?: string[]
 }
 
 /** #563: A container image reference — repository, tag, and optional digest. */

@@ -34,7 +34,8 @@ export function sortBundlesNewestFirst(bundles: Bundle[]): Bundle[] {
  * The bundle shown when the user has not picked one:
  *  1. the pipeline's activeBundleName (chosen by the API), when it is in the list;
  *  2. otherwise the newest bundle that is not Superseded or Rejected, whatever
- *     its phase;
+ *     its phase, where a Rejected bundle whose change is live somewhere
+ *     (rejectedLiveEnvironments) counts as not Rejected;
  *  3. otherwise the newest bundle.
  * Steps 2 and 3 are the API's activeBundleName rule (handlePipelines in
  * cmd/kardinal-controller/ui_api.go), so both pick the same bundle. The phase
@@ -48,7 +49,15 @@ export function pickDefaultBundle(bundles: Bundle[], activeBundleName?: string):
     if (active) return active
   }
   const sorted = sortBundlesNewestFirst(bundles)
-  return sorted.find(b => b.phase !== 'Superseded' && b.phase !== 'Rejected') ?? sorted[0]
+  return sorted.find(b => !isHalted(b)) ?? sorted[0]
+}
+
+/** A bundle that never promotes again and is not deployed anywhere:
+ *  Superseded, or Rejected without a live change (lifecycle.Halted with
+ *  lifecycle.RejectedLiveStep in the controller). */
+export function isHalted(b: Bundle): boolean {
+  if (b.phase === 'Superseded') return true
+  return b.phase === 'Rejected' && !(b.rejectedLiveEnvironments?.length)
 }
 
 /**

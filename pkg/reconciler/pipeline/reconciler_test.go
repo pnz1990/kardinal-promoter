@@ -608,3 +608,49 @@ func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
 		})
 	}
 }
+
+// TestDerivePhase_RejectedLive (QA #1489): a Rejected Bundle whose change is
+// live in an environment (its step there is HealthChecking or Verified)
+// stays the newest Bundle there, so the Pipeline is Degraded: roll back. A
+// Rejected Bundle that never went live (its step was cancelled) is skipped
+// like a Superseded one, and a newer Bundle verified in the environment
+// replaces the rejected change.
+//
+// Covers BUNDLE-REJECT-07.
+func TestDerivePhase_RejectedLive(t *testing.T) {
+	t0 := metav1.Now()
+	t1 := metav1.NewTime(t0.Add(time.Minute))
+	t2 := metav1.NewTime(t0.Add(2 * time.Minute))
+	rejected := func(name string, at metav1.Time) kardinalv1alpha1.Bundle {
+		b := phaseBundle(name, "Rejected", at)
+		b.Spec.Rejected = &kardinalv1alpha1.BundleRejection{By: "alice", Reason: "CVE"}
+		return b
+	}
+	st := func(bundle, env, state string) kardinalv1alpha1.PromotionStep {
+		return kardinalv1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: bundle + "-" + env, Namespace: "default"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: bundle, Environment: env},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: state},
+		}
+	}
+	cases := []struct {
+		name    string
+		bundles []kardinalv1alpha1.Bundle
+		steps   []kardinalv1alpha1.PromotionStep
+		want    string
+	}{
+		{name: "rejected change verified in prod", bundles: []kardinalv1alpha1.Bundle{phaseBundle("v1", "Verified", t0), rejected("v2", t1)},
+			steps: []kardinalv1alpha1.PromotionStep{st("v1", "prod", "Verified"), st("v2", "prod", "Verified")}, want: "Degraded"},
+		{name: "rejected change health-checking in prod", bundles: []kardinalv1alpha1.Bundle{phaseBundle("v1", "Verified", t0), rejected("v2", t1)},
+			steps: []kardinalv1alpha1.PromotionStep{st("v1", "prod", "Verified"), st("v2", "prod", "HealthChecking")}, want: "Degraded"},
+		{name: "rejected before it went live", bundles: []kardinalv1alpha1.Bundle{phaseBundle("v1", "Verified", t0), rejected("v2", t1)},
+			steps: []kardinalv1alpha1.PromotionStep{st("v1", "prod", "Verified"), st("v2", "prod", "Failed")}, want: "Ready"},
+		{name: "rolled back by a newer bundle", bundles: []kardinalv1alpha1.Bundle{rejected("v2", t1), phaseBundle("v3", "Verified", t2)},
+			steps: []kardinalv1alpha1.PromotionStep{st("v2", "prod", "Verified"), st("v3", "prod", "Verified")}, want: "Ready"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, pipeline.DerivePhase("app", tc.bundles, tc.steps))
+		})
+	}
+}

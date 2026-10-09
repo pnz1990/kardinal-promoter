@@ -216,6 +216,10 @@ type uiBundleResponse struct {
 	Environments []uiBundleEnvStatus `json:"environments,omitempty"`
 	// #563: Container images in this Bundle — used by NodeDetail diff preview.
 	Images []v1alpha1.ImageRef `json:"images,omitempty"`
+	// RejectedLiveEnvironments are the environments where this Rejected
+	// Bundle's change is live (lifecycle.RejectedLiveEnvs): the UI keeps it
+	// current there, marked Rejected, with a roll-back hint.
+	RejectedLiveEnvironments []string `json:"rejectedLiveEnvironments,omitempty"`
 }
 
 // uiBundleEnvStatus is the per-environment status summary of a Bundle (#503).
@@ -503,9 +507,11 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 			bundlesByPipeline[key] = append(bundlesByPipeline[key], b)
 		}
 	}
+	// The steps also pick the current bundle: a Rejected bundle whose change
+	// is live stays current (lifecycle.CurrentBundle).
 	activeBundles := make(map[string]*activeBundleEntry, len(bundlesByPipeline))
 	for key, bundles := range bundlesByPipeline {
-		b := lifecycle.CurrentBundle(bundles)
+		b := lifecycle.CurrentBundle(bundles, steps)
 		envStates := make(map[string]string, len(b.Status.Environments))
 		var lastVerified time.Time
 		for _, env := range b.Status.Environments {
@@ -683,6 +689,21 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 		}
 		return items[i].Name > items[j].Name
 	})
+	// The steps say where a Rejected Bundle's change is live; they are listed
+	// only when a Rejected Bundle is in the result.
+	var steps []v1alpha1.PromotionStep
+	for i := range items {
+		if lifecycle.Rejected(&items[i]) {
+			var stepList v1alpha1.PromotionStepList
+			if err := s.client.List(r.Context(), &stepList,
+				client.MatchingLabels{"kardinal.io/pipeline": pipelineName}); err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			steps = append(steps, stepList.Items...)
+			break
+		}
+	}
 	result := make([]uiBundleResponse, 0, len(items))
 	for _, b := range items {
 		// #503: Per-environment statuses.
@@ -711,6 +732,7 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 		if len(envStatuses) > 0 {
 			resp.Environments = envStatuses
 		}
+		resp.RejectedLiveEnvironments = lifecycle.RejectedLiveEnvs(&b, steps)
 		result = append(result, resp)
 	}
 	writeJSON(w, result)

@@ -14,13 +14,19 @@
 package cmd
 
 import (
+	"fmt"
+	"sort"
+
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // currentBundleByEnv returns, per environment, the Bundle that explain and
 // status describe there: the newest Bundle that is not Superseded or Rejected
-// (lifecycle.Halted) and is in that environment. A Bundle is in an environment when it has a PromotionStep
+// (lifecycle.Halted) and is in that environment, where a Rejected Bundle whose
+// change is live there (lifecycle.RejectedLiveStep: its step is
+// HealthChecking or Verified) counts as not Halted, so the view shows the
+// rejected change that is deployed. A Bundle is in an environment when it has a PromotionStep
 // there, or a gate instance there and it has not failed. Newest is
 // lifecycle.CompareCreation, the order supersession uses. An environment
 // where every Bundle is Halted falls back to the newest Halted Bundle
@@ -42,7 +48,7 @@ func currentBundleByEnv(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionSte
 	}
 	current := make(map[string]*v1alpha1.Bundle)
 	superseded := make(map[string]*v1alpha1.Bundle)
-	offer := func(env, bundle string, gateOnly bool) {
+	offer := func(env, bundle string, gateOnly, live bool) {
 		b, ok := byName[bundle]
 		if env == "" || !ok {
 			return
@@ -52,7 +58,7 @@ func currentBundleByEnv(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionSte
 			return
 		}
 		best := current
-		if lifecycle.Halted(b) {
+		if lifecycle.Halted(b) && !live {
 			best = superseded
 		}
 		if cur, ok := best[env]; !ok || lifecycle.CompareCreation(b, cur) > 0 {
@@ -60,10 +66,15 @@ func currentBundleByEnv(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionSte
 		}
 	}
 	for i := range steps {
-		offer(steps[i].Spec.Environment, steps[i].Spec.BundleName, false)
+		s := &steps[i]
+		live := false
+		if b, ok := byName[s.Spec.BundleName]; ok {
+			live = lifecycle.RejectedLiveStep(b, s)
+		}
+		offer(s.Spec.Environment, s.Spec.BundleName, false, live)
 	}
 	for i := range gates {
-		offer(gates[i].Labels["kardinal.io/environment"], gates[i].Labels["kardinal.io/bundle"], true)
+		offer(gates[i].Labels["kardinal.io/environment"], gates[i].Labels["kardinal.io/bundle"], true, false)
 	}
 
 	out := make(map[string]string, len(current)+len(superseded))
@@ -74,4 +85,41 @@ func currentBundleByEnv(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionSte
 		out[env] = b.Name
 	}
 	return out
+}
+
+// rejectedLiveHints returns one line per environment where the current
+// Bundle (current: env → Bundle, from currentBundleByEnv) is Rejected and its
+// change is live there, telling the operator to roll back. Environments are
+// sorted; envFilter, when set, keeps one.
+func rejectedLiveHints(pipeline string, current map[string]string, bundles []v1alpha1.Bundle,
+	steps []v1alpha1.PromotionStep, envFilter string) []string {
+	byName := make(map[string]*v1alpha1.Bundle, len(bundles))
+	for i := range bundles {
+		byName[bundles[i].Name] = &bundles[i]
+	}
+	var hints []string
+	seen := map[string]bool{}
+	envs := make([]string, 0, len(current))
+	for env := range current {
+		envs = append(envs, env)
+	}
+	sort.Strings(envs)
+	for _, env := range envs {
+		if envFilter != "" && env != envFilter {
+			continue
+		}
+		b := byName[current[env]]
+		if b == nil || !lifecycle.Rejected(b) {
+			continue
+		}
+		for i := range steps {
+			s := &steps[i]
+			if s.Spec.Environment == env && lifecycle.RejectedLiveStep(b, s) && !seen[env] {
+				seen[env] = true
+				hints = append(hints, fmt.Sprintf("WARNING: bundle %s is Rejected in %s: %s (kardinal rollback %s --env %s)",
+					b.Name, env, lifecycle.RejectedLiveHint, pipeline, env))
+			}
+		}
+	}
+	return hints
 }

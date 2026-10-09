@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -112,13 +113,55 @@ func Halted(b *v1alpha1.Bundle) bool {
 	return b.Status.Phase == "Superseded" || Rejected(b)
 }
 
+// RejectedLiveHint is what the views say about a Rejected Bundle whose change
+// is live in an environment (RejectedLiveStep): rejecting stops promotions,
+// it does not revert what was merged.
+const RejectedLiveHint = "rejected change is live; roll back"
+
+// LiveStepState reports whether a PromotionStep in state has its change in
+// the environment: its PR merged or its push landed, and the health check
+// runs (HealthChecking) or passed (Verified).
+func LiveStepState(state string) bool {
+	return state == "HealthChecking" || state == "Verified"
+}
+
+// RejectedLiveStep reports whether s, a step of b, is a rejected change that
+// is live: b is Rejected and s is HealthChecking or Verified. Such a Bundle
+// stays the current one in that environment, marked Rejected, so the views
+// show what is deployed there instead of hiding it with the Halted Bundles.
+func RejectedLiveStep(b *v1alpha1.Bundle, s *v1alpha1.PromotionStep) bool {
+	return Rejected(b) && s.Spec.BundleName == b.Name && LiveStepState(s.Status.State)
+}
+
+// RejectedLiveEnvs returns, sorted, the environments where the Rejected
+// Bundle b's change is live (RejectedLiveStep), or nil.
+func RejectedLiveEnvs(b *v1alpha1.Bundle, steps []v1alpha1.PromotionStep) []string {
+	if !Rejected(b) {
+		return nil
+	}
+	seen := map[string]bool{}
+	var envs []string
+	for i := range steps {
+		s := &steps[i]
+		if s.Namespace == b.Namespace && RejectedLiveStep(b, s) && !seen[s.Spec.Environment] {
+			seen[s.Spec.Environment] = true
+			envs = append(envs, s.Spec.Environment)
+		}
+	}
+	sort.Strings(envs)
+	return envs
+}
+
 // moreCurrent reports whether Bundle a outranks Bundle b of the same
 // Pipeline as the Pipeline's current Bundle. A Bundle that is not Halted
-// (Superseded or Rejected) outranks a Halted one whatever its phase, so a
-// newer Failed Bundle is never hidden behind an older Verified or Promoting
-// one (E2E-R15). Otherwise the newer one (CompareCreation) wins.
-func moreCurrent(a, b *v1alpha1.Bundle) bool {
-	aHalted, bHalted := Halted(a), Halted(b)
+// (Superseded or Rejected), or is Rejected with its change live somewhere
+// (live), outranks a Halted one whatever its phase, so a newer Failed Bundle
+// is never hidden behind an older Verified or Promoting one (E2E-R15), and a
+// rejected change that is deployed is not hidden behind an older Bundle.
+// Otherwise the newer one (CompareCreation) wins.
+func moreCurrent(a, b *v1alpha1.Bundle, live map[string]bool) bool {
+	aHalted := Halted(a) && !live[a.Namespace+"/"+a.Name]
+	bHalted := Halted(b) && !live[b.Namespace+"/"+b.Name]
 	if aHalted != bHalted {
 		return bHalted
 	}
@@ -126,15 +169,23 @@ func moreCurrent(a, b *v1alpha1.Bundle) bool {
 }
 
 // CurrentBundle returns the current Bundle of one Pipeline, given its
-// Bundles: the newest Bundle that is not Superseded or Rejected, whatever its
-// phase, or the newest one when every Bundle is (moreCurrent). It returns
-// nil when bundles is empty. The UI API's activeBundleName, the pipeline
-// table of kardinal get pipelines and web/src/bundleSelection.ts
+// Bundles and (any superset of) their PromotionSteps: the newest Bundle that
+// is not Superseded or Rejected, whatever its phase, where a Rejected Bundle
+// whose change is live in some environment (RejectedLiveStep) counts as not
+// Rejected; or the newest one when every Bundle is Halted (moreCurrent). It
+// returns nil when bundles is empty. The UI API's activeBundleName, the
+// pipeline table of kardinal get pipelines and web/src/bundleSelection.ts
 // pickDefaultBundle all use this rule.
-func CurrentBundle(bundles []v1alpha1.Bundle) *v1alpha1.Bundle {
+func CurrentBundle(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionStep) *v1alpha1.Bundle {
+	live := map[string]bool{}
+	for i := range bundles {
+		if len(RejectedLiveEnvs(&bundles[i], steps)) > 0 {
+			live[bundles[i].Namespace+"/"+bundles[i].Name] = true
+		}
+	}
 	var current *v1alpha1.Bundle
 	for i := range bundles {
-		if current == nil || moreCurrent(&bundles[i], current) {
+		if current == nil || moreCurrent(&bundles[i], current, live) {
 			current = &bundles[i]
 		}
 	}

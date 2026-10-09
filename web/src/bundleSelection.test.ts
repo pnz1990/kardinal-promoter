@@ -52,6 +52,8 @@ describe('pickDefaultBundle', () => {
     { name: 'a newer Verified bundle beats an older Promoting bundle', bundles: [promoting, b('app-5', 'Verified', '2026-01-05T00:00:00Z')], active: undefined, want: 'app-5' },
     { name: 'an older Promoting bundle beats a newer Superseded bundle', bundles: [old, promoting, superseded], active: undefined, want: 'app-2' },
     { name: 'a newer Rejected bundle is skipped like a Superseded one', bundles: [old, promoting, b('app-5', 'Rejected', '2026-01-05T00:00:00Z')], active: undefined, want: 'app-2' },
+    // QA #1489: a Rejected bundle whose change is live stays current.
+    { name: 'a newer Rejected bundle whose change is live is shown', bundles: [old, promoting, { ...b('app-5', 'Rejected', '2026-01-05T00:00:00Z'), rejectedLiveEnvironments: ['prod'] }], active: undefined, want: 'app-5' },
     { name: 'then the newest bundle', bundles: [b('s1', 'Superseded', '2026-01-01T00:00:00Z'), b('s2', 'Superseded', '2026-01-02T00:00:00Z')], active: undefined, want: 's2' },
   ])('$name', ({ bundles, active, want }) => {
     expect(pickDefaultBundle(bundles, active)?.name).toBe(want)

@@ -57,6 +57,15 @@ func TestPlanPromote(t *testing.T) {
 			env: "prod", wantSrc: "v1", wantTag: "1",
 		},
 		{
+			name: "a moving tag: a fixed digest under a rejected image's tag is a source (QA #1489)",
+			objs: []client.Object{
+				rejected(digest(bundle("v1", "app", "latest", 0), "sha256:bad")),
+				digest(bundle("v2", "app", "latest", 10), "sha256:fixed"),
+				step("v1", "app", "uat", "Verified", 1), step("v2", "app", "uat", "Verified", 11),
+			},
+			env: "prod", wantSrc: "v2", wantTag: "latest",
+		},
+		{
 			name: "a failed attempt in the target environment can be promoted again",
 			objs: []client.Object{
 				bundle("v1", "app", "1", 0),

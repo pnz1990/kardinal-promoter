@@ -18,8 +18,10 @@ import (
 // just as unwanted. Rollback, promote and Subscriptions skip any Bundle that
 // carries one of them (Carries).
 type RejectedArtifacts struct {
-	// images holds repository@digest and repository:tag keys.
-	images map[string]string
+	// digests holds repository@digest keys of rejected images that have a
+	// digest; tags holds repository:tag keys of rejected images without one.
+	digests map[string]string
+	tags    map[string]string
 	// commits holds config commit SHAs.
 	commits map[string]string
 }
@@ -40,7 +42,7 @@ func LoadRejectedArtifacts(ctx context.Context, c client.Reader, ns, pipeline st
 // Bundle the controller rejected because it carries a rejected artifact adds
 // nothing new.
 func RejectedArtifactsOf(bundles []v1alpha1.Bundle, pipeline string) *RejectedArtifacts {
-	r := &RejectedArtifacts{images: map[string]string{}, commits: map[string]string{}}
+	r := &RejectedArtifacts{digests: map[string]string{}, tags: map[string]string{}, commits: map[string]string{}}
 	for i := range bundles {
 		b := &bundles[i]
 		if b.Spec.Pipeline == pipeline && b.Spec.Rejected != nil {
@@ -52,8 +54,11 @@ func RejectedArtifactsOf(bundles []v1alpha1.Bundle, pipeline string) *RejectedAr
 
 func (r *RejectedArtifacts) add(b *v1alpha1.Bundle) {
 	for _, img := range b.Spec.Images {
-		for _, k := range imageRefKeys(img) {
-			r.images[k] = b.Name
+		switch {
+		case img.Digest != "":
+			r.digests[img.Repository+"@"+img.Digest] = b.Name
+		case img.Tag != "":
+			r.tags[img.Repository+":"+img.Tag] = b.Name
 		}
 	}
 	if b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != "" {
@@ -61,22 +66,28 @@ func (r *RejectedArtifacts) add(b *v1alpha1.Bundle) {
 	}
 }
 
-// imageRefKeys are the keys an image is known by: its digest and its tag. A
-// rejected image matches another one with the same repository and either the
-// same digest or the same tag.
-func imageRefKeys(img v1alpha1.ImageRef) []string {
-	var keys []string
+// carriesImage reports whether img is a rejected image. A rejected image
+// with a digest matches only that digest: a tag moves (latest, a re-pushed
+// fix), so r/a:latest@bad being rejected says nothing about r/a:latest@fixed.
+// A rejected image without a digest is known only by its tag and matches any
+// image with that repository and tag.
+func (r *RejectedArtifacts) carriesImage(img v1alpha1.ImageRef) (string, bool) {
 	if img.Digest != "" {
-		keys = append(keys, img.Repository+"@"+img.Digest)
+		if name, ok := r.digests[img.Repository+"@"+img.Digest]; ok {
+			return name, true
+		}
 	}
 	if img.Tag != "" {
-		keys = append(keys, img.Repository+":"+img.Tag)
+		if name, ok := r.tags[img.Repository+":"+img.Tag]; ok {
+			return name, true
+		}
 	}
-	return keys
+	return "", false
 }
 
 // Carries reports whether b is rejected or deploys an image or config commit
-// of a rejected Bundle, and names that Bundle. A nil set carries nothing.
+// of a rejected Bundle (carriesImage), and names that Bundle. A nil set
+// carries nothing.
 func (r *RejectedArtifacts) Carries(b *v1alpha1.Bundle) (string, bool) {
 	if Rejected(b) {
 		return b.Name, true
@@ -85,10 +96,8 @@ func (r *RejectedArtifacts) Carries(b *v1alpha1.Bundle) (string, bool) {
 		return "", false
 	}
 	for _, img := range b.Spec.Images {
-		for _, k := range imageRefKeys(img) {
-			if name, ok := r.images[k]; ok {
-				return name, true
-			}
+		if name, ok := r.carriesImage(img); ok {
+			return name, true
 		}
 	}
 	if b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != "" {

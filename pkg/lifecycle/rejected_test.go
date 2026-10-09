@@ -15,9 +15,13 @@ import (
 )
 
 // TestRejectedArtifacts: a Bundle carries a rejected artifact when it shares
-// an image (same repository and digest, or same tag) or the config commit of
-// a rejected Bundle of the same pipeline; another pipeline's rejections and
-// other repositories do not count.
+// an image or the config commit of a rejected Bundle of the same pipeline. A
+// rejected image with a digest matches by digest only, so a moving tag
+// (r/a:latest@bad rejected) does not block a fixed push of the same tag
+// (r/a:latest@fixed); a rejected image without a digest matches by tag.
+// Another pipeline's rejections and other repositories do not count.
+//
+// Covers BUNDLE-REJECT-06.
 func TestRejectedArtifacts(t *testing.T) {
 	withImage := func(name, pipe string, img v1alpha1.ImageRef) *v1alpha1.Bundle {
 		b := bundle(name, pipe, "", 0)
@@ -32,6 +36,7 @@ func TestRejectedArtifacts(t *testing.T) {
 	}
 	c := newClient(t,
 		rejected(withImage("bad-digest", "app", v1alpha1.ImageRef{Repository: "r/a", Digest: "sha256:aa"})),
+		rejected(withImage("bad-latest", "app", v1alpha1.ImageRef{Repository: "r/l", Tag: "latest", Digest: "sha256:bad"})),
 		rejected(withImage("bad-tag", "app", v1alpha1.ImageRef{Repository: "r/b", Tag: "2"})),
 		rejected(cfg("bad-config", "c0ffee")),
 		rejected(withImage("other-pipe", "other", v1alpha1.ImageRef{Repository: "r/c", Tag: "1"})),
@@ -46,6 +51,9 @@ func TestRejectedArtifacts(t *testing.T) {
 	}{
 		{name: "same digest, other tag", b: withImage("x", "app", v1alpha1.ImageRef{Repository: "r/a", Tag: "9", Digest: "sha256:aa"}), want: "bad-digest"},
 		{name: "same tag", b: withImage("x", "app", v1alpha1.ImageRef{Repository: "r/b", Tag: "2", Digest: "sha256:bb"}), want: "bad-tag"},
+		{name: "moving tag, the rejected digest", b: withImage("x", "app", v1alpha1.ImageRef{Repository: "r/l", Tag: "latest", Digest: "sha256:bad"}), want: "bad-latest"},
+		{name: "moving tag, a fixed digest", b: withImage("x", "app", v1alpha1.ImageRef{Repository: "r/l", Tag: "latest", Digest: "sha256:fixed"})},
+		{name: "moving tag without a digest", b: withImage("x", "app", v1alpha1.ImageRef{Repository: "r/l", Tag: "latest"})},
 		{name: "same config commit", b: cfg("x", "c0ffee"), want: "bad-config"},
 		{name: "other repository", b: withImage("x", "app", v1alpha1.ImageRef{Repository: "r/z", Tag: "2"})},
 		{name: "other digest", b: withImage("x", "app", v1alpha1.ImageRef{Repository: "r/a", Digest: "sha256:ab"})},

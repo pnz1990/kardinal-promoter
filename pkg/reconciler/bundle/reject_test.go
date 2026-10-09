@@ -113,8 +113,13 @@ func TestBundleReconciler_RejectedSiblingSupersedesNothing(t *testing.T) {
 }
 
 // TestBundleReconciler_HistoryGCKeepsRejected: historyLimit never deletes a
-// Rejected Bundle, which records that its artifacts must not be promoted
-// again, and does not count it against the limit.
+// rejected Bundle (spec.rejected), whatever its phase (also one not marked
+// Rejected yet), which records that its artifacts must not be promoted
+// again, and does not count it against the limit. A Bundle the controller
+// rejected only because it carries a rejected artifact (phase Rejected, no
+// spec.rejected) is history and may be deleted (QA #1489).
+//
+// Covers BUNDLE-REJECT-08.
 func TestBundleReconciler_HistoryGCKeepsRejected(t *testing.T) {
 	now := time.Now()
 	pipeline := &kardinalv1alpha1.Pipeline{
@@ -140,7 +145,18 @@ func TestBundleReconciler_HistoryGCKeepsRejected(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "app-v3", Namespace: "default", CreationTimestamp: metav1.NewTime(now)},
 		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
 	}
-	c := indexedBuilder(newScheme()).WithObjects(pipeline, gone, oldest, kept, fresh).WithStatusSubresource(gone, oldest, kept, fresh).Build()
+	rejectedVerified := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-v0r", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-5 * time.Minute))},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app", Rejected: rejection()},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Verified"},
+	}
+	carrier := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-v0c", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-4 * time.Minute))},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Rejected"},
+	}
+	c := indexedBuilder(newScheme()).WithObjects(pipeline, gone, oldest, kept, fresh, rejectedVerified, carrier).
+		WithStatusSubresource(gone, oldest, kept, fresh, rejectedVerified, carrier).Build()
 	r := &bundle.Reconciler{Client: c}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "app-v3", Namespace: "default"}})
 	require.NoError(t, err)
@@ -150,7 +166,7 @@ func TestBundleReconciler_HistoryGCKeepsRejected(t *testing.T) {
 	for _, b := range list.Items {
 		names = append(names, b.Name)
 	}
-	assert.ElementsMatch(t, []string{"app-v1", "app-v2", "app-v3"}, names)
+	assert.ElementsMatch(t, []string{"app-v0r", "app-v1", "app-v2", "app-v3"}, names)
 }
 
 // TestBundleReconciler_RejectedArtifact: a new or promoting Bundle that

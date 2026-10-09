@@ -306,6 +306,11 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	if _, err := fmt.Fprint(w, output); err != nil {
 		return fmt.Errorf("write explain output: %w", err)
 	}
+	for _, h := range rejectedLiveHints(pipeline, current, bundles.Items, steps.Items, envFilter) {
+		if _, err := fmt.Fprintln(w, h); err != nil {
+			return fmt.Errorf("write explain hint: %w", err)
+		}
+	}
 	return writeExplainDeployed(w, pipeline, envNames, envFilter, current, steps.Items, bundleByName)
 }
 

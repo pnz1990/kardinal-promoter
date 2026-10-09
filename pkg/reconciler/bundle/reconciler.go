@@ -614,7 +614,8 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 	return ctrl.Result{RequeueAfter: 500 * time.Millisecond}, nil
 }
 
-// enforceHistoryLimit deletes the oldest terminal Bundles (Verified/Failed/Superseded)
+// enforceHistoryLimit deletes the oldest terminal Bundles (Verified/Failed/Superseded,
+// and Rejected for carrying a rejected artifact; never one with spec.rejected)
 // for the given pipeline in the given namespace, keeping at most historyLimit bundles.
 //
 // This implements Pipeline.spec.historyLimit enforcement (spec #910). Non-terminal
@@ -643,13 +644,24 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 
 	terminal := make([]*kardinalv1alpha1.Bundle, 0, len(allBundles.Items))
 	for i := range allBundles.Items {
-		switch allBundles.Items[i].Status.Phase {
-		case phaseVerified, phaseFailed, phaseSuperseded:
-			// Rejected Bundles are kept: they are the record that their
-			// artifacts must not be promoted again (rollback and promote skip
-			// any Bundle carrying a rejected artifact, lifecycle.RejectedArtifacts).
-			// Rejections are rare and made by hand, so they stay few.
-			terminal = append(terminal, &allBundles.Items[i])
+		b := &allBundles.Items[i]
+		if b.Spec.Rejected != nil {
+			// A rejected Bundle (spec.rejected) is kept whatever its phase,
+			// also before the reconciler marked it Rejected: it is the record
+			// that its artifacts must not be promoted again (rollback,
+			// promote and Subscriptions skip any Bundle carrying a rejected
+			// artifact, lifecycle.RejectedArtifacts). Rejections are rare and
+			// made by hand, so they stay few.
+			continue
+		}
+		switch b.Status.Phase {
+		case phaseVerified, phaseFailed, phaseSuperseded, phaseRejected:
+			// phaseRejected without spec.rejected: a Bundle the controller
+			// rejected because it carries a rejected artifact
+			// (markRejectedArtifact). It adds nothing to the record, which
+			// the original rejected Bundle holds, so it is history like the
+			// others.
+			terminal = append(terminal, b)
 		}
 	}
 	if len(terminal) <= limit {

@@ -87,6 +87,16 @@ func TestPlanRollback(t *testing.T) {
 			wantTarget: "v1", wantFrom: "v4", wantTag: "1",
 		},
 		{
+			name: "a moving tag: the rejected digest does not block the same tag with another digest (QA #1489)",
+			objs: []client.Object{
+				digest(bundle("v1", "app", "latest", 0), "sha256:fixed"),
+				rejected(digest(bundle("v2", "app", "latest", 10), "sha256:bad")), bundle("v3", "app", "3", 20),
+				step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "Verified", 11),
+				step("v3", "app", "prod", "Verified", 21),
+			},
+			wantTarget: "v1", wantFrom: "v3", wantTag: "latest",
+		},
+		{
 			name: "--to a bundle carrying the image of a rejected bundle is refused",
 			objs: []client.Object{
 				bundle("v1", "app", "1", 0), rejected(bundle("v2", "app", "2", 10)), bundle("v2b", "app", "2", 20),
