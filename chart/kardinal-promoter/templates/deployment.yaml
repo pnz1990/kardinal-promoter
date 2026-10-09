@@ -73,6 +73,15 @@ spec:
             - --access-log-trusted-proxies={{ join "," . }}
             {{- end }}
             {{- end }}
+            {{- with (.Values.graph.retire).superseded }}
+            - --graph-retire-superseded-after={{ . }}
+            {{- end }}
+            {{- with (.Values.graph.retire).failed }}
+            - --graph-retire-failed-after={{ . }}
+            {{- end }}
+            {{- with (.Values.graph.retire).verified }}
+            - --graph-retire-verified-after={{ . }}
+            {{- end }}
             {{- with .Values.controller.watchNamespace }}
             - --watch-namespace={{ . }}
             {{- end }}

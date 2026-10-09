@@ -105,6 +105,7 @@ func main() {
 		scmAPIURL              string
 		gateStatusHeartbeat    time.Duration
 		graphCompactAbove      int
+		retire                 bundlereconciler.RetirePolicy
 	)
 
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
@@ -113,6 +114,13 @@ func main() {
 	flag.IntVar(&graphCompactAbove, "graph-compact-above", graphpkg.DefaultCompactAbove,
 		"Environment count above which a Bundle's Graph uses the compact shape (one PromotionStep collection) "+
 			"when the Pipeline's kardinal.io/graph-shape annotation does not choose one. 0 makes every Graph compact.")
+	flag.DurationVar(&retire.Superseded, "graph-retire-superseded-after", bundlereconciler.DefaultRetirePolicy.Superseded,
+		"How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, "+
+			"is kept before it is retired (deleted; the Bundle keeps its PromotionSteps in status.retiredSteps). 0 keeps it.")
+	flag.DurationVar(&retire.Failed, "graph-retire-failed-after", bundlereconciler.DefaultRetirePolicy.Failed,
+		"How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle no longer recovers. 0 keeps it.")
+	flag.DurationVar(&retire.Verified, "graph-retire-verified-after", bundlereconciler.DefaultRetirePolicy.Verified,
+		"How long the Graph of a Verified Bundle that is still deployed in an environment is kept before it is retired. 0 keeps it.")
 	flag.BoolVar(&leaderElect, "leader-elect", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&zerologLevel, "log-level", "info",
@@ -521,6 +529,12 @@ func main() {
 	// patch on events.k8s.io events for this recorder.
 	eventRecorder := mgr.GetEventRecorder("kardinal-controller")
 
+	if err := retire.Validate(); err != nil {
+		logger.Fatal().Err(err).Msg("invalid --graph-retire-*-after")
+	}
+	if retire == (bundlereconciler.RetirePolicy{}) {
+		logger.Info().Msg("every --graph-retire-*-after is 0: finished Bundles keep their Graphs unless their Pipeline sets kardinal.io/graph-retire-after")
+	}
 	if err := (&bundlereconciler.Reconciler{
 		Client: mgr.GetClient(),
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
@@ -530,6 +544,7 @@ func main() {
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),
+		Retire:           retire,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}

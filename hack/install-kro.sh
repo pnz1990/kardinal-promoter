@@ -10,6 +10,7 @@
 #   KRO_VERSION=0.10.0 ./hack/install-kro.sh     # override version
 #   KRO_RBAC_MODE=unrestricted ./hack/install-kro.sh
 #   KRO_GRAPH_CONCURRENT_RECONCILES=16 ./hack/install-kro.sh
+#   KRO_MEMORY_LIMIT=2Gi ./hack/install-kro.sh
 #
 # Prerequisites: Kubernetes 1.30 or later (the script checks first), helm >= 3.8
 # (OCI), kubectl. The current kubectl context (or KUBECONFIG / KUBE_CONTEXT)
@@ -28,6 +29,13 @@
 # Graph in the cluster by seconds (4-29 s measured with two 150-environment
 # Graphs; 0.1-0.3 s with 8 workers). The script raises the worker count and the
 # client rate limit; see docs/design/16-graph-capability-ledger.md gap G9.
+#
+# Memory: kro keeps every Graph it reconciles in memory (compiled program,
+# watches), 3 to 6 MB per kardinal Graph. kardinal retires the Graph of a
+# finished Bundle (#1492), so the live Graphs are about the Bundles in flight
+# plus the recently finished ones. KRO_MEMORY_LIMIT (default 2Gi, twice kro's chart
+# default) sets the kro container's memory limit; size it with
+# docs/installation.md#sizing-kro. Ledger gap G15.
 
 set -euo pipefail
 
@@ -45,6 +53,8 @@ KRO_CHART="${KRO_CHART:-oci://registry.k8s.io/kro/charts/kro}"
 KRO_GRAPH_CONCURRENT_RECONCILES="${KRO_GRAPH_CONCURRENT_RECONCILES:-8}"
 KRO_CLIENT_QPS="${KRO_CLIENT_QPS:-300}"
 KRO_CLIENT_BURST="${KRO_CLIENT_BURST:-500}"
+KRO_MEMORY_LIMIT="${KRO_MEMORY_LIMIT:-2Gi}"
+KRO_MEMORY_REQUEST="${KRO_MEMORY_REQUEST:-768Mi}"
 KRO_CRD_BASE="https://raw.githubusercontent.com/kubernetes-sigs/kro/v${KRO_VERSION}/helm/crds"
 
 KUBECTL=(kubectl)
@@ -54,7 +64,7 @@ if [ -n "${KUBE_CONTEXT:-}" ]; then
   HELM+=(--kube-context "$KUBE_CONTEXT")
 fi
 
-echo "=== Installing kro v${KRO_VERSION} (Graph controller, rbac.mode=${KRO_RBAC_MODE}, ${KRO_GRAPH_CONCURRENT_RECONCILES} Graph workers, client QPS ${KRO_CLIENT_QPS}/${KRO_CLIENT_BURST}) ==="
+echo "=== Installing kro v${KRO_VERSION} (Graph controller, rbac.mode=${KRO_RBAC_MODE}, ${KRO_GRAPH_CONCURRENT_RECONCILES} Graph workers, client QPS ${KRO_CLIENT_QPS}/${KRO_CLIENT_BURST}, memory ${KRO_MEMORY_REQUEST}/${KRO_MEMORY_LIMIT}) ==="
 echo "Target kube context: ${KUBE_CONTEXT:-$(kubectl config current-context 2>/dev/null || echo '<none>') (current)}"
 
 # ── 0. Kubernetes version ─────────────────────────────────────────────────────
@@ -100,6 +110,8 @@ echo "Kubernetes server: ${server_major}.${server_minor}"
   --set "config.graphConcurrentReconciles=${KRO_GRAPH_CONCURRENT_RECONCILES}" \
   --set "config.clientQps=${KRO_CLIENT_QPS}" \
   --set "config.clientBurst=${KRO_CLIENT_BURST}" \
+  --set "deployment.resources.limits.memory=${KRO_MEMORY_LIMIT}" \
+  --set "deployment.resources.requests.memory=${KRO_MEMORY_REQUEST}" \
   --wait --timeout 180s
 
 # ── 2. CRDs ───────────────────────────────────────────────────────────────────
