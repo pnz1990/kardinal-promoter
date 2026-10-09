@@ -342,6 +342,10 @@ func TestHookRun_SecurityDefaults(t *testing.T) {
 		{"seccomp unconfined", podJob(`{"securityContext":{"seccompProfile":{"type":"Unconfined"}},` + sprintf(c, "") + `}`), "seccompProfile", true, true, false},
 		{"nodeName", podJob(`{"nodeName":"n1",` + sprintf(c, restrictedSC) + `}`), "nodeName", true, true, false},
 		{"hostPort", podJob(`{` + sprintf(c, `,"ports":[{"containerPort":80,"hostPort":80}]`) + `}`), "hostPort", true, true, false},
+		// AppArmor through the pod template's annotation (QA #1493 round 3:
+		// the template metadata was not passed to the evaluator).
+		{"apparmor annotation", `{"backoffLimit":0,"template":{"metadata":{"annotations":{"container.apparmor.security.beta.kubernetes.io/m":"unconfined"}},"spec":{` +
+			sprintf(c, restrictedSC) + `}}}`, "AppArmor", true, true, false},
 		{"ephemeral volume", podJob(`{"volumes":[{"name":"scratch","ephemeral":{"volumeClaimTemplate":{"spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":"1Gi"}}}}}}],` + sprintf(c, restrictedSC) + `}`), "", false, false, false},
 		{"selector", `{"manualSelector":true,"selector":{"matchLabels":{"a":"b"}},"template":{"spec":{` + sprintf(c, "") + `}}}`, "selector", true, true, true},
 	}
@@ -361,6 +365,7 @@ func TestHookRun_SecurityDefaults(t *testing.T) {
 				}
 				assert.Equal(t, v1alpha1.HookRunFailed, hr.Status.Phase, "level %q", lv.level)
 				assert.Contains(t, hr.Status.Message, tc.want, "level %q", lv.level)
+				assert.NotContains(t, hr.Status.Message, "uses a hostPort in container", "hostPort reported once, by the standard")
 				_, exists := h.job()
 				assert.False(t, exists, "level %q: no Job", lv.level)
 			}

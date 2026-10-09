@@ -5,12 +5,14 @@ package promotionstep_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -194,4 +196,25 @@ func TestHooksSkippedRecorded(t *testing.T) {
 	c2 := newClient(t, pending, makePipeline("p"), makeBundle("b1", "p"))
 	got2, _ := reconcileHookStep(t, c2, "step2")
 	assert.Equal(t, "Promoting", got2.Status.State, "a Skipped pre hook does not hold the step")
+}
+
+// TestVerifyingEventText: entering Verifying records an Event that says the
+// step verifies with post-deploy hooks and analyses, not hooks only (QA
+// #1502 round 3).
+func TestVerifyingEventText(t *testing.T) {
+	ps := labelled(makeStep("step", "p", "b1", "test"))
+	ps.Spec.Analyses = []string{"smoke"}
+	ps.Status.State = "HealthChecking"
+	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	rec := events.NewFakeRecorder(10)
+	r := &promotionstep.Reconciler{Client: c, SCM: &noopSCM{}, GitClient: &noopGit{}, Recorder: rec,
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "step", Namespace: "default"}})
+	require.NoError(t, err)
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step", Namespace: "default"}, &got))
+	require.Equal(t, promotionstep.StateVerifying, got.Status.State)
+	evs := drain(rec)
+	assert.Contains(t, strings.Join(evs, "\n"), "env test: health check passed, verifying (post-deploy hooks and analyses)", "%v", evs)
+	assert.NotContains(t, strings.Join(evs, "\n"), "running post-deploy hooks")
 }

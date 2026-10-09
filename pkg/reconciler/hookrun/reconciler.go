@@ -94,8 +94,8 @@ type Reconciler struct {
 
 	// PodSecurityLevel is the Pod Security Standard a hook Pod must meet
 	// (--hook-pod-security-level): baseline (the default, ""), restricted,
-	// or privileged (no Pod checks). Below privileged, nodeName and hostPort
-	// are refused as well.
+	// or privileged (no Pod checks). Below privileged, nodeName is refused
+	// as well.
 	PodSecurityLevel string
 
 	// NowFn returns the current time; nil means time.Now.
@@ -528,7 +528,7 @@ func (r *Reconciler) jobFor(hr *v1alpha1.HookRun, timeout time.Duration) (*batch
 	if spec.ManualSelector != nil && *spec.ManualSelector || spec.Selector != nil {
 		return nil, fmt.Errorf("the hook's Job may not set selector or manualSelector")
 	}
-	if why := podSecurityViolation(r.PodSecurityLevel, spec.Template.Labels, pod); why != "" {
+	if why := podSecurityViolation(r.PodSecurityLevel, &spec.Template.ObjectMeta, pod); why != "" {
 		return nil, fmt.Errorf("the hook's Pod %s; the controller's --hook-pod-security-level refuses it", why)
 	}
 	if pod.RestartPolicy == "" {
