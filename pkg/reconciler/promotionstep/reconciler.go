@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -51,6 +52,7 @@ import (
 
 	// Import built-in steps to trigger init() registration.
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -155,6 +157,10 @@ type Reconciler struct {
 	// HealthDetector selects the health adapter for health checking.
 	// If nil, the health-check step stub (always-success) is used.
 	HealthDetector *health.AutoDetector
+
+	// RemoteClusters builds the health adapters of an environment with
+	// health.kubeconfigSecretRef. Nil fails such a step.
+	RemoteClusters *health.RemoteClusters
 
 	// WorkDirFn returns the working directory for a given pipeline+bundle pair.
 	// Tests set it; when nil a fixed path under the kardinal work root is used.
@@ -387,9 +393,9 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 	// Bundle was superseded (E2E-R20). It is not a cancelled promotion, so it
 	// is failed without a PromotionSuperseded record or step metrics.
 	unstarted := base.Status.State == StatePending || base.Status.State == StatePendingExplicit
-	msg := fmt.Sprintf("bundle %s was superseded — promotion cancelled", ps.Spec.BundleName)
+	msg := lifecycle.SupersededMessage(ps.Spec.BundleName) + " — promotion cancelled"
 	if unstarted {
-		msg = fmt.Sprintf("bundle %s was superseded before this step started", ps.Spec.BundleName)
+		msg = lifecycle.SupersededMessage(ps.Spec.BundleName) + " before this step started"
 	}
 	if closeErr := r.closeStepPR(ctx, ps, "bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle", false); closeErr != nil {
 		if !closing {
@@ -408,8 +414,8 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 			delay := retryDelay(ps.Status.RetryCount)
 			next := metav1.NewTime(r.now().Add(delay))
 			ps.Status.NextRetryAt = &next
-			ps.Status.Message = fmt.Sprintf("bundle %s was superseded; closing its PR failed, retrying in %s (%d/%d): %v",
-				ps.Spec.BundleName, delay, ps.Status.RetryCount, maxStepRetries, closeErr)
+			ps.Status.Message = fmt.Sprintf("%s; closing its PR failed, retrying in %s (%d/%d): %v", lifecycle.SupersededMessage(ps.Spec.BundleName),
+				delay, ps.Status.RetryCount, maxStepRetries, closeErr)
 			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("patch supersession retry: %w", err)
 			}
@@ -772,6 +778,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	state := &steps.StepState{
 		Pipeline:     pipeline.Spec,
 		PipelineName: ps.Spec.PipelineName,
+		Namespace:    ps.Namespace,
 		Environment:  env,
 		Bundle:       bundle.Spec,
 		BundleName:   ps.Spec.BundleName,
@@ -1311,7 +1318,15 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		opts.TargetUpdatedAt = at.Time
 	}
 
-	adapter, err := r.HealthDetector.Select(ctx, opts.Type)
+	detector, remote, unreachable, err := r.healthDetector(ctx, log, ps, env)
+	if err != nil {
+		// A refused kubeconfig: waiting does not fix it.
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, err.Error())
+	}
+	if unreachable != "" {
+		return r.clusterUnreachable(ctx, log, base, ps, env, health.EffectiveType(env), unreachable, timeout)
+	}
+	adapter, err := detector.Select(ctx, opts.Type)
 	if err != nil {
 		// Only an unknown type reaches here; admission rejects it.
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, err.Error())
@@ -1343,6 +1358,12 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			Reason: "merge commit of the PR not known yet (needed to check the synced revision)"}
 	default:
 		result, checkErr = adapter.Check(ctx, opts)
+	}
+	if checkErr != nil && remote {
+		// An unreachable cluster is not an unhealthy workload: no failure is
+		// counted, health.timeout still applies.
+		log.Warn().Err(checkErr).Str("adapter", adapter.Name()).Msg("remote cluster health check error")
+		return r.clusterUnreachable(ctx, log, base, ps, env, adapter.Name(), health.ClassifyRemoteError(checkErr), timeout)
 	}
 	if checkErr != nil {
 		log.Error().Err(checkErr).Str("adapter", adapter.Name()).Msg("health adapter check error")
@@ -1853,7 +1874,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
 		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleMapper),
 			builderutil.WithPredicates(bundleWakesSteps)).
-		Complete(r)
+		Complete(tracing.WrapReconciler("promotionstep", r))
 }
 
 // isSuperseded passes Bundle events of superseded Bundles.
@@ -2346,4 +2367,72 @@ func (r *Reconciler) setRollbackState(ctx context.Context, log zerolog.Logger, s
 		return
 	}
 	state.RollbackFromBundle = &from.Spec
+}
+
+// labelReferenceable must be "true" on a kubeconfig Secret that
+// health.kubeconfigSecretRef names (program-wide rule for Secrets kardinal
+// sends to an address someone else chose).
+const labelReferenceable = "kardinal.io/referenceable"
+
+// healthDetector returns the adapters for env's health check: the
+// controller's own cluster, or with health.kubeconfigSecretRef the cluster of
+// that kubeconfig (remote true). unreachable is set, with a nil error, when
+// the remote cluster cannot be used yet (its Secret or key is missing, or the
+// Secret is not labelled referenceable), so the step waits until
+// health.timeout. err is a kubeconfig that is refused.
+func (r *Reconciler) healthDetector(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
+	env v1alpha1.EnvironmentSpec) (d *health.AutoDetector, remote bool, unreachable string, err error) {
+	ref := env.Health.KubeconfigSecretRef
+	if ref == nil {
+		return r.HealthDetector, false, "", nil
+	}
+	if r.RemoteClusters == nil {
+		return nil, true, "", fmt.Errorf("health.kubeconfigSecretRef is not supported by this controller")
+	}
+	// The Secret is always read from the step's (the Pipeline's) namespace:
+	// a Pipeline cannot use another namespace's credentials.
+	var secret corev1.Secret
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ps.Namespace, Name: ref.Name}, &secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			r.RemoteClusters.Forget(ps.Namespace, ref.Name)
+			return nil, true, fmt.Sprintf("kubeconfig Secret %q not found", ref.Name), nil
+		}
+		log.Warn().Err(err).Str("secret", ref.Name).Msg("read kubeconfig Secret")
+		return nil, true, fmt.Sprintf("kubeconfig Secret %q could not be read", ref.Name), nil
+	}
+	if secret.Labels[labelReferenceable] != "true" {
+		r.RemoteClusters.Forget(ps.Namespace, ref.Name)
+		return nil, true, fmt.Sprintf("SecretNotReferenceable: kubeconfig Secret %q does not have the label %s: \"true\"",
+			ref.Name, labelReferenceable), nil
+	}
+	d, err = r.RemoteClusters.Detector(&secret, ref.Key)
+	switch {
+	case errors.Is(err, health.ErrKubeconfigNotAllowed):
+		return nil, true, "", fmt.Errorf("health.kubeconfigSecretRef %q: %w", ref.Name, err)
+	case err != nil:
+		return nil, true, err.Error(), nil
+	}
+	return d, true, "", nil
+}
+
+// clusterUnreachable records that the remote cluster could not be checked,
+// without counting a health failure, and checks again later. reason is a
+// classified, short text (health.ClassifyRemoteError): the full error is
+// logged, never written to status. The step still fails at health.timeout.
+// During a bake the check counts as waiting: the window stops (the time the
+// cluster was unreachable is not healthy time) and health.timeout bounds the
+// wait for the next healthy check again.
+func (r *Reconciler) clusterUnreachable(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
+	env v1alpha1.EnvironmentSpec, adapter, reason string, timeout time.Duration) (ctrl.Result, error) {
+	checkedAt := metav1.NewTime(time.Now())
+	ps.Status.LastHealthCheckAt = &checkedAt
+	if env.Bake != nil {
+		return r.handleBake(ctx, log, base, ps, env,
+			health.HealthStatus{Progressing: true, Reason: "ClusterUnreachable: " + reason}, adapter, timeout)
+	}
+	ps.Status.Message = fmt.Sprintf("waiting for %s: ClusterUnreachable: %s", adapter, reason)
+	if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("patch health result: %w", err)
+	}
+	return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
 }

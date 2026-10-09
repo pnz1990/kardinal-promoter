@@ -39,6 +39,18 @@ func noChanges(state *parentsteps.StepState) bool {
 	return state.Outputs[outputNoChanges] == "true"
 }
 
+// PromoteMessage is the commit message of a promotion (docs/pr-evidence.md).
+// It names the Bundle, environment, Pipeline and namespace, so a promotion's
+// own commit is told apart from another Pipeline's that uses the same names
+// in another namespace (scm.ErrAlreadyCommitted).
+func PromoteMessage(bundle, env, pipeline, namespace string) string {
+	msg := fmt.Sprintf("[kardinal] Promote %s to %s\n\nBundle: %s\nPipeline: %s", bundle, env, bundle, pipeline)
+	if namespace != "" {
+		msg += "\nNamespace: " + namespace
+	}
+	return msg
+}
+
 type gitCommitStep struct{}
 
 func (s *gitCommitStep) Name() string { return "git-commit" }
@@ -48,9 +60,7 @@ func (s *gitCommitStep) Execute(ctx context.Context, state *parentsteps.StepStat
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: "GitClient not configured"}, nil
 	}
 
-	message := fmt.Sprintf("[kardinal] Promote %s to %s\n\nBundle: %s\nPipeline: %s",
-		state.BundleName, state.Environment.Name,
-		state.BundleName, state.PipelineName)
+	message := PromoteMessage(state.BundleName, state.Environment.Name, state.PipelineName, state.Namespace)
 
 	authorName := state.Git.AuthorName
 	if authorName == "" {
@@ -62,6 +72,21 @@ func (s *gitCommitStep) Execute(ctx context.Context, state *parentsteps.StepStat
 	}
 
 	err := state.GitClient.CommitAll(ctx, state.WorkDir, message, authorName, authorEmail)
+	// The base branch already has this promotion's commit: an earlier
+	// attempt pushed it and its result was lost. The change is this
+	// promotion's, so it is not a no-op (deployment metrics count it). Only
+	// for a direct push: a pr-review step clones the base branch, where its
+	// commit lands only through the merge of its own PR, and opening a PR
+	// with no commits would fail. The clone is shallow (depth 1), so only
+	// HEAD is checked: if another writer pushed on top of the earlier
+	// attempt's commit, the retry still records noChanges.
+	if errors.Is(err, scm.ErrAlreadyCommitted) && !state.OpensPR() {
+		return parentsteps.StepResult{
+			Status:  parentsteps.StepSuccess,
+			Message: "already committed by an earlier attempt of this promotion",
+			Outputs: map[string]string{outputNoChanges: "false"},
+		}, nil
+	}
 	if errors.Is(err, scm.ErrNothingToCommit) {
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepSuccess,

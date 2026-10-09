@@ -34,6 +34,10 @@ type BuildInput struct {
 	// Analyses are the Argo Rollouts analysis templates the environments'
 	// spec.verification names, as the translator read them.
 	Analyses AnalysisInput
+	// MetricChecks are the MetricChecks of the Pipeline namespace. Each one
+	// with spec.perPromotion that a gate of an environment reads gets an
+	// instance node for that environment (buildMetricCheckNode).
+	MetricChecks []kardinalv1alpha1.MetricCheck
 }
 
 // BuildResult is the output of the graph builder.
@@ -135,7 +139,8 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 5 & 6: build nodes and wire edges
-	nodes, instances, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates, input.Analyses)
+	nodes, instances, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates,
+		input.MetricChecks, input.PolicyNamespaces, input.Analyses)
 	if err != nil {
 		return nil, err
 	}
@@ -526,8 +531,10 @@ func matchGatesByEnv(filteredEnvs []string,
 func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
-	skipGates map[string][]skipPermissionGate, analyses AnalysisInput) ([]GraphNode, []kardinalv1alpha1.PolicyGate, error) {
+	skipGates map[string][]skipPermissionGate,
+	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string, analyses AnalysisInput) ([]GraphNode, []kardinalv1alpha1.PolicyGate, error) {
 	pipelineName := pipeline.Name
+	bundleSlug := CELSafeSlug(bundle.Name) // camelCase — node IDs only
 
 	// Filter deps to only include filtered envs
 	filteredSet := make(map[string]bool, len(filteredEnvs))
@@ -594,6 +601,19 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 				return nil, nil, err
 			}
 			envGates = append(envGates, name)
+		}
+
+		// Per-promotion MetricCheck instances the gates of this environment read.
+		vars := MetricTemplateVars(pipeline, bundle, envName)
+		for _, mc := range metricTemplatesFor(gatesByEnv[envName], metricChecks, pipeline.Namespace, policyNamespaces) {
+			node, err := buildMetricCheckNode(
+				metricNodeName(bundleSlug, mc.Name, envName),
+				metricNodeK8sName(bundle.Name, mc.Name, envName),
+				mc, vars, pipelineName, bundle.Name, envName, upstreams)
+			if err != nil {
+				return nil, nil, err
+			}
+			nodes = append(nodes, node)
 		}
 
 		// PRStatus — created alongside each PromotionStep. The open-pr step

@@ -336,6 +336,7 @@ func TestChart_DefaultInstall(t *testing.T) {
 		{Verb: "create", Group: "kardinal.io", Resource: "policygates", Namespace: a.ns},
 		{Verb: "create", Group: "kardinal.io", Resource: "prstatuses", Namespace: a.ns},
 		{Verb: "create", Group: "kardinal.io", Resource: "hookruns", Namespace: a.ns},
+		{Verb: "create", Group: "kardinal.io", Resource: "metricchecks", Namespace: a.ns},
 		{Verb: "get", Group: "kardinal.io", Resource: "bundles", Namespace: a.ns},
 		{Verb: "get", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace},
 	}, []framework.Access{
@@ -348,6 +349,7 @@ func TestChart_DefaultInstall(t *testing.T) {
 		{Verb: "watch", Group: "kardinal.io", Resource: "promotionsteps"},
 		{Verb: "watch", Group: "kardinal.io", Resource: "policygates"},
 		{Verb: "watch", Group: "kardinal.io", Resource: "prstatuses"},
+		{Verb: "watch", Group: "kardinal.io", Resource: "metricchecks"},
 	}, nil)
 
 	logs := r.AllLogs(t)
