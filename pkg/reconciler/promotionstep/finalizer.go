@@ -5,6 +5,7 @@ package promotionstep
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
@@ -204,7 +206,9 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 	default:
 		keepBranch := back == comebackPushesBranch
 		if err := r.closeStepPR(ctx, ps, r.deleteReason(ctx, ps), keepBranch); err != nil {
-			if elapsed < closePRDeadline {
+			// The ScmProvider the PR was opened with is gone: no retry can
+			// close it, so the finalizer goes now instead of at the deadline.
+			if elapsed < closePRDeadline && !errors.Is(err, scm.ErrProviderGone) {
 				delay := closePRRetryDelay(elapsed)
 				log.Warn().Err(err).Dur("retryIn", delay).
 					Msg("closing the PR of a deleted PromotionStep failed; retrying")

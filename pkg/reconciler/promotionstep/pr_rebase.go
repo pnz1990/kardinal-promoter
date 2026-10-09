@@ -157,7 +157,15 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	if err != nil {
 		return false, fmt.Errorf("load bundle: %w", err)
 	}
-	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, r.workDir(ps), cred)
+	// The step's own SCM provider (spec.scmProvider); one that cannot be
+	// used leaves the branch as it is: the next reconcile fails the step
+	// with the reason.
+	provider, err := r.scmFor(ctx, ps)
+	if err != nil {
+		log.Debug().Err(err).Msg("the step's SCM provider cannot be used; not rebuilding the PR branch")
+		return false, nil
+	}
+	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, r.workDir(ps), cred, provider)
 	// The rebuilt commit is computed afresh: forget the previous run's
 	// "nothing to commit".
 	delete(state.Outputs, "noChanges")
