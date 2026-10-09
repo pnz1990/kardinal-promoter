@@ -186,8 +186,8 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 			`invalid image repository "ghcr.io/stefanprodan/PodInfo": want [host[:port]/]path (e.g. ghcr.io/org/image)`},
 		{[]string{pipelineName, "--image", fixtures.Image + ":" + fixtures.V2, "--ci-run-url", "ci.example/run/1"},
 			"create bundle: --ci-run-url must be an absolute http or https URL"},
-		{[]string{pipelineName, "--image", fixtures.Image + ":" + fixtures.V2, "--type", "chart"},
-			`create bundle: type must be one of image, config, mixed (got "chart")`},
+		{[]string{pipelineName, "--image", fixtures.Image + ":" + fixtures.V2, "--type", "helm"},
+			`create bundle: type must be one of image, config, mixed, chart (got "helm")`},
 		{[]string{"nope", "--image", fixtures.Image + ":" + fixtures.V2},
 			fmt.Sprintf("pipeline %q not found in namespace %q", "nope", a.ns)},
 	} {

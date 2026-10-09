@@ -332,9 +332,9 @@ func deploysConfig(b *v1alpha1.Bundle) bool {
 }
 
 // deploysImages reports whether promoting b deploys its images: every Bundle
-// but a config Bundle does.
+// but a config or chart Bundle does.
 func deploysImages(b *v1alpha1.Bundle) bool {
-	return b.Spec.Type != "config"
+	return b.Spec.Type != "config" && b.Spec.Type != "chart"
 }
 
 // sameDeployed reports whether deploying the rollback artifacts r changes
@@ -347,6 +347,11 @@ func deploysImages(b *v1alpha1.Bundle) bool {
 // from. When the history has none, the version is not known and counts as a
 // change.
 func (s *restoreSources) sameDeployed(ctx context.Context, r, cur *v1alpha1.Bundle) (bool, error) {
+	if r.Spec.Type == "chart" {
+		// A chart Bundle deploys only its chart version; cur is the
+		// deployed chart Bundle (a rollback stays within its type).
+		return cur.Spec.Type == "chart" && chartKey(r) == chartKey(cur), nil
+	}
 	if deploysImages(r) {
 		for _, img := range r.Spec.Images {
 			at, err := s.deployedImage(ctx, cur, img.Repository)
