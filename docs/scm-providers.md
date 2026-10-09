@@ -301,10 +301,12 @@ status is `completed`.
 
 ## Pipeline CRD configuration
 
-The controller uses one SCM provider for every Pipeline, chosen by `--scm-provider`
-(or `KARDINAL_SCM_PROVIDER`). `spec.git.provider` is **deprecated and ignored**: it does
-not select a provider, and the CRD accepts only `github` or `gitlab` there. Leave it
-unset. The repository comes from `spec.git.url`.
+A Pipeline without `spec.git.providerRef` uses the controller's SCM provider, chosen by
+`--scm-provider` (or `KARDINAL_SCM_PROVIDER`). To use another SCM, or another token, set
+`spec.git.providerRef` to a [ScmProvider or ClusterScmProvider](#several-scm-providers-scmprovider-and-clusterscmprovider).
+`spec.git.provider` is **deprecated and ignored**: it does not select a provider, and the
+CRD accepts only `github` or `gitlab` there. Leave it unset. The repository comes from
+`spec.git.url`.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -363,6 +365,168 @@ pending the SCM would merge at once, so kardinal leaves the PR for a merge by ha
   its branch policies pass.
 
 kardinal keeps the PR's head branch when the SCM merges it, as it does for a merge by hand.
+
+---
+
+## Several SCM providers: ScmProvider and ClusterScmProvider
+
+One controller can open PRs on several SCMs, or on one SCM with several tokens. Each
+Pipeline that should not use the controller's `--scm-provider` names a provider in
+`spec.git.providerRef`:
+
+- A **ScmProvider** is namespaced. Only Pipelines in its namespace can use it, and its
+  Secrets must be in that namespace too.
+- A **ClusterScmProvider** is cluster-scoped. Pipelines in the namespaces its
+  `spec.allowedNamespaces` label selector matches can use it. If the selector is not set,
+  no namespace can use it, so a cluster-wide token is shared only on purpose. It names
+  the namespace of its Secrets, which can be any namespace: only cluster administrators
+  can create ClusterScmProviders (see [Install modes and RBAC](#install-modes-and-rbac)).
+
+Every Secret a provider names, `secretRef` and `webhookSecretRef` alike, must be labeled
+`kardinal.io/referenceable: "true"`. A provider whose Secret does not have the label is
+not used, and its `Ready` condition says why. With the label, the Secret's owner decides
+that custom resources may use the Secret. Without it, anyone who can create a
+ScmProvider could send any Secret of the namespace to an `apiURL` they choose.
+
+```bash
+kubectl -n team-a create secret generic team-gitlab-token --from-literal=token=glpat-...
+kubectl -n team-a label secret team-gitlab-token kardinal.io/referenceable=true
+```
+
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: ScmProvider
+metadata:
+  name: team-gitlab
+  namespace: team-a
+spec:
+  type: gitlab                       # github, gitlab, forgejo, gitea, bitbucket or azuredevops
+  apiURL: https://gitlab.example.com # https:// only (see below); empty uses the public API
+  secretRef:
+    name: team-gitlab-token          # key "token" unless secretRef.key is set
+  webhookSecretRef:                  # optional; key "secret" unless set
+    name: team-gitlab-webhook
+  allowedRepositories:               # optional; globs over the SCM repository path
+    - platform/*
+    - apps/**
+---
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: my-app
+  namespace: team-a
+spec:
+  git:
+    url: https://gitlab.example.com/platform/my-app-deploy
+    secretRef: { name: team-gitlab-git }   # git clone and push, as before
+    providerRef:
+      name: team-gitlab                    # kind defaults to ScmProvider
+  environments:
+    - name: prod
+      approval: pr-review
+```
+
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: ClusterScmProvider
+metadata:
+  name: github-enterprise
+spec:
+  type: github
+  apiURL: https://ghe.example.com/api/v3
+  secretRef: { name: ghe-token, namespace: kardinal-system }
+  allowedNamespaces:
+    matchLabels:
+      scm.example.com/ghe: "true"
+# In a Pipeline: providerRef: { kind: ClusterScmProvider, name: github-enterprise }
+```
+
+How it works:
+
+- **The provider is set when the Graph is built.** When the controller translates a
+  Bundle, it resolves `providerRef` and writes the provider's kind, name and UID into
+  each PromotionStep's `spec.scmProvider`. The PromotionStep copies it into the PRStatus
+  of its PR. Opening the PR, labels, polling, comments and branch cleanup all use that
+  provider's client. If the provider is missing, does not allow the namespace or the
+  repository, or uses an `http://` API without the opt-in, the Bundle stays `Available`
+  with a `TranslationError` that gives the reason. It is retried every 15 seconds and goes
+  ahead once the provider is created or fixed.
+- **A step keeps the provider it started with.** If the provider is deleted, or deleted
+  and created again under the same name (so it has another UID), the step fails with the
+  reason. It does not fall back to the controller's provider, because that SCM does not
+  know the PR. The same happens when `allowedRepositories` stops allowing the repository,
+  or when a ClusterScmProvider stops selecting the namespace.
+- **Every use is checked again.** Each SCM call re-checks the provider's UID, its
+  `allowedRepositories` and, for a ClusterScmProvider, the namespace's labels against
+  `allowedNamespaces`. The controller caches a namespace's labels for 30 seconds, so a
+  namespace whose label is removed loses the provider within 30 seconds, including for
+  steps and PRs already in flight. A provider's Secrets are also cached for 30 seconds:
+  a rotated token is used within 30 seconds, and a change to a provider's `spec` is used
+  at the next call. **When you rotate a provider's token, keep the old token valid for at
+  least 30 seconds after you update the Secret**, so calls made from the cached Secret do
+  not fail. A deleted provider's client and its cached Secrets are dropped from memory.
+- **`allowedRepositories`** lists globs over the repository path the SCM API uses, such
+  as `owner/repo` or `group/subgroup/repo`, on the provider's host. Matching ignores
+  case. `*` matches one path segment, and a trailing `/**` matches any depth below. A
+  segment with `%`, `\`, `..` or whitespace never matches. The globs are matched like
+  `scm.allowedRepositories` (see [Security](guides/security.md)). The check runs when the
+  Graph is built, and again on every SCM call the provider's token makes. If the field
+  is empty, every repository is allowed. The controller-wide `scm.allowedRepositories`
+  applies to the controller's own token only. A Pipeline with `providerRef` and its own
+  `git.secretRef` never uses that token.
+- **`apiURL` must be `https://`.** An `http://` URL would send the token in clear text,
+  so it is refused unless the cluster administrator sets
+  `scm.providersAllowInsecureHTTP: true` (`--scm-providers-allow-http`) for an
+  in-cluster SCM without TLS. Every provider API request goes through the controller's
+  egress guard, the one NotificationHooks and MetricChecks use: no loopback, link-local
+  or cloud metadata addresses, even after a redirect or a DNS change.
+- **Git credentials do not change.** `git-clone` and `git-push` still use
+  `spec.git.secretRef` (or an ssh remote). The provider's token is used only for the SCM
+  API.
+- **Status.** The controller sets the `Ready` condition to `True` when the provider's
+  `apiURL`, `allowedRepositories` and `allowedNamespaces` are valid and its Secrets exist,
+  are labeled `kardinal.io/referenceable`, and have their keys. Otherwise it is `False`
+  with the reason. Secrets are not watched, so the controller checks them again every 5
+  minutes. It makes no SCM call before a Pipeline needs one.
+- **Only token authentication.** A provider uses an API token. GitHub App credentials
+  per provider are planned once the controller's GitHub App mode lands (#1491).
+
+### Webhooks per provider
+
+Each provider has its own webhook endpoint. Deliveries are checked with the provider's
+`webhookSecretRef` and mark only the PRStatuses of PRs opened on that provider:
+
+| Provider | Webhook URL |
+|---|---|
+| ScmProvider `<name>` in namespace `<ns>` | `POST http://<controller-host>:8083/webhook/scm/namespaces/<ns>/<name>` |
+| ClusterScmProvider `<name>` | `POST http://<controller-host>:8083/webhook/scm/cluster/<name>` |
+| The controller's `--scm-provider` | `POST http://<controller-host>:8083/webhook/scm` (PRs of Pipelines without `providerRef` only) |
+
+Configure the webhook on the SCM as described in that provider's section above, with
+this URL and the provider's webhook secret. If a provider has no `webhookSecretRef`, its
+endpoint answers 401 to every delivery, just like an endpoint for a provider that does
+not exist. Its merges are still seen by polling.
+
+Before the signature is checked, the endpoint reads only the provider and its webhook
+Secret. The Secret read is cached for 30 seconds, whether the Secret is found or not.
+The token and the SCM are used only to confirm a signed merge event. Each endpoint of a
+provider that exists takes 10 deliveries a second, with bursts of 20. Past that it answers
+429. GitHub does not redeliver a delivery that got 429, and other SCMs may not either; the
+merge is not lost, because the PRStatus poll sees it at its next interval. A delivery for a
+provider that does not exist gets 401 without using a rate-limit bucket, so deliveries to
+made-up names do not push out the buckets of real endpoints.
+
+### Install modes and RBAC
+
+The chart lets the controller read ScmProviders and ClusterScmProviders and write their
+status. The controller never creates or changes their spec. Secrets are read with `get`
+by name, like every Secret the controller reads. In namespace mode
+(`controller.watchNamespace`), the controller can read Secrets only in the watched
+namespace. A ClusterScmProvider used there must keep its Secrets in that namespace.
+
+Who may create a ScmProvider in a namespace decides which token that namespace's
+Pipelines can use. Grant `create` on `scmproviders` like `create` on Secrets. Grant
+`clusterscmproviders` to cluster administrators only.
 
 ---
 

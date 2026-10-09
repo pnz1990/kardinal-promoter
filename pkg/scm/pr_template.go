@@ -102,6 +102,16 @@ type PRBody struct {
 	// recorded.
 	RolledBackBy string
 
+	// CreatedBy is the Bundle's verified creator (kardinal.io/created-by,
+	// pinned by admission), shown as "Created by" under the provenance table
+	// of a promotion PR. Empty when it is not recorded.
+	CreatedBy string
+
+	// RequestedBy is the kardinal.io/requested-by annotation, which the
+	// client writes and nothing verifies. A promotion PR shows it, marked
+	// "(unverified)", only when CreatedBy is empty.
+	RequestedBy string
+
 	// GateResults holds PolicyGate evaluation results for this environment.
 	GateResults []v1alpha1.GateResult
 
@@ -187,6 +197,13 @@ const prBodySections = `
 | {{.Repository}} | {{if .Tag}}{{.Tag}}{{else}}—{{end}} | {{if .Digest}}{{.Digest}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{cirun $.Bundle.Provenance.CIRunURL}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{or (mdcell $.Bundle.Provenance.CommitSHA) "—"}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{or (mdcell $.Bundle.Provenance.Author) "—"}}{{else}}—{{end}} |
 {{- else}}
 | — | — | — | — | — | — |
+{{- end}}
+{{- if .CreatedBy}}
+
+Created by: {{mdcell .CreatedBy}}
+{{- else if .RequestedBy}}
+
+Requested by: {{mdcell .RequestedBy}} (unverified)
 {{- end}}
 {{- with .Bundle.Chart}}
 
