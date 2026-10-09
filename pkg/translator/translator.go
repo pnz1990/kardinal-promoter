@@ -19,6 +19,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // Translator handles the full pipeline-to-graph creation flow:
@@ -37,6 +38,8 @@ type Translator struct {
 	// the cluster. kro resolves the CRD schema of every static-GVK node when
 	// it compiles a Graph, so one missing CRD would reject the whole Graph.
 	mapper meta.RESTMapper
+	// providers checks a Pipeline's spec.git.providerRef (WithProviders).
+	providers *scm.Registry
 }
 
 // New creates a new Translator.
@@ -119,6 +122,16 @@ func (t *Translator) Translate(ctx context.Context,
 	// Build, identity.Ensure and graphClient.Create prefix their own errors
 	// ("build: ", "graph identity: ", "graph.Create "), so they are wrapped
 	// with the Translate context only.
+	// spec.git.providerRef: resolved once here and written into every
+	// PromotionStep template, so the steps and their PRStatuses keep the
+	// provider they started with (DESIGN §10 D3, no Watch node). A provider
+	// that is missing or refuses this Pipeline is a TranslationError, retried
+	// until it is created or changed.
+	providerID, err := t.resolveProvider(ctx, pipeline)
+	if err != nil {
+		return "", fmt.Errorf("translator.Translate: %w", err)
+	}
+
 	shape, err := t.existingShape(ctx, pipeline, bundle)
 	if err != nil {
 		return "", fmt.Errorf("translator.Translate: %w", err)
@@ -128,6 +141,7 @@ func (t *Translator) Translate(ctx context.Context,
 		Bundle:           bundle,
 		PolicyGates:      gates,
 		PolicyNamespaces: t.policyNS,
+		ScmProvider:      providerID,
 		Analyses:         analyses,
 		Shape:            shape,
 		MetricChecks:     metricChecks,
