@@ -20,7 +20,9 @@ last 40 characters of the step's PR URL, open or merged; REGION is - unless the
 step was created by a Graph built before multi-region fan-out was removed;
 spec.regions is deprecated), the Bundle deployed in every environment (the
 one whose change landed there last, as kardinal rollback judges it, with its
-image tags or config commit; "none" when no change has landed yet), and the
+image tags or config commit, and, as in kardinal explain, the config or
+image Bundle the rest of what runs there came from; "none" when no change has
+landed yet), and the
 PolicyGates holding it back (with their CEL expression cut to 40 characters,
 current reason and when each was last checked). A gate is listed as blocking only while it holds the bundle back: it
 is not ready and either every upstream environment is Verified for that bundle

@@ -55,7 +55,13 @@ func runGetSubscriptions(cmd *cobra.Command, args []string, allNamespaces bool) 
 	if err != nil {
 		return fmt.Errorf("get subscriptions: %w", err)
 	}
+	return getSubscriptionsFn(cmd.OutOrStdout(), c, ns, args, allNamespaces)
+}
 
+// getSubscriptionsFn is the testable implementation of get subscriptions: it
+// lists the Subscriptions of ns (every namespace with allNamespaces), keeps
+// the one named args[0] when given, and writes them in the --output format.
+func getSubscriptionsFn(w io.Writer, c sigs_client.Client, ns string, args []string, allNamespaces bool) error {
 	var opts []sigs_client.ListOption
 	if !allNamespaces {
 		opts = append(opts, sigs_client.InNamespace(ns))
@@ -81,11 +87,11 @@ func runGetSubscriptions(cmd *cobra.Command, args []string, allNamespaces bool) 
 
 	switch OutputFormat() {
 	case "json":
-		return WriteJSON(cmd.OutOrStdout(), items)
+		return WriteJSON(w, items)
 	case "yaml":
-		return WriteYAML(cmd.OutOrStdout(), items)
+		return WriteYAML(w, items)
 	default:
-		return FormatSubscriptionTable(cmd.OutOrStdout(), items, allNamespaces)
+		return FormatSubscriptionTable(w, items, allNamespaces)
 	}
 }
 
