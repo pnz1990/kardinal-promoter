@@ -64,7 +64,7 @@ Rules:
 | [G10](#g10-a-graph-is-one-etcd-object) | A Graph's spec and inventory share one etcd object (1.5 MiB) | Medium | `pkg/graph/size.go` `CheckSize` refuses a Graph over 1.2 MB | None filed |
 | [G11](#g11-collections-are-all-or-nothing) | A `forEach` collection is all-or-nothing on pending data and on apply errors, and every growth relabels every item | Medium | pacing by choosing the list; label-only events ignored | None filed |
 | [G12](#g12-delete-and-prune-orphan-the-pods-of-a-job) | kro deletes and prunes without a propagation policy, so a Job node orphans its Pods, and a deleted Job runs again | Medium | Hooks use a `HookRun` CRD that owns its Job (#1443) | None filed |
-| [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | **Planned in #1505 (not on main)**: kardinal shards only its own controllers (#1462). On main the controller does not shard (`--shard` was removed) | None filed |
+| [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | kardinal shards only its own controllers, by namespace (`--namespace-shard`, `pkg/shard`, #1462) | None filed |
 | [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | Mirror `patch` nodes with a literal target name (hooks, #1443; gate commit statuses **planned in #1518 (not on main)**) | None filed |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
@@ -467,7 +467,7 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 | Wall-clock time (`schedule.*`, soak) | `ScheduleClock` reconciler; `soakMinutes` in `pkg/reconciler/bundle/reconciler.go` `handleSyncEvidence` | CEL in kro has no `now()` and no time-based requeue | `time.now()` from KREP-025 (in review) covers soak; recurring windows need its follow-up calendar KREP |
 | Soak time (`bundle.upstreamSoakMinutes`) | Bundle reconciler writes `status.environments[].soakMinutes` and requeues every minute while Promoting; PolicyGate reconciler takes the minimum over the gated environment's direct upstreams | Same as above; also a cross-node read | KREP-025, reading `uat.status` from the gate node |
 | PolicyGate CEL (`bundle.*`, `schedule.*`, `metrics.*`, `upstream.*`) | `pkg/reconciler/policygate` | Time and explainability. A Graph can already read every data source a gate uses (selector refs from KREP-003 decorators, reshaped by a `def` node), and `changewindow.isAllowed/isBlocked` are sugar for a map index. What it cannot do: time-derived fields (metric staleness, active ChangeWindows), and recording why a gate blocked (`status.reason`, `lastEvaluatedAt`, the audit that `kardinal explain` shows) | A clock in CEL (KREP-025). Explainability needs no kro change: the PolicyGate CR plus its reconciler, which writes `status.ready`, is the intended shape (an owned node) |
-| Git and SCM steps (clone, kustomize, push, open PR, merge detection) | `pkg/steps`, `pkg/scm`, PRStatus reconciler | Side effects on external systems; kro only applies Kubernetes objects | Out of scope for kro. The PromotionStep CR is the Graph-native boundary |
+| Git and SCM steps (clone, kustomize, push with rebase-and-retry onto a branch other Pipelines move, rebuilding an open PR's branch when its base moves (#1461), open PR, merge detection) | `pkg/steps`, `pkg/scm`, PRStatus reconciler | Side effects on external systems; kro only applies Kubernetes objects. A git working tree cannot cross a reconcile boundary, so clone, edit, commit, rebase and push stay in one step sequence | Out of scope for kro. The PromotionStep CR is the Graph-native boundary |
 | Artifact discovery: registry, Git and Helm polling with credentials, tag filters, `pathGlob`, and the registry/SCM webhook receiver (#1454, #1455) | Subscription reconciler (`pkg/reconciler/subscription`, `pkg/source`), `/webhook/subscriptions/...` in `cmd/kardinal-controller` | External I/O before any Graph exists: a Graph is per Bundle and the Subscription creates the Bundle; a `ref` node reads only Kubernetes objects, and kro CEL has no I/O. The reconciler is an owned node (writes only Subscription status, creates Bundles, which enter the Graph flow); the receiver writes only the `kardinal.io/refresh` annotation, like the SCM webhook writes only PRStatus | None needed. The Bundle CR is the Graph-native boundary |
 | Outbound notifications (NotificationHook webhooks: json, Slack, Teams, templated bodies) and the controller egress allowlist | `pkg/reconciler/notificationhook`, `pkg/egress` | An HTTP POST to an external system is a side effect, and a delivery record must survive restarts; kro only applies Kubernetes objects. The hook is not a Graph node: it reads the status that Bundle, PolicyGate and PromotionStep reconcilers already write (phase, `Ready` condition and its `Unblocked` reason, `prURL`, state) and writes only its own status (`processedEventKeys`, conditions). The allowlist is controller configuration, not promotion logic | None needed. A Graph-level event sink would still need a delivery controller; no ask |
 | Health adapters (HealthChecking to Verified) | `pkg/health/adapter.go` via PromotionStep reconciler | A Graph cannot write PromotionStep status, and `readyWhen` does not gate dependents (G1, G3) | None needed: stays in the reconciler by design (#1283) |
@@ -687,10 +687,12 @@ the Job started (`pkg/reconciler/hookrun`, `pkg/graph/hooks.go`, #1443; live tes
 (`controller/graph/controller.go` `SetupWithManager`); there is no label selector or shard flag
 for Graphs.
 
-**kardinal workaround. Planned in #1505 (not on main).** kardinal shards only its own
-controllers, by namespace label (#1462). Graph throughput stays bounded by the one kro
-instance (G9). On main one controller replica reconciles everything (the old `--shard` flag
-and `shard` field were removed and are refused).
+**kardinal workaround.** kardinal shards only its own controllers, by namespace label
+(`--namespace-shard`, `pkg/shard`, #1462): a per-namespace token Lease `kardinal-shard` decides which
+installation reconciles the namespace, and a per-shard heartbeat Lease says whether that
+installation is alive. Every shard's Graphs still go through the one kro leader and
+its one queue, so Graph throughput stays bounded by that instance (G9) and its
+`graphConcurrentReconciles`.
 
 **Upstream work.** None filed. Ask: a `--graph-selector` label selector on the Graph
 controller, so several kro installations can split Graphs.

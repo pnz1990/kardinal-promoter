@@ -436,14 +436,22 @@ func controllerAccess() []apiAccess {
 var optionalAccess = []struct {
 	set string
 	acc []apiAccess
+	// clusterOnly: the value cannot be set in namespace mode.
+	clusterOnly bool
 }{
 	{"ui.auth.tokenReview=true", []apiAccess{
 		{"authentication.k8s.io", "tokenreviews", []string{"create"}, inCluster, "", "pkg/uiauth TokenReview"},
 		{"authorization.k8s.io", "subjectaccessreviews", []string{"create"}, inCluster, "", "pkg/uiauth SubjectAccessReview"},
-	}},
+	}, false},
+	{"controller.namespaceShard=b", []apiAccess{
+		{"", "namespaces", []string{"list", "watch"}, inCluster, "", "pkg/shard Gate.Pass (Namespace informer)"},
+		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "update"}, inCluster, "kardinal-shard", "pkg/shard Gate.take/release/resync (token Lease per namespace)"},
+		{"coordination.k8s.io", "leases", []string{"create"}, inCluster, "", "pkg/shard Gate.take (first token of a namespace)"},
+		{"coordination.k8s.io", "leases", []string{"get", "list"}, inCluster, "kardinal-shard-heartbeat-b", "pkg/shard Gate.heartbeatStopped/warnUnrunShards"},
+	}, true},
 	{"rbac.argocdApplicationsWrite=true", []apiAccess{
 		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"},
-	}},
+	}, false},
 }
 
 func checkAccess(t *testing.T, v rbacView, mode string, watched []string, acc apiAccess, want bool) {
@@ -487,6 +495,9 @@ func TestChartRBACGrantsControllerAccess(t *testing.T) {
 			for _, opt := range optionalAccess {
 				for _, acc := range opt.acc {
 					checkAccess(t, v, m.name+" default (no "+opt.set+")", m.watched, acc, false)
+				}
+				if opt.clusterOnly && m.watched[0] == releaseNS && len(m.watched) == 1 {
+					continue
 				}
 				on := newRBACView(t, render(t, "kardinal-promoter", append(m.args, "--set", opt.set)...))
 				for _, acc := range opt.acc {
@@ -1264,6 +1275,41 @@ func TestChartRequiresKubernetes130(t *testing.T) {
 			assert.Contains(t, out, "chart requires kubeVersion: >=1.30.0-0")
 		})
 	}
+}
+
+// TestChartNamespaceShard: controller.namespaceShard passes --namespace-shard,
+// and cannot be combined with namespace mode or be an invalid label value.
+func TestChartNamespaceShard(t *testing.T) {
+	found := false
+	for _, d := range render(t, "kardinal-promoter", "--set", "controller.namespaceShard=b") {
+		if d.Kind == "Deployment" && strings.Contains(string(d.raw), `"--namespace-shard=b"`) {
+			found = true
+		}
+	}
+	assert.True(t, found, "--namespace-shard=b in the controller args")
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "controller.namespaceShard=b",
+		"--set", "controller.watchNamespace="+releaseNS)
+	require.Error(t, err)
+	assert.Contains(t, out, "cannot be combined with controller.watchNamespace")
+	_, err = helmTemplate(t, "kardinal-promoter", "--set", "controller.namespaceShard=a/b")
+	require.Error(t, err, "not a label value")
+
+	// #1505 QA: writes are limited to the shard tokens by name (only create
+	// cannot be); other shards' heartbeats and leader election Leases are
+	// read-only, and nothing but the tokens can be watched.
+	v := newRBACView(t, render(t, "kardinal-promoter", "--set", "controller.namespaceShard=b"))
+	sa := "kardinal-promoter"
+	for _, d := range []struct{ verb, name string }{
+		{"update", "kardinal-promoter-leader"}, {"delete", "kardinal-promoter-leader"},
+		{"watch", ""}, {"delete", "kardinal-shard"}, {"patch", "kardinal-shard"},
+		{"update", "kardinal-shard-heartbeat-a"}, {"watch", "kardinal-shard-heartbeat-a"}, {"update", "other-lease"},
+	} {
+		assert.False(t, v.allowed(releaseNS, sa, "team-a", "coordination.k8s.io", "leases", d.verb, d.name),
+			"a sharded controller must not %s Lease %q in another namespace", d.verb, d.name)
+	}
+	assert.True(t, v.allowed(releaseNS, sa, "team-a", "coordination.k8s.io", "leases", "update", "kardinal-shard"))
+	assert.True(t, v.allowed(releaseNS, sa, releaseNS, "coordination.k8s.io", "leases", "update", "kardinal-shard-heartbeat-b"),
+		"its own heartbeat, through the release Role")
 }
 
 // TestChartGateStatusHeartbeat: controller.gateStatusHeartbeat sets

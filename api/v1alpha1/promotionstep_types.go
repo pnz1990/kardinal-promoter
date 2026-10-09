@@ -256,6 +256,14 @@ type PromotionStepStatus struct {
 	// +optional
 	GitCredentialRetries int `json:"gitCredentialRetries,omitempty"`
 
+	// ContendedRetries is the number of consecutive retries of a git-push that
+	// lost to other writers of the base branch every time within one reconcile
+	// (the base branch kept moving). They have no limit, since contention is
+	// not a fault of the step, and do not use up the retries of retryCount;
+	// they only back off. Reset with retryCount.
+	// +optional
+	ContendedRetries int `json:"contendedRetries,omitempty"`
+
 	// NextRetryAt is when a step that failed with a retryable error runs
 	// again, or when a superseded step whose PR close failed retries the close
 	// (condition SupersededCloseFailed). A reconcile before then waits for it,
