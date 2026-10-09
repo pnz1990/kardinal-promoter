@@ -171,6 +171,14 @@ github:
 scm:
   provider: ""
   apiURL: ""
+  # -- Repositories (host/path globs: "github.com/acme/*", or
+  # "gitlab.example.com/platform/**" for every subgroup) that a Pipeline
+  # without git.secretRef may promote into with the controller's SCM token
+  # (--scm-allowed-repositories). Any other Pipeline without git.secretRef
+  # is Ready=False/RepositoryNotAllowed and its steps fail before git-clone.
+  # Empty allows every repository the token can write to, and the
+  # controller logs a warning at startup. See docs/guides/security.md.
+  allowedRepositories: []
 
 # -- Webhook secret for :8083/webhook/scm (KARDINAL_WEBHOOK_SECRET): the HMAC
 # key, or for GitLab and Azure DevOps the plain token the SCM sends.

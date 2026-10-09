@@ -9,6 +9,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // unsupportedConfig returns a message when the Pipeline asks for something the
@@ -17,10 +18,17 @@ import (
 // Each case used to be accepted and then silently ignored or, for the Secret
 // namespace, honoured in an unsafe way. Failing the step with a clear message
 // is the only honest behaviour.
-func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep) string {
+func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep,
+	allowed *scm.RepositoryAllowlist) string {
 	// Confused deputy: refused on purpose. The Pipeline reconciler reports the
 	// same error as Ready=False/ValidationFailed.
 	if err := graph.ValidateSecretRef(pipeline); err != nil {
+		return err.Error()
+	}
+	// The controller's shared SCM token may act only on the allowed
+	// repositories (#1332). Checked before git-clone; the Pipeline reconciler
+	// reports it as Ready=False/RepositoryNotAllowed.
+	if err := allowed.CheckPipeline(pipeline); err != nil {
 		return err.Error()
 	}
 	// Distributed mode was removed. The Pipeline reconciler reports the same

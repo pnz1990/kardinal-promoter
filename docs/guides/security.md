@@ -159,7 +159,7 @@ The namespace is kardinal's tenancy unit. There is no Project CRD, and none is p
   writes for a user is checked with a `SubjectAccessReview` (see
   [UI API Access Control](#ui-api-access-control)).
 
-#### Known limit: the shared SCM token
+#### The shared SCM token and `scm.allowedRepositories`
 
 Git clone and push use the Pipeline's `git.secretRef` token. The controller uses its own SCM
 token (`github.token` or `github.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
@@ -167,15 +167,36 @@ comment on and close PRs. When it closes a PR that was not merged, it also delet
 branch, `kardinal/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
 deletes that branch too when a step that pushed it ends before it opens a PR. It deletes only
 branches under `kardinal/`. So the controller token needs write access to repository contents,
-not only to pull requests. And anyone who can create a Pipeline, in any namespace, can have PRs
-opened, and `kardinal/` branches deleted, in any repository that token can write to. Restricting the repositories is tracked in
-[#1332](https://github.com/pnz1990/kardinal-promoter/issues/1332) (`scm.allowedRepositories`).
-Until then:
+not only to pull requests.
+
+Without a limit, anyone who can create a Pipeline, in any namespace, can have PRs opened, and
+`kardinal/` branches deleted, in any repository that token can write to. Set
+`scm.allowedRepositories` (the controller flag `--scm-allowed-repositories`) to the repositories
+a Pipeline without its own `git.secretRef` may promote into:
+
+```yaml
+scm:
+  allowedRepositories:
+    - github.com/acme/gitops          # one repository
+    - github.com/acme-platform/*      # every repository of an owner
+    - gitlab.example.com/platform/**  # everything under a group, subgroups included
+```
+
+Each entry is `host/path`, matched without the URL scheme, user, port and `.git`, ignoring case.
+`*` matches one path segment, and an entry ending in `/**` matches everything below it. A Pipeline
+without `git.secretRef` whose `spec.git.url` matches no entry is `Ready=False` with reason
+`RepositoryNotAllowed`, and its PromotionSteps fail before `git-clone` with the same message, so
+nothing is cloned, pushed or opened. `kardinal validate --allowed-repositories <list>` reports it
+before you apply the file. A Pipeline with its own `git.secretRef` is not limited: it pushes with
+its namespace's token, so its author already has access to the repository. When the value is
+empty, every repository is allowed, as before, and the controller logs a warning at startup.
+
+Also:
 
 1. Scope the controller's SCM token to the GitOps repositories kardinal manages, for example a
    fine-grained PAT limited to those repositories.
 2. Give each team its own `git.secretRef` token in its namespace, scoped to that team's
-   repositories.
+   repositories. This is the recommended setup: each team's PRs are limited by its own token.
 3. Grant `create` on `pipelines.kardinal.io` only to people you trust with the controller
    token's reach.
 

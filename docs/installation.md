@@ -141,6 +141,7 @@ kardinal version
 | `github.token` | `""` | Token value. The chart stores it in Secret `<fullname>-github-token` (`kardinal-promoter-github-token` for release `kardinal-promoter`); the value stays in the Helm release history. Setting both this and `secretRef.name` fails |
 | `scm.provider` | `""` | `--scm-provider`: `github` (default), `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops` |
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |
+| `scm.allowedRepositories` | `[]` | `--scm-allowed-repositories`: `host/path` globs (`github.com/acme/*`, `gitlab.example.com/team/**`) a Pipeline without `git.secretRef` may promote into with the controller's token; others are `Ready=False/RepositoryNotAllowed`. Empty allows every repository. See [Security](guides/security.md#the-shared-scm-token-and-scmallowedrepositories) |
 | `webhook.secretRef.name` / `.key` | `""` / `secret` | Secret with the SCM webhook secret (`KARDINAL_WEBHOOK_SECRET`): the HMAC key, or for GitLab and Azure DevOps the plain token |
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |

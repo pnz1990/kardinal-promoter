@@ -23,6 +23,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 func newScheme() *runtime.Scheme {
@@ -235,6 +236,63 @@ func TestPipelineReconciler_SecretRefNamespaceInvalid(t *testing.T) {
 			assert.Equal(t, tc.wantStatus, cond.Status)
 			assert.Equal(t, tc.wantReason, cond.Reason)
 			assert.Contains(t, cond.Message, tc.wantMsg)
+		})
+	}
+}
+
+// TestPipelineReconciler_RepositoryNotAllowed covers #1332: with
+// --scm-allowed-repositories set, a Pipeline without git.secretRef whose
+// spec.git.url is not in the list is Ready=False/RepositoryNotAllowed, since
+// the controller's shared token would open its PRs. Its own secretRef, an
+// allowed URL or an unset list keeps it Valid. Reconciling again is a no-op.
+func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
+	allow, err := scm.ParseRepositoryAllowlist([]string{"github.com/myorg/*"})
+	require.NoError(t, err)
+	tests := []struct {
+		name       string
+		allow      *scm.RepositoryAllowlist
+		url        string
+		secret     string
+		wantStatus metav1.ConditionStatus
+		wantReason string
+		wantMsg    string
+	}{
+		{name: "not allowed", allow: allow, url: "https://github.com/other/gitops.git",
+			wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
+			wantMsg: `spec.git.url "https://github.com/other/gitops.git" is not in the controller's allowed repositories (github.com/myorg/*)`},
+		{name: "allowed", allow: allow, url: "https://github.com/myorg/gitops.git",
+			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
+		{name: "own secretRef", allow: allow, url: "https://github.com/other/gitops.git", secret: "team-token",
+			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
+		{name: "unset", url: "https://github.com/other/gitops.git",
+			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+			p.Spec.Git.URL = tc.url
+			if tc.secret != "" {
+				p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: tc.secret}
+			}
+			c := newClientWithIndex(newScheme(), p)
+			key := types.NamespacedName{Name: "app", Namespace: "default"}
+			r := &pipeline.Reconciler{Client: c, AllowedRepositories: tc.allow}
+			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			cond := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, cond)
+			assert.Equal(t, tc.wantStatus, cond.Status)
+			assert.Equal(t, tc.wantReason, cond.Reason)
+			assert.Contains(t, cond.Message, tc.wantMsg)
+
+			rv := got.ResourceVersion
+			_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			assert.Equal(t, rv, got.ResourceVersion, "a second reconcile patches nothing")
 		})
 	}
 }

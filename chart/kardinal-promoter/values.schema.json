@@ -206,6 +206,14 @@
         },
         "apiURL": {
           "type": "string"
+        },
+        "allowedRepositories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "--scm-allowed-repositories: host/path globs a Pipeline without git.secretRef may promote into."
         }
       }
     },

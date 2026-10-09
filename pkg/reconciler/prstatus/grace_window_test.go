@@ -232,3 +232,45 @@ func TestClosedGraceWindow_CommentOnceWhenSaveFails(t *testing.T) {
 		})
 	}
 }
+
+// TestClosedGraceWindow_NoCommentOnPRKardinalClosed covers #1351: a PR that
+// kardinal closed itself (the PromotionStep cancel path) already has the
+// "kardinal closed this PR" comment, and the step reconciler records that on
+// the PRStatus in the closed-by annotation, with the PR number. The end of
+// the grace window then posts no second "stopped tracking" comment. An
+// annotation that names another PR (the PRStatus now tracks a new PR, B72)
+// does not count, and neither does a PR a person closed.
+func TestClosedGraceWindow_NoCommentOnPRKardinalClosed(t *testing.T) {
+	tests := []struct {
+		name         string
+		annotation   string
+		wantComments int
+	}{
+		{name: "closed by a person: one stopped-tracking comment", wantComments: 1},
+		{name: "closed by kardinal: no second comment", annotation: "7"},
+		{name: "annotation for an earlier PR: comment", annotation: "6", wantComments: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pr := prAt(nil, v1alpha1.PRStatusStatus{LastCheckedAt: metaAgo(time.Minute), ClosedAt: metaAgo(6 * time.Minute)})
+			pr.Labels = map[string]string{"kardinal.io/environment": "prod"}
+			if tt.annotation != "" {
+				pr.Annotations = map[string]string{prstatus.AnnotationClosedByKardinal: tt.annotation}
+			}
+			require.Equal(t, 7, pr.Spec.PRNumber, "fixture PR number")
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(pr).
+				WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+			s := &commentSCM{}
+			r := &prstatus.Reconciler{Client: c, SCM: s}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "pr", Namespace: "default"}}
+			for i := 0; i < 2; i++ {
+				_, err := r.Reconcile(context.Background(), req)
+				require.NoError(t, err)
+			}
+			var got v1alpha1.PRStatus
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.True(t, got.Status.ClosedFinal, "the PR is final-closed either way")
+			assert.Len(t, s.comments, tt.wantComments)
+		})
+	}
+}

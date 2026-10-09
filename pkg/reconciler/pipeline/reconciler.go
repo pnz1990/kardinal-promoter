@@ -29,6 +29,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // Ready condition reasons.
@@ -55,6 +56,11 @@ const (
 // and status.phase.
 type Reconciler struct {
 	client.Client
+
+	// AllowedRepositories is --scm-allowed-repositories: a Pipeline without
+	// git.secretRef whose spec.git.url it does not allow is
+	// Ready=False/RepositoryNotAllowed (#1332). Nil allows every repository.
+	AllowedRepositories *scm.RepositoryAllowlist
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -365,6 +371,15 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline) metav1.Condition {
 	// deputy), so it is a validation error, not an unimplemented field.
 	if err := graph.ValidateSecretRef(p); err != nil {
 		return invalid(err.Error())
+	}
+	// Without its own secretRef the Pipeline would have the controller's
+	// shared SCM token act on spec.git.url (#1332). The PromotionStep
+	// reconciler refuses the step with the same error.
+	if err := r.AllowedRepositories.CheckPipeline(p); err != nil {
+		return metav1.Condition{
+			Type: "Ready", Status: metav1.ConditionFalse, Reason: scm.ReasonRepositoryNotAllowed,
+			Message: strings.TrimPrefix(err.Error(), scm.ErrRepositoryNotAllowed.Error()+": "), ObservedGeneration: p.Generation,
+		}
 	}
 	// argocd + pr-review is refused by the CRD at apply time; a Pipeline
 	// stored before that rule is caught here (#1281).

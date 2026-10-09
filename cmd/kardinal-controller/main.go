@@ -125,6 +125,12 @@ func main() {
 		"SCM provider type for the whole controller: \"github\" (default), \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\" or \"azuredevops\".")
 	flag.StringVar(&scmAPIURL, "scm-api-url", os.Getenv("KARDINAL_SCM_API_URL"),
 		"SCM API base URL override (e.g. for GitHub Enterprise or self-managed GitLab).")
+	var scmAllowedRepositories string
+	flag.StringVar(&scmAllowedRepositories, "scm-allowed-repositories", os.Getenv("KARDINAL_SCM_ALLOWED_REPOSITORIES"),
+		"Comma-separated host/path globs (github.com/acme/*, gitlab.example.com/team/**) of the repositories "+
+			"a Pipeline without git.secretRef may promote into with the controller's SCM token. Other "+
+			"Pipelines without git.secretRef are Ready=False/RepositoryNotAllowed and their steps fail. "+
+			"Empty allows every repository.")
 
 	var bundleToken string
 	flag.StringVar(&bundleToken, "bundle-api-token", os.Getenv("KARDINAL_BUNDLE_TOKEN"),
@@ -280,6 +286,19 @@ func main() {
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
+	allowedRepos, err := scm.ParseRepositoryAllowlist(splitCSV(scmAllowedRepositories))
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --scm-allowed-repositories")
+	}
+	if allowedRepos == nil {
+		logger.Warn().Msg("--scm-allowed-repositories (Helm scm.allowedRepositories) is not set: a Pipeline " +
+			"without git.secretRef has the controller's SCM token open PRs and delete kardinal/ branches in " +
+			"any repository that token can write to; see docs/guides/security.md")
+	} else {
+		logger.Info().Strs("allowedRepositories", allowedRepos.Patterns()).
+			Msg("Pipelines without git.secretRef are limited to the allowed repositories")
+	}
+
 	uiHosts, err := parseUIAllowedHosts(uiAllowedHosts)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("invalid --ui-allowed-hosts")
@@ -390,7 +409,7 @@ func main() {
 		}
 	}
 
-	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient()}).
+	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}
@@ -409,12 +428,13 @@ func main() {
 	}
 
 	if err := (&psreconciler.Reconciler{
-		Client:         mgr.GetClient(),
-		APIReader:      mgr.GetAPIReader(),
-		SCM:            scmProvider,
-		GitClient:      gitClient,
-		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
-		Recorder:       eventRecorder,
+		Client:              mgr.GetClient(),
+		APIReader:           mgr.GetAPIReader(),
+		SCM:                 scmProvider,
+		AllowedRepositories: allowedRepos,
+		GitClient:           gitClient,
+		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
+		Recorder:            eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}

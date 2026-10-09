@@ -240,3 +240,41 @@ func TestValidate_Documents(t *testing.T) {
 		})
 	}
 }
+
+// TestValidate_AllowedRepositories covers #1332: with --allowed-repositories
+// (the controller's scm.allowedRepositories), a Pipeline without
+// git.secretRef whose spec.git.url is not allowed is invalid, with the
+// message of the controller's Ready=False/RepositoryNotAllowed.
+func TestValidate_AllowedRepositories(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		content string
+		wantOut string
+		wantErr bool
+	}{
+		{name: "not allowed", args: []string{"--allowed-repositories", "github.com/acme/*"}, content: validPipelineDoc,
+			wantOut: `spec.git.url "https://github.com/o/r" is not in the controller's allowed repositories (github.com/acme/*)`,
+			wantErr: true},
+		{name: "allowed", args: []string{"--allowed-repositories", "github.com/acme/*,github.com/o/*"}, content: validPipelineDoc,
+			wantOut: "✓ f.yaml is valid"},
+		{name: "own secretRef", args: []string{"--allowed-repositories", "github.com/acme/*"},
+			content: secretRefDoc("", "team-a"), wantOut: "✓ f.yaml is valid"},
+		{name: "flag not set", content: validPipelineDoc, wantOut: "✓ f.yaml is valid"},
+		{name: "bad pattern", args: []string{"--allowed-repositories", "github.com/[x"}, content: validPipelineDoc,
+			wantOut: "", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			require.NoError(t, os.WriteFile("f.yaml", []byte(tc.content), 0o600))
+			out, err := executeRoot(t, append([]string{"validate", "-f", "f.yaml"}, tc.args...)...)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Contains(t, out, tc.wantOut)
+		})
+	}
+}

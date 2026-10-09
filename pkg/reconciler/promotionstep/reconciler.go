@@ -137,6 +137,11 @@ type Reconciler struct {
 	// SCM is the SCM provider for PR operations.
 	SCM scm.SCMProvider
 
+	// AllowedRepositories is --scm-allowed-repositories: a step of a Pipeline
+	// without git.secretRef whose spec.git.url it does not allow fails before
+	// git-clone (#1332). Nil allows every repository.
+	AllowedRepositories *scm.RepositoryAllowlist
+
 	// GitClient is the Git operations client.
 	GitClient scm.GitClient
 
@@ -495,12 +500,45 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		return fmt.Errorf("close PR #%d: %w", num, err)
 	}
 	log.Info().Int("pr", num).Str("step", ps.Name).Msg("closed PR of cancelled step")
+	r.markPRStatusClosedByKardinal(ctx, ps, num)
 	body := fmt.Sprintf("kardinal closed this PR: %s. Merging it would change environment %s "+
 		"without a PromotionStep tracking it.", reason, ps.Spec.Environment)
 	if err := r.SCM.CommentOnPR(ctx, repo, num, body); err != nil {
 		log.Warn().Err(err).Int("pr", num).Msg("could not comment on the closed PR (non-fatal)")
 	}
 	return r.closedPRBranch(ctx, ps, repo, num, keepBranch)
+}
+
+// markPRStatusClosedByKardinal records on the step's PRStatus that kardinal
+// closed PR num itself (prstatus.AnnotationClosedByKardinal), so the PRStatus
+// reconciler does not comment "stopped tracking" on it when the grace window
+// ends: the close comment already says why (#1351). It writes metadata only,
+// never the PRStatus status, and only when the PRStatus spec names PR num.
+// Best-effort: a failure costs a second comment, so it is logged.
+func (r *Reconciler) markPRStatusClosedByKardinal(ctx context.Context, ps *v1alpha1.PromotionStep, num int) {
+	if ps.Spec.PRStatusRef == "" {
+		return
+	}
+	log := zerolog.Ctx(ctx)
+	var prs v1alpha1.PRStatus
+	if err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs); err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Warn().Err(err).Int("pr", num).Msg("could not read the PRStatus to mark the PR closed by kardinal (non-fatal)")
+		}
+		return
+	}
+	want := strconv.Itoa(num)
+	if prs.Spec.PRNumber != num || prs.Annotations[prstatus.AnnotationClosedByKardinal] == want {
+		return
+	}
+	patch := client.MergeFrom(prs.DeepCopy())
+	if prs.Annotations == nil {
+		prs.Annotations = map[string]string{}
+	}
+	prs.Annotations[prstatus.AnnotationClosedByKardinal] = want
+	if err := r.Patch(ctx, &prs, patch); err != nil && !apierrors.IsNotFound(err) {
+		log.Warn().Err(err).Int("pr", num).Msg("could not mark the PRStatus closed by kardinal (non-fatal)")
+	}
 }
 
 // withLabelsError appends the error of open-pr's failed attempt to label the
@@ -540,7 +578,7 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
 		return res, holdErr
 	}
-	if msg := unsupportedConfig(pipeline, findEnv(pipeline, ps.Spec.Environment), ps); msg != "" {
+	if msg := unsupportedConfig(pipeline, findEnv(pipeline, ps.Spec.Environment), ps, r.AllowedRepositories); msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 
@@ -641,7 +679,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 	env := findEnv(pipeline, ps.Spec.Environment)
-	if msg := unsupportedConfig(pipeline, env, ps); msg != "" {
+	if msg := unsupportedConfig(pipeline, env, ps, r.AllowedRepositories); msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 	// Run the step list recorded when the step left Pending, never one rebuilt
@@ -1141,7 +1179,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 	env := findEnv(pipeline, ps.Spec.Environment)
-	if msg := unsupportedConfig(pipeline, env, ps); msg != "" {
+	if msg := unsupportedConfig(pipeline, env, ps, r.AllowedRepositories); msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 
