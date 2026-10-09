@@ -1893,7 +1893,7 @@ func (r *Reconciler) handleBake(
 				Msg("bake: complete, Verified")
 			msg := fmt.Sprintf("bake complete: %dm contiguous healthy via %s (resets=%d)",
 				env.Bake.Minutes, adapterName, ps.Status.BakeResets)
-			if len(ps.Spec.PostHooks) > 0 {
+			if verifies(ps) {
 				return ctrl.Result{}, r.passHealth(ctx, base, ps, "BakeComplete", msg)
 			}
 			ps.Status.Conditions = appendCondition(ps.Status.Conditions,
