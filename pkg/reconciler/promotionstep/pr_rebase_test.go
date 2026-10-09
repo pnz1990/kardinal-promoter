@@ -121,6 +121,7 @@ func newGitRemote(t *testing.T) *gitRemote {
 //     new base.
 //   - Someone commits to the PR branch: it is not rebuilt, and the message
 //     says so.
+//
 // The PR keeps its number and branch; status.outputs.prBranchRebuilds counts
 // rebuilds. Remote heads are read once per 30 s, so the clock moves past
 // that between checks. Paused: no git write.
