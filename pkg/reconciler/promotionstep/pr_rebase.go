@@ -58,26 +58,30 @@ const hintHistoryUnknown = "the base branch history since the PR was built could
 // head, reading historyDepth commits and then, if since is not among them
 // and the branch had more, deepHistoryDepth. found is false when since is
 // not in the deeper history either, or when the reads take longer than
-// historyTimeout.
-func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, since, token string) ([]string, bool, error) {
+// historyTimeout. top is the newest commit of the history read: head, or a
+// later one when head came from a stale cache and the read was fresh.
+func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, since, token string) (changed []string, found bool, top string, err error) {
 	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
 	defer cancel()
 	for _, depth := range []int{historyDepth, deepHistoryDepth} {
 		history, err := r.remotes.branchHistory(hctx, rh, url, branch, head, token, depth)
 		if err != nil {
 			if ctx.Err() == nil && errors.Is(hctx.Err(), context.DeadlineExceeded) {
-				return nil, false, nil // too slow: history not found
+				return nil, false, top, nil // too slow: history not found
 			}
-			return nil, false, err
+			return nil, false, top, err
+		}
+		if len(history) > 0 {
+			top = history[0].SHA
 		}
 		if changed, found := scm.PathsChangedSince(history, since); found {
-			return changed, true, nil
+			return changed, true, top, nil
 		}
 		if len(history) < depth {
 			break // the whole branch was read: since is not in it
 		}
 	}
-	return nil, false, nil
+	return nil, false, top, nil
 }
 
 // revisionContains is health.CheckOptions.RevisionContains for a step whose
@@ -199,7 +203,27 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 		ps.Status.Message = msg
 		return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
 	}
-	changed, found, herr := r.changedSince(ctx, rh, url, branch, head, built, cred.token)
+	// The cached heads can be older than the commit the PR was built on:
+	// another step on this repository read them before it was pushed. Such a
+	// head is not a move of the base. Its cached history does not contain
+	// built (read the heads again before rebuilding), and a fresh history
+	// read starts at a later commit (follow that one, never record the old).
+	changed, found, top, herr := r.changedSince(ctx, rh, url, branch, head, built, cred.token)
+	if herr == nil && !found {
+		if fresh, ferr := r.remotes.readHeads(ctx, rh, url, cred.token, r.now()); ferr == nil && fresh[branch] != head {
+			head = fresh[branch]
+			if head == "" || head == built {
+				return false, nil
+			}
+			changed, found, top, herr = r.changedSince(ctx, rh, url, branch, head, built, cred.token)
+		}
+	}
+	if herr == nil && top != "" && top != head {
+		head = top
+		if head == built {
+			return false, nil
+		}
+	}
 	unknown := herr != nil || !found
 	switch {
 	case herr != nil:

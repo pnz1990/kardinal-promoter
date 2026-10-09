@@ -24,8 +24,10 @@ const historyEntries = 64
 // repository per remoteHeadsTTL) and the recent history of a branch at a
 // given head (immutable for that head). It is a read-through cache of
 // external values, not promotion state: a stale entry only delays a PR
-// branch rebuild by up to remoteHeadsTTL, and an empty cache costs one more
-// read. The decisions it feeds are recorded in the step's status.outputs.
+// branch refresh by up to remoteHeadsTTL, and an empty cache costs one more
+// read. A cached head can be older than a commit the reader already knows
+// (another step read the heads before it pushed): a reader that would act on
+// such a head reads them again (readHeads). The decisions it feeds are recorded in the step's status.outputs.
 type remoteCache struct {
 	mu      sync.Mutex
 	heads   map[string]headsEntry
@@ -47,6 +49,12 @@ func (c *remoteCache) remoteHeads(ctx context.Context, rh scm.RemoteHeadReader, 
 	if ok && now.Sub(e.at) < remoteHeadsTTL && !now.Before(e.at) {
 		return e.heads, nil
 	}
+	return c.readHeads(ctx, rh, url, token, now)
+}
+
+// readHeads reads the branch heads of url now, bypassing the cache, and
+// stores them for the others.
+func (c *remoteCache) readHeads(ctx context.Context, rh scm.RemoteHeadReader, url, token string, now time.Time) (map[string]string, error) {
 	heads, err := rh.RemoteHeads(ctx, url, token)
 	if err != nil {
 		return nil, err
