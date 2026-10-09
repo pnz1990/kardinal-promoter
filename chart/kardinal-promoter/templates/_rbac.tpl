@@ -67,6 +67,13 @@ rules exist for. A new client call needs a row there and a rule here.
     - scheduleclocks/status
     - notificationhooks/status
   verbs: ["get", "update", "patch"]
+# Approvals: the UI records, replaces and revokes decisions for its
+# TokenReview user (POST /api/v1/ui/approvals). An Approval is immutable, so
+# there is no update; the approvals admission policy admits the controller's
+# writes only for Approvals marked kardinal.io/recorded-via: ui.
+- apiGroups: ["kardinal.io"]
+  resources: ["approvals"]
+  verbs: ["get", "list", "watch", "create", "delete"]
 # Audit records are append-only.
 - apiGroups: ["kardinal.io"]
   resources: ["auditevents"]
