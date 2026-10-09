@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -278,9 +279,14 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 	bind(editor, direct.Name)
 	bind(editor, edit.Name)
 
+	// These callers talk to the API server, so their tokens are for its
+	// audience, not kardinal's.
 	as := func(u roleUser) client.Client {
+		tr, err := e.Kube.CoreV1().ServiceAccounts(ns).CreateToken(ctx, u.name, &authnv1.TokenRequest{
+			Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](600)}}, metav1.CreateOptions{})
+		require.NoError(t, err)
 		cfg := rest.AnonymousClientConfig(e.Config)
-		cfg.BearerToken = u.token
+		cfg.BearerToken = tr.Status.Token
 		c, err := client.New(cfg, client.Options{Scheme: framework.Scheme()})
 		require.NoError(t, err)
 		return c
@@ -292,12 +298,18 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 	})
 
 	key := types.NamespacedName{Namespace: ns, Name: pipelineName}
+	// The controller writes the Pipeline too: retry on conflict, as kubectl
+	// edit would.
 	updatePipeline := func(u roleUser, change func(*v1alpha1.Pipeline)) error {
 		c := as(u)
-		var p v1alpha1.Pipeline
-		require.NoError(t, c.Get(ctx, key, &p))
-		change(&p)
-		return c.Update(ctx, &p)
+		return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			var p v1alpha1.Pipeline
+			if err := c.Get(ctx, key, &p); err != nil {
+				return err
+			}
+			change(&p)
+			return c.Update(ctx, &p)
+		})
 	}
 	tests := []struct {
 		name   string
@@ -324,15 +336,22 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 
 	gk := types.NamespacedName{Namespace: ns, Name: "hold"}
 	gc := as(gater)
-	var g v1alpha1.PolicyGate
-	require.NoError(t, gc.Get(ctx, gk, &g))
-	g.Spec.Overrides = append(g.Spec.Overrides, v1alpha1.PolicyGateOverride{
-		Reason: "e2e scoped write", CreatedBy: gater.username(),
-		ExpiresAt: metav1.NewTime(time.Now().Add(5 * time.Minute)), CreatedAt: ptr.To(metav1.Now())})
-	assert.NoError(t, gc.Update(ctx, &g), "gater adds an override")
-	require.NoError(t, gc.Get(ctx, gk, &g))
-	g.Spec.Expression = "true"
-	err := gc.Update(ctx, &g)
+	updateGate := func(change func(*v1alpha1.PolicyGate)) error {
+		return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			var g v1alpha1.PolicyGate
+			if err := gc.Get(ctx, gk, &g); err != nil {
+				return err
+			}
+			change(&g)
+			return gc.Update(ctx, &g)
+		})
+	}
+	assert.NoError(t, updateGate(func(g *v1alpha1.PolicyGate) {
+		g.Spec.Overrides = append(g.Spec.Overrides, v1alpha1.PolicyGateOverride{
+			Reason: "e2e scoped write", CreatedBy: gater.username(),
+			ExpiresAt: metav1.NewTime(time.Now().Add(5 * time.Minute)), CreatedAt: ptr.To(metav1.Now())})
+	}), "gater adds an override")
+	err := updateGate(func(g *v1alpha1.PolicyGate) { g.Spec.Expression = "true" })
 	require.Error(t, err, "gater may not change the expression")
 	assert.Contains(t, err.Error(), "you may change only spec.overrides")
 }
