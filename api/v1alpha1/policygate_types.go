@@ -118,7 +118,11 @@ type PolicyGateStatus struct {
 	// +optional
 	Reason string `json:"reason,omitempty"`
 
-	// LastEvaluatedAt is when the gate was last evaluated.
+	// LastEvaluatedAt is when the gate's result was last written. The
+	// controller re-evaluates more often, but writes the status only when the
+	// result or reason changes, when a PromotionStep that has not started
+	// needs a newer result, after a spec change, and otherwise at least every
+	// 10 minutes.
 	// +optional
 	LastEvaluatedAt *metav1.Time `json:"lastEvaluatedAt,omitempty"`
 

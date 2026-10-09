@@ -60,24 +60,28 @@ func (gc *gateClock) eval(at time.Time) kardinalv1alpha1.PolicyGate {
 // TestPolicyGateReconciler_ReadyConditionMarksTransitions: the Ready
 // condition's lastTransitionTime moves only when the gate flips, so it
 // identifies one blocking episode (C04-gates-09, C04-gates-10), while
-// lastEvaluatedAt moves on every recheck.
+// lastEvaluatedAt moves on every write: when the result changes, and at
+// least every statusHeartbeat while it does not.
 func TestPolicyGateReconciler_ReadyConditionMarksTransitions(t *testing.T) {
 	sat := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
 	mon := time.Date(2026, 4, 13, 9, 0, 0, 0, time.UTC)
 	gc := newGateClock(t)
 
+	// wantEval is status.lastEvaluatedAt after the evaluation: a result that
+	// did not change is not written again until statusHeartbeat (10m) has
+	// passed since the last write.
 	steps := []struct {
-		at         time.Time
-		wantStatus metav1.ConditionStatus
-		wantReason string
-		wantLTT    time.Time
+		at, wantEval time.Time
+		wantStatus   metav1.ConditionStatus
+		wantReason   string
+		wantLTT      time.Time
 	}{
-		{at: sat, wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat},
-		{at: sat.Add(5 * time.Minute), wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat},
-		{at: sat.Add(10 * time.Minute), wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat},
-		{at: mon, wantStatus: metav1.ConditionTrue, wantReason: "Allowed", wantLTT: mon},
-		{at: mon.Add(5 * time.Minute), wantStatus: metav1.ConditionTrue, wantReason: "Allowed", wantLTT: mon},
-		{at: sat.Add(7 * 24 * time.Hour), wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat.Add(7 * 24 * time.Hour)},
+		{at: sat, wantEval: sat, wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat},
+		{at: sat.Add(5 * time.Minute), wantEval: sat, wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat},
+		{at: sat.Add(10 * time.Minute), wantEval: sat.Add(10 * time.Minute), wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat},
+		{at: mon, wantEval: mon, wantStatus: metav1.ConditionTrue, wantReason: "Allowed", wantLTT: mon},
+		{at: mon.Add(5 * time.Minute), wantEval: mon, wantStatus: metav1.ConditionTrue, wantReason: "Allowed", wantLTT: mon},
+		{at: sat.Add(7 * 24 * time.Hour), wantEval: sat.Add(7 * 24 * time.Hour), wantStatus: metav1.ConditionFalse, wantReason: "Blocked", wantLTT: sat.Add(7 * 24 * time.Hour)},
 	}
 	for _, s := range steps {
 		g := gc.eval(s.at)
@@ -89,7 +93,8 @@ func TestPolicyGateReconciler_ReadyConditionMarksTransitions(t *testing.T) {
 			s.at, cond.LastTransitionTime.Time, s.wantLTT)
 		assert.Equal(t, g.Status.Reason, cond.Message)
 		require.NotNil(t, g.Status.LastEvaluatedAt)
-		assert.True(t, s.at.Equal(g.Status.LastEvaluatedAt.Time), "lastEvaluatedAt moves on every evaluation")
+		assert.True(t, s.wantEval.Equal(g.Status.LastEvaluatedAt.Time), "at %s: lastEvaluatedAt %s, want %s",
+			s.at, g.Status.LastEvaluatedAt.Time, s.wantEval)
 	}
 }
 

@@ -432,7 +432,7 @@ func TestCLI_CreateBundleDryRun(t *testing.T) {
 	waitPipelineValid(t, e, a.ns, pipelineName)
 
 	want := "[DRY-RUN] Bundle \"podinfo-dry-run\" for pipeline \"podinfo\"\n\n" +
-		"Promotion graph: 6 node(s)\n\n" +
+		"Promotion graph: 7 node(s)\n\n" +
 		"Environments in promotion order:\n" +
 		"  • test\n" +
 		"  • prod (gates: change-freeze)\n\n" +

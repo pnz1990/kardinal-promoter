@@ -61,6 +61,11 @@ type GraphNode struct {
 	// Stored as a map to allow arbitrary Kubernetes resource shapes.
 	Template map[string]interface{} `json:"template,omitempty"`
 
+	// Def introduces data into the Graph's CEL scope without reading or
+	// writing any object. Literal values are typed from the value; a string
+	// with ${...} is evaluated.
+	Def map[string]interface{} `json:"def,omitempty"`
+
 	// Ref identifies an existing object or collection:
 	//
 	//	{apiVersion, kind, metadata: {name | selector, namespace}}
@@ -77,7 +82,8 @@ type GraphNode struct {
 
 	// ForEach expands the node into a collection. Each entry holds exactly one
 	// iterator name mapped to a CEL expression that yields a list, for example
-	// {"item": "${[\"a\",\"b\"]}"}. The builder does not emit it.
+	// {"item": "${[\"a\",\"b\"]}"}. The builder emits it for the
+	// PolicyGates and PRStatuses collections.
 	ForEach []map[string]string `json:"forEach,omitempty"`
 }
 
