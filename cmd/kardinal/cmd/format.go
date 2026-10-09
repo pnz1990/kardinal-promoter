@@ -70,7 +70,7 @@ func truncateRunes(s string, n int) string {
 
 // stepStatePriority returns a sort priority for a PromotionStep state.
 // Higher priority = displayed first. Used by the pipeline, steps and explain views.
-// Active states (Promoting/WaitingForMerge/HealthChecking) take precedence,
+// Active states (Promoting/WaitingForMerge/HealthChecking/Verifying) take precedence,
 // then Pending (step queued but not started), then Verified, AbortedByAlarm
 // and RollingBack, then Failed. AbortedByAlarm and RollingBack rank with
 // Verified because the alarm fires after merge: the environment runs that
@@ -82,7 +82,7 @@ func truncateRunes(s string, n int) string {
 // terminal-state bundles (#260).
 func stepStatePriority(state string) int {
 	switch state {
-	case "Promoting", "WaitingForMerge", "HealthChecking":
+	case "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
 		return 4
 	case "Pending":
 		return 3

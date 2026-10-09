@@ -38,6 +38,9 @@ type BuildInput struct {
 	// DefaultPolicyNamespace.
 	PolicyNamespaces []string
 
+	// Analyses are the Argo Rollouts analysis templates the environments'
+	// spec.verification names, as the translator read them.
+	Analyses AnalysisInput
 	// MetricChecks are the MetricChecks of the Pipeline namespace. Each one
 	// with spec.perPromotion that a gate of an environment reads gets an
 	// instance node for that environment (buildMetricCheckNode).
@@ -113,6 +116,9 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	if err := validateInput(input.Pipeline, input.Bundle); err != nil {
 		return nil, err
 	}
+	if err := ValidateHooks(input.Pipeline); err != nil {
+		return nil, err
+	}
 
 	// Step 1: resolve environment ordering
 	orderedEnvs, deps, err := resolveOrdering(input.Pipeline)
@@ -161,7 +167,7 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 		}
 	}
 	nodes, instances, upstreams, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates,
-		input.MetricChecks, input.PolicyNamespaces, compact)
+		input.MetricChecks, input.PolicyNamespaces, input.Analyses, compact)
 	if err != nil {
 		return nil, err
 	}
@@ -586,7 +592,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
 	skipGates map[string][]skipPermissionGate,
-	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string,
+	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string, analyses AnalysisInput,
 	compact bool) ([]GraphNode, []kardinalv1alpha1.PolicyGate, map[string][]string, error) {
 	pipelineName := pipeline.Name
 	bundleSlug := CELSafeSlug(bundle.Name) // camelCase — node IDs only
@@ -615,6 +621,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		// ReadyWhen intentionally omitted — ref: is read-only.
 	}
 	nodes = append(nodes, bundleWatchNode)
+	nodes = append(nodes, readBackRefs(pipeline, filteredEnvs, bundle)...)
 
 	gates := newGateCollections(pipelineName, bundle.Name)
 	var prItems []interface{}
@@ -694,10 +701,23 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			continue
 		}
 		// PromotionStep node — node ID must be a valid CEL identifier.
-		nodes = append(nodes, buildPromotionStepNode(
+		stepNode := buildPromotionStepNode(
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
 			heldCond(pipeline, envName),
-		))
+		)
+		extras, err := buildEnvExtras(hookNodesInput{
+			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
+			bundleUID:   string(bundle.UID),
+			env:         findEnvSpec(pipeline, envName),
+			stepK8sName: promotionStepK8sName(pipelineName, bundle.Name, envName),
+			conds:       stepConds(heldCond(pipeline, envName), upstreams, envGates, gates.readyCond),
+		}, analyses, bundle)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		attachExtras(stepNode, extras)
+		nodes = append(nodes, stepNode)
+		nodes = append(nodes, extras.nodes...)
 	}
 
 	nodes = append(nodes, gates.nodes()...)
