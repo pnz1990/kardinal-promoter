@@ -23,11 +23,19 @@ const LabelMetricTemplate = "kardinal.io/metric-template"
 // placeholderRE matches a MetricCheck placeholder such as {{ bundle.version }}.
 var placeholderRE = regexp.MustCompile(`\{\{\s*([A-Za-z][A-Za-z.]*)\s*\}\}`)
 
-// safeValueRE is the charset a value must have to be put into a query. A
+// safeValueRE is the form a value must have to be put into a query. A
 // Bundle's version or image tag comes from CI: a value such as `"} or vector(1)`
 // would otherwise rewrite the query, so a value with any other character is
-// not substituted, the placeholder stays, and the instance fails closed.
-var safeValueRE = regexp.MustCompile(`^[A-Za-z0-9._:@+-]*$`)
+// not substituted, the placeholder stays, and the instance fails closed. An
+// empty value is not substituted either: `commit=""` matches nothing, and a
+// count over nothing (NRQL count(*), PromQL `or vector(0)`) is 0, which would
+// pass a gate that should fail. A leading "." and ".." are refused too.
+var safeValueRE = regexp.MustCompile(`^[A-Za-z0-9_:@+-][A-Za-z0-9._:@+-]*$`)
+
+// safeValue reports whether v may be substituted for a placeholder.
+func safeValue(v string) bool {
+	return safeValueRE.MatchString(v) && !strings.Contains(v, "..")
+}
 
 // MetricPlaceholders returns the placeholder names in s ("bundle.version"),
 // in order of appearance.
@@ -74,14 +82,14 @@ func KnownMetricPlaceholder(name string) bool {
 }
 
 // RenderMetricText replaces the placeholders in s with vars. An unknown
-// placeholder, or one whose value has a character outside [A-Za-z0-9._:@+-],
-// is left as it is: the MetricCheck reconciler refuses to query a text with a
+// placeholder, or one whose value is empty, starts with ".", contains "..",
+// or has a character outside [A-Za-z0-9._:@+-], is left as it is: the MetricCheck reconciler refuses to query a text with a
 // placeholder left in it.
 func RenderMetricText(s string, vars map[string]string) string {
 	return placeholderRE.ReplaceAllStringFunc(s, func(m string) string {
 		name := placeholderRE.FindStringSubmatch(m)[1]
 		v, ok := vars[name]
-		if !ok || !safeValueRE.MatchString(v) {
+		if !ok || !safeValue(v) {
 			return m
 		}
 		return v

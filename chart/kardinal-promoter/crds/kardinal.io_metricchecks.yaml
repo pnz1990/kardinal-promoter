@@ -428,7 +428,8 @@ spec:
                     description: |-
                       JSONPath selects the value from the JSON response, in kubectl syntax,
                       for example {.data.errorRate} or {.checks[0].status}. It must select
-                      exactly one string, number or boolean.
+                      exactly one string, number or boolean. Recursive descent (..) is not
+                      supported, and the response may be at most 64 KiB.
                     pattern: ^\{.*\}$
                     type: string
                   method:
@@ -438,8 +439,9 @@ spec:
                     - POST
                     type: string
                   timeoutSeconds:
-                    description: TimeoutSeconds bounds the request. Defaults to 10,
-                      at most 60.
+                    description: |-
+                      TimeoutSeconds bounds the request. Defaults to 10, at most 60, and
+                      never more than half of spec.interval.
                     format: int32
                     maximum: 60
                     minimum: 1
@@ -454,6 +456,9 @@ spec:
                 - jsonPath
                 - url
                 type: object
+                x-kubernetes-validations:
+                - message: 'web.jsonPath: recursive descent (..) is not supported'
+                  rule: '!self.jsonPath.contains(''..'')'
             required:
             - provider
             - threshold

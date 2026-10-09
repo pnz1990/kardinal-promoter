@@ -84,7 +84,10 @@ spec:
                       minLength: 1
                       type: string
                     tag:
-                      description: Tag is the image tag.
+                      description: |-
+                        Tag is the image tag, in the OCI distribution grammar: up to 128
+                        characters of [A-Za-z0-9_.-], not starting with "." or "-".
+                      pattern: ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$
                       type: string
                   required:
                   - repository

@@ -287,11 +287,31 @@ func TestCloudWatchProvider(t *testing.T) {
 		t.Setenv("AWS_ROLE_ARN", "")
 		t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "")
 		srv, rec := serve(t, 200, result(one))
-		v, err := (&metriccheck.CloudWatchProvider{HTTPClient: plainClient, AmbientCredentials: true}).Evaluate(
-			context.Background(), metriccheck.Query{Spec: spec(srv.URL, false), Secret: keys, Now: queryNow})
+		// The endpoint must be an AWS host with ambient credentials; the
+		// client sends the request to the fake instead.
+		target, err := url.Parse(srv.URL)
+		require.NoError(t, err)
+		toFake := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
+			return http.DefaultTransport.RoundTrip(r)
+		})}
+		p := &metriccheck.CloudWatchProvider{HTTPClient: toFake, AmbientCredentials: true}
+		v, err := p.Evaluate(context.Background(),
+			metriccheck.Query{Spec: spec("https://vpce-0a1b-xyz.monitoring.eu-west-1.vpce.amazonaws.com", false), Secret: keys, Now: queryNow})
 		require.NoError(t, err)
 		assert.Equal(t, 4.5, v.Number)
 		assert.Contains(t, rec.req.Header.Get("Authorization"), "Credential=AKIDAMBIENT/")
+
+		// QA #1479: the controller's own credentials never go to another host.
+		for _, endpoint := range []string{srv.URL, "https://evil.example.com", "http://monitoring.eu-west-1.amazonaws.com",
+			"https://amazonaws.com.evil.example"} {
+			before := rec.req
+			_, err := p.Evaluate(context.Background(),
+				metriccheck.Query{Spec: spec(endpoint, false), Secret: keys, Now: queryNow})
+			require.Error(t, err, endpoint)
+			assert.Contains(t, err.Error(), "must be an https *.amazonaws.com", endpoint)
+			assert.Same(t, before, rec.req, "%s: nothing was sent", endpoint)
+		}
 	})
 	t.Run("default endpoint is regional and egress guarded", func(t *testing.T) {
 		var host string
@@ -330,7 +350,10 @@ func TestWebProvider(t *testing.T) {
 		{name: "text", path: "{.status}", body: `{"status":"healthy"}`, wantText: "healthy"},
 		{name: "bool", path: "{.ok}", body: `{"ok":true}`, wantText: "true"},
 		{name: "list element", path: "{.checks[1].state}", body: `{"checks":[{"state":"a"},{"state":"b"}]}`, wantText: "b"},
-		{name: "nothing selected", path: "{.missing}", body: `{"a":1}`, wantErr: "missing is not found"},
+		{name: "nothing selected", path: "{.missing}", body: `{"a":"SECRET-DOC"}`, wantErr: "web jsonPath {.missing} selected nothing"},
+		// QA #1479: recursive descent can take seconds of CPU on a deep document.
+		{name: "recursive descent refused", path: "{..a}", body: `{"a":1}`, wantErr: "recursive descent (..) is not supported"},
+		{name: "invalid expression", path: "{.a[}", body: `{"a":1}`, wantErr: "not a valid JSONPath expression"},
 		{name: "many selected", path: "{.items[*].v}", body: `{"items":[{"v":1},{"v":2}]}`, wantErr: "selected 2 values"},
 		{name: "object selected", path: "{.a}", body: `{"a":{"b":1}}`, wantErr: "object or a list"},
 		{name: "null selected", path: "{.a}", body: `{"a":null}`, wantErr: "null"},
@@ -416,4 +439,66 @@ func TestDefaultBackends_RefuseLoopback(t *testing.T) {
 			assert.True(t, errors.Is(err, egress.ErrBlockedAddress), "%s: %v", name, err)
 		})
 	}
+}
+
+// TestWebProvider_CostBounds covers the QA findings on #1479: the response is
+// capped at 64 KiB, a JSONPath error never quotes the document, a request
+// never outlives half the interval, and at most two web checks run at once
+// (the rest get ErrBusy instead of holding a worker).
+func TestWebProvider_CostBounds(t *testing.T) {
+	spec := func(url, path string) *kardinalv1alpha1.MetricCheckSpec {
+		return &kardinalv1alpha1.MetricCheckSpec{Provider: "web", Interval: "10s",
+			Web: &kardinalv1alpha1.WebProviderSpec{URL: url, JSONPath: path, TimeoutSeconds: 60}}
+	}
+	eval := func(p *metriccheck.WebProvider, s *kardinalv1alpha1.MetricCheckSpec) error {
+		_, err := p.Evaluate(context.Background(), metriccheck.Query{Spec: s, Secret: secrets(nil), Now: queryNow})
+		return err
+	}
+
+	t.Run("body cap", func(t *testing.T) {
+		srv, _ := serve(t, 200, `{"a":"`+strings.Repeat("x", 64<<10)+`"}`)
+		err := eval(&metriccheck.WebProvider{HTTPClient: plainClient}, spec(srv.URL, "{.a}"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "response larger than 65536 bytes")
+	})
+	t.Run("jsonpath error does not quote the document", func(t *testing.T) {
+		srv, _ := serve(t, 200, `{"a":{"k":"SECRET-DOC"}}`)
+		err := eval(&metriccheck.WebProvider{HTTPClient: plainClient}, spec(srv.URL, "{.a[0]}"))
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "SECRET-DOC")
+		assert.Equal(t, "web jsonPath {.a[0]} selected nothing", err.Error())
+	})
+	t.Run("timeout is under the interval", func(t *testing.T) {
+		block := make(chan struct{})
+		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-block }))
+		t.Cleanup(srv.Close)
+		t.Cleanup(func() { close(block) })
+		start := time.Now()
+		err := eval(&metriccheck.WebProvider{HTTPClient: plainClient}, spec(srv.URL, "{.a}"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "timed out")
+		assert.Less(t, time.Since(start), 8*time.Second, "timeoutSeconds 60 is cut to half the 10s interval")
+	})
+	t.Run("at most two at once", func(t *testing.T) {
+		block, arrived := make(chan struct{}), make(chan struct{}, 2)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			arrived <- struct{}{}
+			<-block
+			_, _ = io.WriteString(w, `{"a":1}`)
+		}))
+		t.Cleanup(srv.Close)
+		p := &metriccheck.WebProvider{HTTPClient: plainClient}
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Add(1)
+			go func() { defer wg.Done(); _ = eval(p, spec(srv.URL, "{.a}")) }()
+		}
+		<-arrived
+		<-arrived
+		err := eval(p, spec(srv.URL, "{.a}"))
+		assert.ErrorIs(t, err, metriccheck.ErrBusy)
+		close(block)
+		wg.Wait()
+		assert.NoError(t, eval(p, spec(srv.URL, "{.a}")), "a slot is free again")
+	})
 }

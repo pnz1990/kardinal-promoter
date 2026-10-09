@@ -5,6 +5,7 @@ package metriccheck_test
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"testing"
 	"time"
@@ -226,3 +227,34 @@ func TestPrometheusProvider_Authorization(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestReconciler_NonFiniteFails (QA #1479): NaN and ±Inf (a division by
+// zero) are never a pass, whatever the operator; ne used to pass on NaN.
+func TestReconciler_NonFiniteFails(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		for _, op := range []string{"ne", "lt", "gt"} {
+			mc := newMetricCheck("m", op, 0)
+			got, _, _ := run(t, mc, map[string]metriccheck.Backend{"prometheus": &valueBackend{value: metriccheck.NumberValue(v)}})
+			assert.Equal(t, "Fail", got.Status.Result, "%v %s 0", v, op)
+			assert.Contains(t, got.Status.Reason, "is not a finite number")
+		}
+	}
+}
+
+// busyBackend always reports ErrBusy.
+type busyBackend struct{}
+
+func (busyBackend) Evaluate(context.Context, metriccheck.Query) (metriccheck.Value, error) {
+	return metriccheck.Value{}, metriccheck.ErrBusy
+}
+
+// TestReconciler_BusyProviderRetriesWithoutResult: a check whose provider has
+// no free slot writes nothing and is retried in 2s.
+func TestReconciler_BusyProviderRetriesWithoutResult(t *testing.T) {
+	mc := newMetricCheck("m", "lt", 1)
+	got, second, res := run(t, mc, map[string]metriccheck.Backend{"prometheus": busyBackend{}})
+	assert.Equal(t, 2*time.Second, res.RequeueAfter)
+	assert.Empty(t, got.Status.Result)
+	assert.Nil(t, got.Status.LastEvaluatedAt)
+	assert.Equal(t, got.ResourceVersion, second.ResourceVersion)
+}

@@ -227,6 +227,8 @@ type NewRelicProviderSpec struct {
 }
 
 // WebProviderSpec configures provider web: an HTTP request to any JSON API.
+//
+// +kubebuilder:validation:XValidation:rule="!self.jsonPath.contains('..')",message="web.jsonPath: recursive descent (..) is not supported"
 // The check fails unless the response status is 2xx and JSONPath selects
 // exactly one value, which is then compared with the threshold (numerically,
 // or as text when threshold.text is set).
@@ -255,11 +257,13 @@ type WebProviderSpec struct {
 
 	// JSONPath selects the value from the JSON response, in kubectl syntax,
 	// for example {.data.errorRate} or {.checks[0].status}. It must select
-	// exactly one string, number or boolean.
+	// exactly one string, number or boolean. Recursive descent (..) is not
+	// supported, and the response may be at most 64 KiB.
 	// +kubebuilder:validation:Pattern=`^\{.*\}$`
 	JSONPath string `json:"jsonPath"`
 
-	// TimeoutSeconds bounds the request. Defaults to 10, at most 60.
+	// TimeoutSeconds bounds the request. Defaults to 10, at most 60, and
+	// never more than half of spec.interval.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=60
 	// +optional

@@ -17,6 +17,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **MetricCheck `prometheusURL` and `query` are no longer required for every provider** — `prometheusURL` is required for `prometheus`, `query` for every provider but `web` (CRD validation rules); existing MetricChecks are unchanged. A MetricCheck that is not a template and has a `{{ ... }}` placeholder in its query now fails instead of sending it
+- **Bundle `spec.images[].tag` must follow the OCI tag grammar** (`[A-Za-z0-9_][A-Za-z0-9._-]{0,127}`) — a tag a registry would refuse is now refused by the API server too, so a per-promotion query never gets a quoted or dotted value
 
 ### Docs
 

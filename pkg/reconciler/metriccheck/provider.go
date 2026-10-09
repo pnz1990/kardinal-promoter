@@ -105,6 +105,12 @@ func baseURL(raw, what string) (*url.URL, error) {
 // do sends req with hc and returns the response status and up to
 // maxResponseBytes of the body. The error never contains the URL.
 func do(hc *http.Client, req *http.Request, what string) (int, []byte, error) {
+	return doLimit(hc, req, what, maxResponseBytes)
+}
+
+// doLimit is do with a body limit of limit bytes. A longer body is an error,
+// not a truncated document.
+func doLimit(hc *http.Client, req *http.Request, what string, limit int64) (int, []byte, error) {
 	if hc == nil {
 		hc = defaultHTTPClient
 	}
@@ -120,9 +126,12 @@ func do(hc *http.Client, req *http.Request, what string) (int, []byte, error) {
 		return 0, nil, fmt.Errorf("%s %s: %w", what, req.Method, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return resp.StatusCode, nil, fmt.Errorf("%s: read response: %w", what, err)
+	}
+	if int64(len(body)) > limit {
+		return resp.StatusCode, nil, fmt.Errorf("%s: response larger than %d bytes", what, limit)
 	}
 	return resp.StatusCode, body, nil
 }

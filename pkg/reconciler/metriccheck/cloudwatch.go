@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,6 +91,14 @@ func (p *CloudWatchProvider) Evaluate(ctx context.Context, q Query) (Value, erro
 	endpoint, err := baseURL(address, "cloudwatch endpoint")
 	if err != nil {
 		return Value{}, err
+	}
+	// The controller's own session token goes only to AWS: an endpoint
+	// override with ambient credentials must be an https amazonaws.com host
+	// (regional or VPC endpoint). Checked before the credentials are fetched.
+	ambient := cw.AccessKeyIDSecretRef == nil || cw.SecretAccessKeySecretRef == nil
+	if ambient && p.AmbientCredentials && (endpoint.Scheme != "https" || !awsHostRE.MatchString(endpoint.Hostname())) {
+		return Value{}, errors.New("cloudwatch endpoint: with the controller's own AWS identity the endpoint " +
+			"must be an https *.amazonaws.com or *.amazonaws.com.cn host")
 	}
 	creds, err := p.credentials(ctx, q)
 	if err != nil {
@@ -187,6 +196,9 @@ func (p *CloudWatchProvider) credentials(ctx context.Context, q Query) (aws.Cred
 	}
 	return c, nil
 }
+
+// awsHostRE matches AWS service hosts, VPC endpoints included.
+var awsHostRE = regexp.MustCompile(`^([a-z0-9-]+\.)+amazonaws\.com(\.cn)?$`)
 
 // cloudWatchValue returns the latest point of the single result.
 func cloudWatchValue(resp cloudWatchResponse) (Value, error) {

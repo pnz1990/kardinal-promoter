@@ -45,7 +45,9 @@ type ImageRef struct {
 	// +kubebuilder:validation:MinLength=1
 	Repository string `json:"repository"`
 
-	// Tag is the image tag.
+	// Tag is the image tag, in the OCI distribution grammar: up to 128
+	// characters of [A-Za-z0-9_.-], not starting with "." or "-".
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`
 	// +optional
 	Tag string `json:"tag,omitempty"`
 

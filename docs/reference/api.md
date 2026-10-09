@@ -57,7 +57,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.images` | []object |  | Images lists the container images included in this Bundle. |
 | `spec.images[].digest` | string |  | Digest is the image digest (sha256:...). |
 | `spec.images[].repository` | string | yes | Repository is the image repository (e.g. "ghcr.io/nginx/nginx"). |
-| `spec.images[].tag` | string |  | Tag is the image tag. |
+| `spec.images[].tag` | string |  | Tag is the image tag, in the OCI distribution grammar: up to 128 characters of [A-Za-z0-9_.-], not starting with "." or "-". |
 | `spec.intent` | object |  | Intent declares optional targeting and skip overrides for this Bundle. |
 | `spec.intent.skipEnvironments` | []string |  | SkipEnvironments lists environment names to exclude from this promotion, subject to the PolicyGate SkipPermission check. |
 | `spec.intent.targetEnvironment` | string |  | TargetEnvironment restricts this Bundle to promoting only up to and including this environment. Empty means promote through all environments. |
@@ -182,9 +182,9 @@ MetricCheck is a metric gate backed by Prometheus, Datadog, CloudWatch, New Reli
 | `spec.web.headers[].valueFromSecret` | object |  | ValueFromSecret names a Secret key whose value is sent as the header value. |
 | `spec.web.headers[].valueFromSecret.key` | string | yes | Key is the key in the Secret's data. |
 | `spec.web.headers[].valueFromSecret.name` | string | yes | Name is the Secret name. |
-| `spec.web.jsonPath` | string | yes | JSONPath selects the value from the JSON response, in kubectl syntax, for example {.data.errorRate} or {.checks[0].status}. It must select exactly one string, number or boolean. |
+| `spec.web.jsonPath` | string | yes | JSONPath selects the value from the JSON response, in kubectl syntax, for example {.data.errorRate} or {.checks[0].status}. It must select exactly one string, number or boolean. Recursive descent (..) is not supported, and the response may be at most 64 KiB. |
 | `spec.web.method` | string |  | Method is GET (default) or POST. One of: `GET`, `POST`. |
-| `spec.web.timeoutSeconds` | integer (int32) |  | TimeoutSeconds bounds the request. Defaults to 10, at most 60. |
+| `spec.web.timeoutSeconds` | integer (int32) |  | TimeoutSeconds bounds the request. Defaults to 10, at most 60, and never more than half of spec.interval. |
 | `spec.web.url` | string | yes | URL is the http or https URL to call. It may contain placeholders such as {{ bundle.version }}; see MetricCheckSpec.PerPromotion. |
 | `status` | object |  | MetricCheckStatus records the most recent metric evaluation result. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is the timestamp of the most recent evaluation. |

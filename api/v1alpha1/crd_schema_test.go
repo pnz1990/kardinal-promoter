@@ -716,8 +716,29 @@ func TestCRDMetricCheckProviders(t *testing.T) {
 		"text with lt": mc(map[string]interface{}{"provider": "web", "web": map[string]interface{}{"url": "http://x", "jsonPath": "{.a}"},
 			"threshold": map[string]interface{}{"operator": "lt", "text": "x"}}),
 		"unknown provider": mc(map[string]interface{}{"provider": "graphite", "query": "q"}),
+		"web recursive descent": mc(map[string]interface{}{"provider": "web",
+			"web": map[string]interface{}{"url": "http://x", "jsonPath": "{..a}"}}),
 	}
 	for name, obj := range rejected {
 		assert.NotEmpty(t, validateCR(t, crds, obj), "%s must be rejected", name)
+	}
+}
+
+// TestCRDBundleImageTag: a Bundle image tag follows the OCI grammar, so a
+// per-promotion MetricCheck never gets an empty, dotted or quoted tag
+// (QA #1479).
+func TestCRDBundleImageTag(t *testing.T) {
+	crds := loadCRDs(t)
+	bundle := func(tag string) map[string]interface{} {
+		return map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Bundle",
+			"metadata": map[string]interface{}{"name": "b", "namespace": "default"},
+			"spec": map[string]interface{}{"type": "image", "pipeline": "p",
+				"images": []interface{}{map[string]interface{}{"repository": "ghcr.io/a/b", "tag": tag}}}}
+	}
+	for _, ok := range []string{"1.2.3", "sha-abc1234", "v1_rc.2", "latest", "6.14.1-alpine"} {
+		assert.Empty(t, validateCR(t, crds, bundle(ok)), "tag %q must be accepted", ok)
+	}
+	for _, bad := range []string{".hidden", "-x", `x"} or vector(1)`, "a b", strings.Repeat("a", 129)} {
+		assert.NotEmpty(t, validateCR(t, crds, bundle(bad)), "tag %q must be rejected", bad)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"k8s.io/client-go/util/jsonpath"
@@ -23,7 +24,19 @@ const (
 	// defaultWebTimeout and maxWebTimeout bound a web request.
 	defaultWebTimeout = 10 * time.Second
 	maxWebTimeout     = 60 * time.Second
+	// maxWebResponseBytes bounds the web response that is read and parsed.
+	// JSONPath walks the whole document, so its size bounds the CPU a check
+	// can take; metric APIs answer far less.
+	maxWebResponseBytes = 64 << 10
+	// maxWebConcurrent is how many web checks run at once. Web endpoints are
+	// arbitrary, so a slow one must not take every MetricCheck worker: a
+	// check that finds no slot is retried shortly (ErrBusy).
+	maxWebConcurrent = 2
 )
+
+// ErrBusy means the provider has no free slot: the check is retried shortly
+// without recording a result.
+var ErrBusy = errors.New("provider busy")
 
 // webHTTPClient is egress-guarded like defaultHTTPClient. It has no client
 // timeout (the request context carries web.timeoutSeconds) and does not
@@ -44,10 +57,22 @@ type WebProvider struct {
 	// HTTPClient is used for the calls; nil means the egress-guarded default
 	// client. Its Timeout is replaced by web.timeoutSeconds.
 	HTTPClient *http.Client
+
+	slotsOnce sync.Once
+	slots     chan struct{}
 }
 
-// Evaluate implements Backend.
+// Evaluate implements Backend. At most maxWebConcurrent web checks run at
+// once; when every slot is taken it returns ErrBusy at once instead of
+// holding the reconcile worker.
 func (p *WebProvider) Evaluate(ctx context.Context, q Query) (Value, error) {
+	p.slotsOnce.Do(func() { p.slots = make(chan struct{}, maxWebConcurrent) })
+	select {
+	case p.slots <- struct{}{}:
+		defer func() { <-p.slots }()
+	default:
+		return Value{}, ErrBusy
+	}
 	w := q.Spec.Web
 	if w == nil {
 		return Value{}, errors.New("web: spec.web is required")
@@ -58,9 +83,13 @@ func (p *WebProvider) Evaluate(ctx context.Context, q Query) (Value, error) {
 	if !strings.HasPrefix(w.JSONPath, "{") || !strings.HasSuffix(w.JSONPath, "}") {
 		return Value{}, errors.New("web jsonPath: must be one {...} expression, for example {.data.value}")
 	}
+	// Recursive descent visits every node of the document for each step.
+	if strings.Contains(w.JSONPath, "..") {
+		return Value{}, errors.New("web jsonPath: recursive descent (..) is not supported")
+	}
 	jp := jsonpath.New("web")
 	if err := jp.Parse(w.JSONPath); err != nil {
-		return Value{}, fmt.Errorf("web jsonPath: %s", truncate(err.Error()))
+		return Value{}, errors.New("web jsonPath: not a valid JSONPath expression")
 	}
 	method := w.Method
 	if method == "" {
@@ -70,6 +99,8 @@ func (p *WebProvider) Evaluate(ctx context.Context, q Query) (Value, error) {
 	if w.TimeoutSeconds > 0 {
 		timeout = min(time.Duration(w.TimeoutSeconds)*time.Second, maxWebTimeout)
 	}
+	// A request never outlives the check's interval.
+	timeout = min(timeout, parseInterval(q.Spec.Interval)/2)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -102,7 +133,7 @@ func (p *WebProvider) Evaluate(ctx context.Context, q Query) (Value, error) {
 	if hc == nil {
 		hc = webHTTPClient
 	}
-	status, raw, err := do(hc, req, "web")
+	status, raw, err := doLimit(hc, req, "web", maxWebResponseBytes)
 	if err != nil {
 		return Value{}, err
 	}
@@ -128,9 +159,11 @@ func newRequest(ctx context.Context, method, url string, body *strings.Reader) (
 
 // jsonPathValue runs jp over doc and returns the single value it selects.
 func jsonPathValue(jp *jsonpath.JSONPath, doc interface{}, expr string) (Value, error) {
+	// The jsonpath error text quotes the document, which can hold what the
+	// endpoint returned to the controller: never copy it into status.
 	results, err := jp.FindResults(doc)
 	if err != nil {
-		return Value{}, fmt.Errorf("web jsonPath %s: %s", truncate(expr), truncate(err.Error()))
+		return Value{}, fmt.Errorf("web jsonPath %s selected nothing", truncate(expr))
 	}
 	var found []reflect.Value
 	for _, r := range results {

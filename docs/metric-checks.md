@@ -14,7 +14,8 @@ the result as `metrics.<name>.result`, `.value` and `.stale`, so a metric can ho
 
 Every provider has to return a single value: one series (the latest point is used), one NRQL row,
 or one JSONPath match. Anything else, an HTTP error, or a timeout gives `Fail`, so a gate on
-`metrics.<name>.result == "Pass"` blocks (fail closed).
+`metrics.<name>.result == "Pass"` blocks (fail closed). So does a value that is not a finite
+number (`NaN`, `+Inf`, `-Inf`, for example a division by zero), whatever the operator.
 
 ## Common fields
 
@@ -107,7 +108,9 @@ spec:
 
 The query is a `GetMetricData` expression; it must return one result, and the value is its latest
 point. `cloudWatch.endpoint` replaces `https://monitoring.<region>.amazonaws.com`, for example
-with a VPC endpoint. The request is signed with SigV4.
+with a VPC endpoint. The request is signed with SigV4. With the controller's own identity (below)
+an `endpoint` must be an `https` host under `amazonaws.com` or `amazonaws.com.cn` (VPC endpoints
+included), so the controller's session token is never sent anywhere else.
 
 Without the two Secret refs the check fails, unless the controller may use its own AWS identity:
 install with `--set metricCheck.cloudWatch.ambientCredentials=true` (controller flag
@@ -160,7 +163,11 @@ spec:
 ```
 
 The check fails unless the response status is 2xx (redirects are not followed) and `jsonPath`
-selects exactly one string, number or boolean. A number, or a string that parses as one, can be
+selects exactly one string, number or boolean. Limits, so one slow or large endpoint cannot hold
+the controller: the response may be at most 64 KiB, recursive descent (`..`) is not supported, a
+request never takes longer than half of `interval`, and at most two web checks run at once (one
+that finds no slot is retried 2 seconds later). A JSONPath that selects nothing reports
+`selected nothing`, never the document. A number, or a string that parses as one, can be
 compared with `threshold.value`; a string or boolean (`"true"`, `"false"`) with `threshold.text`.
 No CEL runs on the response.
 
@@ -220,9 +227,14 @@ How the Graph runs it:
   which has no result, and blocks.
 - Once the Bundle is no longer promoting (Verified, Failed or Superseded) the Graph sets the
   instance's `spec.suspend`, and it stops querying. A Failed Bundle that promotes again resumes it.
-- A value with a character outside `A-Z a-z 0-9 . _ : @ + -` is not put into a query (a Bundle's
-  tag comes from CI, and `"} or vector(1)` would rewrite a PromQL query). The placeholder stays, and
-  the instance fails with `unrendered placeholder {{ ... }}`. An unknown placeholder does the same,
+- A value with a character outside `A-Z a-z 0-9 . _ : @ + -`, an empty value, a value that starts
+  with `.`, and a value containing `..` are not put into a query (a Bundle's tag comes from CI, and
+  `"} or vector(1)` would rewrite a PromQL query; an empty commit matches nothing, and a count over
+  nothing is 0, which would pass). The placeholder stays, and the instance fails with
+  `unrendered placeholder {{ ... }}`. Bundle image tags must also follow the OCI tag grammar.
+- Put placeholders inside quoted literals (`version="{{ bundle.version }}"`,
+  `WHERE version = '{{ bundle.version }}'`), never inside a regular expression (`=~`, `LIKE`,
+  `RLIKE`): there `.` and `+` are operators, and a value can match more than its own release. An unknown placeholder does the same,
   and the template's `status.reason` names it. A MetricCheck that is not a template and contains a
   placeholder fails the same way.
 - Templates are read when the Bundle's Graph is built: a template created afterwards applies to

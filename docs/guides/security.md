@@ -454,6 +454,15 @@ loopback address is refused.
 
 ---
 
+**MetricCheck `web` reads from wherever the controller can reach.** A `web` MetricCheck sends a
+GET or POST to a URL its author chooses and copies one JSONPath value of the answer into
+`status.lastValue` (at most 256 bytes, a string, number or boolean). The egress guard keeps it off
+loopback, link-local and metadata addresses, but private addresses stay allowed, so anyone who can
+create a MetricCheck can read a field from an in-cluster Service that answers JSON. Give `create`
+on MetricChecks only to people who may read those Services, and restrict the targets with the
+controller egress allowlist (`--egress-allowlist`, #1474) or the chart NetworkPolicy
+(`networkPolicy.enabled`, `networkPolicy.extraEgress`).
+
 ## Admission Validation
 
 The CRDs validate their fields with OpenAPI schema rules, so `kubectl apply` rejects bad

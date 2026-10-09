@@ -171,7 +171,7 @@ func TestMetric_WebProviderGate(t *testing.T) {
 	e.WaitMetricCheck(t, a.ns, "error-rate", metricTimeout, "failing", framework.MetricResult("Fail", "0.9 lt 0.5 = false"))
 	e.WaitMetricCheck(t, a.ns, "status", metricTimeout, "failing", framework.MetricResult("Fail", `"degraded" eq "healthy" = false`))
 	e.WaitMetricCheck(t, a.ns, "unauthorized", metricTimeout, "refused", framework.MetricResult("Fail", "web query error: web returned HTTP 401"))
-	e.WaitMetricCheck(t, a.ns, "no-match", metricTimeout, "failing", framework.MetricResult("Fail", "nothing is not found"))
+	e.WaitMetricCheck(t, a.ns, "no-match", metricTimeout, "failing", framework.MetricResult("Fail", "web jsonPath {.nothing} selected nothing"))
 
 	gates := map[string]string{
 		"web-error-rate": `metrics["error-rate"].result == "Pass"`,

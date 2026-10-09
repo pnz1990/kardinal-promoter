@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -50,6 +51,8 @@ const (
 	// status write: a write that failed once, for example on a conflict or
 	// a brief API server outage, is likely to work at once.
 	firstWriteRetry = 5 * time.Second
+	// busyRetry is how soon a check whose provider had no free slot runs.
+	busyRetry = 2 * time.Second
 )
 
 // MetricsProvider queries a Prometheus-compatible backend and returns a
@@ -146,6 +149,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	value, queryErr := r.evaluate(ctx, &mc)
+	if errors.Is(queryErr, ErrBusy) {
+		// Every slot of the provider is taken (web): try again soon, without
+		// a result. The last one still goes stale at its validUntil.
+		return ctrl.Result{RequeueAfter: busyRetry}, nil
+	}
 	if queryErr != nil {
 		log.Warn().Err(queryErr).Str("provider", mc.Spec.Provider).Msg("metric query failed")
 		return r.record(ctx, log, &mc, interval, "", "Fail", fmt.Sprintf("%s query error: %s", providerName(&mc.Spec), queryErr))
@@ -368,6 +376,11 @@ func evaluateThreshold(value Value, t kardinalv1alpha1.MetricThreshold) (string,
 		return "Fail", fmt.Sprintf("value %q is not a number: set threshold.text to compare text", value.Text)
 	}
 	v := value.Number
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		// NaN compares false with everything and true with ne: a division by
+		// zero must not pass a gate.
+		return "Fail", fmt.Sprintf("value %s is not a finite number", value.Text)
+	}
 	var pass bool
 	switch t.Operator {
 	case "lt":

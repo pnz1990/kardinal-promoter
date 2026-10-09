@@ -44,7 +44,8 @@ func metricNodes(t *testing.T, g *graph.Graph) map[string]graph.GraphNode {
 }
 
 func TestRenderMetricText(t *testing.T) {
-	vars := map[string]string{"bundle.version": "1.2.3", "environment.name": "prod", "bundle.imageTag": `x"} or vector(1)`}
+	vars := map[string]string{"bundle.version": "1.2.3", "environment.name": "prod", "bundle.imageTag": `x"} or vector(1)`,
+		"bundle.commitSHA": "", "bundle.name": ".+", "pipeline.name": "a..b"}
 	tests := []struct {
 		name, in, want string
 	}{
@@ -53,6 +54,10 @@ func TestRenderMetricText(t *testing.T) {
 		{"unknown stays", `x{{ bundle.nope }}`, `x{{ bundle.nope }}`},
 		{"unsafe value stays", `t="{{ bundle.imageTag }}"`, `t="{{ bundle.imageTag }}"`},
 		{"single braces untouched", `sum(rate(x{a="b"}[5m]))`, `sum(rate(x{a="b"}[5m]))`},
+		// QA #1479: an empty value would match nothing and a count of 0 passes.
+		{"empty value stays", `commit = '{{ bundle.commitSHA }}'`, `commit = '{{ bundle.commitSHA }}'`},
+		{"leading dot stays", `v="{{ bundle.name }}"`, `v="{{ bundle.name }}"`},
+		{"double dot stays", `v="{{ pipeline.name }}"`, `v="{{ pipeline.name }}"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
