@@ -95,6 +95,8 @@ export interface EnvironmentNode {
   /** Set on a fleet environment: environmentStates and deployed are keyed by
    *  its target environments, which the fleet board rolls up (D1). */
   fleet?: EnvironmentFleet
+  /** The environment's hold (spec.holds, kardinal rollback --hold), if held. */
+  hold?: EnvironmentHold
 }
 
 /** A fleet environment's targets and pacing (spec.fleet). */
@@ -107,6 +109,18 @@ export interface EnvironmentFleet {
   maxUnavailable?: number
   /** Why the targets cannot be resolved (a selector fleet). */
   message?: string
+}
+
+/** A Pipeline environment pinned to a rollback Bundle until it is released (#1528). */
+export interface EnvironmentHold {
+  /** The rollback Bundle the environment is held on. */
+  bundle: string
+  reason: string
+  createdBy?: string
+  /** RFC 3339. */
+  createdAt?: string
+  /** When the controller removes the hold, RFC 3339; absent: when released. */
+  expiresAt?: string
 }
 
 export interface Bundle {
