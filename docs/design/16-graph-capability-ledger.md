@@ -66,6 +66,7 @@ Rules:
 | [G12](#g12-delete-and-prune-orphan-the-pods-of-a-job) | kro deletes and prunes without a propagation policy, so a Job node orphans its Pods, and a deleted Job runs again | Medium | **Planned in #1493 (not on main)**: hooks use a `HookRun` CRD that owns its Job (#1443) | None filed |
 | [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | kardinal shards only its own controllers, by namespace (`--namespace-shard`, `pkg/shard`, #1462) | None filed |
 | [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | **Planned in #1518 (not on main)**: mirror `patch` nodes with a literal target name | None filed |
+| [G15](#g15-kro-holds-every-graph-in-memory-and-a-graph-cannot-be-retired-without-its-children) | kro holds every live Graph in memory (3 to 6 MB each, whatever its size), and a Graph cannot be deleted without deleting its children | High at scale | `pkg/reconciler/bundle/retire.go` records the steps in `Bundle.status.retiredSteps`, then deletes the Graph | None filed (drafts: Graph suspend, kro#1445 comment) |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
@@ -724,6 +725,77 @@ per field. The G1 `gateReadiness` opt-in would also do: the gating fields would 
 
 ---
 
+## G15: kro holds every Graph in memory, and a Graph cannot be retired without its children
+
+**Need.** Keep the history of a finished Bundle (its PromotionSteps, which rollback, promote,
+history, DORA metrics, the Pipeline phase, the CLI and the UI read) without keeping its Graph
+live. kro was OOMKilled at about 337 Graphs with its 1 GiB default (#1492): kardinal kept the
+Graph of every finished Bundle until `historyLimit` pruned the Bundle, up to 50 per Pipeline.
+
+**kro today** (v0.10.0-rc.0, read in the source):
+
+- A live Graph costs memory for its whole life: the compiled program in the `Registry`
+  (`pkg/graphengine/registry/registry.go`), its watch registrations in the `watchrouter`, and its
+  `SchemaWatcher` subscriptions. They are released only in `reconcileDelete`
+  (`pkg/controller/graph/controller.go:262-269`).
+- `reconcileDelete` deletes every `status.managedResources` entry by name with a UID
+  precondition (`executor/simple.go:530-570`). It reads no label, annotation or ownerReference
+  (kro sets none on children, G7), and there is no deletion policy or suspend for the Graph
+  kind: `kro.run/reconcile: suspended` is read only by the instance controller
+  (`pkg/controller/instance/controller.go:317`), and kro#1445's `Detach` is RGD-only.
+- The cost is per Graph, not per byte: the scale suite measured 5.4 MB of kro working set per
+  live Graph for 14 KB, 11-node Graphs (148 Graphs, 844 MiB; OOMKilled at about 160 in 1 GiB).
+  A heap profile at 150 Graphs (kro built with `-tags pprof`) has 390 MB in use, 88% of it in the
+  compiled programs the `Registry` keeps (`Registry.Compile` → `compileFrame`). 83% is the typed CEL
+  environment (`krocel.TypedEnvironmentWithIDsAndProvider` → `defaultEnvironment`,
+  `pkg/cel/environment.go:218`): `SchemaDeclTypeWithMetadata` (`pkg/cel/schemas.go:52`, 52%)
+  converts every typed node's CRD schema into a fresh `DeclType`, and `MaybeAssignTypeName` (25%)
+  copies it under the node's name. None of it is shared between nodes of the same kind or between
+  Graphs. That is about 2.6 MB of heap per Graph, roughly 5 MB of working set at GOGC=100.
+- Shrinking the spec prunes the removed nodes' resources (`controller.go:391-425`); entries of
+  an Unresolved node are kept, but the node stays compiled, so the memory stays.
+
+**Options checked and rejected.**
+
+- *Detach by removing kro's finalizer, then delete.* The children survive, but a Graph deleted
+  without the finalizer path leaves its `Registry` entry, watches and schema subscriptions in
+  kro: `Reconcile` returns on NotFound (`controller.go:129-131`) without releasing them, so the
+  memory is not freed until kro restarts.
+- *Detach by clearing `status.managedResources`, then delete.* No race-free order exists: an
+  in-flight reconcile writes its in-memory inventory back with an unconditional merge patch
+  (`updateStatus`, `controller.go:707-740`; `persistManagedResources` only grows it), and every
+  later reconcile re-records each applied child. If that write lands after ours, teardown deletes
+  the children anyway. It also means writing kro's status, a cross-CRD status write.
+- *Shrink the Graph to a minimal spec.* kro prunes the children (the same loss as deleting) and
+  the Graph object stays.
+
+**kardinal workaround.** Retire, with a record. After a delay (1m for a Superseded Bundle or a
+Verified one replaced everywhere, 1h for a Verified one still deployed, 24h for a Failed one;
+`--graph-retire-*-after`, Pipeline annotation `kardinal.io/graph-retire-after`), and once every
+step is `Verified` or `Failed` with no finalizer, the Bundle reconciler writes one record per step
+to `Bundle.status.retiredSteps` and sets `GraphRetired=True` in one status write, then deletes the
+Graph; kro deletes the children. Readers list steps with `lifecycle.ListPromotionSteps` /
+`AddRetiredSteps`, which add the records of retired Bundles as in-memory steps. A retired Bundle
+is final (no recovery, no rebuild on a Pipeline change). Lost: gate instances, PRStatuses,
+per-step detail and Events; AuditEvents are not Graph children and stay. kro's memory is then
+bounded by the Bundles in flight and recently finished; `hack/install-kro.sh` sets the limit
+(`KRO_MEMORY_LIMIT`) and `docs/installation.md#sizing-kro` sizes it.
+
+**Upstream asks** (drafts, not posted):
+
+- Graph honors `kro.run/reconcile: suspended` (skip apply and prune). With it, kardinal could
+  suspend a finished Graph, wait for the condition, clear its inventory and delete it, keeping
+  the children race-free.
+- A Graph-level or node-level `Detach` deletion policy in the shared teardown (comment on
+  kro#1445), which releases the template field manager on detach.
+- Release the `Registry` entry, watches and schema subscriptions when `Reconcile` finds the Graph
+  gone (`controller.go:129-131`), so a Graph deleted without the finalizer does not leak.
+- Cache the `DeclType` per CRD schema (GVK and resourceVersion) and share it across nodes and
+  Graphs instead of converting and renaming it per node. Draft #10 in the upstream drafts, not
+  posted.
+
+---
+
 ## Notes: constraints we design around
 
 These are not gaps, but the translator has to work around them.
@@ -875,6 +947,7 @@ blocks above.
 | G12 Job orphans | Background propagation on delete and prune | Yes |
 | G13 sharding | `--graph-selector` on the Graph controller | Yes, with G9 |
 | G14 frozen nodes | `TolerateDataPending` opt-in for Graph nodes | Yes, unless G1 lands first |
+| G15 retire a Graph, keep its children | Graph suspend, Graph `Detach` policy, release memory on NotFound | Yes |
 
 ### Hazards found
 

@@ -33,6 +33,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func newExplainCmd() *cobra.Command {
@@ -169,6 +170,8 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
 		return fmt.Errorf("list bundles: %w", err)
 	}
+	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+	steps.Items = lifecycle.AddRetiredSteps(steps.Items, bundles.Items, map[string]string{"kardinal.io/pipeline": pipeline})
 
 	type explainRow struct {
 		environment string

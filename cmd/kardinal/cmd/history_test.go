@@ -206,3 +206,30 @@ func TestHistory_Order(t *testing.T) {
 	}
 	assert.Equal(t, want[:2], bundles(buildHistoryRows(steps, nil, "", 2)))
 }
+
+// TestHistory_RetiredBundle verifies that history still lists a Bundle whose
+// Graph was retired (#1492): its steps are gone and only its
+// status.retiredSteps are left.
+func TestHistory_RetiredBundle(t *testing.T) {
+	s := cliTestScheme(t)
+	at := metav1.NewTime(time.Now().Add(-time.Hour).Truncate(time.Second))
+	b := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default", CreationTimestamp: at},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: v1alpha1.BundleStatus{
+			Phase: "Verified",
+			Conditions: []metav1.Condition{{Type: "GraphRetired", Status: metav1.ConditionTrue, Reason: "Retired",
+				LastTransitionTime: at}},
+			RetiredAt: &at,
+			RetiredSteps: []v1alpha1.RetiredStep{{Name: "nginx-demo-v1-dev", Environment: "dev", StepType: "open-pr",
+				State: "Verified", PRURL: "https://github.com/org/repo/pull/10", CreatedAt: at, VerifiedAt: &at}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+
+	var buf bytes.Buffer
+	require.NoError(t, historyFn(&buf, c, "default", "nginx-demo", "", 20))
+	out := buf.String()
+	assert.Contains(t, out, "nginx-demo-v1")
+	assert.Contains(t, out, "#10")
+}

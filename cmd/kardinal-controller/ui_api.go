@@ -504,7 +504,9 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, pipelineListResponse(list.Items, bundleList.Items, stepList.Items, gateList.Items, time.Now().UTC(), &s.upstreams))
+	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+	steps := lifecycle.AddRetiredSteps(stepList.Items, bundleList.Items, nil)
+	writeJSON(w, pipelineListResponse(list.Items, bundleList.Items, steps, gateList.Items, time.Now().UTC(), &s.upstreams))
 	s.upstreams.prune(list.Items)
 }
 
@@ -825,6 +827,10 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 		fail(err, "list promotion steps")
 		return
 	}
+	if bundle != nil {
+		// A retired Bundle (#1492) keeps its steps in status.retiredSteps.
+		psList.Items = lifecycle.AddRetiredSteps(psList.Items, []v1alpha1.Bundle{*bundle}, byBundle)
+	}
 	var gateList v1alpha1.PolicyGateList
 	if err := s.client.List(ctx, &gateList, client.InNamespace(namespace), byBundle); err != nil {
 		fail(err, "list policy gates")
@@ -1012,7 +1018,7 @@ func linearEnvDeps(order []string) map[string][]string {
 // handleBundleSteps handles GET /api/v1/ui/bundles/{name}/steps[?namespace=].
 // Steps are read from the Bundle's namespace only (see findBundle).
 func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, bundleName string) {
-	_, namespace, err := s.findBundle(r.Context(), bundleName, r.URL.Query().Get("namespace"))
+	bundle, namespace, err := s.findBundle(r.Context(), bundleName, r.URL.Query().Get("namespace"))
 	if err != nil {
 		s.log.Error().Err(err).Str("bundle", bundleName).Msg("ui: bundle steps: list bundles")
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -1023,6 +1029,11 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 		s.log.Error().Err(err).Str("bundle", bundleName).Msg("ui: bundle steps: list promotion steps")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	if bundle != nil {
+		// A retired Bundle (#1492) keeps its steps in status.retiredSteps.
+		list.Items = lifecycle.AddRetiredSteps(list.Items, []v1alpha1.Bundle{*bundle},
+			map[string]string{lifecycle.LabelBundle: bundleName})
 	}
 
 	// Build a bake target index: pipelineName+envName → bake minutes.
