@@ -9,6 +9,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,9 +21,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	sigyaml "sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -411,6 +417,191 @@ func TestForgejo_CircuitBreakerHonorsRateLimit(t *testing.T) {
 		}
 		return len(recs) == n, fmt.Sprintf("%d requests, %d when the circuit opened", len(recs), n)
 	})
+}
+
+// TestForgejo_CircuitBreakerSurvivesTokenRotation points the controller at
+// an API that answers 503 with Retry-After: 600, waits for the repository
+// owner's circuit to open, then rotates the controller's token Secret. The
+// controller reloads the token without a restart and keeps the open circuit:
+// no request reaches the API from before the rotation until 45s after it. A
+// rotation used to build a provider with a closed circuit, so the next polls
+// hit the failing API again at once (#1274). Not parallel: it changes the controller's --scm-api-url and
+// token.
+//
+// Covers SCM-BREAKER-02.
+func TestForgejo_CircuitBreakerSurvivesTokenRotation(t *testing.T) {
+	e := framework.New(t)
+	requireKind(t, e, "forgejo")
+	r := framework.NewReceiver(t)
+	ns := e.Namespace(t)
+	bucket := "rotate-" + ns[len(ns)-8:]
+	r.FailRetryAfter(t, bucket, http.StatusServiceUnavailable, 0, "600")
+	since := time.Now()
+	e.PatchController(t, func(spec *corev1.PodSpec) {
+		framework.SetArg(spec, "scm-api-url", strings.TrimRight(r.URL(bucket, ""), "/"))
+	})
+	e.WaitControllerLog(t, since, time.Minute, "the controller to load its token", framework.LogMessage("SCM credentials loaded"))
+
+	ctx := context.Background()
+	for i := 1; i <= 6; i++ {
+		p := &v1alpha1.PRStatus{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("rotate-%d", i), Namespace: ns},
+			Spec: v1alpha1.PRStatusSpec{PRURL: fmt.Sprintf("http://example.invalid/e2e/rotate/pulls/%d", i),
+				PRNumber: i, Repo: "e2e/rotate"},
+		}
+		require.NoError(t, e.Client.Create(ctx, p))
+	}
+	open := regexp.MustCompile(`SCM circuit open until (\S+)`)
+	l := e.WaitControllerLog(t, since, 90*time.Second, "a poll refused by the open circuit", func(l framework.LogLine) bool {
+		return framework.LogMessage("GetPRStatus failed, will retry", "namespace", ns)(l) && open.MatchString(l.Str("error"))
+	})
+	until, err := time.Parse(time.RFC3339, open.FindStringSubmatch(l.Str("error"))[1])
+	require.NoError(t, err)
+	assert.True(t, until.After(time.Now().Add(9*time.Minute)), "the circuit stays open for Retry-After's 600s: until %s", until)
+
+	// The count is taken before the rotation: the token watcher and the
+	// PRStatus polls both run every 30s, so a reset circuit is hit by the
+	// next poll within a second of the reload.
+	n := len(r.MustRecords(t, bucket))
+	require.NotZero(t, n, "the API was called before the circuit opened")
+	noNewRequest := func(context.Context) (bool, string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		recs, err := r.Records(ctx, bucket)
+		if err != nil {
+			return false, err.Error()
+		}
+		return len(recs) == n, fmt.Sprintf("%d requests, %d before the rotation", len(recs), n)
+	}
+
+	pod := e.ControllerPod(t).Name
+	since = time.Now()
+	e.SetSecretValue(t, framework.ControllerNamespace, framework.GitSecretName, "token", []byte(fakeToken))
+	rotated := framework.LogMessage("SCM credentials rotated", "secret", framework.ControllerNamespace+"/"+framework.GitSecretName, "key", "token")
+	e.WaitControllerLog(t, since, 50*time.Second, "the controller to load the new token", rotated)
+	assert.Equal(t, pod, e.ControllerPod(t).Name, "no restart")
+	ok, msg := noNewRequest(context.Background())
+	require.True(t, ok, "no request reached the API across the rotation: %s", msg)
+
+	// The PRStatuses are polled again every 30s while the error is transient.
+	framework.Consistently(t, 45*time.Second, "no request after the rotation while the circuit is open", noNewRequest)
+}
+
+// TestForgejo_AllowedRepositories runs the controller with
+// --scm-allowed-repositories (Helm scm.allowedRepositories) set to a
+// repository other than the test's, which plays the victim (#1332):
+//   - A Pipeline without git.secretRef would have the controller's shared
+//     token open PRs there, so it is Ready=False/RepositoryNotAllowed, and
+//     "kardinal validate --allowed-repositories" reports the same message
+//     offline. Its Bundle's step fails before git-clone: nothing is pushed
+//     and no PR is opened.
+//   - Its own git.secretRef does not exempt it while an environment uses
+//     pr-review: the shared token would still open and poll that PR.
+//   - A PRStatus that names the repository is not polled: the SCM provider
+//     refuses every call the shared token would make for it, and the
+//     refusal is in status.pollError.
+//   - With its own git.secretRef and only auto environments the Pipeline
+//     never needs the shared token: it is Valid and promotes.
+//
+// Not parallel: it changes the controller's flags.
+//
+// Covers SCM-ALLOWREPO-01.
+func TestForgejo_AllowedRepositories(t *testing.T) {
+	e := framework.New(t)
+	requireKind(t, e, "forgejo")
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	u, err := url.Parse(a.repo.CloneURL)
+	require.NoError(t, err)
+	repoID := strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git")
+	owner, _, _ := strings.Cut(repoID, "/")
+	allowed := u.Hostname() + "/" + owner + "/only-this-repo"
+
+	since := time.Now()
+	e.PatchController(t, func(spec *corev1.PodSpec) {
+		framework.SetArg(spec, "scm-allowed-repositories", allowed)
+	})
+	e.WaitControllerLog(t, since, time.Minute, "the controller to load the allowlist",
+		framework.LogMessage("the controller's SCM token is limited to the allowed repositories"))
+
+	p := a.pipeline(map[string]string{"test": "pr-review"})
+	p.Spec.Git.SecretRef = nil
+	a.apply(t, p)
+	want := fmt.Sprintf("spec.git.url %q is not in the controller's allowed repositories (%s)", a.repo.CloneURL, allowed)
+	waitRefused := func(why string) *v1alpha1.Pipeline {
+		t.Helper()
+		return waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=False RepositoryNotAllowed: "+why, func(p *v1alpha1.Pipeline) (bool, string) {
+			c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+			if c == nil {
+				return false, "no Ready condition"
+			}
+			return c.Status == metav1.ConditionFalse && c.Reason == "RepositoryNotAllowed" && c.ObservedGeneration == p.Generation &&
+					strings.Contains(c.Message, want) && strings.Contains(c.Message, why),
+				fmt.Sprintf("Ready=%s/%s: %s", c.Status, c.Reason, c.Message)
+		})
+	}
+	refused := waitRefused("no git.secretRef to a Secret that exists")
+
+	// kardinal validate says the same offline.
+	dir := t.TempDir()
+	doc := refused.DeepCopy()
+	doc.ObjectMeta = metav1.ObjectMeta{Name: doc.Name, Namespace: doc.Namespace}
+	doc.Status = v1alpha1.PipelineStatus{}
+	doc.APIVersion, doc.Kind = v1alpha1.GroupVersion.String(), "Pipeline"
+	raw, err := sigyaml.Marshal(doc)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "p.yaml"), raw, 0o600))
+	res := e.CLI(t).Exec(framework.CLIOptions{Kubeconfig: "/dev/null", Dir: dir},
+		"validate", "-f", "p.yaml", "--allowed-repositories", allowed)
+	assert.Equal(t, 1, res.Code, "validate fails: %s", res.Stdout)
+	assert.Contains(t, res.Stdout, want)
+
+	head := e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/kustomization.yaml")
+	refusedBundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStepState(t, a.ns, pipelineName, refusedBundle, "test", "Failed", time.Minute)
+	assert.Contains(t, ps.Status.Message, want)
+	for _, s := range ps.Status.Steps {
+		assert.NotEqual(t, v1alpha1.StepExecutionCompleted, s.State, "no step ran: %s did", s.Name)
+	}
+	prs, err := e.Git.PullRequests(ctx, a.repo)
+	require.NoError(t, err)
+	assert.Empty(t, prs, "no PR is opened")
+	assert.Equal(t, head, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/kustomization.yaml"),
+		"nothing is pushed")
+
+	// Its own Secret, but the shared token would open the pr-review PR.
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKeyFromObject(p), p))
+	p.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: framework.GitSecretName}
+	require.NoError(t, e.Client.Update(ctx, p))
+	waitRefused(`environment "test" uses approval: pr-review`)
+
+	// A PRStatus for the repository is refused by the provider, not polled.
+	victim := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "victim", Namespace: a.ns},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: strings.TrimSuffix(a.repo.CloneURL, ".git") + "/pulls/1", PRNumber: 1, Repo: repoID},
+	}
+	require.NoError(t, e.Client.Create(ctx, victim))
+	framework.Eventually(t, time.Minute, "the PRStatus poll refused by the allowlist", func(ctx context.Context) (bool, string) {
+		if err := e.Client.Get(ctx, client.ObjectKeyFromObject(victim), victim); err != nil {
+			return false, err.Error()
+		}
+		return strings.Contains(victim.Status.PollError, "not in the controller's allowed repositories") &&
+			strings.Contains(victim.Status.PollError, repoID), "pollError=" + victim.Status.PollError
+	})
+	assert.Nil(t, victim.Status.LastCheckedAt, "no poll succeeded")
+
+	// Its own Secret and only auto environments: the shared token is never
+	// used, so the Pipeline is Valid and promotes.
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKeyFromObject(p), p))
+	envSpec(t, p, "test").Approval = "auto"
+	require.NoError(t, e.Client.Update(ctx, p))
+	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=True", func(p *v1alpha1.Pipeline) (bool, string) {
+		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+		return c != nil && c.Status == metav1.ConditionTrue && c.ObservedGeneration == p.Generation, fmt.Sprintf("%v", c)
+	})
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "test", fixtures.V2)
 }
 
 // TestForgejo_StaticTokenWithoutWebhookSecret runs the controller without

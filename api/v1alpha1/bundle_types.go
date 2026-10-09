@@ -8,6 +8,11 @@ import (
 )
 
 // BundleSpec defines the desired state of a Bundle.
+// An image Bundle deploys only its images, so a configRef on it is refused
+// instead of ignored (#1353). Bundles stored before the rule keep working:
+// CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
+// supported) lets an update through when spec is unchanged.
+// +kubebuilder:validation:XValidation:rule="!(self.type == 'image' && has(self.configRef))",message="spec.configRef is used only by config and mixed Bundles: an image Bundle deploys only its images; set type config or mixed, or remove configRef"
 type BundleSpec struct {
 	// Type classifies the bundle content.
 	// Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
@@ -136,6 +141,14 @@ type BundleStatus struct {
 	// updated spec.
 	// +optional
 	PipelineSpecHash string `json:"pipelineSpecHash,omitempty"`
+
+	// PolicyGatesHash is the SHA-256 hash of the PolicyGate templates that
+	// apply to the Pipeline's environments, recorded when the Graph could not
+	// be built (InvalidSpec, reason GraphBuildFailed). A change to those
+	// templates retries the Bundle, as a Pipeline change does. Empty
+	// otherwise.
+	// +optional
+	PolicyGatesHash string `json:"policyGatesHash,omitempty"`
 }
 
 // BundleMetrics holds deployment efficiency metrics for a single Bundle (K-05).

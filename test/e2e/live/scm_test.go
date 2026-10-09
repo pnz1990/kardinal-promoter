@@ -832,3 +832,42 @@ func TestSCM_DuplicatePRReusesSameBase(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
 }
+
+// TestSCM_KardinalClosedPRGetsOneComment: a prod PR not merged within
+// waitForMergeTimeout is closed by kardinal, with one comment saying why. Its
+// Bundle fails and keeps its Graph, so the PRStatus keeps polling the closed
+// PR. When the 5-minute grace window ends, the PRStatus reconciler used to
+// post a second comment, "kardinal stopped tracking this PR", which is meant
+// for a PR a person closed (#1351). The close marks the PRStatus with the PR
+// number (kardinal.io/closed-by-kardinal), so the PR keeps its one comment
+// after the window: the PRStatus is final-closed and has no second comment.
+//
+// Covers SCM-CLOSED-02.
+func TestSCM_KardinalClosedPRGetsOneComment(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "prod")
+	p := a.pipeline(map[string]string{"prod": "pr-review"})
+	envSpec(t, p, "prod").WaitForMergeTimeout = "60s"
+	a.apply(t, p)
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	_, pr := a.waitOpenPR(t, bundle, "prod")
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Failed", 3*time.Minute)
+	assert.Contains(t, ps.Status.Message, "wait-for-merge timeout after 1m0s")
+	e.WaitPRState(t, a.repo, pr.Number, "closed", time.Minute)
+	oneComment(t, a, pr.Number, "kardinal closed this PR: it was not merged within waitForMergeTimeout (1m0s)")
+
+	prs := e.WaitPRStatus(t, a.ns, pipelineName, bundle, "prod", closedGrace+2*time.Minute,
+		"the PRStatus final-closed after the grace window", func(p *v1alpha1.PRStatus) bool {
+			return p.Spec.PRNumber == pr.Number && p.Status.ClosedFinal
+		})
+	assert.Equal(t, strconv.Itoa(pr.Number), prs.Annotations["kardinal.io/closed-by-kardinal"],
+		"the close marked the PRStatus with the PR number")
+	framework.Consistently(t, 20*time.Second, "no stopped-tracking comment on the PR kardinal closed", func(context.Context) (bool, string) {
+		n := len(e.PRComments(t, a.repo, pr.Number, "kardinal stopped tracking this PR"))
+		return n == 0, fmt.Sprintf("%d stopped-tracking comments", n)
+	})
+	assert.Len(t, e.PRComments(t, a.repo, pr.Number, "kardinal closed this PR"), 1, "PR #%d keeps its one close comment", pr.Number)
+	assertEnvAt(t, a, "prod", fixtures.V1)
+}

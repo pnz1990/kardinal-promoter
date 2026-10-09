@@ -50,7 +50,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `spec` | object |  | BundleSpec defines the desired state of a Bundle. |
+| `spec` | object |  | BundleSpec defines the desired state of a Bundle. An image Bundle deploys only its images, so a configRef on it is refused instead of ignored (#1353). Bundles stored before the rule keep working: CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest supported) lets an update through when spec is unchanged. |
 | `spec.configRef` | object |  | ConfigRef points to the GitOps repository commit this Bundle represents when the bundle type is "config" or "mixed". |
 | `spec.configRef.commitSHA` | string |  | CommitSHA is the exact commit SHA for this config snapshot. |
 | `spec.configRef.gitRepo` | string |  | GitRepo is the GitOps repository URL. |
@@ -90,6 +90,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.metrics.operatorInterventions` | integer |  | OperatorInterventions is the number of PolicyGate overrides recorded on this Bundle's gate instances (kardinal override), counted when the Bundle becomes Verified. |
 | `status.phase` | string |  | Phase is the bundle promotion phase. One of: `Available`, `Promoting`, `Verified`, `Failed`, `Superseded`. |
 | `status.pipelineSpecHash` | string |  | PipelineSpecHash is the SHA-256 hash of the Pipeline spec (spec.paused excluded) the Graph was last built from. When the Bundle reconciler is re-queued by a Pipeline watch event, it compares the current Pipeline spec hash to this field. A mismatch re-translates the Graph in place with the updated spec. |
+| `status.policyGatesHash` | string |  | PolicyGatesHash is the SHA-256 hash of the PolicyGate templates that apply to the Pipeline's environments, recorded when the Graph could not be built (InvalidSpec, reason GraphBuildFailed). A change to those templates retries the Bundle, as a Pipeline change does. Empty otherwise. |
 
 ## ChangeWindow
 
@@ -177,7 +178,7 @@ PRStatus is a controller-internal CRD that tracks the merge state of a GitHub pu
 | `spec` | object |  | PRStatusSpec defines the desired state of a PRStatus object. PRStatus objects are created by the PromotionStep reconciler's open-pr step, and updated by the PRStatus reconciler via polling or webhook events. |
 | `spec.prNumber` | integer |  | PRNumber is the pull request number (numeric ID within the repo). Set by the open-pr step after the PR is created. Zero in the placeholder. The PromotionStep sets it again when it opened another PR (a recreated step whose PR was closed): the spec always names the step's PR. |
 | `spec.prURL` | string |  | PRURL is the full GitHub pull request URL. Example: https://github.com/owner/repo/pull/42 Set by the open-pr step after the PR is created. Empty in the placeholder. |
-| `spec.repo` | string |  | Repo is the "owner/repo" slug identifying the GitHub repository. Example: acme/my-service Set by the open-pr step after the PR is created. Empty in the placeholder. |
+| `spec.repo` | string |  | Repo is the repository as the SCM API names it: "owner/repo" (GitHub, Forgejo, Gitea, Bitbucket), the project path with subgroups (GitLab), or "organization/project/repo" (Azure DevOps, whose project and repository names may hold single spaces). Each segment is letters, digits, ".", "_" and "-": no percent escapes, backslashes, "?", "#" or control characters, which the SCM API would read as another path. Example: acme/my-service Set by the open-pr step after the PR is created. Empty in the placeholder. |
 | `status` | object |  | PRStatusStatus holds the observed state of the pull request. Written exclusively by the PRStatusReconciler. |
 | `status.approvalCount` | integer |  | ApprovalCount is the number of distinct approved reviews on this PR. Written by PRStatusReconciler. CEL: bundle.pr["staging"].approvalCount &gt;= 2 |
 | `status.approved` | boolean |  | Approved is true when the pull request has at least one approved review and no outstanding change-request reviews. Written by PRStatusReconciler. CEL: bundle.pr["staging"].isApproved |
@@ -205,6 +206,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].autoRollback` | object |  | AutoRollback is reserved and rejected by the API server: consecutive-failure auto-rollback is not implemented. See OnHealthFailure. |
 | `spec.environments[].autoRollback.failureThreshold` | integer |  | FailureThreshold is the number of consecutive health-check failures that trigger an automatic rollback Bundle creation. Default: 3. Default: `3`. |
 | `spec.environments[].bake` | object |  | Bake configures a contiguous-healthy soak window for this environment (K-01). When set, the health check must pass continuously for Bake.Minutes before the step transitions to Verified. A health failure resets the timer if policy is "reset-on-alarm" (default), or fails the step if "fail-on-alarm". |
+| `spec.environments[].bake.maxDuration` | string |  | MaxDuration bounds the time from the first bake window's start (status.bakeFirstStartedAt) to a complete window. A step that has not completed one full window by then applies onHealthFailure when its window stops, also on a Waiting check, so a release that keeps flapping under reset-on-alarm ends. Go duration format (e.g. "36h"). Default: minutes + health.timeout. A value shorter than minutes counts as minutes. |
 | `spec.environments[].bake.minutes` | integer | yes | Minutes is the required contiguous healthy duration in minutes. The window restarts at the next healthy check after a check that is not healthy (see Policy). |
 | `spec.environments[].bake.policy` | string |  | Policy controls what an unhealthy check during the bake window does. "reset-on-alarm" (default): the window stops, status.bakeResets increments and the step stays in HealthChecking. "fail-on-alarm": onHealthFailure applies at the first unhealthy check. A waiting check (the workload is changing, such as a canary paused at a step) stops the window under either policy but is not an alarm. A stopped window restarts at the next healthy check, and health.timeout bounds the wait for it. One of: `reset-on-alarm`, `fail-on-alarm`. Default: `reset-on-alarm`. |
 | `spec.environments[].delivery` | object |  | Delivery holds in-cluster progressive delivery delegation configuration. |
@@ -353,6 +355,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.upstreamStates` | []string |  | UpstreamStates holds the resolved state of all upstream PromotionSteps. Each entry is a string like "Verified", set by the kro Graph controller via CEL expression substitution. Replaces the N-field upstreamVerified/upstreamVerified2 pattern (issue 625) -- a single list scales to any number of upstream environments. kro scans list items for CEL references, so each entry creates a DAG edge. |
 | `status` | object |  | PromotionStepStatus defines the observed state of a PromotionStep. |
 | `status.bakeElapsedMinutes` | integer (int64) |  | BakeElapsedMinutes is the number of contiguous healthy minutes accumulated so far in the current bake window (K-01). Resets to 0 on health failure when policy=reset-on-alarm. When this reaches env.bake.minutes, the step transitions to Verified. |
+| `status.bakeFirstStartedAt` | string (date-time) |  | BakeFirstStartedAt is when the first bake window of this step began: the first healthy check with env.bake configured. It is never reset. With bake.policy reset-on-alarm, the step must complete one full window by BakeFirstStartedAt + bake.minutes + health.timeout, so a release that keeps flapping ends (#1423). |
 | `status.bakeResets` | integer |  | BakeResets is the number of times the bake timer was reset due to a health alarm during the current bake window (K-01). |
 | `status.bakeStartedAt` | string (date-time) |  | BakeStartedAt is when the contiguous-healthy soak window began (K-01). Set on the first successful health check when env.bake is configured. Reset when BakeElapsedMinutes resets (health failure with reset-on-alarm). |
 | `status.conditions` | []object |  | Conditions holds status conditions. |

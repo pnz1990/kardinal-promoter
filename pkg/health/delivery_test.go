@@ -168,6 +168,89 @@ func TestArgoRolloutsAdapter_Revision(t *testing.T) {
 	}
 }
 
+// withHealthyCondition adds the Healthy condition Argo Rollouts sets, with
+// its lastTransitionTime at (RFC 3339); status True or False.
+func withHealthyCondition(st map[string]interface{}, status, at string) map[string]interface{} {
+	st["conditions"] = []interface{}{
+		map[string]interface{}{"type": "Completed", "status": status, "reason": "RolloutCompleted",
+			"lastTransitionTime": at, "lastUpdateTime": at},
+		map[string]interface{}{"type": "Healthy", "status": status, "reason": "RolloutHealthy",
+			"message": "Rollout is healthy", "lastTransitionTime": at, "lastUpdateTime": at},
+	}
+	return st
+}
+
+// TestArgoRolloutsAdapter_ConfigBundleSince proves #1422: when the Bundle
+// images cannot be compared (a config-only Bundle, or a template that runs
+// none of the Bundle repositories), a Healthy phase counts only when Argo
+// Rollouts reported the Rollout Healthy at or after the health check
+// started. Before the GitOps tool applies the change, the previous
+// release's Healthy phase, with the generation observed, used to verify the
+// step. A Bundle whose images the template runs is unaffected, and so is a
+// check without Since (the promotion changed nothing in git).
+func TestArgoRolloutsAdapter_ConfigBundleSince(t *testing.T) {
+	since := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	before, after := "2026-10-08T11:00:00Z", "2026-10-08T12:00:30Z"
+	bundle := []health.ImageExpectation{{Repository: podinfo, Tag: "6.15.0"}}
+	tests := []struct {
+		name     string
+		obj      *unstructured.Unstructured
+		expected []health.ImageExpectation
+		since    time.Time
+		changed  time.Time // CheckOptions.ChangedAt
+		want     wantKind
+		reason   string
+	}{
+		{name: "Healthy after the change reached git but before the health check started verifies",
+			obj:   rolloutObj(5, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("5"), "True", "2026-10-08T11:59:40Z")),
+			since: since, changed: since.Add(-time.Minute), want: isHealthy, reason: "Rollout phase: Healthy"},
+		{name: "Healthy before the change reached git waits",
+			obj:   rolloutObj(5, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("5"), "True", "2026-10-08T11:58:00Z")),
+			since: since, changed: since.Add(-time.Minute), want: isProgressing,
+			reason: "lastTransitionTime 2026-10-08T11:58:00Z is before the promoted change reached git (2026-10-08T11:59:00Z)"},
+		{name: "no Since (nothing changed in git) ignores ChangedAt",
+			obj:     rolloutObj(4, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("4"), "True", before)),
+			changed: since, want: isHealthy},
+		{name: "config-only: Healthy since before the health check waits",
+			obj:   rolloutObj(4, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("4"), "True", before)),
+			since: since, want: isProgressing,
+			reason: "Rollout prod/web: Rollout phase: Healthy is for an earlier release: its Healthy condition's lastTransitionTime " +
+				"2026-10-08T11:00:00Z is before the promoted change reached git (2026-10-08T12:00:00Z); waiting for Argo Rollouts to roll out the change"},
+		{name: "config-only: Healthy again after the health check started verifies",
+			obj:   rolloutObj(5, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("5"), "True", after)),
+			since: since, want: isHealthy, reason: "Rollout phase: Healthy"},
+		{name: "config-only: Healthy in the second the health check started verifies",
+			obj:   rolloutObj(5, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("5"), "True", "2026-10-08T12:00:00Z")),
+			since: since.Add(400 * time.Millisecond), want: isHealthy},
+		{name: "template without the Bundle repository: an earlier Healthy waits",
+			obj:      rolloutObj(4, templateSpec("registry.local/podinfo:6.15.0"), withHealthyCondition(healthyRolloutStatus("4"), "True", before)),
+			expected: bundle, since: since, want: isProgressing, reason: "is for an earlier release"},
+		{name: "image Bundle on the template: the images decide, not the time",
+			obj:      rolloutObj(4, templateSpec(podinfo+":6.15.0"), withHealthyCondition(healthyRolloutStatus("4"), "True", before)),
+			expected: bundle, since: since, want: isHealthy},
+		{name: "no Since (nothing changed in git): the phase decides",
+			obj:  rolloutObj(4, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("4"), "True", before)),
+			want: isHealthy},
+		{name: "no Healthy condition (Argo Rollouts before v1.0): the phase decides, noted",
+			obj:   rolloutObj(4, templateSpec(podinfo+":6.14.0"), healthyRolloutStatus("4")),
+			since: since, want: isHealthy, reason: "(no Healthy condition: cannot tell whether the phase is from this release)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dyn := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), tt.obj)
+			got, err := health.NewArgoRolloutsAdapter(dyn).Check(context.Background(), health.CheckOptions{
+				ArgoRollouts:   health.ArgoRolloutsConfig{Name: "web", Namespace: "prod"},
+				ExpectedImages: tt.expected,
+				Since:          tt.since,
+				ChangedAt:      tt.changed,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, kindOf(got), got.Reason)
+			assert.Contains(t, got.Reason, tt.reason)
+		})
+	}
+}
+
 // canaryObj is Canary prod/web targeting Deployment prod/web, trimmed from
 // the Canary that Flagger v1.45.0 wrote in the delivery spike. Flagger set
 // phase at lastTransition: status.lastTransitionTime and, with a message, the

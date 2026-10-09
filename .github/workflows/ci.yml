@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Validate YAML files
         run: |
-          pip install pyyaml --quiet
+          pip install pyyaml==6.0.3 --quiet
           python3 - <<'PYEOF'
           import pathlib, sys
           import yaml
@@ -99,15 +99,7 @@ jobs:
       - name: go build
         run: go build ./...
       - name: Check Apache 2.0 headers
-        run: |
-          missing=$(grep -rL "Licensed under the Apache License" \
-            --include="*.go" . \
-            --exclude-dir=vendor --exclude-dir=.git 2>/dev/null || true)
-          if [ -n "$missing" ]; then
-            echo "Missing Apache 2.0 header:"
-            echo "$missing"
-            exit 1
-          fi
+        run: bash hack/check-license-headers.sh '*.go' ':!:vendor/**'
       - name: Check banned filenames
         run: |
           banned=$(find . \( -name util.go -o -name helpers.go -o -name common.go \) \
@@ -260,16 +252,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Check Apache 2.0 headers (web sources)
-        run: |
-          missing=$(grep -rL "Licensed under the Apache License" \
-            --include="*.ts" --include="*.tsx" --include="*.mjs" \
-            --exclude-dir=node_modules --exclude-dir=dist \
-            web/src web/test web/*.ts 2>/dev/null || true)
-          if [ -n "$missing" ]; then
-            echo "Missing Apache 2.0 header:"
-            echo "$missing"
-            exit 1
-          fi
+        run: >-
+          bash hack/check-license-headers.sh
+          ':(glob)web/src/**/*.ts' ':(glob)web/src/**/*.tsx' ':(glob)web/src/**/*.mjs'
+          ':(glob)web/test/**/*.ts' ':(glob)web/test/**/*.tsx' ':(glob)web/test/**/*.mjs'
+          ':(glob)web/*.ts'
       # npm and web/package-lock.json are the only package manager and lockfile:
       # the Dockerfile, `make ui` and dependabot use them too. Node matches the
       # Dockerfile's node image.

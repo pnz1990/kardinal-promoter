@@ -142,6 +142,7 @@ kardinal version
 | `github.token` | `""` | Token value. The chart stores it in Secret `<fullname>-github-token` (`kardinal-promoter-github-token` for release `kardinal-promoter`); the value stays in the Helm release history. Setting both this and `secretRef.name` fails |
 | `scm.provider` | `""` | `--scm-provider`: `github` (default), `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops` |
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |
+| `scm.allowedRepositories` | `[]` | `--scm-allowed-repositories`: `host/repository` globs (`github.com/acme/*`, `gitlab.example.com/team/**`) the controller's SCM token may act on. Every SCM call for another repository is refused, and a Pipeline that would need the token for one is `Ready=False/RepositoryNotAllowed`. Empty allows every repository. See [Security](guides/security.md#the-shared-scm-token-and-scmallowedrepositories) |
 | `webhook.secretRef.name` / `.key` | `""` / `secret` | Secret with the SCM webhook secret (`KARDINAL_WEBHOOK_SECRET`): the HMAC key, or for GitLab and Azure DevOps the plain token |
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
@@ -656,6 +657,7 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 | `clusterroles` | `bind`, limited to `<fullname>-graph-applier` and `<fullname>-graph-reader` |
 | `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
 | `replicasets` | get only: the `resource` and `flux` adapters read the ReplicaSet a Deployment's `ProgressDeadlineExceeded` names |
+| `pods` | list only: while a Deployment's replicas are unavailable, the `resource` adapter lists the pods of its new ReplicaSet to name why one is not ready. In the default cluster mode `list` covers **every pod in the cluster** (pod specs, including literal `env` values, not Secrets); `controller.watchNamespace` limits it to one namespace. Without it, health messages leave the pod out |
 | `secrets` | get only: the controller reads each Secret by name and never lists or watches them. In the default cluster mode `get` covers **every Secret in the cluster**. The release-namespace Role adds `get` on the SCM token Secret by name |
 | `configmaps` | None in the watched namespaces. The leader-election Role reads and writes the `kardinal-version` ConfigMap by name |
 | `leases` | Leader election, through a Role in the release namespace |

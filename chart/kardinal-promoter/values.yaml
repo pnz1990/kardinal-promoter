@@ -183,6 +183,16 @@ github:
 scm:
   provider: ""
   apiURL: ""
+  # -- Repositories the controller's SCM token may act on
+  # (--scm-allowed-repositories), as host/repository globs: "github.com/acme/*",
+  # "gitlab.example.com/platform/**" for every subgroup,
+  # "dev.azure.com/<org>/<project>/*" for Azure DevOps. Every SCM call for
+  # another repository is refused, and a Pipeline that would need the token
+  # for one is Ready=False/RepositoryNotAllowed with its steps failing before
+  # git-clone (exempt: its own existing git.secretRef Secret and no pr-review
+  # environment). Empty allows every repository the token can write to, and
+  # the controller logs a warning at startup. See docs/guides/security.md.
+  allowedRepositories: []
 
 # -- Webhook secret for :8083/webhook/scm (KARDINAL_WEBHOOK_SECRET): the HMAC
 # key, or for GitLab and Azure DevOps the plain token the SCM sends.

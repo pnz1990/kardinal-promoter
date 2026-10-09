@@ -125,6 +125,12 @@ func main() {
 		"SCM provider type for the whole controller: \"github\" (default), \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\" or \"azuredevops\".")
 	flag.StringVar(&scmAPIURL, "scm-api-url", os.Getenv("KARDINAL_SCM_API_URL"),
 		"SCM API base URL override (e.g. for GitHub Enterprise or self-managed GitLab).")
+	var scmAllowedRepositories string
+	flag.StringVar(&scmAllowedRepositories, "scm-allowed-repositories", os.Getenv("KARDINAL_SCM_ALLOWED_REPOSITORIES"),
+		"Comma-separated host/repository globs (github.com/acme/*, gitlab.example.com/team/**) of the "+
+			"repositories the controller's SCM token may act on. Every SCM call for another repository is "+
+			"refused, and a Pipeline that would need the token for one is Ready=False/RepositoryNotAllowed "+
+			"and its steps fail. Empty allows every repository.")
 
 	// GitHub App authentication (static mode). With --scm-token-secret-name
 	// the watched Secret may hold the App credentials instead (githubAppID,
@@ -294,6 +300,19 @@ func main() {
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
+	allowedRepos, err := scm.ParseRepositoryAllowlist(splitCSV(scmAllowedRepositories))
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --scm-allowed-repositories")
+	}
+	if allowedRepos == nil {
+		logger.Warn().Msg("--scm-allowed-repositories (Helm scm.allowedRepositories) is not set: any Pipeline " +
+			"can have the controller's SCM token open PRs and delete kardinal/ branches in any repository " +
+			"that token can write to; see docs/guides/security.md")
+	} else {
+		logger.Info().Strs("allowedRepositories", allowedRepos.Patterns()).
+			Msg("the controller's SCM token is limited to the allowed repositories")
+	}
+
 	uiHosts, err := parseUIAllowedHosts(uiAllowedHosts)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("invalid --ui-allowed-hosts")
@@ -368,6 +387,15 @@ func main() {
 			go checkGitHubAppAtStartup(context.Background(), logger, scmProvider)
 		}
 	}
+	// Every SCM call the shared token makes is checked against
+	// --scm-allowed-repositories, whichever code path makes it (#1332).
+	if allowedRepos != nil {
+		scmHost, hostErr := scm.WebHost(scmProviderType, scmAPIURL)
+		if hostErr != nil {
+			logger.Fatal().Err(hostErr).Msg("--scm-allowed-repositories needs the SCM host")
+		}
+		scmProvider = allowedRepos.Guard(scmProvider, scmHost)
+	}
 	gitClient := scm.NewGoGitClient()
 
 	// Reconcilers write events.k8s.io/v1 Events. The chart grants create and
@@ -378,10 +406,11 @@ func main() {
 		Client: mgr.GetClient(),
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
-		APIReader:    mgr.GetAPIReader(),
-		Translator:   newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
-		GraphChecker: newGraphClient(mgr.GetConfig(), logger),
-		Recorder:     eventRecorder,
+		APIReader:        mgr.GetAPIReader(),
+		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
+		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
+		Recorder:         eventRecorder,
+		PolicyNamespaces: splitCSV(policyNamespaces),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
@@ -411,7 +440,7 @@ func main() {
 		}
 	}
 
-	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient()}).
+	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}
@@ -430,12 +459,13 @@ func main() {
 	}
 
 	if err := (&psreconciler.Reconciler{
-		Client:         mgr.GetClient(),
-		APIReader:      mgr.GetAPIReader(),
-		SCM:            scmProvider,
-		GitClient:      gitClient,
-		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
-		Recorder:       eventRecorder,
+		Client:              mgr.GetClient(),
+		APIReader:           mgr.GetAPIReader(),
+		SCM:                 scmProvider,
+		AllowedRepositories: allowedRepos,
+		GitClient:           gitClient,
+		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
+		Recorder:            eventRecorder,
 		// A git Secret with GitHub App credentials gets its installation
 		// tokens from the controller's GitHub API.
 		GitHubAppTokens: &scm.AppTokenCache{APIURL: githubAPIURL(scmProviderType, scmAPIURL)},
