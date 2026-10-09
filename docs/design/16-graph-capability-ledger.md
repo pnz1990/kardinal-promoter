@@ -6,6 +6,10 @@
 > Last verified: 2026-09-29, kind e2e (kind v1.33, kro v0.10.0-rc.0, Argo CD v2.10)
 > Upstream survey: 2026-10-02, kro `main` at `e1b94df` (18 commits past the pin, no Graph-path
 > behavior change). See [Upstream survey](#upstream-survey-2026-10-02).
+>
+> **Planned workarounds.** Text marked **Planned in #N (not on main)** describes a workaround
+> in an open pull request #N. That code is not on main yet; check the PR before you rely on
+> it. The PR that merges the workaround removes the mark. (Checked against main on 2026-10-09.)
 
 ---
 
@@ -59,9 +63,9 @@ Rules:
 | [G9](#g9-a-graph-reconcile-costs-three-api-calls-per-object) | A Graph reconcile costs about three uncached API calls per object, and kro reconciles one Graph at a time by default | High at scale | `hack/install-kro.sh` raises the worker count and client QPS; smaller Graphs | None filed; kro#1324 is related |
 | [G10](#g10-a-graph-is-one-etcd-object) | A Graph's spec and inventory share one etcd object (1.5 MiB) | Medium | `pkg/graph/size.go` `CheckSize` refuses a Graph over 1.2 MB | None filed |
 | [G11](#g11-collections-are-all-or-nothing) | A `forEach` collection is all-or-nothing on pending data and on apply errors, and every growth relabels every item | Medium | pacing by choosing the list; label-only events ignored | None filed |
-| [G12](#g12-delete-and-prune-orphan-the-pods-of-a-job) | kro deletes and prunes without a propagation policy, so a Job node orphans its Pods, and a deleted Job runs again | Medium | hooks use a `HookRun` CRD that owns its Job (#1443) | None filed |
-| [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | kardinal shards only its own controllers (#1462) | None filed |
-| [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | mirror `patch` nodes with a literal target name | None filed |
+| [G12](#g12-delete-and-prune-orphan-the-pods-of-a-job) | kro deletes and prunes without a propagation policy, so a Job node orphans its Pods, and a deleted Job runs again | Medium | Hooks use a `HookRun` CRD that owns its Job (#1443) | None filed |
+| [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | **Planned in #1505 (not on main)**: kardinal shards only its own controllers (#1462). On main the controller does not shard (`--shard` was removed) | None filed |
+| [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | Mirror `patch` nodes with a literal target name (hooks, #1443; gate commit statuses **planned in #1518 (not on main)**) | None filed |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
@@ -358,10 +362,11 @@ Graph cannot grant itself RBAC while running as that identity. So `IdentityProvi
   on kro#1464 anyway ([Engagement](#engagement)).
 - **G5-c: cluster-scoped reads (2026-10-08).** A `ref` to a cluster-scoped object needs a
   ClusterRole and ClusterRoleBinding for the Graph ServiceAccount of every namespace that uses
-  it, and `IdentityProvisioner` creates only RoleBindings. v0.10.0 features avoid it: the
-  translator inlines a `ClusterAnalysisTemplate` into the AnalysisRun template (#1444) and
-  resolves a `ClusterScmProvider` into a static spec field (#1459), the same way it copies
-  PolicyGate templates into instances. No upstream ask: the grant is kardinal's to make, and
+  it, and `IdentityProvisioner` creates only RoleBindings. Two v0.10.0 features avoid it: the
+  translator inlines a `ClusterAnalysisTemplate` into the AnalysisRun template (#1444,
+  `pkg/translator/analysis.go`), and resolves a `ClusterScmProvider` into a static spec field
+  (#1459, **planned in #1517 (not on main)**), the same way it copies PolicyGate templates
+  into instances. No upstream ask: the grant is kardinal's to make, and
   a static copy also gives the Bundle a snapshot.
 
 ---
@@ -468,7 +473,7 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 | Health adapters (HealthChecking to Verified) | `pkg/health/adapter.go` via PromotionStep reconciler | A Graph cannot write PromotionStep status, and `readyWhen` does not gate dependents (G1, G3) | None needed: stays in the reconciler by design (#1283) |
 | MetricCheck query slots (`Limiter`, #1479) | `pkg/reconciler/metriccheck/limiter.go` | Rations outbound queries to user-chosen endpoints (per namespace and cluster-wide, FIFO, wake-ups through a channel source). Process-local: it holds no promotion state, every result is written to MetricCheck status, and a restart only makes the checks ask again. Approved as an exception to the in-memory-state rule (coordinator, as the owner's delegate, 2026-10-09) | None needed: concurrency control of side effects, not promotion logic |
 | Remote-cluster health (`health.kubeconfigSecretRef`, #1458) | `pkg/health/remote.go` (`RemoteClusters`), `healthDetector` in `pkg/reconciler/promotionstep` | kro reads only the cluster it runs in: a ref node cannot point at another cluster, and the remote-cluster KREPs (KREP-012/013, kro#1060, kro#591) are RGD only and rotten or frozen. The translator leaves out the health ref node of such an environment (a ref to an object that is not in this cluster would hold the Graph) | A per-node kubeconfig reference for ref nodes, with the same rules (inline credentials only, https servers only, namespace-local Secret). No ask yet: hub-side Argo CD and Flux cover most users. The process-local client cache (`RemoteClusters`, LRU 128, TTL 1h) is approved as an exception to the in-memory-state rule (coordinator, as the owner's delegate, 2026-10-09): it holds no promotion state, every decision is written to the PromotionStep status, and a restart only rebuilds the clients |
-| Gate results as SCM commit statuses while a PR waits for merge (#1452, planned for v0.10.0) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14) | Side effect on an external system | Out of scope for kro |
+| Gate results as SCM commit statuses while a PR waits for merge (#1452; **Planned in #1518 (not on main)**) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14). Neither is on main | Side effect on an external system | Out of scope for kro |
 | Holding an existing PromotionStep: pause (freeze gate) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
 
 **Upstream work: time.**
@@ -682,8 +687,10 @@ the Job started (`pkg/reconciler/hookrun`, `pkg/graph/hooks.go`, #1443; live tes
 (`controller/graph/controller.go` `SetupWithManager`); there is no label selector or shard flag
 for Graphs.
 
-**kardinal workaround.** kardinal shards only its own controllers, by namespace label (#1462).
-Graph throughput stays bounded by the one kro instance (G9).
+**kardinal workaround. Planned in #1505 (not on main).** kardinal shards only its own
+controllers, by namespace label (#1462). Graph throughput stays bounded by the one kro
+instance (G9). On main one controller replica reconciles everything (the old `--shard` flag
+and `shard` field were removed and are refused).
 
 **Upstream work.** None filed. Ask: a `--graph-selector` label selector on the Graph
 controller, so several kro installations can split Graphs.
@@ -708,7 +715,7 @@ onto the step. A patch whose target does not exist yet is a soft not-ready, and 
 target an object a template node of the same Graph owns; the two field managers coexist.
 Verified on kind: the mirrored gate result followed the gate (true, false, true) while the step
 node was Unresolved. Hooks use it (`live0<env>` writes `spec.live.hooks`, `pkg/graph/hooks.go`,
-#1443).
+#1443); gate commit statuses are **planned in #1518 (not on main)** to use it as well.
 
 **Upstream work.** None filed.
 
