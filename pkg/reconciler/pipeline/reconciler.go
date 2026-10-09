@@ -575,6 +575,11 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 	if err := graph.ValidateUpdateStrategy(p); err != nil {
 		return invalid(err.Error())
 	}
+	// A pr template that does not parse or render would fail every PR of
+	// the environment (docs/pr-evidence.md#customising-the-pr).
+	if err := scm.ValidatePipelinePR(p); err != nil {
+		return invalid(err.Error())
+	}
 
 	if msgs := graph.UnimplementedFields(p); len(msgs) > 0 {
 		return metav1.Condition{
