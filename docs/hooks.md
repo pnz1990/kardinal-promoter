@@ -145,5 +145,6 @@ without a propagation policy, so a Job's Pods outlive it; kro re-creates a delet
 runs the hook again; and an edited Job template is an immutable-field error that stops the
 whole Graph. The results reach the PromotionStep through a `patch` node whose target is the
 step's literal name, so they keep arriving after the step's own template stopped resolving.
-See the [Graph capability ledger](design/16-graph-capability-ledger.md) and
-[Graph coverage](graph-coverage.md).
+See ledger entries [G12](design/16-graph-capability-ledger.md#g12-delete-and-prune-orphan-the-pods-of-a-job)
+and [G14](design/16-graph-capability-ledger.md#g14-a-node-with-one-pending-field-is-wholly-unresolved),
+and [Graph coverage](graph-coverage.md).
