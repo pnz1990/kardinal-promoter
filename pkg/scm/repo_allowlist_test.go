@@ -197,12 +197,18 @@ func (g *guardSCM) GetPRMergeCommit(_ context.Context, repo string, _ int) (stri
 	g.calls = append(g.calls, "merge "+repo)
 	return "sha", nil
 }
+func (g *guardSCM) VerifyCommit(_ context.Context, repo, sha string) (scm.CommitSignature, error) {
+	g.calls = append(g.calls, "verify "+repo+"@"+sha)
+	return scm.CommitSignature{}, nil
+}
 
 // TestGuard covers QA #1483: every SCM call the shared token makes is
 // checked against the allowlist, whichever code path makes it, so a call for
 // a repository that is not allowed never reaches the provider and fails with
 // a permanent ErrRepositoryNotAllowed. Calls for an allowed repository and
 // webhook parsing pass through; an unset allowlist returns the provider.
+//
+// Covers SCM-GUARD-VERIFY-01.
 func TestGuard(t *testing.T) {
 	a, err := scm.ParseRepositoryAllowlist([]string{"github.com/acme/*"})
 	require.NoError(t, err)
@@ -217,7 +223,10 @@ func TestGuard(t *testing.T) {
 		e7 := p.(scm.BranchDeleter).DeleteBranch(ctx, repo, "kardinal/b/prod")
 		_, e8 := p.(scm.MergeCommitGetter).GetPRMergeCommit(ctx, repo, 1)
 		e9 := p.(scm.CommitStatusSetter).SetPRCommitStatus(ctx, repo, 1, "abc", scm.CommitStatus{State: "success"})
-		return []error{e1, e2, e3, e4, e5, e6, e7, e8, e9}
+		// Image verification's signed-commit check (#1521) goes through the
+		// guard too: forwarded, and checked.
+		_, e10 := p.(scm.CommitVerifier).VerifyCommit(ctx, repo, "abc")
+		return []error{e1, e2, e3, e4, e5, e6, e7, e8, e9, e10}
 	}
 
 	inner := &guardSCM{}
@@ -232,7 +241,7 @@ func TestGuard(t *testing.T) {
 	for i, err := range calls(g, "acme/gitops") {
 		assert.NoError(t, err, "call %d", i)
 	}
-	assert.Len(t, inner.calls, 9)
+	assert.Len(t, inner.calls, 10)
 	_, err = g.ParseWebhookEvent(nil, "")
 	assert.NoError(t, err)
 
@@ -246,7 +255,7 @@ func TestGuard(t *testing.T) {
 		assert.True(t, errors.Is(err, scm.ErrRepositoryNotAllowed), "%q: %v", repo, err)
 		assert.False(t, a.AllowsRepo("github.com", repo), "%q", repo)
 	}
-	assert.Len(t, inner.calls, 10, "none of them reached the provider")
+	assert.Len(t, inner.calls, 11, "none of them reached the provider")
 
 	// Azure DevOps: single spaces in the project and repository names only.
 	ado, err := scm.ParseRepositoryAllowlist([]string{"dev.azure.com/acme/**"})
