@@ -629,3 +629,25 @@ func TestExplainWatch_InterruptEndsTheWatch(t *testing.T) {
 		t.Fatal("explain --watch kept running after SIGINT")
 	}
 }
+
+// TestExplain_ShowsHold (#1528): explain names the hold of a held
+// environment, who made it and why, and how to release it; a filter on
+// another environment does not show it.
+func TestExplain_ShowsHold(t *testing.T) {
+	created := policyTestNow.Add(-time.Hour)
+	p := policyPipeline("demo", "test", "prod")
+	p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "demo-rollback-abc123", Reason: "INC-42", CreatedBy: "alice"}}
+	c := policyClient(t, p,
+		explainBundle("b1", "Promoting", created),
+		explainStep("demo", "b1", "test", "Verified", "", created),
+		explainStep("demo", "b1", "prod", "Promoting", "", created),
+	)
+	out, err := runExplain(t, c, "demo", "prod", false)
+	require.NoError(t, err)
+	assert.Contains(t, out, "prod: held on rollback demo-rollback-abc123 by alice (INC-42)")
+	assert.Contains(t, out, "Release with: kardinal release-hold demo --env prod")
+
+	out, err = runExplain(t, c, "demo", "test", false)
+	require.NoError(t, err)
+	assert.NotContains(t, out, "held on rollback")
+}

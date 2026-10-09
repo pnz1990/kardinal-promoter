@@ -852,6 +852,47 @@ These are not gaps, but the translator has to work around them.
   True (`refreshGraphConditions`). Basing the PolicyGate `bundleSettled` check on the steps'
   terminal state would remove the last dependency on Graph `Ready`.
 
+- **Environment holds (#1528) use the G1 pattern.** `kardinal rollback --hold` writes
+  `Pipeline.spec.holds[]` (environment, rollback Bundle, reason, artifact digest, optional
+  expiresAt). `graph.Build` reads it, and the held environment's PromotionStep node gets
+  `spec.bundleName: resolvableWhen(bundleHeld && bundle.metadata.name == "<rollback>")`
+  (`pkg/graph/builder.go` `heldCond`). Every other Bundle's step in that environment is
+  data-pending: not applied, not pruned. In the compact shape the environment's
+  `PromotionDAG` entry carries `held: true` for every other Bundle, and `PromotionWave` does not
+  admit it (`pkg/graph/compact.go`). Its downstream environments wait on it. A hold change is a
+  Pipeline spec change, so the bundle reconciler rebuilds every active Bundle's Graph in place
+  (`ensurePipelineSpecCurrent`, `pipelineSpecHashFor`).
+  Each reconciler that reads the field writes only its own CRD:
+  - The PromotionStep reconciler holds steps created before the hold (`holdIfEnvironmentHeld`,
+    as for pause). It cancels one waiting for its merge as supersession does, closing the PR
+    with a comment.
+  - The Bundle reconciler neither supersedes nor garbage-collects the hold's Bundle.
+  - The Pipeline reconciler is the only one that reads the clock for holds. It removes an
+    expired hold from the spec and writes the `HoldCreated` and `HoldReleased` AuditEvents from
+    the difference between `spec.holds` and `status.observedHolds`.
+  - The PolicyGate reconciler, which already owns gate status, passes gate instances of the
+    held environment for the hold's Bundle, but only after `lifecycle.VerifyHeldRollback`
+    checks it against the CRDs. Its `rollbackOf` was Verified there (PromotionSteps); each
+    image, config commit and chart was deployed by a Bundle Verified there; and its artifact
+    digest equals the one the hold recorded. The reconciler writes an `EXEMPT` reason in
+    `status.reason` (or `hold exemption refused: <why>`), audits the flip and emits a Warning
+    Event.
+
+  Constraints:
+  - The exemption is decided per gate instance from the Pipeline, Bundles and PromotionSteps in
+    etcd, with no in-memory state.
+  - A kro Graph `readyWhen` could not express it, because the gate's readiness is the PolicyGate
+    reconciler's `status.ready` (G3).
+  - A Bundle cannot exempt itself. The hold has to name it. Writing a hold needs `update` on
+    `pipelines/hold`, which the chart's `<release>-hold-writes` ValidatingAdmissionPolicy
+    enforces, together with `createdBy` equal to the caller.
+  - The checks cover a Bundle edited after the hold, until Bundle artifacts are immutable
+    (#1526).
+
+  What would break this: a kro change to data-pending classification (see above) would let
+  held-out steps be applied. `TestBuilder_HeldEnvironment` and `TestCompact_HeldEnvironment`
+  evaluate the emitted expressions.
+
 ---
 
 ## kro upgrade checklist
