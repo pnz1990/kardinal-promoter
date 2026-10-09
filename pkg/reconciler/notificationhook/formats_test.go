@@ -142,10 +142,10 @@ func TestDelivery_Formats(t *testing.T) {
 					"hook": "default/hook", "who": "APP"}, jsonMap(t, body))
 			}},
 		{name: "template text", format: v1alpha1.NotificationFormatTemplate,
-			template: &v1alpha1.NotificationTemplate{Body: `{{ .Event }} {{ printf "%-8s" .Pipeline }}|{{ if .Environment }}env{{ else }}no env{{ end }}|{{ truncate 5 .Bundle }}`,
+			template: &v1alpha1.NotificationTemplate{Body: `{{ .Event }} {{ print .Pipeline "/" }}|{{ if .Environment }}env{{ else }}no env{{ end }}|{{ truncate 5 .Bundle }}`,
 				ContentType: "text/plain; charset=utf-8"},
 			wantCT: "text/plain; charset=utf-8", check: func(t *testing.T, body string) {
-				assert.Equal(t, "Bundle.Failed app     |no env|app-…", body)
+				assert.Equal(t, "Bundle.Failed app/|no env|app-…", body)
 			}},
 	}
 	for _, tt := range tests {
@@ -323,7 +323,9 @@ func TestDelivery_InvalidTemplate(t *testing.T) {
 		"unknown func":  `{{ env "HOME" }}`,
 		"nested range":  `{{ if .Event }}{{ range .Event }}{{ end }}{{ end }}`,
 		// The QA reproduction: 24 doublings to 256 MiB within 16 KiB.
-		"variable doubling": `{{$a := "xxxxxxxxxxxxxxxx"}}` + strings.Repeat(`{{$a = print $a $a}}`, 24),
+		"variable doubling":      `{{$a := "xxxxxxxxxxxxxxxx"}}` + strings.Repeat(`{{$a = print $a $a}}`, 24),
+		"printf":                 `{{ printf "%s" .Event }}`,
+		"declaration in a chain": `{{ print ($x := .).Message }}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv, url := newRecorder(t)
@@ -349,10 +351,7 @@ func TestDelivery_TemplateRenderFailureGivesUpAtOnce(t *testing.T) {
 	for name, tc := range map[string]struct{ body, want string }{
 		"invalid JSON":  {`{"text": "{{ .Message }}`, "rendered body is not valid JSON (content type application/json); quote values with {{ json .Field }}"},
 		"missing field": {`{{ .Nope }}`, "render: "},
-		"too large": {`{{ printf "%999s" .Message }}{{ printf "%999s" .Message }}` + strings.Repeat(`{{ printf "%999s" .Message }}`, 70),
-			"rendered body is over 65536 bytes"},
-		"huge width": {`{{ printf "%9999999d" 1 }}`, "printf: width or precision 9999999 is over 999"},
-		"star width": {`{{ printf "%*d" 99999999 1 }}`, "printf: * widths are not allowed"},
+		"too large":     {strings.Repeat("x", 70000), "rendered body is over 65536 bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv, url := newRecorder(t)

@@ -47,13 +47,13 @@ func TestRenderTemplate_BoundsFunctionAllocation(t *testing.T) {
 	big := strings.Repeat("m", 60<<10)
 	data := &TemplateData{Event: "Bundle.Failed", Message: big}
 	tests := map[string]struct{ body, want string }{
-		"print over input limit":    {`{{len (print .Message .Message)}}`, "print: input is 122880 bytes, over 65536"},
-		"printf over input limit":   {`{{len (printf "%s%s" .Message .Message)}}`, "printf: input is"},
-		"println over input limit":  {`{{len (println .Message .Message)}}`, "println: input is"},
-		"html over input limit":     {`{{len (html .Message .Message)}}`, "html: input is"},
-		"js over input limit":       {`{{len (js .Message .Message)}}`, "js: input is"},
-		"urlquery over input limit": {`{{len (urlquery .Message .Message)}}`, "urlquery: input is"},
-		"json over input limit":     {`{{len (json (print .Message "x"))}}{{len (json (printf "%s%s" .Message .Message))}}`, "printf: input is"},
+		"print over input limit":             {`{{len (print .Message .Message)}}`, "print: input is 122880 bytes, over 65536"},
+		"println over input limit":           {`{{len (println .Message .Message)}}`, "println: input is"},
+		"html over input limit":              {`{{len (html .Message .Message)}}`, "html: input is"},
+		"js over input limit":                {`{{len (js .Message .Message)}}`, "js: input is"},
+		"urlquery over input limit":          {`{{len (urlquery .Message .Message)}}`, "urlquery: input is"},
+		"json charges 6x its input up front": {`{{len (json (print .Message "x"))}}`, "json: function output is over 262144 bytes in total"},
+
 		"budget across calls": {strings.Repeat(`{{len (upper .Message)}}`, 5),
 			"upper: function output is over 262144 bytes in total"},
 		"budget across nested calls": {strings.Repeat(`{{len (lower (print .Message))}}`, 3),

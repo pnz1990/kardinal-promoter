@@ -226,7 +226,7 @@ spec:
       {
         "message": {{ .Message | truncate 130 | json }},
         "alias": {{ json .Key }},
-        "source": {{ printf "kardinal/%s/%s" .Namespace .Pipeline | json }},
+        "source": {{ print "kardinal/" .Namespace "/" .Pipeline | json }},
         "priority": {{ if eq .Event "Bundle.Failed" "PromotionStep.Failed" }}"P2"{{ else }}"P4"{{ end }},
         "details": {"bundle": {{ json .Bundle }}, "environment": {{ json .Environment }}, "pr": {{ json .PRURL }}}
       }
@@ -236,16 +236,19 @@ spec:
 Functions, on top of the text/template builtins (`if`, `with`, `eq`, `and`, `index`,
 `len`, ...): `json` (the value as JSON, quotes and escapes included: use it for every
 string in a JSON body), `lower`, `upper`, `truncate N` (at most N characters, with `…` when
-cut) and `printf` (widths and precisions up to 999, no `*`).
+cut) and `print` (joins its operands: `print "kardinal/" .Namespace`). `printf` is refused:
+with argument indexes (`%[1]s`) it repeats an operand without bound.
 
 Limits, so a template cannot run away with the controller:
 
 - `range`, `define`, `block`, `template` and variables (`{{ $x := ... }}`, `{{ $x = ... }}`)
   are refused: every action runs once, so rendering is linear in the template's size. The
   body is at most 16 KiB, the rendered body at most 64 KiB.
-- Each function (`print`, `printf`, `println`, `html`, `js`, `urlquery`, `json`, `lower`,
-  `upper`, `truncate`) refuses an input over 64 KiB, and all calls of one render produce at
-  most 256 KiB together.
+- Each function (`print`, `println`, `html`, `js`, `urlquery`, `json`, `lower`, `upper`,
+  `truncate`) refuses an input over 64 KiB. Before it runs, the most it can produce from
+  that input (6 times the input for `json`, `html` and `js`, 3 times for `urlquery`, `lower`
+  and `upper`) is charged to a budget of 256 KiB per render, so no render allocates much more
+  than that.
 - A field that does not exist is an error.
 - With a JSON content type (`application/json` or `*+json`), the rendered body must be
   valid JSON.

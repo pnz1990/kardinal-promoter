@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"mime"
-	"regexp"
-	"strconv"
 	"strings"
 	"text/template"
 	"text/template/parse"
@@ -18,10 +16,6 @@ import (
 
 // maxRenderedBody bounds a rendered template body.
 const maxRenderedBody = 64 << 10
-
-// maxFormatWidth bounds a printf width or precision, so a template cannot
-// make fmt allocate a huge string before the size limit sees it.
-const maxFormatWidth = 999
 
 // TemplateData is what a format: template body is rendered over
 // (docs/notifications.md#templated-body). Every field is a string; empty
@@ -80,86 +74,68 @@ func argLen(args ...interface{}) int {
 	return n
 }
 
-// guard wraps a string-producing function: its input must be at most
-// maxRenderedBody bytes and its output must fit in the render's budget.
-func (b *funcBudget) guard(name string, args []interface{}, build func() (string, error)) (string, error) {
-	if n := argLen(args...); n > maxRenderedBody {
-		return "", fmt.Errorf("%s: input is %d bytes, over %d", name, n, maxRenderedBody)
-	}
-	out, err := build()
-	if err != nil {
-		return "", err
+// guard runs a string-producing function. Its input must be at most
+// maxRenderedBody bytes, and bound(input size), the most the function can
+// produce from that input, is charged to the render's budget before the
+// function runs, so no call allocates past the budget.
+func (b *funcBudget) guard(name string, args []interface{}, bound func(in int) int, build func() (string, error)) (string, error) {
+	in := argLen(args...)
+	if in > maxRenderedBody {
+		return "", fmt.Errorf("%s: input is %d bytes, over %d", name, in, maxRenderedBody)
 	}
 	if b != nil {
-		b.used += len(out)
+		b.used += bound(in)
 		if b.used > maxFuncOutput {
 			return "", fmt.Errorf("%s: %w", name, errFuncBudget)
 		}
 	}
-	return out, nil
+	return build()
 }
 
+// Output bounds from the input size: escaping turns a byte into at most 6
+// (\u003c, &#34;), case mapping a byte into at most 3 (an invalid byte
+// becomes U+FFFD), and print adds at most one space per operand.
+func times(k int) func(int) int { return func(in int) int { return k*in + 2 } }
+
 // templateFuncs are the functions a body template may call: json, lower,
-// upper, truncate, and every string-producing text/template builtin (print,
-// printf, println, html, js, urlquery), each replaced by a version that
-// bounds its input and charges its output to b. printf also bounds widths.
+// upper, truncate, and the string-producing text/template builtins print,
+// println, html, js and urlquery, each replaced by a version that bounds its
+// input and charges its largest possible output to b before it runs.
+// printf is refused when the template is parsed: argument indexes
+// (%[1]s) repeat an operand without bound.
 func templateFuncs(b *funcBudget) template.FuncMap {
 	return template.FuncMap{
 		"json": func(v interface{}) (string, error) {
-			return b.guard("json", []interface{}{v}, func() (string, error) {
+			return b.guard("json", []interface{}{v}, times(6), func() (string, error) {
 				out, err := json.Marshal(v)
 				return string(out), err
 			})
 		},
 		"lower": func(s string) (string, error) {
-			return b.guard("lower", []interface{}{s}, func() (string, error) { return strings.ToLower(s), nil })
+			return b.guard("lower", []interface{}{s}, times(3), func() (string, error) { return strings.ToLower(s), nil })
 		},
 		"upper": func(s string) (string, error) {
-			return b.guard("upper", []interface{}{s}, func() (string, error) { return strings.ToUpper(s), nil })
+			return b.guard("upper", []interface{}{s}, times(3), func() (string, error) { return strings.ToUpper(s), nil })
 		},
 		"truncate": func(n int, s string) (string, error) {
-			return b.guard("truncate", []interface{}{s}, func() (string, error) { return truncateRunes(n, s), nil })
+			return b.guard("truncate", []interface{}{s}, times(1), func() (string, error) { return truncateRunes(n, s), nil })
 		},
 		"print": func(args ...interface{}) (string, error) {
-			return b.guard("print", args, func() (string, error) { return fmt.Sprint(args...), nil })
+			return b.guard("print", args, func(in int) int { return in + len(args) }, func() (string, error) { return fmt.Sprint(args...), nil })
 		},
 		"println": func(args ...interface{}) (string, error) {
-			return b.guard("println", args, func() (string, error) { return fmt.Sprintln(args...), nil })
-		},
-		"printf": func(format string, args ...interface{}) (string, error) {
-			return b.guard("printf", append([]interface{}{format}, args...), func() (string, error) {
-				return boundedSprintf(format, args...)
-			})
+			return b.guard("println", args, func(in int) int { return in + len(args) + 1 }, func() (string, error) { return fmt.Sprintln(args...), nil })
 		},
 		"html": func(args ...interface{}) (string, error) {
-			return b.guard("html", args, func() (string, error) { return template.HTMLEscaper(args...), nil })
+			return b.guard("html", args, func(in int) int { return 6*in + 6*len(args) }, func() (string, error) { return template.HTMLEscaper(args...), nil })
 		},
 		"js": func(args ...interface{}) (string, error) {
-			return b.guard("js", args, func() (string, error) { return template.JSEscaper(args...), nil })
+			return b.guard("js", args, func(in int) int { return 6*in + 6*len(args) }, func() (string, error) { return template.JSEscaper(args...), nil })
 		},
 		"urlquery": func(args ...interface{}) (string, error) {
-			return b.guard("urlquery", args, func() (string, error) { return template.URLQueryEscaper(args...), nil })
+			return b.guard("urlquery", args, func(in int) int { return 3*in + 3*len(args) }, func() (string, error) { return template.URLQueryEscaper(args...), nil })
 		},
 	}
-}
-
-// verbRe matches the flags, width and precision of a fmt verb.
-var verbRe = regexp.MustCompile(`%[-+# 0]*(?:\[\d+\])?(\*|\d*)(?:\.(?:\[\d+\])?(\*|\d*))?`)
-
-func boundedSprintf(format string, args ...interface{}) (string, error) {
-	for _, m := range verbRe.FindAllStringSubmatch(format, -1) {
-		for _, n := range m[1:] {
-			if n == "*" {
-				return "", fmt.Errorf("printf: * widths are not allowed")
-			}
-			if n != "" {
-				if v, err := strconv.Atoi(n); err != nil || v > maxFormatWidth {
-					return "", fmt.Errorf("printf: width or precision %s is over %d", n, maxFormatWidth)
-				}
-			}
-		}
-	}
-	return fmt.Sprintf(format, args...), nil
 }
 
 // truncateRunes returns s cut to at most n runes, with "…" when cut.
@@ -199,6 +175,10 @@ func parseBodyTemplate(body string) (*template.Template, error) {
 	return t, nil
 }
 
+// checkNodes walks every node of the tree and refuses range, template (and
+// so define and block), variable declarations and assignments anywhere,
+// including inside parenthesized pipelines and chains
+// ({{print ($x := .).Message}}), and calls to printf.
 func checkNodes(n parse.Node) error {
 	switch x := n.(type) {
 	case nil:
@@ -213,7 +193,7 @@ func checkNodes(n parse.Node) error {
 			}
 		}
 	case *parse.ActionNode:
-		return checkPipe(x.Pipe)
+		return checkNodes(x.Pipe)
 	case *parse.IfNode:
 		return checkBranch(&x.BranchNode)
 	case *parse.WithNode:
@@ -222,36 +202,39 @@ func checkNodes(n parse.Node) error {
 		return errors.New("range is not allowed")
 	case *parse.TemplateNode:
 		return errors.New("template is not allowed")
-	}
-	return nil
-}
-
-// checkPipe refuses variable declarations and assignments in a pipeline
-// and in the pipelines nested in its arguments.
-func checkPipe(p *parse.PipeNode) error {
-	if p == nil {
-		return nil
-	}
-	if len(p.Decl) > 0 {
-		if p.IsAssign {
-			return errors.New("variable assignment is not allowed")
+	case *parse.PipeNode:
+		if x == nil {
+			return nil
 		}
-		return errors.New("variable declaration is not allowed")
-	}
-	for _, c := range p.Cmds {
-		for _, a := range c.Args {
-			if np, ok := a.(*parse.PipeNode); ok {
-				if err := checkPipe(np); err != nil {
-					return err
-				}
+		if len(x.Decl) > 0 {
+			if x.IsAssign {
+				return errors.New("variable assignment is not allowed")
 			}
+			return errors.New("variable declaration is not allowed")
+		}
+		for _, c := range x.Cmds {
+			if err := checkNodes(c); err != nil {
+				return err
+			}
+		}
+	case *parse.CommandNode:
+		for _, a := range x.Args {
+			if err := checkNodes(a); err != nil {
+				return err
+			}
+		}
+	case *parse.ChainNode:
+		return checkNodes(x.Node)
+	case *parse.IdentifierNode:
+		if x.Ident == "printf" {
+			return errors.New("printf is not allowed: use print, which joins its operands")
 		}
 	}
 	return nil
 }
 
 func checkBranch(b *parse.BranchNode) error {
-	if err := checkPipe(b.Pipe); err != nil {
+	if err := checkNodes(b.Pipe); err != nil {
 		return err
 	}
 	if err := checkNodes(b.List); err != nil {

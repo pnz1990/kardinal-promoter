@@ -236,21 +236,27 @@ hook URL. The controller can read every Secret of the namespace (`get` on `secre
 without a guard anyone allowed to create such a resource could have the controller send them a
 Secret they cannot read themselves.
 
-**One rule:** the controller uses a Secret named by a NotificationHook, a MetricCheck or a
-Subscription only when the Secret carries the label `kardinal.io/referenceable: "true"`. The
-label is the Secret owner's consent; set it on the Secrets meant for these resources only:
+**One rule:** the controller uses a Secret a custom resource names only when the Secret carries
+the label `kardinal.io/referenceable: "true"`. The label is the Secret owner's consent; set it
+on the Secrets meant for these resources only:
 
 ```bash
 kubectl label secret alerting-webhook -n team-a kardinal.io/referenceable=true
 ```
 
-A resource that names a Secret without the label (or with any other value) reports reason
-`SecretNotReferenceable` where it reports errors (NotificationHook: `Ready=False`) and does not
-use the Secret. Labeling the Secret takes effect at the next reconcile; removing the label stops
-its use again. Whoever may `update` or `patch` Secrets in the namespace may set the label, so
-grant that as narrowly as reading them. Pipeline `spec.git.secretRef` and the controller's own
-SCM token Secret are not covered by the rule: they are named by the Pipeline owner or the
-operator and never sent to a URL a user writes.
+| Reference | With an unlabeled Secret |
+|-----------|--------------------------|
+| NotificationHook `spec.webhook.secretRef` | Not used: `Ready=False`, reason `SecretNotReferenceable`, nothing is sent |
+
+Other Secret references adopt the rule as they are added. A resource that refuses a Secret
+reports reason `SecretNotReferenceable` where it reports errors. Labeling the Secret takes
+effect at the next reconcile; removing the label stops its use again. Whoever may `update` or
+`patch` Secrets in the namespace may set the label, so grant that as narrowly as reading them.
+
+Pipeline `spec.git.secretRef` has the same exposure (its token goes to the Pipeline's git URL)
+and will follow the rule in v0.11 ([#1506](https://github.com/pnz1990/kardinal-promoter/issues/1506));
+label your git Secrets now. The controller's own SCM token Secret is set by the operator and
+is not covered.
 
 ### Recommended: External Secrets Operator
 

@@ -70,7 +70,7 @@ func TestNotify_SlackTeamsTemplate(t *testing.T) {
 	hook("slack", a.ns+"-slack", "slack/services/T0/B0/x", v1alpha1.NotificationFormatSlack, nil)
 	hook("teams", a.ns+"-teams", "teams/workflows/abc/triggers/manual", v1alpha1.NotificationFormatTeams, nil)
 	hook("template", a.ns+"-tmpl", "events", v1alpha1.NotificationFormatTemplate, &v1alpha1.NotificationTemplate{
-		Body: `{"kind": "kardinal", "what": {{ json .Event }}, "where": {{ printf "%s/%s" .Pipeline .Environment | json }}, ` +
+		Body: `{"kind": "kardinal", "what": {{ json .Event }}, "where": {{ print .Pipeline "/" .Environment | json }}, ` +
 			`"text": {{ json .Message }}, "id": {{ json .Key }}, "from": {{ json .Hook }}}`,
 	})
 	hook("raw-json-to-slack", a.ns+"-raw", "slack/services/T0/B0/y", "", nil)
