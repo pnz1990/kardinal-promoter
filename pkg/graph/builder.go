@@ -781,10 +781,11 @@ func resolvableWhen(cond, value string) string {
 const CondBundleWaitingForSlot = "WaitingForSlot"
 
 // bundleHeld is the condition spec.bundleName of every PromotionStep node
-// resolves under: the Bundle is not Superseded and does not wait for a
+// resolves under: the Bundle is neither Superseded nor Rejected (kardinal
+// reject, #1451; both final) and does not wait for a
 // maxConcurrentPromotions slot. has() keeps a Bundle without conditions
 // resolvable (a missing key would be data-pending, see resolvableWhen).
-const bundleHeld = `bundle.status.phase != "Superseded" && !(has(bundle.status.conditions) && ` +
+const bundleHeld = `bundle.status.phase != "Superseded" && bundle.status.phase != "Rejected" && !(has(bundle.status.conditions) && ` +
 	`bundle.status.conditions.exists(c_, c_.type == "` + CondBundleWaitingForSlot + `" && c_.status == "True"))`
 
 // heldCond is the extra condition spec.bundleName of env's PromotionStep
@@ -835,7 +836,7 @@ func verifiedCond(upstreamID string) string {
 // upstream PromotionStep is Verified and every PolicyGate is ready (see
 // resolvableWhen). Until then kro does not create this PromotionStep.
 // spec.bundleName holds every step, roots included, once the Bundle is
-// Superseded.
+// Superseded or Rejected.
 //
 // There is no per-region fan-out: Build rejects two or more
 // spec.environments[].regions (see RegionsNotSupported) and ignores one.
@@ -867,7 +868,8 @@ func buildPromotionStepNode(
 	templateSpec := map[string]interface{}{
 		"pipelineName": pipelineName,
 		// bundleName: live CEL reference to the Bundle ref node (#622). It only
-		// resolves while the Bundle is not Superseded, so a Superseded Bundle's
+		// resolves while the Bundle is not Superseded or Rejected (kardinal
+		// reject, #1451), so a Superseded or Rejected Bundle's
 		// Graph creates no new PromotionStep when a gate or upstream later turns
 		// ready (E2E-R20). kro re-reads the ref and watches it on every apply
 		// (executor/simple.go applyRef), so the hold takes effect on the next

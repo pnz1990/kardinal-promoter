@@ -30,6 +30,7 @@ kubectl apply -f bundle.yaml
 | Verified | Successfully promoted to all target environments |
 | Failed | A promotion step or health check failed, kro rejected the Graph, or the Pipeline, the Bundle (its intent, or no images or config commit for its type) or a PolicyGate cannot be built into a Graph (condition `InvalidSpec`, with the reason). A Failed Bundle promotes again when the failed step is retried or, for `InvalidSpec`, when the Pipeline changes or, for reason `GraphBuildFailed`, a PolicyGate that applies to one of its environments changes |
 | Superseded | Replaced by a newer Bundle |
+| Rejected | Rejected with `kardinal reject` (`spec.rejected`): never promoted again, its unfinished steps are cancelled, and rollback never picks it. Final. See [Reject a Bundle](rollback.md#reject-a-bundle) |
 
 ### Bundle supersession
 
@@ -300,7 +301,7 @@ kardinal explain my-app --env prod
 ```
 
 Gates that are not ready come first. STATE is Pass, Block (holding the
-Bundle), Superseded, Pending or Waiting; REASON is the controller's latest
+Bundle), Superseded, Rejected, Pending or Waiting; REASON is the controller's latest
 evaluation. See [Inspecting PolicyGates](policy-gates.md#inspecting-policygates).
 
 ### Skip permissions
@@ -457,6 +458,7 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 | `PromotionSucceeded` | Health check passes and the step reaches Verified |
 | `PromotionFailed` | The step reaches Failed or AbortedByAlarm |
 | `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion (a step that had not started writes none) |
+| `PromotionRejected` | `kardinal reject` cancels an in-flight promotion (a step that had not started writes none) |
 | `GateEvaluated` | A PolicyGate instance is first evaluated, and each later change of readiness (outcome `Failure` when blocked, `Success` when allowed) |
 | `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
 | `RollbackSucceeded` | A step of a rollback Bundle (from any rollback path) reaches Verified, besides `PromotionSucceeded`; one per step |

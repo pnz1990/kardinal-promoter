@@ -84,7 +84,8 @@ func upstreamsVerified(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 // the bundle's promotion back in the gate's environment. It is the one rule
 // for the UI API's blockerCount, kardinal status's blocking gates and the
 // Block state of GateState. The gate
-// must be not ready and the bundle still in flight (not Failed or Superseded),
+// must be not ready and the bundle still in flight (not Failed, Superseded or
+// Rejected),
 // and either:
 //   - the bundle has no PromotionStep in the environment and every upstream
 //     environment is Verified for it (UpstreamsVerified): the Graph creates
@@ -116,7 +117,7 @@ func gateHolds(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bun
 	if gate.Status.Ready || env == "" || gate.Labels["kardinal.io/bundle"] != bundle.Name {
 		return false
 	}
-	if phase := bundle.Status.Phase; phase == "Failed" || phase == "Superseded" {
+	if phase := bundle.Status.Phase; phase == "Failed" || phase == "Superseded" || phase == "Rejected" {
 		return false
 	}
 	stepped := false
@@ -139,6 +140,7 @@ const (
 	GateStatePass       = "Pass"
 	GateStateBlock      = "Block"
 	GateStateSuperseded = "Superseded"
+	GateStateRejected   = "Rejected"
 	GateStatePending    = "Pending"
 	GateStateWaiting    = "Waiting"
 )
@@ -150,6 +152,8 @@ const (
 //     these count as blocked.
 //   - Superseded: its bundle was superseded. That is final; the gate is not
 //     evaluated again.
+//   - Rejected: its bundle was rejected (kardinal reject). Final, like
+//     Superseded.
 //   - Pending: not evaluated yet.
 //   - Waiting: evaluated not ready, but the bundle is not held here: it has not
 //     reached the environment, or it failed (a Failed bundle can retry).
@@ -165,6 +169,8 @@ func GateState(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bun
 		return GateStateBlock
 	case bundle != nil && bundle.Status.Phase == "Superseded":
 		return GateStateSuperseded
+	case bundle != nil && bundle.Status.Phase == "Rejected":
+		return GateStateRejected
 	case gate.Status.LastEvaluatedAt == nil:
 		return GateStatePending
 	default:
