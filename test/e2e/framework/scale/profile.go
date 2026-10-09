@@ -76,6 +76,13 @@ type Profile struct {
 	// terminal phase once the test stops creating them.
 	Settle time.Duration
 
+	// TenantWave is the width of the one-branch wave tenant A promotes in
+	// TestScale_TwoTenants while tenant B, in another namespace, promotes a
+	// small Pipeline; TenantStartWithin bounds how long B's steps may wait
+	// for their first reconcile (#1577).
+	TenantWave        int
+	TenantStartWithin time.Duration
+
 	// SLOPipelines Pipelines of PipelineEnvs automatic environments get one
 	// Bundle each at once in TestScale_LatencySLO, which holds the
 	// controller to SLO (test/e2e/README.md#latency-slo).
@@ -96,6 +103,7 @@ var profiles = map[string]Profile{
 		Pipelines: 20, PipelineEnvs: 3, BurstBundles: 100, BurstPipelines: 10,
 		SustainedRate: 0.5, SustainedFor: 2 * time.Minute, SustainedPipelines: 8,
 		RapidFire: 10, ChaosFor: 3 * time.Minute, ChaosPipelines: 8,
+		TenantWave: 30, TenantStartWithin: 20 * time.Second,
 		Settle:       10 * time.Minute,
 		SLOPipelines: 20,
 		SLO:          invariants.SLO{StepP50: 5 * time.Second, StepP99: 15 * time.Second, BundleP99: 45 * time.Second},
@@ -107,6 +115,7 @@ var profiles = map[string]Profile{
 		Pipelines: 200, PipelineEnvs: 3, BurstBundles: 1000, BurstPipelines: 100,
 		SustainedRate: 2, SustainedFor: 10 * time.Minute, SustainedPipelines: 50,
 		RapidFire: 40, ChaosFor: 10 * time.Minute, ChaosPipelines: 40,
+		TenantWave: 149, TenantStartWithin: 20 * time.Second,
 		Settle:       45 * time.Minute,
 		SLOPipelines: 200,
 		SLO:          invariants.SLO{StepP50: 10 * time.Second, StepP99: 30 * time.Second, BundleP99: 2 * time.Minute},
@@ -158,11 +167,12 @@ func overrides(p *Profile) []override {
 		"SHARED_PIPELINES": &p.SharedPipelines, "PIPELINES": &p.Pipelines, "PIPELINE_ENVS": &p.PipelineEnvs,
 		"BURST_BUNDLES": &p.BurstBundles, "BURST_PIPELINES": &p.BurstPipelines,
 		"SUSTAINED_PIPELINES": &p.SustainedPipelines, "RAPID_FIRE": &p.RapidFire,
-		"CHAOS_PIPELINES": &p.ChaosPipelines, "SLO_PIPELINES": &p.SLOPipelines,
+		"CHAOS_PIPELINES": &p.ChaosPipelines, "SLO_PIPELINES": &p.SLOPipelines, "TENANT_WAVE": &p.TenantWave,
 	}
 	durations := map[string]*time.Duration{
 		"SUSTAINED_FOR": &p.SustainedFor, "CHAOS_FOR": &p.ChaosFor, "SETTLE": &p.Settle,
-		"SLO_STEP_P50": &p.SLO.StepP50, "SLO_STEP_P99": &p.SLO.StepP99, "SLO_BUNDLE_P99": &p.SLO.BundleP99,
+		"TENANT_START_WITHIN": &p.TenantStartWithin,
+		"SLO_STEP_P50":        &p.SLO.StepP50, "SLO_STEP_P99": &p.SLO.StepP99, "SLO_BUNDLE_P99": &p.SLO.BundleP99,
 	}
 	var out []override
 	for name, ptr := range ints {
@@ -207,5 +217,6 @@ func (p Profile) String() string {
 		fmt.Sprintf("burst %d Bundles over %d Pipelines", p.BurstBundles, p.BurstPipelines),
 		fmt.Sprintf("sustained %.2f/s for %s over %d Pipelines", p.SustainedRate, p.SustainedFor, p.SustainedPipelines),
 		fmt.Sprintf("chaos %s over %d Pipelines", p.ChaosFor, p.ChaosPipelines),
+		fmt.Sprintf("tenant wave %d", p.TenantWave),
 	}, ", ")
 }
