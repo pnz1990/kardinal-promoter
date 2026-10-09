@@ -487,9 +487,30 @@ The policy allows:
 
 Disable with `--set networkPolicy.enabled=false` if your CNI does not support NetworkPolicy.
 
+### Secrets that kardinal may send
+
+A MetricCheck, NotificationHook or Subscription names a Secret in its own namespace, and the
+controller sends that Secret's value to a URL the object's author chose. The controller can read
+every Secret, so a user who can create one of these objects but cannot read Secrets could
+otherwise have any Secret of the namespace sent to a server they run (a confused deputy).
+
+**Rule:** the controller reads a Secret for these kinds only when the Secret carries the label
+`kardinal.io/referenceable: "true"`. Without the label the object reports `SecretNotReferenceable`
+(a MetricCheck fails with that reason, which blocks gates on it) and no request with a credential
+is sent. Label a Secret only when it is meant to leave the cluster through kardinal:
+
+```bash
+kubectl -n my-app label secret datadog kardinal.io/referenceable=true
+```
+
+Who may set the label is who may `update` (or `patch`) Secrets in the namespace. Pipeline
+`spec.git.secretRef` is not covered: it must be in the Pipeline's namespace and is sent only to
+the Pipeline's git and SCM hosts.
+
 ### Outbound requests to user URLs
 
-NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`)
+NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`,
+`datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`)
 and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`)
 send HTTP requests from the controller to a URL a user wrote into a resource. The controller
 refuses to connect when the address is one of these:
@@ -552,6 +573,15 @@ also enforce its own egress policy. The proxy's own address is checked too: a pr
 loopback address is refused.
 
 ---
+
+**MetricCheck `web` reads from wherever the controller can reach.** A `web` MetricCheck sends a
+GET or POST to a URL its author chooses and copies one JSONPath value of the answer into
+`status.lastValue` (at most 256 bytes, a string, number or boolean). The egress guard keeps it off
+loopback, link-local and metadata addresses, but private addresses stay allowed, so anyone who can
+create a MetricCheck can read a field from an in-cluster Service that answers JSON. Give `create`
+on MetricChecks only to people who may read those Services, and restrict the targets with the
+controller egress allowlist (`--egress-allowlist`, #1474) or the chart NetworkPolicy
+(`networkPolicy.enabled`, `networkPolicy.extraEgress`).
 
 ## Admission Validation
 

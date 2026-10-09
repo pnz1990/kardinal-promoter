@@ -72,10 +72,27 @@ spec:
             {{- if .Values.ui.auth.tokenReview }}
             - --ui-tokenreview-auth=true
             {{- end }}
+            {{- if .Values.metricCheck.cloudWatch.ambientCredentials }}
+            - --metriccheck-cloudwatch-ambient-credentials=true
+            {{- end }}
+            - --metriccheck-global-slots={{ .Values.metricCheck.querySlots.global }}
+            - --metriccheck-namespace-slots={{ .Values.metricCheck.querySlots.perNamespace }}
             {{- with .Values.ui.corsAllowedOrigins }}
             - --cors-allowed-origins={{ join "," . }}
             {{- end }}
             - --ui-allowed-hosts={{ include "kardinal-promoter.uiAllowedHosts" . }}
+            {{- with .Values.tracing }}
+            {{- if .enabled }}
+            - --tracing-enabled=true
+            {{- with .endpoint }}
+            - --tracing-endpoint={{ . }}
+            {{- end }}
+            {{- if .insecure }}
+            - --tracing-insecure=true
+            {{- end }}
+            - --tracing-sampling-ratio={{ if kindIs "invalid" .samplingRatio }}0.1{{ else }}{{ .samplingRatio }}{{ end }}
+            {{- end }}
+            {{- end }}
             {{- with (.Values.egress).allowlist }}
             - --egress-allowlist={{ join "," . }}
             {{- end }}

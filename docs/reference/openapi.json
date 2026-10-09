@@ -206,7 +206,7 @@
             "type": "string"
           },
           "commitSHA": {
-            "description": "CommitSHA is the application source commit that produced this Bundle.",
+            "description": "CommitSHA is the application source commit that produced this Bundle: 4 to 64 hex characters, or an image digest (a Subscription records the digest it found).",
             "type": "string"
           },
           "rollbackOf": {
@@ -255,7 +255,7 @@
         "description": "ConfigRef identifies a GitOps repository commit.",
         "properties": {
           "commitSHA": {
-            "description": "CommitSHA is the exact commit SHA for this config snapshot.",
+            "description": "CommitSHA is the exact commit SHA for this config snapshot: 4 to 64 hex characters.",
             "type": "string"
           },
           "gitRepo": {
@@ -546,7 +546,7 @@
         "description": "ImageRef identifies a container image by repository, tag, and/or digest.",
         "properties": {
           "digest": {
-            "description": "Digest is the image digest (sha256:...).",
+            "description": "Digest is the image digest (sha256:...), in the OCI digest grammar.",
             "type": "string"
           },
           "repository": {
@@ -554,7 +554,7 @@
             "type": "string"
           },
           "tag": {
-            "description": "Tag is the image tag.",
+            "description": "Tag is the image tag, in the OCI distribution grammar: up to 128 characters of [A-Za-z0-9_.-], not starting with \".\" or \"-\".",
             "type": "string"
           }
         },
