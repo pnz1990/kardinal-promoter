@@ -279,6 +279,11 @@ func baseObject(kind string) map[string]interface{} {
 			"provider": "prometheus", "prometheusURL": "http://prometheus:9090", "query": "up",
 			"threshold": map[string]interface{}{"value": int64(1), "operator": "gte"},
 		}
+	case "HookRun":
+		obj["spec"] = map[string]interface{}{
+			"pipelineName": "p", "bundleName": "b", "environment": "prod", "hook": "migrate", "phase": "pre",
+			"job": map[string]interface{}{"template": map[string]interface{}{}},
+		}
 	case "Subscription":
 		obj["spec"] = map[string]interface{}{
 			"type": "image", "pipeline": "p",
@@ -306,6 +311,7 @@ func TestCRDSchemaDurationFields(t *testing.T) {
 		{"MetricCheck", []string{"spec", "interval"}},
 		{"Subscription", []string{"spec", "image", "interval"}},
 		{"Subscription", []string{"spec", "git", "interval"}},
+		{"HookRun", []string{"spec", "timeout"}},
 	}
 	good := []string{"", "0", "30s", "5m", "1h", "1h30m", "1.5h", "500ms", "2h45m30s", "10us", "10µs"}
 	bad := []string{"15 minutes", "2 days", "5", "1d", "-5m", "5M", "1h 30m", "m"}
@@ -481,7 +487,7 @@ func TestPromotionStepStateEnum(t *testing.T) {
 		got = append(got, fmt.Sprint(e.Object))
 	}
 	want := []string{
-		"Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verified",
+		"Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying", "Verified",
 		"Failed", "AbortedByAlarm", "RollingBack",
 	}
 	sort.Strings(got)

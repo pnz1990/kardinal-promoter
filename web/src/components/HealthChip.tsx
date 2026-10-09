@@ -54,6 +54,7 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
     case 'Promoting':
     case 'WaitingForMerge':
     case 'HealthChecking':
+    case 'Verifying':       // post-deploy hooks and analyses running
       return 'Reconciling'
     case 'Failed':
     case 'AbortedByAlarm':  // terminal: an alarm stopped the promotion; a human must act

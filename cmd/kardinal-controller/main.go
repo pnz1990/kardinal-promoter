@@ -50,6 +50,7 @@ import (
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	changewindowrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
+	hookrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
 	metriccheckrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
 	nhookrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
@@ -261,6 +262,12 @@ func main() {
 			"except kube-system, kube-public and kube-node-lease. Health checks in other namespaces "+
 			"get no Graph ref.")
 
+	var hookServiceAccounts string
+	flag.StringVar(&hookServiceAccounts, "hook-service-accounts", hookrunrecon.DefaultServiceAccount,
+		"Comma-separated ServiceAccount names a Pipeline hook's Job Pod may run as (in the Pipeline "+
+			"namespace). A hook whose Pod names another ServiceAccount fails without running. The Graph "+
+			"ServiceAccount (--graph-service-account) is never allowed. See docs/hooks.md.")
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -447,6 +454,14 @@ func main() {
 		Recorder:            eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
+	}
+
+	if err := (&hookrunrecon.Reconciler{
+		Client:                 mgr.GetClient(),
+		AllowedServiceAccounts: splitCSV(hookServiceAccounts),
+		GraphServiceAccount:    graphIdentity.ServiceAccountName,
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up HookRunReconciler")
 	}
 
 	if err := (&metriccheckrecon.Reconciler{
