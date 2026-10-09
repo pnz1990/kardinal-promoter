@@ -180,3 +180,22 @@ describe('PolicyGatesPanel — state from the UI API', () => {
     expect(screen.getByRole('button', { name: /1 waiting, not ready, not holding the bundle/ })).toBeInTheDocument()
   })
 })
+
+describe('PolicyGatesPanel — approval gates (E6)', () => {
+  it('shows the quorum and who approved under an approval gate', async () => {
+    const gate: PolicyGate = {
+      name: 'prod-approval', namespace: 'default', expression: 'true', ready: false, state: 'Block', holding: true,
+      reason: 'waiting for approvals: 1 of 2 (alice)', bundle: 'app-1', environment: 'prod',
+      approval: { required: 2, approved: 1, decisions: [{ user: 'alice', decision: 'approve', counted: true }] },
+    }
+    render(<PolicyGatesPanel gates={[gate]} />)
+    // A holding gate opens the panel by itself.
+    expect(await screen.findByRole('meter', { name: 'Approvals' })).toHaveAttribute('aria-valuetext', '1 of 2 approvals')
+    expect(screen.getByText('kardinal approve app-1 --env prod')).toBeInTheDocument()
+  })
+
+  it('a gate without an approval policy has no quorum', () => {
+    render(<PolicyGatesPanel gates={[{ name: 'g', namespace: 'default', expression: 'true', ready: false, state: 'Block', holding: true }]} />)
+    expect(screen.queryByRole('meter')).not.toBeInTheDocument()
+  })
+})

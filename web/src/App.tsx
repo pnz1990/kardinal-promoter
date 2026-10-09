@@ -38,6 +38,7 @@ import { CreateBundleButton } from './components/CreateBundleDialog'
 import EmptyState from './components/EmptyState'
 import PromotionErrorsPanel from './components/PromotionErrorsPanel'
 import CopyButton from './components/CopyButton'
+import { formatRelativeAge } from './components/approvalAge'
 import { CIRunLink } from './components/CIRunLink'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { api } from './api/client'
@@ -692,6 +693,12 @@ export function App() {
                         <span style={{ color: 'var(--color-text-faint)' }}>·</span>
                         <CIRunLink url={activeBundle.provenance.ciRunURL} />
                       </>
+                    )}
+                    {activeBundle.rejected && (
+                      <span className="bundle-rejected" role="note">
+                        Rejected by <strong>{activeBundle.rejected.by}</strong>
+                        {activeBundle.rejected.at && <> {formatRelativeAge(activeBundle.rejected.at)}</>}: {activeBundle.rejected.reason}
+                      </span>
                     )}
                   </div>
                 )}

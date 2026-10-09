@@ -220,6 +220,9 @@ type uiBundleResponse struct {
 	// Bundle's change is live (lifecycle.RejectedLiveEnvs): the UI keeps it
 	// current there, marked Rejected, with a roll-back hint.
 	RejectedLiveEnvironments []string `json:"rejectedLiveEnvironments,omitempty"`
+	// Rejected is spec.rejected: who rejected the Bundle (kardinal reject),
+	// why and when. Absent when it is not rejected.
+	Rejected *uiBundleRejection `json:"rejected,omitempty"`
 }
 
 // uiBundleEnvStatus is the per-environment status summary of a Bundle (#503).
@@ -338,6 +341,68 @@ type uiGateResponse struct {
 	State string `json:"state"`
 	// #502: Override history from spec.overrides[].
 	Overrides []uiGateOverride `json:"overrides,omitempty"`
+	// Approval is the gate's approval quorum and who approved (an approval
+	// gate, spec.approval). Absent for a gate without one.
+	Approval *uiGateApproval `json:"approval,omitempty"`
+}
+
+// uiBundleRejection is spec.rejected of a Bundle.
+type uiBundleRejection struct {
+	Reason string `json:"reason"`
+	By     string `json:"by"`
+	At     string `json:"at,omitempty"`
+}
+
+// uiGateApproval is a gate's approval policy (spec.approval) and how the
+// gate counted the decisions it has (status.approvals).
+type uiGateApproval struct {
+	// Required is how many distinct allowed people must approve (default 1).
+	Required      int      `json:"required"`
+	AllowedUsers  []string `json:"allowedUsers,omitempty"`
+	AllowedGroups []string `json:"allowedGroups,omitempty"`
+	ExcludeAuthor bool     `json:"excludeAuthor,omitempty"`
+	// Approved is the number of counted approve decisions; Rejected is true
+	// when a counted reject blocks the gate.
+	Approved int  `json:"approved"`
+	Rejected bool `json:"rejected,omitempty"`
+	// Decisions are status.approvals, in the order the gate recorded them.
+	Decisions []uiGateDecision `json:"decisions,omitempty"`
+}
+
+// uiGateDecision is one approve or reject decision as the gate counted it.
+type uiGateDecision struct {
+	User        string `json:"user"`
+	Decision    string `json:"decision"`
+	Counted     bool   `json:"counted"`
+	Reason      string `json:"reason,omitempty"`
+	Comment     string `json:"comment,omitempty"`
+	FirstSeenAt string `json:"firstSeenAt,omitempty"`
+}
+
+// gateApproval is the uiGateApproval of g, or nil without spec.approval.
+func gateApproval(g *v1alpha1.PolicyGate) *uiGateApproval {
+	pol := g.Spec.Approval
+	if pol == nil {
+		return nil
+	}
+	out := &uiGateApproval{Required: max(pol.Required, 1), AllowedUsers: pol.AllowedUsers,
+		AllowedGroups: pol.AllowedGroups, ExcludeAuthor: pol.ExcludeAuthor}
+	for _, a := range g.Status.Approvals {
+		d := uiGateDecision{User: a.User, Decision: a.Decision, Counted: a.Counted, Reason: a.Reason, Comment: a.Comment}
+		if a.FirstSeenAt != nil {
+			d.FirstSeenAt = a.FirstSeenAt.UTC().Format(time.RFC3339)
+		}
+		if a.Counted {
+			switch a.Decision {
+			case "approve":
+				out.Approved++
+			case "reject":
+				out.Rejected = true
+			}
+		}
+		out.Decisions = append(out.Decisions, d)
+	}
+	return out
 }
 
 // uiGateOverride is the JSON shape for a PolicyGateOverride (K-09 audit record).
@@ -739,6 +804,12 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 			resp.Environments = envStatuses
 		}
 		resp.RejectedLiveEnvironments = lifecycle.RejectedLiveEnvs(&b, steps)
+		if rj := b.Spec.Rejected; rj != nil {
+			resp.Rejected = &uiBundleRejection{Reason: rj.Reason, By: rj.By}
+			if rj.At != nil {
+				resp.Rejected.At = rj.At.UTC().Format(time.RFC3339)
+			}
+		}
 		result = append(result, resp)
 	}
 	writeJSON(w, result)
@@ -1131,6 +1202,7 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 			Template:    g.Labels["kardinal.io/bundle"] == "",
 			Holding:     state == graphpkg.GateStateBlock,
 			State:       state,
+			Approval:    gateApproval(&g),
 		}
 		if g.Status.LastEvaluatedAt != nil {
 			resp.LastEvaluatedAt = g.Status.LastEvaluatedAt.UTC().Format("2006-01-02T15:04:05Z")
