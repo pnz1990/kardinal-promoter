@@ -130,8 +130,9 @@ func jaegerTraces(ctx context.Context, api, traceID string) ([]jaegerTrace, erro
 // and the client span. The traces of the release's namespace hold
 // reconcile spans, a span per promotion step, git clone and git push, and
 // SCM API client spans to the git server, and a MetricCheck query's client
-// span to its web API (the receiver). No span carries the hook URL's path or
-// the MetricCheck URL's path.
+// span to its web API (the receiver). A git Subscription's poll is a client
+// span under its subscription reconcile. No span carries the hook URL's path
+// or the MetricCheck URL's path.
 //
 // Covers OBS-TRACING-01.
 func TestChart_Tracing(t *testing.T) {
@@ -150,6 +151,10 @@ func TestChart_Tracing(t *testing.T) {
 	assert.Contains(t, args, "--tracing-enabled=true")
 	assert.Contains(t, args, "--tracing-endpoint="+otlp)
 	assert.Contains(t, args, "--tracing-sampling-ratio=1")
+
+	// A git Subscription: its polls are traced like the SCM API requests.
+	newSub(t, e, a.ns, "traced-sub", v1alpha1.SubscriptionSpec{Type: v1alpha1.SubscriptionTypeGit,
+		Git: &v1alpha1.GitSubscriptionSpec{RepoURL: a.repo.CloneURL, Interval: "30s"}})
 
 	bucket := a.ns + "-traced"
 	newHook(t, e, a.ns, "traced", rcv.URL(bucket, "services/T0/B0/hookpath"), "", "", v1alpha1.NotificationEventBundleVerified)
@@ -238,5 +243,33 @@ func TestChart_Tracing(t *testing.T) {
 		}
 		return len(missing) == 0 && scm > 0 && metric > 0, fmt.Sprintf("missing %v, %d SCM spans to %s, %d MetricCheck spans to %s",
 			missing, scm, gitHost, metric, receiverHost)
+	})
+	cloneURL, err := url.Parse(a.repo.CloneURL)
+	require.NoError(t, err)
+	framework.Eventually(t, 2*time.Minute, "the Subscription's poll spans in Jaeger", func(ctx context.Context) (bool, string) {
+		traces, err := jaegerTraces(ctx, api, "")
+		if err != nil {
+			return false, err.Error()
+		}
+		seen := 0
+		for _, tr := range traces {
+			sub, polls := false, 0
+			for _, s := range tr.Spans {
+				if s.Name == "subscription.Reconcile" && s.tag("k8s.namespace.name") == a.ns {
+					sub = true
+				}
+				if strings.HasPrefix(s.Name, "HTTP ") && s.tag("server.address") == cloneURL.Hostname() {
+					polls++
+					assert.Equal(t, cloneURL.Scheme, s.tag("url.scheme"))
+				}
+			}
+			if sub {
+				seen++
+				if polls > 0 {
+					return true, ""
+				}
+			}
+		}
+		return false, fmt.Sprintf("%d subscription.Reconcile traces in %s, none with an HTTP span to %s", seen, a.ns, cloneURL.Hostname())
 	})
 }

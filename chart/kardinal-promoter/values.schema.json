@@ -421,6 +421,27 @@
         }
       }
     },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Pipeline pre- and post-deploy hooks (docs/hooks.md).",
+      "properties": {
+        "serviceAccounts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+          },
+          "minItems": 1,
+          "description": "ServiceAccount names a hook's Job Pod may run as (--hook-service-accounts)."
+        },
+        "podSecurityLevel": {
+          "type": "string",
+          "enum": ["baseline", "restricted", "privileged"],
+          "description": "Pod Security Standard a hook's Pod must meet (--hook-pod-security-level)."
+        }
+      }
+    },
     "validatingAdmissionPolicy": {
       "type": "object",
       "additionalProperties": false,

@@ -42,11 +42,12 @@ type GraphSpec struct {
 
 // GraphNode represents one node in the kro Graph.
 //
-// Exactly one of Template or Ref is set:
+// Exactly one of Template, Ref or Patch is set:
 //
 //	Template = kro creates and owns the object (server-side apply).
 //	Ref      = kro reads an existing object (metadata.name) or a collection
 //	           (metadata.selector) into scope without owning it.
+//	Patch    = kro writes some fields of an existing object.
 //
 // ReadyWhen feeds the Graph's Ready condition only. On a standalone Graph it
 // does NOT hold back dependent nodes, so kardinal gates dependents with
@@ -67,8 +68,10 @@ type GraphNode struct {
 	Def map[string]interface{} `json:"def,omitempty"`
 
 	// Patch contributes fields to an object kro does not create from this
-	// node (kro "patch" node): {apiVersion, kind, metadata: {name}, spec...}.
-	// kro applies only those fields, under a field manager of its own.
+	// node (kro "patch" node, which may target another node's object):
+	// {apiVersion, kind, metadata: {name}, spec...}. kro applies only those
+	// fields, under a field manager of its own (one per node), and waits while
+	// the target does not exist. Other nodes cannot reference a patch node.
 	Patch map[string]interface{} `json:"patch,omitempty"`
 
 	// Ref identifies an existing object or collection:

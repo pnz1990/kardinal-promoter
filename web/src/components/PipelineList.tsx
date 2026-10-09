@@ -401,7 +401,7 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                       }
                       const phaseColor: Record<string, string> = {
                         Verified: 'var(--color-success)', Promoting: 'var(--color-accent)', WaitingForMerge: 'var(--color-accent)',
-                        HealthChecking: 'var(--color-info)', Failed: 'var(--color-error)', Pending: 'var(--color-text-faint)',
+                        HealthChecking: 'var(--color-info)', Verifying: 'var(--color-info)', Failed: 'var(--color-error)', Pending: 'var(--color-text-faint)',
                       }
                       return Object.entries(counts).map(([phase, count]) => (
                         <span key={phase} style={{
