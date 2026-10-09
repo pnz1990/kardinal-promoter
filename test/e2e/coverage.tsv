@@ -386,18 +386,18 @@ CLI-VALIDATE-02	live	core	covered	cli	validate reports a reserved environment na
 CLI-COMPLETION-01	live	core	covered	cli	completion bash|zsh|fish	cmd/kardinal/cmd/completion.go:24
 CLI-APPROVE-01	live	core	covered	cli	kardinal approve <bundle> --env <env> records an Approval in the caller's SelfSubjectReview name and groups for the Bundle's UID, labelled with the Bundle and environment and owned by the Bundle; --decision reject and a repeat with another decision replace it	cmd/kardinal/cmd/approve.go:100-209; docs/policy-gates.md:630-639
 CLI-EMERGENCY-01	deprecated	core	covered	cli	rollback --emergency has no effect and prints a deprecation notice	cmd/kardinal/cmd/rollback.go:116-117; docs/changelog.md:326
-UIAPI-PIPELINES-01	live	ui	covered	ui-api	GET /api/v1/ui/pipelines lists pipelines with env status	cmd/kardinal-controller/ui_api.go:498
-UIAPI-BUNDLES-01	live	ui	covered	ui-api	GET pipelines/{p}/bundles	cmd/kardinal-controller/ui_api.go:702
-UIAPI-GRAPH-01	live	ui	covered	ui-api	GET bundles/{b}/graph returns nodes, edges and PR links	cmd/kardinal-controller/ui_api.go:800
-UIAPI-STEPS-01	live	ui	covered	ui-api	GET bundles/{b}/steps	cmd/kardinal-controller/ui_api.go:1061
-UIAPI-GATES-01	live	ui	covered	ui-api	GET gates with holding/blockerCount	cmd/kardinal-controller/ui_api.go:1152
-UIAPI-EVENTS-01	live	ui	covered	ui-api	GET steps/{ns}/{n}/events (count, first/last timestamp); 404 for a missing step	cmd/kardinal-controller/ui_api.go:1491
+UIAPI-PIPELINES-01	live	ui	covered	ui-api	GET /api/v1/ui/pipelines lists pipelines with env status	cmd/kardinal-controller/ui_api.go:497
+UIAPI-BUNDLES-01	live	ui	covered	ui-api	GET pipelines/{p}/bundles	cmd/kardinal-controller/ui_api.go:701
+UIAPI-GRAPH-01	live	ui	covered	ui-api	GET bundles/{b}/graph returns nodes, edges and PR links	cmd/kardinal-controller/ui_api.go:799
+UIAPI-STEPS-01	live	ui	covered	ui-api	GET bundles/{b}/steps	cmd/kardinal-controller/ui_api.go:1060
+UIAPI-GATES-01	live	ui	covered	ui-api	GET gates with holding/blockerCount	cmd/kardinal-controller/ui_api.go:1151
+UIAPI-EVENTS-01	live	ui	covered	ui-api	GET steps/{ns}/{n}/events (count, first/last timestamp); 404 for a missing step	cmd/kardinal-controller/ui_api.go:1490
 UIAPI-PROMOTE-01	live	ui	covered	ui-api	POST promote	cmd/kardinal-controller/ui_lifecycle.go:82
 UIAPI-ROLLBACK-01	live	ui	covered	ui-api	POST rollback	cmd/kardinal-controller/ui_lifecycle.go:151
 UIAPI-PAUSE-01	live	ui	covered	ui-api	POST pause and resume	cmd/kardinal-controller/ui_lifecycle.go:298; cmd/kardinal-controller/ui_lifecycle.go:304
-UIAPI-APPROVE-01	live	ui	covered	ui-api	POST gates/[{ns}/]{name}/approve writes an override	cmd/kardinal-controller/ui_api.go:1338
-UIAPI-VALIDATECEL-01	live	ui	covered	ui-api	POST validate-cel returns compile errors	cmd/kardinal-controller/ui_api.go:1296
-UIAPI-CREATE-01	live	ui	covered	ui-api	POST bundles creates a Bundle from the UI	cmd/kardinal-controller/ui_api.go:1633-1656; cmd/kardinal-controller/ui_api.go:1723-1747
+UIAPI-APPROVE-01	live	ui	covered	ui-api	POST gates/[{ns}/]{name}/approve writes an override	cmd/kardinal-controller/ui_api.go:1337
+UIAPI-VALIDATECEL-01	live	ui	covered	ui-api	POST validate-cel returns compile errors	cmd/kardinal-controller/ui_api.go:1295
+UIAPI-CREATE-01	live	ui	covered	ui-api	POST bundles creates a Bundle from the UI	cmd/kardinal-controller/ui_api.go:1632-1655; cmd/kardinal-controller/ui_api.go:1722-1746
 UIAPI-LOCAL-01	live	ui	covered	ui-api	with no UI auth mode, non-loopback clients or requests with proxy headers get 403	cmd/kardinal-controller/ui_peer.go:33-71; docs/installation.md:337-344; docs/changelog.md:301
 UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:1050-1093; cmd/kardinal-controller/ui_hosts.go:16-18; cmd/kardinal-controller/ui_hosts.go:53-64; cmd/kardinal-controller/main.go:1207-1212
 UIAPI-TOKEN-01	live	ui	covered	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:845-871
@@ -412,14 +412,14 @@ UIAPI-CORS-01	live	ui	covered	ui-api	CORS: allowed origin reflected, others 403,
 UIAPI-TLS-01	live	ui	covered	ui-api	TLS on UI and webhook servers; cert without key is a startup error	docs/guides/security.md:1123-1127
 UIAPI-HEADERS-01	live	ui	covered	ui-api	browser security headers (CSP, nosniff, frame deny)	docs/guides/security.md:1108-1122; cmd/kardinal-controller/ui_security_headers.go:31-60
 UIAPI-BODY-01	live	ui	covered	ui-api	request body over 1 MiB rejected	cmd/kardinal-controller/ui_auth.go:24; cmd/kardinal-controller/ui_auth.go:191-200
-UIAPI-REQUESTER-01	live	ui	covered	ui-api	TokenReview mode: a UI promote and a Bundle created from the UI record the caller's Kubernetes username as kardinal.io/requested-by and log it as requestedBy	docs/guides/security.md:443-466; cmd/kardinal-controller/ui_lifecycle.go:28-45; cmd/kardinal-controller/ui_api.go:1711-1739
+UIAPI-REQUESTER-01	live	ui	covered	ui-api	TokenReview mode: a UI promote and a Bundle created from the UI record the caller's Kubernetes username as kardinal.io/requested-by and log it as requestedBy	docs/guides/security.md:443-466; cmd/kardinal-controller/ui_lifecycle.go:28-45; cmd/kardinal-controller/ui_api.go:1710-1738
 UIAPI-ACCESSLOG-01	live	ui	covered	ui-api	the UI API access log records a TokenReview login with user and groups, a 403 with the RBAC reason, a 401, and the source IP; no token is logged	docs/guides/security.md:536-582; pkg/accesslog/accesslog.go:159-196
 UIAPI-REQUESTER-02	live	ui	covered	ui-api	no UI auth: a UI promote and rollback record kardinal-ui as kardinal.io/requested-by	docs/guides/security.md:443-466; cmd/kardinal-controller/ui_lifecycle.go:24-26
-UIAPI-REQUESTER-03	live	ui	covered	ui-api	no UI auth: a Bundle created from the UI records kardinal-ui as kardinal.io/requested-by	docs/guides/security.md:443-466; cmd/kardinal-controller/ui_api.go:1711-1720
-UIAPI-REQUESTER-04	live	ui	covered	ui-api	no UI auth: a UI gate approval records kardinal-ui as the override's createdBy, which the gate reason shows	docs/guides/security.md:443-466; cmd/kardinal-controller/ui_api.go:1387; pkg/reconciler/policygate/reconciler.go:269
+UIAPI-REQUESTER-03	live	ui	covered	ui-api	no UI auth: a Bundle created from the UI records kardinal-ui as kardinal.io/requested-by	docs/guides/security.md:443-466; cmd/kardinal-controller/ui_api.go:1710-1719
+UIAPI-REQUESTER-04	live	ui	covered	ui-api	no UI auth: a UI gate approval records kardinal-ui as the override's createdBy, which the gate reason shows	docs/guides/security.md:443-466; cmd/kardinal-controller/ui_api.go:1386; pkg/reconciler/policygate/reconciler.go:269
 UI-STATIC-01	live	ui	covered	ui	/ui/ serves the embedded web app	docs/installation.md:316-355
 UI-LIST-01	live	ui	covered	ui	pipeline sidebar (PAUSED/Blocked/Degraded) and fleet health bar with filters	docs/roadmap.md:144-145
-UI-FLEET-01	live	ui	covered	ui	fleet board: each environment of every pipeline shows the version it runs (and, as kardinal status does, the config or images it runs from another Bundle) and when it was Verified; a lit rail marks the active Bundle promoting, held by a gate or failed; a station opens its pipeline	docs/installation.md:359-369; cmd/kardinal-controller/ui_api.go:152-199
+UI-FLEET-01	live	ui	covered	ui	fleet board: each environment of every pipeline shows the version it runs (and, as kardinal status does, the config or images it runs from another Bundle) and when it was Verified; a lit rail marks the active Bundle promoting, held by a gate or failed; a station opens its pipeline	docs/installation.md:359-369; cmd/kardinal-controller/ui_api.go:151-198
 UI-STEPTIME-01	live	ui	covered	ui	step timings: a finished promotion's step list draws each step as a bar on the promotion's time span, in the order the steps ran	docs/installation.md:372-374; web/src/stepTimeline.ts:22
 UI-BUNDLETYPE-01	live	ui	covered	ui	Bundle type badges: the Bundle card names the type of the shown Bundle (image, config, image + config, chart); the Bundle history tags only the Bundles that are not image Bundles	docs/installation.md:375-377; web/src/components/BundleTypeBadge.tsx:38
 UI-KEYBOARD-01	live	ui	covered	ui	keyboard access: the first Tab stop skips to the main content; each fleet line and the Bundle history are one Tab stop, moved through with the arrow keys; Enter opens the one in focus	docs/installation.md:378-382; web/src/useRovingFocus.ts:31
