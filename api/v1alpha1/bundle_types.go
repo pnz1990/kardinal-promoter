@@ -45,7 +45,9 @@ type BundleSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Pipeline string `json:"pipeline"`
 
-	// Images lists the container images included in this Bundle.
+	// Images lists the container images included in this Bundle, at most
+	// 100.
+	// +kubebuilder:validation:MaxItems=100
 	// +optional
 	Images []ImageRef `json:"images,omitempty"`
 
@@ -119,16 +121,19 @@ type RejectedArtifactSet struct {
 type ImageRef struct {
 	// Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
 	Repository string `json:"repository"`
 
 	// Tag is the image tag, in the OCI distribution grammar: up to 128
 	// characters of [A-Za-z0-9_.-], not starting with "." or "-".
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`
+	// +kubebuilder:validation:MaxLength=128
 	// +optional
 	Tag string `json:"tag,omitempty"`
 
 	// Digest is the image digest (sha256:...), in the OCI digest grammar.
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$`
+	// +kubebuilder:validation:MaxLength=256
 	// +optional
 	Digest string `json:"digest,omitempty"`
 }
