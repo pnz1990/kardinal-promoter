@@ -59,11 +59,65 @@ func shortSHA(s string) string {
 	return prefix + s
 }
 
-// deployedBundles returns lifecycle.DeployedBundle for each of envs.
-func deployedBundles(steps []v1alpha1.PromotionStep, pipeline string, envs []string) map[string]string {
-	out := make(map[string]string, len(envs))
+// deployedEnv is what runs in an environment. bundle is the Bundle whose
+// change landed there last (lifecycle.DeployedBundle). Image and config
+// Bundles do not supersede each other, so when bundle is an image Bundle,
+// configFrom is the last Bundle that deployed a config commit there, and when
+// it is a config Bundle, imagesFrom is the last one that deployed images
+// (#1353). Each is "" when there is none, or when bundle is gone and its type
+// is not known.
+type deployedEnv struct {
+	bundle     string
+	configFrom string
+	imagesFrom string
+}
+
+// deployedBundles returns the deployedEnv of each of envs. byName holds the
+// pipeline's Bundles by name: their types say what each one deployed.
+func deployedBundles(steps []v1alpha1.PromotionStep, pipeline string, envs []string,
+	byName map[string]*v1alpha1.Bundle) map[string]deployedEnv {
+	deploys := func(want func(*v1alpha1.Bundle) bool) func(string) bool {
+		return func(name string) bool { b := byName[name]; return b != nil && want(b) }
+	}
+	out := make(map[string]deployedEnv, len(envs))
 	for _, env := range envs {
-		out[env] = lifecycle.DeployedBundle(steps, pipeline, env)
+		d := deployedEnv{bundle: lifecycle.DeployedBundle(steps, pipeline, env)}
+		if b := byName[d.bundle]; b != nil {
+			switch {
+			case !bundleDeploysConfig(b):
+				d.configFrom = lifecycle.DeployedBundleMatching(steps, pipeline, env, deploys(bundleDeploysConfig))
+			case !bundleDeploysImages(b):
+				d.imagesFrom = lifecycle.DeployedBundleMatching(steps, pipeline, env, deploys(bundleDeploysImages))
+			}
+		}
+		out[env] = d
 	}
 	return out
+}
+
+// bundleDeploysConfig reports whether b deploys a config commit: config and
+// mixed Bundles do.
+func bundleDeploysConfig(b *v1alpha1.Bundle) bool {
+	return (b.Spec.Type == "config" || b.Spec.Type == "mixed") && b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != ""
+}
+
+// bundleDeploysImages reports whether b deploys images: every Bundle but a
+// config Bundle does.
+func bundleDeploysImages(b *v1alpha1.Bundle) bool {
+	return b.Spec.Type != "config" && len(b.Spec.Images) > 0
+}
+
+// deployedLabelOf is deployedLabel of d.bundle, followed by where the rest
+// comes from: "; config <sha> from <bundle>" under an image Bundle, or
+// "; images <tags> from <bundle>" under a config Bundle.
+func deployedLabelOf(d deployedEnv, byName map[string]*v1alpha1.Bundle) string {
+	label := deployedLabel(d.bundle, byName)
+	if b := byName[d.configFrom]; b != nil {
+		label += "; config " + shortSHA(b.Spec.ConfigRef.CommitSHA) + " from " + d.configFrom
+	}
+	if b := byName[d.imagesFrom]; b != nil {
+		label += "; images " + bundleVersion(&v1alpha1.Bundle{Spec: v1alpha1.BundleSpec{Images: b.Spec.Images}}) +
+			" from " + d.imagesFrom
+	}
+	return label
 }

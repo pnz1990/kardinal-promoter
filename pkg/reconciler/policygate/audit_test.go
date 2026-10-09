@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
@@ -35,7 +36,7 @@ func auditEvents(t *testing.T, c client.Client) []kardinalv1alpha1.AuditEvent {
 	var list kardinalv1alpha1.AuditEventList
 	require.NoError(t, c.List(context.Background(), &list, client.InNamespace("default")))
 	sort.Slice(list.Items, func(i, j int) bool {
-		return list.Items[i].Spec.Timestamp.Before(&list.Items[j].Spec.Timestamp)
+		return lifecycle.CompareAuditEvents(&list.Items[i], &list.Items[j]) < 0
 	})
 	return list.Items
 }
@@ -108,7 +109,7 @@ func TestPolicyGateReconciler_AuditNameAndLabelFallback(t *testing.T) {
 	events := auditEvents(t, c)
 	require.Len(t, events, 1)
 	assert.LessOrEqual(t, len(events[0].Name), 253)
-	assert.True(t, strings.HasSuffix(events[0].Name, "-gate-success-1775556000"), events[0].Name)
+	assert.True(t, strings.HasSuffix(events[0].Name, "-gate-success-1775556000000"), events[0].Name)
 	assert.Equal(t, "no-weekend-deploys", events[0].Labels["kardinal.io/gate"])
 	assert.True(t, tue.Equal(events[0].Spec.Timestamp.Time), "the timestamp is the evaluation time")
 }

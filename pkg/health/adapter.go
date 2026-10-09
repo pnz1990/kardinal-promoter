@@ -139,6 +139,17 @@ type CheckOptions struct {
 	// the ReplicaSet it names does not decide. Zero skips that check.
 	Since time.Time
 
+	// ChangedAt is the earliest time the promoted change can have reached
+	// the environment's branch: when git-push started for a direct push, or
+	// when the promotion PR was opened (kardinal does not record when the
+	// SCM merged it; the merge is later). Zero when unknown, or when the
+	// promotion changed nothing in git. The argoRollouts adapter counts a
+	// Healthy phase of a Rollout whose images cannot be compared only when
+	// it was set at or after this time (Since when zero), so a Rollout that
+	// turned Healthy between the merge and the start of the health check
+	// is not missed.
+	ChangedAt time.Time
+
 	// TargetUpdatedAt is when a check of this promotion first found the
 	// target (the Deployment, or the Canary's target) running the Bundle
 	// images (HealthStatus.TargetUpdated); zero when no check has yet. With
@@ -210,8 +221,9 @@ type Adapter interface {
 type DeploymentAdapter struct {
 	client sigs_client.Client
 	// dynamic reads the ReplicaSet a ProgressDeadlineExceeded names (see
-	// deadlineOfReplicaSet), uncached; nil leaves the condition's times to
-	// decide.
+	// deadlineOfReplicaSet), uncached, and lists the pods of the new
+	// ReplicaSet while replicas are unavailable (see podProblemLookup); nil
+	// leaves the condition's times to decide and the pods unread.
 	dynamic dynamic.Interface
 }
 
@@ -242,6 +254,7 @@ func (a *DeploymentAdapter) Check(ctx context.Context, opts CheckOptions) (Healt
 		cfg.Condition = "Available"
 	}
 	rs := replicaSetLookup(ctx, a.dynamic)
+	pods := podProblemLookup(ctx, a.dynamic)
 
 	if len(cfg.LabelSelector) > 0 {
 		var list appsv1.DeploymentList
@@ -260,7 +273,7 @@ func (a *DeploymentAdapter) Check(ctx context.Context, opts CheckOptions) (Healt
 		comparable, updated := 0, 0
 		for i := range list.Items {
 			d := &list.Items[i]
-			st := checkDeployment(d, cfg.Condition, opts, rs)
+			st := checkDeployment(d, cfg.Condition, opts, rs, pods)
 			if runsRepository(opts.ExpectedImages, deploymentImages(d)) {
 				comparable++
 				if st.TargetUpdated {
@@ -292,7 +305,7 @@ func (a *DeploymentAdapter) Check(ctx context.Context, opts CheckOptions) (Healt
 		}
 		return HealthStatus{}, fmt.Errorf("get deployment %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}
-	return checkDeployment(&deploy, cfg.Condition, opts, rs), nil
+	return checkDeployment(&deploy, cfg.Condition, opts, rs, pods), nil
 }
 
 func severity(st HealthStatus) int {
@@ -308,13 +321,17 @@ func severity(st HealthStatus) int {
 
 // checkDeployment applies the rollout checks documented on DeploymentAdapter.Check.
 // It reads opts.ExpectedImages, ImagesOnly, Since and TargetUpdatedAt, and
-// sets TargetUpdated when the pod template runs the Bundle images. rs may be
-// nil.
-func checkDeployment(d *appsv1.Deployment, condition string, opts CheckOptions, rs replicaSetRevision) HealthStatus {
+// sets TargetUpdated when the pod template runs the Bundle images. A result
+// that is not Healthy while replicas are unavailable names why a new pod is
+// not ready (see withPodProblem). rs and pods may be nil.
+func checkDeployment(d *appsv1.Deployment, condition string, opts CheckOptions, rs replicaSetRevision, pods newPodProblem) HealthStatus {
 	running := deploymentImages(d)
 	imagesOK, imageNote := checkImages(opts.ExpectedImages, running)
 	updated := imagesOK && runsRepository(opts.ExpectedImages, running)
 	st := deploymentRollout(d, condition, imagesOK, imageNote, updated, updated && opts.ImagesOnly, opts, rs)
+	if imagesOK {
+		st = withPodProblem(st, d, pods)
+	}
 	st.TargetUpdated = updated
 	return st
 }
@@ -1333,6 +1350,24 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 			return progressing(fmt.Sprintf("%s: stable ReplicaSet %q is not the current pod template hash %q yet (%s)",
 				id, stable, current, reason)), nil
 		}
+		if !runsRepository(opts.ExpectedImages, running) {
+			// The images cannot tell the promoted revision from the previous
+			// one (#1422): the phase counts only when set after this check
+			// started.
+			since := opts.ChangedAt
+			if since.IsZero() || opts.Since.IsZero() {
+				// Since zero: nothing changed in git, the phase decides.
+				since = opts.Since
+			}
+			stale, note := healthySetBefore(rollout, since)
+			if stale != "" {
+				return progressing(fmt.Sprintf("%s: Rollout phase: Healthy is for an earlier release: %s; "+
+					"waiting for Argo Rollouts to roll out the change", id, stale)), nil
+			}
+			if note != "" {
+				reason += " " + note
+			}
+		}
 		if imageNote != "" {
 			reason += " " + imageNote
 		}
@@ -1342,6 +1377,37 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 	default: // Progressing, Paused, or not reported yet
 		return progressing(reason), nil
 	}
+}
+
+// healthySetBefore explains why the Rollout's Healthy phase predates since,
+// the earliest time the promoted change can have reached git (see
+// CheckOptions.ChangedAt), or returns "" when it does not (or since is zero:
+// the promotion changed nothing in git). Argo Rollouts sets its
+// Healthy condition False when it starts rolling out a new revision and True
+// again once the revision is healthy, so the condition's lastTransitionTime
+// is when the current revision became healthy. Both times are compared in
+// whole seconds. Without the condition (Argo Rollouts before v1.0) the phase
+// decides, with a note.
+func healthySetBefore(rollout *unstructured.Unstructured, since time.Time) (stale, note string) {
+	if since.IsZero() {
+		return "", ""
+	}
+	conditions, _, _ := unstructured.NestedSlice(rollout.Object, "status", "conditions")
+	cond := findCondition(conditions, "Healthy")
+	if cond == nil {
+		return "", "(no Healthy condition: cannot tell whether the phase is from this release)"
+	}
+	lt, _ := cond["lastTransitionTime"].(string)
+	at, err := time.Parse(time.RFC3339, lt)
+	if err != nil {
+		return fmt.Sprintf("its Healthy condition's lastTransitionTime %q is not a time", lt), ""
+	}
+	start := since.Truncate(time.Second)
+	if at.Before(start) {
+		return fmt.Sprintf("its Healthy condition's lastTransitionTime %s is before the promoted change reached git (%s)",
+			at.UTC().Format(time.RFC3339), start.UTC().Format(time.RFC3339)), ""
+	}
+	return "", ""
 }
 
 // rolloutImages returns the images of the Rollout's pod template. A Rollout
@@ -1622,7 +1688,7 @@ type canaryRevision struct {
 // primaryHealth is the health of a primary Deployment that runs the Bundle
 // images, prefixed with what the phase says.
 func (r canaryRevision) primaryHealth(prefix string) HealthStatus {
-	st := checkDeployment(r.primary, "Available", CheckOptions{}, nil)
+	st := checkDeployment(r.primary, "Available", CheckOptions{}, nil, nil)
 	id := fmt.Sprintf("primary Deployment %s/%s", r.primary.Namespace, r.primary.Name)
 	if st.Healthy {
 		return healthy(fmt.Sprintf("%s; %s runs the Bundle images: %s", prefix, id, st.Reason))
