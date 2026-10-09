@@ -357,7 +357,9 @@ func (a *AzureDevOpsProvider) AddLabelsToPR(ctx context.Context, repo string, pr
 // do executes an authenticated Azure DevOps API request using PAT Basic auth.
 func (a *AzureDevOpsProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
 	owner := ownerFromPath(path, "/")
+	call := startSCMCall("azuredevops", owner, method, path)
 	if err := a.circuits.Allow(owner); err != nil {
+		call.circuitOpen(a.circuits, owner)
 		return fmt.Errorf("azuredevops scm: %w", err)
 	}
 
@@ -381,6 +383,8 @@ func (a *AzureDevOpsProvider) do(ctx context.Context, method, path string, body,
 	}
 
 	resp, err := a.client.Do(req)
+	// Arguments are taken now; the circuit states are read at return, after Record.
+	defer call.done(resp, err, a.circuits, owner)
 	if err != nil {
 		a.circuits.Record(owner, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
