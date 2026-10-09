@@ -191,13 +191,24 @@ func TestLifecycle_FailedBundleHeldOnlyWhenCapFull(t *testing.T) {
 }
 
 // #1349 (QA on #1487): a Failed Bundle that a newer Bundle of its type
-// replaced is never held for a slot. With cap 1 and steady traffic, every
+// replaced (Promoting or Verified) is never held for a slot. With cap 1 and steady traffic, every
 // abandoned Failed Bundle would otherwise show WaitingForSlot, re-read the
 // namespace's Bundles from the API server and wake its steps on every
 // sibling change. A newer Bundle that is in flight or Verified both count.
 func TestLifecycle_ReplacedFailedBundleNotHeld(t *testing.T) {
-	for _, newerPhase := range []string{"Promoting", "Verified", "Available"} {
-		t.Run(newerPhase, func(t *testing.T) {
+	for _, tc := range []struct {
+		newerPhase string
+		held       bool
+	}{
+		{newerPhase: "Promoting"},
+		{newerPhase: "Verified"},
+		// A newer Bundle that is new or Available may itself wait for the
+		// slot, so it does not replace the Failed one: the hold applies.
+		{newerPhase: "Available", held: true},
+		{newerPhase: "", held: true},
+	} {
+		newerPhase := tc.newerPhase
+		t.Run("newer="+newerPhase, func(t *testing.T) {
 			t0 := time.Now().UTC().Add(-time.Hour)
 			p := lcPipeline("app", lcEnvs("test")...)
 			p.Spec.MaxConcurrentPromotions = 1
@@ -220,9 +231,14 @@ func TestLifecycle_ReplacedFailedBundleNotHeld(t *testing.T) {
 			res := lcReconcile(t, r, "app-v1")
 			got := lcGet(t, c, "app-v1")
 			assert.Equal(t, "Failed", got.Status.Phase)
-			assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, graph.CondBundleWaitingForSlot))
+			assert.Equal(t, tc.held, meta.IsStatusConditionTrue(got.Status.Conditions, graph.CondBundleWaitingForSlot))
 			assert.Zero(t, res.RequeueAfter)
-			assert.Zero(t, listed, "no uncached cap count for a replaced Bundle")
+			if tc.held {
+				assert.Equal(t, 1, listed, "the cap is counted uncached")
+			} else {
+				assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, graph.CondBundleWaitingForSlot))
+				assert.Zero(t, listed, "no uncached cap count for a replaced Bundle")
+			}
 
 			rv := got.ResourceVersion
 			lcReconcile(t, r, "app-v1")

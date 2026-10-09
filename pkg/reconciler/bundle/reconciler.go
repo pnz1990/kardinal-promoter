@@ -613,9 +613,20 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 // newer sibling and writes only its own status (BU-1 / BU-4, no cross-CRD
 // mutations).
 func (r *Reconciler) hasNewerSibling(ctx context.Context, b *kardinalv1alpha1.Bundle, countVerified bool) (bool, error) {
+	newer, _, err := r.newerSiblings(ctx, b, countVerified)
+	return newer, err
+}
+
+// newerSiblings scans the same-type Bundles created after b once. newer is
+// hasNewerSibling's answer. replaced reports a newer one that is Promoting or
+// Verified: it has the Pipeline's slot or finished, so b, a Failed Bundle, is
+// not held for a maxConcurrentPromotions slot (#1349). A newer one that is new
+// or Available may itself wait for the slot, so it does not count.
+func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bundle,
+	countVerified bool) (newer, replaced bool, err error) {
 	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
 	if err != nil {
-		return false, fmt.Errorf("list bundles for supersession check: %w", err)
+		return false, false, fmt.Errorf("list bundles for supersession check: %w", err)
 	}
 	for i := range siblings {
 		s := &siblings[i]
@@ -631,10 +642,13 @@ func (r *Reconciler) hasNewerSibling(ctx context.Context, b *kardinalv1alpha1.Bu
 			}
 		}
 		if lifecycle.CompareCreation(s, b) > 0 {
-			return true, nil
+			newer = true
+			if s.Status.Phase == phasePromoting || s.Status.Phase == phaseVerified {
+				replaced = true
+			}
 		}
 	}
-	return false, nil
+	return newer, replaced, nil
 }
 
 // pipelineBundleList lists the Bundles of a pipeline through the spec.pipeline index.
@@ -1137,8 +1151,9 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		stepsObserved := len(steps) > 0 || !failedPromoting(before)
 		// One read decides the three cases below: a newer same-type Bundle
 		// (in flight or Verified) supersedes this one instead of letting it
-		// recover, so it is never held for a slot either.
-		newer, newerErr := r.hasNewerSibling(ctx, b, true)
+		// recover; one that is Promoting or Verified (replaced) also means it
+		// is not held for a slot.
+		newer, replaced, newerErr := r.newerSiblings(ctx, b, true)
 		if newerErr != nil {
 			log.Warn().Err(newerErr).Msg("failed to check for newer bundle (non-fatal)")
 		}
@@ -1161,10 +1176,12 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		// slot, so while the cap is full it is held (WaitingForSlot): its
 		// Graph creates no step and its Pending steps wait, and it does not
 		// recover into Promoting. The hold is lifted when a slot frees: the
-		// sibling's phase change re-queues it (waitingSiblings). A Bundle a
-		// newer one replaced is not held: it can only be superseded.
+		// sibling's phase change re-queues it (waitingSiblings). A Bundle
+		// that a newer Promoting or Verified one replaced is not held: it can
+		// only be superseded. A newer one that is new or Available may be
+		// waiting for the slot itself, so it does not lift the hold.
 		limit, held := 0, false
-		if !newer {
+		if !replaced {
 			var err error
 			if limit, held, err = r.slotTaken(ctx, b, pipeline); err != nil {
 				// A failed read is not a free slot: keep the hold as it is and retry.
