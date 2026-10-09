@@ -96,8 +96,11 @@ func TestRollbackAndHold_Refused(t *testing.T) {
 	})
 	t.Run("already held", func(t *testing.T) {
 		c := newClient(t, holdObjects()...)
-		_, first, err := lifecycle.RollbackAndHold(context.Background(), c, holdRequest())
+		plan, first, err := lifecycle.RollbackAndHold(context.Background(), c, holdRequest())
 		require.NoError(t, err)
+		// The rollback is deployed now: the refusal names the hold, not the
+		// missing rollback target.
+		require.NoError(t, c.Create(context.Background(), step(plan.Bundle.Name, "app", "prod", "Verified", 30)))
 		_, _, err = lifecycle.RollbackAndHold(context.Background(), c, holdRequest())
 		require.ErrorIs(t, err, lifecycle.ErrConflict)
 		assert.Contains(t, err.Error(), "kardinal release-hold app --env prod")

@@ -115,6 +115,14 @@ func RollbackAndHold(ctx context.Context, c client.Client, req HoldRequest) (*Ro
 		}
 		req.Name = req.Pipeline + "-rollback-" + hex.EncodeToString(suffix)
 	}
+	// Refuse a held environment before planning: what is deployed there is
+	// the held rollback, so the plan would fail for a less useful reason.
+	var p v1alpha1.Pipeline
+	if err := c.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: req.Pipeline}, &p); err == nil {
+		if h := HoldOf(&p, req.Environment); h != nil {
+			return nil, nil, heldConflict(req.Pipeline, h)
+		}
+	}
 	plan, err := PlanRollback(ctx, c, req.RollbackRequest)
 	if err != nil {
 		return nil, nil, err
@@ -150,12 +158,17 @@ func setHold(ctx context.Context, c client.Client, ns, pipeline string, hold v1a
 			return fmt.Errorf("get pipeline %s/%s: %w", ns, pipeline, err)
 		}
 		if h := HoldOf(&p, hold.Environment); h != nil {
-			return fmt.Errorf("environment %s is already held on %s (%s); release it first with kardinal release-hold %s --env %s: %w",
-				h.Environment, h.Bundle, h.Reason, pipeline, h.Environment, ErrConflict)
+			return heldConflict(pipeline, h)
 		}
 		p.Spec.Holds = append(p.Spec.Holds, hold)
 		return c.Update(ctx, &p)
 	})
+}
+
+// heldConflict is the refusal to hold an environment that is held already.
+func heldConflict(pipeline string, h *v1alpha1.EnvironmentHold) error {
+	return fmt.Errorf("environment %s is already held on %s (%s); release it first with kardinal release-hold %s --env %s: %w",
+		h.Environment, h.Bundle, h.Reason, pipeline, h.Environment, ErrConflict)
 }
 
 // ReleaseHold removes the hold of env from the Pipeline and returns it. A
