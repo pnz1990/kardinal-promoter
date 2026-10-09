@@ -6,6 +6,7 @@ package graphcleanup_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -486,4 +488,39 @@ func readerBindingKeys(t *testing.T, c client.Client) []string {
 		}
 	}
 	return out
+}
+
+// TestReconciler_PruneIsCoalesced (PERF-GRAPHCLEANUP-01): every deleted Graph of a namespace maps to
+// the namespace's one prune request, so the work queue holds one prune
+// however many Graphs Graph retirement deletes at once, and that request
+// prunes like a deleted Graph's did. Before, each deleted Graph was its own
+// prune, each listing the namespace's Graphs from the API server, and the
+// queue reached 676 in the scale suite's chaos tests.
+//
+// Covers PERF-GRAPHCLEANUP-01.
+func TestReconciler_PruneIsCoalesced(t *testing.T) {
+	q := workqueue.NewTypedRateLimitingQueue[ctrl.Request](workqueue.DefaultTypedControllerRateLimiter[ctrl.Request]())
+	defer q.ShutDown()
+	for i := 0; i < 50; i++ {
+		g := kardinalGraph("team-a", false)
+		g.SetName(fmt.Sprintf("g-%d", i))
+		for _, req := range graphcleanup.PruneOnDelete(context.Background(), g) {
+			q.Add(req)
+		}
+	}
+	other := kardinalGraph("team-b", false)
+	for _, req := range graphcleanup.PruneOnDelete(context.Background(), other) {
+		q.Add(req)
+	}
+	assert.Equal(t, 2, q.Len(), "one prune per namespace")
+
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).
+		WithObjects(applierBinding("team-a", false, "argocd"), readerBinding("argocd", "team-a")).Build()
+	lister := &graphLister{graphs: map[string][]*graph.Graph{}}
+	r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: lister,
+		Identity: &graph.IdentityProvisioner{Writer: c, Reader: c, ReaderNamespaces: graph.DefaultReaderNamespaces}}
+	_, err := r.Reconcile(context.Background(), graphcleanup.PruneRequest("team-a"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, lister.calls)
+	assert.Empty(t, readerBindingKeys(t, c), "the namespace's last Graph is gone: its reader binding is pruned")
 }
