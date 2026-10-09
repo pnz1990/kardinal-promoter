@@ -31,8 +31,8 @@ case "$FLAVOR" in
   # Forgejo reads the webhook allow list from [webhook], where "*" allows
   # every host. Gitea 28 reads it from [security] (the [webhook] key only logs
   # a deprecation error), rejects "*", and needs private hosts listed.
-  forgejo) IMAGE=$FORGEJO_IMAGE PFX=FORGEJO ALLOW_SECTION=webhook ALLOW_HOSTS='*' ;;
-  gitea) IMAGE=$GITEA_IMAGE PFX=GITEA ALLOW_SECTION=security ALLOW_HOSTS='*.svc.cluster.local' ;;
+  forgejo) IMAGE=$FORGEJO_IMAGE PFX=FORGEJO ALLOW_SECTION=webhook ALLOW_HOSTS='*' INI=/var/lib/gitea/custom/conf/app.ini ;;
+  gitea) IMAGE=$GITEA_IMAGE PFX=GITEA ALLOW_SECTION=security ALLOW_HOSTS='*.svc.cluster.local' INI=/etc/gitea/app.ini ;;
   *) die "flavor must be forgejo or gitea" ;;
 esac
 NS=$FLAVOR
@@ -60,6 +60,27 @@ spec:
       labels: {app: $FLAVOR}
     spec:
       securityContext: {fsGroup: 1000}
+      # The instance signing key (repository.signing): a GPG key made at
+      # start, its ID written to app.ini, so API commits by users with a
+      # public key are instance-signed, as on a production instance with
+      # signing set up (image verification tests).
+      initContainers:
+        - name: signing-key
+          image: $IMAGE
+          imagePullPolicy: IfNotPresent
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              export GNUPGHOME=/var/lib/gitea/gnupg
+              mkdir -p "\$GNUPGHOME" && chmod 700 "\$GNUPGHOME"
+              gpg2 --batch --passphrase "" --quick-gen-key "$FLAVOR-instance <instance@example.com>" ed25519 sign never
+              key=\$(gpg2 --list-secret-keys --with-colons | awk -F: '/^sec/{print \$5; exit}')
+              mkdir -p "\$(dirname $INI)"
+              printf '[repository.signing]\nSIGNING_KEY = %s\n' "\$key" > $INI
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/gitea}
+            - {name: config, mountPath: /etc/gitea}
       containers:
         - name: $FLAVOR
           image: $IMAGE
@@ -86,6 +107,16 @@ spec:
             - {name: ${PFX}__actions__ENABLED, value: "false"}
             - {name: ${PFX}__mailer__ENABLED, value: "false"}
             - {name: ${PFX}__cron_0X2E_update_checker__ENABLED, value: "false"}
+            - {name: GNUPGHOME, value: /var/lib/gitea/gnupg}
+            - {name: ${PFX}__repository_0X2E_signing__SIGNING_NAME, value: "$FLAVOR-instance"}
+            - {name: ${PFX}__repository_0X2E_signing__SIGNING_EMAIL, value: instance@example.com}
+            # Sign only for users with a public key: the tests' fixtures stay
+            # unsigned (signing serializes on gpg-agent), and a user with a
+            # key gets instance-signed API commits (InstanceCommitAs).
+            - {name: ${PFX}__repository_0X2E_signing__CRUD_ACTIONS, value: pubkey}
+            - {name: ${PFX}__repository_0X2E_signing__INITIAL_COMMIT, value: never}
+            - {name: ${PFX}__repository_0X2E_signing__MERGES, value: never}
+            - {name: ${PFX}__git_0X2E_config__gpg_0X2E_program, value: gpg2}
           readinessProbe:
             httpGet: {path: /api/healthz, port: http}
             periodSeconds: 3
