@@ -101,14 +101,11 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 		imageKey = "image.tag"
 	}
 
-	// Determine the tag to set from the Bundle images.
-	tag := ""
-	for _, img := range state.Bundle.Images {
-		if img.Tag != "" {
-			tag = img.Tag
-			break
-		}
-	}
+	// The value to set: the first Bundle image's tag, as "<tag>@<digest>"
+	// when it is pinned by digest (like helm-set-image), so a digest the
+	// Bundle pins (and image verification checked) is what the chart pulls,
+	// not whatever the tag points to.
+	tag := argoCDImageValue(state.Bundle.Images)
 	if tag == "" {
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepSuccess,
@@ -168,6 +165,24 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 			"imageTag":          tag,
 		},
 	}, nil
+}
+
+// argoCDImageValue returns the value argocd-set-image writes: the first
+// image with a tag, as "<tag>@<digest>" when it is also pinned by digest;
+// "" when no image has a tag (an image with only a digest is skipped: the
+// image key holds a tag).
+func argoCDImageValue(images []v1alpha1.ImageRef) string {
+	for _, img := range images {
+		switch {
+		case img.Tag == "":
+			continue
+		case img.Digest != "":
+			return img.Tag + "@" + img.Digest
+		default:
+			return img.Tag
+		}
+	}
+	return ""
 }
 
 // getValuesObjectKey reads a dot-separated key from

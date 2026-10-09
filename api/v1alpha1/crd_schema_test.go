@@ -459,6 +459,86 @@ func TestCRDHookRunPhaseLatched(t *testing.T) {
 	}
 }
 
+// TestCRDImageVerificationPhaseLatched: the API server refuses to change a
+// Verified or Failed ImageVerification's phase.
+func TestCRDImageVerificationPhaseLatched(t *testing.T) {
+	phase := loadCRDs(t)["ImageVerification"].structural.Properties["status"].Properties["phase"]
+	var rule string
+	for _, r := range phase.XValidations {
+		if strings.Contains(r.Rule, "oldSelf") {
+			rule = r.Rule
+		}
+	}
+	require.NotEmpty(t, rule)
+	env, err := cel.NewEnv(cel.Variable("self", cel.StringType), cel.Variable("oldSelf", cel.StringType))
+	require.NoError(t, err)
+	ast, iss := env.Compile(rule)
+	require.NoError(t, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	for _, c := range []struct {
+		old, new string
+		allow    bool
+	}{{"Pending", "Verified", true}, {"Pending", "Failed", true}, {"Verified", "Failed", false}, {"Failed", "Verified", false}} {
+		out, _, err := prg.Eval(map[string]interface{}{"self": c.new, "oldSelf": c.old})
+		require.NoError(t, err)
+		assert.Equal(t, c.allow, out.Value(), "%s -> %s", c.old, c.new)
+	}
+}
+
+// TestCRDImageVerificationSpecImmutable: an ImageVerification's spec cannot
+// change; a policy change gives a new one (QA #1521: an edited spec would
+// keep the old verdict).
+func TestCRDImageVerificationSpecImmutable(t *testing.T) {
+	spec := loadCRDs(t)["ImageVerification"].structural.Properties["spec"]
+	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	require.NoError(t, err)
+	var prgs []cel.Program
+	for _, r := range spec.XValidations {
+		if !strings.Contains(r.Rule, "oldSelf") {
+			continue
+		}
+		ast, iss := env.Compile(r.Rule)
+		require.NoError(t, iss.Err(), r.Rule)
+		prg, err := env.Program(ast)
+		require.NoError(t, err)
+		prgs = append(prgs, prg)
+	}
+	require.NotEmpty(t, prgs, "ImageVerification spec needs a transition rule")
+	base := func() map[string]interface{} {
+		return map[string]interface{}{"pipelineName": "app", "bundleName": "v1",
+			"images": []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "digest": "sha256:" + strings.Repeat("a", 64)}},
+			"policy": map[string]interface{}{"authorities": []interface{}{map[string]interface{}{"name": "release",
+				"key": map[string]interface{}{"secretRef": map[string]interface{}{"name": "cosign", "key": "cosign.pub"}}}}}}
+	}
+	cases := []struct {
+		name  string
+		edit  func(m map[string]interface{})
+		allow bool
+	}{
+		{"unchanged", func(map[string]interface{}) {}, true},
+		{"digest changed", func(m map[string]interface{}) {
+			m["images"] = []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "digest": "sha256:" + strings.Repeat("b", 64)}}
+		}, false},
+		{"authority key changed", func(m map[string]interface{}) {
+			m["policy"] = map[string]interface{}{"authorities": []interface{}{map[string]interface{}{"name": "release",
+				"key": map[string]interface{}{"secretRef": map[string]interface{}{"name": "other", "key": "cosign.pub"}}}}}
+		}, false},
+		{"commit added", func(m map[string]interface{}) { m["commit"] = map[string]interface{}{"repo": "r", "sha": "s"} }, false},
+	}
+	for _, c := range cases {
+		next := base()
+		c.edit(next)
+		allowed := true
+		for _, prg := range prgs {
+			out, _, err := prg.Eval(map[string]interface{}{"self": next, "oldSelf": base()})
+			require.NoError(t, err, c.name)
+			allowed = allowed && out.Value() == true
+		}
+		assert.Equal(t, c.allow, allowed, c.name)
+	}
+}
+
 // TestCRDBundleArtifactImmutable: a Bundle's artifact (type, pipeline,
 // images, configRef, provenance) cannot change after creation: gates and
 // image verification were checked against it, so an edit would promote
