@@ -235,6 +235,7 @@ func TestCRDSchemaEnvironmentNames(t *testing.T) {
 		{"bundle"}, {"status"}, {"spec"}, {"metadata"}, {"kind"}, {"api-version"},
 		{"graph"}, {"kro"}, {"self"}, {"each"}, {"item"}, {"items"}, {"object"},
 		{"this"}, {"context"}, {"namespace"}, {"in"}, {"true"}, {"null"}, {"if"}, {"while"},
+		{"time"},
 	}
 	for _, names := range rejected {
 		assert.NotEmpty(t, validateCR(t, crds, pipelineWithEnvs(names...)), "%v must be rejected", names)
