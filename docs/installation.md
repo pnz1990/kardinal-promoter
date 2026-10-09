@@ -733,7 +733,8 @@ kubectl delete crd --ignore-not-found \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
   promotiontemplates.kardinal.io \
-  auditevents.kardinal.io
+  auditevents.kardinal.io \
+  approvals.kardinal.io
 
 # Optional: remove kro and its CRDs (only if nothing else uses kro)
 helm uninstall kro -n kro-system
