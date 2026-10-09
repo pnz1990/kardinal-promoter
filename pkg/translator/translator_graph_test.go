@@ -274,6 +274,29 @@ func TestTranslate_PermanentErrors(t *testing.T) {
 		assert.ErrorIs(t, err, graph.ErrInvalid)
 		assert.Contains(t, err.Error(), `type "image" requires at least one entry in images`)
 	})
+	t.Run("build error carries the gates it was given (#1312)", func(t *testing.T) {
+		tr := newTranslator(nil)
+		gate := &kardinalv1alpha1.PolicyGate{
+			ObjectMeta: metav1.ObjectMeta{Name: "hold", Namespace: "team-a",
+				Labels: map[string]string{"kardinal.io/applies-to": "prod"}},
+			Spec: kardinalv1alpha1.PolicyGateSpec{Expression: "true"},
+		}
+		require.NoError(t, tr.k8s.(client.Client).Create(ctx, gate))
+		p := teamPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
+		b := teamBundle(nil)
+		b.Spec.Images = nil
+		_, err := tr.Translate(ctx, p, b)
+		var be *BuildError
+		require.ErrorAs(t, err, &be)
+		require.Len(t, be.Gates, 1)
+		assert.Equal(t, "hold", be.Gates[0].Name)
+		assert.Equal(t, GatesHash(p, be.Gates), GatesHash(p, []kardinalv1alpha1.PolicyGate{*gate}))
+		assert.NotEqual(t, GatesHash(p, nil), GatesHash(p, be.Gates))
+		other := gate.DeepCopy()
+		other.Labels["kardinal.io/applies-to"] = "staging"
+		assert.Equal(t, GatesHash(p, nil), GatesHash(p, []kardinalv1alpha1.PolicyGate{*other}),
+			"a gate of another environment does not count")
+	})
 	t.Run("api error", func(t *testing.T) {
 		p := teamPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
 		_, err := newTranslator(apierrors.NewServiceUnavailable("etcd")).Translate(ctx, p, teamBundle(nil))

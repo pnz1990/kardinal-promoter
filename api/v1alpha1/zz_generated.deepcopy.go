@@ -1526,6 +1526,10 @@ func (in *PromotionStepStatus) DeepCopyInto(out *PromotionStepStatus) {
 		in, out := &in.BakeStartedAt, &out.BakeStartedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.BakeFirstStartedAt != nil {
+		in, out := &in.BakeFirstStartedAt, &out.BakeFirstStartedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.NextRetryAt != nil {
 		in, out := &in.NextRetryAt, &out.NextRetryAt
 		*out = (*in).DeepCopy()

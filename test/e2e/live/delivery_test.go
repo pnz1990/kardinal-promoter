@@ -7,6 +7,7 @@ package live
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
 
@@ -200,6 +202,58 @@ func TestRollouts_VerifiedOnBundleRevision(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, r.Image == v2 && r.Phase == "Healthy" && r.Done, "Verified means the Rollout finished V2: %s", r)
 	assert.Equal(t, v2, e.StableImage(t, a.ns, rollout))
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+}
+
+// TestRollouts_ConfigBundleWaitsForRollout checks health.type: argoRollouts
+// for a config Bundle, which has no images to compare (#1422). Argo CD's
+// automated sync is off, so the Rollout is still Healthy on the previous
+// spec, its generation observed, when the step's health check runs: that
+// phase used to verify the step. It now counts only when Argo Rollouts
+// reported the Rollout Healthy after the change reached git, so the step
+// waits with no failure, and is Verified once Argo CD applies the config and
+// the Rollout rolls it out.
+//
+// Covers HEALTH-ROLL-06.
+func TestRollouts_ConfigBundleWaitsForRollout(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newRolloutApp(t, e, "10s", "prod")
+	a.apply(t, a.deliveryPipeline(rollouts, false, nil))
+	rollout := fixtures.Workload("prod")
+	file := fixtures.Path("prod") + "/rollout.yaml"
+
+	e.SetArgoAutoSync(t, a.argoApp("prod"), false)
+	manifest := string(fixtures.RolloutRepo(fixtures.App{Namespace: a.ns, Envs: []string{"prod"}}, "10s")[file])
+	cfg := e.Repo(t, a.ns+"-config", map[string][]byte{file: []byte(withConfigChange(manifest))})
+	commits, err := gitserver.Commits(context.Background(), e.Git, cfg, cfg.Branch, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, commits)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", commits[0].SHA,
+		"--config-repo", cfg.CloneURL)
+
+	stale := fmt.Sprintf("waiting for argoRollouts: Rollout %s/%s: Rollout phase: Healthy is for an earlier release: "+
+		"its Healthy condition's lastTransitionTime ", a.ns, rollout)
+	e.WaitStepMessageAll(t, a.ns, pipelineName, bundle, "prod", "HealthChecking", promoteTimeout,
+		stale, " is before the promoted change reached git (", "; waiting for Argo Rollouts to roll out the change")
+	require.Contains(t, e.ReadFile(t, a.repo, a.repo.Branch, file), configValue, "the config change is in git")
+	e.HoldStep(t, deliveryHold, a.ns, pipelineName, bundle, "prod", "a Healthy Rollout on the previous spec does not verify the config",
+		func(ps *v1alpha1.PromotionStep) bool {
+			return ps.Status.State == "HealthChecking" && ps.Status.ConsecutiveHealthFailures == 0 &&
+				strings.HasPrefix(ps.Status.Message, stale)
+		})
+
+	e.SetArgoAutoSync(t, a.argoApp("prod"), true)
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", deliveryTimeout)
+	assert.Contains(t, ps.Status.Message, "health check passed via argoRollouts: Rollout phase: Healthy")
+	u, err := e.Dynamic.Resource(framework.RolloutGVR).Namespace(a.ns).Get(context.Background(), rollout, metav1.GetOptions{})
+	require.NoError(t, err)
+	containers, _, _ := unstructured.NestedSlice(u.Object, "spec", "template", "spec", "containers")
+	require.NotEmpty(t, containers)
+	assert.Contains(t, fmt.Sprint(containers[0]), configValue, "Verified means the Rollout runs the config")
+	r, err := e.GetRollout(context.Background(), a.ns, rollout)
+	require.NoError(t, err)
+	assert.True(t, r.Phase == "Healthy" && r.Done, "Verified means the Rollout finished: %s", r)
 	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
 }
 

@@ -206,6 +206,14 @@
         },
         "apiURL": {
           "type": "string"
+        },
+        "allowedRepositories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "--scm-allowed-repositories: host/repository globs the controller's SCM token may act on."
         }
       }
     },

@@ -21,6 +21,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // commentSCM is a fakeSCM that records PR comments.
@@ -229,6 +230,94 @@ func TestClosedGraceWindow_CommentOnceWhenSaveFails(t *testing.T) {
 			assert.True(t, got.Status.ClosedFinal)
 			assert.Len(t, s.comments, 1, "exactly one comment")
 			assert.Equal(t, failures+1, s.calls, "polled once per attempt, not after closedFinal is saved")
+		})
+	}
+}
+
+// TestClosedGraceWindow_NoCommentOnPRKardinalClosed covers #1351: a PR that
+// kardinal closed itself (the PromotionStep cancel path) already has the
+// "kardinal closed this PR" comment, and the step reconciler records that on
+// the PRStatus in the closed-by annotation, with the PR number. The end of
+// the grace window then posts no second "stopped tracking" comment. An
+// annotation that names another PR (the PRStatus now tracks a new PR, B72)
+// does not count, and neither does a PR a person closed.
+func TestClosedGraceWindow_NoCommentOnPRKardinalClosed(t *testing.T) {
+	tests := []struct {
+		name         string
+		annotation   string
+		wantComments int
+	}{
+		{name: "closed by a person: one stopped-tracking comment", wantComments: 1},
+		{name: "closed by kardinal: no second comment", annotation: "7"},
+		{name: "annotation for an earlier PR: comment", annotation: "6", wantComments: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pr := prAt(nil, v1alpha1.PRStatusStatus{LastCheckedAt: metaAgo(time.Minute), ClosedAt: metaAgo(6 * time.Minute)})
+			pr.Labels = map[string]string{"kardinal.io/environment": "prod"}
+			if tt.annotation != "" {
+				pr.Annotations = map[string]string{prstatus.AnnotationClosedByKardinal: tt.annotation}
+			}
+			require.Equal(t, 7, pr.Spec.PRNumber, "fixture PR number")
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(pr).
+				WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+			s := &commentSCM{}
+			r := &prstatus.Reconciler{Client: c, SCM: s}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "pr", Namespace: "default"}}
+			for i := 0; i < 2; i++ {
+				_, err := r.Reconcile(context.Background(), req)
+				require.NoError(t, err)
+			}
+			var got v1alpha1.PRStatus
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.True(t, got.Status.ClosedFinal, "the PR is final-closed either way")
+			assert.Len(t, s.comments, tt.wantComments)
+		})
+	}
+}
+
+// TestRepositoryNotAllowed_PRStatusPollsNothing is the regression test for
+// the fourth QA finding on #1483: the PRStatus reconciler polls spec.repo
+// with the controller's shared token, and a PRStatus can name any
+// repository. With the provider wrapped in --scm-allowed-repositories
+// (scm.RepositoryAllowlist.Guard, as the controller wires it), a PRStatus
+// for a repository that is not allowed reaches the SCM with no call, and
+// records the refusal in status.pollError, where its PromotionStep fails on
+// it; polling is not retried every 30s. A merged PR's merge commit is not
+// read either, and no stopped-tracking comment is posted.
+func TestRepositoryNotAllowed_PRStatusPollsNothing(t *testing.T) {
+	allow, err := scm.ParseRepositoryAllowlist([]string{"github.com/myorg/*"})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name   string
+		status v1alpha1.PRStatusStatus
+	}{
+		{name: "open PR is not polled"},
+		{name: "merged PR's merge commit is not read", status: v1alpha1.PRStatusStatus{Merged: true, LastCheckedAt: metaAgo(time.Hour)}},
+		{name: "closed PR gets no comment", status: v1alpha1.PRStatusStatus{LastCheckedAt: metaAgo(time.Minute), ClosedAt: metaAgo(6 * time.Minute)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pr := prAt(nil, tc.status)
+			require.Equal(t, "owner/repo", pr.Spec.Repo)
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(pr).
+				WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+			inner := &commentSCM{}
+			r := &prstatus.Reconciler{Client: c, SCM: allow.Guard(inner, "github.com")}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "pr", Namespace: "default"}}
+			res, err := r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+
+			assert.Zero(t, inner.calls, "GetPRStatus never reached the provider")
+			assert.Zero(t, inner.reviewCalls, "GetPRReviewStatus never reached the provider")
+			assert.Empty(t, inner.comments, "no comment")
+			var got v1alpha1.PRStatus
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			if tc.status.Merged {
+				assert.True(t, got.Status.MergeCommitUnavailable, "the refused lookup is final")
+				return
+			}
+			assert.Contains(t, got.Status.PollError, "not in the controller's allowed repositories")
+			assert.Equal(t, 5*time.Minute, res.RequeueAfter, "a refused poll is permanent, not retried every 30s")
 		})
 	}
 }
