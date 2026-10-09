@@ -339,6 +339,23 @@ func TestIdentityAdmission_GateInstanceFieldsComplete(t *testing.T) {
 		}
 		assert.Contains(t, only, "object.spec."+name+" == oldObject.spec."+name, "spec.%s must not change on a gate instance", name)
 	}
+	// Every metadata field a client can set is compared, but for what the
+	// API server writes or never lets change.
+	serverOwned := map[string]bool{"managedFields": true, "resourceVersion": true, "generation": true, "name": true,
+		"namespace": true, "uid": true, "creationTimestamp": true, "selfLink": true, "deletionTimestamp": true,
+		"deletionGracePeriodSeconds": true}
+	meta := reflect.TypeOf(metav1.ObjectMeta{})
+	for i := 0; i < meta.NumField(); i++ {
+		name := strings.Split(meta.Field(i).Tag.Get("json"), ",")[0]
+		if serverOwned[name] {
+			continue
+		}
+		if name == "annotations" {
+			assert.Contains(t, only, "variables.annotationsKept", "annotations are compared but for kardinal.io/force-recheck")
+			continue
+		}
+		assert.Contains(t, only, "object.metadata."+name+" == oldObject.metadata."+name, "metadata.%s must not change on a gate instance", name)
+	}
 }
 
 // TestIdentityAdmission_Approvals: an Approval is admitted only in the
@@ -456,23 +473,6 @@ func TestIdentityAdmission_Approvals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, admitsAs(tc.obj, tc.old, tc.user, mine))
 		})
-	}
-	// Every metadata field a client can set is compared, but for what the
-	// API server writes or never lets change.
-	serverOwned := map[string]bool{"managedFields": true, "resourceVersion": true, "generation": true, "name": true,
-		"namespace": true, "uid": true, "creationTimestamp": true, "selfLink": true, "deletionTimestamp": true,
-		"deletionGracePeriodSeconds": true}
-	meta := reflect.TypeOf(metav1.ObjectMeta{})
-	for i := 0; i < meta.NumField(); i++ {
-		name := strings.Split(meta.Field(i).Tag.Get("json"), ",")[0]
-		if serverOwned[name] {
-			continue
-		}
-		if name == "annotations" {
-			assert.Contains(t, only, "variables.annotationsKept", "annotations are compared but for kardinal.io/force-recheck")
-			continue
-		}
-		assert.Contains(t, only, "object.metadata."+name+" == oldObject.metadata."+name, "metadata.%s must not change on a gate instance", name)
 	}
 }
 
