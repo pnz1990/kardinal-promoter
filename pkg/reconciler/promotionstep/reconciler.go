@@ -24,6 +24,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -156,6 +157,13 @@ type Reconciler struct {
 	// it. It drives the deadline for closing a deleted step's PR and the
 	// retry backoff (status.nextRetryAt).
 	NowFn func() time.Time
+
+	// GitHubAppTokens mints the git tokens of Pipelines whose git Secret
+	// holds GitHub App credentials, at the controller's GitHub API
+	// (--scm-api-url). When nil, a cache for api.github.com is made on first
+	// use.
+	GitHubAppTokens *scm.AppTokenCache
+	appTokensOnce   sync.Once
 }
 
 // now returns the current time from NowFn, or time.Now when it is nil.
@@ -689,11 +697,13 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		WorkDir:      workDir,
 		Outputs:      cloneMap(ps.Status.Outputs),
 		Git: steps.GitConfig{
-			URL:         pipeline.Spec.Git.URL,
-			Branch:      baseBranch(pipeline),
-			Token:       cred.token,
-			AuthorName:  "kardinal-promoter",
-			AuthorEmail: "kardinal@kardinal.io",
+			URL:           pipeline.Spec.Git.URL,
+			Branch:        baseBranch(pipeline),
+			Token:         cred.token,
+			SSHPrivateKey: cred.sshKey,
+			SSHKnownHosts: cred.knownHosts,
+			AuthorName:    "kardinal-promoter",
+			AuthorEmail:   "kardinal@kardinal.io",
 		},
 		SCM:                  r.SCM,
 		GitClient:            r.GitClient,

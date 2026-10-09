@@ -17,9 +17,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +32,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	gogitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"github.com/skeema/knownhosts"
 )
 
 // ErrNothingToCommit is returned by CommitAll when the work tree has no
@@ -47,6 +51,110 @@ type GoGitClient struct{}
 // NewGoGitClient constructs a new GoGitClient.
 func NewGoGitClient() *GoGitClient {
 	return &GoGitClient{}
+}
+
+// GitAuth is how git authenticates to a remote.
+type GitAuth struct {
+	// Token is the HTTP(S) password: a PAT, an access token or a GitHub App
+	// installation token. Used only for http(s) remotes.
+	Token string
+	// SSHPrivateKey is the private key (PEM or OpenSSH format, without a
+	// passphrase) for an ssh remote (ssh://... or git@host:path).
+	SSHPrivateKey []byte
+	// SSHKnownHosts is known_hosts content. An ssh remote's host key must be
+	// in it: kardinal never accepts an unknown host key.
+	SSHKnownHosts []byte
+}
+
+// TokenAuth is the GitAuth of an HTTP(S) token.
+func TokenAuth(token string) GitAuth { return GitAuth{Token: token} }
+
+// ErrSSHKeyMissing is returned for an ssh remote when GitAuth has no private
+// key, and ErrSSHKnownHostsMissing when it has a key but no known_hosts.
+var (
+	ErrSSHKeyMissing        = errors.New("ssh remote, but the git Secret has no sshPrivateKey key")
+	ErrSSHKnownHostsMissing = errors.New("ssh remote, but the git Secret has no knownHosts key: add the server's host keys (ssh-keyscan <host>)")
+)
+
+// isSSHRemote reports whether remoteURL uses the ssh transport: ssh:// or
+// the scp-like user@host:path form.
+func isSSHRemote(remoteURL string) bool {
+	ep, err := transport.NewEndpoint(strings.TrimSpace(remoteURL))
+	return err == nil && ep.Protocol == "ssh"
+}
+
+// authMethod returns the go-git credentials of auth for remoteURL: HTTP basic
+// auth with the token for an http(s) remote (httpAuth), the private key with
+// a known_hosts host key check for an ssh remote, nil for other remotes
+// (file://, or http(s) without a token).
+func authMethod(remoteURL string, auth GitAuth) (transport.AuthMethod, error) {
+	if !isSSHRemote(remoteURL) {
+		if a := httpAuth(remoteURL, auth.Token); a != nil {
+			return a, nil
+		}
+		return nil, nil
+	}
+	return sshAuth(remoteURL, auth)
+}
+
+// sshAuth returns public key auth for the ssh remote remoteURL. The user is
+// the URL's (git@...), or git. The host key must be in auth.SSHKnownHosts;
+// the host key algorithms offered are the ones known_hosts has for the host,
+// so a server with several host keys is checked against the one recorded.
+func sshAuth(remoteURL string, auth GitAuth) (transport.AuthMethod, error) {
+	if len(strings.TrimSpace(string(auth.SSHPrivateKey))) == 0 {
+		return nil, ErrSSHKeyMissing
+	}
+	if len(strings.TrimSpace(string(auth.SSHKnownHosts))) == 0 {
+		return nil, ErrSSHKnownHostsMissing
+	}
+	ep, err := transport.NewEndpoint(strings.TrimSpace(remoteURL))
+	if err != nil {
+		return nil, fmt.Errorf("parse ssh remote: %w", err)
+	}
+	user := ep.User
+	if user == "" {
+		user = "git"
+	}
+	keys, err := gogitssh.NewPublicKeys(user, auth.SSHPrivateKey, "")
+	if err != nil {
+		// The error names the key format, never the key.
+		return nil, fmt.Errorf("read sshPrivateKey: %w", err)
+	}
+	db, err := knownHostsDB(auth.SSHKnownHosts)
+	if err != nil {
+		return nil, err
+	}
+	port := ep.Port
+	if port == 0 {
+		port = 22
+	}
+	keys.HostKeyCallback = db.HostKeyCallback()
+	keys.HostKeyAlgorithms = db.HostKeyAlgorithms(net.JoinHostPort(ep.Host, strconv.Itoa(port)))
+	return keys, nil
+}
+
+// knownHostsDB parses known_hosts content. The parser reads files, so the
+// content goes through a temporary file that is removed at once: the
+// database is in memory once it is read.
+func knownHostsDB(content []byte) (*knownhosts.HostKeyDB, error) {
+	f, err := os.CreateTemp("", "kardinal-known-hosts-")
+	if err != nil {
+		return nil, fmt.Errorf("write known_hosts: %w", err)
+	}
+	defer func() { _ = os.Remove(f.Name()) }()
+	if _, err := f.Write(append(append([]byte{}, content...), '\n')); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("write known_hosts: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("write known_hosts: %w", err)
+	}
+	db, err := gogitssh.NewKnownHostsDb(f.Name())
+	if err != nil {
+		return nil, fmt.Errorf("parse knownHosts: %w", err)
+	}
+	return db, nil
 }
 
 // httpAuth returns the HTTP basic-auth credentials for remoteURL, or nil when
@@ -81,16 +189,20 @@ func httpAuth(remoteURL, token string) transport.AuthMethod {
 // with token over HTTP(S) when it is set. dir must not already contain a repo.
 // A clone error reads "git clone <url>: <reason>". Every error names the URL
 // once and never contains URL credentials.
-func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string) error {
+func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir string, auth GitAuth) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create clone dir for %s: %w", RedactURL(url), err)
+	}
+	am, err := authMethod(url, auth)
+	if err != nil {
+		return fmt.Errorf("git clone %s: %w", RedactURL(url), err)
 	}
 
 	opts := &gogit.CloneOptions{
 		URL:          url,
 		Depth:        1,
 		SingleBranch: true,
-		Auth:         httpAuth(url, token),
+		Auth:         am,
 	}
 	if branch != "" {
 		opts.ReferenceName = plumbing.NewBranchReferenceName(branch)
@@ -104,14 +216,18 @@ func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string)
 
 // CloneAt clones url into dir and checks out commitSHA (detached). It is used
 // to read the content of a specific commit, e.g. the source of a config Bundle.
-func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir, token string) error {
+func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir string, auth GitAuth) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create clone dir for %s: %w", RedactURL(url), err)
+	}
+	am, err := authMethod(url, auth)
+	if err != nil {
+		return fmt.Errorf("git clone %s: %w", RedactURL(url), err)
 	}
 	repo, err := gogit.PlainCloneContext(ctx, dir, false, &gogit.CloneOptions{
 		URL:        url,
 		NoCheckout: true,
-		Auth:       httpAuth(url, token),
+		Auth:       am,
 	})
 	if err != nil {
 		return fmt.Errorf("git clone %s: %s", RedactURL(url), gitErrorText(err))
@@ -173,7 +289,7 @@ func (c *GoGitClient) CommitAll(ctx context.Context, dir, message, authorName, a
 // With force=false it returns ErrNonFastForward when the remote branch has
 // commits that HEAD does not contain. force=true overwrites the remote branch;
 // callers use it only for branches kardinal owns (kardinal/<bundle>/<env>).
-func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token string, force bool) error {
+func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch string, auth GitAuth, force bool) error {
 	repo, err := gogit.PlainOpen(dir)
 	if err != nil {
 		return fmt.Errorf("open repo at %s: %w", dir, err)
@@ -195,13 +311,16 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 	if urls := rem.Config().URLs; len(urls) > 0 {
 		remoteURL = urls[0]
 	}
-	auth := httpAuth(remoteURL, token)
+	am, err := authMethod(remoteURL, auth)
+	if err != nil {
+		return fmt.Errorf("git push %s %s: %w", remote, branch, err)
+	}
 	target := plumbing.NewBranchReferenceName(branch)
 
 	if !force {
 		// go-git's own fast-forward check walks history and fails with
 		// "object not found" in a shallow clone, so check the remote tip here.
-		if remoteHash, found, lerr := remoteBranchHash(ctx, rem, auth, target); lerr == nil && found &&
+		if remoteHash, found, lerr := remoteBranchHash(ctx, rem, am, target); lerr == nil && found &&
 			remoteHash != head.Hash() && !isAncestor(repo, remoteHash, head.Hash()) {
 			return fmt.Errorf("git push %s %s: %w", remote, branch, ErrNonFastForward)
 		}
@@ -215,7 +334,7 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 		RemoteName: remote,
 		RefSpecs:   []config.RefSpec{config.RefSpec(refSpec)},
 		Force:      force,
-		Auth:       auth,
+		Auth:       am,
 	}
 
 	if err := repo.PushContext(ctx, pushOpts); err != nil {

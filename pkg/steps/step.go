@@ -70,14 +70,25 @@ type GitConfig struct {
 	// never leaves it empty; an unset spec.git.branch is main.
 	Branch string
 
-	// Token is the SCM authentication token.
+	// Token is the HTTP(S) git token: a PAT, an access token or a GitHub App
+	// installation token.
 	Token string
+
+	// SSHPrivateKey and SSHKnownHosts authenticate an ssh remote: the
+	// sshPrivateKey and knownHosts keys of the Pipeline's git Secret.
+	SSHPrivateKey []byte
+	SSHKnownHosts []byte
 
 	// AuthorName is the git commit author name.
 	AuthorName string
 
 	// AuthorEmail is the git commit author email.
 	AuthorEmail string
+}
+
+// Auth is the git authentication of g.
+func (g GitConfig) Auth() scm.GitAuth {
+	return scm.GitAuth{Token: g.Token, SSHPrivateKey: g.SSHPrivateKey, SSHKnownHosts: g.SSHKnownHosts}
 }
 
 // StepState carries all context needed by a step during execution.

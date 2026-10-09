@@ -61,7 +61,8 @@ type mockGitClient struct {
 	pushErrs   []error
 }
 
-func (m *mockGitClient) Clone(_ context.Context, url, _, dir, token string) error {
+func (m *mockGitClient) Clone(_ context.Context, url, _, dir string, auth scm.GitAuth) error {
+	token := auth.Token
 	m.cloneCalls++
 	m.cloneURL, m.cloneDir, m.cloneToken = url, dir, token
 	if m.cloneErr != nil {
@@ -73,7 +74,8 @@ func (m *mockGitClient) Clone(_ context.Context, url, _, dir, token string) erro
 	return os.MkdirAll(dir, 0o755)
 }
 
-func (m *mockGitClient) CloneAt(_ context.Context, url, sha, dir, token string) error {
+func (m *mockGitClient) CloneAt(_ context.Context, url, sha, dir string, auth scm.GitAuth) error {
+	token := auth.Token
 	m.cloneAtCalls++
 	m.cloneAtURL, m.cloneAtSHA, m.cloneAtDir, m.cloneAtToken = url, sha, dir, token
 	if m.cloneAtErr != nil {
@@ -93,7 +95,7 @@ func (m *mockGitClient) CommitAll(_ context.Context, _, _, _, _ string) error {
 	return nil
 }
 
-func (m *mockGitClient) Push(_ context.Context, _, _, branch, _ string, force bool) error {
+func (m *mockGitClient) Push(_ context.Context, _, _, branch string, _ scm.GitAuth, force bool) error {
 	m.pushCalls++
 	m.pushBranch = branch
 	m.pushForce = force

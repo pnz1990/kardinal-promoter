@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"slices"
 	"testing"
 
@@ -39,7 +40,7 @@ type pushRecorder struct {
 	pushes   []string // "<branch> force=<force>" of every Push call
 }
 
-func (g *pushRecorder) Push(_ context.Context, _, _, branch, _ string, force bool) error {
+func (g *pushRecorder) Push(_ context.Context, _, _, branch string, _ scm.GitAuth, force bool) error {
 	g.pushes = append(g.pushes, fmt.Sprintf("%s force=%t", branch, force))
 	if len(g.pushErrs) == 0 {
 		return nil

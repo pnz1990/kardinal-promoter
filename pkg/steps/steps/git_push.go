@@ -74,7 +74,7 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 		force = false
 	}
 
-	err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Token, force)
+	err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), force)
 	if !force && errors.Is(err, scm.ErrNonFastForward) {
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepRestart,

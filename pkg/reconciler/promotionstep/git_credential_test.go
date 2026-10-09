@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,7 +49,8 @@ type authGit struct {
 	pushErr  error
 }
 
-func (g *authGit) Clone(_ context.Context, url, _, _, token string) error {
+func (g *authGit) Clone(_ context.Context, url, _, _ string, auth scm.GitAuth) error {
+	token := auth.Token
 	if g.cloneErr != nil {
 		return g.cloneErr
 	}
@@ -57,9 +59,10 @@ func (g *authGit) Clone(_ context.Context, url, _, _, token string) error {
 	}
 	return nil
 }
-func (g *authGit) CloneAt(_ context.Context, _, _, _, _ string) error   { return nil }
-func (g *authGit) CommitAll(_ context.Context, _, _, _, _ string) error { return nil }
-func (g *authGit) Push(_ context.Context, _, remote, branch, token string, _ bool) error {
+func (g *authGit) CloneAt(_ context.Context, _, _, _ string, _ scm.GitAuth) error { return nil }
+func (g *authGit) CommitAll(_ context.Context, _, _, _, _ string) error           { return nil }
+func (g *authGit) Push(_ context.Context, _, remote, branch string, auth scm.GitAuth, _ bool) error {
+	token := auth.Token
 	if g.pushErr != nil {
 		return g.pushErr
 	}

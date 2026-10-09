@@ -42,3 +42,37 @@ func NewProvider(providerType, token, apiURL, webhookSecret string) (SCMProvider
 		return nil, fmt.Errorf("unknown SCM provider type %q: supported types are \"github\", \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\", \"azuredevops\"", providerType)
 	}
 }
+
+// Credentials are what a provider authenticates with: a token, or for
+// GitHub, GitHub App credentials.
+type Credentials struct {
+	// Token is the PAT or access token. Ignored when GitHubApp is set.
+	Token string
+	// GitHubApp, when set, authenticates as a GitHub App installation.
+	GitHubApp *GitHubAppCredentials
+}
+
+// fingerprint identifies the credentials without revealing them.
+func (c Credentials) fingerprint() string {
+	if c.GitHubApp != nil {
+		return c.GitHubApp.Fingerprint()
+	}
+	return "token:" + strings.TrimSpace(c.Token)
+}
+
+// NewProviderWithCredentials is NewProvider for cred. GitHub App credentials
+// need providerType github (or ""); the provider mints installation tokens
+// at apiURL, so --scm-api-url points it at GitHub Enterprise Server too.
+func NewProviderWithCredentials(providerType string, cred Credentials, apiURL, webhookSecret string) (SCMProvider, error) {
+	if cred.GitHubApp == nil {
+		return NewProvider(providerType, cred.Token, apiURL, webhookSecret)
+	}
+	if providerType != "github" && providerType != "" {
+		return nil, fmt.Errorf("GitHub App credentials need SCM provider github, not %q", providerType)
+	}
+	src, err := NewGitHubAppTokenSource(*cred.GitHubApp, apiURL)
+	if err != nil {
+		return nil, err
+	}
+	return NewGitHubAppProvider(src, apiURL, webhookSecret), nil
+}

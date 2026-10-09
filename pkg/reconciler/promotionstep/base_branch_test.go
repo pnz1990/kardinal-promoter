@@ -5,6 +5,7 @@ package promotionstep_test
 
 import (
 	"context"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +20,7 @@ type cloneRecorder struct {
 	clones []string
 }
 
-func (g *cloneRecorder) Clone(_ context.Context, _, branch, _, _ string) error {
+func (g *cloneRecorder) Clone(_ context.Context, _, branch, _ string, _ scm.GitAuth) error {
 	g.clones = append(g.clones, branch)
 	return nil
 }

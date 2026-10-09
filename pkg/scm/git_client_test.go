@@ -61,7 +61,7 @@ func TestGoGitClient_PushCreatesBranch(t *testing.T) {
 	require.NoError(t, err)
 
 	workDir := filepath.Join(t.TempDir(), "work")
-	require.NoError(t, c.Clone(ctx, "file://"+remoteDir, "main", workDir, ""))
+	require.NoError(t, c.Clone(ctx, "file://"+remoteDir, "main", workDir, scm.TokenAuth("")))
 	require.NoError(t, os.WriteFile(filepath.Join(workDir, "README"), []byte("promoted\n"), 0o600))
 	require.NoError(t, c.CommitAll(ctx, workDir, "promote", "t", "t@example.com"))
 
@@ -70,7 +70,7 @@ func TestGoGitClient_PushCreatesBranch(t *testing.T) {
 	workHead, err := work.Head()
 	require.NoError(t, err)
 
-	require.NoError(t, c.Push(ctx, workDir, "origin", "kardinal/app-v1/test", "", false))
+	require.NoError(t, c.Push(ctx, workDir, "origin", "kardinal/app-v1/test", scm.TokenAuth(""), false))
 
 	remote, err := gogit.PlainOpen(remoteDir)
 	require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestGoGitClient_CloneSendsToken(t *testing.T) {
 	defer srv.Close()
 
 	c := scm.NewGoGitClient()
-	err := c.Clone(context.Background(), srv.URL+"/org/private.git", "main", filepath.Join(t.TempDir(), "w"), "ghp_TOKEN\n")
+	err := c.Clone(context.Background(), srv.URL+"/org/private.git", "main", filepath.Join(t.TempDir(), "w"), scm.TokenAuth("ghp_TOKEN\n"))
 	require.Error(t, err)
 
 	mu.Lock()
@@ -129,7 +129,7 @@ func TestGoGitClient_CloneSendsToken(t *testing.T) {
 
 	// Credentials embedded in the URL never appear in the error.
 	u := strings.Replace(srv.URL, "http://", "http://user:ghp_SECRET@", 1) + "/org/private.git"
-	err = c.Clone(context.Background(), u, "main", filepath.Join(t.TempDir(), "w2"), "")
+	err = c.Clone(context.Background(), u, "main", filepath.Join(t.TempDir(), "w2"), scm.TokenAuth(""))
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "ghp_SECRET")
 }
@@ -158,29 +158,29 @@ func TestGoGitClient_HTTPErrorsEndWithTheReason(t *testing.T) {
 	}{
 		{name: "clone, body with a newline", status: http.StatusUnauthorized, body: "Unauthorized\n",
 			run: func(t *testing.T, url string) error {
-				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), scm.TokenAuth("tok"))
 			},
 			want: "git clone %s: authentication required: Unauthorized"},
 		{name: "clone, empty body", status: http.StatusUnauthorized,
 			run: func(t *testing.T, url string) error {
-				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), scm.TokenAuth("tok"))
 			},
 			want: "git clone %s: authentication required"},
 		{name: "clone at a commit", status: http.StatusForbidden, body: "Forbidden\r\n",
 			run: func(t *testing.T, url string) error {
-				return c.CloneAt(ctx, url, "abc123", filepath.Join(t.TempDir(), "w"), "tok")
+				return c.CloneAt(ctx, url, "abc123", filepath.Join(t.TempDir(), "w"), scm.TokenAuth("tok"))
 			},
 			want: "git clone %s: authorization failed: Forbidden"},
 		{name: "push", status: http.StatusUnauthorized, body: "Unauthorized\n",
 			run: func(t *testing.T, url string) error {
 				work := filepath.Join(t.TempDir(), "w")
-				require.NoError(t, c.Clone(ctx, "file://"+seedBareRemote(t, map[string]string{"a.txt": "a\n"}), "main", work, ""))
+				require.NoError(t, c.Clone(ctx, "file://"+seedBareRemote(t, map[string]string{"a.txt": "a\n"}), "main", work, scm.TokenAuth("")))
 				repo, err := gogit.PlainOpen(work)
 				require.NoError(t, err)
 				require.NoError(t, repo.DeleteRemote("origin"))
 				_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{Name: "origin", URLs: []string{url}})
 				require.NoError(t, err)
-				return c.Push(ctx, work, "origin", "main", "tok", true)
+				return c.Push(ctx, work, "origin", "main", scm.TokenAuth("tok"), true)
 			},
 			want: "git push origin main: authentication required: Unauthorized"},
 		// go-git reports other codes as "unexpected client error: unexpected
@@ -188,29 +188,29 @@ func TestGoGitClient_HTTPErrorsEndWithTheReason(t *testing.T) {
 		// which named the URL a second time and dropped the body.
 		{name: "clone, 500 with a body", status: http.StatusInternalServerError, body: "upstream\n  timed out\n",
 			run: func(t *testing.T, url string) error {
-				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), scm.TokenAuth("tok"))
 			},
 			want: "git clone %s: HTTP 500 Internal Server Error: upstream timed out"},
 		{name: "clone, 502 with an empty body", status: http.StatusBadGateway,
 			run: func(t *testing.T, url string) error {
-				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+				return c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), scm.TokenAuth("tok"))
 			},
 			want: "git clone %s: HTTP 502 Bad Gateway"},
 		{name: "clone at a commit, 503", status: http.StatusServiceUnavailable, body: "maintenance\n",
 			run: func(t *testing.T, url string) error {
-				return c.CloneAt(ctx, url, "abc123", filepath.Join(t.TempDir(), "w"), "tok")
+				return c.CloneAt(ctx, url, "abc123", filepath.Join(t.TempDir(), "w"), scm.TokenAuth("tok"))
 			},
 			want: "git clone %s: HTTP 503 Service Unavailable: maintenance"},
 		{name: "push, 500", status: http.StatusInternalServerError, body: "hook failed\n",
 			run: func(t *testing.T, url string) error {
 				work := filepath.Join(t.TempDir(), "w")
-				require.NoError(t, c.Clone(ctx, "file://"+seedBareRemote(t, map[string]string{"a.txt": "a\n"}), "main", work, ""))
+				require.NoError(t, c.Clone(ctx, "file://"+seedBareRemote(t, map[string]string{"a.txt": "a\n"}), "main", work, scm.TokenAuth("")))
 				repo, err := gogit.PlainOpen(work)
 				require.NoError(t, err)
 				require.NoError(t, repo.DeleteRemote("origin"))
 				_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{Name: "origin", URLs: []string{url}})
 				require.NoError(t, err)
-				return c.Push(ctx, work, "origin", "main", "tok", true)
+				return c.Push(ctx, work, "origin", "main", scm.TokenAuth("tok"), true)
 			},
 			want: "git push origin main: HTTP 500 Internal Server Error: hook failed"},
 	}
@@ -266,7 +266,7 @@ func TestGoGitClient_HTMLErrorBodyIsOneLine(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 			url := srv.URL + "/org/repo.git"
-			err := c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+			err := c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), scm.TokenAuth("tok"))
 			require.Error(t, err)
 			assert.Equal(t, fmt.Sprintf(tc.want, url), err.Error())
 			assert.NotContains(t, err.Error(), "\n")
@@ -301,7 +301,7 @@ func TestGoGitClient_ErrorBodyCredentialsAreRemoved(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 			url := srv.URL + "/org/repo.git"
-			err := scm.NewGoGitClient().Clone(context.Background(), url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+			err := scm.NewGoGitClient().Clone(context.Background(), url, "main", filepath.Join(t.TempDir(), "w"), scm.TokenAuth("tok"))
 			require.Error(t, err)
 
 			assert.Equal(t, fmt.Sprintf("git clone %s: %s: %s…", url, tc.reason, removed[:200]), err.Error())
@@ -344,7 +344,7 @@ func TestGoGitClient_ErrorBodyIsRedactedAsText(t *testing.T) {
 				}))
 				t.Cleanup(srv.Close)
 				url := srv.URL + "/org/repo.git"
-				err := scm.NewGoGitClient().Clone(context.Background(), url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+				err := scm.NewGoGitClient().Clone(context.Background(), url, "main", filepath.Join(t.TempDir(), "w"), scm.TokenAuth("tok"))
 				require.Error(t, err)
 
 				assert.Equal(t, fmt.Sprintf("git clone %s: %s: %s", url, tc.reason, body.want), err.Error())
@@ -410,14 +410,14 @@ func TestGoGitClient_LocalErrorsNameTheRepository(t *testing.T) {
 	}
 
 	t.Run("clone, create clone dir", func(t *testing.T) {
-		err := c.Clone(ctx, secretURL, "main", underFile(t), "")
+		err := c.Clone(ctx, secretURL, "main", underFile(t), scm.TokenAuth(""))
 		require.Error(t, err)
 		assert.True(t, strings.HasPrefix(err.Error(), "create clone dir for "+shown+": "), err.Error())
 		assert.Equal(t, 1, strings.Count(err.Error(), shown), err.Error())
 		assert.NotContains(t, err.Error(), "ghp_SECRET")
 	})
 	t.Run("clone at a commit, create clone dir", func(t *testing.T) {
-		err := c.CloneAt(ctx, secretURL, "abc123", underFile(t), "")
+		err := c.CloneAt(ctx, secretURL, "abc123", underFile(t), scm.TokenAuth(""))
 		require.Error(t, err)
 		assert.True(t, strings.HasPrefix(err.Error(), "create clone dir for "+shown+": "), err.Error())
 		assert.Equal(t, 1, strings.Count(err.Error(), shown), err.Error())
@@ -426,7 +426,7 @@ func TestGoGitClient_LocalErrorsNameTheRepository(t *testing.T) {
 	t.Run("clone at a commit, checkout", func(t *testing.T) {
 		remote, commit := seedUncheckoutable(t)
 		url := "file://" + remote
-		err := c.CloneAt(ctx, url, commit.String(), filepath.Join(t.TempDir(), "w"), "")
+		err := c.CloneAt(ctx, url, commit.String(), filepath.Join(t.TempDir(), "w"), scm.TokenAuth(""))
 		require.Error(t, err)
 		assert.True(t, strings.HasPrefix(err.Error(), "checkout "+commit.String()+" in "+url+": "), err.Error())
 		assert.Equal(t, 1, strings.Count(err.Error(), url), err.Error())
@@ -473,7 +473,7 @@ func TestGoGitClient_CommitAllNothingToCommit(t *testing.T) {
 	c := scm.NewGoGitClient()
 	remote := seedBareRemote(t, map[string]string{"a.txt": "a\n"})
 	work := filepath.Join(t.TempDir(), "w")
-	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, ""))
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, scm.TokenAuth("")))
 
 	repo, err := gogit.PlainOpen(work)
 	require.NoError(t, err)
@@ -494,7 +494,7 @@ func TestGoGitClient_CommitAllStagesDeletions(t *testing.T) {
 	c := scm.NewGoGitClient()
 	remote := seedBareRemote(t, map[string]string{"a.txt": "a\n", "b.txt": "b\n"})
 	work := filepath.Join(t.TempDir(), "w")
-	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, ""))
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, scm.TokenAuth("")))
 	require.NoError(t, os.Remove(filepath.Join(work, "b.txt")))
 	require.NoError(t, c.CommitAll(ctx, work, "rm b", "t", "t@example.com"))
 
@@ -518,7 +518,7 @@ func TestGoGitClient_PushNonFastForward(t *testing.T) {
 
 	cloneAndCommit := func(name, content string) string {
 		work := filepath.Join(t.TempDir(), name)
-		require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, ""))
+		require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, scm.TokenAuth("")))
 		require.NoError(t, os.WriteFile(filepath.Join(work, "a.txt"), []byte(content), 0o600))
 		require.NoError(t, c.CommitAll(ctx, work, name, "t", "t@example.com"))
 		return work
@@ -527,14 +527,14 @@ func TestGoGitClient_PushNonFastForward(t *testing.T) {
 	w2 := cloneAndCommit("w2", "two\n")
 
 	// Base branch: the first writer wins, the second gets ErrNonFastForward.
-	require.NoError(t, c.Push(ctx, w1, "origin", "main", "", false))
-	err := c.Push(ctx, w2, "origin", "main", "", false)
+	require.NoError(t, c.Push(ctx, w1, "origin", "main", scm.TokenAuth(""), false))
+	err := c.Push(ctx, w2, "origin", "main", scm.TokenAuth(""), false)
 	require.ErrorIs(t, err, scm.ErrNonFastForward)
 
 	// Promotion branch: a re-run from a fresh clone overwrites it with force.
-	require.NoError(t, c.Push(ctx, w1, "origin", "kardinal/b/prod", "", false))
-	require.ErrorIs(t, c.Push(ctx, w2, "origin", "kardinal/b/prod", "", false), scm.ErrNonFastForward)
-	require.NoError(t, c.Push(ctx, w2, "origin", "kardinal/b/prod", "", true))
+	require.NoError(t, c.Push(ctx, w1, "origin", "kardinal/b/prod", scm.TokenAuth(""), false))
+	require.ErrorIs(t, c.Push(ctx, w2, "origin", "kardinal/b/prod", scm.TokenAuth(""), false), scm.ErrNonFastForward)
+	require.NoError(t, c.Push(ctx, w2, "origin", "kardinal/b/prod", scm.TokenAuth(""), true))
 
 	bare, err := gogit.PlainOpen(remote)
 	require.NoError(t, err)
@@ -553,17 +553,17 @@ func TestGoGitClient_CloneAt(t *testing.T) {
 	c := scm.NewGoGitClient()
 	remote := seedBareRemote(t, map[string]string{"a.txt": "v1\n"})
 	work := filepath.Join(t.TempDir(), "w")
-	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, ""))
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, scm.TokenAuth("")))
 	repo, err := gogit.PlainOpen(work)
 	require.NoError(t, err)
 	first, err := repo.Head()
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(work, "a.txt"), []byte("v2\n"), 0o600))
 	require.NoError(t, c.CommitAll(ctx, work, "v2", "t", "t@example.com"))
-	require.NoError(t, c.Push(ctx, work, "origin", "main", "", false))
+	require.NoError(t, c.Push(ctx, work, "origin", "main", scm.TokenAuth(""), false))
 
 	at := filepath.Join(t.TempDir(), "at")
-	require.NoError(t, c.CloneAt(ctx, "file://"+remote, first.Hash().String(), at, ""))
+	require.NoError(t, c.CloneAt(ctx, "file://"+remote, first.Hash().String(), at, scm.TokenAuth("")))
 	b, err := os.ReadFile(filepath.Join(at, "a.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "v1\n", string(b))

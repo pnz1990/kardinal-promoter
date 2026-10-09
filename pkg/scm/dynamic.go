@@ -67,13 +67,23 @@ func (d *DynamicProvider) Reload(token string) error {
 }
 
 func (d *DynamicProvider) reload(token string) error {
-	p, err := NewProvider(d.providerType, token, d.apiURL, d.webhookSecret)
+	return d.ReloadCredentials(Credentials{Token: token})
+}
+
+// ReloadCredentials is Reload for cred, a token or GitHub App credentials.
+// A provider built from GitHub App credentials mints its first installation
+// token on its first request.
+func (d *DynamicProvider) ReloadCredentials(cred Credentials) error {
+	p, err := NewProviderWithCredentials(d.providerType, cred, d.apiURL, d.webhookSecret)
 	if err != nil {
 		return fmt.Errorf("creating SCM provider during reload: %w", err)
 	}
 	d.inner.Store(&p)
 	return nil
 }
+
+// Current returns the provider the DynamicProvider delegates to now.
+func (d *DynamicProvider) Current() SCMProvider { return d.current() }
 
 // current returns the active inner SCMProvider. It panics if no provider has
 // been initialised — this should never happen after NewDynamicProvider.

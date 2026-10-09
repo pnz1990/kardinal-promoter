@@ -15,6 +15,7 @@ package scm
 
 import (
 	"fmt"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -127,6 +128,24 @@ func SameOrigin(a, b string) bool {
 	oa, okA := httpOrigin(a)
 	ob, okB := httpOrigin(b)
 	return okA && okB && oa == ob
+}
+
+// SameSSHHost reports whether two ssh git remotes (ssh:// or scp-like) are
+// on the same host and port, so the ssh key for a may be used for b.
+func SameSSHHost(a, b string) bool {
+	ea, errA := transport.NewEndpoint(strings.TrimSpace(a))
+	eb, errB := transport.NewEndpoint(strings.TrimSpace(b))
+	if errA != nil || errB != nil || ea.Protocol != "ssh" || eb.Protocol != "ssh" {
+		return false
+	}
+	pa, pb := ea.Port, eb.Port
+	if pa == 0 {
+		pa = 22
+	}
+	if pb == 0 {
+		pb = 22
+	}
+	return strings.EqualFold(ea.Host, eb.Host) && pa == pb
 }
 
 // httpOrigin returns "scheme://host:port" for an http or https URL.

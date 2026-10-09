@@ -29,10 +29,16 @@ import (
 )
 
 // GitHubProvider implements SCMProvider against the GitHub REST API.
-// Requests are authenticated with a personal access token.
+// Requests are authenticated with a personal access token, or with GitHub
+// App installation tokens (NewGitHubAppProvider).
 type GitHubProvider struct {
-	// Token is the GitHub personal access token or fine-grained PAT.
+	// Token is the GitHub personal access token or fine-grained PAT. It is
+	// not used when tokens is set.
 	Token string
+
+	// tokens, when set, gives the token of each request: a
+	// GitHubAppTokenSource minting installation tokens.
+	tokens TokenSource
 
 	// APIURL is the GitHub API base URL. Defaults to "https://api.github.com" if empty.
 	APIURL string
@@ -61,6 +67,26 @@ func NewGitHubProvider(token, apiURL, webhookSecret string) *GitHubProvider {
 		circuit:       NewCircuitBreaker(),
 		client:        &http.Client{Timeout: providerHTTPTimeout},
 	}
+}
+
+// NewGitHubAppProvider constructs a GitHubProvider that authenticates every
+// request with an installation token from tokens.
+func NewGitHubAppProvider(tokens TokenSource, apiURL, webhookSecret string) *GitHubProvider {
+	g := NewGitHubProvider("", apiURL, webhookSecret)
+	g.tokens = tokens
+	return g
+}
+
+// requestToken is the token of one request.
+func (g *GitHubProvider) requestToken(ctx context.Context) (string, error) {
+	if g.tokens == nil {
+		return g.Token, nil
+	}
+	tok, err := g.tokens.Token(ctx)
+	if err != nil {
+		return "", fmt.Errorf("github scm: %w", err)
+	}
+	return tok, nil
 }
 
 // OpenPR creates a pull request and returns the PR URL and number.
@@ -317,11 +343,15 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 		bodyReader = bytes.NewReader(data)
 	}
 
+	token, err := g.requestToken(ctx)
+	if err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, method, g.APIURL+path, bodyReader)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+g.Token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	if body != nil {

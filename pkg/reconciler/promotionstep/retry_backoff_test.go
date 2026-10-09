@@ -17,6 +17,7 @@ package promotionstep_test
 import (
 	"context"
 	"errors"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -54,7 +55,7 @@ type flakyGit struct {
 	clones int
 }
 
-func (g *flakyGit) Clone(_ context.Context, _, _, _, _ string) error {
+func (g *flakyGit) Clone(_ context.Context, _, _, _ string, _ scm.GitAuth) error {
 	g.clones++
 	if g.fail {
 		return errors.New("git clone: 503 Service Unavailable")
