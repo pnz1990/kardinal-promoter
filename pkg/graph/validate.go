@@ -36,6 +36,11 @@ var reservedNodeIDs = map[string]bool{
 	"for": true, "function": true, "if": true, "import": true, "let": true,
 	"loop": true, "package": true, "return": true,
 	"var": true, "void": true, "while": true,
+	// "time" is reserved by kro#1434 (KREP-025 time.now()), which is not in
+	// the pinned kro yet. Reserved now so a Pipeline with an environment
+	// named "time" is refused before the kro upgrade would break it (ledger
+	// Notes: node ID grammar).
+	"time": true,
 }
 
 // ErrInvalid is in the chain of every error Build and ValidateNodeIDs

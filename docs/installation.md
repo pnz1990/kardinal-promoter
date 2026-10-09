@@ -35,6 +35,20 @@ The script installs the kro Helm chart (`oci://registry.k8s.io/kro/charts/kro`) 
 with `config.featureGates.GraphKind=true` and `rbac.mode=aggregation`, then server-side applies the
 kro CRDs. Override the version with `KRO_VERSION=<version>`.
 
+The script also tunes kro for kardinal's Graphs:
+
+| Helm value | kro default | Script default | Override |
+|---|---|---|---|
+| `config.graphConcurrentReconciles` | 1 | 8 | `KRO_GRAPH_CONCURRENT_RECONCILES` |
+| `config.clientQps` | 100 | 300 | `KRO_CLIENT_QPS` |
+| `config.clientBurst` | 150 | 500 | `KRO_CLIENT_BURST` |
+
+kro reconciles one Graph at a time by default, and each reconcile makes about three API calls per
+object the Graph applies. With one worker, one large promotion (a Pipeline with 150 environments)
+delays every other Graph in the cluster by several seconds, up to about 30 seconds while two such
+promotions run. Eight workers keep that under half a second. If you install kro another way, set
+the same values.
+
 !!! warning "Version compatibility"
     The kro version kardinal-promoter is tested against is pinned in `hack/install-kro.sh`.
 
@@ -280,7 +294,7 @@ kubectl version | grep Server
 
 ```bash
 kubectl get pipelines -A -o json | jq -r '
-  ["api-version","kind","metadata","namespace","spec","status","graph","graphengine","kro","each","item","items","object","self","this","context","true","false","null","in","as","break","const","continue","else","for","function","if","import","let","loop","package","return","var","void","while","bundle"] as $reserved
+  ["api-version","kind","metadata","namespace","spec","status","graph","graphengine","kro","each","item","items","object","self","this","context","true","false","null","in","as","break","const","continue","else","for","function","if","import","let","loop","package","return","var","void","while","bundle","time"] as $reserved
   | .items[] | "pipeline \(.metadata.namespace)/\(.metadata.name)" as $p
   | ( (select((.spec.policyGates // []) | length > 0) | "\($p): spec.policyGates"),
       ((.spec.environments // []) | group_by(.name)[] | select(length > 1) | "\($p): duplicate environment name \(.[0].name)"),
