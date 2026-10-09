@@ -244,3 +244,62 @@ func TestGoGitClient_RebaseOnRemote_BaseMissing(t *testing.T) {
 	require.ErrorIs(t, err, scm.ErrRebaseBaseMissing)
 	assert.Contains(t, err.Error(), "1111111111111111111111111111111111111111")
 }
+
+// TestGoGitClient_RebaseOnRemote_BaseFetched (#1606): a HEAD made on an
+// earlier head of the branch that the shallow clone does not have is rebased
+// all the same: RebaseOnRemote fetches the branch's recent history, finds the
+// base there and replays the change onto the current head, keeping the other
+// writers' commits.
+func TestGoGitClient_RebaseOnRemote_BaseFetched(t *testing.T) {
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	remote := seedBareRemote(t, map[string]string{"README.md": "r\n", "envs/a.yaml": "a: 1\n"})
+	push := func(name string, files map[string]string) string {
+		w := filepath.Join(t.TempDir(), name)
+		require.NoError(t, c.Clone(ctx, "file://"+remote, "main", w, ""))
+		writeFiles(t, w, files)
+		require.NoError(t, c.CommitAll(ctx, w, "write "+name, "other", "o@example.com"))
+		require.NoError(t, c.Push(ctx, w, "origin", "main", "", false))
+		h, err := c.HeadCommit(ctx, w)
+		require.NoError(t, err)
+		return h
+	}
+	work := filepath.Join(t.TempDir(), "w")
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, ""))
+	earlier := push("x", map[string]string{"envs/x.yaml": "x\n"})
+	push("y", map[string]string{"envs/y.yaml": "y\n"})
+
+	// HEAD: this promotion's change, made on the earlier head the clone
+	// never fetched.
+	repo, err := gogit.PlainOpen(work)
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	cur, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+	// Its tree is the earlier head's (x.yaml) with this change (a.yaml).
+	writeFiles(t, work, map[string]string{"envs/a.yaml": "a: 2\n", "envs/x.yaml": "x\n"})
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, wt.AddGlob("envs"))
+	tmp, err := wt.Commit("tmp", &gogit.CommitOptions{Author: &cur.Author})
+	require.NoError(t, err)
+	tc, err := repo.CommitObject(tmp)
+	require.NoError(t, err)
+	promo := &object.Commit{Author: cur.Author, Committer: cur.Committer, Message: "promote a", TreeHash: tc.TreeHash,
+		ParentHashes: []plumbing.Hash{plumbing.NewHash(earlier)}}
+	obj := repo.Storer.NewEncodedObject()
+	require.NoError(t, promo.Encode(obj))
+	h, err := repo.Storer.SetEncodedObject(obj)
+	require.NoError(t, err)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(head.Name(), h)))
+	_, err = repo.CommitObject(plumbing.NewHash(earlier))
+	require.ErrorIs(t, err, plumbing.ErrObjectNotFound, "the clone lacks the base")
+
+	changed, err := c.RebaseOnRemote(ctx, work, "origin", "main", "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"envs/a.yaml"}, changed)
+	require.NoError(t, c.Push(ctx, work, "origin", "main", "", false))
+	files, _ := remoteFiles(t, remote, "main")
+	assert.Equal(t, map[string]string{"README.md": "r\n", "envs/a.yaml": "a: 2\n", "envs/x.yaml": "x\n", "envs/y.yaml": "y\n"}, files)
+}

@@ -1789,42 +1789,65 @@ func TestReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 // reconcile ends with a requeue and no error, and the next reconcile writes
 // the transition from the stored step. The change that caused the conflict
 // may be one the predicates drop (kro relabelling the step), so no watch
-// event would reconcile the step again.
+// event would reconcile the step again. HealthChecking → Verified is the
+// transition the 50-target fleet test lost: before, the step stayed in
+// HealthChecking with nothing to reconcile it.
 func TestReconciler_TransitionConflictRequeues(t *testing.T) {
-	promoting := asPromoting(makeStep("step-prod", "my-app", "bundle-1", "test"), makePipeline("my-app"))
-	conflicts := 1
-	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
-		WithObjects(promoting, makeBundle("bundle-1", "my-app"), makePipeline("my-app")).
-		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PolicyGate{}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
-				patch client.Patch, opts ...client.SubResourcePatchOption) error {
-				if _, ok := obj.(*v1alpha1.PromotionStep); ok && conflicts > 0 {
-					conflicts--
-					return apierrors.NewConflict(schema.GroupResource{Group: "kardinal.io", Resource: "promotionsteps"},
-						obj.GetName(), errors.New("the object has been modified"))
-				}
-				return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
-			},
-		}).Build()
-	r := &promotionstep.Reconciler{
-		Client:    c,
-		SCM:       &mockSCM{},
-		GitClient: &mockGit{},
-		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	healthChecking := labelled(makeStep("step-prod", "my-app", "bundle-1", "test"))
+	healthChecking.Status.State = "HealthChecking"
+	healthChecking.Status.Steps = recordedSteps("")
+	tests := []struct {
+		name      string
+		step      *v1alpha1.PromotionStep
+		objs      []client.Object
+		wantState string
+	}{
+		{name: "Promoting → HealthChecking",
+			step:      asPromoting(makeStep("step-prod", "my-app", "bundle-1", "test"), makePipeline("my-app")),
+			wantState: "HealthChecking"},
+		{name: "HealthChecking → Verified",
+			step: healthChecking, objs: []client.Object{healthyDeployment("my-app", "test")},
+			wantState: "Verified"},
 	}
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
-	key := client.ObjectKeyFromObject(promoting)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conflicts := 1
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithObjects(append(tt.objs, tt.step, makeBundle("bundle-1", "my-app"), makePipeline("my-app"))...).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PolicyGate{}, &v1alpha1.Bundle{}).
+				WithInterceptorFuncs(interceptor.Funcs{
+					SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
+						patch client.Patch, opts ...client.SubResourcePatchOption) error {
+						if ps, ok := obj.(*v1alpha1.PromotionStep); ok && conflicts > 0 && ps.Status.State == tt.wantState {
+							conflicts--
+							return apierrors.NewConflict(schema.GroupResource{Group: "kardinal.io", Resource: "promotionsteps"},
+								obj.GetName(), errors.New("the object has been modified"))
+						}
+						return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+					},
+				}).Build()
+			r := &promotionstep.Reconciler{
+				Client:         c,
+				SCM:            &mockSCM{},
+				GitClient:      &mockGit{},
+				WorkDirFn:      func(_, _ string) string { return t.TempDir() },
+				HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme())),
+			}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
+			key := client.ObjectKeyFromObject(tt.step)
 
-	res, err := r.Reconcile(context.Background(), req)
-	require.NoError(t, err)
-	assert.Equal(t, time.Second, res.RequeueAfter, "a conflict requeues the step")
-	var got v1alpha1.PromotionStep
-	require.NoError(t, c.Get(context.Background(), key, &got))
-	assert.Equal(t, promoting.Status.State, got.Status.State, "the conflicting patch wrote nothing")
+			res, err := r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+			require.Zero(t, conflicts, "the transition patch conflicted")
+			assert.Equal(t, time.Second, res.RequeueAfter, "a conflict requeues the step")
+			var got v1alpha1.PromotionStep
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			assert.Equal(t, tt.step.Status.State, got.Status.State, "the conflicting patch wrote nothing")
 
-	_, err = r.Reconcile(context.Background(), req)
-	require.NoError(t, err)
-	require.NoError(t, c.Get(context.Background(), key, &got))
-	assert.NotEqual(t, promoting.Status.State, got.Status.State, "the requeued reconcile writes the transition")
+			_, err = r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			assert.Equal(t, tt.wantState, got.Status.State, "the requeued reconcile writes the transition")
+		})
+	}
 }

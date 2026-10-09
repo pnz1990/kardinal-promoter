@@ -437,6 +437,10 @@ force-pushes the base branch, so no writer's commit is lost:
   the other writer's version. After that the step is retried with jittered backoff (at most
   2 minutes), counted in `status.contendedRetries` with no limit and not in
   `status.retryCount`, so contention slows a promotion down but does not fail it.
+  A missing base commit is the exception. `git-push` first fetches the last 200 commits of
+  the branch to find it. Each fresh clone it still needs is counted in
+  `status.outputs.baseMissingRestarts`. After 5 of them the step fails, because the branch was
+  probably force-pushed or rewritten.
 - **pr-review environments**: each promotion pushes its own branch
   `kardinal/<namespace hash>/<bundle>/<environment>` (the hash is the first 8 hex digits of
   the SHA-256 of the namespace, so Bundles of the same name in two namespaces get separate
