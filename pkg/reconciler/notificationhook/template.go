@@ -63,14 +63,16 @@ var errFuncBudget = fmt.Errorf("function output is over %d bytes in total", maxF
 // dozen.
 const maxFuncCalls = 2000
 
-// maxRenderTime bounds one render. text/template cannot be cancelled, so a
-// timer sets the render's stopped flag, which every function call and every
-// write checks; Execute runs on the caller's goroutine and returns at the
-// next one.
-const maxRenderTime = 20 * time.Millisecond
+// maxRenderTime is a backstop on one render's wall-clock time. The call
+// budget (maxFuncCalls), the byte budgets and the scalar-only arguments are
+// what stop a hostile template; a tight wall-clock limit would instead drop
+// real notifications on a CPU-throttled controller. text/template cannot be
+// cancelled, so a timer sets the render's stopped flag, which every function
+// call and every write checks; Execute runs on the caller's goroutine and
+// returns at the next one.
+const maxRenderTime = 500 * time.Millisecond
 
-// renderDeadline is maxRenderTime; tests that count calls raise it so a
-// slow (-race) run stops on the count, not the clock.
+// renderDeadline is maxRenderTime; the deadline tests shorten it.
 var renderDeadline = maxRenderTime
 
 // maxDataField is the most bytes of each TemplateData field a template sees;
