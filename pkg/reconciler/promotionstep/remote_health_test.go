@@ -11,8 +11,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,7 +52,8 @@ current-context: spoke
 }
 
 func kubeconfigSecret(name, data string) *corev1.Secret {
-	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", UID: "uid-1", ResourceVersion: "1"},
+	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", UID: "uid-1", ResourceVersion: "1",
+		Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 		Data: map[string][]byte{"kubeconfig": []byte(data)}}
 }
 
@@ -63,7 +66,13 @@ func fakeRemoteAPI(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	app.SetAPIVersion("argoproj.io/v1alpha1")
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.Header.Get("Authorization") != "Bearer remote-token" {
+		switch r.Header.Get("Authorization") {
+		case "Bearer remote-token":
+		case "Bearer broken":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"kind":"Status","message":"SECRET-BODY from the server"}`))
+			return
+		default:
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -113,7 +122,17 @@ func TestRemoteClusterHealth(t *testing.T) {
 		{name: "unreachable cluster waits", secret: kubeconfigSecret("spoke", remoteKubeconfig(closedURL, "")),
 			remote: &health.RemoteClusters{Dial: loopbackDial}, wantState: "HealthChecking", wantMsg: "waiting for argocd: ClusterUnreachable: "},
 		{name: "wrong token is not healthy", secret: kubeconfigSecret("spoke", remoteKubeconfig(srv.URL, "token: other")),
-			remote: &health.RemoteClusters{Dial: loopbackDial}, wantState: "HealthChecking", wantMsg: "ClusterUnreachable", wantCalls: true},
+			remote: &health.RemoteClusters{Dial: loopbackDial}, wantState: "HealthChecking",
+			wantMsg: "waiting for argocd: ClusterUnreachable: unauthorized (HTTP 401)", wantCalls: true},
+		{name: "server body is not copied", secret: kubeconfigSecret("spoke", remoteKubeconfig(srv.URL, "token: broken")),
+			remote: &health.RemoteClusters{Dial: loopbackDial}, wantState: "HealthChecking",
+			wantMsg: "waiting for argocd: ClusterUnreachable: ", wantCalls: true},
+		{name: "unlabelled Secret waits and is not read", secret: unlabelled(kubeconfigSecret("spoke", remoteKubeconfig(srv.URL, ""))),
+			remote: &health.RemoteClusters{Dial: loopbackDial}, wantState: "HealthChecking",
+			wantMsg: `ClusterUnreachable: SecretNotReferenceable: kubeconfig Secret "spoke" does not have the label kardinal.io/referenceable: "true"`},
+		{name: "insecure-skip-tls-verify fails the step", secret: kubeconfigSecret("spoke", strings.Replace(
+			remoteKubeconfig(srv.URL, ""), "certificate-authority-data: "+remoteCA, "insecure-skip-tls-verify: true", 1)),
+			remote: &health.RemoteClusters{Dial: loopbackDial}, wantState: "Failed", wantMsg: "insecure-skip-tls-verify is not supported"},
 		{name: "exec plugin fails the step", secret: kubeconfigSecret("spoke",
 			remoteKubeconfig(srv.URL, "exec: {apiVersion: client.authentication.k8s.io/v1, command: /bin/sh}")),
 			remote: &health.RemoteClusters{Dial: loopbackDial}, wantState: "Failed", wantMsg: "users[].user.exec is not supported"},
@@ -121,7 +140,7 @@ func TestRemoteClusterHealth(t *testing.T) {
 			remoteKubeconfig(srv.URL, "tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token")),
 			remote: &health.RemoteClusters{Dial: loopbackDial}, wantState: "Failed", wantMsg: "tokenFile is not supported"},
 		{name: "egress guard refuses loopback", secret: kubeconfigSecret("spoke", remoteKubeconfig(srv.URL, "")),
-			remote: &health.RemoteClusters{}, wantState: "HealthChecking", wantMsg: "destination address is not allowed"},
+			remote: &health.RemoteClusters{}, wantState: "HealthChecking", wantMsg: "ClusterUnreachable: destination address is not allowed"},
 		{name: "controller without remote support fails", secret: kubeconfigSecret("spoke", remoteKubeconfig(srv.URL, "")),
 			wantState: "Failed", wantMsg: "health.kubeconfigSecretRef is not supported by this controller"},
 	}
@@ -137,6 +156,8 @@ func TestRemoteClusterHealth(t *testing.T) {
 			assert.Contains(t, ps.Status.Message, tt.wantMsg)
 			assert.Zero(t, ps.Status.ConsecutiveHealthFailures, "an unreachable cluster is not a health failure")
 			assert.NotContains(t, ps.Status.Message, "remote-token")
+			assert.NotContains(t, ps.Status.Message, "SECRET-BODY", "the server's answer is never copied to status")
+			assert.NotContains(t, ps.Status.Message, "127.0.0.1", "no address in status")
 			if tt.wantCalls {
 				assert.Greater(t, calls.Load(), before, "the remote API server was asked")
 			} else {
@@ -144,6 +165,37 @@ func TestRemoteClusterHealth(t *testing.T) {
 			}
 		})
 	}
+}
+
+func unlabelled(s *corev1.Secret) *corev1.Secret {
+	s.Labels = nil
+	return s
+}
+
+// TestRemoteClusterHealth_UnreachableStopsBake (QA #1495): a bake whose
+// window started 40 minutes ago must not complete on a check that cannot
+// reach the cluster: the window stops, no failure is counted, and
+// health.timeout bounds the wait for the next healthy check again.
+func TestRemoteClusterHealth_UnreachableStopsBake(t *testing.T) {
+	closed := httptest.NewTLSServer(http.NotFoundHandler())
+	fakeRemoteAPI(t) // sets remoteCA
+	closedURL := closed.URL
+	closed.Close()
+	started := metav1.NewTime(time.Now().Add(-40 * time.Minute))
+	env := v1alpha1.EnvironmentSpec{Name: "test", Bake: &v1alpha1.BakeConfig{Minutes: 30},
+		Health: v1alpha1.HealthConfig{Type: "argocd", Timeout: "10m", ArgoCD: &v1alpha1.HealthTargetRef{Name: "custom"},
+			KubeconfigSecretRef: &v1alpha1.KubeconfigSecretRef{Name: "spoke"}}}
+	hc := healthCase{env: env, remote: &health.RemoteClusters{Dial: loopbackDial},
+		objs:   []client.Object{kubeconfigSecret("spoke", remoteKubeconfig(closedURL, ""))},
+		status: v1alpha1.PromotionStepStatus{BakeStartedAt: &started, BakeElapsedMinutes: 39}}
+	_, ps, _ := hc.run(t)
+	assert.Equal(t, "HealthChecking", ps.Status.State, ps.Status.Message)
+	assert.Nil(t, ps.Status.BakeStartedAt, "the bake window stopped")
+	assert.Contains(t, ps.Status.Message, "bake: window stopped, waiting for argocd: ClusterUnreachable: ")
+	assert.Zero(t, ps.Status.ConsecutiveHealthFailures)
+	require.NotNil(t, ps.Status.HealthCheckExpiry)
+	assert.WithinDuration(t, time.Now().Add(10*time.Minute), ps.Status.HealthCheckExpiry.Time, time.Minute,
+		"health.timeout is in force again")
 }
 
 // TestRemoteClusters_CacheFollowsSecretVersion: the clients are reused while
@@ -162,5 +214,27 @@ func TestRemoteClusters_CacheFollowsSecretVersion(t *testing.T) {
 	assert.NotSame(t, d1, d3)
 	_, err = r.Detector(s, "other")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `secret "spoke" has no key "other"`)
+	assert.Equal(t, `secret "spoke" has no key "other"`, err.Error(), "the Secret's keys are not listed")
+
+	// Two keys of one Secret are two entries; Forget drops both.
+	s.Data["second"] = s.Data["kubeconfig"]
+	_, err = r.Detector(s, "second")
+	require.NoError(t, err)
+	assert.Equal(t, 2, r.Len())
+	r.Forget("default", "spoke")
+	assert.Zero(t, r.Len())
+}
+
+// TestRemoteClusters_CacheExpires: an entry unused for an hour is dropped.
+func TestRemoteClusters_CacheExpires(t *testing.T) {
+	now := time.Now()
+	r := &health.RemoteClusters{Dial: loopbackDial, NowFn: func() time.Time { return now }}
+	a := kubeconfigSecret("a", remoteKubeconfig("https://a.example:6443", ""))
+	_, err := r.Detector(a, "")
+	require.NoError(t, err)
+	now = now.Add(2 * time.Hour)
+	b := kubeconfigSecret("b", remoteKubeconfig("https://b.example:6443", ""))
+	_, err = r.Detector(b, "")
+	require.NoError(t, err)
+	assert.Equal(t, 1, r.Len(), "the expired entry was evicted")
 }

@@ -532,7 +532,8 @@ func spokeKubeconfig(t *testing.T, e *framework.Env) string {
 func putKubeconfig(t *testing.T, e *framework.Env, ns, name, kubeconfig string) {
 	t.Helper()
 	ctx := context.Background()
-	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns,
+		Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 		Data: map[string][]byte{"kubeconfig": []byte(kubeconfig)}}
 	if _, err := e.Kube.CoreV1().Secrets(ns).Create(ctx, s, metav1.CreateOptions{}); apierrors.IsAlreadyExists(err) {
 		_, err = e.Kube.CoreV1().Secrets(ns).Update(ctx, s, metav1.UpdateOptions{})

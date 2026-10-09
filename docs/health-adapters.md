@@ -269,25 +269,33 @@ health:
     key: kubeconfig             # default "kubeconfig"
 ```
 
-- The Secret must be in the Pipeline's namespace: a Pipeline cannot use another namespace's
-  credentials. The controller reads it at every check, so a rotated Secret is used from the next
-  check.
+- The Secret must be in the Pipeline's namespace (a Pipeline cannot use another namespace's
+  credentials) and carry the label `kardinal.io/referenceable: "true"`; without the label the step
+  waits with `ClusterUnreachable: SecretNotReferenceable: ...` and the kubeconfig is not used. The
+  label is the Secret owner's consent to have it used for another cluster; it is the same rule as
+  for the Secrets of MetricChecks, NotificationHooks and Subscriptions. The
+  controller reads it at every check, so a rotated Secret is used from the next check.
 - Only inline credentials work: a bearer token (`token`), a client certificate and key
   (`client-certificate-data`, `client-key-data`), or `username` and `password`, sent only to an
   `https` server. A kubeconfig with `exec`, `auth-provider`, `tokenFile`, a file path
-  (`client-certificate`, `client-key`, `certificate-authority`) or `proxy-url` is refused and the
-  step fails with `kubeconfig not allowed: ... is not supported`: these would run a command or read
-  a file inside the controller. For EKS or GKE, use a ServiceAccount token in the remote cluster
+  (`client-certificate`, `client-key`, `certificate-authority`), `proxy-url` or
+  `insecure-skip-tls-verify` is refused and the step fails with `kubeconfig not allowed: ... is not
+  supported`: these would run a command or read a file inside the controller, or send the
+  credentials to a server that is not verified. For EKS or GKE, use a ServiceAccount token in the remote cluster
   (a `kubernetes.io/service-account-token` Secret there, or a token an external tool refreshes into
   the kubeconfig Secret), bound to a role that can `get` and `list` the checked objects.
 - Only the kubeconfig's `current-context` is used. The API server address goes through the
   controller's egress guard (no loopback, link-local or cloud metadata addresses) and is dialled
   directly, not through `HTTP(S)_PROXY`. Each request has a 10 second timeout.
 - A cluster that cannot be reached, or a Secret that does not exist yet, is not an unhealthy
-  workload: the step shows `waiting for <adapter>: ClusterUnreachable: <error>`, counts no health
+  workload: the step shows `waiting for <adapter>: ClusterUnreachable: <reason>`, counts no health
   failure (`status.consecutiveHealthFailures` does not move), and keeps checking every 10 seconds
-  until `health.timeout`. During a `bake`, an unreachable check neither stops nor completes the
-  window; the next reachable check decides.
+  until `health.timeout`. The reason is a class (`timed out`, `connection refused or unreachable`,
+  `host not found`, `TLS handshake failed`, `unauthorized (HTTP 401)`, `forbidden (HTTP 403)`,
+  `destination address is not allowed`, ...); the full error, which can quote the remote server,
+  is in the controller log only. During a `bake` an unreachable check stops the window like a
+  waiting result: the time the cluster could not be read is not healthy time, and `health.timeout`
+  bounds the wait for the next healthy check again.
 - Remote health is polled, not watched, and the Bundle's Graph has no health ref node for the
   environment (kro reads only the cluster it runs in; see the
   [Graph capability ledger](design/16-graph-capability-ledger.md#g8-logic-still-outside-the-graph)).

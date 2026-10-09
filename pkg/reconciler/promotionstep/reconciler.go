@@ -1218,13 +1218,13 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		opts.TargetUpdatedAt = at.Time
 	}
 
-	detector, remote, unreachable, err := r.healthDetector(ctx, ps, env)
+	detector, remote, unreachable, err := r.healthDetector(ctx, log, ps, env)
 	if err != nil {
 		// A refused kubeconfig: waiting does not fix it.
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, err.Error())
 	}
 	if unreachable != "" {
-		return r.clusterUnreachable(ctx, base, ps, health.EffectiveType(env), unreachable)
+		return r.clusterUnreachable(ctx, log, base, ps, env, health.EffectiveType(env), unreachable, timeout)
 	}
 	adapter, err := detector.Select(ctx, opts.Type)
 	if err != nil {
@@ -1263,7 +1263,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		// An unreachable cluster is not an unhealthy workload: no failure is
 		// counted, health.timeout still applies.
 		log.Warn().Err(checkErr).Str("adapter", adapter.Name()).Msg("remote cluster health check error")
-		return r.clusterUnreachable(ctx, base, ps, adapter.Name(), checkErr.Error())
+		return r.clusterUnreachable(ctx, log, base, ps, env, adapter.Name(), health.ClassifyRemoteError(checkErr), timeout)
 	}
 	if checkErr != nil {
 		log.Error().Err(checkErr).Str("adapter", adapter.Name()).Msg("health adapter check error")
@@ -2167,12 +2167,18 @@ func (r *Reconciler) setRollbackState(ctx context.Context, log zerolog.Logger, s
 	state.RollbackFromBundle = &from.Spec
 }
 
+// labelReferenceable must be "true" on a kubeconfig Secret that
+// health.kubeconfigSecretRef names (program-wide rule for Secrets kardinal
+// sends to an address someone else chose).
+const labelReferenceable = "kardinal.io/referenceable"
+
 // healthDetector returns the adapters for env's health check: the
 // controller's own cluster, or with health.kubeconfigSecretRef the cluster of
 // that kubeconfig (remote true). unreachable is set, with a nil error, when
-// the remote cluster cannot be used yet (its Secret or key is missing), so
-// the step waits until health.timeout. err is a kubeconfig that is refused.
-func (r *Reconciler) healthDetector(ctx context.Context, ps *v1alpha1.PromotionStep,
+// the remote cluster cannot be used yet (its Secret or key is missing, or the
+// Secret is not labelled referenceable), so the step waits until
+// health.timeout. err is a kubeconfig that is refused.
+func (r *Reconciler) healthDetector(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
 	env v1alpha1.EnvironmentSpec) (d *health.AutoDetector, remote bool, unreachable string, err error) {
 	ref := env.Health.KubeconfigSecretRef
 	if ref == nil {
@@ -2186,9 +2192,16 @@ func (r *Reconciler) healthDetector(ctx context.Context, ps *v1alpha1.PromotionS
 	var secret corev1.Secret
 	if err := r.Get(ctx, types.NamespacedName{Namespace: ps.Namespace, Name: ref.Name}, &secret); err != nil {
 		if apierrors.IsNotFound(err) {
+			r.RemoteClusters.Forget(ps.Namespace, ref.Name)
 			return nil, true, fmt.Sprintf("kubeconfig Secret %q not found", ref.Name), nil
 		}
-		return nil, true, fmt.Sprintf("read kubeconfig Secret %q: %v", ref.Name, err), nil
+		log.Warn().Err(err).Str("secret", ref.Name).Msg("read kubeconfig Secret")
+		return nil, true, fmt.Sprintf("kubeconfig Secret %q could not be read", ref.Name), nil
+	}
+	if secret.Labels[labelReferenceable] != "true" {
+		r.RemoteClusters.Forget(ps.Namespace, ref.Name)
+		return nil, true, fmt.Sprintf("SecretNotReferenceable: kubeconfig Secret %q does not have the label %s: \"true\"",
+			ref.Name, labelReferenceable), nil
 	}
 	d, err = r.RemoteClusters.Detector(&secret, ref.Key)
 	switch {
@@ -2200,19 +2213,21 @@ func (r *Reconciler) healthDetector(ctx context.Context, ps *v1alpha1.PromotionS
 	return d, true, "", nil
 }
 
-// maxUnreachableReason bounds the error text kept in status.message.
-const maxUnreachableReason = 512
-
 // clusterUnreachable records that the remote cluster could not be checked,
-// without counting a health failure, and checks again later. The step still
-// fails at health.timeout.
-func (r *Reconciler) clusterUnreachable(ctx context.Context, base, ps *v1alpha1.PromotionStep,
-	adapter, reason string) (ctrl.Result, error) {
-	if len(reason) > maxUnreachableReason {
-		reason = reason[:maxUnreachableReason] + "..."
-	}
+// without counting a health failure, and checks again later. reason is a
+// classified, short text (health.ClassifyRemoteError): the full error is
+// logged, never written to status. The step still fails at health.timeout.
+// During a bake the check counts as waiting: the window stops (the time the
+// cluster was unreachable is not healthy time) and health.timeout bounds the
+// wait for the next healthy check again.
+func (r *Reconciler) clusterUnreachable(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
+	env v1alpha1.EnvironmentSpec, adapter, reason string, timeout time.Duration) (ctrl.Result, error) {
 	checkedAt := metav1.NewTime(time.Now())
 	ps.Status.LastHealthCheckAt = &checkedAt
+	if env.Bake != nil {
+		return r.handleBake(ctx, log, base, ps, env,
+			health.HealthStatus{Progressing: true, Reason: "ClusterUnreachable: " + reason}, adapter, timeout)
+	}
 	ps.Status.Message = fmt.Sprintf("waiting for %s: ClusterUnreachable: %s", adapter, reason)
 	if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch health result: %w", err)
