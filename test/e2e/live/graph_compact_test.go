@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -257,6 +259,10 @@ func TestGraph_ShapeKeptAcrossThreshold(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := framework.New(t)
 			ctx := context.Background()
+			if above := controllerCompactAbove(t, e); above != graph.DefaultCompactAbove {
+				t.Skipf("the controller runs with --graph-compact-above=%d; this test crosses the default, %d",
+					above, graph.DefaultCompactAbove)
+			}
 			const perWave = 25
 			gate := func(env string) string {
 				if env[:3] == "w02" {
@@ -310,4 +316,23 @@ func TestGraph_ShapeKeptAcrossThreshold(t *testing.T) {
 			assert.Len(t, stepUIDs(t, e, ns, bundle), len(cur.Spec.Environments), "every environment of the edited Pipeline")
 		})
 	}
+}
+
+// controllerCompactAbove returns the controller's --graph-compact-above, or
+// graph.DefaultCompactAbove when it is not set.
+func controllerCompactAbove(t *testing.T, e *framework.Env) int {
+	t.Helper()
+	dep, err := e.Kube.AppsV1().Deployments(framework.ControllerNamespace).Get(context.Background(),
+		framework.ControllerService, metav1.GetOptions{})
+	require.NoError(t, err)
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		for _, arg := range c.Args {
+			if v, ok := strings.CutPrefix(arg, "--graph-compact-above="); ok {
+				n, err := strconv.Atoi(v)
+				require.NoError(t, err, "controller arg %s", arg)
+				return n
+			}
+		}
+	}
+	return graph.DefaultCompactAbove
 }

@@ -136,6 +136,17 @@ func TestGraph_NamespaceDeletionFinishes(t *testing.T) {
 	})
 }
 
+// nodesShape pins p to the nodes Graph shape. Reader RoleBindings exist only
+// for health ref nodes, which a compact Graph does not have, so the reader
+// binding tests pin the shape whatever the controller's --graph-compact-above.
+func nodesShape(p *v1alpha1.Pipeline) *v1alpha1.Pipeline {
+	if p.Annotations == nil {
+		p.Annotations = map[string]string{}
+	}
+	p.Annotations["kardinal.io/graph-shape"] = "nodes"
+	return p
+}
+
 // TestGraph_ReaderBindingPruned deletes the only Bundle of a namespace whose
 // Graph read an Argo CD Application. For that read the controller created a
 // RoleBinding in argocd granting the namespace's kardinal-graph service
@@ -147,7 +158,7 @@ func TestGraph_ReaderBindingPruned(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	a := newArgoApp(t, e, "test")
-	a.apply(t, a.pipeline(nil))
+	a.apply(t, nodesShape(a.pipeline(nil)))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	graph := a.bundle(t, bundle).Status.GraphRef
@@ -193,7 +204,7 @@ func TestGraph_ReaderBindingSweep(t *testing.T) {
 	live, emptied := newArgoApp(t, e, "test"), newArgoApp(t, e, "test")
 	var bundles []string
 	for _, a := range []*app{live, emptied} {
-		a.apply(t, a.pipeline(nil))
+		a.apply(t, nodesShape(a.pipeline(nil)))
 		bundles = append(bundles, e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2))
 	}
 	for i, a := range []*app{live, emptied} {
