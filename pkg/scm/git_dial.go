@@ -36,6 +36,10 @@ import (
 // ever. A variable so a test can shorten it.
 var gitIdleTimeout = 5 * time.Minute
 
+// dialTCP dials a git connection; a test replaces it with a dial that
+// never connects (a blackholed address).
+var dialTCP = (&net.Dialer{KeepAlive: 30 * time.Second}).DialContext
+
 // dialScheme is the proxy scheme kardinal's git client sets on ssh
 // endpoints (ProxyOptions) so that go-git dials through dialScope: go-git
 // has no other hook for the connection it opens for a fetch.
@@ -45,10 +49,11 @@ const dialScheme = "kardinal-dial"
 // are closed when the context ends, and closeAll closes them at once (a
 // handshake that does not finish in time).
 type dialScope struct {
-	id    string
-	ctx   context.Context
-	mu    sync.Mutex
-	conns []net.Conn
+	id     string
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	conns  []net.Conn
 }
 
 var (
@@ -79,9 +84,13 @@ func init() {
 // release that forgets it.
 func newDialScope(ctx context.Context) (transport.ProxyOptions, *dialScope, func()) {
 	id := strconv.FormatUint(dialSeq.Add(1), 10)
-	s := &dialScope{id: id, ctx: ctx}
+	ctx, cancel := context.WithCancel(ctx)
+	s := &dialScope{id: id, ctx: ctx, cancel: cancel}
 	dialScopes.Store(id, s)
-	return transport.ProxyOptions{URL: dialScheme + "://" + id}, s, func() { dialScopes.Delete(id) }
+	return transport.ProxyOptions{URL: dialScheme + "://" + id}, s, func() {
+		dialScopes.Delete(id)
+		cancel()
+	}
 }
 
 // scopeOf returns the dialScope of an endpoint kardinal's git client made,
@@ -104,8 +113,10 @@ func (s *dialScope) track(c net.Conn) {
 	s.mu.Unlock()
 }
 
-// closeAll closes every connection of the scope.
+// closeAll cancels the scope, which ends a dial in progress (a connect to
+// an address that never answers), and closes every connection of the scope.
 func (s *dialScope) closeAll() {
+	s.cancel()
 	s.mu.Lock()
 	conns := s.conns
 	s.conns = nil
@@ -133,7 +144,7 @@ func (d scopedDialer) DialContext(ctx context.Context, network, addr string) (ne
 		stop := context.AfterFunc(s.ctx, cancel)
 		defer stop()
 	}
-	c, err := (&net.Dialer{KeepAlive: 30 * time.Second}).DialContext(ctx, network, addr)
+	c, err := dialTCP(ctx, network, addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
@@ -173,15 +184,18 @@ func (c *idleConn) deadline() time.Time {
 	return time.Now().Add(c.idle)
 }
 
+// Read and Write each push both deadlines out: data moving either way is
+// progress, so an upload the server reads slowly does not time out a read
+// that waits for its answer, and the reverse.
 func (c *idleConn) Read(p []byte) (int, error) {
-	if err := c.SetReadDeadline(c.deadline()); err != nil {
+	if err := c.Conn.SetDeadline(c.deadline()); err != nil {
 		return 0, err
 	}
 	return c.Conn.Read(p)
 }
 
 func (c *idleConn) Write(p []byte) (int, error) {
-	if err := c.SetWriteDeadline(c.deadline()); err != nil {
+	if err := c.Conn.SetDeadline(c.deadline()); err != nil {
 		return 0, err
 	}
 	return c.Conn.Write(p)

@@ -58,6 +58,8 @@ type fakeGitHubApp struct {
 	// long issued tokens live (default one hour).
 	mintCalls int
 	lifetime  time.Duration
+	// mintDelay holds each mint answer this long.
+	mintDelay time.Duration
 }
 
 func newFakeGitHubApp(t *testing.T, pub *rsa.PublicKey, prefix string, now func() time.Time) (*fakeGitHubApp, *httptest.Server) {
@@ -79,7 +81,9 @@ func (f *fakeGitHubApp) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Lock()
 		f.mintCalls++
+		delay := f.mintDelay
 		f.mu.Unlock()
+		time.Sleep(delay)
 		if f.mintErr != 0 {
 			w.WriteHeader(f.mintErr)
 			_, _ = w.Write([]byte(`{"message":"Integration not found"}`))
@@ -443,4 +447,37 @@ func TestGitHubApp_CancelledMintStartsNoBackoff(t *testing.T) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	assert.Equal(t, 1, f.mintCalls, "the cancelled mint never reached GitHub")
+}
+
+// TestGitHubApp_SlowMintSharedWithoutTheLock: while one mint is slow, a
+// caller whose context ends returns at once (the lock is not held across
+// the mint), its cancellation does not fail the mint for a caller that
+// waits, and concurrent callers share one mint. Covers SCM-GHAPP-01.
+func TestGitHubApp_SlowMintSharedWithoutTheLock(t *testing.T) {
+	c := &clock{t: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)}
+	k, pemKey := appKey(t, false)
+	f, srv := newFakeGitHubApp(t, &k.PublicKey, "", c.now)
+	f.mintDelay = 500 * time.Millisecond
+	src := appSource(t, pemKey, srv.URL, c)
+
+	done := make(chan error, 3)
+	for range 3 {
+		go func() {
+			_, err := src.Token(context.Background())
+			done <- err
+		}()
+	}
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	time.Sleep(10 * time.Millisecond)
+	start := time.Now()
+	_, err := src.Token(short)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 300*time.Millisecond, "the impatient caller does not wait for the mint")
+	for range 3 {
+		require.NoError(t, <-done)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	assert.Equal(t, 1, f.mintCalls, "one mint for every caller")
 }

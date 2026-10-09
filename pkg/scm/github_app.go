@@ -31,7 +31,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // The keys of a Secret that holds GitHub App credentials instead of a token,
@@ -145,6 +148,9 @@ type GitHubAppTokenSource struct {
 	// now is the clock; tests replace it.
 	now func() time.Time
 
+	// minting runs one mint at a time for all callers.
+	minting singleflight.Group
+
 	mu      sync.Mutex
 	token   string
 	expires time.Time
@@ -191,44 +197,80 @@ func NewGitHubAppTokenSource(creds GitHubAppCredentials, apiURL string) (*GitHub
 // Token returns a cached installation token, or mints a new one when the
 // cached one expires within appTokenRefreshBefore.
 func (s *GitHubAppTokenSource) Token(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		// The caller gave up already: no mint, no backoff.
+		if tok, ok := s.validToken(); ok {
+			return tok, nil
+		}
+		return "", err
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := s.now()
 	if s.token != "" && now.Before(s.refreshAt) {
-		return s.token, nil
+		tok := s.token
+		s.mu.Unlock()
+		return tok, nil
 	}
 	if s.lastErr != nil && now.Before(s.retryAt) {
+		defer s.mu.Unlock()
 		if s.token != "" && now.Before(s.expires) {
 			// The cached token is still valid: use it while minting fails.
 			return s.token, nil
 		}
 		return "", fmt.Errorf("%w (not retried before %s)", s.lastErr, s.retryAt.UTC().Format(time.RFC3339))
 	}
-	tok, exp, err := s.mint(ctx)
-	if err != nil && ctx.Err() != nil {
-		// The caller gave up (its step was cancelled or timed out): that
-		// says nothing about GitHub, so it starts no backoff.
-		if s.token != "" && now.Before(s.expires) {
-			return s.token, nil
+	s.mu.Unlock()
+
+	// One mint at a time, shared by every caller that needs it, run on a
+	// context of its own: a caller that gives up returns at once without
+	// holding the lock, and its cancellation neither fails the mint for the
+	// others nor counts toward the backoff.
+	ch := s.minting.DoChan("mint", func() (interface{}, error) {
+		mctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), providerHTTPTimeout)
+		defer cancel()
+		tok, exp, err := s.mint(mctx)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		now := s.now()
+		if err != nil {
+			s.failures++
+			s.lastErr = err
+			s.retryAt = now.Add(min(appMintBackoff<<min(s.failures-1, 10), appMintBackoffMax))
+			return nil, err
 		}
-		return "", err
-	}
-	if err != nil {
-		s.failures++
-		s.lastErr = err
-		s.retryAt = now.Add(min(appMintBackoff<<min(s.failures-1, 10), appMintBackoffMax))
-		if s.token != "" && now.Before(s.expires) {
-			return s.token, nil
+		s.failures, s.lastErr = 0, nil
+		margin := appTokenRefreshBefore
+		if life := exp.Sub(now); life < 2*margin {
+			margin = life / 10
 		}
-		return "", err
+		s.token, s.expires, s.refreshAt = tok, exp, exp.Add(-margin)
+		return tok, nil
+	})
+	select {
+	case <-ctx.Done():
+		if tok, ok := s.validToken(); ok {
+			return tok, nil
+		}
+		return "", ctx.Err()
+	case r := <-ch:
+		if r.Err != nil {
+			if tok, ok := s.validToken(); ok {
+				return tok, nil
+			}
+			return "", r.Err
+		}
+		return r.Val.(string), nil
 	}
-	s.failures, s.lastErr = 0, nil
-	margin := appTokenRefreshBefore
-	if life := exp.Sub(now); life < 2*margin {
-		margin = life / 10
+}
+
+// validToken returns the cached token while it has not expired.
+func (s *GitHubAppTokenSource) validToken() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.token != "" && s.now().Before(s.expires) {
+		return s.token, true
 	}
-	s.token, s.expires, s.refreshAt = tok, exp, exp.Add(-margin)
-	return tok, nil
+	return "", false
 }
 
 // appJWT returns the RS256 JWT that authenticates as the App.

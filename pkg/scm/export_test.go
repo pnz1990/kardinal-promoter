@@ -80,3 +80,10 @@ func SetGitIdleTimeoutForTest(d time.Duration) (restore func()) {
 
 // NewIdleConnForTest wraps c in the git idle bound.
 func NewIdleConnForTest(c net.Conn, idle time.Duration) net.Conn { return newIdleConn(c, idle) }
+
+// SetDialTCPForTest replaces the git TCP dial.
+func SetDialTCPForTest(f func(ctx context.Context, network, addr string) (net.Conn, error)) (restore func()) {
+	old := dialTCP
+	dialTCP = f
+	return func() { dialTCP = old }
+}
