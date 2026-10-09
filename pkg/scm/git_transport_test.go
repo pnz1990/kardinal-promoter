@@ -66,11 +66,14 @@ func (s *slowReader) Read(p []byte) (int, error) {
 //
 // Covers SCM-SSH-03.
 func TestGoGitClient_SlowHTTPPushIsNotCut(t *testing.T) {
-	defer scm.SetGitIdleTimeoutForTest(1500 * time.Millisecond)()
+	const idle = 4 * time.Second
+	defer scm.SetGitIdleTimeoutForTest(idle)()
 	remote := seedBareRemote(t, map[string]string{"a.txt": "a\n"})
 	require.NoError(t, exec.Command("git", "-C", remote, "config", "http.receivepack", "true").Run())
 	root := filepath.Dir(remote)
-	srv := gitHTTPBackend(t, root, 2*time.Millisecond)
+	// About 1500 reads of 16 KiB, 4ms apart: the push lasts well past the
+	// idle bound, while each read and write is far inside it.
+	srv := gitHTTPBackend(t, root, 4*time.Millisecond)
 	url := srv.URL + "/" + filepath.Base(remote)
 
 	ctx := context.Background()
@@ -82,12 +85,22 @@ func TestGoGitClient_SlowHTTPPushIsNotCut(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(work, "big.bin"), big, 0o600))
 	require.NoError(t, c.CommitAll(ctx, work, "big", "k", "k@example.com"))
 	start := time.Now()
-	// Bounded, so the old behaviour (a read deadline only reads extend)
-	// fails the test instead of hanging it.
-	pushCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Bounded, so the old behaviour (a deadline only reads extend) fails the
+	// test instead of hanging it: a write blocked on a stalled connection
+	// does not see the context, so the server's connections are closed too.
+	pushCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
-	require.NoError(t, c.Push(pushCtx, work, "origin", "kardinal/b/prod", scm.GitAuth{}, false))
-	assert.Greater(t, time.Since(start), 1500*time.Millisecond, "the push took longer than the idle bound in total")
+	done := make(chan error, 1)
+	go func() { done <- c.Push(pushCtx, work, "origin", "kardinal/b/prod", scm.GitAuth{}, false) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(120 * time.Second):
+		srv.CloseClientConnections()
+		<-done
+		t.Fatal("the push hung: the idle bound does not extend on writes")
+	}
+	assert.Greater(t, time.Since(start), idle, "the push took longer than the idle bound in total")
 	out, err := exec.Command("git", "-C", remote, "rev-parse", "kardinal/b/prod").CombinedOutput()
 	require.NoError(t, err, "%s", out)
 }
@@ -130,7 +143,11 @@ func TestGoGitClient_SSHBlackholeConnect(t *testing.T) {
 	_, hostKey := sshKeyPair(t)
 	auth := scm.GitAuth{SSHPrivateKey: clientKey, SSHKnownHosts: []byte("[192.0.2.1]:22 " + string(ssh.MarshalAuthorizedKey(hostKey)))}
 	start := time.Now()
-	err := scm.NewGoGitClient().Clone(context.Background(), "ssh://git@192.0.2.1:22/a/b.git", "main", filepath.Join(t.TempDir(), "w"), auth)
+	// Bounded, so a regression (the connect not cancelled) fails the test
+	// instead of hanging it.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := scm.NewGoGitClient().Clone(ctx, "ssh://git@192.0.2.1:22/a/b.git", "main", filepath.Join(t.TempDir(), "w"), auth)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 3*time.Second, "the connect limit ended the clone: %v", err)
 }
