@@ -249,8 +249,26 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
 	}
 
+	// Approvals (#1449): count spec.approvals, which the Graph copies from
+	// the Bundle's Approval objects, against spec.approval (buildContext
+	// exposes the same count to the expression as approvals.*).
+	tally := tallyApprovals(&gate, bundleCreator(celCtx))
+	if err := r.recordApprovals(ctx, &gate, tally); apierrors.IsConflict(err) {
+		return ctrl.Result{}, err // a stale read: Reconcile evaluates again (#1513)
+	} else if err != nil {
+		log.Warn().Err(err).Msg("failed to record approvals in status (non-fatal)")
+	}
+
 	// Evaluate CEL expression
 	pass, reason, evalErr := r.eval.evaluate(ctx, gate.Spec.Expression, celCtx)
+	// The approval policy holds a gate whose expression passes.
+	if pass && evalErr == nil {
+		if held := tally.blocked(); held != "" {
+			pass, reason = false, held
+		} else if met := tally.met(); met != "" {
+			reason = reason + "; " + met
+		}
+	}
 	// Name the stale metrics the expression uses when it blocks: a stale
 	// value is empty, so a double(...) comparison fails with an evaluation
 	// error rather than false.
@@ -461,6 +479,9 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"type":    bundle.Spec.Type,
 		"version": version,
 		"labels":  labelsCtx,
+		// createdBy is the verified creator (kardinal.io/created-by), "" when
+		// the Bundle has none.
+		"createdBy": bundle.Annotations[lifecycle.AnnotationCreatedBy],
 		"provenance": map[string]interface{}{
 			"author":    "",
 			"commitSHA": "",
@@ -559,7 +580,16 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"metrics":      metricsCtx,
 		"upstream":     upstreamCtx,
 		"changewindow": cwCtx,
+		"approvals":    tallyApprovals(gate, bundleCreator(map[string]interface{}{"bundle": bundleCtx})).context(),
 	}, version, nil
+}
+
+// bundleCreator reads bundle.createdBy from a CEL context built by
+// buildContext.
+func bundleCreator(celCtx map[string]interface{}) string {
+	b, _ := celCtx["bundle"].(map[string]interface{})
+	creator, _ := b["createdBy"].(string)
+	return creator
 }
 
 // directUpstreamSoakMinutes returns the soak minutes of the environments that
@@ -1377,13 +1407,22 @@ func (r *Reconciler) pipelineGateRequests(ctx context.Context, obj client.Object
 const ReasonGateExempted = "GateExempted"
 
 // HoldExemptible reports whether a hold on env may exempt gate: a gate
-// instance of the held environment. The freeze gate of a paused Pipeline is
-// never an instance, and pause holds steps on its own. The exempt set is
+// instance of the held environment, except an approval gate (approvalGate).
+// The freeze gate of a paused Pipeline is never an instance, and pause holds
+// steps on its own. The exempt set is
 // documented in docs/policy-gates.md#rollback-hold-exemption and enforced
 // by TestHoldExemptible.
 func HoldExemptible(gate *kardinalv1alpha1.PolicyGate, env string) bool {
 	return gate.Labels[labelBundle] != "" && gate.Labels[labelEnvironment] == env &&
-		gate.Labels[lifecycle.LabelFreeze] != "true"
+		gate.Labels[lifecycle.LabelFreeze] != "true" &&
+		!approvalGate(gate) // #1449: a quorum of people is never bypassed by a hold
+}
+
+// approvalGate reports whether gate counts approvals: it has an approval
+// policy (spec.approval) or its expression reads approvals.*. A hold never
+// exempts one, met or not.
+func approvalGate(g *kardinalv1alpha1.PolicyGate) bool {
+	return g.Spec.Approval != nil || strings.Contains(g.Spec.Expression, "approvals.")
 }
 
 // holdExemption returns the hold that exempts gate, a gate instance of

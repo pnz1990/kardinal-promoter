@@ -15,9 +15,15 @@ import (
 // SelfSubjectReview.
 func StubIdentity(t testing.TB, user string) {
 	t.Helper()
+	stubIdentity(t, Identity{Username: user})
+}
+
+// stubIdentity is StubIdentity with groups.
+func stubIdentity(t testing.TB, id Identity) {
+	t.Helper()
 	old := identityOf
 	identityOf = func(context.Context, sigs_client.Client) (Identity, error) {
-		return Identity{Username: user}, nil
+		return id, nil
 	}
 	t.Cleanup(func() { identityOf = old })
 }

@@ -74,7 +74,11 @@ spec:
                   Action is a short verb describing what happened.
                   Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
                                 "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
-                                "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "HoldCreated", "HoldReleased".
+                                "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
+                                "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased".
+                  ApprovalRecorded and ApprovalRevoked are written by an approval gate
+                  when a decision (kardinal approve) appears in or leaves its
+                  spec.approvals.
                   GateOverridden is written once per spec.overrides entry of a gate
                   instance, naming who created it (kardinal override or the UI).
                   HealthCheckFailed and GateBlocked are accepted but never written: a
@@ -93,6 +97,8 @@ spec:
                 - GateBlocked
                 - GateEvaluated
                 - GateOverridden
+                - ApprovalRecorded
+                - ApprovalRevoked
                 - HoldCreated
                 - HoldReleased
                 type: string

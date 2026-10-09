@@ -66,6 +66,90 @@ spec:
           spec:
             description: PolicyGateSpec defines the desired state of a PolicyGate.
             properties:
+              approval:
+                description: |-
+                  Approval makes the gate wait for people: it is ready only when its
+                  expression is true and at least approval.required allowed people have
+                  approved the Bundle for the environment (kardinal approve), and none of
+                  them rejected it. Copied from the template to every gate instance. For
+                  a gate that only waits for approvals, use the expression "true".
+                properties:
+                  allowedGroups:
+                    description: |-
+                      AllowedGroups are Kubernetes groups: an approval counts when one of the
+                      approval's groups is listed. With neither allowedUsers nor
+                      allowedGroups, every approval counts; who may approve is then decided
+                      by RBAC on approvals.
+                    items:
+                      type: string
+                    type: array
+                  allowedUsers:
+                    description: AllowedUsers are Kubernetes usernames whose approvals
+                      count.
+                    items:
+                      type: string
+                    type: array
+                  excludeAuthor:
+                    description: |-
+                      ExcludeAuthor does not count an approval whose user created the Bundle
+                      (no self-approval): the kardinal.io/created-by annotation, which the
+                      chart's admission policy pins to the creating user (kardinal create
+                      bundle, the Bundle API and the UI set it). A Bundle without it blocks
+                      the gate: the rule cannot be enforced.
+                    type: boolean
+                  required:
+                    default: 1
+                    description: Required is how many distinct allowed people must
+                      approve.
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                type: object
+              approvals:
+                description: |-
+                  Approvals is written by the promotion Graph on gate instances: the
+                  Approvals of the instance's Bundle and environment, copied from the
+                  Approval objects, at most 101 (more than 100 blocks the gate). Do not
+                  set it; on a template it is ignored.
+                items:
+                  description: |-
+                    GateApproval is an Approval's spec as the Graph copies it into a gate
+                    instance (the fields of ApprovalSpec).
+                  properties:
+                    bundle:
+                      description: Bundle is the Bundle the decision is about.
+                      type: string
+                    bundleUID:
+                      description: BundleUID is that Bundle's UID.
+                      type: string
+                    comment:
+                      description: Comment is the approver's note.
+                      type: string
+                    decision:
+                      description: Decision is approve or reject.
+                      type: string
+                    environment:
+                      description: Environment is the environment the decision is
+                        for.
+                      type: string
+                    groups:
+                      description: Groups are the approver's groups that count for
+                        allowedGroups.
+                      items:
+                        type: string
+                      type: array
+                    user:
+                      description: User is the approver's Kubernetes username.
+                      type: string
+                  required:
+                  - bundle
+                  - bundleUID
+                  - decision
+                  - environment
+                  - user
+                  type: object
+                maxItems: 101
+                type: array
               expression:
                 description: |-
                   Expression is the CEL expression evaluated to determine if promotion
@@ -229,6 +313,41 @@ spec:
           status:
             description: PolicyGateStatus defines the observed state of a PolicyGate.
             properties:
+              approvals:
+                description: |-
+                  Approvals records each decision in spec.approvals and whether the gate
+                  counted it (spec.approval), for kardinal explain, the PR evidence and
+                  the UI.
+                items:
+                  description: GateApprovalStatus records how the gate counted one
+                    approval.
+                  properties:
+                    comment:
+                      description: Comment is the approver's comment.
+                      type: string
+                    counted:
+                      description: Counted reports whether the decision counts for
+                        the gate.
+                      type: boolean
+                    decision:
+                      description: Decision is approve or reject.
+                      type: string
+                    firstSeenAt:
+                      description: FirstSeenAt is when the gate first saw the decision.
+                      format: date-time
+                      type: string
+                    reason:
+                      description: Reason says why a decision does not count.
+                      type: string
+                    user:
+                      description: User is the approver.
+                      type: string
+                  required:
+                  - counted
+                  - decision
+                  - user
+                  type: object
+                type: array
               conditions:
                 description: Conditions holds status conditions.
                 items:
