@@ -105,8 +105,11 @@ spec:
                       format: date-time
                       type: string
                     createdBy:
-                      description: CreatedBy is the user who created the override
-                        (informational).
+                      description: |-
+                        CreatedBy is the Kubernetes username of whoever created the override.
+                        The chart's ValidatingAdmissionPolicy admits a new override only when
+                        createdBy equals the requesting user (kardinal override reads it with a
+                        SelfSubjectReview), or when the controller writes it for the UI.
                       type: string
                     expiresAt:
                       description: |-
@@ -290,6 +293,59 @@ spec:
                   result or reason changes, when a PromotionStep that has not started
                   needs a newer result, after a spec change, and otherwise at least every
                   10 minutes.
+                format: date-time
+                type: string
+              overrides:
+                description: |-
+                  Overrides records each spec.overrides entry the controller has seen:
+                  when it first saw it, whether its createdBy was checked by the chart's
+                  identity admission policy, and whether its GateOverridden AuditEvent
+                  is written. An override counts from firstSeen: it ends at the earlier
+                  of its expiresAt and firstSeen plus the override cap
+                  (--gate-override-max-minutes). Records are never dropped, so an entry
+                  removed and added again keeps its firstSeen; past 200 records new
+                  overrides are not counted (condition OverrideIgnored).
+                items:
+                  description: OverrideRecord is the controller's record of one spec.overrides
+                    entry.
+                  properties:
+                    audited:
+                      description: Audited is true once the GateOverridden AuditEvent
+                        is written.
+                      type: boolean
+                    firstSeen:
+                      description: |-
+                        FirstSeen is when the controller first saw the override. It is the
+                        AuditEvent timestamp and the start of the override cap.
+                      format: date-time
+                      type: string
+                    key:
+                      description: |-
+                        Key identifies the override: a hash of its stage, reason, createdBy,
+                        createdAt and expiresAt, so an edited entry is a new override.
+                      maxLength: 64
+                      type: string
+                    verified:
+                      description: |-
+                        Verified is true when createdBy was checked: the chart's identity
+                        admission policy was bound when the controller first saw the override,
+                        on a gate it was already checking.
+                      type: boolean
+                  required:
+                  - firstSeen
+                  - key
+                  type: object
+                maxItems: 200
+                type: array
+                x-kubernetes-list-map-keys:
+                - key
+                x-kubernetes-list-type: map
+              overridesVerifiedSince:
+                description: |-
+                  OverridesVerifiedSince is when the controller first reconciled this
+                  gate with override identity checks (the chart's admission policy).
+                  Overrides already on the gate then were not checked: their createdBy is
+                  shown as unverified.
                 format: date-time
                 type: string
               ready:
