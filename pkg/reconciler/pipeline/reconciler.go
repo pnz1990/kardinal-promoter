@@ -30,6 +30,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // secretRecheckInterval is how often a Pipeline refused for a missing
@@ -556,7 +557,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}}
 			}),
 		).
-		Complete(r)
+		Complete(tracing.WrapReconciler("pipeline", r))
 }
 
 // deploymentMetricsEqual returns true when a and b represent the same metrics.

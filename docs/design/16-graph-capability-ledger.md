@@ -107,6 +107,18 @@ would be data-pending too. A node that already exists and
 turns Unresolved is neither re-applied nor pruned (`executor/simple.go:318-324`,
 `pkg/controller/graph/tracking.go:102-106`), so its object stays as history.
 
+Per-promotion MetricCheck instances (`buildMetricCheckNode`, #1445) use the same hold on
+their `spec.query` (`spec.web.url` for provider `web`): kro creates the instance only once
+every upstream step of the gated environment is Verified. Their `spec.suspend` is a live
+`${!(bundle.status.phase in ["Available", "Promoting"])}`: kro re-applies the template when
+the Bundle ref changes, so the instance stops querying once the Bundle is Verified, Failed or
+Superseded, without kardinal deleting it. The placeholder values (`{{ bundle.version }}`) are
+rendered by the translator, not by kro string templates: they come from the Bundle the
+translator is building for, any text kro would read as `${...}` is passed as a CEL string
+literal (`${"..."}`), and values outside `[A-Za-z0-9._:@+-]` are not substituted (fail
+closed). Rendering them with kro CEL from the `bundle` ref would need the same escaping plus
+`has()` chains for optional fields, and gives nothing the translator does not have.
+
 Verified on kind: `uat` was created only after `test` was Verified; `prod` stayed absent
 while `require-uat-soak` was not ready.
 
@@ -453,6 +465,7 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 | Git and SCM steps (clone, kustomize, push with rebase-and-retry onto a branch other Pipelines move, rebuilding an open PR's branch when its base moves (#1461), open PR, merge detection) | `pkg/steps`, `pkg/scm`, PRStatus reconciler | Side effects on external systems; kro only applies Kubernetes objects. A git working tree cannot cross a reconcile boundary, so clone, edit, commit, rebase and push stay in one step sequence | Out of scope for kro. The PromotionStep CR is the Graph-native boundary |
 | Outbound notifications (NotificationHook webhooks: json, Slack, Teams, templated bodies) and the controller egress allowlist | `pkg/reconciler/notificationhook`, `pkg/egress` | An HTTP POST to an external system is a side effect, and a delivery record must survive restarts; kro only applies Kubernetes objects. The hook is not a Graph node: it reads the status that Bundle, PolicyGate and PromotionStep reconcilers already write (phase, `Ready` condition and its `Unblocked` reason, `prURL`, state) and writes only its own status (`processedEventKeys`, conditions). The allowlist is controller configuration, not promotion logic | None needed. A Graph-level event sink would still need a delivery controller; no ask |
 | Health adapters (HealthChecking to Verified) | `pkg/health/adapter.go` via PromotionStep reconciler | A Graph cannot write PromotionStep status, and `readyWhen` does not gate dependents (G1, G3) | None needed: stays in the reconciler by design (#1283) |
+| MetricCheck query slots (`Limiter`, #1479) | `pkg/reconciler/metriccheck/limiter.go` | Rations outbound queries to user-chosen endpoints (per namespace and cluster-wide, FIFO, wake-ups through a channel source). Process-local: it holds no promotion state, every result is written to MetricCheck status, and a restart only makes the checks ask again. Approved as an exception to the in-memory-state rule (coordinator, as the owner's delegate, 2026-10-09) | None needed: concurrency control of side effects, not promotion logic |
 | Remote-cluster health (`health.cluster`, #1458, planned for v0.10.0) | PromotionStep reconciler health adapter, with a client built from a kubeconfig Secret in the Pipeline namespace | kro reads only its own cluster; no Graph primitive reads another cluster (see "multi-cluster" below) | None asked: the adapter already runs in the reconciler (G3) |
 | Gate results as SCM commit statuses while a PR waits for merge (#1452, planned for v0.10.0) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14) | Side effect on an external system | Out of scope for kro |
 | Holding an existing PromotionStep: pause (freeze gate) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |

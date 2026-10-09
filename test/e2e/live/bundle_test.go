@@ -1022,3 +1022,57 @@ func TestBundle_Metrics(t *testing.T) {
 	assert.Equal(t, 1, m.OperatorInterventions, "one override")
 	assert.GreaterOrEqual(t, m.CommitToProductionMinutes, int64(1), "the bake alone takes a minute")
 }
+
+// TestBundle_ArtifactFieldsValidated: the API server refuses a Bundle whose
+// artifact fields a per-promotion query could carry somewhere unintended: a
+// tag outside the OCI tag grammar, a digest that is not an OCI digest, a
+// configRef.commitSHA that is not 4 to 64 hex characters, and a
+// provenance.commitSHA that is neither hex nor a digest (a CI placeholder
+// such as "unknown"). The refusal names the field, nothing is stored, and a
+// Bundle with valid values is accepted.
+//
+// Covers BUNDLE-PATTERNS-01.
+func TestBundle_ArtifactFieldsValidated(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	ns := e.Namespace(t)
+	digest := "sha256:" + strings.Repeat("ab", 32)
+	bundle := func(name string, mutate func(*v1alpha1.BundleSpec)) *v1alpha1.Bundle {
+		b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: pipelineName,
+				Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}}}
+		mutate(&b.Spec)
+		return b
+	}
+	for _, tc := range []struct {
+		name, field string
+		mutate      func(*v1alpha1.BundleSpec)
+	}{
+		{"tag-with-slash", "spec.images[0].tag", func(s *v1alpha1.BundleSpec) { s.Images[0].Tag = "v1/../x" }},
+		{"tag-with-space", "spec.images[0].tag", func(s *v1alpha1.BundleSpec) { s.Images[0].Tag = "v1 x" }},
+		{"tag-starting-with-dot", "spec.images[0].tag", func(s *v1alpha1.BundleSpec) { s.Images[0].Tag = ".hidden" }},
+		{"short-digest", "spec.images[0].digest", func(s *v1alpha1.BundleSpec) { s.Images[0].Digest = "sha256:abc" }},
+		{"config-commit-unknown", "spec.configRef.commitSHA", func(s *v1alpha1.BundleSpec) {
+			s.Type = "config"
+			s.Images = nil
+			s.ConfigRef = &v1alpha1.ConfigRef{GitRepo: "https://example.com/repo.git", CommitSHA: "unknown"}
+		}},
+		{"provenance-commit-unknown", "spec.provenance.commitSHA", func(s *v1alpha1.BundleSpec) {
+			s.Provenance = &v1alpha1.BundleProvenance{CommitSHA: "unknown"}
+		}},
+	} {
+		err := e.Client.Create(ctx, bundle(tc.name, tc.mutate))
+		require.Error(t, err, tc.name)
+		assert.True(t, apierrors.IsInvalid(err), "%s: %v", tc.name, err)
+		assert.Contains(t, err.Error(), tc.field, tc.name)
+		var got v1alpha1.Bundle
+		assert.True(t, apierrors.IsNotFound(e.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: tc.name}, &got)), "%s is not stored", tc.name)
+	}
+	ok := bundle("valid", func(s *v1alpha1.BundleSpec) {
+		s.Images[0].Tag = "1.2.3-rc_1"
+		s.Images[0].Digest = digest
+		s.Provenance = &v1alpha1.BundleProvenance{CommitSHA: digest}
+	})
+	require.NoError(t, e.Client.Create(ctx, ok), "valid tag, digest and a digest as provenance.commitSHA")
+}
