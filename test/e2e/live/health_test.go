@@ -765,6 +765,23 @@ func newHookedArgoApp(t *testing.T, e *framework.Env, env, phase, script string)
 	e.ArgoApp(t, a.argoApp(env), a.repo, fixtures.Path(env), ns)
 	e.WaitArgoApp(t, a.argoApp(env), syncTimeout)
 	e.WaitDeploymentImage(t, ns, fixtures.Workload(env), fixtures.Image+":"+fixtures.V1, syncTimeout)
+	// The first sync, with its hook, must be over before a test promotes:
+	// Healthy and Synced come before a PostSync hook runs. Under load the
+	// first sync's hook Job (Job "hook", HookSucceeded) was still there
+	// when the promoted commit's sync started, and Argo CD took it as that
+	// sync's hook: the operation Succeeded without running the hook on the
+	// new version (TestHealth_ArgoFailures saw the step Verified).
+	e.WaitArgoOperation(t, a.argoApp(env), "Succeeded", syncTimeout)
+	framework.Eventually(t, syncTimeout, "the first sync's hook Job deleted (HookSucceeded)", func(ctx context.Context) (bool, string) {
+		_, err := e.Kube.BatchV1().Jobs(ns).Get(ctx, "hook", metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return true, ""
+		}
+		if err != nil {
+			return false, err.Error()
+		}
+		return false, "Job hook still exists"
+	})
 	return a
 }
 
