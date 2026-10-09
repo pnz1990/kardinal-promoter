@@ -5,7 +5,9 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,11 +50,107 @@ type pathSegment struct {
 var segmentRE = regexp.MustCompile(`^([A-Za-z0-9_-]+)((?:\[[0-9]+\])*)$`)
 var indexRE = regexp.MustCompile(`\[([0-9]+)\]`)
 
+// tempSuffix names the temporary file written next to each edited file.
+const tempSuffix = ".kardinal-tmp"
+
 // removeTemps removes the temporary files of a failed write.
 func removeTemps(root *os.Root, order []string) {
 	for _, rel := range order {
-		_ = root.Remove(rel + ".kardinal-tmp")
+		_ = root.Remove(rel + tempSuffix)
 	}
+}
+
+// Test seams: the encoder and the rename, so tests can make the re-parse
+// check and a rename fail.
+var (
+	encodeYAMLDoc = func(d *yamlDoc) ([]byte, error) { return d.encode() }
+	renameInRoot  = func(root *os.Root, from, to string) error { return root.Rename(from, to) }
+)
+
+// writeExclusive writes data to a new file name in root with mode perm. A
+// file or symbolic link already at name (left by a crash, or committed to the
+// repository) is removed first, and the file is created with O_EXCL, so the
+// write never goes through a link.
+func writeExclusive(root *os.Root, name string, data []byte, perm os.FileMode) error {
+	if err := root.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	// The umask may have narrowed perm; the edited file keeps its mode.
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// noSymlinkPath refuses rel when any of its components, directories
+// included, is a symbolic link, or a directory component is not a directory.
+// os.Root keeps a link inside the checkout, but a link could still let two
+// entries edit one file under two names, or one environment edit another's.
+func noSymlinkPath(root *os.Root, rel string) (os.FileInfo, error) {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for i := range parts {
+		p := filepath.FromSlash(strings.Join(parts[:i+1], "/"))
+		info, err := root.Lstat(p)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", filepath.ToSlash(rel), err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, parentsteps.Permanent(fmt.Errorf("%s is a symbolic link, which yaml-update does not follow",
+				filepath.ToSlash(p)))
+		}
+		if i < len(parts)-1 && !info.IsDir() {
+			return nil, parentsteps.Permanent(fmt.Errorf("%s is not a directory", filepath.ToSlash(p)))
+		}
+		if i == len(parts)-1 {
+			return info, nil
+		}
+	}
+	return nil, parentsteps.Permanent(fmt.Errorf("path is empty"))
+}
+
+// noMergeKey refuses a mapping with a merge key (<<): its values come from
+// another mapping, so a key set or read here may not be the one consumers
+// see.
+func noMergeKey(m *yaml.Node, path string) error {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if k := m.Content[i]; k.Tag == "!!merge" || (k.Value == "<<" && k.Style == 0) {
+			return fmt.Errorf("%s: merge keys (<<) on the path are not supported", path)
+		}
+	}
+	return nil
+}
+
+// duplicateKey returns the first mapping key that appears twice in the same
+// mapping anywhere in n. YAML forbids it, and tools disagree about which
+// value wins, so the value yaml-update sets might not be the one deployed.
+func duplicateKey(n *yaml.Node) (string, int, bool) {
+	if n.Kind == yaml.MappingNode {
+		seen := map[string]bool{}
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k := n.Content[i]
+			if k.Kind == yaml.ScalarNode {
+				if seen[k.Value] {
+					return k.Value, k.Line, true
+				}
+				seen[k.Value] = true
+			}
+		}
+	}
+	for _, c := range n.Content {
+		if k, line, ok := duplicateKey(c); ok {
+			return k, line, true
+		}
+	}
+	return "", 0, false
 }
 
 // parseYAMLPath parses "a.b[0].c" into segments.
@@ -95,6 +193,9 @@ func setYAMLPath(root *yaml.Node, path string, value string) error {
 		}
 		if node.Kind != yaml.MappingNode {
 			return fmt.Errorf("%s: not a mapping at %q", path, seg.key)
+		}
+		if err := noMergeKey(node, path); err != nil {
+			return err
 		}
 		if last {
 			v := mapValue(node, seg.key)
@@ -273,6 +374,7 @@ func (s *yamlUpdateStep) Execute(_ context.Context, state *parentsteps.StepState
 	type edit struct{ path, value string }
 	docs := map[string]*yamlDoc{}
 	originals := map[string][]byte{}
+	modes := map[string]os.FileMode{}
 	edits := map[string][]edit{}
 	var order []string
 	var applied []string
@@ -290,15 +392,14 @@ func (s *yamlUpdateStep) Execute(_ context.Context, state *parentsteps.StepState
 		rel := filepath.Join(envRel, fileRel)
 		doc, ok := docs[rel]
 		if !ok {
-			// A symbolic link would let two entries edit one file under two
-			// names, or point outside the environment: refuse it.
-			info, err := root.Lstat(rel)
+			// A symbolic link anywhere on the path, the environment
+			// directory included, would let two entries edit one file under
+			// two names, or point at another environment: refuse it.
+			info, err := noSymlinkPath(root, rel)
 			if err != nil {
-				return fail(fmt.Errorf("read %s: %w", filepath.ToSlash(rel), err))
+				return fail(err)
 			}
 			switch {
-			case info.Mode()&os.ModeSymlink != 0:
-				return fail(parentsteps.Permanent(fmt.Errorf("%s is a symbolic link, which yaml-update does not edit", filepath.ToSlash(rel))))
 			case !info.Mode().IsRegular():
 				return fail(parentsteps.Permanent(fmt.Errorf("%s is not a regular file", filepath.ToSlash(rel))))
 			case info.Size() > maxYAMLUpdateFile:
@@ -311,7 +412,11 @@ func (s *yamlUpdateStep) Execute(_ context.Context, state *parentsteps.StepState
 			if doc, err = parseYAMLMapping(raw); err != nil {
 				return fail(parentsteps.Permanent(fmt.Errorf("parse %s: %w", filepath.ToSlash(rel), err)))
 			}
-			docs[rel], originals[rel] = doc, raw
+			if key, line, dup := duplicateKey(doc.root()); dup {
+				return fail(parentsteps.Permanent(fmt.Errorf("parse %s: key %q appears twice in one mapping (line %d)",
+					filepath.ToSlash(rel), key, line)))
+			}
+			docs[rel], originals[rel], modes[rel] = doc, raw, info.Mode().Perm()
 			order = append(order, rel)
 		}
 		if err := setYAMLPath(doc.root(), u.Path, value); err != nil {
@@ -327,7 +432,7 @@ func (s *yamlUpdateStep) Execute(_ context.Context, state *parentsteps.StepState
 	sort.Strings(order)
 	outs := map[string][]byte{}
 	for _, rel := range order {
-		out, err := docs[rel].encode()
+		out, err := encodeYAMLDoc(docs[rel])
 		if err != nil {
 			return fail(fmt.Errorf("encode %s: %w", filepath.ToSlash(rel), err))
 		}
@@ -347,15 +452,17 @@ func (s *yamlUpdateStep) Execute(_ context.Context, state *parentsteps.StepState
 	// when a rename fails, the files already replaced get their old content
 	// back, so the checkout is never left half edited.
 	for _, rel := range order {
-		if err := root.WriteFile(rel+".kardinal-tmp", outs[rel], 0o644); err != nil {
+		if err := writeExclusive(root, rel+tempSuffix, outs[rel], modes[rel]); err != nil {
 			removeTemps(root, order)
 			return fail(fmt.Errorf("write %s: %w", filepath.ToSlash(rel), err))
 		}
 	}
 	for i, rel := range order {
-		if err := root.Rename(rel+".kardinal-tmp", rel); err != nil {
+		if err := renameInRoot(root, rel+tempSuffix, rel); err != nil {
 			for _, done := range order[:i] {
-				_ = root.WriteFile(done, originals[done], 0o644)
+				if rbErr := writeExclusive(root, done+tempSuffix, originals[done], modes[done]); rbErr == nil {
+					_ = renameInRoot(root, done+tempSuffix, done)
+				}
 			}
 			removeTemps(root, order)
 			return fail(fmt.Errorf("write %s: %w", filepath.ToSlash(rel), err))

@@ -235,3 +235,151 @@ func TestYAMLUpdate_NoTempFilesLeft(t *testing.T) {
 	}))
 	assert.ElementsMatch(t, []string{"values.yaml", "deployment.yaml"}, names)
 }
+
+// TestYAMLEdits_TrailingEmptyDocument: a file ending with "---", or with an
+// empty or null document after it, is one document. kustomize-set-image,
+// helm-set-image and yaml-update edit it (QA round 3 on #1498: refusing it
+// broke files that worked before); a second document with content is still
+// refused.
+func TestYAMLEdits_TrailingEmptyDocument(t *testing.T) {
+	img := []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "2.0.0"}}
+	for _, trailer := range []string{"---\n", "---\n---\n", "--- null\n", "---\n...\n"} {
+		t.Run(trailer, func(t *testing.T) {
+			workDir := t.TempDir()
+			envPath := filepath.Join(workDir, "environments", "prod")
+			writeKustomization(t, envPath, "kind: Kustomization\n"+trailer)
+			_, err := mustLookup(t, "kustomize-set-image").Execute(context.Background(), makeKustomizeState(workDir, "prod", img))
+			require.NoError(t, err)
+			assert.Contains(t, readKustomization(t, envPath), "newTag: 2.0.0")
+
+			require.NoError(t, os.WriteFile(filepath.Join(envPath, "values.yaml"), []byte("image:\n  tag: v1\n"+trailer), 0o644))
+			_, err = mustLookup(t, "helm-set-image").Execute(context.Background(), makeKustomizeState(workDir, "prod", img))
+			require.NoError(t, err)
+			assert.Equal(t, "image:\n  tag: 2.0.0\n", readEnvFile(t, envPath, "values.yaml"))
+
+			state, envDir := yamlState(t, map[string]string{"values.yaml": valuesYAML + trailer},
+				[]v1alpha1.YAMLUpdate{{File: "values.yaml", Path: "image.tag"}}, appV2)
+			_, err = mustLookup(t, "yaml-update").Execute(context.Background(), state)
+			require.NoError(t, err)
+			assert.Contains(t, readEnvFile(t, envDir, "values.yaml"), `tag: "2.0.0"`)
+		})
+	}
+	for _, trailer := range []string{"---\nkind: Secret\n", "---\n# a comment only\n", "---\n- a\n"} {
+		state, envDir := yamlState(t, map[string]string{"values.yaml": valuesYAML + trailer},
+			[]v1alpha1.YAMLUpdate{{File: "values.yaml", Path: "image.tag"}}, appV2)
+		res, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
+		require.Error(t, err, trailer)
+		assert.Contains(t, res.Message, "more than one YAML document")
+		assert.Equal(t, valuesYAML+trailer, readEnvFile(t, envDir, "values.yaml"))
+	}
+}
+
+// TestYAMLUpdate_RefusesSymlinkedDirectories: a symbolic link anywhere on
+// the path, the environment directory or a directory in update.yaml.file,
+// fails for good and nothing is written through it, also when the link stays
+// inside the checkout.
+func TestYAMLUpdate_RefusesSymlinkedDirectories(t *testing.T) {
+	t.Run("environment directory", func(t *testing.T) {
+		state, envDir := yamlState(t, map[string]string{"values.yaml": valuesYAML},
+			[]v1alpha1.YAMLUpdate{{File: "values.yaml", Path: "image.tag"}}, appV2)
+		// environments/staging is a link to environments/prod.
+		require.NoError(t, os.Symlink("prod", filepath.Join(filepath.Dir(envDir), "staging")))
+		state.Environment.Name = "staging"
+		res, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, parentsteps.ErrPermanent))
+		assert.Contains(t, res.Message, "environments/staging is a symbolic link")
+		assert.Equal(t, valuesYAML, readEnvFile(t, envDir, "values.yaml"))
+	})
+	t.Run("directory in the file path", func(t *testing.T) {
+		state, envDir := yamlState(t, map[string]string{"real/values.yaml": valuesYAML},
+			[]v1alpha1.YAMLUpdate{{File: "linked/values.yaml", Path: "image.tag"}}, appV2)
+		require.NoError(t, os.Symlink("real", filepath.Join(envDir, "linked")))
+		res, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, parentsteps.ErrPermanent))
+		assert.Contains(t, res.Message, "environments/prod/linked is a symbolic link")
+		assert.Equal(t, valuesYAML, readEnvFile(t, envDir, "real/values.yaml"))
+	})
+	t.Run("file path through a file", func(t *testing.T) {
+		state, _ := yamlState(t, map[string]string{"values.yaml": valuesYAML},
+			[]v1alpha1.YAMLUpdate{{File: "values.yaml/x.yaml", Path: "image.tag"}}, appV2)
+		res, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
+		require.Error(t, err)
+		assert.Contains(t, res.Message, "is not a directory")
+	})
+}
+
+// TestYAMLUpdate_RefusesSiblingAtRuntime: a file that leaves the environment
+// directory (../staging/values.yaml) is refused when the step runs, not only
+// by the CRD pattern, and the sibling environment is untouched.
+func TestYAMLUpdate_RefusesSiblingAtRuntime(t *testing.T) {
+	for _, file := range []string{"../staging/values.yaml", "./../staging/values.yaml", "a/../../staging/values.yaml"} {
+		state, envDir := yamlState(t, map[string]string{"values.yaml": valuesYAML},
+			[]v1alpha1.YAMLUpdate{{File: file, Path: "image.tag"}}, appV2)
+		staging := filepath.Join(filepath.Dir(envDir), "staging")
+		require.NoError(t, os.MkdirAll(staging, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(staging, "values.yaml"), []byte(valuesYAML), 0o644))
+		res, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
+		require.Error(t, err, file)
+		assert.True(t, errors.Is(err, parentsteps.ErrPermanent))
+		assert.Contains(t, res.Message, "must stay inside the repository", file)
+		b, err := os.ReadFile(filepath.Join(staging, "values.yaml"))
+		require.NoError(t, err)
+		assert.Equal(t, valuesYAML, string(b), "the sibling environment is untouched")
+	}
+}
+
+// TestYAMLUpdate_RefusesMergeKeysAndDuplicateKeys: a merge key (<<) on the
+// path, or a key that appears twice in one mapping, fails for good: the value
+// set might not be the one consumers read.
+func TestYAMLUpdate_RefusesMergeKeysAndDuplicateKeys(t *testing.T) {
+	tests := []struct {
+		name, content, path, wantMsg string
+	}{
+		{"merge key on the path", "defaults: {tag: \"1.0.0\"}\nimage:\n  <<: {tag: \"0.9.0\"}\n  repo: app\n", "image.tag", "merge keys (<<)"},
+		{"merge key at the top", "<<: {image: {tag: \"0.9.0\"}}\nimage:\n  tag: \"1.0.0\"\n", "image.tag", "merge keys (<<)"},
+		{"duplicate key", "image:\n  tag: \"1.0.0\"\n  tag: \"1.1.0\"\n", "image.tag", `key "tag" appears twice`},
+		{"duplicate key elsewhere", "image:\n  tag: \"1.0.0\"\nother:\n  a: 1\n  a: 2\n", "image.tag", `key "a" appears twice`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state, envDir := yamlState(t, map[string]string{"values.yaml": tt.content},
+				[]v1alpha1.YAMLUpdate{{File: "values.yaml", Path: tt.path}}, appV2)
+			res, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, parentsteps.ErrPermanent))
+			assert.Contains(t, res.Message, tt.wantMsg)
+			assert.Equal(t, tt.content, readEnvFile(t, envDir, "values.yaml"))
+		})
+	}
+	// A quoted "<<" is an ordinary key.
+	state, envDir := yamlState(t, map[string]string{"values.yaml": "image:\n  \"<<\": x\n  tag: \"1.0.0\"\n"},
+		[]v1alpha1.YAMLUpdate{{File: "values.yaml", Path: "image.tag"}}, appV2)
+	_, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
+	require.NoError(t, err)
+	assert.Contains(t, readEnvFile(t, envDir, "values.yaml"), `tag: "2.0.0"`)
+}
+
+// TestYAMLUpdate_KeepsModeAndIgnoresPlantedTemp: the edited file keeps its
+// mode, and a symbolic link committed at the temporary file's name is
+// replaced, not written through (O_EXCL).
+func TestYAMLUpdate_KeepsModeAndIgnoresPlantedTemp(t *testing.T) {
+	state, envDir := yamlState(t, map[string]string{"values.yaml": valuesYAML},
+		[]v1alpha1.YAMLUpdate{{File: "values.yaml", Path: "image.tag"}}, appV2)
+	p := filepath.Join(envDir, "values.yaml")
+	require.NoError(t, os.Chmod(p, 0o600))
+	target := filepath.Join(envDir, "other.yaml")
+	require.NoError(t, os.WriteFile(target, []byte("keep: me\n"), 0o644))
+	require.NoError(t, os.Symlink("other.yaml", p+".kardinal-tmp"))
+
+	_, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
+	require.NoError(t, err)
+	info, err := os.Stat(p)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "the mode is kept")
+	assert.Contains(t, readEnvFile(t, envDir, "values.yaml"), `tag: "2.0.0"`)
+	assert.Equal(t, "keep: me\n", readEnvFile(t, envDir, "other.yaml"), "nothing written through the planted link")
+	_, err = os.Lstat(p + ".kardinal-tmp")
+	assert.True(t, os.IsNotExist(err), "no temporary file left")
+}

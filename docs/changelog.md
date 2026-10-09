@@ -10,7 +10,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **`update.strategy: yaml`** (#1448) — sets any YAML paths (`spec.template.spec.containers[0].image`, `api.image.tag`) in any files of the environment directory to a Bundle image's tag, digest, `tag@digest` or full reference, with `image` choosing among several Bundle images. Every edit is checked before any file is written, so a wrong path fails the step without a partial change. See [The yaml update strategy](pipeline-reference.md#the-yaml-update-strategy)
+- **`update.strategy: yaml`** (#1448) — sets any YAML paths (`spec.template.spec.containers[0].image`, `api.image.tag`) in any files of the environment directory to a Bundle image's tag, digest, `tag@digest` or full reference, with `image` choosing among several Bundle images. Every edit is checked before any file is written, so a wrong path fails the step without a partial change. Symbolic links anywhere on the path, anchors, aliases and merge keys on the edited path, duplicate keys and a second YAML document are refused; an empty trailing document (`---` at the end of a file) is accepted, also by the kustomize and helm strategies. See [The yaml update strategy](pipeline-reference.md#the-yaml-update-strategy)
 
 ### Changed
 

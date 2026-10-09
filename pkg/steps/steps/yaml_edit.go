@@ -34,20 +34,27 @@ type yamlDoc struct {
 // An empty document is treated as an empty mapping.
 //
 // A stream with more than one document (---) is refused: decoding only the
-// first and writing it back would silently drop the others.
+// first and writing it back would silently drop the others. Empty documents
+// after the first (a trailing "---", or "--- null") hold nothing and are
+// ignored; they are not written back.
 func parseYAMLMapping(raw []byte) (*yamlDoc, error) {
 	d := &yamlDoc{compactSeq: compactSeqIndent(raw)}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	if err := dec.Decode(&d.doc); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
-	var extra yaml.Node
-	switch err := dec.Decode(&extra); {
-	case errors.Is(err, io.EOF):
-	case err != nil:
-		return nil, err
-	default:
-		return nil, fmt.Errorf("the file holds more than one YAML document (---), which is not supported")
+	for {
+		var extra yaml.Node
+		err := dec.Decode(&extra)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !emptyDocument(&extra) || commentAfterFirstDocument(raw) {
+			return nil, fmt.Errorf("the file holds more than one YAML document (---), which is not supported")
+		}
 	}
 	if d.doc.Kind == 0 {
 		d.doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
@@ -56,6 +63,46 @@ func parseYAMLMapping(raw []byte) (*yamlDoc, error) {
 		return nil, fmt.Errorf("top level is not a mapping")
 	}
 	return d, nil
+}
+
+// emptyDocument reports whether n is a document with no content and no
+// comments: nothing, or a single null scalar ("---" alone, or "--- null").
+func emptyDocument(n *yaml.Node) bool {
+	if n.Kind == 0 {
+		return true
+	}
+	if n.Kind != yaml.DocumentNode || n.HeadComment != "" || n.LineComment != "" || n.FootComment != "" {
+		return false
+	}
+	switch len(n.Content) {
+	case 0:
+		return true
+	case 1:
+		c := n.Content[0]
+		return c.Kind == yaml.ScalarNode && c.Tag == "!!null" && c.Anchor == "" &&
+			c.HeadComment == "" && c.LineComment == "" && c.FootComment == ""
+	}
+	return false
+}
+
+// commentAfterFirstDocument reports whether a comment line follows the end of
+// the first document. The parser keeps no node for a document that holds
+// only comments, so writing the file back would drop them.
+func commentAfterFirstDocument(raw []byte) bool {
+	content, ended := false, false
+	for _, line := range strings.Split(string(raw), "\n") {
+		t := strings.TrimSpace(line)
+		separator := t == "---" || strings.HasPrefix(t, "--- ") || t == "..."
+		switch {
+		case ended && strings.HasPrefix(t, "#"):
+			return true
+		case separator && content:
+			ended = true
+		case !separator && t != "" && !strings.HasPrefix(t, "#"):
+			content = true
+		}
+	}
+	return false
 }
 
 // root returns the top-level mapping.
