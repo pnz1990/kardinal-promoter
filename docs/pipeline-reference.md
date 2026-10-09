@@ -222,6 +222,13 @@ A `Failed` Bundle does not count, so it does not take a slot back while the cap 
 
 Default: `0`.
 
+### spec.imageVerification
+
+Requires the Bundle's images (selected by `images`, by digest) to carry a signature from one of
+`authorities` (a cosign key or a Sigstore keyless identity), and a config Bundle's commit to be
+signed when `commits.requireSigned`, before the Bundle is promoted into its first environments.
+See [Image Signature Verification](image-verification.md).
+
 ### spec.policyNamespaces
 
 Extra namespaces to read PolicyGates from. It only adds: the org policy namespaces (the controller's `--policy-namespaces`, default `platform-policies`) and the Pipeline's namespace are always read. A gate found only through it is a team gate unless it is labelled `kardinal.io/scope: org`, and it never grants a skip. See [Policy Gates](policy-gates.md).
@@ -259,9 +266,10 @@ once its upstream environments are Verified, as the nodes shape does. One differ
 an upstream leaves Verified before the environment's step starts, the compact shape deletes that
 environment's instances (they leave the collection, so kro prunes them) and creates them again once
 the upstreams are Verified; once the step has started, its instances are kept.
-[Hooks](hooks.md) (`spec.environments[].hooks`) and [analysis](analysis.md)
-(`spec.environments[].verification`) are not carried yet: both the Bundle and the Pipeline
-condition report them.
+[Hooks](hooks.md) (`spec.environments[].hooks`), [analysis](analysis.md)
+(`spec.environments[].verification`) and [image verification](image-verification.md)
+(`spec.imageVerification`) are not carried yet: both the Bundle and the Pipeline condition report
+them.
 
 The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
 each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be
@@ -572,10 +580,12 @@ The API server checks the grammar: a Pipeline with a path outside it is refused.
 
 Checks that must hold for the running workload belong where it runs, not in the promoter:
 
-- **Image signatures.** Enforce them at admission in the cluster that runs the pods, with
+- **Image signatures.** `spec.imageVerification` verifies cosign and Sigstore signatures
+  before a Bundle is promoted ([Image Signature Verification](image-verification.md)). Also
+  enforce them at admission in the cluster that runs the pods, with
   [Sigstore policy-controller](https://docs.sigstore.dev/policy-controller/overview/) or
-  [Kyverno `verifyImages`](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/).
-  A check in the promoter is bypassed by anyone who can push to the GitOps repository;
+  [Kyverno `verifyImages`](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/):
+  a check in the promoter is bypassed by anyone who can push to the GitOps repository;
   admission is not.
 - **Tests after a deploy.** Run them as a [post-deploy hook](hooks.md): a Job kardinal runs
   after the health check passed; the environment is Verified only when it succeeded. Or run

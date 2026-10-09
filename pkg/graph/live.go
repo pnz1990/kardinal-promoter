@@ -27,6 +27,8 @@ type envExtras struct {
 	analyses  []interface{} // spec.analyses of the step
 	// analysisPolicy is spec.analysisPolicy of the step.
 	analysisPolicy map[string]interface{}
+	// imageVerification is spec.imageVerification of the step.
+	imageVerification string
 }
 
 // buildEnvExtras returns the hook and analysis nodes of one environment and
@@ -47,8 +49,10 @@ func buildEnvExtras(in hookNodesInput, analyses AnalysisInput, bundle *kardinalv
 	if len(runs.names) > 0 {
 		out.analysisPolicy = runs.policy
 	}
-	if len(hooks.nodes) > 0 || len(runs.nodes) > 0 {
-		out.nodes = append(out.nodes, buildLiveMirrorNode(in.env.Name, in.stepK8sName, in.bundleUID, hooks.names, runs.runNames))
+	out.imageVerification = in.imageVerification
+	if len(hooks.nodes) > 0 || len(runs.nodes) > 0 || in.imageVerification != "" {
+		out.nodes = append(out.nodes, buildLiveMirrorNode(in.env.Name, in.stepK8sName, in.bundleUID,
+			hooks.names, runs.runNames, in.imageVerification != ""))
 	}
 	return out, nil
 }
@@ -68,16 +72,22 @@ func attachExtras(step GraphNode, x envExtras) {
 	if x.analysisPolicy != nil {
 		spec["analysisPolicy"] = x.analysisPolicy
 	}
+	if x.imageVerification != "" {
+		spec["imageVerification"] = x.imageVerification
+	}
 }
 
 // buildLiveMirrorNode builds the patch node that writes env's HookRun and
-// AnalysisRun results onto its PromotionStep (spec.live). Hook results come
-// only from the HookRuns this build rendered (hookNames, a literal list
-// rebuilt at every translation) that kro applied for this Bundle
-// (genuineFilter), so a HookRun created by hand is not a result; the same
-// holds for AnalysisRuns (runNames).
-func buildLiveMirrorNode(env, stepK8sName, bundleUID string, hookNames, runNames []string) GraphNode {
+// AnalysisRun results, and the Bundle's ImageVerification result, onto its
+// PromotionStep (spec.live). Hook results come only from the HookRuns this
+// build rendered (hookNames, a literal list rebuilt at every translation)
+// that kro applied for this Bundle (genuineFilter), so a HookRun created by
+// hand is not a result; the same holds for AnalysisRuns (runNames).
+func buildLiveMirrorNode(env, stepK8sName, bundleUID string, hookNames, runNames []string, imageVerification bool) GraphNode {
 	live := map[string]interface{}{}
+	if imageVerification {
+		live["imageVerification"] = imageVerificationLive()
+	}
 	if len(hookNames) > 0 {
 		live["hooks"] = fmt.Sprintf(`${%s.filter(h, %s).map(h, {"name": h.metadata.name, "hook": h.spec.hook, `+
 			`"phase": h.spec.phase, "result": h.?status.?phase.orValue("Pending"), "message": h.?status.?message.orValue(""), `+
