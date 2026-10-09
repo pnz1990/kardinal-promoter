@@ -245,7 +245,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// the Bundle's Approval objects, against spec.approval (buildContext
 	// exposes the same count to the expression as approvals.*).
 	tally := tallyApprovals(&gate, bundleCreator(celCtx))
-	if err := r.recordApprovals(ctx, &gate, tally); err != nil {
+	if err := r.recordApprovals(ctx, &gate, tally); apierrors.IsConflict(err) {
+		return ctrl.Result{}, err // a stale read: Reconcile evaluates again (#1513)
+	} else if err != nil {
 		log.Warn().Err(err).Msg("failed to record approvals in status (non-fatal)")
 	}
 

@@ -196,23 +196,30 @@ func (r *Reconciler) recordApprovals(ctx context.Context, gate *kardinalv1alpha1
 	if equality.Semantic.DeepEqual(records, gate.Status.Approvals) {
 		return nil
 	}
+	// The patch carries the resourceVersion the gate was read at, as
+	// patchStatus's does (#1513): a reconcile from a stale cache, which would
+	// see the decisions a newer reconcile already recorded as new and audit
+	// them again, gets a Conflict and writes nothing. The audit records
+	// follow the status write, so only the reconcile that recorded a change
+	// audits it.
+	old := gate.Status.Approvals
+	patch := client.MergeFromWithOptions(gate.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	gate.Status.Approvals = records
+	if err := r.Status().Patch(ctx, gate, patch); err != nil {
+		gate.Status.Approvals = old
+		return fmt.Errorf("record approvals: %w", err)
+	}
 	// Audit each decision that appeared or left (an Approval created, or
-	// deleted to revoke it) before the status records the change, so none is
-	// lost; a failed status write can record a decision twice.
+	// deleted to revoke it).
 	for _, rec := range records {
-		if !hasDecision(gate.Status.Approvals, rec) {
+		if !hasDecision(old, rec) {
 			r.writeApprovalAuditEvent(ctx, gate, rec, auditActionApprovalRecorded)
 		}
 	}
-	for _, old := range gate.Status.Approvals {
-		if !hasDecision(records, old) {
-			r.writeApprovalAuditEvent(ctx, gate, old, auditActionApprovalRevoked)
+	for _, o := range old {
+		if !hasDecision(records, o) {
+			r.writeApprovalAuditEvent(ctx, gate, o, auditActionApprovalRevoked)
 		}
-	}
-	patch := client.MergeFrom(gate.DeepCopy())
-	gate.Status.Approvals = records
-	if err := r.Status().Patch(ctx, gate, patch); err != nil {
-		return fmt.Errorf("record approvals: %w", err)
 	}
 	return nil
 }
