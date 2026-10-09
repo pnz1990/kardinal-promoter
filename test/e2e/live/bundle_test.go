@@ -1076,3 +1076,80 @@ func TestBundle_ArtifactFieldsValidated(t *testing.T) {
 	})
 	require.NoError(t, e.Client.Create(ctx, ok), "valid tag, digest and a digest as provenance.commitSHA")
 }
+
+// TestBundle_ArtifactImmutable: the API server refuses an update that
+// changes a Bundle's images, chart, configRef, provenance, type, pipeline or
+// intent (QA #1521: gates and image verification were checked against the
+// artifact, so an edit would promote something nobody checked; an intent
+// edit applied only at a later re-translation). Metadata stays editable, and
+// the Bundle still promotes after such an edit.
+//
+// Covers BUNDLE-IMMUTABLE-01.
+func TestBundle_ArtifactImmutable(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+
+	update := func(name string, edit func(b *v1alpha1.Bundle)) error {
+		return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			var cur v1alpha1.Bundle
+			if err := e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: name}, &cur); err != nil {
+				return err
+			}
+			edit(&cur)
+			return e.Client.Update(ctx, &cur)
+		})
+	}
+	refused := func(name, field string, edit func(b *v1alpha1.Bundle)) {
+		t.Helper()
+		err := update(name, edit)
+		require.Error(t, err, field)
+		assert.True(t, apierrors.IsInvalid(err), "%s: %v", field, err)
+		assert.Contains(t, err.Error(), field+" is immutable", field)
+	}
+	refused(bundle, "spec.images", func(b *v1alpha1.Bundle) { b.Spec.Images[0].Tag = fixtures.V3 })
+	refused(bundle, "spec.images", func(b *v1alpha1.Bundle) {
+		b.Spec.Images = append(b.Spec.Images, v1alpha1.ImageRef{Repository: fixtures.Image, Tag: fixtures.V3})
+	})
+	refused(bundle, "spec.provenance", func(b *v1alpha1.Bundle) {
+		b.Spec.Provenance = &v1alpha1.BundleProvenance{Author: "someone-else", CommitSHA: "abcdef0"}
+	})
+	refused(bundle, "spec.type", func(b *v1alpha1.Bundle) { b.Spec.Type = "mixed" })
+	refused(bundle, "spec.pipeline", func(b *v1alpha1.Bundle) { b.Spec.Pipeline = "other" })
+	refused(bundle, "spec.intent", func(b *v1alpha1.Bundle) {
+		b.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "test"}
+	})
+
+	// A config Bundle's configRef and a chart Bundle's chart, for a
+	// Pipeline that does not exist, so nothing is promoted.
+	cfgBundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "podinfo-config-immutable", Namespace: a.ns},
+		Spec: v1alpha1.BundleSpec{Type: "config", Pipeline: "no-such-pipeline",
+			ConfigRef: &v1alpha1.ConfigRef{GitRepo: "https://example.com/config.git", CommitSHA: strings.Repeat("a", 40)}},
+	}
+	require.NoError(t, e.Client.Create(ctx, cfgBundle))
+	config := cfgBundle.Name
+	refused(config, "spec.configRef", func(b *v1alpha1.Bundle) { b.Spec.ConfigRef.CommitSHA = strings.Repeat("0", 40) })
+	refused(config, "spec.configRef", func(b *v1alpha1.Bundle) { b.Spec.ConfigRef.GitRepo = "https://example.com/other.git" })
+	chart := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "podinfo-chart-immutable", Namespace: a.ns},
+		Spec: v1alpha1.BundleSpec{Type: "chart", Pipeline: "no-such-pipeline",
+			Chart: &v1alpha1.ChartRef{Name: "podinfo", Version: "6.14.1"}},
+	}
+	require.NoError(t, e.Client.Create(ctx, chart))
+	refused(chart.Name, "spec.chart", func(b *v1alpha1.Bundle) { b.Spec.Chart.Version = "6.15.0" })
+	refused(chart.Name, "spec.chart", func(b *v1alpha1.Bundle) { b.Spec.Chart.Digest = "sha256:" + strings.Repeat("a", 64) })
+
+	require.NoError(t, update(bundle, func(b *v1alpha1.Bundle) {
+		if b.Annotations == nil {
+			b.Annotations = map[string]string{}
+		}
+		b.Annotations["e2e.kardinal.io/note"] = "metadata stays editable"
+	}), "metadata stays editable")
+
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	a.running(t, "test", imageV2, "the Bundle's original image")
+}
