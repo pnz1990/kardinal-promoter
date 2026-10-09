@@ -200,6 +200,53 @@ func metricTemplatesFor(gates []kardinalv1alpha1.PolicyGate, templates []kardina
 // as a CEL string literal, so text in a query is never evaluated by kro.
 func buildMetricCheckNode(nodeID, k8sName string, tmpl kardinalv1alpha1.MetricCheck,
 	vars map[string]string, pipelineName, bundleName, envName string, upstreams []string) (GraphNode, error) {
+	specMap, held, key, text, err := metricCheckSpec(tmpl, vars)
+	if err != nil {
+		return GraphNode{}, err
+	}
+	if len(upstreams) > 0 {
+		conds := make([]string, len(upstreams))
+		for i, up := range upstreams {
+			conds[i] = verifiedCond(up)
+		}
+		held[key] = resolvableWhen(strings.Join(conds, " && "), strconv.Quote(text))
+	}
+
+	return GraphNode{
+		ID: nodeID,
+		Template: map[string]interface{}{
+			"apiVersion": "kardinal.io/v1alpha1",
+			"kind":       "MetricCheck",
+			"metadata": map[string]interface{}{
+				"name":   k8sName,
+				"labels": metricCheckLabels(pipelineName, bundleName, envName, tmpl.Name),
+			},
+			"spec": specMap,
+		},
+	}, nil
+}
+
+// metricSuspendExpr is spec.suspend of a MetricCheck instance: it stops
+// querying once the Bundle is Verified, Failed or Superseded.
+const metricSuspendExpr = `${!(bundle.status.phase in ["Available", "Promoting"])}`
+
+// metricCheckLabels are the labels of a MetricCheck instance.
+func metricCheckLabels(pipelineName, bundleName, envName, template string) map[string]interface{} {
+	return map[string]interface{}{
+		"kardinal.io/pipeline":    pipelineName,
+		"kardinal.io/bundle":      bundleName,
+		"kardinal.io/environment": envName,
+		LabelMetricTemplate:       template,
+	}
+}
+
+// metricCheckSpec renders tmpl's spec for one promotion (placeholders
+// replaced, perPromotion dropped, spec.suspend set to metricSuspendExpr,
+// every other string with "${" quoted for kro). It also returns the map and
+// key of the field that holds the node shape's instance back (query, or
+// web.url for provider web) and that field's rendered text.
+func metricCheckSpec(tmpl kardinalv1alpha1.MetricCheck, vars map[string]string) (
+	specMap, held map[string]interface{}, key, text string, err error) {
 	spec := *tmpl.Spec.DeepCopy()
 	spec.PerPromotion = false
 	spec.Suspend = false
@@ -216,45 +263,19 @@ func buildMetricCheckNode(nodeID, k8sName string, tmpl kardinalv1alpha1.MetricCh
 	}
 	raw, err := json.Marshal(spec)
 	if err != nil {
-		return GraphNode{}, fmt.Errorf("build: MetricCheck %q: %w", tmpl.Name, err)
+		return nil, nil, "", "", fmt.Errorf("build: MetricCheck %q: %w", tmpl.Name, err)
 	}
-	var specMap map[string]interface{}
 	if err := json.Unmarshal(raw, &specMap); err != nil {
-		return GraphNode{}, fmt.Errorf("build: MetricCheck %q: %w", tmpl.Name, err)
+		return nil, nil, "", "", fmt.Errorf("build: MetricCheck %q: %w", tmpl.Name, err)
 	}
 	quoteKroStrings(specMap)
 
-	// The field that holds the instance back until the upstreams are Verified.
-	held, key, text := specMap, "query", spec.Query
+	held, key, text = specMap, "query", spec.Query
 	if web, ok := specMap["web"].(map[string]interface{}); ok && spec.Provider == "web" {
 		held, key, text = web, "url", spec.Web.URL
 	}
-	if len(upstreams) > 0 {
-		conds := make([]string, len(upstreams))
-		for i, up := range upstreams {
-			conds[i] = verifiedCond(up)
-		}
-		held[key] = resolvableWhen(strings.Join(conds, " && "), strconv.Quote(text))
-	}
-	specMap["suspend"] = `${!(bundle.status.phase in ["Available", "Promoting"])}`
-
-	return GraphNode{
-		ID: nodeID,
-		Template: map[string]interface{}{
-			"apiVersion": "kardinal.io/v1alpha1",
-			"kind":       "MetricCheck",
-			"metadata": map[string]interface{}{
-				"name": k8sName,
-				"labels": map[string]interface{}{
-					"kardinal.io/pipeline":    pipelineName,
-					"kardinal.io/bundle":      bundleName,
-					"kardinal.io/environment": envName,
-					LabelMetricTemplate:       tmpl.Name,
-				},
-			},
-			"spec": specMap,
-		},
-	}, nil
+	specMap["suspend"] = metricSuspendExpr
+	return specMap, held, key, text, nil
 }
 
 // renderURL renders a web URL template. The host must be literal in the
@@ -306,33 +327,4 @@ func kroLiteral(s string) string {
 		return s
 	}
 	return "${" + strconv.Quote(s) + "}"
-}
-
-// The compact shape does not build per-promotion MetricCheck instances: an
-// instance waits on its environment's upstream step nodes (buildMetricCheckNode),
-// which the compact shape folds into the PromotionSteps collection. A Graph
-// that needs one is built in the node shape, or refused (compactUnsupported).
-func init() {
-	RegisterCompactUnsupported(perPromotionMetricChecksUsed)
-}
-
-// perPromotionMetricChecksUsed returns the feature name when a gate of one of
-// the Pipeline's environments reads a per-promotion MetricCheck template in
-// in.MetricChecks. It needs the gates and the templates: with only the
-// Pipeline (the Pipeline reconciler's call) it returns "", and the Bundle's
-// build refuses the compact Graph instead.
-func perPromotionMetricChecksUsed(in BuildInput) string {
-	if in.Pipeline == nil || len(in.MetricChecks) == 0 || len(in.PolicyGates) == 0 {
-		return ""
-	}
-	envs := make([]string, 0, len(in.Pipeline.Spec.Environments))
-	for _, e := range in.Pipeline.Spec.Environments {
-		envs = append(envs, e.Name)
-	}
-	for _, gates := range matchGatesByEnv(envs, in.PolicyGates, nil) {
-		if len(metricTemplatesFor(gates, in.MetricChecks, in.Pipeline.Namespace, in.PolicyNamespaces)) > 0 {
-			return "per-promotion MetricChecks (spec.perPromotion)"
-		}
-	}
-	return ""
 }

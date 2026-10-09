@@ -118,3 +118,59 @@ describe('FleetBoard: fleet environments (D1)', () => {
     expect(within(prod).getByText('stopped: 2 failed (max 2)')).toBeInTheDocument()
   })
 })
+
+describe('FleetBoard — keyboard', () => {
+  it('each line is one Tab stop; arrow keys move along a line and between lines', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+    const three = [{ name: 'test' }, { name: 'uat', upstreams: ['test'] }, { name: 'prod', upstreams: ['uat'] }]
+    const ps: Pipeline[] = [
+      { name: 'a', namespace: 'ns', phase: 'Ready', environmentCount: 3, environmentTopology: three },
+      { name: 'b', namespace: 'ns', phase: 'Ready', environmentCount: 2, environmentTopology: linear },
+    ]
+    const onSelect = vi.fn()
+    render(<FleetBoard pipelines={ps} total={2} onSelect={onSelect} now={now} />)
+    const station = (p: string, env: string) => screen.getByRole('button', { name: new RegExp(`^${p} ${env}:`) })
+    expect([station('a', 'test'), station('a', 'uat'), station('a', 'prod')].map(s => s.tabIndex)).toEqual([0, -1, -1])
+
+    await user.click(screen.getByRole('button', { name: 'a' }))
+    await user.tab()
+    expect(station('a', 'test')).toHaveFocus()
+    await user.keyboard('{ArrowRight}{ArrowRight}')
+    expect(station('a', 'prod')).toHaveFocus()
+    await user.keyboard('{ArrowDown}')
+    expect(station('b', 'prod')).toHaveFocus() // the same position, or the last
+    await user.keyboard('{ArrowUp}')
+    expect(station('a', 'uat')).toHaveFocus() // the same position (b has two)
+    await user.keyboard('{Home}')
+    expect(station('a', 'test')).toHaveFocus()
+    await user.tab()
+    expect(screen.getByRole('button', { name: 'b' })).toHaveFocus() // past the line in one step
+    await user.keyboard('{Shift>}{Tab}{/Shift}')
+    expect(station('a', 'test')).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(onSelect).toHaveBeenCalledWith('a', 'ns')
+  })
+
+  it('arrow keys with Alt, Ctrl or Meta are left to the browser and screen readers', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+    const ps: Pipeline[] = [
+      { name: 'a', namespace: 'ns', phase: 'Ready', environmentCount: 2, environmentTopology: linear },
+      { name: 'b', namespace: 'ns', phase: 'Ready', environmentCount: 2, environmentTopology: linear },
+    ]
+    render(<FleetBoard pipelines={ps} total={2} onSelect={vi.fn()} now={now} />)
+    const station = (p: string, env: string) => screen.getByRole('button', { name: new RegExp(`^${p} ${env}:`) })
+    await user.click(screen.getByRole('button', { name: 'a' }))
+    await user.tab()
+    expect(station('a', 'test')).toHaveFocus()
+    for (const mod of ['Alt', 'Control', 'Meta']) {
+      for (const key of ['ArrowRight', 'ArrowDown', 'End']) {
+        await user.keyboard(`{${mod}>}{${key}}{/${mod}}`)
+        expect(station('a', 'test'), `${mod}+${key}`).toHaveFocus()
+      }
+    }
+    await user.keyboard('{Shift>}{ArrowRight}{/Shift}')
+    expect(station('a', 'prod'), 'Shift is not a command modifier').toHaveFocus()
+  })
+})

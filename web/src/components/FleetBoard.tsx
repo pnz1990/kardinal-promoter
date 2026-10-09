@@ -7,8 +7,9 @@
 // no Pipeline is selected. The data comes from GET /api/v1/ui/pipelines
 // (deployed, activeBundleVersion, environmentStates, environmentTopology).
 
-import { Fragment } from 'react'
+import { Fragment, useRef } from 'react'
 import '../styles/FleetBoard.css'
+import { hasCommandModifier, rovingFocus, rovingItems, useRovingFocus } from '../useRovingFocus'
 import type { Pipeline } from '../types'
 import { ageOf, fleetRow, type FleetRow, type Station } from '../fleetModel'
 
@@ -112,6 +113,8 @@ function StationPlate({ s, pipeline, now, onSelect }: {
 
 function FleetLine({ row, now, onSelect }: { row: FleetRow; now: number; onSelect: FleetBoardProps['onSelect'] }) {
   const p = row.pipeline
+  const track = useRef<HTMLDivElement>(null)
+  const roving = useRovingFocus(track, STATION)
   const blockers = p.blockerCount ?? 0
   const failed = p.failedStepCount ?? 0
   return (
@@ -127,7 +130,20 @@ function FleetLine({ row, now, onSelect }: { row: FleetRow; now: number; onSelec
           {failed > 0 && <span className="fleet-flag" data-kind="failed">{failed} failed</span>}
         </span>
       </div>
-      <div className="fleet-line__track">
+      <div
+        className="fleet-line__track"
+        ref={track}
+        role="group"
+        aria-label={`${p.name} environments (arrow keys move between stations)`}
+        onFocus={roving.onFocus}
+        onKeyDown={e => {
+          if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !hasCommandModifier(e)) {
+            if (moveLine(track.current, e.key === 'ArrowUp' ? -1 : 1, e.target as HTMLElement)) e.preventDefault()
+            return
+          }
+          roving.onKeyDown(e)
+        }}
+      >
         {row.groups.length === 0 ? (
           <span className="fleet-line__none">No environments</span>
         ) : (
@@ -143,6 +159,27 @@ function FleetLine({ row, now, onSelect }: { row: FleetRow; now: number; onSelec
       </div>
     </li>
   )
+}
+
+/** The stations of a line: one Tab stop, arrow keys between them. */
+const STATION = '.fleet-station'
+
+/**
+ * moveLine moves focus from station from to the station at the same position
+ * (or the last) of the line dir lines away. It returns false at the edges.
+ */
+function moveLine(track: HTMLElement | null, dir: number, from: HTMLElement): boolean {
+  const board = track?.closest('.fleet-board')
+  if (!track || !board) return false
+  const tracks = Array.from(board.querySelectorAll<HTMLElement>('.fleet-line__track'))
+  const at = rovingItems(track, STATION).indexOf(from)
+  for (let i = tracks.indexOf(track) + dir; i >= 0 && i < tracks.length; i += dir) {
+    const items = rovingItems(tracks[i], STATION)
+    if (items.length === 0) continue
+    rovingFocus(tracks[i], STATION, items[Math.min(Math.max(at, 0), items.length - 1)])
+    return true
+  }
+  return false
 }
 
 /** The fleet board: one line of stations per Pipeline. */

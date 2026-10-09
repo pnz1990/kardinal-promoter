@@ -84,7 +84,13 @@ func ObjectCount(g *Graph) int {
 		if len(n.ForEach) == 1 {
 			for _, expr := range n.ForEach[0] {
 				if m := reDefList.FindStringSubmatch(expr); m != nil {
-					if list, ok := defs[m[1]][m[2]].([]interface{}); ok {
+					src := m[1]
+					if src == NodePromotionMetrics {
+						// A computed admission list: at most every instance
+						// in the data.
+						src = NodeMetricCheckData
+					}
+					if list, ok := defs[src][m[2]].([]interface{}); ok {
 						items = len(list)
 					}
 				}
