@@ -36,6 +36,7 @@ func TestIsPermanentError(t *testing.T) {
 		{"forgejo", "forgejo", "o/r", func(u string) scm.SCMProvider { return scm.NewForgejoProvider("t", u, "") }},
 		{"bitbucket", "bitbucket", "ws/r", func(u string) scm.SCMProvider { return scm.NewBitbucketProvider("t", u, "") }},
 		{"azuredevops", "azuredevops", "org/proj/r", func(u string) scm.SCMProvider { return scm.NewAzureDevOpsProvider("t", u, "") }},
+		{"bitbucket-datacenter", "bitbucket-datacenter", "PROJ/r", func(u string) scm.SCMProvider { return scm.NewBitbucketDCProvider("t", u, "") }},
 	}
 	responses := []struct {
 		name          string
