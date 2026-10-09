@@ -376,12 +376,22 @@ type StepSpec struct {
 }
 
 // UpdateConfig holds manifest update strategy configuration.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.strategy) || self.strategy != 'yaml' || (has(self.yaml) && size(self.yaml.updates) > 0)",message="update.strategy yaml requires update.yaml.updates"
 type UpdateConfig struct {
-	// Strategy selects the manifest update strategy.
-	// +kubebuilder:validation:Enum=kustomize;helm;argocd
+	// Strategy selects the manifest update strategy: kustomize (default,
+	// kustomization.yaml images), helm (one values key), argocd (patch the
+	// Application, no git), or yaml (any YAML paths in any files of the
+	// environment directory).
+	// +kubebuilder:validation:Enum=kustomize;helm;argocd;yaml
 	// +kubebuilder:default=kustomize
 	// +optional
 	Strategy string `json:"strategy,omitempty"`
+
+	// YAML holds the edits of the yaml strategy.
+	// Used when Strategy is "yaml".
+	// +optional
+	YAML *YAMLUpdateConfig `json:"yaml,omitempty"`
 
 	// Helm holds Helm-specific update configuration.
 	// Used when Strategy is "helm".
@@ -393,6 +403,53 @@ type UpdateConfig struct {
 	// spec.source.helm.valuesObject directly without a git commit.
 	// +optional
 	ArgoCD *ArgoCDUpdateConfig `json:"argocd,omitempty"`
+}
+
+// YAMLUpdateConfig lists the edits of the yaml update strategy. All of them
+// are applied in one commit; when one cannot be applied, none is written.
+type YAMLUpdateConfig struct {
+	// Updates are the values to set.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
+	Updates []YAMLUpdate `json:"updates"`
+}
+
+// YAMLUpdate sets one scalar in one YAML file to a value taken from a Bundle
+// image. The file must be a regular file of at most 4 MiB holding one YAML
+// document; symbolic links and anchors or aliases on the path are refused.
+type YAMLUpdate struct {
+	// File is the YAML file, relative to the environment path, for example
+	// "values.yaml" or "deploy/deployment.yaml". It must stay inside the
+	// repository. A file with several documents (---) is not supported.
+	// Each path segment starts with a letter, digit or "_" and has single
+	// dots only, so the file can neither be absolute nor leave the
+	// environment path.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*(/[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*)*$`
+	// +kubebuilder:validation:MaxLength=512
+	File string `json:"file"`
+
+	// Path is the key path of the scalar to set: keys separated by ".", with
+	// "[N]" to index a list, for example "image.tag" or
+	// "spec.template.spec.containers[0].image". Missing mapping keys are
+	// created; list elements are not. A key that contains "." is not supported.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]+(\[[0-9]+\])*(\.[A-Za-z0-9_-]+(\[[0-9]+\])*)*$`
+	// +kubebuilder:validation:MaxLength=512
+	Path string `json:"path"`
+
+	// Image is the repository of the Bundle image whose value is written,
+	// for example "ghcr.io/org/app". It may be empty when the Bundle has
+	// exactly one image.
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Value is what to write: tag (default), digest, tagWithDigest
+	// ("<tag>@<digest>"), image ("<repository>:<tag>"), or imageWithDigest
+	// ("<repository>:<tag>@<digest>", or "<repository>@<digest>" without a
+	// tag). A value the image does not have (a digest of a tag-only image)
+	// fails the step.
+	// +kubebuilder:validation:Enum=tag;digest;tagWithDigest;image;imageWithDigest
+	// +optional
+	Value string `json:"value,omitempty"`
 }
 
 // HelmUpdateConfig holds Helm-specific update strategy configuration.
@@ -457,11 +514,31 @@ type HealthConfig struct {
 	// supported" instead of silently checking the local cluster.
 	//
 	// Deprecated: remove cluster. To verify a workload in another cluster,
-	// check its Argo CD Application (health.type: argocd) or Flux
-	// Kustomization (health.type: flux) in the hub cluster kardinal runs in;
-	// see docs/health-adapters.md#remote-clusters.
+	// set kubeconfigSecretRef, or check its Argo CD Application
+	// (health.type: argocd) or Flux Kustomization (health.type: flux) in the
+	// hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
 	// +optional
 	Cluster string `json:"cluster,omitempty"`
+
+	// KubeconfigSecretRef runs the health check against another cluster: the
+	// one the kubeconfig in this Secret key selects (its current context).
+	// The Secret must be in the Pipeline's namespace. Every health type reads
+	// its object (Deployment, Application, Kustomization, Rollout, Canary)
+	// in that cluster instead of the controller's.
+	//
+	// Only inline credentials are accepted: a bearer token, a client
+	// certificate and key (-data fields), or a username and password. A
+	// kubeconfig with exec, auth-provider, tokenFile or any file path is
+	// refused and the step fails: it would run a command, or read a file, in
+	// the controller. The API server address goes through the controller's
+	// egress guard (no loopback, link-local or metadata addresses) and is
+	// dialled directly, not through HTTP(S)_PROXY.
+	//
+	// A cluster that cannot be reached is not unhealthy: the step reports
+	// ClusterUnreachable and keeps checking until health.timeout. Remote
+	// health is polled, not watched.
+	// +optional
+	KubeconfigSecretRef *KubeconfigSecretRef `json:"kubeconfigSecretRef,omitempty"`
 
 	// LabelSelector enables WatchKind mode for health.type=resource.
 	// When set, the health node watches ALL Deployments in the environment namespace
@@ -505,6 +582,18 @@ type HealthConfig struct {
 	// Defaults: name "<pipeline>", namespace "<environment>".
 	// +optional
 	Flagger *HealthTargetRef `json:"flagger,omitempty"`
+}
+
+// KubeconfigSecretRef names the key of a Secret, in the Pipeline's
+// namespace, that holds a kubeconfig.
+type KubeconfigSecretRef struct {
+	// Name is the Secret name.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Key is the key holding the kubeconfig. Defaults to "kubeconfig".
+	// +optional
+	Key string `json:"key,omitempty"`
 }
 
 // HealthTargetRef names the object a health adapter reads.
@@ -623,6 +712,43 @@ type PipelineDeploymentMetrics struct {
 	// SampleSize is the number of Bundles included in this computation.
 	// +optional
 	SampleSize int `json:"sampleSize,omitempty"`
+
+	// Deployments is the number of deployments the change failure rate and
+	// time to restore are computed over: the last 30 Bundles whose change
+	// reached a final environment (one nothing depends on; its health check
+	// started), whatever the outcome, once per Bundle. Not deployments: a
+	// no-op promotion (outputs.noChanges), the steps a supersession
+	// cancelled (a RollingBack, AbortedByAlarm or already Failed step of a
+	// superseded Bundle still counts), and rollback Bundles (they count only
+	// as restores).
+	// +optional
+	Deployments int `json:"deployments,omitempty"`
+
+	// FailedDeployments is how many of those deployments failed: a
+	// PromotionStep in a final environment ended Failed, AbortedByAlarm or
+	// RollingBack after its health check started, a rollback Bundle later
+	// rolled a final environment back from it (annotation
+	// kardinal.io/rollback-from), or the Bundle was rejected after it was
+	// deployed.
+	// +optional
+	FailedDeployments int `json:"failedDeployments,omitempty"`
+
+	// ChangeFailureRateMillis is failedDeployments / deployments as integer
+	// thousandths (DORA change failure rate; 250 = 25%).
+	// +optional
+	ChangeFailureRateMillis int `json:"changeFailureRateMillis,omitempty"`
+
+	// MeanTimeToRestoreMinutes is the mean, in whole minutes, from each failed
+	// deployment reaching a final environment to the first later Bundle
+	// Verified in every final environment it targets, in every region (DORA
+	// time to restore). Failures not restored yet are not counted.
+	// +optional
+	MeanTimeToRestoreMinutes int64 `json:"meanTimeToRestoreMinutes,omitempty"`
+
+	// RestoredFailures is the number of failed deployments in
+	// meanTimeToRestoreMinutes.
+	// +optional
+	RestoredFailures int `json:"restoredFailures,omitempty"`
 
 	// ComputedAt is when these metrics were last written by the PipelineReconciler.
 	// +optional

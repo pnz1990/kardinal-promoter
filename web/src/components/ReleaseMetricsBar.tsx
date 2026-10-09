@@ -18,7 +18,7 @@
 //  - Rollback rate: share of bundles that are rollbacks (spec.provenance.rollbackOf).
 //  - Deploys: bundles that reached the last environment.
 // The bar is hidden until at least one bundle has reached the last environment.
-import type { Bundle } from '../types'
+import type { Bundle, DeploymentMetrics } from '../types'
 import { sortBundlesNewestFirst } from '../bundleSelection'
 
 /** Number of most recent bundles the metrics cover. */
@@ -88,6 +88,23 @@ export function formatHours(hours: number): string {
   return `${Math.round(hours / 24)}d`
 }
 
+/** Format minutes: < 60 → "Xm", < 48h → "XhYm", otherwise "Xd". */
+export function formatMinutes(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`
+  if (minutes < 48 * 60) {
+    const m = minutes % 60
+    return m ? `${Math.floor(minutes / 60)}h${m}m` : `${minutes / 60}h`
+  }
+  return `${Math.round(minutes / 1440)}d`
+}
+
+/** Color for the change failure rate (DORA: elite 0-15%). */
+export function cfrColor(millis: number): string {
+  if (millis <= 150) return 'var(--color-success)'
+  if (millis <= 300) return 'var(--color-warning)'
+  return 'var(--color-error)'
+}
+
 /** Color for the rollback rate percentage. */
 function rollbackColor(pct: number): string {
   if (pct === 0) return 'var(--color-success)'
@@ -125,17 +142,23 @@ interface ReleaseMetricsBarProps {
   bundles: Bundle[]
   /** The pipeline's last environment; metrics count bundles that reached it. */
   finalEnvironment?: string
+  /** The controller's Pipeline.status.deploymentMetrics: adds the change
+   *  failure rate and time to restore (DORA stability) when it has deployments. */
+  deploymentMetrics?: DeploymentMetrics
 }
 
 /**
  * ReleaseMetricsBar renders inline release efficiency metrics for a pipeline.
  * Computed client-side from the bundle list — no new backend API needed.
  */
-export function ReleaseMetricsBar({ bundles, finalEnvironment }: ReleaseMetricsBarProps) {
+export function ReleaseMetricsBar({ bundles, finalEnvironment, deploymentMetrics }: ReleaseMetricsBarProps) {
   const metrics = computeReleaseMetrics(bundles, finalEnvironment)
   if (!metrics) return null
 
   const scope = `last ${metrics.totalBundles} bundle${metrics.totalBundles === 1 ? '' : 's'}`
+  const dm = deploymentMetrics
+  const stability = dm && (dm.deployments ?? 0) > 0 ? dm : undefined
+  const cfrMillis = stability?.changeFailureRateMillis ?? 0
   return (
     <section
       aria-label="Release metrics"
@@ -165,8 +188,27 @@ export function ReleaseMetricsBar({ bundles, finalEnvironment }: ReleaseMetricsB
         value={String(metrics.deployCount)}
         sub={scope}
         color="var(--color-accent)"
-        last
+        last={!stability}
       />
+      {stability && (
+        <MetricCell
+          label="Change failure rate"
+          value={`${(cfrMillis / 10).toFixed(1)}%`}
+          sub={`${stability.failedDeployments ?? 0} of ${stability.deployments} deployments`}
+          color={cfrColor(cfrMillis)}
+        />
+      )}
+      {stability && (
+        <MetricCell
+          label="Time to restore"
+          value={(stability.restoredFailures ?? 0) > 0 ? formatMinutes(stability.meanTimeToRestoreMinutes ?? 0) : '—'}
+          sub={(stability.restoredFailures ?? 0) > 0
+            ? `mean of ${stability.restoredFailures} restored`
+            : 'no restored failure'}
+          color="var(--color-code)"
+          last
+        />
+      )}
     </section>
   )
 }

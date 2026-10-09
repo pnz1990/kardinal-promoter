@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -356,7 +357,7 @@ func TestDelivery_NoRetryBeforeNextRetryAt(t *testing.T) {
 	// API server does.
 	h := f.hook()
 	require.Equal(t, int64(1), h.Status.ObservedGeneration)
-	h.Spec.Webhook.AuthorizationHeader = "Bearer fixed"
+	h.Spec.Webhook.AuthorizationHeader = "Bearer fixed" //nolint:staticcheck // SA1019: tests the deprecated field
 	h.Generation = 2
 	require.NoError(t, f.c.Update(context.Background(), &h))
 	require.Equal(t, int64(2), f.hook().Generation)
@@ -486,16 +487,18 @@ func TestDelivery_URLTokenNotInStatusOrLogs(t *testing.T) {
 		name        string
 		url         string
 		wantFailure bool
+		// wantNotReady: the URL is refused before any delivery (Ready=False).
+		wantNotReady bool
 	}{
 		{name: "delivered", url: ok.URL + secretPath},
 		{name: "http error", url: failing.URL + secretPath, wantFailure: true},
 		{name: "connection refused", url: closedURL + secretPath + "?token=SECRETTOKEN", wantFailure: true},
-		{name: "invalid URL", url: "http://[::1" + secretPath, wantFailure: true},
+		{name: "invalid URL", url: "http://[::1" + secretPath, wantNotReady: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			hook := newHook(tt.url, v1alpha1.NotificationEventBundleFailed)
-			hook.Spec.Webhook.AuthorizationHeader = "Bearer SECRETHEADER"
+			hook.Spec.Webhook.AuthorizationHeader = "Bearer SECRETHEADER" //nolint:staticcheck // SA1019: tests the deprecated field
 			f := newFixture(t, hook, failedBundle("app-v0", saturday))
 
 			var logs bytes.Buffer
@@ -510,6 +513,14 @@ func TestDelivery_URLTokenNotInStatusOrLogs(t *testing.T) {
 				assert.NotEmpty(t, h.Status.FailureMessage)
 			} else {
 				assert.Empty(t, h.Status.FailureMessage)
+			}
+			ready := meta.FindStatusCondition(h.Status.Conditions, "Ready")
+			require.NotNil(t, ready)
+			if tt.wantNotReady {
+				assert.Equal(t, metav1.ConditionFalse, ready.Status)
+				assert.Equal(t, "InvalidURL", ready.Reason)
+			} else {
+				assert.Equal(t, metav1.ConditionTrue, ready.Status)
 			}
 			require.NotEmpty(t, logs.String(), "the delivery is logged")
 			for _, secret := range []string{"SECRETTOKEN", "SECRETHEADER"} {

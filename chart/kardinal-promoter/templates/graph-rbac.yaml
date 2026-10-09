@@ -17,9 +17,10 @@ metadata:
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 rules:
-  # Graph templates; promotionsteps also takes the hook mirror patch.
+  # Graph templates (metricchecks: per-promotion MetricCheck instances);
+  # promotionsteps also takes the hook mirror patch.
   - apiGroups: ["kardinal.io"]
-    resources: ["promotionsteps", "policygates", "prstatuses", "hookruns"]
+    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "hookruns"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Graph refs.
   - apiGroups: ["kardinal.io"]
@@ -61,7 +62,7 @@ metadata:
     rbac.kro.run/aggregate-to-controller: "true"
 rules:
   - apiGroups: ["kardinal.io"]
-    resources: ["promotionsteps", "policygates", "prstatuses", "bundles", "hookruns"]
+    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "bundles", "hookruns"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
