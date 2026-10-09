@@ -168,6 +168,14 @@ func main() {
 	// token check is applied and TokenReview is not called.
 	//
 	// Design ref: docs/design/15-production-readiness.md §Lens 4
+	var bundleTokenReviewAuth bool
+	flag.BoolVar(&bundleTokenReviewAuth, "bundle-api-tokenreview-auth",
+		os.Getenv("KARDINAL_BUNDLE_TOKENREVIEW_AUTH") == "true",
+		"Accept Kubernetes tokens on POST /api/v1/bundles: the caller is authenticated with a TokenReview and "+
+			"needs get on the Pipeline and create on bundles in the namespace (SubjectAccessReview), and is "+
+			"recorded in kardinal.io/requested-by. The static --bundle-api-token, when set, still works and acts "+
+			"as the controller. Chart value: bundleAPI.tokenReview. Also readable from KARDINAL_BUNDLE_TOKENREVIEW_AUTH.")
+
 	var uiTokenReviewAuth bool
 	flag.BoolVar(&uiTokenReviewAuth, "ui-tokenreview-auth",
 		os.Getenv("KARDINAL_UI_TOKENREVIEW_AUTH") == "true",
@@ -526,8 +534,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
-	// Bundle API endpoint — only mounted if a token is configured.
-	if bundleAPIToken != "" {
+	// Bundle API endpoint — only mounted if a token or TokenReview is configured.
+	if bundleAPIToken != "" || bundleTokenReviewAuth {
 		// Default to the watched namespace; in namespace-scoped mode it is
 		// also the only namespace Bundles may be created in.
 		bundleNS := "default"
@@ -537,6 +545,14 @@ func main() {
 		bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
 		bundleAPI.onlyNamespace = watchNamespace
 		bundleAPI.reader = mgr.GetAPIReader()
+		if bundleTokenReviewAuth {
+			tokens, access, err := newReviewers(mgr.GetConfig())
+			if err != nil {
+				logger.Fatal().Err(err).Msg("bundle API TokenReview auth")
+			}
+			bundleAPI.enableTokenReview(tokens, access)
+			logger.Info().Msg("bundle API accepts Kubernetes tokens (TokenReview + SubjectAccessReview)")
+		}
 		mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
 		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
 	}

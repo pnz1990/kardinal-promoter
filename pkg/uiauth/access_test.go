@@ -314,3 +314,82 @@ func TestMiddleware_StoresUser(t *testing.T) {
 	assert.Equal(t, "alice", got.Username)
 	assert.Equal(t, []string{"devs"}, got.Groups)
 }
+
+// TestAuthorizingClient_ListFallsBackToNamespaceRBAC: an all-namespaces
+// list by a user who may not list cluster-wide returns the items of the
+// namespaces where the user may list, without recording a denial; a user
+// who may list nowhere is denied (403); one who may list cluster-wide gets
+// everything with one review.
+func TestAuthorizingClient_ListFallsBackToNamespaceRBAC(t *testing.T) {
+	objs := []client.Object{uiauthPipeline("team-a", "a1"), uiauthPipeline("team-a", "a2"),
+		uiauthPipeline("team-b", "b1"), uiauthPipeline("team-c", "c1")}
+	tests := []struct {
+		name      string
+		allow     func(string, authzv1.ResourceAttributes) bool
+		want      []string
+		wantForb  bool
+		wantCalls int
+	}{
+		{name: "cluster-wide viewer", allow: func(_ string, a authzv1.ResourceAttributes) bool { return true },
+			want: []string{"team-a/a1", "team-a/a2", "team-b/b1", "team-c/c1"}, wantCalls: 1},
+		{name: "viewer in team-a and team-c", allow: func(_ string, a authzv1.ResourceAttributes) bool {
+			return a.Namespace == "team-a" || a.Namespace == "team-c"
+		}, want: []string{"team-a/a1", "team-a/a2", "team-c/c1"}, wantCalls: 4},
+		{name: "viewer nowhere", allow: func(string, authzv1.ResourceAttributes) bool { return false }, wantForb: true},
+		{name: "may list other kinds only", allow: func(_ string, a authzv1.ResourceAttributes) bool {
+			return a.Resource == "bundles"
+		}, wantForb: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(uiauthScheme(t)).WithObjects(objs...).Build()
+			access := &fakeAccess{allow: tt.allow}
+			ac := uiauth.NewAuthorizingClient(c, access, "")
+			ctx := uiauth.WithUser(context.Background(), authv1.UserInfo{Username: "alice"})
+			var list v1alpha1.PipelineList
+			err := ac.List(ctx, &list)
+			if tt.wantForb {
+				require.Error(t, err)
+				assert.True(t, apierrors.IsForbidden(err), "%v", err)
+				return
+			}
+			require.NoError(t, err)
+			var got []string
+			for _, p := range list.Items {
+				got = append(got, p.Namespace+"/"+p.Name)
+			}
+			assert.ElementsMatch(t, tt.want, got)
+			if tt.wantCalls > 0 {
+				assert.Len(t, access.calls, tt.wantCalls, "%+v", access.calls)
+			}
+			for _, a := range access.calls {
+				assert.Equal(t, "list", a.Verb)
+				assert.Equal(t, "pipelines", a.Resource)
+			}
+		})
+	}
+}
+
+// TestMiddlewareFor_GuardsItsPrefixOnly: MiddlewareFor checks tokens on its
+// prefix with its realm and lets other paths through.
+func TestMiddlewareFor_GuardsItsPrefixOnly(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, ok := uiauth.UserFrom(r.Context())
+		if ok {
+			_, _ = w.Write([]byte(u.Username))
+		}
+	})
+	h := uiauth.MiddlewareFor(next, &userReviewer{user: authv1.UserInfo{Username: "ci-bot"}}, "/api/v1/bundles", "kardinal-bundle-api")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/bundles", nil))
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Equal(t, `Bearer realm="kardinal-bundle-api"`, w.Header().Get("Www-Authenticate"))
+	w = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bundles", nil)
+	req.Header.Set("Authorization", "Bearer x")
+	h.ServeHTTP(w, req)
+	assert.Equal(t, "ci-bot", w.Body.String())
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/webhook/scm/health", nil))
+	assert.Equal(t, http.StatusOK, w.Code, "other paths are not guarded")
+}

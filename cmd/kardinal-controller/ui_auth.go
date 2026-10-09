@@ -46,17 +46,27 @@ func buildUIAuth(cfg *rest.Config, staticToken string, tokenReview bool, scopeNa
 	if staticToken != "" || !tokenReview {
 		return auth, nil
 	}
+	tokens, access, err := newReviewers(cfg)
+	if err != nil {
+		return uiAuthConfig{}, err
+	}
+	auth.tokens, auth.access = tokens, access
+	return auth, nil
+}
+
+// newReviewers builds the cached TokenReview and SubjectAccessReview clients
+// the UI API and the Bundle API authenticate and authorize callers with.
+func newReviewers(cfg *rest.Config) (uiauth.TokenReviewer, uiauth.AccessReviewer, error) {
 	tokens, err := uiauth.NewKubeTokenReviewer(cfg)
 	if err != nil {
-		return uiAuthConfig{}, fmt.Errorf("token reviewer: %w", err)
+		return nil, nil, fmt.Errorf("token reviewer: %w", err)
 	}
 	access, err := uiauth.NewKubeAccessReviewer(cfg)
 	if err != nil {
-		return uiAuthConfig{}, fmt.Errorf("access reviewer: %w", err)
+		return nil, nil, fmt.Errorf("access reviewer: %w", err)
 	}
-	auth.tokens = uiauth.NewCachedTokenReviewer(tokens, uiauth.DefaultCacheTTL)
-	auth.access = uiauth.NewCachedAccessReviewer(access, uiauth.DefaultCacheTTL)
-	return auth, nil
+	return uiauth.NewCachedTokenReviewer(tokens, uiauth.DefaultCacheTTL),
+		uiauth.NewCachedAccessReviewer(access, uiauth.DefaultCacheTTL), nil
 }
 
 // newUIHandler builds the UI server handler: the /api/v1/ui/* API, the

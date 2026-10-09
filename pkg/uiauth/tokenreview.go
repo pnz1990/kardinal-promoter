@@ -97,9 +97,16 @@ func (r *KubeTokenReviewer) Review(ctx context.Context, token string) (*authv1.T
 // Only applied when --ui-tokenreview-auth=true AND --ui-auth-token is not set.
 // When both flags are set, the static token middleware takes precedence (O4).
 func Middleware(next http.Handler, reviewer TokenReviewer) http.Handler {
+	return MiddlewareFor(next, reviewer, "/api/v1/ui/", "kardinal-ui")
+}
+
+// MiddlewareFor is Middleware for the paths under prefix, answering 401 with
+// the Bearer realm realm. The Bundle API uses it with "/api/v1/bundles".
+func MiddlewareFor(next http.Handler, reviewer TokenReviewer, prefix, realm string) http.Handler {
+	challenge := `Bearer realm="` + realm + `"`
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// O5: Static assets at /ui/* are never gated.
-		if !strings.HasPrefix(r.URL.Path, "/api/v1/ui/") {
+		if !strings.HasPrefix(r.URL.Path, prefix) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -107,7 +114,7 @@ func Middleware(next http.Handler, reviewer TokenReviewer) http.Handler {
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
 			// O2: Missing or malformed Authorization header.
-			w.Header().Set("Www-Authenticate", `Bearer realm="kardinal-ui"`)
+			w.Header().Set("Www-Authenticate", challenge)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -122,7 +129,7 @@ func Middleware(next http.Handler, reviewer TokenReviewer) http.Handler {
 		}
 		if !status.Authenticated {
 			// O3: TokenReview returned Authenticated=false.
-			w.Header().Set("Www-Authenticate", `Bearer realm="kardinal-ui"`)
+			w.Header().Set("Www-Authenticate", challenge)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
