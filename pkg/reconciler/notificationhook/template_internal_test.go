@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -50,8 +51,8 @@ func TestRenderTemplate_BoundsFunctionAllocation(t *testing.T) {
 	data := &TemplateData{Event: "Bundle.Failed", Message: strings.Repeat("m", maxDataField)}
 	big := "(print" + strings.Repeat(" .Message", 15) + ")"
 	tests := map[string]struct{ body, want string }{
-		"print over input limit":             {`{{len (print ` + big + ` ` + big + `)}}`, "print: input is 122880 bytes, over 65536"},
-		"println over input limit":           {`{{len (println ` + big + ` ` + big + `)}}`, "println: input is"},
+		"print over input limit":             {`{{len (print ` + big + ` ` + big + `)}}`, "print: input is over 65536 bytes"},
+		"println over input limit":           {`{{len (println ` + big + ` ` + big + `)}}`, "println: input is over"},
 		"html over input limit":              {`{{len (html ` + big + ` ` + big + `)}}`, "html: input is"},
 		"js over input limit":                {`{{len (js ` + big + ` ` + big + `)}}`, "js: input is"},
 		"urlquery over input limit":          {`{{len (urlquery ` + big + ` ` + big + `)}}`, "urlquery: input is"},
@@ -101,6 +102,16 @@ func TestRenderTemplate_WorstCaseAllocation(t *testing.T) {
 	require.Error(t, err, "the budget stops it")
 	assert.ErrorIs(t, err, errFuncBudget)
 	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(16<<20), "allocated %d bytes", after.TotalAlloc-before.TotalAlloc)
+
+	// The data as an operand, as often as fits: refused before formatting.
+	printData, err := parseBodyTemplate("{{print" + strings.Repeat(" .", 16384/2-8) + "}}")
+	require.NoError(t, err)
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, err = renderTemplate(printData, data, "text/plain")
+	runtime.ReadMemStats(&after)
+	require.Error(t, err)
+	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(16<<20), "print of the data allocated %d bytes", after.TotalAlloc-before.TotalAlloc)
 }
 
 // TestRenderTemplate_TruncatesData: every field the template sees is cut to
@@ -201,9 +212,10 @@ func TestRenderTemplate_WorstCaseTime(t *testing.T) {
 	data := &TemplateData{Message: strings.Repeat("<m>", 60<<10)}
 	big := "(print" + strings.Repeat(" .Message", 15) + ")"
 	bodies := map[string]string{
-		"most calls":     strings.Repeat(`{{eq (len (slice .Message 1)) 2}}`, 16384/34),
-		"most building":  strings.Repeat(`{{len (js (html `+big+`))}}`, 16384/165),
-		"nested escapes": strings.Repeat(`{{len (json (js (html (urlquery .Message))))}}`, 16384/50),
+		"most calls":        strings.Repeat(`{{eq (len (slice .Message 1)) 2}}`, 16384/34),
+		"most building":     strings.Repeat(`{{len (js (html `+big+`))}}`, 16384/165),
+		"nested escapes":    strings.Repeat(`{{len (json (js (html (urlquery .Message))))}}`, 16384/50),
+		"print of the data": "{{print" + strings.Repeat(" .", 16384/2-8) + "}}",
 	}
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
@@ -217,6 +229,61 @@ func TestRenderTemplate_WorstCaseTime(t *testing.T) {
 			assert.Less(t, elapsed, 50*time.Millisecond)
 			time.Sleep(maxRenderTime + 5*time.Millisecond) // a timer that fired would have run by now
 			assert.LessOrEqual(t, runtime.NumGoroutine(), before, "no goroutine left after Execute")
+		})
+	}
+}
+
+// TestRenderTemplate_RefusesNonScalarArguments: function arguments may only
+// be strings, numbers or bools. The data itself (a struct), and anything a
+// pipeline turns into a pointer, map or slice, is refused before it is
+// formatted: {{print . . .}} used to format the whole data per operand.
+func TestRenderTemplate_RefusesNonScalarArguments(t *testing.T) {
+	data := &TemplateData{Message: strings.Repeat("m", 60<<10)}
+	bodies := []string{
+		`{{print .}}`, `{{json .}}`, `{{html . .}}`, `{{upper (print .)}}`,
+		"{{print" + strings.Repeat(" .", 8000) + "}}",
+	}
+	for _, body := range bodies {
+		name := body
+		if len(name) > 30 {
+			name = name[:30]
+		}
+		t.Run(name, func(t *testing.T) {
+			require.LessOrEqual(t, len(body), 16384)
+			tmpl, err := parseBodyTemplate(body)
+			require.NoError(t, err)
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			_, err = renderTemplate(tmpl, data, "text/plain")
+			runtime.ReadMemStats(&after)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "takes strings, numbers and bools only")
+			assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(1<<20), "allocated %d bytes", after.TotalAlloc-before.TotalAlloc)
+		})
+	}
+}
+
+// TestRenderTemplate_DeadlineStopsARender: a function call that blocks past
+// the render deadline is not interrupted (text/template cannot be), but the
+// real timer sets the stopped flag, so the next call or write ends the
+// render with errRenderTime. That error is retryable: not errTemplate.
+func TestRenderTemplate_DeadlineStopsARender(t *testing.T) {
+	for name, body := range map[string]string{
+		"next call":  `{{slow}}{{print "x"}}`,
+		"next write": `{{slow}}after`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			tmpl, err := template.New("body").Option("missingkey=error").Funcs(templateFuncs(nil)).
+				Funcs(template.FuncMap{"slow": func() string { time.Sleep(maxRenderTime + 15*time.Millisecond); return "" }}).
+				Parse(body)
+			require.NoError(t, err)
+			start := time.Now()
+			_, err = renderTemplate(tmpl, &TemplateData{}, "text/plain")
+			require.Error(t, err)
+			assert.ErrorIs(t, err, errRenderTime)
+			assert.NotErrorIs(t, err, errTemplate, "out of time is retried, not given up on")
+			assert.Less(t, time.Since(start), 100*time.Millisecond)
 		})
 	}
 }

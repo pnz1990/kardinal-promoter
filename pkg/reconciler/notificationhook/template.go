@@ -108,18 +108,48 @@ func (b *funcBudget) tick(name string) error {
 }
 
 // argLen is the size of a function's input, checked before it builds its
-// result. Template data fields are strings; other values (numbers, bools)
-// are formatted to measure them, which is cheap for them.
-func argLen(args ...interface{}) int {
+// result. Arguments may only be strings, numbers or bools: anything else (a
+// struct such as the template data, a pointer, map or slice) is refused
+// before it is formatted, since formatting it is what costs. It stops as soon
+// as the running total passes maxRenderedBody.
+func argLen(name string, args ...interface{}) (int, error) {
 	n := 0
 	for _, a := range args {
-		if s, ok := a.(string); ok {
-			n += len(s)
-		} else {
-			n += len(fmt.Sprint(a))
+		size, err := scalarLen(a)
+		if err != nil {
+			return 0, fmt.Errorf("%s: %w", name, err)
+		}
+		n += size
+		if n > maxRenderedBody {
+			return n, fmt.Errorf("%s: input is over %d bytes", name, maxRenderedBody)
 		}
 	}
-	return n
+	return n, nil
+}
+
+// scalarLen is the most bytes fmt.Sprint makes of a string, number or bool.
+func scalarLen(a interface{}) (int, error) {
+	switch x := a.(type) {
+	case nil:
+		return 5, nil
+	case string:
+		return len(x), nil
+	case bool:
+		return 5, nil
+	}
+	v := reflect.ValueOf(a)
+	switch v.Kind() {
+	case reflect.String:
+		return v.Len(), nil
+	case reflect.Bool:
+		return 5, nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return 20, nil
+	case reflect.Float32, reflect.Float64:
+		return 32, nil
+	}
+	return 0, fmt.Errorf("takes strings, numbers and bools only, not %T", a)
 }
 
 // guard runs a string-producing function. Its input must be at most
@@ -130,9 +160,9 @@ func (b *funcBudget) guard(name string, args []interface{}, bound func(in int) i
 	if err := b.tick(name); err != nil {
 		return "", err
 	}
-	in := argLen(args...)
-	if in > maxRenderedBody {
-		return "", fmt.Errorf("%s: input is %d bytes, over %d", name, in, maxRenderedBody)
+	in, err := argLen(name, args...)
+	if err != nil {
+		return "", err
 	}
 	if b != nil {
 		b.used += bound(in)
@@ -543,6 +573,11 @@ func renderTemplate(t *template.Template, data *TemplateData, contentType string
 	if err != nil {
 		if errors.Is(err, errBodyTooLarge) {
 			return nil, fmt.Errorf("%w: %w", errTemplate, errBodyTooLarge)
+		}
+		// Out of time is not the body's fault (a busy controller): the event
+		// is retried with backoff, not given up on.
+		if errors.Is(err, errRenderTime) {
+			return nil, fmt.Errorf("render: %w", err)
 		}
 		return nil, fmt.Errorf("%w: render: %w", errTemplate, err)
 	}

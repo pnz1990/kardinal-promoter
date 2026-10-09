@@ -252,9 +252,12 @@ Limits, so a template cannot run away with the controller:
   that input (6 times the input for `json`, `html` and `js`, 3 times for `urlquery`, `lower`
   and `upper`) is charged to a budget of 256 KiB per render, so no render allocates much more
   than that.
+- Function arguments may only be strings, numbers or bools. A struct (such as `.` itself),
+  a list or a map is refused before it is formatted: `{{ print . }}` is an error.
 - A render makes at most 2,000 function calls, builtins included, and stops after 20 ms:
   text/template cannot be cancelled, so the next call or write after the deadline fails
-  and the render ends there.
+  and the render ends there. Running out of time is not the template's fault (a busy
+  controller), so that event is retried with backoff like a failed delivery.
 - Every field the template sees is cut to 4 KiB (on a character boundary), so a long
   `Message` cannot feed a large render.
 - A field that does not exist is an error.
@@ -263,7 +266,7 @@ Limits, so a template cannot run away with the controller:
 
 A template that does not parse, or uses a refused action, makes the hook `Ready=False`
 (reason `InvalidTemplate`) and nothing is sent until it is fixed. A template that parses but
-fails to render for one event (invalid JSON, a body over 64 KiB) cannot succeed on a retry,
+fails to render for one event (invalid JSON, a body over 64 KiB, a refused argument) cannot succeed on a retry,
 so that event is given up on at once (`failureMessage: gave up on <key>: template: ...`) and
 the next event is delivered.
 
