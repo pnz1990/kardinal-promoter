@@ -247,8 +247,12 @@ NotificationHook defines an outbound webhook that is triggered when specific pro
 |---|---|---|---|
 | `spec` | object |  | NotificationHookSpec defines the desired state of a NotificationHook. |
 | `spec.events` | []string | yes | Events is the list of event types that trigger delivery. At least one event type is required. See docs/notifications.md#events. |
-| `spec.format` | string |  | Format is the shape of the request body: json (the kardinal payload, the default), slack (an incoming-webhook message with blocks), teams (a Workflows webhook message with an Adaptive Card) or template (spec.template). One of: `json`, `slack`, `teams`, `template`. |
+| `spec.format` | string |  | Format is the shape of the request body: json (the kardinal payload, the default), slack (an incoming-webhook message with blocks), teams (a Workflows webhook message with an Adaptive Card), template (spec.template) or cloudevents (the payload as a CloudEvents 1.0 structured event). One of: `json`, `slack`, `teams`, `template`, `cloudevents`. |
 | `spec.pipelineSelector` | string |  | PipelineSelector restricts notifications to events originating from the named Pipeline. When empty, events from all Pipelines are delivered. |
+| `spec.signing` | object |  | Signing, when set, signs every request so the receiver can check that it comes from this controller, unchanged and not replayed (docs/notifications.md#signed-requests). |
+| `spec.signing.secretRef` | object | yes | SecretRef names the Secret, in the hook's namespace and labeled kardinal.io/referenceable=true, whose key holds the signing key. |
+| `spec.signing.secretRef.key` | string |  | Key of the signing key in the Secret. Defaults to signing-key. |
+| `spec.signing.secretRef.name` | string | yes | Name of the Secret. |
 | `spec.template` | object |  | Template is the request body for format: template. |
 | `spec.template.body` | string | yes | Body is a Go text/template rendered over the event (docs/notifications.md#templated-body). range, define, template and block are not allowed; the rendered body is at most 64 KiB. |
 | `spec.template.contentType` | string |  | ContentType is the Content-Type header of the POST. Defaults to application/json, in which case the rendered body must be valid JSON. |
