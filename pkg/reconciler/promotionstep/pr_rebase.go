@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -77,6 +78,63 @@ func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, 
 		}
 	}
 	return nil, false, nil
+}
+
+// revisionContains is health.CheckOptions.RevisionContains for a step whose
+// promoted commit is want (#1575). Argo CD and Flux sync the branch head,
+// which on a branch many environments push to is often a later commit than
+// the step's own. Nil when the git client cannot read remote history or
+// there is no promoted commit. The Secret is read only when a check asks.
+func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
+	want string) func(context.Context, string) (bool, error) {
+	rh, ok := r.GitClient.(scm.RemoteHeadReader)
+	if !ok || want == "" || pipeline == nil {
+		return nil
+	}
+	return func(ctx context.Context, rev string) (bool, error) {
+		cred := r.resolveGitCredential(ctx, log, pipeline)
+		return r.descends(ctx, rh, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.token, rev, want)
+	}
+}
+
+// descends reports whether rev contains want: both are in the first-parent
+// history of branch, read through the shared remote cache (one ls-remote per
+// repository per remoteHeadsTTL, one history per head), and rev is want or
+// newer. A revision that is not on the branch (another branch, a
+// force-push) does not count.
+func (r *Reconciler) descends(ctx context.Context, rh scm.RemoteHeadReader, url, branch, token, rev, want string) (bool, error) {
+	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
+	defer cancel()
+	heads, err := r.remotes.remoteHeads(hctx, rh, url, token, r.now())
+	if err != nil {
+		return false, fmt.Errorf("read the heads of %s: %w", scm.RedactURL(url), err)
+	}
+	head := heads[branch]
+	if head == "" {
+		return false, nil
+	}
+	for _, depth := range []int{historyDepth, deepHistoryDepth} {
+		history, err := r.remotes.branchHistory(hctx, rh, url, branch, head, token, depth)
+		if err != nil {
+			return false, fmt.Errorf("read the history of %s: %w", branch, err)
+		}
+		iRev, iWant := -1, -1
+		for i, c := range history {
+			if iRev < 0 && health.SameRevision(c.SHA, rev) {
+				iRev = i
+			}
+			if iWant < 0 && health.SameRevision(c.SHA, want) {
+				iWant = i
+			}
+		}
+		if iRev >= 0 && iWant >= 0 {
+			return iRev <= iWant, nil // newest first: rev is want or later
+		}
+		if len(history) < depth {
+			return false, nil // the whole branch was read
+		}
+	}
+	return false, nil
 }
 
 // outputPushedSHA is git-push's status.outputs.pushedSHA, the commit kardinal

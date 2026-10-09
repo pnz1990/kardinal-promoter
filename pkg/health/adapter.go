@@ -116,6 +116,15 @@ type CheckOptions struct {
 	// that it recorded in its history.
 	ExpectedRevision string
 
+	// RevisionContains, when set, reports whether a later commit of the
+	// branch descends from ExpectedRevision: the git history says the commit
+	// a tool synced contains the promoted change (#1575). On a branch many
+	// environments push to, Argo CD or Flux can sync a newer head before it
+	// ever fetches the promoted commit; without Pods there are no images to
+	// show the change either. The PromotionStep reconciler reads it from the
+	// branch history through its shared remote cache. Nil: not known.
+	RevisionContains func(ctx context.Context, revision string) (bool, error)
+
 	// ExpectedImages are the Bundle images. The resource adapter (and the argocd
 	// adapter when no ExpectedRevision is known) require every workload container
 	// that runs one of these repositories to run the Bundle's tag or digest.
@@ -627,6 +636,9 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	state := fmt.Sprintf("health=%s, sync=%s, opPhase=%s", healthStatus, syncStatus, opPhase)
 
 	target := argoCDRevision(app, syncStatus, opPhase, opts)
+	if !target.deployed && syncStatus == "Synced" {
+		target = argoCDDescendant(ctx, app, opts, target)
+	}
 	if !target.deployed || target.unverified {
 		state += ", " + target.note
 	}
@@ -650,6 +662,32 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	default:
 		return progressing(state), nil
 	}
+}
+
+// argoCDDescendant accepts a synced revision that is not the promoted commit
+// when the branch history says it descends from it (opts.RevisionContains):
+// the Application is Synced on a commit that contains the change. A
+// multi-source Application counts when any of its synced revisions does.
+func argoCDDescendant(ctx context.Context, app *unstructured.Unstructured, opts CheckOptions, t argoCDTarget) argoCDTarget {
+	if opts.ExpectedRevision == "" || opts.RevisionContains == nil {
+		return t
+	}
+	opRevs := revisions(app, "status", "operationState", "syncResult")
+	for _, rev := range revisions(app, "status", "sync") {
+		if rev == "" || SameRevision(rev, opts.ExpectedRevision) {
+			continue
+		}
+		ok, err := opts.RevisionContains(ctx, rev)
+		if err != nil {
+			t.note += fmt.Sprintf(" (could not read whether %s contains it: %v)", shortRev(rev), err)
+			return t
+		}
+		if ok {
+			return argoCDTarget{deployed: true, operated: hasRevision(opRevs, rev),
+				note: fmt.Sprintf("(synced revision %s contains %s)", shortRev(rev), shortRev(opts.ExpectedRevision))}
+		}
+	}
+	return t
 }
 
 // argoCDTarget is how far an Application has got with the promoted change.
@@ -947,6 +985,13 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 			reason += fmt.Sprintf(" (revision not verified: lastAppliedRevision %q is not a git commit)", applied)
 		case !SameRevision(rev, want):
 			waiting := progressing(fmt.Sprintf("%s, lastAppliedRevision=%s, waiting for %s", state, shortRev(rev), shortRev(want)))
+			// The applied revision is a later commit of the branch that
+			// contains ours (#1575): Flux applied the promoted change.
+			if opts.RevisionContains != nil {
+				if ok, err := opts.RevisionContains(ctx, rev); err == nil && ok {
+					return healthy(fmt.Sprintf("%s (lastAppliedRevision %s contains %s)", reason, shortRev(rev), shortRev(want))), nil
+				}
+			}
 			// Another commit on the shared branch (another environment's
 			// push) can supersede ours before Flux fetches it. Accept that
 			// revision only when the Kustomization's Deployments
