@@ -865,6 +865,12 @@ func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bund
 // nothing (non-fatal).
 func (r *Reconciler) keepRemovedFleetTargets(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline) {
+	if graph.ValidateFleets(pipeline) != nil {
+		// The fleets cannot be resolved (no targets yet, a selector not
+		// read): every target would look removed, and the Graph is not
+		// rebuilt from them anyway.
+		return
+	}
 	var steps kardinalv1alpha1.PromotionStepList
 	if err := r.List(ctx, &steps, client.InNamespace(b.Namespace), client.MatchingLabels{lifecycle.LabelBundle: b.Name}); err != nil {
 		log.Warn().Err(err).Msg("list steps to keep removed fleet targets (non-fatal)")

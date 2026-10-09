@@ -36,7 +36,10 @@ func TestFleet_UnresolvedEnvironmentFailsClosed(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, env, state, want string
+		noFleet                bool
 	}{
+		{name: "target of a fleet that is gone", env: "prod-eu", state: "Promoting", noFleet: true,
+			want: "it is a target of fleet prod, which does not list it any more"},
 		{name: "target of an unresolved fleet", env: "prod-eu", state: "Pending",
 			want: `its selector has not been resolved yet`},
 		{name: "environment that became a fleet", env: "prod", state: "Promoting",
@@ -45,9 +48,15 @@ func TestFleet_UnresolvedEnvironmentFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			step := makeStep("step", "web", "bundle-1", tc.env)
 			step.Status.State = tc.state
+			p := selectorFleet()
+			if tc.noFleet {
+				// The Pipeline lost its last fleet; the step still carries the label.
+				p = makePipeline("web")
+				step.Labels = map[string]string{"kardinal.io/fleet": "prod"}
+			}
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithStatusSubresource(
 				&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.Pipeline{},
-			).WithObjects(step, selectorFleet(), makeBundle("bundle-1", "web")).Build()
+			).WithObjects(step, p, makeBundle("bundle-1", "web")).Build()
 			git := &countingGit{}
 			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
 				WorkDirFn: func(_, _ string) string { return t.TempDir() }}

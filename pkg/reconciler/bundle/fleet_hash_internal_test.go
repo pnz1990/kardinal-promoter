@@ -72,3 +72,45 @@ func TestKeepRemovedFleetTargets(t *testing.T) {
 	assert.Equal(t, "WaitingForMerge", got.State)
 	assert.Equal(t, "https://x/pull/3", got.PRURL)
 }
+
+// nopTranslator counts Translate calls.
+type nopTranslator struct{ calls int }
+
+func (m *nopTranslator) Translate(context.Context, *kardinalv1alpha1.Pipeline, *kardinalv1alpha1.Bundle) (string, error) {
+	m.calls++
+	return "g", nil
+}
+
+// TestEnsurePipelineSpecCurrent_KeepsRemovedTargets (D1): the in-place
+// Graph update for a changed Pipeline records the removed target's step
+// before it translates; a Pipeline whose fleets cannot be resolved records
+// nothing (every target would look removed).
+//
+// Covers FLEET-07.
+func TestEnsurePipelineSpecCurrent_KeepsRemovedTargets(t *testing.T) {
+	p := &kardinalv1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"}}
+	p.Spec.Environments = []kardinalv1alpha1.EnvironmentSpec{{Name: "prod", Fleet: &kardinalv1alpha1.FleetSpec{
+		Targets: []kardinalv1alpha1.FleetTarget{{Name: "eu"}}}}}
+	gone := &kardinalv1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: "web-b1-prod-us", Namespace: "default",
+		Labels: map[string]string{"kardinal.io/bundle": "web-b1", "kardinal.io/fleet": "prod"}},
+		Spec: kardinalv1alpha1.PromotionStepSpec{Environment: "prod-us"}, Status: kardinalv1alpha1.PromotionStepStatus{State: "WaitingForMerge"}}
+	s := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gone).Build()
+	tr := &nopTranslator{}
+	r := &Reconciler{Client: c, Translator: tr}
+	b := &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "web-b1", Namespace: "default"}}
+	b.Status.PipelineSpecHash = "old"
+	require.NoError(t, r.ensurePipelineSpecCurrent(context.Background(), zerolog.Nop(), b, p))
+	assert.Equal(t, 1, tr.calls)
+	require.Len(t, b.Status.RetiredSteps, 1)
+	assert.Equal(t, "prod-us", b.Status.RetiredSteps[0].Environment)
+
+	// An unresolved selector fleet: nothing is recorded.
+	unresolved := p.DeepCopy()
+	unresolved.Spec.Environments[0].Fleet = &kardinalv1alpha1.FleetSpec{Selector: &kardinalv1alpha1.FleetSelector{
+		MatchLabels: map[string]string{"tier": "prod"}}}
+	b2 := &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "web-b1", Namespace: "default"}}
+	r.keepRemovedFleetTargets(context.Background(), zerolog.Nop(), b2, unresolved)
+	assert.Empty(t, b2.Status.RetiredSteps)
+}

@@ -27,8 +27,9 @@ func fleetPipeline() *v1alpha1.Pipeline {
 // TestPlanRollback_Fleet (D1): kardinal rollback --env <fleet> rolls the
 // whole fleet back: the target is chosen from the fleet's first target that
 // has something deployed, and the rollback Bundle's targetEnvironment is the
-// fleet, so its Graph promotes every target. A target can still be rolled
-// back alone.
+// fleet, so its Graph promotes every target. Targets on different Bundles
+// are refused, naming each, unless --to says where to go. A target can
+// still be rolled back alone.
 //
 // Covers FLEET-07.
 func TestPlanRollback_Fleet(t *testing.T) {
@@ -48,6 +49,24 @@ func TestPlanRollback_Fleet(t *testing.T) {
 		Namespace: ns, Pipeline: "app", Environment: "prod-us", Now: t0.Add(time.Hour)})
 	require.NoError(t, err)
 	assert.Equal(t, "prod-us", one.Bundle.Spec.Intent.TargetEnvironment, "one target")
+
+	// eu on v1, us on v2: rolling the whole fleet back to "the version
+	// before" would mean v0 for eu, so it is refused unless --to says where.
+	mixed := newClient(t, fleetPipeline(),
+		bundle("app-v0", "app", "v0", 0), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20),
+		step("app-v0", "app", "prod-eu", "Verified", 1), step("app-v0", "app", "prod-us", "Verified", 2),
+		step("app-v1", "app", "prod-eu", "Verified", 11), step("app-v1", "app", "prod-us", "Verified", 12),
+		step("app-v2", "app", "prod-us", "Verified", 21),
+	)
+	_, err = lifecycle.PlanRollback(context.Background(), mixed, lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+	assert.ErrorIs(t, err, lifecycle.ErrConflict)
+	assert.ErrorContains(t, err, "run different Bundles (prod-eu runs app-v1, prod-us runs app-v2)")
+	to, err := lifecycle.PlanRollback(context.Background(), mixed, lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: "app-v1", Now: t0.Add(time.Hour)})
+	require.NoError(t, err, "--to: planned from prod-us, where app-v1 is a rollback")
+	assert.Equal(t, "app-v1", to.Target.Name)
+	assert.Equal(t, "prod", to.Bundle.Spec.Intent.TargetEnvironment)
 
 	_, err = lifecycle.PlanRollback(context.Background(), newClient(t, fleetPipeline()), lifecycle.RollbackRequest{
 		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})

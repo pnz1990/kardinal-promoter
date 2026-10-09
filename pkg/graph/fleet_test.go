@@ -463,3 +463,34 @@ func TestFleet_LastGoodMembers(t *testing.T) {
 	_, err = graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
 	assert.ErrorContains(t, err, "could not be resolved: list Applications in argocd: timeout")
 }
+
+// TestFleet_HeldByFleetHold: a hold on the fleet (kardinal rollback --env
+// <fleet> --hold) marks every target's DAG entry held for any other Bundle,
+// and none for the held rollback Bundle itself; a target's own hold applies
+// to that target only.
+//
+// Covers FLEET-07.
+func TestFleet_HeldByFleetHold(t *testing.T) {
+	held := func(p *kardinalv1alpha1.Pipeline, bundle string) map[string]bool {
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle(bundle, "app")})
+		require.NoError(t, err)
+		out := map[string]bool{}
+		for _, n := range res.Graph.Spec.Nodes {
+			if n.ID != graph.NodePromotionDAG {
+				continue
+			}
+			for _, e := range n.Def["steps"].([]interface{}) {
+				m := e.(map[string]interface{})
+				out[m["environment"].(string)] = m["held"].(bool)
+			}
+		}
+		return out
+	}
+	p := bigFleet(2, 1, nil)
+	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-a", Reason: "r"}}
+	assert.Equal(t, map[string]bool{"test": false, "prod-t00": true, "prod-t01": true}, held(p, "app-v3"))
+	assert.Equal(t, map[string]bool{"test": false, "prod-t00": false, "prod-t01": false}, held(p, "app-rollback-a"))
+
+	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod-t01", Bundle: "app-rollback-b", Reason: "r"}}
+	assert.Equal(t, map[string]bool{"test": false, "prod-t00": false, "prod-t01": true}, held(p, "app-v3"))
+}

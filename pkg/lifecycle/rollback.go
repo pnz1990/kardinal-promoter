@@ -650,35 +650,72 @@ func fleetTargets(p *v1alpha1.Pipeline, env string) []string {
 }
 
 // planFleetRollback plans the rollback of a whole fleet (kardinal rollback
-// --env <fleet>): the rollback of the fleet's first target that has
-// something deployed, by PlanRollback's rules, with intent.targetEnvironment
-// the fleet, so its Graph promotes the restored artifacts to every target.
-// Targets that already run them commit nothing and are Verified.
+// --env <fleet>): one rollback Bundle with intent.targetEnvironment the fleet,
+// whose Graph promotes the restored artifacts to every target. It plans
+// from the fleet's first target that has something deployed, by
+// PlanRollback's rules, and only when every target that has something
+// deployed runs the same Bundle: targets on different versions (a rollout
+// part way, or one target rolled back alone) would all get the version
+// before the reference target's, which may be older than what another
+// target runs. Then it refuses with ErrConflict naming each target's Bundle,
+// unless ToBundle says where to go.
 func planFleetRollback(ctx context.Context, c client.Reader, req RollbackRequest, targets []string) (*RollbackPlan, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("rollback: fleet environment %s has no targets: %w", req.Environment, ErrInvalid)
 	}
+	ref := ""
+	runs := map[string]string{}
+	var deployedIn []string
 	for _, t := range targets {
-		if req.FromBundle == "" {
-			h, err := loadEnvHistory(ctx, c, req.Namespace, req.Pipeline, t)
-			if err != nil {
-				return nil, fmt.Errorf("rollback of fleet %s: %w", req.Environment, err)
-			}
-			if h.deployed() == "" {
-				continue // this target never ran anything: look at the next one
+		h, err := loadEnvHistory(ctx, c, req.Namespace, req.Pipeline, t)
+		if err != nil {
+			return nil, fmt.Errorf("rollback of fleet %s: %w", req.Environment, err)
+		}
+		if d := h.deployed(); d != "" {
+			runs[t] = d
+			deployedIn = append(deployedIn, t)
+			if ref == "" {
+				ref = t
 			}
 		}
+	}
+	if ref == "" {
+		return nil, fmt.Errorf("rollback: nothing has been deployed to any target of fleet %s in pipeline %s yet: %w",
+			req.Environment, req.Pipeline, ErrConflict)
+	}
+	if req.ToBundle == "" && req.FromBundle == "" {
+		for _, t := range deployedIn {
+			if runs[t] != runs[ref] {
+				parts := make([]string, 0, len(deployedIn))
+				for _, x := range deployedIn {
+					parts = append(parts, x+" runs "+runs[x])
+				}
+				return nil, fmt.Errorf("rollback: the targets of fleet %s run different Bundles (%s); "+
+					"name the Bundle to go back to with --to, or roll back one target with --env <target>: %w",
+					req.Environment, strings.Join(parts, ", "), ErrConflict)
+			}
+		}
+	}
+	// With --to, plan from the first target where going there is a rollback
+	// (the Bundle was Verified there and is not what it runs now); targets
+	// that already run it are Verified at once.
+	candidates := []string{ref}
+	if req.ToBundle != "" {
+		candidates = deployedIn
+	}
+	var lastErr error
+	for _, t := range candidates {
 		sub := req
 		sub.Environment = t
 		plan, err := PlanRollback(ctx, c, sub)
 		if err != nil {
-			return nil, fmt.Errorf("rollback of fleet %s (planned from target %s): %w", req.Environment, t, err)
+			lastErr = fmt.Errorf("rollback of fleet %s (planned from target %s): %w", req.Environment, t, err)
+			continue
 		}
 		plan.Bundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: req.Environment}
 		return plan, nil
 	}
-	return nil, fmt.Errorf("rollback: nothing has been deployed to any target of fleet %s in pipeline %s yet: %w",
-		req.Environment, req.Pipeline, ErrConflict)
+	return nil, lastErr
 }
 
 // buildRollbackBundle builds the rollback Bundle of plan. restored holds the
