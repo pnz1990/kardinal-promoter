@@ -18,8 +18,18 @@ NS=argocd
 # The controllers read the reconciliation settings at start, so they go in
 # before the install. Their own field manager keeps the install's apply (whose
 # argocd-cm has no data) from removing them.
-"${KUBECTL[@]}" -n "$NS" create configmap argocd-cm \
-  --from-literal=timeout.reconciliation=10s --from-literal=timeout.reconciliation.jitter=0s \
+cm=(--from-literal=timeout.reconciliation=10s --from-literal=timeout.reconciliation.jitter=0s)
+# KARDINAL_E2E_ARGOCD_EXCLUDE_KARDINAL=1 (the scale suite) keeps kardinal's
+# and kro's kinds out of Argo CD's resource tracking: the application
+# controller would otherwise watch and cache every PromotionStep, PolicyGate,
+# AuditEvent and Graph the suite makes, thousands of them, though no
+# Application deploys them.
+if [ "${KARDINAL_E2E_ARGOCD_EXCLUDE_KARDINAL:-0}" = 1 ]; then
+  cm+=(--from-literal=resource.exclusions='- apiGroups: ["kardinal.io", "kro.run", "internal.kro.run"]
+  kinds: ["*"]
+  clusters: ["*"]')
+fi
+"${KUBECTL[@]}" -n "$NS" create configmap argocd-cm "${cm[@]}" \
   --dry-run=client -o yaml | "${KUBECTL[@]}" apply --server-side --field-manager=kardinal-e2e -f - >/dev/null
 MANIFEST="$E2E_OUT/argocd-$ARGOCD_RELEASE.yaml"
 [ -s "$MANIFEST" ] || curl -fsSL --retry 5 -o "$MANIFEST" \

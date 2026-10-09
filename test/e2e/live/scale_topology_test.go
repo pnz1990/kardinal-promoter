@@ -30,7 +30,7 @@ func TestScale_TopologyChain(t *testing.T) {
 	p := r.Fleet.Pipeline(t, "chain", envs)
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
 	r.Note("stages", len(envs))
-	r.Finish()
+	r.Finish(scale.AllVerified)
 }
 
 // applyBig creates a Pipeline of more than 100 environments over its own
@@ -55,7 +55,7 @@ func TestScale_TopologyLongChain(t *testing.T) {
 	p := applyBig(t, r, "longchain", envs)
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
 	r.Note("stages", len(envs))
-	r.Finish()
+	r.Finish(scale.AllVerified)
 }
 
 // TestScale_TopologyWaves is a fan-out: canary, then Waves waves of
@@ -69,7 +69,7 @@ func TestScale_TopologyWaves(t *testing.T) {
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
 	r.Note("environments", len(envs))
 	r.Note("edges", scale.Edges(envs))
-	r.Finish()
+	r.Finish(scale.AllVerified)
 }
 
 // TestScale_TopologyBigWaves is the fan-out a large company asks for: canary
@@ -82,7 +82,7 @@ func TestScale_TopologyBigWaves(t *testing.T) {
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
 	r.Note("environments", len(envs))
 	r.Note("edges", scale.Edges(envs))
-	r.Finish()
+	r.Finish(scale.AllVerified)
 }
 
 // TestScale_TopologyLattice is a diamond lattice: entry, LatticeDepth layers
@@ -95,7 +95,7 @@ func TestScale_TopologyLattice(t *testing.T) {
 	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
 	r.Note("environments", len(envs))
 	r.Note("edges", scale.Edges(envs))
-	r.Finish()
+	r.Finish(scale.AllVerified)
 }
 
 // TestScale_TopologyFanIn is build, FanIn parallel environments, and prod
@@ -107,7 +107,7 @@ func TestScale_TopologyFanIn(t *testing.T) {
 	p := r.Fleet.Pipeline(t, "fanin", envs)
 	b := r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
 	r.Note("environments", len(envs))
-	r.Finish()
+	r.Finish(scale.AllVerified)
 
 	steps, err := r.E.Steps(context.Background(), r.Fleet.NS, p.Name, b.Name)
 	if err != nil {
@@ -153,7 +153,7 @@ func TestScale_TopologyMixedApproval(t *testing.T) {
 	if rev.Merged() != 8 {
 		t.Errorf("the reviewer merged %d PRs, want 8 (4 pr-review environments, 2 Bundles)", rev.Merged())
 	}
-	r.Finish()
+	r.Finish(scale.AllVerified)
 }
 
 // TestScale_TopologySharedRepo has SharedPipelines Pipelines, each a chain
@@ -193,8 +193,10 @@ func TestScale_TopologySharedRepo(t *testing.T) {
 // Verified once Argo CD synced a commit that contains the promoted one. With
 // 151 environments on one branch, Argo CD has usually synced a later commit
 // by the time a step checks (#1591): the check must accept it from the branch
-// history, not wait for its own commit. It runs alone (150-environment tests
-// are serialised). Covers SCALE-TOPO-ARGOCD-01.
+// history, not wait for its own commit. The Bundle must end Verified with all
+// 151 steps Verified. It calls scale.Begin, so it runs on its own, like the
+// load and chaos tests, not in parallel with the other topology tests.
+// Covers SCALE-TOPO-ARGOCD-01.
 func TestScale_TopologyArgoCD(t *testing.T) {
 	r := scale.Begin(t)
 	envs := scale.Waves(r.P.BigWaves, r.P.BigWaveWidth)
@@ -217,8 +219,26 @@ func TestScale_TopologyArgoCD(t *testing.T) {
 		t.Fatalf("create Pipeline %s (%d environments): %v", name, len(envs), err)
 	}
 	r.Fleet.Track(p, repo)
-	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
+	start := time.Now()
+	b := r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
+	r.E.WaitBundlePhase(t, r.Fleet.NS, b.Name, "Verified", r.P.Settle)
+	r.Note("promotionSeconds", int(time.Since(start).Seconds()))
+	steps, err := r.E.Steps(context.Background(), r.Fleet.NS, p.Name, b.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified := 0
+	for i := range steps {
+		if steps[i].Status.State == "Verified" {
+			verified++
+		} else {
+			t.Errorf("step %s is %q: %s", steps[i].Name, steps[i].Status.State, steps[i].Status.Message)
+		}
+	}
+	if verified != len(envs) {
+		t.Errorf("%d of %d steps Verified", verified, len(envs))
+	}
 	r.Note("environments", len(envs))
 	r.Note("argoApplications", len(envs))
-	r.Finish()
+	r.Finish(scale.AllVerified)
 }

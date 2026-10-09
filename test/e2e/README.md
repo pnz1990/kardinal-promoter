@@ -160,6 +160,7 @@ The invariants, after every Bundle settled:
 - no environment has two open PRs, and no open PR belongs to a finished Bundle;
 - no `kardinal/` branch is left without an open or merged PR;
 - every Bundle (and each of its steps) reached a terminal phase within the profile's `Settle`;
+- the Bundles ended as the test expects (`expected-outcome`): by default the newest Bundle of each Pipeline Verified and the others Verified or Superseded; `scale.AllVerified` for tests with one Bundle per Pipeline. A Failed Bundle passes only with `invariants.OutcomeAny` and a stated reason;
 - no Graph outlived its Bundle, stayed deleting, reports an error or nears etcd's request limit;
 - AuditEvents agree with the step states;
 - the controller logged no `DATA RACE`, no panic and no error-level line outside the allowlist (`invariants.Benign` plus the faults a test injects), and neither its containers nor kro's restarted (OOMKilled, crashed);

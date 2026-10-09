@@ -30,7 +30,7 @@ func TestScale_LoadPipelines(t *testing.T) {
 	r.Note("pipelines", len(names))
 	r.Note("pipelineSetupSeconds", int(time.Since(start).Seconds()))
 	r.Note("burst", r.Fleet.Burst(t, names, len(names), 50))
-	r.Finish()
+	r.Finish(scale.AllVerified)
 }
 
 // TestScale_LoadBurst creates the profile's BurstBundles Bundles (1,000 in
@@ -92,5 +92,5 @@ func TestScale_LatencySLO(t *testing.T) {
 	r.Note("pipelines", len(names))
 	r.Note("burst", r.Fleet.Burst(t, names, len(names), 50))
 	slo := r.P.SLO
-	r.Finish(func(o *invariants.Options) { o.SLO = &slo })
+	r.Finish(scale.AllVerified, func(o *invariants.Options) { o.SLO = &slo })
 }

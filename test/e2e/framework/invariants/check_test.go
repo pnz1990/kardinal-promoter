@@ -226,3 +226,32 @@ func TestRetiredSteps(t *testing.T) {
 		t.Fatalf("verifiedAt = %v, %v; want %v", at, ok, verifiedAt.Time)
 	}
 }
+
+// TestCheckOutcome (#1613 QA): a Failed Bundle fails a test that expects
+// success. By default the newest Bundle of each Pipeline must be Verified and
+// the others Verified or Superseded; all-verified wants every one Verified;
+// any accepts Failed only with a reason.
+//
+// Covers SCALE-INV-OUTCOME-01.
+func TestCheckOutcome(t *testing.T) {
+	at := func(name, pipeline, phase string, sec int) v1alpha1.Bundle {
+		b := bundle(name, phase)
+		b.Spec.Pipeline = pipeline
+		b.Annotations = map[string]string{lifecycle.AnnotationCreatedAt: time.Date(2026, 10, 9, 12, 0, sec, 0, time.UTC).Format(time.RFC3339Nano)}
+		return b
+	}
+	ok := testState([]v1alpha1.Bundle{at("a1", "a", "Superseded", 1), at("a2", "a", "Verified", 2), at("b1", "b", "Verified", 1)}, nil)
+	assert.Empty(t, checkOutcome(ok, Options{}).Violations)
+
+	newestFailed := testState([]v1alpha1.Bundle{at("a1", "a", "Superseded", 1), at("a2", "a", "Failed", 2)}, nil)
+	v := checkOutcome(newestFailed, Options{}).Violations
+	require.Len(t, v, 1)
+	assert.Contains(t, v[0], "newest Bundle a2 is \"Failed\"")
+
+	olderFailed := testState([]v1alpha1.Bundle{at("a1", "a", "Failed", 1), at("a2", "a", "Verified", 2)}, nil)
+	assert.Len(t, checkOutcome(olderFailed, Options{}).Violations, 1, "an older Bundle may not fail either")
+
+	assert.Len(t, checkOutcome(ok, Options{Outcome: OutcomeAllVerified}).Violations, 1, "a1 is Superseded")
+	assert.Len(t, checkOutcome(newestFailed, Options{Outcome: OutcomeAny}).Violations, 1, "any needs a reason")
+	assert.Empty(t, checkOutcome(newestFailed, Options{Outcome: OutcomeAny, OutcomeWhy: "the test fails a Bundle"}).Violations)
+}
