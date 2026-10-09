@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -335,4 +336,44 @@ func TestDeleteBranch_AzureDevOps(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "staleOldObjectId")
 	})
+}
+
+// TestDeleteBranch_ForgejoOneCircuitResult (#1476): the read and delete of a
+// branch are one call for the circuit. Deleting branches Forgejo answers 500
+// "object does not exist" for, and then reads as gone, never opens it;
+// deletes that keep failing open it after the threshold, as one call each.
+// Covers SCM-CIRCUIT-DELETE-01.
+func TestDeleteBranch_ForgejoOneCircuitResult(t *testing.T) {
+	const branch = "kardinal/b/prod"
+	var deletes int
+	gone := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodDelete:
+			deletes++
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"message":"object does not exist"}`)
+		case gone && deletes > 0:
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			_, _ = io.WriteString(w, `{"name":"`+branch+`"}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	p := scm.NewForgejoProvider("t", srv.URL, "s")
+	for i := 0; i < 10; i++ {
+		deletes = 0
+		require.NoError(t, p.DeleteBranch(context.Background(), "o/r", branch), "delete %d", i)
+	}
+	gone = false
+	var errs []error
+	for i := 0; i < 6; i++ {
+		errs = append(errs, p.DeleteBranch(context.Background(), "o/r", branch))
+	}
+	var open *scm.ErrCircuitOpen
+	for i, err := range errs[:5] {
+		require.Error(t, err)
+		assert.False(t, errors.As(err, &open), "delete %d is made", i)
+	}
+	assert.ErrorAs(t, errs[5], &open, "five failed deletes open the circuit")
 }

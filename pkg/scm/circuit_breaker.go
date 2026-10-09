@@ -64,6 +64,9 @@ const (
 	// another caller is allowed to probe (the first one never reported back):
 	// the providers' HTTP timeout and a margin.
 	defaultHalfOpenTimeout = providerHTTPTimeout + 15*time.Second
+	// halfOpenRecheck is the RetryAfter a caller gets while another caller's
+	// probe is out: the probe answers within seconds once the SCM is back.
+	halfOpenRecheck = 2 * time.Second
 )
 
 // CircuitBreaker implements the circuit-breaker pattern for SCM API calls.
@@ -106,6 +109,13 @@ type CircuitBreaker struct {
 	openings     int
 	openUntil    time.Time // when to transition Open → HalfOpen
 	probeStarted time.Time // when the current half-open probe was admitted; zero if none
+	// openedAt is when the circuit last opened: a call that started before
+	// it says nothing about the outage (RecordFailureFrom, RecordSuccessFrom).
+	openedAt time.Time
+	// onChange, when set, is called with true when the circuit opens and
+	// false when it closes (the kardinal_scm_circuit_open metric). It runs
+	// with cb.mu held and must not call back into cb.
+	onChange func(open bool)
 }
 
 // NewCircuitBreaker creates a circuit breaker with sensible defaults.
@@ -158,7 +168,9 @@ func (cb *CircuitBreaker) Allow() error {
 	case CircuitHalfOpen:
 		now := time.Now()
 		if !cb.probeStarted.IsZero() && now.Sub(cb.probeStarted) < cb.HalfOpenTimeout {
-			return &ErrCircuitOpen{RetryAfter: cb.probeStarted.Add(cb.HalfOpenTimeout)}
+			// A probe is out and decides in a moment: look again soon, not
+			// when the probe would time out.
+			return &ErrCircuitOpen{RetryAfter: now.Add(halfOpenRecheck)}
 		}
 		cb.probeStarted = now
 		return nil
@@ -167,14 +179,31 @@ func (cb *CircuitBreaker) Allow() error {
 	}
 }
 
-// RecordSuccess records a successful call and resets the failure counter.
+// RecordSuccess records a successful call that started just now and closes
+// the circuit.
 func (cb *CircuitBreaker) RecordSuccess() {
+	cb.RecordSuccessFrom(time.Now())
+}
+
+// RecordSuccessFrom records a successful call that started at started. A
+// call that started before the circuit opened, and answers while it is open
+// or half-open, was in flight when the SCM went away: it does not close the
+// circuit (a late success of a rate-limited token, say, is no sign the
+// quota is back).
+func (cb *CircuitBreaker) RecordSuccessFrom(started time.Time) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
+	if cb.currentState() != CircuitClosed && started.Before(cb.openedAt) {
+		return
+	}
+	wasOpen := cb.state != CircuitClosed
 	cb.consecutiveFails = 0
 	cb.openings = 0
 	cb.state = CircuitClosed
 	cb.probeStarted = time.Time{}
+	if wasOpen && cb.onChange != nil {
+		cb.onChange(false)
+	}
 }
 
 // cancelProbe gives back the half-open probe slot of a call that Allow
@@ -250,9 +279,15 @@ func (cb *CircuitBreaker) RecordFailureFrom(started, retryAfter time.Time) {
 // openLocked opens the circuit for the current backoff, or until retryAfter
 // if that is later. Must be called with cb.mu held.
 func (cb *CircuitBreaker) openLocked(retryAfter time.Time) {
-	cb.openUntil = latestTime(retryAfter, time.Now().Add(cb.backoffDuration(cb.openings)))
+	wasClosed := cb.state == CircuitClosed
+	now := time.Now()
+	cb.openUntil = latestTime(retryAfter, now.Add(cb.backoffDuration(cb.openings)))
 	cb.state = CircuitOpen
+	cb.openedAt = now
 	cb.probeStarted = time.Time{}
+	if wasClosed && cb.onChange != nil {
+		cb.onChange(true)
+	}
 }
 
 // backoffDuration returns the exponential backoff for the given step.

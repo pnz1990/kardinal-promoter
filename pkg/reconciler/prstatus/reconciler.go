@@ -158,6 +158,9 @@ type Reconciler struct {
 	// If nil the reconciler is a no-op (useful in tests that only test CRD
 	// plumbing without a live GitHub connection).
 	SCM scm.SCMProvider
+
+	// NowFn returns the current time; nil uses time.Now (tests inject it).
+	NowFn func() time.Time
 }
 
 // Reconcile processes one PRStatus event.
@@ -238,7 +241,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if errors.As(err, &open) {
 			// No call was made (#1476): poll again when the circuit lets
 			// one through, not at the next interval.
-			wait := time.Until(open.RetryAfter).Round(time.Second)
+			wait := open.RetryAfter.Sub(r.now()).Round(time.Second)
 			if wait < time.Second {
 				wait = time.Second
 			}
@@ -551,4 +554,12 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PRStatus{}).
 		Complete(r)
+}
+
+// now is NowFn, or time.Now.
+func (r *Reconciler) now() time.Time {
+	if r.NowFn != nil {
+		return r.NowFn()
+	}
+	return time.Now()
 }

@@ -27,12 +27,17 @@ func apiErr(status int, body string, transient bool) error {
 		Path: "/repos/owner/repo/pulls/7", StatusCode: status, Body: body, Transient: transient})
 }
 
+// pollNow is the clock of the circuit-open rows.
+var pollNow = time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+
 // TestPollError proves that a GetPRStatus error a retry cannot fix (401, 403
 // that is not a rate limit, 404, 410; scm.IsPermanentError) is recorded in
 // status.pollError, so the PromotionStep waiting for the PR can fail with it,
 // and is polled again only every 5 minutes instead of every 30 seconds.
 // Transient errors keep the 30s retry and record nothing, and the next
-// successful poll clears the error.
+// successful poll clears the error. An open SCM circuit is polled again when
+// it lets a call through, within the poll interval (#1476).
+// Covers SCM-CIRCUIT-WAIT-04.
 func TestPollError(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -61,10 +66,10 @@ func TestPollError(t *testing.T) {
 			err: errors.New("connection reset by peer"), wantRequeue: 30 * time.Second},
 		// No call was made (#1476): poll when the circuit lets one through.
 		{name: "an open SCM circuit is waited for", pr: prAt(nil, v1alpha1.PRStatusStatus{}),
-			err:         fmt.Errorf("get PR status: %w", &scm.ErrCircuitOpen{RetryAfter: time.Now().Add(12 * time.Second)}),
+			err:         fmt.Errorf("get PR status: %w", &scm.ErrCircuitOpen{RetryAfter: pollNow.Add(12 * time.Second)}),
 			wantRequeue: 12 * time.Second},
 		{name: "an open SCM circuit is looked at again within the poll interval", pr: prAt(nil, v1alpha1.PRStatusStatus{}),
-			err:         fmt.Errorf("get PR status: %w", &scm.ErrCircuitOpen{RetryAfter: time.Now().Add(time.Hour)}),
+			err:         fmt.Errorf("get PR status: %w", &scm.ErrCircuitOpen{RetryAfter: pollNow.Add(time.Hour)}),
 			wantRequeue: 30 * time.Second},
 		{name: "a successful poll clears the error", pr: prAt(nil, v1alpha1.PRStatusStatus{PollError: "status 401"}),
 			open: true, wantRequeue: 30 * time.Second, wantPatched: true, wantOpen: true},
@@ -78,6 +83,9 @@ func TestPollError(t *testing.T) {
 			require.NoError(t, c.Get(context.Background(), key, &before))
 			s := &fakeSCM{open: tt.open, err: tt.err}
 			r := &prstatus.Reconciler{Client: c, SCM: s}
+			if errors.As(tt.err, new(*scm.ErrCircuitOpen)) {
+				r.NowFn = func() time.Time { return pollNow }
+			}
 
 			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 			require.NoError(t, err)

@@ -103,6 +103,10 @@ func main() {
 		gateStatusHeartbeat    time.Duration
 	)
 
+	var scmWaitTimeout time.Duration
+	flag.DurationVar(&scmWaitTimeout, "scm-wait-timeout", psreconciler.DefaultSCMWaitTimeout,
+		"Longest a PromotionStep waits for an open SCM circuit (its SCM host keeps failing) before it fails, "+
+			"when its environment sets no stepTimeoutSeconds.")
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
 		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
 			"re-check the gate's whole Graph. 0 writes the status on every evaluation.")
@@ -465,6 +469,7 @@ func main() {
 		GitClient:           gitClient,
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		Recorder:            eventRecorder,
+		SCMWaitTimeout:      scmWaitTimeout,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}

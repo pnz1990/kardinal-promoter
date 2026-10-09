@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -104,27 +105,40 @@ func (g *GitLabProvider) DeleteBranch(ctx context.Context, repo, branch string) 
 
 // DeleteBranch deletes a Forgejo or Gitea branch. Both route /branches/* by
 // path, so the slashes of the name stay. Forgejo answers 500 "object does
-// not exist" to the delete of a branch that is not there (B90). That 500
-// would count against the SCM circuit, so the branch is read first and a
-// branch that reads 404 is gone: deleting a deleted branch is a no-op, as a
-// cleanup retried after an outage needs (#1476). After a failed delete the
-// branch is read again.
+// not exist" to the delete of a branch that is not there (B90), so the
+// branch is read first: a branch that reads 404 is gone, and deleting a
+// deleted branch is a no-op, as a cleanup retried after an outage needs
+// (#1476). After a failed delete the branch is read again. The reads and
+// the delete are one call for the SCM circuit, recorded once with the
+// outcome of the delete (a 500 for a branch that turned out to be gone
+// counts as a success).
 func (f *ForgejoProvider) DeleteBranch(ctx context.Context, repo, branch string) error {
 	owner, name, err := splitRepo(repo)
 	if err != nil {
 		return err
 	}
 	path := fmt.Sprintf("/api/v1/repos/%s/%s/branches/%s", owner, name, branchPath(branch))
-	if _, gone := statusIs(f.do(ctx, http.MethodGet, path, nil, nil), http.StatusNotFound); gone {
+	if err := f.circuits.Allow(owner); err != nil {
+		return fmt.Errorf("forgejo scm: %w", err)
+	}
+	started := time.Now()
+	resp, err := f.send(ctx, http.MethodGet, path, nil, nil)
+	if _, gone := statusIs(err, http.StatusNotFound); gone {
+		f.circuits.Record(owner, started, resp, nil)
 		return nil
 	}
-	err = f.do(ctx, http.MethodDelete, path, nil, nil)
+	resp, err = f.send(ctx, http.MethodDelete, path, nil, nil)
 	if _, gone := statusIs(err, http.StatusNotFound); gone || err == nil {
+		f.circuits.Record(owner, started, resp, nil)
 		return nil
 	}
-	if _, gone := statusIs(f.do(ctx, http.MethodGet, path, nil, nil), http.StatusNotFound); gone {
-		return nil
+	if readResp, readErr := f.send(ctx, http.MethodGet, path, nil, nil); readResp != nil {
+		if _, gone := statusIs(readErr, http.StatusNotFound); gone {
+			f.circuits.Record(owner, started, readResp, nil)
+			return nil
+		}
 	}
+	f.circuits.Record(owner, started, resp, callError(resp, err))
 	return fmt.Errorf("delete Forgejo branch %s in %s: %w", branch, repo, err)
 }
 

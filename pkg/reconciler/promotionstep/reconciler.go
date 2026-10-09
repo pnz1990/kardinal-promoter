@@ -163,6 +163,11 @@ type Reconciler struct {
 	// it. It drives the deadline for closing a deleted step's PR and the
 	// retry backoff (status.nextRetryAt).
 	NowFn func() time.Time
+
+	// SCMWaitTimeout bounds how long a step waits for an open SCM circuit
+	// when its environment sets no stepTimeoutSeconds; 0 is
+	// DefaultSCMWaitTimeout (#1476).
+	SCMWaitTimeout time.Duration
 }
 
 // now returns the current time from NowFn, or time.Now when it is nil.
@@ -382,7 +387,18 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 		if !closing {
 			ps.Status.RetryCount = 0
 		}
-		if wait, ok := circuitWait(closeErr, r.now()); ok {
+		wait, ok := circuitWait(closeErr, r.now())
+		if ok {
+			if waited, started := r.startSCMWait(ps, closeErr); waited >= r.scmWaitBound(0) {
+				// Waited for the whole bound: spend the close retries now.
+				ok = false
+			} else if started {
+				r.emitSCMUnavailable(ps, r.scmWaitBound(0), closeErr)
+			}
+		} else {
+			clearSCMWait(ps, r.now())
+		}
+		if ok {
 			// The SCM circuit is open (#1476): no call was made. Wait for it
 			// without spending a close retry, so an outage longer than the
 			// retries cannot leave the PR or its branch behind.
@@ -589,24 +605,6 @@ func withLabelsError(msg string, outputs map[string]string) string {
 }
 
 // retryDelay is the backoff before retry n (1-based) of a transient failure.
-// circuitWait reports whether err is an open SCM circuit (scm.ErrCircuitOpen)
-// and how long to wait for it: until the circuit lets a call through, at
-// least a second and at most retryMaxDelay.
-func circuitWait(err error, now time.Time) (time.Duration, bool) {
-	var open *scm.ErrCircuitOpen
-	if !errors.As(err, &open) {
-		return 0, false
-	}
-	wait := open.RetryAfter.Sub(now)
-	if wait < time.Second {
-		wait = time.Second
-	}
-	if wait > retryMaxDelay {
-		wait = retryMaxDelay
-	}
-	return wait, true
-}
-
 func retryDelay(n int) time.Duration {
 	d := retryBaseDelay
 	for i := 1; i < n && d < retryMaxDelay; i++ {
@@ -827,9 +825,12 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 	// Every path below writes the status.
 	clearGitCredentialMissing(ps, cred)
+	if _, waiting := circuitWait(execErr, r.now()); !waiting {
+		clearSCMWait(ps, r.now())
+	}
 
 	if execErr != nil {
-		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr, nil, cred)
+		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(), execErr, nil, cred, env.StepTimeoutSeconds)
 	}
 	closed := updateStepStatuses(ps, eng.StepNames(), nextIdx, false, "", eng.Timings())
 
@@ -893,7 +894,8 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// ExecuteFrom reports StepFailed with an error, so this is unreachable
 		// unless a step returns an unknown status.
 		return r.handleStepError(ctx, log, base, ps, eng.StepNames(), eng.Timings(),
-			fmt.Errorf("step %d returned status %q: %s", nextIdx, result.Status, result.Message), closed, cred)
+			fmt.Errorf("step %d returned status %q: %s", nextIdx, result.Status, result.Message), closed, cred,
+			env.StepTimeoutSeconds)
 	}
 }
 
@@ -937,7 +939,7 @@ func prOpenedAt(ps *v1alpha1.PromotionStep) (opened time.Time, ok bool) {
 // limit, since creating it does not help.
 func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
 	stepNames []string, timings map[int]steps.StepTiming, execErr error, closed stepObservations,
-	cred gitCredential) (ctrl.Result, error) {
+	cred gitCredential, stepTimeoutSeconds int) (ctrl.Result, error) {
 	idx := ps.Status.CurrentStepIndex
 	retryable := errors.Unwrap(execErr) != nil && !errors.Is(execErr, steps.ErrPermanent)
 	// A git-clone or git-push that the remote refused for lack of
@@ -956,25 +958,40 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		emitCredential = markGitCredentialMissing(ps, cred.reason, note)
 		waitForSecret = cred.waitsForSecret()
 	}
+	scmDown := false
 	if wait, ok := circuitWait(execErr, r.now()); retryable && ok {
 		// The SCM circuit is open (#1476): no call was made, so nothing
 		// failed. Wait for the circuit to let a call through and run the
-		// step again without spending a retry.
-		next := metav1.NewTime(r.now().Add(wait))
-		ps.Status.NextRetryAt = &next
-		ps.Status.Message = fmt.Sprintf("waiting %s for the SCM (not counted as a retry; %d/%d used): %v",
-			wait, ps.Status.RetryCount, maxStepRetries, execErr)
-		closed = append(closed, updateStepStatuses(ps, stepNames, idx, false, "", timings)...)
-		log.Info().Err(execErr).Str("env", ps.Spec.Environment).Dur("wait", wait).
-			Msg("SCM circuit open, step waits")
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
-			if apierrors.IsNotFound(patchErr) {
-				return ctrl.Result{}, nil
+		// step again without spending a retry, up to the wait bound.
+		bound := r.scmWaitBound(stepTimeoutSeconds)
+		waited, started := r.startSCMWait(ps, execErr)
+		if waited < bound {
+			next := metav1.NewTime(r.now().Add(wait))
+			ps.Status.NextRetryAt = &next
+			ps.Status.Message = fmt.Sprintf("waiting %s for the SCM (not counted as a retry; %d/%d used; waiting since %s, for %s at most): %v",
+				wait.Round(time.Second), ps.Status.RetryCount, maxStepRetries,
+				ps.Status.SCMWaitSince.UTC().Format(time.RFC3339), bound, execErr)
+			closed = append(closed, updateStepStatuses(ps, stepNames, idx, false, "", timings)...)
+			log.Info().Err(execErr).Str("env", ps.Spec.Environment).Dur("wait", wait).
+				Msg("SCM circuit open, step waits")
+			if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+				if apierrors.IsNotFound(patchErr) {
+					return ctrl.Result{}, nil
+				}
+				return ctrl.Result{}, fmt.Errorf("patch step circuit wait: %w", patchErr)
 			}
-			return ctrl.Result{}, fmt.Errorf("patch step circuit wait: %w", patchErr)
+			closed.record()
+			if started {
+				r.emitSCMUnavailable(ps, bound, execErr)
+			}
+			return ctrl.Result{RequeueAfter: wait}, nil
 		}
-		closed.record()
-		return ctrl.Result{RequeueAfter: wait}, nil
+		// Waited for the whole bound: the SCM stays down. Fail the step.
+		execErr = fmt.Errorf("the SCM was unavailable for %s, the most this step waits: %w", waited.Round(time.Second), execErr)
+		scmDown = true
+	}
+	if scmDown {
+		retryable = false
 	}
 	if retryable && (waitForSecret || ps.Status.RetryCount < maxStepRetries) {
 		var count string

@@ -305,3 +305,56 @@ func TestCircuitBreaker_HalfOpenTimeout(t *testing.T) {
 	assert.Greater(t, cb.HalfOpenTimeout, providerHTTPTimeout)
 	assert.LessOrEqual(t, cb.HalfOpenTimeout, providerHTTPTimeout+30*time.Second)
 }
+
+// TestCircuitBreaker_HalfOpenWaitersLookAgainSoon: while one caller probes,
+// the others are told to come back in a couple of seconds, not when the
+// probe would time out.
+func TestCircuitBreaker_HalfOpenWaitersLookAgainSoon(t *testing.T) {
+	cb := NewCircuitBreaker()
+	for i := 0; i < cb.FailureThreshold; i++ {
+		cb.RecordFailure(time.Time{})
+	}
+	expire(cb)
+	require.NoError(t, cb.Allow(), "the probe")
+	var open *ErrCircuitOpen
+	require.ErrorAs(t, cb.Allow(), &open)
+	assert.InDelta(t, halfOpenRecheck.Seconds(), time.Until(open.RetryAfter).Seconds(), 0.5)
+}
+
+// TestCircuitBreaker_LateSuccessDoesNotClose: a call that started before
+// the circuit opened and succeeds late does not close it; one that started
+// after does.
+func TestCircuitBreaker_LateSuccessDoesNotClose(t *testing.T) {
+	cb := NewCircuitBreaker()
+	before := time.Now().Add(-time.Second)
+	for i := 0; i < cb.FailureThreshold; i++ {
+		cb.RecordFailure(time.Time{})
+	}
+	cb.RecordSuccessFrom(before)
+	assert.Equal(t, CircuitOpen, cb.State())
+	expire(cb)
+	require.NoError(t, cb.Allow())
+	cb.RecordSuccessFrom(before)
+	assert.Equal(t, CircuitHalfOpen, cb.State(), "a late success is not the probe's")
+	cb.RecordSuccessFrom(time.Now())
+	assert.Equal(t, CircuitClosed, cb.State())
+}
+
+// TestCircuitBreaker_ReportsStateChanges: onChange sees each opening and
+// closing once, not each failed probe.
+func TestCircuitBreaker_ReportsStateChanges(t *testing.T) {
+	cb := NewCircuitBreaker()
+	var seen []bool
+	cb.onChange = func(open bool) { seen = append(seen, open) }
+	for i := 0; i < cb.FailureThreshold+3; i++ {
+		cb.RecordFailure(time.Time{})
+	}
+	expire(cb)
+	require.NoError(t, cb.Allow())
+	cb.RecordFailure(time.Time{}) // the probe failed: still open
+	expire(cb)
+	require.NoError(t, cb.Allow())
+	cb.RecordSuccess()
+	cb.RecordSuccess()
+	assert.Equal(t, []bool{true, false}, seen)
+}
