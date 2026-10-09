@@ -177,8 +177,7 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 		}
 		return "", nil, fmt.Errorf("plan rollback: %w", planErr)
 	}
-	lifecycle.StampCreatedBy(plan.Bundle, lifecycle.ControllerCreator)
-	if createErr := r.Create(ctx, plan.Bundle); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+	if createErr := lifecycle.CreateBundleAs(ctx, r.Client, plan.Bundle, lifecycle.ControllerCreator); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
 		return "", nil, fmt.Errorf("create rollback bundle %s: %w", name, createErr)
 	}
 	return name, nil, nil

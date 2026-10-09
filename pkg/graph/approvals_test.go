@@ -44,8 +44,11 @@ func TestBuilder_ApprovalGate(t *testing.T) {
 	require.True(t, ok, "the ApprovalGates collection")
 
 	approvalsRef := []interface{}{
-		approvalObj("z-alice", "prod", "alice"), approvalObj("a-bob", "prod", "bob"), approvalObj("m-mia", "test", "mia"),
-		approvalFor("b-eve", "prod", "eve", "uid-of-an-earlier-app-v1"),
+		withGroups(approvalObj("z-alice", "prod", "alice"), "release-managers"),
+		withGroups(approvalObj("a-bob", "prod", "bob"), "devs", "release-managers"),
+		approvalObj("c-carl", "prod", "carl"), // not in an allowed group: not copied
+		approvalObj("m-mia", "test", "mia"),
+		withGroups(approvalFor("b-eve", "prod", "eve", "uid-of-an-earlier-app-v1"), "release-managers"),
 	}
 	byName := map[string]map[string]interface{}{}
 	for _, o := range renderObjectsWith(t, res.Graph, map[string]interface{}{graph.ApprovalsNodeID: approvalsRef}) {
@@ -68,7 +71,7 @@ func TestBuilder_ApprovalGate(t *testing.T) {
 	for _, a := range spec["approvals"].([]interface{}) {
 		users = append(users, a.(map[string]interface{})["user"].(string))
 	}
-	assert.Equal(t, []string{"bob", "alice"}, users, "prod's Approvals of this Bundle UID, in name order")
+	assert.Equal(t, []string{"bob", "alice"}, users, "prod's Approvals of this Bundle UID from allowed approvers, in name order")
 
 	counted := byName["one-ok"]["spec"].(map[string]interface{})
 	assert.Nil(t, counted["approval"], "no policy on a gate that only reads approvals.*")
@@ -116,6 +119,16 @@ func approvalObj(name, env, user string) map[string]interface{} {
 	return approvalFor(name, env, user, "uid-app-v1")
 }
 
+// withGroups sets the approver's groups of approval a.
+func withGroups(a map[string]interface{}, groups ...string) map[string]interface{} {
+	list := make([]interface{}, len(groups))
+	for i, g := range groups {
+		list[i] = g
+	}
+	a["spec"].(map[string]interface{})["groups"] = list
+	return a
+}
+
 // approvalFor is an Approval of the Bundle with UID uid (the renderer gives
 // the Bundle ref "uid-<name>").
 func approvalFor(name, env, user, uid string) map[string]interface{} {
@@ -142,6 +155,33 @@ func TestBuilder_ApprovalsCapped(t *testing.T) {
 			assert.Len(t, o.Object["spec"].(map[string]interface{})["approvals"], 101)
 		}
 	}
+}
+
+// TestBuilder_ApprovalsFilteredBeforeCap (QA #1510): with allowedUsers set,
+// Approvals from anyone else are dropped before the 101 cap, so 150 of them
+// cannot crowd out the allowed approver's.
+func TestBuilder_ApprovalsFilteredBeforeCap(t *testing.T) {
+	p := makeLinearPipeline("app", "prod")
+	g := makePolicyGate("ok", "platform-policies", "prod", "true")
+	g.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1, AllowedUsers: []string{"zoe"}}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app"),
+		PolicyGates: []kardinalv1alpha1.PolicyGate{g}})
+	require.NoError(t, err)
+	var many []interface{}
+	for i := range 150 {
+		many = append(many, approvalObj(fmt.Sprintf("a%03d", i), "prod", fmt.Sprintf("u%03d", i)))
+	}
+	many = append(many, approvalObj("z-zoe", "prod", "zoe"))
+	found := false
+	for _, o := range renderObjectsWith(t, res.Graph, map[string]interface{}{graph.ApprovalsNodeID: many}) {
+		if o.Object["kind"] == "PolicyGate" {
+			found = true
+			approvals := o.Object["spec"].(map[string]interface{})["approvals"].([]interface{})
+			require.Len(t, approvals, 1)
+			assert.Equal(t, "zoe", approvals[0].(map[string]interface{})["user"])
+		}
+	}
+	require.True(t, found)
 }
 
 // TestBuilder_SkipPermissionApprovalRefused: approvals on a skip-permission

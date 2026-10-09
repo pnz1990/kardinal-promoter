@@ -146,7 +146,9 @@ func TestPolicyGateReconciler_ApprovalFirstSeenKept(t *testing.T) {
 
 // TestPolicyGateReconciler_ApprovalHeld: an approval gate blocks, whatever
 // the approvals, when excludeAuthor cannot be enforced (the Bundle has no
-// verified creator) or when it got more Approvals than it counts.
+// verified creator, or its creator is a kardinal component: a Subscription,
+// the Bundle API's static token, the controller) or when it got more
+// Approvals than it counts.
 func TestPolicyGateReconciler_ApprovalHeld(t *testing.T) {
 	many := make([]kardinalv1alpha1.GateApproval, 101)
 	for i := range many {
@@ -163,6 +165,15 @@ func TestPolicyGateReconciler_ApprovalHeld(t *testing.T) {
 		{name: "excludeAuthor without a creator", policy: &kardinalv1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true},
 			approvals: []kardinalv1alpha1.GateApproval{decision("alice", "approve")},
 			want:      "excludeAuthor cannot be enforced: the Bundle has no verified creator (annotation kardinal.io/created-by)"},
+		{name: "excludeAuthor on a Subscription's Bundle", policy: &kardinalv1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true},
+			creator: "subscription:app", approvals: []kardinalv1alpha1.GateApproval{decision("alice", "approve")},
+			want: `excludeAuthor cannot be enforced: the Bundle was created by the kardinal component "subscription:app", not a person`},
+		{name: "excludeAuthor on a Bundle API Bundle", policy: &kardinalv1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true},
+			creator: "bundle-api", approvals: []kardinalv1alpha1.GateApproval{decision("alice", "approve")},
+			want: `created by the kardinal component "bundle-api"`},
+		{name: "excludeAuthor on an automatic rollback", policy: &kardinalv1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true},
+			creator: "kardinal-controller", approvals: []kardinalv1alpha1.GateApproval{decision("alice", "approve")},
+			want: `created by the kardinal component "kardinal-controller"`},
 		{name: "excludeAuthor with a creator", policy: &kardinalv1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}, creator: "bob",
 			approvals: []kardinalv1alpha1.GateApproval{decision("alice", "approve")}, want: "approved by alice (1 of 1)", ready: true},
 		{name: "without excludeAuthor no creator is needed", policy: &kardinalv1alpha1.GateApprovalPolicy{Required: 1},

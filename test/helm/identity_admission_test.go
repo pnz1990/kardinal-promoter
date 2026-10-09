@@ -31,9 +31,9 @@ func identityAdmissionObjects(release string) []string {
 
 // identityPolicy renders the chart and returns the ValidatingAdmissionPolicy
 // named release-suffix, checking its binding denies.
-func identityPolicy(t *testing.T, suffix string) *admissionregistrationv1.ValidatingAdmissionPolicy {
+func identityPolicy(t *testing.T, suffix string, args ...string) *admissionregistrationv1.ValidatingAdmissionPolicy {
 	t.Helper()
-	docs := render(t, "kardinal-promoter")
+	docs := render(t, "kardinal-promoter", args...)
 	name := "kardinal-promoter-" + suffix
 	var vap admissionregistrationv1.ValidatingAdmissionPolicy
 	var binding admissionregistrationv1.ValidatingAdmissionPolicyBinding
@@ -56,29 +56,26 @@ func identityPolicy(t *testing.T, suffix string) *admissionregistrationv1.Valida
 	return &vap
 }
 
-// groupsOf returns the groups the API server gives user: a ServiceAccount
-// "system:serviceaccount:<ns>:<name>" is in system:serviceaccounts and
-// system:serviceaccounts:<ns>.
-func groupsOf(user string) []interface{} {
-	groups := []interface{}{"system:authenticated"}
-	if rest, ok := strings.CutPrefix(user, "system:serviceaccount:"); ok {
-		if ns, _, ok := strings.Cut(rest, ":"); ok {
-			groups = append(groups, "system:serviceaccounts", "system:serviceaccounts:"+ns)
-		}
-	}
-	return groups
-}
-
 // admits evaluates every validation of vap the way the API server binds the
 // variables (object, oldObject, request) and reports whether all pass.
+// The requester is in system:authenticated only: a case that needs groups
+// (a ServiceAccount's) uses admitsGroups, so an exemption that trusted a
+// group could not pass by accident.
 func admits(t *testing.T, vap *admissionregistrationv1.ValidatingAdmissionPolicy, object, oldObject map[string]interface{}, user string) bool {
+	t.Helper()
+	return admitsGroups(t, vap, object, oldObject, user, []interface{}{"system:authenticated"})
+}
+
+// admitsGroups is admits for a requester in groups.
+func admitsGroups(t *testing.T, vap *admissionregistrationv1.ValidatingAdmissionPolicy, object, oldObject map[string]interface{},
+	user string, groups []interface{}) bool {
 	t.Helper()
 	env, err := cel.NewEnv(cel.Variable("object", cel.DynType), cel.Variable("oldObject", cel.DynType),
 		cel.Variable("request", cel.DynType), cel.Variable("variables", cel.DynType))
 	require.NoError(t, err)
 	vars := map[string]interface{}{
 		"object": object, "request": map[string]interface{}{
-			"userInfo":  map[string]interface{}{"username": user, "groups": groupsOf(user)},
+			"userInfo":  map[string]interface{}{"username": user, "groups": groups},
 			"operation": operation(object, oldObject)},
 	}
 	if object == nil {
@@ -283,11 +280,11 @@ func TestIdentityAdmission_GateOverrides(t *testing.T) {
 	}
 }
 
-// TestIdentityAdmission_GateOverridesNamespaceMode: in namespace mode the
-// gate-overrides binding is limited to the watched namespace, because its
-// controller exemption names this release's ServiceAccount; another release's
-// controller in another namespace is not refused by it.
-func TestIdentityAdmission_GateOverridesNamespaceMode(t *testing.T) {
+// TestIdentityAdmission_NamespaceMode: in namespace mode every identity
+// binding is limited to the watched namespace, because its exemptions name
+// this release's controller; another release's controller in another
+// namespace is not refused by them. Cluster mode binds every namespace.
+func TestIdentityAdmission_NamespaceMode(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
 		want map[string]string
@@ -295,20 +292,29 @@ func TestIdentityAdmission_GateOverridesNamespaceMode(t *testing.T) {
 		{args: nil, want: nil},
 		{args: []string{"--set", "controller.watchNamespace=" + releaseNS}, want: map[string]string{"kubernetes.io/metadata.name": releaseNS}},
 	} {
-		var binding admissionregistrationv1.ValidatingAdmissionPolicyBinding
+		bindings := map[string]admissionregistrationv1.ValidatingAdmissionPolicyBinding{}
 		for _, d := range render(t, "kardinal-promoter", tc.args...) {
-			if d.Kind == "ValidatingAdmissionPolicyBinding" && d.Name == "kardinal-promoter-gate-overrides" {
-				decodeStrict(t, d, &binding)
+			if d.Kind == "ValidatingAdmissionPolicyBinding" {
+				var b admissionregistrationv1.ValidatingAdmissionPolicyBinding
+				decodeStrict(t, d, &b)
+				bindings[b.Name] = b
 			}
 		}
-		require.Equal(t, "kardinal-promoter-gate-overrides", binding.Name, "args %v", tc.args)
-		if tc.want == nil {
-			assert.Nil(t, binding.Spec.MatchResources, "cluster mode binds every namespace")
-			continue
+		for _, obj := range identityAdmissionObjects("kardinal-promoter") {
+			name, ok := strings.CutPrefix(obj, "ValidatingAdmissionPolicyBinding/")
+			if !ok {
+				continue
+			}
+			binding, found := bindings[name]
+			require.True(t, found, "binding %s, args %v", name, tc.args)
+			if tc.want == nil {
+				assert.Nil(t, binding.Spec.MatchResources, "%s: cluster mode binds every namespace", name)
+				continue
+			}
+			require.NotNil(t, binding.Spec.MatchResources, name)
+			require.NotNil(t, binding.Spec.MatchResources.NamespaceSelector, name)
+			assert.Equal(t, tc.want, binding.Spec.MatchResources.NamespaceSelector.MatchLabels, name)
 		}
-		require.NotNil(t, binding.Spec.MatchResources)
-		require.NotNil(t, binding.Spec.MatchResources.NamespaceSelector)
-		assert.Equal(t, tc.want, binding.Spec.MatchResources.NamespaceSelector.MatchLabels)
 	}
 }
 
@@ -396,6 +402,17 @@ func TestIdentityAdmission_Approvals(t *testing.T) {
 		}
 		return true
 	}
+	owned := func(a map[string]interface{}, kind, name, uid string) map[string]interface{} {
+		a["spec"].(map[string]interface{})["bundleUID"] = "uid-1"
+		a["metadata"].(map[string]interface{})["ownerReferences"] = []interface{}{
+			map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": kind, "name": name, "uid": uid}}
+		return a
+	}
+	withUID := func(a map[string]interface{}) map[string]interface{} {
+		a["spec"].(map[string]interface{})["bundleUID"] = "uid-1"
+		return a
+	}
+	controller := "system:serviceaccount:" + releaseNS + ":kardinal-promoter"
 	mine := []interface{}{"release-managers", "system:authenticated"}
 	tests := []struct {
 		name     string
@@ -419,6 +436,21 @@ func TestIdentityAdmission_Approvals(t *testing.T) {
 			user: "system:serviceaccount:kube-system:generic-garbage-collector", want: true},
 		{name: "namespace deletion", old: approval("alice", []interface{}{}, "app-v1", "prod"),
 			user: "system:serviceaccount:kube-system:namespace-controller", want: true},
+		{name: "kardinal's controller cannot revoke it", old: approval("alice", []interface{}{}, "app-v1", "prod"),
+			user: controller, want: false},
+		// The only owner an Approval may name is the Bundle it approves.
+		{name: "owned by its Bundle", obj: owned(approval("alice", []interface{}{}, "app-v1", "prod"), "Bundle", "app-v1", "uid-1"),
+			user: "alice", want: true},
+		{name: "no owner", obj: withUID(approval("alice", []interface{}{}, "app-v1", "prod")), user: "alice", want: true},
+		{name: "owned by another Bundle", obj: owned(approval("alice", []interface{}{}, "app-v1", "prod"), "Bundle", "app-v1", "uid-2"),
+			user: "alice", want: false},
+		{name: "owned by something else", obj: owned(approval("alice", []interface{}{}, "app-v1", "prod"), "ConfigMap", "app-v1", "uid-1"),
+			user: "alice", want: false},
+		{name: "owner changed later", old: owned(approval("alice", []interface{}{}, "app-v1", "prod"), "Bundle", "app-v1", "uid-1"),
+			obj: withUID(approval("alice", []interface{}{}, "app-v1", "prod")), user: "alice", want: false},
+		{name: "the garbage collector updates owners", old: owned(approval("alice", []interface{}{}, "app-v1", "prod"), "Bundle", "app-v1", "uid-1"),
+			obj:  withUID(approval("alice", []interface{}{}, "app-v1", "prod")),
+			user: "system:serviceaccount:kube-system:generic-garbage-collector", want: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -479,14 +511,13 @@ func TestIdentityAdmission_BundleCreator(t *testing.T) {
 		{name: "create without the annotation", cur: bundle(""), user: "alice", want: true},
 		{name: "create in someone else's name", cur: bundle("bob"), user: "alice", want: false},
 		{name: "the controller names the creator", cur: bundle("subscription:app"), user: controller, want: true},
-		// A second controller instance (a watchNamespace variant) runs as
-		// another ServiceAccount in the release namespace.
-		{name: "another controller instance names the creator", cur: bundle("bundle-api"),
-			user: "system:serviceaccount:" + releaseNS + ":variant-1", want: true},
+		// Only the exact controller ServiceAccount: another one in the
+		// release namespace (a second controller instance), or one of the
+		// same name elsewhere, may not.
+		{name: "another ServiceAccount of the release namespace cannot", cur: bundle("bundle-api"),
+			user: "system:serviceaccount:" + releaseNS + ":variant-1", want: false},
 		{name: "a ServiceAccount elsewhere cannot", cur: bundle("bundle-api"),
 			user: "system:serviceaccount:team-a:kardinal-promoter", want: false},
-		{name: "a user named like a release ServiceAccount cannot", cur: bundle("bundle-api"),
-			user: "system:serviceaccount" + releaseNS, want: false},
 		{name: "unchanged on update", old: bundle("alice"), cur: bundle("alice"), user: "bob", want: true},
 		{name: "added later", old: bundle(""), cur: bundle("bob"), user: "bob", want: false},
 		{name: "changed later", old: bundle("alice"), cur: bundle("bob"), user: "bob", want: false},
@@ -497,4 +528,13 @@ func TestIdentityAdmission_BundleCreator(t *testing.T) {
 			assert.Equal(t, tc.want, admits(t, vap, tc.cur, tc.old, tc.user))
 		})
 	}
+	// The release namespace's ServiceAccount groups do not exempt anyone.
+	variant := "system:serviceaccount:" + releaseNS + ":variant-1"
+	assert.False(t, admitsGroups(t, vap, bundle("bundle-api"), nil, variant,
+		[]interface{}{"system:authenticated", "system:serviceaccounts", "system:serviceaccounts:" + releaseNS}))
+	// admission.bundleCreatorStampers names more exact usernames.
+	listed := identityPolicy(t, "bundle-creator", "--set", "admission.bundleCreatorStampers={"+variant+"}")
+	assert.True(t, admits(t, listed, bundle("bundle-api"), nil, variant), "a listed username names the creator")
+	assert.True(t, admits(t, listed, bundle("subscription:app"), nil, controller), "the controller still does")
+	assert.False(t, admits(t, listed, bundle("bundle-api"), nil, "system:serviceaccount:"+releaseNS+":variant-2"))
 }

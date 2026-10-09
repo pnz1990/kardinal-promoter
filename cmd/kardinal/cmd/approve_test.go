@@ -6,6 +6,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -122,28 +123,51 @@ func TestApprove_SomeoneElsesApproval(t *testing.T) {
 	stubIdentity(t, Identity{Username: "alice"})
 	ctx := context.Background()
 	name := approvalName("app-v1", "prod", "alice")
+	labels := map[string]string{"kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod"}
 	squat := &v1alpha1.Approval{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: labels},
 		Spec:       v1alpha1.ApprovalSpec{Bundle: "app-v1", BundleUID: "uid-1", Environment: "prod", User: "mallory", Decision: "reject"},
 	}
 	c := approveFixture(t, "Promoting")
 	require.NoError(t, c.Create(ctx, squat))
-	for _, o := range []approveOptions{{env: "prod", decision: "reject"}, {env: "prod", decision: "approve"}, {env: "prod", decision: "approve", revoke: true}} {
-		err := approveFn(ctx, &bytes.Buffer{}, c, "default", "app-v1", o)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "belongs to mallory, not to you (alice)")
-	}
-	require.Len(t, approvals(t, c), 1)
-	assert.Equal(t, "mallory", approvals(t, c)[0].Spec.User)
 
-	stale := approvals(t, c)[0]
-	require.NoError(t, c.Delete(ctx, &stale))
+	// Mallory's object under alice's name is neither counted as hers, nor
+	// replaced, nor revoked: alice's Approval gets a generated name.
+	err := approveFn(ctx, &bytes.Buffer{}, c, "default", "app-v1", approveOptions{env: "prod", decision: "approve", revoke: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "alice has no Approval of app-v1 for prod to revoke")
+	var out bytes.Buffer
+	require.NoError(t, approveFn(ctx, &out, c, "default", "app-v1", approveOptions{env: "prod", decision: "approve"}))
+	list := approvals(t, c)
+	require.Len(t, list, 2)
+	var alices []v1alpha1.Approval
+	for _, a := range list {
+		if a.Spec.User == "alice" {
+			alices = append(alices, a)
+		}
+	}
+	require.Len(t, alices, 1)
+	assert.NotEqual(t, name, alices[0].Name, "the taken name is not reused")
+	assert.True(t, strings.HasPrefix(alices[0].Name, name+"-"), alices[0].Name)
+	assert.Contains(t, out.String(), "Recorded: alice approves app-v1 for prod (Approval "+alices[0].Name+")")
+
+	// A second approve finds alice's by its labels and user.
+	out.Reset()
+	require.NoError(t, approveFn(ctx, &out, c, "default", "app-v1", approveOptions{env: "prod", decision: "approve"}))
+	assert.Contains(t, out.String(), "Already recorded")
+	require.NoError(t, approveFn(ctx, &bytes.Buffer{}, c, "default", "app-v1", approveOptions{env: "prod", decision: "approve", revoke: true}))
+	list = approvals(t, c)
+	require.Len(t, list, 1)
+	assert.Equal(t, "mallory", list[0].Spec.User, "only alice's own Approval is revoked")
+
+	// Alice's Approval of an earlier Bundle of the same name is replaced.
+	require.NoError(t, c.Delete(ctx, &list[0]))
 	old := squat.DeepCopy()
 	old.ResourceVersion = ""
 	old.Spec.User, old.Spec.BundleUID, old.Spec.Decision = "alice", "uid-of-an-earlier-app-v1", "approve"
 	require.NoError(t, c.Create(ctx, old))
 	require.NoError(t, approveFn(ctx, &bytes.Buffer{}, c, "default", "app-v1", approveOptions{env: "prod", decision: "approve"}))
-	list := approvals(t, c)
+	list = approvals(t, c)
 	require.Len(t, list, 1)
 	assert.Equal(t, "uid-1", list[0].Spec.BundleUID, "the earlier Bundle's Approval is replaced")
 }

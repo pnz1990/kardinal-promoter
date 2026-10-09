@@ -58,7 +58,7 @@ func userKubeconfig(t *testing.T, e *framework.Env, ns, user string, groups ...s
 // release-managers, excludeAuthor) in front of an approval: auto prod and
 // approves with the CLI as several users. prod has no step and the gate reads
 // "waiting for approvals: 0 of 2" until two allowed people approved: an
-// approval from someone outside the group is recorded but not counted, one
+// approval from someone outside the group is not copied into the gate, one
 // in another user's name is refused by the admission policy, a reject from
 // an allowed approver blocks until revoked, and the second allowed approval
 // lets prod promote. Each decision is an Approval object in the approver's
@@ -93,11 +93,15 @@ func TestGate_ApprovalQuorum(t *testing.T) {
 	r := as(mallory, "approve", bundle, "--env", "prod", "--comment", "looks fine to me")
 	require.Equal(t, 0, r.Code, r.Output())
 	assert.Contains(t, r.Stdout, "Recorded: mallory@example.com approves "+bundle+" for prod")
-	gate := e.WaitGate(t, a.ns, bundle, "prod", "two-approvers", gateTimeout, "mallory recorded, not counted", func(g *v1alpha1.PolicyGate) bool {
-		return len(g.Status.Approvals) == 1 && !g.Status.Approvals[0].Counted
+	// The Graph copies only allowed approvers' Approvals into the gate
+	// (before the 101 cap), so mallory's never reaches it.
+	framework.Consistently(t, 15*time.Second, "mallory's Approval is not copied into the gate", func(ctx context.Context) (bool, string) {
+		gate, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", "two-approvers")
+		if err != nil || !ok {
+			return false, fmt.Sprintf("no gate instance (%v)", err)
+		}
+		return len(gate.Spec.Approvals) == 0 && !gate.Status.Ready, fmt.Sprintf("%d approvals, ready=%v", len(gate.Spec.Approvals), gate.Status.Ready)
 	})
-	assert.Contains(t, gate.Status.Approvals[0].Reason, "not an allowed approver")
-	assert.False(t, gate.Status.Ready)
 
 	// An Approval in someone else's name is refused (identity policy).
 	forger := impersonating(t, e, a.ns, "mallory@example.com", []string{"devs"}, []string{"approvals"}, "create", "delete")

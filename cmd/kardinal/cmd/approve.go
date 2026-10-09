@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -53,7 +54,9 @@ Approving before the Bundle reaches the gate is fine.
   --revoke            deletes your Approval for the Bundle and environment.
 
 Running approve again with the same decision does nothing; with another
-decision it replaces yours. An Approval belongs to its Bundle and is deleted
+decision it replaces yours. Your Approval is found by its labels and
+spec.user, not by its name; if the name it would get is taken, the API
+server generates one. An Approval belongs to its Bundle and is deleted
 with it. See docs/policy-gates.md (Approval gates).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -82,6 +85,15 @@ func approvalName(bundle, env, user string) string {
 		bundle = strings.TrimRight(bundle[:limit], "-.")
 	}
 	return bundle + suffix
+}
+
+// generatePrefix is a generateName for name: the API server appends five
+// characters, and the result must stay a DNS subdomain of 253.
+func generatePrefix(name string) string {
+	if len(name) > 247 {
+		name = strings.TrimRight(name[:247], "-.")
+	}
+	return name + "-"
 }
 
 // approveFn is the testable implementation of approve.
@@ -113,44 +125,51 @@ func approveFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundl
 	if err != nil {
 		return fmt.Errorf("approve: %w", err)
 	}
-	name := approvalName(bundleName, o.env, id.Username)
-	key := types.NamespacedName{Namespace: ns, Name: name}
-
-	var existing v1alpha1.Approval
-	getErr := c.Get(ctx, key, &existing)
-	if getErr == nil && existing.Spec.User != id.Username {
-		// The name is derived from the user, but anyone can create an object
-		// of that name: never count, replace or revoke someone else's.
-		return fmt.Errorf("approve: Approval %s belongs to %s, not to you (%s); ask an admin to delete it",
-			name, existing.Spec.User, id.Username)
+	// Your Approval of this Bundle for env: found by its labels and
+	// spec.user, not by name. Anyone can create an object under the name
+	// approvalName derives, and an Approval of an earlier Bundle of the
+	// same name is not counted (the Graph matches spec.bundleUID).
+	var list v1alpha1.ApprovalList
+	if err := c.List(ctx, &list, sigs_client.InNamespace(ns),
+		sigs_client.MatchingLabels{"kardinal.io/bundle": bundleName, "kardinal.io/environment": o.env}); err != nil {
+		return fmt.Errorf("approve: list approvals of %s: %w", bundleName, err)
 	}
-	if getErr == nil && existing.Spec.BundleUID != string(b.UID) {
-		// An Approval of an earlier Bundle with the same name: the Graph
-		// does not count it, so record a fresh one.
-		if err := c.Delete(ctx, &existing); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("approve: replace the Approval of an earlier Bundle %s: %w", bundleName, err)
+	var mine []v1alpha1.Approval
+	for _, a := range list.Items {
+		if a.Spec.User != id.Username {
+			continue // never count, replace or revoke someone else's
 		}
-		getErr = apierrors.NewNotFound(v1alpha1.GroupVersion.WithResource("approvals").GroupResource(), name)
+		if a.Spec.BundleUID != string(b.UID) {
+			if err := c.Delete(ctx, &a); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("approve: delete %s, your Approval of an earlier Bundle %s: %w", a.Name, bundleName, err)
+			}
+			continue
+		}
+		mine = append(mine, a)
 	}
+	sort.Slice(mine, func(i, j int) bool { return mine[i].Name < mine[j].Name })
+
 	switch {
-	case getErr == nil && o.revoke:
-		if err := c.Delete(ctx, &existing); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("approve: revoke %s: %w", name, err)
+	case o.revoke && len(mine) == 0:
+		return fmt.Errorf("approve: %s has no Approval of %s for %s to revoke", id.Username, bundleName, o.env)
+	case o.revoke:
+		for i := range mine {
+			if err := c.Delete(ctx, &mine[i]); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("approve: revoke %s: %w", mine[i].Name, err)
+			}
 		}
 		return writef(w, "Revoked: %s no longer %ss %s for %s (Approval %s deleted)\n",
-			id.Username, existing.Spec.Decision, bundleName, o.env, name)
-	case apierrors.IsNotFound(getErr) && o.revoke:
-		return fmt.Errorf("approve: %s has no Approval of %s for %s to revoke", id.Username, bundleName, o.env)
-	case getErr == nil && existing.Spec.Decision == o.decision && existing.Spec.Comment == o.comment:
-		return writef(w, "Already recorded: %s %ss %s for %s (Approval %s)\n", id.Username, o.decision, bundleName, o.env, name)
-	case getErr == nil:
-		// An Approval is immutable: a new decision replaces it.
-		if err := c.Delete(ctx, &existing); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("approve: replace %s: %w", name, err)
-		}
-	case !apierrors.IsNotFound(getErr):
-		return fmt.Errorf("approve: get approval %s: %w", name, getErr)
+			id.Username, mine[0].Spec.Decision, bundleName, o.env, mine[0].Name)
+	case len(mine) == 1 && mine[0].Spec.Decision == o.decision && mine[0].Spec.Comment == o.comment:
+		return writef(w, "Already recorded: %s %ss %s for %s (Approval %s)\n", id.Username, o.decision, bundleName, o.env, mine[0].Name)
 	}
+	// An Approval is immutable: a new decision replaces yours.
+	for i := range mine {
+		if err := c.Delete(ctx, &mine[i]); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("approve: replace %s: %w", mine[i].Name, err)
+		}
+	}
+	name := approvalName(bundleName, o.env, id.Username)
 
 	groups := id.Groups
 	if groups == nil {
@@ -175,10 +194,18 @@ func approveFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundl
 			Decision: o.decision, Comment: o.comment,
 		},
 	}
-	if err := c.Create(ctx, a); err != nil {
-		return fmt.Errorf("approve: create approval %s: %w", name, err)
+	err = c.Create(ctx, a)
+	if apierrors.IsAlreadyExists(err) {
+		// The name is taken (by someone else's object, or a revoke still
+		// finishing): let the API server pick one.
+		a.Name, a.GenerateName = "", generatePrefix(name)
+		a.ResourceVersion = ""
+		err = c.Create(ctx, a)
 	}
-	return writef(w, "Recorded: %s %ss %s for %s (Approval %s)\n", id.Username, o.decision, bundleName, o.env, name)
+	if err != nil {
+		return fmt.Errorf("approve: create approval for %s: %w", bundleName, err)
+	}
+	return writef(w, "Recorded: %s %ss %s for %s (Approval %s)\n", id.Username, o.decision, bundleName, o.env, a.Name)
 }
 
 func writef(w io.Writer, format string, args ...interface{}) error {

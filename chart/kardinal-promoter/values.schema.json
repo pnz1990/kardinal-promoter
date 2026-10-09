@@ -382,6 +382,17 @@
       },
       "description": "Deprecated, no effect."
     },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bundleCreatorStampers": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Exact usernames, besides this release's controller ServiceAccount, that may set any kardinal.io/created-by on a Bundle."
+        }
+      }
+    },
     "tracing": {
       "type": "object",
       "additionalProperties": false,

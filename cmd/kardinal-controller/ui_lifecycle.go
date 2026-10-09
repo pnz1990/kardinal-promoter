@@ -22,7 +22,7 @@ import (
 
 // uiActor is the requester the UI records when it does not know who the
 // caller is: with the static UI token (--ui-auth-token) or with no UI auth.
-const uiActor = "kardinal-ui"
+const uiActor = lifecycle.UICreator
 
 // uiRequester is who asked for a UI action: a promote, a rollback, a new
 // Bundle, a gate approval, a pause or a resume. With --ui-tokenreview-auth it
@@ -109,8 +109,7 @@ func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
 		s.writeLifecycleError(w, "promote", err)
 		return
 	}
-	lifecycle.StampCreatedBy(plan.Bundle, requester)
-	if err := s.client.Create(r.Context(), plan.Bundle); err != nil {
+	if err := lifecycle.CreateBundleAs(r.Context(), s.client, plan.Bundle, requester); err != nil {
 		s.writeLifecycleError(w, "create promote bundle", err)
 		return
 	}
@@ -180,8 +179,7 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 		s.writeLifecycleError(w, "rollback", err)
 		return
 	}
-	lifecycle.StampCreatedBy(plan.Bundle, requester)
-	if err := s.client.Create(r.Context(), plan.Bundle); err != nil {
+	if err := lifecycle.CreateBundleAs(r.Context(), s.client, plan.Bundle, requester); err != nil {
 		s.writeLifecycleError(w, "create rollback bundle", err)
 		return
 	}

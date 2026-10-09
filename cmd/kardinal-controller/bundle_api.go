@@ -46,7 +46,7 @@ const (
 	bundleRateLimit = 60
 	// bundleAPICreator is the kardinal.io/created-by of a Bundle created
 	// through the Bundle API token.
-	bundleAPICreator = "bundle-api"
+	bundleAPICreator = lifecycle.BundleAPICreator
 )
 
 // bundleCreateRequest is the JSON body accepted by POST /api/v1/bundles.
@@ -251,9 +251,7 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 		lifecycle.StampCreatedAt(bundle, now) // sub-second creation order for supersession
 		// The holder of the Bundle API token, not a person: excludeAuthor
 		// never matches it.
-		lifecycle.StampCreatedBy(bundle, bundleAPICreator)
-
-		if err := s.client.Create(r.Context(), bundle); err != nil {
+		if err := lifecycle.CreateBundleAs(r.Context(), s.client, bundle, bundleAPICreator); err != nil {
 			s.log.Error().Err(err).Str("namespace", ns).Str("pipeline", req.Pipeline).Msg("failed to create bundle")
 			switch {
 			case apierrors.IsInvalid(err):

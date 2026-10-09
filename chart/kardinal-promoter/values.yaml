@@ -194,6 +194,16 @@ github:
 # -- SCM provider (--scm-provider): github (default when empty), gitlab,
 # forgejo, gitea, bitbucket or azuredevops, and its API base URL
 # (--scm-api-url) for self-hosted instances. See docs/scm-providers.md.
+
+# Identity admission policies (templates/identity-admission.yaml,
+# docs/guides/security.md#verified-identity).
+admission:
+  # -- Exact usernames, besides this release's controller ServiceAccount, that
+  # may set any kardinal.io/created-by on a Bundle: another kardinal
+  # controller that creates Bundles for people (for example
+  # "system:serviceaccount:kardinal-system:kardinal-promoter-b"). Never a
+  # namespace or a group.
+  bundleCreatorStampers: []
 scm:
   provider: ""
   apiURL: ""

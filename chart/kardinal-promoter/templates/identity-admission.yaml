@@ -53,6 +53,13 @@ metadata:
 spec:
   policyName: {{ include "kardinal-promoter.fullname" . }}-bundle-rejection
   validationActions: ["Deny"]
+  {{- with .Values.controller.watchNamespace }}
+  # Namespace mode: this release manages the watched namespace only.
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ . | quote }}
+  {{- end }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -174,14 +181,18 @@ spec:
         resources: ["approvals"]
   variables:
     # Deleting an Approval revokes it: only its approver may, besides the
-    # garbage collector (an Approval is owned by its Bundle), the namespace
-    # controller (namespace deletion) and kardinal's controller.
+    # garbage collector (an Approval is owned by its Bundle) and the
+    # namespace controller (namespace deletion). kardinal's controller never
+    # deletes Approvals, so it is not exempt.
     - name: cleanup
       expression: >-
         request.userInfo.username in [
           'system:serviceaccount:kube-system:generic-garbage-collector',
           'system:serviceaccount:kube-system:namespace-controller',
-          {{ $controller | quote }}]
+          'system:kube-controller-manager']
+    - name: owners
+      expression: >-
+        object != null && has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []
   validations:
     # kardinal approve records the approver. The spec is immutable (CRD
     # rule), so only the create is checked.
@@ -214,6 +225,21 @@ spec:
         the kardinal.io/bundle and kardinal.io/environment labels must equal spec.bundle
         and spec.environment
       reason: Invalid
+    # The garbage collector deletes an Approval with its Bundle: the only
+    # owner an Approval may name is the Bundle it approves (spec.bundleUID),
+    # so owning it by something else cannot delete it early, and owning it
+    # by its Bundle cannot be dropped to keep it past the Bundle.
+    - expression: >-
+        request.operation != 'CREATE' ||
+        variables.owners.all(r, r.kind == 'Bundle' && r.apiVersion.startsWith('kardinal.io/') &&
+          r.uid == object.spec.bundleUID && r.name == object.spec.bundle)
+      message: an Approval may be owned only by the Bundle it approves (spec.bundle and spec.bundleUID)
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'UPDATE' || variables.cleanup ||
+        variables.owners == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
+      message: the ownerReferences of an Approval cannot change
+      reason: Forbidden
     - expression: >-
         request.operation != 'DELETE' || variables.cleanup ||
         oldObject.spec.user == request.userInfo.username
@@ -230,6 +256,13 @@ metadata:
 spec:
   policyName: {{ include "kardinal-promoter.fullname" . }}-approvals
   validationActions: ["Deny"]
+  {{- with .Values.controller.watchNamespace }}
+  # Namespace mode: this release manages the watched namespace only.
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ . | quote }}
+  {{- end }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -247,16 +280,13 @@ spec:
         resources: ["bundles"]
   variables:
     # The controller creates Bundles for the UI, the Bundle API,
-    # Subscriptions and automatic rollbacks and names their creator. Any
-    # ServiceAccount in the release namespace counts as a controller here, so
-    # extra controller instances (watchNamespace variants, a second
-    # Deployment) can stamp too: creating ServiceAccount tokens there already
-    # grants the controller's access.
+    # Subscriptions and automatic rollbacks and names their creator: this
+    # release's controller ServiceAccount, exactly, plus the usernames listed
+    # in admission.bundleCreatorStampers (another kardinal controller). Never
+    # a whole namespace: in namespace mode that namespace is the tenant's.
     - name: controller
       expression: >-
-        request.userInfo.username == {{ $controller | quote }} ||
-        ('system:serviceaccounts:{{ .Release.Namespace }}' in request.userInfo.groups &&
-          request.userInfo.username.startsWith('system:serviceaccount:{{ .Release.Namespace }}:'))
+        request.userInfo.username in {{ prepend (.Values.admission.bundleCreatorStampers | default list) $controller | toJson }}
     - name: creator
       expression: >-
         has(object.metadata.annotations) && 'kardinal.io/created-by' in object.metadata.annotations ?

@@ -377,12 +377,20 @@ func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
 // approvalsOfItem is the spec.approvals of an approval gate instance: the
 // specs of the Approvals for the item's environment and for this very Bundle
 // (spec.bundleUID == the Bundle's UID, so an Approval of an earlier Bundle
-// with the same name never counts), sorted by name, at most
-// maxCopiedApprovals of them. The gate blocks when it gets more than it counts
-// (policygate maxGateApprovals).
+// with the same name never counts), from approvers the gate's policy allows
+// (allowedUsers or allowedGroups; anyone when both are empty), sorted by
+// name, at most maxCopiedApprovals of them. Filtering before the cap means
+// Approvals from people who may not approve cannot crowd out the ones that
+// count. The gate blocks when it gets more than it counts (policygate
+// maxGateApprovals).
 func approvalsOfItem() string {
-	list := fmt.Sprintf("%s.filter(a, a.spec.environment == %s.environment && a.spec.bundleUID == bundle.metadata.uid)"+
-		".sortBy(a, a.metadata.name).map(a, a.spec)", ApprovalsNodeID, iterGate)
+	policy := fmt.Sprintf("%s.templates[%s.t].spec.?approval", NodePolicyGateData, iterGate)
+	users := policy + ".?allowedUsers.orValue([])"
+	groups := policy + ".?allowedGroups.orValue([])"
+	eligible := fmt.Sprintf("((size(%[1]s) == 0 && size(%[2]s) == 0) || a.spec.user in %[1]s || "+
+		"a.spec.?groups.orValue([]).exists(g, g in %[2]s))", users, groups)
+	list := fmt.Sprintf("%s.filter(a, a.spec.environment == %s.environment && a.spec.bundleUID == bundle.metadata.uid && %s)"+
+		".sortBy(a, a.metadata.name).map(a, a.spec)", ApprovalsNodeID, iterGate, eligible)
 	return fmt.Sprintf("${size(%[1]s) > %[2]d ? %[1]s.slice(0, %[2]d) : %[1]s}", list, maxCopiedApprovals)
 }
 

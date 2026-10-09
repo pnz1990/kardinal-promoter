@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // approvalTally is how a gate instance counts the decisions in its
@@ -65,6 +66,9 @@ func tallyApprovals(gate *kardinalv1alpha1.PolicyGate, creator string) approvalT
 				maxGateApprovals, gate.Labels[labelEnvironment])
 		case p.ExcludeAuthor && creator == "":
 			t.held = "excludeAuthor cannot be enforced: the Bundle has no verified creator (annotation kardinal.io/created-by)"
+		case p.ExcludeAuthor && lifecycle.ComponentCreator(creator):
+			t.held = fmt.Sprintf("excludeAuthor cannot be enforced: the Bundle was created by the kardinal component %q, "+
+				"not a person; create it as yourself (kardinal create bundle, or the Bundle API with your own token)", creator)
 		}
 	}
 	bundle, env := gate.Labels[labelBundle], gate.Labels[labelEnvironment]

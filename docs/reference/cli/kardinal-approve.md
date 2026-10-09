@@ -22,7 +22,9 @@ Approving before the Bundle reaches the gate is fine.
   --revoke            deletes your Approval for the Bundle and environment.
 
 Running approve again with the same decision does nothing; with another
-decision it replaces yours. An Approval belongs to its Bundle and is deleted
+decision it replaces yours. Your Approval is found by its labels and
+spec.user, not by its name; if the name it would get is taken, the API
+server generates one. An Approval belongs to its Bundle and is deleted
 with it. See docs/policy-gates.md (Approval gates).
 
 ```
