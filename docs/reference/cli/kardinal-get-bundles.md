@@ -2,6 +2,11 @@
 
 List Bundles, optionally filtered by pipeline name
 
+### Synopsis
+
+List Bundles, newest first: by the kardinal.io/created-at annotation, then
+creation time and name, the order supersession uses and kardinal history lists.
+
 ```
 kardinal get bundles [pipeline] [flags]
 ```

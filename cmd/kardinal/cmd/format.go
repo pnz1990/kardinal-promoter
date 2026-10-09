@@ -103,6 +103,19 @@ func stepStatePriority(state string) int {
 // pipeline. showNamespace prepends a NAMESPACE column (--all-namespaces).
 func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 	steps []v1alpha1.PromotionStep, subs []v1alpha1.Subscription, showNamespace bool) error {
+	return formatPipelines(w, pipelines, bundles, steps, subs, showNamespace, false)
+}
+
+// maxEnvColumns is the most environment columns the pipeline table shows:
+// with more (one wide Pipeline, or the union of several), each row shows a
+// summary instead (formatPipelineSummary), unless allColumns asks for every
+// environment (kardinal get pipelines <name>).
+const maxEnvColumns = 8
+
+// formatPipelines is FormatPipelineTableFull with allColumns: show one
+// column per environment however many there are.
+func formatPipelines(w io.Writer, pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
+	steps []v1alpha1.PromotionStep, subs []v1alpha1.Subscription, showNamespace, allColumns bool) error {
 	var subCount map[string]int
 	if subs != nil {
 		// namespace/pipeline → count of active Subscriptions (Phase=="Watching").
@@ -116,7 +129,154 @@ func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, bundles
 			}
 		}
 	}
-	return formatPipelineTableInternal(w, pipelines, pipelineEnvStates(pipelines, bundles, steps), subCount, showNamespace)
+	rows := pipelineEnvStates(pipelines, bundles, steps)
+	if !allColumns && len(envColumnOrder(pipelines)) > maxEnvColumns {
+		return formatPipelineSummary(w, pipelines, rows, subCount, showNamespace)
+	}
+	return formatPipelineTableInternal(w, pipelines, rows, subCount, showNamespace)
+}
+
+// envColumnOrder is the environment columns of pipelines: each Pipeline's
+// environments in DAG order (graph.EnvironmentOrder, list order when the
+// ordering is invalid), merged so that an environment comes after every
+// environment that precedes it in some Pipeline (test, uat, prod for a
+// Pipeline test → uat → prod next to one test → prod). Ties, and orders
+// that contradict each other, keep the first appearance.
+func envColumnOrder(pipelines []v1alpha1.Pipeline) []string {
+	var first []string
+	seen := map[string]bool{}
+	after := map[string]map[string]bool{} // env → the envs that must come before it
+	for i := range pipelines {
+		order, err := graph.EnvironmentOrder(&pipelines[i])
+		if err != nil || len(order) != len(pipelines[i].Spec.Environments) {
+			order = order[:0]
+			for _, e := range pipelines[i].Spec.Environments {
+				order = append(order, e.Name)
+			}
+		}
+		for j, env := range order {
+			if !seen[env] {
+				seen[env] = true
+				first = append(first, env)
+			}
+			if j > 0 {
+				if after[env] == nil {
+					after[env] = map[string]bool{}
+				}
+				after[env][order[j-1]] = true
+			}
+		}
+	}
+	// Kahn's algorithm over first-appearance order; whatever a cycle leaves
+	// keeps its first-appearance place at the end.
+	placed := map[string]bool{}
+	out := make([]string, 0, len(first))
+	for progress := true; progress && len(out) < len(first); {
+		progress = false
+		for _, env := range first {
+			if placed[env] {
+				continue
+			}
+			ready := true
+			for dep := range after[env] {
+				if !placed[dep] {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				placed[env] = true
+				out = append(out, env)
+				progress = true
+			}
+		}
+	}
+	for _, env := range first {
+		if !placed[env] {
+			out = append(out, env)
+		}
+	}
+	return out
+}
+
+// formatPipelineSummary renders the pipeline table with one summary column
+// instead of a column per environment: ENVS is the environment count and
+// PROGRESS the current Bundle's states, most advanced first ("42 Verified,
+// 108 HealthChecking"). A footnote says how to see every environment.
+func formatPipelineSummary(w io.Writer, pipelines []v1alpha1.Pipeline, rows map[string]pipelineRow,
+	subCount map[string]int, showNamespace bool) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	header := ""
+	if showNamespace {
+		header = "NAMESPACE\t"
+	}
+	header += "PIPELINE\tBUNDLE\tENVS\tPROGRESS"
+	if subCount != nil {
+		header += "\tSUB"
+	}
+	header += "\tAGE"
+	if _, err := fmt.Fprintln(tw, header); err != nil {
+		return fmt.Errorf("write pipeline table header: %w", err)
+	}
+	for _, p := range pipelines {
+		key := p.Namespace + "/" + p.Name
+		pr := rows[key]
+		name := p.Name
+		if p.Spec.Paused {
+			name += " [PAUSED]"
+		}
+		row := name + "\t" + orDash(pr.bundle)
+		if showNamespace {
+			row = p.Namespace + "\t" + row
+		}
+		row += fmt.Sprintf("\t%d\t%s", len(p.Spec.Environments), progressSummary(pr.envs))
+		if subCount != nil {
+			row += fmt.Sprintf("\t%d", subCount[key])
+		}
+		row += "\t" + HumanAge(p.CreationTimestamp.Time)
+		if _, err := fmt.Fprintln(tw, row); err != nil {
+			return fmt.Errorf("write pipeline row: %w", err)
+		}
+	}
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("flush pipeline table: %w", err)
+	}
+	_, err := fmt.Fprintf(w, "\nMore than %d environments: one row per Pipeline. "+
+		"Every environment of one: kardinal get pipelines <name>\n", maxEnvColumns)
+	if err != nil {
+		return fmt.Errorf("write pipeline table note: %w", err)
+	}
+	return nil
+}
+
+// progressSummary counts the environment states of a row, Verified first,
+// then by stepStatePriority (the most advanced first), "-" without any.
+func progressSummary(envs map[string]string) string {
+	count := map[string]int{}
+	for _, st := range envs {
+		count[st]++
+	}
+	if len(count) == 0 {
+		return "-"
+	}
+	states := make([]string, 0, len(count))
+	for st := range count {
+		states = append(states, st)
+	}
+	sort.Slice(states, func(i, j int) bool {
+		if (states[i] == "Verified") != (states[j] == "Verified") {
+			return states[i] == "Verified"
+		}
+		if pi, pj := stepStatePriority(states[i]), stepStatePriority(states[j]); pi != pj {
+			return pi > pj
+		}
+		return states[i] < states[j]
+	})
+	parts := make([]string, len(states))
+	for i, st := range states {
+		parts[i] = fmt.Sprintf("%d %s", count[st], st)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // pipelineRow is the table content of one pipeline: its current Bundle and
@@ -196,19 +356,9 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, row
 		return nil
 	}
 
-	// Collect all environment names in spec order across all pipelines so that
-	// when multiple pipelines are printed their columns align.
-	// We preserve spec-order per pipeline and use the union across all.
-	envOrder := make([]string, 0)
-	envSeen := make(map[string]bool)
-	for _, p := range pipelines {
-		for _, e := range p.Spec.Environments {
-			if !envSeen[e.Name] {
-				envSeen[e.Name] = true
-				envOrder = append(envOrder, e.Name)
-			}
-		}
-	}
+	// One column per environment, in DAG order, merged across pipelines so
+	// that their columns align (envColumnOrder).
+	envOrder := envColumnOrder(pipelines)
 
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 

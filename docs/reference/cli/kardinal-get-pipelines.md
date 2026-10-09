@@ -18,6 +18,14 @@ explain instead pick the current bundle per environment, so for an
 environment the newest bundle has not reached they describe the bundle that
 was there before.
 
+Environment columns follow the pipeline's DAG (waves and dependsOn), merged
+across the pipelines listed. With more than 8 environment columns (one wide
+pipeline, or several with different environments), each pipeline gets one
+summary row instead: ENVS, the environment count, and PROGRESS, the current
+bundle's states with counts, most advanced first ("42 Verified, 108
+HealthChecking"). kardinal get pipelines <name> shows every environment of
+that pipeline.
+
 The table needs list permission on bundles and promotionsteps; without it the
 command fails instead of showing dashes.
 
