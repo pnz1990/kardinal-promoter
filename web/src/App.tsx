@@ -22,6 +22,7 @@ import { PipelineOpsTable } from './components/PipelineOpsTable'
 import { DAGView } from './components/DAGView'
 import { NodeDetail } from './components/NodeDetail'
 import { HealthChip } from './components/HealthChip'
+import { RejectedLiveBanner } from './components/RejectedLiveBanner'
 import { BlockedBanner } from './components/BlockedBanner'
 import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
 import { BundleTimeline } from './components/BundleTimeline'
@@ -669,6 +670,7 @@ export function App() {
                     <BundleTypeBadge type={activeBundle.type} />
                     <span style={{ color: 'var(--color-text-faint)' }}>·</span>
                     <HealthChip state={activeBundle.phase} size="sm" />
+                    <RejectedLiveBanner bundle={activeBundle} />
                     {activeBundle.provenance?.commitSHA && (
                       <>
                         <span style={{ color: 'var(--color-text-faint)' }}>·</span>

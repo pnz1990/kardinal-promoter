@@ -9,7 +9,7 @@ kardinal get bundles [pipeline] [flags]
 ### Options
 
 ```
-      --active   Hide Superseded bundles
+      --active   Hide Superseded and Rejected bundles
   -h, --help     help for bundles
 ```
 
