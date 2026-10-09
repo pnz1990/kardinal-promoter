@@ -157,14 +157,16 @@ func TestGate_ApprovalQuorum(t *testing.T) {
 		assert.Equal(t, bundle, ap.OwnerReferences[0].Name)
 	}
 	assert.Equal(t, map[string]string{"alice@example.com": "approve", "bob@example.com": "approve", "mallory@example.com": "approve"}, users)
-	final := e.WaitGate(t, a.ns, bundle, "prod", "two-approvers", gateTimeout, "three decisions recorded", func(g *v1alpha1.PolicyGate) bool {
-		return len(g.Status.Approvals) == 3
+	// mallory's Approval exists but is not an allowed approver's: the Graph
+	// does not copy it into the gate.
+	final := e.WaitGate(t, a.ns, bundle, "prod", "two-approvers", gateTimeout, "two decisions recorded", func(g *v1alpha1.PolicyGate) bool {
+		return len(g.Status.Approvals) == 2
 	})
 	counted := map[string]bool{}
 	for _, rec := range final.Status.Approvals {
 		counted[rec.User] = rec.Counted
 	}
-	assert.Equal(t, map[string]bool{"alice@example.com": true, "bob@example.com": true, "mallory@example.com": false}, counted,
+	assert.Equal(t, map[string]bool{"alice@example.com": true, "bob@example.com": true}, counted,
 		fmt.Sprintf("status.approvals: %+v", final.Status.Approvals))
 
 	// Every decision is audited: bob's reject recorded and revoked by his
@@ -178,7 +180,7 @@ func TestGate_ApprovalQuorum(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, []string{
-		"ApprovalRecorded approve mallory@example.com", "ApprovalRecorded approve alice@example.com",
+		"ApprovalRecorded approve alice@example.com",
 		"ApprovalRecorded reject bob@example.com", "ApprovalRevoked reject bob@example.com",
 		"ApprovalRecorded approve bob@example.com",
 	}, decisions)
