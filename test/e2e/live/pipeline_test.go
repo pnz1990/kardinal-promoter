@@ -225,7 +225,10 @@ func TestPipeline_NotImplemented(t *testing.T) {
 func TestPipeline_RejectedFields(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
-	a := &app{e: e, ns: e.Namespace(t), envs: []string{"test"}, repo: gitserver.Repo{CloneURL: "https://git.example.com/podinfo.git", Branch: "main"}}
+	ns := e.Namespace(t)
+	// A repository of its own: Pipelines of other tests at the same path
+	// would get PathConflict.
+	a := &app{e: e, ns: ns, envs: []string{"test"}, repo: gitserver.Repo{CloneURL: "https://git.example.com/" + ns + "/podinfo.git", Branch: "main"}}
 	cases := []struct {
 		name string
 		set  func(p *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec)
@@ -296,8 +299,9 @@ func TestPipeline_RejectedFields(t *testing.T) {
 func TestPipeline_NameAndDurationRules(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
-	a := &app{e: e, ns: e.Namespace(t), envs: []string{"test", "prod"},
-		repo: gitserver.Repo{CloneURL: "https://git.example.com/podinfo.git", Branch: "main"}}
+	ns := e.Namespace(t)
+	a := &app{e: e, ns: ns, envs: []string{"test", "prod"},
+		repo: gitserver.Repo{CloneURL: "https://git.example.com/" + ns + "/podinfo.git", Branch: "main"}}
 	const dnsLabel = "should match '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'"
 	cases := []struct {
 		name string
