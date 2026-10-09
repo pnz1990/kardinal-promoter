@@ -258,6 +258,12 @@ func (h healthInjector) inject(pipeline *kardinalv1alpha1.Pipeline, g *graph.Gra
 		if !healthConfigured(env) || !inGraph[env.Name] {
 			continue
 		}
+		// A remote cluster's object is not in this cluster: a ref node would
+		// wait for an object that never appears here (ledger G8). The step
+		// reads it through health.kubeconfigSecretRef.
+		if env.Health.KubeconfigSecretRef != nil {
+			continue
+		}
 		// The same type and target the PromotionStep reconciler checks.
 		opts := health.OptionsForEnv(pipeline.Name, env)
 		log := h.log.With().Str("environment", env.Name).Str("healthType", opts.Type).Logger()
