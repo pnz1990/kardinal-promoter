@@ -1,7 +1,8 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// UI-NODE-01: the node details panel (step progress, events, CEL check). Go
+// UI-NODE-01: the node details panel (step progress, events, CEL check), and
+// UI-STEPTIME-01: the step timing bars. Go
 // test: TestUI_BrowserNodeDetail (test/e2e/live/ui_browser_test.go).
 //
 // In KARDINAL_UI_NAMESPACE, podinfo's Bundle is Verified in test and waits
@@ -76,6 +77,16 @@ test('a step shows its sub-steps, elapsed time, merge link and events', async ({
   await expect(detail).toContainText('Environment: test')
   await expect(detail.locator('.health-chip').first()).toHaveAttribute('data-health-state', 'Ready')
   await expectSubSteps(detail, testSteps)
+  // UI-STEPTIME-01: each finished sub-step is a bar on the promotion's time
+  // span, in the order the steps ran, the last one ending at the span's end.
+  const bars = detail.getByRole('list', { name: 'Promotion steps' }).getByTestId('step-bar')
+  await expect(bars).toHaveCount(testSteps.filter(s => s.state === 'Completed').length)
+  const spans = await bars.evaluateAll(els => els.map(e => ({
+    offset: Number(e.getAttribute('data-offset')), width: Number(e.getAttribute('data-width')),
+  })))
+  for (let i = 1; i < spans.length; i++) expect(spans[i].offset).toBeGreaterThanOrEqual(spans[i - 1].offset)
+  expect(spans[0].offset).toBe(0)
+  expect(Math.max(...spans.map(s => s.offset + s.width))).toBeGreaterThanOrEqual(99)
   await expect(detail.locator('strong', { hasText: 'Elapsed:' })).toHaveCount(0)
   await expect(detail.getByRole('link', { name: /Pull Request/ })).toHaveCount(0)
   const verified = detail.getByTestId('event-row').filter({ hasText: 'Verified' })
