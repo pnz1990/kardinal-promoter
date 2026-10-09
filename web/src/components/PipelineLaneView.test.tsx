@@ -24,7 +24,7 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('../api/client', () => ({ api }))
 
-import { PipelineLaneView } from './PipelineLaneView'
+import { laneStages, PipelineLaneView } from './PipelineLaneView'
 
 const makeNode = (overrides: Partial<GraphNode> = {}): GraphNode => ({
   id: 'step-test',
@@ -251,5 +251,52 @@ describe('PipelineLaneView — rollback hold (#1528)', () => {
     expect(api.releaseHold).toHaveBeenCalledWith('app', 'prod', 'team-a')
     expect(await screen.findByRole('status')).toHaveTextContent('Hold on prod released')
     expect(onActionDone).toHaveBeenCalledOnce()
+  })
+})
+
+describe('PipelineLaneView — waves and parallel environments (#1580)', () => {
+  const step = (env: string, state = 'Pending'): GraphNode => makeNode({ id: `step-${env}`, label: env, environment: env, state })
+  const fan = (root: string, envs: string[], states: Record<string, string> = {}) => ({
+    nodes: [step(root, 'Verified'), ...envs.map(e => step(e, states[e]))],
+    edges: envs.map(e => ({ from: `step-${root}`, to: `step-${e}` })),
+  })
+
+  it('groups steps by depth through gates, in graph order', () => {
+    const nodes = [step('test'), step('eu'), step('us'), step('global'),
+      { id: 'gate-g', type: 'PolicyGate' as const, label: 'g', environment: 'us', state: 'Pass' }]
+    const edges: GraphEdge[] = [
+      { from: 'step-test', to: 'step-eu' }, { from: 'step-test', to: 'gate-g' }, { from: 'gate-g', to: 'step-us' },
+      { from: 'step-eu', to: 'step-global' }, { from: 'step-us', to: 'step-global' },
+    ]
+    expect(laneStages(nodes, edges).map(g => g.map(n => n.environment))).toEqual([['test'], ['eu', 'us'], ['global']])
+    expect(laneStages(nodes, []).map(g => g.map(n => n.environment))).toEqual([['test'], ['eu'], ['us'], ['global']])
+  })
+
+  it('stacks a few parallel environments in one column', () => {
+    const { nodes, edges } = fan('test', ['eu', 'us'])
+    render(<PipelineLaneView nodes={nodes} edges={edges} />)
+    const column = screen.getByRole('group', { name: 'Parallel: eu, us' })
+    expect(within(column).getByText('eu')).toBeInTheDocument()
+    expect(within(column).getByText('us')).toBeInTheDocument()
+  })
+
+  it('draws a wave as one card that counts its states and expands to the list', async () => {
+    const envs = Array.from({ length: 149 }, (_, i) => `env-${String(i + 1).padStart(3, '0')}`)
+    const states = Object.fromEntries(envs.map((e, i) => [e, i < 120 ? 'Verified' : i < 148 ? 'Promoting' : 'Failed']))
+    const { nodes, edges } = fan('env-000', envs, states)
+    const onSelect = vi.fn()
+    render(<PipelineLaneView nodes={nodes} edges={edges} onSelectNode={onSelect} />)
+    const wave = screen.getByRole('group', { name: '149 environments: env-001 to env-149' })
+    expect(within(wave).getByText('env-001 … env-149')).toBeInTheDocument()
+    expect(wave).toHaveTextContent('1 failed28 in progress120 verified')
+    // Collapsed: no card per environment.
+    expect(screen.queryByRole('button', { name: 'Select env-042' })).toBeNull()
+
+    await userEvent.click(within(wave).getByRole('button', { name: 'Show environments' }))
+    expect(within(wave).getAllByRole('button', { name: /^Select env-/ })).toHaveLength(149)
+    await userEvent.click(within(wave).getByRole('button', { name: 'Select env-042' }))
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ environment: 'env-042' }))
+    await userEvent.click(within(wave).getByRole('button', { name: 'Hide environments' }))
+    expect(screen.queryByRole('button', { name: 'Select env-042' })).toBeNull()
   })
 })

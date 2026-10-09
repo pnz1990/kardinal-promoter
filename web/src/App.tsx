@@ -46,6 +46,7 @@ import { useTheme } from './ThemeContext'
 import { useUrlState } from './useUrlState'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { resolveShownBundle } from './bundleSelection'
+import { terminalEnvironments } from './fleetModel'
 import { KeyboardShortcutsPanel } from './components/KeyboardShortcutsPanel'
 
 import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
@@ -776,7 +777,7 @@ export function App() {
               {/* #504: Release efficiency metrics bar — inline metrics for the pipeline. */}
               <ReleaseMetricsBar
                 bundles={bundles}
-                finalEnvironment={activePipeline?.environmentTopology?.at(-1)?.name}
+                finalEnvironments={terminalEnvironments(activePipeline?.environmentTopology)}
                 deploymentMetrics={activePipeline?.deploymentMetrics}
               />
 
