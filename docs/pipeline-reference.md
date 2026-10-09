@@ -266,8 +266,8 @@ environment's instances (they leave the collection, so kro prunes them) and crea
 the upstreams are Verified; once the step has started, its instances are kept.
 [Hooks](hooks.md) and [analysis](analysis.md) are carried too: HookRuns and AnalysisRuns are
 collections admitted with the same conditions as in the nodes shape, and kept once they exist.
-[Image verification](image-verification.md) (`spec.imageVerification`) is not carried yet: both
-the Bundle and the Pipeline condition report it.
+So is [image verification](image-verification.md): the root steps and their pre hooks wait for
+the Bundle's ImageVerification.
 
 The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
 each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be

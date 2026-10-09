@@ -63,8 +63,11 @@ type compactHook struct {
 	name, env, phase, hook, step, prev string
 	upstreams, gates                   []string
 	held                               bool
-	job                                interface{}
-	timeout                            string
+	// verify: a pre hook of a root step, which also waits for the Bundle's
+	// ImageVerification to be Verified.
+	verify  bool
+	job     interface{}
+	timeout string
 }
 
 // compactRun is one AnalysisRun of the compact shape.
@@ -100,7 +103,8 @@ func buildCompactEnvExtras(in hookNodesInput, a AnalysisInput, bundle *kardinalv
 			name := HookRunName(in.pipeline, in.bundle, in.env.Name, phase, h.Name)
 			out.hooks = append(out.hooks, compactHook{name: name, env: in.env.Name, phase: phase, hook: h.Name,
 				step: in.stepK8sName, prev: prev, upstreams: upstreams, gates: gates, held: held,
-				job: literalStrings(job), timeout: h.Timeout})
+				verify: phase == kardinalv1alpha1.HookPhasePre && in.imageVerification != "",
+				job:    literalStrings(job), timeout: h.Timeout})
 			out.hookRuns = append(out.hookRuns, name)
 			if phase == kardinalv1alpha1.HookPhasePre {
 				out.preHooks = append(out.preHooks, name)
@@ -163,6 +167,15 @@ func compactHookNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alp
 		return nil
 	}
 	state, rs := NodePromotionState+".", NodeRunState+"."
+	// A root step's pre hooks wait for the image verification (a migration
+	// must not run for an unverified image), as in the node shape.
+	verified := "true"
+	for _, h := range hooks {
+		if h.verify {
+			verified = "(h.verify == false || " + imageVerifiedCond() + ")"
+			break
+		}
+	}
 	data := map[string]interface{}{}
 	admit := map[string]interface{}{}
 	var collections []GraphNode
@@ -173,7 +186,7 @@ func compactHookNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alp
 			items[j] = map[string]interface{}{
 				"name": h.name, "environment": h.env, "phase": h.phase, "hook": h.hook, "step": h.step,
 				"prev": h.prev, "upstreams": toInterfaces(h.upstreams), "gates": toInterfaces(h.gates),
-				"held": h.held, "job": h.job, "timeout": h.timeout,
+				"held": h.held, "verify": h.verify, "job": h.job, "timeout": h.timeout,
 			}
 		}
 		field := chunkID("items", i)
@@ -184,10 +197,10 @@ func compactHookNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alp
 		// Verifying and the Bundle is not Superseded.
 		admit[field] = fmt.Sprintf(`${%[1]s.%[2]s.filter(h, h.name in %[3]shookRuns || `+
 			`((h.prev == "" || h.prev in %[3]ssucceeded) && (h.phase == "pre" ? `+
-			`(h.environment in %[4]sstarted || (%[4]shold == false && h.held == false && h.upstreams.all(u, u in %[4]sverified) && `+
-			`h.gates.all(g, g in %[4]sreadyGates))) : `+
+			`(%[5]s && (h.environment in %[4]sstarted || (%[4]shold == false && h.held == false && h.upstreams.all(u, u in %[4]sverified) && `+
+			`h.gates.all(g, g in %[4]sreadyGates)))) : `+
 			`(h.step in %[3]sverifying && %[3]ssuperseded == false))))}`,
-			NodeHookRunData, field, rs, state)
+			NodeHookRunData, field, rs, state, verified)
 		item := func(f string) string { return "${" + iterHook + "." + f + "}" }
 		collections = append(collections, GraphNode{
 			ID:      chunkID(NodeHookRuns, i),
@@ -297,7 +310,7 @@ func compactAnalysisNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv
 // item's HookRun and AnalysisRun results, from the read-back refs, filtered
 // to the runs this Graph rendered for the item (its hookRuns and
 // analysisRuns), applied by kro, for this Bundle.
-func compactLive(bundle *kardinalv1alpha1.Bundle, hooks, analyses bool) map[string]interface{} {
+func compactLive(bundle *kardinalv1alpha1.Bundle, hooks, analyses, imageVerification bool) map[string]interface{} {
 	live := map[string]interface{}{}
 	genuine := func(v, names string) string {
 		return fmt.Sprintf(`%[1]s.metadata.name in %[2]s && %[1]s.metadata.?labels[?%[3]q].hasValue() && `+
@@ -314,6 +327,12 @@ func compactLive(bundle *kardinalv1alpha1.Bundle, hooks, analyses bool) map[stri
 			`"created": string(r.metadata.creationTimestamp), `+
 			`"template": r.metadata.labels[%q], "phase": r.?status.?phase.orValue("Pending"), "message": r.?status.?message.orValue("")})}`,
 			refAnalysisRunsNodeID, genuine("r", iterStep+".analysisRuns"), LabelAnalysisTemplate)
+	}
+	if imageVerification {
+		// Every item gets it (a CEL conditional cannot choose between a
+		// record and nothing); only a step whose spec.imageVerification
+		// names the ImageVerification reads it.
+		live["imageVerification"] = imageVerificationLive()
 	}
 	return live
 }

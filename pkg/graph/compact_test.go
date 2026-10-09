@@ -401,8 +401,14 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 	gates = append(gates, skip)
 	policyNamespaces := []string{"platform-policies"}
 	// Pre and post hooks and an analysis on prod: HookRuns and AnalysisRuns
-	// in both shapes.
+	// in both shapes. An image policy, with signed config commits: an
+	// ImageVerification the root step test and its pre hook wait for.
+	p.Spec.ImageVerification = ivPipeline().Spec.ImageVerification
+	p.Spec.ImageVerification.Commits = &kardinalv1alpha1.CommitSignaturePolicy{RequireSigned: true}
 	for i := range p.Spec.Environments {
+		if p.Spec.Environments[i].Name == "test" {
+			p.Spec.Environments[i].Hooks = []kardinalv1alpha1.HookSpec{hook("migrate", "pre", hookJob)}
+		}
 		if p.Spec.Environments[i].Name == "prod" {
 			p.Spec.Environments[i].Hooks = []kardinalv1alpha1.HookSpec{hook("migrate", "pre", hookJob), hook("smoke", "post", hookJob)}
 			p.Spec.Environments[i].Verification = &kardinalv1alpha1.VerificationSpec{
@@ -458,7 +464,7 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 			// Every expression of both shapes reads only nodes they have
 			// (assertKroValid runs assertRefsResolve).
 			assertKroValid(t, nodes.Graph)
-			for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus", "MetricCheck", "HookRun", "AnalysisRun"} {
+			for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus", "MetricCheck", "HookRun", "AnalysisRun", "ImageVerification"} {
 				require.True(t, kinds(nodes.Graph)[k], "the fixture exercises %s", k)
 			}
 			require.True(t, hasNode(nodes.Graph, graph.NodeSkipPermissionGates),
@@ -750,4 +756,51 @@ func TestCompact_HeldEnvironment(t *testing.T) {
 		envs, _ := sim.wave()
 		assert.Equal(t, want, envs, bundle)
 	}
+}
+
+// TestCompact_ImageVerification: the compact shape carries an image policy
+// (#1456): no refusal, the ImageVerification node, the root step (and only
+// it) names the ImageVerification in spec.imageVerification, every step's
+// spec.live.imageVerification reads it as the node shape's mirror does, and
+// the root step's pre hook waits until it is Verified.
+func TestCompact_ImageVerification(t *testing.T) {
+	p := ivPipeline()
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	p.Spec.Environments[0].Hooks = []kardinalv1alpha1.HookSpec{hook("migrate", "pre", hookJob)}
+	b := ivBundle(kardinalv1alpha1.ImageRef{Repository: "ghcr.io/org/app", Digest: ivDigest})
+	b.UID = "uid-1"
+	in := graph.BuildInput{Pipeline: p, Bundle: b}
+	assert.Empty(t, graph.CompactUnsupported(in))
+	res, err := graph.NewBuilder().Build(in)
+	require.NoError(t, err, "no refusal")
+	assertKroValid(t, res.Graph)
+	g := res.Graph
+	assert.Equal(t, "compact", g.Labels["kardinal.io/graph-shape"])
+	ivName := hookNode(t, g, "imageVerify").Template["metadata"].(map[string]interface{})["name"].(string)
+
+	byEnv := map[string]interface{}{}
+	for _, e := range hookNode(t, g, graph.NodePromotionDAG).Def["steps"].([]interface{}) {
+		m := e.(map[string]interface{})
+		byEnv[m["environment"].(string)] = m["imageVerification"]
+	}
+	assert.Equal(t, map[string]interface{}{"test": ivName, "prod": ""}, byEnv, "only the root step waits")
+	spec := hookNode(t, g, graph.NodePromotionSteps).Template["spec"].(map[string]interface{})
+	assert.Equal(t, "${Step.imageVerification}", spec["imageVerification"])
+	assert.Equal(t, map[string]interface{}{
+		"name":    `${imageVerify.metadata.name}`,
+		"phase":   `${imageVerify.?status.?phase.orValue("Pending")}`,
+		"message": `${imageVerify.?status.?message.orValue("")}`,
+		"images":  `${imageVerify.spec.?images.orValue([]).map(i, i.repository + "@" + i.digest)}`,
+	}, spec["live"].(map[string]interface{})["imageVerification"])
+
+	migrate := graph.HookRunName("app", "app-v1", "test", "pre", "migrate")
+	admitted := func(phase string) []string {
+		vars := compactRunVars(t, g, nil, nil, nil, nil)
+		vars["imageVerify"] = map[string]interface{}{"metadata": map[string]interface{}{"name": ivName},
+			"status": map[string]interface{}{"phase": phase}}
+		return admittedNames(t, g, graph.NodePromotionHooks, vars)
+	}
+	assert.Empty(t, admitted("Pending"), "no migration for an unverified image")
+	assert.Empty(t, admitted("Failed"))
+	assert.Equal(t, []string{migrate}, admitted("Verified"))
 }

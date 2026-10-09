@@ -710,19 +710,25 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		if compact {
 			stepName := promotionStepK8sName(pipelineName, bundle.Name, envName)
 			held := heldBundle(pipeline, envName) != "" && heldBundle(pipeline, envName) != bundle.Name
+			iv := ""
+			if len(upstreams) == 0 {
+				iv = ivName // a root step and its pre hooks wait for the image verification
+			}
 			extras, err := buildCompactEnvExtras(hookNodesInput{
 				pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
 				bundleUID: string(bundle.UID), env: findEnvSpec(pipeline, envName), stepK8sName: stepName,
+				imageVerification: iv,
 			}, analyses, bundle, rawUpstreams, envGates, held)
 			if err != nil {
 				return nil, nil, nil, err
 			}
 			compactSteps = append(compactSteps, compactStep{env: envName,
-				name:      stepName,
-				prStatus:  prName,
-				upstreams: rawUpstreams,
-				gates:     envGates,
-				extras:    extras,
+				name:              stepName,
+				prStatus:          prName,
+				upstreams:         rawUpstreams,
+				gates:             envGates,
+				extras:            extras,
+				imageVerification: iv,
 			})
 			continue
 		}
