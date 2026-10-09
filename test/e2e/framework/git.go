@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -50,15 +51,47 @@ func (e *Env) SubgroupRepo(t *testing.T, sub, ns string, files map[string][]byte
 	})
 }
 
-// newRepo creates a repo with create, deletes it when the test ends unless
-// KARDINAL_E2E_KEEP=1, and registers the suite's webhook on it when hook is
-// set. Before deleting the repo it drains the test's namespaces (see
+// EnvGitCreateSlots bounds how many tests create a repo at once (default
+// 4). A core shard's parallel tests start in the same second once its serial
+// tests end; about 100 repo creates at once queue in the git server past the
+// client's timeout (#1557).
+const EnvGitCreateSlots = "KARDINAL_E2E_GIT_CREATE_SLOTS"
+
+var (
+	repoCreateOnce  sync.Once
+	repoCreateSlots chan struct{}
+)
+
+// acquireRepoCreate waits for a repo create slot and returns its release.
+func acquireRepoCreate(t *testing.T) func() {
+	t.Helper()
+	repoCreateOnce.Do(func() {
+		n := 4
+		if v, err := strconv.Atoi(os.Getenv(EnvGitCreateSlots)); err == nil && v > 0 {
+			n = v
+		}
+		repoCreateSlots = make(chan struct{}, n)
+	})
+	select {
+	case repoCreateSlots <- struct{}{}:
+		return func() { <-repoCreateSlots }
+	case <-time.After(10 * time.Minute):
+		t.Fatalf("no repo create slot in 10m (%s=%d)", EnvGitCreateSlots, cap(repoCreateSlots))
+		return func() {}
+	}
+}
+
+// newRepo creates a repo with create, at most EnvGitCreateSlots at once,
+// deletes it when the test ends unless KARDINAL_E2E_KEEP=1, and registers
+// the suite's webhook on it when hook is set. Before deleting the repo it drains the test's namespaces (see
 // beforeRepoDelete).
 func (e *Env) newRepo(t *testing.T, ns string, hook bool, create func(context.Context) (gitserver.Repo, error)) gitserver.Repo {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	release := acquireRepoCreate(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	repo, err := create(ctx)
+	release()
 	if err != nil {
 		t.Fatalf("create %s repo %s: %v", e.Git.Kind(), ns, err)
 	}
