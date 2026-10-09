@@ -10,6 +10,8 @@ The pipeline name is a required positional argument; the Pipeline must exist.
 An image or mixed Bundle needs at least one --image. A config or mixed Bundle
 needs --config-commit, the commit of the config repository to promote;
 --config-repo names that repository and defaults to the Pipeline's git.url.
+An image Bundle with --config-repo or --config-commit is refused: it would
+deploy only its images and ignore them.
 
 --commit, --author and --ci-run-url set the Bundle's provenance, shown in the
 PR body and the UI. kardinal records them as given: they are what the caller

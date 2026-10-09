@@ -1118,6 +1118,7 @@ func TestGate_InvalidGatesRejected(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, apierrors.IsInvalid(err), "%v", err)
 	assert.Contains(t, err.Error(), "PolicyGate names are at most 63 characters")
+	assert.Contains(t, err.Error(), "; use a name of at most 63 characters", "the message says what to do (#1358)")
 
 	require.NoError(t, e.Client.Create(ctx, framework.Gate(ns, strings.Repeat("g", 63), "prod", "true", "")))
 }
