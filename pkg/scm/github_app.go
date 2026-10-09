@@ -148,7 +148,23 @@ type GitHubAppTokenSource struct {
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+	// refreshAt is when the cached token is replaced: appTokenRefreshBefore
+	// before it expires, or for a token that lives less than twice that,
+	// a tenth of its life before.
+	refreshAt time.Time
+	// After a failed mint, lastErr is returned without asking GitHub until
+	// retryAt; failures doubles the wait each time, up to appMintBackoffMax.
+	lastErr  error
+	retryAt  time.Time
+	failures int
 }
+
+// The backoff after a failed mint: appMintBackoff, doubled per failure, at
+// most appMintBackoffMax.
+const (
+	appMintBackoff    = 5 * time.Second
+	appMintBackoffMax = 5 * time.Minute
+)
 
 // NewGitHubAppTokenSource returns a token source for creds against the
 // GitHub API at apiURL ("" is https://api.github.com; GitHub Enterprise
@@ -177,14 +193,33 @@ func NewGitHubAppTokenSource(creds GitHubAppCredentials, apiURL string) (*GitHub
 func (s *GitHubAppTokenSource) Token(ctx context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.token != "" && s.now().Add(appTokenRefreshBefore).Before(s.expires) {
+	now := s.now()
+	if s.token != "" && now.Before(s.refreshAt) {
 		return s.token, nil
+	}
+	if s.lastErr != nil && now.Before(s.retryAt) {
+		if s.token != "" && now.Before(s.expires) {
+			// The cached token is still valid: use it while minting fails.
+			return s.token, nil
+		}
+		return "", fmt.Errorf("%w (not retried before %s)", s.lastErr, s.retryAt.UTC().Format(time.RFC3339))
 	}
 	tok, exp, err := s.mint(ctx)
 	if err != nil {
+		s.failures++
+		s.lastErr = err
+		s.retryAt = now.Add(min(appMintBackoff<<min(s.failures-1, 10), appMintBackoffMax))
+		if s.token != "" && now.Before(s.expires) {
+			return s.token, nil
+		}
 		return "", err
 	}
-	s.token, s.expires = tok, exp
+	s.failures, s.lastErr = 0, nil
+	margin := appTokenRefreshBefore
+	if life := exp.Sub(now); life < 2*margin {
+		margin = life / 10
+	}
+	s.token, s.expires, s.refreshAt = tok, exp, exp.Add(-margin)
 	return tok, nil
 }
 

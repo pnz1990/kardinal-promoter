@@ -121,6 +121,11 @@ func TestGitAuth_SSH(t *testing.T) {
 // exec of git-upload-pack or git-receive-pack runs the git binary on dir,
 // for a client that authenticates with authorized.
 func sshGitServer(t *testing.T, dir string, authorized ssh.PublicKey, receiveExited *atomic.Int32) (addr string, hostKey ssh.PublicKey) {
+	return sshGitServerHook(t, dir, authorized, receiveExited, 300*time.Millisecond)
+}
+
+// sshGitServerHook is sshGitServer with the post-receive hook taking hook.
+func sshGitServerHook(t *testing.T, dir string, authorized ssh.PublicKey, receiveExited *atomic.Int32, hook time.Duration) (addr string, hostKey ssh.PublicKey) {
 	t.Helper()
 	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -142,7 +147,7 @@ func sshGitServer(t *testing.T, dir string, authorized ssh.PublicKey, receiveExi
 			if err != nil {
 				return
 			}
-			go serveSSHGit(conn, cfg, dir, receiveExited)
+			go serveSSHGit(conn, cfg, dir, receiveExited, hook)
 		}
 	}()
 	return ln.Addr().String(), signer.PublicKey()
@@ -151,7 +156,7 @@ func sshGitServer(t *testing.T, dir string, authorized ssh.PublicKey, receiveExi
 // serveSSHGit serves one connection. After git-receive-pack exits it waits
 // a moment, as a post-receive hook would run, and counts in receiveExited
 // the exit statuses the client was still there to receive.
-func serveSSHGit(conn net.Conn, cfg *ssh.ServerConfig, dir string, receiveExited *atomic.Int32) {
+func serveSSHGit(conn net.Conn, cfg *ssh.ServerConfig, dir string, receiveExited *atomic.Int32, hook time.Duration) {
 	defer func() { _ = conn.Close() }()
 	_, chans, reqs, err := ssh.NewServerConn(conn, cfg)
 	if err != nil {
@@ -185,7 +190,7 @@ func serveSSHGit(conn net.Conn, cfg *ssh.ServerConfig, dir string, receiveExited
 					status = 1
 				}
 				if service == "git-receive-pack" {
-					time.Sleep(300 * time.Millisecond) // the post-receive hook
+					time.Sleep(hook) // the post-receive hook
 				}
 				_, err := ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
 				if err == nil && service == "git-receive-pack" {
@@ -241,4 +246,57 @@ func TestGoGitClient_SSHRoundTrip(t *testing.T) {
 	err = c.Clone(ctx, url, "main", filepath.Join(t.TempDir(), "w"), scm.GitAuth{SSHPrivateKey: otherClient, SSHKnownHosts: knownHosts})
 	require.Error(t, err, "a client key the server does not know")
 	assert.Contains(t, err.Error(), "unable to authenticate")
+}
+
+// TestGoGitClient_SSHBounded: a server that accepts the TCP connection and
+// never runs the ssh handshake fails the clone and the push within the
+// connect limit, and a post-receive hook that hangs does not hold the push
+// past the receive-pack wait: the push returns once the refs are reported
+// updated. Covers SCM-SSH-01.
+func TestGoGitClient_SSHBounded(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("the ssh server runs the git binary")
+	}
+	defer scm.SetSSHTimeoutsForTest(time.Second, 500*time.Millisecond)()
+	ctx := context.Background()
+	clientKey, clientPub := sshKeyPair(t)
+
+	// A server that never answers.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = c.Close() })
+		}
+	}()
+	_, hostKey := sshKeyPair(t)
+	host, port, _ := net.SplitHostPort(ln.Addr().String())
+	silent := scm.GitAuth{SSHPrivateKey: clientKey, SSHKnownHosts: []byte("[" + host + "]:" + port + " " + string(ssh.MarshalAuthorizedKey(hostKey)))}
+	start := time.Now()
+	err = scm.NewGoGitClient().Clone(ctx, "ssh://git@"+ln.Addr().String()+"/a/b.git", "main", filepath.Join(t.TempDir(), "w"), silent)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second, "the clone gives up at the connect limit: %v", err)
+
+	// A hook that hangs.
+	remote := seedBareRemote(t, map[string]string{"a.txt": "a\n"})
+	var exited atomic.Int32
+	addr, realHost := sshGitServerHook(t, remote, clientPub, &exited, time.Hour)
+	h, p, _ := net.SplitHostPort(addr)
+	auth := scm.GitAuth{SSHPrivateKey: clientKey, SSHKnownHosts: []byte("[" + h + "]:" + p + " " + string(ssh.MarshalAuthorizedKey(realHost)))}
+	url := "ssh://git@" + addr + "/a/b.git"
+	work := filepath.Join(t.TempDir(), "w")
+	require.NoError(t, scm.NewGoGitClient().Clone(ctx, url, "main", work, auth))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "a.txt"), []byte("b\n"), 0o600))
+	require.NoError(t, scm.NewGoGitClient().CommitAll(ctx, work, "c", "k", "k@example.com"))
+	start = time.Now()
+	require.NoError(t, scm.NewGoGitClient().Push(ctx, work, "origin", "kardinal/b/prod", auth, false))
+	assert.Less(t, time.Since(start), 5*time.Second, "the push does not wait for the hanging hook")
+	out, err := exec.Command("git", "-C", remote, "show", "kardinal/b/prod:a.txt").CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	assert.Equal(t, "b\n", string(out))
 }

@@ -107,7 +107,9 @@ helm upgrade --install kardinal-promoter ... \
 The Secret is watched like a token Secret ([Credential rotation](#credential-rotation-zero-downtime)):
 a new key or ID is picked up within 30 seconds, and the controller mints a token at once to
 check it, logging `SCM GitHub App installation token minted`, or `SCM GITHUB APP WARNING` with
-GitHub's answer. A Secret with `githubAppPrivateKey` is read as App credentials even if it also
+GitHub's answer. After a failed mint kardinal waits before it asks again (5s, doubling to 5
+minutes) and keeps using a token that is still valid; a token issued for less than 20 minutes is
+replaced a tenth of its life before it expires. A Secret with `githubAppPrivateKey` is read as App credentials even if it also
 has a `token`. Without the chart, run the controller with `--scm-token-secret-name github-app`,
 or in static mode with `--github-app-id`, `--github-app-installation-id` and
 `--github-app-private-key-file` (or `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`,
@@ -385,7 +387,8 @@ kubectl create secret generic git-ssh -n <pipeline-namespace> \
 | `sshPrivateKey` | The private key, PEM or OpenSSH format, without a passphrase. The ssh user is the URL's (`git@`), or `git`. |
 | `knownHosts` | `known_hosts` lines for the server. **Required**: kardinal never accepts an unknown host key, and only offers the host key algorithms recorded for the host (`[host]:port` for a port other than 22). |
 
-A wrong or missing host key fails the step with a `knownhosts:` error, and a Secret with an ssh
+Connecting and the ssh handshake are bounded (30s), and a push waits at most a minute for the
+server's post-receive hooks before it closes the connection. A wrong or missing host key fails the step with a `knownhosts:` error, and a Secret with an ssh
 URL but no `sshPrivateKey` or `knownHosts` fails it with a message naming the missing key. The
 config source of a config Bundle on the same ssh host uses the same key. With the chart's
 `networkPolicy.enabled`, allow the ssh port (22, or the server's) in `networkPolicy.extraEgress`:

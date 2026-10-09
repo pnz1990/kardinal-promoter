@@ -54,6 +54,10 @@ type fakeGitHubApp struct {
 	issued  map[string]time.Time
 	mintErr int // when non-zero, the mint answers this status
 	authOf  []string
+	// mintCalls counts mint requests, failed ones included; lifetime is how
+	// long issued tokens live (default one hour).
+	mintCalls int
+	lifetime  time.Duration
 }
 
 func newFakeGitHubApp(t *testing.T, pub *rsa.PublicKey, prefix string, now func() time.Time) (*fakeGitHubApp, *httptest.Server) {
@@ -73,6 +77,9 @@ func (f *fakeGitHubApp) serve(w http.ResponseWriter, r *http.Request) {
 			_, _ = fmt.Fprintf(w, `{"message":%q}`, err.Error())
 			return
 		}
+		f.mu.Lock()
+		f.mintCalls++
+		f.mu.Unlock()
 		if f.mintErr != 0 {
 			w.WriteHeader(f.mintErr)
 			_, _ = w.Write([]byte(`{"message":"Integration not found"}`))
@@ -80,7 +87,11 @@ func (f *fakeGitHubApp) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		n := f.mints.Add(1)
 		tok := fmt.Sprintf("ghs_installation_%d", n)
-		exp := f.now().Add(time.Hour).UTC().Truncate(time.Second)
+		life := f.lifetime
+		if life == 0 {
+			life = time.Hour
+		}
+		exp := f.now().Add(life).UTC().Truncate(time.Second)
 		f.mu.Lock()
 		f.issued[tok] = exp
 		f.mu.Unlock()
@@ -363,4 +374,52 @@ func TestSecretWatcher_GitHubApp(t *testing.T) {
 	_, _, err = dyn.OpenPR(context.Background(), "acme/web", "t", "b", "h", "main")
 	require.NoError(t, err, "the provider keeps the App")
 	assert.NotContains(t, logs.String(), "PRIVATE KEY")
+}
+
+// TestGitHubApp_MintBackoffAndShortTokens: after a failed mint the error is
+// returned without asking GitHub again until a backoff passes (5s, doubled
+// per failure); a cached token that is still valid is used while minting
+// fails; a short-lived token is cached until a tenth of its life before it
+// expires instead of being minted on every call. Covers SCM-GHAPP-01.
+func TestGitHubApp_MintBackoffAndShortTokens(t *testing.T) {
+	ctx := context.Background()
+	c := &clock{t: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)}
+	k, pemKey := appKey(t, false)
+	f, srv := newFakeGitHubApp(t, &k.PublicKey, "", c.now)
+	src := appSource(t, pemKey, srv.URL, c)
+
+	f.mintErr = http.StatusInternalServerError
+	_, err := src.Token(ctx)
+	require.Error(t, err)
+	attempts := func() int { f.mu.Lock(); defer f.mu.Unlock(); return f.mintCalls }
+	assert.Equal(t, 1, attempts())
+	_, err = src.Token(ctx)
+	assert.ErrorContains(t, err, "not retried before")
+	assert.Equal(t, 1, attempts(), "no mint inside the backoff")
+	c.add(6 * time.Second)
+	_, err = src.Token(ctx)
+	require.Error(t, err)
+	assert.Equal(t, 2, attempts())
+	c.add(6 * time.Second)
+	_, _ = src.Token(ctx)
+	assert.Equal(t, 2, attempts(), "the second backoff is 10s")
+	c.add(5 * time.Second)
+	f.mintErr = 0
+	f.lifetime = 5 * time.Minute
+	tok, err := src.Token(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 3, attempts())
+
+	// A 5-minute token is kept until 30s before it expires.
+	c.add(4 * time.Minute)
+	again, err := src.Token(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, tok, again)
+	assert.Equal(t, 3, attempts())
+	c.add(31 * time.Second)
+	f.mintErr = http.StatusBadGateway
+	again, err = src.Token(ctx)
+	require.NoError(t, err, "the cached token is still valid while the refresh fails")
+	assert.Equal(t, tok, again)
+	assert.Equal(t, 4, attempts())
 }

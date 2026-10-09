@@ -61,3 +61,11 @@ func SetAppTokenClockForTest(s *GitHubAppTokenSource, now func() time.Time) { s.
 
 // AuthMethodForTest exposes authMethod.
 var AuthMethodForTest = authMethod
+
+// SetSSHTimeoutsForTest replaces the ssh connect and receive-pack wait
+// limits and returns a function that restores them.
+func SetSSHTimeoutsForTest(dial, wait time.Duration) (restore func()) {
+	oldDial, oldWait := sshDialTimeout, receivePackWait
+	sshDialTimeout, receivePackWait = dial, wait
+	return func() { sshDialTimeout, receivePackWait = oldDial, oldWait }
+}

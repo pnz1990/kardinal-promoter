@@ -48,11 +48,11 @@ func init() {
 }
 
 // receivePackWait bounds the wait for git-receive-pack (and its hooks) to
-// exit after the report status.
-const receivePackWait = time.Minute
+// exit after the report status. A variable so a test can shorten it.
+var receivePackWait = time.Minute
 
 // sshDialTimeout bounds the TCP connect and ssh handshake of a push.
-const sshDialTimeout = 30 * time.Second
+var sshDialTimeout = 30 * time.Second
 
 type sshTransport struct {
 	transport.Transport
@@ -76,7 +76,7 @@ func (t sshTransport) NewReceivePackSession(ep *transport.Endpoint, auth transpo
 	if port <= 0 {
 		port = gogitssh.DefaultPort
 	}
-	conn, err := ssh.Dial("tcp", net.JoinHostPort(ep.Host, strconv.Itoa(port)), cfg)
+	conn, err := dialSSH(context.Background(), net.JoinHostPort(ep.Host, strconv.Itoa(port)), cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +99,66 @@ func (t sshTransport) NewReceivePackSession(ep *transport.Endpoint, auth transpo
 		return nil, err
 	}
 	return s, nil
+}
+
+// dialSSH connects to addr and runs the ssh handshake, both bounded by
+// sshDialTimeout (and ctx): the TCP dial with a context, the handshake with
+// a deadline on the connection, which is cleared once the client is up so a
+// long push is not cut.
+func dialSSH(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
+	ctx, cancel := context.WithTimeout(ctx, sshDialTimeout)
+	defer cancel()
+	var d net.Dialer
+	tcp, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("ssh: dial %s: %w", addr, err)
+	}
+	deadline, _ := ctx.Deadline()
+	if err := tcp.SetDeadline(deadline); err != nil {
+		_ = tcp.Close()
+		return nil, fmt.Errorf("ssh: %w", err)
+	}
+	stop := context.AfterFunc(ctx, func() { _ = tcp.SetDeadline(time.Unix(1, 0)) })
+	c, chans, reqs, err := ssh.NewClientConn(tcp, addr, cfg)
+	stop()
+	if err != nil {
+		_ = tcp.Close()
+		return nil, fmt.Errorf("ssh: handshake with %s: %w", addr, err)
+	}
+	if err := tcp.SetDeadline(time.Time{}); err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("ssh: %w", err)
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// NewUploadPackSession is go-git's, bounded by sshDialTimeout: go-git's
+// ssh client runs the handshake without a deadline, so a server that
+// accepts the connection and never answers would hold the step for ever.
+// After the timeout the session, if it comes, is closed.
+func (t sshTransport) NewUploadPackSession(ep *transport.Endpoint, auth transport.AuthMethod) (transport.UploadPackSession, error) {
+	type result struct {
+		s   transport.UploadPackSession
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		s, err := t.Transport.NewUploadPackSession(ep, auth)
+		done <- result{s, err}
+	}()
+	timer := time.NewTimer(sshDialTimeout)
+	defer timer.Stop()
+	select {
+	case r := <-done:
+		return r.s, r.err
+	case <-timer.C:
+		go func() {
+			if r := <-done; r.err == nil && r.s != nil {
+				_ = r.s.Close()
+			}
+		}()
+		return nil, fmt.Errorf("ssh: connect and handshake with %s took longer than %s", ep.Host, sshDialTimeout)
+	}
 }
 
 // shellQuote quotes s for a POSIX shell, as git does (quote.c sq_quote_buf).
@@ -195,17 +255,24 @@ func (s *receivePackSession) ReceivePack(ctx context.Context, req *packp.Referen
 		}
 	}
 	// Read the rest (hook output) and wait for git-receive-pack to exit:
-	// closing the session now would stop its post-receive hook.
-	_, _ = io.Copy(io.Discard, s.stdout)
+	// closing the session now would stop its post-receive hook. Draining and
+	// waiting share one limit; on timeout the session is closed.
 	done := make(chan error, 1)
-	go func() { done <- s.sess.Wait() }()
+	go func() {
+		_, _ = io.Copy(io.Discard, s.stdout)
+		done <- s.sess.Wait()
+	}()
+	timer := time.NewTimer(receivePackWait)
+	defer timer.Stop()
 	var waitErr error
 	select {
 	case waitErr = <-done:
-	case <-time.After(receivePackWait):
-		waitErr = errors.New("git-receive-pack did not exit")
+	case <-timer.C:
+		waitErr = fmt.Errorf("git-receive-pack did not exit within %s", receivePackWait)
+		_ = s.Close()
 	case <-ctx.Done():
 		waitErr = ctx.Err()
+		_ = s.Close()
 	}
 	if report != nil {
 		if err := report.Error(); err != nil {
