@@ -47,10 +47,11 @@ func ParsePodSecurityLevel(s string) (string, error) {
 	return string(l), nil
 }
 
-// podSecurityViolation returns why pod breaks level, or "". On top of the
-// Pod Security Standard, every level below privileged refuses nodeName (it
-// bypasses the scheduler, so node selection and taints) and hostPort.
-func podSecurityViolation(level string, labels map[string]string, pod *corev1.PodSpec) string {
+// podSecurityViolation returns why pod (with the template's metadata, whose
+// annotations carry AppArmor profiles on older Pods) breaks level, or "".
+// Below privileged, nodeName is refused as well: it bypasses the scheduler,
+// so node selection and taints. hostPort is a check of the standard itself.
+func podSecurityViolation(level string, md *metav1.ObjectMeta, pod *corev1.PodSpec) string {
 	l, err := ParsePodSecurityLevel(level)
 	if err != nil {
 		return err.Error()
@@ -58,26 +59,21 @@ func podSecurityViolation(level string, labels map[string]string, pod *corev1.Po
 	if l == PodSecurityPrivileged {
 		return ""
 	}
+	if md == nil {
+		md = &metav1.ObjectMeta{}
+	}
 	var why []string
 	res := policy.AggregateCheckResults(psaEvaluator.EvaluatePod(
-		psaapi.LevelVersion{Level: psaapi.Level(l), Version: psaapi.LatestVersion()},
-		&metav1.ObjectMeta{Labels: labels}, pod))
+		psaapi.LevelVersion{Level: psaapi.Level(l), Version: psaapi.LatestVersion()}, md, pod))
 	if !res.Allowed {
-		why = append(why, fmt.Sprintf("violates Pod Security %q (%s)", l, res.ForbiddenReason()))
+		msg := res.ForbiddenReason()
 		if d := res.ForbiddenDetail(); d != "" {
-			why[len(why)-1] = fmt.Sprintf("violates Pod Security %q (%s: %s)", l, res.ForbiddenReason(), d)
+			msg += ": " + d
 		}
+		why = append(why, fmt.Sprintf("violates Pod Security %q (%s)", l, msg))
 	}
 	if pod.NodeName != "" {
 		why = append(why, "sets nodeName")
-	}
-	containers := append(append([]corev1.Container(nil), pod.InitContainers...), pod.Containers...)
-	for _, c := range containers {
-		for _, p := range c.Ports {
-			if p.HostPort != 0 {
-				why = append(why, "uses a hostPort in container "+c.Name)
-			}
-		}
 	}
 	return strings.Join(why, "; ")
 }
