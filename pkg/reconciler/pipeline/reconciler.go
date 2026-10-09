@@ -462,5 +462,10 @@ func deploymentMetricsEqual(a, b *kardinalv1alpha1.PipelineDeploymentMetrics) bo
 		a.AutoRollbackRateMillis == b.AutoRollbackRateMillis &&
 		a.OperatorInterventionRateMillis == b.OperatorInterventionRateMillis &&
 		a.StaleProdDays == b.StaleProdDays &&
-		a.SampleSize == b.SampleSize
+		a.SampleSize == b.SampleSize &&
+		a.Deployments == b.Deployments &&
+		a.FailedDeployments == b.FailedDeployments &&
+		a.ChangeFailureRateMillis == b.ChangeFailureRateMillis &&
+		a.MeanTimeToRestoreMinutes == b.MeanTimeToRestoreMinutes &&
+		a.RestoredFailures == b.RestoredFailures
 }

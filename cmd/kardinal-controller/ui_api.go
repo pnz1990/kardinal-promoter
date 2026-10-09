@@ -75,6 +75,10 @@ type uiPipelineResponse struct {
 	// LastMergedAt is the RFC3339 timestamp of the last env that reached Verified.
 	// Empty string when no environment has been verified yet.
 	LastMergedAt string `json:"lastMergedAt,omitempty"`
+	// DeploymentMetrics is the Pipeline's status.deploymentMetrics, written by
+	// the PipelineReconciler (DORA throughput and stability for the last
+	// environment). Nil until a Bundle is Verified there.
+	DeploymentMetrics *v1alpha1.PipelineDeploymentMetrics `json:"deploymentMetrics,omitempty"`
 }
 
 // uiEnvironmentNode is the static topology shape for one environment in a Pipeline.
@@ -390,6 +394,7 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			}
 			resp.EnvironmentTopology = topo
 		}
+		resp.DeploymentMetrics = p.Status.DeploymentMetrics
 		if ab := activeBundles[key]; ab != nil {
 			resp.ActiveBundleName = ab.name
 			if len(ab.envStates) > 0 {

@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Change failure rate and time to restore** — `Pipeline.status.deploymentMetrics` gains the DORA stability pair for the last environment: `deployments`, `failedDeployments`, `changeFailureRateMillis`, `meanTimeToRestoreMinutes` and `restoredFailures`, over the last 30 deployments. A failure is a step that ends `Failed`, `AbortedByAlarm` or `RollingBack` after its change reached the environment, or a Bundle a later rollback rolled back from. `kardinal metrics` prints `change_failure_rate` and `time_to_restore`, and the UI release metrics bar shows both ([Change failure rate and time to restore](guides/monitoring.md#change-failure-rate-and-time-to-restore))
+
 ### Docs
 
 - **Comparison** — resurveyed Kargo v1.12.1 and GitOps Promoter v0.42.1 (2026-10-03). The matrix corrects cells that had gone stale, such as GitOps Promoter's CLI, PR body and Flux support, and Kargo's gates, steps and engines. It adds rows for pause, supersession, `explain`/`policy simulate` and audit trails, plus sections on what changed in 2026 and where Kargo or GitOps Promoter is ahead. The home table, the rollback page and the Kargo migration guide match it

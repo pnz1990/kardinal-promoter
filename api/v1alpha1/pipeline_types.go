@@ -602,6 +602,37 @@ type PipelineDeploymentMetrics struct {
 	// +optional
 	SampleSize int `json:"sampleSize,omitempty"`
 
+	// Deployments is the number of deployments to the final environment
+	// the change failure rate and time to restore are computed over: the
+	// last 30 Bundles whose change reached it (its health check started),
+	// whatever the outcome. A multi-region environment counts once per Bundle.
+	// +optional
+	Deployments int `json:"deployments,omitempty"`
+
+	// FailedDeployments is how many of those deployments failed in the final
+	// environment: a PromotionStep there ended Failed, AbortedByAlarm or
+	// RollingBack after its health check started, or a rollback Bundle later
+	// rolled the environment back from it (annotation kardinal.io/rollback-from).
+	// +optional
+	FailedDeployments int `json:"failedDeployments,omitempty"`
+
+	// ChangeFailureRateMillis is failedDeployments / deployments as integer
+	// thousandths (DORA change failure rate; 250 = 25%).
+	// +optional
+	ChangeFailureRateMillis int `json:"changeFailureRateMillis,omitempty"`
+
+	// MeanTimeToRestoreMinutes is the mean, in whole minutes, from each failed
+	// deployment's failure (its step's failure, or the rollback Bundle's
+	// creation) to the next Bundle Verified in the final environment (DORA
+	// time to restore). Failures not restored yet are not counted.
+	// +optional
+	MeanTimeToRestoreMinutes int64 `json:"meanTimeToRestoreMinutes,omitempty"`
+
+	// RestoredFailures is the number of failed deployments in
+	// meanTimeToRestoreMinutes.
+	// +optional
+	RestoredFailures int `json:"restoredFailures,omitempty"`
+
 	// ComputedAt is when these metrics were last written by the PipelineReconciler.
 	// +optional
 	ComputedAt *metav1.Time `json:"computedAt,omitempty"`

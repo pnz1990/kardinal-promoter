@@ -162,8 +162,15 @@ func ComputeDeploymentMetrics(
 		staleProdDays = 0
 	}
 
+	stability := computeStability(pipeline.Name, finalEnv, bundles, steps, finalVerifiedAt)
+
 	computedAt := metav1.NewTime(now)
 	return &kardinalv1alpha1.PipelineDeploymentMetrics{
+		Deployments:                    stability.deployments,
+		FailedDeployments:              stability.failed,
+		ChangeFailureRateMillis:        ratioMillis(stability.failed, stability.deployments),
+		MeanTimeToRestoreMinutes:       stability.mttrMinutes,
+		RestoredFailures:               stability.restored,
 		RolloutsLast30Days:             rolloutsLast30,
 		P50CommitToProdMinutes:         p50,
 		P90CommitToProdMinutes:         p90,
@@ -236,4 +243,155 @@ func clamp(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+// healthCheckStepName is the last step of every step sequence. Its startedAt
+// is when the change reached the environment: the engine runs it right after
+// git-push (auto) or the merge (pr-review).
+const healthCheckStepName = "health-check"
+
+// stability is the DORA stability pair over the last metricsLookbackBundles
+// deployments to the final environment.
+type stability struct {
+	deployments, failed, restored int
+	mttrMinutes                   int64
+}
+
+// deployment is one Bundle's change reaching the final environment.
+type deployment struct {
+	bundle     string
+	deployedAt time.Time
+	failed     bool
+	failedAt   time.Time
+}
+
+// stepDeployedAt returns when s's change reached its environment: the
+// startedAt of its health-check step. ok is false when it never did (the
+// step failed or is still before git-push or the merge).
+func stepDeployedAt(s *kardinalv1alpha1.PromotionStep) (time.Time, bool) {
+	for i := range s.Status.Steps {
+		st := &s.Status.Steps[i]
+		if st.Name == healthCheckStepName && st.StartedAt != nil {
+			return st.StartedAt.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
+
+// stepFailedAt is when a failed step failed: the completedAt of its failed
+// step entry, else its health-check's, else its creation time.
+func stepFailedAt(s *kardinalv1alpha1.PromotionStep) time.Time {
+	var hc time.Time
+	for i := range s.Status.Steps {
+		st := &s.Status.Steps[i]
+		if st.CompletedAt == nil {
+			continue
+		}
+		if st.State == kardinalv1alpha1.StepExecutionFailed {
+			return st.CompletedAt.UTC()
+		}
+		if st.Name == healthCheckStepName {
+			hc = st.CompletedAt.UTC()
+		}
+	}
+	if !hc.IsZero() {
+		return hc
+	}
+	return s.CreationTimestamp.UTC()
+}
+
+// computeStability computes the change failure rate and the time to restore
+// in finalEnv from PromotionStep and Bundle status, both written by their own
+// reconcilers.
+//
+// A deployment is a Bundle at least one of whose finalEnv steps started its
+// health check. It failed when such a step ended Failed, AbortedByAlarm or
+// RollingBack, or when a rollback Bundle targeting finalEnv names it in
+// kardinal.io/rollback-from (rolled back by a human or a RollbackPolicy).
+// Its restore is the first Verified time in finalEnv, of any Bundle, after
+// the failure.
+func computeStability(pipelineName, finalEnv string, bundles []kardinalv1alpha1.Bundle,
+	steps []kardinalv1alpha1.PromotionStep, finalVerifiedAt map[string]time.Time) stability {
+	byBundle := map[string]*deployment{}
+	for i := range steps {
+		s := &steps[i]
+		if s.Spec.Environment != finalEnv || s.Spec.PipelineName != pipelineName {
+			continue
+		}
+		at, ok := stepDeployedAt(s)
+		if !ok {
+			continue
+		}
+		d := byBundle[s.Spec.BundleName]
+		if d == nil {
+			d = &deployment{bundle: s.Spec.BundleName, deployedAt: at}
+			byBundle[s.Spec.BundleName] = d
+		}
+		if at.Before(d.deployedAt) {
+			d.deployedAt = at
+		}
+		switch s.Status.State {
+		case "Failed", "AbortedByAlarm", "RollingBack":
+			f := stepFailedAt(s)
+			if !d.failed || f.Before(d.failedAt) {
+				d.failed, d.failedAt = true, f
+			}
+		}
+	}
+	for i := range bundles {
+		b := &bundles[i]
+		if b.Spec.Pipeline != pipelineName || b.Labels[lifecycle.LabelRollback] != "true" {
+			continue
+		}
+		if b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != "" && b.Spec.Intent.TargetEnvironment != finalEnv {
+			continue
+		}
+		from := b.Annotations[lifecycle.AnnotationRollbackFrom]
+		d := byBundle[from]
+		if from == "" || d == nil {
+			continue
+		}
+		if at := b.CreationTimestamp.UTC(); !d.failed || at.Before(d.failedAt) {
+			d.failed, d.failedAt = true, at
+		}
+	}
+
+	deps := make([]*deployment, 0, len(byBundle))
+	for _, d := range byBundle {
+		deps = append(deps, d)
+	}
+	sort.Slice(deps, func(i, j int) bool {
+		if !deps[i].deployedAt.Equal(deps[j].deployedAt) {
+			return deps[i].deployedAt.After(deps[j].deployedAt)
+		}
+		return deps[i].bundle < deps[j].bundle
+	})
+	if len(deps) > metricsLookbackBundles {
+		deps = deps[:metricsLookbackBundles]
+	}
+
+	verifiedTimes := make([]time.Time, 0, len(finalVerifiedAt))
+	for _, t := range finalVerifiedAt {
+		verifiedTimes = append(verifiedTimes, t)
+	}
+	sort.Slice(verifiedTimes, func(i, j int) bool { return verifiedTimes[i].Before(verifiedTimes[j]) })
+
+	out := stability{deployments: len(deps)}
+	var restoreSum time.Duration
+	for _, d := range deps {
+		if !d.failed {
+			continue
+		}
+		out.failed++
+		k := sort.Search(len(verifiedTimes), func(i int) bool { return verifiedTimes[i].After(d.failedAt) })
+		if k == len(verifiedTimes) {
+			continue // not restored yet
+		}
+		out.restored++
+		restoreSum += verifiedTimes[k].Sub(d.failedAt)
+	}
+	if out.restored > 0 {
+		out.mttrMinutes = int64((restoreSum / time.Duration(out.restored)).Minutes())
+	}
+	return out
 }
