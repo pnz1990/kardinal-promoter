@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **OpenAPI description of the REST API** — the controller serves an OpenAPI 3.1 document of the UI API, the Bundle API and the webhook health endpoint at `GET /api/v1/openapi.json` on both listeners (no credentials needed), also published as [`docs/reference/openapi.json`](reference/openapi.json). It is generated from the controller's request and response types, and a test fails when it drifts. The new [REST API](reference/rest-api.md) page lists the endpoints and shows how to give scripts their own ServiceAccount tokens (TokenRequest) with TokenReview auth
+
 ### Changed
 
 - **Smaller Graphs: gate instances and PRStatuses are collections** — a Bundle's Graph now creates its PolicyGate instances from one `PolicyGates` node (and `SkipPermissionGates` for skip permissions) and its PRStatuses from one `PRStatuses` node, each a `forEach` over the data in a `def` node, instead of one node per object. A 150-environment Pipeline with 3 gates per environment has 155 nodes instead of 751, and 471 KB of Graph spec instead of 647 KB. The objects keep their names and labels; kro adds `kro.run/node-id: PolicyGates` (or `PRStatuses`) and its collection labels. A Graph that is updated in place keeps its existing gates and PRStatuses
