@@ -61,9 +61,9 @@ spec:
     spec:
       securityContext: {fsGroup: 1000}
       # The instance signing key (repository.signing): a GPG key made at
-      # start, its ID written to app.ini, so commits the server makes (API
-      # file edits, initial commits, merges) are instance-signed, as on a
-      # production instance with signing set up (image verification tests).
+      # start, its ID written to app.ini, so API commits by users with a
+      # public key are instance-signed, as on a production instance with
+      # signing set up (image verification tests).
       initContainers:
         - name: signing-key
           image: $IMAGE
@@ -110,8 +110,12 @@ spec:
             - {name: GNUPGHOME, value: /var/lib/gitea/gnupg}
             - {name: ${PFX}__repository_0X2E_signing__SIGNING_NAME, value: "$FLAVOR-instance"}
             - {name: ${PFX}__repository_0X2E_signing__SIGNING_EMAIL, value: instance@example.com}
-            - {name: ${PFX}__repository_0X2E_signing__CRUD_ACTIONS, value: always}
-            - {name: ${PFX}__repository_0X2E_signing__INITIAL_COMMIT, value: always}
+            # Sign only for users with a public key: the tests' fixtures stay
+            # unsigned (signing serializes on gpg-agent), and a user with a
+            # key gets instance-signed API commits (InstanceCommitAs).
+            - {name: ${PFX}__repository_0X2E_signing__CRUD_ACTIONS, value: pubkey}
+            - {name: ${PFX}__repository_0X2E_signing__INITIAL_COMMIT, value: never}
+            - {name: ${PFX}__repository_0X2E_signing__MERGES, value: never}
             - {name: ${PFX}__git_0X2E_config__gpg_0X2E_program, value: gpg2}
           readinessProbe:
             httpGet: {path: /api/healthz, port: http}

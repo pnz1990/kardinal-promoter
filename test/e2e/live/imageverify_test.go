@@ -326,7 +326,8 @@ func TestSCM_SignedCommitPerson(t *testing.T) {
 }
 
 // TestSCM_SignedCommitInstance: a commit the server signed with its
-// instance key (an API file edit, with repository.signing set up) is a
+// instance key (an API file edit by a user with a key, with
+// repository.signing set up) is a
 // platform signature on Forgejo and on Gitea (Gitea reports SIGNING_NAME as
 // signer.username): refused by default, accepted when allowedSigners lists
 // forgejo-instance (regression, QA #1521 round 3: Gitea instance
@@ -343,7 +344,9 @@ func TestSCM_SignedCommitInstance(t *testing.T) {
 	p.Spec.ImageVerification = &v1alpha1.ImageVerificationPolicy{
 		Commits: &v1alpha1.CommitSignaturePolicy{RequireSigned: true}}
 	a.apply(t, p)
-	cfg, sha := a.configRepo(t, "test") // committed through the API: instance-signed
+	cfg, _ := a.configRepo(t, "test")
+	sha, err := gitserver.InstanceCommitAs(ctx, e.Git, cfg, "apiuser-"+a.ns[len(a.ns)-8:], "README.md", []byte("instance-signed\n"))
+	require.NoError(t, err)
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
 	iv := waitImageVerification(t, e, a.ns, bundle, "Failed")
 	assert.Contains(t, iv.Status.Message, "signed by the SCM platform (forgejo-instance")

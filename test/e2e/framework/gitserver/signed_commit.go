@@ -6,6 +6,7 @@ package gitserver
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"time"
@@ -19,6 +20,65 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 )
 
+// signingUser makes a Forgejo/Gitea user (name, email name@example.com)
+// with a GPG key registered on the server and write access to r, and
+// returns the user's token, client and key.
+func signingUser(ctx context.Context, f *forgejo, r Repo, name string) (string, client, *openpgp.Entity, error) {
+	token, err := f.CreateUser(ctx, name, []string{"write:repository", "write:user"})
+	if err != nil {
+		return "", client{}, nil, fmt.Errorf("create user %s: %w", name, err)
+	}
+	if err := f.AddCollaborator(ctx, r, name); err != nil {
+		return "", client{}, nil, fmt.Errorf("add %s to %s: %w", name, r.Name, err)
+	}
+	entity, err := openpgp.NewEntity(name, "", name+"@example.com", nil)
+	if err != nil {
+		return "", client{}, nil, err
+	}
+	var pub bytes.Buffer
+	w, err := armor.Encode(&pub, openpgp.PublicKeyType, nil)
+	if err != nil {
+		return "", client{}, nil, err
+	}
+	if err := entity.Serialize(w); err != nil {
+		return "", client{}, nil, err
+	}
+	if err := w.Close(); err != nil {
+		return "", client{}, nil, err
+	}
+	as := f.client
+	as.headers = map[string]string{"Authorization": "token " + token}
+	if err := as.do(ctx, http.MethodPost, "/api/v1/user/gpg_keys", map[string]string{"armored_public_key": pub.String()}, nil); err != nil {
+		return "", client{}, nil, fmt.Errorf("register %s's GPG key: %w", name, err)
+	}
+	return token, as, entity, nil
+}
+
+// InstanceCommitAs makes the user as signingUser does and commits
+// path=content to r's branch through the contents API as that user. The
+// e2e servers sign API commits with their instance key for users with a
+// public key (repository.signing CRUD_ACTIONS = pubkey): the commit is
+// instance-signed. It returns the commit SHA.
+func InstanceCommitAs(ctx context.Context, s Server, r Repo, name, path string, content []byte) (string, error) {
+	f, err := asForgejo(s)
+	if err != nil {
+		return "", err
+	}
+	_, as, _, err := signingUser(ctx, f, r, name)
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	err = as.do(ctx, http.MethodPost, f.repoPath(r)+"/contents/"+path, map[string]string{
+		"content": base64.StdEncoding.EncodeToString(content), "message": "API commit by " + name, "branch": r.Branch,
+	}, &out)
+	return out.Commit.SHA, err
+}
+
 // CommitAs makes a Forgejo/Gitea user (name, email name@example.com) with a
 // GPG key registered on the server and write access to r, and pushes a
 // commit of path=content to r's branch, signed with that key when sign is
@@ -29,32 +89,9 @@ func CommitAs(ctx context.Context, s Server, r Repo, name, path string, content 
 		return "", err
 	}
 	email := name + "@example.com"
-	token, err := f.CreateUser(ctx, name, []string{"write:repository", "write:user"})
-	if err != nil {
-		return "", fmt.Errorf("create user %s: %w", name, err)
-	}
-	if err := f.AddCollaborator(ctx, r, name); err != nil {
-		return "", fmt.Errorf("add %s to %s: %w", name, r.Name, err)
-	}
-	entity, err := openpgp.NewEntity(name, "", email, nil)
+	token, _, entity, err := signingUser(ctx, f, r, name)
 	if err != nil {
 		return "", err
-	}
-	var pub bytes.Buffer
-	w, err := armor.Encode(&pub, openpgp.PublicKeyType, nil)
-	if err != nil {
-		return "", err
-	}
-	if err := entity.Serialize(w); err != nil {
-		return "", err
-	}
-	if err := w.Close(); err != nil {
-		return "", err
-	}
-	as := f.client
-	as.headers = map[string]string{"Authorization": "token " + token}
-	if err := as.do(ctx, http.MethodPost, "/api/v1/user/gpg_keys", map[string]string{"armored_public_key": pub.String()}, nil); err != nil {
-		return "", fmt.Errorf("register %s's GPG key: %w", name, err)
 	}
 
 	url := fmt.Sprintf("%s/%s/%s.git", f.api, r.Owner, r.Name)
