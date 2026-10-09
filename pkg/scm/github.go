@@ -306,6 +306,12 @@ func (g *GitHubProvider) AddLabelsToPR(ctx context.Context, repo string, prNumbe
 
 // do executes an authenticated GitHub API request.
 func (g *GitHubProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
+	return g.doURL(ctx, method, g.APIURL+path, path, body, result)
+}
+
+// doURL executes an authenticated GitHub API request to rawURL. path names
+// the request in errors.
+func (g *GitHubProvider) doURL(ctx context.Context, method, rawURL, path string, body, result interface{}) error {
 	// Check circuit breaker before making the call.
 	owner := ownerFromPath(path, "/repos/")
 	call := startSCMCall("github", owner, method, path)
@@ -326,7 +332,7 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 		bodyReader = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, g.APIURL+path, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
