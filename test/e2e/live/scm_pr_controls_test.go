@@ -76,7 +76,7 @@ func scmPRControls(t *testing.T, e *framework.Env, scopes []string) {
 	p.Spec.Environments[0].PR = &v1alpha1.PRConfig{
 		TitleTemplate: "Deploy {{ .Bundle.Version }} to {{ .Environment }} ({{ .Bundle.CommitSHA | truncate 7 }})",
 		BodyTemplate:  "Requested by @{{ .Bundle.Author }}.\n\n{{ provenanceTable }}\n\n{{ gatesTable }}\n",
-		Labels:        []string{"env/{{ .Environment }}", "{{ range .Bundle.Images }}version/{{ .Tag }}{{ end }}"},
+		Labels:        []string{"env/{{ .Environment }}", "version/{{ (index .Bundle.Images 0).Tag }}"},
 		Reviewers:     []string{user},
 		Assignees:     []string{"{{ .Bundle.Author }}"},
 		// The test repo has no required check or review, so nothing is

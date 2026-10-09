@@ -43,13 +43,16 @@ type BundleSpec struct {
 type ImageRef struct {
 	// Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
 	Repository string `json:"repository"`
 
-	// Tag is the image tag.
+	// Tag is the image tag (at most 128 characters, the OCI limit).
+	// +kubebuilder:validation:MaxLength=128
 	// +optional
 	Tag string `json:"tag,omitempty"`
 
 	// Digest is the image digest (sha256:...).
+	// +kubebuilder:validation:MaxLength=256
 	// +optional
 	Digest string `json:"digest,omitempty"`
 }

@@ -57,7 +57,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.images` | []object |  | Images lists the container images included in this Bundle. |
 | `spec.images[].digest` | string |  | Digest is the image digest (sha256:...). |
 | `spec.images[].repository` | string | yes | Repository is the image repository (e.g. "ghcr.io/nginx/nginx"). |
-| `spec.images[].tag` | string |  | Tag is the image tag. |
+| `spec.images[].tag` | string |  | Tag is the image tag (at most 128 characters, the OCI limit). |
 | `spec.intent` | object |  | Intent declares optional targeting and skip overrides for this Bundle. |
 | `spec.intent.skipEnvironments` | []string |  | SkipEnvironments lists environment names to exclude from this promotion, subject to the PolicyGate SkipPermission check. |
 | `spec.intent.targetEnvironment` | string |  | TargetEnvironment restricts this Bundle to promoting only up to and including this environment. Empty means promote through all environments. |
