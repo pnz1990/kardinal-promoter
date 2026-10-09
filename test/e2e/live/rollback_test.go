@@ -159,7 +159,7 @@ var rbFinished = regexp.MustCompile(`^[0-9]+[smhd]$`)
 func rbMerge(t *testing.T, a *app, bundle, env string) gitserver.PR {
 	t.Helper()
 	a.e.WaitStepState(t, a.ns, pipelineName, bundle, env, "WaitingForMerge", promoteTimeout)
-	head := "kardinal/" + bundle + "/" + env
+	head := prHead(a.ns, bundle, env)
 	pr := a.e.WaitPR(t, a.repo, time.Minute, "the PR from "+head, func(pr gitserver.PR) bool {
 		return pr.Head == head && pr.State == "open"
 	})
@@ -315,7 +315,7 @@ func TestRollback_PullRequest(t *testing.T) {
 	_, rb := rbRollback(t, a, "test")
 	actor := cliUser(t)
 	e.WaitStepState(t, a.ns, pipelineName, rb, "test", "WaitingForMerge", promoteTimeout)
-	head := "kardinal/" + rb + "/test"
+	head := prHead(a.ns, rb, "test")
 	pr := e.WaitPR(t, a.repo, time.Minute, "the rollback PR", func(pr gitserver.PR) bool { return pr.Head == head })
 	assert.Equal(t, "open", pr.State)
 	assert.Equal(t, a.repo.Branch, pr.Base)

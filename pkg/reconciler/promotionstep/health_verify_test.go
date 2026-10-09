@@ -43,6 +43,8 @@ type healthCase struct {
 	bundle func(*v1alpha1.Bundle)
 	// prsGetErr, when set, is the error the reconciler gets reading a PRStatus.
 	prsGetErr error
+	// remote, when set, is the reconciler's RemoteClusters.
+	remote *health.RemoteClusters
 }
 
 func (hc healthCase) run(t *testing.T) (client.Client, v1alpha1.PromotionStep, time.Duration) {
@@ -73,7 +75,8 @@ func (hc healthCase) run(t *testing.T) (client.Client, v1alpha1.PromotionStep, t
 			}})
 	}
 	r := &promotionstep.Reconciler{Client: rc, SCM: &mockSCM{}, GitClient: &mockGit{},
-		HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme(), hc.dynObjs...))}
+		HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme(), hc.dynObjs...)),
+		RemoteClusters: hc.remote}
 	res, err := r.Reconcile(context.Background(), reqFor("step"))
 	require.NoError(t, err)
 	return c, getStep(t, c, "step"), res.RequeueAfter

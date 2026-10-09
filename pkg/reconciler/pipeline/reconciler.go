@@ -32,6 +32,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
@@ -113,6 +114,11 @@ type Reconciler struct {
 	// would need the shared SCM token for a spec.git.url it does not allow is
 	// Ready=False/RepositoryNotAllowed (#1332). Nil allows every repository.
 	AllowedRepositories *scm.RepositoryAllowlist
+
+	// CompactAbove is --graph-compact-above: a Pipeline whose new Bundles
+	// would get a compact Graph and that uses a feature the compact shape
+	// does not carry yet is Ready=False. Nil is graph.DefaultCompactAbove.
+	CompactAbove *int
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -201,6 +207,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", p.Name, err)
 	}
+	// Pipelines that share a repository and branch must write separate paths
+	// (PathConflict). Reads Pipelines, writes only this Pipeline's status.
+	var pipelines kardinalv1alpha1.PipelineList
+	if err := r.List(ctx, &pipelines); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list pipelines: %w", err)
+	}
+	desiredConflict := pathConflict(&p, pipelines.Items)
+
 	desiredPhase := DerivePhase(p.Name, bundleList.Items, stepList.Items)
 	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, stepList.Items, time.Now().UTC())
 
@@ -212,11 +226,15 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredPaused != nil {
 		pausedMatch = conditionMatches(p.Status.Conditions, *desiredPaused)
 	}
+	conflictMatch := meta.FindStatusCondition(p.Status.Conditions, conditionPathConflict) == nil
+	if desiredConflict != nil {
+		conflictMatch = conditionMatches(p.Status.Conditions, *desiredConflict)
+	}
 	secretMatch := meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil
 	if desiredSecret != nil {
 		secretMatch = conditionMatches(p.Status.Conditions, *desiredSecret)
 	}
-	if condMatch && phaseMatch && metricsMatch && pausedMatch && secretMatch {
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -232,6 +250,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		meta.SetStatusCondition(&p.Status.Conditions, *desiredPaused)
 	} else {
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPaused)
+	}
+	if desiredConflict != nil {
+		meta.SetStatusCondition(&p.Status.Conditions, *desiredConflict)
+		log.Warn().Msg(desiredConflict.Message)
+	} else {
+		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPathConflict)
 	}
 	if desiredSecret != nil {
 		if meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil {
@@ -443,6 +467,28 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 		}
 	}
 
+	// The Graph shape annotation must name a shape; a Bundle of this Pipeline
+	// would fail with GraphBuildFailed otherwise.
+	if v, ok := p.Annotations[graph.AnnotationGraphShape]; ok && v != graph.GraphShapeCompact && v != graph.GraphShapeNodes {
+		return invalid(fmt.Sprintf("annotation %s=%q: use %q or %q, or remove it",
+			graph.AnnotationGraphShape, v, graph.GraphShapeCompact, graph.GraphShapeNodes))
+	}
+
+	// A Pipeline whose new Bundles would get a compact Graph must not use a
+	// feature the compact shape does not carry yet: each Bundle would fail
+	// with GraphBuildFailed.
+	b := graph.NewBuilder()
+	if r.CompactAbove != nil {
+		b.CompactAbove = *r.CompactAbove
+	}
+	if b.WouldBeCompact(p, len(p.Spec.Environments)) {
+		if f := graph.CompactUnsupported(graph.BuildInput{Pipeline: p}); len(f) > 0 {
+			return invalid(fmt.Sprintf("its Bundles get a compact Graph (more than %d environments, or the %s annotation), "+
+				"and the compact shape does not support %s yet; use the annotation %s: %s or remove the feature",
+				b.CompactAbove, graph.AnnotationGraphShape, strings.Join(f, ", "), graph.AnnotationGraphShape, graph.GraphShapeNodes))
+		}
+	}
+
 	// Check for duplicate environment names
 	seen := make(map[string]struct{}, len(p.Spec.Environments))
 	for _, env := range p.Spec.Environments {
@@ -538,9 +584,12 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index PromotionStep by spec.pipelineName: %w", err)
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&kardinalv1alpha1.Pipeline{}).
+		// A Pipeline on the same repository and branch changed: re-check
+		// PathConflict on the others.
+		Watches(&kardinalv1alpha1.Pipeline{}, r.pipelinePeers()).
 		// Deleting the freeze gate by hand while the pipeline is paused, or
 		// removing a user gate that has its name, re-enqueues the Pipeline.
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(pipelineForFreezeGate)).
@@ -566,8 +615,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}}
 			}),
 			builder.WithPredicates(stepStateChanged),
-		).
-		Complete(tracing.WrapReconciler("pipeline", r))
+		)
+	return shard.Active().Complete(b, tracing.WrapReconciler("pipeline", r), &kardinalv1alpha1.PipelineList{})
 }
 
 // deploymentMetricsEqual returns true when a and b represent the same metrics.

@@ -88,6 +88,15 @@ controller:
   # into the namespace it watches); org-level PolicyGates are read from this
   # namespace too.
   watchNamespace: ""
+  # -- Controller shard (--namespace-shard). Empty = no sharding: this
+  # controller reconciles every namespace. Set, it reconciles the namespaces
+  # labelled kardinal.io/shard=<name>; "default" also takes the namespaces
+  # without the label and the cluster-scoped kinds. Install one release per
+  # shard (one of them "default"), each in its own namespace labelled with its
+  # shard. Grants list/watch on Namespaces and Leases cluster-wide: each shard
+  # holds a Lease kardinal-shard in every namespace it reconciles. Cannot be
+  # combined with watchNamespace. See docs/sharding.md.
+  namespaceShard: ""
   # -- Namespaces holding org-level PolicyGates (--policy-namespaces).
   # Empty keeps the controller default, platform-policies. In namespace
   # mode org gates are read from watchNamespace, and an entry other than
@@ -110,6 +119,18 @@ controller:
   #   policyGate: 8
   #   bundle: 4
   #   pipeline: 4
+  # -- Access log of the UI API and the Bundle API: logins (TokenReviews),
+  # refusals (401/403/429, with the reason) and writes are always logged as
+  # structured lines (component=access). Tokens are never logged.
+  accessLog:
+    # -- Log every request (--access-log-all-requests).
+    allRequests: false
+    # -- Add the client address (--access-log-source-ip).
+    sourceIP: false
+    # -- CIDRs of proxies (an Ingress controller) whose X-Forwarded-For gives
+    # the client address (--access-log-trusted-proxies). Other clients'
+    # X-Forwarded-For is ignored.
+    trustedProxies: []
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).
@@ -271,6 +292,11 @@ graph:
   # -- Ship a ClusterRole aggregated into kro's controller role, for kro
   # installed with rbac.mode=aggregation (the hack/install-kro.sh default).
   aggregateToKro: true
+  # -- Environment count above which a Bundle's Graph uses the compact shape
+  # (--graph-compact-above): one PromotionStep collection instead of one node
+  # per environment. null keeps the controller default, 100; 0 makes every
+  # Graph compact. A Pipeline's kardinal.io/graph-shape annotation overrides it.
+  compactAbove: null
 
 # -- Deprecated, no effect. The chart no longer ships ValidatingAdmissionPolicies;
 # the CRD schemas validate these fields instead. Kept so existing
