@@ -252,7 +252,7 @@ Same as above but for Flux. Check `kubectl get kustomizations -n flux-system`.
 
 ### Symptom: PromotionStep fails with "health.cluster is not supported"
 
-Remote-cluster health checks through a kubeconfig Secret are not implemented, so an environment that sets `health.cluster` fails instead of checking the local cluster. Remove `health.cluster`. To verify a workload in another cluster, check its Argo CD Application in the controller's cluster (`health.type: argocd`). See [Health Adapters](health-adapters.md#remote-clusters).
+`health.cluster` is a deprecated string field, and an environment that sets it fails instead of checking the local cluster. Remove it. To verify a workload in another cluster, set `health.kubeconfigSecretRef` to a kubeconfig Secret for that cluster, or check its Argo CD Application or Flux Kustomization in the controller's cluster (`health.type: argocd` or `flux`). See [Health Adapters](health-adapters.md#remote-clusters).
 
 ## Webhook issues
 
@@ -304,13 +304,7 @@ If the Graph controller is not running, PromotionSteps will not be created. kard
 
 ### Symptom: Graph shows "Accepted: False"
 
-kardinal generates the Graph, so a rejected Graph is a bug in kardinal. The Bundle is `Failed` with reason `GraphRejected` and kro's message:
-
-```bash
-kubectl describe bundle <name>
-```
-
-Please open an issue with that message and the Pipeline.
+See [Graph shows `Accepted: False` with a CEL compile error](#symptom-graph-shows-accepted-false-with-a-cel-compile-error).
 
 ### Symptom: Bundle condition "GatesCreated" is False
 
@@ -394,7 +388,7 @@ After applying, `kardinal policy simulate --pipeline my-app --env prod --time "T
 kubectl get promotionstep -l kardinal.io/bundle=my-app-v1 -o jsonpath='{range .items[*]}{.metadata.name}: {.status.state}{"\n"}{end}'
 ```
 
-### Symptom: PolicyGate stays FAIL even when condition should pass
+### Symptom: PolicyGate stays Block even though the condition should pass
 
 ```bash
 # Force re-evaluation by annotating the gate instances. The controller evaluates
@@ -451,6 +445,7 @@ The PromotionStep's `GitCredentialMissing` condition is `True` with the same mes
 
 ```bash
 kubectl create secret generic github-token -n team-a --from-literal=token=<token>
+kubectl label secret github-token -n team-a kardinal.io/referenceable=true
 ```
 
 ### Symptom: "authentication required" with "git Secret ... could not be read"

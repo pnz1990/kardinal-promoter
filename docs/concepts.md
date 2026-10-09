@@ -433,8 +433,11 @@ See [Advanced Patterns](advanced-patterns.md) for detailed guidance on all of th
 
 Some tools shortcut promotion by patching `spec.source.targetRevision` on an Argo CD
 Application directly, without writing to Git. This breaks the GitOps contract: Git is
-no longer the source of truth. kardinal-promoter never mutates GitOps tool CRDs.
-All promotions write to Git first.
+no longer the source of truth. kardinal-promoter's Git strategies (`kustomize`, `helm`,
+`yaml`) write to Git first and change no GitOps tool CRD. The one exception is opt-in:
+`update.strategy: argocd` patches the inline Helm values of an Argo CD Application that
+holds its configuration itself, with no Git repository (see
+[Argo CD-native promotion](argocd-native-promotion.md)).
 
 ### `approval: auto` for production environments
 
