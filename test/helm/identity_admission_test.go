@@ -71,7 +71,7 @@ func admitsGroups(t *testing.T, vap *admissionregistrationv1.ValidatingAdmission
 	user string, groups []interface{}) bool {
 	t.Helper()
 	env, err := cel.NewEnv(cel.Variable("object", cel.DynType), cel.Variable("oldObject", cel.DynType),
-		cel.Variable("request", cel.DynType), cel.Variable("variables", cel.DynType))
+		cel.Variable("request", cel.DynType), cel.Variable("variables", cel.DynType), ext.Strings())
 	require.NoError(t, err)
 	vars := map[string]interface{}{
 		"object": object, "request": map[string]interface{}{
@@ -532,9 +532,14 @@ func TestIdentityAdmission_BundleCreator(t *testing.T) {
 	variant := "system:serviceaccount:" + releaseNS + ":variant-1"
 	assert.False(t, admitsGroups(t, vap, bundle("bundle-api"), nil, variant,
 		[]interface{}{"system:authenticated", "system:serviceaccounts", "system:serviceaccounts:" + releaseNS}))
-	// admission.bundleCreatorStampers names more exact usernames.
-	listed := identityPolicy(t, "bundle-creator", "--set", "admission.bundleCreatorStampers={"+variant+"}")
+	// admission.controllerUsernames names more exact usernames.
+	listed := identityPolicy(t, "bundle-creator", "--set", "admission.controllerUsernames={"+variant+"}")
 	assert.True(t, admits(t, listed, bundle("bundle-api"), nil, variant), "a listed username names the creator")
 	assert.True(t, admits(t, listed, bundle("subscription:app"), nil, controller), "the controller still does")
 	assert.False(t, admits(t, listed, bundle("bundle-api"), nil, "system:serviceaccount:"+releaseNS+":variant-2"))
+	// An entry ending in * is a prefix, for a test rig's controller instances.
+	prefixed := identityPolicy(t, "bundle-creator", "--set", "admission.controllerUsernames={system:serviceaccount:"+releaseNS+":variant-*}")
+	assert.True(t, admits(t, prefixed, bundle("bundle-api"), nil, "system:serviceaccount:"+releaseNS+":variant-7"))
+	assert.False(t, admits(t, prefixed, bundle("bundle-api"), nil, "system:serviceaccount:"+releaseNS+":other"))
+	assert.False(t, admits(t, prefixed, bundle("bundle-api"), nil, "system:serviceaccount:team-a:variant-7"))
 }

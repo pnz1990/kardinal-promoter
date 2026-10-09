@@ -282,11 +282,14 @@ spec:
     # The controller creates Bundles for the UI, the Bundle API,
     # Subscriptions and automatic rollbacks and names their creator: this
     # release's controller ServiceAccount, exactly, plus the usernames listed
-    # in admission.bundleCreatorStampers (another kardinal controller). Never
-    # a whole namespace: in namespace mode that namespace is the tenant's.
+    # in admission.controllerUsernames (another kardinal controller; an entry
+    # ending in * is a prefix). Never a whole namespace by default: in
+    # namespace mode that namespace is the tenant's.
     - name: controller
       expression: >-
-        request.userInfo.username in {{ prepend (.Values.admission.bundleCreatorStampers | default list) $controller | toJson }}
+        {{ prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}.exists(u,
+          u.endsWith('*') ? request.userInfo.username.startsWith(u.substring(0, size(u) - 1)) :
+          request.userInfo.username == u)
     - name: creator
       expression: >-
         has(object.metadata.annotations) && 'kardinal.io/created-by' in object.metadata.annotations ?

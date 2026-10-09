@@ -386,10 +386,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "bundleCreatorStampers": {
+        "controllerUsernames": {
           "type": "array",
           "items": {"type": "string", "minLength": 1},
-          "description": "Exact usernames, besides this release's controller ServiceAccount, that may set any kardinal.io/created-by on a Bundle."
+          "description": "Usernames (or prefixes ending in *), besides this release's controller ServiceAccount, that run a kardinal controller."
         }
       }
     },
