@@ -636,6 +636,8 @@ kubectl delete crd --ignore-not-found \
   changewindows.kardinal.io \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
+  hookruns.kardinal.io \
+  renderruns.kardinal.io \
   promotiontemplates.kardinal.io \
   auditevents.kardinal.io
 

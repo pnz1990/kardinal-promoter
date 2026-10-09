@@ -43,7 +43,7 @@ var crdGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version:
 var (
 	primaryKinds   = []string{"Pipeline", "Bundle", "PolicyGate", "PromotionStep"}
 	secondaryKinds = []string{"Subscription", "NotificationHook", "MetricCheck", "ChangeWindow",
-		"ScheduleClock", "RollbackPolicy", "AuditEvent", "PRStatus", "HookRun"}
+		"ScheduleClock", "RollbackPolicy", "AuditEvent", "PRStatus", "HookRun", "RenderRun"}
 )
 
 // TestCore_KroInstalled checks the kro hack/install-kro.sh installs
