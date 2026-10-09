@@ -103,7 +103,8 @@ spec:
 
 ### spec.environments[]
 
-A Pipeline has 1 to 100 environments. The CRD rejects, at `kubectl apply` time:
+A Pipeline has 1 to 500 environments (see [Large Pipelines](#large-pipelines) for what fits in
+one Bundle's Graph). The CRD rejects, at `kubectl apply` time:
 
 - a name that is not a DNS label: lowercase letters, digits and `-`, starting and ending
   with a letter or digit, at most 63 characters. The name is used as a namespace
@@ -185,6 +186,43 @@ Default: `0`.
 Extra namespaces to read PolicyGates from. It only adds: the org policy namespaces (the controller's `--policy-namespaces`, default `platform-policies`) and the Pipeline's namespace are always read. A gate found only through it is a team gate unless it is labelled `kardinal.io/scope: org`, and it never grants a skip. See [Policy Gates](policy-gates.md).
 
 Default: none.
+
+### Large Pipelines
+
+Each Bundle is promoted by one kro Graph, and a Graph is one Kubernetes object, which etcd stores
+only up to 1.5 MiB. Two Graph shapes keep it in bounds:
+
+- **nodes** (Pipelines with up to 100 environments): one Graph node per environment. `kubectl get
+  graph -o yaml` shows each environment's PromotionStep as a node.
+- **compact** (above 100 environments): the promotion order is data in the Graph, and one node
+  creates every PromotionStep the order allows (upstream environments Verified, gates ready, the
+  Bundle not superseded, rejected or waiting for a `maxConcurrentPromotions` slot). A step that exists is not removed when a gate later closes or
+  the Bundle is superseded. The Graph has about a dozen nodes whatever the number of environments,
+  and no health ref nodes (health is checked by the PromotionStep as in the nodes shape).
+
+Both shapes promote the same way: the same PromotionSteps, PolicyGate instances and PRStatuses,
+with the same names. Choose one for a Pipeline with the annotation `kardinal.io/graph-shape:
+compact` or `nodes`; the controller's `--graph-compact-above` (chart `graph.compactAbove`) moves
+the threshold. A Bundle keeps the shape its Graph was created with: a later Pipeline edit, a changed
+annotation or threshold applies to new Bundles only, because switching the shape of a Graph in
+flight would delete its PromotionSteps. The shape is read from the Graph's nodes; the Graph's
+`kardinal.io/graph-shape` label only shows it.
+
+In the compact shape every PromotionStep comes from one collection, so a PolicyGate instance or a
+PromotionStep that kro cannot apply holds every environment of the Bundle, not only its own (the
+Bundle's `GatesCreated` condition names a gate that cannot be created). A feature the compact shape
+does not carry yet fails the Bundle with `GraphBuildFailed` naming the feature, and sets the
+Pipeline `Ready=False` while its new Bundles would get a compact Graph. Per-promotion MetricChecks
+(`spec.perPromotion`) are one: use the node shape (`kardinal.io/graph-shape: nodes`) for a Pipeline
+whose gates read one. Only the Bundle reports this one; the Pipeline condition does not, because
+the Pipeline reconciler does not read the gates and MetricChecks. [Hooks](hooks.md)
+(`spec.environments[].hooks`) and [analysis](analysis.md) (`spec.environments[].verification`)
+are others, and both the Bundle and the Pipeline condition report them.
+
+The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
+each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be
+over 1.2 MB, or create more than 4,500 objects, fails with `GraphBuildFailed` and the size in the
+message.
 
 ## Health Check Defaults
 

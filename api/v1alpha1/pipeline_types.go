@@ -19,10 +19,10 @@ type PipelineSpec struct {
 	// has no upstream dependency. This sequential default means a list of N environments
 	// without dependsOn fields produces a linear chain. Override with dependsOn to
 	// express parallel fan-out or explicit DAG structure.
-	// Environment names must be unique; at most 100 environments (a bound
+	// Environment names must be unique; at most 500 environments (a bound
 	// the API server needs to cost the CEL rules on each entry).
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=100
+	// +kubebuilder:validation:MaxItems=500
 	// +listType=map
 	// +listMapKey=name
 	Environments []EnvironmentSpec `json:"environments"`

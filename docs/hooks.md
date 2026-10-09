@@ -160,6 +160,11 @@ namespaces (the chart grants it) and caches only Jobs labelled `kardinal.io/hook
 
 ## What hooks cannot do
 
+- Hooks need the node Graph shape. A Pipeline whose Bundles get a
+  [compact Graph](pipeline-reference.md#large-pipelines) (more than `--graph-compact-above`
+  environments, default 100, or the annotation `kardinal.io/graph-shape: compact`) is
+  `Ready=False` and its Bundles fail with `GraphBuildFailed`, naming hooks, instead of promoting
+  without them.
 - Hooks run in the Pipeline's namespace in the cluster kardinal runs in, not in the target
   cluster of a remote environment. Reach the target through its Service or API from the Pod.
 - A pre hook runs before the step starts. When a PolicyGate turns false after the migration
