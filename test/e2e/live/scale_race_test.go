@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/invariants"
@@ -403,4 +404,74 @@ func TestScale_RaceWebhooks(t *testing.T) {
 	send("reopened", pr.Number, false)
 	r.E.WaitBundlePhase(t, r.Fleet.NS, b.Name, "Verified", 5*time.Minute)
 	r.Finish()
+}
+
+// TestScale_RaceSupersededPush reproduces #1603: Pipelines on one
+// repository branch each get a burst of Bundles created within a second,
+// for several rounds, so a step of a Bundle that is superseded while it runs
+// races the newer Bundle's step for the branch. A superseded step must never
+// push over the newer Bundle's commit: every Pipeline's newest Bundle ends
+// Verified, and every environment's file on the branch pins the newest
+// Bundle's tag. Covers SCALE-RACE-SUPERSEDED-PUSH-01.
+func TestScale_RaceSupersededPush(t *testing.T) {
+	r := scale.BeginParallel(t)
+	envs := scale.Chain(2)
+	const rounds, burst = 3, 6
+	var names []string
+	all := map[string][]string{}
+	for i := 1; i <= r.P.SharedPipelines*2; i++ {
+		name := fmt.Sprintf("sup-%02d", i)
+		names = append(names, name)
+		all[name] = scale.Names(envs)
+	}
+	repo := r.Fleet.Repo(t, r.Fleet.NS+"-sup", all)
+	for _, name := range names {
+		r.Fleet.Apply(t, r.Fleet.PipelineSpec(name, repo, envs), repo)
+	}
+	newest := map[string]string{}
+	for round := 0; round < rounds; round++ {
+		n := len(names) * burst
+		err := scale.Parallel(n, n, func(i int) error {
+			name := names[i%len(names)]
+			_, err := r.Fleet.CreateBundle(context.Background(), name, scale.Tag(name, round*burst+i/len(names)+1))
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Second) // the next burst lands while this one pushes
+	}
+	r.Note("pipelines", len(names))
+	r.Note("bundles", len(names)*burst*rounds)
+	r.Finish()
+	assertNewestVerified(t, r)
+
+	bundles, err := r.Fleet.Bundles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := map[string]*v1alpha1.Bundle{}
+	for i := range bundles {
+		b := &bundles[i]
+		if n := latest[b.Spec.Pipeline]; n == nil || lifecycle.CompareCreation(b, n) > 0 {
+			latest[b.Spec.Pipeline] = b
+		}
+	}
+	for p, b := range latest {
+		if len(b.Spec.Images) > 0 {
+			newest[p] = b.Spec.Images[0].Tag
+		}
+	}
+	for _, name := range names {
+		for _, env := range scale.Names(envs) {
+			raw, err := r.E.Git.ReadFile(context.Background(), repo, repo.Branch, scale.EnvPath(name, env)+"/kustomization.yaml")
+			if err != nil {
+				t.Fatalf("read %s/%s: %v", name, env, err)
+			}
+			if want := newest[name]; !strings.Contains(string(raw), "newTag: "+want) {
+				t.Errorf("Pipeline %s env %s pins %q on the branch, want the newest Bundle's tag %s (a superseded step pushed over it, #1603)",
+					name, env, strings.TrimSpace(string(raw)), want)
+			}
+		}
+	}
 }
