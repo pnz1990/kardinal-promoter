@@ -93,6 +93,17 @@ spec:
                         the step transitions to Verified. A health failure resets the timer if
                         policy is "reset-on-alarm" (default), or fails the step if "fail-on-alarm".
                       properties:
+                        maxDuration:
+                          description: |-
+                            MaxDuration bounds the time from the first bake window's start
+                            (status.bakeFirstStartedAt) to a complete window. A step that has not
+                            completed one full window by then applies onHealthFailure when its
+                            window stops, also on a Waiting check, so a release that keeps
+                            flapping under reset-on-alarm ends. Go duration format (e.g. "36h").
+                            Default: minutes + health.timeout. A value shorter than minutes counts
+                            as minutes.
+                          pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                          type: string
                         minutes:
                           description: |-
                             Minutes is the required contiguous healthy duration in minutes.
@@ -547,7 +558,8 @@ spec:
                     rule: '!has(self.promotionTemplate)'
                   - message: 'reserved environment name: the name becomes a kro Graph
                       node ID; bundle, time, kro reserved IDs (spec, status, metadata,
-                      graph, self, each, item, ...) and CEL keywords are not allowed'
+                      graph, self, each, item, ...) and CEL keywords are not allowed;
+                      rename the environment'
                     rule: '!(self.name in [''api-version'',''kind'',''metadata'',''namespace'',''spec'',''status'',''graph'',''graphengine'',''kro'',''each'',''item'',''items'',''object'',''self'',''this'',''context'',''true'',''false'',''null'',''in'',''as'',''break'',''const'',''continue'',''else'',''for'',''function'',''if'',''import'',''let'',''loop'',''package'',''return'',''var'',''void'',''while'',''bundle'',''time''])'
                 maxItems: 100
                 minItems: 1

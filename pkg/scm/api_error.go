@@ -58,10 +58,15 @@ func isRateLimitBody(body string) bool {
 // retrying the same request cannot fix: the token was rejected (401), the
 // token lacks access (403 that is not a rate limit), or the repository or
 // pull request does not exist or is not visible to the token (404, 410).
+// A call the repository allowlist refused (ErrRepositoryNotAllowed) is
+// permanent too.
 //
 // Network errors, timeouts, an open circuit breaker, 429 and 5xx responses
 // are not permanent.
 func IsPermanentError(err error) bool {
+	if errors.Is(err, ErrRepositoryNotAllowed) {
+		return true // a call the allowlist refused (#1332)
+	}
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Transient {
 		return false

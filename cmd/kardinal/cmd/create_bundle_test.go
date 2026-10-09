@@ -252,6 +252,12 @@ func TestCreateBundle_SharesBundleAPIRules(t *testing.T) {
 		{name: "mixed bundle without a commit",
 			opts:    createBundleOptions{Images: []string{img}, Type: "mixed"},
 			wantErr: `create bundle: type "mixed" requires --config-commit`},
+		{name: "image bundle with a config repo (#1353)",
+			opts:    createBundleOptions{Images: []string{img}, Type: "image", ConfigRepo: "https://github.com/org/config"},
+			wantErr: "create bundle: --config-repo needs --type config or mixed and --config-commit"},
+		{name: "image bundle with a config commit (#1353)",
+			opts:    createBundleOptions{Images: []string{img}, ConfigCommit: "9f8e7d6"},
+			wantErr: "create bundle: --config-commit needs --type config or mixed"},
 		{name: "unknown type",
 			opts:    createBundleOptions{Images: []string{img}, Type: "helm"},
 			wantErr: `create bundle: type must be one of image, config, mixed, chart (got "helm")`},
@@ -313,4 +319,130 @@ func TestCreateBundle_ConfigAndProvenanceFlagsRegistered(t *testing.T) {
 	for _, name := range []string{"config-repo", "config-commit", "commit", "author", "ci-run-url"} {
 		assert.NotNil(t, cmd.Flags().Lookup(name), "--%s", name)
 	}
+}
+
+// TestCreateBundle_CreatesBundle verifies that createBundleFn creates a Bundle CRD.
+func TestCreateBundle_CreatesBundle(t *testing.T) {
+	s := cliTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(policyPipeline("nginx-demo", "test")).Build()
+
+	var buf bytes.Buffer
+	err := createBundleFn(&buf, c, "default", "nginx-demo", createBundleOptions{Images: []string{"nginx:1.25"}, Type: "image"})
+	require.NoError(t, err)
+
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	require.Len(t, bundles.Items, 1)
+	assert.Equal(t, "nginx-demo", bundles.Items[0].Spec.Pipeline)
+	assert.Equal(t, "image", bundles.Items[0].Spec.Type)
+	assert.Equal(t, "nginx", bundles.Items[0].Spec.Images[0].Repository)
+	assert.Equal(t, "1.25", bundles.Items[0].Spec.Images[0].Tag)
+
+	assert.Contains(t, buf.String(), "Bundle")
+	assert.Contains(t, buf.String(), "nginx-demo")
+}
+
+// TestCreateBundle_RejectsMalformedImage verifies that image references with
+// invalid characters are rejected before creating a Bundle (#283).
+func TestCreateBundle_RejectsMalformedImage(t *testing.T) {
+	s := cliTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(policyPipeline("nginx-demo", "test")).Build()
+
+	tests := []struct {
+		image   string
+		wantErr bool
+	}{
+		{"ghcr.io/pnz1990/app:sha-abc1234", false},
+		{"nginx:1.29", false},
+		{"nginx", false},
+		{"!!! bad", true},
+		{"space bad", true},
+	}
+	for _, tc := range tests {
+		var buf bytes.Buffer
+		err := createBundleFn(&buf, c, "default", "nginx-demo", createBundleOptions{Images: []string{tc.image}, Type: "image"})
+		if tc.wantErr {
+			require.Error(t, err, "image %q must be rejected", tc.image)
+		} else {
+			require.NoError(t, err, "image %q must be accepted", tc.image)
+		}
+	}
+}
+
+// TestSplitImageRef verifies image reference parsing. A digest is returned as
+// the digest, never as the tag (C09a-cli-02).
+func TestSplitImageRef(t *testing.T) {
+	tests := []struct {
+		img    string
+		repo   string
+		tag    string
+		digest string
+	}{
+		{"nginx:1.25", "nginx", "1.25", ""},
+		{"ghcr.io/myorg/app:v2.0.0", "ghcr.io/myorg/app", "v2.0.0", ""},
+		{"nginx", "nginx", "", ""},
+		{"nginx@sha256:abc123", "nginx", "", "sha256:abc123"},
+		{"ghcr.io/myorg/app:v2@sha256:abc123", "ghcr.io/myorg/app", "v2", "sha256:abc123"},
+		{"registry:5000/app", "registry:5000/app", "", ""},
+		{"registry:5000/app:v1", "registry:5000/app", "v1", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.img, func(t *testing.T) {
+			repo, tag, digest := splitImageRef(tt.img)
+			assert.Equal(t, tt.repo, repo)
+			assert.Equal(t, tt.tag, tag)
+			assert.Equal(t, tt.digest, digest)
+		})
+	}
+}
+
+// TestImageRepoPattern (C09a-cli-04): repositories with a registry port are
+// valid. (repo:tag@digest also needs the C09a-cli-02 split, lifecycle area.)
+func TestImageRepoPattern(t *testing.T) {
+	cases := []struct {
+		repo string
+		want bool
+	}{
+		{"nginx", true},
+		{"docker.io/library/nginx", true},
+		{"ghcr.io/pnz1990/kardinal-test-app", true},
+		{"localhost:5000/kardinal-test-app", true},
+		{"registry.internal:8443/org/app", true},
+		{"my-registry.example.com/team__a/app.v2", true},
+		{"not valid @@@", false},
+		{"ghcr.io/org/app:v1", false},
+		{"ghcr.io/Org/App", false},
+		{"-bad", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.repo, func(t *testing.T) {
+			assert.Equal(t, tc.want, imageRepoPattern.MatchString(tc.repo))
+		})
+	}
+
+	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithObjects(policyPipeline("demo", "test")).Build()
+	var buf bytes.Buffer
+	require.NoError(t, createBundleFn(&buf, c, "default", "demo", createBundleOptions{Images: []string{"localhost:5000/kardinal-test-app:sha-abc1234"}, Type: "image"}))
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	require.Len(t, bundles.Items, 1)
+	assert.Equal(t, v1alpha1.ImageRef{Repository: "localhost:5000/kardinal-test-app", Tag: "sha-abc1234"}, bundles.Items[0].Spec.Images[0])
+}
+
+// TestCreateBundle_DryRun_ListsEnvironmentsAndGates (C09a-cli-05): the preview
+// lists the Pipeline's environments in order with the gates the controller
+// would attach, including org gates from platform-policies.
+func TestCreateBundle_DryRun_ListsEnvironmentsAndGates(t *testing.T) {
+	c := policyClient(t,
+		policyPipeline("demo", "test", "uat", "prod"),
+		policyGate("no-weekend-deploys", "platform-policies", "prod", "!schedule.isWeekend", "kardinal.io/scope", "org"),
+		policyGate("team-soak", "default", "uat", "upstream.test.soakMinutes >= 5"),
+	)
+	var buf bytes.Buffer
+	require.NoError(t, createBundleDryRun(&buf, c, "default", "demo", createBundleOptions{Images: []string{"ghcr.io/org/app:sha-abc1234"}, Type: "image"}))
+	assert.Contains(t, buf.String(), "Environments in promotion order:\n"+
+		"  • test\n"+
+		"  • uat (gates: team-soak)\n"+
+		"  • prod (gates: no-weekend-deploys)\n", buf.String())
 }
