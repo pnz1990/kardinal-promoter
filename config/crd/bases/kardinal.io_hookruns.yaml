@@ -101,22 +101,14 @@ spec:
                   when the earlier run was deleted while it ran (result unknown). It is
                   not part of the spec hash.
                 properties:
-                  hook:
-                    description: Hook is the hook's name in the Pipeline.
-                    type: string
                   message:
-                    description: Message is the HookRun's last message.
-                    type: string
-                  phase:
-                    description: Phase is pre or post.
+                    description: Message is the recorded run's last message.
                     type: string
                   result:
-                    description: Result is Running, Succeeded or Failed. Succeeded
-                      and Failed are final.
+                    description: Result is Running, Succeeded or Failed.
                     type: string
                   specHash:
-                    description: SpecHash is the HookRun's spec hash (job and timeout)
-                      that ran.
+                    description: SpecHash is the spec hash of the recorded run.
                     type: string
                 type: object
               stepAdvanced:

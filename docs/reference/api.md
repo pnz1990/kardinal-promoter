@@ -154,11 +154,9 @@ HookRun is one run of a pre- or post-deploy hook (a Kubernetes Job) for one Bund
 | `spec.phase` | string | yes | Phase is "pre" or "post" (see HookSpec.Phase). One of: `pre`, `post`. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline the hook belongs to. |
 | `spec.recorded` | object |  | Recorded is set by the Graph from the step's status.hookRecords: the result the step recorded for this hook, when one ran before. A HookRun that starts with a record of its own spec hash does not run the Job again: it takes the recorded result (Succeeded or Failed), or Failed when the earlier run was deleted while it ran (result unknown). It is not part of the spec hash. |
-| `spec.recorded.hook` | string |  | Hook is the hook's name in the Pipeline. |
-| `spec.recorded.message` | string |  | Message is the HookRun's last message. |
-| `spec.recorded.phase` | string |  | Phase is pre or post. |
-| `spec.recorded.result` | string |  | Result is Running, Succeeded or Failed. Succeeded and Failed are final. |
-| `spec.recorded.specHash` | string |  | SpecHash is the HookRun's spec hash (job and timeout) that ran. |
+| `spec.recorded.message` | string |  | Message is the recorded run's last message. |
+| `spec.recorded.result` | string |  | Result is Running, Succeeded or Failed. |
+| `spec.recorded.specHash` | string |  | SpecHash is the spec hash of the recorded run. |
 | `spec.stepAdvanced` | boolean |  | StepAdvanced is set by the Graph from the step's state: true once the step passed the point this hook runs at (started, for a pre hook; finished, for a post hook). A HookRun that starts with it set is Skipped: a hook added to the Pipeline too late for this Bundle does not run out of order. It is not part of the spec hash. |
 | `spec.timeout` | string |  | Timeout is the hook timeout (see HookSpec.Timeout). |
 | `status` | object |  | HookRunStatus is the observed state of a HookRun. |
