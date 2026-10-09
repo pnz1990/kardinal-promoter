@@ -179,13 +179,15 @@ func configKey(b *v1alpha1.Bundle) string {
 	return b.Spec.ConfigRef.GitRepo + "@" + b.Spec.ConfigRef.CommitSHA
 }
 
-// copyArtifacts deep-copies the images and config ref of src into dst.
+// copyArtifacts deep-copies the images and config ref of src into dst. An
+// image Bundle stored before the CRD refused a configRef on it may carry one
+// it never deployed; it is not copied, so the copy passes the CRD (#1353).
 func copyArtifacts(dst *v1alpha1.BundleSpec, src *v1alpha1.Bundle) {
 	dst.Type = src.Spec.Type
 	if len(src.Spec.Images) > 0 {
 		dst.Images = append([]v1alpha1.ImageRef(nil), src.Spec.Images...)
 	}
-	if src.Spec.ConfigRef != nil {
+	if src.Spec.ConfigRef != nil && src.Spec.Type != "image" {
 		ref := *src.Spec.ConfigRef
 		dst.ConfigRef = &ref
 	}

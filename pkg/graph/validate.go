@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -41,6 +42,31 @@ var reservedNodeIDs = map[string]bool{
 	// named "time" is refused before the kro upgrade would break it (ledger
 	// Notes: node ID grammar).
 	"time": true,
+}
+
+// reservedEnvironmentNames is the list the Pipeline CRD's reserved-name rule
+// refuses (api/v1alpha1 EnvironmentSpec): the names whose node ID kro
+// reserves, written as environment names (apiVersion becomes "api-version"),
+// "bundle", the ID of the Bundle node every Graph has, and "time", which
+// kro#1434 proposes to reserve.
+// TestReservedEnvironmentNamesMatchCRD keeps the two in step.
+var reservedEnvironmentNames = []string{
+	"api-version", "kind", "metadata", "namespace", "spec", "status", "graph", "graphengine", "kro",
+	"each", "item", "items", "object", "self", "this", "context", "true", "false", "null", "in",
+	"as", "break", "const", "continue", "else", "for", "function", "if", "import", "let", "loop",
+	"package", "return", "var", "void", "while", "bundle", "time",
+}
+
+// ReservedEnvironmentMessage is the message of the Pipeline CRD's
+// reserved-name rule.
+const ReservedEnvironmentMessage = "reserved environment name: the name becomes a kro Graph node ID; bundle, time, kro " +
+	"reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; " +
+	"rename the environment"
+
+// ReservedEnvironmentName reports whether the API server refuses name as an
+// environment name (ReservedEnvironmentMessage).
+func ReservedEnvironmentName(name string) bool {
+	return slices.Contains(reservedEnvironmentNames, name)
 }
 
 // ErrInvalid is in the chain of every error Build and ValidateNodeIDs
