@@ -60,8 +60,8 @@ PIPE-NAME-01	live	core	covered	pipeline	environment name must be a DNS label, un
 PIPE-PATH-01	live	core	covered	pipeline	environment path must stay inside the repo: absolute paths, .. segments and escaping symlinks fail the step	docs/pipeline-reference.md:124
 PIPE-PHASE-01	live	core	covered	pipeline	Pipeline status.phase is Promoting while a Bundle is in flight or held by a gate	docs/changelog.md:258
 PIPE-DORA-01	live	core	covered	pipeline	status.deploymentMetrics: rolloutsLast30Days, p50/p90 commit-to-prod, autoRollbackRateMillis, operatorInterventionRateMillis, staleProdDays	api/v1alpha1/pipeline_types.go:680-762
-PIPE-DORA-02	live	core	covered	pipeline	status.deploymentMetrics change failure rate and mean time to restore (health failure, rollback), kardinal metrics rows, UI API	docs/guides/monitoring.md:261-279; api/v1alpha1/pipeline_types.go:722-757; pkg/reconciler/pipeline/metrics.go:310-492
-STEP-TIMINGS-01	live	core	covered	pipeline	PromotionStep status.steps records startedAt, completedAt and durationMs for every step	docs/guides/monitoring.md:281-287
+PIPE-DORA-02	live	core	covered	pipeline	status.deploymentMetrics change failure rate and mean time to restore (health failure, rollback), kardinal metrics rows, UI API	docs/guides/monitoring.md:274-292; api/v1alpha1/pipeline_types.go:722-757; pkg/reconciler/pipeline/metrics.go:310-492
+STEP-TIMINGS-01	live	core	covered	pipeline	PromotionStep status.steps records startedAt, completedAt and durationMs for every step	docs/guides/monitoring.md:294-300
 PIPE-GITSECRET-LABEL-01	live	core	covered	pipeline	an unlabeled git Secret still works and sets SecretReferenceable=False SecretNotReferenceable; labeling clears it	docs/pipeline-reference.md:101; pkg/reconciler/pipeline/reconciler.go:77-98
 STEP-SM-01	live	core	covered	step	PromotionStep state machine Pending -> Promoting -> (WaitingForMerge) -> HealthChecking -> Verified	api/v1alpha1/promotionstep_types.go:106-110; docs/concepts.md:189
 STEP-AUTO-01	live	core	covered	step	approval: auto clones, commits and pushes straight to the base branch; no PR	docs/pipeline-reference.md:132; docs/pr-evidence.md:150-152
@@ -364,7 +364,7 @@ CLI-POLICY-TEST-01	live	core	covered	cli	policy test evaluates an expression loc
 CLI-HISTORY-01	live	core	covered	cli	history <pipeline> --env --limit	cmd/kardinal/cmd/history.go:37
 CLI-LOGS-01	live	core	covered	cli	logs <pipeline> --env --bundle [-f] follows until a terminal state	cmd/kardinal/cmd/logs.go:42; docs/reference/cli/kardinal-logs.md:16
 CLI-DIFF-01	live	core	covered	cli	diff <bundleA> <bundleB>	cmd/kardinal/cmd/diff.go:32
-CLI-METRICS-01	live	core	covered	cli	metrics --pipeline [--env] [--days] prints DORA metrics	cmd/kardinal/cmd/metrics.go:28; docs/guides/monitoring.md:222-290
+CLI-METRICS-01	live	core	covered	cli	metrics --pipeline [--env] [--days] prints DORA metrics	cmd/kardinal/cmd/metrics.go:28; docs/guides/monitoring.md:235-303
 CLI-AUDIT-01	live	core	covered	cli	audit summary --pipeline --since	cmd/kardinal/cmd/audit.go:48
 CLI-REFRESH-01	live	core	covered	cli	refresh forces a re-reconcile via annotation	cmd/kardinal/cmd/refresh_dashboard.go:24
 CLI-DASHBOARD-01	live	core	covered	cli	dashboard [--address] [--no-open] opens the UI	cmd/kardinal/cmd/refresh_dashboard.go:81
@@ -451,15 +451,15 @@ CHART-GRAPH-01	live	chart	covered	chart	graph.serviceAccountName, kroNamespace, 
 CHART-NETPOL-01	live	chart	covered	chart	networkPolicy allows metrics/UI/webhook ingress and API/SCM egress only	chart/kardinal-promoter/values.yaml:312-327; docs/guides/security.md:519-537
 CHART-CLOCK-01	live	chart	covered	chart	scheduleClock creates kardinal-clock	chart/kardinal-promoter/values.yaml:348-354
 CHART-DEMO-01	live	chart	covered	chart	demo values	chart/kardinal-promoter/values.yaml:371-404
-CHART-MON-01	live	flux	covered	chart	serviceMonitor and prometheusRule are picked up by Prometheus Operator: the controller target is up and the alerts are loaded	chart/kardinal-promoter/values.yaml:406-431; docs/guides/monitoring.md:22-43; docs/guides/monitoring.md:291-324
-CHART-MON-02	live	flux	covered	chart	grafanaDashboard is imported by Grafana's dashboard sidecar, and its panels query the default Prometheus datasource and show data	chart/kardinal-promoter/values.yaml:433-455; chart/kardinal-promoter/templates/grafana-dashboard.yaml; chart/kardinal-promoter/dashboards/kardinal-promoter-dashboard.json:1055-1069; docs/guides/monitoring.md:369-417
+CHART-MON-01	live	flux	covered	chart	serviceMonitor and prometheusRule are picked up by Prometheus Operator: the controller target is up and the alerts are loaded	chart/kardinal-promoter/values.yaml:406-431; docs/guides/monitoring.md:22-43; docs/guides/monitoring.md:304-337
+CHART-MON-02	live	flux	covered	chart	grafanaDashboard is imported by Grafana's dashboard sidecar, and its panels query the default Prometheus datasource and show data	chart/kardinal-promoter/values.yaml:433-455; chart/kardinal-promoter/templates/grafana-dashboard.yaml; chart/kardinal-promoter/dashboards/kardinal-promoter-dashboard.json:1055-1069; docs/guides/monitoring.md:382-430
 CHART-SCHEMA-01	live	chart	covered	chart	values schema rejects removed keys (controller.shard, v0.8.1 krocodile block) with a clear error	chart/kardinal-promoter/values.schema.json:6; chart/kardinal-promoter/values.schema.json:93; docs/changelog.md:237; docs/installation.md:543
 CHART-INTEGJOBS-01	deprecated	chart	covered	chart	rbac.integrationTestJobs has no effect	chart/kardinal-promoter/values.yaml:243-246; docs/changelog.md:276; docs/installation.md:542
 CHART-VAP-01	deprecated	chart	covered	chart	validatingAdmissionPolicy.enabled has no effect	chart/kardinal-promoter/values.yaml:280-284; docs/changelog.md:276; docs/installation.md:541
-OBS-METRICS-01	live	flux	covered	observability	/metrics exposes the 7 kardinal metrics with labels after a promotion	docs/guides/monitoring.md:75-122; pkg/reconciler/observability/metrics.go:124-134
+OBS-METRICS-01	live	flux	covered	observability	/metrics exposes the 7 kardinal metrics with labels after a promotion	docs/guides/monitoring.md:75-135; pkg/reconciler/observability/metrics.go:124-134
 OBS-CRMETRICS-01	live	flux	covered	observability	controller-runtime reconcile and workqueue metrics	docs/guides/monitoring.md:47-74
-OBS-SCM-01	live	core	covered	observability	SCM API and git metrics: an opened PR counts as an ok SCM call of the provider, clones and pushes count with durations and HTTP bytes, circuit gauges are present, owner and operation labels stay capped	docs/guides/monitoring.md:91-119; pkg/scm/metrics.go:200-217; pkg/scm/git_transport.go:47-60
-OBS-TRACING-01	live	chart	covered	observability	tracing.enabled exports OTLP/HTTP spans (reconcile, step, git, SCM, webhook) and NotificationHook webhooks carry traceparent	docs/guides/monitoring.md:421-467; pkg/tracing/http.go:32-67
+OBS-SCM-01	live	core	covered	observability	SCM API and git metrics: an opened PR counts as an ok SCM call of the provider, clones and pushes count with durations and HTTP bytes, circuit gauges are present, owner and operation labels stay capped	docs/guides/monitoring.md:91-132; pkg/scm/metrics.go:263-284; pkg/scm/git_transport.go:84-97
+OBS-TRACING-01	live	chart	covered	observability	tracing.enabled exports OTLP/HTTP spans (reconcile, step, git, SCM, webhook) and NotificationHook webhooks carry traceparent	docs/guides/monitoring.md:434-480; pkg/tracing/http.go:32-67
 OBS-READYZ-01	live	core	covered	observability	/readyz readiness probe on the health port	chart/kardinal-promoter/templates/deployment.yaml:191-196
 OBS-HEALTHZ-01	live	core	covered	observability	/healthz liveness probe	chart/kardinal-promoter/templates/deployment.yaml:185-190
 UPG-CRDS-01	live	upgrade	covered	upgrade	v0.8.1 to v0.9.0: kro first, CRDs applied by hand, then helm upgrade	docs/changelog.md:110-118; docs/installation.md:271-286; docs/installation.md:415-449
