@@ -14,7 +14,6 @@
 package scm
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tmplsafe"
 )
 
 // This file renders the templates of an environment's pr config
@@ -179,19 +179,30 @@ func truncateRunes(s string, n int) string {
 	return string([]rune(s)[:n])
 }
 
-// renderPRTemplate parses and executes one pr template. A template is parsed
-// per render, with its functions bound to body: parsing is cheap, and it
-// keeps the shared state of a render out of the template.
-func renderPRTemplate(field, text string, body PRBody, data PRTemplateData) (string, error) {
-	t, err := template.New(field).Option("missingkey=error").Funcs(prTemplateFuncs(body)).Parse(text)
+// The limits of the pr templates (pkg/tmplsafe): a body may be as long as
+// GitHub takes (65536 characters), and the other fields far less.
+var (
+	prBodyLimits  = tmplsafe.Limits{MaxOutput: 64 << 10, MaxFuncInput: 64 << 10, MaxFuncOutput: 64 << 10, MaxRangeDepth: 2}
+	prShortLimits = tmplsafe.Limits{MaxOutput: 4 << 10, MaxFuncInput: 64 << 10, MaxFuncOutput: 64 << 10, MaxRangeDepth: 2}
+	prMergeLimits = tmplsafe.Limits{MaxOutput: 16 << 10, MaxFuncInput: 64 << 10, MaxFuncOutput: 64 << 10, MaxRangeDepth: 2}
+)
+
+// renderPRTemplate parses and executes one pr template in the tmplsafe
+// sandbox: a template written in a Pipeline runs in the controller, so it
+// may not declare variables, recurse, loop over a number or grow past lim.
+// A template is parsed per render, with its functions bound to body:
+// parsing is cheap, and it keeps the shared state of a render out of the
+// template.
+func renderPRTemplate(field, text string, lim tmplsafe.Limits, body PRBody, data PRTemplateData) (string, error) {
+	t, err := tmplsafe.Parse(field, text, prTemplateFuncs(body), lim)
 	if err != nil {
 		return "", fmt.Errorf("pr.%s: %w", field, err)
 	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
+	out, err := t.Execute(data)
+	if err != nil {
 		return "", fmt.Errorf("pr.%s: %w", field, err)
 	}
-	return buf.String(), nil
+	return out, nil
 }
 
 // RenderedPR is an environment's pr config rendered for one PR.
@@ -221,7 +232,7 @@ func RenderPR(cfg *v1alpha1.PRConfig, defaultTitle string, body PRBody) (Rendere
 	}
 	data := NewPRTemplateData(body)
 	if cfg.TitleTemplate != "" {
-		title, err := renderPRTemplate("titleTemplate", cfg.TitleTemplate, body, data)
+		title, err := renderPRTemplate("titleTemplate", cfg.TitleTemplate, prShortLimits, body, data)
 		if err != nil {
 			return RenderedPR{}, err
 		}
@@ -232,7 +243,7 @@ func RenderPR(cfg *v1alpha1.PRConfig, defaultTitle string, body PRBody) (Rendere
 		out.Title = truncateRunes(title, maxPRTitle)
 	}
 	if cfg.BodyTemplate != "" {
-		b, err := renderPRTemplate("bodyTemplate", cfg.BodyTemplate, body, data)
+		b, err := renderPRTemplate("bodyTemplate", cfg.BodyTemplate, prBodyLimits, body, data)
 		if err != nil {
 			return RenderedPR{}, err
 		}
@@ -271,7 +282,7 @@ func renderPRList(field string, templates []string, body PRBody, data PRTemplate
 	var out []string
 	seen := map[string]bool{}
 	for i, text := range templates {
-		s, err := renderPRTemplate(fmt.Sprintf("%s[%d]", field, i), text, body, data)
+		s, err := renderPRTemplate(fmt.Sprintf("%s[%d]", field, i), text, prShortLimits, body, data)
 		if err != nil {
 			return nil, err
 		}
@@ -312,7 +323,7 @@ func RenderMergeOptions(m *v1alpha1.PRMergeConfig, body PRBody, pr PRTemplatePR)
 	}
 	data := NewPRTemplateData(body)
 	data.PR = pr
-	msg, err := renderPRTemplate("merge.commitMessageTemplate", m.CommitMessageTemplate, body, data)
+	msg, err := renderPRTemplate("merge.commitMessageTemplate", m.CommitMessageTemplate, prMergeLimits, body, data)
 	if err != nil {
 		return MergeOptions{}, err
 	}

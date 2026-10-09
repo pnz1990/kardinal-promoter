@@ -4,6 +4,7 @@
 package scm_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -135,7 +136,7 @@ func TestRenderPR_Errors(t *testing.T) {
 		{"reviewer error", v1alpha1.PRConfig{Reviewers: []string{"ok", "{{ .X }}"}}, "pr.reviewers[1]:"},
 		{"team error", v1alpha1.PRConfig{TeamReviewers: []string{"{{ .X }}"}}, "pr.teamReviewers[0]:"},
 		{"assignee error", v1alpha1.PRConfig{Assignees: []string{"{{ .X }}"}}, "pr.assignees[0]:"},
-		{"too many entries", v1alpha1.PRConfig{Reviewers: []string{`{{ range $i := 51 }}u{{ $i }}{{ "\n" }}{{ end }}`}}, "renders 51 entries, more than 50"},
+		{"too many entries", v1alpha1.PRConfig{Reviewers: manyReviewers(51)}, "renders 51 entries, more than 50"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -143,6 +144,56 @@ func TestRenderPR_Errors(t *testing.T) {
 			_, err := scm.RenderPR(&cfg, "t", prTemplateBody())
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+// manyReviewers returns n distinct reviewer entries.
+func manyReviewers(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("u%d", i)
+	}
+	return out
+}
+
+// TestPRTemplates_Sandbox: a pr template runs in the controller, so the
+// constructs that grow a string without bound or spin are refused when the
+// Pipeline is validated and when the step renders it: the 16-byte string
+// doubled 24 times through variables (256 MiB), recursion through
+// {{template}}, a range over a number, deep ranges, and a string builtin
+// fed past its input limit.
+//
+// Covers SCM-PRCTL-TPL-01.
+func TestPRTemplates_Sandbox(t *testing.T) {
+	doubling := `{{$a := "xxxxxxxxxxxxxxxx"}}` + strings.Repeat(`{{$a = print $a $a}}`, 24) + `{{$a}}`
+	tests := []struct {
+		name string
+		cfg  v1alpha1.PRConfig
+		want string
+	}{
+		{"doubling body", v1alpha1.PRConfig{BodyTemplate: doubling}, "pr.bodyTemplate: variables are not allowed"},
+		{"doubling title", v1alpha1.PRConfig{TitleTemplate: doubling}, "pr.titleTemplate: variables are not allowed"},
+		{"doubling label", v1alpha1.PRConfig{Labels: []string{doubling}}, "pr.labels[0]: variables are not allowed"},
+		{"doubling message", v1alpha1.PRConfig{Merge: &v1alpha1.PRMergeConfig{Auto: true, CommitMessageTemplate: doubling}},
+			"pr.merge.commitMessageTemplate: variables are not allowed"},
+		{"recursion", v1alpha1.PRConfig{BodyTemplate: `{{ define "r" }}{{ template "r" }}{{ end }}{{ template "r" }}`}, "pr.bodyTemplate: define and block are not allowed"},
+		{"range over a number", v1alpha1.PRConfig{BodyTemplate: `{{ range 100000000 }}{{ end }}`}, "range over a number is not allowed"},
+		{"deep ranges", v1alpha1.PRConfig{BodyTemplate: `{{ range .Bundle.Images }}{{ range $.Bundle.Images }}{{ range $.Bundle.Images }}{{ end }}{{ end }}{{ end }}`},
+			"ranges nested more than 2 deep"},
+		{"output too long", v1alpha1.PRConfig{TitleTemplate: strings.Repeat("{{ evidence }}", 8)}, "pr.titleTemplate: template output is too large"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			err := scm.ValidatePRConfig(&cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+			_, err = scm.RenderPR(&cfg, "t", prTemplateBody())
+			if cfg.Merge == nil {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.want)
+			}
 		})
 	}
 }

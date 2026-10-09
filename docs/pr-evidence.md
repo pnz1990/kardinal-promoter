@@ -207,6 +207,15 @@ Every field is a plain value, so a Bundle without provenance renders empty strin
 | `mdcell` | Escapes a value for a markdown table cell |
 | `truncate N`, `lower`, `upper`, `trimSpace`, `trimPrefix P`, `replace OLD NEW`, `contains S`, `hasPrefix P`, `join SEP`, `default D` | String helpers; the string comes last, so they work in a pipeline: `{{ .Bundle.CommitSHA \| truncate 7 }}` |
 
+### Template limits
+
+The templates run in the controller, so they are restricted: variables (`{{ $x := ... }}`,
+`{{ $x = ... }}`, `range $i, $v := ...`), `define`, `block` and `template` are refused, as are
+`range` over a number and ranges nested more than two deep. `$` and `.` work as usual. A body
+renders at most 64 KiB, a title or list entry 4 KiB and a commit message 16 KiB, and a function
+(`print`, `printf` and the helpers above included) takes at most 64 KiB of string arguments.
+A template that breaks a rule is refused like one that does not parse.
+
 ### Invalid templates and failed controls
 
 The controller renders every template of a Pipeline with sample data for a promotion and a
