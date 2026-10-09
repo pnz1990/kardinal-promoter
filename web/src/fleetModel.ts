@@ -50,11 +50,14 @@ const FAILED = new Set(['Failed', 'AbortedByAlarm', 'RollingBack'])
 
 /**
  * The upstream environments of each environment of a topology. Edges are the
- * controller-resolved upstreams; when the API sends none (an older controller,
- * or an invalid ordering), dependsOn, else the previous entry, as the DAG view does.
+ * controller-resolved upstreams when the API says the ordering is resolved
+ * (Pipeline.topologyResolved; then an entry without upstreams is a root, as
+ * in a Pipeline whose every environment is in wave 1). Without the flag (an
+ * older controller, or an invalid ordering), upstreams when any entry has
+ * them, else dependsOn, else the previous entry.
  */
-export function environmentUpstreams(topo: EnvironmentNode[]): Map<string, string[]> {
-  const resolved = topo.some(e => (e.upstreams ?? []).length > 0)
+export function environmentUpstreams(topo: EnvironmentNode[], topologyResolved?: boolean): Map<string, string[]> {
+  const resolved = topologyResolved || topo.some(e => (e.upstreams ?? []).length > 0)
   return new Map<string, string[]>(topo.map((e, i) => {
     if (resolved) return [e.name, e.upstreams ?? []]
     if (e.dependsOn && e.dependsOn.length > 0) return [e.name, e.dependsOn]
@@ -67,9 +70,9 @@ export function environmentUpstreams(topo: EnvironmentNode[]): Map<string, strin
  * in spec order. For test, uat, prod that is prod; for a last wave of 149
  * environments it is all 149. Empty without a topology.
  */
-export function terminalEnvironments(topo: EnvironmentNode[] | undefined): string[] {
+export function terminalEnvironments(topo: EnvironmentNode[] | undefined, topologyResolved?: boolean): string[] {
   if (!topo || topo.length === 0) return []
-  const ups = environmentUpstreams(topo)
+  const ups = environmentUpstreams(topo, topologyResolved)
   const waitedFor = new Set<string>()
   for (const list of ups.values()) for (const up of list) waitedFor.add(up)
   return topo.map(e => e.name).filter(name => !waitedFor.has(name))
@@ -85,7 +88,7 @@ export function depthGroups(p: Pipeline): string[][] {
     const envs = Object.keys(p.environmentStates ?? {})
     return envs.length ? [envs] : []
   }
-  return groupByDepth(topo.map(e => e.name), environmentUpstreams(topo))
+  return groupByDepth(topo.map(e => e.name), environmentUpstreams(topo, p.topologyResolved))
 }
 
 /**
@@ -173,7 +176,7 @@ export function ageOf(iso: string | undefined, now: number = Date.now()): string
   return `${Math.floor(h / 24)}d`
 }
 
-/** More stations than this at one depth are drawn as one wave plate. */
+/** This many stations or more at one depth are drawn as one wave plate (and one lane card). */
 export const WAVE_PLATE_MIN = 5
 
 /** One plate for a wave of stations at the same depth. */

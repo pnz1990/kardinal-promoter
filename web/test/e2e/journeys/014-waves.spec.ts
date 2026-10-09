@@ -22,6 +22,7 @@ const pipeline = {
   blockerCount: 0,
   failedStepCount: 0,
   environmentTopology: [{ name: 'env-000' }, ...WAVE.map(name => ({ name, upstreams: ['env-000'] }))],
+  topologyResolved: true,
   environmentStates: Object.fromEntries(['env-000', ...WAVE].map(e => [e, 'Verified'])),
   deployed: Object.fromEntries(['env-000', ...WAVE].map(e => [e, { bundle: 'fleet-2', version: '2.0.0' }])),
 }
@@ -57,6 +58,10 @@ test.describe('Journey 014 — Waves', () => {
     await expect(plate).toContainText('149 environments')
     await expect(plate).toContainText('2.0.0')
     await expect(board.getByRole('button', { name: /^fleet / })).toHaveCount(2)
+
+    // The plate passes the WCAG 2.1 AA checks, colour contrast included.
+    const axe = await new AxeBuilder({ page }).include('.fleet-station--wave').withTags(['wcag2a', 'wcag2aa']).analyze()
+    expect(axe.violations.map(v => `${v.id}: ${v.nodes[0]?.target[0]}`)).toEqual([])
   })
 
   test('the lane groups the wave, the DAG keeps spec order, the metrics count the final wave', async ({ page }) => {

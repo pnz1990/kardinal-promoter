@@ -127,6 +127,19 @@ describe('terminalEnvironments', () => {
     { name: 'no topology', topo: undefined, want: [] },
   ]
   for (const c of cases) it(c.name, () => expect(terminalEnvironments(c.topo)).toEqual(c.want))
+
+  // #1580 QA: a Pipeline whose every environment is in wave 1 has only roots,
+  // so no entry has upstreams. With topologyResolved that is the answer; an
+  // older controller sends no flag and the spec order is the fallback.
+  const allWave1 = [{ name: 'eu' }, { name: 'us' }, { name: 'ap' }]
+  it('all roots when the controller resolved the ordering', () => {
+    expect(terminalEnvironments(allWave1, true)).toEqual(['eu', 'us', 'ap'])
+    expect(depthGroups(base({ environmentTopology: allWave1, topologyResolved: true }))).toEqual([['eu', 'us', 'ap']])
+  })
+  it('the previous entry without the flag', () => {
+    expect(terminalEnvironments(allWave1)).toEqual(['ap'])
+    expect(depthGroups(base({ environmentTopology: allWave1 }))).toEqual([['eu'], ['us'], ['ap']])
+  })
 })
 
 describe('wavePlate', () => {

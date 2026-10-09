@@ -19,7 +19,7 @@
 // (a wave, or parallel dependsOn) share one column, so the lane does not read
 // as a chain (#1580); a column of WAVE_PLATE_MIN or more is one wave card that
 // counts its states and expands to the full list.
-import { useState, type CSSProperties } from 'react'
+import { useId, useMemo, useState, type CSSProperties } from 'react'
 import type { EnvironmentHold, GraphEdge, GraphNode } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
 import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionDialog'
@@ -122,8 +122,10 @@ export function PipelineLaneView({
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
 
-  // Only PromotionStep nodes (not PolicyGates) are stages, one column per depth.
-  const stages = laneStages(nodes, edges)
+  const waveId = useId()
+  // Only PromotionStep nodes (not PolicyGates) are stages, one column per
+  // depth. Polls bring new arrays, so key on the topology and states.
+  const stages = useMemo(() => laneStages(nodes, edges), [nodes, edges])
 
   if (loading || stages.length === 0) {
     return null
@@ -319,6 +321,9 @@ export function PipelineLaneView({
         const key = stage.map(n => n.id).join(',')
         const wave = stage.length >= WAVE_PLATE_MIN
         const open = expanded.has(key)
+        // A collapsed wave says which of its environments is selected.
+        const selectedHere = wave && !open ? stage.find(n => n.id === selectedNode?.id) : undefined
+        const listId = `${waveId}-wave-${idx}`
         return (
           <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
             {/* Connector line between stages */}
@@ -334,7 +339,7 @@ export function PipelineLaneView({
               <div
                 role="group"
                 aria-label={wave ? `${stage.length} environments: ${stage[0].environment} to ${stage[stage.length - 1].environment}` : `Parallel: ${stage.map(n => n.environment).join(', ')}`}
-                className={wave ? 'stage-wave' : 'stage-parallel'}
+                className={[wave ? 'stage-wave' : 'stage-parallel', selectedHere ? 'stage-wave--selected' : ''].filter(Boolean).join(' ')}
               >
                 {wave && (
                   <div className="stage-wave__head">
@@ -351,6 +356,7 @@ export function PipelineLaneView({
                       type="button"
                       className="stage-wave__toggle"
                       aria-expanded={open}
+                      aria-controls={listId}
                       onClick={() => setExpanded(prev => {
                         const next = new Set(prev)
                         if (next.has(key)) next.delete(key)
@@ -360,10 +366,13 @@ export function PipelineLaneView({
                     >
                       {open ? 'Hide environments' : 'Show environments'}
                     </button>
+                    {selectedHere && (
+                      <span className="stage-wave__selected">Selected: {selectedHere.environment}</span>
+                    )}
                   </div>
                 )}
                 {(!wave || open) && (
-                  <div className={wave ? 'stage-wave__list' : 'stage-parallel__list'}>
+                  <div id={wave ? listId : undefined} className={wave ? 'stage-wave__list' : 'stage-parallel__list'}>
                     {stage.map(renderCard)}
                   </div>
                 )}

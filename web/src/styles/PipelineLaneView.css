@@ -148,3 +148,14 @@
   overflow-y: auto;
   padding-right: 0.2rem;
 }
+
+/* A collapsed wave that holds the selected environment. */
+.stage-wave--selected {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.stage-wave__selected {
+  font-size: 0.65rem;
+  color: var(--color-accent);
+}
