@@ -170,3 +170,31 @@ func TestPromotionTemplateAndStepInputsRemoved(t *testing.T) {
 	spec := crdSchema(t, "kardinal.io_promotionsteps.yaml", "spec")
 	assert.NotContains(t, spec["properties"], "inputs")
 }
+
+// TestBundleCRDRejectsConfigRefOnImage: the API server refuses an image
+// Bundle with a configRef, which it would deploy without (#1353). The
+// Bundle API and kardinal create bundle refuse it first with the same advice.
+func TestBundleCRDRejectsConfigRefOnImage(t *testing.T) {
+	spec := crdSchema(t, "kardinal.io_bundles.yaml", "spec")
+	const msg = "spec.configRef is used only by config and mixed Bundles: an image Bundle deploys only its images; " +
+		"set type config or mixed, or remove configRef"
+	ref := map[string]interface{}{"commitSHA": "abc"}
+	img := []interface{}{map[string]interface{}{"repository": "r/app", "tag": "1"}}
+	tests := []struct {
+		name string
+		self map[string]interface{}
+		want []string
+	}{
+		{"image with configRef", map[string]interface{}{"type": "image", "pipeline": "p", "images": img, "configRef": ref}, []string{msg}},
+		{"image with an empty configRef", map[string]interface{}{"type": "image", "pipeline": "p", "images": img,
+			"configRef": map[string]interface{}{}}, []string{msg}},
+		{"image", map[string]interface{}{"type": "image", "pipeline": "p", "images": img}, nil},
+		{"config", map[string]interface{}{"type": "config", "pipeline": "p", "configRef": ref}, nil},
+		{"mixed", map[string]interface{}{"type": "mixed", "pipeline": "p", "images": img, "configRef": ref}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, failingRules(t, spec, tc.self))
+		})
+	}
+}

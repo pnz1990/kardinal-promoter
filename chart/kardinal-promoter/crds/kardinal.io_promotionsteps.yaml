@@ -157,6 +157,15 @@ spec:
                   transitions to Verified.
                 format: int64
                 type: integer
+              bakeFirstStartedAt:
+                description: |-
+                  BakeFirstStartedAt is when the first bake window of this step began:
+                  the first healthy check with env.bake configured. It is never reset.
+                  With bake.policy reset-on-alarm, the step must complete one full
+                  window by BakeFirstStartedAt + bake.minutes + health.timeout, so a
+                  release that keeps flapping ends (#1423).
+                format: date-time
+                type: string
               bakeResets:
                 description: |-
                   BakeResets is the number of times the bake timer was reset due to a
