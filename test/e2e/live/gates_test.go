@@ -932,7 +932,9 @@ func TestGate_OverridePassesStage(t *testing.T) {
 // override and an override for another stage leave prod's gate blocked. A
 // short override passes the gate only until it expires; the controller
 // re-evaluates the gate right at expiry, although its recheckInterval is an
-// hour. An override for every stage (no stage) releases prod.
+// hour. An override dated ahead of when the controller first saw it is
+// ignored (OverrideIgnored). An override for every stage (no stage) releases
+// prod.
 //
 // Covers GATE-OVERRIDE-02.
 func TestGate_OverrideLimits(t *testing.T) {
@@ -962,6 +964,18 @@ func TestGate_OverrideLimits(t *testing.T) {
 			return false, fmt.Sprintf("gate lookup: ok=%v err=%v", ok, err)
 		}
 		return !g.Status.Ready && strings.Contains(g.Status.Reason, "= false"), framework.DescribeGate(g)
+	})
+
+	// An entry dated a day ahead (chained past the override cap) does not
+	// count: the controller ignores an override created more than 5 minutes
+	// after it first saw it, and says so in OverrideIgnored.
+	ahead := metav1.NewTime(time.Now().Add(48 * time.Hour))
+	e.Override(t, gate, v1alpha1.PolicyGateOverride{Stage: "prod", Reason: "chained", CreatedBy: "e2e-chained",
+		CreatedAt: &ahead, ExpiresAt: metav1.NewTime(ahead.Add(24 * time.Hour))})
+	e.WaitGate(t, a.ns, bundle, "prod", "hold", gateTimeout, "the future-dated override ignored", func(g *v1alpha1.PolicyGate) bool {
+		c := meta.FindStatusCondition(g.Status.Conditions, "OverrideIgnored")
+		return c != nil && c.Status == metav1.ConditionTrue && strings.Contains(c.Message, "e2e-chained") &&
+			len(g.Status.OverridesSeen) == 3 && !g.Status.Ready
 	})
 
 	// No fast ScheduleClock may re-evaluate the gate for us around the expiry.
