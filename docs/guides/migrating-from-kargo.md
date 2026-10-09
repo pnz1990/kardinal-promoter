@@ -296,6 +296,9 @@ helm uninstall kargo -n kargo
 | Rollback | Manual re-promotion of older Freight (pins the Stage since v1.11); auto-rollback in Kargo Enterprise (beta) | `kardinal rollback my-app --env prod`, or `onHealthFailure: rollback` |
 | Evidence / audit | Promotion objects and Kubernetes Events; `record-audit-event` in Kargo Enterprise (v1.12) | PR body with structured evidence, `AuditEvent` CRD, `kardinal history` |
 | DAG visualization | Kargo UI | Built-in React UI (embedded in the controller) |
+| Notifications | Slack, email and HTTP notifications in Kargo Enterprise | `NotificationHook` CRD: Slack, Microsoft Teams, JSON or a templated body ([Notifications](../notifications.md)) |
+| REST API | Kargo API server with API tokens | UI and Bundle API described by OpenAPI (`GET /api/v1/openapi.json`); scripts use ServiceAccount tokens ([REST API](../reference/rest-api.md)) |
+| Delivery metrics | Kargo Prometheus metrics (v1.12) | DORA metrics (deployment frequency, lead time, change failure rate, time to restore) in `Pipeline.status.deploymentMetrics`, `kardinal metrics` and the UI |
 | Promotion steps | A Stage's `promotionTemplate` composes built-in steps and PromotionTasks | Fixed sequence per environment, chosen by the Bundle type, `update.strategy` and `approval`; no custom steps |
 | Multi-cluster | Stages that update each cluster's Argo CD Application | Argo CD or Flux hub: `health.type: argocd` or `flux` reads each Application or Kustomization in the hub (`health.cluster` kubeconfig Secrets are not supported) |
 

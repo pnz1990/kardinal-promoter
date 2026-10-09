@@ -46,7 +46,7 @@ kardinal-promoter is a Kubernetes-native controller that automates software prom
 
 ## Why kardinal-promoter?
 
-All three tools can promote through a DAG of environments. The first rows show where kardinal differs. Surveyed on 2026-10-03 against Kargo v1.12.1 and GitOps Promoter v0.42.1.
+All three tools can promote through a DAG of environments. The first rows show where kardinal differs. Surveyed on 2026-10-09 against Kargo v1.12.3 and GitOps Promoter v0.45.0.
 
 | Feature | kardinal | Kargo | GitOps Promoter |
 |---|---|---|---|
@@ -58,7 +58,8 @@ All three tools can promote through a DAG of environments. The first rows show w
 | DORA metrics built-in | ✅ | ❌ | ❌ on its roadmap |
 | Upstream promotion history in gates | ✅ | ❌ | ❌ |
 | Time-limited gate override with a recorded reason | ✅ | ❌ | ❌ |
-| Auto-rollback on health failure | ✅ | Enterprise only (beta) | ❌ |
+| Auto-rollback on health failure | ✅ | Enterprise only (beta) | ❌ manual `RestoreActiveCommit` |
+| Slack and Teams notifications built in (`NotificationHook`) | ✅ | Enterprise only | ❌ open PR |
 | Explain a blocked promotion, simulate a policy (`explain`, `policy simulate`) | ✅ | ❌ | ❌ |
 | A newer release supersedes an older one in flight | ✅ | ❌ promotions queue | ✅ newest commit wins |
 | DAG promotion pipelines | ✅ | ✅ Stage DAG | ✅ `dependsOn` |

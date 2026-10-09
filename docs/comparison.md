@@ -3,8 +3,8 @@
 This page compares kardinal-promoter with the two most similar tools in the GitOps promotion space.
 
 !!! note "Objectivity"
-    Surveyed on 2026-10-03 from each project's source, docs and release notes: kardinal-promoter
-    v0.9.0, Kargo v1.12.1 and GitOps Promoter v0.42.1. All three tools are actively developed;
+    Surveyed on 2026-10-09 from each project's source, docs and release notes: kardinal-promoter
+    v0.9.0 and its main branch (v0.10.0, unreleased), Kargo v1.12.3 and GitOps Promoter v0.45.0. All three tools are actively developed;
     check each project's releases for the latest capabilities. "Kargo Enterprise" means the
     commercial edition (Kargo on the Akuity Platform); everything else in the Kargo column is open source.
 
@@ -23,7 +23,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **GitOps engine support** | ArgoCD, Flux, raw Kubernetes (chosen per environment) | Argo CD (sync and health); can push Flux-compatible OCI artifacts (v1.12), with no Flux sync or health check | Argo CD first-class (Source Hydrator, health gate, UI extension); any engine that syncs the environment branches, with no health gate for it |
 | **SCM providers** | GitHub (incl. Enterprise), GitLab (incl. self-managed), Forgejo/Gitea; Bitbucket Cloud and Azure DevOps (newer, less tested). One provider per controller | GitHub, GitLab, Gitea, Bitbucket Cloud, Azure DevOps | GitHub (a GitHub App, incl. Enterprise), GitLab, Forgejo, Gitea, Bitbucket Cloud, Azure DevOps |
 | **Health checks** | Deployment, ArgoCD, Flux, Argo Rollouts, Flagger | ArgoCD Application, plus AnalysisTemplate verification | ArgoCD Application (Healthy and Synced); others through a custom CommitStatus |
-| **Rollback mechanism** | `kardinal rollback` promotes the previous artifact through the same pipeline, gates and PR flow | Re-promote older Freight; since v1.11 this pins the Stage so auto-promotion does not roll forward again | Manual git revert (a "restore this version" feature is in an open PR) |
+| **Rollback mechanism** | `kardinal rollback` promotes the previous artifact through the same pipeline, gates and PR flow | Re-promote older Freight; since v1.11 this pins the Stage so auto-promotion does not roll forward again | `RestoreActiveCommit` (v0.44): restores a version the environment already ran and blocks promotion there until released; otherwise a manual git revert |
 | **Auto-rollback on health failure** | Yes — `onHealthFailure: rollback \| abort \| none` per stage, or a RollbackPolicy | Kargo Enterprise only (beta): back to the last verified Freight when verification fails | No |
 | **Contiguous healthy soak** | Yes — `bake.minutes` resets timer on health alarm | No — `requiredSoakTime` counts time since the Freight was verified upstream; health does not reset it | No — `TimedCommitStatus` counts time since the commit merged; health does not reset it |
 | **Change freeze management** | Yes — cluster-scoped `ChangeWindow` (blackout or recurring), enforced by any gate that references it | Kargo Enterprise only (promotion windows, v1.12, beta); open source ignores the field | `ScheduledCommitStatus` cron windows, global or per environment, per PromotionStrategy |
@@ -47,7 +47,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Artifact discovery** | Bundle created by CI (HTTP API, GitHub Action) or the CLI; Subscription CRD polls public OCI registries and Git repos | Warehouse: images, Git and Helm charts, with webhook receivers for registries and SCMs | Git commits from a hydrator (Argo CD Source Hydrator or any other) |
 | **Multi-artifact bundle** | Yes (image + config in one Bundle) | Yes (Freight, with creation criteria since v1.8) | No |
 | **Architecture** | Graph-first (one kro Graph per Bundle) | Controllers over Stage and Freight CRDs; v2.0 will replace the storage layer | Controller, plus an optional API server for the dashboard |
-| **Maturity** | v0.9.0, active development; runs on kro's alpha Graph API (v0.10.0-rc.0) | v1.12.1, production-grade; v2.0.0 is next | v0.42.1, `v1alpha1` API, "experimental" per its README |
+| **Maturity** | v0.9.0, active development; runs on kro's alpha Graph API (v0.10.0-rc.0) | v1.12.3, production-grade; v2.0.0 is next | v0.45.0, `v1alpha1` API, "experimental" per its README |
 | **License** | Apache 2.0 | Apache 2.0 | Apache 2.0 |
 
 ---
@@ -63,7 +63,8 @@ Both projects closed some of the gaps this page used to list.
 - Auto-promotion holds (v1.11): a manual re-promote of older Freight pins the Stage.
 - Freight creation criteria and the `MatchUpstream` selection policy (v1.8), a REST API with API tokens and a generic webhook receiver (v1.9), and its own Prometheus metrics (v1.12).
 - Notifications to Slack, email and HTTP, in Kargo Enterprise (v1.8+).
-- Next: v2.0.0, a storage rewrite, and a Kargo Enterprise fan-out to fleets of targets, unreleased.
+- Admin login logging, with optional source IP and a log of every request (v1.12.2).
+- Next: v2.0.0. Its main branch moves Projects and Targets into a database served by the API server, adds a Bitbucket Data Center provider, and removes deprecated tag filters and SSH URLs. A Kargo Enterprise fan-out to fleets of targets is also on main, unreleased.
 
 **GitOps Promoter** (v0.13 to v0.42):
 
@@ -72,7 +73,9 @@ Both projects closed some of the gaps this page used to list.
 - An enriched default PR description (v0.37) and a promotion history CRD (v0.41).
 - Bitbucket Cloud, Azure DevOps and Gitea (v0.19, v0.20).
 - A redesigned dashboard and Argo CD UI extension with promotion history (v0.25 to v0.40).
-- Open PRs: a "restore this version" rollback and outbound notification webhooks.
+- `RestoreActiveCommit` (v0.44): roll one environment back to a version it already ran, and block promotion there until released.
+- Windows CLI binaries, and SCM rate-limit metrics per GitHub App installation (v0.45).
+- Open PRs: outbound notification webhooks, a namespaced mode, a Bitbucket Data Center provider and runtime UI plugins.
 
 Still unique to kardinal: CEL gates that combine schedule, soak, history, metrics and change windows;
 the contiguous healthy soak; wave topology; gate results and provenance in the PR body; DORA metrics;
