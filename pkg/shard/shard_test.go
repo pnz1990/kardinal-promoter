@@ -626,9 +626,7 @@ type hookReader struct {
 
 func (r hookReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 	if key.Name == HeartbeatName(DefaultShard) && r.onHeartbeat != nil {
-		f := r.onHeartbeat
-		r.onHeartbeat = nil
-		f()
+		r.onHeartbeat() // runs its work once (it keeps its own flag)
 	}
 	return r.Reader.Get(ctx, key, obj, opts...)
 }
