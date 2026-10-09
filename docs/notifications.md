@@ -237,7 +237,10 @@ Functions, on top of the text/template builtins (`if`, `with`, `eq`, `and`, `ind
 `len`, ...): `json` (the value as JSON, quotes and escapes included: use it for every
 string in a JSON body), `lower`, `upper`, `truncate N` (at most N characters, with `…` when
 cut) and `print` (joins its operands: `print "kardinal/" .Namespace`). `printf` is refused:
-with argument indexes (`%[1]s`) it repeats an operand without bound.
+with argument indexes (`%[1]s`) it repeats an operand without bound. `call` is refused too.
+The comparison, logic and indexing builtins (`eq`, `ne`, `lt`, `le`, `gt`, `ge`, `and`, `or`,
+`not`, `len`, `index`, `slice`) take strings, numbers and bools; `and` and `or` evaluate every
+operand.
 
 Limits, so a template cannot run away with the controller:
 
@@ -249,6 +252,11 @@ Limits, so a template cannot run away with the controller:
   that input (6 times the input for `json`, `html` and `js`, 3 times for `urlquery`, `lower`
   and `upper`) is charged to a budget of 256 KiB per render, so no render allocates much more
   than that.
+- A render makes at most 2,000 function calls, builtins included, and stops after 20 ms:
+  text/template cannot be cancelled, so the next call or write after the deadline fails
+  and the render ends there.
+- Every field the template sees is cut to 4 KiB (on a character boundary), so a long
+  `Message` cannot feed a large render.
 - A field that does not exist is an error.
 - With a JSON content type (`application/json` or `*+json`), the rendered body must be
   valid JSON.

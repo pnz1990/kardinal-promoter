@@ -5,8 +5,10 @@ package notificationhook
 
 import (
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,19 +46,20 @@ func TestParseBodyTemplate_RefusesVariables(t *testing.T) {
 // function refuses an input over 64 KiB, and the functions of one render
 // produce at most maxFuncOutput bytes together, however the calls nest.
 func TestRenderTemplate_BoundsFunctionAllocation(t *testing.T) {
-	big := strings.Repeat("m", 60<<10)
-	data := &TemplateData{Event: "Bundle.Failed", Message: big}
+	// Fields are cut to 4 KiB, so a 60 KiB string is built by joining one.
+	data := &TemplateData{Event: "Bundle.Failed", Message: strings.Repeat("m", maxDataField)}
+	big := "(print" + strings.Repeat(" .Message", 15) + ")"
 	tests := map[string]struct{ body, want string }{
-		"print over input limit":             {`{{len (print .Message .Message)}}`, "print: input is 122880 bytes, over 65536"},
-		"println over input limit":           {`{{len (println .Message .Message)}}`, "println: input is"},
-		"html over input limit":              {`{{len (html .Message .Message)}}`, "html: input is"},
-		"js over input limit":                {`{{len (js .Message .Message)}}`, "js: input is"},
-		"urlquery over input limit":          {`{{len (urlquery .Message .Message)}}`, "urlquery: input is"},
-		"json charges 6x its input up front": {`{{len (json (print .Message "x"))}}`, "json: function output is over 262144 bytes in total"},
+		"print over input limit":             {`{{len (print ` + big + ` ` + big + `)}}`, "print: input is 122880 bytes, over 65536"},
+		"println over input limit":           {`{{len (println ` + big + ` ` + big + `)}}`, "println: input is"},
+		"html over input limit":              {`{{len (html ` + big + ` ` + big + `)}}`, "html: input is"},
+		"js over input limit":                {`{{len (js ` + big + ` ` + big + `)}}`, "js: input is"},
+		"urlquery over input limit":          {`{{len (urlquery ` + big + ` ` + big + `)}}`, "urlquery: input is"},
+		"json charges 6x its input up front": {`{{len (json (print ` + big + ` "x"))}}`, "json: function output is over 262144 bytes in total"},
 
-		"budget across calls": {strings.Repeat(`{{len (upper .Message)}}`, 5),
-			"upper: function output is over 262144 bytes in total"},
-		"budget across nested calls": {strings.Repeat(`{{len (lower (print .Message))}}`, 3),
+		"budget across calls": {strings.Repeat(`{{len (upper `+big+`)}}`, 5),
+			"function output is over 262144 bytes in total"},
+		"budget across nested calls": {strings.Repeat(`{{len (lower (print `+big+`))}}`, 3),
 			"function output is over 262144 bytes in total"},
 	}
 	for name, tt := range tests {
@@ -71,7 +74,7 @@ func TestRenderTemplate_BoundsFunctionAllocation(t *testing.T) {
 	}
 
 	// The budget is per render: the same template renders again.
-	tmpl, err := parseBodyTemplate(`{{len (upper .Message)}}`)
+	tmpl, err := parseBodyTemplate(`{{len (upper ` + big + `)}}`)
 	require.NoError(t, err)
 	for i := 0; i < 10; i++ {
 		out, err := renderTemplate(tmpl, data, "text/plain")
@@ -85,7 +88,8 @@ func TestRenderTemplate_BoundsFunctionAllocation(t *testing.T) {
 // render allocates a few MiB at most, not hundreds.
 func TestRenderTemplate_WorstCaseAllocation(t *testing.T) {
 	data := &TemplateData{Message: strings.Repeat("m", 60<<10)}
-	body := strings.Repeat(`{{len (print (upper (lower .Message)))}}`, 400)
+	big := "(print" + strings.Repeat(" .Message", 15) + ")"
+	body := strings.Repeat(`{{len (print (upper (lower `+big+`)))}}`, 90)
 	require.LessOrEqual(t, len(body), 16384)
 	tmpl, err := parseBodyTemplate(body)
 	require.NoError(t, err)
@@ -97,4 +101,118 @@ func TestRenderTemplate_WorstCaseAllocation(t *testing.T) {
 	require.Error(t, err, "the budget stops it")
 	assert.ErrorIs(t, err, errFuncBudget)
 	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(16<<20), "allocated %d bytes", after.TotalAlloc-before.TotalAlloc)
+}
+
+// TestRenderTemplate_TruncatesData: every field the template sees is cut to
+// maxDataField bytes, on a rune boundary.
+func TestRenderTemplate_TruncatesData(t *testing.T) {
+	tests := []struct {
+		name, msg string
+		want      int
+	}{
+		{"short", "hello", 5},
+		{"long ASCII", strings.Repeat("m", 60<<10), maxDataField},
+		{"long multibyte keeps whole runes", strings.Repeat("é", 3000), maxDataField}, // 2 bytes each
+		{"cut inside a rune", "xx" + strings.Repeat("€", 2000), maxDataField - 2},     // 2 + 3n bytes
+	}
+	tmpl, err := parseBodyTemplate(`{{len .Message}}`)
+	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := renderTemplate(tmpl, &TemplateData{Message: tt.msg}, "text/plain")
+			require.NoError(t, err)
+			assert.Equal(t, strconv.Itoa(tt.want), string(out))
+		})
+	}
+}
+
+// TestRenderTemplate_CountedBuiltins: the comparison, logic and indexing
+// builtins still work, and every call counts against maxFuncCalls.
+func TestRenderTemplate_CountedBuiltins(t *testing.T) {
+	data := &TemplateData{Event: "Bundle.Failed", Environment: "prod", Message: "abc"}
+	tests := []struct{ body, want, err string }{
+		{body: `{{if eq .Environment "prod"}}P{{end}}`, want: "P"},
+		{body: `{{if eq .Environment "test" "prod"}}P{{end}}`, want: "P"},
+		{body: `{{if ne .Environment "prod"}}N{{else}}S{{end}}`, want: "S"},
+		{body: `{{if and (eq .Event "Bundle.Failed") (lt (len .Message) 5)}}Y{{end}}`, want: "Y"},
+		{body: `{{or .Bundle "none"}}`, want: "none"},
+		{body: `{{and .Message .Environment}}`, want: "prod"},
+		{body: `{{not .Bundle}}`, want: "true"},
+		{body: `{{gt 3 2}} {{ge 2 2}} {{le 1.5 2}} {{lt "a" "b"}}`, want: "true true true true"},
+		{body: `{{eq true true}} {{ne true false}}`, want: "true true"},
+		{body: `{{slice .Message 1 2}}{{index .Message 0}}`, want: "b97"},
+		{body: `{{lt .Message 3}}`, err: "lt: incompatible types for comparison"},
+		{body: `{{slice .Message 2 9}}`, err: "out of range"},
+		{body: strings.Repeat(`{{eq "a" "a"}}`, maxFuncCalls+1), err: errTooManyCalls.Error()},
+		{body: strings.Repeat(`{{not .Message}}`, maxFuncCalls+1), err: errTooManyCalls.Error()},
+	}
+	for _, tt := range tests {
+		name := tt.body
+		if len(name) > 60 {
+			name = name[:60]
+		}
+		t.Run(name, func(t *testing.T) {
+			tmpl, err := parseBodyTemplate(tt.body)
+			require.NoError(t, err)
+			out, err := renderTemplate(tmpl, data, "text/plain")
+			if tt.err != "" {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, errTemplate)
+				assert.Contains(t, err.Error(), tt.err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(out))
+		})
+	}
+}
+
+// TestParseBodyTemplate_RefusesCall: call runs a function value and is
+// refused like printf.
+func TestParseBodyTemplate_RefusesCall(t *testing.T) {
+	_, err := parseBodyTemplate(`{{call .Message}}`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "call is not allowed")
+}
+
+// TestFuncBudget_Stopped: once the render's time is up, every function call
+// and every write fails, so Execute returns at the next action.
+func TestFuncBudget_Stopped(t *testing.T) {
+	b := &funcBudget{}
+	require.NoError(t, b.tick("eq"))
+	b.stopped.Store(true)
+	assert.ErrorIs(t, b.tick("eq"), errRenderTime)
+	_, err := b.guard("print", []interface{}{"x"}, times(1), func() (string, error) { return "x", nil })
+	assert.ErrorIs(t, err, errRenderTime)
+	buf := &limitedBuffer{max: 10, stopped: &b.stopped}
+	_, err = buf.Write([]byte("x"))
+	assert.ErrorIs(t, err, errRenderTime)
+}
+
+// TestRenderTemplate_WorstCaseTime renders the slowest bodies that fit in
+// 16 KiB: the most calls, and the most bytes built. Each finishes in under
+// 50 ms and leaves no goroutine behind: Execute runs on the caller's
+// goroutine and the timer is stopped.
+func TestRenderTemplate_WorstCaseTime(t *testing.T) {
+	data := &TemplateData{Message: strings.Repeat("<m>", 60<<10)}
+	big := "(print" + strings.Repeat(" .Message", 15) + ")"
+	bodies := map[string]string{
+		"most calls":     strings.Repeat(`{{eq (len (slice .Message 1)) 2}}`, 16384/34),
+		"most building":  strings.Repeat(`{{len (js (html `+big+`))}}`, 16384/165),
+		"nested escapes": strings.Repeat(`{{len (json (js (html (urlquery .Message))))}}`, 16384/50),
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			require.LessOrEqual(t, len(body), 16384)
+			tmpl, err := parseBodyTemplate(body)
+			require.NoError(t, err)
+			before := runtime.NumGoroutine()
+			start := time.Now()
+			_, _ = renderTemplate(tmpl, data, "text/plain")
+			elapsed := time.Since(start)
+			assert.Less(t, elapsed, 50*time.Millisecond)
+			time.Sleep(maxRenderTime + 5*time.Millisecond) // a timer that fired would have run by now
+			assert.LessOrEqual(t, runtime.NumGoroutine(), before, "no goroutine left after Execute")
+		})
+	}
 }

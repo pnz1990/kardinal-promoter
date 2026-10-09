@@ -276,26 +276,26 @@ NOTIF-01	live	core	covered	notifications	NotificationHook delivers Bundle.Verifi
 NOTIF-02	live	core	covered	notifications	NotificationHook delivers Bundle.Failed	docs/notifications.md:102
 NOTIF-03	live	core	covered	notifications	NotificationHook delivers PolicyGate.Blocked	docs/notifications.md:106; docs/notifications.md:124-133
 NOTIF-04	live	core	covered	notifications	NotificationHook delivers PromotionStep.Failed	docs/notifications.md:66-78; docs/notifications.md:108
-NOTIF-AUTH-01	live	core	covered	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:368-373; pkg/reconciler/notificationhook/reconciler.go:564-568
-NOTIF-SEL-01	live	core	covered	notifications	pipelineSelector limits which Pipelines a hook reports on	docs/notifications.md:428-439
+NOTIF-AUTH-01	live	core	covered	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:376-381; pkg/reconciler/notificationhook/reconciler.go:564-568
+NOTIF-SEL-01	live	core	covered	notifications	pipelineSelector limits which Pipelines a hook reports on	docs/notifications.md:436-447
 NOTIF-EGRESS-01	live	core	covered	notifications	hook URL to loopback, link-local or metadata address is refused	docs/guides/security.md:450-515; pkg/egress/guard.go:70-93
-NOTIF-RETRY-01	live	core	covered	notifications	failed deliveries retried with backoff	docs/notifications.md:275-282; pkg/reconciler/notificationhook/reconciler.go:321-356; pkg/reconciler/notificationhook/reconciler.go:396-406
-NOTIF-GIVEUP-01	live	core	covered	notifications	delivery gives up after 10 attempts; a spec edit resets the count	docs/notifications.md:275-282
-NOTIF-NEW-01	live	core	covered	notifications	a new hook delivers only the newest existing event, not the backlog	docs/notifications.md:272-273
-NOTIF-STATUS-01	live	core	covered	notifications	status records last delivery, result and failure count	docs/notifications.md:381-414
+NOTIF-RETRY-01	live	core	covered	notifications	failed deliveries retried with backoff	docs/notifications.md:283-290; pkg/reconciler/notificationhook/reconciler.go:321-356; pkg/reconciler/notificationhook/reconciler.go:396-406
+NOTIF-GIVEUP-01	live	core	covered	notifications	delivery gives up after 10 attempts; a spec edit resets the count	docs/notifications.md:283-290
+NOTIF-NEW-01	live	core	covered	notifications	a new hook delivers only the newest existing event, not the backlog	docs/notifications.md:280-281
+NOTIF-STATUS-01	live	core	covered	notifications	status records last delivery, result and failure count	docs/notifications.md:389-422
 NOTIF-PAYLOAD-01	live	core	covered	notifications	documented payload fields; Bundle events carry no environment	docs/notifications.md:63-87
 NOTIF-SLACK-01	live	core	covered	notifications	format: slack posts a Slack incoming-webhook message (text and Block Kit blocks) that Slack accepts	docs/notifications.md:148-176; pkg/reconciler/notificationhook/format.go:97-130
 NOTIF-TEAMS-01	live	core	covered	notifications	format: teams posts a Teams Workflows message with an Adaptive Card that Teams accepts	docs/notifications.md:178-196; pkg/reconciler/notificationhook/format.go:188-224
-NOTIF-TEMPLATE-01	live	core	covered	notifications	format: template renders spec.template.body over the documented event fields	docs/notifications.md:198-262; pkg/reconciler/notificationhook/template.go:161-176
-NOTIF-SECRET-01	live	core	covered	notifications	spec.webhook.secretRef: url and authorization from a Secret; a missing Secret is Ready=False and the event waits	docs/notifications.md:330-366; pkg/reconciler/notificationhook/reconciler.go:421-487
-NOTIF-SECRET-LABEL-01	live	core	covered	notifications	secretRef Secret without kardinal.io/referenceable=true is not used (Ready=False SecretNotReferenceable) until labeled	docs/guides/security.md:232-260; docs/notifications.md:353-359; pkg/reconciler/notificationhook/reconciler.go:441-448
-NOTIF-PLAINTEXT-01	live	core	covered	notifications	deprecated authorizationHeader still delivers and sets PlaintextCredential=True	docs/notifications.md:368-373; pkg/reconciler/notificationhook/reconciler.go:492-510
+NOTIF-TEMPLATE-01	live	core	covered	notifications	format: template renders spec.template.body over the documented event fields	docs/notifications.md:198-270; pkg/reconciler/notificationhook/template.go:412-427
+NOTIF-SECRET-01	live	core	covered	notifications	spec.webhook.secretRef: url and authorization from a Secret; a missing Secret is Ready=False and the event waits	docs/notifications.md:338-374; pkg/reconciler/notificationhook/reconciler.go:421-487
+NOTIF-SECRET-LABEL-01	live	core	covered	notifications	secretRef Secret without kardinal.io/referenceable=true is not used (Ready=False SecretNotReferenceable) until labeled	docs/guides/security.md:232-260; docs/notifications.md:361-367; pkg/reconciler/notificationhook/reconciler.go:441-448
+NOTIF-PLAINTEXT-01	live	core	covered	notifications	deprecated authorizationHeader still delivers and sets PlaintextCredential=True	docs/notifications.md:376-381; pkg/reconciler/notificationhook/reconciler.go:492-510
 NOTIF-UNBLOCK-01	live	core	covered	notifications	PolicyGate.Unblocked once when a blocking gate allows again	docs/notifications.md:107; docs/notifications.md:128-133
 NOTIF-PR-01	live	core	covered	notifications	PromotionStep.PROpened and PromotionStep.WaitingForApproval with prURL for a pr-review step	docs/notifications.md:109-110
 NOTIF-SUPERSEDE-01	live	core	covered	notifications	Bundle.Superseded when a newer Bundle supersedes one	docs/notifications.md:103
 NOTIF-ROLLBACK-01	live	core	covered	notifications	Bundle.RollbackStarted and Bundle.RolledBack for kardinal rollback	docs/notifications.md:104-105
 NOTIF-ALLOWLIST-01	live	chart	covered	notifications	egress.allowlist: hosts and CIDRs allowed, other hook and MetricCheck URLs refused, deny list kept	docs/guides/security.md:474-502; pkg/egress/allowlist.go:41-78; pkg/egress/guard.go:158-182
-NOTIF-RESTART-01	live	chart	covered	notifications	a controller restart sends no delivered event again	docs/notifications.md:306-312
+NOTIF-RESTART-01	live	chart	covered	notifications	a controller restart sends no delivered event again	docs/notifications.md:314-320
 CLI-VERSION-01	live	core	covered	cli	kardinal version prints the CLI version line	cmd/kardinal/cmd/version.go:33; docs/reference/cli/kardinal-version.md
 CLI-VERSION-02	live	core	covered	cli	kardinal version shows the controller version from the kardinal-version ConfigMap (--controller-namespace)	cmd/kardinal/cmd/version.go:48-49; cmd/kardinal/cmd/version.go:65-75
 CLI-GLOBAL-01	live	core	covered	cli	global flags -n, --kubeconfig, --context select the target	cmd/kardinal/cmd/root.go:61-65
