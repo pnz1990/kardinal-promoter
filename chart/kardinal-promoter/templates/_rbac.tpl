@@ -55,6 +55,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - notificationhooks
     - hookruns
     - renderruns
+    - imageverifications
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["kardinal.io"]
   resources:
@@ -70,6 +71,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - notificationhooks/status
     - hookruns/status
     - renderruns/status
+    - imageverifications/status
   verbs: ["get", "update", "patch"]
 # Pipeline hooks (docs/hooks.md) and rendered manifests
 # (docs/rendered-manifests.md): the HookRun and RenderRun reconcilers create

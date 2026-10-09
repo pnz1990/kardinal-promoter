@@ -242,6 +242,12 @@ scm:
   # environment). Empty allows every repository the token can write to, and
   # the controller logs a warning at startup. See docs/guides/security.md.
   allowedRepositories: []
+  # -- Forgejo/Gitea only: the names or emails the instance signs commits
+  # with (its repository.signing SIGNING_NAME / SIGNING_EMAIL,
+  # --scm-instance-signers). Image verification treats such a commit as a
+  # platform signature (forgejo-instance). Without it, a verified signer that
+  # is not a user of the instance is taken as the instance key.
+  instanceSigners: []
   # -- The gate results of a waiting pr-review step as a commit status on the
   # commit kardinal pushed to its PR (docs/pr-evidence.md). enabled: false
   # (--gates-commit-status=false) posts none, for a token without the

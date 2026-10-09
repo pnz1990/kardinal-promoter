@@ -393,7 +393,7 @@ type apiAccess struct {
 var kardinalNamespacedKinds = []string{
 	"pipelines", "bundles", "policygates", "rollbackpolicies", "subscriptions",
 	"promotionsteps", "prstatuses", "metricchecks",
-	"scheduleclocks", "notificationhooks", "hookruns",
+	"scheduleclocks", "notificationhooks", "hookruns", "imageverifications",
 }
 
 var rwVerbs = []string{"get", "list", "watch", "create", "update", "patch", "delete"}

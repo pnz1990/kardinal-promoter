@@ -269,6 +269,14 @@
           },
           "description": "--scm-allowed-repositories: host/repository globs the controller's SCM token may act on."
         },
+        "instanceSigners": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "--scm-instance-signers: names or emails the Forgejo/Gitea instance signs commits with."
+        },
         "gatesCommitStatus": {
           "type": "object",
           "additionalProperties": false,
@@ -386,7 +394,8 @@
       "additionalProperties": false,
       "properties": {
         "serviceAccountName": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         },
         "kroNamespace": {
           "type": "string"
