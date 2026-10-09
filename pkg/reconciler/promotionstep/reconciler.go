@@ -224,8 +224,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.syncPRFinalizer(ctx, &ps); err != nil {
 		return prFinalizerSyncFailed(log, err)
 	}
-	// Hooks added too late for this step: say so on the step (any state).
-	if base := ps.DeepCopy(); recordSkippedHooks(&ps, r.now().UTC()) {
+	// Hooks added too late for this step: say so on the step (any state);
+	// hooks that ran: record them, so a recreated HookRun does not run again.
+	base := ps.DeepCopy()
+	skipped, recorded := recordSkippedHooks(&ps, r.now().UTC()), recordHookRuns(&ps)
+	if skipped || recorded {
 		if err := r.Status().Patch(ctx, &ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, fmt.Errorf("patch %s condition: %w", ConditionHooksSkipped, err)
 		}

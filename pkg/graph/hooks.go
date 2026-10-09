@@ -253,6 +253,9 @@ func buildHookRunNode(id, name string, in hookNodesInput, phase string,
 		// A hook added to the Pipeline after its step passed the point it
 		// runs at is Skipped by its reconciler, not run out of order.
 		"stepAdvanced": stepAdvanced(in.stepK8sName, phase),
+		// What the step recorded for this hook, when one ran before (a
+		// HookRun deleted and applied again does not run its Job twice).
+		"recorded": hookRecorded(in.stepK8sName, phase, h.Name),
 	}
 	if h.Timeout != "" {
 		spec["timeout"] = h.Timeout
@@ -331,6 +334,16 @@ func stepAdvanced(stepK8sName, phase string) string {
 		states = `s.?status.?state.orValue("") in ["Verified", "Failed", "AbortedByAlarm", "RollingBack"]`
 	}
 	return fmt.Sprintf(`${%s.exists(s, s.metadata.name == %s && %s)}`, refStepsNodeID, strconv.Quote(stepK8sName), states)
+}
+
+// hookRecorded is the CEL expression of a HookRun's spec.recorded: the
+// step's status.hookRecords entry for hook in phase, or {} when the step
+// has none (or does not exist yet).
+func hookRecorded(stepK8sName, phase, hook string) string {
+	match := fmt.Sprintf(`r.hook == %s && r.phase == %s`, strconv.Quote(hook), strconv.Quote(phase))
+	step := fmt.Sprintf(`s.metadata.name == %s`, strconv.Quote(stepK8sName))
+	return fmt.Sprintf(`${%[1]s.exists(s, %[2]s && s.?status.?hookRecords.orValue([]).exists(r, %[3]s)) ? `+
+		`%[1]s.filter(s, %[2]s)[0].status.hookRecords.filter(r, %[3]s)[0] : {}}`, refStepsNodeID, step, match)
 }
 
 // The compact shape does not build HookRun nodes or the mirror patch node:

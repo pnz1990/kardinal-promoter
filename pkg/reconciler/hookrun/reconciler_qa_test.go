@@ -135,10 +135,55 @@ func TestHookRun_FinalizerHoldsRunningJob(t *testing.T) {
 	assert.True(t, controllerutil.ContainsFinalizer(hr, hookrun.Finalizer), "held while the Job runs")
 
 	h.setJobCondition(batchv1.JobComplete, "", "")
+	res = h.reconcile()
+	hr = h.hookRun()
+	assert.Equal(t, v1alpha1.HookRunSucceeded, hr.Status.Phase, "the result is recorded before the HookRun goes")
+	assert.True(t, controllerutil.ContainsFinalizer(hr, hookrun.Finalizer), "held briefly so the mirror carries the result")
+	assert.Positive(t, res.RequeueAfter)
+
+	h.now = h.now.Add(31 * time.Second)
 	h.reconcile()
 	var gone v1alpha1.HookRun
 	err := h.c.Get(context.Background(), types.NamespacedName{Name: hr.Name, Namespace: ns}, &gone)
-	assert.True(t, err != nil, "released once the Job ended")
+	assert.True(t, err != nil, "released once the Job ended and the grace passed")
+}
+
+// TestHookRun_RecreatedTakesRecordedResult: a HookRun applied again for a
+// hook that already ran for the step (spec.recorded, from the step's
+// status.hookRecords, with the same spec hash) creates no Job: it takes the
+// recorded result, or Failed when the earlier run's result is unknown; a
+// record of another spec hash does not count (regression, #1544 review).
+func TestHookRun_RecreatedTakesRecordedResult(t *testing.T) {
+	probe := newHarness(t, newHookRun(jobJSON("")))
+	probe.reconcile()
+	hash := probe.hookRun().Status.SpecHash
+	require.NotEmpty(t, hash)
+	cases := []struct {
+		name, result, specHash, want, msg string
+		job                               bool
+	}{
+		{"recorded success", v1alpha1.HookRunSucceeded, hash, v1alpha1.HookRunSucceeded, "not run again: this hook already ran", false},
+		{"recorded failure", v1alpha1.HookRunFailed, hash, v1alpha1.HookRunFailed, "not run again: this hook already ran", false},
+		{"deleted while running", v1alpha1.HookRunRunning, hash, v1alpha1.HookRunFailed, "its result is unknown", false},
+		{"another job ran", v1alpha1.HookRunSucceeded, "other", v1alpha1.HookRunPending, "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hr := newHookRun(jobJSON(""))
+			hr.Spec.Recorded = &v1alpha1.HookRecord{Hook: "migrate", Phase: "pre", SpecHash: tc.specHash, Result: tc.result, Message: "Job x completed"}
+			h := newHarness(t, hr)
+			h.reconcile()
+			h.reconcile()
+			got := h.hookRun()
+			_, exists := h.job()
+			assert.Equal(t, tc.job, exists, "Job created")
+			if !tc.job {
+				assert.Equal(t, tc.want, got.Status.Phase)
+				assert.Contains(t, got.Status.Message, tc.msg)
+				assert.Zero(t, h.creates)
+			}
+		})
+	}
 }
 
 // TestHookRun_FinalizerReleasedAtDeadline: a Job past its deadline does not

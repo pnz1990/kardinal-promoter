@@ -224,7 +224,10 @@ func (r *Reconciler) job(ctx context.Context, hr *v1alpha1.HookRun) (*batchv1.Jo
 }
 
 // deleting holds a deleted HookRun while its Job runs and its deadline is
-// ahead, then lets it go (garbage collection deletes the Job and its Pods).
+// ahead, records the Job's result in its status (so the Graph's mirror can
+// carry it to the step's status.hookRecords) and holds it
+// recordGrace longer, then lets it go (garbage collection deletes the Job
+// and its Pods).
 func (r *Reconciler) deleting(ctx context.Context, log zerolog.Logger, hr *v1alpha1.HookRun) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(hr, Finalizer) {
 		return ctrl.Result{}, nil
@@ -234,10 +237,21 @@ func (r *Reconciler) deleting(ctx context.Context, log zerolog.Logger, hr *v1alp
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if found && string(job.UID) == hr.Status.JobUID && jobCondition(job, batchv1.JobComplete) == nil &&
-			jobCondition(job, batchv1.JobFailed) == nil {
-			log.Info().Str("job", job.Name).Msg("HookRun deleted while its Job runs; holding it until the Job ends")
-			return ctrl.Result{RequeueAfter: r.untilDeadline(hr)}, nil
+		if found && string(job.UID) == hr.Status.JobUID {
+			if jobCondition(job, batchv1.JobComplete) == nil && jobCondition(job, batchv1.JobFailed) == nil {
+				log.Info().Str("job", job.Name).Msg("HookRun deleted while its Job runs; holding it until the Job ends")
+				return ctrl.Result{RequeueAfter: r.untilDeadline(hr)}, nil
+			}
+			// The Job ended: record its result before letting go.
+			if _, err := r.observe(ctx, log, hr.DeepCopy(), hr, job); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: recordGrace}, nil
+		}
+	}
+	if hr.Status.FinishedAt != nil {
+		if left := hr.Status.FinishedAt.Add(recordGrace).Sub(r.now()); left > 0 {
+			return ctrl.Result{RequeueAfter: left}, nil
 		}
 	}
 	base := hr.DeepCopy()
@@ -268,6 +282,12 @@ func (r *Reconciler) notGenuine(ctx context.Context, hr *v1alpha1.HookRun) (stri
 	}
 	return "", nil
 }
+
+// recordGrace is how long a deleted HookRun whose Job finished stays, with
+// its result in its status, so the Graph's mirror copies the result onto the
+// step (status.hookRecords) before the HookRun goes and the Graph applies it
+// again.
+const recordGrace = 30 * time.Second
 
 // siblingRunning reports whether another HookRun of the same Bundle,
 // environment and phase has a Job running, or is an older one about to
@@ -325,6 +345,22 @@ func older(a, b *v1alpha1.HookRun) bool {
 // leaves a HookRun that knows its deadline.
 func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, hr *v1alpha1.HookRun, hash string) (ctrl.Result, error) {
 	now := metav1.NewTime(r.now())
+	if rec := hr.Spec.Recorded; rec != nil && rec.Result != "" && rec.SpecHash == hash {
+		// This hook already ran for the step (a HookRun of it was deleted
+		// and the Graph applied it again): take the step's record, never run
+		// the Job a second time.
+		hr.Status.SpecHash, hr.Status.StartedAt = hash, &now
+		switch rec.Result {
+		case v1alpha1.HookRunSucceeded, v1alpha1.HookRunFailed:
+			r.finish(hr, rec.Result, fmt.Sprintf("not run again: this hook already ran for the step (%s, recorded on its PromotionStep): %s",
+				rec.Result, rec.Message))
+		default:
+			r.finish(hr, v1alpha1.HookRunFailed, "not run again: an earlier HookRun of this hook was deleted while its Job ran, "+
+				"so its result is unknown; the hook is not run a second time")
+		}
+		log.Info().Str("recorded", rec.Result).Msg("hook already ran for this step; not run again")
+		return ctrl.Result{}, r.patch(ctx, base, hr)
+	}
 	if hr.Spec.StepAdvanced {
 		hr.Status.SpecHash, hr.Status.StartedAt = hash, &now
 		when := "the step had already started"

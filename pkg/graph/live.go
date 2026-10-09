@@ -80,7 +80,8 @@ func buildLiveMirrorNode(env, stepK8sName, bundleUID string, hookNames, runNames
 	live := map[string]interface{}{}
 	if len(hookNames) > 0 {
 		live["hooks"] = fmt.Sprintf(`${%s.filter(h, %s).map(h, {"name": h.metadata.name, "hook": h.spec.hook, `+
-			`"phase": h.spec.phase, "result": h.?status.?phase.orValue("Pending"), "message": h.?status.?message.orValue("")})}`,
+			`"phase": h.spec.phase, "result": h.?status.?phase.orValue("Pending"), "message": h.?status.?message.orValue(""), `+
+			`"specHash": h.?status.?specHash.orValue("")})}`,
 			refHookRunsNodeID, genuineFilter("h", hookNames, bundleUID)+" && h.spec.environment == "+strconv.Quote(env))
 	}
 	if len(runNames) > 0 {
