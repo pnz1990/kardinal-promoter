@@ -361,7 +361,7 @@ func TestCheckKardinalCRDs(t *testing.T) {
 
 	r = checkKardinalCRDs(disco("pipelines", "bundles"))
 	assert.True(t, r.failed)
-	assert.Contains(t, r.detail, "missing: auditevents, changewindows")
+	assert.Contains(t, r.detail, "missing: approvals, auditevents, changewindows")
 	assert.Contains(t, r.detail, "promotionsteps")
 }
 

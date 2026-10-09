@@ -601,6 +601,63 @@ shown as **Superseded**: they are not evaluated again.
 (holding the Bundle), **Superseded**, **Pending** (not evaluated yet) or **Waiting** (evaluated not
 ready, not holding the Bundle).
 
+## Approval gates
+
+An approval gate waits for people. Put `spec.approval` on a gate template; the gate is ready only when its expression is true and enough allowed people have approved the Bundle for the environment, and none of them rejected it. It works for `approval: auto` environments as for `pr-review` ones: the environment's PromotionStep is not created until the gate is ready.
+
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: two-approvers
+  namespace: platform-policies
+  labels:
+    kardinal.io/scope: org
+    kardinal.io/applies-to: prod
+spec:
+  expression: "true"            # or any expression: both must pass
+  message: "prod needs two release managers"
+  approval:
+    required: 2                 # distinct people (default 1)
+    allowedGroups: [release-managers]
+    allowedUsers: [oidc:carol@example.com]
+    excludeAuthor: true         # the Bundle's verified creator does not count
+```
+
+Approve with the CLI:
+
+```bash
+kardinal approve my-app-v1-29-0 --env prod --comment "checked the migration"
+kardinal approve my-app-v1-29-0 --env prod --decision reject --comment "wait for INC-42"
+kardinal approve my-app-v1-29-0 --env prod --revoke
+```
+
+```
+Recorded: oidc:alice@example.com approves my-app-v1-29-0 for prod (Approval my-app-v1-29-0-prod-3f2a9c1b0d)
+```
+
+How it works:
+
+- `kardinal approve` creates an `Approval` object in the Pipeline namespace, labelled with the Bundle and environment, holding the Bundle's UID (`spec.bundleUID`) and owned by the Bundle (deleted with it). It records your Kubernetes username and groups, read from the API server with a SelfSubjectReview. The chart's `<release>-approvals` ValidatingAdmissionPolicy refuses an Approval whose `spec.user` is not the requester, whose `spec.groups` are not among the requester's groups, or whose labels do not match its spec, or that is owned by anything but the Bundle it approves (its owner references cannot change later), and lets only its approver delete it (the garbage collector and the namespace controller excepted; kardinal's controller never deletes Approvals) ([Verified identity](guides/security.md#verified-identity)). An Approval cannot be changed: approving again with another decision replaces yours, and `--revoke` deletes it. The CLI finds your Approval by its labels and `spec.user`, never by name: anyone can create an object under the name it would use, so when that name is taken the API server generates one.
+- The promotion Graph reads the Bundle's Approvals with a selector `ref` node and copies those for the environment, for this Bundle's UID and from approvers the gate allows (`allowedUsers`, `allowedGroups`; anyone when both are empty) into each approval gate instance (`spec.approvals`, at most 101; a gate with more than 100 blocks and says so). The allow-lists apply before the cap, so Approvals from people who may not approve cannot crowd out the ones that count. An Approval of an earlier Bundle that had the same name never counts. A new or deleted Approval re-renders the gate at once. Approving before the Bundle reaches the gate is fine.
+- The gate counts a decision when its user is in `allowedUsers` or one of its groups is in `allowedGroups`, and, with `excludeAuthor`, the user is not the Bundle's verified creator. Each user counts once. A counted `reject` blocks the gate whatever the approvals. Every decision that appears or is revoked writes an `ApprovalRecorded` or `ApprovalRevoked` AuditEvent.
+- With neither `allowedUsers` nor `allowedGroups`, every Approval counts: RBAC on `approvals` decides who can approve, and that includes ServiceAccounts with `create` on `approvals`. Set an allow-list for a gate that only people may pass.
+- Group membership is checked when the Approval is created: an approval stays valid after its approver leaves the group. Revoke it by deleting the Approval (its approver) or with a new Bundle. Revoking only matters while the gate waits: once the gate passed and the environment's promotion started, a revoked approval does not stop or undo that promotion (reject the Bundle, or roll back, for that).
+- `excludeAuthor` compares approvers with the Bundle's `kardinal.io/created-by` annotation, its verified creator. `kardinal create bundle`, `kardinal promote` and `kardinal rollback` set it to your Kubernetes username, and the chart's `<release>-bundle-creator` policy admits it only in the requester's name and never lets it change. The UI sets the authenticated UI user (`kardinal-ui` without per-user authentication), a Subscription `subscription:<name>`, the Bundle API's static token `bundle-api`, an automatic rollback `kardinal-controller`; only this release's controller ServiceAccount (and the exact usernames in Helm `admission.controllerUsernames`) may name a creator other than itself. A Bundle without the annotation (created with `kubectl` or a GitOps tool without it) blocks a gate with `excludeAuthor`: `excludeAuthor cannot be enforced: the Bundle has no verified creator`. So does a Bundle created by a kardinal component (`subscription:*`, `bundle-api`, `kardinal-ui`, `kardinal-controller`): no person is known to exclude. For CI, create the Bundle as the CI identity: `kardinal create bundle` (or `kubectl create`) with the CI ServiceAccount's kubeconfig records that ServiceAccount, which the policy verifies; with the Bundle API, send the ServiceAccount's own token rather than the shared static token once TokenReview authentication of the Bundle API is enabled (#1511), so the controller records the authenticated caller.
+- While it waits, the gate reason is `waiting for approvals: 1 of 2 (alice@example.com)` or `rejected by bob@example.com (wait for INC-42)`; once met, the expression's reason ends with `approved by alice@example.com, bob@example.com (2 of 2)`, which `kardinal explain`, the UI and the PR evidence show. `status.approvals` lists every decision, whether it counts, why not, and when the gate first saw it.
+- The expression can read the count: `approvals.count`, `approvals.required`, `approvals.users` and `approvals.rejected` ([CEL context](reference/cel-context.md#approvals)).
+- `kardinal override` still force-passes an approval gate, with its own audit record.
+
+Who may approve: bind the chart's `<release>-approvals` ClusterRole (create, delete and read `approvals`, read Bundles, Pipelines and PolicyGates) with a RoleBinding in the Pipeline namespace. The Graph ServiceAccount needs `list` and `watch` on `approvals`, which the chart's `graph-applier` role has.
+
+Trust: anyone allowed to impersonate users or groups (`impersonate` RBAC) can approve as anyone. The identity checks rely on the API server's authentication, so treat `impersonate` as full trust for approvals, overrides and rejections.
+
+Limits:
+
+- An Approval is for one Bundle: the next Bundle needs new approvals.
+- Approving from the UI is not available yet: the UI writes as the controller's ServiceAccount, and the identity policy would refuse an Approval in another name. It comes with per-caller identity in the UI (#1466).
+- Upgrading: `helm upgrade` does not update CRDs. Apply `chart/kardinal-promoter/crds/kardinal.io_approvals.yaml` and the updated `kardinal.io_policygates.yaml` before you add `spec.approval` to a gate; a Graph with an approval gate cannot be built without the Approval CRD.
+
 ## Emergency Overrides (K-09)
 
 Use `kardinal override` to force-pass a PolicyGate with a mandatory audit record.
@@ -629,6 +686,8 @@ long as the hold lasts. This is exactly what is exempt:
     - gates of every other environment, including the ones the rollback crosses before the
       held one;
     - the freeze gate of a paused Pipeline, which holds steps on its own;
+    - approval gates (an `approval` policy, or an expression on `approvals.*`), met or not: a
+      hold never stands in for the people a quorum requires;
     - any Bundle but the one the hold names.
 
 The exemption applies only to a rollback the controller verifies, at every evaluation:

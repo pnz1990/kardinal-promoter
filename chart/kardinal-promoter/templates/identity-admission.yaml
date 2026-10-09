@@ -11,7 +11,7 @@ ValidatingAdmissionPolicy (the chart's kubeVersion).
 */}}
 {{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
 {{- /* PolicyGate spec fields a gate instance copies from its template (all but overrides). */}}
-{{- $instanceSpecFields := list "expression" "message" "recheckInterval" "skipPermission" "when" "selector" "generated" }}
+{{- $instanceSpecFields := list "expression" "message" "recheckInterval" "skipPermission" "when" "selector" "approval" "approvals" "generated" }}
 {{- /* Gate instance metadata a caller other than kro and the controller may not change: all of it but
 managedFields, resourceVersion and generation, which the API server writes (name and namespace are immutable). */}}
 {{- $instanceMetaFields := list "labels" "ownerReferences" "finalizers" "generateName" }}
@@ -53,6 +53,13 @@ metadata:
 spec:
   policyName: {{ include "kardinal-promoter.fullname" . }}-bundle-rejection
   validationActions: ["Deny"]
+  {{- with .Values.controller.watchNamespace }}
+  # Namespace mode: this release manages the watched namespace only.
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ . | quote }}
+  {{- end }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -152,6 +159,169 @@ spec:
   {{- with .Values.controller.watchNamespace }}
   # Namespace mode: the controller exemption above is this release's, so the
   # policy applies only to the namespace this release's controller manages.
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ . | quote }}
+  {{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-approvals
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["approvals"]
+  variables:
+    # Deleting an Approval revokes it: only its approver may, besides the
+    # garbage collector (an Approval is owned by its Bundle) and the
+    # namespace controller (namespace deletion). kardinal's controller never
+    # deletes Approvals, so it is not exempt.
+    - name: cleanup
+      expression: >-
+        request.userInfo.username in [
+          'system:serviceaccount:kube-system:generic-garbage-collector',
+          'system:serviceaccount:kube-system:namespace-controller',
+          'system:kube-controller-manager']
+    - name: owners
+      expression: >-
+        object != null && has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []
+  validations:
+    # kardinal approve records the approver. The spec is immutable (CRD
+    # rule), so only the create is checked.
+    - expression: request.operation != 'CREATE' || object.spec.user == request.userInfo.username
+      messageExpression: >-
+        'spec.user must be your own username "' + request.userInfo.username +
+        '"; kardinal approve sets it for you'
+      reason: Forbidden
+    # Groups are checked when the Approval is created: removing someone from
+    # a group later does not revoke the approval they gave.
+    - expression: >-
+        request.operation != 'CREATE' || !has(object.spec.groups) ||
+        object.spec.groups.all(g, g in request.userInfo.groups)
+      messageExpression: >-
+        'spec.groups may only list your own groups (' +
+        request.userInfo.groups.join(', ') + ')'
+      reason: Forbidden
+    # The promotion Graph selects Approvals by the kardinal.io/bundle label
+    # and filters on spec.environment and spec.bundleUID: the labels must say
+    # the same as the spec, so an Approval cannot be counted for another
+    # Bundle.
+    - expression: >-
+        request.operation == 'DELETE' || (
+        has(object.metadata.labels) &&
+        'kardinal.io/bundle' in object.metadata.labels &&
+        object.metadata.labels['kardinal.io/bundle'] == object.spec.bundle &&
+        'kardinal.io/environment' in object.metadata.labels &&
+        object.metadata.labels['kardinal.io/environment'] == object.spec.environment)
+      message: >-
+        the kardinal.io/bundle and kardinal.io/environment labels must equal spec.bundle
+        and spec.environment
+      reason: Invalid
+    # The garbage collector deletes an Approval with its Bundle: the only
+    # owner an Approval may name is the Bundle it approves (spec.bundleUID),
+    # so owning it by something else cannot delete it early, and owning it
+    # by its Bundle cannot be dropped to keep it past the Bundle.
+    - expression: >-
+        request.operation != 'CREATE' ||
+        variables.owners.all(r, r.kind == 'Bundle' && r.apiVersion.startsWith('kardinal.io/') &&
+          r.uid == object.spec.bundleUID && r.name == object.spec.bundle)
+      message: an Approval may be owned only by the Bundle it approves (spec.bundle and spec.bundleUID)
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'UPDATE' || variables.cleanup ||
+        variables.owners == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
+      message: the ownerReferences of an Approval cannot change
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'DELETE' || variables.cleanup ||
+        oldObject.spec.user == request.userInfo.username
+      messageExpression: >-
+        'only ' + oldObject.spec.user + ' can revoke this Approval (kardinal approve --revoke)'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-approvals
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kardinal-promoter.fullname" . }}-approvals
+  validationActions: ["Deny"]
+  {{- with .Values.controller.watchNamespace }}
+  # Namespace mode: this release manages the watched namespace only.
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ . | quote }}
+  {{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-bundle-creator
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["bundles"]
+  variables:
+    # The controller creates Bundles for the UI, the Bundle API,
+    # Subscriptions and automatic rollbacks and names their creator: this
+    # release's controller ServiceAccount, exactly, plus the exact usernames
+    # listed in admission.controllerUsernames (another kardinal controller).
+    # Never a namespace or a group: in namespace mode that namespace is the
+    # tenant's.
+    - name: controller
+      expression: >-
+        request.userInfo.username in {{ prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
+    - name: creator
+      expression: >-
+        has(object.metadata.annotations) && 'kardinal.io/created-by' in object.metadata.annotations ?
+        object.metadata.annotations['kardinal.io/created-by'] : ''
+  validations:
+    # kardinal.io/created-by is who created the Bundle; an approval gate's
+    # excludeAuthor compares approvers with it. Optional, but when set it
+    # must be the requester.
+    - expression: >-
+        request.operation != 'CREATE' || variables.controller || variables.creator == '' ||
+        variables.creator == request.userInfo.username
+      messageExpression: >-
+        'the kardinal.io/created-by annotation must be your own username "' + request.userInfo.username +
+        '" (kardinal create bundle sets it), or absent'
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'UPDATE' || variables.controller ||
+        variables.creator == (has(oldObject.metadata.annotations) &&
+          'kardinal.io/created-by' in oldObject.metadata.annotations ?
+          oldObject.metadata.annotations['kardinal.io/created-by'] : '')
+      message: the kardinal.io/created-by annotation cannot be added, changed or removed after the Bundle is created
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-bundle-creator
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kardinal-promoter.fullname" . }}-bundle-creator
+  validationActions: ["Deny"]
+  {{- with .Values.controller.watchNamespace }}
+  # Namespace mode: the controller exemption is this release's.
   matchResources:
     namespaceSelector:
       matchLabels:
