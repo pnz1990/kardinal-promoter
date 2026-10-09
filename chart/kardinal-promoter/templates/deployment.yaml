@@ -51,6 +51,9 @@ spec:
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
             - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
+            {{- if not (kindIs "invalid" .Values.graph.compactAbove) }}
+            - --graph-compact-above={{ .Values.graph.compactAbove }}
+            {{- end }}
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
             {{- end }}

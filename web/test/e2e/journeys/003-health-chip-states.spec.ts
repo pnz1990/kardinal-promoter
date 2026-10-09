@@ -10,7 +10,7 @@ test.describe('Journey 003 — Health chip CSS class regression guard (#532)', (
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
     // Wait for pipeline list to render
-    await expect(page.getByText('kardinal-test-app')).toBeVisible()
+    await expect(page.getByRole('complementary').getByText('kardinal-test-app')).toBeVisible()
   })
 
   test('Step 1: Ready pipeline shows health-chip--ready class', async ({ page }) => {

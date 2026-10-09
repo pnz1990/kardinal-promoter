@@ -18,7 +18,9 @@ type BundleSpec struct {
 	// Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
 	// An image bundle does NOT supersede a config bundle and vice versa.
 	// This allows image and config promotions to coexist independently in the same pipeline.
-	// +kubebuilder:validation:Enum=image;config;mixed
+	// A chart Bundle promotes a Helm chart version (spec.chart) with
+	// update.strategy helm.
+	// +kubebuilder:validation:Enum=image;config;mixed;chart
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`
 
@@ -36,6 +38,11 @@ type BundleSpec struct {
 	// when the bundle type is "config" or "mixed".
 	// +optional
 	ConfigRef *ConfigRef `json:"configRef,omitempty"`
+
+	// Chart is the Helm chart version a "chart" Bundle promotes. The
+	// helm-set-image step writes chart.version at update.helm.chartVersionPath.
+	// +optional
+	Chart *ChartRef `json:"chart,omitempty"`
 
 	// Provenance carries build metadata for audit and rollback.
 	// +optional
@@ -78,6 +85,31 @@ type ConfigRef struct {
 	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F]{4,64}$`
 	// +optional
 	CommitSHA string `json:"commitSHA,omitempty"`
+}
+
+// ChartRef identifies a Helm chart version.
+type ChartRef struct {
+	// RepoURL is the chart repository (https://... or oci://...).
+	// +optional
+	RepoURL string `json:"repoURL,omitempty"`
+
+	// Name is the chart name: letters, digits, ".", "_" and "-", starting
+	// and ending with a letter or digit. It is joined into the chart's
+	// index and OCI paths, so a "/", "]" or other path character would
+	// point the version lookup elsewhere.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=250
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`
+	Name string `json:"name"`
+
+	// Version is the chart version.
+	// +kubebuilder:validation:MinLength=1
+	Version string `json:"version"`
+
+	// Digest is the chart package digest (index.yaml digest, or the OCI
+	// manifest digest).
+	// +optional
+	Digest string `json:"digest,omitempty"`
 }
 
 // BundleProvenance carries build origin metadata.

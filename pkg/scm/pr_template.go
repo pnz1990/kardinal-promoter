@@ -167,6 +167,7 @@ const prBodySections = `
 {{- define "rollbackNotice"}}
 {{- if .RollbackOf}}> **This is a rollback PR.** {{if eq .Bundle.Type "mixed"}}It reverts environment {{.Environment}} to the state of bundle {{.RollbackOf}}.
 {{- else if eq .Bundle.Type "config"}}It restores the config commit of bundle {{.RollbackOf}} in environment {{.Environment}}.
+{{- else if eq .Bundle.Type "chart"}}It restores the chart version of bundle {{.RollbackOf}} in environment {{.Environment}}.
 {{- else}}It restores the images of bundle {{.RollbackOf}} in environment {{.Environment}}.{{end}}
 > Rolling back FROM: {{if .RollbackFrom}}{{.RollbackFrom}}{{with .RollbackFromVersion}} ({{mdcell .}}){{end}}{{else}}the bundle deployed in {{.Environment}} now{{end}}
 > Rolling back TO: {{.RollbackOf}}{{with .RestoredVersion}} ({{mdcell .}}){{end}}
@@ -186,6 +187,12 @@ const prBodySections = `
 | {{.Repository}} | {{if .Tag}}{{.Tag}}{{else}}—{{end}} | {{if .Digest}}{{.Digest}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{cirun $.Bundle.Provenance.CIRunURL}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{or (mdcell $.Bundle.Provenance.CommitSHA) "—"}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{or (mdcell $.Bundle.Provenance.Author) "—"}}{{else}}—{{end}} |
 {{- else}}
 | — | — | — | — | — | — |
+{{- end}}
+{{- with .Bundle.Chart}}
+
+| Chart | Version | Repository | Digest |
+|---|---|---|---|
+| {{mdcell .Name}} | {{mdcell .Version}} | {{or (mdcell .RepoURL) "—"}} | {{or (mdcell .Digest) "—"}} |
 {{- end}}
 {{- end}}
 
@@ -250,10 +257,14 @@ const maxVersionImages = 3
 // BundleVersion names the version a Bundle deploys, for the rollback PR title
 // and note: the tag of a one-image Bundle (its short digest, or the image name,
 // when it has no tag), "<image>:<tag>" for each of several images, or
-// "config <short commit>" for a config Bundle. A mixed Bundle deploys both, so
+// "config <short commit>" for a config Bundle, "<chart> <version>" for a chart
+// Bundle. A mixed Bundle deploys both, so
 // it reads "<images> with config <short commit>". It returns "" when the
 // Bundle has no artifacts.
 func BundleVersion(spec v1alpha1.BundleSpec) string {
+	if spec.Type == "chart" && spec.Chart != nil {
+		return spec.Chart.Name + " " + spec.Chart.Version
+	}
 	config := ""
 	if spec.ConfigRef != nil && spec.ConfigRef.CommitSHA != "" {
 		config = "config " + truncate(spec.ConfigRef.CommitSHA, 7)
