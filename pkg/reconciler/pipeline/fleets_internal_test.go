@@ -5,6 +5,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -50,10 +51,10 @@ func fleetPipeline(sel map[string]string) *kardinalv1alpha1.Pipeline {
 // selected Application in the Argo CD namespace is a target with its path and
 // argocd health, sorted by name; Applications the selector does not match or
 // in another namespace are not; an Application without a path or with a name
-// that cannot be a target fails the fleet with a message, as does one that
-// deploys from another repository than the Pipeline's (its first source with
-// a path counts) and a selector past 500 targets; and a cluster without Argo
-// CD says so.
+// that cannot be a target is skipped and named in the message (without its
+// repository, for one that deploys from another repository than the
+// Pipeline's; its first source with a path counts); a selector past 500
+// targets is refused without a count; and a cluster without Argo CD says so.
 //
 // Covers FLEET-03.
 func TestResolveFleets(t *testing.T) {
@@ -81,12 +82,12 @@ func TestResolveFleets(t *testing.T) {
 				ArgoCD: &kardinalv1alpha1.HealthTargetRef{Name: "us", Namespace: "argocd"}}},
 		}},
 		{name: "no path", mapper: mapper, objs: []client.Object{app("argocd", "eu", "", sel)},
-			wantMsg: "Application argocd/eu cannot be a target: it has no spec.source.path"},
+			wantMsg: "not targets: Application eu (no spec.source.path)"},
 		{name: "another repository", mapper: mapper, objs: []client.Object{func() client.Object {
 			a := app("argocd", "eu", "clusters/eu", sel)
 			_ = unstructured.SetNestedField(a.Object, "https://github.com/acme/other.git", "spec", "source", "repoURL")
 			return a
-		}()}, wantMsg: "Application argocd/eu cannot be a target: it deploys from https://github.com/acme/other.git, not the Pipeline's spec.git.url"},
+		}()}, wantMsg: "not targets: Application eu (it deploys from another repository than spec.git.url)"},
 		{name: "multi-source", mapper: mapper, objs: []client.Object{func() client.Object {
 			a := app("argocd", "eu", "", sel)
 			_ = unstructured.SetNestedSlice(a.Object, []interface{}{
@@ -102,7 +103,7 @@ func TestResolveFleets(t *testing.T) {
 				objs = append(objs, app("argocd", fmt.Sprintf("c%03d", i), "clusters/x", sel))
 			}
 			return objs
-		}(), wantMsg: "the selector matches 501 Applications in argocd; a fleet has at most 500 targets"},
+		}(), wantMsg: "the selector matches more than 500 Applications; narrow it"},
 		{name: "Argo CD not installed", mapper: mapper, noKind: true,
 			wantMsg: "argoproj.io/v1alpha1 Applications are not served"},
 	}
@@ -122,6 +123,7 @@ func TestResolveFleets(t *testing.T) {
 			assert.Equal(t, "prod", got[0].Environment)
 			if tc.wantMsg != "" {
 				assert.Contains(t, got[0].Message, tc.wantMsg)
+				assert.NotContains(t, got[0].Message, "other.git", "a foreign repository is not named")
 				assert.Empty(t, got[0].Targets)
 				return
 			}
@@ -175,15 +177,60 @@ func TestResolveFleets_ClusterProfiles(t *testing.T) {
 	p.Spec.Environments[1].Fleet.Selector.Namespace = "fleet-system"
 	p.Spec.Environments[1].Fleet.Selector.MatchExpressions = nil
 	got = r.resolveFleets(context.Background(), p)
+	assert.Empty(t, got[0].Targets, "another namespace only with fleets.clusterProfileNamespaces")
+	assert.Contains(t, got[0].Message, "fleets.clusterProfileNamespaces")
+	r.FleetClusterProfileNamespaces = []string{"fleet-system"}
+	got = r.resolveFleets(context.Background(), p)
 	assert.Equal(t, []kardinalv1alpha1.FleetTarget{{Name: "prod-ap-1"}}, got[0].Targets)
 
 	noCRD := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
 		return &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "multicluster.x-k8s.io", Kind: "ClusterProfile"}}
 	}}).Build()
-	got = (&Reconciler{Client: noCRD}).resolveFleets(context.Background(), p)
+	got = (&Reconciler{Client: noCRD, FleetClusterProfileNamespaces: []string{"fleet-system"}}).resolveFleets(context.Background(), p)
 	assert.Contains(t, got[0].Message, "ClusterProfiles are not served")
 
 	p.Spec.Environments[1].Fleet.Selector.Kind = kardinalv1alpha1.FleetSelectorTarget
 	assert.Empty(t, r.resolveFleets(context.Background(), p), "a Target selector is resolved by the Graph builder")
 	assert.False(t, hasSelectorFleet(p))
+}
+
+// TestResolveFleets_KeepsLastGood: a selector that cannot be read keeps the
+// targets it resolved to last, with the reason in the message, so a Bundle in
+// flight goes on; one bad object is skipped and the others stay targets; a
+// selector namespace outside fleets.applicationNamespaces is refused (and
+// keeps the last targets too).
+//
+// Covers FLEET-03.
+func TestResolveFleets_KeepsLastGood(t *testing.T) {
+	sel := map[string]string{"fleet": "prod"}
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application"}, meta.RESTScopeNamespace)
+	s := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
+	last := []kardinalv1alpha1.FleetTarget{{Name: "eu", Path: "clusters/eu"}, {Name: "us", Path: "clusters/us"}}
+	p := fleetPipeline(sel)
+	p.Status.Fleets = []kardinalv1alpha1.FleetStatus{{Environment: "prod", Targets: last}}
+
+	failing := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+			return errors.New("the server is currently unable to handle the request")
+		}}).Build()
+	got := (&Reconciler{Client: failing}).resolveFleets(context.Background(), p)
+	require.Len(t, got, 1)
+	assert.Equal(t, last, got[0].Targets, "the last good targets are kept")
+	assert.Contains(t, got[0].Message, "unable to handle the request")
+
+	bad := app("argocd", "Bad_Name", "clusters/bad", sel)
+	c := fake.NewClientBuilder().WithScheme(s).WithRESTMapper(mapper).WithObjects(
+		app("argocd", "eu", "clusters/eu", sel), app("argocd", "nopath", "", sel), bad).Build()
+	got = (&Reconciler{Client: c}).resolveFleets(context.Background(), p)
+	require.Len(t, got, 1)
+	require.Len(t, got[0].Targets, 1, "the qualifying Application stays a target")
+	assert.Equal(t, "eu", got[0].Targets[0].Name)
+	assert.Contains(t, got[0].Message, "Application nopath (no spec.source.path)")
+
+	p.Spec.Environments[1].Fleet.Selector.Namespace = "team-b-apps"
+	got = (&Reconciler{Client: c, FleetApplicationNamespaces: []string{"argocd"}}).resolveFleets(context.Background(), p)
+	assert.Equal(t, last, got[0].Targets)
+	assert.Contains(t, got[0].Message, `selector.namespace "team-b-apps": Applications are read only from the controller's fleets.applicationNamespaces (argocd)`)
 }

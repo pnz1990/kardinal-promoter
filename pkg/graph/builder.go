@@ -832,17 +832,26 @@ const bundleHeld = `bundle.status.phase != "Superseded" && bundle.status.phase !
 // follows it. A Bundle the condition holds back gets no step in env; the
 // steps that existed already are held by the PromotionStep reconciler.
 func heldCond(pipeline *kardinalv1alpha1.Pipeline, env string) string {
-	if h := heldBundle(pipeline, env); h != "" {
+	if h := heldBundle(pipeline, env, ""); h != "" {
 		return "bundle.metadata.name == " + celString(h)
 	}
 	return ""
 }
 
 // heldBundle is the Bundle the Pipeline holds env on (spec.holds), or "".
-func heldBundle(pipeline *kardinalv1alpha1.Pipeline, env string) string {
+func heldBundle(pipeline *kardinalv1alpha1.Pipeline, env, fleet string) string {
 	for _, h := range pipeline.Spec.Holds {
 		if h.Environment == env {
 			return h.Bundle
+		}
+	}
+	// A fleet target is also held by its fleet's hold (kardinal rollback
+	// --env <fleet> --hold).
+	if fleet != "" {
+		for _, h := range pipeline.Spec.Holds {
+			if h.Environment == fleet {
+				return h.Bundle
+			}
 		}
 	}
 	return ""

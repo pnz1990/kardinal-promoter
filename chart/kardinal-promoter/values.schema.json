@@ -360,6 +360,27 @@
         }
       }
     },
+    "fleets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "applicationNamespaces": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          }
+        },
+        "clusterProfileNamespaces": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          }
+        }
+      }
+    },
     "graph": {
       "type": "object",
       "additionalProperties": false,

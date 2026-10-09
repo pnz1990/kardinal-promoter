@@ -633,8 +633,8 @@ type FleetSpec struct {
 	MaxConcurrent int `json:"maxConcurrent,omitempty"`
 
 	// MaxUnavailable stops the rollout: once this many of the fleet's
-	// targets have Failed, no further target starts, and the targets in
-	// flight finish. Unset, a failure only keeps its place in
+	// targets have failed (Failed, AbortedByAlarm or RollingBack), no
+	// further target starts, and the targets in flight finish. Unset, a failure only keeps its place in
 	// maxConcurrent. An environment after the fleet waits for every target
 	// to be Verified either way.
 	// +kubebuilder:validation:Minimum=1
@@ -688,8 +688,11 @@ type FleetSelector struct {
 	// +optional
 	Kind string `json:"kind,omitempty"`
 
-	// Namespace holds the Applications (default argocd) or ClusterProfiles
-	// (default the Pipeline's namespace). Unused by kind Target.
+	// Namespace holds the Applications or ClusterProfiles. Applications are
+	// read only from the controller's fleets.applicationNamespaces (default
+	// argocd; the default namespace is the first of them), ClusterProfiles
+	// from the Pipeline's namespace (the default) and the controller's
+	// fleets.clusterProfileNamespaces. Unused by kind Target.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 

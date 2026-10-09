@@ -124,6 +124,15 @@ type Reconciler struct {
 	// not cached: the controller does not watch Applications, whose CRD may
 	// be missing. Nil uses Client.
 	Reader client.Reader
+	// FleetApplicationNamespaces are the namespaces a fleet selector of kind
+	// Application may read (--fleet-application-namespaces); empty is
+	// argocd. A selector naming another namespace is refused, so a Pipeline
+	// cannot list the Applications of a namespace its author cannot read.
+	FleetApplicationNamespaces []string
+	// FleetClusterProfileNamespaces are the namespaces besides the
+	// Pipeline's own a ClusterProfile selector may read
+	// (--fleet-clusterprofile-namespaces).
+	FleetClusterProfileNamespaces []string
 
 	// Now is the clock of hold expiry (spec.holds[].expiresAt). Nil is
 	// time.Now.

@@ -371,3 +371,95 @@ func TestGraph_FleetTargetsChangedMidRollout(t *testing.T) {
 	assert.Contains(t, e.ReadFile(t, repo, repo.Branch, "fleet/r/kustomization.yaml"), "newTag: "+fixtures.V1,
 		"the removed target's PR was closed unmerged")
 }
+
+// restartKro deletes the running kro controller Pod and waits until a new
+// one is Ready.
+func restartKro(t *testing.T, e *framework.Env) {
+	t.Helper()
+	ctx := context.Background()
+	sel := metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=kro"}
+	pods, err := e.Kube.CoreV1().Pods("kro-system").List(ctx, sel)
+	require.NoError(t, err)
+	old := map[types.UID]bool{}
+	for _, p := range pods.Items {
+		old[p.UID] = true
+		require.NoError(t, e.Kube.CoreV1().Pods("kro-system").Delete(ctx, p.Name, metav1.DeleteOptions{}))
+	}
+	require.NotEmpty(t, old, "a running kro Pod in kro-system")
+	framework.Eventually(t, 3*time.Minute, "a new kro Pod Ready", func(ctx context.Context) (bool, string) {
+		pods, err := e.Kube.CoreV1().Pods("kro-system").List(ctx, sel)
+		if err != nil {
+			return false, err.Error()
+		}
+		for _, p := range pods.Items {
+			if old[p.UID] || p.DeletionTimestamp != nil {
+				continue
+			}
+			for _, c := range p.Status.Conditions {
+				if c.Type == "Ready" && c.Status == "True" {
+					return true, ""
+				}
+			}
+		}
+		return false, fmt.Sprintf("%d kro Pods", len(pods.Items))
+	})
+}
+
+// TestGraph_FleetSurvivesKroRestart: kro restarts while a fleet's wave is in
+// flight (three targets of six admitted, each waiting on its PR). The new
+// kro rebuilds the wave from the observed steps: no admitted step is pruned
+// or recreated (same UIDs), no fourth target starts while three are in
+// flight, and the rollout then finishes in order.
+//
+// It does not run in parallel: restarting kro stalls every Graph of the
+// suite for a moment.
+//
+// Covers FLEET-01.
+func TestGraph_FleetSurvivesKroRestart(t *testing.T) {
+	e := framework.New(t)
+	ns := e.Namespace(t)
+	var targets []v1alpha1.FleetTarget
+	var names []string
+	for i := range 6 {
+		names = append(names, fmt.Sprintf("t%02d", i))
+		targets = append(targets, v1alpha1.FleetTarget{Name: names[i]})
+	}
+	repo := e.Repo(t, ns, fleetFiles(ns, []string{"test", "post"}, "fleet", names, false))
+	createCompactHealth(t, e, ns)
+	a := &app{e: e, ns: ns, envs: []string{"test", "prod", "post"}, repo: repo}
+	a.apply(t, fleetPromotion(ns, repo, &v1alpha1.FleetSpec{MaxConcurrent: 3, Targets: targets}, "pr-review"))
+
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+	admitted := map[string]types.UID{}
+	for _, n := range names[:3] {
+		admitted["prod-"+n] = e.WaitStepState(t, ns, pipelineName, bundle, "prod-"+n, "WaitingForMerge", promoteTimeout).UID
+	}
+	restartKro(t, e)
+	framework.Consistently(t, 45*time.Second, "admitted steps kept and no fourth target started", func(context.Context) (bool, string) {
+		steps := fleetSteps(t, e, ns, bundle, "prod")
+		for env, uid := range admitted {
+			s, ok := steps[env]
+			if !ok {
+				return false, env + " was pruned"
+			}
+			if s.UID != uid {
+				return false, env + " was recreated"
+			}
+		}
+		if len(steps) != 3 {
+			return false, fmt.Sprintf("%d target steps, want the 3 admitted", len(steps))
+		}
+		return true, ""
+	})
+
+	// The rollout finishes: each PR merged as it opens.
+	for _, n := range names {
+		a.merge(t, a.openPR(t, bundle, "prod-"+n))
+		e.WaitStepState(t, ns, pipelineName, bundle, "prod-"+n, "Verified", promoteTimeout)
+	}
+	e.WaitBundlePhase(t, ns, bundle, "Verified", 5*time.Minute)
+	steps := fleetSteps(t, e, ns, bundle, "prod")
+	for env, uid := range admitted {
+		assert.Equal(t, uid, steps[env].UID, "%s: the step admitted before the restart is the one that finished", env)
+	}
+}

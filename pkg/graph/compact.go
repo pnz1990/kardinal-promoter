@@ -238,7 +238,7 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 			// The Pipeline holds the environment on another Bundle's
 			// rollback (spec.holds, #1528; the node shape's heldCond): it
 			// is not admitted. A hold change rebuilds the Graph in place.
-			"held": heldBundle(pipeline, s.env) != "" && heldBundle(pipeline, s.env) != bundle.Name,
+			"held": heldBundle(pipeline, s.env, s.fleet) != "" && heldBundle(pipeline, s.env, s.fleet) != bundle.Name,
 		}
 		if fleets {
 			e := entries[i].(map[string]interface{})
@@ -363,7 +363,9 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		stateDef["startedFleets"] = fmt.Sprintf(`${%s.map(s, s.metadata.labels[?"%s"].orValue(""))}`, NodeStepsObserved, LabelFleet)
 		stateDef["verifiedFleets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") == "Verified").map(s, s.metadata.labels[?"%s"].orValue(""))}`,
 			NodeStepsObserved, LabelFleet)
-		stateDef["failedFleets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") == "Failed").map(s, s.metadata.labels[?"%s"].orValue(""))}`,
+		// A failure is Failed, AbortedByAlarm or RollingBack, as the Bundle
+		// reconciler counts it (failedState).
+		stateDef["failedFleets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") in ["Failed", "AbortedByAlarm", "RollingBack"]).map(s, s.metadata.labels[?"%s"].orValue(""))}`,
 			NodeStepsObserved, LabelFleet)
 		steps := nodes[4].Template["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
 		steps[LabelFleet] = step("fleet")

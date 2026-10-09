@@ -87,7 +87,13 @@ func SinkEnvironments(pipeline *kardinalv1alpha1.Pipeline) ([]string, error) {
 		return nil, fmt.Errorf("sink environments: %w", err)
 	}
 	hasDependent := make(map[string]bool, len(ordered))
-	for _, ups := range deps {
+	for env, ups := range deps {
+		// deps also lists each fleet environment's targets under the fleet's
+		// name (expandFleets); a fleet is not an environment of the
+		// ordering, so its targets are sinks when nothing depends on them.
+		if isFleetName(ordered, deps, env) {
+			continue
+		}
 		for _, up := range ups {
 			hasDependent[up] = true
 		}

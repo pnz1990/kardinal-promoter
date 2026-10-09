@@ -1426,3 +1426,21 @@ func TestChartControllerMemoryLimitEnv(t *testing.T) {
 	}
 	assert.True(t, found, "KARDINAL_MEMORY_LIMIT env")
 }
+
+// TestChartFleetNamespaces (D1): fleets.applicationNamespaces passes
+// --fleet-application-namespaces (default argocd), and
+// fleets.clusterProfileNamespaces --fleet-clusterprofile-namespaces when
+// set; the schema refuses an empty Application list.
+//
+// Covers FLEET-03.
+func TestChartFleetNamespaces(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	assert.Equal(t, "argocd", argValues(c)["fleet-application-namespaces"])
+	assert.NotContains(t, argValues(c), "fleet-clusterprofile-namespaces")
+	c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "fleets.applicationNamespaces={argocd,argocd-apps}",
+		"--set", "fleets.clusterProfileNamespaces={fleet-system}"))
+	assert.Equal(t, "argocd,argocd-apps", argValues(c)["fleet-application-namespaces"])
+	assert.Equal(t, "fleet-system", argValues(c)["fleet-clusterprofile-namespaces"])
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "fleets.applicationNamespaces={}")
+	assert.Error(t, err, "applicationNamespaces must not be empty:\n%s", out)
+}

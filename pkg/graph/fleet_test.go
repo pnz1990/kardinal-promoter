@@ -405,3 +405,61 @@ func TestFleet_CompactUnsupportedFeatures(t *testing.T) {
 	assert.Contains(t, err.Error(), "hooks")
 	assert.NotEmpty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}), "the Pipeline reconciler reports it too")
 }
+
+// TestFleet_SinkEnvironments (DORA): a fleet that is the last environment
+// has every target as a sink; a fleet followed by another environment has
+// none.
+//
+// Covers FLEET-06.
+func TestFleet_SinkEnvironments(t *testing.T) {
+	p := bigFleet(3, 1, nil)
+	sinks, err := graph.SinkEnvironments(p)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"prod-t00", "prod-t01", "prod-t02"}, sinks)
+
+	p.Spec.Environments = append(p.Spec.Environments, kardinalv1alpha1.EnvironmentSpec{Name: "audit"})
+	sinks, err = graph.SinkEnvironments(p)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"audit"}, sinks)
+}
+
+// TestFleet_MaxUnavailableCountsEveryFailure: AbortedByAlarm and RollingBack
+// count toward maxUnavailable as Failed does (the Bundle reconciler's
+// failedState).
+//
+// Covers FLEET-06.
+func TestFleet_MaxUnavailableCountsEveryFailure(t *testing.T) {
+	for _, failed := range []string{"Failed", "AbortedByAlarm", "RollingBack"} {
+		t.Run(failed, func(t *testing.T) {
+			one := 1
+			sim := fleetSim(t, bigFleet(5, 2, &one))
+			sim.steps["test"] = "Verified"
+			sim.advance()
+			sim.steps["prod-t00"] = failed
+			sim.steps["prod-t01"] = "Verified"
+			before := len(sim.steps)
+			sim.advance()
+			assert.Len(t, sim.steps, before, "%s stops the rollout at maxUnavailable 1", failed)
+		})
+	}
+}
+
+// TestFleet_LastGoodMembers: a selector fleet whose status.fleets entry has
+// a message and targets (the last good membership, kept on a read error)
+// builds with those targets; one with a message and no targets is refused.
+//
+// Covers FLEET-03.
+func TestFleet_LastGoodMembers(t *testing.T) {
+	p := pipelineOf("app", kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Fleet: &kardinalv1alpha1.FleetSpec{
+			Selector: &kardinalv1alpha1.FleetSelector{MatchLabels: map[string]string{"tier": "prod"}}}})
+	p.Status.Fleets = []kardinalv1alpha1.FleetStatus{{Environment: "prod", Message: "list Applications in argocd: timeout",
+		Targets: []kardinalv1alpha1.FleetTarget{{Name: "eu", Path: "clusters/eu"}}}}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"test", "prod-eu"}, res.Environments)
+
+	p.Status.Fleets[0].Targets = nil
+	_, err = graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
+	assert.ErrorContains(t, err, "could not be resolved: list Applications in argocd: timeout")
+}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -45,17 +46,29 @@ var clusterProfileListGVK = schema.GroupVersionKind{Group: "multicluster.x-k8s.i
 // resolveFleets returns status.fleets for p: for each fleet environment with
 // an Application or ClusterProfile selector, the objects it selects as
 // targets, sorted by name. A selector of kind Target picks from
-// spec.fleet.targets and needs no status. An object that cannot be a
-// target, or a selector that cannot be read, is reported in the entry's
-// message, and the Graph refuses the fleet. It reads objects only and writes
-// nothing.
+// spec.fleet.targets and needs no status. A selected object that cannot be a
+// target is skipped and named in the entry's message; the others are the
+// targets. A selector that cannot be read (an API error, the CRD not served,
+// a namespace the controller does not read) keeps the last targets it
+// resolved to, with the reason in the message, so a Bundle in flight goes on
+// with them; a fleet that never resolved has none, and the Graph refuses it.
+// It reads objects only and writes nothing.
 func (r *Reconciler) resolveFleets(ctx context.Context, p *kardinalv1alpha1.Pipeline) []kardinalv1alpha1.FleetStatus {
 	var out []kardinalv1alpha1.FleetStatus
 	for _, env := range p.Spec.Environments {
 		if env.Fleet == nil || !resolvedSelector(env.Fleet.Selector) {
 			continue
 		}
-		out = append(out, r.resolveFleet(ctx, p, env.Name, env.Fleet.Selector))
+		st, ok := r.resolveFleet(ctx, p, env.Name, env.Fleet.Selector)
+		if !ok {
+			// Keep the last good membership.
+			for _, prev := range p.Status.Fleets {
+				if prev.Environment == env.Name {
+					st.Targets = prev.Targets
+				}
+			}
+		}
+		out = append(out, st)
 	}
 	return out
 }
@@ -66,9 +79,16 @@ func resolvedSelector(sel *kardinalv1alpha1.FleetSelector) bool {
 	return sel != nil && sel.Kind != kardinalv1alpha1.FleetSelectorTarget
 }
 
-func (r *Reconciler) resolveFleet(ctx context.Context, p *kardinalv1alpha1.Pipeline, env string, sel *kardinalv1alpha1.FleetSelector) kardinalv1alpha1.FleetStatus {
+// maxSkippedNamed is how many skipped objects a fleet message names.
+const maxSkippedNamed = 5
+
+// resolveFleet resolves one selector. ok is false when the selector could
+// not be read at all: st then has only the message, and the caller keeps
+// the last targets.
+func (r *Reconciler) resolveFleet(ctx context.Context, p *kardinalv1alpha1.Pipeline, env string,
+	sel *kardinalv1alpha1.FleetSelector) (st kardinalv1alpha1.FleetStatus, ok bool) {
 	pipelineNS := p.Namespace
-	st := kardinalv1alpha1.FleetStatus{Environment: env}
+	st = kardinalv1alpha1.FleetStatus{Environment: env}
 	kind := sel.Kind
 	if kind == "" {
 		kind = kardinalv1alpha1.FleetSelectorApplication
@@ -79,13 +99,29 @@ func (r *Reconciler) resolveFleet(ctx context.Context, p *kardinalv1alpha1.Pipel
 		if ns == "" {
 			ns = pipelineNS
 		}
-	} else if ns == "" {
-		ns = defaultArgoNamespace
+		if ns != pipelineNS && !slices.Contains(r.FleetClusterProfileNamespaces, ns) {
+			st.Message = fmt.Sprintf("selector.namespace %q: ClusterProfiles are read only from the Pipeline's namespace "+
+				"and the controller's fleets.clusterProfileNamespaces", ns)
+			return st, false
+		}
+	} else {
+		allowed := r.FleetApplicationNamespaces
+		if len(allowed) == 0 {
+			allowed = []string{defaultArgoNamespace}
+		}
+		if ns == "" {
+			ns = allowed[0]
+		}
+		if !slices.Contains(allowed, ns) {
+			st.Message = fmt.Sprintf("selector.namespace %q: Applications are read only from the controller's "+
+				"fleets.applicationNamespaces (%s)", ns, strings.Join(allowed, ", "))
+			return st, false
+		}
 	}
 	ls, err := metav1.LabelSelectorAsSelector(sel.LabelSelector())
 	if err != nil {
 		st.Message = fmt.Sprintf("selector: %v", err)
-		return st
+		return st, false
 	}
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(gvk)
@@ -93,7 +129,10 @@ func (r *Reconciler) resolveFleet(ctx context.Context, p *kardinalv1alpha1.Pipel
 	if reader == nil {
 		reader = r.Client
 	}
-	if err := reader.List(ctx, list, client.InNamespace(ns), client.MatchingLabelsSelector{Selector: ls}); err != nil {
+	// One more than the cap: past it the fleet is refused without saying
+	// how many objects the namespace holds.
+	if err := reader.List(ctx, list, client.InNamespace(ns), client.MatchingLabelsSelector{Selector: ls},
+		client.Limit(maxFleetTargets+1)); err != nil {
 		switch {
 		case meta.IsNoMatchError(err) && kind == kardinalv1alpha1.FleetSelectorClusterProfile:
 			st.Message = "multicluster.x-k8s.io/v1alpha1 ClusterProfiles are not served: install a cluster inventory or list the targets in spec.fleet.targets"
@@ -102,35 +141,32 @@ func (r *Reconciler) resolveFleet(ctx context.Context, p *kardinalv1alpha1.Pipel
 		default:
 			st.Message = fmt.Sprintf("list %ss in %s: %v", kind, ns, err)
 		}
-		return st
+		return st, false
 	}
-	if n := len(list.Items); n > maxFleetTargets {
-		st.Message = fmt.Sprintf("the selector matches %d %ss in %s; a fleet has at most %d targets", n, kind, ns, maxFleetTargets)
-		return st
+	if len(list.Items) > maxFleetTargets || list.GetContinue() != "" {
+		st.Message = fmt.Sprintf("the selector matches more than %d %ss; narrow it", maxFleetTargets, kind)
+		return st, false
 	}
+	var skipped []string
 	for _, obj := range list.Items {
 		name := obj.GetName()
 		if errs := validation.IsDNS1123Label(name); len(errs) > 0 || len(name) > 62 {
-			st.Message = fmt.Sprintf("%s %s/%s cannot be a target: its name is not a DNS label of at most 62 characters", kind, ns, name)
-			st.Targets = nil
-			return st
+			skipped = append(skipped, fmt.Sprintf("%s %s (its name is not a DNS label of at most 62 characters)", kind, name))
+			continue
 		}
 		t := kardinalv1alpha1.FleetTarget{Name: name}
 		if kind == kardinalv1alpha1.FleetSelectorApplication {
 			repoURL, path := applicationSource(&obj)
 			if path == "" {
-				st.Message = fmt.Sprintf("Application %s/%s cannot be a target: it has no spec.source.path", ns, name)
-				st.Targets = nil
-				return st
+				skipped = append(skipped, fmt.Sprintf("Application %s (no spec.source.path)", name))
+				continue
 			}
 			// kardinal writes the target's path in the Pipeline's
 			// repository: an Application that deploys from another one
-			// would never see the change.
+			// would never see the change. Its repository is not named.
 			if !sameRepository(repoURL, p.Spec.Git.URL) {
-				st.Message = fmt.Sprintf("Application %s/%s cannot be a target: it deploys from %s, not the Pipeline's spec.git.url",
-					ns, name, scm.RedactURL(repoURL))
-				st.Targets = nil
-				return st
+				skipped = append(skipped, fmt.Sprintf("Application %s (it deploys from another repository than spec.git.url)", name))
+				continue
 			}
 			t.Path = path
 			t.Health = &kardinalv1alpha1.HealthConfig{Type: "argocd",
@@ -141,7 +177,15 @@ func (r *Reconciler) resolveFleet(ctx context.Context, p *kardinalv1alpha1.Pipel
 		st.Targets = append(st.Targets, t)
 	}
 	sort.Slice(st.Targets, func(i, j int) bool { return st.Targets[i].Name < st.Targets[j].Name })
-	return st
+	if len(skipped) > 0 {
+		sort.Strings(skipped)
+		named := skipped
+		if len(named) > maxSkippedNamed {
+			named = append(named[:maxSkippedNamed:maxSkippedNamed], fmt.Sprintf("and %d more", len(skipped)-maxSkippedNamed))
+		}
+		st.Message = "not targets: " + strings.Join(named, "; ")
+	}
+	return st, true
 }
 
 // applicationSource is an Argo CD Application's spec.source repoURL and

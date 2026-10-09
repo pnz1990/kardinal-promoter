@@ -1,0 +1,103 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+
+package promotionstep_test
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
+)
+
+// TestFleet_UnresolvedEnvironmentFailsClosed (D1): a step whose environment
+// the Pipeline does not resolve to never runs with an empty spec (auto, the
+// default path and health). It stays in its state, says why, and looks
+// again: a fleet target whose selector has not resolved, and a step of an
+// environment that became a fleet while it was in flight (the nodes shape
+// Bundle's prod step after prod is edited into a fleet). Once the fleet
+// resolves, the target's step starts.
+//
+// Covers FLEET-07.
+func TestFleet_UnresolvedEnvironmentFailsClosed(t *testing.T) {
+	selectorFleet := func() *v1alpha1.Pipeline {
+		p := makePipeline("web")
+		p.Spec.Environments[1].Fleet = &v1alpha1.FleetSpec{Selector: &v1alpha1.FleetSelector{
+			MatchLabels: map[string]string{"tier": "prod"}}}
+		return p
+	}
+	for _, tc := range []struct {
+		name, env, state, want string
+	}{
+		{name: "target of an unresolved fleet", env: "prod-eu", state: "Pending",
+			want: `its selector has not been resolved yet`},
+		{name: "environment that became a fleet", env: "prod", state: "Promoting",
+			want: "it is now a fleet environment, whose targets are promoted as prod-<target>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			step := makeStep("step", "web", "bundle-1", tc.env)
+			step.Status.State = tc.state
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithStatusSubresource(
+				&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.Pipeline{},
+			).WithObjects(step, selectorFleet(), makeBundle("bundle-1", "web")).Build()
+			git := &countingGit{}
+			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step", Namespace: "default"}}
+			for range 2 { // idempotent
+				res, err := r.Reconcile(context.Background(), req)
+				require.NoError(t, err)
+				assert.Equal(t, 30*time.Second, res.RequeueAfter)
+			}
+			var got v1alpha1.PromotionStep
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.Equal(t, tc.state, got.Status.State, "the step does not move")
+			assert.Contains(t, got.Status.Message, "cannot be resolved")
+			assert.Contains(t, got.Status.Message, tc.want)
+			assert.Zero(t, git.calls, "nothing is cloned or pushed")
+		})
+	}
+
+	// Resolved: the target's step starts.
+	p := selectorFleet()
+	p.Status.Fleets = []v1alpha1.FleetStatus{{Environment: "prod", Targets: []v1alpha1.FleetTarget{{Name: "eu"}}}}
+	step := makeStep("step", "web", "bundle-1", "prod-eu")
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.Pipeline{},
+	).WithObjects(step, p, makeBundle("bundle-1", "web")).Build()
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "step", Namespace: "default"}})
+	require.NoError(t, err)
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step", Namespace: "default"}, &got))
+	assert.Equal(t, "Promoting", got.Status.State)
+}
+
+// countingGit counts every git call.
+type countingGit struct{ calls int }
+
+func (m *countingGit) Clone(context.Context, string, string, string, string) error {
+	m.calls++
+	return nil
+}
+func (m *countingGit) CloneAt(context.Context, string, string, string, string) error {
+	m.calls++
+	return nil
+}
+func (m *countingGit) CommitAll(context.Context, string, string, string, string) error {
+	m.calls++
+	return nil
+}
+func (m *countingGit) Push(context.Context, string, string, string, string, bool) error {
+	m.calls++
+	return nil
+}

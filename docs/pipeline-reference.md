@@ -396,30 +396,43 @@ environments:
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `fleet.targets[]` | One of `targets` and `selector` | | The targets, in the order they are promoted (at most 500). `name` is a DNS label. With the environment's name and a `-`, it must make a DNS label of at most 63 characters, and it must not be the name of another environment. `labels` describe the target for a `Target` selector. `path` defaults to the environment's `path` (default `environments/<environment>`) followed by `/<name>`. `health` replaces the environment's health check for this target. |
-| `fleet.selector.kind` | No | `Application` | `Target`: pick from `fleet.targets` by their `labels`, in their order. `Application`: every Argo CD Application the selector matches in `selector.namespace` (default `argocd`) is a target, named after the Application. The Application's `spec.source.path` is its path, and the Application is its `argocd` health check. `ClusterProfile`: every `multicluster.x-k8s.io/v1alpha1` ClusterProfile of the [cluster inventory](https://github.com/kubernetes-sigs/cluster-inventory-api) the selector matches in `selector.namespace` (default the Pipeline's namespace) is a target, named after the cluster. It uses the fleet's path and health check. |
+| `fleet.selector.kind` | No | `Application` | `Target`: pick from `fleet.targets` by their `labels`, in their order. `Application`: every Argo CD Application the selector matches in `selector.namespace` is a target, named after the Application. The namespace must be one of the controller's `fleets.applicationNamespaces` (`--fleet-application-namespaces`, default `argocd`), and defaults to the first of them. The Application's `spec.source.path` is its path, and the Application is its `argocd` health check. `ClusterProfile`: every `multicluster.x-k8s.io/v1alpha1` ClusterProfile of the [cluster inventory](https://github.com/kubernetes-sigs/cluster-inventory-api) the selector matches in `selector.namespace` is a target, named after the cluster. The namespace defaults to the Pipeline's, and another one must be in the controller's `fleets.clusterProfileNamespaces`. It uses the fleet's path and health check. |
 | `fleet.selector.matchLabels`, `fleet.selector.matchExpressions` | One of them | | A Kubernetes label selector (`In`, `NotIn`, `Exists`, `DoesNotExist`). |
 | `fleet.maxConcurrent` | No | `0` | Targets promoted at once. A target is in flight from the creation of its PromotionStep until it is Verified. A Failed target keeps its place, so failures slow the rollout down. `0` promotes every target at once. |
-| `fleet.maxUnavailable` | No | (unset) | Once this many targets have Failed, no further target starts. The targets in flight finish. A Failed target that is retried to Verified gives its place back, and the rollout goes on. Unset, failures only keep their places. |
+| `fleet.maxUnavailable` | No | (unset) | Once this many targets have failed (`Failed`, `AbortedByAlarm` or `RollingBack`), no further target starts. The targets in flight finish. A failed target that is retried to Verified gives its place back, and the rollout goes on. Unset, failures only keep their places. |
 
 How a fleet is promoted:
 
-- **Order and pacing.** The targets start in their order: list order, or by name for an
+- **Order and pacing.** The targets start in their order: list order, or sorted by name for an
   `Application` or `ClusterProfile` selector. A target starts once the environments the fleet
-  depends on are Verified, its own gates are ready and the fleet has a free place.
+  depends on are Verified, its own gates are ready and the fleet has a free place. A target is
+  known by its name: renaming one (or its Application) removes a target and adds another, and
+  the new one is promoted.
 - **Gates.** A PolicyGate that applies to the fleet environment (`kardinal.io/applies-to: prod`)
   applies to each target, which gets its own instance. A gate can also name one target
   (`prod-eu-west`). A per-promotion MetricCheck that such a gate reads gets one instance per
   target. Each instance starts once the fleet's upstreams are Verified.
 - **After the fleet.** An environment that depends on the fleet waits for every target to be
   Verified. A failed target holds it until that target is Verified. With `maxUnavailable` unset,
-  the Bundle is `Failed` while the other targets keep promoting.
+  the Bundle is `Failed` while the other targets keep promoting. A fleet that depends on
+  another fleet waits for all of it: each of its N targets lists the M targets of the first as
+  upstreams, so the Graph carries N×M upstream entries (50×50 is 2,500), which count toward its
+  size limit.
 - **Selector membership.** The controller resolves an `Application` or `ClusterProfile` selector
   into the Pipeline's `status.fleets`, and reads it again every minute. An Application qualifies
-  only if it deploys from the Pipeline's `spec.git.url` and has a `spec.source.path`. If any
-  selected object cannot be a target, or the selector matches more than 500, the fleet is
-  refused: its Bundles fail with `GraphBuildFailed` and `status.fleets[].message` says why. The
+  only if it deploys from the Pipeline's `spec.git.url` and has a `spec.source.path`, and any
+  object needs a name that can be a target. Selected objects that do not qualify are skipped and
+  named in `status.fleets[].message`; the others are the targets. When the selector cannot be read
+  (an API error, the CRD not served, a namespace the controller does not read), the fleet keeps
+  the targets it resolved to last and the message says why, so a Bundle in flight goes on; a fleet
+  that never resolved has no targets, and its Bundles fail with `GraphBuildFailed`. A selector
+  that matches more than 500 objects is refused the same way, without saying how many. The
   controller reads ClusterProfiles with the `get` and `list` the chart grants. Argo CD
   Applications are covered by the controller's existing read access.
+- **Unresolved environments.** A step whose environment the Pipeline does not resolve to (a
+  fleet target whose selector has not resolved yet or that left the fleet, or the step of an
+  environment that became a fleet while it promoted) never runs with a default environment: it
+  stays in its state, says why in its message, and looks again every 30 seconds.
 - **Checks.** While a fleet cannot be built, the Pipeline is `Ready=False` with reason
   `ValidationFailed` and the reason in its message: no targets, a selector that cannot be
   resolved, or a target name that does not make a DNS label or is already used.
@@ -429,8 +442,17 @@ How a fleet is promoted:
 - **Targets changed mid-rollout.** An edit to `fleet.targets`, or a change in what a selector
   selects, updates the Graph of a Bundle in flight in place. An added target joins the queue
   after the others. A removed target's PromotionStep is deleted: an open PR is closed and its
-  branch deleted, and a Verified target's change stays in git. Targets already Verified are not
+  branch deleted, and a Verified target's change stays in git. Its step's record (state,
+  message, PR) is kept in the Bundle's `status.retiredSteps`. Targets already Verified are not
   promoted again.
+- **Rollback.** `kardinal rollback <pipeline> --env <fleet>-<target>` rolls one target back.
+  Its rollback Bundle does not supersede the fleet's Bundle, which goes on promoting the other
+  targets. Add `--hold` to keep the fleet's Bundle (and later ones) off that target until
+  `kardinal release-hold`. `kardinal rollback <pipeline> --env <fleet>` rolls the whole fleet
+  back. The version to go back to is chosen from the fleet's first target that has something
+  deployed, and one rollback Bundle promotes it to every target; targets that already run it
+  are Verified at once. `--hold` on a fleet holds every target, and `kardinal release-hold
+  --env <fleet>` releases them. A target held through its fleet cannot be released alone.
 - **Targets on one branch.** Targets in flight together push to the same branch. Argo CD (or
   Flux) can then deploy a later commit, another target's, before the target's own commit. The
   `argocd` and `flux` health checks accept a later commit only when the workloads run the

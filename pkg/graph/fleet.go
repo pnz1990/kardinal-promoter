@@ -61,7 +61,10 @@ func fleetTargets(p *kardinalv1alpha1.Pipeline, env kardinalv1alpha1.Environment
 		if f.Environment != env.Name {
 			continue
 		}
-		if f.Message != "" {
+		// With a message the targets are the last good ones (the selector
+		// could not be read now), or the message names objects that are
+		// not targets: the targets still count.
+		if len(f.Targets) == 0 && f.Message != "" {
 			return nil, fmt.Errorf("build: fleet environment %q: its selector could not be resolved: %s", env.Name, f.Message)
 		}
 		return f.Targets, nil
@@ -254,10 +257,13 @@ func ValidateFleets(p *kardinalv1alpha1.Pipeline) error {
 	return err
 }
 
+// HasFleets reports whether any environment of p is a fleet.
+func HasFleets(p *kardinalv1alpha1.Pipeline) bool { return hasFleets(p) }
+
 // hasFleets reports whether any environment of p is a fleet.
 func hasFleets(p *kardinalv1alpha1.Pipeline) bool {
-	for _, e := range p.Spec.Environments {
-		if e.Fleet != nil {
+	for i := range p.Spec.Environments {
+		if p.Spec.Environments[i].Fleet != nil {
 			return true
 		}
 	}

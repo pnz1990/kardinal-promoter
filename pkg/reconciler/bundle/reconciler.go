@@ -530,6 +530,7 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 		Str("oldHash", b.Status.PipelineSpecHash).
 		Str("newHash", currentHash).
 		Msg("pipeline spec changed — updating Graph in place")
+	r.keepRemovedFleetTargets(ctx, log, b, pipeline)
 	if _, err := r.translate(ctx, log, pipeline, b); err != nil {
 		return fmt.Errorf("update graph for changed pipeline spec: %w", err)
 	}
@@ -809,8 +810,8 @@ func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bund
 	// --hold) is never superseded: the hold pins the environment to it until
 	// it is released.
 	var p kardinalv1alpha1.Pipeline
-	if getErr := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pipeline}, &p); getErr == nil &&
-		lifecycle.HoldNaming(&p, b.Name) != nil {
+	gotPipeline := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pipeline}, &p) == nil
+	if gotPipeline && lifecycle.HoldNaming(&p, b.Name) != nil {
 		return false, false, nil
 	}
 	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
@@ -825,6 +826,13 @@ func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bund
 		}
 		if _, bad := rejected.Carries(s); bad {
 			continue // a rejected Bundle, or one carrying a rejected artifact, never promotes: it supersedes nothing
+		}
+		if gotPipeline && targetRollback(&p, s) != "" && targetRollback(&p, s) != targetRollback(&p, b) {
+			// The rollback of one fleet target (kardinal rollback --env
+			// <fleet>-<target>) does not stop the fleet's rollout to the
+			// other targets (D1). A rollback of the same target still
+			// supersedes an older one.
+			continue
 		}
 		switch s.Status.Phase {
 		case phaseSuperseded, phaseFailed, phaseRejected:
@@ -842,6 +850,49 @@ func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bund
 		}
 	}
 	return newer, replaced, nil
+}
+
+// keepRemovedFleetTargets records, in b's status.retiredSteps, the steps of
+// fleet targets that the Pipeline no longer has (D1): the in-place Graph
+// update prunes them, and their evidence (state, message, PR) would be lost.
+// The records are kept with the ones the retirement writes. It changes b in
+// memory only; the caller patches the status. A failed list records
+// nothing (non-fatal).
+func (r *Reconciler) keepRemovedFleetTargets(ctx context.Context, log zerolog.Logger,
+	b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline) {
+	var steps kardinalv1alpha1.PromotionStepList
+	if err := r.List(ctx, &steps, client.InNamespace(b.Namespace), client.MatchingLabels{lifecycle.LabelBundle: b.Name}); err != nil {
+		log.Warn().Err(err).Msg("list steps to keep removed fleet targets (non-fatal)")
+		return
+	}
+	kept := make(map[string]bool, len(b.Status.RetiredSteps))
+	for _, rs := range b.Status.RetiredSteps {
+		kept[rs.Name] = true
+	}
+	for i := range steps.Items {
+		s := &steps.Items[i]
+		if s.Labels[graph.LabelFleet] == "" || kept[s.Name] {
+			continue
+		}
+		if _, ok := graph.EnvironmentSpecFor(pipeline, s.Spec.Environment); ok {
+			continue
+		}
+		b.Status.RetiredSteps = append(b.Status.RetiredSteps, lifecycle.RetiredStepOf(s))
+		log.Info().Str("env", s.Spec.Environment).Msg("fleet target removed from the Pipeline; its step is kept in status.retiredSteps")
+	}
+}
+
+// targetRollback is the fleet target b rolls back when b is the rollback of
+// one fleet target (label kardinal.io/rollback, intent.targetEnvironment a
+// target of a fleet of p), else "".
+func targetRollback(p *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) string {
+	if b.Labels[lifecycle.LabelRollback] != "true" || b.Spec.Intent == nil || !graph.HasFleets(p) {
+		return ""
+	}
+	if t := b.Spec.Intent.TargetEnvironment; t != "" && graph.FleetOf(p, t) != "" {
+		return t
+	}
+	return ""
 }
 
 // pipelineBundleList lists the Bundles of a pipeline through the spec.pipeline index.
@@ -1618,11 +1669,17 @@ func pipelineSpecHashFor(pipeline *kardinalv1alpha1.Pipeline) string {
 		raw, err = json.Marshal(spec)
 	} else {
 		// The resolved fleet members are part of what the Graph is built
-		// from: a change rebuilds the Graph of a Bundle in flight.
+		// from: a change rebuilds the Graph of a Bundle in flight. The
+		// message is not: a read error that keeps the last members, or a
+		// skipped object, changes nothing the Graph uses.
+		members := make([]kardinalv1alpha1.FleetStatus, len(pipeline.Status.Fleets))
+		for i, f := range pipeline.Status.Fleets {
+			members[i] = kardinalv1alpha1.FleetStatus{Environment: f.Environment, Targets: f.Targets}
+		}
 		raw, err = json.Marshal(struct {
 			Spec   kardinalv1alpha1.PipelineSpec  `json:"spec"`
 			Fleets []kardinalv1alpha1.FleetStatus `json:"fleets"`
-		}{spec, pipeline.Status.Fleets})
+		}{spec, members})
 	}
 	if err != nil {
 		return "" // should never happen for a valid Pipeline object
