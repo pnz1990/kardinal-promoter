@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // maxResponseBytes bounds the Prometheus response body that is read.
@@ -44,9 +45,11 @@ type PrometheusProvider struct {
 // destinations at dial time (pkg/egress), so a MetricCheck URL cannot reach
 // the controller's own UI API or the node's credential endpoints. Private
 // ranges stay allowed for in-cluster Prometheus. It honours HTTP(S)_PROXY.
+// Every request gets an OpenTelemetry client span when tracing is on; no
+// trace context is sent to the metrics API.
 var defaultHTTPClient = &http.Client{
 	Timeout:   10 * time.Second,
-	Transport: egress.NewTransport(http.ProxyFromEnvironment),
+	Transport: tracing.Transport(egress.NewTransport(http.ProxyFromEnvironment), false),
 }
 
 // NewPrometheusProvider creates a PrometheusProvider with the default,

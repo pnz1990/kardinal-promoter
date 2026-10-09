@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/util/jsonpath"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -31,9 +32,10 @@ const (
 
 // webHTTPClient is egress-guarded like defaultHTTPClient. It has no client
 // timeout (the request context carries web.timeoutSeconds) and does not
-// follow redirects: a 3xx answer fails the check.
+// follow redirects: a 3xx answer fails the check. Requests are traced like
+// defaultHTTPClient's, without sending trace context.
 var webHTTPClient = &http.Client{
-	Transport: egress.NewTransport(http.ProxyFromEnvironment),
+	Transport: tracing.Transport(egress.NewTransport(http.ProxyFromEnvironment), false),
 	CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	},
