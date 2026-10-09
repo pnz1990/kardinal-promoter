@@ -121,16 +121,11 @@ func TestScale_ChaosGitLatency(t *testing.T) {
 	assertNewestVerified(t, r)
 }
 
-// gitOutageBug is the SCM circuit breaker's: a 60-second outage opens it
-// for ten minutes and fails every pr-review promotion in flight.
-const gitOutageBug = 1476
-
 // TestScale_ChaosGitOutage cuts the git server off for 60 seconds, twice,
 // while the load runs, as a git host failover does: promotions must wait
 // and retry, and the newest Bundle of every Pipeline must still end
 // Verified. Covers SCALE-CHAOS-GITOUTAGE-01.
 func TestScale_ChaosGitOutage(t *testing.T) {
-	scale.KnownBug(t, gitOutageBug, "a 60s git outage keeps the SCM circuit open for 10 minutes; every pr-review promotion in flight fails")
 	r := scale.Begin(t)
 	tp := scale.NewToxiproxy(t, r.E)
 	// The breaker's state is in memory: restart the controller afterwards,
