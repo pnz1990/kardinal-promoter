@@ -6,6 +6,7 @@ package promotionstep
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -248,4 +249,46 @@ func verifiedImagesDiffer(bundle *v1alpha1.Bundle, verified []string) string {
 		}
 	}
 	return ""
+}
+
+// recordHookRuns copies onto status.hookRecords each hook whose HookRun has
+// started (spec.live.hooks with a spec hash and Running, Succeeded or
+// Failed). The Graph renders the record into the hook's HookRun
+// (spec.recorded), so a HookRun deleted and applied again does not run its
+// Job a second time. A final result is never changed for the same spec hash.
+// It reports whether the records changed.
+func recordHookRuns(ps *v1alpha1.PromotionStep) bool {
+	if ps.Spec.Live == nil {
+		return false
+	}
+	changed := false
+	for _, h := range ps.Spec.Live.Hooks {
+		switch h.Result {
+		case v1alpha1.HookRunRunning, v1alpha1.HookRunSucceeded, v1alpha1.HookRunFailed:
+		default:
+			continue
+		}
+		if h.SpecHash == "" || h.Hook == "" {
+			continue
+		}
+		rec := v1alpha1.HookRecord{Hook: h.Hook, Phase: h.Phase, SpecHash: h.SpecHash, Result: h.Result, Message: h.Message}
+		i := slices.IndexFunc(ps.Status.HookRecords, func(r v1alpha1.HookRecord) bool { return r.Hook == h.Hook && r.Phase == h.Phase })
+		switch {
+		case i < 0:
+			ps.Status.HookRecords = append(ps.Status.HookRecords, rec)
+			changed = true
+		case ps.Status.HookRecords[i] == rec:
+		case ps.Status.HookRecords[i].SpecHash == rec.SpecHash && finalHookResult(ps.Status.HookRecords[i].Result):
+			// Final for this job: a later HookRun that took the recorded
+			// result reports the same, nothing to change.
+		default:
+			ps.Status.HookRecords[i] = rec
+			changed = true
+		}
+	}
+	return changed
+}
+
+func finalHookResult(r string) bool {
+	return r == v1alpha1.HookRunSucceeded || r == v1alpha1.HookRunFailed
 }

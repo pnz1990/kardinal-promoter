@@ -108,6 +108,15 @@ type HookRunSpec struct {
 	// run out of order. It is not part of the spec hash.
 	// +optional
 	StepAdvanced bool `json:"stepAdvanced,omitempty"`
+
+	// Recorded is set by the Graph from the step's status.hookRecords: the
+	// result the step recorded for this hook, when one ran before. A HookRun
+	// that starts with a record of its own spec hash does not run the Job
+	// again: it takes the recorded result (Succeeded or Failed), or Failed
+	// when the earlier run was deleted while it ran (result unknown). It is
+	// not part of the spec hash.
+	// +optional
+	Recorded *HookRecord `json:"recorded,omitempty"`
 }
 
 // HookRunStatus is the observed state of a HookRun.

@@ -579,3 +579,40 @@ func TestStep_HooksRefusedInCompactGraph(t *testing.T) {
 	assert.False(t, ok, "nothing promoted without its hooks")
 	a.fileHas(t, "test", fixtures.V1, "test in git")
 }
+
+// TestStep_HookDeletedWhileRunningRunsOnce: deleting a pre-hook HookRun
+// while its Job runs does not run the migration twice. The finalizer holds
+// the HookRun until the Job ends and records its result, the step keeps the
+// result in status.hookRecords, and the HookRun the Graph applies again
+// takes the recorded result without a Job (regression, #1544 review).
+//
+// Covers HOOK-RECREATE-01.
+func TestStep_HookDeletedWhileRunningRunsOnce(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{{Name: "migrate", Phase: "pre", Job: hookJob(t, `sleep 20; echo migrated`, "")}}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	name := graph.HookRunName(pipelineName, bundle, "test", "pre", "migrate")
+	first := waitHookRun(t, e, a.ns, name, v1alpha1.HookRunRunning)
+	require.NoError(t, e.Client.Delete(ctx, first))
+
+	var again *v1alpha1.HookRun
+	framework.Eventually(t, 3*time.Minute, "the HookRun applied again", func(ctx context.Context) (bool, string) {
+		hr, ok, err := hookRun(ctx, e, a.ns, name)
+		if err != nil || !ok {
+			return false, fmt.Sprint(err)
+		}
+		again = hr
+		return hr.UID != first.UID && hr.Status.Phase != "", fmt.Sprintf("uid=%s phase=%q", hr.UID, hr.Status.Phase)
+	})
+	assert.Equal(t, v1alpha1.HookRunSucceeded, again.Status.Phase, again.Status.Message)
+	assert.Contains(t, again.Status.Message, "not run again")
+	assert.Empty(t, again.Status.JobUID, "no second Job")
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	require.NotEmpty(t, ps.Status.HookRecords)
+	assert.Equal(t, "Succeeded", ps.Status.HookRecords[0].Result)
+}

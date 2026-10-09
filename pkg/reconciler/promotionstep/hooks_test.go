@@ -218,3 +218,41 @@ func TestVerifyingEventText(t *testing.T) {
 	assert.Contains(t, strings.Join(evs, "\n"), "env test: health check passed, verifying (post-deploy hooks and analyses)", "%v", evs)
 	assert.NotContains(t, strings.Join(evs, "\n"), "running post-deploy hooks")
 }
+
+// TestHookRecordsKept: the step records on its own status each hook whose
+// HookRun started (hook, phase, spec hash, result), updates it as the run
+// finishes, and never changes a final result for the same spec hash, so a
+// HookRun the Graph applies again takes the recorded result (regression,
+// #1544 review: a deleted running pre-hook HookRun ran its migration twice).
+func TestHookRecordsKept(t *testing.T) {
+	ps := labelled(makeStep("step", "p", "b1", "test"))
+	ps.Spec.PreHooks = []string{"hr-migrate"}
+	ps.Spec.Live = &v1alpha1.PromotionStepLive{Hooks: []v1alpha1.LiveHookRun{
+		{Name: "hr-migrate", Hook: "migrate", Phase: "pre", Result: "Running", SpecHash: "h1", Message: "Job running"},
+		{Name: "hr-seed", Hook: "seed", Phase: "pre", Result: "Pending"},
+	}}
+	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	got, _ := reconcileHookStep(t, c, "step")
+	assert.Equal(t, []v1alpha1.HookRecord{{Hook: "migrate", Phase: "pre", SpecHash: "h1", Result: "Running", Message: "Job running"}},
+		got.Status.HookRecords, "a started run is recorded; a Pending one is not")
+
+	got.Spec.Live.Hooks[0].Result, got.Spec.Live.Hooks[0].Message = "Succeeded", "Job completed"
+	require.NoError(t, c.Update(context.Background(), got))
+	got, _ = reconcileHookStep(t, c, "step")
+	require.Len(t, got.Status.HookRecords, 1)
+	assert.Equal(t, "Succeeded", got.Status.HookRecords[0].Result)
+
+	// The recreated HookRun reports the recorded result, or (a buggy
+	// report) Failed for the same job: the final record stays.
+	got.Spec.Live.Hooks[0].Result = "Failed"
+	require.NoError(t, c.Update(context.Background(), got))
+	got, _ = reconcileHookStep(t, c, "step")
+	assert.Equal(t, "Succeeded", got.Status.HookRecords[0].Result, "a final result is not changed for the same spec hash")
+
+	// An edited hook (another spec hash) that runs is recorded anew.
+	got.Spec.Live.Hooks[0].SpecHash, got.Spec.Live.Hooks[0].Result = "h2", "Running"
+	require.NoError(t, c.Update(context.Background(), got))
+	got, _ = reconcileHookStep(t, c, "step")
+	assert.Equal(t, "h2", got.Status.HookRecords[0].SpecHash)
+	assert.Equal(t, "Running", got.Status.HookRecords[0].Result)
+}

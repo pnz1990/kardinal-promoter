@@ -92,6 +92,33 @@ spec:
                 description: PipelineName is the Pipeline the hook belongs to.
                 minLength: 1
                 type: string
+              recorded:
+                description: |-
+                  Recorded is set by the Graph from the step's status.hookRecords: the
+                  result the step recorded for this hook, when one ran before. A HookRun
+                  that starts with a record of its own spec hash does not run the Job
+                  again: it takes the recorded result (Succeeded or Failed), or Failed
+                  when the earlier run was deleted while it ran (result unknown). It is
+                  not part of the spec hash.
+                properties:
+                  hook:
+                    description: Hook is the hook's name in the Pipeline.
+                    type: string
+                  message:
+                    description: Message is the HookRun's last message.
+                    type: string
+                  phase:
+                    description: Phase is pre or post.
+                    type: string
+                  result:
+                    description: Result is Running, Succeeded or Failed. Succeeded
+                      and Failed are final.
+                    type: string
+                  specHash:
+                    description: SpecHash is the HookRun's spec hash (job and timeout)
+                      that ran.
+                    type: string
+                type: object
               stepAdvanced:
                 description: |-
                   StepAdvanced is set by the Graph from the step's state: true once the

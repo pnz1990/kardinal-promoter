@@ -160,6 +160,10 @@ spec:
                           description: Result is the HookRun's status.phase (Pending
                             when it has none yet).
                           type: string
+                        specHash:
+                          description: 'SpecHash is the HookRun''s status.specHash:
+                            which job and timeout ran.'
+                          type: string
                       required:
                       - name
                       type: object
@@ -385,6 +389,36 @@ spec:
                   Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md).
                 format: date-time
                 type: string
+              hookRecords:
+                description: HookRecords records each hook that ran for this step
+                  (HookRecord).
+                items:
+                  description: |-
+                    HookRecord is the step's own record that a hook ran for it: once a
+                    HookRun's Job started, the step keeps its result here, so a HookRun
+                    recreated for the same hook (deleted and applied again by the Graph) does
+                    not run the Job a second time and takes the recorded result instead.
+                  properties:
+                    hook:
+                      description: Hook is the hook's name in the Pipeline.
+                      type: string
+                    message:
+                      description: Message is the HookRun's last message.
+                      type: string
+                    phase:
+                      description: Phase is pre or post.
+                      type: string
+                    result:
+                      description: Result is Running, Succeeded or Failed. Succeeded
+                        and Failed are final.
+                      type: string
+                    specHash:
+                      description: SpecHash is the HookRun's spec hash (job and timeout)
+                        that ran.
+                      type: string
+                  type: object
+                maxItems: 40
+                type: array
               lastHealthCheckAt:
                 description: |-
                   LastHealthCheckAt records when the health adapter was last called. Used to

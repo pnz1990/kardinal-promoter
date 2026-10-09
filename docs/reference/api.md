@@ -153,6 +153,12 @@ HookRun is one run of a pre- or post-deploy hook (a Kubernetes Job) for one Bund
 | `spec.job` | object | yes | Job is the batch/v1 JobSpec to run (see HookSpec.Job). |
 | `spec.phase` | string | yes | Phase is "pre" or "post" (see HookSpec.Phase). One of: `pre`, `post`. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline the hook belongs to. |
+| `spec.recorded` | object |  | Recorded is set by the Graph from the step's status.hookRecords: the result the step recorded for this hook, when one ran before. A HookRun that starts with a record of its own spec hash does not run the Job again: it takes the recorded result (Succeeded or Failed), or Failed when the earlier run was deleted while it ran (result unknown). It is not part of the spec hash. |
+| `spec.recorded.hook` | string |  | Hook is the hook's name in the Pipeline. |
+| `spec.recorded.message` | string |  | Message is the HookRun's last message. |
+| `spec.recorded.phase` | string |  | Phase is pre or post. |
+| `spec.recorded.result` | string |  | Result is Running, Succeeded or Failed. Succeeded and Failed are final. |
+| `spec.recorded.specHash` | string |  | SpecHash is the HookRun's spec hash (job and timeout) that ran. |
 | `spec.stepAdvanced` | boolean |  | StepAdvanced is set by the Graph from the step's state: true once the step passed the point this hook runs at (started, for a pre hook; finished, for a post hook). A HookRun that starts with it set is Skipped: a hook added to the Pipeline too late for this Bundle does not run out of order. It is not part of the spec hash. |
 | `spec.timeout` | string |  | Timeout is the hook timeout (see HookSpec.Timeout). |
 | `status` | object |  | HookRunStatus is the observed state of a HookRun. |
@@ -599,6 +605,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.live.hooks[].name` | string | yes | Name is the HookRun name. |
 | `spec.live.hooks[].phase` | string |  | Phase is the hook phase: pre or post. |
 | `spec.live.hooks[].result` | string |  | Result is the HookRun's status.phase (Pending when it has none yet). |
+| `spec.live.hooks[].specHash` | string |  | SpecHash is the HookRun's status.specHash: which job and timeout ran. |
 | `spec.live.imageVerification` | object |  | ImageVerification is the Bundle's ImageVerification result. |
 | `spec.live.imageVerification.images` | []string |  | Images are the images it verifies, "repository@digest" (repository normalized). The step refuses to promote a Bundle whose images differ. |
 | `spec.live.imageVerification.message` | string |  | Message is its status.message. |
@@ -629,6 +636,12 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.currentStepIndex` | integer |  | CurrentStepIndex is the index into the step sequence that the reconciler is currently executing. Persisted to etcd for idempotent crash recovery (spec 003 FR-002). |
 | `status.gitCredentialRetries` | integer |  | GitCredentialRetries is the number of consecutive retries of a git-clone or git-push that the remote refused while git had no credentials because spec.git.secretRef is not set, or names a Secret that does not exist or has no token key (condition GitCredentialMissing). These retries have no limit, so creating the Secret is enough for the step to continue, and they do not use up the retries of retryCount. Reset with retryCount, and when git has a token. |
 | `status.healthCheckExpiry` | string (date-time) |  | HealthCheckExpiry is the deadline for a healthy check: health.timeout after the health check began, moved to health.timeout after the moment a bake window stops. It does not apply while a bake window runs. A Graph CEL expression can observe this field to detect a stale health check. Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md). |
+| `status.hookRecords` | []object |  | HookRecords records each hook that ran for this step (HookRecord). |
+| `status.hookRecords[].hook` | string |  | Hook is the hook's name in the Pipeline. |
+| `status.hookRecords[].message` | string |  | Message is the HookRun's last message. |
+| `status.hookRecords[].phase` | string |  | Phase is pre or post. |
+| `status.hookRecords[].result` | string |  | Result is Running, Succeeded or Failed. Succeeded and Failed are final. |
+| `status.hookRecords[].specHash` | string |  | SpecHash is the HookRun's spec hash (job and timeout) that ran. |
 | `status.lastHealthCheckAt` | string (date-time) |  | LastHealthCheckAt records when the health adapter was last called. Used to space health checks at the health-check interval regardless of how often the step is reconciled. |
 | `status.message` | string |  | Message provides human-readable detail about the current state. |
 | `status.nextRetryAt` | string (date-time) |  | NextRetryAt is when a step that failed with a retryable error runs again, or when a superseded step whose PR close failed retries the close (condition SupersededCloseFailed). A reconcile before then waits for it, so the retry backoff holds however often the step is reconciled (a gate re-evaluation, a PRStatus change, a controller restart). Cleared when the step runs again. |
