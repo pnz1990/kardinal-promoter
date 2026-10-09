@@ -218,6 +218,15 @@ type PolicyGateStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// PendingAuditEvents are AuditEvents for this gate's transitions that are
+	// not yet written (the audit outbox, #1552). Each entry is stored in the
+	// same status patch as its transition and removed once the AuditEvent
+	// exists, so an API error or a controller restart between the two cannot
+	// lose the record. Normally empty.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	PendingAuditEvents []PendingAuditEvent `json:"pendingAuditEvents,omitempty"`
+
 	// Approvals records each decision in spec.approvals and whether the gate
 	// counted it (spec.approval), for kardinal explain, the PR evidence and
 	// the UI.
@@ -227,7 +236,7 @@ type PolicyGateStatus struct {
 	// Overrides records each spec.overrides entry the controller has seen:
 	// when it first saw it, whether its createdBy was checked by the chart's
 	// identity admission policy, and whether its GateOverridden AuditEvent
-	// is written. An override counts from firstSeen: it ends at the earlier
+	// is recorded. An override counts from firstSeen: it ends at the earlier
 	// of its expiresAt and firstSeen plus the override cap
 	// (--gate-override-max-minutes). Records are never dropped, so an entry
 	// removed and added again keeps its firstSeen; past 200 records new
@@ -260,7 +269,8 @@ type OverrideRecord struct {
 	// on a gate it was already checking.
 	// +optional
 	Verified bool `json:"verified,omitempty"`
-	// Audited is true once the GateOverridden AuditEvent is written.
+	// Audited is true once the GateOverridden record is stored: in
+	// status.pendingAuditEvents until the AuditEvent is written (#1552).
 	// +optional
 	Audited bool `json:"audited,omitempty"`
 }
