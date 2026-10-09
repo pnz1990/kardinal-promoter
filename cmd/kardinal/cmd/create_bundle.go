@@ -75,9 +75,7 @@ deploy only its images and ignore them.
 
 --commit, --author and --ci-run-url set the Bundle's provenance, shown in the
 PR body and the UI. kardinal records them as given: they are what the caller
-asserts, as with the Bundle API. The PR body also names who created the Bundle
-("Requested by"): your Kubernetes user name, or your local user name when the
-cluster does not report it.
+asserts, as with the Bundle API.
 
 The Bundle API (POST /api/v1/bundles) applies the same checks.
 
@@ -93,14 +91,6 @@ Use --dry-run to preview the promotion graph without creating any resources.`,
 			}
 			if dryRun {
 				return createBundleDryRun(cmd.OutOrStdout(), c, ns, args[0], opts)
-			}
-			// Best effort: the PR body names who created the Bundle. The
-			// Kubernetes user name when the cluster tells us, else the
-			// local user name, as kardinal promote records.
-			if user, err := kubeUser(cmd.Context(), c); err == nil {
-				opts.RequestedBy = user
-			} else {
-				opts.RequestedBy = currentUser()
 			}
 			return createBundleFn(cmd.OutOrStdout(), c, ns, args[0], opts)
 		},
@@ -139,10 +129,6 @@ type createBundleOptions struct {
 	// CompactAbove is the controller's --graph-compact-above, for --dry-run;
 	// nil means graph.DefaultCompactAbove.
 	CompactAbove *int
-	// RequestedBy is recorded as the Bundle's kardinal.io/requested-by
-	// annotation, shown as "Requested by" in the PR body. Empty records
-	// nothing.
-	RequestedBy string
 }
 
 // bundleSpec turns the flags into a Bundle spec for pipeline and checks it
@@ -203,9 +189,6 @@ func createBundleFn(w io.Writer, c sigs_client.Client, ns, pipeline string, opts
 			Namespace:    ns,
 		},
 		Spec: spec,
-	}
-	if opts.RequestedBy != "" {
-		bundle.Annotations = map[string]string{lifecycle.AnnotationRequestedBy: opts.RequestedBy}
 	}
 	// Record sub-second creation order so supersession picks the newer of two
 	// Bundles created in the same second.

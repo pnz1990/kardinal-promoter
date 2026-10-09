@@ -502,7 +502,8 @@ func TestUpstreamEnvironments(t *testing.T) {
 }
 
 // TestSetRollbackState checks what the open-pr step learns about a rollback
-// Bundle: who asked for it (kardinal.io/requested-by) and the Bundle it
+// Bundle: who asked for it (kardinal.io/requested-by), its verified creator
+// (kardinal.io/created-by) and the Bundle it
 // replaces (kardinal.io/rollback-from) with that Bundle's spec, or only its
 // name when it was deleted. A promotion gets no replaced Bundle (spike bug 6).
 func TestSetRollbackState(t *testing.T) {
@@ -520,11 +521,12 @@ func TestSetRollbackState(t *testing.T) {
 		}
 	}
 	tests := []struct {
-		name     string
-		bundle   *v1alpha1.Bundle
-		wantBy   string
-		wantFrom string
-		wantSpec *v1alpha1.BundleSpec
+		name        string
+		bundle      *v1alpha1.Bundle
+		wantBy      string
+		wantCreator string
+		wantFrom    string
+		wantSpec    *v1alpha1.BundleSpec
 	}{
 		{
 			name: "rollback of a bundle that exists",
@@ -540,8 +542,8 @@ func TestSetRollbackState(t *testing.T) {
 		},
 		{
 			name:   "promotion",
-			bundle: bundle(map[string]string{lifecycle.AnnotationRequestedBy: "bob"}),
-			wantBy: "bob",
+			bundle: bundle(map[string]string{lifecycle.AnnotationRequestedBy: "bob", lifecycle.AnnotationCreatedBy: "oidc:bob"}),
+			wantBy: "bob", wantCreator: "oidc:bob",
 		},
 		{
 			name:   "nothing recorded",
@@ -555,6 +557,7 @@ func TestSetRollbackState(t *testing.T) {
 			state := &steps.StepState{}
 			r.setRollbackState(context.Background(), zerolog.Nop(), state, tt.bundle)
 			assert.Equal(t, tt.wantBy, state.RequestedBy)
+			assert.Equal(t, tt.wantCreator, state.CreatedBy)
 			assert.Equal(t, tt.wantFrom, state.RollbackFrom)
 			assert.Equal(t, tt.wantSpec, state.RollbackFromBundle)
 		})

@@ -2598,6 +2598,7 @@ func (r *Reconciler) setRollbackState(ctx context.Context, log zerolog.Logger, s
 		return
 	}
 	state.RequestedBy = bundle.Annotations[lifecycle.AnnotationRequestedBy]
+	state.CreatedBy = bundle.Annotations[lifecycle.AnnotationCreatedBy]
 	name := bundle.Annotations[lifecycle.AnnotationRollbackFrom]
 	if name == "" {
 		return

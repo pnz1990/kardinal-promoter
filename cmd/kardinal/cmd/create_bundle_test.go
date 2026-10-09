@@ -31,7 +31,6 @@ import (
 	"sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func buildCreateBundleScheme(t *testing.T) *runtime.Scheme {
@@ -272,17 +271,6 @@ func TestCreateBundle_SharesBundleAPIRules(t *testing.T) {
 				assert.Empty(t, b.Spec.Images)
 				assert.Equal(t, &v1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "9f8e7d6"}, b.Spec.ConfigRef)
 				assert.Nil(t, b.Spec.Provenance, "no provenance flag, no provenance")
-			}},
-		{name: "records who created it (#1581)",
-			opts: createBundleOptions{Images: []string{img}, Type: "image", RequestedBy: "alice@example.com"},
-			check: func(t *testing.T, b v1alpha1.Bundle) {
-				assert.Equal(t, "alice@example.com", b.Annotations[lifecycle.AnnotationRequestedBy])
-				assert.Nil(t, b.Spec.Provenance, "the requester is not the commit author")
-			}},
-		{name: "no requester, no annotation",
-			opts: createBundleOptions{Images: []string{img}, Type: "image"},
-			check: func(t *testing.T, b v1alpha1.Bundle) {
-				assert.NotContains(t, b.Annotations, lifecycle.AnnotationRequestedBy)
 			}},
 		{name: "image bundle with provenance",
 			opts: createBundleOptions{Images: []string{img}, Type: "image",

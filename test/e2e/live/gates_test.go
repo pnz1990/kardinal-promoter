@@ -709,8 +709,9 @@ func TestGate_PolicyNamespacesAddGates(t *testing.T) {
 // Bundle created with kardinal create bundle and no --author (#1581): a gate
 // from a spec.policyNamespaces namespace is listed with that namespace, not
 // the Pipeline namespace its instance lives in; a team gate with the
-// Pipeline's; and the body names the Kubernetes user who created the Bundle,
-// which the CLI records as kardinal.io/requested-by.
+// Pipeline's; and the body names the Bundle's verified creator, the
+// Kubernetes user the CLI records as kardinal.io/created-by and admission
+// pins, without an "(unverified)" requester line.
 //
 // Covers GATE-PREVIDENCE-01.
 func TestGate_PREvidenceNamesTemplates(t *testing.T) {
@@ -732,7 +733,7 @@ func TestGate_PREvidenceNamesTemplates(t *testing.T) {
 	require.NotEmpty(t, user)
 	var b v1alpha1.Bundle
 	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: bundle}, &b))
-	assert.Equal(t, user, b.Annotations[lifecycle.AnnotationRequestedBy], "the CLI records who created the Bundle")
+	assert.Equal(t, user, b.Annotations[lifecycle.AnnotationCreatedBy], "the CLI records who created the Bundle")
 	assert.Nil(t, b.Spec.Provenance, "without --author there is no provenance")
 
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "WaitingForMerge", promoteTimeout)
@@ -740,11 +741,12 @@ func TestGate_PREvidenceNamesTemplates(t *testing.T) {
 	for _, want := range []string{
 		"| shared-pass | " + listed + " | Pass |",
 		"| team-pass | " + a.ns + " | Pass |",
-		"| " + fixtures.Image + " | " + fixtures.V2 + " | — | — | — | — |\n\nRequested by: " + user + "\n",
+		"| " + fixtures.Image + " | " + fixtures.V2 + " | — | — | — | — |\n\nCreated by: " + user + "\n",
 	} {
 		assert.Contains(t, pr.Body, want)
 	}
 	assert.NotContains(t, pr.Body, "| shared-pass | "+a.ns+" |", "the org gate is not listed in the instance's namespace")
+	assert.NotContains(t, pr.Body, "(unverified)")
 	a.merge(t, pr)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 }

@@ -45,7 +45,7 @@ If adding the labels fails, the PR stays open without them: while the step waits
 |---|---|---|---|---|---|
 | ghcr.io/myorg/my-app | 1.29.0 | sha256:a1b2c3d4 | [CI run](https://github.com/myorg/my-app/actions/runs/12345) | abc123d | engineer-name |
 
-Requested by: alice
+Created by: alice
 
 ### Policy Gate Compliance
 
@@ -107,12 +107,14 @@ One row per image in the Bundle's `spec.images`:
 The CI run, commit and author come from the Bundle's `spec.provenance` field, which is set when the Bundle is created by CI.
 `kardinal create bundle` sets them only from `--commit`, `--author` and `--ci-run-url`.
 
-"Requested by", under the table, is who created the Bundle: the `kardinal.io/requested-by`
-annotation. `kardinal create bundle` records your Kubernetes user name (from a
-SelfSubjectReview), or your local user name when the cluster does not report it;
-`kardinal promote` records your local user name and the UI its signed-in user. A Bundle from the Bundle API has none, so the line
-is left out; its author is `spec.provenance.author`. A rollback PR names its actor on the
-"Rolled back by" line instead.
+"Created by", under the table, is the Bundle's verified creator: the `kardinal.io/created-by`
+annotation, which the chart's `<release>-bundle-creator` admission policy admits only in the
+requesting user's name. `kardinal create bundle` and `kardinal promote` record your Kubernetes
+user name; the UI, the Bundle API and Subscriptions record theirs (see
+[Approval gates](policy-gates.md#approval-gates)). A Bundle without it, for example one created
+with `kubectl`, shows the client-written `kardinal.io/requested-by` instead, as
+"Requested by: <name> (unverified)": nothing checks that name. With neither, the line is left
+out. A rollback PR names its actor on the "Rolled back by" line instead.
 
 A Bundle with no images, such as a `config` Bundle, gets one row of `—`. The body then shows
 neither its provenance nor its config commit.

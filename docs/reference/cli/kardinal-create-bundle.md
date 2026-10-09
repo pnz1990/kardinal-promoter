@@ -15,9 +15,7 @@ deploy only its images and ignore them.
 
 --commit, --author and --ci-run-url set the Bundle's provenance, shown in the
 PR body and the UI. kardinal records them as given: they are what the caller
-asserts, as with the Bundle API. The PR body also names who created the Bundle
-("Requested by"): your Kubernetes user name, or your local user name when the
-cluster does not report it.
+asserts, as with the Bundle API.
 
 The Bundle API (POST /api/v1/bundles) applies the same checks.
 

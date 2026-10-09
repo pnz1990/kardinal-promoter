@@ -102,9 +102,14 @@ type PRBody struct {
 	// recorded.
 	RolledBackBy string
 
-	// RequestedBy is who created the Bundle (its kardinal.io/requested-by
-	// annotation), shown under the provenance table of a promotion PR.
-	// Empty when it is not recorded.
+	// CreatedBy is the Bundle's verified creator (kardinal.io/created-by,
+	// pinned by admission), shown as "Created by" under the provenance table
+	// of a promotion PR. Empty when it is not recorded.
+	CreatedBy string
+
+	// RequestedBy is the kardinal.io/requested-by annotation, which the
+	// client writes and nothing verifies. A promotion PR shows it, marked
+	// "(unverified)", only when CreatedBy is empty.
 	RequestedBy string
 
 	// GateResults holds PolicyGate evaluation results for this environment.
@@ -175,9 +180,12 @@ var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMa
 {{- else}}
 | — | — | — | — | — | — |
 {{- end}}
-{{- with .RequestedBy}}
+{{- if .CreatedBy}}
 
-Requested by: {{mdcell .}}
+Created by: {{mdcell .CreatedBy}}
+{{- else if .RequestedBy}}
+
+Requested by: {{mdcell .RequestedBy}} (unverified)
 {{- end}}
 {{- with .Bundle.Chart}}
 

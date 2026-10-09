@@ -796,28 +796,38 @@ func TestOpenPRStep_RollbackBody(t *testing.T) {
 			assert.Contains(t, body, "| ghcr.io/nginx/nginx | 1.29.0 | — | — | abc1234 | ci-bot |",
 				"the provenance Author is the restored build's author")
 			assert.NotContains(t, body, "Requested by:", "a rollback names its actor once, as Rolled back by")
+			assert.NotContains(t, body, "Created by:")
 		})
 	}
 }
 
-// TestOpenPRStep_RequestedBy checks that a promotion PR names who created the
-// Bundle under the provenance table, so a Bundle created without --author
-// still says who asked for it (#1581), and that a hostile name cannot add
-// Markdown structure.
-func TestOpenPRStep_RequestedBy(t *testing.T) {
+// TestOpenPRStep_CreatedBy checks that a promotion PR names who created the
+// Bundle under the provenance table (#1581): the verified creator
+// (kardinal.io/created-by, pinned by admission) as "Created by"; without one,
+// the client-written kardinal.io/requested-by, marked unverified; and that a
+// hostile name cannot add Markdown structure.
+func TestOpenPRStep_CreatedBy(t *testing.T) {
 	tests := []struct {
 		name        string
+		createdBy   string
 		requestedBy string
 		want        string
 	}{
-		{name: "recorded", requestedBy: "alice@example.com", want: "\n\nRequested by: alice@example.com\n"},
-		{name: "hostile", requestedBy: "mallory\n## Approved", want: "\n\nRequested by: mallory ## Approved\n"},
-		{name: "not recorded"},
+		{name: "verified creator", createdBy: "alice@example.com",
+			want: "\n\nCreated by: alice@example.com\n"},
+		{name: "verified creator wins over the requester", createdBy: "alice@example.com", requestedBy: "mallory",
+			want: "\n\nCreated by: alice@example.com\n"},
+		{name: "requester only", requestedBy: "bob",
+			want: "\n\nRequested by: bob (unverified)\n"},
+		{name: "hostile creator", createdBy: "mallory\n## Approved",
+			want: "\n\nCreated by: mallory ## Approved\n"},
+		{name: "nothing recorded"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockSCM := &mockSCMProvider{prURL: "https://github.com/owner/repo/pull/30", prNumber: 30}
 			state := makeState(t, &mockGitClient{}, mockSCM)
+			state.CreatedBy = tt.createdBy
 			state.RequestedBy = tt.requestedBy
 
 			step, err := parentsteps.Lookup("open-pr")
@@ -829,10 +839,12 @@ func TestOpenPRStep_RequestedBy(t *testing.T) {
 			require.Len(t, mockSCM.bodies, 1)
 			body := mockSCM.bodies[0]
 			if tt.want == "" {
+				assert.NotContains(t, body, "Created by")
 				assert.NotContains(t, body, "Requested by")
 				return
 			}
 			assert.Contains(t, body, tt.want)
+			assert.Equal(t, 1, strings.Count(body, " by: "), "one creator line")
 			assert.NotContains(t, body, "\n## Approved")
 		})
 	}
