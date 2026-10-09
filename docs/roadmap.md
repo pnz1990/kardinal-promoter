@@ -42,7 +42,7 @@ Config and mixed Bundles run the `config-merge` step, which copies the environme
 
 **Gates and policies**
 - CEL context: schedule, bundle metadata, upstream soak time, metrics, changewindow
-- MetricCheck CRD (PromQL-based metric injection into CEL)
+- MetricCheck CRD: Prometheus, Datadog, CloudWatch, New Relic and JSON web checks, Secret-backed credentials, per-promotion templated queries (unreleased)
 - Org-level gates (mandatory: a team Pipeline cannot remove or weaken them; `kardinal override` can force-pass one for a limited time with a recorded reason, so restrict `patch` on PolicyGates in team namespaces)
 - Team-level gates (additive)
 - SkipPermission gates
@@ -141,6 +141,11 @@ Merged since v0.9.0; they ship with v0.10.0. See the [changelog](changelog.md) "
 - Gate instances and PRStatuses as Graph `forEach` collections; gate status written only on change (#1496)
 - A warning when a git Secret lacks `kardinal.io/referenceable` (enforced in v0.11) (#1508)
 - Kubernetes 1.30 or newer required (#1426)
+- OpenTelemetry tracing over OTLP/HTTP, off by default (#1499)
+- MetricCheck providers Datadog, CloudWatch, New Relic and web; Secret-backed credentials; per-promotion queries (#1479)
+- Remote-cluster health through kubeconfig Secrets (`health.kubeconfigSecretRef`) (#1495)
+- The generic YAML update strategy (`update.strategy: yaml`) (#1498)
+- UI fleet board and step timings (#1519)
 
 ## In progress for v0.10.0
 
@@ -151,11 +156,11 @@ Open pull requests; each moves to the list above when it merges.
 - Per-environment PR controls: templates, labels, reviewers, auto-merge (#1477); gate results as SCM commit statuses (#1518)
 - GitHub App and ssh git auth (#1491); Bitbucket Data Center (#1501); several SCM providers per controller (#1517)
 - Many Pipelines on one branch (#1504); controller sharding by namespace (#1505); a compact Graph for 500 environments (#1516); retiring finished Graphs (#1527)
-- Pre- and post-deploy hooks (#1493); Argo Rollouts analysis (#1502); MetricCheck Datadog, CloudWatch, New Relic and web (#1479); image signature verification (#1521)
-- Rendered manifests with `layout: branch` (#1515); the generic YAML update strategy (#1498)
-- Remote-cluster health through kubeconfig Secrets (#1495); OpenTelemetry tracing (#1499); AuditEvent retention (#1523)
-- UI: fleet board and step timings (#1519), Bundle type badges and keyboard navigation (#1524), approvals and rejected Bundles (#1525)
-- Planned, no PR yet: fleets of targets (#1457), rollback with an environment hold (#1528), SCM metrics (#1529), an API access log (#1530), signed notifications (#1531)
+- Pre- and post-deploy hooks (#1493); Argo Rollouts analysis (#1502); image signature verification (#1521)
+- Rendered manifests with `layout: branch` (#1515)
+- AuditEvent retention (#1523); SCM API and git metrics (#1540)
+- UI: Bundle type badges and keyboard navigation (#1524), approvals and rejected Bundles (#1525)
+- Planned, no PR yet: fleets of targets (#1457), rollback with an environment hold (#1528), an API access log (#1530), signed notifications (#1531)
 
 ## UI — Full Control Plane (shipped v0.5.0–v0.6.0)
 
@@ -185,7 +190,6 @@ Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, 
 - kro v0.10.0 (v0.9.1, #1424)
 - `layout: branch`: promote rendered manifests (#1271)
 - `kardinal override` writes an AuditEvent with the cluster identity (#1286)
-- Secret-backed auth for MetricCheck (#1267, in #1479)
 - `rollback` and `promote --env` without re-running upstream environments (#1311)
 - `kardinal approve`: a real gate bypass, or removal (#1309)
 

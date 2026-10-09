@@ -262,6 +262,59 @@ func TestStep_HelmValues(t *testing.T) {
 	a.running(t, "test", imageV2, "test after the promotion")
 }
 
+// TestStep_YAMLUpdate promotes plain manifests (a kustomization without an
+// images list) with update.strategy yaml: yaml-update writes the image
+// reference at spec.template.spec.containers[0].image in deployment.yaml and
+// the tag at release.version in a second file, in one commit, and the new
+// version runs. A later edit that cannot be applied (a list element that does
+// not exist) fails the step for good, and nothing is pushed: both files keep
+// the previous release.
+//
+// Covers STEP-YAML-01, STEP-YAML-02.
+func TestStep_YAMLUpdate(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	plain := func(ns string) map[string][]byte {
+		files := fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: []string{"test"}})
+		k := fixtures.Path("test") + "/kustomization.yaml"
+		files[k] = []byte(strings.Split(string(files[k]), "images:")[0])
+		files[fixtures.Path("test")+"/release.yaml"] = []byte("# written by kardinal\nrelease:\n  version: " + fixtures.V1 + "\n")
+		return files
+	}
+	a := newArgoAppFiles(t, e, plain, "test")
+	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("test"), imageV1, syncTimeout)
+
+	updates := []v1alpha1.YAMLUpdate{
+		{File: "deployment.yaml", Path: "spec.template.spec.containers[0].image", Value: "image"},
+		{File: "release.yaml", Path: "release.version", Image: fixtures.Image},
+	}
+	p := a.pipeline(nil)
+	envSpec(t, p, "test").Update = v1alpha1.UpdateConfig{Strategy: "yaml", YAML: &v1alpha1.YAMLUpdateConfig{Updates: updates}}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	checkSteps(t, ps, imageSteps("yaml-update", false))
+	dep := e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/deployment.yaml")
+	assert.Contains(t, dep, "image: "+imageV2, "deployment.yaml has the new image")
+	release := e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/release.yaml")
+	assert.Equal(t, "# written by kardinal\nrelease:\n  version: "+fixtures.V2+"\n", release, "release.yaml has the new tag, comment kept")
+	a.running(t, "test", imageV2, "test after the promotion")
+
+	// A path that cannot be applied fails the step, with nothing pushed.
+	var live v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
+	broken := append([]v1alpha1.YAMLUpdate{}, updates...)
+	broken = append(broken, v1alpha1.YAMLUpdate{File: "deployment.yaml", Path: "spec.template.spec.containers[3].image"})
+	envSpec(t, &live, "test").Update.YAML.Updates = broken
+	require.NoError(t, e.Client.Update(context.Background(), &live))
+	bad := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
+	ps = e.WaitStepState(t, a.ns, pipelineName, bad, "test", "Failed", promoteTimeout)
+	assert.Contains(t, ps.Status.Message, "containers has 1 elements, no [3]")
+	assert.Equal(t, dep, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/deployment.yaml"), "nothing pushed")
+	assert.Equal(t, release, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/release.yaml"), "nothing pushed")
+	a.running(t, "test", imageV2, "test keeps the previous release")
+}
+
 // TestStep_GitAuth makes the GitOps repo private, so cloning needs
 // credentials, and points the Pipeline's git.secretRef at a Secret holding a
 // wrong token. git-clone is refused and the step retries (status.message

@@ -49,8 +49,11 @@ type (
 			Name      string
 			DependsOn []string
 			Approval  string
+			Upstreams []string
 		}
 		BlockerCount, FailedStepCount int
+		ActiveBundleVersion           string
+		Deployed                      map[string]struct{ Bundle, Version, VerifiedAt string }
 	}
 	uiBundle struct {
 		Name, Namespace, Phase, Type, Pipeline, CreatedAt string
@@ -175,8 +178,11 @@ func eventWith(evs []uiEvent, reason, msg string) (uiEvent, bool) {
 // graph with the PR link, its steps, and the steps' events. Each must match
 // what kardinal wrote to the cluster, and follow it when it changes.
 //
+// The pipeline list also carries the fleet board's fields: the version each
+// environment runs, when it was Verified, and the resolved upstreams.
+//
 // Covers UIAPI-PIPELINES-01, UIAPI-BUNDLES-01, UIAPI-GRAPH-01, UIAPI-STEPS-01,
-// UIAPI-EVENTS-01.
+// UIAPI-EVENTS-01, UI-FLEET-01.
 func TestUI_APIReadsFollowPromotion(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -212,6 +218,16 @@ func TestUI_APIReadsFollowPromotion(t *testing.T) {
 	assert.Equal(t, "auto", p.EnvironmentTopology[0].Approval)
 	assert.Equal(t, "prod", p.EnvironmentTopology[1].Name)
 	assert.Equal(t, "pr-review", p.EnvironmentTopology[1].Approval)
+	assert.Empty(t, p.EnvironmentTopology[0].Upstreams, "test is the root")
+	assert.Equal(t, []string{"test"}, p.EnvironmentTopology[1].Upstreams, "the controller resolves prod after test")
+	// Fleet board: what each environment runs.
+	assert.Equal(t, fixtures.V2, p.ActiveBundleVersion)
+	require.Contains(t, p.Deployed, "test")
+	assert.Equal(t, bundle, p.Deployed["test"].Bundle)
+	assert.Equal(t, fixtures.V2, p.Deployed["test"].Version)
+	_, err := time.Parse(time.RFC3339, p.Deployed["test"].VerifiedAt)
+	assert.NoError(t, err, "test verifiedAt %q", p.Deployed["test"].VerifiedAt)
+	assert.NotContains(t, p.Deployed, "prod", "prod waits on its PR: kardinal has deployed nothing there yet")
 
 	// GET /pipelines/{p}/bundles
 	var bundles []uiBundle
@@ -226,7 +242,7 @@ func TestUI_APIReadsFollowPromotion(t *testing.T) {
 	require.NotNil(t, b.Provenance)
 	assert.Equal(t, "0123abc", b.Provenance.CommitSHA)
 	assert.Equal(t, "e2e-bot", b.Provenance.Author)
-	_, err := time.Parse(time.RFC3339, b.CreatedAt)
+	_, err = time.Parse(time.RFC3339, b.CreatedAt)
 	assert.NoError(t, err, "createdAt %q", b.CreatedAt)
 	envs := map[string]string{}
 	for _, env := range b.Environments {
@@ -317,8 +333,9 @@ func TestUI_APIReadsFollowPromotion(t *testing.T) {
 			}
 		}
 		_, verifiedEvent := eventWith(eventsOf(t, c, a.ns, prodStep.Name), "Verified", "env prod")
-		return p.EnvironmentStates["prod"] == "Verified" && pn.State == "Verified" && stepState == "Verified" && verifiedEvent,
-			fmt.Sprintf("pipeline=%v graph=%q steps=%q event=%v", p.EnvironmentStates, pn.State, stepState, verifiedEvent)
+		deployed := p.Deployed["prod"].Bundle == bundle && p.Deployed["prod"].VerifiedAt != ""
+		return p.EnvironmentStates["prod"] == "Verified" && pn.State == "Verified" && stepState == "Verified" && verifiedEvent && deployed,
+			fmt.Sprintf("pipeline=%v deployed=%+v graph=%q steps=%q event=%v", p.EnvironmentStates, p.Deployed, pn.State, stepState, verifiedEvent)
 	})
 	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
 	framework.Eventually(t, time.Minute, "the Bundle list to show the Bundle Verified", func(context.Context) (bool, string) {

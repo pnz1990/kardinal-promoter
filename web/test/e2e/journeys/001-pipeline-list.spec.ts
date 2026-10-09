@@ -11,8 +11,10 @@ test.describe('Journey 001 — Pipeline list', () => {
   })
 
   test('Step 1: Pipeline list renders with pipeline names', async ({ page }) => {
-    await expect(page.getByText('kardinal-test-app')).toBeVisible()
-    await expect(page.getByText('payments-service')).toBeVisible()
+    // The sidebar list; the fleet board names them too.
+    const sidebar = page.getByRole('complementary')
+    await expect(sidebar.getByText('kardinal-test-app')).toBeVisible()
+    await expect(sidebar.getByText('payments-service')).toBeVisible()
   })
 
   test('Step 2: Click pipeline shows DAG view', async ({ page }) => {

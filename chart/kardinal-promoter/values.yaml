@@ -266,6 +266,22 @@ graph:
 validatingAdmissionPolicy:
   enabled: true
 
+tracing:
+  # -- Export OpenTelemetry traces over OTLP/HTTP (--tracing-enabled): spans for
+  # reconciles, promotion steps, git clone/push, SCM API calls and
+  # NotificationHook deliveries (which carry a traceparent header), and server
+  # spans for /webhook/scm and /api/v1/bundles. See docs/guides/monitoring.md.
+  enabled: false
+  # -- OTLP/HTTP endpoint: a URL (http://otel-collector.observability:4318) or
+  # host:port. Empty uses OTEL_EXPORTER_OTLP_ENDPOINT (set it with
+  # controller.extraEnv), else localhost:4318.
+  endpoint: ""
+  # -- Plain HTTP to a host:port endpoint (a URL's scheme decides by itself).
+  insecure: false
+  # -- Fraction of traces recorded, 0 to 1, decided at each trace's root. An
+  # inbound traceparent is linked, not trusted, so it does not force recording.
+  samplingRatio: 0.1
+
 egress:
   # -- Destinations NotificationHook, MetricCheck and Subscription requests may
   # reach (--egress-allowlist): host names (hooks.slack.com), wildcards
@@ -292,6 +308,25 @@ networkPolicy:
   # -- Extra egress rules (NetworkPolicyEgressRule list), e.g. Prometheus on
   # :9090 for MetricChecks or a webhook receiver for NotificationHooks.
   extraEgress: []
+
+# -- MetricCheck providers.
+metricCheck:
+  cloudWatch:
+    # -- Let cloudwatch MetricChecks that name no credential Secret use the
+    # controller's own AWS identity (IRSA, EKS Pod Identity, environment).
+    # Off by default: anyone who can create a MetricCheck could then read
+    # CloudWatch with that identity. Annotate serviceAccount for IRSA.
+    ambientCredentials: false
+  # -- Outbound MetricCheck query slots. Every provider dials an address the
+  # MetricCheck's author chose, so queries are capped: at most `global` run
+  # at once in the cluster, at most `perNamespace` per namespace, and the
+  # rest wait first come, first served (status reason WaitingForSlot). The
+  # sustained throughput is about global / query time: with 12 slots and
+  # 0.5 s queries, 24 queries a second, so 1,440 MetricChecks at a 60 s
+  # interval. One namespace gets at most perNamespace / query time.
+  querySlots:
+    global: 12
+    perNamespace: 1
 
 # -- ScheduleClock configuration.
 # One ScheduleClock is deployed per cluster. Each tick re-evaluates every
