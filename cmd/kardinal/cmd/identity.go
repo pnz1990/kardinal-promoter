@@ -18,6 +18,10 @@ type Identity struct {
 	Groups   []string
 }
 
+// identityOf is how commands read the caller's identity: whoAmI, replaced
+// in tests that run a command against a fake client.
+var identityOf = whoAmI
+
 // errNoIdentity is returned when the API server answers a SelfSubjectReview
 // without a username.
 var errNoIdentity = errors.New("the API server returned no username for this kubeconfig")

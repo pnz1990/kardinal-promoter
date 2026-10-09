@@ -381,6 +381,10 @@ type uiGateOverride struct {
 	ExpiresAt string `json:"expiresAt,omitempty"`
 	CreatedAt string `json:"createdAt,omitempty"`
 	CreatedBy string `json:"createdBy,omitempty"`
+	// CreatedByVerified is true when the chart's identity admission policy
+	// checked createdBy (status.overrides): false for an override recorded
+	// while the policy was not bound, or before the upgrade that added it.
+	CreatedByVerified bool `json:"createdByVerified"`
 }
 
 // uiAPIServer serves the REST API for the embedded UI.
@@ -1168,11 +1172,13 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 			resp.LastEvaluatedAt = g.Status.LastEvaluatedAt.UTC().Format("2006-01-02T15:04:05Z")
 		}
 		// #502: Populate override history from spec.overrides[].
-		for _, ov := range g.Spec.Overrides {
+		for i := range g.Spec.Overrides {
+			ov := &g.Spec.Overrides[i]
 			o := uiGateOverride{
-				Reason:    ov.Reason,
-				Stage:     ov.Stage,
-				CreatedBy: ov.CreatedBy,
+				Reason:            ov.Reason,
+				Stage:             ov.Stage,
+				CreatedBy:         ov.CreatedBy,
+				CreatedByVerified: policygate.OverrideVerified(&g, ov),
 			}
 			if !ov.ExpiresAt.IsZero() {
 				o.ExpiresAt = ov.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z")
