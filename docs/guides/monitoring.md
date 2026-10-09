@@ -81,6 +81,7 @@ The controller registers these on the same `/metrics` endpoint
 | `kardinal_bundles_total` | Counter | `phase` | Bundle phase transitions, labelled by the phase entered |
 | `kardinal_steps_total` | Counter | `type` (always `PromotionStep`), `result` (`succeeded`, `failed`) | PromotionSteps reaching a terminal state |
 | `kardinal_gate_evaluations_total` | Counter | `result` (`allowed`, `blocked`) | PolicyGate evaluations |
+| `kardinal_api_access_log_dropped_total` | Counter | `kind` (`denied`, `request`) | API access log lines not written over their per-second budget ([API access log](security.md#api-access-log)) |
 | `kardinal_pr_duration_seconds` | Histogram | — | Time from the PR opening (the `open-pr` step completing) to the merge the controller sees, observed once, when the step's move to `HealthChecking` is written |
 | `kardinal_step_duration_seconds` | Histogram | `step` (step name, e.g. `git-clone`) | Duration of each promotion step, observed once, when the status that records it Completed or Failed is written. `wait-for-merge` lasts until the merge; `health-check` covers the health check and the bake |
 | `kardinal_gate_blocking_duration_seconds` | Histogram | — | How long a PolicyGate was blocked before it allowed |
@@ -363,6 +364,54 @@ dashboard's **Prometheus** selector, which starts at your default Prometheus
 datasource.
 
 ---
+
+## Tracing (OpenTelemetry)
+
+The controller can export OpenTelemetry traces over OTLP/HTTP to any collector or backend
+that accepts it (the OpenTelemetry Collector, Jaeger, Tempo, Honeycomb, Datadog Agent, ...).
+Tracing is off by default.
+
+```yaml
+tracing:
+  enabled: true
+  endpoint: http://otel-collector.observability:4318   # /v1/traces is added
+  samplingRatio: 0.1                                   # default
+```
+
+| Value | Flag | Meaning |
+|-------|------|---------|
+| `tracing.enabled` | `--tracing-enabled` | Export traces. Default `false` |
+| `tracing.endpoint` | `--tracing-endpoint` | An `http://` or `https://` URL, or `host:port`. Empty uses `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` (set them with `controller.extraEnv`), else `localhost:4318` |
+| `tracing.insecure` | `--tracing-insecure` | Plain HTTP to a `host:port` endpoint. A URL's scheme decides by itself |
+| `tracing.samplingRatio` | `--tracing-sampling-ratio` | Fraction of traces recorded, 0 to 1, decided at each trace's root (a reconcile or an inbound request); a span's children follow it. An inbound `traceparent` is linked, not trusted, so it does not force recording |
+
+Only OTLP over HTTP (protobuf, port 4318) is supported, not OTLP/gRPC. The standard
+`OTEL_EXPORTER_OTLP_*` variables for headers, certificates and timeouts apply, through
+`controller.extraEnv`. Spans have the resource `service.name=kardinal-controller` and
+`service.version` set to the controller version.
+
+| Span | Kind | Attributes |
+|------|------|------------|
+| `<controller>.Reconcile` (`bundle`, `promotionstep`, `policygate`, `notificationhook`, ...) | internal | `kardinal.controller`, `k8s.namespace.name`, `kardinal.object.name`, `kardinal.requeue_after_ms`; error status when the reconcile fails |
+| `step <name>` (`step git-clone`, `step open-pr`, ...) | internal | `kardinal.step`, `kardinal.step.index`, `kardinal.environment`, `kardinal.step.status` |
+| `git clone`, `git push` | internal | `server.address`, `kardinal.git.branch` (or `kardinal.git.commit`), `kardinal.git.force` |
+| `HTTP <method>` | client | `http.request.method`, `server.address`, `url.scheme`, `http.response.status_code`: SCM API requests and NotificationHook deliveries |
+| `webhook.scm`, `bundleapi.create` | server | `http.request.method`, `http.response.status_code`: inbound SCM webhooks and Bundle API calls |
+
+**Trace context.** NotificationHook deliveries carry the W3C `traceparent` (and `tracestate`,
+`baggage`) of their client span, so a receiver that traces can join the trace. SCM API
+requests do not carry trace headers. `/webhook/scm` and `/api/v1/bundles` are reached before
+the caller is authenticated, so an inbound `traceparent` is not trusted: their server span
+starts a new trace, sampled by the controller's own sampler, with a link to the caller's span
+(a CI job that traces sees the link, not a child).
+
+**What spans never hold.** No URL path, query or user info in attributes, no headers, no
+request or response bodies: incoming-webhook URLs and git remotes can carry tokens. A span
+names only the host it talked to. When a span records an error, every URL in the error text
+is cut to its scheme and host (`https://github.com/…`).
+
+**Shutdown.** Buffered spans are exported every 5 seconds and once more when the controller
+stops, after every reconciler and HTTP server has drained (at most 5 seconds more).
 
 ## Changing the Metrics Port
 

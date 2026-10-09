@@ -216,6 +216,14 @@ spec:
                   failures for this step. Reset to 0 on a successful health check.
                   Used by the auto-rollback policy in the pipeline environment spec.
                 type: integer
+              contendedRetries:
+                description: |-
+                  ContendedRetries is the number of consecutive retries of a git-push that
+                  lost to other writers of the base branch every time within one reconcile
+                  (the base branch kept moving). They have no limit, since contention is
+                  not a fault of the step, and do not use up the retries of retryCount;
+                  they only back off. Reset with retryCount.
+                type: integer
               currentStepIndex:
                 description: |-
                   CurrentStepIndex is the index into the step sequence that the reconciler

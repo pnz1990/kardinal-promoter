@@ -92,6 +92,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "accessLog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allRequests": {"type": "boolean"},
+            "sourceIP": {"type": "boolean"},
+            "trustedProxies": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": "^[0-9a-fA-F.:/]+$"}}
+          }
+        },
         "tlsCertFile": {
           "type": "string"
         },
@@ -100,6 +109,10 @@
         },
         "watchNamespace": {
           "type": "string"
+        },
+        "namespaceShard": {
+          "type": "string",
+          "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
         },
         "policyNamespaces": {
           "type": "array",
@@ -323,10 +336,32 @@
         "aggregateToKro": {
           "type": "boolean"
         },
+        "compactAbove": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
         "readerNamespaces": {
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "retire": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "superseded": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            },
+            "failed": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            },
+            "verified": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            }
           }
         }
       }
@@ -340,6 +375,16 @@
         }
       },
       "description": "Deprecated, no effect."
+    },
+    "tracing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "endpoint": {"type": "string", "pattern": "^$|^https?://[^\\s/]+(/\\S*)?$|^[^\\s/:]+:[0-9]{1,5}$"},
+        "insecure": {"type": "boolean"},
+        "samplingRatio": {"type": "number", "minimum": 0, "maximum": 1}
+      }
     },
     "egress": {
       "type": "object",
@@ -382,6 +427,37 @@
         },
         "extraEgress": {
           "type": "array"
+        }
+      }
+    },
+    "metricCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cloudWatch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ambientCredentials": {
+              "type": "boolean"
+            }
+          }
+        },
+        "querySlots": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "global": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "perNamespace": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
         }
       }
     },

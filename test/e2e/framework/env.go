@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
@@ -73,11 +74,11 @@ type Env struct {
 	namespaces []*testNamespace
 }
 
-// Scheme has the kardinal types plus core and apps.
+// Scheme has the kardinal types plus core, apps and coordination (Leases).
 func Scheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{
-		v1alpha1.AddToScheme, corev1.AddToScheme, appsv1.AddToScheme,
+		v1alpha1.AddToScheme, corev1.AddToScheme, appsv1.AddToScheme, coordinationv1.AddToScheme,
 	} {
 		if err := add(s); err != nil {
 			panic(err)
