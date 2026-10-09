@@ -70,3 +70,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The hold's rollback Bundle does not exist (#1629): the hold stays in effect. */
+.stage-card__hold-missing {
+  flex-basis: 100%;
+  color: var(--color-warning);
+  white-space: normal;
+}

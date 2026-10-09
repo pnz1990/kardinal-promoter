@@ -128,11 +128,23 @@ var (
 			Help: "AuditEvents deleted by retention (older than the max age, or past the max count per Pipeline).",
 		},
 	)
+
+	// HoldBundleMissingTotal counts holds (Pipeline spec.holds) whose
+	// rollback Bundle has not existed for the grace, once per hold. The
+	// hold stays in effect until a human releases it (#1629).
+	HoldBundleMissingTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_hold_bundle_missing_total",
+			Help: "Holds whose rollback Bundle does not exist past the grace, once per hold; the hold stays in effect until released.",
+		},
+		[]string{"pipeline_namespace", "pipeline"},
+	)
 )
 
 func init() {
 	ctrlmetrics.Registry.MustRegister(
 		AuditEventsPrunedTotal,
+		HoldBundleMissingTotal,
 		BundlesTotal,
 		StepsTotal,
 		GateEvaluationsTotal,

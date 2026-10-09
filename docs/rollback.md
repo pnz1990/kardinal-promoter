@@ -137,20 +137,31 @@ and writes `HoldReleased`.
 #### A hold whose rollback Bundle does not exist
 
 The hold is written first, then the rollback Bundle. If the client or the controller stops
-between the two, or the Bundle is deleted later, the hold names a Bundle that does not exist.
-Without an `expiresAt`, nothing would end it, and no other Bundle could promote into the
-environment. The controller records each hold's state in the Pipeline's `status.holdStates`:
+between the two, or someone deletes the Bundle later, the hold names a Bundle that does not
+exist. **A missing Bundle never lifts a hold**: the hold stays in effect, and no other Bundle
+promotes into the environment until a person with `pipelines/hold` releases or replaces it.
+Deleting a Bundle therefore cannot end a hold.
 
-| State | Meaning |
-|---|---|
-| `Active` | The rollback Bundle exists; the hold is in effect |
-| `BundleMissing` | The Bundle does not exist, but the hold is less than 2 minutes old (the controller flag `--hold-bundle-grace`; set it with `controller.extraArgs`) (from `createdAt`, or from when the controller first found the Bundle missing if `createdAt` is not set). The hold is still in effect: the Bundle may be about to be created |
-| `Orphaned` | The Bundle has not existed for longer than that. The hold is **not in effect**: other Bundles promote into the environment again |
+The controller records each hold's state in the Pipeline's `status.holdStates`: `Active`
+(the Bundle exists) or `BundleMissing` (the controller found it missing; `bundleMissingSince`
+is the first time it did, by the controller's clock). When the Bundle has been missing for
+2 minutes (the controller flag `--hold-bundle-grace`, set with `controller.extraArgs`), the
+controller reports it once:
 
-The controller does not remove an orphaned hold: it stays in `spec.holds`, and
-`kardinal explain` shows it as `NOT IN EFFECT`, until you release it with
-`kardinal release-hold` or replace it with a new `--hold`. If the Bundle exists again, the
-hold is `Active` again.
+- the Pipeline condition `HoldBundleMissing` is `True`, naming the environment, the Bundle and
+  the command that releases the hold;
+- a `Warning` Event with reason `HoldBundleMissing` on the Pipeline;
+- a `HoldBundleMissing` AuditEvent (outcome `Failure`);
+- `kardinal_hold_bundle_missing_total{pipeline_namespace,pipeline}` goes up by one
+  ([kardinal metrics](guides/monitoring.md#kardinal-metrics));
+- `kardinal explain` and the UI's hold badge show the missing Bundle and the release command.
+
+To recover, release the hold (`kardinal release-hold my-app --env prod`, or the UI's
+**Release hold**), or roll back again with `--hold`: a new hold may replace one whose Bundle
+was reported missing. If the Bundle exists again, the hold is `Active` again and the
+condition is `False`. When the controller cannot read the Bundle (an API error other than
+not found), it keeps the hold's state and sets the condition to `Unknown` (reason
+`LookupFailed`).
 
 ```bash
 kubectl get pipeline my-app -o jsonpath='{range .status.holdStates[*]}{.environment}={.state} {.message}{"\n"}{end}'

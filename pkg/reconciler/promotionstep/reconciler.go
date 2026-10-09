@@ -2354,8 +2354,7 @@ var holdsChanged = predicate.Funcs{
 	UpdateFunc: func(e event.UpdateEvent) bool {
 		o, ok1 := e.ObjectOld.(*v1alpha1.Pipeline)
 		n, ok2 := e.ObjectNew.(*v1alpha1.Pipeline)
-		return ok1 && ok2 && (!equality.Semantic.DeepEqual(o.Spec.Holds, n.Spec.Holds) ||
-			strings.Join(o.OrphanedHolds(), ",") != strings.Join(n.OrphanedHolds(), ","))
+		return ok1 && ok2 && !equality.Semantic.DeepEqual(o.Spec.Holds, n.Spec.Holds)
 	},
 }
 

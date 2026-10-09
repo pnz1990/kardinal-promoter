@@ -20,8 +20,6 @@ import (
 // never resolves spec.bundleName (data-pending: the node is not applied), and
 // the hold's own Bundle resolves it as usual. Other environments are not
 // affected, and the Graph stays valid for kro.
-//
-// Covers RB-HOLD-04.
 func TestBuilder_HeldEnvironment(t *testing.T) {
 	p := makeLinearPipeline("app", "test", "uat", "prod")
 	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-abc123", Reason: "INC-42"}}
@@ -70,15 +68,6 @@ func TestBuilder_HeldEnvironment(t *testing.T) {
 	got, err := eval(t, own["prod"], "app-rollback-abc123")
 	require.NoError(t, err)
 	assert.Equal(t, "app-rollback-abc123", got, "the hold's Bundle promotes into the held environment")
-
-	// Orphaned (#1629: the Pipeline reconciler found its Bundle missing past
-	// the grace): the hold holds nothing.
-	p.Status.HoldStates = []kardinalv1alpha1.EnvironmentHoldState{
-		{Environment: "prod", Bundle: "app-rollback-abc123", State: kardinalv1alpha1.HoldStateOrphaned}}
-	assert.Equal(t, supersededHold, emitted("app-v3")["prod"], "orphaned: the condition is gone")
-	p.Status.HoldStates[0].State = kardinalv1alpha1.HoldStateBundleMissing
-	assert.Contains(t, emitted("app-v3")["prod"], `bundle.metadata.name == "app-rollback-abc123"`, "within the grace it holds")
-	p.Status.HoldStates = nil
 
 	p.Spec.Holds = nil
 	assert.Equal(t, supersededHold, emitted("app-v3")["prod"], "released: the condition is gone")

@@ -537,6 +537,7 @@ spec:
                           - ApprovalRevoked
                           - HoldCreated
                           - HoldReleased
+                          - HoldBundleMissing
                           type: string
                         bundleName:
                           description: BundleName is the name of the Bundle being

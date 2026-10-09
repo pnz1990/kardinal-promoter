@@ -1622,19 +1622,12 @@ func soakRequeue(b *kardinalv1alpha1.Bundle) ctrl.Result {
 // count. spec.paused is excluded: pausing changes nothing in the Graph (the
 // PromotionStep reconciler holds steps), so pause and resume must not
 // re-translate every in-flight Graph.
-//
-// Orphaned holds (status.holdStates, #1629) count too: they hold nothing in
-// the Graph, so a hold turning orphaned or active again rebuilds it. With
-// none, the hash is the spec's alone, as before.
 func pipelineSpecHashFor(pipeline *kardinalv1alpha1.Pipeline) string {
 	spec := pipeline.Spec
 	spec.Paused = false
 	raw, err := json.Marshal(spec)
 	if err != nil {
 		return "" // should never happen for a valid Pipeline object
-	}
-	if orphaned := pipeline.OrphanedHolds(); len(orphaned) > 0 {
-		raw = append(raw, []byte("\norphaned holds: "+strings.Join(orphaned, ","))...)
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
@@ -1930,24 +1923,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(bundleLabelMapper)).
 		Watches(graphObject, handler.EnqueueRequestsFromMapFunc(bundleLabelMapper)).
 		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineBundles),
-			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, orphanedHoldsChanged))).
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.gateBundles),
 			builder.WithPredicates(gateTemplateChanged))
 	return shard.Active().Complete(b, tracing.WrapReconciler("bundle", r), &kardinalv1alpha1.BundleList{})
-}
-
-// orphanedHoldsChanged passes a Pipeline update whose orphaned holds
-// changed (status.holdStates, #1629): it changes the Graph without a spec
-// change.
-var orphanedHoldsChanged = predicate.Funcs{
-	CreateFunc:  func(event.CreateEvent) bool { return false },
-	DeleteFunc:  func(event.DeleteEvent) bool { return false },
-	GenericFunc: func(event.GenericEvent) bool { return false },
-	UpdateFunc: func(e event.UpdateEvent) bool {
-		o, ok1 := e.ObjectOld.(*kardinalv1alpha1.Pipeline)
-		n, ok2 := e.ObjectNew.(*kardinalv1alpha1.Pipeline)
-		return ok1 && ok2 && strings.Join(o.OrphanedHolds(), ",") != strings.Join(n.OrphanedHolds(), ",")
-	},
 }
 
 // bundlePipelineIndex is the spec.pipeline index function.

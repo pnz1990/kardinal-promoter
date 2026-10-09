@@ -863,18 +863,16 @@ func (h *EnvironmentHold) Expired(now time.Time) bool {
 	return h != nil && h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time)
 }
 
-// The states of a hold (PipelineStatus.HoldStates).
+// The states of a hold (PipelineStatus.HoldStates). A hold is in effect in
+// every state: the controller never lifts a hold (#1629).
 const (
-	// HoldStateActive: the hold's Bundle exists; the hold is in effect.
+	// HoldStateActive: the hold's Bundle exists.
 	HoldStateActive = "Active"
-	// HoldStateBundleMissing: the Bundle does not exist, within the grace
-	// period; the hold is still in effect (the Bundle may be about to be
-	// created).
+	// HoldStateBundleMissing: the controller found the hold's Bundle
+	// missing. The hold stays in effect; past the grace the controller
+	// reports it (condition HoldBundleMissing, a Warning Event, an
+	// AuditEvent) and a human releases or replaces it.
 	HoldStateBundleMissing = "BundleMissing"
-	// HoldStateOrphaned: the Bundle has not existed for longer than the
-	// grace period; the hold counts as absent until the Bundle exists again
-	// or the hold is released.
-	HoldStateOrphaned = "Orphaned"
 )
 
 // EnvironmentHoldState is the state of one hold, written by the Pipeline
@@ -884,44 +882,33 @@ type EnvironmentHoldState struct {
 	Environment string `json:"environment"`
 	// Bundle is the hold's Bundle the state was found for.
 	Bundle string `json:"bundle"`
-	// State is Active, BundleMissing or Orphaned.
+	// State is Active or BundleMissing.
 	State string `json:"state"`
 	// BundleMissingSince is when the controller first found the Bundle
-	// missing.
+	// missing: the grace counts from it, not from the client-set createdAt.
 	// +optional
 	BundleMissingSince *metav1.Time `json:"bundleMissingSince,omitempty"`
-	// Message says why the hold is not in effect.
+	// ReportedAt is when the controller reported the missing Bundle, once,
+	// past the grace.
+	// +optional
+	ReportedAt *metav1.Time `json:"reportedAt,omitempty"`
+	// Message says what is wrong and how to recover.
 	// +optional
 	Message string `json:"message,omitempty"`
 }
 
-// HoldOrphaned reports whether status.holdStates marks h Orphaned: its
-// rollback Bundle has not existed for longer than the grace period, so the
-// hold counts as absent.
-func (p *Pipeline) HoldOrphaned(h *EnvironmentHold) bool {
+// HoldState returns the status.holdStates entry of h, or nil.
+func (p *Pipeline) HoldState(h *EnvironmentHold) *EnvironmentHoldState {
 	if p == nil || h == nil {
-		return false
+		return nil
 	}
 	for i := range p.Status.HoldStates {
 		st := &p.Status.HoldStates[i]
 		if st.Environment == h.Environment && st.Bundle == h.Bundle {
-			return st.State == HoldStateOrphaned
+			return st
 		}
 	}
-	return false
-}
-
-// OrphanedHolds lists "<environment>/<bundle>" of every hold of spec.holds
-// that HoldOrphaned marks, in spec order: what changes the effect of the
-// holds besides spec.holds itself.
-func (p *Pipeline) OrphanedHolds() []string {
-	var out []string
-	for i := range p.Spec.Holds {
-		if p.HoldOrphaned(&p.Spec.Holds[i]) {
-			out = append(out, p.Spec.Holds[i].Environment+"/"+p.Spec.Holds[i].Bundle)
-		}
-	}
-	return out
+	return nil
 }
 
 // EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.
@@ -997,12 +984,11 @@ type PipelineStatus struct {
 	// +optional
 	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
 
-	// HoldStates says, per hold of spec.holds, whether it is in effect
-	// (#1629). A hold whose rollback Bundle does not exist past a grace
-	// period is Orphaned and counts as absent: a crash between the hold and
-	// the Bundle create, or the Bundle deleted by hand, must not block the
-	// environment for ever. The hold stays in spec.holds until it is
-	// released.
+	// HoldStates says, per hold of spec.holds, whether its rollback Bundle
+	// exists (#1629). A hold whose Bundle is missing (a crash between the
+	// hold and the Bundle create, or the Bundle deleted) stays in effect;
+	// past the grace the controller reports it, and a human releases or
+	// replaces it.
 	// +listType=map
 	// +listMapKey=environment
 	// +optional

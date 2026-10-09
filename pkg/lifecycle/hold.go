@@ -50,18 +50,8 @@ import (
 var HoldNow = time.Now
 
 // HoldOf returns the hold of env in p, or nil. A hold whose expiresAt has
-// passed counts as absent, also before the Pipeline reconciler removes it,
-// and so does an orphaned one (its Bundle does not exist, #1629).
+// passed counts as absent, also before the Pipeline reconciler removes it.
 func HoldOf(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentHold {
-	if h := holdEntry(p, env); h != nil && !p.HoldOrphaned(h) {
-		return h
-	}
-	return nil
-}
-
-// holdEntry is the unexpired hold of env in p, orphaned or not: what
-// release-hold removes.
-func holdEntry(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentHold {
 	if p == nil {
 		return nil
 	}
@@ -82,7 +72,7 @@ func HoldNaming(p *v1alpha1.Pipeline, bundle string) *v1alpha1.EnvironmentHold {
 	}
 	now := HoldNow()
 	for i := range p.Spec.Holds {
-		if p.Spec.Holds[i].Bundle == bundle && !p.Spec.Holds[i].Expired(now) && !p.HoldOrphaned(&p.Spec.Holds[i]) {
+		if p.Spec.Holds[i].Bundle == bundle && !p.Spec.Holds[i].Expired(now) {
 			return &p.Spec.Holds[i]
 		}
 	}
@@ -305,7 +295,7 @@ func RollbackAndHold(ctx context.Context, c client.Client, req HoldRequest) (*Ro
 	// the held rollback, so the plan would fail for a less useful reason.
 	var p v1alpha1.Pipeline
 	if err := c.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: req.Pipeline}, &p); err == nil {
-		if h := HoldOf(&p, req.Environment); h != nil {
+		if h := HoldOf(&p, req.Environment); h != nil && !Replaceable(&p, h) {
 			return nil, nil, heldConflict(req.Pipeline, h)
 		}
 	}
@@ -347,11 +337,12 @@ func setHold(ctx context.Context, c client.Client, ns, pipeline string, hold v1a
 			}
 			return fmt.Errorf("get pipeline %s/%s: %w", ns, pipeline, err)
 		}
-		if h := HoldOf(&p, hold.Environment); h != nil {
+		if h := HoldOf(&p, hold.Environment); h != nil && !Replaceable(&p, h) {
 			return heldConflict(pipeline, h)
 		}
 		// An expired entry of the environment the controller has not
-		// removed yet makes way (one entry per environment).
+		// removed yet makes way (one entry per environment), and so does a
+		// hold whose rollback Bundle the controller reported missing.
 		kept := make([]v1alpha1.EnvironmentHold, 0, len(p.Spec.Holds)+1)
 		for _, x := range p.Spec.Holds {
 			if x.Environment != hold.Environment {
@@ -362,6 +353,15 @@ func setHold(ctx context.Context, c client.Client, ns, pipeline string, hold v1a
 		p.Spec.Holds = kept
 		return c.Update(ctx, &p)
 	})
+}
+
+// Replaceable reports whether a new hold may replace h: the controller
+// reported its rollback Bundle missing past the grace (status.holdStates,
+// #1629). Writing the new hold needs pipelines/hold like any other, and the
+// controller itself never lifts a hold.
+func Replaceable(p *v1alpha1.Pipeline, h *v1alpha1.EnvironmentHold) bool {
+	st := p.HoldState(h)
+	return st != nil && st.State == v1alpha1.HoldStateBundleMissing && st.ReportedAt != nil
 }
 
 // heldConflict is the refusal to hold an environment that is held already.
@@ -382,8 +382,7 @@ func ReleaseHold(ctx context.Context, c client.Client, ns, pipeline, env string)
 			}
 			return fmt.Errorf("get pipeline %s/%s: %w", ns, pipeline, err)
 		}
-		// An orphaned hold is released like any other.
-		h := holdEntry(&p, env)
+		h := HoldOf(&p, env)
 		if h == nil {
 			return fmt.Errorf("environment %s of pipeline %s is not held: %w", env, pipeline, ErrNotFound)
 		}

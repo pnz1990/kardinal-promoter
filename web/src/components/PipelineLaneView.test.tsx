@@ -252,4 +252,16 @@ describe('PipelineLaneView — rollback hold (#1528)', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Hold on prod released')
     expect(onActionDone).toHaveBeenCalledOnce()
   })
+
+  // #1629: a hold whose rollback Bundle is missing stays in effect, with how to release it.
+  it('shows a hold whose rollback Bundle is missing', () => {
+    const { nodes, edges } = lane({ test: 'Verified', uat: 'Verified', prod: 'Verified' })
+    render(<PipelineLaneView nodes={nodes} edges={edges} pipelineName="app" namespace="team-a"
+      holds={{ prod: { bundle: 'app-rollback-gone', reason: 'INC-42', bundleMissing: true,
+        releaseCommand: 'kardinal release-hold app --env prod' } }} />)
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Rollback Bundle app-rollback-gone does not exist; the hold stays in effect.')
+    expect(alert).toHaveTextContent('Release with kardinal release-hold app --env prod.')
+    expect(screen.getByRole('button', { name: 'Release the hold on prod' })).toBeInTheDocument()
+  })
 })

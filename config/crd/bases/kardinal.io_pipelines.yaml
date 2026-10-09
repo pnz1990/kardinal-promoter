@@ -1481,12 +1481,11 @@ spec:
                 type: object
               holdStates:
                 description: |-
-                  HoldStates says, per hold of spec.holds, whether it is in effect
-                  (#1629). A hold whose rollback Bundle does not exist past a grace
-                  period is Orphaned and counts as absent: a crash between the hold and
-                  the Bundle create, or the Bundle deleted by hand, must not block the
-                  environment for ever. The hold stays in spec.holds until it is
-                  released.
+                  HoldStates says, per hold of spec.holds, whether its rollback Bundle
+                  exists (#1629). A hold whose Bundle is missing (a crash between the
+                  hold and the Bundle create, or the Bundle deleted) stays in effect;
+                  past the grace the controller reports it, and a human releases or
+                  replaces it.
                 items:
                   description: |-
                     EnvironmentHoldState is the state of one hold, written by the Pipeline
@@ -1499,17 +1498,23 @@ spec:
                     bundleMissingSince:
                       description: |-
                         BundleMissingSince is when the controller first found the Bundle
-                        missing.
+                        missing: the grace counts from it, not from the client-set createdAt.
                       format: date-time
                       type: string
                     environment:
                       description: Environment is the held environment.
                       type: string
                     message:
-                      description: Message says why the hold is not in effect.
+                      description: Message says what is wrong and how to recover.
+                      type: string
+                    reportedAt:
+                      description: |-
+                        ReportedAt is when the controller reported the missing Bundle, once,
+                        past the grace.
+                      format: date-time
                       type: string
                     state:
-                      description: State is Active, BundleMissing or Orphaned.
+                      description: State is Active or BundleMissing.
                       type: string
                   required:
                   - bundle
@@ -1645,6 +1650,7 @@ spec:
                           - ApprovalRevoked
                           - HoldCreated
                           - HoldReleased
+                          - HoldBundleMissing
                           type: string
                         bundleName:
                           description: BundleName is the name of the Bundle being

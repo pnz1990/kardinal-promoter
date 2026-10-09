@@ -652,21 +652,24 @@ func TestExplain_ShowsHold(t *testing.T) {
 	assert.NotContains(t, out, "held on rollback")
 }
 
-// TestExplain_ShowsOrphanedHold (#1629): a hold whose rollback Bundle does
-// not exist is shown as not in effect.
+// TestExplain_ShowsHoldBundleMissing (#1629): a hold whose rollback Bundle
+// does not exist is shown as still in effect, with how to end it.
 //
 // Covers RB-HOLD-04.
-func TestExplain_ShowsOrphanedHold(t *testing.T) {
+func TestExplain_ShowsHoldBundleMissing(t *testing.T) {
 	created := policyTestNow.Add(-time.Hour)
+	since := metav1.NewTime(created)
 	p := policyPipeline("demo", "test", "prod")
 	p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "demo-rollback-gone", Reason: "INC-42", CreatedBy: "alice"}}
-	p.Status.HoldStates = []v1alpha1.EnvironmentHoldState{{Environment: "prod", Bundle: "demo-rollback-gone", State: v1alpha1.HoldStateOrphaned}}
+	p.Status.HoldStates = []v1alpha1.EnvironmentHoldState{{Environment: "prod", Bundle: "demo-rollback-gone",
+		State: v1alpha1.HoldStateBundleMissing, BundleMissingSince: &since}}
 	c := policyClient(t, p,
 		explainBundle("b1", "Promoting", created),
 		explainStep("demo", "b1", "prod", "Promoting", "", created),
 	)
 	out, err := runExplain(t, c, "demo", "prod", false)
 	require.NoError(t, err)
-	assert.Contains(t, out, "prod: held on rollback demo-rollback-gone by alice (INC-42), but NOT IN EFFECT: the rollback Bundle does not exist")
-	assert.Contains(t, out, "Release with: kardinal release-hold demo --env prod")
+	assert.Contains(t, out, "prod: held on rollback demo-rollback-gone by alice (INC-42), but the rollback Bundle does not exist since "+
+		since.UTC().Format(time.RFC3339)+". The hold stays in effect")
+	assert.Contains(t, out, "Release with: kardinal release-hold demo --env prod, or replace it with a new rollback --hold")
 }

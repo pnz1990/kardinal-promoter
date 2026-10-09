@@ -20,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -125,9 +126,13 @@ type Reconciler struct {
 	Now func() time.Time
 
 	// HoldBundleGrace is how long a hold may name a Bundle that does not
-	// exist before it is Orphaned (--hold-bundle-grace). 0 is
+	// exist before the controller reports it (--hold-bundle-grace). 0 is
 	// DefaultHoldBundleGrace.
 	HoldBundleGrace time.Duration
+
+	// Recorder emits the HoldBundleMissing Warning Event. Nil emits none
+	// (tests).
+	Recorder events.EventRecorder
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
