@@ -2764,6 +2764,10 @@ func (in *PromotionStepStatus) DeepCopyInto(out *PromotionStepStatus) {
 		in, out := &in.NextRetryAt, &out.NextRetryAt
 		*out = (*in).DeepCopy()
 	}
+	if in.SCMWaitSince != nil {
+		in, out := &in.SCMWaitSince, &out.SCMWaitSince
+		*out = (*in).DeepCopy()
+	}
 	if in.LastHealthCheckAt != nil {
 		in, out := &in.LastHealthCheckAt, &out.LastHealthCheckAt
 		*out = (*in).DeepCopy()
