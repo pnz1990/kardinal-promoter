@@ -66,7 +66,7 @@ func TestChartNamePattern(t *testing.T) {
 		"podinfo#x":          false,
 		"podinfo%2f..":       false,
 		"podinfo\n":          false,
-		`podinfo\..\other`:   false,
+		`podinfo\..\x`:       false,
 		"podinfo:1.0.0":      false,
 		"podinfo@sha256:abc": false,
 	} {
