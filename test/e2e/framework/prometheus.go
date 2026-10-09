@@ -343,3 +343,59 @@ func parseLabels(in string, labels map[string]string) (int, error) {
 		i++
 	}
 }
+
+// PromSeries is one series of a Prometheus range query: its labels and
+// (unix seconds, value) points.
+type PromSeries struct {
+	Metric map[string]string
+	Points []PromPoint
+}
+
+// PromPoint is one point of a PromSeries.
+type PromPoint struct {
+	Time  time.Time
+	Value float64
+}
+
+// PromQueryRange runs a range query from start to end at step and returns
+// its series. Points whose value is not a number (NaN) are dropped.
+func (e *Env) PromQueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) ([]PromSeries, error) {
+	data, err := e.promGet(ctx, "api/v1/query_range", map[string]string{
+		"query": query,
+		"start": strconv.FormatInt(start.Unix(), 10),
+		"end":   strconv.FormatInt(end.Unix(), 10),
+		"step":  strconv.FormatFloat(step.Seconds(), 'f', -1, 64),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var d struct {
+		ResultType string `json:"resultType"`
+		Result     []struct {
+			Metric map[string]string `json:"metric"`
+			Values [][2]interface{}  `json:"values"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(data, &d); err != nil {
+		return nil, fmt.Errorf("decode range query %q: %w", query, err)
+	}
+	if d.ResultType != "matrix" {
+		return nil, fmt.Errorf("range query %q: unsupported resultType %q", query, d.ResultType)
+	}
+	out := make([]PromSeries, 0, len(d.Result))
+	for _, r := range d.Result {
+		s := PromSeries{Metric: r.Metric}
+		for _, v := range r.Values {
+			ts, _ := v[0].(float64)
+			str, _ := v[1].(string)
+			f, err := strconv.ParseFloat(str, 64)
+			if err != nil || f != f {
+				continue
+			}
+			sec := int64(ts)
+			s.Points = append(s.Points, PromPoint{Time: time.Unix(sec, int64((ts-float64(sec))*1e9)), Value: f})
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
