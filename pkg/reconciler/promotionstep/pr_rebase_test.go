@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -42,6 +43,12 @@ func (g *gitRemote) url() string { return "file://" + g.dir }
 // no parent and replaces main by force (a force-pushed base branch).
 func (g *gitRemote) commit(files map[string]string, rewrite bool) string {
 	g.t.Helper()
+	return g.commitOn("main", files, rewrite)
+}
+
+// commitOn is commit on branch.
+func (g *gitRemote) commitOn(branch string, files map[string]string, rewrite bool) string {
+	g.t.Helper()
 	ctx := context.Background()
 	dir := filepath.Join(g.t.TempDir(), "w")
 	if rewrite {
@@ -51,15 +58,15 @@ func (g *gitRemote) commit(files map[string]string, rewrite bool) string {
 		_, err = repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{g.url()}})
 		require.NoError(g.t, err)
 	} else {
-		require.NoError(g.t, g.c.Clone(ctx, g.url(), "main", dir, ""))
+		require.NoError(g.t, g.c.Clone(ctx, g.url(), branch, dir, ""))
 	}
 	for p, content := range files {
 		require.NoError(g.t, os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0o755))
 		require.NoError(g.t, os.WriteFile(filepath.Join(dir, p), []byte(content), 0o600))
 	}
 	require.NoError(g.t, g.c.CommitAll(ctx, dir, "other writer", "o", "o@example.com"))
-	require.NoError(g.t, g.c.Push(ctx, dir, "origin", "main", "", rewrite))
-	return g.head("main").Hash.String()
+	require.NoError(g.t, g.c.Push(ctx, dir, "origin", branch, "", rewrite))
+	return g.head(branch).Hash.String()
 }
 
 type commitInfo struct {
@@ -103,14 +110,20 @@ func newGitRemote(t *testing.T) *gitRemote {
 }
 
 // TestWaitingForMerge_RebuildsPRBranchOnMovedBase (#1504 QA): while a
-// pr-review PR waits for its merge, the base branch moves. When other
-// writers fast-forward it, the next reconcile rebuilds the PR branch on the
-// new head: one commit whose parent is the new head, with the promotion's
-// change and the other writers' files. When the base is force-pushed (its
-// history rewritten), the PR branch is re-created from the new base the same
-// way. The PR keeps its number and branch; status.outputs.baseSHA follows
-// the base and status.outputs.prBranchRebuilds counts the rebuilds. When the
-// base did not move, nothing is pushed.
+// pr-review PR waits for its merge, the base branch moves.
+//   - Commits that change none of the PR's paths: the PR still merges, so
+//     only status.outputs.baseSHA follows the base; nothing is pushed (no
+//     livelock of PRs rebuilding on each other's merges).
+//   - A commit that changes a file under the environment's path: the PR
+//     branch is rebuilt on the new head (one commit whose parent is the head,
+//     with the promotion's change and the other writer's file).
+//   - A force-pushed base (baseSHA not in its history): re-created from the
+//     new base.
+//   - Someone commits to the PR branch: it is not rebuilt, and the message
+//     says so.
+// The PR keeps its number and branch; status.outputs.prBranchRebuilds counts
+// rebuilds. Remote heads are read once per 30 s, so the clock moves past
+// that between checks. Paused: no git write.
 func TestWaitingForMerge_RebuildsPRBranchOnMovedBase(t *testing.T) {
 	remote := newGitRemote(t)
 	pl, b := makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")
@@ -121,8 +134,18 @@ func TestWaitingForMerge_RebuildsPRBranchOnMovedBase(t *testing.T) {
 	step.Status.State = "Promoting"
 	c := newClient(t, step, pl, b, openPRStatus(step.Spec.PRStatusRef, "", 0))
 	m := &mockSCM{open: true, prURL: "https://github.com/test/repo/pull/5", prNumber: 5}
+	now := time.Now()
 	r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: scm.NewGoGitClient(),
+		NowFn:     func() time.Time { return now },
 		WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+	check := func() promotionstepState {
+		t.Helper()
+		now = now.Add(31 * time.Second)
+		reconcileStep(t, r, step.Name)
+		got := getStep(t, c, step.Name)
+		require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+		return promotionstepState{got.Status.Outputs, got.Status.Message}
+	}
 
 	reconcileStep(t, r, step.Name) // records the step list
 	reconcileStep(t, r, step.Name) // runs it, opens the PR
@@ -131,52 +154,72 @@ func TestWaitingForMerge_RebuildsPRBranchOnMovedBase(t *testing.T) {
 	branch := got.Status.Outputs["branch"]
 	require.Equal(t, "kardinal/37a8eec1/bundle-1/prod", branch)
 	first := remote.head(branch)
-	built := remote.head("main").Hash.String()
-	assert.Equal(t, built, got.Status.Outputs["baseSHA"])
+	assert.Equal(t, remote.head("main").Hash.String(), got.Status.Outputs["baseSHA"])
+	assert.Equal(t, first.Hash.String(), got.Status.Outputs["pushedSHA"], "the lease")
 	assert.Contains(t, first.file(t, "environments/prod/kustomization.yaml"), "newTag: 1.2.3")
 
 	// No move: nothing is pushed.
-	reconcileStep(t, r, step.Name)
+	st := check()
 	assert.Equal(t, first.Hash, remote.head(branch).Hash)
-	assert.Empty(t, getStep(t, c, step.Name).Status.Outputs["prBranchRebuilds"])
+	assert.Empty(t, st.outputs["prBranchRebuilds"])
 
-	// Another writer fast-forwards main.
-	moved := remote.commit(map[string]string{"notes/ci.txt": "note\n"}, false)
-	reconcileStep(t, r, step.Name)
-	got = getStep(t, c, step.Name)
-	require.Equal(t, "WaitingForMerge", got.Status.State)
+	// Other writers move main at other paths: baseSHA follows, no push.
+	remote.commit(map[string]string{"notes/ci.txt": "note\n"}, false)
+	elsewhere := remote.commit(map[string]string{"environments/test/kustomization.yaml": "other\n"}, false)
+	st = check()
+	assert.Equal(t, elsewhere, st.outputs["baseSHA"])
+	assert.Equal(t, first.Hash, remote.head(branch).Hash, "the PR's paths did not change: no rebuild")
+	assert.Empty(t, st.outputs["prBranchRebuilds"])
+
+	// A commit under environments/prod: rebuilt on the new head.
+	moved := remote.commit(map[string]string{"environments/prod/extra.yaml": "x: 1\n"}, false)
+	st = check()
 	pr := remote.head(branch)
 	assert.Equal(t, []plumbing.Hash{plumbing.NewHash(moved)}, pr.Parents, "one commit on the new head")
-	assert.Equal(t, "note\n", pr.file(t, "notes/ci.txt"), "the other writer's file")
+	assert.Equal(t, "x: 1\n", pr.file(t, "environments/prod/extra.yaml"), "the other writer's file")
 	assert.Contains(t, pr.file(t, "environments/prod/kustomization.yaml"), "newTag: 1.2.3")
-	assert.Equal(t, moved, got.Status.Outputs["baseSHA"])
-	assert.Equal(t, "1", got.Status.Outputs["prBranchRebuilds"])
-	assert.Equal(t, branch, got.Status.Outputs["branch"])
-	assert.Equal(t, "5", got.Status.Outputs["prNumber"])
-	assert.Contains(t, got.Status.Message, "rebuilt the PR branch")
+	assert.Equal(t, moved, st.outputs["baseSHA"])
+	assert.Equal(t, pr.Hash.String(), st.outputs["pushedSHA"])
+	assert.Equal(t, "1", st.outputs["prBranchRebuilds"])
+	assert.Equal(t, branch, st.outputs["branch"])
+	assert.Equal(t, "5", st.outputs["prNumber"])
+	assert.Contains(t, st.message, "rebuilt the PR branch")
 	assert.Equal(t, 1, m.openCalled, "the same PR, not a new one")
 
-	// main is force-pushed: its history is replaced.
+	// main is force-pushed: re-created from the new base.
 	forced := remote.commit(map[string]string{
 		"environments/prod/kustomization.yaml": prodKustomization,
 		"README.md":                            "rewritten\n",
 	}, true)
-	reconcileStep(t, r, step.Name)
-	got = getStep(t, c, step.Name)
+	st = check()
 	pr = remote.head(branch)
 	assert.Equal(t, []plumbing.Hash{plumbing.NewHash(forced)}, pr.Parents, "re-created from the new base")
 	assert.Empty(t, pr.file(t, "notes/ci.txt"), "nothing of the old history")
 	assert.Equal(t, "rewritten\n", pr.file(t, "README.md"))
-	assert.Contains(t, pr.file(t, "environments/prod/kustomization.yaml"), "newTag: 1.2.3")
-	assert.Equal(t, forced, got.Status.Outputs["baseSHA"])
-	assert.Equal(t, "2", got.Status.Outputs["prBranchRebuilds"])
+	assert.Equal(t, forced, st.outputs["baseSHA"])
+	assert.Equal(t, "2", st.outputs["prBranchRebuilds"])
+
+	// Someone pushes to the PR branch; then main moves under the PR's path.
+	human := remote.commitOn(branch, map[string]string{"environments/prod/fix.yaml": "by hand\n"}, false)
+	remote.commit(map[string]string{"environments/prod/extra.yaml": "x: 2\n"}, false)
+	st = check()
+	assert.Equal(t, human, remote.head(branch).Hash.String(), "a human commit is never overwritten")
+	assert.Contains(t, st.message, "its branch has commits kardinal did not push")
+	assert.Equal(t, "2", st.outputs["prBranchRebuilds"])
+	assert.Equal(t, forced, st.outputs["baseSHA"])
 
 	// Paused: no git write.
-	remote.commit(map[string]string{"notes/ci2.txt": "note\n"}, false)
 	var p v1alpha1.Pipeline
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(pl), &p))
 	p.Spec.Paused = true
 	require.NoError(t, c.Update(context.Background(), &p))
+	before := remote.head(branch).Hash
+	now = now.Add(31 * time.Second)
 	reconcileStep(t, r, step.Name)
-	assert.Equal(t, pr.Hash, remote.head(branch).Hash, "paused: the PR branch is left alone")
+	assert.Equal(t, before, remote.head(branch).Hash, "paused: the PR branch is left alone")
+}
+
+type promotionstepState struct {
+	outputs map[string]string
+	message string
 }

@@ -148,6 +148,9 @@ type Reconciler struct {
 	// GitClient is the Git operations client.
 	GitClient scm.GitClient
 
+	// remotes caches the remote reads of PR branch refreshes (remoteCache).
+	remotes remoteCache
+
 	// HealthDetector selects the health adapter for health checking.
 	// If nil, the health-check step stub (always-success) is used.
 	HealthDetector *health.AutoDetector
@@ -580,6 +583,16 @@ func retryDelay(n int) time.Duration {
 	return d
 }
 
+// contendedDelay jitters the backoff of a step that lost to other writers of
+// its branch, so writers that collided do not come back in lockstep: half the
+// delay plus up to the whole of it again, at most retryMaxDelay.
+func contendedDelay(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	return min(d/2+time.Duration(rand.Int64N(int64(d))), retryMaxDelay)
+}
+
 // handlePending initializes the step sequence and transitions to Promoting.
 // Before transitioning, it re-checks every PolicyGate in spec.requiredGates
 // (checkRequiredGates): each must exist, be ready, and have been evaluated at
@@ -757,7 +770,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	ps.Status.CurrentStepIndex = nextIdx
 	if nextIdx > prevIdx {
 		// Progress resets the retry budget.
-		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
+		ps.Status.RetryCount, ps.Status.GitCredentialRetries, ps.Status.ContendedRetries = 0, 0, 0
 	}
 	if prURL := state.Outputs["prURL"]; prURL != "" {
 		ps.Status.PRURL = prURL
@@ -925,21 +938,26 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		emitCredential = markGitCredentialMissing(ps, cred.reason, note)
 		waitForSecret = cred.waitsForSecret()
 	}
-	if retryable && (waitForSecret || ps.Status.RetryCount < maxStepRetries) {
+	contended := retryable && errors.Is(execErr, steps.ErrContended)
+	if retryable && (waitForSecret || contended || ps.Status.RetryCount < maxStepRetries) {
 		var count string
-		if waitForSecret {
+		switch {
+		case waitForSecret:
 			ps.Status.GitCredentialRetries++
 			count = fmt.Sprintf("%d, no limit while git has no credentials", ps.Status.GitCredentialRetries)
-		} else {
+		case contended:
+			// Losing to other writers is not the step's fault: it backs off
+			// with no limit and does not use up retryCount.
+			ps.Status.ContendedRetries++
+			count = fmt.Sprintf("%d, no limit while other writers keep moving the branch", ps.Status.ContendedRetries)
+		default:
 			ps.Status.RetryCount++
 			count = fmt.Sprintf("%d/%d", ps.Status.RetryCount, maxStepRetries)
 		}
-		// Both kinds of retry back off together.
-		delay := retryDelay(ps.Status.RetryCount + ps.Status.GitCredentialRetries)
-		if errors.Is(execErr, steps.ErrContended) {
-			// Writers that collided on a branch must not come back in
-			// lockstep: half the backoff plus up to the whole of it again.
-			delay = delay/2 + time.Duration(rand.Int64N(int64(delay)))
+		// Every kind of retry backs off together.
+		delay := retryDelay(ps.Status.RetryCount + ps.Status.GitCredentialRetries + ps.Status.ContendedRetries)
+		if contended {
+			delay = contendedDelay(delay)
 		}
 		next := metav1.NewTime(r.now().Add(delay))
 		ps.Status.NextRetryAt = &next

@@ -114,6 +114,15 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	}
 
 	outputs := map[string]string{"branch": branch}
+	if force {
+		// The commit on kardinal's PR branch (status.outputs.pushedSHA): a
+		// later rebuild of the branch checks that nobody else pushed since.
+		if hr, ok := state.GitClient.(scm.HeadCommitReader); ok {
+			if sha, err := hr.HeadCommit(ctx, state.WorkDir); err == nil && sha != "" {
+				outputs[OutputPushedSHA] = sha
+			}
+		}
+	}
 	msg := "pushed " + branch
 	if rebases > 0 {
 		msg = fmt.Sprintf("pushed %s after rebasing onto %d newer commit(s) of other writers", branch, rebases)
@@ -127,6 +136,10 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 		Outputs: outputs,
 	}, nil
 }
+
+// OutputPushedSHA is the git-push output (status.outputs.pushedSHA) naming
+// the commit pushed to a PR branch.
+const OutputPushedSHA = "pushedSHA"
 
 // outputRebases is the step output (status.outputs.rebases) that counts the
 // rebases git-push made before its push landed; absent when none was needed.

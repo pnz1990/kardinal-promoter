@@ -161,8 +161,9 @@ func TestPipeline_SharedBranchWriters(t *testing.T) {
 	}
 	assert.Positive(t, rebased, "auto environments of different Pipelines pushed into each other and rebased")
 
-	// The base branch moves while the prod PRs wait: every PR branch is
-	// rebuilt on the new head (status.outputs.baseSHA follows it).
+	// The base branch moves while the prod PRs wait, at a path no PR
+	// writes: every step records the new head (status.outputs.baseSHA) and
+	// no PR branch is rebuilt, since each PR still merges as it is.
 	for i, name := range names {
 		e.WaitStepState(t, ns, name, newest[i], name+"-prod", "WaitingForMerge", 10*time.Minute)
 	}
@@ -179,15 +180,20 @@ func TestPipeline_SharedBranchWriters(t *testing.T) {
 			return ps.Status.Outputs["baseSHA"] == moved, fmt.Sprintf("baseSHA %s rebuilds %s: %s",
 				ps.Status.Outputs["baseSHA"], ps.Status.Outputs["prBranchRebuilds"], ps.Status.Message)
 		})
+		ps, _, err := e.Step(ctx, ns, name, newest[i], name+"-prod")
+		require.NoError(t, err)
+		assert.Empty(t, ps.Status.Outputs["prBranchRebuilds"], "%s-prod: no rebuild for a move at other paths", name)
 	}
 
 	// Every prod PR merges, one after the other, each onto a branch the
-	// others moved: no conflicts between Pipelines.
+	// others moved: no conflicts between Pipelines, and no PR branch rebuilt
+	// for another PR's merge (separate paths).
 	for i, name := range names {
 		a.merge(t, a.openPR(t, newest[i], name+"-prod"))
 	}
 	for i, name := range names {
-		e.WaitStepState(t, ns, name, newest[i], name+"-prod", "Verified", 10*time.Minute)
+		ps := e.WaitStepState(t, ns, name, newest[i], name+"-prod", "Verified", 10*time.Minute)
+		assert.Empty(t, ps.Status.Outputs["prBranchRebuilds"], "%s-prod: rebuilt for another PR's merge", name)
 	}
 
 	for _, env := range envs {

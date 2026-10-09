@@ -40,38 +40,43 @@ func (m *contendedGit) Push(context.Context, string, string, string, string, boo
 }
 
 // TestStepRetry_ContendedBranchIsTransient (#1504 QA): an auto environment
-// whose base branch keeps moving runs out of sequence restarts in one
-// reconcile. That is not a failure: the step stays Promoting, its retry
-// count goes up and it is requeued after a jittered backoff (between half
-// and one and a half of the usual delay), without sleeping in the
-// reconcile. Each attempt gets as far as git-push, which is progress, so the
-// count starts over: contention alone never fails the step, also when
-// earlier errors had used up the retries.
+// whose base branch never stops moving runs out of sequence restarts in every
+// reconcile. That is not a failure: across 8 reconciles the step stays
+// Promoting, status.contendedRetries counts them and status.retryCount stays
+// at 0 (the first reconcile reaches git-push, which resets it, also when
+// earlier errors had used up 5 of the 5 retries; after that the index never
+// moves, so before #1504's fix the count ran out on the sixth), and
+// each requeue is a jittered backoff that never exceeds the 2 minute
+// maximum, without sleeping in the reconcile.
 func TestStepRetry_ContendedBranchIsTransient(t *testing.T) {
-	for _, tt := range []struct {
-		retryCount int
-		wantState  string
-	}{{0, "Promoting"}, {5, "Promoting"}} {
-		ps := asPromoting(labelled(makeStep("step", "p", "b1", "test")), makePipeline("p"))
-		ps.Status.RetryCount = tt.retryCount
-		c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
-		git := &contendedGit{}
-		r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{open: true}, GitClient: git,
-			Recorder:  events.NewFakeRecorder(20),
-			WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
-		start := time.Now()
-		res, err := r.Reconcile(context.Background(), reqFor("step"))
-		require.NoError(t, err)
-		assert.Less(t, time.Since(start), 5*time.Second, "no sleep in the reconcile")
-		got := getStep(t, c, "step")
-		assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
-		assert.Contains(t, got.Status.Message, "gave up after 3 restarts in this reconcile")
-		assert.Equal(t, 4, git.pushes, "one push per run of the sequence")
-		if tt.wantState == "Promoting" {
-			assert.Equal(t, 1, got.Status.RetryCount, "progress to git-push restarts the count")
-			assert.Contains(t, got.Status.Message, "retrying in")
-			assert.GreaterOrEqual(t, res.RequeueAfter, 5*time.Second)
-			assert.Less(t, res.RequeueAfter, 15*time.Second)
-		}
+	for _, initial := range []int{0, 5} {
+		t.Run(fmt.Sprintf("retryCount %d", initial), func(t *testing.T) {
+			ps := asPromoting(labelled(makeStep("step", "p", "b1", "test")), makePipeline("p"))
+			ps.Status.RetryCount = initial
+			c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+			git := &contendedGit{}
+			now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{open: true}, GitClient: git,
+				Recorder:  events.NewFakeRecorder(100),
+				NowFn:     func() time.Time { return now },
+				WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+			for i := 1; i <= 8; i++ {
+				start := time.Now()
+				res, err := r.Reconcile(context.Background(), reqFor("step"))
+				require.NoError(t, err)
+				assert.Less(t, time.Since(start), 5*time.Second, "no sleep in the reconcile")
+				got := getStep(t, c, "step")
+				require.Equal(t, "Promoting", got.Status.State, "reconcile %d: %s", i, got.Status.Message)
+				assert.Contains(t, got.Status.Message, "gave up after 3 restarts in this reconcile")
+				assert.Contains(t, got.Status.Message, "no limit while other writers keep moving the branch")
+				assert.Equal(t, i, got.Status.ContendedRetries)
+				assert.Zero(t, got.Status.RetryCount, "contention does not use up retries")
+				assert.Equal(t, 4*i, git.pushes, "one push per run of the sequence")
+				assert.Positive(t, res.RequeueAfter)
+				assert.LessOrEqual(t, res.RequeueAfter, 2*time.Minute, "capped at the maximum backoff")
+				require.NotNil(t, got.Status.NextRetryAt)
+				now = got.Status.NextRetryAt.Add(time.Second) // the backoff has passed
+			}
+		})
 	}
 }

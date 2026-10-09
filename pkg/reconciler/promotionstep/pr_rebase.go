@@ -6,8 +6,10 @@ package promotionstep
 import (
 	"context"
 	"fmt"
+	"path"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
@@ -28,18 +30,34 @@ const outputPRRebuilds = "prBranchRebuilds"
 // moved base branch.
 const ReasonPRBranchRebuilt = "PRBranchRebuilt"
 
-// refreshPRBranch keeps an open promotion PR based on the head of its base
-// branch. When the base branch moved past the commit the promotion was
-// built on (status.outputs.baseSHA; a fast-forward by other writers, or a
-// force-push that rewrote it), it runs the step list up to open-pr again
-// from a fresh clone of the new head and force-pushes the result to the PR
-// branch: the PR keeps its number and branch, and its one commit sits on the
-// new base. Force is safe there, the branch is kardinal's own; the base
-// branch is never forced.
+// historyDepth is how many commits of the base branch a PR branch refresh
+// reads to find the paths changed since the PR was built.
+const historyDepth = 20
+
+// outputPushedSHA is git-push's status.outputs.pushedSHA, the commit kardinal
+// pushed to the PR branch: the lease a rebuild checks.
+const outputPushedSHA = builtinsteps.OutputPushedSHA
+
+// refreshPRBranch keeps an open promotion PR mergeable on the head of its
+// base branch. It compares the base head (one ls-remote per repository per
+// remoteHeadsTTL, shared by every waiting step) with the commit the PR was
+// built on (status.outputs.baseSHA). When the base moved:
 //
-// It reports whether it wrote the step's status. A failure (the remote is
-// unreachable, an update step fails on the new base) is logged and shown in
-// the message; the PR as it is stays valid and the next reconcile tries
+//   - If the commits since baseSHA changed none of the PR's paths (the
+//     environment's path and a Helm valuesFile outside it), the PR still
+//     merges cleanly: only baseSHA is recorded. Rebuilding every PR on every
+//     move made each rebuild a move for the others' merges (livelock).
+//   - If they changed one of its paths, or baseSHA is not in the base
+//     branch's last historyDepth commits (a force-push, or a long move), it
+//     reruns the step list up to open-pr on a fresh clone of the new head and
+//     force-pushes the PR branch, which is kardinal's own. The PR keeps its
+//     number and branch.
+//   - If the PR branch's head is not the commit kardinal pushed
+//     (status.outputs.pushedSHA), someone else committed to it: nothing is
+//     rebuilt, and the message says so.
+//
+// It reports whether it wrote the step's status. A failure is logged and
+// shown in the message; the PR as it is stays valid and the next check tries
 // again. A step without baseSHA (started before v0.10.0) is left alone.
 func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
 	pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec) (bool, error) {
@@ -58,12 +76,36 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	}
 	cred := r.resolveGitCredential(ctx, log, pipeline)
 	branch := baseBranch(pipeline)
-	head, err := rh.RemoteBranchHead(ctx, pipeline.Spec.Git.URL, branch, cred.token)
-	if err != nil || head == "" || head == built {
-		if err != nil {
-			log.Debug().Err(err).Msg("could not read the base branch head; the PR branch is not refreshed")
-		}
+	url := pipeline.Spec.Git.URL
+	heads, err := r.remotes.remoteHeads(ctx, rh, url, cred.token, r.now())
+	if err != nil {
+		log.Debug().Err(err).Msg("could not read the remote heads; the PR branch is not refreshed")
 		return false, nil
+	}
+	head := heads[branch]
+	if head == "" || head == built {
+		return false, nil
+	}
+	pr := ps.Status.Outputs["prNumber"]
+	if pushed, now := ps.Status.Outputs[outputPushedSHA], heads[ps.Status.Outputs["branch"]]; pushed != "" && now != "" && now != pushed {
+		msg := withLabelsError(fmt.Sprintf("PR #%s is open, waiting for merge; its branch has commits kardinal did not push "+
+			"(head %s, kardinal pushed %s), so it is not rebuilt on %s at %s", pr, short(now), short(pushed), branch, short(head)), ps.Status.Outputs)
+		if ps.Status.Message == msg {
+			return false, nil
+		}
+		ps.Status.Message = msg
+		return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
+	}
+	if history, herr := r.remotes.branchHistory(ctx, rh, url, branch, head, cred.token, historyDepth); herr == nil {
+		if changed, found := scm.PathsChangedSince(history, built); found && !touchesAny(changed, prPaths(env)) {
+			// The PR's paths did not change: it merges as it is.
+			outputs := cloneMap(ps.Status.Outputs)
+			outputs[builtinsteps.OutputBaseSHA] = head
+			ps.Status.Outputs = outputs
+			return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
+		}
+	} else {
+		log.Debug().Err(herr).Msg("could not read the base branch history; rebuilding the PR branch")
 	}
 	bundle, err := r.loadBundle(ctx, ps)
 	if err != nil {
@@ -74,7 +116,6 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	// "nothing to commit".
 	delete(state.Outputs, "noChanges")
 	eng := steps.NewEngine(seq[:i])
-	pr := ps.Status.Outputs["prNumber"]
 	if _, _, execErr := eng.ExecuteFrom(ctx, state, 0); execErr != nil {
 		msg := fmt.Sprintf("PR #%s is open, waiting for merge; rebuilding its branch on %s at %s failed, retrying: %v",
 			pr, branch, short(head), execErr)
@@ -90,7 +131,8 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	for k, v := range state.Outputs {
 		outputs[k] = v
 	}
-	// The PR and its branch are the ones open-pr recorded.
+	// The PR and its branch are the ones open-pr recorded; pushedSHA is the
+	// rebuilt commit (git-push).
 	for _, k := range []string{"branch", "prURL", "prNumber"} {
 		if v, ok := ps.Status.Outputs[k]; ok {
 			outputs[k] = v
@@ -112,6 +154,33 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	log.Info().Str("from", built).Str("to", head).Msg("rebuilt the PR branch on the moved base branch")
 	kubeevent.Emit(r.Recorder, ps, corev1.EventTypeNormal, ReasonPRBranchRebuilt, "Promote", note)
 	return true, nil
+}
+
+// prPaths are the paths a promotion of env writes: its directory and a Helm
+// valuesFile outside it.
+func prPaths(env v1alpha1.EnvironmentSpec) []string {
+	dir := env.Path
+	if dir == "" {
+		dir = "environments/" + env.Name
+	}
+	dir = path.Clean(strings.TrimPrefix(dir, "./"))
+	out := []string{dir}
+	if h := env.Update.Helm; env.Update.Strategy == "helm" && h != nil && h.ValuesFile != "" {
+		out = append(out, path.Clean(path.Join(dir, h.ValuesFile)))
+	}
+	return out
+}
+
+// touchesAny reports whether a changed path is one of paths or inside one.
+func touchesAny(changed, paths []string) bool {
+	for _, c := range changed {
+		for _, p := range paths {
+			if p == "." || c == p || strings.HasPrefix(c, p+"/") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // short is a commit SHA's first 7 characters.

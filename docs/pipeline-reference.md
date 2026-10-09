@@ -313,19 +313,29 @@ force-pushes the base branch, so no writer's commit is lost:
   `pushed main after rebasing onto N newer commit(s) of other writers`. When the new commits
   changed one of the same files, or the branch keeps moving, the whole step sequence runs
   again from a fresh clone (at most 3 times in one reconcile), so the update is computed on
-  the other writer's version. After that the step is retried with jittered backoff, like any
-  transient failure; each retry gets as far as `git-push`, which restarts the retry count, so
-  contention slows a promotion down but does not fail it.
+  the other writer's version. After that the step is retried with jittered backoff (at most
+  2 minutes), counted in `status.contendedRetries` with no limit and not in
+  `status.retryCount`, so contention slows a promotion down but does not fail it.
 - **pr-review environments**: each promotion pushes its own branch
   `kardinal/<namespace hash>/<bundle>/<environment>` (the hash is the first 8 hex digits of
   the SHA-256 of the namespace, so Bundles of the same name in two namespaces get separate
   branches; a PR opened by an earlier release keeps its `kardinal/<bundle>/<environment>`
   branch). The branch starts at the base head of its clone. While the PR waits for its merge,
-  the controller checks the base head every 30 seconds; when the base moved (other PRs
-  merged, a direct push, or a force-push), it reruns the promotion's steps on a fresh clone of
-  the new head and force-pushes the PR branch, so the PR is always one commit on the current
-  base. Commits pushed to the PR branch by hand are replaced, and a host set to dismiss stale
-  approvals asks for the review again. PRs of different Pipelines change different paths, so
+  the controller reads the base head every 30 seconds (one `git ls-remote` per repository,
+  shared by every waiting PR). When the base moved, it reads the commits since the PR's base
+  (the last 20 of the branch, once per new head) and:
+  - when they changed none of the PR's paths (the environment's `path`, and a Helm `valuesFile`
+    outside it), the PR still merges cleanly: only `status.outputs.baseSHA` moves, nothing is
+    pushed;
+  - when they changed one of its paths, or the PR's base is not among them (a force-push, or a
+    longer move), it reruns the promotion's steps on a fresh clone of the new head and
+    force-pushes the PR branch, so the PR is one commit on the current base
+    (`status.outputs.prBranchRebuilds` counts it);
+  - when the PR branch has a commit kardinal did not push (its head is not
+    `status.outputs.pushedSHA`), it is never rebuilt, and the step message says so.
+
+  A rebuild replaces only kardinal's own commit; a host set to dismiss stale approvals asks for
+  the review again. PRs of different Pipelines change different paths, so
   each merges without a conflict however many merged before it.
 - **Path isolation**: two environments that write the same path, or one inside the other,
   overwrite each other's files and their PRs conflict. The Pipeline reconciler checks every
