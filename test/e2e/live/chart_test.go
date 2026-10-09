@@ -602,9 +602,11 @@ func TestChart_ScheduleClock(t *testing.T) {
 }
 
 // TestChart_DeprecatedValues checks the two deprecated values do nothing:
-// setting them renders the same manifest, no ValidatingAdmissionPolicy is
-// ever created, and the controller's Job permissions are the hooks' (create,
-// get, delete; never patch), whatever rbac.integrationTestJobs says.
+// setting them renders the same manifest, the release has exactly the
+// ValidatingAdmissionPolicies and bindings the chart always ships (none from
+// validatingAdmissionPolicy.enabled), and the controller's Job permissions
+// are the hooks' (create, get, delete; never patch), whatever
+// rbac.integrationTestJobs says.
 //
 // Covers CHART-INTEGJOBS-01, CHART-VAP-01.
 func TestChart_DeprecatedValues(t *testing.T) {
