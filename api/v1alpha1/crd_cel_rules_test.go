@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -55,6 +56,10 @@ func failingRules(t *testing.T, node map[string]interface{}, self map[string]int
 	var failed []string
 	for _, r := range rules {
 		rule := r.(map[string]interface{})
+		if strings.Contains(rule["rule"].(string), "oldSelf") {
+			// A transition rule runs only on update, never on create.
+			continue
+		}
 		ast, iss := env.Compile(rule["rule"].(string))
 		require.NoError(t, iss.Err(), "rule %q", rule["rule"])
 		prg, err := env.Program(ast)
