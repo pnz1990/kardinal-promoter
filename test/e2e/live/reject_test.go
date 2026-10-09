@@ -174,9 +174,11 @@ func TestBundle_RejectIdentity(t *testing.T) {
 // TestRollback_SkipsRejected promotes three Bundles to test and rejects the
 // middle one after it was Verified there. kardinal rollback from the newest
 // goes back past the rejected Bundle to the oldest, which runs again, and
-// rollback --to the rejected Bundle is refused.
+// rollback --to the rejected Bundle is refused. A new Bundle with the
+// rejected image (a CI retry) turns Rejected with reason RejectedArtifact,
+// promotes nothing, and does not supersede the rollback.
 //
-// Covers RB-REJECT-01.
+// Covers RB-REJECT-01, BUNDLE-REJECT-04.
 func TestRollback_SkipsRejected(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -198,6 +200,54 @@ func TestRollback_SkipsRejected(t *testing.T) {
 	out, rb := rbRollback(t, a, "test")
 	assert.Contains(t, out, fmt.Sprintf("from %s to %s", b3, b1), "the rollback skips the rejected %s", b2)
 	rbAssertBundle(t, e, a.ns, rb, "test", b3, b1, cliUser(t), "")
+
+	// A CI retry of the rejected build: same image, new Bundle.
+	retry := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	got := e.WaitBundlePhase(t, a.ns, retry, "Rejected", time.Minute)
+	assert.Nil(t, got.Spec.Rejected)
+	cond := findCond(got.Status.Conditions, "Rejected")
+	assert.Equal(t, "RejectedArtifact", cond.Reason)
+	assert.Equal(t, fmt.Sprintf("carries an image or config commit of the rejected bundle %s; it is never promoted", b2), cond.Message)
+
 	rbVerified(t, a, rb, "test")
 	assertEnvAt(t, a, "test", fixtures.V2)
+	assert.Zero(t, a.stepCount(t, retry), "the retry of a rejected build promotes nothing")
+	assert.Equal(t, fmt.Sprintf("rollback: bundle %s was rejected, so it is never promoted again; pick another Bundle: invalid request", retry),
+		rbRefused(t, a, "--env", "test", "--to", retry))
+}
+
+// TestBundle_RejectAfterMerge merges a Bundle's prod PR and rejects the
+// Bundle right after. The change is live in prod, so the step is not
+// cancelled: it is health-checked and Verified, prod runs the Bundle's image,
+// and kardinal rollback treats it as what prod runs (rollback from it goes
+// to the previous Bundle). The Bundle itself stays Rejected.
+//
+// Covers BUNDLE-REJECT-05.
+func TestBundle_RejectAfterMerge(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "prod")
+	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
+	ctx := context.Background()
+
+	first := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	a.merge(t, a.openPR(t, first, "prod"))
+	rbVerified(t, a, first, "prod")
+
+	b := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	pr := a.openPR(t, b, "prod")
+	user := whoAmI(t, e)
+	a.merge(t, pr)
+	rej := []byte(fmt.Sprintf(`{"spec":{"rejected":{"by":%q,"reason":"e2e: rejected right after the merge"}}}`, user))
+	require.NoError(t, e.Client.Patch(ctx, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: b, Namespace: a.ns}},
+		client.RawPatch(types.MergePatchType, rej)))
+	e.WaitBundlePhase(t, a.ns, b, "Rejected", time.Minute)
+	ps := e.WaitStepState(t, a.ns, pipelineName, b, "prod", "Verified", promoteTimeout)
+	assert.NotContains(t, ps.Status.Message, "rejected")
+	a.running(t, "prod", imageV3, "the merged change is live")
+	assert.NotContains(t, stepAudits(t, e, a.ns, b, "prod"), "PromotionRejected")
+	e.WaitPRState(t, a.repo, pr.Number, "merged", time.Minute)
+
+	_, rb := rbRollback(t, a, "prod")
+	rbAssertBundle(t, e, a.ns, rb, "prod", b, first, cliUser(t), "")
 }

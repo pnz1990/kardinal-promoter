@@ -19,11 +19,11 @@ import (
 )
 
 // currentBundleByEnv returns, per environment, the Bundle that explain and
-// status describe there: the newest Bundle that is not Superseded and is in
-// that environment. A Bundle is in an environment when it has a PromotionStep
+// status describe there: the newest Bundle that is not Superseded or Rejected
+// (lifecycle.Halted) and is in that environment. A Bundle is in an environment when it has a PromotionStep
 // there, or a gate instance there and it has not failed. Newest is
 // lifecycle.CompareCreation, the order supersession uses. An environment
-// where every Bundle is Superseded falls back to the newest Superseded Bundle
+// where every Bundle is Halted falls back to the newest Halted Bundle
 // with a PromotionStep there, as the UI falls back to the newest Superseded
 // Bundle. A step or gate instance whose Bundle is not in bundles (being
 // deleted) is ignored, and so are gate templates, which have no bundle label.
@@ -48,11 +48,11 @@ func currentBundleByEnv(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionSte
 			return
 		}
 		phase := b.Status.Phase
-		if gateOnly && (phase == "Failed" || phase == "Superseded" || phase == "Rejected") {
+		if gateOnly && (phase == "Failed" || lifecycle.Halted(b)) {
 			return
 		}
 		best := current
-		if phase == "Superseded" {
+		if lifecycle.Halted(b) {
 			best = superseded
 		}
 		if cur, ok := best[env]; !ok || lifecycle.CompareCreation(b, cur) > 0 {

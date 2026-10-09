@@ -53,10 +53,11 @@ type BundleSpec struct {
 	Intent *BundleIntent `json:"intent,omitempty"`
 
 	// Rejected marks the Bundle as rejected (kardinal reject): it is never
-	// promoted again, its in-flight steps are cancelled and rollback never
-	// picks it. Setting it is one-way: it cannot be changed or removed. The
-	// chart's ValidatingAdmissionPolicy requires rejected.by to be the
-	// requesting user.
+	// promoted again, its in-flight steps are cancelled, and rollback,
+	// promote and Subscriptions skip any Bundle carrying its artifacts.
+	// Setting it is one-way: it cannot be changed or removed. The chart's
+	// ValidatingAdmissionPolicy requires rejected.by to be the requesting
+	// user; without that policy nothing checks it.
 	// +optional
 	Rejected *BundleRejection `json:"rejected,omitempty"`
 }

@@ -192,6 +192,10 @@ func TestCurrentBundle(t *testing.T) {
 			bundles: []v1alpha1.Bundle{b("b2", 2, ""), b("b1", 1, "Verified")}, want: "b2"},
 		{name: "a newer Superseded bundle is skipped",
 			bundles: []v1alpha1.Bundle{b("b1", 1, "Verified"), b("b2", 2, "Superseded")}, want: "b1"},
+		{name: "a newer Rejected bundle is skipped",
+			bundles: []v1alpha1.Bundle{b("b1", 1, "Verified"), *rejected(bundle("b2", "app", "", 2))}, want: "b1"},
+		{name: "a bundle with spec.rejected is skipped before its phase says so",
+			bundles: []v1alpha1.Bundle{b("b1", 1, "Verified"), *rejected(phase(bundle("b2", "app", "", 2), "Promoting"))}, want: "b1"},
 		{name: "every bundle Superseded: the newest",
 			bundles: []v1alpha1.Bundle{b("b2", 2, "Superseded"), b("b1", 1, "Superseded")}, want: "b2"},
 	}

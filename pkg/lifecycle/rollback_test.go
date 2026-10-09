@@ -77,6 +77,27 @@ func TestPlanRollback(t *testing.T) {
 			wantTarget: "v1", wantFrom: "v2", wantTag: "1",
 		},
 		{
+			name: "a bundle carrying the image of a rejected bundle is never the target",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 0), rejected(bundle("v2", "app", "2", 10)), bundle("v2b", "app", "2", 20),
+				bundle("v4", "app", "4", 30),
+				step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "Verified", 11),
+				step("v2b", "app", "prod", "Verified", 21), step("v4", "app", "prod", "Verified", 31),
+			},
+			wantTarget: "v1", wantFrom: "v4", wantTag: "1",
+		},
+		{
+			name: "--to a bundle carrying the image of a rejected bundle is refused",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 0), rejected(bundle("v2", "app", "2", 10)), bundle("v2b", "app", "2", 20),
+				bundle("v4", "app", "4", 30),
+				step("v1", "app", "prod", "Verified", 1), step("v2b", "app", "prod", "Verified", 21),
+				step("v4", "app", "prod", "Verified", 31),
+			},
+			req:     lifecycle.RollbackRequest{ToBundle: "v2b"},
+			wantErr: lifecycle.ErrInvalid,
+		},
+		{
 			name: "--to a rejected bundle is refused",
 			objs: []client.Object{
 				bundle("v1", "app", "1", 0), rejected(bundle("v2", "app", "2", 10)), bundle("v3", "app", "3", 20),

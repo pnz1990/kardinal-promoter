@@ -161,7 +161,7 @@ Graph is built.
 
 ### spec.historyLimit
 
-Number of finished Bundles (Verified, Failed, Superseded or Rejected) to retain per Pipeline. Older ones are garbage-collected, oldest first, when a new Bundle is created. `kardinal rollback` can only target a retained Bundle. The Git PR history is permanent regardless of this setting.
+Number of finished Bundles (Verified, Failed or Superseded; Rejected Bundles are never deleted) to retain per Pipeline. Older ones are garbage-collected, oldest first, when a new Bundle is created. `kardinal rollback` can only target a retained Bundle. The Git PR history is permanent regardless of this setting.
 
 Default: 50.
 

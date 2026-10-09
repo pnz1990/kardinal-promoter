@@ -264,7 +264,7 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, row
 }
 
 // FormatBundleErrors writes a plain-text error notice for each pipeline whose
-// newest Bundle that is not Superseded is Failed. A newer Bundle, promoting or
+// newest Bundle that is not Superseded or Rejected is Failed. A newer Bundle, promoting or
 // Verified, means the failure is history, so it is not reported (E2E-R16).
 // The notice is printed after the pipeline table so the root cause of a
 // silent "Phase: Error" is visible without `kubectl describe graph`.
@@ -282,7 +282,7 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, row
 func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bool) error {
 	sorted := make([]v1alpha1.Bundle, 0, len(bundles))
 	for _, b := range bundles {
-		if b.Status.Phase != "Superseded" {
+		if !lifecycle.Halted(&b) {
 			sorted = append(sorted, b)
 		}
 	}

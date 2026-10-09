@@ -68,7 +68,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle. |
 | `spec.provenance.rollbackOf` | string |  | RollbackOf is the name of the Bundle this Bundle rolls back (if any). |
 | `spec.provenance.timestamp` | string (date-time) |  | Timestamp is when the bundle was built. |
-| `spec.rejected` | object |  | Rejected marks the Bundle as rejected (kardinal reject): it is never promoted again, its in-flight steps are cancelled and rollback never picks it. Setting it is one-way: it cannot be changed or removed. The chart's ValidatingAdmissionPolicy requires rejected.by to be the requesting user. |
+| `spec.rejected` | object |  | Rejected marks the Bundle as rejected (kardinal reject): it is never promoted again, its in-flight steps are cancelled, and rollback, promote and Subscriptions skip any Bundle carrying its artifacts. Setting it is one-way: it cannot be changed or removed. The chart's ValidatingAdmissionPolicy requires rejected.by to be the requesting user; without that policy nothing checks it. |
 | `spec.rejected.at` | string (date-time) |  | At is when the Bundle was rejected. |
 | `spec.rejected.by` | string | yes | By is the Kubernetes username of whoever rejected the Bundle. The chart's ValidatingAdmissionPolicy (kardinal-identity) admits a new rejection only when by equals the requesting user's username. |
 | `spec.rejected.reason` | string | yes | Reason says why the Bundle was rejected. |

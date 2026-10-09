@@ -11,11 +11,13 @@ API server with a SelfSubjectReview, as kubectl auth whoami does) and the
 reason. The Bundle turns Rejected, whatever its phase:
 
   - no new PromotionStep is created for it;
-  - its steps that have not delivered the change (Pending, Promoting,
-    WaitingForMerge) fail, and their open PRs are closed;
-  - a step already HealthChecking keeps checking: the change is live there;
-  - kardinal rollback and onHealthFailure=rollback never roll back to it,
-    and kardinal promote never copies it.
+  - its steps that have not delivered the change (Pending, Promoting, or
+    WaitingForMerge with the PR still open) fail, and their PRs are closed;
+  - a step whose change is live (HealthChecking, or a PR that merged) keeps
+    going and is health-checked;
+  - kardinal rollback, onHealthFailure=rollback and kardinal promote never
+    pick it or any Bundle carrying its images or config commit, and a
+    Subscription creates no Bundle for them.
 
 Rejecting is final: spec.rejected cannot be changed or removed. It does not
 revert an environment that already runs the Bundle; roll that environment

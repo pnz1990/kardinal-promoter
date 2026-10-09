@@ -366,8 +366,8 @@ var inFlightBundlePhases = map[string]bool{
 //     UI shows "Idle")
 //
 // Newest follows the rule the UI (ui_api.go) and the CLI (current_bundle.go)
-// use to pick the current Bundle: Superseded Bundles and their steps are
-// skipped (handleSuperseded fails a superseded Bundle's cancelled steps), and
+// use to pick the current Bundle: Superseded and Rejected Bundles
+// (lifecycle.Halted) and their steps are skipped (handleSuperseded fails a superseded Bundle's cancelled steps), and
 // Bundles are ordered by lifecycle.CompareCreation, the order supersession
 // uses. A step whose Bundle is not listed (another pipeline's, or being
 // deleted) is skipped too. Each environment is judged by every step its newest
@@ -379,7 +379,7 @@ func DerivePhase(pipelineName string, bundles []kardinalv1alpha1.Bundle, steps [
 	var newestBundle *kardinalv1alpha1.Bundle
 	for i := range bundles {
 		b := &bundles[i]
-		if b.Spec.Pipeline != pipelineName || b.Status.Phase == "Superseded" {
+		if b.Spec.Pipeline != pipelineName || lifecycle.Halted(b) {
 			continue
 		}
 		byName[b.Name] = b

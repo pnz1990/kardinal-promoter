@@ -240,6 +240,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if b.Spec.Rejected != nil && b.Status.Phase != phaseRejected {
 		return r.markRejected(ctx, log, &b)
 	}
+	// A rejection is about the artifacts: a Bundle that has not finished and
+	// carries an image or config commit of a rejected Bundle is rejected
+	// too, so a CI retry of a rejected build does not promote it again.
+	if inFlightOrFailed(b.Status.Phase) {
+		if from, err := r.rejectedArtifactOf(ctx, &b); err != nil {
+			log.Warn().Err(err).Msg("failed to check for rejected artifacts (non-fatal)")
+		} else if from != "" {
+			return r.markRejectedArtifact(ctx, log, &b, from)
+		}
+	}
 
 	switch b.Status.Phase {
 	case "":
@@ -608,7 +618,8 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 // for the given pipeline in the given namespace, keeping at most historyLimit bundles.
 //
 // This implements Pipeline.spec.historyLimit enforcement (spec #910). Non-terminal
-// Bundles (Available, Promoting) are never deleted by this function.
+// Bundles (Available, Promoting) and Rejected Bundles are never deleted by
+// this function.
 //
 // Ordering: oldest-first by creation (lifecycle.CompareCreation).
 // Default limit: defaultHistoryLimit (50) when spec.historyLimit is unset or zero.
@@ -633,7 +644,11 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 	terminal := make([]*kardinalv1alpha1.Bundle, 0, len(allBundles.Items))
 	for i := range allBundles.Items {
 		switch allBundles.Items[i].Status.Phase {
-		case phaseVerified, phaseFailed, phaseSuperseded, phaseRejected:
+		case phaseVerified, phaseFailed, phaseSuperseded:
+			// Rejected Bundles are kept: they are the record that their
+			// artifacts must not be promoted again (rollback and promote skip
+			// any Bundle carrying a rejected artifact, lifecycle.RejectedArtifacts).
+			// Rejections are rare and made by hand, so they stay few.
 			terminal = append(terminal, &allBundles.Items[i])
 		}
 	}
@@ -687,13 +702,14 @@ func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bund
 	if err != nil {
 		return false, false, fmt.Errorf("list bundles for supersession check: %w", err)
 	}
+	rejected := lifecycle.RejectedArtifactsOf(siblings, b.Spec.Pipeline)
 	for i := range siblings {
 		s := &siblings[i]
 		if s.Name == b.Name || s.Spec.Type != b.Spec.Type {
 			continue // image bundles are only superseded by image bundles, etc.
 		}
-		if s.Spec.Rejected != nil {
-			continue // a rejected Bundle never promotes, so it supersedes nothing
+		if _, bad := rejected.Carries(s); bad {
+			continue // a rejected Bundle, or one carrying a rejected artifact, never promotes: it supersedes nothing
 		}
 		switch s.Status.Phase {
 		case phaseSuperseded, phaseFailed, phaseRejected:
@@ -780,6 +796,50 @@ func (r *Reconciler) markRejected(ctx context.Context, log zerolog.Logger,
 	}
 	log.Info().Str("from", from).Str("by", b.Spec.Rejected.By).Str("reason", b.Spec.Rejected.Reason).
 		Msg("bundle rejected")
+	r.event(b, corev1.EventTypeWarning, "Rejected", msg)
+	observability.BundlesTotal.WithLabelValues(phaseRejected).Inc()
+	return ctrl.Result{}, nil
+}
+
+// inFlightOrFailed reports whether a Bundle in phase can still promote.
+func inFlightOrFailed(phase string) bool {
+	switch phase {
+	case "", phaseAvailable, phasePromoting, phaseFailed:
+		return true
+	}
+	return false
+}
+
+// rejectedArtifactOf names the rejected Bundle of b's pipeline whose image or
+// config commit b carries, or "" (lifecycle.RejectedArtifacts). It reads the
+// sibling list from the cache, as supersession does.
+func (r *Reconciler) rejectedArtifactOf(ctx context.Context, b *kardinalv1alpha1.Bundle) (string, error) {
+	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
+	if err != nil {
+		return "", err
+	}
+	name, _ := lifecycle.RejectedArtifactsOf(siblings, b.Spec.Pipeline).Carries(b)
+	return name, nil
+}
+
+// markRejectedArtifact rejects b, which carries an artifact of the rejected
+// Bundle from: phase Rejected (final), Ready False and Rejected True with
+// reason RejectedArtifact. spec.rejected stays unset, since nobody rejected
+// b itself; everything that skips Rejected Bundles skips it.
+func (r *Reconciler) markRejectedArtifact(ctx context.Context, log zerolog.Logger,
+	b *kardinalv1alpha1.Bundle, from string) (ctrl.Result, error) {
+	patch := client.MergeFrom(b.DeepCopy())
+	msg := fmt.Sprintf("carries an image or config commit of the rejected bundle %s; it is never promoted", from)
+	b.Status.Phase = phaseRejected
+	setBundleCondition(b, condReady, metav1.ConditionFalse, "RejectedArtifact", msg)
+	setBundleCondition(b, condRejected, metav1.ConditionTrue, "RejectedArtifact", msg)
+	if err := r.Status().Patch(ctx, b, patch); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("patch bundle status Rejected (artifact): %w", err)
+	}
+	log.Info().Str("rejectedBundle", from).Msg("bundle carries a rejected artifact — rejected")
 	r.event(b, corev1.EventTypeWarning, "Rejected", msg)
 	observability.BundlesTotal.WithLabelValues(phaseRejected).Inc()
 	return ctrl.Result{}, nil

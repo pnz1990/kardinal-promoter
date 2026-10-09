@@ -105,22 +105,29 @@ func CompareCreation(a, b *v1alpha1.Bundle) int {
 	return strings.Compare(a.Name, b.Name)
 }
 
+// Halted reports whether b never promotes again: a newer Bundle superseded
+// it, or it was rejected (Rejected). Both are history, so every view that
+// picks a Pipeline's current Bundle skips them the same way.
+func Halted(b *v1alpha1.Bundle) bool {
+	return b.Status.Phase == "Superseded" || Rejected(b)
+}
+
 // moreCurrent reports whether Bundle a outranks Bundle b of the same
-// Pipeline as the Pipeline's current Bundle. A Bundle that is not Superseded
-// outranks a Superseded one whatever its phase, so a newer Failed Bundle is
-// never hidden behind an older Verified or Promoting one (E2E-R15). Otherwise
-// the newer one (CompareCreation) wins.
+// Pipeline as the Pipeline's current Bundle. A Bundle that is not Halted
+// (Superseded or Rejected) outranks a Halted one whatever its phase, so a
+// newer Failed Bundle is never hidden behind an older Verified or Promoting
+// one (E2E-R15). Otherwise the newer one (CompareCreation) wins.
 func moreCurrent(a, b *v1alpha1.Bundle) bool {
-	aSuperseded, bSuperseded := a.Status.Phase == "Superseded", b.Status.Phase == "Superseded"
-	if aSuperseded != bSuperseded {
-		return bSuperseded
+	aHalted, bHalted := Halted(a), Halted(b)
+	if aHalted != bHalted {
+		return bHalted
 	}
 	return CompareCreation(a, b) > 0
 }
 
 // CurrentBundle returns the current Bundle of one Pipeline, given its
-// Bundles: the newest Bundle that is not Superseded, whatever its phase, or
-// the newest one when every Bundle is Superseded (moreCurrent). It returns
+// Bundles: the newest Bundle that is not Superseded or Rejected, whatever its
+// phase, or the newest one when every Bundle is (moreCurrent). It returns
 // nil when bundles is empty. The UI API's activeBundleName, the pipeline
 // table of kardinal get pipelines and web/src/bundleSelection.ts
 // pickDefaultBundle all use this rule.

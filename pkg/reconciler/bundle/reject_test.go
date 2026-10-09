@@ -112,9 +112,10 @@ func TestBundleReconciler_RejectedSiblingSupersedesNothing(t *testing.T) {
 	}
 }
 
-// TestBundleReconciler_HistoryGCCountsRejected: Rejected Bundles are
-// terminal, so historyLimit deletes the oldest of them like any finished one.
-func TestBundleReconciler_HistoryGCCountsRejected(t *testing.T) {
+// TestBundleReconciler_HistoryGCKeepsRejected: historyLimit never deletes a
+// Rejected Bundle, which records that its artifacts must not be promoted
+// again, and does not count it against the limit.
+func TestBundleReconciler_HistoryGCKeepsRejected(t *testing.T) {
 	now := time.Now()
 	pipeline := &kardinalv1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
@@ -125,6 +126,11 @@ func TestBundleReconciler_HistoryGCCountsRejected(t *testing.T) {
 		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app", Rejected: rejection()},
 		Status:     kardinalv1alpha1.BundleStatus{Phase: "Rejected"},
 	}
+	gone := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-v0", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-3 * time.Minute))},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Verified"},
+	}
 	kept := &kardinalv1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-time.Minute))},
 		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
@@ -134,7 +140,7 @@ func TestBundleReconciler_HistoryGCCountsRejected(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "app-v3", Namespace: "default", CreationTimestamp: metav1.NewTime(now)},
 		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
 	}
-	c := indexedBuilder(newScheme()).WithObjects(pipeline, oldest, kept, fresh).WithStatusSubresource(oldest, kept, fresh).Build()
+	c := indexedBuilder(newScheme()).WithObjects(pipeline, gone, oldest, kept, fresh).WithStatusSubresource(gone, oldest, kept, fresh).Build()
 	r := &bundle.Reconciler{Client: c}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "app-v3", Namespace: "default"}})
 	require.NoError(t, err)
@@ -144,5 +150,59 @@ func TestBundleReconciler_HistoryGCCountsRejected(t *testing.T) {
 	for _, b := range list.Items {
 		names = append(names, b.Name)
 	}
-	assert.ElementsMatch(t, []string{"app-v2", "app-v3"}, names)
+	assert.ElementsMatch(t, []string{"app-v1", "app-v2", "app-v3"}, names)
+}
+
+// TestBundleReconciler_RejectedArtifact: a new or promoting Bundle that
+// carries the image of a rejected Bundle (same repository and digest) is
+// rejected too, with reason RejectedArtifact naming the rejected Bundle, and
+// supersedes nothing; a Verified one is left as history. Reconciling again
+// writes nothing (idempotent).
+func TestBundleReconciler_RejectedArtifact(t *testing.T) {
+	img := []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/x/app", Tag: "1.2", Digest: "sha256:bad"}}
+	for _, phase := range []string{"", "Promoting", "Verified"} {
+		t.Run("phase "+phase, func(t *testing.T) {
+			now := time.Now()
+			pipeline := &kardinalv1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+				Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "prod"}}},
+			}
+			older := &kardinalv1alpha1.Bundle{
+				ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
+				Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
+				Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+			}
+			bad := &kardinalv1alpha1.Bundle{
+				ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-time.Minute))},
+				Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app", Images: img, Rejected: rejection()},
+				Status:     kardinalv1alpha1.BundleStatus{Phase: "Rejected"},
+			}
+			retry := &kardinalv1alpha1.Bundle{
+				ObjectMeta: metav1.ObjectMeta{Name: "app-v3", Namespace: "default", CreationTimestamp: metav1.NewTime(now)},
+				Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app",
+					Images: []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/x/app", Tag: "retag", Digest: "sha256:bad"}}},
+				Status: kardinalv1alpha1.BundleStatus{Phase: phase},
+			}
+			c := indexedBuilder(newScheme()).WithObjects(pipeline, older, bad, retry).WithStatusSubresource(older, bad, retry).Build()
+			r := &bundle.Reconciler{Client: c}
+			for _, name := range []string{"app-v3", "app-v3", "app-v1"} {
+				_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: "default"}})
+				require.NoError(t, err)
+			}
+			var got kardinalv1alpha1.Bundle
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "app-v3", Namespace: "default"}, &got))
+			if phase == "Verified" {
+				assert.Equal(t, "Verified", got.Status.Phase, "a finished Bundle is history")
+				return
+			}
+			assert.Equal(t, "Rejected", got.Status.Phase)
+			assert.Nil(t, got.Spec.Rejected, "nobody rejected it: spec.rejected stays unset")
+			cond := meta.FindStatusCondition(got.Status.Conditions, "Rejected")
+			require.NotNil(t, cond)
+			assert.Equal(t, "RejectedArtifact", cond.Reason)
+			assert.Equal(t, "carries an image or config commit of the rejected bundle app-v2; it is never promoted", cond.Message)
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "app-v1", Namespace: "default"}, &got))
+			assert.Equal(t, "Promoting", got.Status.Phase, "a Bundle carrying a rejected artifact supersedes nothing")
+		})
+	}
 }

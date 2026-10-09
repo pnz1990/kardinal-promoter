@@ -86,11 +86,12 @@ func PlanPromote(ctx context.Context, c client.Reader, req PromoteRequest) (*Pro
 	if err := c.List(ctx, &bundles, client.InNamespace(req.Namespace)); err != nil {
 		return nil, fmt.Errorf("promote: list bundles: %w", err)
 	}
+	rejected := RejectedArtifactsOf(bundles.Items, req.Pipeline)
 	var candidates []*v1alpha1.Bundle
 	for i := range bundles.Items {
 		b := &bundles.Items[i]
-		if b.Spec.Pipeline != req.Pipeline || !HasArtifacts(b) || Rejected(b) {
-			continue // a rejected Bundle is never promoted again (#1451)
+		if _, bad := rejected.Carries(b); b.Spec.Pipeline != req.Pipeline || !HasArtifacts(b) || bad {
+			continue // a rejected artifact is never promoted again (#1451)
 		}
 		verified := true
 		for _, up := range ups {

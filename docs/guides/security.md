@@ -670,6 +670,10 @@ chart installs a `ValidatingAdmissionPolicy` with a `Deny` binding, per release:
 |---|---|
 | `<release>-bundle-rejection` | A Bundle's new `spec.rejected.by` ([`kardinal reject`](../rollback.md#reject-a-bundle)) equals the requesting user's `request.userInfo.username`. A rejection already set is immutable (CRD rule), so it is checked only when it is first written. |
 
+The checks exist only where the chart's policies are installed: the CRDs do not check the
+names. Installing the CRDs alone (`kubectl apply -f config/crd/bases`) or deleting a policy
+binding turns them off.
+
 The CLI reads your username from the API server with a SelfSubjectReview (what
 `kubectl auth whoami` shows): an OIDC user is often `oidc:alice@example.com`, a ServiceAccount
 `system:serviceaccount:<namespace>:<name>`. The local OS user is not used. The policy has

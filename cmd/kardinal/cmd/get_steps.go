@@ -76,7 +76,7 @@ func getStepsOnce(w io.Writer, c sigs_client.Client, ns, pipeline string) error 
 		return fmt.Errorf("list promotion steps: %w", err)
 	}
 
-	// Steps of Superseded Bundles are history, not the current view.
+	// Steps of Superseded and Rejected Bundles are history, not the current view.
 	var bundles v1alpha1.BundleList
 	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
 		return fmt.Errorf("list bundles: %w", err)
@@ -85,7 +85,7 @@ func getStepsOnce(w io.Writer, c sigs_client.Client, ns, pipeline string) error 
 	steps.Items = lifecycle.AddRetiredSteps(steps.Items, bundles.Items, map[string]string{"kardinal.io/pipeline": pipeline})
 	activeBundles := make(map[string]bool)
 	for _, b := range bundles.Items {
-		if b.Spec.Pipeline == pipeline && b.Status.Phase != "Superseded" {
+		if b.Spec.Pipeline == pipeline && !lifecycle.Halted(&b) {
 			activeBundles[b.Name] = true
 		}
 	}

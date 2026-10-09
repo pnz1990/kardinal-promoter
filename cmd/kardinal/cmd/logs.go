@@ -222,7 +222,7 @@ func fetchFilteredSteps(ctx context.Context, c sigs_client.Client, ns, pipeline,
 		if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err == nil {
 			activeBundles := make(map[string]bool)
 			for _, b := range bundles.Items {
-				if b.Spec.Pipeline == pipeline && b.Status.Phase != "Superseded" {
+				if b.Spec.Pipeline == pipeline && !lifecycle.Halted(&b) {
 					activeBundles[b.Name] = true
 				}
 			}
