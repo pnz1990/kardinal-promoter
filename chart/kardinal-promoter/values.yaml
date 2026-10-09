@@ -66,6 +66,25 @@ logLevel: info
 # -- Enable leader election for controller manager
 leaderElect: true
 
+# API Priority and Fairness for the leader election Lease (#1592): a
+# FlowSchema sends the controller ServiceAccount's Lease requests in its
+# namespace to the built-in leader-election priority level, so a busy
+# controller (or a cluster that throttles it) cannot starve its own lease
+# renewals and lose leadership. Needs flowcontrol.apiserver.k8s.io/v1
+# (Kubernetes 1.30, kardinal's minimum); skipped when the API is missing.
+# Cluster-scoped: the installer needs create/get/update/delete on
+# flowschemas.flowcontrol.apiserver.k8s.io. Set enabled: false for GitOps
+# installs that may not manage cluster resources.
+leaderElectionFlowSchema:
+  # -- Create the FlowSchema.
+  enabled: true
+  # -- Its matchingPrecedence. It must be lower (matched first) than any
+  # FlowSchema that matches the controller's other requests; the built-in
+  # workload ones are 9000 and above.
+  matchingPrecedence: 90
+  # -- The priority level the Lease requests use.
+  priorityLevel: leader-election
+
 controller:
   # TLS for the UI (:8082) and webhook/Bundle API (:8083) servers.
   # When both tlsCertFile and tlsKeyFile are set, both servers use HTTPS; one alone fails the install.
@@ -486,7 +505,8 @@ audit:
     maxAge: "2160h"
     # -- Keep this many newest records per Pipeline
     # (--audit-retention-max-per-pipeline). 0 keeps any number. A gate that
-    # flips often writes a record per flip and reaches it quickly.
+    # flips often writes a record per flip and reaches it quickly. A record
+    # created in the last 10 minutes is kept even past it.
     maxPerPipeline: 1000
 
 # -- MetricCheck providers.

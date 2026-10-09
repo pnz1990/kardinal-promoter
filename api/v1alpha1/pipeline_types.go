@@ -837,6 +837,14 @@ type PipelineStatus struct {
 	// +optional
 	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
 
+	// PendingAuditEvents are the HoldCreated and HoldReleased AuditEvents not
+	// yet written (the audit outbox, #1552). Each entry is stored in the same
+	// status patch as observedHolds and removed once the AuditEvent exists.
+	// Normally empty.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	PendingAuditEvents []PendingAuditEvent `json:"pendingAuditEvents,omitempty"`
+
 	// DeploymentMetrics holds aggregate DORA-style metrics computed from the
 	// last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler.
 	// +optional
