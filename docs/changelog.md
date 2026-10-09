@@ -8,6 +8,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Deprecated
+
+- **An unlabeled Pipeline git Secret** — a Secret named by `spec.git.secretRef` should carry `kardinal.io/referenceable: "true"`, like every Secret a custom resource references: its token goes to the Pipeline's `git.url`, which the Pipeline's author chooses. In v0.10.0 an unlabeled Secret still works and the Pipeline gets the warning condition `SecretReferenceable=False` (reason `SecretNotReferenceable`); v0.11 will refuse it (#1506). Label your git Secrets: `kubectl label secret <name> kardinal.io/referenceable=true`
 ### Added
 
 - **NotificationHook formats** — `spec.format: slack` posts a Slack incoming-webhook message with Block Kit blocks, `teams` a Microsoft Teams Workflows message with an Adaptive Card, and `template` a body you write as a Go text/template (`spec.template`; no loops or recursion, every function call counted (2,000 per render), 20 ms per render, fields cut to 4 KiB, function arguments limited to strings, numbers and bools, 64 KiB rendered, JSON checked for JSON content types). `json`, the default, is unchanged ([Formats](notifications.md#formats))
