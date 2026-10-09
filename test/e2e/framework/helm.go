@@ -88,6 +88,10 @@ func BaseChartValues(t *testing.T) Values {
 		"logLevel": "debug",
 		"scm":      Values{"provider": os.Getenv(EnvSCMProvider), "apiURL": os.Getenv(EnvSCMAPI)},
 		"github":   Values{"secretRef": Values{"name": GitSecretName}},
+		// A release the test installs has its own identity admission
+		// policies, cluster-wide in cluster mode: they must let the suite's
+		// controller and its variants write what kardinal writes.
+		"admission": Values{"controllerUsernames": suiteControllers()},
 	}
 }
 
@@ -572,4 +576,15 @@ func (r *Release) cleanup(t *testing.T) {
 	if out, err := r.e.Helm(t, "uninstall", r.Name, "-n", r.Namespace, "--wait", "--timeout", "2m"); err != nil {
 		t.Errorf("helm uninstall %s: %v\n%s", r.Name, err, out)
 	}
+}
+
+// suiteControllers are the exact usernames of the suite's controller and its
+// variants (variant-1 ... variant-MaxVariants, ControllerVariant), which a
+// release a test installs must treat as kardinal controllers.
+func suiteControllers() []string {
+	out := []string{"system:serviceaccount:" + ControllerNamespace + ":" + ControllerServiceAccount}
+	for i := 1; i <= MaxVariants; i++ {
+		out = append(out, fmt.Sprintf("system:serviceaccount:%s:variant-%d", ControllerNamespace, i))
+	}
+	return out
 }

@@ -396,7 +396,7 @@ func TestForgejo_CircuitBreakerHonorsRateLimit(t *testing.T) {
 			Spec: v1alpha1.PRStatusSpec{PRURL: fmt.Sprintf("http://example.invalid/e2e/breaker/pulls/%d", i),
 				PRNumber: i, Repo: "e2e/breaker"},
 		}
-		require.NoError(t, e.Client.Create(ctx, p))
+		require.NoError(t, e.AsController(t).Create(ctx, p)) // only kardinal creates PRStatuses
 	}
 	open := regexp.MustCompile(`SCM circuit open until (\S+)`)
 	l := e.WaitControllerLog(t, since, 90*time.Second, "a poll refused by the open circuit", func(l framework.LogLine) bool {
@@ -449,7 +449,7 @@ func TestForgejo_CircuitBreakerSurvivesTokenRotation(t *testing.T) {
 			Spec: v1alpha1.PRStatusSpec{PRURL: fmt.Sprintf("http://example.invalid/e2e/rotate/pulls/%d", i),
 				PRNumber: i, Repo: "e2e/rotate"},
 		}
-		require.NoError(t, e.Client.Create(ctx, p))
+		require.NoError(t, e.AsController(t).Create(ctx, p)) // only kardinal creates PRStatuses
 	}
 	open := regexp.MustCompile(`SCM circuit open until (\S+)`)
 	l := e.WaitControllerLog(t, since, 90*time.Second, "a poll refused by the open circuit", func(l framework.LogLine) bool {
@@ -580,7 +580,7 @@ func TestForgejo_AllowedRepositories(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "victim", Namespace: a.ns},
 		Spec:       v1alpha1.PRStatusSpec{PRURL: strings.TrimSuffix(a.repo.CloneURL, ".git") + "/pulls/1", PRNumber: 1, Repo: repoID},
 	}
-	require.NoError(t, e.Client.Create(ctx, victim))
+	require.NoError(t, e.AsController(t).Create(ctx, victim)) // only kardinal creates PRStatuses
 	framework.Eventually(t, time.Minute, "the PRStatus poll refused by the allowlist", func(ctx context.Context) (bool, string) {
 		if err := e.Client.Get(ctx, client.ObjectKeyFromObject(victim), victim); err != nil {
 			return false, err.Error()

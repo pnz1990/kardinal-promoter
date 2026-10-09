@@ -432,16 +432,17 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 		"image": func(*kardinalv1alpha1.Bundle) {},
 		"config": func(b *kardinalv1alpha1.Bundle) {
 			b.Spec.Type, b.Spec.Images = "config", nil
-			b.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "abc123"}
+			b.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: strings.Repeat("abc1", 10)}
 		},
 		"mixed": func(b *kardinalv1alpha1.Bundle) {
 			b.Spec.Type = "mixed"
-			b.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "abc123"}
+			b.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: strings.Repeat("abc1", 10)}
 		},
 	}
 	for typ, mutate := range bundles {
 		t.Run(typ, func(t *testing.T) {
 			b := makeBundle("app-x7k2m", "app")
+			b.Spec.Images = []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v1", Digest: ivDigest}}
 			mutate(b)
 			b.Spec.Intent = &kardinalv1alpha1.BundleIntent{SkipEnvironments: []string{"canary"}}
 			build := func(shape string) (*graph.BuildResult, error) {

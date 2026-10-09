@@ -19,20 +19,73 @@ import (
 type forgejo struct {
 	client
 	kind string
+	// retry is the wait between create tries (2s when zero; tests set it).
+	retry time.Duration
 }
 
 func (f *forgejo) Kind() string { return f.kind }
 
+// forgejoCreateTries is how many times CreateRepo tries a repo whose
+// creation failed on a timeout or a server error.
+const forgejoCreateTries = 3
+
+// CreateRepo creates the repo and seeds it. Forgejo creates repositories one
+// at a time; when many tests ask at once, a request can outlast the client's
+// timeout while Forgejo still creates the repo (#1557). A create or seed that
+// failed that way is retried from scratch: the half-made repo is deleted
+// first, so the retry neither finds it "already exists" nor commits the seed
+// twice.
 func (f *forgejo) CreateRepo(ctx context.Context, name string, files map[string][]byte) (Repo, error) {
 	r := Repo{Owner: f.owner, Name: name, Branch: "main",
 		CloneURL: fmt.Sprintf("%s/%s/%s.git", f.cloneBase, f.owner, name)}
+	var err error
+	for try := 1; try <= forgejoCreateTries; try++ {
+		if try > 1 {
+			if derr := f.DeleteRepo(ctx, r); derr != nil && !retryableCreate(derr) {
+				return Repo{}, fmt.Errorf("delete half-created repo %s before retrying: %w (after: %w)", name, derr, err)
+			}
+			select {
+			case <-ctx.Done():
+				return Repo{}, fmt.Errorf("%w (after: %w)", ctx.Err(), err)
+			case <-time.After(f.createRetryEvery()):
+			}
+		}
+		if err = f.createOnce(ctx, r, files); err == nil || !retryableCreate(err) || ctx.Err() != nil {
+			break
+		}
+	}
+	if err != nil {
+		return Repo{}, err
+	}
+	return r, nil
+}
+
+func (f *forgejo) createRetryEvery() time.Duration {
+	if f.retry > 0 {
+		return f.retry
+	}
+	return 2 * time.Second
+}
+
+// retryableCreate reports whether a create request failed in a way a retry
+// can fix: a timeout or another transport error, or a 5xx.
+func retryableCreate(err error) bool {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return se.Code >= 500
+	}
+	var ue *url.Error
+	return errors.As(err, &ue)
+}
+
+func (f *forgejo) createOnce(ctx context.Context, r Repo, files map[string][]byte) error {
 	// auto_init gives the repo a first commit on main, so the multi-file
 	// contents API below has a branch to commit to.
 	err := f.do(ctx, http.MethodPost, "/api/v1/orgs/"+f.owner+"/repos", map[string]interface{}{
-		"name": name, "default_branch": "main", "auto_init": true, "private": false,
+		"name": r.Name, "default_branch": "main", "auto_init": true, "private": false,
 	}, nil)
 	if err != nil {
-		return Repo{}, err
+		return err
 	}
 	paths := make([]string, 0, len(files))
 	for p := range files {
@@ -45,10 +98,9 @@ func (f *forgejo) CreateRepo(ctx context.Context, name string, files map[string]
 			"operation": "create", "path": p, "content": base64.StdEncoding.EncodeToString(files[p]),
 		})
 	}
-	err = f.do(ctx, http.MethodPost, f.repoPath(r)+"/contents", map[string]interface{}{
+	return f.do(ctx, http.MethodPost, f.repoPath(r)+"/contents", map[string]interface{}{
 		"branch": "main", "message": "seed e2e fixture", "files": changes,
 	}, nil)
-	return r, err
 }
 
 func (f *forgejo) DeleteRepo(ctx context.Context, r Repo) error {

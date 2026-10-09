@@ -67,6 +67,8 @@ Rules:
 | [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | kardinal shards only its own controllers, by namespace (`--namespace-shard`, `pkg/shard`, #1462) | None filed |
 | [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | Mirror `patch` nodes with a literal target name (hooks, #1443; gate commit statuses, #1452) | None filed |
 | [G15](#g15-kro-holds-every-graph-in-memory-and-a-graph-cannot-be-retired-without-its-children) | kro holds every live Graph in memory (3 to 6 MB each, whatever its size), and a Graph cannot be deleted without deleting its children | High at scale | `pkg/reconciler/bundle/retire.go` records the steps in `Bundle.status.retiredSteps`, then deletes the Graph | None filed (drafts: Graph suspend, kro#1445 comment) |
+| [G16](#g16-kro-impersonates-with-only-a-username) | kro impersonates the Graph ServiceAccount with only a username, so admission cannot tell it from `edit`/`admin` holders impersonating it | High | Refuse minted and Pod tokens (credential-id, pod-name extras); `edit`/`admin` holders are trusted as kro (documented) | Blocked on upstream: draft, not posted |
+| [G17](#g17-a-graph-adopts-an-object-someone-else-created) | kro adopts an existing object of the name it applies and keeps fields its template does not set | High | Admission: only kro and the controller create Graph-only kinds; no update turns an existing PolicyGate or MetricCheck into an instance | None filed |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
@@ -807,6 +809,67 @@ bounded by the Bundles in flight and recently finished; `hack/install-kro.sh` se
 
 ---
 
+## G16: kro impersonates with only a username
+
+**Need.** Admission must tell kro, applying a Graph as the namespace's Graph ServiceAccount, from
+anyone else using that ServiceAccount's identity, so only kro passes the identity policies as the
+Graph (`<release>-gate-overrides`, `<release>-graph-objects`).
+
+**kro today.** The Graph controller impersonates `spec.serviceAccountName` with only
+`ImpersonationConfig.UserName` (`pkg/controller/graph/impersonation.go`): no groups beyond the
+ServiceAccount's, and no extra. Its requests therefore look exactly like anyone else's who
+impersonates that ServiceAccount. The stock `edit` and `admin` roles grant `impersonate` on
+ServiceAccounts in their namespace, and let their holders create legacy token Secrets.
+
+**kardinal workaround.** The policies refuse the Graph ServiceAccount when
+`userInfo.extra` carries `authentication.kubernetes.io/credential-id` (TokenRequest and bound
+tokens, `kubectl create token`) or `authentication.kubernetes.io/pod-name` (a Pod running as it):
+kro's impersonated requests carry neither. That leaves impersonation and legacy token Secrets
+open, so `edit` and `admin` holders in a namespace are trusted as kro there (documented in
+`docs/guides/security.md`); tenants given kardinal's roles plus `view` cannot forge.
+
+**Upstream work.** None filed; draft in the kro upstream drafts (not posted). **Blocked on
+upstream.**
+
+**Smallest change, no upstream work yet.** kro adds an impersonation extra when it applies a
+Graph, for example `Impersonate-Extra-kro.run/graph: <graph uid>`. Admission could then require
+that key. Impersonating an extra needs `impersonate` on `userextras/kro.run/graph`, which `edit`
+does not grant, so only kro could set it.
+
+---
+
+## G17: A Graph adopts an object someone else created
+
+**Need.** A gate instance must be what its template says, plus only the overrides people record
+on it afterwards. Nothing created before kro applies it may carry over.
+
+**kro today.** When the object a template node (or collection item) applies already exists, the
+Graph executor adopts it. It refuses only an object being deleted, one with another
+`applyset.kubernetes.io/part-of`, or one another Graph's template field manager owns
+(`executor/simple.go:703-739`, `ownedByForeignGraphTemplate` 2022-2053). Otherwise it applies
+without force, then with force on a conflict with any other manager, which it calls "external drift
+we are allowed to reclaim" (2153-2175). Server-side apply keeps every field the template does not
+set: a PolicyGate made ahead of kro under an instance's name keeps its `spec.overrides`,
+annotations and finalizers. The adopted object joins the Graph's inventory, so kro prunes it later.
+A refused apply (`Forbidden`) holds the item not-ready and retries; a validation rejection
+(`Invalid`, `BadRequest`) keeps the live object and treats the node as converged (1043-1065).
+
+**kardinal workaround.** Admission, with `Forbidden`, never `Invalid`. The `<release>-graph-objects`
+policy lets only kro and the controller create PromotionSteps, PRStatuses and the other
+Graph-only kinds, so nothing can be there first. For PolicyGates, which people also write
+(templates), the `<release>-gate-overrides` policy refuses every update that adds
+`kardinal.io/bundle` to an existing PolicyGate, kro's included. kro's adoption fails, the promotion
+waits, and deleting the squatter lets kro create the instance. Verified on kind
+(`TestGraph_GateSquatterRefused`).
+
+**Upstream work.** None filed.
+
+**Smallest change, no upstream work yet.** An opt-in for Graph template nodes to refuse
+objects they did not create (a create-only apply, or a refusal when the live object has no kro
+field manager).
+
+---
+
 ## Notes: constraints we design around
 
 These are not gaps, but the translator has to work around them.
@@ -959,6 +1022,8 @@ blocks above.
 | G13 sharding | `--graph-selector` on the Graph controller | Yes, with G9 |
 | G14 frozen nodes | `TolerateDataPending` opt-in for Graph nodes | Yes, unless G1 lands first |
 | G15 retire a Graph, keep its children | Graph suspend, Graph `Detach` policy, release memory on NotFound | Yes |
+| G16 impersonation | An impersonation extra on Graph applies (`kro.run/graph`) | Yes |
+| G17 adoption | Opt-in refusal of objects a template node did not create | Yes |
 
 ### Hazards found
 

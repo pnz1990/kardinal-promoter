@@ -20,7 +20,7 @@ rules:
   # Graph templates (metricchecks: per-promotion MetricCheck instances);
   # promotionsteps also takes the hook mirror patch.
   - apiGroups: ["kardinal.io"]
-    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "hookruns"]
+    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "hookruns", "imageverifications"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Graph refs: the Bundle, and its Approvals (approval gates).
   - apiGroups: ["kardinal.io"]
@@ -67,7 +67,7 @@ metadata:
     rbac.kro.run/aggregate-to-controller: "true"
 rules:
   - apiGroups: ["kardinal.io"]
-    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "bundles", "hookruns", "approvals"]
+    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "bundles", "hookruns", "approvals", "imageverifications"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
