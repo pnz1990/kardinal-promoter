@@ -64,6 +64,9 @@ const (
 	// MetricCheck's. A smaller recheckInterval ("1ms") would re-evaluate and
 	// patch the gate in a hot loop.
 	minRecheckInterval = 10 * time.Second
+	// conflictRetryDelay is how soon a reconcile that lost a status write
+	// to a newer one (a stale cache) evaluates the gate again.
+	conflictRetryDelay = 200 * time.Millisecond
 	// historyLimit is the number of recent Bundles to include in history stats.
 	historyLimit = 10
 )
@@ -135,7 +138,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// on the current gate.
 		zerolog.Ctx(ctx).Debug().Err(err).Str("gate", req.String()).
 			Msg("policygate changed since it was read; evaluating again")
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: conflictRetryDelay}, nil
 	}
 	return res, err
 }

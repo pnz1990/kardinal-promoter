@@ -63,7 +63,7 @@ func TestPolicyGateReconciler_StaleReadWritesNoDuplicateAudit(t *testing.T) {
 	now = tue.Add(20 * time.Millisecond)
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 	require.NoError(t, err, "a Conflict is requeued, not returned")
-	assert.True(t, res.Requeue, "the stale reconcile is requeued") //nolint:staticcheck // Requeue is what Reconcile returns
+	assert.Positive(t, res.RequeueAfter, "the stale reconcile is requeued")
 	assert.Len(t, auditEvents(t, base), 1, "the stale reconcile writes no second record")
 
 	stale = nil
