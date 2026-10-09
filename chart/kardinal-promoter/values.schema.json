@@ -92,6 +92,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "accessLog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allRequests": {"type": "boolean"},
+            "sourceIP": {"type": "boolean"},
+            "trustedProxies": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": "^[0-9a-fA-F.:/]+$"}}
+          }
+        },
         "tlsCertFile": {
           "type": "string"
         },
@@ -100,6 +109,10 @@
         },
         "watchNamespace": {
           "type": "string"
+        },
+        "namespaceShard": {
+          "type": "string",
+          "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
         },
         "policyNamespaces": {
           "type": "array",

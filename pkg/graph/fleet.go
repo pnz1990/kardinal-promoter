@@ -221,6 +221,27 @@ func FleetTargetEnvironments(p *kardinalv1alpha1.Pipeline) (map[string][]string,
 	return byFleet, err
 }
 
+// FleetTargetSpecs returns each fleet environment's targets as
+// environments (the fleet environment with the target's name, path and
+// health), in the order they are promoted. A fleet whose targets cannot be
+// resolved has none.
+func FleetTargetSpecs(p *kardinalv1alpha1.Pipeline) map[string][]kardinalv1alpha1.EnvironmentSpec {
+	if !hasFleets(p) {
+		return nil
+	}
+	members, byFleet, err := fleetMembers(p)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string][]kardinalv1alpha1.EnvironmentSpec, len(byFleet))
+	for fleet, names := range byFleet {
+		for _, n := range names {
+			out[fleet] = append(out[fleet], members[n].spec)
+		}
+	}
+	return out
+}
+
 // ValidateFleets returns what keeps p's fleets from being built: a fleet
 // without targets, a selector that is not resolved (status.fleets) or could
 // not be, and a target whose environment name is not a DNS label or is

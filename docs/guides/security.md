@@ -67,7 +67,7 @@ The controller uses a GitHub Personal Access Token (PAT) to:
 1. Open pull requests (one per environment promotion)
 2. Read PR status (merged, closed, open)
 3. Post comments on PRs (soak time, gate results, rollback evidence)
-4. Delete the head branch of a PR it closed without a merge (`kardinal/<bundle>/<env>`)
+4. Delete the head branch of a PR it closed without a merge (`kardinal/<namespace hash>/<bundle>/<env>`)
 
 ### Minimum required scopes (classic PAT)
 
@@ -165,7 +165,7 @@ The namespace is kardinal's tenancy unit. There is no Project CRD, and none is p
 Git clone and push use the Pipeline's `git.secretRef` token. The controller uses its own SCM
 token (`github.token` or `github.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
 comment on and close PRs. When it closes a PR that was not merged, it also deletes the PR's head
-branch, `kardinal/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
+branch, `kardinal/<namespace hash>/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
 deletes that branch too when a step that pushed it ends before it opens a PR. It deletes only
 branches under `kardinal/`. So the controller token needs write access to repository contents,
 not only to pull requests.
@@ -465,6 +465,54 @@ rules:
     verbs: ["get", "list", "watch"]
     # Intentionally no "delete" or "update"
 ```
+
+### API access log
+
+The controller logs access to the UI API (`:8082/api/v1/ui/*`) and the Bundle API
+(`POST :8083/api/v1/bundles`). Each access is one structured log line with
+`component=access`, written to the controller's log next to its other lines. By default
+these accesses are logged:
+
+| `access` | When |
+|----------|------|
+| `login` | A token was checked with the API server (a TokenReview), or the shared static token was used for the first time in 30 seconds on that server. Repeated requests within the 30-second review cache are not logins |
+| `denied` | The request was answered `401`, `403`, `429` or `503` (authentication unavailable: the review API failed and the API fails closed). `reason` holds kardinal's message, for example `forbidden: user "…" cannot update pipelines.kardinal.io in namespace team-a` |
+| `write` | Any request that is not `GET`, `HEAD` or `OPTIONS`: promote, roll back, pause, resume, approve, create Bundle |
+| `request` | Any other request, only with `controller.accessLog.allRequests=true` (`--access-log-all-requests`) |
+
+```json
+{"level":"warn","component":"access","access":"denied","server":"ui","method":"POST","path":"/api/v1/ui/pause","status":403,"durationMs":4,"user":"system:serviceaccount:team-a:dashboard","groups":["system:serviceaccounts","system:serviceaccounts:team-a","system:authenticated"],"auth":"tokenreview","reason":"forbidden: user \"system:serviceaccount:team-a:dashboard\" cannot update pipelines.kardinal.io in namespace team-a","message":"api access"}
+```
+
+**Fields:**
+
+- `server`: `ui` or `bundle-api`.
+- `method`, `path`, `status` and `durationMs`.
+- `user` and `groups`: the authenticated caller, in TokenReview mode.
+- `auth`: `tokenreview` or `static-token`. A shared static token has no user, so its line says only `static-token`.
+
+**Source address.** With `controller.accessLog.sourceIP=true` (`--access-log-source-ip`), each
+line also has `sourceIP`, the address of the connecting peer. Behind an Ingress, list the
+Ingress controller's addresses in `controller.accessLog.trustedProxies`
+(`--access-log-trusted-proxies`, CIDRs). kardinal then takes the client address from the
+nearest `X-Forwarded-For` entry that is not a trusted proxy. It ignores `X-Forwarded-For`
+from any other peer, so clients cannot forge it.
+
+**What is never logged.** Tokens, request headers, request bodies and query strings are never
+logged. The request path is logged, cut to 256 bytes. It holds only route segments and object
+names, and a caller controls it, so it could carry anything put in a URL. For refusals, kardinal's own refusal
+message is logged: at most 256 bytes of the response, only for `401`, `403`, `429` and `503`.
+
+**Rate limit.** `login` and `write` lines are never dropped. `denied` and `request` lines each
+have a budget of 50 a second. Lines over a budget are not written. Every 10 seconds one line
+reports how many of each kind were dropped (`dropped_denied`, `dropped_request`), and the
+counter `kardinal_api_access_log_dropped_total{kind}` counts them. So a flood of refused
+requests cannot fill the log, and it cannot hide a login or a write.
+
+The access log covers the HTTP APIs. What the controller then does (promotions, gate
+results, rollbacks) is in the AuditEvents above, with the caller in `kardinal.io/requested-by`
+where the UI or Bundle API made the change. Ship the controller's log to your SIEM to keep
+both records.
 
 ---
 
