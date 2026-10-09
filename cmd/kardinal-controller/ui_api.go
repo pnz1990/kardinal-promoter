@@ -41,7 +41,6 @@ import (
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
-	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -55,7 +54,7 @@ var maxGateOverrideMinutes = 24 * 60
 // for the PolicyGate reconciler (how long an override counts) and the UI API
 // (the longest override it accepts). The chart's scoped-writes policy reads
 // the same Helm value (test/helm TestGateOverrideCapIsOneValue).
-func applyGateOverrideCap(minutes int, r *policygaterecon.Reconciler) {
+func applyGateOverrideCap(minutes int, r *policygate.Reconciler) {
 	maxGateOverrideMinutes = minutes
 	r.MaxOverride = time.Duration(minutes) * time.Minute
 }
