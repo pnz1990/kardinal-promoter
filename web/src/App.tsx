@@ -829,6 +829,8 @@ export function App() {
               pipelineName={activePipeline?.name}
               namespace={activePipeline?.namespace ?? 'default'}
               onActionDone={() => { void manualRefresh() }}
+              holds={Object.fromEntries((activePipeline?.environmentTopology ?? [])
+                .filter(e => e.hold).map(e => [e.name, e.hold!]))}
               loading={graphLoading}
             />
 

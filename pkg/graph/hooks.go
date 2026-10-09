@@ -314,8 +314,11 @@ func literalStrings(v interface{}) interface{} {
 // step node IDs and gate instance names may be created: the conditions the
 // step's own bundleName, upstreamStates and requiredGates expressions gate
 // on (gateReady is the gate collection's readiness condition).
-func stepConds(upstreams, gateNames []string, gateReady func(name string) string) []string {
-	conds := []string{`bundle.status.phase != "Superseded"`}
+func stepConds(held string, upstreams, gateNames []string, gateReady func(name string) string) []string {
+	// The step's own resolvability: not Superseded, not waiting for a
+	// maxConcurrentPromotions slot, and the held Bundle when the
+	// environment is held (spec.holds).
+	conds := []string{stepCond(held)}
 	for _, up := range upstreams {
 		conds = append(conds, verifiedCond(up))
 	}

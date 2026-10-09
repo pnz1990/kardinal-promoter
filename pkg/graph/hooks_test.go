@@ -451,3 +451,36 @@ func TestBuilder_HookRecorded(t *testing.T) {
 		})
 	}
 }
+
+// TestBuilder_PreHookHeldAndSlot: a pre hook resolves under the step's own
+// conditions, so it does not run for a Bundle waiting for a
+// maxConcurrentPromotions slot, nor for another Bundle while the
+// environment is held on a rollback (spec.holds) (merge of #1542).
+func TestBuilder_PreHookHeldAndSlot(t *testing.T) {
+	p := makeLinearPipeline("app", "prod")
+	p.Spec.Environments[0].Hooks = []kardinalv1alpha1.HookSpec{hook("migrate", "pre", hookJob)}
+	build := func(p *kardinalv1alpha1.Pipeline) string {
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app")})
+		require.NoError(t, err)
+		return nameExpr(t, res.Graph, "hook0pre0prod0migrate")
+	}
+	bundle := func(name string, conditions ...interface{}) map[string]interface{} {
+		st := map[string]interface{}{"phase": "Promoting"}
+		if len(conditions) > 0 {
+			st["conditions"] = conditions
+		}
+		return map[string]interface{}{"metadata": map[string]interface{}{"name": name}, "status": st}
+	}
+	expr := build(p)
+	_, err := celEval(t, expr, map[string]interface{}{"bundle": bundle("app-v1"), "refSteps": []interface{}{}})
+	require.NoError(t, err, "resolves for a promoting Bundle")
+	_, err = celEval(t, expr, map[string]interface{}{"refSteps": []interface{}{},
+		"bundle": bundle("app-v1", map[string]interface{}{"type": graph.CondBundleWaitingForSlot, "status": "True"})})
+	require.Error(t, err, "not while the Bundle waits for a slot")
+
+	held := p.DeepCopy()
+	held.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-1"}}
+	expr = build(held)
+	_, err = celEval(t, expr, map[string]interface{}{"bundle": bundle("app-v1"), "refSteps": []interface{}{}})
+	require.Error(t, err, "not for another Bundle while prod is held")
+}
