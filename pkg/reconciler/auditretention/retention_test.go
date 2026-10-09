@@ -292,3 +292,35 @@ func TestPruner_PerPipelineSelector(t *testing.T) {
 	assert.Equal(t, "a|kardinal.io/pipeline=web", c.selectors[1])
 	assert.Equal(t, []string{"a/api-0", "a/web-2", "b/db-0"}, names(t, c))
 }
+
+// TestPruner_CountCapGrace (#1552): the count cap never deletes a record
+// created within the last Interval, so a burst, such as an audit outbox
+// flushed after an outage, stays at least one Interval for an exporter to
+// read. The records past the cap that are older go, oldest first; once the
+// burst is an Interval old, the next run trims it to the cap.
+//
+// Covers AUDIT-RETENTION-02.
+func TestPruner_CountCapGrace(t *testing.T) {
+	var objs []client.Object
+	for i := 0; i < 3; i++ { // old records
+		objs = append(objs, event("a", "web", fmt.Sprintf("old-%d", i), now.Add(-time.Hour+time.Duration(i)*time.Second)))
+	}
+	for i := 0; i < 4; i++ { // a burst a minute ago
+		objs = append(objs, event("a", "web", fmt.Sprintf("burst-%d", i), now.Add(-time.Minute+time.Duration(i)*time.Second)))
+	}
+	c := newPaged(t, objs...)
+	at := now
+	p := &auditretention.Pruner{Client: c, MaxPerPipeline: 2, Interval: 10 * time.Minute, Now: func() time.Time { return at }}
+	n, err := p.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 3, n)
+	assert.Equal(t, []string{"old-0", "old-1", "old-2"}, c.deletes, "only records older than an Interval, oldest first")
+	assert.Equal(t, []string{"a/burst-0", "a/burst-1", "a/burst-2", "a/burst-3"}, names(t, c), "the burst stays past the cap")
+
+	c.deletes = nil
+	at = now.Add(10 * time.Minute)
+	n, err = p.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+	assert.Equal(t, []string{"a/burst-2", "a/burst-3"}, names(t, c), "an Interval later, trimmed to the cap")
+}

@@ -17,47 +17,45 @@ package policygate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/rs/zerolog"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 )
 
 // maxObjectNameLength is the longest valid Kubernetes object name.
 const maxObjectNameLength = 253
 
-// writeGateAuditEvent creates an AuditEvent recording a PolicyGate readiness
-// change at time at. patchStatus calls it when the gate first evaluates and
-// on every ready flip.
+// auditKind labels the audit outbox metrics of PolicyGate records.
+const auditKind = "PolicyGate"
+
+// gateAuditEntry is the outbox entry recording a PolicyGate readiness
+// change at time at, and false for a gate without the pipeline or bundle
+// label. patchStatus stores it on the first evaluation and on every ready
+// flip, in the same status patch as the flip (#1552).
 //
 // The name carries the outcome and the transition time, so every transition
 // gets its own record (C04-gates-22); a fixed name per gate recorded only the
-// first one. A failed write is logged, not returned: audit must never block
-// gate evaluation.
-func writeGateAuditEvent(
-	ctx context.Context,
-	c client.Client,
-	gate *kardinalv1alpha1.PolicyGate,
-	outcome, reason string,
-	at metav1.Time,
-) {
-	if c == nil || gate == nil {
-		return
+// first one. The name is fixed when the entry is stored, so a retried create
+// finds the record by name.
+func gateAuditEntry(gate *kardinalv1alpha1.PolicyGate, outcome, reason string,
+	at metav1.Time) (kardinalv1alpha1.PendingAuditEvent, bool) {
+	if gate == nil {
+		return kardinalv1alpha1.PendingAuditEvent{}, false
 	}
-
 	labels := gate.GetLabels()
 	pipelineName := labels["kardinal.io/pipeline"]
 	bundleName := labels["kardinal.io/bundle"]
 	envName := labels["kardinal.io/environment"]
 	if pipelineName == "" || bundleName == "" {
-		return
+		return kardinalv1alpha1.PendingAuditEvent{}, false
 	}
 
 	action := "GateEvaluated"
@@ -73,42 +71,44 @@ func writeGateAuditEvent(
 
 	aeLabels := gateAuditLabels(labels, action)
 
-	ae := &kardinalv1alpha1.AuditEvent{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: gate.Namespace,
-			Labels:    aeLabels,
-		},
-		Spec: kardinalv1alpha1.AuditEventSpec{
-			Timestamp:    at,
-			BundleName:   bundleName,
-			PipelineName: pipelineName,
-			Environment:  envName,
-			Action:       action,
-			Outcome:      outcome,
-			Message:      reason,
-		},
-	}
+	return audit.Entry(name, aeLabels, kardinalv1alpha1.AuditEventSpec{
+		BundleName:   bundleName,
+		PipelineName: pipelineName,
+		Environment:  envName,
+		Action:       action,
+		Outcome:      outcome,
+		Message:      reason,
+	}, at), true
+}
 
-	// spec.timestamp is stored with one-second resolution; the annotation
-	// orders records within a second (lifecycle.CompareAuditEvents).
-	lifecycle.StampCreatedAt(ae, at.Time)
-
-	// AlreadyExists is the same transition written by an earlier attempt.
-	err := c.Create(ctx, ae)
-	switch {
-	case client.IgnoreAlreadyExists(err) == nil:
-	case apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause):
-		// The namespace is being deleted: it refuses new objects, and its
-		// deletion removes the gate and its records next.
-		zerolog.Ctx(ctx).Debug().Err(err).
-			Str("gate", gate.Name).Str("auditEvent", name).
-			Msg("namespace is being deleted — PolicyGate AuditEvent not written")
-	default:
-		zerolog.Ctx(ctx).Warn().Err(err).
-			Str("gate", gate.Name).Str("auditEvent", name).
-			Msg("failed to write PolicyGate AuditEvent")
+// flushAudit creates the AuditEvents in gate's outbox
+// (status.pendingAuditEvents) and removes the written entries from its
+// status. It returns an error when an entry is still unwritten; the entry
+// stays in status until a create succeeds (#1552). The status patch carries
+// the gate's resourceVersion, so it cannot drop an entry a newer reconcile
+// stored.
+func (r *Reconciler) flushAudit(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) error {
+	if len(gate.Status.PendingAuditEvents) == 0 {
+		return nil
 	}
+	remaining, ferr := audit.Flush(ctx, r.Client, auditKind, gate.Namespace, gate.Status.PendingAuditEvents)
+	if len(remaining) != len(gate.Status.PendingAuditEvents) {
+		prev := gate.Status.PendingAuditEvents
+		patch := client.MergeFromWithOptions(gate.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		gate.Status.PendingAuditEvents = remaining
+		if err := r.Status().Patch(ctx, gate, patch); err != nil && !apierrors.IsNotFound(err) {
+			// The entries are still in status: the next flush finds their
+			// AuditEvents by name (AlreadyExists).
+			gate.Status.PendingAuditEvents = prev
+			return errors.Join(ferr, fmt.Errorf("remove written AuditEvents from the outbox: %w", err))
+		}
+	}
+	if ferr != nil {
+		zerolog.Ctx(ctx).Warn().Err(ferr).Str("gate", gate.Name).Int("pending", len(remaining)).
+			Msg("failed to write PolicyGate AuditEvent; kept in status.pendingAuditEvents to retry")
+		return ferr
+	}
+	return nil
 }
 
 // gateAuditLabels returns the labels of an AuditEvent about a gate instance

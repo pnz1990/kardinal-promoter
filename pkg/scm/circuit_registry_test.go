@@ -173,7 +173,7 @@ func TestCircuitRegistry_Concurrent(t *testing.T) {
 			defer wg.Done()
 			owner := "o" + strconv.Itoa(i%5)
 			if err := reg.Allow(owner); err == nil {
-				reg.Record(owner, &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{}}, nil)
+				reg.Record(owner, time.Now(), &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{}}, nil)
 			}
 		}(i)
 	}
@@ -191,13 +191,13 @@ func TestCircuitRegistry_Bounded(t *testing.T) {
 	ok := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}}
 	for i := 0; i < 5; i++ {
 		require.NoError(t, reg.Allow("failing"))
-		reg.Record("failing", fail, nil)
+		reg.Record("failing", time.Now(), fail, nil)
 	}
 	require.Error(t, reg.Allow("failing"), "the failing owner's circuit is open")
 	for i := 0; i < 2000; i++ {
 		owner := "o" + strconv.Itoa(i)
 		require.NoError(t, reg.Allow(owner))
-		reg.Record(owner, ok, nil)
+		reg.Record(owner, time.Now(), ok, nil)
 	}
 	assert.LessOrEqual(t, reg.Owners(), 257, "idle owners are dropped")
 	assert.True(t, isCircuitOpen(reg.Allow("failing")), "an open circuit is never dropped")
@@ -215,6 +215,38 @@ func TestCircuitRegistry_DCProjectKeyIgnoresCase(t *testing.T) {
 	assert.True(t, isCircuitOpen(err), "the same project in another case shares the circuit: %v", err)
 }
 
+// TestCircuitRegistry_InFlightFailures: requests in flight when an owner's
+// circuit opens fail with it; recorded with their start time, they do not
+// lengthen its backoff (#1476).
+func TestCircuitRegistry_InFlightFailures(t *testing.T) {
+	reg := scm.NewCircuitRegistry()
+	started := time.Now()
+	for i := 0; i < 60; i++ {
+		reg.Record("acme", started, nil, errors.New("connection refused"))
+	}
+	err := reg.Allow("acme")
+	var open *scm.ErrCircuitOpen
+	require.ErrorAs(t, err, &open)
+	assert.LessOrEqual(t, time.Until(open.RetryAfter), scm.NewCircuitBreaker().BaseBackoff+time.Second)
+}
+
+// TestCircuitRegistry_LateTransientKeepsQuotaOpen: a 5xx answered by a call
+// that started before the quota circuit opened does not close it.
+//
+// Covers SCM-BREAKER-LATE-01.
+func TestCircuitRegistry_LateTransientKeepsQuotaOpen(t *testing.T) {
+	reg := scm.NewCircuitRegistry()
+	before := time.Now().Add(-time.Second)
+	exhausted := &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Retry-After": []string{"600"}}}
+	reg.Record("acme", time.Now(), exhausted, nil)
+	var open *scm.ErrCircuitOpen
+	require.ErrorAs(t, reg.Allow("acme"), &open)
+	reg.Record("other", before, &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{}}, nil)
+	reg.Record("other", before, &http.Response{StatusCode: http.StatusOK, Header: http.Header{}}, nil)
+	require.ErrorAs(t, reg.Allow("acme"), &open, "late answers leave the quota circuit open")
+	assert.Greater(t, time.Until(open.RetryAfter), 9*time.Minute)
+}
+
 // TestCircuitRegistry_RateLimitBodyCounts: GitHub can send a secondary rate
 // limit as a 403 with no rate-limit header, only the message in the body
 // (APIError.Transient). Such responses count against the shared quota
@@ -225,7 +257,7 @@ func TestCircuitRegistry_RateLimitBodyCounts(t *testing.T) {
 	reg := scm.NewCircuitRegistry()
 	for i := 0; i < 10; i++ {
 		require.NoError(t, reg.Allow("acme"))
-		reg.RecordAPIError("acme", forbidden, &scm.APIError{StatusCode: http.StatusForbidden})
+		reg.RecordAPIError("acme", time.Now(), forbidden, &scm.APIError{StatusCode: http.StatusForbidden})
 	}
 	assert.NoError(t, reg.Allow("other"), "a permission 403 opens nothing")
 
@@ -235,7 +267,7 @@ func TestCircuitRegistry_RateLimitBodyCounts(t *testing.T) {
 			opened = true
 			break
 		}
-		reg.RecordAPIError("acme", forbidden, &scm.APIError{StatusCode: http.StatusForbidden, Transient: true,
+		reg.RecordAPIError("acme", time.Now(), forbidden, &scm.APIError{StatusCode: http.StatusForbidden, Transient: true,
 			Body: `{"message":"You have exceeded a secondary rate limit"}`})
 	}
 	require.True(t, opened, "rate-limit 403s open the quota circuit")

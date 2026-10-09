@@ -448,11 +448,14 @@ force-pushes the base branch, so no writer's commit is lost:
   - when they changed none of the PR's paths (the environment's `path`, and a Helm `valuesFile`
     outside it), the PR still merges cleanly: only `status.outputs.baseSHA` moves, nothing is
     pushed;
-  - when they changed one of its paths, or the PR's base is not among the last 500 (a
-    force-push), or reading them takes longer than 30 seconds, it reruns the promotion's steps on a fresh clone of the new head and
+  - when they changed one of its paths, or the whole branch was read and the PR's base is not
+    in it (a force-push), it reruns the promotion's steps on a fresh clone of the new head and
     force-pushes the PR branch, so the PR is one commit on the current base
-    (`status.outputs.prBranchRebuilds` counts it; when the history could not be read, the
-    step message says the PR branch was rebuilt to be safe);
+    (`status.outputs.prBranchRebuilds` counts it; after a force-push the step message says so);
+  - when the history cannot be read (an error, a read longer than 30 seconds, or a PR base
+    further back than the last 500 commits), nothing is decided: the PR branch is kept as it
+    is, the step message says why, and the next check reads again. Rebuilding on uncertainty
+    would churn the PR and can dismiss its reviews (#1584);
   - when the PR branch has a commit kardinal did not push (its head is not
     `status.outputs.pushedSHA`), it is never rebuilt, and the step message says so.
 

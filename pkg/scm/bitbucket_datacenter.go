@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
@@ -416,9 +417,14 @@ func (b *BitbucketDCProvider) do(ctx context.Context, method, path string, body,
 		return errors.New("bitbucket-datacenter scm: --scm-api-url (the server's base URL) is not set")
 	}
 	owner := dcProjectOf(path)
+	call := startSCMCall("bitbucket-datacenter", owner, method, path)
 	if err := b.circuits.Allow(owner); err != nil {
+		call.circuitOpen(b.circuits, owner)
 		return fmt.Errorf("bitbucket-datacenter scm: %w", err)
 	}
+	// When the call started: a failure of a call that started before the
+	// circuit opened is not counted (CircuitBreaker.RecordFailureFrom).
+	started := time.Now()
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -440,17 +446,20 @@ func (b *BitbucketDCProvider) do(ctx context.Context, method, path string, body,
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := b.client.Do(req)
+	// Arguments are taken now; the circuit states are read at return, after Record.
+	defer call.done(resp, err, b.circuits, owner)
 	if err != nil {
-		b.circuits.Record(owner, nil, err)
+		b.circuits.Record(owner, started, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		b.circuits.Record(owner, resp, nil)
-		return newAPIError("bitbucket-datacenter", method, path, resp, raw)
+		apiErr := newAPIError("bitbucket-datacenter", method, path, resp, raw)
+		b.circuits.RecordAPIError(owner, started, resp, apiErr)
+		return apiErr
 	}
-	b.circuits.Record(owner, resp, nil)
+	b.circuits.Record(owner, started, resp, nil)
 	if result != nil && resp.StatusCode != http.StatusNoContent {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil && !errors.Is(err, io.EOF) {
 			return fmt.Errorf("decode response: %w", err)

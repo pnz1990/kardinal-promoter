@@ -497,6 +497,123 @@ spec:
                   Outputs accumulates key/value results from completed steps in the
                   sequence (e.g. prURL from the open-pr step).
                 type: object
+              pendingAuditEvents:
+                description: |-
+                  PendingAuditEvents are AuditEvents for this step's transitions that are
+                  not yet written (the audit outbox, #1552). Each entry is stored in the
+                  same status patch as its transition and removed once the AuditEvent
+                  exists, so an API error or a controller restart between the two cannot
+                  lose the record. Normally empty.
+                items:
+                  description: |-
+                    PendingAuditEvent is an AuditEvent that a reconciler has decided to write
+                    but has not yet seen created. The reconciler stores it in its own status in
+                    the same patch as the transition it records. It creates the AuditEvent on
+                    that reconcile or a later one, then removes the entry. The name is fixed
+                    when the entry is stored, so a retried create that the API server already
+                    applied returns AlreadyExists, which counts as written (#1552).
+                  properties:
+                    createdAt:
+                      description: |-
+                        CreatedAt is the transition time in RFC 3339 with nanoseconds, written
+                        to the AuditEvent's kardinal.io/created-at annotation: spec.timestamp
+                        has one-second resolution.
+                      type: string
+                    labels:
+                      additionalProperties:
+                        type: string
+                      description: Labels are the AuditEvent's labels.
+                      type: object
+                    name:
+                      description: Name is the AuditEvent's name.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    spec:
+                      description: |-
+                        Spec is the AuditEvent's spec, timestamp included: the record carries
+                        the time of the transition, not the time it was written.
+                      properties:
+                        action:
+                          description: |-
+                            Action is a short verb describing what happened.
+                            Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
+                                          "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
+                                          "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
+                                          "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased".
+                            ApprovalRecorded and ApprovalRevoked are written by an approval gate
+                            when a decision (kardinal approve) appears in or leaves its
+                            spec.approvals.
+                            GateOverridden is written once per spec.overrides entry of a gate
+                            instance, naming who created it (kardinal override or the UI).
+                            HealthCheckFailed and GateBlocked are accepted but never written: a
+                            failed health check records PromotionFailed (RollbackStarted when
+                            onHealthFailure is rollback), and a blocked gate records GateEvaluated
+                            with outcome Failure.
+                          enum:
+                          - PromotionStarted
+                          - PromotionSucceeded
+                          - PromotionFailed
+                          - PromotionSuperseded
+                          - PromotionRejected
+                          - RollbackStarted
+                          - RollbackSucceeded
+                          - HealthCheckFailed
+                          - GateBlocked
+                          - GateEvaluated
+                          - GateOverridden
+                          - ApprovalRecorded
+                          - ApprovalRevoked
+                          - HoldCreated
+                          - HoldReleased
+                          type: string
+                        bundleName:
+                          description: BundleName is the name of the Bundle being
+                            promoted.
+                          minLength: 1
+                          type: string
+                        environment:
+                          description: Environment is the environment name where the
+                            event occurred.
+                          minLength: 1
+                          type: string
+                        message:
+                          description: Message is a human-readable description of
+                            the event.
+                          type: string
+                        outcome:
+                          description: |-
+                            Outcome describes the result of the action.
+                            Valid values: "Success", "Failure", "Pending".
+                          enum:
+                          - Success
+                          - Failure
+                          - Pending
+                          type: string
+                        pipelineName:
+                          description: PipelineName is the name of the Pipeline the
+                            Bundle is promoting through.
+                          minLength: 1
+                          type: string
+                        timestamp:
+                          description: Timestamp is when the event occurred (RFC 3339
+                            format).
+                          format: date-time
+                          type: string
+                      required:
+                      - action
+                      - bundleName
+                      - environment
+                      - outcome
+                      - pipelineName
+                      - timestamp
+                      type: object
+                  required:
+                  - name
+                  - spec
+                  type: object
+                maxItems: 32
+                type: array
               prURL:
                 description: |-
                   PRURL is the GitHub pull request URL opened for this promotion.
@@ -509,6 +626,15 @@ spec:
                   limit the PromotionStep fails. Retries counted in gitCredentialRetries
                   are not counted here.
                 type: integer
+              scmWaitSince:
+                description: |-
+                  SCMWaitSince is when the step started waiting for an open SCM circuit
+                  (condition SCMUnavailable): its SCM host failed, so the step makes no
+                  call and waits without spending retryCount. The wait ends when the
+                  SCM answers, or fails the step after the environment's
+                  stepTimeoutSeconds, else the controller's --scm-wait-timeout (30m).
+                format: date-time
+                type: string
               state:
                 description: |-
                   State is the step execution state.
