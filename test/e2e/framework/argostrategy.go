@@ -6,6 +6,7 @@ package framework
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"errors"
 	"io"
 	"os"
@@ -92,6 +93,19 @@ func (e *Env) ControllerCan(t *testing.T, verb, name string) bool {
 		t.Fatalf("SubjectAccessReview %s applications: %v", verb, err)
 	}
 	return review.Status.Allowed
+}
+
+// WaitControllerCan waits until the controller may verb the Application
+// name (ControllerCan). The API server authorizes from an informer cache of
+// Roles and RoleBindings, so a binding created a moment ago may not count
+// yet (#1556); it logs how long the wait took.
+func (e *Env) WaitControllerCan(t *testing.T, verb, name string, timeout time.Duration) {
+	t.Helper()
+	start := time.Now()
+	Eventually(t, timeout, fmt.Sprintf("the controller may %s Application %q", verb, name), func(context.Context) (bool, string) {
+		return e.ControllerCan(t, verb, name), "SubjectAccessReview: not allowed"
+	})
+	t.Logf("the controller may %s Application %q after %s", verb, name, time.Since(start).Round(time.Millisecond))
 }
 
 // ChartApplicationRules renders the repo's chart with helm template and the
