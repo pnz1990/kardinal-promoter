@@ -306,7 +306,7 @@ func TestTranslate_PermanentErrors(t *testing.T) {
 	t.Run("graph over the size limit (G10)", func(t *testing.T) {
 		var envs []kardinalv1alpha1.EnvironmentSpec
 		var gates []client.Object
-		for i := 0; i < 400; i++ {
+		for i := 0; i < 500; i++ {
 			name := fmt.Sprintf("region%03d", i)
 			envs = append(envs, kardinalv1alpha1.EnvironmentSpec{Name: name})
 			for g := 0; g < 3; g++ {
@@ -383,6 +383,118 @@ func TestTranslate_ErrorPrefixes(t *testing.T) {
 			require.Error(t, err)
 			assert.Equal(t, tc.want, err.Error())
 			assert.Equal(t, 1, strings.Count(err.Error(), tc.once), "%q appears once: %v", tc.once, err)
+		})
+	}
+}
+
+// TestTranslate_CompactHasNoHealthNodes: a compact Graph gets no health ref
+// nodes (they only feed Graph readiness, ledger G3), so it stays one node per
+// kind instead of one per environment; the node shape keeps them.
+func TestTranslate_CompactHasNoHealthNodes(t *testing.T) {
+	ctx := zerolog.Nop().WithContext(context.Background())
+	for _, shape := range []string{graph.GraphShapeCompact, graph.GraphShapeNodes} {
+		t.Run(shape, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(translateScheme(t)).Build()
+			dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
+			gc := graph.NewGraphClient(dyn, zerolog.Nop())
+			tr := New(gc, graph.NewBuilder(), c, []string{"platform-policies"}, zerolog.Nop())
+			p := teamPipeline(
+				kardinalv1alpha1.EnvironmentSpec{Name: "test", Health: resourceHealth("team-a")},
+				kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: resourceHealth("team-a")},
+			)
+			p.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
+			name, err := tr.Translate(ctx, p, teamBundle(nil))
+			require.NoError(t, err)
+			g, err := gc.Get(ctx, "team-a", name)
+			require.NoError(t, err)
+			var health []string
+			for _, n := range g.Spec.Nodes {
+				if strings.HasPrefix(n.ID, "health") {
+					health = append(health, n.ID)
+				}
+			}
+			if shape == graph.GraphShapeCompact {
+				assert.Empty(t, health)
+			} else {
+				assert.ElementsMatch(t, []string{"healthTest", "healthProd"}, health)
+			}
+		})
+	}
+}
+
+// TestTranslate_ShapeIsPinned checks that a Bundle keeps the Graph shape its
+// Graph was created with: a Pipeline edit that crosses the compact threshold,
+// or a graph-shape annotation added later, re-translates in the same shape,
+// so kro never prunes the PromotionSteps of the other shape's nodes. A Graph
+// built before the compact shape (no shape label) stays in the node shape.
+func TestTranslate_ShapeIsPinned(t *testing.T) {
+	ctx := zerolog.Nop().WithContext(context.Background())
+	envs := func(n int) []kardinalv1alpha1.EnvironmentSpec {
+		var out []kardinalv1alpha1.EnvironmentSpec
+		for i := 0; i < n; i++ {
+			out = append(out, kardinalv1alpha1.EnvironmentSpec{Name: fmt.Sprintf("e%03d", i)})
+		}
+		return out
+	}
+	tests := []struct {
+		name               string
+		first, second      int
+		secondAnnotation   string
+		label              string // replaces the Graph's shape label after the first translation; "-" removes it
+		wantFirst, wantEnd string
+	}{
+		{name: "nodes Graph grows past the threshold", first: 100, second: 101, wantFirst: "nodes", wantEnd: "nodes"},
+		{name: "compact Graph shrinks under the threshold", first: 101, second: 100, wantFirst: "compact", wantEnd: "compact"},
+		{name: "annotation added to a nodes Graph", first: 3, second: 4, secondAnnotation: "compact", wantFirst: "nodes", wantEnd: "nodes"},
+		{name: "compact Graph without a shape label", first: 101, second: 100, label: "-", wantFirst: "compact", wantEnd: "compact"},
+		{name: "compact Graph labelled nodes", first: 101, second: 100, label: "nodes", wantFirst: "compact", wantEnd: "compact"},
+		{name: "nodes Graph labelled compact", first: 100, second: 101, label: "compact", wantFirst: "nodes", wantEnd: "nodes"},
+		{name: "garbage label", first: 100, second: 101, label: "flat", wantFirst: "nodes", wantEnd: "nodes"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(translateScheme(t)).Build()
+			dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
+			gc := graph.NewGraphClient(dyn, zerolog.Nop())
+			tr := New(gc, graph.NewBuilder(), c, []string{"platform-policies"}, zerolog.Nop())
+			b := teamBundle(nil)
+
+			p := teamPipeline(envs(tc.first)...)
+			name, err := tr.Translate(ctx, p, b)
+			require.NoError(t, err)
+			g, err := gc.Get(ctx, "team-a", name)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantFirst, g.Labels[graph.LabelGraphShape])
+			if tc.label != "" {
+				u, err := dyn.Resource(graph.GraphGVR).Namespace("team-a").Get(ctx, name, metav1.GetOptions{})
+				require.NoError(t, err)
+				labels := u.GetLabels()
+				if tc.label == "-" {
+					delete(labels, graph.LabelGraphShape)
+				} else {
+					labels[graph.LabelGraphShape] = tc.label
+				}
+				u.SetLabels(labels)
+				_, err = dyn.Resource(graph.GraphGVR).Namespace("team-a").Update(ctx, u, metav1.UpdateOptions{})
+				require.NoError(t, err)
+			}
+
+			p = teamPipeline(envs(tc.second)...)
+			if tc.secondAnnotation != "" {
+				p.Annotations = map[string]string{graph.AnnotationGraphShape: tc.secondAnnotation}
+			}
+			_, err = tr.Translate(ctx, p, b)
+			require.NoError(t, err)
+			g, err = gc.Get(ctx, "team-a", name)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantEnd, g.Labels[graph.LabelGraphShape], "the label is written again from the spec")
+			compact := false
+			for _, n := range g.Spec.Nodes {
+				compact = compact || n.ID == graph.NodePromotionSteps
+			}
+			assert.Equal(t, tc.wantEnd == "compact", compact, "the Graph's nodes are of the pinned shape")
 		})
 	}
 }

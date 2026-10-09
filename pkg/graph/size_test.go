@@ -71,7 +71,9 @@ func TestCheckSize(t *testing.T) {
 	}{
 		{name: "small pipeline", envs: 3, gates: 2},
 		{name: "150 environments, 3 gates each", envs: 150, gates: 3},
-		{name: "300 environments, 3 gates each", envs: 300, gates: 3, wantErr: true},
+		{name: "300 environments, 3 gates each (compact shape)", envs: 300, gates: 3},
+		{name: "500 environments, no gates (compact shape)", envs: 500},
+		{name: "400 environments, 3 gates each", envs: 400, gates: 3, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -87,6 +89,18 @@ func TestCheckSize(t *testing.T) {
 		})
 	}
 	assert.NoError(t, graph.CheckSize(nil))
+
+	// The object limit: a collection of 4,501 items is refused even though
+	// its spec is small.
+	many := &graph.Graph{Spec: graph.GraphSpec{Nodes: []graph.GraphNode{
+		{ID: "Data", Def: map[string]interface{}{"items": make([]interface{}, 4501)}},
+		{ID: "Things", ForEach: []map[string]string{{"Item": "${Data.items}"}},
+			Template: map[string]interface{}{"kind": "ConfigMap"}},
+	}}}
+	err := graph.CheckSize(many)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, graph.ErrInvalid)
+	assert.Contains(t, err.Error(), "would create 4501 objects, over kardinal's limit of 4500")
 }
 
 // TestObjectCount checks that EstimateSize counts every object a collection

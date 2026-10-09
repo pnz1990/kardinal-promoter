@@ -146,21 +146,22 @@ Merged since v0.9.0; they ship with v0.10.0. See the [changelog](changelog.md) "
 - Remote-cluster health through kubeconfig Secrets (`health.kubeconfigSecretRef`) (#1495)
 - The generic YAML update strategy (`update.strategy: yaml`) (#1498)
 - UI fleet board and step timings (#1519)
+- Subscriptions: private registries and repos, Helm charts, tag filters, `pathGlob`, inbound webhooks (#1478)
+- A compact Graph shape for large Pipelines; up to 500 environments (#1516)
 
 ## In progress for v0.10.0
 
 Open pull requests; each moves to the list above when it merges.
 
-- Subscriptions: private registries and repos, Helm charts, tag filters, `pathGlob`, inbound webhooks (#1478)
 - Approval gates with quorum and verified identity (#1510); verified override identity (#1503); reject a Bundle (#1489)
 - Per-environment PR controls: templates, labels, reviewers, auto-merge (#1477); gate results as SCM commit statuses (#1518)
 - GitHub App and ssh git auth (#1491); Bitbucket Data Center (#1501); several SCM providers per controller (#1517)
-- Many Pipelines on one branch (#1504); controller sharding by namespace (#1505); a compact Graph for 500 environments (#1516); retiring finished Graphs (#1527)
+- Many Pipelines on one branch (#1504); controller sharding by namespace (#1505); retiring finished Graphs (#1527)
 - Pre- and post-deploy hooks (#1493); Argo Rollouts analysis (#1502); image signature verification (#1521)
 - Rendered manifests with `layout: branch` (#1515)
-- AuditEvent retention (#1523); SCM API and git metrics (#1540)
+- AuditEvent retention (#1523); SCM API and git metrics (#1540); rollback with an environment hold (#1542); an API access log (#1537); signed NotificationHook requests and CloudEvents (#1533)
 - UI: Bundle type badges and keyboard navigation (#1524), approvals and rejected Bundles (#1525)
-- Planned, no PR yet: fleets of targets (#1457), rollback with an environment hold (#1528), an API access log (#1530), signed notifications (#1531)
+- Planned, no PR yet: fleets of targets (#1457)
 
 ## UI — Full Control Plane (shipped v0.5.0–v0.6.0)
 

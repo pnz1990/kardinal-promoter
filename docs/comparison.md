@@ -45,7 +45,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Multi-cluster** | Argo CD or Flux hub (health read from the hub's Applications or Kustomizations), or direct remote-cluster health through a kubeconfig Secret (`health.kubeconfigSecretRef`, inline credentials only) | Yes — through Argo CD; controllers can be sharded across clusters | Yes — the Argo CD gate reads remote clusters through kubeconfig Secrets |
 | **Upstream soak time in gates** | Yes — `bundle.upstreamSoakMinutes >= 30` (minutes since the upstream was Verified) | Yes — `requiredSoakTime` (elapsed time) | Yes — a `TimedCommitStatus` on the upstream, which the ordering gate requires |
 | **Cross-stage history in gates** | Yes — `upstream.<env>.recentSuccessCount`, `lastPromotedAt` | No | No |
-| **Artifact discovery** | Bundle created by CI (HTTP API, GitHub Action) or the CLI; Subscription CRD polls public OCI registries and Git repos | Warehouse: images, Git and Helm charts, with webhook receivers for registries and SCMs | Git commits from a hydrator (Argo CD Source Hydrator or any other) |
+| **Artifact discovery** | Bundle created by CI (HTTP API, GitHub Action) or the CLI; the Subscription CRD watches OCI images, Git (HTTPS or SSH, `pathGlob`) and Helm charts (HTTP index or OCI), public or private (pull Secrets; ECR, GCR and ACR through refreshed token Secrets), with semver, regex and allow/ignore filters, and webhook receivers for Docker Hub, GHCR, Harbor, Quay, Artifactory and generic senders | Warehouse: images, Git and Helm charts, with webhook receivers for registries and SCMs | Git commits from a hydrator (Argo CD Source Hydrator or any other) |
 | **Multi-artifact bundle** | Yes (image + config in one Bundle) | Yes (Freight, with creation criteria since v1.8) | No |
 | **Architecture** | Graph-first (one kro Graph per Bundle) | Controllers over Stage and Freight CRDs; v2.0 will replace the storage layer | Controller, plus an optional API server for the dashboard |
 | **Maturity** | v0.9.0, active development; runs on kro's alpha Graph API (v0.10.0-rc.0) | v1.12.3, production-grade; v2.0.0 is next | v0.45.0, `v1alpha1` API, "experimental" per its README |
@@ -209,9 +209,6 @@ it with `dependsOn` on its environments.
 - **Composable promotion steps** (Kargo). About 35 built-in steps (git, Helm, Kustomize, YAML,
   OCI, HTTP, Argo CD), reusable PromotionTasks, conditions and retries. kardinal runs a fixed
   sequence per environment.
-- **Artifact discovery** (Kargo). Warehouses watch images, Git and Helm charts, including private
-  ones, with webhook receivers for registries and SCMs. kardinal's Subscription polls public
-  registries and repos only; create Bundles from CI for private ones.
 - **Verification providers** (Kargo). AnalysisTemplates query Prometheus, Datadog, CloudWatch,
   New Relic and others, and can run a Job. A kardinal `MetricCheck` covers Prometheus, Datadog,
   CloudWatch, New Relic and JSON web APIs, per promotion with `perPromotion` (unreleased), but
