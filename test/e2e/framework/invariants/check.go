@@ -70,6 +70,10 @@ type Options struct {
 	// MaxReconcileErrorRatio is the highest share of reconciles that may end
 	// in an error over the run (default 0.05). Chaos tests set it higher.
 	MaxReconcileErrorRatio float64
+	// MaxRefusedPushRatio is the most git pushes the server may refuse as
+	// non-fast-forward per push that landed (default 0.5). Tests where
+	// another writer moves the branches set it higher.
+	MaxRefusedPushRatio float64
 	// Allow lists more benign error-log patterns, for faults the test
 	// injects (a git outage makes clones fail).
 	Allow []*regexp.Regexp
@@ -90,6 +94,9 @@ func Check(t *testing.T, e *framework.Env, o Options) *Report {
 	t.Helper()
 	if o.MaxReconcileErrorRatio == 0 {
 		o.MaxReconcileErrorRatio = 0.05
+	}
+	if o.MaxRefusedPushRatio == 0 {
+		o.MaxRefusedPushRatio = 0.5
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()

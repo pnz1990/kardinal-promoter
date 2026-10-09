@@ -145,7 +145,7 @@ in upper snake case (`KARDINAL_E2E_SCALE_SUSTAINED_RATE=5`,
 | Tests | What they do |
 |---|---|
 | `TestScale_Topology*` | a 100-stage chain, the 120-stage chain and 150-environment fan-out a large company asks for, waves, a diamond lattice, a fan-in, mixed auto and pr-review approval, several Pipelines writing one repo and branch |
-| `TestScale_Load*`, `TestScale_LatencySLO` | 200 Pipelines with a Bundle each, a burst of 1,000 Bundles (the newest per Pipeline must end Verified), a sustained rate for a duration, the latency objective ([Latency SLO](#latency-slo)) |
+| `TestScale_Load*`, `TestScale_LatencySLO`, `TestScale_TwoTenants` | 200 Pipelines with a Bundle each, a burst of 1,000 Bundles (the newest per Pipeline must end Verified), a sustained rate for a duration, the latency objective ([Latency SLO](#latency-slo)), and two tenants: a 149-environment wave on one branch in one namespace while another namespace's Pipeline must get its first reconcile within `TenantStartWithin` (20 s) |
 | `TestScale_Race*` | rapid-fire Bundles, Pipeline edits, gate flapping, a ChangeWindow switched on while a step waits for merge, pause/resume storms, rollback during a promotion, PRs closed, reopened and merged from outside, a force-pushed branch, a namespace deleted mid-flight, duplicate, forged and out-of-order webhooks |
 | `TestScale_Chaos*` | the leader killed every 20-60 s, kro restarted, git latency and outages, API Priority and Fairness throttling the controller to one seat, the SCM token rotated mid-flight |
 
@@ -163,7 +163,8 @@ The invariants, after every Bundle settled:
 - no Graph outlived its Bundle, stayed deleting, reports an error or nears etcd's request limit;
 - AuditEvents agree with the step states;
 - the controller logged no `DATA RACE`, no panic and no error-level line outside the allowlist (`invariants.Benign` plus the faults a test injects), and neither its containers nor kro's restarted (OOMKilled, crashed);
-- Prometheus: the reconcile error ratio stays under the test's limit, every work queue drains, and no controller Pod that ran the whole test in one role (leader or standby) grew its goroutines past 1.5x (+100), its resident memory past 2x (+200 MiB; 2.5x + 500 MiB for a `-race` build, whose shadow memory grows with every allocation and is never returned: steady leaders measured up to 2.3x and +261 MiB in the `full` profile) or its memory past 90% of the limit.
+- Prometheus: the reconcile error ratio stays under the test's limit, every work queue drains, and no controller Pod that ran the whole test in one role (leader or standby) grew its goroutines past 1.5x (+100), its resident memory past 2x (+200 MiB; 2.5x + 500 MiB for a `-race` build, whose shadow memory grows with every allocation and is never returned: steady leaders measured up to 2.3x and +261 MiB in the `full` profile) or its memory past 90% of the limit;
+- git pushes: at most half a push refused as non-fast-forward per push that landed (`metrics-push-efficiency`, `Options.MaxRefusedPushRatio`): the auto promotions of one controller that write one branch take turns, so only another writer can make a push lose.
 
 Each test writes `diagnostics/scale/<test>/report.json` (every number:
 latency per stage, Bundle end to end, Graph sizes, reconcile errors, queue

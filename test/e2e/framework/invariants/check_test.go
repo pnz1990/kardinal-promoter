@@ -197,3 +197,15 @@ func TestCheckSLO(t *testing.T) {
 
 	assert.Contains(t, checkSLO(testState(nil, nil), o).Violations[0], "nothing to measure")
 }
+
+// TestPushEfficiency (#1578): refused pushes above the ratio fail the run,
+// none or a few do not, and a shared controller only reports.
+//
+// Covers SCALE-INV-PUSH-01.
+func TestPushEfficiency(t *testing.T) {
+	assert.Empty(t, pushEfficiency(150, 0, 0.5, false))
+	assert.Empty(t, pushEfficiency(150, 75, 0.5, false))
+	assert.Len(t, pushEfficiency(318, 4023, 0.5, false), 1, "the O(N²) wave of #1578")
+	assert.Len(t, pushEfficiency(0, 2, 0.5, false), 1, "refusals with nothing landed")
+	assert.Empty(t, pushEfficiency(318, 4023, 0.5, true), "shared controller: reported only")
+}
