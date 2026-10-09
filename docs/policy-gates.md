@@ -686,6 +686,8 @@ long as the hold lasts. This is exactly what is exempt:
     - gates of every other environment, including the ones the rollback crosses before the
       held one;
     - the freeze gate of a paused Pipeline, which holds steps on its own;
+    - approval gates (an `approval` policy, or an expression on `approvals.*`), met or not: a
+      hold never stands in for the people a quorum requires;
     - any Bundle but the one the hold names.
 
 The exemption applies only to a rollback the controller verifies, at every evaluation:

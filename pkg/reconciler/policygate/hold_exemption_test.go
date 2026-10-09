@@ -236,8 +236,9 @@ func TestPolicyGateReconciler_HoldExemption(t *testing.T) {
 
 // TestHoldExemptible pins exactly which gates a hold can exempt
 // (docs/policy-gates.md#rollback-hold-exemption): gate instances (they carry
-// kardinal.io/bundle) of the held environment, except the freeze gate.
-// Approval gates (#1510) must be added here as never exempt when they land.
+// kardinal.io/bundle) of the held environment, except the freeze gate and
+// approval gates (#1449): an approval policy, or an expression on approvals.*,
+// met or not.
 func TestHoldExemptible(t *testing.T) {
 	inst := func(env string, extra map[string]string) *kardinalv1alpha1.PolicyGate {
 		g := makeGateInstance("g", "default", holdRB, "false", "5m")
@@ -247,16 +248,26 @@ func TestHoldExemptible(t *testing.T) {
 		}
 		return g
 	}
+	approval := inst("prod", nil)
+	approval.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 2}
+	unmet := inst("prod", nil)
+	unmet.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 2}
+	unmet.Spec.Approvals = []kardinalv1alpha1.GateApproval{{User: "alice", Decision: "approve"}}
+	counting := inst("prod", nil)
+	counting.Spec.Expression = "approvals.count >= 1"
 	template := inst("prod", nil)
 	delete(template.Labels, "kardinal.io/bundle")
 	for name, tc := range map[string]struct {
 		gate *kardinalv1alpha1.PolicyGate
 		want bool
 	}{
-		"an instance of the held environment":  {inst("prod", nil), true},
-		"an instance of another environment":   {inst("test", nil), false},
-		"a template (no kardinal.io/bundle)":   {template, false},
-		"the freeze gate of a paused Pipeline": {inst("prod", map[string]string{lifecycle.LabelFreeze: "true"}), false},
+		"an instance of the held environment":    {inst("prod", nil), true},
+		"an instance of another environment":     {inst("test", nil), false},
+		"a template (no kardinal.io/bundle)":     {template, false},
+		"the freeze gate of a paused Pipeline":   {inst("prod", map[string]string{lifecycle.LabelFreeze: "true"}), false},
+		"an approval gate (spec.approval)":       {approval, false},
+		"an approval gate with its quorum unmet": {unmet, false},
+		"an expression on approvals.count":       {counting, false},
 	} {
 		assert.Equal(t, tc.want, policygate.HoldExemptible(tc.gate, "prod"), name)
 	}

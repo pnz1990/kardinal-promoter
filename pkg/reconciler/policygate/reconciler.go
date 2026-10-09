@@ -1407,13 +1407,22 @@ func (r *Reconciler) pipelineGateRequests(ctx context.Context, obj client.Object
 const ReasonGateExempted = "GateExempted"
 
 // HoldExemptible reports whether a hold on env may exempt gate: a gate
-// instance of the held environment. The freeze gate of a paused Pipeline is
-// never an instance, and pause holds steps on its own. The exempt set is
+// instance of the held environment, except an approval gate (approvalGate).
+// The freeze gate of a paused Pipeline is never an instance, and pause holds
+// steps on its own. The exempt set is
 // documented in docs/policy-gates.md#rollback-hold-exemption and enforced
 // by TestHoldExemptible.
 func HoldExemptible(gate *kardinalv1alpha1.PolicyGate, env string) bool {
 	return gate.Labels[labelBundle] != "" && gate.Labels[labelEnvironment] == env &&
-		gate.Labels[lifecycle.LabelFreeze] != "true"
+		gate.Labels[lifecycle.LabelFreeze] != "true" &&
+		!approvalGate(gate) // #1449: a quorum of people is never bypassed by a hold
+}
+
+// approvalGate reports whether gate counts approvals: it has an approval
+// policy (spec.approval) or its expression reads approvals.*. A hold never
+// exempts one, met or not.
+func approvalGate(g *kardinalv1alpha1.PolicyGate) bool {
+	return g.Spec.Approval != nil || strings.Contains(g.Spec.Expression, "approvals.")
 }
 
 // holdExemption returns the hold that exempts gate, a gate instance of
