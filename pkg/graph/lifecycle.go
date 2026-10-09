@@ -77,3 +77,13 @@ func SinkEnvironments(pipeline *kardinalv1alpha1.Pipeline) ([]string, error) {
 	}
 	return sinks, nil
 }
+
+// ValidateOrdering runs the environment-ordering checks of Build alone:
+// names declared once, dependsOn naming declared environments, and no
+// dependency cycle. kardinal validate runs it when an environment name is
+// reserved, which makes the whole Build fail on the node ID first (#1358).
+// Errors wrap ErrInvalid.
+func ValidateOrdering(pipeline *kardinalv1alpha1.Pipeline) error {
+	_, _, err := resolveOrdering(pipeline)
+	return asInvalid(err)
+}

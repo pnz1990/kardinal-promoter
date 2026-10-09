@@ -24,6 +24,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func newGetAuditEventsCmd() *cobra.Command {
@@ -103,9 +104,9 @@ func getAuditEventsFn(out io.Writer, client sigs_client.Client, ns, pipeline, bu
 		events = []v1alpha1.AuditEvent{} // -o json prints [], not null
 	}
 
-	// Sort by timestamp descending (most recent first).
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].Spec.Timestamp.After(events[j].Spec.Timestamp.Time)
+	// Most recent first; within a second, in the order they were written.
+	sort.SliceStable(events, func(i, j int) bool {
+		return lifecycle.CompareAuditEvents(&events[i], &events[j]) > 0
 	})
 
 	// Apply limit.

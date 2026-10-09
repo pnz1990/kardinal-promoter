@@ -298,7 +298,8 @@ spec is set at creation and never mutated. Kubernetes RBAC controls who can dele
 
 | Field | Description |
 |---|---|
-| `spec.timestamp` | RFC 3339 time when the event occurred |
+| `spec.timestamp` | RFC 3339 time when the event occurred, stored to the second |
+| `metadata.annotations["kardinal.io/created-at"]` | The same time with nanoseconds: it orders events within one second, such as a gate that flips twice in a second (`kardinal get auditevents` sorts by it). Events written before v0.10.0 do not have it |
 | `spec.pipelineName` | Name of the Pipeline |
 | `spec.bundleName` | Name of the Bundle being promoted |
 | `spec.environment` | Environment name (e.g. `prod`) |
