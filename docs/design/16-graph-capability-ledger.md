@@ -56,6 +56,12 @@ Rules:
 | [G6](#g6-spec-changes-are-handled-by-delete-and-recreate) | Spec changes handled by delete-and-recreate (kardinal bug, fixed) | Closed | `pkg/graph/client.go` in-place update | Not needed |
 | [G7](#g7-no-ownerreferences-on-graph-children) | No ownerReferences on Graph children | Low | labels + kro inventory; Bundle owns the Graph only | None for the Graph kind |
 | [G8](#g8-logic-still-outside-the-graph) | Logic still outside the Graph (time, CEL gates, git/SCM) | High | reconcilers; see `11-graph-purity-tech-debt.md` | Time: Partial (KREP-025, in review). Everything else: none |
+| [G9](#g9-a-graph-reconcile-costs-three-api-calls-per-object) | A Graph reconcile costs about three uncached API calls per object, and kro reconciles one Graph at a time by default | High at scale | `hack/install-kro.sh` raises the worker count and client QPS; smaller Graphs | None filed; kro#1324 is related |
+| [G10](#g10-a-graph-is-one-etcd-object) | A Graph's spec and inventory share one etcd object (1.5 MiB) | Medium | `pkg/graph/size.go` `CheckSize` refuses a Graph over 1.2 MB | None filed |
+| [G11](#g11-collections-are-all-or-nothing) | A `forEach` collection is all-or-nothing on pending data, and every growth relabels every item | Medium | pacing by choosing the list; label-only events ignored | None filed |
+| [G12](#g12-delete-and-prune-orphan-the-pods-of-a-job) | kro deletes and prunes without a propagation policy, so a Job node orphans its Pods, and a deleted Job runs again | Medium | hooks use a `HookRun` CRD that owns its Job (#1443) | None filed |
+| [G13](#g13-the-graph-controller-cannot-be-sharded) | kro's Graph controller is one leader with one queue | Medium | kardinal shards only its own controllers (#1462) | None filed |
+| [G14](#g14-a-node-with-one-pending-field-is-wholly-unresolved) | One pending field leaves the whole node Unresolved, so live fields cannot sit next to gating fields | Medium | mirror `patch` nodes with a literal target name | None filed |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
@@ -335,6 +341,13 @@ Graph cannot grant itself RBAC while running as that identity. So `IdentityProvi
   `dropHealthNodes` (`pkg/translator/translator.go:293`) and the `unbound` plumbing in
   `IdentityProvisioner.Ensure`. Moot if #1283 removes the health refs; we plan to raise it
   on kro#1464 anyway ([Engagement](#engagement)).
+- **G5-c: cluster-scoped reads (2026-10-08).** A `ref` to a cluster-scoped object needs a
+  ClusterRole and ClusterRoleBinding for the Graph ServiceAccount of every namespace that uses
+  it, and `IdentityProvisioner` creates only RoleBindings. v0.10.0 features avoid it: the
+  translator inlines a `ClusterAnalysisTemplate` into the AnalysisRun template (#1444) and
+  resolves a `ClusterScmProvider` into a static spec field (#1459), the same way it copies
+  PolicyGate templates into instances. No upstream ask: the grant is kardinal's to make, and
+  a static copy also gives the Bundle a snapshot.
 
 ---
 
@@ -436,6 +449,8 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 | PolicyGate CEL (`bundle.*`, `schedule.*`, `metrics.*`, `upstream.*`) | `pkg/reconciler/policygate` | Time and explainability. A Graph can already read every data source a gate uses (selector refs from KREP-003 decorators, reshaped by a `def` node), and `changewindow.isAllowed/isBlocked` are sugar for a map index. What it cannot do: time-derived fields (metric staleness, active ChangeWindows), and recording why a gate blocked (`status.reason`, `lastEvaluatedAt`, the audit that `kardinal explain` shows) | A clock in CEL (KREP-025). Explainability needs no kro change: the PolicyGate CR plus its reconciler, which writes `status.ready`, is the intended shape (an owned node) |
 | Git and SCM steps (clone, kustomize, push, open PR, merge detection) | `pkg/steps`, `pkg/scm`, PRStatus reconciler | Side effects on external systems; kro only applies Kubernetes objects | Out of scope for kro. The PromotionStep CR is the Graph-native boundary |
 | Health adapters (HealthChecking to Verified) | `pkg/health/adapter.go` via PromotionStep reconciler | A Graph cannot write PromotionStep status, and `readyWhen` does not gate dependents (G1, G3) | None needed: stays in the reconciler by design (#1283) |
+| Remote-cluster health (`health.cluster`, #1458, planned for v0.10.0) | PromotionStep reconciler health adapter, with a client built from a kubeconfig Secret in the Pipeline namespace | kro reads only its own cluster; no Graph primitive reads another cluster (see "multi-cluster" below) | None asked: the adapter already runs in the reconciler (G3) |
+| Gate results as SCM commit statuses while a PR waits for merge (#1452, planned for v0.10.0) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14) | Side effect on an external system | Out of scope for kro |
 | Holding an existing PromotionStep: pause (freeze gate) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
 
 **Upstream work: time.**
@@ -481,6 +496,173 @@ instance controller. It would let a Superseded Bundle's Graph freeze without the
 
 ---
 
+## G9: A Graph reconcile costs three API calls per object
+
+**Need.** A promotion with 100 or more environments, several Bundles in flight, and every other
+Pipeline in the cluster still moving at normal speed.
+
+**kro today.** Every reconcile walks every node and, for each object it applies, makes an
+uncached `GET` (`executor/simple.go` `getLive`, `:1092`), an uncached SelfSubjectAccessReview
+before it registers the drift watch (`controller/graph/impersonation.go:203` `canWatchFor`,
+called from `simple.go:1421` `watchObject`), and a server-side apply `PATCH`, with no skip when
+nothing changed. The impersonated client is a plain `client.New` (`cmd/controller/graphengine.go:87-90`).
+Graphs are reconciled one at a time by default (`--graph-concurrent-reconciles=1`,
+`cmd/controller/main.go:142`), with client QPS 100 and burst 150 (`:172`).
+
+Measured on kind (kro v0.10.0-rc.0, 2026-10-08): after a 150-environment run the kro client had
+made about 130,000 GETs, 130,000 PATCHes and 131,000 POSTs (the access reviews). A linear chain
+advances one environment per reconcile: 4.4 s median per environment at 150 environments
+(1,050 objects), 700 s for the whole chain. While two such Graphs reconciled, a three-node Graph
+took 4 to 29 s to react to a change, against about 0.1 s when idle; with 8 workers it took 0.1 to
+0.3 s.
+
+**kardinal workaround.** `hack/install-kro.sh` sets `config.graphConcurrentReconciles=8`,
+`config.clientQps=300` and `config.clientBurst=500` (overridable; `docs/installation.md`
+§Install kro). Planned (next PR): Graphs stay small by moving gate instances and PRStatuses into
+`forEach` collections, whose items kro applies 20 at a time (`--apply-concurrency`).
+
+**Upstream work.** None filed. [kro#1324](https://github.com/kubernetes-sigs/kro/issues/1324)
+(30 s watch-sync block per reconcile) is related: it also stalls every Graph behind one.
+
+**Smallest changes, no upstream work yet.** Cache `CanWatch` per (identity, GVR, namespace) with
+a short TTL; skip the SSA when the rendered object hashes to what was last applied (an
+annotation); read the live object through the metadata informer kro already runs. Each removes a
+third of the calls. A default above 1 for `graph-concurrent-reconciles` is worth asking on
+kro#1324.
+
+---
+
+## G10: A Graph is one etcd object
+
+**Need.** Pipelines with hundreds of environments.
+
+**kro today.** The Graph object holds the spec kardinal writes and kro's
+`status.managedResources` inventory, one entry per applied object (`api/v1alpha1/graph_types.go:80-87`,
+`maxItems: 5000`). etcd refuses a write over 1.5 MiB (`etcdserver: request is too large`); the API
+server's gRPC limit is 2 MiB. There is no node-count limit in the compiler. The Graph kind has
+no GraphRevision, so there is no second copy of the spec. When a write does not fit, the API
+server drops `metadata.managedFields` and retries (`k8s.io/apiserver`
+`pkg/endpoints/handlers/update.go:229-236`), so managedFields do not count against the limit,
+but every write near it fails once at etcd first.
+
+Measured with Graphs from kardinal's builder (one node per object): 1.1 KB of spec per
+environment for its PromotionStep and PRStatus, 1.1 KB per PolicyGate instance, 242 bytes of
+status per applied object. 150 environments with 3 gates and 2 hook Jobs each (1,051 nodes)
+were 1,119,167 bytes once everything was applied. 300 environments (1,716,336 bytes of spec)
+were refused at create. The ceiling with 3 gates per environment is about 280 environments,
+with 3 gates and 2 hooks about 210.
+
+**kardinal workaround.** `pkg/graph/size.go` `CheckSize`, called by the translator before the
+Graph is written: the JSON size plus 260 bytes per template node may not exceed 1,200,000
+bytes. Over it, the Bundle fails with `GraphBuildFailed` and a message that names the size and
+the fix (a new Bundle or a Pipeline edit retries). Planned: gate and PRStatus collections shrink
+the spec (G9 workaround), and a compact shape that keeps the promotion DAG as data in a `def` node
+serves Pipelines with more than about 200 environments.
+
+**Upstream work.** None filed. Optional ask: keep the inventory out of the Graph object (an
+ApplySet-style parent or a child object), so the spec alone bounds the size.
+
+---
+
+## G11: Collections are all-or-nothing
+
+**Need.** Fan one environment out to many targets (fleets, #1457) and pace them, and keep
+gate and PRStatus instances in collections (G10).
+
+**kro today.** A node is rendered row by row and the first data-pending field returns from
+`Resolve` (`runtime/node.go:311-316`, `:358-372`), so one pending item leaves the whole
+collection Unresolved: no item is applied or pruned. There is no per-item gating. Every item is
+stamped with `kro.run/collection-size` (`executor/simple.go:1129-1137`), so a collection that
+grows by one item rewrites every item's labels.
+
+Measured on kind: the first item's `resourceVersion` changed each time a 300-item step
+collection grew (sizes 91, 95, 99), and kro routed 45,814 PromotionStep events over one
+300-environment run.
+
+**kardinal workaround.** Pacing is done by choosing the list: a `def` node computes the items
+to admit from a selector `ref` that reads the collection's own objects back (no CEL edge, so no
+cycle), and items already admitted stay in the list, so pacing never prunes. Verified on kind
+with `maxConcurrent` and `maxUnavailable`. kardinal's reconcilers must ignore label-only updates
+on the objects they own, or they reconcile every item on each growth.
+
+**Upstream work.** None filed.
+
+**Smallest changes, no upstream work yet.** A per-item option to skip an item whose fields are
+pending (keep its existing object); make the `collection-size` label optional or drop it, since
+`collection-index` and `node-id` already identify the item.
+
+---
+
+## G12: Delete and prune orphan the Pods of a Job
+
+**Need.** Run a Job before or after an environment's deploy (database migrations, integration
+tests) once per Bundle and environment (#1443).
+
+**kro today.** `executor/simple.go:530-555` (`Delete`, used for prune and teardown) sends a UID
+precondition and no `propagationPolicy`. For `batch/v1` Jobs the API default orphans the Pods.
+A template node also re-creates an object that disappears, and a Job's pod template is
+immutable.
+
+Verified on kind with a Job template node: deleting the Graph deleted the Jobs and left their 3
+Pods; deleting a completed Job made kro create it again, and it ran again; changing the Job's
+command in the Graph failed with `spec.template: ... field is immutable`, a hard error that stops
+prune and release for the whole Graph until the change is reverted.
+
+**kardinal workaround.** Hooks are `HookRun` objects (a kardinal CRD) in the Graph. The HookRun
+reconciler creates the Job with a controller ownerReference, so garbage collection deletes the
+Pods, records a terminal phase once and never runs the Job again, and ignores spec changes after
+the Job started. Planned for v0.10.0 (#1443).
+
+**Upstream work.** None filed.
+
+**Smallest change, no upstream work yet.** Delete and prune with
+`propagationPolicy: Background` (the executor owns the objects it deletes), or a per-node
+`deletionPropagation`. Re-creating a run-once kind is by design; documenting it would help.
+
+---
+
+## G13: The Graph controller cannot be sharded
+
+**Need.** Spread promotion work across controller replicas (#1462).
+
+**kro today.** One kro leader reconciles every Graph in the cluster from one queue
+(`controller/graph/controller.go` `SetupWithManager`); there is no label selector or shard flag
+for Graphs.
+
+**kardinal workaround.** kardinal shards only its own controllers, by namespace label (#1462).
+Graph throughput stays bounded by the one kro instance (G9).
+
+**Upstream work.** None filed. Ask: a `--graph-selector` label selector on the Graph
+controller, so several kro installations can split Graphs.
+
+---
+
+## G14: A node with one pending field is wholly Unresolved
+
+**Need.** Give an existing PromotionStep live data from other nodes (gate results while its PR
+waits for merge, hook and analysis results, image verification) while its template also carries
+the `resolvableWhen` gating fields of G1.
+
+**kro today.** One data-pending field makes the whole node Unresolved (`runtime/node.go:358-372`),
+and an Unresolved node is not re-applied (`executor/simple.go:318-323`). Once a gate turns false
+after the step exists, the step's template is frozen. `TolerateDataPending`, which omits a
+pending field and applies the rest, is set only for the RGD adapter's status node
+(`compiler/compiler.go:304`, `compiler/program.go:100-104`).
+
+**kardinal workaround.** A `patch` node per environment whose target is the step's literal
+name (not `${step.metadata.name}`, which is Unresolved with the step) writes the live data
+onto the step. A patch whose target does not exist yet is a soft not-ready, and a patch may
+target an object a template node of the same Graph owns; the two field managers coexist.
+Verified on kind: the mirrored gate result followed the gate (true, false, true) while the step
+node was Unresolved.
+
+**Upstream work.** None filed.
+
+**Smallest change, no upstream work yet.** Let a Graph node opt into `TolerateDataPending`, or
+per field. The G1 `gateReadiness` opt-in would also do: the gating fields would go away.
+
+---
+
 ## Notes: constraints we design around
 
 These are not gaps, but the translator has to work around them.
@@ -495,7 +677,7 @@ These are not gaps, but the translator has to work around them.
   environment name (`api/v1alpha1/pipeline_types.go`), and `pkg/graph/validate.go` checks
   node IDs. Upstream: [kro#1434](https://github.com/kubernetes-sigs/kro/pull/1434) (KREP-025)
   adds `time` to the reserved IDs, so an environment named `time` would make the Graph invalid
-  once it ships; kardinal should reserve it now. IDs over 63 characters are fine: since
+  once it ships, so kardinal reserves it already (`pkg/graph/validate.go`, `api/v1alpha1/pipeline_types.go`). IDs over 63 characters are fine: since
   [kro#1392](https://github.com/kubernetes-sigs/kro/pull/1392) (in the pin) the `kro.run/node-id`
   label value is hashed and the readable ID moves to an annotation. Quickstart gate IDs are
   65 characters; kardinal never selects on that label.
@@ -539,6 +721,30 @@ These are not gaps, but the translator has to work around them.
 
 ---
 
+## kro upgrade checklist
+
+Run on every kro upgrade (the cadence and the analysis steps are in AGENTS.md §kro Upgrade
+Cadence):
+
+1. Set `KRO_VERSION` in `hack/install-kro.sh` and the `kro.version` annotation in
+   `chart/kardinal-promoter/Chart.yaml`.
+2. **cel-go parity.** Copy the `github.com/google/cel-go` version from kro's `go.mod` at the new
+   tag into `KRO_CEL_GO_VERSION` in `hack/install-kro.sh`, and require the same version in
+   kardinal's `go.mod`. `TestCelGoParity` (`test/hack`) fails until they match. The G1 workaround
+   depends on kro classifying cel-go's `index out of bounds` error as data-pending
+   (`runtime/errors.go`), and `TestBuilder_SupersededHoldIsDataPending` checks that text with
+   kardinal's cel-go, so the test proves nothing if the versions differ. Also check that
+   `celDataPendingPatterns` in kro's `runtime/errors.go` still lists `index out of bounds`.
+3. Check the reserved node IDs in kro's `compiler/validation.go` against `reservedNodeIDs` in
+   `pkg/graph/validate.go` and the reserved environment names in `api/v1alpha1/pipeline_types.go`.
+4. Check the tuning values `hack/install-kro.sh` sets still exist in kro's `helm/values.yaml`
+   (`config.graphConcurrentReconciles`, `config.clientQps`, `config.clientBurst`), and re-check
+   G9 and G10: the per-object call count and the inventory entry size.
+5. Re-read the entries above for anything the new tag closes, and the hazards in the upstream
+   survey (`graphcleanup` depends on the finalizer name and the `status.managedResources` shape).
+
+---
+
 ## Upstream survey (2026-10-02)
 
 kro `main` at `e1b94df`, 18 commits past the pin (`v0.10.0-rc.0`, `54a203b`). Open and recent
@@ -561,12 +767,18 @@ blocks above.
 | Recurring time windows | Calendar and timezone helpers (follow-up to KREP-025) | Yes, already raised on kro#1434 |
 | Empty collection is ready; no `forEach` on refs; typed data-pending error; Graph `Ready` latch | See Notes | No |
 | Multi-cluster reads; adopter-registered CEL functions | Read-only `ref.cluster`; a function registry | No |
+| G9 walk cost | Cache `CanWatch`; skip unchanged SSA; informer-backed GET | Yes |
+| G10 object size | Inventory outside the Graph object | Optional |
+| G11 collections | Per-item pending tolerance; optional `collection-size` label | Yes |
+| G12 Job orphans | Background propagation on delete and prune | Yes |
+| G13 sharding | `--graph-selector` on the Graph controller | Yes, with G9 |
+| G14 frozen nodes | `TolerateDataPending` opt-in for Graph nodes | Yes, unless G1 lands first |
 
 ### Hazards found
 
 | Hazard | Effect on kardinal | Action |
 |--------|--------------------|--------|
-| [kro#1434](https://github.com/kubernetes-sigs/kro/pull/1434) reserves `time` | An environment named `time` would make the Graph invalid | Reserve `time` in `pkg/graph/validate.go` and the Pipeline API now |
+| [kro#1434](https://github.com/kubernetes-sigs/kro/pull/1434) reserves `time` | An environment named `time` would make the Graph invalid | Done (2026-10-08): `time` is reserved in `pkg/graph/validate.go` and the Pipeline API |
 | [kro#1464](https://github.com/kubernetes-sigs/kro/issues/1464) watches dropped on a hard failure | While one branch keeps hard-failing, a node created in another branch gets no watch, so the Graph waits on controller-runtime backoff (up to ~16 minutes per transition). The hot loop needs a never-committed Graph that is the only user of a kind | Upgrade when kro#1465 or the async watch work lands; comment on kro#1464 |
 | [kro#1324](https://github.com/kubernetes-sigs/kro/issues/1324) 30s watch-sync block per reconcile | kro's Graph controller defaults to `--graph-concurrent-reconciles=1`, so one Graph stuck on a kind kro cannot list delays every Graph. Triggered by `graph.aggregateToKro=false` with kro in aggregation mode, or a slow initial list on a large cluster | Set `config.graphConcurrentReconciles` above 1 in `hack/install-kro.sh` and the install docs; document `config.watchSyncTimeout` after the next kro upgrade |
 | cel-go version drift | `resolvableWhen` depends on cel-go's `index out of bounds` text (Notes) | Compare cel-go versions on every kro upgrade |

@@ -35,6 +35,20 @@ The script installs the kro Helm chart (`oci://registry.k8s.io/kro/charts/kro`) 
 with `config.featureGates.GraphKind=true` and `rbac.mode=aggregation`, then server-side applies the
 kro CRDs. Override the version with `KRO_VERSION=<version>`.
 
+The script also tunes kro for kardinal's Graphs:
+
+| Helm value | kro default | Script default | Override |
+|---|---|---|---|
+| `config.graphConcurrentReconciles` | 1 | 8 | `KRO_GRAPH_CONCURRENT_RECONCILES` |
+| `config.clientQps` | 100 | 300 | `KRO_CLIENT_QPS` |
+| `config.clientBurst` | 150 | 500 | `KRO_CLIENT_BURST` |
+
+kro reconciles one Graph at a time by default, and each reconcile makes about three API calls per
+object the Graph applies. With one worker, one large promotion (a Pipeline with 150 environments)
+delays every other Graph in the cluster by several seconds, up to about 30 seconds while two such
+promotions run. Eight workers keep that under half a second. If you install kro another way, set
+the same values.
+
 !!! warning "Version compatibility"
     The kro version kardinal-promoter is tested against is pinned in `hack/install-kro.sh`.
 
@@ -251,6 +265,10 @@ never applied, and a key the new chart removed fails its schema.
 `helm upgrade` upgrades the kardinal-promoter controller only. Upgrade kro separately by
 re-running `hack/install-kro.sh` from the matching kardinal-promoter release.
 
+From v0.10.0 the Pipeline CRD rejects an environment named `time`: kro#1434 proposes reserving it
+as a Graph node ID. Rename such an environment before you upgrade (see the reserved names in the
+[Pipeline reference](pipeline-reference.md)); renaming gives it new PromotionSteps and PR branches.
+
 ### Downgrading
 
 A controller from v0.9.0-rc.1 or earlier does not know the `kardinal.io/close-pr` finalizer
@@ -284,7 +302,7 @@ kubectl version | grep Server
 
 ```bash
 kubectl get pipelines -A -o json | jq -r '
-  ["api-version","kind","metadata","namespace","spec","status","graph","graphengine","kro","each","item","items","object","self","this","context","true","false","null","in","as","break","const","continue","else","for","function","if","import","let","loop","package","return","var","void","while","bundle"] as $reserved
+  ["api-version","kind","metadata","namespace","spec","status","graph","graphengine","kro","each","item","items","object","self","this","context","true","false","null","in","as","break","const","continue","else","for","function","if","import","let","loop","package","return","var","void","while","bundle","time"] as $reserved
   | .items[] | "pipeline \(.metadata.namespace)/\(.metadata.name)" as $p
   | ( (select((.spec.policyGates // []) | length > 0) | "\($p): spec.policyGates"),
       ((.spec.environments // []) | group_by(.name)[] | select(length > 1) | "\($p): duplicate environment name \(.[0].name)"),
