@@ -53,10 +53,16 @@ func renderObjectsWith(t *testing.T, g *graph.Graph, refs map[string]interface{}
 		if n.Def != nil {
 			defs[n.ID] = n.Def
 		}
-		// A selector ref not given is an empty collection.
-		if md, _ := n.Ref["metadata"].(map[string]interface{}); md["selector"] != nil {
+		// A selector ref not given is an empty collection; a named ref not
+		// given is the object with its name and a made-up UID.
+		if md, _ := n.Ref["metadata"].(map[string]interface{}); md != nil {
 			if _, given := defs[n.ID]; !given {
-				defs[n.ID] = []interface{}{}
+				if md["selector"] != nil {
+					defs[n.ID] = []interface{}{}
+				} else {
+					defs[n.ID] = map[string]interface{}{"metadata": map[string]interface{}{
+						"name": md["name"], "namespace": md["namespace"], "uid": fmt.Sprintf("uid-%v", md["name"])}}
+				}
 			}
 		}
 	}

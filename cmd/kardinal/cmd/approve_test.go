@@ -56,7 +56,7 @@ func TestApprove(t *testing.T) {
 	a := list[0]
 	assert.Equal(t, name, a.Name)
 	assert.Equal(t, map[string]string{"kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod", "kardinal.io/pipeline": "app"}, a.Labels)
-	assert.Equal(t, v1alpha1.ApprovalSpec{Bundle: "app-v1", Environment: "prod", User: "oidc:alice@example.com",
+	assert.Equal(t, v1alpha1.ApprovalSpec{Bundle: "app-v1", BundleUID: "uid-1", Environment: "prod", User: "oidc:alice@example.com",
 		Groups: []string{"release-managers", "system:authenticated"}, Decision: "approve", Comment: "LGTM"}, a.Spec)
 	require.Len(t, a.OwnerReferences, 1)
 	assert.Equal(t, "Bundle", a.OwnerReferences[0].Kind)
@@ -113,4 +113,37 @@ func TestApprovalName(t *testing.T) {
 	assert.NotEqual(t, a, approvalName("app-v1", "test", "alice"), "one per environment")
 	long := approvalName(string(bytes.Repeat([]byte("b"), 300)), "prod", "alice")
 	assert.LessOrEqual(t, len(long), 253)
+}
+
+// TestApprove_SomeoneElsesApproval: an Approval with the caller's name that
+// belongs to someone else is never counted as the caller's, replaced or
+// revoked; one of an earlier Bundle with the same name is replaced.
+func TestApprove_SomeoneElsesApproval(t *testing.T) {
+	stubIdentity(t, Identity{Username: "alice"})
+	ctx := context.Background()
+	name := approvalName("app-v1", "prod", "alice")
+	squat := &v1alpha1.Approval{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec:       v1alpha1.ApprovalSpec{Bundle: "app-v1", BundleUID: "uid-1", Environment: "prod", User: "mallory", Decision: "reject"},
+	}
+	c := approveFixture(t, "Promoting")
+	require.NoError(t, c.Create(ctx, squat))
+	for _, o := range []approveOptions{{env: "prod", decision: "reject"}, {env: "prod", decision: "approve"}, {env: "prod", decision: "approve", revoke: true}} {
+		err := approveFn(ctx, &bytes.Buffer{}, c, "default", "app-v1", o)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "belongs to mallory, not to you (alice)")
+	}
+	require.Len(t, approvals(t, c), 1)
+	assert.Equal(t, "mallory", approvals(t, c)[0].Spec.User)
+
+	stale := approvals(t, c)[0]
+	require.NoError(t, c.Delete(ctx, &stale))
+	old := squat.DeepCopy()
+	old.ResourceVersion = ""
+	old.Spec.User, old.Spec.BundleUID, old.Spec.Decision = "alice", "uid-of-an-earlier-app-v1", "approve"
+	require.NoError(t, c.Create(ctx, old))
+	require.NoError(t, approveFn(ctx, &bytes.Buffer{}, c, "default", "app-v1", approveOptions{env: "prod", decision: "approve"}))
+	list := approvals(t, c)
+	require.Len(t, list, 1)
+	assert.Equal(t, "uid-1", list[0].Spec.BundleUID, "the earlier Bundle's Approval is replaced")
 }

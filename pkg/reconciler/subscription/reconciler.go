@@ -363,6 +363,7 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 		}
 	}
 	lifecycle.StampCreatedAt(bundle, now) // sub-second creation order for supersession
+	lifecycle.StampCreatedBy(bundle, "subscription:"+sub.Name)
 
 	rej, err := lifecycle.LoadRejectedArtifacts(ctx, r.Client, ns, sub.Spec.Pipeline)
 	if err != nil {

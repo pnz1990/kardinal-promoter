@@ -5,6 +5,9 @@ package policygate_test
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,7 +78,7 @@ func TestPolicyGateReconciler_Approvals(t *testing.T) {
 			gate.Spec.Approvals = tc.approvals
 			bundle := makeBundle("nginx-demo-v1", "default")
 			bundle.Status.Phase = "Promoting"
-			bundle.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{Author: "ci-bot"}
+			bundle.Annotations = map[string]string{"kardinal.io/created-by": "ci-bot"}
 			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).WithStatusSubresource(gate, bundle).Build()
 			r, err := policygate.NewReconciler(c)
 			require.NoError(t, err)
@@ -139,4 +142,97 @@ func TestPolicyGateReconciler_ApprovalFirstSeenKept(t *testing.T) {
 	assert.True(t, got.Status.Approvals[0].FirstSeenAt.Equal(&metav1.Time{Time: t0}), "alice first seen at t0")
 	assert.True(t, got.Status.Approvals[1].FirstSeenAt.Equal(&metav1.Time{Time: t0.Add(time.Hour)}), "bob first seen an hour later")
 	assert.True(t, got.Status.Ready)
+}
+
+// TestPolicyGateReconciler_ApprovalHeld: an approval gate blocks, whatever
+// the approvals, when excludeAuthor cannot be enforced (the Bundle has no
+// verified creator) or when it got more Approvals than it counts.
+func TestPolicyGateReconciler_ApprovalHeld(t *testing.T) {
+	many := make([]kardinalv1alpha1.GateApproval, 101)
+	for i := range many {
+		many[i] = decision(fmt.Sprintf("u%03d", i), "approve")
+	}
+	cases := []struct {
+		name      string
+		policy    *kardinalv1alpha1.GateApprovalPolicy
+		creator   string
+		approvals []kardinalv1alpha1.GateApproval
+		want      string
+		ready     bool
+	}{
+		{name: "excludeAuthor without a creator", policy: &kardinalv1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true},
+			approvals: []kardinalv1alpha1.GateApproval{decision("alice", "approve")},
+			want:      "excludeAuthor cannot be enforced: the Bundle has no verified creator (annotation kardinal.io/created-by)"},
+		{name: "excludeAuthor with a creator", policy: &kardinalv1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true}, creator: "bob",
+			approvals: []kardinalv1alpha1.GateApproval{decision("alice", "approve")}, want: "approved by alice (1 of 1)", ready: true},
+		{name: "without excludeAuthor no creator is needed", policy: &kardinalv1alpha1.GateApprovalPolicy{Required: 1},
+			approvals: []kardinalv1alpha1.GateApproval{decision("alice", "approve")}, want: "approved by alice (1 of 1)", ready: true},
+		{name: "too many approvals", policy: &kardinalv1alpha1.GateApprovalPolicy{Required: 1}, approvals: many,
+			want: "more than 100 Approvals for this Bundle in prod"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gate := makeGateInstance("g", "default", "nginx-demo-v1", "true", "5m")
+			gate.Spec.Approval, gate.Spec.Approvals = tc.policy, tc.approvals
+			bundle := makeBundle("nginx-demo-v1", "default")
+			bundle.Status.Phase = "Promoting"
+			if tc.creator != "" {
+				bundle.Annotations = map[string]string{"kardinal.io/created-by": tc.creator}
+			}
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).WithStatusSubresource(gate, bundle).Build()
+			r, err := policygate.NewReconciler(c)
+			require.NoError(t, err)
+			_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "g", Namespace: "default"}})
+			require.NoError(t, err)
+			var got kardinalv1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "g", Namespace: "default"}, &got))
+			assert.Equal(t, tc.ready, got.Status.Ready)
+			assert.Contains(t, got.Status.Reason, tc.want)
+		})
+	}
+}
+
+// TestPolicyGateReconciler_ApprovalAudits: a decision that appears in the
+// gate's approvals writes ApprovalRecorded, one that leaves it (the Approval
+// was deleted) ApprovalRevoked, each once.
+func TestPolicyGateReconciler_ApprovalAudits(t *testing.T) {
+	gate := makeGateInstance("g", "default", "nginx-demo-v1", "true", "5m")
+	gate.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 2}
+	gate.Spec.Approvals = []kardinalv1alpha1.GateApproval{decision("alice", "approve")}
+	bundle := makeBundle("nginx-demo-v1", "default")
+	bundle.Status.Phase = "Promoting"
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).WithStatusSubresource(gate, bundle).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "g", Namespace: "default"}}
+	actions := func() []string {
+		var list kardinalv1alpha1.AuditEventList
+		require.NoError(t, c.List(context.Background(), &list))
+		var out []string
+		for _, a := range list.Items {
+			if strings.HasPrefix(a.Spec.Action, "Approval") {
+				out = append(out, a.Spec.Action+" "+a.Spec.Message)
+			}
+		}
+		sort.Strings(out)
+		return out
+	}
+	for range 2 {
+		_, err = r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, []string{"ApprovalRecorded approve by alice recorded on gate g (counted)"}, actions())
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	got.Spec.Approvals = nil
+	require.NoError(t, c.Update(context.Background(), &got))
+	for range 2 {
+		_, err = r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, []string{
+		"ApprovalRecorded approve by alice recorded on gate g (counted)",
+		"ApprovalRevoked approve by alice revoked on gate g (counted)",
+	}, actions())
 }

@@ -244,7 +244,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Approvals (#1449): count spec.approvals, which the Graph copies from
 	// the Bundle's Approval objects, against spec.approval (buildContext
 	// exposes the same count to the expression as approvals.*).
-	tally := tallyApprovals(&gate, bundleAuthor(celCtx))
+	tally := tallyApprovals(&gate, bundleCreator(celCtx))
 	if err := r.recordApprovals(ctx, &gate, tally); err != nil {
 		log.Warn().Err(err).Msg("failed to record approvals in status (non-fatal)")
 	}
@@ -444,6 +444,9 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"type":    bundle.Spec.Type,
 		"version": version,
 		"labels":  labelsCtx,
+		// createdBy is the verified creator (kardinal.io/created-by), "" when
+		// the Bundle has none.
+		"createdBy": bundle.Annotations[lifecycle.AnnotationCreatedBy],
 		"provenance": map[string]interface{}{
 			"author":    "",
 			"commitSHA": "",
@@ -542,17 +545,16 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"metrics":      metricsCtx,
 		"upstream":     upstreamCtx,
 		"changewindow": cwCtx,
-		"approvals":    tallyApprovals(gate, bundleAuthor(map[string]interface{}{"bundle": bundleCtx})).context(),
+		"approvals":    tallyApprovals(gate, bundleCreator(map[string]interface{}{"bundle": bundleCtx})).context(),
 	}, version, nil
 }
 
-// bundleAuthor reads bundle.provenance.author from a CEL context built by
+// bundleCreator reads bundle.createdBy from a CEL context built by
 // buildContext.
-func bundleAuthor(celCtx map[string]interface{}) string {
+func bundleCreator(celCtx map[string]interface{}) string {
 	b, _ := celCtx["bundle"].(map[string]interface{})
-	p, _ := b["provenance"].(map[string]interface{})
-	author, _ := p["author"].(string)
-	return author
+	creator, _ := b["createdBy"].(string)
+	return creator
 }
 
 // directUpstreamSoakMinutes returns the soak minutes of the environments that

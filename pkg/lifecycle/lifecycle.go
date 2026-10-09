@@ -49,7 +49,34 @@ const (
 	// AnnotationRequestedBy records who asked for a promote, a rollback or a
 	// Bundle created from the UI.
 	AnnotationRequestedBy = "kardinal.io/requested-by"
+	// AnnotationCreatedBy is who created a Bundle: the Kubernetes username of
+	// a person (the chart's admission policy pins it to the requester), or a
+	// kardinal component ("subscription:<name>", "bundle-api",
+	// "kardinal-controller") for the Bundles the controller creates. An
+	// approval gate's excludeAuthor compares approvers with it.
+	AnnotationCreatedBy = "kardinal.io/created-by"
 )
+
+// ControllerCreator is the kardinal.io/created-by of the Bundles the
+// controller creates on its own (automatic rollbacks).
+const ControllerCreator = "kardinal-controller"
+
+// StampCreatedBy sets the kardinal.io/created-by annotation on obj to who,
+// unless it is already set or who is empty.
+func StampCreatedBy(obj metav1.Object, who string) {
+	if who == "" {
+		return
+	}
+	ann := obj.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	if _, ok := ann[AnnotationCreatedBy]; ok {
+		return
+	}
+	ann[AnnotationCreatedBy] = who
+	obj.SetAnnotations(ann)
+}
 
 // Sentinel errors. Callers map them to exit messages or HTTP status codes
 // (ErrNotFound → 404, ErrInvalid → 400, ErrConflict → 409).

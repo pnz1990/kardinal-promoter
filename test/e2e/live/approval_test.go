@@ -27,7 +27,7 @@ import (
 
 // approverRole is the chart's approver ClusterRole (approver-role.yaml) of the
 // e2e release.
-const approverRole = framework.ControllerDeployment + "-approver"
+const approverRole = framework.ControllerDeployment + "-approvals"
 
 // userKubeconfig writes a kubeconfig that reaches the kind cluster as user in
 // groups (client-go impersonation on top of the harness credentials), so the
@@ -62,7 +62,10 @@ func userKubeconfig(t *testing.T, e *framework.Env, ns, user string, groups ...s
 // in another user's name is refused by the admission policy, a reject from
 // an allowed approver blocks until revoked, and the second allowed approval
 // lets prod promote. Each decision is an Approval object in the approver's
-// own name, and status.approvals says which ones count.
+// own name, and status.approvals says which ones count. An Approval with a
+// group the approver does not have is refused, someone else cannot delete
+// (revoke) an Approval, every decision writes an ApprovalRecorded or
+// ApprovalRevoked AuditEvent, and the Bundle names its verified creator.
 //
 // Covers GATE-APPROVAL-01, GATE-APPROVAL-02, GATE-APPROVAL-03, CLI-APPROVE-01.
 func TestGate_ApprovalQuorum(t *testing.T) {
@@ -97,21 +100,37 @@ func TestGate_ApprovalQuorum(t *testing.T) {
 	assert.False(t, gate.Status.Ready)
 
 	// An Approval in someone else's name is refused (identity policy).
-	forger := impersonating(t, e, a.ns, "mallory@example.com", []string{"devs"}, []string{"approvals"}, "create")
-	err := forger.Create(ctx, &v1alpha1.Approval{
-		ObjectMeta: metav1.ObjectMeta{Name: "forged", Namespace: a.ns,
-			Labels: map[string]string{"kardinal.io/bundle": bundle, "kardinal.io/environment": "prod"}},
-		Spec: v1alpha1.ApprovalSpec{Bundle: bundle, Environment: "prod", User: "alice@example.com",
-			Groups: []string{"release-managers"}, Decision: "approve"},
-	})
+	forger := impersonating(t, e, a.ns, "mallory@example.com", []string{"devs"}, []string{"approvals"}, "create", "delete")
+	b := getBundle(t, e, a.ns, bundle)
+	forged := func(name, user string, groups ...string) *v1alpha1.Approval {
+		return &v1alpha1.Approval{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: a.ns,
+				Labels: map[string]string{"kardinal.io/bundle": bundle, "kardinal.io/environment": "prod"}},
+			Spec: v1alpha1.ApprovalSpec{Bundle: bundle, BundleUID: string(b.UID), Environment: "prod", User: user,
+				Groups: groups, Decision: "approve"},
+		}
+	}
+	err := forger.Create(ctx, forged("forged-user", "alice@example.com", "release-managers"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `spec.user must be your own username "mallory@example.com"`)
+	err = forger.Create(ctx, forged("forged-group", "mallory@example.com", "release-managers"))
+	require.Error(t, err, "a group the approver does not have is refused")
+	assert.Contains(t, err.Error(), "spec.groups may only list your own groups")
 
 	// One allowed approval of two.
 	r = as(alice, "approve", bundle, "--env", "prod")
 	require.Equal(t, 0, r.Code, r.Output())
 	e.WaitGateReady(t, a.ns, bundle, "prod", "two-approvers", false, "waiting for approvals: 1 of 2 (alice@example.com)", gateTimeout)
 	a.noStep(t, bundle, "prod", 10*time.Second)
+
+	// Only alice can revoke her Approval.
+	words := strings.Fields(r.Stdout) // ... (Approval <name>)
+	var alices v1alpha1.Approval
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: strings.TrimSuffix(words[len(words)-1], ")")}, &alices))
+	assert.Equal(t, string(b.UID), alices.Spec.BundleUID)
+	err = forger.Delete(ctx, &alices)
+	require.Error(t, err, "someone else cannot revoke alice's approval")
+	assert.Contains(t, err.Error(), "only alice@example.com can revoke this Approval")
 
 	// An allowed reject blocks, whatever the approvals.
 	r = as(bob, "approve", bundle, "--env", "prod", "--decision", "reject", "--comment", "wait for the DB migration")
@@ -143,4 +162,22 @@ func TestGate_ApprovalQuorum(t *testing.T) {
 	}
 	assert.Equal(t, map[string]bool{"alice@example.com": true, "bob@example.com": true, "mallory@example.com": false}, counted,
 		fmt.Sprintf("status.approvals: %+v", final.Status.Approvals))
+
+	// Every decision is audited: bob's reject recorded and revoked by his
+	// approve, which is recorded too.
+	var audits v1alpha1.AuditEventList
+	require.NoError(t, e.Client.List(ctx, &audits, client.InNamespace(a.ns), client.MatchingLabels{"kardinal.io/bundle": bundle}))
+	var decisions []string
+	for _, ae := range audits.Items {
+		if strings.HasPrefix(ae.Spec.Action, "Approval") {
+			decisions = append(decisions, ae.Spec.Action+" "+strings.Fields(ae.Spec.Message)[0]+" "+strings.Fields(ae.Spec.Message)[2])
+		}
+	}
+	assert.ElementsMatch(t, []string{
+		"ApprovalRecorded approve mallory@example.com", "ApprovalRecorded approve alice@example.com",
+		"ApprovalRecorded reject bob@example.com", "ApprovalRevoked reject bob@example.com",
+		"ApprovalRecorded approve bob@example.com",
+	}, decisions)
+	// The Bundle the CLI created names its creator, which excludeAuthor reads.
+	assert.Equal(t, whoAmI(t, e), b.Annotations["kardinal.io/created-by"])
 }

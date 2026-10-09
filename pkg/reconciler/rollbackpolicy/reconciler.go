@@ -371,6 +371,7 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 		return "", &refusal{reason: reason, message: kubeevent.Truncate(err.Error())}, nil
 	}
 
+	lifecycle.StampCreatedBy(plan.Bundle, lifecycle.ControllerCreator)
 	if err := r.Create(ctx, plan.Bundle); err != nil && !apierrors.IsAlreadyExists(err) {
 		return "", nil, fmt.Errorf("create rollback bundle: %w", err)
 	}

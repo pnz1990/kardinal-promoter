@@ -5,10 +5,15 @@ package policygate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/rs/zerolog"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,20 +36,36 @@ type approvalTally struct {
 	comments  map[string]string
 	// records is one entry per decision, for status.approvals.
 	records []kardinalv1alpha1.GateApprovalStatus
+	// held is a reason the policy cannot be met at all: too many Approvals,
+	// or excludeAuthor on a Bundle with no verified creator.
+	held string
 }
+
+// maxGateApprovals is how many decisions a gate counts; the Graph copies at
+// most one more, so a gate with more blocks instead of counting a cut list.
+const maxGateApprovals = 100
 
 // tallyApprovals counts the decisions of gate's spec.approvals for its
 // Bundle and environment. A decision counts when its user is in
 // allowedUsers or one of its groups is in allowedGroups (everyone counts
-// when both are empty), and, with excludeAuthor, its user is not author.
+// when both are empty), and, with excludeAuthor, its user is not creator, the
+// Bundle's verified kardinal.io/created-by; with no creator, excludeAuthor
+// holds the gate.
 // Each user counts once; a reject from a counted user wins over their
 // approve. Decisions for another Bundle or environment are ignored: the
 // Graph filters them, so they only come from a hand-edited spec.
-func tallyApprovals(gate *kardinalv1alpha1.PolicyGate, author string) approvalTally {
+func tallyApprovals(gate *kardinalv1alpha1.PolicyGate, creator string) approvalTally {
 	t := approvalTally{comments: map[string]string{}}
 	p := gate.Spec.Approval
 	if p != nil {
 		t.required = max(p.Required, 1)
+		switch {
+		case len(gate.Spec.Approvals) > maxGateApprovals:
+			t.held = fmt.Sprintf("more than %d Approvals for this Bundle in %s; delete the stale ones (kubectl get approvals)",
+				maxGateApprovals, gate.Labels[labelEnvironment])
+		case p.ExcludeAuthor && creator == "":
+			t.held = "excludeAuthor cannot be enforced: the Bundle has no verified creator (annotation kardinal.io/created-by)"
+		}
 	}
 	bundle, env := gate.Labels[labelBundle], gate.Labels[labelEnvironment]
 	approved, rejected := map[string]bool{}, map[string]bool{}
@@ -55,8 +76,8 @@ func tallyApprovals(gate *kardinalv1alpha1.PolicyGate, author string) approvalTa
 			rec.Reason = fmt.Sprintf("for bundle %s in %s, not this gate's", a.Bundle, a.Environment)
 		case p != nil && !allowed(p, a):
 			rec.Reason = "not an allowed approver (approval.allowedUsers, approval.allowedGroups)"
-		case p != nil && p.ExcludeAuthor && author != "" && a.User == author:
-			rec.Reason = "the Bundle's author (approval.excludeAuthor)"
+		case p != nil && p.ExcludeAuthor && creator != "" && a.User == creator:
+			rec.Reason = "the Bundle's creator (approval.excludeAuthor)"
 		default:
 			rec.Counted = true
 			if a.Decision == "reject" {
@@ -120,6 +141,9 @@ func (t approvalTally) blocked() string {
 	if t.required == 0 {
 		return ""
 	}
+	if t.held != "" {
+		return t.held
+	}
 	if len(t.rejecters) > 0 {
 		var parts []string
 		for _, u := range t.rejecters {
@@ -172,10 +196,80 @@ func (r *Reconciler) recordApprovals(ctx context.Context, gate *kardinalv1alpha1
 	if equality.Semantic.DeepEqual(records, gate.Status.Approvals) {
 		return nil
 	}
+	// Audit each decision that appeared or left (an Approval created, or
+	// deleted to revoke it) before the status records the change, so none is
+	// lost; a failed status write can record a decision twice.
+	for _, rec := range records {
+		if !hasDecision(gate.Status.Approvals, rec) {
+			r.writeApprovalAuditEvent(ctx, gate, rec, auditActionApprovalRecorded)
+		}
+	}
+	for _, old := range gate.Status.Approvals {
+		if !hasDecision(records, old) {
+			r.writeApprovalAuditEvent(ctx, gate, old, auditActionApprovalRevoked)
+		}
+	}
 	patch := client.MergeFrom(gate.DeepCopy())
 	gate.Status.Approvals = records
 	if err := r.Status().Patch(ctx, gate, patch); err != nil {
 		return fmt.Errorf("record approvals: %w", err)
 	}
 	return nil
+}
+
+// Approval AuditEvent actions (#1449).
+const (
+	auditActionApprovalRecorded = "ApprovalRecorded"
+	auditActionApprovalRevoked  = "ApprovalRevoked"
+)
+
+func hasDecision(list []kardinalv1alpha1.GateApprovalStatus, rec kardinalv1alpha1.GateApprovalStatus) bool {
+	for _, o := range list {
+		if o.User == rec.User && o.Decision == rec.Decision {
+			return true
+		}
+	}
+	return false
+}
+
+// writeApprovalAuditEvent records that rec appeared in (ApprovalRecorded) or
+// left (ApprovalRevoked) the gate's approvals. The name is derived from the
+// gate, the action, the user, the decision and when the gate first saw it. A
+// failure is logged: audit never blocks gate evaluation.
+func (r *Reconciler) writeApprovalAuditEvent(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	rec kardinalv1alpha1.GateApprovalStatus, action string) {
+	labels := gate.GetLabels()
+	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" {
+		return
+	}
+	seen := ""
+	if rec.FirstSeenAt != nil {
+		seen = rec.FirstSeenAt.UTC().Format(time.RFC3339)
+	}
+	sum := sha256.Sum256([]byte(action + "\x00" + rec.User + "\x00" + rec.Decision + "\x00" + seen))
+	suffix := "-approval-" + hex.EncodeToString(sum[:])[:12]
+	base := gate.Name
+	if limit := maxObjectNameLength - len(suffix); len(base) > limit {
+		base = base[:limit]
+	}
+	counted := "counted"
+	if !rec.Counted {
+		counted = "not counted: " + rec.Reason
+	}
+	verb := map[string]string{auditActionApprovalRecorded: "recorded", auditActionApprovalRevoked: "revoked"}[action]
+	msg := fmt.Sprintf("%s by %s %s on gate %s (%s)", rec.Decision, rec.User, verb, gate.Name, counted)
+	if rec.Comment != "" {
+		msg += ": " + rec.Comment
+	}
+	ae := &kardinalv1alpha1.AuditEvent{
+		ObjectMeta: metav1.ObjectMeta{Name: sanitizeGateName(base + suffix), Namespace: gate.Namespace,
+			Labels: gateAuditLabels(labels, action)},
+		Spec: kardinalv1alpha1.AuditEventSpec{
+			Timestamp: metav1.NewTime(r.now()), BundleName: labels[labelBundle], PipelineName: labels[labelPipeline],
+			Environment: labels[labelEnvironment], Action: action, Outcome: "Success", Message: truncateMessage(msg),
+		},
+	}
+	if err := r.Create(ctx, ae); client.IgnoreAlreadyExists(err) != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Str("gate", gate.Name).Str("action", action).Msg("failed to write approval AuditEvent")
+	}
 }

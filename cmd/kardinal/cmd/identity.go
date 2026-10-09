@@ -7,9 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // Identity is the user the Kubernetes API server authenticates the CLI as.
@@ -43,4 +47,18 @@ func whoAmI(ctx context.Context, c sigs_client.Client) (Identity, error) {
 		return Identity{}, errNoIdentity
 	}
 	return Identity{Username: info.Username, Groups: info.Groups}, nil
+}
+
+// stampCreator records the authenticated user as the Bundle's creator
+// (kardinal.io/created-by), which an approval gate's excludeAuthor reads. The
+// chart's admission policy refuses any other name. When the API server does
+// not say who the caller is, the Bundle is created without it and a warning
+// is printed: excludeAuthor then blocks the gate.
+func stampCreator(ctx context.Context, w io.Writer, c sigs_client.Client, b *v1alpha1.Bundle) {
+	id, err := identityOf(ctx, c)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "warning: the Bundle records no creator (%v); an approval gate with excludeAuthor will not pass it\n", err)
+		return
+	}
+	lifecycle.StampCreatedBy(b, id.Username)
 }

@@ -21,6 +21,13 @@ type ApprovalSpec struct {
 	// +kubebuilder:validation:MaxLength=253
 	Bundle string `json:"bundle"`
 
+	// BundleUID is the UID of that Bundle: the Graph counts the Approval
+	// only for the Bundle with this UID, so an Approval cannot carry over to
+	// a new Bundle that reuses the name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	BundleUID string `json:"bundleUID"`
+
 	// Environment is the Pipeline environment the decision is for.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -29,11 +36,14 @@ type ApprovalSpec struct {
 	// User is the Kubernetes username of the approver, as the API server
 	// authenticates them (kubectl auth whoami).
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	User string `json:"user"`
 
 	// Groups are the approver's Kubernetes groups that count for the gate's
 	// approval.allowedGroups. Each must be one of the requester's groups.
 	// +kubebuilder:default={}
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MaxLength=253
 	// +optional
 	Groups []string `json:"groups"`
 

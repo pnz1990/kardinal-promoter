@@ -30,14 +30,18 @@ type AuditEventSpec struct {
 	// Action is a short verb describing what happened.
 	// Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
 	//               "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
-	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden".
+	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
+	//               "ApprovalRecorded", "ApprovalRevoked".
+	// ApprovalRecorded and ApprovalRevoked are written by an approval gate
+	// when a decision (kardinal approve) appears in or leaves its
+	// spec.approvals.
 	// GateOverridden is written once per spec.overrides entry of a gate
 	// instance, naming who created it (kardinal override or the UI).
 	// HealthCheckFailed and GateBlocked are accepted but never written: a
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.

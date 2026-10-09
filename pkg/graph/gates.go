@@ -84,6 +84,9 @@ func (c *gateCollections) add(gate kardinalv1alpha1.PolicyGate, envName, k8sName
 	item := map[string]interface{}{"name": k8sName, "environment": envName, "t": t}
 	var collection string
 	switch {
+	case len(skipped) > 0 && needsApprovals(gate):
+		return "", fmt.Errorf("build: %s is a skip-permission gate with spec.approval or approvals.*; "+
+			"approvals are not supported on skip-permission gates, so it would never pass: remove them", what)
 	case len(skipped) > 0:
 		item["skipped"] = strings.Join(skipped, ",")
 		collection = appendChunked(&c.skipGates, item, NodeSkipPermissionGates)
@@ -362,8 +365,7 @@ func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
 		"recheckInterval": tmpl("recheckInterval"),
 		"generated":       true,
 		"when":            fmt.Sprintf(`${%s.templates[%s.t].spec.?when.orValue("post-deploy")}`, NodePolicyGateData, iterGate),
-		"approvals": fmt.Sprintf("${%s.filter(a, a.spec.environment == %s.environment).sortBy(a, a.metadata.name).map(a, a.spec)}",
-			ApprovalsNodeID, iterGate),
+		"approvals":       approvalsOfItem(),
 	}
 	// A gate that only reads approvals.* in its expression has no policy: a
 	// missing optional renders as null, which leaves the field unset.
@@ -371,3 +373,18 @@ func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
 	n.Template["spec"] = spec
 	return n
 }
+
+// approvalsOfItem is the spec.approvals of an approval gate instance: the
+// specs of the Approvals for the item's environment and for this very Bundle
+// (spec.bundleUID == the Bundle's UID, so an Approval of an earlier Bundle
+// with the same name never counts), sorted by name, at most
+// maxCopiedApprovals of them. The gate blocks when it gets more than it counts
+// (policygate maxGateApprovals).
+func approvalsOfItem() string {
+	list := fmt.Sprintf("%s.filter(a, a.spec.environment == %s.environment && a.spec.bundleUID == bundle.metadata.uid)"+
+		".sortBy(a, a.metadata.name).map(a, a.spec)", ApprovalsNodeID, iterGate)
+	return fmt.Sprintf("${size(%[1]s) > %[2]d ? %[1]s.slice(0, %[2]d) : %[1]s}", list, maxCopiedApprovals)
+}
+
+// maxCopiedApprovals caps spec.approvals (the CRD's maxItems).
+const maxCopiedApprovals = 101

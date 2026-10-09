@@ -11,7 +11,7 @@ allowedGroups; this role only lets them record a decision, in their own name
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "kardinal-promoter.fullname" . }}-approver
+  name: {{ include "kardinal-promoter.fullname" . }}-approvals
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 rules:

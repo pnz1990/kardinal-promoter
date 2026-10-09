@@ -77,7 +77,9 @@ type PolicyGateSpec struct {
 
 	// Approvals is written by the promotion Graph on gate instances: the
 	// Approvals of the instance's Bundle and environment, copied from the
-	// Approval objects. Do not set it; on a template it is ignored.
+	// Approval objects, at most 101 (more than 100 blocks the gate). Do not
+	// set it; on a template it is ignored.
+	// +kubebuilder:validation:MaxItems=101
 	// +optional
 	Approvals []GateApproval `json:"approvals,omitempty"`
 
@@ -111,9 +113,11 @@ type GateApprovalPolicy struct {
 	// +optional
 	AllowedGroups []string `json:"allowedGroups,omitempty"`
 
-	// ExcludeAuthor does not count an approval whose user is the Bundle's
-	// spec.provenance.author (no self-approval). The author is what CI
-	// recorded, so this works when CI records the Kubernetes username.
+	// ExcludeAuthor does not count an approval whose user created the Bundle
+	// (no self-approval): the kardinal.io/created-by annotation, which the
+	// chart's admission policy pins to the creating user (kardinal create
+	// bundle, the Bundle API and the UI set it). A Bundle without it blocks
+	// the gate: the rule cannot be enforced.
 	// +optional
 	ExcludeAuthor bool `json:"excludeAuthor,omitempty"`
 }
@@ -123,6 +127,8 @@ type GateApprovalPolicy struct {
 type GateApproval struct {
 	// Bundle is the Bundle the decision is about.
 	Bundle string `json:"bundle"`
+	// BundleUID is that Bundle's UID.
+	BundleUID string `json:"bundleUID"`
 	// Environment is the environment the decision is for.
 	Environment string `json:"environment"`
 	// User is the approver's Kubernetes username.

@@ -74,6 +74,14 @@ spec:
                 maxLength: 253
                 minLength: 1
                 type: string
+              bundleUID:
+                description: |-
+                  BundleUID is the UID of that Bundle: the Graph counts the Approval
+                  only for the Bundle with this UID, so an Approval cannot carry over to
+                  a new Bundle that reuses the name.
+                maxLength: 64
+                minLength: 1
+                type: string
               comment:
                 default: ""
                 description: Comment is a free-form note shown with the decision.
@@ -100,16 +108,20 @@ spec:
                   Groups are the approver's Kubernetes groups that count for the gate's
                   approval.allowedGroups. Each must be one of the requester's groups.
                 items:
+                  maxLength: 253
                   type: string
+                maxItems: 64
                 type: array
               user:
                 description: |-
                   User is the Kubernetes username of the approver, as the API server
                   authenticates them (kubectl auth whoami).
+                maxLength: 253
                 minLength: 1
                 type: string
             required:
             - bundle
+            - bundleUID
             - decision
             - environment
             - user

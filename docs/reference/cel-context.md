@@ -27,6 +27,7 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | Field | Type | Example | When populated |
 |---|---|---|---|
 | `bundle.type` | string | `"image"` | Always |
+| `bundle.createdBy` | string | `"oidc:alice@example.com"` | The Bundle's verified creator (`kardinal.io/created-by`); `""` when it has none |
 | `bundle.version` | string | `"1.29.0"` | Always. `image` and `mixed` Bundles: the first image's tag (`""` when that image has only a digest). `config` Bundles: the first 8 characters of `configRef.commitSHA` |
 | `bundle.upstreamSoakMinutes` | int | `45` | Soak of the direct upstream environment(s) of the gated environment; minimum across them on fan-in; 0 for a root environment or an upstream that is not Verified |
 | `bundle.provenance.author` | string | `"engineer@co.com"` | When Bundle was created with `provenance.author` |

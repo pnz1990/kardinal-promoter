@@ -23,7 +23,7 @@ import (
 // release (identity-admission.yaml).
 func identityAdmissionObjects(release string) []string {
 	var out []string
-	for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals"} {
+	for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals", "bundle-creator"} {
 		out = append(out, "ValidatingAdmissionPolicy/"+release+"-"+p, "ValidatingAdmissionPolicyBinding/"+release+"-"+p)
 	}
 	return out
@@ -64,7 +64,11 @@ func admits(t *testing.T, vap *admissionregistrationv1.ValidatingAdmissionPolicy
 		cel.Variable("request", cel.DynType), cel.Variable("variables", cel.DynType))
 	require.NoError(t, err)
 	vars := map[string]interface{}{
-		"object": object, "request": map[string]interface{}{"userInfo": map[string]interface{}{"username": user}},
+		"object": object, "request": map[string]interface{}{"userInfo": map[string]interface{}{"username": user},
+			"operation": operation(object, oldObject)},
+	}
+	if object == nil {
+		vars["object"] = nil
 	}
 	if oldObject == nil {
 		vars["oldObject"] = nil
@@ -314,7 +318,7 @@ func TestIdentityAdmission_GateInstanceFieldsComplete(t *testing.T) {
 			continue
 		}
 		assert.Contains(t, only, "object.spec."+name+" == oldObject.spec."+name, "spec.%s must not change on a gate instance", name)
-}
+	}
 }
 
 // TestIdentityAdmission_Approvals: an Approval is admitted only in the
@@ -343,9 +347,23 @@ func TestIdentityAdmission_Approvals(t *testing.T) {
 			cel.Variable("request", cel.DynType), cel.Variable("variables", cel.DynType), ext.Strings())
 		require.NoError(t, err)
 		vars := map[string]interface{}{"object": obj, "oldObject": nil, "variables": map[string]interface{}{},
-			"request": map[string]interface{}{"userInfo": map[string]interface{}{"username": user, "groups": groups}}}
+			"request": map[string]interface{}{"userInfo": map[string]interface{}{"username": user, "groups": groups},
+				"operation": operation(obj, old)}}
 		if old != nil {
 			vars["oldObject"] = old
+		}
+		if obj == nil {
+			vars["object"] = nil
+		}
+		variables := vars["variables"].(map[string]interface{})
+		for _, v := range vap.Spec.Variables {
+			ast, iss := env.Compile(v.Expression)
+			require.NoError(t, iss.Err(), v.Expression)
+			prg, err := env.Program(ast)
+			require.NoError(t, err)
+			out, _, err := prg.Eval(vars)
+			require.NoError(t, err, v.Expression)
+			variables[v.Name] = out.Value()
 		}
 		for _, v := range vap.Spec.Validations {
 			ast, iss := env.Compile(v.Expression)
@@ -380,6 +398,13 @@ func TestIdentityAdmission_Approvals(t *testing.T) {
 			obj: approval("alice", []interface{}{}, "app-v2", "prod"), user: "alice", want: false},
 		{name: "update keeping the labels", old: approval("alice", []interface{}{}, "app-v1", "prod"),
 			obj: approval("alice", []interface{}{}, "app-v1", "prod"), user: "system:serviceaccount:kube-system:generic-garbage-collector", want: true},
+		{name: "revoke your own", old: approval("alice", []interface{}{}, "app-v1", "prod"), user: "alice", want: true},
+		{name: "delete someone else's", old: approval("alice", []interface{}{}, "app-v1", "prod"), user: "mallory", want: false},
+		{name: "delete someone else's, as cluster admin", old: approval("alice", []interface{}{}, "app-v1", "prod"), user: "kubernetes-admin", want: false},
+		{name: "garbage collection with the Bundle", old: approval("alice", []interface{}{}, "app-v1", "prod"),
+			user: "system:serviceaccount:kube-system:generic-garbage-collector", want: true},
+		{name: "namespace deletion", old: approval("alice", []interface{}{}, "app-v1", "prod"),
+			user: "system:serviceaccount:kube-system:namespace-controller", want: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -402,5 +427,52 @@ func TestIdentityAdmission_Approvals(t *testing.T) {
 			continue
 		}
 		assert.Contains(t, only, "object.metadata."+name+" == oldObject.metadata."+name, "metadata.%s must not change on a gate instance", name)
+	}
+}
+
+// operation is the admission operation of a request with obj and old.
+func operation(obj, old map[string]interface{}) string {
+	switch {
+	case old == nil:
+		return "CREATE"
+	case obj == nil:
+		return "DELETE"
+	}
+	return "UPDATE"
+}
+
+// TestIdentityAdmission_BundleCreator: kardinal.io/created-by, which an
+// approval gate's excludeAuthor reads, is optional on a new Bundle but must
+// be the requester; it cannot be added, changed or removed later; the
+// controller names the creator of the Bundles it creates.
+func TestIdentityAdmission_BundleCreator(t *testing.T) {
+	vap := identityPolicy(t, "bundle-creator")
+	controller := "system:serviceaccount:" + releaseNS + ":kardinal-promoter"
+	bundle := func(creator string) map[string]interface{} {
+		md := map[string]interface{}{"name": "app-v1"}
+		if creator != "" {
+			md["annotations"] = map[string]interface{}{"kardinal.io/created-by": creator}
+		}
+		return map[string]interface{}{"metadata": md, "spec": map[string]interface{}{"pipeline": "app"}}
+	}
+	tests := []struct {
+		name     string
+		old, cur map[string]interface{}
+		user     string
+		want     bool
+	}{
+		{name: "create with own name", cur: bundle("alice"), user: "alice", want: true},
+		{name: "create without the annotation", cur: bundle(""), user: "alice", want: true},
+		{name: "create in someone else's name", cur: bundle("bob"), user: "alice", want: false},
+		{name: "the controller names the creator", cur: bundle("subscription:app"), user: controller, want: true},
+		{name: "unchanged on update", old: bundle("alice"), cur: bundle("alice"), user: "bob", want: true},
+		{name: "added later", old: bundle(""), cur: bundle("bob"), user: "bob", want: false},
+		{name: "changed later", old: bundle("alice"), cur: bundle("bob"), user: "bob", want: false},
+		{name: "removed later", old: bundle("alice"), cur: bundle(""), user: "bob", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, admits(t, vap, tc.cur, tc.old, tc.user))
+		})
 	}
 }

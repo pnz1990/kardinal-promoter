@@ -109,6 +109,7 @@ func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
 		s.writeLifecycleError(w, "promote", err)
 		return
 	}
+	lifecycle.StampCreatedBy(plan.Bundle, requester)
 	if err := s.client.Create(r.Context(), plan.Bundle); err != nil {
 		s.writeLifecycleError(w, "create promote bundle", err)
 		return
@@ -179,6 +180,7 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 		s.writeLifecycleError(w, "rollback", err)
 		return
 	}
+	lifecycle.StampCreatedBy(plan.Bundle, requester)
 	if err := s.client.Create(r.Context(), plan.Bundle); err != nil {
 		s.writeLifecycleError(w, "create rollback bundle", err)
 		return

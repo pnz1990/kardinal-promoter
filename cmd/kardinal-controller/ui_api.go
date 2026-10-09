@@ -1665,6 +1665,7 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 		Spec: spec,
 	}
 	lifecycle.StampCreatedAt(bundle, time.Now())
+	lifecycle.StampCreatedBy(bundle, requester)
 
 	if err := s.client.Create(r.Context(), bundle); err != nil {
 		if apierrors.IsInvalid(err) {

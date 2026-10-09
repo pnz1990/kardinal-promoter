@@ -118,6 +118,20 @@ func approveFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundl
 
 	var existing v1alpha1.Approval
 	getErr := c.Get(ctx, key, &existing)
+	if getErr == nil && existing.Spec.User != id.Username {
+		// The name is derived from the user, but anyone can create an object
+		// of that name: never count, replace or revoke someone else's.
+		return fmt.Errorf("approve: Approval %s belongs to %s, not to you (%s); ask an admin to delete it",
+			name, existing.Spec.User, id.Username)
+	}
+	if getErr == nil && existing.Spec.BundleUID != string(b.UID) {
+		// An Approval of an earlier Bundle with the same name: the Graph
+		// does not count it, so record a fresh one.
+		if err := c.Delete(ctx, &existing); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("approve: replace the Approval of an earlier Bundle %s: %w", bundleName, err)
+		}
+		getErr = apierrors.NewNotFound(v1alpha1.GroupVersion.WithResource("approvals").GroupResource(), name)
+	}
 	switch {
 	case getErr == nil && o.revoke:
 		if err := c.Delete(ctx, &existing); err != nil && !apierrors.IsNotFound(err) {
@@ -157,7 +171,7 @@ func approveFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundl
 			}},
 		},
 		Spec: v1alpha1.ApprovalSpec{
-			Bundle: bundleName, Environment: o.env, User: id.Username, Groups: groups,
+			Bundle: bundleName, BundleUID: string(b.UID), Environment: o.env, User: id.Username, Groups: groups,
 			Decision: o.decision, Comment: o.comment,
 		},
 	}
