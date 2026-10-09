@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/flowcontrol"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -165,4 +166,28 @@ func TestManagerOptions_SecretsConfigMapsEventsReadLive(t *testing.T) {
 func TestLeaderElectionIDPerShard(t *testing.T) {
 	assert.Equal(t, "kardinal-promoter-leader", buildManagerOptions(managerConfig{}).LeaderElectionID)
 	assert.Equal(t, "kardinal-promoter-leader-b", buildManagerOptions(managerConfig{namespaceShard: "b"}).LeaderElectionID)
+}
+
+// TestManagerOptions_LeaderElectionClient (#1592): the Lease is renewed
+// with a config of its own: its own rate limiter (never the reconcilers'), on a copy,
+// so reconcile traffic in the process cannot take its tokens. Without a
+// config the manager's default is kept.
+//
+// Covers CHART-LEASE-APF-01.
+func TestManagerOptions_LeaderElectionClient(t *testing.T) {
+	shared := flowcontrol.NewTokenBucketRateLimiter(1, 1)
+	base := &rest.Config{Host: "https://api.example", QPS: -1, UserAgent: "kardinal-promoter", RateLimiter: shared}
+	opts := buildManagerOptions(managerConfig{leaderElect: true, restConfig: base})
+	le := opts.LeaderElectionConfig
+	require.NotNil(t, le)
+	assert.NotSame(t, base, le)
+	assert.Equal(t, "https://api.example", le.Host)
+	assert.InDelta(t, leaderElectionQPS, le.QPS, 0)
+	assert.Equal(t, leaderElectionBurst, le.Burst)
+	assert.Nil(t, le.RateLimiter, "the reconcilers' limiter is not shared: the copy builds its own")
+	assert.Equal(t, "kardinal-promoter", le.UserAgent, "controller-runtime appends /leader-election")
+	assert.InDelta(t, -1, base.QPS, 0, "the controller's config is not changed")
+	assert.Same(t, shared, base.RateLimiter)
+
+	assert.Nil(t, buildManagerOptions(managerConfig{leaderElect: true}).LeaderElectionConfig)
 }
