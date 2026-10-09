@@ -394,7 +394,7 @@ UIAPI-GATES-01	live	ui	covered	ui-api	GET gates with holding/blockerCount	cmd/ka
 UIAPI-EVENTS-01	live	ui	covered	ui-api	GET steps/{ns}/{n}/events (count, first/last timestamp); 404 for a missing step	cmd/kardinal-controller/ui_api.go:1490
 UIAPI-PROMOTE-01	live	ui	covered	ui-api	POST promote	cmd/kardinal-controller/ui_lifecycle.go:82
 UIAPI-ROLLBACK-01	live	ui	covered	ui-api	POST rollback	cmd/kardinal-controller/ui_lifecycle.go:151
-UIAPI-PAUSE-01	live	ui	covered	ui-api	POST pause and resume	cmd/kardinal-controller/ui_lifecycle.go:298; cmd/kardinal-controller/ui_lifecycle.go:304
+UIAPI-PAUSE-01	live	ui	covered	ui-api	POST pause and resume	cmd/kardinal-controller/ui_lifecycle.go:307; cmd/kardinal-controller/ui_lifecycle.go:313
 UIAPI-APPROVE-01	live	ui	covered	ui-api	POST gates/[{ns}/]{name}/approve writes an override	cmd/kardinal-controller/ui_api.go:1337
 UIAPI-VALIDATECEL-01	live	ui	covered	ui-api	POST validate-cel returns compile errors	cmd/kardinal-controller/ui_api.go:1295
 UIAPI-CREATE-01	live	ui	covered	ui-api	POST bundles creates a Bundle from the UI	cmd/kardinal-controller/ui_api.go:1632-1655; cmd/kardinal-controller/ui_api.go:1722-1746
@@ -402,7 +402,7 @@ UIAPI-LOCAL-01	live	ui	covered	ui-api	with no UI auth mode, non-loopback clients
 UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:1050-1093; cmd/kardinal-controller/ui_hosts.go:16-18; cmd/kardinal-controller/ui_hosts.go:53-64; cmd/kardinal-controller/main.go:1207-1212
 UIAPI-TOKEN-01	live	ui	covered	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:845-871
 UIAPI-TR-01	live	ui	covered	ui-api	TokenReview mode: 401 invalid token, 403 when SubjectAccessReview denies, 503 when review fails; 30s cache	docs/guides/security.md:880-907; pkg/uiauth/tokenreview.go:132-199; pkg/uiauth/cache.go:20-24
-RBAC-ROLES-01	live	ui	covered	ui-api	chart user roles (viewer, promoter, approver, aggregation into view) bound per namespace decide UI API and Bundle API access; lists follow namespace RBAC	docs/guides/security.md:952-987; docs/guides/security.md:944-950; chart/kardinal-promoter/templates/user-roles.yaml:1-55
+RBAC-ROLES-01	live	ui	covered	ui-api	chart user roles (viewer, promoter, approver, aggregation into view) bound per namespace decide UI API and Bundle API access; lists follow namespace RBAC	docs/guides/security.md:952-987; docs/guides/security.md:944-950; chart/kardinal-promoter/templates/user-roles.yaml:1-60
 BUNDLEAPI-TR-01	live	ui	covered	ci-api	Bundle API accepts Kubernetes tokens authorized by RBAC and records the caller in kardinal.io/requested-by	docs/ci-integration.md:268-296
 RBAC-SCOPED-WRITES-01	live	ui	covered	ui-api	scoped-writes admission policy: a caller with pipelines/pause, pipelines/hold or policygates/override but not the edit subresource may change only spec.paused, spec.holds (each with its subresource) or append-only spec.overrides in their own name; edit allows the rest	docs/guides/security.md:994-1018; chart/kardinal-promoter/templates/identity-admission.yaml:462-586
 TOKENREVIEW-AUD-01	live	ui	covered	ui-api	UI API and Bundle API accept only kardinal-promoter-audience tokens by default; an API server audience token gets 401	docs/guides/security.md:889-897; docs/ci-integration.md:271-277
@@ -445,7 +445,7 @@ CIAPI-ACTION-02	live	core	covered	ci-api	GitHub Action type config or mixed	docs
 CIAPI-GITLAB-01	live	core	covered	ci-api	GitLab CI example payload creates a Bundle	docs/ci-integration.md:133-171; cmd/kardinal-controller/bundle_api.go:211-219
 CHART-DEFAULT-01	live	chart	covered	chart	default helm install: controller Deployment becomes Ready	docs/installation.md:128-171; chart/kardinal-promoter/templates/deployment.yaml:272-277
 CHART-IMAGE-01	live	chart	covered	chart	image.repository/tag/pullPolicy	chart/kardinal-promoter/values.yaml:19-25
-CHART-HA-01	live	chart	covered	chart	replicaCount > 1 with leaderElect, pdb and topologySpread: one leader reconciles, failover works	chart/kardinal-promoter/values.yaml:5; chart/kardinal-promoter/values.yaml:67; chart/kardinal-promoter/values.yaml:541-554
+CHART-HA-01	live	chart	covered	chart	replicaCount > 1 with leaderElect, pdb and topologySpread: one leader reconciles, failover works	chart/kardinal-promoter/values.yaml:5; chart/kardinal-promoter/values.yaml:67; chart/kardinal-promoter/values.yaml:543-556
 CHART-LEADER-RELEASE-01	live	chart	covered	chart	a leader that shuts down (a rollout, a drain) releases its leader Lease, so the next replica takes it without waiting the 15-second lease duration	docs/installation.md:776-777; docs/faq.md:110-112; cmd/kardinal-controller/manager_options.go:101
 CHART-GRACE-01	live	chart	covered	chart	terminationGracePeriodSeconds	chart/kardinal-promoter/values.yaml:11; chart/kardinal-promoter/templates/deployment.yaml:34-35
 CHART-SHUTDOWN-DELAY-01	live	chart	covered	chart	shutdownDelaySeconds (a preStop sleep; 0 removes the hook)	chart/kardinal-promoter/values.yaml:13-17; chart/kardinal-promoter/templates/deployment.yaml:258-265; docs/installation.md:788-797
@@ -465,15 +465,15 @@ CHART-UIAUTH-01	live	chart	covered	chart	ui.corsAllowedOrigins, ui.allowedHosts,
 CHART-UIEXPOSE-01	live	chart	covered	chart	exposing the UI beyond port-forward	docs/installation.md:316-355
 CHART-RBAC-01	live	chart	covered	chart	ClusterRole/Role grants match what the controller reads and writes	chart/kardinal-promoter/templates/_rbac.tpl; docs/guides/security.md:7-58
 CHART-ARGOCDWRITE-01	live	core	covered	chart	rbac.argocdApplicationsWrite lets the argocd strategy patch Applications (checked on the rules helm template renders, bound in a test Role, not on the installed chart's RBAC)	chart/kardinal-promoter/values.yaml:348-350; chart/kardinal-promoter/templates/_rbac.tpl:138-146
-CHART-GRAPH-01	live	chart	covered	chart	graph.serviceAccountName, kroNamespace, readerNamespaces, aggregateToKro	chart/kardinal-promoter/values.yaml:373-398
-CHART-NETPOL-01	live	chart	covered	chart	networkPolicy allows metrics/UI/webhook ingress and API/SCM egress only	chart/kardinal-promoter/values.yaml:475-490; docs/guides/security.md:586-604
-CHART-CLOCK-01	live	chart	covered	chart	scheduleClock creates kardinal-clock	chart/kardinal-promoter/values.yaml:533-539
-CHART-DEMO-01	live	chart	covered	chart	demo values	chart/kardinal-promoter/values.yaml:556-589
-CHART-MON-01	live	flux	covered	chart	serviceMonitor and prometheusRule are picked up by Prometheus Operator: the controller target is up and the alerts are loaded	chart/kardinal-promoter/values.yaml:591-616; docs/guides/monitoring.md:22-43; docs/guides/monitoring.md:307-340
-CHART-MON-02	live	flux	covered	chart	grafanaDashboard is imported by Grafana's dashboard sidecar, and its panels query the default Prometheus datasource and show data	chart/kardinal-promoter/values.yaml:618-640; chart/kardinal-promoter/templates/grafana-dashboard.yaml; chart/kardinal-promoter/dashboards/kardinal-promoter-dashboard.json:1055-1069; docs/guides/monitoring.md:385-433
+CHART-GRAPH-01	live	chart	covered	chart	graph.serviceAccountName, kroNamespace, readerNamespaces, aggregateToKro	chart/kardinal-promoter/values.yaml:375-400
+CHART-NETPOL-01	live	chart	covered	chart	networkPolicy allows metrics/UI/webhook ingress and API/SCM egress only	chart/kardinal-promoter/values.yaml:477-492; docs/guides/security.md:586-604
+CHART-CLOCK-01	live	chart	covered	chart	scheduleClock creates kardinal-clock	chart/kardinal-promoter/values.yaml:535-541
+CHART-DEMO-01	live	chart	covered	chart	demo values	chart/kardinal-promoter/values.yaml:558-591
+CHART-MON-01	live	flux	covered	chart	serviceMonitor and prometheusRule are picked up by Prometheus Operator: the controller target is up and the alerts are loaded	chart/kardinal-promoter/values.yaml:593-618; docs/guides/monitoring.md:22-43; docs/guides/monitoring.md:307-340
+CHART-MON-02	live	flux	covered	chart	grafanaDashboard is imported by Grafana's dashboard sidecar, and its panels query the default Prometheus datasource and show data	chart/kardinal-promoter/values.yaml:620-642; chart/kardinal-promoter/templates/grafana-dashboard.yaml; chart/kardinal-promoter/dashboards/kardinal-promoter-dashboard.json:1055-1069; docs/guides/monitoring.md:385-433
 CHART-SCHEMA-01	live	chart	covered	chart	values schema rejects removed keys (controller.shard, v0.8.1 krocodile block) with a clear error	chart/kardinal-promoter/values.schema.json:6; chart/kardinal-promoter/values.schema.json:111; docs/changelog.md:287; docs/installation.md:667
 CHART-INTEGJOBS-01	deprecated	chart	covered	chart	rbac.integrationTestJobs has no effect	chart/kardinal-promoter/values.yaml:351-355; docs/changelog.md:326; docs/installation.md:666
-CHART-VAP-01	deprecated	chart	covered	chart	validatingAdmissionPolicy.enabled has no effect	chart/kardinal-promoter/values.yaml:441-447; docs/changelog.md:326; docs/installation.md:665
+CHART-VAP-01	deprecated	chart	covered	chart	validatingAdmissionPolicy.enabled has no effect	chart/kardinal-promoter/values.yaml:443-449; docs/changelog.md:326; docs/installation.md:665
 OBS-METRICS-01	live	flux	covered	observability	/metrics exposes the 7 kardinal metrics with labels after a promotion	docs/guides/monitoring.md:75-138; pkg/reconciler/observability/metrics.go:133-144
 OBS-CRMETRICS-01	live	flux	covered	observability	controller-runtime reconcile and workqueue metrics	docs/guides/monitoring.md:47-74
 OBS-SCM-01	live	core	covered	observability	SCM API and git metrics: an opened PR counts as an ok SCM call of the provider, clones and pushes count with durations and HTTP bytes, circuit gauges are present, owner and operation labels stay capped	docs/guides/monitoring.md:94-135; pkg/scm/metrics.go:263-284; pkg/scm/git_transport.go:84-97
