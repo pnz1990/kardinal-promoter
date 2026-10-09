@@ -474,6 +474,15 @@ type PromotionStepStatus struct {
 	// controller logs. Initialized when the step sequence starts (state → Promoting).
 	// +optional
 	Steps []StepStatus `json:"steps,omitempty"`
+
+	// PendingAuditEvents are AuditEvents for this step's transitions that are
+	// not yet written (the audit outbox, #1552). Each entry is stored in the
+	// same status patch as its transition and removed once the AuditEvent
+	// exists, so an API error or a controller restart between the two cannot
+	// lose the record. Normally empty.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	PendingAuditEvents []PendingAuditEvent `json:"pendingAuditEvents,omitempty"`
 }
 
 // +kubebuilder:object:root=true

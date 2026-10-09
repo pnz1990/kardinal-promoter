@@ -31,6 +31,10 @@ on:
         description: 'only these suites, space-separated (hack/e2e/all.sh SUITES); empty runs every suite'
         required: false
         default: ''
+      wave_envs:
+        description: 'environments of the core suite TestHealth_ArgoCDWaveOnSharedBranch (argocd health, one shared branch); 150 is the #1575 acceptance case'
+        required: false
+        default: '30'
 
 permissions:
   contents: read
@@ -90,6 +94,8 @@ jobs:
       # scale suite runs once too (hack/e2e/all.sh does the same).
       COUNT: ${{ (matrix.suite == 'upgrade' || matrix.suite == 'scale') && '1' || github.event_name == 'schedule' && '3' || inputs.count || '1' }}
       SHARD: ${{ matrix.shard }}
+      # Opt-in: gh workflow run e2e-live.yml -f suites=core -f wave_envs=150
+      KARDINAL_E2E_WAVE_ENVS: ${{ inputs.wave_envs || '30' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0

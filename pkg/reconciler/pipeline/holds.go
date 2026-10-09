@@ -7,18 +7,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/rs/zerolog"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 )
 
 // The AuditEvent actions of environment holds (#1528).
@@ -75,17 +75,22 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		return 0, true, nil
 	}
 
+	// Records stored by an earlier reconcile but not yet written go first
+	// (#1552); while any remain the Pipeline is reconciled again soon.
+	auditErr := r.flushAudit(ctx, p)
+
 	observed := map[string]bool{}
 	for i := range p.Status.ObservedHolds {
 		observed[holdKey(&p.Status.ObservedHolds[i])] = true
 	}
+	var entries []kardinalv1alpha1.PendingAuditEvent
 	current := map[string]bool{}
 	for i := range p.Spec.Holds {
 		h := &p.Spec.Holds[i]
 		current[holdKey(h)] = true
 		if !observed[holdKey(h)] {
-			r.writeHoldAudit(ctx, p, h, AuditActionHoldCreated, fmt.Sprintf(
-				"%s held %s on rollback %s: %s%s", orUnknown(h.CreatedBy), h.Environment, h.Bundle, h.Reason, expiresNote(h)))
+			entries = append(entries, r.holdAuditEntry(p, h, AuditActionHoldCreated, fmt.Sprintf(
+				"%s held %s on rollback %s: %s%s", orUnknown(h.CreatedBy), h.Environment, h.Bundle, h.Reason, expiresNote(h))))
 		}
 	}
 	for i := range p.Status.ObservedHolds {
@@ -97,14 +102,34 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		if h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time) {
 			why = "expired at " + h.ExpiresAt.UTC().Format(time.RFC3339) + ", removed by the controller"
 		}
-		r.writeHoldAudit(ctx, p, h, AuditActionHoldReleased, fmt.Sprintf(
-			"hold of %s on rollback %s (held by %s: %s) %s", h.Environment, h.Bundle, orUnknown(h.CreatedBy), h.Reason, why))
+		entries = append(entries, r.holdAuditEntry(p, h, AuditActionHoldReleased, fmt.Sprintf(
+			"hold of %s on rollback %s (held by %s: %s) %s", h.Environment, h.Bundle, orUnknown(h.CreatedBy), h.Reason, why)))
 	}
 	if !equality.Semantic.DeepEqual(p.Status.ObservedHolds, p.Spec.Holds) {
-		patch := client.MergeFrom(p.DeepCopy())
+		// The records go in the same patch as observedHolds, so a crash or a
+		// failed create cannot lose them (#1552).
+		// Locked on the resourceVersion p was read at: a reconcile from a
+		// stale cache would see a hold a newer one already recorded as new
+		// and store its record again.
+		patch := client.MergeFromWithOptions(p.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		p.Status.ObservedHolds = append([]kardinalv1alpha1.EnvironmentHold(nil), p.Spec.Holds...)
+		for _, e := range entries {
+			p.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, p.Status.PendingAuditEvents, e)
+		}
 		if err := r.Status().Patch(ctx, p, patch); err != nil {
+			if k8serrors.IsConflict(err) {
+				// Changed since it was read: the next reconcile works from
+				// what is stored.
+				log.Debug().Msg("pipeline changed since it was read; holds not recorded, retrying")
+				return holdConflictRetry, false, nil
+			}
 			return 0, false, fmt.Errorf("patch observed holds: %w", err)
+		}
+		auditErr = r.flushAudit(ctx, p)
+	}
+	if auditErr != nil || len(p.Status.PendingAuditEvents) > 0 {
+		if next == 0 || next > auditRetryDelay {
+			next = auditRetryDelay
 		}
 	}
 	return next, false, nil
@@ -131,10 +156,21 @@ func expiresNote(h *kardinalv1alpha1.EnvironmentHold) string {
 	return " (expires " + h.ExpiresAt.UTC().Format(time.RFC3339) + ")"
 }
 
-// writeHoldAudit creates the AuditEvent of a hold change. Its name is fixed
-// per hold and action, so writing it again is a no-op. Errors are logged:
-// the audit record must not block the Pipeline.
-func (r *Reconciler) writeHoldAudit(ctx context.Context, p *kardinalv1alpha1.Pipeline, h *kardinalv1alpha1.EnvironmentHold, action, msg string) {
+// auditKind labels the audit outbox metrics of Pipeline records.
+const auditKind = "Pipeline"
+
+// holdConflictRetry is how soon a reconcile whose holds patch lost to a
+// newer write runs again.
+const holdConflictRetry = time.Second
+
+// auditRetryDelay is how soon a Pipeline whose audit outbox still holds
+// unwritten records is reconciled again.
+const auditRetryDelay = 5 * time.Second
+
+// holdAuditEntry is the outbox entry of a hold change. Its name is fixed per
+// hold and action, so writing it again is a no-op.
+func (r *Reconciler) holdAuditEntry(p *kardinalv1alpha1.Pipeline, h *kardinalv1alpha1.EnvironmentHold,
+	action, msg string) kardinalv1alpha1.PendingAuditEvent {
 	sum := sha256.Sum256([]byte(holdKey(h)))
 	suffix := "created"
 	if action == AuditActionHoldReleased {
@@ -144,34 +180,43 @@ func (r *Reconciler) writeHoldAudit(ctx context.Context, p *kardinalv1alpha1.Pip
 	if len(prefix) > 200 {
 		prefix = prefix[:200]
 	}
-	now := metav1.NewTime(r.now())
-	ae := &kardinalv1alpha1.AuditEvent{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-hold-%s-%s", prefix, hex.EncodeToString(sum[:])[:10], suffix),
-			Namespace: p.Namespace,
-			Labels: map[string]string{
-				"kardinal.io/pipeline":    p.Name,
-				"kardinal.io/bundle":      h.Bundle,
-				"kardinal.io/environment": h.Environment,
-				"kardinal.io/action":      action,
-			},
-		},
-		Spec: kardinalv1alpha1.AuditEventSpec{
-			Timestamp:    now,
+	return audit.Entry(fmt.Sprintf("%s-hold-%s-%s", prefix, hex.EncodeToString(sum[:])[:10], suffix),
+		map[string]string{
+			"kardinal.io/pipeline":    p.Name,
+			"kardinal.io/bundle":      h.Bundle,
+			"kardinal.io/environment": h.Environment,
+			"kardinal.io/action":      action,
+		}, kardinalv1alpha1.AuditEventSpec{
 			BundleName:   h.Bundle,
 			PipelineName: p.Name,
 			Environment:  h.Environment,
 			Action:       action,
 			Outcome:      "Success",
 			Message:      msg,
-		},
+		}, metav1.NewTime(r.now()))
+}
+
+// flushAudit creates the AuditEvents in p's outbox and removes the written
+// entries from its status (optimistic lock, so an entry a newer reconcile
+// stored is not dropped). The record must not block the Pipeline: an
+// unwritten entry stays and is retried.
+func (r *Reconciler) flushAudit(ctx context.Context, p *kardinalv1alpha1.Pipeline) error {
+	if len(p.Status.PendingAuditEvents) == 0 {
+		return nil
 	}
-	lifecycle.StampCreatedAt(ae, now.Time)
-	err := r.Create(ctx, ae)
-	switch {
-	case client.IgnoreAlreadyExists(err) == nil:
-	case k8serrors.HasStatusCause(err, corev1.NamespaceTerminatingCause):
-	default:
-		zerolog.Ctx(ctx).Error().Err(err).Str("auditEvent", ae.Name).Str("action", action).Msg("failed to write AuditEvent")
+	remaining, ferr := audit.Flush(ctx, r.Client, auditKind, p.Namespace, p.Status.PendingAuditEvents)
+	if len(remaining) != len(p.Status.PendingAuditEvents) {
+		prev := p.Status.PendingAuditEvents
+		patch := client.MergeFromWithOptions(p.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		p.Status.PendingAuditEvents = remaining
+		if err := r.Status().Patch(ctx, p, patch); err != nil && !k8serrors.IsNotFound(err) {
+			p.Status.PendingAuditEvents = prev
+			return errors.Join(ferr, fmt.Errorf("remove written AuditEvents from the outbox: %w", err))
+		}
 	}
+	if ferr != nil {
+		zerolog.Ctx(ctx).Error().Err(ferr).Int("pending", len(remaining)).
+			Msg("failed to write AuditEvent; kept in status.pendingAuditEvents to retry")
+	}
+	return ferr
 }

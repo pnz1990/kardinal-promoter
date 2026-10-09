@@ -45,6 +45,37 @@ type managerConfig struct {
 	watchNamespace         string
 	// namespaceShard is --namespace-shard: each shard elects its own leader.
 	namespaceShard string
+	// restConfig is the controller's API server config; nil leaves the
+	// leader election client to the manager's default.
+	restConfig *rest.Config
+}
+
+// Leader election client rate limits (#1592): the Lease is renewed every
+// 2s at most, so these never throttle it, and its own limiter means
+// reconcile traffic in the process can never take its tokens. The fix for
+// API Priority and Fairness pressure is the chart's FlowSchema; this only
+// keeps the process-side limiter separate. controller-runtime appends
+// "/leader-election" to the user agent itself.
+const (
+	leaderElectionQPS   = 5
+	leaderElectionBurst = 10
+)
+
+// leaderElectionConfig is cfg for the leader election client alone: its
+// own rate limiter, so the Lease renewal never waits behind the
+// reconcilers' requests in the controller process. The fix for a busy or
+// throttled API server is the chart's FlowSchema (templates/flowschema.yaml),
+// which gives the Lease requests their own priority level.
+func leaderElectionConfig(cfg *rest.Config) *rest.Config {
+	if cfg == nil {
+		return nil
+	}
+	c := rest.CopyConfig(cfg)
+	c.QPS, c.Burst = leaderElectionQPS, leaderElectionBurst
+	// A RateLimiter set on cfg would be shared with the reconcilers' client;
+	// nil makes the copy build its own from QPS and Burst.
+	c.RateLimiter = nil
+	return c
 }
 
 // buildManagerOptions returns the options main passes to ctrl.NewManager.
@@ -69,6 +100,7 @@ func buildManagerOptions(cfg managerConfig) ctrl.Options {
 		LeaderElection:                cfg.leaderElect,
 		LeaderElectionID:              leaderElectionID(cfg.namespaceShard),
 		LeaderElectionReleaseOnCancel: true,
+		LeaderElectionConfig:          leaderElectionConfig(cfg.restConfig),
 		GracefulShutdownTimeout:       ptr(gracefulShutdownTimeout),
 		Cache:                         shardCacheOpts(buildCacheOpts(cfg.watchNamespace), cfg.namespaceShard),
 		Client: sigs_client.Options{

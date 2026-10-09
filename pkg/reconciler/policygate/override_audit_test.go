@@ -127,7 +127,9 @@ func TestPolicyGateReconciler_OverrideAuditRetried(t *testing.T) {
 	var got kardinalv1alpha1.PolicyGate
 	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
 	require.Len(t, got.Status.Overrides, 1)
-	assert.False(t, got.Status.Overrides[0].Audited)
+	assert.True(t, got.Status.Overrides[0].Audited, "the record is stored in the outbox (#1552)")
+	require.Len(t, got.Status.PendingAuditEvents, 1, "and kept there while the create fails")
+	assert.Equal(t, "GateOverridden", got.Status.PendingAuditEvents[0].Spec.Action)
 	assert.True(t, got.Status.Ready, "a failed audit write does not block the override")
 	assert.Empty(t, overrideAudits(t, c))
 
@@ -141,6 +143,7 @@ func TestPolicyGateReconciler_OverrideAuditRetried(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
 	require.Len(t, got.Status.Overrides, 1)
 	assert.True(t, got.Status.Overrides[0].Audited)
+	assert.Empty(t, got.Status.PendingAuditEvents, "written: the outbox is empty")
 }
 
 // TestPolicyGateReconciler_OverrideUnverifiedOnUpgrade: overrides already on a
