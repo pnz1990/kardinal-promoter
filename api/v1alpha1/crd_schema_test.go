@@ -810,3 +810,38 @@ func TestCRDBundleDigestAndCommit(t *testing.T) {
 		assert.NotEmpty(t, validateCR(t, crds, b), "%s must be rejected", name)
 	}
 }
+
+// TestCRDBundleRetiredAtSticky (#1492): once set, status.retiredAt cannot be
+// removed, so no writer can make a retired Bundle unretired.
+func TestCRDBundleRetiredAtSticky(t *testing.T) {
+	status := loadCRDs(t)["Bundle"].structural.Properties["status"]
+	var rule string
+	for _, r := range status.XValidations {
+		if strings.Contains(r.Rule, "retiredAt") {
+			rule = r.Rule
+		}
+	}
+	require.NotEmpty(t, rule, "Bundle status needs the retiredAt transition rule")
+	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	require.NoError(t, err)
+	ast, iss := env.Compile(rule)
+	require.NoError(t, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	at := map[string]interface{}{"phase": "Superseded", "retiredAt": "2026-10-09T00:00:00Z"}
+	notYet := map[string]interface{}{"phase": "Superseded"}
+	for _, c := range []struct {
+		name     string
+		old, new map[string]interface{}
+		allow    bool
+	}{
+		{"set", notYet, at, true},
+		{"kept", at, at, true},
+		{"never set", notYet, notYet, true},
+		{"removed", at, notYet, false},
+	} {
+		out, _, err := prg.Eval(map[string]interface{}{"self": c.new, "oldSelf": c.old})
+		require.NoError(t, err, c.name)
+		assert.Equal(t, c.allow, out.Value(), c.name)
+	}
+}
