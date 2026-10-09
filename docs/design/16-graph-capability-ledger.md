@@ -369,7 +369,7 @@ Graph cannot grant itself RBAC while running as that identity. So `IdentityProvi
   it, and `IdentityProvisioner` creates only RoleBindings. Two v0.10.0 features avoid it: the
   translator inlines a `ClusterAnalysisTemplate` into the AnalysisRun template (#1444,
   `pkg/translator/analysis.go`), and resolves a `ClusterScmProvider` into a static spec field
-  (#1459, **planned in #1517 (not on main)**), the same way it copies PolicyGate templates
+  (#1459, #1517), the same way it copies PolicyGate templates
   into instances. No upstream ask: the grant is kardinal's to make, and
   a static copy also gives the Bundle a snapshot.
 
