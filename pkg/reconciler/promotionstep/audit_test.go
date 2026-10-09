@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -34,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func TestWriteAuditEvent_PromotionStarted(t *testing.T) {
@@ -175,4 +177,35 @@ func TestSanitizeK8sName(t *testing.T) {
 			assert.Equal(t, tc.want, sanitizeK8sName(tc.input))
 		})
 	}
+}
+
+// TestWriteAuditEvent_CreatedAt (#1513): the step writer stamps
+// kardinal.io/created-at with nanoseconds next to spec.timestamp, which is
+// stored with one-second resolution, so lifecycle.CompareAuditEvents orders
+// its records within a second; a rewrite keeps the first record.
+//
+// Covers GATE-AUDIT-02.
+func TestWriteAuditEvent_CreatedAt(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	ps := &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: "app-v1-prod", Namespace: "default",
+		Labels: map[string]string{"kardinal.io/pipeline": "app", "kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod"}}}
+	c := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(ps).Build()
+	ctx := context.Background()
+	before := time.Now()
+	writeAuditEvent(ctx, c, ps, AuditActionPromotionStarted, AuditOutcomePending, "m")
+	writeAuditEvent(ctx, c, ps, AuditActionPromotionSucceeded, AuditOutcomeSuccess, "m")
+
+	var list v1alpha1.AuditEventList
+	require.NoError(t, c.List(ctx, &list))
+	require.Len(t, list.Items, 2)
+	byAction := map[string]v1alpha1.AuditEvent{}
+	for _, ae := range list.Items {
+		byAction[ae.Spec.Action] = ae
+		at, err := time.Parse(time.RFC3339Nano, ae.Annotations[lifecycle.AnnotationCreatedAt])
+		require.NoError(t, err, "kardinal.io/created-at is RFC 3339 with nanoseconds")
+		assert.False(t, at.Before(before.Truncate(time.Microsecond)), "stamped when written")
+	}
+	started, succeeded := byAction[AuditActionPromotionStarted], byAction[AuditActionPromotionSucceeded]
+	assert.Negative(t, lifecycle.CompareAuditEvents(&started, &succeeded), "written first, listed first")
 }
