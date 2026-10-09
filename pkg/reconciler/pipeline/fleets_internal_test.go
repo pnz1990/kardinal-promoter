@@ -105,3 +105,57 @@ func TestResolveFleets(t *testing.T) {
 	}
 	assert.Empty(t, (&Reconciler{}).resolveFleets(context.Background(), &kardinalv1alpha1.Pipeline{}), "no fleet, no status")
 }
+
+func clusterProfile(ns, name string, labels map[string]string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "multicluster.x-k8s.io", Version: "v1alpha1", Kind: "ClusterProfile"})
+	u.SetNamespace(ns)
+	u.SetName(name)
+	u.SetLabels(labels)
+	return u
+}
+
+// TestResolveFleets_ClusterProfiles: a ClusterProfile selector makes every
+// selected cluster of the cluster inventory in the Pipeline's namespace (or
+// selector.namespace) a target named after it, with the fleet's path and
+// health (none set on the target); matchExpressions select too; a cluster
+// without the inventory CRD says so. A selector of kind Target needs no
+// status.
+//
+// Covers FLEET-03.
+func TestResolveFleets_ClusterProfiles(t *testing.T) {
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(schema.GroupVersionKind{Group: "multicluster.x-k8s.io", Version: "v1alpha1", Kind: "ClusterProfile"}, meta.RESTScopeNamespace)
+	s := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
+	c := fake.NewClientBuilder().WithScheme(s).WithRESTMapper(mapper).WithObjects(
+		clusterProfile("team-a", "prod-eu-1", map[string]string{"env": "prod", "region": "eu"}),
+		clusterProfile("team-a", "prod-us-1", map[string]string{"env": "prod", "region": "us"}),
+		clusterProfile("team-a", "dev-1", map[string]string{"env": "dev"}),
+		clusterProfile("fleet-system", "prod-ap-1", map[string]string{"env": "prod"}),
+	).Build()
+	p := fleetPipeline(nil)
+	p.Spec.Environments[1].Fleet.Selector = &kardinalv1alpha1.FleetSelector{Kind: kardinalv1alpha1.FleetSelectorClusterProfile,
+		MatchLabels:      map[string]string{"env": "prod"},
+		MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "region", Operator: metav1.LabelSelectorOpExists}}}
+	r := &Reconciler{Client: c}
+	got := r.resolveFleets(context.Background(), p)
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].Message)
+	assert.Equal(t, []kardinalv1alpha1.FleetTarget{{Name: "prod-eu-1"}, {Name: "prod-us-1"}}, got[0].Targets)
+
+	p.Spec.Environments[1].Fleet.Selector.Namespace = "fleet-system"
+	p.Spec.Environments[1].Fleet.Selector.MatchExpressions = nil
+	got = r.resolveFleets(context.Background(), p)
+	assert.Equal(t, []kardinalv1alpha1.FleetTarget{{Name: "prod-ap-1"}}, got[0].Targets)
+
+	noCRD := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+		return &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "multicluster.x-k8s.io", Kind: "ClusterProfile"}}
+	}}).Build()
+	got = (&Reconciler{Client: noCRD}).resolveFleets(context.Background(), p)
+	assert.Contains(t, got[0].Message, "ClusterProfiles are not served")
+
+	p.Spec.Environments[1].Fleet.Selector.Kind = kardinalv1alpha1.FleetSelectorTarget
+	assert.Empty(t, r.resolveFleets(context.Background(), p), "a Target selector is resolved by the Graph builder")
+	assert.False(t, hasSelectorFleet(p))
+}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -31,72 +32,110 @@ const defaultArgoNamespace = "argocd"
 // applicationListGVK is Argo CD's Application list kind.
 var applicationListGVK = schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "ApplicationList"}
 
+// clusterProfileListGVK is the cluster inventory's ClusterProfile list kind
+// (SIG Multicluster, KEP-4322).
+var clusterProfileListGVK = schema.GroupVersionKind{Group: "multicluster.x-k8s.io", Version: "v1alpha1", Kind: "ClusterProfileList"}
+
 // resolveFleets returns status.fleets for p: for each fleet environment with
-// a selector, the Argo CD Applications it selects as targets, sorted by name.
-// An Application becomes a target named after it, with its
-// spec.source.path (or its first spec.sources path) and argocd health on
-// it. A selector that cannot be read, or an Application name that cannot be
-// a target, is reported in the entry's message, and the Graph refuses the
-// fleet. It reads objects only and writes nothing.
+// an Application or ClusterProfile selector, the objects it selects as
+// targets, sorted by name. A selector of kind Target picks from
+// spec.fleet.targets and needs no status. An object that cannot be a
+// target, or a selector that cannot be read, is reported in the entry's
+// message, and the Graph refuses the fleet. It reads objects only and writes
+// nothing.
 func (r *Reconciler) resolveFleets(ctx context.Context, p *kardinalv1alpha1.Pipeline) []kardinalv1alpha1.FleetStatus {
 	var out []kardinalv1alpha1.FleetStatus
 	for _, env := range p.Spec.Environments {
-		if env.Fleet == nil || env.Fleet.Selector == nil {
+		if env.Fleet == nil || !resolvedSelector(env.Fleet.Selector) {
 			continue
 		}
-		out = append(out, r.resolveFleet(ctx, env.Name, env.Fleet.Selector))
+		out = append(out, r.resolveFleet(ctx, p.Namespace, env.Name, env.Fleet.Selector))
 	}
 	return out
 }
 
-func (r *Reconciler) resolveFleet(ctx context.Context, env string, sel *kardinalv1alpha1.FleetSelector) kardinalv1alpha1.FleetStatus {
+// resolvedSelector reports whether sel selects cluster objects the
+// controller resolves into status.fleets.
+func resolvedSelector(sel *kardinalv1alpha1.FleetSelector) bool {
+	return sel != nil && sel.Kind != kardinalv1alpha1.FleetSelectorTarget
+}
+
+func (r *Reconciler) resolveFleet(ctx context.Context, pipelineNS, env string, sel *kardinalv1alpha1.FleetSelector) kardinalv1alpha1.FleetStatus {
 	st := kardinalv1alpha1.FleetStatus{Environment: env}
-	ns := sel.Namespace
-	if ns == "" {
+	kind := sel.Kind
+	if kind == "" {
+		kind = kardinalv1alpha1.FleetSelectorApplication
+	}
+	ns, gvk := sel.Namespace, applicationListGVK
+	if kind == kardinalv1alpha1.FleetSelectorClusterProfile {
+		gvk = clusterProfileListGVK
+		if ns == "" {
+			ns = pipelineNS
+		}
+	} else if ns == "" {
 		ns = defaultArgoNamespace
 	}
+	ls, err := metav1.LabelSelectorAsSelector(sel.LabelSelector())
+	if err != nil {
+		st.Message = fmt.Sprintf("selector: %v", err)
+		return st
+	}
 	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(applicationListGVK)
+	list.SetGroupVersionKind(gvk)
 	reader := r.Reader
 	if reader == nil {
 		reader = r.Client
 	}
-	if err := reader.List(ctx, list, client.InNamespace(ns), client.MatchingLabels(sel.MatchLabels)); err != nil {
-		if meta.IsNoMatchError(err) {
+	if err := reader.List(ctx, list, client.InNamespace(ns), client.MatchingLabelsSelector{Selector: ls}); err != nil {
+		switch {
+		case meta.IsNoMatchError(err) && kind == kardinalv1alpha1.FleetSelectorClusterProfile:
+			st.Message = "multicluster.x-k8s.io/v1alpha1 ClusterProfiles are not served: install a cluster inventory or list the targets in spec.fleet.targets"
+		case meta.IsNoMatchError(err):
 			st.Message = "argoproj.io/v1alpha1 Applications are not served: install Argo CD or list the targets in spec.fleet.targets"
-		} else {
-			st.Message = fmt.Sprintf("list Argo CD Applications in %s: %v", ns, err)
+		default:
+			st.Message = fmt.Sprintf("list %ss in %s: %v", kind, ns, err)
 		}
 		return st
 	}
-	for _, app := range list.Items {
-		name := app.GetName()
+	for _, obj := range list.Items {
+		name := obj.GetName()
 		if errs := validation.IsDNS1123Label(name); len(errs) > 0 || len(name) > 62 {
-			st.Message = fmt.Sprintf("Application %s/%s cannot be a target: its name is not a DNS label of at most 62 characters", ns, name)
+			st.Message = fmt.Sprintf("%s %s/%s cannot be a target: its name is not a DNS label of at most 62 characters", kind, ns, name)
 			st.Targets = nil
 			return st
 		}
-		p, _, _ := unstructured.NestedString(app.Object, "spec", "source", "path")
-		if p == "" {
-			if sources, _, _ := unstructured.NestedSlice(app.Object, "spec", "sources"); len(sources) > 0 {
-				if s, ok := sources[0].(map[string]interface{}); ok {
-					p, _ = s["path"].(string)
-				}
+		t := kardinalv1alpha1.FleetTarget{Name: name}
+		if kind == kardinalv1alpha1.FleetSelectorApplication {
+			path := applicationPath(&obj)
+			if path == "" {
+				st.Message = fmt.Sprintf("Application %s/%s cannot be a target: it has no spec.source.path", ns, name)
+				st.Targets = nil
+				return st
 			}
+			t.Path = path
+			t.Health = &kardinalv1alpha1.HealthConfig{Type: "argocd",
+				ArgoCD: &kardinalv1alpha1.HealthTargetRef{Name: name, Namespace: ns}}
 		}
-		if p == "" {
-			st.Message = fmt.Sprintf("Application %s/%s cannot be a target: it has no spec.source.path", ns, name)
-			st.Targets = nil
-			return st
-		}
-		st.Targets = append(st.Targets, kardinalv1alpha1.FleetTarget{
-			Name: name, Path: p,
-			Health: &kardinalv1alpha1.HealthConfig{Type: "argocd",
-				ArgoCD: &kardinalv1alpha1.HealthTargetRef{Name: name, Namespace: ns}},
-		})
+		// A ClusterProfile target keeps the fleet's path (followed by the
+		// cluster's name) and the fleet environment's health check.
+		st.Targets = append(st.Targets, t)
 	}
 	sort.Slice(st.Targets, func(i, j int) bool { return st.Targets[i].Name < st.Targets[j].Name })
 	return st
+}
+
+// applicationPath is an Argo CD Application's spec.source.path, or the path
+// of its first spec.sources entry.
+func applicationPath(app *unstructured.Unstructured) string {
+	p, _, _ := unstructured.NestedString(app.Object, "spec", "source", "path")
+	if p == "" {
+		if sources, _, _ := unstructured.NestedSlice(app.Object, "spec", "sources"); len(sources) > 0 {
+			if s, ok := sources[0].(map[string]interface{}); ok {
+				p, _ = s["path"].(string)
+			}
+		}
+	}
+	return p
 }
 
 // fleetsEqual reports whether two status.fleets lists are the same.
@@ -110,7 +149,7 @@ func fleetsEqual(a, b []kardinalv1alpha1.FleetStatus) bool {
 // hasSelectorFleet reports whether p has a fleet environment with a selector.
 func hasSelectorFleet(p *kardinalv1alpha1.Pipeline) bool {
 	for _, env := range p.Spec.Environments {
-		if env.Fleet != nil && env.Fleet.Selector != nil {
+		if env.Fleet != nil && resolvedSelector(env.Fleet.Selector) {
 			return true
 		}
 	}

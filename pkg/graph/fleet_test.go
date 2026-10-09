@@ -4,6 +4,8 @@
 package graph_test
 
 import (
+	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -183,4 +185,181 @@ func TestFleet_Invalid(t *testing.T) {
 	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"prod-a", "prod-b"}, res.Environments)
+}
+
+// bigFleet is test → prod, a fleet of n targets t00..t<n-1>, maxConcurrent
+// at a time, stopping at maxUnavailable failures (nil: unset).
+func bigFleet(n, maxConcurrent int, maxUnavailable *int) *kardinalv1alpha1.Pipeline {
+	var targets []kardinalv1alpha1.FleetTarget
+	for i := 0; i < n; i++ {
+		targets = append(targets, kardinalv1alpha1.FleetTarget{Name: fmt.Sprintf("t%02d", i),
+			Labels: map[string]string{"tier": []string{"canary", "main"}[min(i, 1)]}})
+	}
+	return pipelineOf("app",
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Fleet: &kardinalv1alpha1.FleetSpec{
+			MaxConcurrent: maxConcurrent, MaxUnavailable: maxUnavailable, Targets: targets}},
+	)
+}
+
+func fleetSim(t *testing.T, p *kardinalv1alpha1.Pipeline) *compactSim {
+	t.Helper()
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
+	require.NoError(t, err)
+	assertKroValid(t, res.Graph)
+	sim := newCompactSim(t, res.Graph)
+	sim.fleet = map[string]string{}
+	for _, e := range res.Environments {
+		if graph.FleetOf(p, e) != "" {
+			sim.fleet[e] = graph.FleetOf(p, e)
+		}
+	}
+	return sim
+}
+
+func inFlight(sim *compactSim) int {
+	n := 0
+	for env, st := range sim.steps {
+		if sim.fleet[env] != "" && st != "Verified" {
+			n++
+		}
+	}
+	return n
+}
+
+// TestFleet_FiftyTargetsFiveAtATime walks a 50-target fleet with
+// maxConcurrent 5 to the end: never more than 5 targets in flight, targets
+// start in fleet order, and every target is Verified once.
+//
+// Covers FLEET-01.
+func TestFleet_FiftyTargetsFiveAtATime(t *testing.T) {
+	sim := fleetSim(t, bigFleet(50, 5, nil))
+	sim.advance()
+	sim.steps["test"] = "Verified"
+	var order []string
+	for round := 0; round < 100; round++ {
+		sim.advance()
+		require.LessOrEqual(t, inFlight(sim), 5, "round %d", round)
+		// Verify the oldest in-flight target.
+		var flying []string
+		for env, st := range sim.steps {
+			if sim.fleet[env] != "" && st == "" {
+				flying = append(flying, env)
+			}
+		}
+		if len(flying) == 0 {
+			break
+		}
+		sort.Strings(flying)
+		sim.steps[flying[0]] = "Verified"
+		order = append(order, flying[0])
+	}
+	require.Len(t, order, 50)
+	assert.True(t, sort.StringsAreSorted(order), "targets in fleet order: %v", order)
+	_, complete := sim.wave()
+	assert.True(t, complete)
+}
+
+// TestFleet_MaxUnavailableStopsTheRollout: with maxUnavailable 2, the
+// second failure stops new targets; the ones in flight still finish, and a
+// failure retried to Verified lets the rollout go on.
+//
+// Covers FLEET-02.
+func TestFleet_MaxUnavailableStopsTheRollout(t *testing.T) {
+	two := 2
+	sim := fleetSim(t, bigFleet(10, 3, &two))
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"prod-t00", "prod-t01", "prod-t02", "test"}, sim.advance())
+	sim.steps["prod-t00"] = "Failed"
+	sim.steps["prod-t01"] = "Verified"
+	assert.Contains(t, sim.advance(), "prod-t03", "one failure: the rollout goes on")
+	sim.steps["prod-t02"] = "Failed"
+	before := len(sim.steps)
+	sim.advance()
+	assert.Len(t, sim.steps, before, "two failures: no target starts")
+	sim.steps["prod-t03"] = "Verified" // in flight, it finished
+	sim.advance()
+	assert.Len(t, sim.steps, before, "still stopped")
+	sim.steps["prod-t02"] = "Verified" // retried
+	assert.Contains(t, sim.advance(), "prod-t04", "below maxUnavailable again: the rollout resumes")
+}
+
+// TestFleet_TargetSelector: a selector of kind Target picks static targets
+// by label, in their order.
+//
+// Covers FLEET-03.
+func TestFleet_TargetSelector(t *testing.T) {
+	p := bigFleet(4, 2, nil)
+	p.Spec.Environments[1].Fleet.Selector = &kardinalv1alpha1.FleetSelector{Kind: kardinalv1alpha1.FleetSelectorTarget,
+		MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "tier", Operator: metav1.LabelSelectorOpIn, Values: []string{"main"}}}}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"test", "prod-t01", "prod-t02", "prod-t03"}, res.Environments, "t00 is the canary, not main")
+
+	p.Spec.Environments[1].Fleet.Selector.MatchExpressions = nil
+	p.Spec.Environments[1].Fleet.Selector.MatchLabels = map[string]string{"tier": "nope"}
+	_, err = graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has no targets")
+}
+
+// TestFleet_TargetAddedMidRollout: a target added while the fleet rolls out
+// (the Graph rebuilt in place) joins the queue after the existing ones and
+// is promoted; the targets already Verified stay so, and the environment
+// after the fleet waits for it too.
+//
+// Covers FLEET-04.
+func TestFleet_TargetAddedMidRollout(t *testing.T) {
+	p := fleetPipeline(1)
+	sim := fleetSim(t, p)
+	sim.steps["test"] = "Verified"
+	sim.advance()
+	sim.steps["prod-eu"] = "Verified"
+	sim.advance()
+
+	p.Spec.Environments[1].Fleet.Targets = append(p.Spec.Environments[1].Fleet.Targets, kardinalv1alpha1.FleetTarget{Name: "sa"})
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
+	require.NoError(t, err)
+	steps := sim.steps
+	sim = newCompactSim(t, res.Graph)
+	sim.steps = steps
+	sim.fleet = map[string]string{"prod-eu": "prod", "prod-us": "prod", "prod-ap": "prod", "prod-sa": "prod"}
+	for _, env := range []string{"prod-us", "prod-ap", "prod-sa"} {
+		got := sim.advance()
+		assert.Contains(t, got, env)
+		assert.NotContains(t, got, "post", "post waits for every target, the new one too")
+		sim.steps[env] = "Verified"
+	}
+	assert.Contains(t, sim.advance(), "post")
+	assert.Equal(t, "Verified", sim.steps["prod-eu"], "a Verified target is not promoted again")
+}
+
+// TestFleet_TargetRemovedMidRollout: a target removed while it is in
+// flight leaves the wave (kro prunes its PromotionStep, whose finalizer
+// closes its PR), its place is freed, and the environment after the fleet
+// waits only for the targets that remain.
+//
+// Covers FLEET-04.
+func TestFleet_TargetRemovedMidRollout(t *testing.T) {
+	p := fleetPipeline(1)
+	sim := fleetSim(t, p)
+	sim.steps["test"] = "Verified"
+	assert.Contains(t, sim.advance(), "prod-eu")
+
+	p.Spec.Environments[1].Fleet.Targets = p.Spec.Environments[1].Fleet.Targets[1:] // eu removed, in flight
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
+	require.NoError(t, err)
+	steps := sim.steps
+	sim = newCompactSim(t, res.Graph)
+	sim.steps = steps
+	sim.fleet = map[string]string{"prod-eu": "prod", "prod-us": "prod", "prod-ap": "prod"}
+	got := sim.advance()
+	assert.NotContains(t, got, "prod-eu", "the removed target leaves the wave: kro prunes its step")
+	delete(sim.steps, "prod-eu") // pruned
+	got = sim.advance()
+	assert.Contains(t, got, "prod-us", "its place is free")
+	sim.steps["prod-us"] = "Verified"
+	sim.advance()
+	sim.steps["prod-ap"] = "Verified"
+	assert.Contains(t, sim.advance(), "post", "post waits only for the targets that remain")
 }

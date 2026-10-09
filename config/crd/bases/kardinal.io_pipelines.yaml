@@ -162,35 +162,89 @@ spec:
                         maxConcurrent:
                           description: |-
                             MaxConcurrent is how many targets are promoted at once. A target is in
-                            flight from its PromotionStep's creation until it is Verified; a Failed
-                            target keeps its place, so a failure stops new targets until the Bundle
-                            is retried. 0 promotes every target at once.
+                            flight from its PromotionStep's creation until it is Verified; a
+                            Failed target keeps its place. 0 promotes every target at once.
                           minimum: 0
+                          type: integer
+                        maxUnavailable:
+                          description: |-
+                            MaxUnavailable stops the rollout: once this many of the fleet's
+                            targets have Failed, no further target starts, and the targets in
+                            flight finish. Unset, a failure only keeps its place in
+                            maxConcurrent. An environment after the fleet waits for every target
+                            to be Verified either way.
+                          minimum: 1
                           type: integer
                         selector:
                           description: |-
-                            Selector makes every Argo CD Application it selects a target: the
-                            target is named after the Application, its path is the Application's
-                            spec.source.path, and its health is that Application (health type
-                            argocd). The controller resolves the selector into status.fleets and
-                            rebuilds the Graph of a Bundle in flight when the members change.
+                            Selector picks the targets by labels: from targets (kind Target),
+                            from the Argo CD Applications in a namespace (kind Application), or
+                            from the clusters of a cluster inventory (kind ClusterProfile,
+                            multicluster.x-k8s.io/v1alpha1). The controller resolves Application
+                            and ClusterProfile selectors into status.fleets, and rebuilds the Graph
+                            of a Bundle in flight when the members change.
                           properties:
+                            kind:
+                              default: Application
+                              description: |-
+                                Kind is what the selector selects: Target (spec.fleet.targets),
+                                Application (Argo CD Applications; the default) or ClusterProfile
+                                (multicluster.x-k8s.io/v1alpha1 clusters).
+                              enum:
+                              - Target
+                              - Application
+                              - ClusterProfile
+                              type: string
+                            matchExpressions:
+                              description: |-
+                                MatchExpressions selects by label expressions (In, NotIn, Exists,
+                                DoesNotExist), as in a Kubernetes label selector.
+                              items:
+                                description: |-
+                                  A label selector requirement is a selector that contains values, a key, and an operator that
+                                  relates the key and values.
+                                properties:
+                                  key:
+                                    description: key is the label key that the selector
+                                      applies to.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      operator represents a key's relationship to a set of values.
+                                      Valid operators are In, NotIn, Exists and DoesNotExist.
+                                    type: string
+                                  values:
+                                    description: |-
+                                      values is an array of string values. If the operator is In or NotIn,
+                                      the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                      the values array must be empty. This array is replaced during a strategic
+                                      merge patch.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - key
+                                - operator
+                                type: object
+                              type: array
                             matchLabels:
                               additionalProperties:
                                 type: string
-                              description: MatchLabels selects the Applications.
-                              minProperties: 1
+                              description: MatchLabels selects by label values.
                               type: object
                             namespace:
                               description: |-
-                                Namespace is the Argo CD namespace the Applications are in. Default:
-                                argocd.
+                                Namespace holds the Applications (default argocd) or ClusterProfiles
+                                (default the Pipeline's namespace). Unused by kind Target.
                               type: string
-                          required:
-                          - matchLabels
                           type: object
+                          x-kubernetes-validations:
+                          - message: 'fleet.selector: set matchLabels or matchExpressions'
+                            rule: has(self.matchLabels) || has(self.matchExpressions)
                         targets:
-                          description: Targets are the fleet's members.
+                          description: Targets are the fleet's members, in the order
+                            they are promoted.
                           items:
                             description: FleetTarget is one member of a fleet.
                             properties:
@@ -326,6 +380,15 @@ spec:
                                     - flagger
                                     type: string
                                 type: object
+                              labels:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  Labels describe the target (region, tier, cluster); a selector of
+                                  kind Target picks targets by them. The labels of a selected
+                                  Application or ClusterProfile are its own.
+                                maxProperties: 32
+                                type: object
                               name:
                                 description: |-
                                   Name identifies the target. The target's environment is named
@@ -344,7 +407,7 @@ spec:
                             required:
                             - name
                             type: object
-                          maxItems: 200
+                          maxItems: 500
                           minItems: 1
                           type: array
                           x-kubernetes-list-map-keys:
@@ -352,8 +415,18 @@ spec:
                           x-kubernetes-list-type: map
                       type: object
                       x-kubernetes-validations:
-                      - message: 'fleet: set exactly one of targets and selector'
-                        rule: has(self.targets) != has(self.selector)
+                      - message: 'fleet: set targets, a selector, or both (a selector
+                          of kind Target)'
+                        rule: has(self.targets) || has(self.selector)
+                      - message: 'fleet: targets with a selector need selector.kind
+                          Target; an Application or ClusterProfile selector finds
+                          the targets itself'
+                        rule: '!has(self.selector) || !has(self.targets) || self.selector.kind
+                          == ''Target'''
+                      - message: 'fleet: a selector of kind Target selects from targets,
+                          which is empty'
+                        rule: '!has(self.selector) || self.selector.kind != ''Target''
+                          || has(self.targets)'
                     health:
                       description: Health holds the health check configuration for
                         this environment.
@@ -1302,6 +1375,15 @@ spec:
                                 - argoRollouts
                                 - flagger
                                 type: string
+                            type: object
+                          labels:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              Labels describe the target (region, tier, cluster); a selector of
+                              kind Target picks targets by them. The labels of a selected
+                              Application or ClusterProfile are its own.
+                            maxProperties: 32
                             type: object
                           name:
                             description: |-

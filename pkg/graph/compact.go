@@ -194,6 +194,9 @@ type compactStep struct {
 	fleet         string
 	index         int
 	maxConcurrent int
+	// maxUnavailable stops the fleet's admissions once that many of its
+	// targets Failed (0: unset).
+	maxUnavailable int
 }
 
 // compactNodes builds the compact shape's PromotionStep nodes: the DAG as data
@@ -233,7 +236,7 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		}
 		if fleets {
 			e := entries[i].(map[string]interface{})
-			e["fleet"], e["index"], e["maxConcurrent"] = s.fleet, s.index, s.maxConcurrent
+			e["fleet"], e["index"], e["maxConcurrent"], e["maxUnavailable"] = s.fleet, s.index, s.maxConcurrent, s.maxUnavailable
 		}
 	}
 
@@ -266,9 +269,13 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		inFlight := fmt.Sprintf("(size(%sstartedFleets.filter(f, f == e.fleet)) - size(%sverifiedFleets.filter(f, f == e.fleet)))",
 			state, state)
 		rank := fmt.Sprintf("size(%s.steps.filter(x, x.fleet == e.fleet && x.index < e.index))", NodePromotionEligible)
+		// maxUnavailable: once that many of the fleet's targets Failed,
+		// none of its targets starts; the ones in flight finish.
+		failed := fmt.Sprintf("size(%sfailedFleets.filter(f, f == e.fleet))", state)
 		wave = fmt.Sprintf("${%s.steps.filter(e, e.environment in %sstarted) + %s.steps.filter(e, "+
-			"e.fleet == \"\" || e.maxConcurrent == 0 || %s < e.maxConcurrent - %s)}",
-			NodePromotionDAG, state, NodePromotionEligible, rank, inFlight)
+			"e.fleet == \"\" || ((e.maxUnavailable == 0 || %s < e.maxUnavailable) && "+
+			"(e.maxConcurrent == 0 || %s < e.maxConcurrent - %s)))}",
+			NodePromotionDAG, state, NodePromotionEligible, failed, rank, inFlight)
 	}
 
 	step := func(f string) string { return "${" + iterStep + "." + f + "}" }
@@ -348,6 +355,8 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		stateDef := nodes[2].Def
 		stateDef["startedFleets"] = fmt.Sprintf(`${%s.map(s, s.metadata.labels[?"%s"].orValue(""))}`, NodeStepsObserved, LabelFleet)
 		stateDef["verifiedFleets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") == "Verified").map(s, s.metadata.labels[?"%s"].orValue(""))}`,
+			NodeStepsObserved, LabelFleet)
+		stateDef["failedFleets"] = fmt.Sprintf(`${%s.filter(s, s.?status.?state.orValue("") == "Failed").map(s, s.metadata.labels[?"%s"].orValue(""))}`,
 			NodeStepsObserved, LabelFleet)
 		steps := nodes[4].Template["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
 		steps[LabelFleet] = step("fleet")

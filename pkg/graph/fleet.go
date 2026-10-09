@@ -6,8 +6,9 @@ package graph
 import (
 	"fmt"
 	"path"
-	"sort"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -25,6 +26,8 @@ type fleetMember struct {
 	index int
 	// maxConcurrent is the fleet's spec.fleet.maxConcurrent.
 	maxConcurrent int
+	// maxUnavailable is the fleet's spec.fleet.maxUnavailable, 0 when unset.
+	maxUnavailable int
 	// spec is the target as an environment: the fleet environment with the
 	// target's name, path and health.
 	spec kardinalv1alpha1.EnvironmentSpec
@@ -36,8 +39,23 @@ func FleetTargetName(env, target string) string { return env + "-" + target }
 // fleetTargets returns the targets of fleet environment env: spec.targets,
 // or the members status.fleets resolved for its selector.
 func fleetTargets(p *kardinalv1alpha1.Pipeline, env kardinalv1alpha1.EnvironmentSpec) ([]kardinalv1alpha1.FleetTarget, error) {
-	if env.Fleet.Selector == nil {
+	sel := env.Fleet.Selector
+	if sel == nil {
 		return env.Fleet.Targets, nil
+	}
+	if sel.Kind == kardinalv1alpha1.FleetSelectorTarget {
+		// Static targets picked by their labels, in their order.
+		ls, err := metav1.LabelSelectorAsSelector(sel.LabelSelector())
+		if err != nil {
+			return nil, asInvalid(fmt.Errorf("build: fleet environment %q: selector: %w", env.Name, err))
+		}
+		var out []kardinalv1alpha1.FleetTarget
+		for _, t := range env.Fleet.Targets {
+			if ls.Matches(labels.Set(t.Labels)) {
+				out = append(out, t)
+			}
+		}
+		return out, nil
 	}
 	for _, f := range p.Status.Fleets {
 		if f.Environment != env.Name {
@@ -97,7 +115,12 @@ func fleetMembers(p *kardinalv1alpha1.Pipeline) (map[string]fleetMember, map[str
 			if t.Health != nil {
 				spec.Health = *t.Health.DeepCopy()
 			}
-			members[name] = fleetMember{fleet: e.Name, index: i, maxConcurrent: e.Fleet.MaxConcurrent, spec: spec}
+			maxUnavailable := 0
+			if e.Fleet.MaxUnavailable != nil {
+				maxUnavailable = *e.Fleet.MaxUnavailable
+			}
+			members[name] = fleetMember{fleet: e.Name, index: i, maxConcurrent: e.Fleet.MaxConcurrent,
+				maxUnavailable: maxUnavailable, spec: spec}
 			byFleet[e.Name] = append(byFleet[e.Name], name)
 		}
 	}
@@ -195,14 +218,6 @@ func hasFleets(p *kardinalv1alpha1.Pipeline) bool {
 		}
 	}
 	return false
-}
-
-// sortedTargets sorts the members of a selector fleet by name, the order
-// status.fleets records and the Graph paces them in.
-func sortedTargets(ts []kardinalv1alpha1.FleetTarget) []kardinalv1alpha1.FleetTarget {
-	out := append([]kardinalv1alpha1.FleetTarget(nil), ts...)
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
 }
 
 // EnvironmentNames lists p's environment names as a user may name them: every

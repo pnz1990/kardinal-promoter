@@ -414,6 +414,7 @@ func controllerAccess() []apiAccess {
 		{"argoproj.io", "rollouts", readVerbs, inWatched, "", "health adapter argoRollouts"},
 		{"kustomize.toolkit.fluxcd.io", "kustomizations", readVerbs, inWatched, "", "health adapter flux"},
 		{"flagger.app", "canaries", readVerbs, inWatched, "", "health adapter flagger"},
+		{"multicluster.x-k8s.io", "clusterprofiles", []string{"get", "list"}, inWatched, "", "pipeline fleets.go: fleet selector kind ClusterProfile (uncached List)"},
 		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "create", "update", "patch", "delete"}, inRelease, "", "leader election"},
 		{"", "configmaps", []string{"create"}, inRelease, "", "ensureVersionConfigMap"},
 		{"", "configmaps", []string{"get", "update", "patch"}, inRelease, "kardinal-version", "ensureVersionConfigMap"},
