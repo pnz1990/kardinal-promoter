@@ -69,7 +69,7 @@ spec:
 EOT
 "${KUBECTL[@]}" -n "$NS" rollout status deploy/jaeger --timeout=180s >/dev/null
 BASE="http://$(node_ip):$(nodeport "$NS" jaeger query)"
-wait_http "$BASE/api/services" 60 || die "Jaeger query API not reachable at $BASE"
+wait_http "$BASE/api/v3/services" 60 || die "Jaeger query API not reachable at $BASE"
 
 env_set KARDINAL_E2E_JAEGER_OTLP "http://jaeger.$NS.svc.cluster.local:4318"
 env_set KARDINAL_E2E_JAEGER_API "$BASE"

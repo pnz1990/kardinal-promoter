@@ -24,41 +24,47 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
 
-// jaegerSpan is a span as Jaeger's query API returns it.
+// jaegerSpan is a span as Jaeger's v3 query API returns it (OTLP JSON).
 type jaegerSpan struct {
-	TraceID       string `json:"traceID"`
-	SpanID        string `json:"spanID"`
-	OperationName string `json:"operationName"`
-	References    []struct {
-		RefType string `json:"refType"`
-		SpanID  string `json:"spanID"`
-	} `json:"references"`
-	Tags []struct {
-		Key   string      `json:"key"`
-		Value interface{} `json:"value"`
-	} `json:"tags"`
+	TraceID      string `json:"traceId"`
+	SpanID       string `json:"spanId"`
+	ParentSpanID string `json:"parentSpanId"`
+	Name         string `json:"name"`
+	Attributes   []struct {
+		Key   string                 `json:"key"`
+		Value map[string]interface{} `json:"value"`
+	} `json:"attributes"`
 }
 
+// tag is the attribute key's value as a string ("" when absent).
 func (s jaegerSpan) tag(key string) string {
-	for _, t := range s.Tags {
-		if t.Key == key {
-			return fmt.Sprint(t.Value)
+	for _, a := range s.Attributes {
+		if a.Key == key {
+			for _, v := range a.Value {
+				return fmt.Sprint(v)
+			}
 		}
 	}
 	return ""
 }
 
 type jaegerTrace struct {
-	TraceID string       `json:"traceID"`
-	Spans   []jaegerSpan `json:"spans"`
+	TraceID string
+	Spans   []jaegerSpan
 }
 
-// jaegerTraces queries Jaeger's API for the controller's traces of the
-// last hour, or one trace when traceID is set.
+// jaegerTraces queries Jaeger's v3 API for the controller's traces of the
+// last hour, or for one trace when traceID is set, grouped by trace.
 func jaegerTraces(ctx context.Context, api, traceID string) ([]jaegerTrace, error) {
-	u := api + "/api/traces?" + url.Values{"service": {"kardinal-controller"}, "lookback": {"1h"}, "limit": {"2000"}}.Encode()
+	now := time.Now().UTC()
+	u := api + "/api/v3/traces?" + url.Values{
+		"query.service_name":   {"kardinal-controller"},
+		"query.start_time_min": {now.Add(-time.Hour).Format(time.RFC3339)},
+		"query.start_time_max": {now.Add(time.Minute).Format(time.RFC3339)},
+		"query.num_traces":     {"1000"},
+	}.Encode()
 	if traceID != "" {
-		u = api + "/api/traces/" + traceID
+		u = api + "/api/v3/traces/" + traceID
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -69,17 +75,51 @@ func jaegerTraces(ctx context.Context, api, traceID string) ([]jaegerTrace, erro
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil // no trace (yet)
+	}
 	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("jaeger %s: HTTP %d %s", u, resp.StatusCode, body)
 	}
-	var out struct {
-		Data []jaegerTrace `json:"data"`
+	byTrace := map[string]*jaegerTrace{}
+	var order []string
+	// The API may stream several result objects, one per chunk.
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var chunk struct {
+			Result struct {
+				ResourceSpans []struct {
+					ScopeSpans []struct {
+						Spans []jaegerSpan `json:"spans"`
+					} `json:"scopeSpans"`
+				} `json:"resourceSpans"`
+			} `json:"result"`
+		}
+		if err := dec.Decode(&chunk); err == io.EOF {
+			break
+		} else if err != nil {
+			return nil, fmt.Errorf("decode jaeger traces: %w", err)
+		}
+		for _, rs := range chunk.Result.ResourceSpans {
+			for _, ss := range rs.ScopeSpans {
+				for _, sp := range ss.Spans {
+					tr := byTrace[sp.TraceID]
+					if tr == nil {
+						tr = &jaegerTrace{TraceID: sp.TraceID}
+						byTrace[sp.TraceID] = tr
+						order = append(order, sp.TraceID)
+					}
+					tr.Spans = append(tr.Spans, sp)
+				}
+			}
+		}
 	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, fmt.Errorf("decode jaeger traces: %w", err)
+	out := make([]jaegerTrace, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byTrace[id])
 	}
-	return out.Data, nil
+	return out, nil
 }
 
 // TestChart_Tracing checks tracing.enabled with the OTLP/HTTP endpoint of
@@ -111,7 +151,7 @@ func TestChart_Tracing(t *testing.T) {
 
 	bucket := a.ns + "-traced"
 	newHook(t, e, a.ns, "traced", rcv.URL(bucket, "services/T0/B0/hookpath"), "", "", v1alpha1.NotificationEventBundleVerified)
-	a.apply(t, a.pipeline(map[string]string{"test": "pr-review"}))
+	a.apply(t, a.resourcePipeline(map[string]string{"test": "pr-review"}))
 	promote(t, a, fixtures.V2, map[string]bool{"test": true})
 
 	rec := waitRecords(t, rcv, bucket, 1, time.Minute)[0]
@@ -128,12 +168,12 @@ func TestChart_Tracing(t *testing.T) {
 		hookTrace = tr[0]
 		ops := map[string]bool{}
 		for _, s := range hookTrace.Spans {
-			ops[s.OperationName] = true
+			ops[s.Name] = true
 		}
 		return ops["notificationhook.Reconcile"] && ops["HTTP POST"], fmt.Sprintf("%v", ops)
 	})
 	for _, s := range hookTrace.Spans {
-		switch s.OperationName {
+		switch s.Name {
 		case "HTTP POST":
 			assert.Equal(t, spanID, s.SpanID, "the traceparent names the client span")
 			assert.Equal(t, "receiver.webhook-receiver.svc.cluster.local", s.tag("server.address"))
@@ -166,12 +206,12 @@ func TestChart_Tracing(t *testing.T) {
 				continue
 			}
 			for _, s := range tr.Spans {
-				ops[s.OperationName] = true
-				if strings.HasPrefix(s.OperationName, "HTTP ") && s.tag("server.address") == gitHost {
+				ops[s.Name] = true
+				if strings.HasPrefix(s.Name, "HTTP ") && s.tag("server.address") == gitHost {
 					scm++
 				}
-				for _, tg := range s.Tags {
-					assert.NotContains(t, fmt.Sprint(tg.Value), "hookpath", "%s tag %s", s.OperationName, tg.Key)
+				for _, at := range s.Attributes {
+					assert.NotContains(t, fmt.Sprint(at.Value), "hookpath", "%s attribute %s", s.Name, at.Key)
 				}
 			}
 		}

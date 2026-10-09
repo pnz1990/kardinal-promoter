@@ -293,6 +293,7 @@ func main() {
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
 	tracingCfg.ServiceVersion = ControllerVersion
+	tracingCfg.OnError = func(err error) { logger.Warn().Err(err).Msg("OpenTelemetry: span export failed") }
 	shutdownTracing, err := tracing.Setup(context.Background(), tracingCfg)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("invalid tracing configuration")

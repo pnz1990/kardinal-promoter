@@ -57,6 +57,9 @@ type Config struct {
 	SamplingRatio float64
 	// ServiceVersion is the service.version resource attribute.
 	ServiceVersion string
+	// OnError receives export and SDK errors (a collector that refuses a
+	// batch, for example). Nil drops them.
+	OnError func(error)
 }
 
 // Validate checks the configuration of an enabled exporter.
@@ -129,6 +132,9 @@ func Setup(ctx context.Context, c Config) (shutdown func(context.Context) error,
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(c.SamplingRatio))),
 	)
+	if c.OnError != nil {
+		otel.SetErrorHandler(otel.ErrorHandlerFunc(c.OnError))
+	}
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 	return tp.Shutdown, nil
