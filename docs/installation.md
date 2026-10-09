@@ -655,6 +655,7 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 | `clusterroles` | `bind`, limited to `<fullname>-graph-applier` and `<fullname>-graph-reader` |
 | `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
 | `replicasets` | get only: the `resource` and `flux` adapters read the ReplicaSet a Deployment's `ProgressDeadlineExceeded` names |
+| `pods` | list only: while a Deployment's replicas are unavailable, the `resource` adapter lists the pods of its new ReplicaSet to name why one is not ready. In the default cluster mode `list` covers **every pod in the cluster** (pod specs, including literal `env` values, not Secrets); `controller.watchNamespace` limits it to one namespace. Without it, health messages leave the pod out |
 | `secrets` | get only: the controller reads each Secret by name and never lists or watches them. In the default cluster mode `get` covers **every Secret in the cluster**. The release-namespace Role adds `get` on the SCM token Secret by name |
 | `configmaps` | None in the watched namespaces. The leader-election Role reads and writes the `kardinal-version` ConfigMap by name |
 | `leases` | Leader election, through a Role in the release namespace |
