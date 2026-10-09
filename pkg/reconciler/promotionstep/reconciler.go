@@ -48,6 +48,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -230,6 +231,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return objectgone.Reconcile(ctx, req, promotionStepsResource, r.reconcile)
 }
 
+// auditPending wakes the reconciler when a status patch stores audit
+// records in the outbox: a create that failed in the reconcile that stored
+// them is retried by the next one (#1552).
+var auditPending = predicate.Funcs{
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, okOld := e.ObjectOld.(*v1alpha1.PromotionStep)
+		n, okNew := e.ObjectNew.(*v1alpha1.PromotionStep)
+		return okOld && okNew && audit.Pending(o.Status.PendingAuditEvents, n.Status.PendingAuditEvents)
+	},
+}
+
 // promotionStepsResource is the resource objectgone matches a NotFound against.
 var promotionStepsResource = v1alpha1.GroupVersion.WithResource("promotionsteps").GroupResource()
 
@@ -246,6 +261,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 		return ctrl.Result{}, fmt.Errorf("get promotionstep %s: %w", req.Name, err)
 	}
+
+	// Audit records an earlier reconcile stored but could not write go
+	// first (#1552). A failure does not block the promotion: the records
+	// stay in status and the reconcile is requeued to retry them.
+	auditErr := r.flushAudit(ctx, &ps)
 
 	// A deleted step only closes its PR (FinalizerClosePR). Otherwise the
 	// finalizer follows the state before and after this reconcile: it is on
@@ -279,7 +299,24 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.syncPRFinalizer(ctx, &ps); err != nil {
 		return prFinalizerSyncFailed(log, err)
 	}
-	return res, nil
+	return retryAudit(res, auditErr, len(ps.Status.PendingAuditEvents)), nil
+}
+
+// auditRetryDelay is how soon a reconcile whose audit outbox still holds
+// unwritten records runs again.
+const auditRetryDelay = 5 * time.Second
+
+// retryAudit is res, requeued within auditRetryDelay when the outbox could
+// not be flushed (auditErr) or still holds records: a step in a terminal
+// state is not otherwise reconciled again.
+func retryAudit(res ctrl.Result, auditErr error, pending int) ctrl.Result {
+	if auditErr == nil && pending == 0 {
+		return res
+	}
+	if res.RequeueAfter == 0 || res.RequeueAfter > auditRetryDelay {
+		res.RequeueAfter = auditRetryDelay
+	}
+	return res
 }
 
 // reconcileState runs the orphan and supersession guards and then the
@@ -2240,7 +2277,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{},
-				eventfilter.LabelChangedExceptKro, predicate.AnnotationChangedPredicate{}),
+				eventfilter.LabelChangedExceptKro, predicate.AnnotationChangedPredicate{}, auditPending),
 		)).
 		Watches(&v1alpha1.PRStatus{}, handler.EnqueueRequestsFromMapFunc(r.prStatusMapper)).
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
