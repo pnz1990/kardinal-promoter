@@ -35,5 +35,5 @@ test('an approval gate shows its quorum and who approved', async ({ page }) => {
   const notCounted = rows.filter({ hasText: outsider })
   await expect(notCounted).toHaveAttribute('data-counted', 'false')
   await expect(notCounted).toContainText('not counted')
-  await expect(page.getByText(`kardinal approve ${bundle} --env prod`)).toBeVisible()
+  await expect(page.getByText(`kardinal approve ${bundle} --env prod -n ${ns}`)).toBeVisible()
 })

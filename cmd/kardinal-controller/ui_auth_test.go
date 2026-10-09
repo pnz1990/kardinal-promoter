@@ -461,10 +461,11 @@ func TestUIHandler_Approvals(t *testing.T) {
 	tokens := groupTokens{
 		"alice":  {Username: "alice@example.com", Groups: []string{"release-managers", "system:authenticated"}},
 		"viewer": {Username: "viewer"},
+		"bob":    {Username: "bob@example.com"},
 	}
 	all := []string{"get", "list", "create", "delete", "update"}
 	access := &uiTestAccess{rules: map[string]map[string][]string{
-		"alice@example.com": {"team-a": all}, "viewer": {"team-a": {"get", "list"}}}}
+		"alice@example.com": {"team-a": all}, "bob@example.com": {"team-a": all}, "viewer": {"team-a": {"get", "list"}}}}
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs()...).Build()
 	h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: access}, "", nil, zerolog.Nop())
 	approvals := func() []v1alpha1.Approval {
@@ -507,6 +508,15 @@ func TestUIHandler_Approvals(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	rec = post("alice", `{"bundle":"app-v2","namespace":"team-a","environment":"staging","decision":"approve"}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "unknown environment")
+
+	// Bob may delete approvals in team-a, but the UI revokes only his own:
+	// he has none, so nothing is revoked and alice's reject stays (#1593 QA).
+	rec = post("bob", `{"bundle":"app-v2","namespace":"team-a","environment":"prod","revoke":true}`)
+	assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "bob@example.com has no Approval of app-v2 for prod to revoke")
+	got = approvals()
+	require.Len(t, got, 1)
+	assert.Equal(t, "alice@example.com", got[0].Spec.User)
 
 	rec = post("alice", `{"bundle":"app-v2","namespace":"team-a","environment":"prod","revoke":true}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())

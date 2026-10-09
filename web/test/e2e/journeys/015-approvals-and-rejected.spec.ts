@@ -23,7 +23,7 @@ test.describe('Journey 015 — Approvals and rejected Bundles', () => {
     await expect(rows.nth(0)).toContainText('alice')
     await expect(rows.nth(0)).toContainText('canary looks clean')
     await expect(rows.nth(1)).toContainText("not counted: the Bundle's creator (excludeAuthor)")
-    await expect(page.getByText('kardinal approve payments-service-def456 --env prod')).toBeVisible()
+    await expect(page.getByText('kardinal approve payments-service-def456 --env prod -n default')).toBeVisible()
 
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()
     expect(results.violations.map(v => v.id)).toEqual([])

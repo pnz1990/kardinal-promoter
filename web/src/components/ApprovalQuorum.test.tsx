@@ -53,6 +53,9 @@ describe('ApprovalQuorum', () => {
   it('shows the CLI command to approve until the quorum is met', () => {
     const { rerender } = render(<ApprovalQuorum approval={waiting} bundle="app-1" environment="prod" now={now} />)
     expect(screen.getByText('kardinal approve app-1 --env prod')).toBeInTheDocument()
+    // With the namespace, the copied command names it: it works from any kubeconfig context.
+    rerender(<ApprovalQuorum approval={waiting} bundle="app-1" environment="prod" namespace="team-a" now={now} />)
+    expect(screen.getByText('kardinal approve app-1 --env prod -n team-a')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Copy the approve command/ })).toBeInTheDocument()
     rerender(<ApprovalQuorum approval={{ ...waiting, approved: 2 }} bundle="app-1" environment="prod" now={now} />)
     expect(screen.queryByText(/kardinal approve/)).not.toBeInTheDocument()

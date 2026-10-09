@@ -64,7 +64,9 @@ function DecisionRow({ d, now }: { d: GateDecision; now: number }) {
 export function ApprovalQuorum({ approval: a, bundle, environment, namespace, onDecided, now = Date.now() }: Props) {
   const pips = a.required <= MAX_PIPS ? a.required : 0
   const state = a.rejected ? 'rejected' : a.approved >= a.required ? 'approved' : 'waiting'
-  const command = bundle && environment ? `kardinal approve ${bundle} --env ${environment}` : ''
+  // The namespace makes the copied command work from any kubeconfig context.
+  const command = bundle && environment
+    ? `kardinal approve ${bundle} --env ${environment}${namespace ? ` -n ${namespace}` : ''}` : ''
   const decisions = a.decisions ?? []
   return (
     <div className="approval-quorum" data-state={state}>
