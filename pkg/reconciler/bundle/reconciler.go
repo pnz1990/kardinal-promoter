@@ -32,7 +32,10 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
@@ -140,6 +143,14 @@ type graphReader interface {
 // manages Bundle supersession, syncs evidence from PromotionStep status into
 // Bundle.status.environments, and derives the Verified and Failed phases.
 type Reconciler struct {
+	// Workers is how many Bundles are reconciled at once (--bundle-workers);
+	// 0 is the manager's default. One Bundle is never reconciled twice at
+	// once (the work queue); the maxConcurrentPromotions count of one
+	// Pipeline runs under lockPipeline.
+	Workers int
+	// slotLocks are the per-Pipeline locks of lockPipeline.
+	slotLocks sync.Map
+
 	client.Client
 	// APIReader reads straight from the API server (mgr.GetAPIReader()). The
 	// maxConcurrentPromotions count reads through it, so a Bundle this
@@ -615,8 +626,12 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 		return fmt.Errorf("enforceHistoryLimit: list bundles: %w", err)
 	}
 
+	keep := heldHistory(pipeline, allBundles.Items)
 	terminal := make([]*kardinalv1alpha1.Bundle, 0, len(allBundles.Items))
 	for i := range allBundles.Items {
+		if keep[allBundles.Items[i].Name] {
+			continue
+		}
 		switch allBundles.Items[i].Status.Phase {
 		case phaseVerified, phaseFailed, phaseSuperseded:
 			terminal = append(terminal, &allBundles.Items[i])
@@ -647,6 +662,45 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 	return nil
 }
 
+// heldHistory is the Bundles history GC keeps while a hold lasts (spec.holds,
+// #1528): the Bundle each hold names, its rollbackOf, and every Bundle that
+// deploys one of its artifacts (an image, config commit or chart). The gate
+// exemption checks the held Bundle against them (lifecycle.VerifyHeldRollback),
+// and none of them counts toward historyLimit.
+func heldHistory(p *kardinalv1alpha1.Pipeline, bundles []kardinalv1alpha1.Bundle) map[string]bool {
+	keep := map[string]bool{}
+	for i := range bundles {
+		held := &bundles[i]
+		if lifecycle.HoldNaming(p, held.Name) == nil {
+			continue
+		}
+		keep[held.Name] = true
+		if held.Spec.Provenance != nil && held.Spec.Provenance.RollbackOf != "" {
+			keep[held.Spec.Provenance.RollbackOf] = true
+		}
+		images := map[kardinalv1alpha1.ImageRef]bool{}
+		for _, img := range held.Spec.Images {
+			images[img] = true
+		}
+		for j := range bundles {
+			o := &bundles[j]
+			for _, img := range o.Spec.Images {
+				if images[img] {
+					keep[o.Name] = true
+				}
+			}
+			if c, oc := held.Spec.ConfigRef, o.Spec.ConfigRef; c != nil && oc != nil && c.CommitSHA != "" &&
+				c.GitRepo == oc.GitRepo && c.CommitSHA == oc.CommitSHA {
+				keep[o.Name] = true
+			}
+			if ch, och := held.Spec.Chart, o.Spec.Chart; ch != nil && och != nil && *ch == *och {
+				keep[o.Name] = true
+			}
+		}
+	}
+	return keep
+}
+
 // hasNewerSibling reports whether the pipeline has a Bundle of the same type
 // created after b (lifecycle.CompareCreation) that is still in flight: new,
 // Available or Promoting. With countVerified, a Verified sibling counts too;
@@ -668,6 +722,14 @@ func (r *Reconciler) hasNewerSibling(ctx context.Context, b *kardinalv1alpha1.Bu
 // or Available may itself wait for the slot, so it does not count.
 func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bundle,
 	countVerified bool) (newer, replaced bool, err error) {
+	// The Bundle an environment is held on (spec.holds, kardinal rollback
+	// --hold) is never superseded: the hold pins the environment to it until
+	// it is released.
+	var p kardinalv1alpha1.Pipeline
+	if getErr := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pipeline}, &p); getErr == nil &&
+		lifecycle.HoldNaming(&p, b.Name) != nil {
+		return false, false, nil
+	}
 	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
 	if err != nil {
 		return false, false, fmt.Errorf("list bundles for supersession check: %w", err)
@@ -792,6 +854,10 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// Failed or Superseded, and that phase change re-queues the waiting
 	// siblings (see waitingSiblings). Reads only Bundle status.
 	if limit := pipeline.Spec.MaxConcurrentPromotions; limit > 0 {
+		// With several workers two Available Bundles of the Pipeline could
+		// both count a free slot: the count and the Promoting write that
+		// takes the slot run under the Pipeline's lock.
+		defer r.lockPipeline(b.Namespace, b.Spec.Pipeline)()
 		active, err := r.countPromoting(ctx, b)
 		if err != nil {
 			// A failed read is not a free slot: retry instead of promoting past the cap.
@@ -1255,6 +1321,13 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		// waiting for the slot itself, so it does not lift the hold.
 		limit, held := 0, false
 		if !replaced {
+			if pipeline != nil && pipeline.Spec.MaxConcurrentPromotions > 0 {
+				// A recovery back into Promoting takes a slot too: count it and
+				// write the phase under the Pipeline's lock, as handleAvailable
+				// does, so a recovering and an Available Bundle never take the
+				// same free slot (#1509).
+				defer r.lockPipeline(b.Namespace, b.Spec.Pipeline)()
+			}
 			var err error
 			if limit, held, err = r.slotTaken(ctx, b, pipeline); err != nil {
 				// A failed read is not a free slot: keep the hold as it is and retry.
@@ -1642,6 +1715,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("set up the bundle retirement controller: %w", err)
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&kardinalv1alpha1.Bundle{}).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.waitingSiblings),
 			builder.WithPredicates(bundlePhaseChanged)).
@@ -1805,4 +1879,13 @@ func (r *Reconciler) pipelineBundles(ctx context.Context, obj client.Object) []r
 		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&bundles[i])})
 	}
 	return reqs
+}
+
+// lockPipeline locks the maxConcurrentPromotions slot count of one
+// Pipeline and returns the unlock.
+func (r *Reconciler) lockPipeline(namespace, pipeline string) (unlock func()) {
+	v, _ := r.slotLocks.LoadOrStore(namespace+"/"+pipeline, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }

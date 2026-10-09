@@ -18,7 +18,9 @@ func TestRead(t *testing.T) {
 		in                string
 		ok                bool
 		pass, fail, skip  int
+		knownBugs         int
 		pkgFailed         bool
+		crashed           bool
 		wantOut, wantInMD string
 	}{
 		{
@@ -35,6 +37,69 @@ func TestRead(t *testing.T) {
 			name: "a skip fails the run",
 			in: `{"Action":"pass","Test":"TestCore_A"}
 {"Action":"skip","Test":"TestCore_B"}
+{"Action":"pass"}`,
+			pass: 1, skip: 1, wantInMD: "FAILED",
+		},
+		{
+			name: "an expected failure is a known bug and does not fail the run",
+			in: `{"Action":"pass","Test":"TestScale_A"}
+{"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
+{"Action":"fail","Test":"TestScale_B"}
+{"Action":"fail"}`,
+			ok: true, pass: 1, knownBugs: 1, pkgFailed: true, wantInMD: "known bug [#1473]",
+		},
+		{
+			name: "a known-bug test that passed fails the run",
+			in: `{"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
+{"Action":"output","Test":"TestScale_B","Output":"    run.go:99: KNOWN BUG #1473 FIXED: the test passed; remove scale.KnownBug\n"}
+{"Action":"fail","Test":"TestScale_B"}
+{"Action":"fail"}`,
+			fail: 1, pkgFailed: true, wantInMD: "FAILED",
+		},
+		{
+			name: "the marker counts only on a TestScale_ test, as a t.Log line",
+			in: `{"Action":"output","Test":"TestCore_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: x\n"}
+{"Action":"fail","Test":"TestCore_B"}
+{"Action":"output","Test":"TestScale_C","Output":"error said KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: x\n"}
+{"Action":"fail","Test":"TestScale_C"}
+{"Action":"fail"}`,
+			fail: 2, pkgFailed: true, wantInMD: "FAILED",
+		},
+		{
+			name: "an expected failure does not hide a test binary that timed out",
+			in: `{"Action":"pass","Test":"TestScale_A"}
+{"Action":"run","Test":"TestScale_B"}
+{"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
+{"Action":"fail","Test":"TestScale_B"}
+{"Action":"run","Test":"TestScale_C"}
+{"Action":"output","Test":"TestScale_C","Output":"panic: test timed out after 1h30m0s\n"}
+{"Action":"fail"}`,
+			pass: 1, fail: 1, knownBugs: 1, pkgFailed: true, crashed: true, wantInMD: "the test binary crashed",
+		},
+		{
+			name: "a crash reported outside any test still fails the run",
+			in: `{"Action":"pass","Test":"TestScale_A"}
+{"Action":"run","Test":"TestScale_B"}
+{"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
+{"Action":"fail","Test":"TestScale_B"}
+{"Action":"output","Output":"fatal error: concurrent map writes\n"}
+{"Action":"fail"}`,
+			pass: 1, knownBugs: 1, pkgFailed: true, crashed: true, wantInMD: "the test binary crashed",
+		},
+		{
+			name: "a known-bug test the binary crashed under is a failure, not a known bug",
+			in: `{"Action":"pass","Test":"TestScale_A"}
+{"Action":"run","Test":"TestScale_B"}
+{"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
+{"Action":"output","Test":"TestScale_B","Output":"panic: runtime error: index out of range [3] with length 3\n"}
+{"Action":"fail","Test":"TestScale_B"}
+{"Action":"fail"}`,
+			pass: 1, fail: 1, pkgFailed: true, crashed: true, wantInMD: "| `TestScale_B` | fail |",
+		},
+		{
+			name: "a skip still fails the run",
+			in: `{"Action":"pass","Test":"TestScale_A"}
+{"Action":"skip","Test":"TestScale_C"}
 {"Action":"pass"}`,
 			pass: 1, skip: 1, wantInMD: "FAILED",
 		},
@@ -71,7 +136,9 @@ live/core_test.go:1: undefined: foo
 			assert.Equal(t, tt.pass, s.count("pass"))
 			assert.Equal(t, tt.fail, s.count("fail"))
 			assert.Equal(t, tt.skip, s.count("skip"))
+			assert.Equal(t, tt.knownBugs, s.knownBugs())
 			assert.Equal(t, tt.pkgFailed, s.pkgFailed)
+			assert.Equal(t, tt.crashed, s.crashed)
 			if tt.wantOut != "" {
 				assert.Contains(t, out.String(), tt.wantOut)
 			}
