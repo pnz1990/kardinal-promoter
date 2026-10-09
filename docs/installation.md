@@ -144,6 +144,20 @@ Helm installs `crds/` only on the first install and never updates or deletes it.
 The chart ships `values.schema.json`, which rejects unknown keys: a misspelled `--set` fails the
 install instead of being ignored.
 
+Create the Secrets first. The controller reads `github.secretRef`, `webhook.secretRef`,
+`bundleAPI.tokenSecretRef` and `ui.auth.tokenSecretRef` at startup, so a Pod whose Secret or key
+is missing waits in `CreateContainerConfigError`, and `helm install --wait` would time out with
+only `context deadline exceeded`. When Helm talks to the cluster (`helm install`, `helm upgrade`,
+`--dry-run=server`), the chart looks each Secret up in the release namespace and fails at once
+with the value, the Secret and the missing key, for example:
+
+```
+Error: INSTALLATION FAILED: ... github.secretRef.name: Secret "github-token" does not exist in namespace kardinal-system. Create it before installing ...
+```
+
+The installer needs `get` on Secrets in the release namespace for this check. `helm template`
+and client-side dry runs (which GitOps tools such as Argo CD use) have no cluster and skip it.
+
 Verify both controllers are running:
 
 ```bash
@@ -811,6 +825,8 @@ kubectl delete crd --ignore-not-found \
   changewindows.kardinal.io \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
+  scmproviders.kardinal.io \
+  clusterscmproviders.kardinal.io \
   promotiontemplates.kardinal.io \
   auditevents.kardinal.io \
   approvals.kardinal.io
@@ -832,7 +848,7 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 
 | Resources | Verbs |
 |---|---|
-| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create) and `changewindows` (get, list, watch; get, update, patch on `/status`) |
+| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete only with `audit.retention.enabled: true`) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
 | `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
 | `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |

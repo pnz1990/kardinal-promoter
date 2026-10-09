@@ -497,8 +497,10 @@ func TestOpenAPIRoutesAreServed(t *testing.T) {
 		require.NoError(t, err)
 		for _, m := range pattern.FindAllStringSubmatch(string(src), -1) {
 			p := m[1]
-			if p == "/webhook/scm" {
-				continue // provider payloads, documented in docs/scm-providers.md
+			if p == "/webhook/scm" || strings.HasPrefix(p, "POST /webhook/scm/namespaces/") || strings.HasPrefix(p, "POST /webhook/scm/cluster/") {
+				// SCM payloads, the controller's and each ScmProvider's,
+				// documented in docs/scm-providers.md.
+				continue
 			}
 			found := false
 			for d := range documented {
