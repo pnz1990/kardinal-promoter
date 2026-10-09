@@ -27,6 +27,10 @@ on:
         description: 'go test -count for every suite'
         required: true
         default: '1'
+      suites:
+        description: 'only these suites, space-separated (hack/e2e/all.sh SUITES); empty runs every suite'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -52,6 +56,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: List the jobs (hack/e2e/matrix.txt)
         id: matrix
+        env:
+          SUITES: ${{ inputs.suites }}
         run: |
           m=$(bash hack/e2e/all.sh -matrix)
           echo "matrix=$m" >> "$GITHUB_OUTPUT"
@@ -70,8 +76,9 @@ jobs:
     name: ${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }} on Kubernetes ${{ matrix.k8s }}
     needs: image
     runs-on: ubuntu-latest
-    # The weekly run repeats every test three times.
-    timeout-minutes: ${{ (github.event_name == 'schedule' || inputs.count != '1') && 180 || 60 }}
+    # The weekly run repeats every test three times. The scale suite runs
+    # once (its ci profile takes about an hour).
+    timeout-minutes: ${{ matrix.suite == 'scale' && 120 || (github.event_name == 'schedule' || inputs.count != '1') && 180 || 60 }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.image.outputs.matrix) }}
@@ -79,8 +86,9 @@ jobs:
       SUITE: ${{ matrix.suite }}
       KIND_K8S: ${{ matrix.k8s }}
       KARDINAL_E2E_BUILD: none
-      # hack/e2e/run.sh refuses COUNT above 1 for the upgrade suite.
-      COUNT: ${{ matrix.suite == 'upgrade' && '1' || github.event_name == 'schedule' && '3' || inputs.count || '1' }}
+      # hack/e2e/run.sh refuses COUNT above 1 for the upgrade suite; the
+      # scale suite runs once too (hack/e2e/all.sh does the same).
+      COUNT: ${{ (matrix.suite == 'upgrade' || matrix.suite == 'scale') && '1' || github.event_name == 'schedule' && '3' || inputs.count || '1' }}
       SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -184,6 +192,10 @@ jobs:
     needs: suite
     if: always()
     runs-on: ubuntu-latest
+    # proof asks the GitHub API whether each known bug's issue is open.
+    permissions:
+      contents: read
+      issues: read
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -201,13 +213,21 @@ jobs:
       # A job that was re-run has one results/<job>-attempt-<n> directory per
       # attempt; only its latest counts.
       - name: Prove the coverage
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           declare -A latest
           while read -r d; do latest[${d%-attempt-*}]=$d; done < \
             <(find results -mindepth 1 -maxdepth 1 -type d -name '*-attempt-*' | sort -V)
-          [ "${#latest[@]}" -gt 0 ] || { echo "::error::no suite uploaded results"; exit 1; }
-          mapfile -t files < <(find "${latest[@]}" -name summary.json | sort)
-          go run ./test/e2e/proof -out coverage-proof.json "${files[@]}"
+          if [ "${#latest[@]}" -gt 0 ]; then
+            mapfile -t files < <(find "${latest[@]}" -name summary.json | sort)
+          else
+            # download-artifact puts a single matching artifact (a dispatch
+            # of one suite) straight into results/, with no directory of its own.
+            mapfile -t files < <(find results -name summary.json | sort)
+          fi
+          [ "${#files[@]}" -gt 0 ] || { echo "::error::no suite uploaded results"; exit 1; }
+          GITHUB_TOKEN="$GH_TOKEN" go run ./test/e2e/proof -out coverage-proof.json "${files[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:

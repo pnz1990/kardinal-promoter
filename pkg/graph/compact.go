@@ -203,6 +203,10 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 			"upstreams":      toInterfaces(s.upstreams),
 			"upstreamStates": upstreamStates,
 			"gates":          toInterfaces(s.gates),
+			// The Pipeline holds the environment on another Bundle's
+			// rollback (spec.holds, #1528; the node shape's heldCond): it
+			// is not admitted. A hold change rebuilds the Graph in place.
+			"held": heldBundle(pipeline, s.env) != "" && heldBundle(pipeline, s.env) != bundle.Name,
 		}
 	}
 
@@ -217,12 +221,13 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 
 	state := NodePromotionState + "."
 	// Admit an environment that has a step, or, while the Bundle is not
-	// Superseded, whose upstreams are Verified and gates ready. The PRStatuses
+	// Superseded and the environment not held on another Bundle (held),
+	// whose upstreams are Verified and gates ready. The PRStatuses
 	// collection is not referenced: kro publishes a collection only when every
 	// item applied (G11), and a step names its PRStatus literally and waits
 	// for it in WaitingForMerge.
 	wave := fmt.Sprintf("${%s.steps.filter(e, e.environment in %sstarted || "+
-		"(%shold == false && e.upstreams.all(u, u in %sverified) && e.gates.all(g, g in %sreadyGates)))}",
+		"(%shold == false && e.held == false && e.upstreams.all(u, u in %sverified) && e.gates.all(g, g in %sreadyGates)))}",
 		NodePromotionDAG, state, state, state, state)
 
 	step := func(f string) string { return "${" + iterStep + "." + f + "}" }

@@ -400,3 +400,23 @@ func TestHookRunName(t *testing.T) {
 		assert.Empty(t, validation.IsDNS1123Label(n), n)
 	}
 }
+
+// TestBuilder_HeldEnvironmentHoldsItsHooks: an environment held on a
+// rollback Bundle (spec.holds) creates no PromotionStep for another Bundle,
+// so its hooks wait on the same hold: a pre hook (a migration) does not run
+// for a Bundle that cannot promote there.
+func TestBuilder_HeldEnvironmentHoldsItsHooks(t *testing.T) {
+	p := hookPipeline()
+	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rb", Reason: "incident"}}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app")})
+	require.NoError(t, err)
+	b, err := json.Marshal(hookNode(t, res.Graph, "hook0pre0prod0migrate"))
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `bundle.metadata.name == \"app-rb\"`)
+
+	res, err = graph.NewBuilder().Build(graph.BuildInput{Pipeline: hookPipeline(), Bundle: makeBundle("app-v1", "app")})
+	require.NoError(t, err)
+	b, err = json.Marshal(hookNode(t, res.Graph, "hook0pre0prod0migrate"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "bundle.metadata.name ==", "no hold, no condition")
+}

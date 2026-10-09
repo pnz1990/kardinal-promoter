@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 )
@@ -1711,6 +1712,74 @@ func TestBundleReconciler_HistoryGC_DeletesOldestTerminal(t *testing.T) {
 	}
 }
 
+// TestBundleReconciler_HistoryGC_KeepsHeldBundle (#1528): while a hold lasts,
+// history GC keeps the Bundle it names, that Bundle's rollbackOf and the
+// Bundles that deployed its artifacts, and none of them counts toward
+// historyLimit; other terminal Bundles are collected as usual, and an expired
+// hold keeps nothing.
+func TestBundleReconciler_HistoryGC_KeepsHeldBundle(t *testing.T) {
+	day := func(d int) metav1.Time { return metav1.NewTime(time.Date(2026, 1, d, 0, 0, 0, 0, time.UTC)) }
+	mk := func(name string, d int, tag string) *kardinalv1alpha1.Bundle {
+		return &kardinalv1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: day(d)},
+			Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app",
+				Images: []kardinalv1alpha1.ImageRef{{Repository: "r/app", Tag: tag}}},
+			Status: kardinalv1alpha1.BundleStatus{Phase: "Verified"},
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		expired bool
+		want    []string
+	}{
+		{name: "hold in force", want: []string{"my-app-v1", "my-app-v2", "my-app-v3", "my-app-rb", "my-app-new"}},
+		{name: "hold expired", expired: true, want: []string{"my-app-v3", "my-app-rb", "my-app-new"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hold := kardinalv1alpha1.EnvironmentHold{Environment: "test", Bundle: "my-app-rb", Reason: "INC-42"}
+			if tc.expired {
+				exp := metav1.NewTime(time.Now().Add(-time.Minute))
+				hold.ExpiresAt = &exp
+			}
+			pipeline := &kardinalv1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+				Spec: kardinalv1alpha1.PipelineSpec{HistoryLimit: 1,
+					Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+					Holds:        []kardinalv1alpha1.EnvironmentHold{hold}},
+			}
+			v0 := mk("my-app-v0", 1, "0") // unrelated, oldest: collected
+			v1 := mk("my-app-v1", 2, "1") // the rollback's rollbackOf
+			v2 := mk("my-app-v2", 3, "2") // deployed the rollback's other image
+			v3 := mk("my-app-v3", 4, "3") // unrelated, newest terminal: within the limit
+			rb := mk("my-app-rb", 5, "1")
+			rb.Spec.Images = append(rb.Spec.Images, kardinalv1alpha1.ImageRef{Repository: "r/app", Tag: "2"})
+			rb.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{RollbackOf: "my-app-v1"}
+			rb.Status.Phase = "Promoting"
+			newBundle := &kardinalv1alpha1.Bundle{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-app-new", Namespace: "default", CreationTimestamp: day(6)},
+				Spec:       kardinalv1alpha1.BundleSpec{Type: "config", Pipeline: "my-app"},
+			}
+			c := fake.NewClientBuilder().WithScheme(newScheme()).
+				WithObjects(pipeline, v0, v1, v2, v3, rb, newBundle).
+				WithStatusSubresource(newBundle).
+				WithIndex(&kardinalv1alpha1.Bundle{}, "spec.pipeline", func(obj client.Object) []string {
+					return []string{obj.(*kardinalv1alpha1.Bundle).Spec.Pipeline}
+				}).Build()
+			r := &bundle.Reconciler{Client: c}
+			_, err := r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "my-app-new", Namespace: "default"}})
+			require.NoError(t, err)
+			var list kardinalv1alpha1.BundleList
+			require.NoError(t, c.List(context.Background(), &list))
+			var got []string
+			for _, b := range list.Items {
+				got = append(got, b.Name)
+			}
+			assert.ElementsMatch(t, tc.want, got)
+		})
+	}
+}
+
 // TestBundleReconciler_HistoryGC_DefaultLimit verifies that when Pipeline.spec.historyLimit
 // is unset (zero), the default limit of 50 is applied (spec #910 O2).
 func TestBundleReconciler_HistoryGC_DefaultLimit(t *testing.T) {
@@ -2479,4 +2548,48 @@ func TestBundleReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 			assert.Empty(t, recorder.Events, "no Event on a deleted Bundle")
 		})
 	}
+}
+
+// TestBundleReconciler_HeldRollbackIsNotSuperseded (#1528): the Bundle an
+// environment is held on (spec.holds) is not superseded by a newer Promoting
+// Bundle while the hold lasts, and is once the hold is released.
+func TestBundleReconciler_HeldRollbackIsNotSuperseded(t *testing.T) {
+	s := newScheme()
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "prod"}},
+			Holds:        []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "nginx-demo-rollback-abc123", Reason: "INC-42"}},
+		},
+	}
+	held := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-rollback-abc123", Namespace: "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+			Labels:            map[string]string{"kardinal.io/rollback": "true"}},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	newer := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-new", Namespace: "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)}},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	c := indexedBuilder(s).WithObjects(pipeline, held, newer).WithStatusSubresource(held, newer).Build()
+	r := &bundle.Reconciler{Client: c}
+	ctx := context.Background()
+	key := types.NamespacedName{Name: held.Name, Namespace: "default"}
+
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	require.NoError(t, err)
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(ctx, key, &got))
+	assert.NotEqual(t, "Superseded", got.Status.Phase, "the held rollback is never superseded")
+
+	_, err = lifecycle.ReleaseHold(ctx, c, "default", "nginx-demo", "prod")
+	require.NoError(t, err)
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	require.NoError(t, err)
+	require.NoError(t, c.Get(ctx, key, &got))
+	assert.Equal(t, "Superseded", got.Status.Phase, "released, it is superseded like any Bundle")
 }

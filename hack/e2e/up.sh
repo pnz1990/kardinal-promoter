@@ -31,6 +31,11 @@
 #           and a second kind cluster, <cluster>-spoke, with Argo Rollouts,
 #           which the hub's Argo CD and Flux manage (spoke.sh); both have
 #           podinfo on the node
+#   scale   Forgejo behind Toxiproxy (git latency and outages), Prometheus,
+#           and two controller replicas built with -race (KARDINAL_E2E_RACE,
+#           default 1 here): the TestScale_ topology, load, race and chaos
+#           tests and their invariants (test/e2e/framework/scale); sizes
+#           come from KARDINAL_E2E_SCALE_PROFILE at test time (ci, full, soak)
 #
 # Env:
 #   KIND_CLUSTER     cluster name (default kardinal-e2e-SUITE)
@@ -41,6 +46,12 @@
 #   KUBECONFIG       honoured; recorded in the env file. When unset, it is
 #                    test/e2e/results/<cluster>/kubeconfig, so kind does not
 #                    write the default ~/.kube/config
+#   KARDINAL_E2E_NODE_MEMORY  docker memory limit of the kind node, e.g. 24g
+#                    (default none; the scale suite's full profile wants one
+#                    on a shared host)
+#   KARDINAL_E2E_KRO_MEMORY  memory limit of the kro controller, e.g. 8Gi
+#                    (default: the kro chart's, 1Gi; the scale suite's 3Gi,
+#                    and its full profile needs 8Gi until #1492 is fixed)
 #   KARDINAL_E2E_TOOLS  pinned (default): install the kind, kubectl and helm
 #                    of hack/tool-versions.env into bin/e2e (tools.sh) and use
 #                    them; path: use the ones on PATH
@@ -93,6 +104,19 @@ case "$SUITE" in
   # Two controllers splitting the namespaces by the kardinal.io/shard label.
   shard) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(shard.sh) RUN='^TestShard_'
     HELM_ARGS='--set controller.namespaceShard=default' ;;
+  # Production-scale topologies, load, races and chaos. The controller
+  # reaches Forgejo through Toxiproxy (components/toxiproxy.sh), runs two
+  # replicas so a killed leader fails over, and is built with -race; its
+  # ServiceMonitor feeds the invariants' Prometheus queries. Info logs: the
+  # invariants read every controller log line.
+  scale) COMPONENTS=("toxiproxy.sh forgejo.forgejo.svc.cluster.local:3000" "giteafamily.sh forgejo" prometheus.sh)
+    RUN='^TestScale_'
+    export KARDINAL_E2E_RACE=${KARDINAL_E2E_RACE:-1}
+    # kro's chart default (1 GiB) is OOMKilled under the suite's load (#1492).
+    export KARDINAL_E2E_KRO_MEMORY=${KARDINAL_E2E_KRO_MEMORY:-3Gi}
+    export KARDINAL_E2E_GIT_ROOT_URL=http://toxiproxy.toxiproxy.svc.cluster.local:3000
+    HELM_ARGS='--set serviceMonitor.enabled=true --set replicaCount=2 --set logLevel=info
+      --set resources.limits.cpu=4 --set resources.limits.memory=4Gi --set resources.requests.cpu=500m --set resources.requests.memory=512Mi' ;;
   *)
     echo "unknown suite $SUITE" >&2
     exit 1
@@ -116,6 +140,11 @@ fi
 start=$(date +%s)
 kind_cluster "$KIND_CLUSTER"
 target_cluster
+if [ -n "${KARDINAL_E2E_NODE_MEMORY:-}" ]; then
+  docker update --memory "$KARDINAL_E2E_NODE_MEMORY" --memory-swap "$KARDINAL_E2E_NODE_MEMORY" \
+    "$KIND_CLUSTER-control-plane" >/dev/null
+  log "kind node memory limit $KARDINAL_E2E_NODE_MEMORY"
+fi
 on_exit() {
   local rc=$?
   [ "$rc" -eq 0 ] || dump_setup_diagnostics
@@ -136,7 +165,11 @@ env_set KUBECONFIG "$KUBECONFIG"
 
 if [ "${KARDINAL_E2E_KRO:-1}" = 1 ]; then
   KUBE_CONTEXT="$CTX" bash "$REPO_ROOT/hack/install-kro.sh" >/dev/null
-  log "kro ready"
+  if [ -n "${KARDINAL_E2E_KRO_MEMORY:-}" ]; then
+    "${KUBECTL[@]}" -n kro-system set resources deploy/kro --limits="memory=$KARDINAL_E2E_KRO_MEMORY" >/dev/null
+    "${KUBECTL[@]}" -n kro-system rollout status deploy/kro --timeout=180s >/dev/null
+  fi
+  log "kro ready${KARDINAL_E2E_KRO_MEMORY:+ (memory limit $KARDINAL_E2E_KRO_MEMORY)}"
 fi
 for c in "${COMPONENTS[@]}"; do
   # shellcheck disable=SC2086
@@ -152,4 +185,8 @@ for c in "${AFTER[@]}"; do
   # shellcheck disable=SC2086
   bash "$E2E_DIR/components/"$c
 done
+if [ "$SUITE" = scale ]; then
+  # A throttle a killed run left behind (scale.Throttle) slows every test.
+  "${KUBECTL[@]}" delete flowschema,prioritylevelconfiguration kardinal-scale-throttle --ignore-not-found >/dev/null
+fi
 log "suite $SUITE up on $CTX in $(($(date +%s) - start))s; env: $E2E_OUT/env; KUBECONFIG=$KUBECONFIG"

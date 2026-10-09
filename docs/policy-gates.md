@@ -614,3 +614,42 @@ kardinal override my-app --stage prod --gate no-weekend-deploy \
 - `kubectl get policygate <instance> -o yaml` shows every entry in `spec.overrides[]`, active or expired, while the Bundle exists.
 - `kardinal explain` shows the `OVERRIDDEN by ...` reason in the gate's REASON column while the override is active.
 - The PR evidence body has no separate badge. A PR opened while the override is active lists the gate in its Policy Gate Compliance table with Result `Pass` and the `OVERRIDDEN by ...` reason. The body is written when the PR is opened and is not updated afterwards, so an override recorded after that, or one that expired before it, does not appear there. An `auto` environment opens no PR.
+
+### Rollback hold exemption
+
+A rollback created with `kardinal rollback --hold` can pass gates that would block it, for as
+long as the hold lasts. This is exactly what is exempt:
+
+- **Exempt:** the gate instances of the held environment (`kardinal.io/environment` equals the
+  hold's environment) for the Bundle the hold names.
+- **Not exempt:**
+    - gates of every other environment, including the ones the rollback crosses before the
+      held one;
+    - the freeze gate of a paused Pipeline, which holds steps on its own;
+    - any Bundle but the one the hold names.
+
+The exemption applies only to a rollback the controller verifies, at every evaluation:
+
+1. The Bundle is a rollback Bundle (`kardinal.io/rollback=true`) of the Pipeline.
+2. Its `spec.provenance.rollbackOf` names a Bundle that was Verified in the held environment.
+3. The combination of artifacts is checked per repository. For every image repository, config
+   repository and chart that `rollbackOf` deploys, the rollback deploys exactly `rollbackOf`'s
+   ref. Only repositories `rollbackOf` does not name (the ones `kardinal rollback` fills from
+   earlier Bundles) may come from another Bundle Verified in that environment. The rollback
+   therefore never mixes a version of one repository with another version of the same repository
+   than the target ran.
+4. Its artifacts still have the digest the hold recorded when it was made
+   (`spec.holds[].artifacts`: SHA-256 of the JSON of its type, images, configRef and chart). A
+   Bundle edited after the hold is not exempt.
+5. The hold has not expired. A hold past its `expiresAt` counts as absent at once, also before
+   the controller removes it from the spec.
+
+When a hold names the Bundle but the checks fail, the gate blocks as usual, and its reason ends
+with `(hold exemption refused: <why>)`.
+
+An exempt gate has the `status.reason`
+`EXEMPT: rollback <bundle> holds <env> (by <user>: <reason>); without the hold: <the gate's own result>`.
+The flip is a `GateEvaluated` AuditEvent, and the gate gets a `GateExempted` Warning Event, so
+`kardinal explain`, `kardinal audit` and `kubectl get events` all show it.
+`kardinal release-hold` ends the exemption, and the gates are evaluated again at once. See
+[Roll back and hold](rollback.md#roll-back-and-hold).

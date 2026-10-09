@@ -174,6 +174,35 @@ kardinal version
 
 ---
 
+### Sizing the controller
+
+The controller keeps an informer cache of every Pipeline, Bundle, PromotionStep, PRStatus and
+PolicyGate it watches, so its memory grows with the number of Pipelines times the Bundles each
+keeps (`historyLimit`), more than with the promotion rate. Measured with the scale suite (`full`
+profile, controller built without `-race`, 2 replicas; peak resident memory of the leader,
+[#1553](https://github.com/pnz1990/kardinal-promoter/issues/1553)):
+
+| Load | Controller memory (peak) |
+|---|---|
+| No Pipelines | 55-70 MiB |
+| 200 Pipelines x 3 environments, one Bundle each | 166 MiB |
+| 1,000 Bundles over 100 Pipelines | 175 MiB |
+| 200 Pipelines, one Bundle each, latency run | 187 MiB |
+| 2 Bundles a second for 10 minutes over 50 Pipelines (1,200 Bundles) | 366 MiB |
+| 2 Bundles a second over 40 Pipelines, leader killed 12 times | 409 MiB |
+
+The chart requests 256 MiB and limits the controller to 1 GiB: 2.5 times the largest load
+measured. A controller that runs out of memory is OOMKilled, re-lists everything when it
+restarts and can be killed again, and no promotion in the cluster moves while it is down. For
+more Pipelines or a longer history, raise `resources.limits.memory` in proportion: about
+0.5 MiB per Pipeline with one Bundle (the 200-Pipeline run above), plus what the kept Bundles
+and their steps hold. Watch
+`container_memory_working_set_bytes` of the controller Pod, or `process_resident_memory_bytes`
+on its metrics port. The controller sets the Go runtime's soft memory limit (`GOMEMLIMIT`) to 90% of
+its container limit, which the chart passes in from the downward API, so the garbage collector
+works harder before the kernel would OOMKill it; set `GOMEMLIMIT` in `controller.extraEnv` to
+choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
+
 ## Helm values reference
 
 ### kardinal-promoter controller
@@ -214,6 +243,7 @@ kardinal version
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
 | `graph.compactAbove` | `null` | Environment count above which a Bundle's Graph uses the compact shape (`--graph-compact-above`; default `100`; `0` makes every Graph compact). See [Large Pipelines](pipeline-reference.md#large-pipelines) |
 | `controller.gateStatusHeartbeat` | `""` | Longest a PolicyGate's status goes unwritten while its result does not change (`--gate-status-heartbeat`; default `10m`; `0s` writes on every evaluation). See [Policy gates](policy-gates.md#re-evaluation) |
+| `controller.workers.promotionStep` / `.prStatus` / `.policyGate` / `.bundle` / `.pipeline` | unset (16 / 8 / 8 / 4 / 4) | How many objects of a kind are reconciled at once (`--promotionstep-workers`, ...). One object is never reconciled twice at once. See [Controller concurrency](#controller-concurrency) |
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
@@ -226,9 +256,9 @@ kardinal version
 | `render.timeout` | `5m` | How long a render Job may run |
 | `render.networkPolicy.enabled`, `.namespaces`, `.gitEgress` | `false`, `[]`, `[]` | A NetworkPolicy in each listed namespace that lets the render Pods reach only DNS and the git host rules in `gitEgress` (a CNI that enforces NetworkPolicy is needed). Recommended |
 | `resources.limits.cpu` | `500m` | CPU limit |
-| `resources.limits.memory` | `128Mi` | Memory limit |
+| `resources.limits.memory` | `1Gi` | Memory limit; see [Sizing the controller](#sizing-the-controller) |
 | `resources.requests.cpu` | `10m` | CPU request |
-| `resources.requests.memory` | `64Mi` | Memory request |
+| `resources.requests.memory` | `256Mi` | Memory request |
 | `nodeSelector` | `{}` | Node selector |
 | `tolerations` | `[]` | Pod tolerations |
 | `affinity` | `{}` | Pod affinity |
@@ -636,6 +666,50 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 - **Rolling back to v0.8.1** was not tested.
 
 ---
+
+## Controller concurrency
+
+Each controller reconciles several objects at once. A PromotionStep holds its worker through
+every git and SCM round trip, so one worker made the steps of every Pipeline in the cluster wait
+for each other: one slow repository or git host slowed every promotion. The defaults below
+were measured with the scale suite's `full` profile (`TestScale_LoadPipelines`: 200 Pipelines
+x 3 automatic environments, one Bundle each, started together; `TestScale_LoadBurst`: 1,000
+Bundles over 100 Pipelines; controller built with `-race`, 4 CPU, 2 replicas):
+
+| Controller | 200 Pipelines: step p50 / p99 | Bundle end to end p50 / p99 | All settled | 1,000 Bundles: Bundle end to end p50 / p99 |
+|---|---|---|---|---|
+| 1 worker each (before) | 65 s / 81 s | 245 s / 319 s | 324 s | 201 s / 221 s |
+| the worker defaults | 1 s / 3 s | 110 s / 314 s | 325 s | 90 s / 153 s |
+| the defaults, and Graph translations of one namespace no longer list its Graphs under one lock for the whole controller | 3 s / 6 s | 52 s / 82 s | 87 s | 16 s / 26 s |
+
+With the defaults the `full` profile meets the latency objective of `TestScale_LatencySLO`
+(test/e2e/README.md, Latency SLO): automatic steps p50 2 s and p99 5 s, Bundles p99 92 s,
+against 10 s, 30 s and 2 minutes.
+
+With 1.5 s of latency on every git round trip and 2 Bundles a second over 40 Pipelines for 10
+minutes, one worker brought 180 steps to `Verified` (step p99 67 s, PromotionStep queue 84);
+the defaults brought 597 (step p99 20 s, queue 22). The controller's memory was the same with
+one worker and with the defaults (peak resident about 700 MiB in that run with the race
+detector, which inflates it), so in that run the workers added no memory of note. That is not a
+sizing guide: the controller's memory grows with the number of Pipelines, Bundles and steps it
+caches, and the chart's default limit is too small for the `full` profile ([#1553](https://github.com/pnz1990/kardinal-promoter/issues/1553)).
+
+| Value | Flag | Default | Why |
+|---|---|---|---|
+| `controller.workers.promotionStep` | `--promotionstep-workers` | `16` | git clone, commit, push, PR and health checks: almost all waiting on the network |
+| `controller.workers.prStatus` | `--prstatus-workers` | `8` | one SCM call per poll |
+| `controller.workers.policyGate` | `--policygate-workers` | `8` | CEL evaluation and a status write; the compiled programs are shared |
+| `controller.workers.bundle` | `--bundle-workers` | `4` | Graph creation; the Graph identity of one namespace is bound under that namespace's lock, so Bundles of different namespaces translate in parallel |
+| `controller.workers.pipeline` | `--pipeline-workers` | `4` | status and history |
+
+One object is never reconciled by two workers at once: the work queue serializes it. Bundles
+of one Pipeline with `maxConcurrentPromotions` count the free slots under a per-Pipeline lock
+(as does a Failed Bundle that recovers into a slot), so more workers never promote past the
+cap. Environments that promote in parallel to one branch (waves, a fan-in) push at the same
+time and rebase onto each other's commits (git-push retries a moved branch), so a wave of 50
+regions on one branch takes about a minute even when each step is fast. Raise `promotionStep` for many Pipelines on slow
+git hosts. Each step that runs at once holds one shallow clone of its repository in the
+controller's memory and its working directory on disk.
 
 ## Graceful shutdown
 

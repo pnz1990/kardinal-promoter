@@ -14,6 +14,12 @@
 #   KARDINAL_E2E_BUILD      docker (default): docker build of the repo Dockerfile
 #                           host: go build on the host + hack/e2e/controller.Dockerfile
 #                           none: KARDINAL_E2E_IMAGE is already built (CI)
+#   KARDINAL_E2E_RACE       1: build the controller with -race (cgo, linked
+#                           against glibc) on the host and run it on
+#                           RACE_RUNTIME_IMAGE, whatever KARDINAL_E2E_BUILD
+#                           says; the race detector's reports ("WARNING: DATA
+#                           RACE") go to the controller log. The scale suite
+#                           sets it by default
 #   KARDINAL_E2E_HELM_ARGS  extra helm arguments, word-split
 #   KARDINAL_E2E_INSTALL    0: build and load the image and the CLI and apply the
 #                           chart's CRDs, but install no release (the chart suite's
@@ -36,7 +42,31 @@ BUILD=${KARDINAL_E2E_BUILD:-docker}
 BIN="$E2E_OUT/bin"
 mkdir -p "$BIN"
 
+# build_render_host builds the render Job image from a host-built binary
+# (the render process is not race-instrumented: it is not the controller).
+build_render_host() {
+  local rctx
+  rctx=$(mktemp -d)
+  (cd "$REPO_ROOT" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false \
+    -ldflags="-s -w" -o "$rctx/kardinal-render" ./cmd/kardinal-render)
+  chmod 0755 "$rctx" "$rctx/kardinal-render"
+  docker build -q -t "$RENDER_IMAGE" -f "$E2E_DIR/render.Dockerfile" "$rctx" >/dev/null
+}
+
+[ "${KARDINAL_E2E_RACE:-0}" != 1 ] || BUILD=race
 case "$BUILD" in
+  race)
+    ctx=$(mktemp -d)
+    (cd "$REPO_ROOT" && CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -race -buildvcs=false \
+      -ldflags="-s -w -X main.ControllerVersion=e2e-race" -o "$ctx/kardinal-controller" ./cmd/kardinal-controller)
+    chmod 0755 "$ctx" "$ctx/kardinal-controller"
+    if ! docker image inspect "$RACE_RUNTIME_IMAGE" >/dev/null 2>&1; then
+      src=$(pull_retry docker pull -q "$RACE_RUNTIME_IMAGE") || die "can't pull $RACE_RUNTIME_IMAGE"
+      [ "$src" = "$RACE_RUNTIME_IMAGE" ] || docker tag "$src" "$RACE_RUNTIME_IMAGE"
+    fi
+    docker build -q -t "$IMAGE" --build-arg "RUNTIME=$RACE_RUNTIME_IMAGE" -f "$E2E_DIR/controller.Dockerfile" "$ctx" >/dev/null
+    build_render_host
+    ;;
   docker)
     docker build -q -t "$IMAGE" "$REPO_ROOT" >/dev/null
     docker build -q -t "$RENDER_IMAGE" -f "$REPO_ROOT/render.Dockerfile" "$REPO_ROOT" >/dev/null
@@ -47,11 +77,7 @@ case "$BUILD" in
       -ldflags="-s -w -X main.ControllerVersion=e2e" -o "$ctx/kardinal-controller" ./cmd/kardinal-controller)
     chmod 0755 "$ctx" "$ctx/kardinal-controller"
     docker build -q -t "$IMAGE" -f "$E2E_DIR/controller.Dockerfile" "$ctx" >/dev/null
-    rctx=$(mktemp -d)
-    (cd "$REPO_ROOT" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false \
-      -ldflags="-s -w" -o "$rctx/kardinal-render" ./cmd/kardinal-render)
-    chmod 0755 "$rctx" "$rctx/kardinal-render"
-    docker build -q -t "$RENDER_IMAGE" -f "$E2E_DIR/render.Dockerfile" "$rctx" >/dev/null
+    build_render_host
     ;;
   none)
     docker image inspect "$IMAGE" >/dev/null || die "KARDINAL_E2E_BUILD=none but $IMAGE is not built"
@@ -63,6 +89,7 @@ load_image "$IMAGE"
 load_image "$RENDER_IMAGE"
 (cd "$REPO_ROOT" && go build -o "$BIN/kardinal" ./cmd/kardinal)
 log "controller image $IMAGE ($BUILD), CLI $BIN/kardinal"
+env_set KARDINAL_E2E_RACE "${KARDINAL_E2E_RACE:-0}"
 env_set KARDINAL_E2E_IMAGE "$IMAGE"
 env_set KARDINAL_E2E_RENDER_IMAGE "$RENDER_IMAGE"
 env_set KARDINAL_E2E_CHART "$REPO_ROOT/chart/kardinal-promoter"
