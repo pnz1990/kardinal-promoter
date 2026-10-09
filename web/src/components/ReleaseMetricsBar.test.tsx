@@ -16,7 +16,7 @@
 // and status.environments[].healthCheckedAt for when an environment was verified.
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { computeReleaseMetrics, formatHours, ReleaseMetricsBar } from './ReleaseMetricsBar'
+import { cfrColor, computeReleaseMetrics, formatHours, formatMinutes, ReleaseMetricsBar } from './ReleaseMetricsBar'
 import type { Bundle } from '../types'
 
 const HOUR = 3_600_000
@@ -113,5 +113,47 @@ describe('ReleaseMetricsBar', () => {
     expect(bar).toHaveTextContent('Time to prod3h')
     expect(bar).toHaveTextContent('Rollback rate33%1 rollback')
     expect(bar).toHaveTextContent('Deploys to prod2last 3 bundles')
+  })
+
+  it('adds the controller change failure rate and time to restore', () => {
+    render(
+      <ReleaseMetricsBar
+        bundles={[bundle('a', { ttpHours: 2 })]}
+        finalEnvironment="prod"
+        deploymentMetrics={{ deployments: 4, failedDeployments: 1, changeFailureRateMillis: 250,
+          meanTimeToRestoreMinutes: 95, restoredFailures: 1 }}
+      />,
+    )
+    const bar = screen.getByRole('region', { name: 'Release metrics' })
+    expect(bar).toHaveTextContent('Change failure rate25.0%1 of 4 deployments')
+    expect(bar).toHaveTextContent('Time to restore1h35mmean of 1 restored')
+  })
+
+  it('shows a dash when no failure was restored, and no stability cells without deployments', () => {
+    const { rerender } = render(
+      <ReleaseMetricsBar
+        bundles={[bundle('a', { ttpHours: 2 })]}
+        finalEnvironment="prod"
+        deploymentMetrics={{ deployments: 2, failedDeployments: 1, changeFailureRateMillis: 500 }}
+      />,
+    )
+    const bar = screen.getByRole('region', { name: 'Release metrics' })
+    expect(bar).toHaveTextContent('Time to restore—no restored failure')
+    rerender(
+      <ReleaseMetricsBar bundles={[bundle('a', { ttpHours: 2 })]} finalEnvironment="prod" deploymentMetrics={{ sampleSize: 1 }} />,
+    )
+    expect(screen.getByRole('region', { name: 'Release metrics' })).not.toHaveTextContent('Change failure rate')
+  })
+})
+
+describe('formatMinutes and cfrColor', () => {
+  it.each([[0, '0m'], [59, '59m'], [60, '1h'], [95, '1h35m'], [47 * 60, '47h'], [72 * 60, '3d']])('formatMinutes(%i) = %s', (m, want) => {
+    expect(formatMinutes(m)).toBe(want)
+  })
+  it('colors the change failure rate by DORA band', () => {
+    expect(cfrColor(0)).toBe('var(--color-success)')
+    expect(cfrColor(150)).toBe('var(--color-success)')
+    expect(cfrColor(300)).toBe('var(--color-warning)')
+    expect(cfrColor(301)).toBe('var(--color-error)')
   })
 })

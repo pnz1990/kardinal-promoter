@@ -677,7 +677,7 @@ func TestCLI_Reports(t *testing.T) {
 		return dm != nil && dm.SampleSize == 2, fmt.Sprintf("%+v", dm)
 	})
 	mc := cells(c.Must(a.ns, "metrics", "--pipeline", pipelineName))
-	require.Len(t, mc, 10, "%v", mc)
+	require.Len(t, mc, 12, "%v", mc)
 	assert.Equal(t, [][]string{
 		{"METRIC", "VALUE", "NOTES"},
 		{"pipeline", "podinfo", "(controller: last 2 bundles verified in prod)"},
@@ -688,16 +688,18 @@ func TestCLI_Reports(t *testing.T) {
 		{"auto_rollback_rate", fmt.Sprintf("%.1f%%", float64(dm.AutoRollbackRateMillis)/10), fmt.Sprintf("(%d per thousand)", dm.AutoRollbackRateMillis)},
 		{"operator_intervention_rate", fmt.Sprintf("%.1f%%", float64(dm.OperatorInterventionRateMillis)/10), fmt.Sprintf("(%d per thousand)", dm.OperatorInterventionRateMillis)},
 		{"stale_prod_days", fmt.Sprintf("%d", dm.StaleProdDays)},
-	}, mc[:9])
-	assert.Equal(t, "metrics_age", mc[9][0])
-	assert.Regexp(t, `^\d+(s|m\d+s)$`, mc[9][1])
-	assert.Equal(t, "(last computed by controller)", mc[9][2])
+		{"change_failure_rate", "0.0%", "(0 of 2 deployments failed)"},
+		{"time_to_restore", "-", "(no restored failure)"},
+	}, mc[:11])
+	assert.Equal(t, "metrics_age", mc[11][0])
+	assert.Regexp(t, `^\d+(s|m\d+s)$`, mc[11][1])
+	assert.Equal(t, "(last computed by controller)", mc[11][2])
 	assert.Equal(t, "0.0%", mc[6][1], "no automatic rollback")
 	// metrics_age is the only row that changes between the two calls.
 	explicit := cells(c.Must(a.ns, "metrics", "--pipeline", pipelineName, "--env", "prod", "--days", "30"))
-	require.Len(t, explicit, 10, "%v", explicit)
-	assert.Equal(t, mc[:9], explicit[:9], "the defaults are the last environment and 30 days")
-	assert.Equal(t, "metrics_age", explicit[9][0])
+	require.Len(t, explicit, 12, "%v", explicit)
+	assert.Equal(t, mc[:11], explicit[:11], "the defaults are the last environment and 30 days")
+	assert.Equal(t, "metrics_age", explicit[11][0])
 
 	lead := regexp.MustCompile(`^(\d+s|\d+m\d+s)$`)
 	mc = cells(c.Must(a.ns, "metrics", "--pipeline", pipelineName, "--days", "7"))
