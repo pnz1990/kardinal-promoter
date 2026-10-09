@@ -210,7 +210,7 @@ func TestLifecycle_ReplacedFailedBundleNotHeld(t *testing.T) {
 					lcStep("app-v1", "test", "s-v1", "Failed")).
 				WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}, &kardinalv1alpha1.PromotionStep{}).
 				Build()
-			api := interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+			api := interceptor.NewClient(c, interceptor.Funcs{
 				List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 					listed++
 					return cl.List(ctx, list, opts...)
