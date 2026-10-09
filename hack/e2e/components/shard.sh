@@ -17,6 +17,7 @@ set -euo pipefail
 # shellcheck source=hack/e2e/lib.sh
 source "$(dirname "$0")/../lib.sh"
 target_cluster
+# shellcheck disable=SC1091
 source "$E2E_OUT/env"
 
 NS=kardinal-shard-b
