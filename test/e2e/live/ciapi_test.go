@@ -287,8 +287,8 @@ spec:
 }
 
 // TestCIAPI_Validate checks the Bundle API's 400s: an unknown field, a Bundle
-// that fails validation (image without images, config without configRef, an
-// unknown type), a body over 1 MiB, and a ciRunURL with user info, one that
+// that fails validation (image without images, image with a configRef it
+// would ignore, config without configRef, an unknown type), a body over 1 MiB, and a ciRunURL with user info, one that
 // does not parse and a relative one. The errors about ciRunURL do not echo the
 // URL or its credentials. No request creates a Bundle; the Pipeline exists, as
 // a valid request shows.
@@ -316,6 +316,9 @@ func TestCIAPI_Validate(t *testing.T) {
 			`type "image" requires at least one entry in images`, nil},
 		{"config Bundle without configRef", ciBody(t, a.ns, fixtures.V2, map[string]interface{}{"type": "config", "images": nil}),
 			`type "config" requires configRef.commitSHA`, nil},
+		{"image Bundle with configRef", ciBody(t, a.ns, fixtures.V2, map[string]interface{}{
+			"configRef": map[string]string{"commitSHA": ciCommit}}),
+			`type "image" does not use configRef; set type config or mixed with configRef.commitSHA, or drop configRef`, nil},
 		{"unknown type", ciBody(t, a.ns, fixtures.V2, map[string]interface{}{"type": "helm"}),
 			`type must be one of image, config, mixed (got "helm")`, nil},
 		{"body over 1 MiB", ciBody(t, a.ns, fixtures.V2, map[string]interface{}{

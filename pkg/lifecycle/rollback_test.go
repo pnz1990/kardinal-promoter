@@ -583,3 +583,22 @@ func TestPlanRollback_ToHintOnlyForPeople(t *testing.T) {
 		})
 	}
 }
+
+// TestPlanRollback_DropsConfigRefOfImageTarget: an image Bundle stored before
+// the CRD refused a configRef on it may carry one it never deployed. The
+// rollback Bundle made from it carries no configRef, so the API server, which
+// now refuses one on an image Bundle, accepts it (#1353).
+func TestPlanRollback_DropsConfigRefOfImageTarget(t *testing.T) {
+	v1 := bundle("v1", "app", "1", 0)
+	v1.Spec.ConfigRef = &v1alpha1.ConfigRef{GitRepo: "https://git.example/cfg", CommitSHA: "abc"}
+	c := newClient(t, pipeline("app", "prod"), v1, bundle("v2", "app", "2", 10),
+		step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "HealthChecking", 11))
+	plan, err := lifecycle.PlanRollback(context.Background(), c, lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", FromBundle: "v2",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "image", plan.Bundle.Spec.Type)
+	assert.Nil(t, plan.Bundle.Spec.ConfigRef)
+	require.Len(t, plan.Bundle.Spec.Images, 1)
+	assert.Equal(t, "1", plan.Bundle.Spec.Images[0].Tag)
+}
