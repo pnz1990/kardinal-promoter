@@ -39,7 +39,7 @@ spec:
         yaml:                           # When strategy: yaml
           updates:                      # One or more; all are applied in one commit
             - file: <string>            # YAML file relative to path
-              path: <string>            # Key path, e.g. "spec.template.spec.containers[0].image"
+              path: <string>            # YAML path, e.g. "spec.template.spec.containers[name=app].image"
               image: <string>           # Bundle image repository (optional with one image)
               value: <string>           # tag (default), digest, tagWithDigest, image, imageWithDigest
       approval: <string>                # "auto" (default) or "pr-review"
@@ -128,7 +128,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `update.helm.imagePathTemplate` | No | `.image.tag` | `helm` only. Dot path of the image tag in the values file. |
 | `update.helm.valuesFile` | No | `values.yaml` | `helm` only. Values file to patch, relative to the environment `path`. |
 | `update.helm.chartVersionFile` | No | `Chart.yaml` | `helm` only, for `chart` Bundles (from a [Helm Subscription](subscription.md#promoting-a-chart-version)). File the chart version is written to, relative to the environment `path`. A chart Bundle fails at build in an environment whose strategy is not `helm`. |
-| `update.helm.chartVersionPath` | No | `.dependencies[name=<chart>].version` | `helm` only. Dot path of the chart version in `chartVersionFile`; a numeric segment indexes a list and `[field=value]` selects a list element (`.helmCharts[name=podinfo].version`, `.spec.chart.spec.version`, `.spec.source.targetRevision`). The default is the umbrella chart's dependency named after the Bundle's chart; the step fails when there is none. |
+| `update.helm.chartVersionPath` | No | `.dependencies[name=<chart>].version` | `helm` only. [YAML path](#yaml-paths) of the chart version in `chartVersionFile` (`.helmCharts[name=podinfo].version`, `.spec.chart.spec.version`, `.spec.source.targetRevision`). The default is the umbrella chart's dependency named after the Bundle's chart; the step fails when there is none. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
 | `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. |
@@ -422,9 +422,8 @@ update:
 | `image` | `<repository>:<tag>` |
 | `imageWithDigest` | `<repository>:<tag>@<digest>`, or `<repository>@<digest>` without a tag |
 
-- `path` is keys separated by `.`, with `[N]` to index a list. Missing mapping keys are created;
-  list elements are not. A key that contains `.` (an annotation such as `app.kubernetes.io/version`)
-  cannot be addressed.
+- `path` uses the [YAML path](#yaml-paths) grammar, as `update.helm.chartVersionPath` does.
+  Missing mapping keys are created; list elements are not.
 - The step computes every edit before it writes anything. An edit that cannot be applied (a
   Bundle without the named image, a value the image does not have such as the digest of a
   tag-only image, a missing list element, a path through a scalar, a path that would replace a
@@ -441,6 +440,24 @@ update:
   symbolic link anywhere on the path (the environment directory, a directory in `file`, or the
   file), a file over 4 MiB, and a `file` that is absolute or contains `..`.
 - A Bundle without images (a config Bundle) changes nothing.
+
+### YAML paths
+
+`update.yaml.updates[].path` and `update.helm.chartVersionPath` name a scalar in a YAML file
+with one grammar:
+
+- Keys separated by `.`; a leading `.` is optional (`image.tag` and `.image.tag` are the same).
+  A key is letters, digits, `_` and `-`. A key that contains `.` or `/` (an annotation such as
+  `app.kubernetes.io/version`) cannot be addressed.
+- `[N]` after a key picks a list element by position: `spec.template.spec.containers[0].image`.
+  A digits-only key does the same when it reaches a list (`.dependencies.0.version`); in a
+  mapping it is a key.
+- `[field=value]` picks the list element (a mapping) whose `field` has that value:
+  `spec.template.spec.containers[name=app].image`, `.dependencies[name=podinfo].version`. The
+  value is letters, digits and `_ - . / : @`.
+- The element a list step names must exist; the step fails for good otherwise.
+
+The API server checks the grammar: a Pipeline with a path outside it is refused.
 
 ### Image signatures and tests
 

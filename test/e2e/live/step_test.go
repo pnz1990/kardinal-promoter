@@ -264,9 +264,10 @@ func TestStep_HelmValues(t *testing.T) {
 
 // TestStep_YAMLUpdate promotes plain manifests (a kustomization without an
 // images list) with update.strategy yaml: yaml-update writes the image
-// reference at spec.template.spec.containers[0].image in deployment.yaml and
-// the tag at release.version in a second file, in one commit, and the new
-// version runs. A later edit that cannot be applied (a list element that does
+// reference at spec.template.spec.containers[name=podinfo].image (a list
+// element picked by its name) in deployment.yaml and the tag at
+// .release.version (a leading "." as in chartVersionPath) in a second file,
+// in one commit, and the new version runs. A later edit that cannot be applied (a list element that does
 // not exist) fails the step for good, and nothing is pushed: both files keep
 // the previous release.
 //
@@ -285,8 +286,8 @@ func TestStep_YAMLUpdate(t *testing.T) {
 	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("test"), imageV1, syncTimeout)
 
 	updates := []v1alpha1.YAMLUpdate{
-		{File: "deployment.yaml", Path: "spec.template.spec.containers[0].image", Value: "image"},
-		{File: "release.yaml", Path: "release.version", Image: fixtures.Image},
+		{File: "deployment.yaml", Path: "spec.template.spec.containers[name=podinfo].image", Value: "image"},
+		{File: "release.yaml", Path: ".release.version", Image: fixtures.Image},
 	}
 	p := a.pipeline(nil)
 	envSpec(t, p, "test").Update = v1alpha1.UpdateConfig{Strategy: "yaml", YAML: &v1alpha1.YAMLUpdateConfig{Updates: updates}}
