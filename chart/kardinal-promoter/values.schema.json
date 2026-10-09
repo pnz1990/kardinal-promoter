@@ -110,6 +110,10 @@
         "watchNamespace": {
           "type": "string"
         },
+        "namespaceShard": {
+          "type": "string",
+          "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+        },
         "policyNamespaces": {
           "type": "array",
           "items": {
@@ -119,6 +123,37 @@
         "gateStatusHeartbeat": {
           "type": "string",
           "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        },
+        "workers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "promotionStep": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "prStatus": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "policyGate": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "bundle": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "pipeline": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            }
+          }
         },
         "extraArgs": {
           "type": "array",
@@ -340,6 +375,24 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "retire": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "superseded": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            },
+            "failed": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            },
+            "verified": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            }
           }
         }
       }

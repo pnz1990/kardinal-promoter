@@ -6,6 +6,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,14 +21,21 @@ import (
 )
 
 type testResult = struct {
-	Test   string `json:"test"`
-	Action string `json:"action"`
+	Test     string `json:"test"`
+	Action   string `json:"action"`
+	KnownBug int    `json:"knownBug,omitempty"`
 }
 
+// suiteRun is a suite's summary; action "known-bug" is an expected failure
+// of known bug #1473.
 func suiteRun(suite string, results map[string]string) summary {
 	s := summary{Suite: suite}
 	for name, action := range results {
-		s.Results = append(s.Results, testResult{Test: name, Action: action})
+		r := testResult{Test: name, Action: action}
+		if action == "known-bug" {
+			r.Action, r.KnownBug = "xfail", 1473
+		}
+		s.Results = append(s.Results, r)
 	}
 	return s
 }
@@ -33,7 +43,7 @@ func suiteRun(suite string, results map[string]string) summary {
 func TestProve(t *testing.T) {
 	rows := []coverage.Row{
 		{ID: "CORE-01", Tier: "live"},
-		{ID: "CORE-02", Tier: "live"},
+		{ID: "CORE-02", Tier: "live", Status: "known-bug"},
 		{ID: "CORE-03", Tier: "live"},
 		{ID: "SCM-01", Tier: "live"},
 		{ID: "BB-01", Tier: "contract"},
@@ -55,6 +65,7 @@ func TestProve(t *testing.T) {
 	cases := []struct {
 		name      string
 		summaries []summary
+		isOpen    func(int) (bool, error)
 		want      map[string]string
 	}{{
 		name: "only core ran",
@@ -74,6 +85,33 @@ func TestProve(t *testing.T) {
 		})},
 		want: map[string]string{"CORE-01": passed, "CORE-02": failed, "CORE-03": passed},
 	}, {
+		name: "an expected failure is a known bug, not a failure",
+		summaries: []summary{suiteRun("core", map[string]string{
+			"TestCore_A": "pass", "TestCore_B": "known-bug", "TestCore_C": "skip",
+		})},
+		isOpen: func(n int) (bool, error) { return n == 1473, nil },
+		want:   map[string]string{"CORE-01": passed, "CORE-02": known, "CORE-03": failed},
+	}, {
+		name: "a known bug whose issue is closed fails",
+		summaries: []summary{suiteRun("core", map[string]string{
+			"TestCore_A": "pass", "TestCore_B": "known-bug",
+		})},
+		isOpen: func(int) (bool, error) { return false, nil },
+		want:   map[string]string{"CORE-02": failed},
+	}, {
+		name: "a known bug whose issue cannot be read fails",
+		summaries: []summary{suiteRun("core", map[string]string{
+			"TestCore_A": "pass", "TestCore_B": "known-bug",
+		})},
+		isOpen: func(int) (bool, error) { return false, errors.New("HTTP 500") },
+		want:   map[string]string{"CORE-02": failed},
+	}, {
+		name: "a covered row whose test is an expected failure fails",
+		summaries: []summary{suiteRun("core", map[string]string{
+			"TestCore_A": "known-bug",
+		})},
+		want: map[string]string{"CORE-01": failed},
+	}, {
 		name: "every suite ran",
 		summaries: []summary{
 			suiteRun("core", map[string]string{"TestCore_A": "pass", "TestCore_B": "pass", "TestCore_C": "pass"}),
@@ -92,7 +130,7 @@ func TestProve(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := map[string]string{}
-			for _, r := range prove(rows, tests, runs, tc.summaries) {
+			for _, r := range prove(rows, tests, runs, tc.summaries, tc.isOpen) {
 				got[r.ID] = r.Result
 			}
 			for id, want := range tc.want {
@@ -116,6 +154,7 @@ func TestOK(t *testing.T) {
 		{"a missing row", []rowResult{rr("live", missing)}, false, false},
 		{"a live row not run", []rowResult{rr("live", passed), rr("live", notRun)}, true, false},
 		{"a live row todo", []rowResult{rr("live", todo)}, true, false},
+		{"a live row a known bug", []rowResult{rr("live", passed), rr("live", known)}, true, false},
 		{"a deprecated row todo", []rowResult{rr("deprecated", todo)}, true, false},
 		{"a contract row todo", []rowResult{rr("contract", todo)}, true, true},
 	}
@@ -137,7 +176,7 @@ func TestMarkdown(t *testing.T) {
 	markdown(&b, results, false)
 	out := b.String()
 	assert.Contains(t, out, "### Coverage proof: FAILED")
-	assert.Contains(t, out, "| contract | 1 | 0 | 0 | 0 | 0 | 1 | 0 |")
+	assert.Contains(t, out, "| contract | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |")
 	assert.Contains(t, out, "| live | 2 | 1 | 1 | 0 | 0 | 0 | 0 |")
 	assert.Contains(t, out, "| CORE-01 | live | core | passed | `TestCore_A` |")
 }
@@ -197,4 +236,28 @@ func TestRun(t *testing.T) {
 	assert.Error(t, run(root, []string{write("bad.json", suiteRun("core", core))}, false, ""))
 	assert.ErrorContains(t, run(root, []string{write("unknown.json", suiteRun("nope", nil))}, false, ""), `suite "nope"`)
 	assert.Error(t, run(root, nil, false, ""))
+}
+
+func TestGitHubIssueOpen(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer tok", r.Header.Get("Authorization"))
+		switch r.URL.Path {
+		case "/repos/pnz1990/kardinal-promoter/issues/1":
+			_, _ = w.Write([]byte(`{"state":"open"}`))
+		case "/repos/pnz1990/kardinal-promoter/issues/2":
+			_, _ = w.Write([]byte(`{"state":"closed"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	check := githubIssueOpen(srv.Client(), srv.URL, "tok")
+	open, err := check(1)
+	require.NoError(t, err)
+	assert.True(t, open)
+	open, err = check(2)
+	require.NoError(t, err)
+	assert.False(t, open)
+	_, err = check(3)
+	assert.ErrorContains(t, err, "HTTP 404")
 }

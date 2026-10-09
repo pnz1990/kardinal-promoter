@@ -1,0 +1,89 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+Admission policy for Pipeline spec.holds (kardinal rollback --hold, #1528;
+docs/rollback.md#who-may-hold). Kubernetes 1.30+ serves
+admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy (the chart's
+kubeVersion).
+*/}}
+{{- $fullname := include "kardinal-promoter.fullname" . }}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $fullname }}-hold-writes
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pipelines"]
+  # A hold pins an environment and exempts its rollback from the
+  # environment's gates, so changing spec.holds needs more than update on the
+  # Pipeline: update on the virtual subresource pipelines/hold. Every new
+  # entry names the caller in createdBy and has a createdAt (and expiresAt,
+  # if set, after it); an entry is added or removed, never edited in place.
+  # The controller is exempt: it removes expired holds, and it writes the
+  # holds the UI makes after checking pipelines/hold for the UI user, whom it
+  # records in createdBy.
+  variables:
+    - name: exempt
+      expression: request.userInfo.username == {{ $controller | quote }}
+    - name: oldHolds
+      expression: >-
+        request.operation == 'UPDATE' && has(oldObject.spec.holds) ? oldObject.spec.holds : []
+    - name: newHolds
+      expression: "has(object.spec.holds) ? object.spec.holds : []"
+    - name: changed
+      expression: variables.oldHolds != variables.newHolds
+    - name: added
+      expression: variables.newHolds.filter(h, !(h in variables.oldHolds))
+    - name: mayHold
+      expression: >-
+        authorizer.group('kardinal.io').resource('pipelines').subresource('hold')
+        .namespace(object.metadata.namespace).name(object.metadata.name).check('update').allowed()
+  validations:
+    - expression: variables.exempt || !variables.changed || variables.mayHold
+      messageExpression: >-
+        'changing spec.holds needs update on pipelines/hold (user ' + request.userInfo.username + ')'
+      reason: Forbidden
+    - expression: >-
+        variables.exempt ||
+        variables.added.all(h, !variables.oldHolds.exists(o, o.environment == h.environment))
+      message: a spec.holds entry may be added or removed, not edited in place
+      reason: Forbidden
+    - expression: >-
+        variables.exempt ||
+        variables.added.all(h, has(h.createdBy) && h.createdBy == request.userInfo.username)
+      messageExpression: >-
+        'every new spec.holds entry must have createdBy "' + request.userInfo.username + '"'
+      reason: Forbidden
+    - expression: >-
+        variables.exempt ||
+        variables.added.all(h, has(h.createdAt) &&
+          (!has(h.expiresAt) || timestamp(h.expiresAt) > timestamp(h.createdAt)))
+      message: every new spec.holds entry needs createdAt, and an expiresAt after it if it has one
+      reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $fullname }}-hold-writes
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $fullname }}-hold-writes
+  validationActions: ["Deny"]
+  {{- with .Values.controller.watchNamespace }}
+  # Namespace mode: the controller exemption above is this release's, so the
+  # policy applies only to the namespace this release's controller manages.
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ . | quote }}
+  {{- end }}

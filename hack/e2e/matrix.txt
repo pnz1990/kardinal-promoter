@@ -9,6 +9,9 @@
 # upgrade runs on 1.30, the oldest minor kardinal supports.
 #
 # suite       Kubernetes  shard (hack/e2e/run.sh SHARD; - for the whole suite)
+# The scale suite's ci profile (test/e2e/README.md#scale-suite): its
+# controller is built with -race on the runner, whatever KARDINAL_E2E_BUILD.
+scale         1.37        -
 core          1.35        1/2
 core          1.35        2/2
 core          1.36        1/2
@@ -25,6 +28,7 @@ ui            1.37        -
 # same minor.
 multi-cluster 1.36        -
 flux          1.37        -
+shard         1.37        -
 # 1.30: KIND_NODE_UPGRADE_1_30, the oldest minor kardinal supports.
 # all.sh and CI run the upgrade test once whatever COUNT is: it upgrades its
 # cluster.

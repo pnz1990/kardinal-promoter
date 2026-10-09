@@ -1,0 +1,51 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * PipelineActionDialog.css — the hold option of the rollback dialog (#1528).
+ */
+
+.hold-option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  color: var(--color-text);
+}
+
+.hold-option__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.hold-option__note {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  border-left: 2px solid var(--color-warning);
+  padding-left: 0.5rem;
+}
+
+.hold-option__label {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.hold-option__reason {
+  padding: 0.4rem 0.55rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+}
+
+.hold-option__reason:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
