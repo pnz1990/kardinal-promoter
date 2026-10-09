@@ -626,6 +626,50 @@ func TestStep_HooksInCompactGraph(t *testing.T) {
 	}
 }
 
+// TestStep_CompactPauseHoldsNextPreHook: with the compact Graph shape, a
+// pre hook is created only while the node shape's HookRun node would
+// resolve, also once the environment's step exists (QA #1602). prod's step
+// and its first pre hook exist when the Pipeline is paused; the first hook
+// finishes, but the second is not created while the pause's freeze gate
+// holds prod. After resume it runs and prod is Verified.
+//
+// Covers HOOK-COMPACT-03.
+func TestStep_CompactPauseHoldsNextPreHook(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	p.Spec.Environments[1].Hooks = []v1alpha1.HookSpec{
+		{Name: "migrate", Phase: "pre", Job: hookJob(t, `sleep 15; echo migrated`, "")},
+		{Name: "seed", Phase: "pre", Job: hookJob(t, `echo seed`, "")},
+	}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	migrate := graph.HookRunName(pipelineName, bundle, "prod", "pre", "migrate")
+	seed := graph.HookRunName(pipelineName, bundle, "prod", "pre", "seed")
+
+	waitHookRun(t, e, a.ns, migrate, v1alpha1.HookRunRunning)
+	_, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "prod")
+	require.NoError(t, err)
+	require.True(t, ok, "prod's step exists")
+	e.MustKardinal(t, a.ns, "pause", pipelineName)
+	waitHookRun(t, e, a.ns, migrate, v1alpha1.HookRunSucceeded)
+	framework.Consistently(t, 30*time.Second, "no second pre hook while paused", func(ctx context.Context) (bool, string) {
+		_, exists, err := hookRun(ctx, e, a.ns, seed)
+		if err != nil {
+			return false, err.Error()
+		}
+		return !exists, fmt.Sprintf("seed exists=%v", exists)
+	})
+	a.fileHas(t, "prod", fixtures.V1, "prod in git while paused")
+
+	e.MustKardinal(t, a.ns, "resume", pipelineName)
+	waitHookRun(t, e, a.ns, seed, v1alpha1.HookRunSucceeded)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout+hookTimeout)
+}
+
 // TestStep_HookDeletedWhileRunningRunsOnce: deleting a pre-hook HookRun
 // while its Job runs does not run the migration twice. The finalizer holds
 // the HookRun until the Job ends and records its result, the step keeps the

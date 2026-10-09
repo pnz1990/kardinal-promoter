@@ -162,8 +162,10 @@ progress. The step then waits for the new run (the newest run of the template) a
 message; the timeout keeps counting from when the step entered `Verifying`, it does not restart.
 
 In a [compact Graph](pipeline-reference.md#large-pipelines) the AnalysisRuns are items of one
-collection, created once their step entered `Verifying` and kept from then on; `spec.terminate`
-is set the same way.
+collection. Each is created once its step entered `Verifying` while the Bundle is not Superseded,
+and kept from then on; `spec.terminate` is set the same way. Each AnalysisRun counts against the
+Graph's size limits. One that kro cannot create holds only its environment, and the Bundle's
+`RunsCreated` condition names it.
 
 ## What it cannot do
 

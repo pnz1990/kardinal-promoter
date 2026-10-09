@@ -147,13 +147,19 @@ func compactRunNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alph
 		"verifying":  fmt.Sprintf(`${%s.filter(s, s.?status.?verificationStartedAt.hasValue()).map(s, s.metadata.name)}`, steps),
 		"superseded": `${bundle.?status.?phase.orValue("") == "Superseded"}`,
 	}
+	// Only runs kro applied for this Bundle count (the read-back filter of
+	// spec.live): a HookRun or AnalysisRun created by anyone else under one
+	// of the names neither keeps an item admitted nor passes for a Succeeded
+	// previous hook.
+	applied := fmt.Sprintf(`r.metadata.?labels[?%q].hasValue() && r.metadata.?labels[?%q].orValue("") == %s`,
+		LabelKRONodeID, LabelBundleUID, strconv.Quote(string(bundle.UID)))
 	if len(hooks) > 0 {
-		runState["hookRuns"] = fmt.Sprintf(`${%s.map(r, r.metadata.name)}`, refHookRunsNodeID)
-		runState["succeeded"] = fmt.Sprintf(`${%s.filter(r, r.?status.?phase.orValue("") == "Succeeded").map(r, r.metadata.name)}`,
-			refHookRunsNodeID)
+		runState["hookRuns"] = fmt.Sprintf(`${%s.filter(r, %s).map(r, r.metadata.name)}`, refHookRunsNodeID, applied)
+		runState["succeeded"] = fmt.Sprintf(`${%s.filter(r, %s && r.?status.?phase.orValue("") == "Succeeded").map(r, r.metadata.name)}`,
+			refHookRunsNodeID, applied)
 	}
 	if len(runs) > 0 {
-		runState["analysisRuns"] = fmt.Sprintf(`${%s.map(r, r.metadata.name)}`, refAnalysisRunsNodeID)
+		runState["analysisRuns"] = fmt.Sprintf(`${%s.filter(r, %s).map(r, r.metadata.name)}`, refAnalysisRunsNodeID, applied)
 	}
 	out := []GraphNode{{ID: NodeRunState, Def: runState}}
 	out = append(out, compactHookNodes(pipeline, bundle, hooks)...)
@@ -192,13 +198,17 @@ func compactHookNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alp
 		field := chunkID("items", i)
 		data[field] = items
 		// Kept once it exists; otherwise after the previous hook of its
-		// phase succeeded, and: a pre hook with its environment's step (as
-		// NodePromotionWave admits it), a post hook once the step entered
-		// Verifying and the Bundle is not Superseded.
+		// phase succeeded, and, as the node shape gates the HookRun nodes
+		// (stepConds): a pre hook while the Bundle is not Superseded,
+		// Rejected or waiting for a slot, the environment not held on another
+		// Bundle, every upstream Verified and every gate (the pause freeze
+		// gate included) ready, and the image verified for a root step,
+		// whether or not the step already exists; a post hook once the step
+		// entered Verifying and the Bundle is not Superseded.
 		admit[field] = fmt.Sprintf(`${%[1]s.%[2]s.filter(h, h.name in %[3]shookRuns || `+
 			`((h.prev == "" || h.prev in %[3]ssucceeded) && (h.phase == "pre" ? `+
-			`(%[5]s && (h.environment in %[4]sstarted || (%[4]shold == false && h.held == false && h.upstreams.all(u, u in %[4]sverified) && `+
-			`h.gates.all(g, g in %[4]sreadyGates)))) : `+
+			`(%[5]s && %[4]shold == false && h.held == false && h.upstreams.all(u, u in %[4]sverified) && `+
+			`h.gates.all(g, g in %[4]sreadyGates)) : `+
 			`(h.step in %[3]sverifying && %[3]ssuperseded == false))))}`,
 			NodeHookRunData, field, rs, state, verified)
 		item := func(f string) string { return "${" + iterHook + "." + f + "}" }

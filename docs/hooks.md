@@ -165,9 +165,18 @@ The controller needs `create`, `get`, `list`, `watch` and `delete` on `batch/job
 namespaces (the chart grants it) and caches only Jobs labelled `kardinal.io/hookrun`.
 
 In a [compact Graph](pipeline-reference.md#large-pipelines) (above `--graph-compact-above`
-environments) hooks behave the same: the HookRuns are items of one collection, a pre hook is
-created with its environment's PromotionStep and the next one once the previous succeeded, a post
-hook once the step entered `Verifying`, and a HookRun that exists stays whatever changes after.
+environments) the HookRuns are items of one collection, created under the conditions the node
+shape's HookRun nodes resolve under. A pre hook is created once the previous one succeeded, its
+environment's upstreams are Verified, its gates are ready (the pause freeze gate too), the
+environment is not held for another Bundle, the Bundle is not Superseded, Rejected or waiting for a
+`maxConcurrentPromotions` slot, and, for a root environment, the image is verified. All of this
+holds even after the environment's PromotionStep exists. A post hook is created once the step
+entered `Verifying` and the Bundle is not Superseded. A HookRun the Graph created stays, whatever
+changes after. Only HookRuns kro applied for this Bundle count: a forged HookRun with a hook's
+name keeps nothing admitted and does not let the next hook start. Each HookRun counts against the
+Graph's size limits. A HookRun that kro cannot create holds only its own environment, whose step
+waits for the hook. The Bundle's `RunsCreated` condition names it, with kro's error
+([Troubleshooting](troubleshooting.md#symptom-bundle-condition-runscreated-is-false)).
 
 ## What hooks cannot do
 

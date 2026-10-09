@@ -482,6 +482,8 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 			}
 			assert.ElementsMatch(t, mapKeys(metricNodes(t, nodes.Graph)), compactMetrics, "the same MetricCheck instances")
 			assert.Equal(t, kinds(nodes.Graph), kinds(compact.Graph), "the compact Graph creates the same object kinds")
+			assert.Equal(t, graph.ObjectCount(nodes.Graph), graph.ObjectCount(compact.Graph),
+				"the size and object-count guards count the compact HookRuns, AnalysisRuns and the rest as the node shape's")
 			assert.Equal(t, nodes.Environments, compact.Environments)
 			assert.ElementsMatch(t, gateNames(nodes.GateInstances), gateNames(compact.GateInstances), "the same gate instances")
 			assert.Contains(t, strings.Join(gateNames(compact.GateInstances), ","), "allow-skip-canary",
@@ -525,19 +527,43 @@ func compactRunVars(t *testing.T, g *graph.Graph, steps map[string]string, verif
 	}
 	vars[graph.NodeStepsObserved] = observed
 	vars["refSteps"] = observed
+	// The runs kro applied for this Bundle carry its node-id and bundle-uid
+	// labels; a name prefixed "forged:" has neither.
+	md := func(name string) map[string]interface{} {
+		if strings.HasPrefix(name, "forged:") {
+			return map[string]interface{}{"name": strings.TrimPrefix(name, "forged:")}
+		}
+		return map[string]interface{}{"name": name, "labels": map[string]interface{}{
+			graph.LabelKRONodeID: "run", graph.LabelBundleUID: graphBundleUID(g)}}
+	}
 	var hr []interface{}
 	for name, phase := range hookRuns {
-		hr = append(hr, map[string]interface{}{"metadata": map[string]interface{}{"name": name}, "status": map[string]interface{}{"phase": phase}})
+		hr = append(hr, map[string]interface{}{"metadata": md(name), "status": map[string]interface{}{"phase": phase}})
 	}
 	vars["refHookRuns"] = hr
 	var ar []interface{}
 	for _, name := range runs {
-		ar = append(ar, map[string]interface{}{"metadata": map[string]interface{}{"name": name}})
+		ar = append(ar, map[string]interface{}{"metadata": md(name)})
 	}
 	vars["refAnalysisRuns"] = ar
 	vars[graph.NodePromotionState] = sim.def(graph.NodePromotionState, vars)
 	vars[graph.NodeRunState] = sim.def(graph.NodeRunState, vars)
 	return vars
+}
+
+// graphBundleUID is the kardinal.io/bundle-uid label of g's HookRun or
+// AnalysisRun templates.
+func graphBundleUID(g *graph.Graph) string {
+	for _, n := range g.Spec.Nodes {
+		if md, ok := n.Template["metadata"].(map[string]interface{}); ok {
+			if l, ok := md["labels"].(map[string]interface{}); ok {
+				if uid, ok := l[graph.LabelBundleUID].(string); ok && uid != "" {
+					return uid
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func admittedNames(t *testing.T, g *graph.Graph, id string, vars map[string]interface{}) []string {
@@ -588,6 +614,12 @@ func TestCompact_Hooks(t *testing.T) {
 		map[string]bool{prodStep: true}, map[string]string{migrate: "Succeeded", seed: "Succeeded"}), "the post hook in Verifying")
 	assert.ElementsMatch(t, []string{migrate, smoke}, admitted(map[string]string{testStep: "Failed"}, nil,
 		map[string]string{migrate: "Succeeded", smoke: "Running"}), "existing HookRuns stay whatever changes")
+	// Only runs kro applied for this Bundle count: a forged HookRun under
+	// migrate's name neither keeps migrate admitted nor lets seed start.
+	assert.Empty(t, admitted(map[string]string{testStep: "Failed"}, nil, map[string]string{"forged:" + migrate: "Succeeded"}),
+		"a forged HookRun keeps nothing admitted")
+	assert.Equal(t, []string{migrate}, admitted(map[string]string{testStep: "Verified"}, nil,
+		map[string]string{"forged:" + migrate: "Succeeded"}), "a forged Succeeded HookRun does not start the next hook")
 
 	// The HookRun template and the step's spec.
 	var tmpl, step map[string]interface{}
@@ -803,4 +835,76 @@ func TestCompact_ImageVerification(t *testing.T) {
 	assert.Empty(t, admitted("Pending"), "no migration for an unverified image")
 	assert.Empty(t, admitted("Failed"))
 	assert.Equal(t, []string{migrate}, admitted("Verified"))
+}
+
+// TestCompact_PreHookHeldAndSlot is TestBuilder_PreHookHeldAndSlot for the
+// compact shape, with prod's step already created (QA #1602): a pre hook
+// is admitted only while the node shape's HookRun node would resolve. It
+// waits while the Bundle waits for a slot, is Rejected or Superseded, while
+// prod is held on another Bundle, while a gate (the pause freeze gate
+// among them) is not ready, and while an upstream is not Verified; a
+// HookRun that exists stays.
+func TestCompact_PreHookHeldAndSlot(t *testing.T) {
+	envs := func() *kardinalv1alpha1.Pipeline {
+		return compactPipeline(
+			kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+			kardinalv1alpha1.EnvironmentSpec{Name: "prod", DependsOn: []string{"test"},
+				Hooks: []kardinalv1alpha1.HookSpec{hook("migrate", "pre", hookJob)}})
+	}
+	build := func(p *kardinalv1alpha1.Pipeline) *graph.Graph {
+		b := makeBundle("app-v1", "app")
+		b.UID = "uid-1"
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b,
+			PolicyGates: []kardinalv1alpha1.PolicyGate{makePolicyGate("freeze", "app-ns", "prod", "false")}})
+		require.NoError(t, err)
+		assertKroValid(t, res.Graph)
+		return res.Graph
+	}
+	migrate := graph.HookRunName("app", "app-v1", "prod", "pre", "migrate")
+	prodStep, testStep := "app-app-v1-prod", "app-app-v1-test"
+	type state struct {
+		bundle     map[string]interface{}
+		testState  string
+		gatesReady bool
+		hookRuns   map[string]string
+	}
+	admitted := func(g *graph.Graph, s state) []string {
+		v := compactRunVars(t, g, map[string]string{testStep: s.testState, prodStep: ""}, nil, s.hookRuns, nil)
+		if s.bundle != nil {
+			v["bundle"] = s.bundle
+		}
+		ps := newCompactSim(t, g).def(graph.NodePromotionState, v)
+		if !s.gatesReady {
+			ps["readyGates"] = []interface{}{}
+		}
+		v[graph.NodePromotionState] = ps
+		v[graph.NodeRunState] = newCompactSim(t, g).def(graph.NodeRunState, v)
+		return admittedNames(t, g, graph.NodePromotionHooks, v)
+	}
+	bundle := func(phase string, conditions ...interface{}) map[string]interface{} {
+		st := map[string]interface{}{"phase": phase}
+		if len(conditions) > 0 {
+			st["conditions"] = conditions
+		}
+		return map[string]interface{}{"metadata": map[string]interface{}{"name": "app-v1"}, "status": st}
+	}
+	g := build(envs())
+	ok := state{bundle: bundle("Promoting"), testState: "Verified", gatesReady: true}
+	require.Equal(t, []string{migrate}, admitted(g, ok), "admitted with prod's step")
+	for name, s := range map[string]state{
+		"waiting for a slot": {bundle: bundle("Promoting", map[string]interface{}{"type": graph.CondBundleWaitingForSlot, "status": "True"}),
+			testState: "Verified", gatesReady: true},
+		"Rejected":                    {bundle: bundle("Rejected"), testState: "Verified", gatesReady: true},
+		"Superseded":                  {bundle: bundle("Superseded"), testState: "Verified", gatesReady: true},
+		"paused (freeze gate false)":  {bundle: bundle("Promoting"), testState: "Verified"},
+		"upstream no longer Verified": {bundle: bundle("Promoting"), testState: "Failed", gatesReady: true},
+	} {
+		assert.Empty(t, admitted(g, s), "not while %s, though prod's step exists", name)
+		s.hookRuns = map[string]string{migrate: "Running"}
+		assert.Equal(t, []string{migrate}, admitted(g, s), "an existing HookRun stays while %s", name)
+	}
+
+	held := envs()
+	held.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-1"}}
+	assert.Empty(t, admitted(build(held), ok), "not for another Bundle while prod is held, though prod's step exists")
 }

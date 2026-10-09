@@ -645,7 +645,13 @@ created holds every gated environment of the Bundle; the Bundle reconciler then 
 `GatesCreated=False` with the missing instance names and kro's message
 (`pkg/reconciler/bundle/gates_created.go`). Steps name their PRStatus literally, not through the
 PRStatuses collection, so a PRStatus that cannot be created holds only its own environment, whose
-step waits in WaitingForMerge with a message that names it.
+step waits in WaitingForMerge with a message that names it. The compact shape's HookRuns and
+AnalysisRuns follow the PRStatus pattern: steps read them back through the `refHookRuns` and
+`refAnalysisRuns` selector refs, never through their collections. So a run that cannot be created
+holds only its own environment, whose step says it waits for the hook or analysis. The step
+cannot show kro's error: the PromotionStep reconciler does not read the Graph, and the Bundle
+reconciler does not write step status. So the Bundle reconciler sets `RunsCreated=False`, naming
+the run, its environment and kro's message (`pkg/reconciler/bundle/runs_created.go`).
 
 **Upstream work.** None filed.
 

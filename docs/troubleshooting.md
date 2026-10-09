@@ -328,6 +328,21 @@ the Bundle continues. A PRStatus that cannot be created holds only its own envir
 PromotionStep waits in `WaitingForMerge` with `waiting for PRStatus <name>: the Graph has not
 created it yet`.
 
+### Symptom: Bundle condition "RunsCreated" is False
+
+In a compact Graph, kro creates the HookRuns and AnalysisRuns from collections. The API server
+refused one of them, for example because of a `ResourceQuota`, an admission policy or an invalid
+Job. That run's environment waits: its step reports that it is waiting for the hook or the
+analysis. The other environments go on. The condition names the run, its environment and kro's
+error:
+
+```bash
+kubectl get bundle <name> -o jsonpath='{.status.conditions[?(@.type=="RunsCreated")].message}'
+```
+
+Fix what refuses the run. kro retries on its own, and the condition goes away once kro no longer
+reports the run.
+
 ## Debugging commands
 
 ```bash
