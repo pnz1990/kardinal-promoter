@@ -696,6 +696,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		// PromotionStep node — node ID must be a valid CEL identifier.
 		nodes = append(nodes, buildPromotionStepNode(
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
+			heldCond(pipeline, envName),
 		))
 	}
 
@@ -766,6 +767,40 @@ const CondBundleWaitingForSlot = "WaitingForSlot"
 const bundleHeld = `bundle.status.phase != "Superseded" && !(has(bundle.status.conditions) && ` +
 	`bundle.status.conditions.exists(c_, c_.type == "` + CondBundleWaitingForSlot + `" && c_.status == "True"))`
 
+// heldCond is the extra condition spec.bundleName of env's PromotionStep
+// resolves under when the Pipeline holds env (spec.holds, kardinal rollback
+// --hold, #1528): only the hold's Bundle may promote there. "" when env is
+// not held. The hold is read when the Graph is built; adding or releasing a
+// hold changes the Pipeline spec, which rebuilds every active Bundle's Graph
+// in place (bundle reconciler ensurePipelineSpecCurrent), so the condition
+// follows it. A Bundle the condition holds back gets no step in env; the
+// steps that existed already are held by the PromotionStep reconciler.
+func heldCond(pipeline *kardinalv1alpha1.Pipeline, env string) string {
+	if h := heldBundle(pipeline, env); h != "" {
+		return "bundle.metadata.name == " + celString(h)
+	}
+	return ""
+}
+
+// heldBundle is the Bundle the Pipeline holds env on (spec.holds), or "".
+func heldBundle(pipeline *kardinalv1alpha1.Pipeline, env string) string {
+	for _, h := range pipeline.Spec.Holds {
+		if h.Environment == env {
+			return h.Bundle
+		}
+	}
+	return ""
+}
+
+// stepCond is the condition spec.bundleName resolves under: bundleHeld, and
+// held when env is held (heldCond).
+func stepCond(held string) string {
+	if held == "" {
+		return bundleHeld
+	}
+	return bundleHeld + " && " + held
+}
+
 // verifiedCond returns the CEL condition "upstream PromotionStep is Verified".
 func verifiedCond(upstreamID string) string {
 	return fmt.Sprintf(`%s.status.state == "Verified"`, upstreamID)
@@ -791,6 +826,7 @@ func buildPromotionStepNode(
 	gateNames []string,
 	gateReady func(name string) string,
 	prStatusName string,
+	held string,
 ) GraphNode {
 	// Determine step type based on bundle type
 	stepType := defaultStepType(bundle.Spec.Type)
@@ -821,7 +857,7 @@ func buildPromotionStepNode(
 		// is not used because an excluded node is pruned. Failed is not held:
 		// a Failed Bundle can return to Promoting, unless it waits for a
 		// maxConcurrentPromotions slot (bundleHeld, #1349).
-		"bundleName":  resolvableWhen(bundleHeld, "bundle.metadata.name"),
+		"bundleName":  resolvableWhen(stepCond(held), "bundle.metadata.name"),
 		"environment": envName,
 		"stepType":    stepType,
 		// prStatusRef names the environment's PRStatus. The PromotionStep

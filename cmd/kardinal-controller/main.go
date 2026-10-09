@@ -103,9 +103,30 @@ func main() {
 		scmProviderType        string
 		scmAPIURL              string
 		gateStatusHeartbeat    time.Duration
+		workers                = map[string]*int{}
 		graphCompactAbove      int
 		retire                 bundlereconciler.RetirePolicy
 	)
+
+	// Workers per controller: one object is never reconciled twice at once
+	// (the work queue serializes it), so these only let different objects
+	// run side by side. The defaults are measured with the scale suite
+	// (docs/installation.md, Controller concurrency).
+	for _, w := range []struct {
+		name string
+		def  int
+		what string
+	}{
+		{"promotionstep", defaultPromotionStepWorkers, "PromotionSteps (git clone, commit, push, PR, health check)"},
+		{"bundle", defaultBundleWorkers, "Bundles (Graph creation)"},
+		{"prstatus", defaultPRStatusWorkers, "PRStatuses (SCM polls)"},
+		{"policygate", defaultPolicyGateWorkers, "PolicyGates (CEL evaluation)"},
+		{"pipeline", defaultPipelineWorkers, "Pipelines (status, history)"},
+	} {
+		v := new(int)
+		workers[w.name] = v
+		flag.IntVar(v, w.name+"-workers", w.def, "How many "+w.what+" are reconciled at once.")
+	}
 
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
 		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
@@ -367,6 +388,14 @@ func main() {
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
+	// The Go runtime's soft memory limit at 90% of the container limit, so
+	// the GC works harder before the kernel OOMKills the controller (#1553).
+	if limit, why, err := applyGoMemoryLimit(os.Getenv("GOMEMLIMIT"), os.Getenv("KARDINAL_MEMORY_LIMIT")); err != nil {
+		logger.Warn().Err(err).Msg("Go memory limit not set")
+	} else if limit > 0 {
+		logger.Info().Int64("bytes", limit).Str("from", why).Msg("Go soft memory limit set")
+	}
+
 	tracingCfg.ServiceVersion = ControllerVersion
 	tracingCfg.OnError = func(err error) { logger.Warn().Err(err).Msg("OpenTelemetry: span export failed") }
 	shutdownTracing, err := tracing.Setup(context.Background(), tracingCfg)
@@ -523,7 +552,8 @@ func main() {
 		logger.Info().Msg("every --graph-retire-*-after is 0: finished Bundles keep their Graphs unless their Pipeline sets kardinal.io/graph-retire-after")
 	}
 	if err := (&bundlereconciler.Reconciler{
-		Client: mgr.GetClient(),
+		Workers: *workers["bundle"],
+		Client:  mgr.GetClient(),
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
 		APIReader:        mgr.GetAPIReader(),
@@ -563,7 +593,7 @@ func main() {
 	}
 
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
-		CompactAbove: &graphCompactAbove}).
+		CompactAbove: &graphCompactAbove, Workers: *workers["pipeline"]}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}
@@ -577,11 +607,13 @@ func main() {
 	// namespace, the same namespaces the translator takes org gates from.
 	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
 	pgReconciler.StatusHeartbeat = gateStatusHeartbeat
+	pgReconciler.Workers = *workers["policygate"]
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
 
 	if err := (&psreconciler.Reconciler{
+		Workers:             *workers["promotionstep"],
 		Client:              mgr.GetClient(),
 		APIReader:           mgr.GetAPIReader(),
 		SCM:                 scmProvider,
@@ -603,8 +635,9 @@ func main() {
 	}
 
 	if err := (&prstatusrecon.Reconciler{
-		Client: mgr.GetClient(),
-		SCM:    scmProvider,
+		Workers: *workers["prstatus"],
+		Client:  mgr.GetClient(),
+		SCM:     scmProvider,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PRStatusReconciler")
 	}

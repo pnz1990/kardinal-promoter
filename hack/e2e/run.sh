@@ -14,6 +14,10 @@
 #   SHARD         i/n runs every nth of the matching tests, starting at the
 #                 ith (CI splits the core suite across jobs this way)
 #   KIND_CLUSTER  cluster name (default kardinal-e2e-SUITE)
+#   KARDINAL_E2E_TIMEOUT   go test -timeout (default 90m per repetition; the
+#                 scale suite's full and soak profiles need more, e.g. 4h)
+#   KARDINAL_E2E_PARALLEL  go test -parallel (default GOMAXPROCS; the scale
+#                 suite's default is 4, a CI runner's vCPUs)
 #
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
@@ -54,6 +58,13 @@ if [ -n "${SHARD:-}" ]; then
   RUN="^($(IFS='|'; echo "${mine[*]}"))\$"
   echo "shard $SHARD: ${#mine[@]} of ${#tests[@]} tests"
 fi
-# 90 minutes per repetition.
-go test -tags e2e ./test/e2e/live -run "$RUN" -count="$COUNT" -timeout "$((90 * COUNT))m" -json 2>&1 |
+# 90 minutes per repetition unless KARDINAL_E2E_TIMEOUT says.
+PARALLEL=${KARDINAL_E2E_PARALLEL:-}
+[ -n "$PARALLEL" ] || [ "$SUITE" != scale ] || PARALLEL=4
+# report decides: go test also fails the package for an expected failure
+# (scale.KnownBug), which report does not count as one.
+set +o pipefail
+go test -tags e2e ./test/e2e/live -run "$RUN" -count="$COUNT" -timeout "${KARDINAL_E2E_TIMEOUT:-$((90 * COUNT))m}" \
+  ${PARALLEL:+-parallel "$PARALLEL"} -json 2>&1 |
   tee "$E2E_OUT/test.json" | "$E2E_OUT/bin/report" -suite "$SUITE" -out "$E2E_OUT/summary.json"
+exit "${PIPESTATUS[2]}"
