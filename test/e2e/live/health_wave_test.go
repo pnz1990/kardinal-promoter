@@ -25,9 +25,11 @@ import (
 )
 
 // waveEnvs is how many environments TestHealth_ArgoCDWaveOnSharedBranch runs
-// (KARDINAL_E2E_WAVE_ENVS, default 150: the acceptance case of #1575).
+// (KARDINAL_E2E_WAVE_ENVS). The default, 30, keeps the core suite's runner
+// free for its other tests; 150 is the acceptance case of #1575 (about 11
+// minutes on a 32-core host).
 func waveEnvs(t *testing.T) int {
-	n := 150
+	n := 30
 	if v := os.Getenv("KARDINAL_E2E_WAVE_ENVS"); v != "" {
 		var err error
 		n, err = strconv.Atoi(v)

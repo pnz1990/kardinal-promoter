@@ -246,6 +246,8 @@ lists every row's result. `-complete` also fails on rows still todo.
   `test/e2e/results/kardinal-e2e-<suite>/diagnostics/<namespace>/`. The
   namespace is `e2e-<test name>-<hash>`, new on every run.
   `KARDINAL_E2E_KEEP=1` keeps namespaces and repos for debugging.
+  `KARDINAL_E2E_WAVE_ENVS=150` runs `TestHealth_ArgoCDWaveOnSharedBranch` (core) with a wave of
+  150 environments on one branch, the size of the #1575 acceptance case, instead of 30.
 
 ## Test app
 
