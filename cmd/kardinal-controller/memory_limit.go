@@ -21,14 +21,15 @@ const envMemoryLimit = "KARDINAL_MEMORY_LIMIT"
 // cache of git work trees).
 const memoryLimitShare = 0.9
 
-// goMemoryLimit returns the soft memory limit to set from the environment
-// (getenv), and why. It returns 0 when GOMEMLIMIT is set (the runtime
-// already applied it) or there is no usable container limit.
-func goMemoryLimit(getenv func(string) string) (int64, string, error) {
-	if v := getenv("GOMEMLIMIT"); v != "" {
-		return 0, "GOMEMLIMIT=" + v + " is set", nil
+// goMemoryLimit returns the soft memory limit to set from GOMEMLIMIT
+// (gomemlimit) and the container limit in bytes (containerLimit, the value of
+// KARDINAL_MEMORY_LIMIT), and why. It returns 0 when GOMEMLIMIT is set (the
+// runtime already applied it) or there is no usable container limit.
+func goMemoryLimit(gomemlimit, containerLimit string) (int64, string, error) {
+	if gomemlimit != "" {
+		return 0, "GOMEMLIMIT=" + gomemlimit + " is set", nil
 	}
-	raw := strings.TrimSpace(getenv(envMemoryLimit))
+	raw := strings.TrimSpace(containerLimit)
 	if raw == "" {
 		return 0, envMemoryLimit + " is not set", nil
 	}
@@ -41,8 +42,8 @@ func goMemoryLimit(getenv func(string) string) (int64, string, error) {
 
 // applyGoMemoryLimit sets the Go runtime's soft memory limit from the
 // container limit (goMemoryLimit) and returns what it set, 0 for nothing.
-func applyGoMemoryLimit(getenv func(string) string) (int64, string, error) {
-	limit, why, err := goMemoryLimit(getenv)
+func applyGoMemoryLimit(gomemlimit, containerLimit string) (int64, string, error) {
+	limit, why, err := goMemoryLimit(gomemlimit, containerLimit)
 	if err != nil || limit == 0 {
 		return 0, why, err
 	}
