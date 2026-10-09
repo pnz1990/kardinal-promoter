@@ -62,6 +62,16 @@ func (s *gitCommitStep) Execute(ctx context.Context, state *parentsteps.StepStat
 	}
 
 	err := state.GitClient.CommitAll(ctx, state.WorkDir, message, authorName, authorEmail)
+	// The branch already has this promotion's commit: an earlier attempt
+	// pushed it and its result was lost. The change is this promotion's, so
+	// it is not a no-op (deployment metrics count it).
+	if errors.Is(err, scm.ErrAlreadyCommitted) {
+		return parentsteps.StepResult{
+			Status:  parentsteps.StepSuccess,
+			Message: "already committed by an earlier attempt of this promotion",
+			Outputs: map[string]string{outputNoChanges: "false"},
+		}, nil
+	}
 	if errors.Is(err, scm.ErrNothingToCommit) {
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepSuccess,

@@ -247,6 +247,32 @@ func TestGitCommitStep_Success(t *testing.T) {
 	assert.Equal(t, 1, git.commitCalls)
 }
 
+// TestGitCommitStep_NoChangesOutput: a clean tree is a no-op promotion
+// (noChanges=true), except when HEAD is this promotion's own commit from an
+// earlier attempt (ErrAlreadyCommitted), which is a real change.
+func TestGitCommitStep_NoChangesOutput(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"committed", nil, "false"},
+		{"nothing to commit", scm.ErrNothingToCommit, "true"},
+		{"committed by an earlier attempt", scm.ErrAlreadyCommitted, "false"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := makeState(t, &mockGitClient{commitErr: tt.err}, nil)
+			step, err := parentsteps.Lookup("git-commit")
+			require.NoError(t, err)
+			result, err := step.Execute(context.Background(), state)
+			require.NoError(t, err)
+			assert.Equal(t, parentsteps.StepSuccess, result.Status)
+			assert.Equal(t, tt.want, result.Outputs["noChanges"])
+		})
+	}
+}
+
 func TestGitPushStep_Success(t *testing.T) {
 	git := &mockGitClient{}
 	state := makeState(t, git, nil)
