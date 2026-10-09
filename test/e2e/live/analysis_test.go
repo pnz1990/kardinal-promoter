@@ -7,6 +7,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -19,8 +20,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
@@ -519,4 +522,91 @@ func TestGraph_AnalysisFailsClosedWithoutRolloutsCompact(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok, "no environment was promoted")
 	a.fileHas(t, "prod", fixtures.V1, "prod in git")
+}
+
+// TestRollouts_CompactShape150HooksAndAnalysis promotes a Bundle through a
+// compact Pipeline of 150 environments (15 waves of 10, a gate on each),
+// every one with a pre hook, a post hook and an analysis: 300 HookRuns and
+// 150 AnalysisRuns from three collections. Every environment is Verified with
+// the new version in git, every pre hook finished before its step left
+// Pending, every post hook and analysis started after its step entered
+// Verifying, and the Graph stays under the guard and is Ready at the end.
+//
+// It does not run in parallel (a 150-overlay repo, see TestGraph_CompactShape300).
+//
+// Covers HOOK-COMPACT-02.
+func TestRollouts_CompactShape150HooksAndAnalysis(t *testing.T) {
+	e := framework.New(t)
+	ctx := context.Background()
+	const waves, perWave = 15, 10
+	a, p := wavePipeline(t, e, waves, perWave, func(string) string { return "true" })
+	ns, envs := a.ns, a.envs
+	createAnalysisTemplate(t, e, ns, "check", []string{"environment"}, jobMetric("env", `test -n "{{args.environment}}"`))
+	for i := range p.Spec.Environments {
+		p.Spec.Environments[i].Hooks = []v1alpha1.HookSpec{
+			{Name: "migrate", Phase: "pre", Job: hookJob(t, `echo migrate`, "")},
+			{Name: "smoke", Phase: "post", Job: hookJob(t, `echo smoke`, "")},
+		}
+		p.Spec.Environments[i].Verification = &v1alpha1.VerificationSpec{
+			AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "check"}}}
+	}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+
+	e.WaitStepState(t, ns, pipelineName, bundle, envs[perWave], "Verified", 15*time.Minute)
+	g := bundleGraph(t, e, ns, bundle)
+	assert.Equal(t, "compact", g.GetLabels()["kardinal.io/graph-shape"])
+	ids := graphNodeIDs(g)
+	for _, id := range append(append([]string(nil), compactNodeIDs...), graph.NodeHookRuns, graph.NodeAnalysisRuns, graph.NodeRunState) {
+		assert.Contains(t, ids, id)
+	}
+	assert.Less(t, len(ids), 30, "no node per environment")
+
+	e.WaitBundlePhase(t, ns, bundle, "Verified", 60*time.Minute)
+	var steps v1alpha1.PromotionStepList
+	require.NoError(t, e.Client.List(ctx, &steps, client.InNamespace(ns), client.MatchingLabels{"kardinal.io/bundle": bundle}))
+	require.Len(t, steps.Items, len(envs))
+	byEnv := map[string]v1alpha1.PromotionStep{}
+	for _, s := range steps.Items {
+		assert.Equal(t, "Verified", s.Status.State, s.Name)
+		byEnv[s.Spec.Environment] = s
+	}
+	var hrs v1alpha1.HookRunList
+	require.NoError(t, e.Client.List(ctx, &hrs, client.InNamespace(ns), client.MatchingLabels{"kardinal.io/bundle": bundle}))
+	require.Len(t, hrs.Items, 2*len(envs))
+	for _, hr := range hrs.Items {
+		assert.Equal(t, v1alpha1.HookRunSucceeded, hr.Status.Phase, hr.Name)
+		assert.Equal(t, graph.NodeHookRuns, hr.Labels["kro.run/node-id"], hr.Name)
+		ps := byEnv[hr.Spec.Environment]
+		require.NotNil(t, ps.Status.VerificationStartedAt, ps.Name)
+		if hr.Spec.Phase == "post" && hr.Status.StartedAt != nil {
+			assert.False(t, hr.Status.StartedAt.Before(ps.Status.VerificationStartedAt), "%s started after Verifying", hr.Name)
+		}
+		if hr.Spec.Phase == "pre" {
+			require.NotNil(t, hr.Status.FinishedAt, hr.Name)
+			assert.True(t, hr.Status.FinishedAt.Before(ps.Status.VerificationStartedAt), "%s finished before the step verified", hr.Name)
+		}
+	}
+	list, err := e.Dynamic.Resource(analysisRunGVR).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: "kardinal.io/bundle=" + bundle})
+	require.NoError(t, err)
+	require.Len(t, list.Items, len(envs))
+	for _, r := range list.Items {
+		phase, _, _ := unstructured.NestedString(r.Object, "status", "phase")
+		assert.Equal(t, "Successful", phase, r.GetName())
+		ps := byEnv[r.GetLabels()["kardinal.io/environment"]]
+		require.NotNil(t, ps.Status.VerificationStartedAt, r.GetName())
+		assert.False(t, r.GetCreationTimestamp().Time.Before(ps.Status.VerificationStartedAt.Truncate(time.Second)),
+			"%s created after Verifying", r.GetName())
+	}
+	assert.Contains(t, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path(envs[len(envs)-1])+"/kustomization.yaml"),
+		"newTag: "+fixtures.V2, "the last environment has the new version in git")
+	g = bundleGraph(t, e, ns, bundle)
+	raw, err := json.Marshal(g.Object)
+	require.NoError(t, err)
+	t.Logf("Graph %s: %d nodes, %d bytes (spec and status)", g.GetName(), len(graphNodeIDs(g)), len(raw))
+	assert.Less(t, len(raw), graph.MaxGraphBytes, "the applied Graph stays under the guard")
+	framework.Eventually(t, 2*time.Minute, "the Graph to be Ready", func(ctx context.Context) (bool, string) {
+		st, reason, msg := graphCondition(bundleGraph(t, e, ns, bundle), "Ready")
+		return st == "True", st + " " + reason + ": " + msg
+	})
 }
