@@ -81,6 +81,12 @@ func Bundle(repository, digest string) (bundleJSON, publicPEM []byte, err error)
 
 // Bundle is the package-level Bundle signed with k.
 func (k *Key) Bundle(repository, digest string) ([]byte, error) {
+	return k.BundleWithPredicate(repository, digest, "https://sigstore.dev/cosign/sign/v1")
+}
+
+// BundleWithPredicate is Bundle with another in-toto predicate type (an
+// attestation, which is not an image signature).
+func (k *Key) BundleWithPredicate(repository, digest, predicateType string) ([]byte, error) {
 	hexPart, ok := strings.CutPrefix(digest, "sha256:")
 	if !ok {
 		return nil, fmt.Errorf("digest %q is not sha256", digest)
@@ -88,7 +94,7 @@ func (k *Key) Bundle(repository, digest string) ([]byte, error) {
 	statement, err := json.Marshal(map[string]interface{}{
 		"_type":         "https://in-toto.io/Statement/v1",
 		"subject":       []interface{}{map[string]interface{}{"name": repository, "digest": map[string]string{"sha256": hexPart}}},
-		"predicateType": "https://sigstore.dev/cosign/sign/v1",
+		"predicateType": predicateType,
 		"predicate":     map[string]interface{}{},
 	})
 	if err != nil {

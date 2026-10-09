@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // Pre- and post-deploy hooks (docs/hooks.md). The step reads hook results
@@ -109,10 +110,24 @@ func (r *Reconciler) holdForImageVerification(ctx context.Context, log zerolog.L
 	if ps.Spec.Live != nil && ps.Spec.Live.ImageVerification != nil {
 		live = *ps.Spec.Live.ImageVerification
 	}
-	switch live.Phase {
-	case v1alpha1.ImageVerificationVerified:
+	switch {
+	case live.Name != "" && live.Name != ps.Spec.ImageVerification:
+		// The mirror still shows the previous ImageVerification (a policy
+		// change renamed it): wait for the new one's result.
+		live = v1alpha1.LiveImageVerification{Message: fmt.Sprintf("the result shown is for %s", live.Name)}
+	case live.Phase == v1alpha1.ImageVerificationVerified:
+		bundle, err := r.loadBundle(ctx, ps)
+		if err != nil {
+			return true, ctrl.Result{}, err
+		}
+		if why := verifiedImagesDiffer(bundle, live.Images); why != "" {
+			log.Warn().Str("imageVerification", ps.Spec.ImageVerification).Str("reason", why).Msg("the Bundle's images are not the verified ones")
+			return true, ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, fmt.Sprintf(
+				"refusing to promote: %s (image verification %s)", why, ps.Spec.ImageVerification))
+		}
 		return false, ctrl.Result{}, nil
-	case v1alpha1.ImageVerificationFailed:
+	}
+	if live.Phase == v1alpha1.ImageVerificationFailed {
 		log.Info().Str("imageVerification", ps.Spec.ImageVerification).Msg("image verification failed — step failed before promoting")
 		msg := fmt.Sprintf("image verification %s failed", ps.Spec.ImageVerification)
 		if live.Message != "" {
@@ -200,4 +215,37 @@ func recordSkippedHooks(ps *v1alpha1.PromotionStep, now time.Time) bool {
 		ObservedGeneration: ps.Generation, LastTransitionTime: metav1.NewTime(now),
 	})
 	return true
+}
+
+// verifiedImagesDiffer returns why bundle's images are not the ones an
+// ImageVerification verified (verified: "repository@digest", repositories
+// normalized), or "": every verified image is in the Bundle with that
+// digest, and no Bundle image of a verified repository has another digest.
+// A repository that does not parse fails closed.
+func verifiedImagesDiffer(bundle *v1alpha1.Bundle, verified []string) string {
+	want := map[string]string{}
+	for _, v := range verified {
+		repo, digest, ok := strings.Cut(v, "@")
+		if !ok {
+			return fmt.Sprintf("verified image %q has no digest", v)
+		}
+		want[repo] = digest
+	}
+	have := map[string]string{}
+	for _, img := range bundle.Spec.Images {
+		repo, err := graph.NormalizeRepository(img.Repository)
+		if err != nil {
+			return err.Error()
+		}
+		if d, ok := want[repo]; ok && img.Digest != d {
+			return fmt.Sprintf("the Bundle's image %s has digest %q, not the verified %s", repo, img.Digest, d)
+		}
+		have[repo] = img.Digest
+	}
+	for repo, d := range want {
+		if have[repo] != d {
+			return fmt.Sprintf("the verified image %s@%s is not in the Bundle", repo, d)
+		}
+	}
+	return ""
 }

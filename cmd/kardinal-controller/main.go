@@ -32,6 +32,7 @@ import (
 	"github.com/rs/zerolog"
 	sigroot "github.com/sigstore/sigstore-go/pkg/root"
 	sigtuf "github.com/sigstore/sigstore-go/pkg/tuf"
+	tuffetcher "github.com/theupdateframework/go-tuf/v2/metadata/fetcher"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,6 +48,7 @@ import (
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
@@ -483,13 +485,24 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up HookRunReconciler")
 	}
 
+	ivSCMHost, ivHostErr := scm.WebHost(scmProviderType, scmAPIURL)
+	if ivHostErr != nil {
+		logger.Warn().Err(ivHostErr).Msg("no SCM host: image policies with commits.requireSigned will fail")
+	}
 	if err := (&ivrecon.Reconciler{
 		Client:   mgr.GetClient(),
 		Registry: &ivrecon.OCIRegistry{},
 		SCM:      scmProvider,
+		SCMHost:  ivSCMHost,
 		PublicGoodRoot: ivrecon.PublicGoodRoot(func() (sigroot.TrustedMaterial, error) {
 			// In memory: the controller's root file system is read-only.
-			return sigroot.FetchTrustedRootWithOptions(sigtuf.DefaultOptions().WithDisableLocalCache())
+			// Every TUF request is time-bounded and egress-guarded.
+			opts := sigtuf.DefaultOptions().WithDisableLocalCache()
+			opts.Fetcher = tuffetcher.NewDefaultFetcher().NewFetcherWithHTTPClient(&http.Client{
+				Timeout:   ivrecon.PublicGoodFetchTimeout,
+				Transport: egress.NewTransport(http.ProxyFromEnvironment),
+			})
+			return sigroot.FetchTrustedRootWithOptions(opts)
 		}),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up ImageVerificationReconciler")

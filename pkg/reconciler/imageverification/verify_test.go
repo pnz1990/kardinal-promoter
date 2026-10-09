@@ -4,22 +4,28 @@
 package imageverification
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"testing"
 
+	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/sign"
 	"github.com/sigstore/sigstore-go/pkg/testing/ca"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification/signtest"
 )
 
 // testImage is a fake image: its "manifest" bytes and their digest.
@@ -35,11 +41,24 @@ func newTestImage(t *testing.T, seed string) testImage {
 	return testImage{manifest: m, digest: "sha256:" + hex.EncodeToString(sum[:])}
 }
 
-// keyBundle signs img's manifest (its digest) with a new key into a
-// Sigstore bundle with no transparency log entry, as `cosign sign --key
-// --tlog-upload=false --new-bundle-format` does. It returns the bundle JSON
-// and the key's PEM.
+// keyBundle signs img's digest with a new key into a Sigstore bundle (a
+// DSSE in-toto statement with the cosign signature predicate) with no
+// transparency log entry, as `cosign sign --key --tlog-upload=false
+// --new-bundle-format` does. It returns the bundle JSON and the key's PEM.
 func keyBundle(t *testing.T, img testImage) ([]byte, []byte) {
+	t.Helper()
+	k, err := signtest.NewKey()
+	require.NoError(t, err)
+	b, err := k.Bundle("r.example/app", img.digest)
+	require.NoError(t, err)
+	pemKey, err := k.PublicPEM()
+	require.NoError(t, err)
+	return b, pemKey
+}
+
+// messageBundle signs img's manifest bytes as a plain message signature
+// (sign-blob style), which is not a cosign image signature.
+func messageBundle(t *testing.T, img testImage) ([]byte, []byte) {
 	t.Helper()
 	kp, err := sign.NewEphemeralKeypair(nil)
 	require.NoError(t, err)
@@ -84,6 +103,15 @@ func TestVerifyImage_Key(t *testing.T) {
 	bun, pemKey := keyBundle(t, img)
 	_, otherKey := keyBundle(t, img)
 	leg, legKey := legacySig(t, img.digest)
+	// QA #1521: a bundle must be a cosign image signature, not any statement
+	// or signature over the digest.
+	ak, err := signtest.NewKey()
+	require.NoError(t, err)
+	attest, err := ak.BundleWithPredicate("r.example/app", img.digest, "https://slsa.dev/provenance/v1")
+	require.NoError(t, err)
+	attestKey, err := ak.PublicPEM()
+	require.NoError(t, err)
+	msg, msgKey := messageBundle(t, img)
 
 	cases := []struct {
 		name        string
@@ -110,6 +138,10 @@ func TestVerifyImage_Key(t *testing.T) {
 			[]authority{keyAuthority(t, "legacy", legKey)}, false, "", "not " + other.digest},
 		{"garbage bundle", img.digest, Signatures{Bundles: [][]byte{[]byte("{")}},
 			[]authority{keyAuthority(t, "release", pemKey)}, false, "", "bundle 1"},
+		{"attestation with another predicate, right key", img.digest, Signatures{Bundles: [][]byte{attest}},
+			[]authority{keyAuthority(t, "release", attestKey)}, false, "", "not a cosign image signature (predicate type \"https://slsa.dev/provenance/v1\""},
+		{"message signature over the manifest, right key", img.digest, Signatures{Bundles: [][]byte{msg}},
+			[]authority{keyAuthority(t, "release", msgKey)}, false, "", "not a cosign image signature (a message signature"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -152,7 +184,7 @@ func TestVerifyEntity_Keyless(t *testing.T) {
 	img := newTestImage(t, "keyless")
 	const subject = "https://github.com/org/app/.github/workflows/release.yml@refs/heads/main"
 	const issuer = "https://token.actions.githubusercontent.com"
-	entity, err := vs.Sign(subject, issuer, img.manifest)
+	entity, err := vs.Attest(subject, issuer, cosignStatement(t, img.digest))
 	require.NoError(t, err)
 	digest, err := digestBytes(img.digest)
 	require.NoError(t, err)
@@ -189,6 +221,65 @@ func TestVerifyEntity_Keyless(t *testing.T) {
 	require.NoError(t, err)
 	_, err = authority{name: "ci", trusted: vs, identity: &id}.verifyEntity(entity, od)
 	require.Error(t, err)
+}
+
+// cosignStatement is the in-toto statement cosign signs for an image.
+func cosignStatement(t *testing.T, digest string) []byte {
+	t.Helper()
+	b, err := json.Marshal(map[string]interface{}{
+		"_type":         "https://in-toto.io/Statement/v1",
+		"subject":       []interface{}{map[string]interface{}{"name": "r.example/app", "digest": map[string]string{"sha256": digest[len("sha256:"):]}}},
+		"predicateType": CosignSignPredicate,
+		"predicate":     map[string]interface{}{},
+	})
+	require.NoError(t, err)
+	return b
+}
+
+// TestVerifyEntity_KeylessNotCosign: a keyless message signature over the
+// manifest, by the right identity, is not an image signature (QA #1521).
+func TestVerifyEntity_KeylessNotCosign(t *testing.T) {
+	vs, err := ca.NewVirtualSigstore()
+	require.NoError(t, err)
+	img := newTestImage(t, "keyless-msg")
+	const subject, issuer = "https://github.com/org/app/.github/workflows/release.yml@refs/heads/main", "https://token.actions.githubusercontent.com"
+	entity, err := vs.Sign(subject, issuer, img.manifest)
+	require.NoError(t, err)
+	digest, err := digestBytes(img.digest)
+	require.NoError(t, err)
+	id, err := verify.NewShortCertificateIdentity(issuer, "", subject, "")
+	require.NoError(t, err)
+	_, err = authority{name: "ci", trusted: vs, identity: &id}.verifyEntity(entity, digest)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a cosign image signature")
+}
+
+// TestAuthorities_SubjectRegExpAnchored: subjectRegExp must match the whole
+// certificate subject (QA #1521: sigstore-go matches anywhere, so an
+// unanchored expression accepted a subject that only contains it).
+func TestAuthorities_SubjectRegExpAnchored(t *testing.T) {
+	vs, err := ca.NewVirtualSigstore()
+	require.NoError(t, err)
+	img := newTestImage(t, "anchored")
+	const issuer = "https://token.actions.githubusercontent.com"
+	digest, err := digestBytes(img.digest)
+	require.NoError(t, err)
+	r := &Reconciler{PublicGoodRoot: func(context.Context) (root.TrustedMaterial, error) { return vs, nil }}
+	v := &v1alpha1.ImageVerification{Spec: v1alpha1.ImageVerificationSpec{Policy: v1alpha1.ImageVerificationPolicy{
+		Authorities: []v1alpha1.SignatureAuthority{{Name: "ci", Keyless: &v1alpha1.KeylessAuthority{
+			Issuer: issuer, SubjectRegExp: `https://github\.com/org/app/.*`}}}}}}
+	as, err := r.authorities(context.Background(), v)
+	require.NoError(t, err)
+	require.Len(t, as, 1)
+	for subject, ok := range map[string]bool{
+		"https://github.com/org/app/.github/workflows/release.yml@refs/heads/main":                      true,
+		"https://evil.example/https://github.com/org/app/.github/workflows/release.yml@refs/heads/main": false,
+	} {
+		entity, err := vs.Attest(subject, issuer, cosignStatement(t, img.digest))
+		require.NoError(t, err)
+		_, err = as[0].verifyEntity(entity, digest)
+		assert.Equal(t, ok, err == nil, "%s: %v", subject, err)
+	}
 }
 
 // TestVerifyLegacy_KeylessRefused: a legacy keyless .sig is reported as

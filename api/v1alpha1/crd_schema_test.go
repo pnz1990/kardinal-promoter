@@ -486,6 +486,18 @@ func TestCRDImageVerificationPhaseLatched(t *testing.T) {
 	}
 }
 
+// TestCRDImageVerificationSpecImmutable: an ImageVerification's spec cannot
+// change; a policy change gives a new one (QA #1521: an edited spec would
+// keep the old verdict).
+func TestCRDImageVerificationSpecImmutable(t *testing.T) {
+	spec := loadCRDs(t)["ImageVerification"].structural.Properties["spec"]
+	var rules []string
+	for _, r := range spec.XValidations {
+		rules = append(rules, r.Rule)
+	}
+	assert.Contains(t, rules, "self == oldSelf")
+}
+
 // ── C08-api-config-24, -28: printer columns, enums, short names ──────────────
 
 // listFilter matches a JSONPath list filter such as [?(@.type=="Ready")],

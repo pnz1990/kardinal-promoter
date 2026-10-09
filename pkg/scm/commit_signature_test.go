@@ -33,18 +33,27 @@ func TestVerifyCommit(t *testing.T) {
 			routes: map[string]struct {
 				code int
 				body string
-			}{"/repos/org/config/commits/abc": {200, `{"commit":{"author":{"email":"a@x"},"verification":{"verified":true,"reason":"valid"}},"committer":{"login":"alice"}}`}},
+			}{"/repos/org/config/commits/abc": {200, `{"sha":"abc","commit":{"committer":{"email":"a@x"},"verification":{"verified":true,"reason":"valid"}},"committer":{"login":"alice"}}`}},
 			provider: func(u string) scm.CommitVerifier { return scm.NewGitHubProvider("t", u, "") },
-			repo:     "org/config", want: scm.CommitSignature{Verified: true, Signer: "alice", Reason: "valid"},
+			repo:     "org/config", want: scm.CommitSignature{Verified: true, Signer: "alice", Reason: "valid", SHA: "abc", Identities: []string{"alice", "a@x"}},
+		},
+		{
+			name: "github web-flow (a commit GitHub signed)",
+			routes: map[string]struct {
+				code int
+				body string
+			}{"/repos/org/config/commits/abc": {200, `{"sha":"abc","commit":{"committer":{"email":"noreply@github.com"},"verification":{"verified":true,"reason":"valid"}},"committer":{"login":"web-flow"}}`}},
+			provider: func(u string) scm.CommitVerifier { return scm.NewGitHubProvider("t", u, "") },
+			repo:     "org/config", want: scm.CommitSignature{Verified: true, Signer: "web-flow", Reason: "valid", SHA: "abc", Identities: []string{scm.PlatformSignerGitHub}},
 		},
 		{
 			name: "github unsigned",
 			routes: map[string]struct {
 				code int
 				body string
-			}{"/repos/org/config/commits/abc": {200, `{"commit":{"author":{"email":"a@x"},"verification":{"verified":false,"reason":"unsigned"}}}`}},
+			}{"/repos/org/config/commits/abc": {200, `{"sha":"abc","commit":{"committer":{"email":"a@x"},"verification":{"verified":false,"reason":"unsigned"}}}`}},
 			provider: func(u string) scm.CommitVerifier { return scm.NewGitHubProvider("t", u, "") },
-			repo:     "org/config", want: scm.CommitSignature{Signer: "a@x", Reason: "unsigned"},
+			repo:     "org/config", want: scm.CommitSignature{Signer: "a@x", Reason: "unsigned", SHA: "abc", Identities: []string{"a@x"}},
 		},
 		{
 			name: "github missing commit",
@@ -60,9 +69,9 @@ func TestVerifyCommit(t *testing.T) {
 			routes: map[string]struct {
 				code int
 				body string
-			}{"/api/v1/repos/org/config/git/commits/abc": {200, `{"commit":{"verification":{"verified":true,"reason":"","signer":{"username":"bob","email":"b@x"}}}}`}},
+			}{"/api/v1/repos/org/config/git/commits/abc": {200, `{"sha":"abc","commit":{"verification":{"verified":true,"reason":"","signer":{"username":"bob","email":"b@x"}}}}`}},
 			provider: func(u string) scm.CommitVerifier { return scm.NewForgejoProvider("t", u, "") },
-			repo:     "org/config", want: scm.CommitSignature{Verified: true, Signer: "bob"},
+			repo:     "org/config", want: scm.CommitSignature{Verified: true, Signer: "bob", SHA: "abc", Identities: []string{"bob", "b@x"}},
 		},
 		{
 			name: "gitlab verified",
@@ -71,10 +80,22 @@ func TestVerifyCommit(t *testing.T) {
 				body string
 			}{
 				"/api/v4/projects/grp%2Fconfig/repository/commits/abc":           {200, `{"id":"abc"}`},
-				"/api/v4/projects/grp%2Fconfig/repository/commits/abc/signature": {200, `{"signature_type":"PGP","verification_status":"verified","gpg_key_user_email":"c@x"}`},
+				"/api/v4/projects/grp%2Fconfig/repository/commits/abc/signature": {200, `{"signature_type":"PGP","verification_status":"verified","gpg_key_user_email":"c@x","gpg_key_primary_keyid":"ABCD1234"}`},
 			},
 			provider: func(u string) scm.CommitVerifier { return scm.NewGitLabProvider("t", u, "") },
-			repo:     "grp/config", want: scm.CommitSignature{Verified: true, Signer: "c@x", Reason: "verified"},
+			repo:     "grp/config", want: scm.CommitSignature{Verified: true, Signer: "c@x", Reason: "verified", SHA: "abc", Identities: []string{"c@x", "ABCD1234"}},
+		},
+		{
+			name: "gitlab verified_system (a commit GitLab signed)",
+			routes: map[string]struct {
+				code int
+				body string
+			}{
+				"/api/v4/projects/grp%2Fconfig/repository/commits/abc":           {200, `{"id":"abc"}`},
+				"/api/v4/projects/grp%2Fconfig/repository/commits/abc/signature": {200, `{"signature_type":"SSH","verification_status":"verified_system"}`},
+			},
+			provider: func(u string) scm.CommitVerifier { return scm.NewGitLabProvider("t", u, "") },
+			repo:     "grp/config", want: scm.CommitSignature{Verified: true, Signer: "gitlab-system", Reason: "verified_system", SHA: "abc", Identities: []string{scm.PlatformSignerGitLab}},
 		},
 		{
 			name: "gitlab unsigned (404 on signature)",
@@ -86,7 +107,7 @@ func TestVerifyCommit(t *testing.T) {
 				"/api/v4/projects/grp%2Fconfig/repository/commits/abc/signature": {404, `{"message":"404 GPG Signature Not Found"}`},
 			},
 			provider: func(u string) scm.CommitVerifier { return scm.NewGitLabProvider("t", u, "") },
-			repo:     "grp/config", want: scm.CommitSignature{Reason: "unsigned"},
+			repo:     "grp/config", want: scm.CommitSignature{Reason: "unsigned", SHA: "abc"},
 		},
 		{
 			name: "gitlab missing commit",

@@ -130,8 +130,20 @@ type KeylessAuthority struct {
 // CommitSignaturePolicy requires signed commits.
 type CommitSignaturePolicy struct {
 	// RequireSigned requires the config Bundle's commit to be signed with a
-	// signature the SCM provider verified.
+	// signature the SCM provider verified. configRef.commitSHA must then be
+	// a full 40- or 64-character SHA, and configRef.gitRepo must be on the
+	// controller's SCM host.
 	RequireSigned bool `json:"requireSigned"`
+
+	// AllowedSigners, when set, also requires the signer to be one of these:
+	// an SCM login, an email address, or a key ID or fingerprint, as the SCM
+	// reports them. Commits the SCM platform signed itself (GitHub web-flow
+	// for web UI edits and merges, GitLab verified_system) match only the
+	// entries "web-flow" (GitHub) and "gitlab-system" (GitLab). Empty means
+	// any signature the SCM verified, platform signatures included.
+	// +kubebuilder:validation:MaxItems=50
+	// +optional
+	AllowedSigners []string `json:"allowedSigners,omitempty"`
 }
 
 // LocalObjectName names an object in the same namespace.
@@ -170,7 +182,10 @@ type VerifiedCommit struct {
 
 // ImageVerificationSpec is what one Bundle must prove before its first
 // environments are promoted. The Bundle's Graph creates it from the
-// Pipeline's spec.imageVerification and the Bundle's images.
+// Pipeline's spec.imageVerification and the Bundle's images. It is
+// immutable: a policy change gives a new ImageVerification (its name carries
+// a hash of the spec), so a verdict is never reused for another policy.
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="an ImageVerification's spec is immutable"
 type ImageVerificationSpec struct {
 	// PipelineName is the Pipeline.
 	// +kubebuilder:validation:MinLength=1
@@ -229,6 +244,12 @@ type ImageVerificationStatus struct {
 	// Message summarizes the phase.
 	// +optional
 	Message string `json:"message,omitempty"`
+	// Reason is a machine-readable reason for a Failed or waiting
+	// verification: SecretNotReferenceable, SecretNotFound,
+	// InvalidPublicKey, InvalidTrustedRoot, InvalidRegistryCredentials,
+	// SignatureNotVerified, CommitNotVerified, Timeout.
+	// +optional
+	Reason string `json:"reason,omitempty"`
 	// Images has one result per spec.images entry.
 	// +optional
 	Images []ImageVerificationResult `json:"images,omitempty"`

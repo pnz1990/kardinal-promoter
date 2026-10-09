@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -58,16 +60,26 @@ type RegistryClient interface {
 // OCIRegistry is the RegistryClient for OCI registries.
 type OCIRegistry struct {
 	// Transport is the base HTTP transport; nil means the egress-guarded
-	// default (no loopback, link-local or cloud metadata addresses).
+	// default (no loopback, link-local or cloud metadata addresses), with a
+	// response header timeout.
 	Transport http.RoundTripper
+
+	once sync.Once
 }
 
+// responseHeaderTimeout bounds the wait for a registry's response headers;
+// the caller's context bounds the whole fetch.
+const responseHeaderTimeout = 20 * time.Second
+
 func (r *OCIRegistry) transport(insecure []string) http.RoundTripper {
-	base := r.Transport
-	if base == nil {
-		base = egress.NewTransport(http.ProxyFromEnvironment)
-	}
-	return httpsOnly{base: base, insecure: insecure}
+	r.once.Do(func() {
+		if r.Transport == nil {
+			t := egress.NewTransport(http.ProxyFromEnvironment)
+			t.ResponseHeaderTimeout = responseHeaderTimeout
+			r.Transport = t
+		}
+	})
+	return httpsOnly{base: r.Transport, insecure: insecure}
 }
 
 // httpsOnly refuses plain-HTTP requests to hosts not listed as insecure.

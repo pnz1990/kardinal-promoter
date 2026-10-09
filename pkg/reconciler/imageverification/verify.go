@@ -8,6 +8,7 @@ import (
 	"crypto"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -76,7 +77,17 @@ type verdict struct {
 	// reasons say why each signature did not verify (empty when there was
 	// no signature).
 	reasons []string
+	// wrongDigest is set when a cosign signature verified with a policy key
+	// names another image digest: a signature that is ours and wrong, which
+	// fails at once instead of waiting for another one.
+	wrongDigest bool
 }
+
+// CosignSignPredicate is the in-toto predicate type of a cosign image
+// signature in a Sigstore bundle. A bundle with another predicate (an SBOM
+// or provenance attestation) or a plain message signature is not an image
+// signature, whoever signed it.
+const CosignSignPredicate = "https://sigstore.dev/cosign/sign/v1"
 
 // verifyImage checks sigs of the image with digest against the authorities:
 // the image is verified when one signature verifies against one authority.
@@ -107,6 +118,10 @@ func verifyImage(digest string, sigs Signatures, authorities []authority) verdic
 			if err == nil {
 				return verdict{verified: true, authority: a.name, signer: a.name}
 			}
+			var wd *wrongDigestError
+			if errors.As(err, &wd) {
+				v.wrongDigest = true
+			}
 			v.reasons = append(v.reasons, fmt.Sprintf("signature %d, authority %s: %v", i+1, a.name, err))
 		}
 	}
@@ -134,7 +149,11 @@ func (a authority) verifyEntity(b verify.SignedEntity, digest []byte) (string, e
 		if err != nil {
 			return "", fmt.Errorf("verifier: %w", err)
 		}
-		if _, err := v.Verify(b, verify.NewPolicy(artifact, verify.WithKey())); err != nil {
+		res, err := v.Verify(b, verify.NewPolicy(artifact, verify.WithKey()))
+		if err != nil {
+			return "", err
+		}
+		if err := cosignSignature(res); err != nil {
 			return "", err
 		}
 		return a.name, nil
@@ -147,10 +166,33 @@ func (a authority) verifyEntity(b verify.SignedEntity, digest []byte) (string, e
 	if err != nil {
 		return "", err
 	}
+	if err := cosignSignature(res); err != nil {
+		return "", err
+	}
 	if res.Signature != nil && res.Signature.Certificate != nil {
 		return res.Signature.Certificate.SubjectAlternativeName, nil
 	}
 	return a.name, nil
+}
+
+// cosignSignature checks that a verified bundle is a cosign image
+// signature: a DSSE in-toto statement with CosignSignPredicate.
+func cosignSignature(res *verify.VerificationResult) error {
+	if res == nil || res.Statement == nil {
+		return fmt.Errorf("not a cosign image signature (a message signature, not an in-toto statement)")
+	}
+	if res.Statement.PredicateType != CosignSignPredicate {
+		return fmt.Errorf("not a cosign image signature (predicate type %q, want %s)", res.Statement.PredicateType, CosignSignPredicate)
+	}
+	return nil
+}
+
+// wrongDigestError is a cosign signature, verified with a policy key, for
+// another image.
+type wrongDigestError struct{ got, want string }
+
+func (e *wrongDigestError) Error() string {
+	return fmt.Sprintf("the signature is for %s, not %s", e.got, e.want)
 }
 
 // simpleSigning is the payload cosign signs for an image.
@@ -181,7 +223,7 @@ func (a authority) verifyLegacy(s LegacySignature, digest string) error {
 		return fmt.Errorf("payload: %w", err)
 	}
 	if got := p.Critical.Image.DockerManifestDigest; got != digest {
-		return fmt.Errorf("the signature is for %s, not %s", got, digest)
+		return &wrongDigestError{got: got, want: digest}
 	}
 	return nil
 }

@@ -22,6 +22,32 @@ type CommitSignature struct {
 	// Reason is the provider's reason when Verified is false ("unsigned",
 	// "unknown_key", ...).
 	Reason string
+	// SHA is the commit the provider answered for; the caller checks it is
+	// the one it asked about.
+	SHA string
+	// Identities are what an allowed-signers list matches: the signer's
+	// login, email and key ID or fingerprint, as the provider reports them.
+	// A commit the platform signed itself has only PlatformSignerGitHub or
+	// PlatformSignerGitLab.
+	Identities []string
+}
+
+// Identities of commits an SCM platform signed with its own key: GitHub
+// signs web UI edits and merges as web-flow, GitLab reports verified_system
+// for commits it signed (web UI, API).
+const (
+	PlatformSignerGitHub = "web-flow"
+	PlatformSignerGitLab = "gitlab-system"
+)
+
+func nonEmpty(v ...string) []string {
+	var out []string
+	for _, s := range v {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // CommitVerifier is implemented by the providers that report commit
@@ -43,10 +69,11 @@ var ErrCommitVerificationUnsupported = errors.New("the SCM provider does not rep
 // (commit.verification).
 func (g *GitHubProvider) VerifyCommit(ctx context.Context, repo, sha string) (CommitSignature, error) {
 	var result struct {
+		SHA    string `json:"sha"`
 		Commit struct {
-			Author struct {
+			Committer struct {
 				Email string `json:"email"`
-			} `json:"author"`
+			} `json:"committer"`
 			Verification struct {
 				Verified bool   `json:"verified"`
 				Reason   string `json:"reason"`
@@ -59,12 +86,21 @@ func (g *GitHubProvider) VerifyCommit(ctx context.Context, repo, sha string) (Co
 	if err := g.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/commits/%s", repo, url.PathEscape(sha)), nil, &result); err != nil {
 		return CommitSignature{}, fmt.Errorf("get commit %s@%s: %w", repo, sha, err)
 	}
-	signer := result.Commit.Author.Email
-	if result.Committer != nil && result.Committer.Login != "" {
-		signer = result.Committer.Login
+	// GitHub verifies a signature against the committer's keys, so the
+	// signer is the committer.
+	login := ""
+	if result.Committer != nil {
+		login = result.Committer.Login
 	}
-	return CommitSignature{Verified: result.Commit.Verification.Verified, Signer: signer,
-		Reason: result.Commit.Verification.Reason}, nil
+	sig := CommitSignature{Verified: result.Commit.Verification.Verified, Reason: result.Commit.Verification.Reason,
+		SHA: result.SHA, Signer: login, Identities: nonEmpty(login, result.Commit.Committer.Email)}
+	if sig.Signer == "" {
+		sig.Signer = result.Commit.Committer.Email
+	}
+	if login == PlatformSignerGitHub {
+		sig.Identities = []string{PlatformSignerGitHub}
+	}
+	return sig, nil
 }
 
 // VerifyCommit implements CommitVerifier with
@@ -75,6 +111,7 @@ func (f *ForgejoProvider) VerifyCommit(ctx context.Context, repo, sha string) (C
 		return CommitSignature{}, err
 	}
 	var result struct {
+		SHA    string `json:"sha"`
 		Commit struct {
 			Verification struct {
 				Verified bool   `json:"verified"`
@@ -92,12 +129,13 @@ func (f *ForgejoProvider) VerifyCommit(ctx context.Context, repo, sha string) (C
 		return CommitSignature{}, fmt.Errorf("get commit %s@%s: %w", repo, sha, err)
 	}
 	v := result.Commit.Verification
-	sig := CommitSignature{Verified: v.Verified, Reason: v.Reason}
+	sig := CommitSignature{Verified: v.Verified, Reason: v.Reason, SHA: result.SHA}
 	if v.Signer != nil {
 		sig.Signer = v.Signer.Username
 		if sig.Signer == "" {
 			sig.Signer = v.Signer.Email
 		}
+		sig.Identities = nonEmpty(v.Signer.Username, v.Signer.Email)
 	}
 	return sig, nil
 }
@@ -108,19 +146,25 @@ func (f *ForgejoProvider) VerifyCommit(ctx context.Context, repo, sha string) (C
 // commit that does not exist is still an error.
 func (g *GitLabProvider) VerifyCommit(ctx context.Context, repo, sha string) (CommitSignature, error) {
 	project := encodeProjectID(repo)
+	var commit struct {
+		ID string `json:"id"`
+	}
 	if err := g.do(ctx, http.MethodGet,
-		fmt.Sprintf("/api/v4/projects/%s/repository/commits/%s", project, url.PathEscape(sha)), nil, nil); err != nil {
+		fmt.Sprintf("/api/v4/projects/%s/repository/commits/%s", project, url.PathEscape(sha)), nil, &commit); err != nil {
 		return CommitSignature{}, fmt.Errorf("get commit %s@%s: %w", repo, sha, err)
 	}
 	var result struct {
 		SignatureType      string `json:"signature_type"`
 		VerificationStatus string `json:"verification_status"`
 		GPGKeyUserEmail    string `json:"gpg_key_user_email"`
+		GPGKeyPrimaryKeyID string `json:"gpg_key_primary_keyid"`
 		Key                *struct {
-			Title string `json:"title"`
+			Title       string `json:"title"`
+			Fingerprint string `json:"fingerprint_sha256"`
 		} `json:"key"`
 		X509Certificate *struct {
-			Email string `json:"email"`
+			Email                string `json:"email"`
+			SubjectKeyIdentifier string `json:"subject_key_identifier"`
 		} `json:"x509_certificate"`
 		CommitSource string `json:"commit_source"`
 	}
@@ -128,19 +172,27 @@ func (g *GitLabProvider) VerifyCommit(ctx context.Context, repo, sha string) (Co
 		fmt.Sprintf("/api/v4/projects/%s/repository/commits/%s/signature", project, url.PathEscape(sha)), nil, &result)
 	var apiErr *APIError
 	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
-		return CommitSignature{Reason: "unsigned"}, nil
+		return CommitSignature{Reason: "unsigned", SHA: commit.ID}, nil
 	}
 	if err != nil {
 		return CommitSignature{}, fmt.Errorf("get commit signature %s@%s: %w", repo, sha, err)
 	}
-	sig := CommitSignature{Verified: result.VerificationStatus == "verified", Reason: result.VerificationStatus}
+	// verified_system: GitLab signed the commit itself (web UI, API).
+	system := result.VerificationStatus == "verified_system"
+	sig := CommitSignature{Verified: result.VerificationStatus == "verified" || system,
+		Reason: result.VerificationStatus, SHA: commit.ID}
 	switch {
+	case system:
+		sig.Signer, sig.Identities = PlatformSignerGitLab, []string{PlatformSignerGitLab}
 	case result.GPGKeyUserEmail != "":
 		sig.Signer = result.GPGKeyUserEmail
+		sig.Identities = nonEmpty(result.GPGKeyUserEmail, result.GPGKeyPrimaryKeyID)
 	case result.X509Certificate != nil:
 		sig.Signer = result.X509Certificate.Email
+		sig.Identities = nonEmpty(result.X509Certificate.Email, result.X509Certificate.SubjectKeyIdentifier)
 	case result.Key != nil:
 		sig.Signer = result.Key.Title
+		sig.Identities = nonEmpty(result.Key.Title, result.Key.Fingerprint)
 	}
 	return sig, nil
 }

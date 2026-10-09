@@ -164,7 +164,7 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `spec` | object |  | ImageVerificationSpec is what one Bundle must prove before its first environments are promoted. The Bundle's Graph creates it from the Pipeline's spec.imageVerification and the Bundle's images. |
+| `spec` | object |  | ImageVerificationSpec is what one Bundle must prove before its first environments are promoted. The Bundle's Graph creates it from the Pipeline's spec.imageVerification and the Bundle's images. It is immutable: a policy change gives a new ImageVerification (its name carries a hash of the spec), so a verdict is never reused for another policy. |
 | `spec.bundleName` | string | yes | BundleName is the Bundle. |
 | `spec.commit` | object |  | Commit is the config commit to verify, when commits.requireSigned. |
 | `spec.commit.repo` | string | yes | Repo is the git repository URL. |
@@ -189,7 +189,8 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `spec.policy.authorities[].keyless.trustedRootRef.name` | string | yes | Name is the object name. |
 | `spec.policy.authorities[].name` | string | yes | Name identifies the authority in results. |
 | `spec.policy.commits` | object |  | Commits, when requireSigned is true, requires the commit of a config or mixed Bundle (spec.configRef.commitSHA) to be signed, as the SCM provider reports it (GitHub, GitLab, Forgejo, Gitea). |
-| `spec.policy.commits.requireSigned` | boolean | yes | RequireSigned requires the config Bundle's commit to be signed with a signature the SCM provider verified. |
+| `spec.policy.commits.allowedSigners` | []string |  | AllowedSigners, when set, also requires the signer to be one of these: an SCM login, an email address, or a key ID or fingerprint, as the SCM reports them. Commits the SCM platform signed itself (GitHub web-flow for web UI edits and merges, GitLab verified_system) match only the entries "web-flow" (GitHub) and "gitlab-system" (GitLab). Empty means any signature the SCM verified, platform signatures included. |
+| `spec.policy.commits.requireSigned` | boolean | yes | RequireSigned requires the config Bundle's commit to be signed with a signature the SCM provider verified. configRef.commitSHA must then be a full 40- or 64-character SHA, and configRef.gitRepo must be on the controller's SCM host. |
 | `spec.policy.images` | []string |  | Images selects the Bundle images to verify by repository, with "*" matching any characters ("ghcr.io/myorg/*"). Empty means every image. Every selected image must be pinned by digest in the Bundle. |
 | `spec.policy.insecureRegistries` | []string |  | InsecureRegistries are registry hosts ("registry.local:5000") read over plain HTTP. Every other registry is read over HTTPS. |
 | `spec.policy.registrySecretRef` | object |  | RegistrySecretRef names a kubernetes.io/dockerconfigjson Secret in the Pipeline namespace with credentials for the registries holding the images and their signatures. Without it registries are read anonymously. |
@@ -212,6 +213,7 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `status.lastCheckedAt` | string (date-time) |  | LastCheckedAt is when the registry or SCM was last asked. |
 | `status.message` | string |  | Message summarizes the phase. |
 | `status.phase` | string |  | Phase is Pending, Verified or Failed. Verified and Failed are terminal: a verified signature is not checked again (revocation after the verification is not seen). One of: `Pending`, `Verified`, `Failed`. |
+| `status.reason` | string |  | Reason is a machine-readable reason for a Failed or waiting verification: SecretNotReferenceable, SecretNotFound, InvalidPublicKey, InvalidTrustedRoot, InvalidRegistryCredentials, SignatureNotVerified, CommitNotVerified, Timeout. |
 | `status.startedAt` | string (date-time) |  | StartedAt is when the verification started. |
 
 ## MetricCheck
@@ -396,7 +398,8 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.imageVerification.authorities[].keyless.trustedRootRef.name` | string | yes | Name is the object name. |
 | `spec.imageVerification.authorities[].name` | string | yes | Name identifies the authority in results. |
 | `spec.imageVerification.commits` | object |  | Commits, when requireSigned is true, requires the commit of a config or mixed Bundle (spec.configRef.commitSHA) to be signed, as the SCM provider reports it (GitHub, GitLab, Forgejo, Gitea). |
-| `spec.imageVerification.commits.requireSigned` | boolean | yes | RequireSigned requires the config Bundle's commit to be signed with a signature the SCM provider verified. |
+| `spec.imageVerification.commits.allowedSigners` | []string |  | AllowedSigners, when set, also requires the signer to be one of these: an SCM login, an email address, or a key ID or fingerprint, as the SCM reports them. Commits the SCM platform signed itself (GitHub web-flow for web UI edits and merges, GitLab verified_system) match only the entries "web-flow" (GitHub) and "gitlab-system" (GitLab). Empty means any signature the SCM verified, platform signatures included. |
+| `spec.imageVerification.commits.requireSigned` | boolean | yes | RequireSigned requires the config Bundle's commit to be signed with a signature the SCM provider verified. configRef.commitSHA must then be a full 40- or 64-character SHA, and configRef.gitRepo must be on the controller's SCM host. |
 | `spec.imageVerification.images` | []string |  | Images selects the Bundle images to verify by repository, with "*" matching any characters ("ghcr.io/myorg/*"). Empty means every image. Every selected image must be pinned by digest in the Bundle. |
 | `spec.imageVerification.insecureRegistries` | []string |  | InsecureRegistries are registry hosts ("registry.local:5000") read over plain HTTP. Every other registry is read over HTTPS. |
 | `spec.imageVerification.registrySecretRef` | object |  | RegistrySecretRef names a kubernetes.io/dockerconfigjson Secret in the Pipeline namespace with credentials for the registries holding the images and their signatures. Without it registries are read anonymously. |
@@ -497,7 +500,9 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.live.hooks[].phase` | string |  | Phase is the hook phase: pre or post. |
 | `spec.live.hooks[].result` | string |  | Result is the HookRun's status.phase (Pending when it has none yet). |
 | `spec.live.imageVerification` | object |  | ImageVerification is the Bundle's ImageVerification result. |
+| `spec.live.imageVerification.images` | []string |  | Images are the images it verifies, "repository@digest" (repository normalized). The step refuses to promote a Bundle whose images differ. |
 | `spec.live.imageVerification.message` | string |  | Message is its status.message. |
+| `spec.live.imageVerification.name` | string |  | Name is the ImageVerification's name. |
 | `spec.live.imageVerification.phase` | string |  | Phase is its status.phase (Pending when it has none yet). |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this step belongs to. |
 | `spec.postHooks` | []string |  | PostHooks names the HookRuns of the environment's post-deploy hooks, in order. A step with post hooks goes from HealthChecking to Verifying, and is Verified only when every one of them Succeeded in spec.live.hooks; a Failed one applies onHealthFailure. |

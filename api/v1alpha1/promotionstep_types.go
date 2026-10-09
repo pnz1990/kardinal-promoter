@@ -120,6 +120,13 @@ type PromotionStepLive struct {
 
 // LiveImageVerification is the result of the Bundle's ImageVerification.
 type LiveImageVerification struct {
+	// Name is the ImageVerification's name.
+	// +optional
+	Name string `json:"name,omitempty"`
+	// Images are the images it verifies, "repository@digest" (repository
+	// normalized). The step refuses to promote a Bundle whose images differ.
+	// +optional
+	Images []string `json:"images,omitempty"`
 	// Phase is its status.phase (Pending when it has none yet).
 	// +optional
 	Phase string `json:"phase,omitempty"`

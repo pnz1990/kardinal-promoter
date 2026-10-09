@@ -168,8 +168,18 @@ spec:
                     description: ImageVerification is the Bundle's ImageVerification
                       result.
                     properties:
+                      images:
+                        description: |-
+                          Images are the images it verifies, "repository@digest" (repository
+                          normalized). The step refuses to promote a Bundle whose images differ.
+                        items:
+                          type: string
+                        type: array
                       message:
                         description: Message is its status.message.
+                        type: string
+                      name:
+                        description: Name is the ImageVerification's name.
                         type: string
                       phase:
                         description: Phase is its status.phase (Pending when it has

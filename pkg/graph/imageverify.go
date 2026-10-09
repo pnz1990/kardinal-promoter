@@ -4,10 +4,14 @@
 package graph
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/google/go-containerregistry/pkg/name"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -34,24 +38,80 @@ const imageVerifyNodeID = "imageVerify"
 // digestPattern is a sha256 image digest.
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
+// fullCommitSHA is a full SHA-1 or SHA-256 git commit id.
+var fullCommitSHA = regexp.MustCompile(`^([a-f0-9]{40}|[a-f0-9]{64})$`)
+
 // ImageVerificationName returns the ImageVerification name of a Bundle:
-// "<pipeline>-<bundle>-verify", hash-suffixed when it would lose
-// characters or exceed 253 characters.
-func ImageVerificationName(pipeline, bundle string) string {
-	preferred := pipeline + "-" + slugify(bundle) + "-verify"
+// "<pipeline>-<bundle>-verify-<hash>", where hash is a hash of the
+// ImageVerification spec, cut to 253 characters. A policy change gives a new
+// name, so kro creates a new ImageVerification (the spec is immutable) and
+// the steps that have not consumed the old verdict wait for the new one.
+func ImageVerificationName(pipeline, bundle, specHash string) string {
+	preferred := pipeline + "-" + slugify(bundle) + "-verify-" + specHash
 	return boundedName(preferred, isSlug(pipeline) && isSlug(bundle),
-		nameKey("imageverification", pipeline, bundle), maxObjectNameLen)
+		nameKey("imageverification", pipeline, bundle, specHash), maxObjectNameLen)
 }
 
-// imageSelected reports whether repository matches one of the policy's
-// image patterns ("*" matches any characters, "/" included); no pattern
-// selects every image.
+// NormalizeRepository returns the canonical form of an image repository, so
+// that names of one repository compare equal: the registry host lowercased,
+// without :443, docker.io for Docker Hub (index.docker.io,
+// registry-1.docker.io, or no host at all), and library/ for an official
+// Docker Hub image ("nginx" is docker.io/library/nginx). A reference that
+// does not parse is an error: image verification fails closed on it.
+func NormalizeRepository(repository string) (string, error) {
+	r := strings.TrimPrefix(strings.TrimPrefix(repository, "https://"), "http://")
+	if i := strings.IndexByte(r, '/'); i > 0 && looksLikeHost(r[:i]) {
+		r = strings.ToLower(r[:i]) + r[i:]
+	}
+	repo, err := name.NewRepository(r)
+	if err != nil {
+		return "", fmt.Errorf("image repository %q is not a valid reference: %w", repository, err)
+	}
+	return canonicalHost(repo.RegistryStr()) + "/" + repo.RepositoryStr(), nil
+}
+
+// looksLikeHost reports whether the first path segment of a reference is a
+// registry host (as docker reads it): it has a dot or a port, or is
+// localhost.
+func looksLikeHost(seg string) bool {
+	return strings.ContainsAny(seg, ".:") || strings.EqualFold(seg, "localhost")
+}
+
+func canonicalHost(host string) string {
+	host = strings.TrimSuffix(strings.ToLower(host), ":443")
+	switch host {
+	case name.DefaultRegistry, "registry-1.docker.io", "docker.io":
+		return "docker.io"
+	}
+	return host
+}
+
+// normalizePattern is NormalizeRepository for an image pattern, whose "*"
+// a reference parser refuses.
+func normalizePattern(p string) string {
+	p = strings.TrimPrefix(strings.TrimPrefix(p, "https://"), "http://")
+	if p == "*" {
+		return p
+	}
+	host, rest, ok := strings.Cut(p, "/")
+	if !ok || !looksLikeHost(host) {
+		host, rest = "docker.io", p
+		if !strings.Contains(rest, "/") && !strings.Contains(rest, "*") {
+			rest = "library/" + rest
+		}
+	}
+	return canonicalHost(host) + "/" + rest
+}
+
+// imageSelected reports whether repository (normalized) matches one of the
+// policy's image patterns ("*" matches any characters, "/" included); no
+// pattern selects every image.
 func imageSelected(patterns []string, repository string) bool {
 	if len(patterns) == 0 {
 		return true
 	}
 	for _, p := range patterns {
-		re := "^" + strings.ReplaceAll(regexp.QuoteMeta(p), `\*`, ".*") + "$"
+		re := "^" + strings.ReplaceAll(regexp.QuoteMeta(normalizePattern(p)), `\*`, ".*") + "$"
 		if ok, _ := regexp.MatchString(re, repository); ok {
 			return true
 		}
@@ -74,7 +134,10 @@ func imageVerificationSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinal
 	spec.Policy.Images = nil
 	if len(policy.Authorities) > 0 {
 		for _, img := range bundle.Spec.Images {
-			repo := strings.TrimPrefix(strings.TrimPrefix(img.Repository, "https://"), "http://")
+			repo, err := NormalizeRepository(img.Repository)
+			if err != nil {
+				return nil, fmt.Errorf("build: spec.imageVerification: %w", err)
+			}
 			if !imageSelected(policy.Images, repo) {
 				continue
 			}
@@ -91,8 +154,9 @@ func imageVerificationSpec(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinal
 	}
 	if policy.Commits != nil && policy.Commits.RequireSigned && bundle.Spec.ConfigRef != nil {
 		c := bundle.Spec.ConfigRef
-		if c.CommitSHA == "" {
-			return nil, fmt.Errorf("build: spec.imageVerification.commits.requireSigned: the config Bundle has no configRef.commitSHA")
+		if !fullCommitSHA.MatchString(c.CommitSHA) {
+			return nil, fmt.Errorf("build: spec.imageVerification.commits.requireSigned: configRef.commitSHA %q is not a full "+
+				"40- or 64-character commit SHA; a signed commit is checked by its full SHA", c.CommitSHA)
 		}
 		repo := c.GitRepo
 		if repo == "" {
@@ -121,14 +185,15 @@ func buildImageVerificationNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kar
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, "", fmt.Errorf("build: spec.imageVerification: %w", err)
 	}
-	name := ImageVerificationName(pipeline.Name, bundle.Name)
+	sum := sha256.Sum256(raw)
+	ivName := ImageVerificationName(pipeline.Name, bundle.Name, hex.EncodeToString(sum[:])[:8])
 	return &GraphNode{
 		ID: imageVerifyNodeID,
 		Template: map[string]interface{}{
 			"apiVersion": "kardinal.io/v1alpha1",
 			"kind":       "ImageVerification",
 			"metadata": map[string]interface{}{
-				"name": name,
+				"name": ivName,
 				"labels": map[string]interface{}{
 					"kardinal.io/pipeline": pipeline.Name,
 					"kardinal.io/bundle":   bundle.Name,
@@ -138,7 +203,7 @@ func buildImageVerificationNode(pipeline *kardinalv1alpha1.Pipeline, bundle *kar
 		},
 		ReadyWhen: []string{fmt.Sprintf(`${%s.?status.?phase.orValue("") == %q}`,
 			imageVerifyNodeID, kardinalv1alpha1.ImageVerificationVerified)},
-	}, name, nil
+	}, ivName, nil
 }
 
 // imageVerifiedCond is the condition "the Bundle's images are verified"; it
@@ -147,10 +212,15 @@ func imageVerifiedCond() string {
 	return fmt.Sprintf(`%s.?status.?phase.orValue("") == %q`, imageVerifyNodeID, kardinalv1alpha1.ImageVerificationVerified)
 }
 
-// imageVerificationLive is the mirror's spec.live.imageVerification.
+// imageVerificationLive is the mirror's spec.live.imageVerification: the
+// ImageVerification's name, phase and message, and the images it verifies
+// ("repository@digest"), which the step compares with the Bundle's before
+// it promotes.
 func imageVerificationLive() map[string]interface{} {
 	return map[string]interface{}{
+		"name":    fmt.Sprintf(`${%s.metadata.name}`, imageVerifyNodeID),
 		"phase":   fmt.Sprintf(`${%s.?status.?phase.orValue("Pending")}`, imageVerifyNodeID),
 		"message": fmt.Sprintf(`${%s.?status.?message.orValue("")}`, imageVerifyNodeID),
+		"images":  fmt.Sprintf(`${%s.spec.?images.orValue([]).map(i, i.repository + "@" + i.digest)}`, imageVerifyNodeID),
 	}
 }

@@ -1249,6 +1249,26 @@ func TestHealth_ArgoStrategyPatchesApplication(t *testing.T) {
 	e.WaitBundlePhase(t, ns, bundle, "Verified", time.Minute)
 }
 
+// TestHealth_ArgoStrategyWritesDigest: a Bundle image pinned by digest is
+// written to the Application as "<tag>@<digest>", so Argo CD deploys the
+// digest the Bundle pins (and image verification checked), not whatever the
+// tag points to (regression, QA #1521). Covers ARGOSTRAT-DIGEST-01.
+func TestHealth_ArgoStrategyWritesDigest(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ns, repo, app := argoStrategyApp(t, e, map[string]interface{}{
+		"app": map[string]interface{}{"image": map[string]interface{}{"tag": fixtures.V1}}})
+	e.GrantArgoPatch(t, ns, app)
+	require.NoError(t, e.Client.Create(context.Background(), argoStrategyPipeline(ns, repo, argoStrategyEnv("test", app, argoImageKey))))
+
+	pinned := fixtures.V2 + "@" + fixtures.V2Digest
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", fixtures.Image+":"+pinned)
+	ps := e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, pinned, ps.Status.Outputs["imageTag"])
+	assert.Equal(t, pinned, valuesKey(t, e, app, argoImageKey))
+	e.WaitDeploymentImage(t, ns, fixtures.Workload("test"), fixtures.Image+":"+pinned, syncTimeout)
+}
+
 // valuesObject is the Application's spec.source.helm.valuesObject, nil when
 // unset.
 func valuesObject(t *testing.T, e *framework.Env, app string) map[string]interface{} {

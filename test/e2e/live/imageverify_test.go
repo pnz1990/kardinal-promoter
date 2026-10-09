@@ -19,10 +19,9 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification/signtest"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
@@ -61,8 +60,9 @@ func (s signatures) pushLegacy(t *testing.T, digest string, payload, sig []byte)
 func keyPolicy(t *testing.T, e *framework.Env, ns string, s signatures, pem []byte, timeout string) *v1alpha1.ImageVerificationPolicy {
 	t.Helper()
 	require.NoError(t, e.Client.Create(context.Background(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "cosign", Namespace: ns},
-		Data:       map[string][]byte{"cosign.pub": pem},
+		ObjectMeta: metav1.ObjectMeta{Name: "cosign", Namespace: ns,
+			Labels: map[string]string{"kardinal.io/referenceable": "true"}},
+		Data: map[string][]byte{"cosign.pub": pem},
 	}))
 	return &v1alpha1.ImageVerificationPolicy{
 		Authorities: []v1alpha1.SignatureAuthority{{Name: "release",
@@ -73,11 +73,23 @@ func keyPolicy(t *testing.T, e *framework.Env, ns string, s signatures, pem []by
 	}
 }
 
-// imageVerification reads a Bundle's ImageVerification.
+// imageVerification reads a Bundle's ImageVerification (its name carries a
+// hash of its spec), the one its root step waits for.
 func imageVerification(ctx context.Context, e *framework.Env, ns, bundle string) (*v1alpha1.ImageVerification, error) {
-	var iv v1alpha1.ImageVerification
-	err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: graph.ImageVerificationName(pipelineName, bundle)}, &iv)
-	return &iv, err
+	var list v1alpha1.ImageVerificationList
+	if err := e.Client.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{"kardinal.io/bundle": bundle}); err != nil {
+		return nil, err
+	}
+	if len(list.Items) == 0 {
+		return nil, fmt.Errorf("no ImageVerification for %s yet", bundle)
+	}
+	newest := list.Items[0]
+	for _, iv := range list.Items[1:] {
+		if newest.CreationTimestamp.Before(&iv.CreationTimestamp) {
+			newest = iv
+		}
+	}
+	return &newest, nil
 }
 
 func waitImageVerification(t *testing.T, e *framework.Env, ns, bundle, phase string) *v1alpha1.ImageVerification {
@@ -188,8 +200,9 @@ func TestStep_ImageVerificationBlocksUnsigned(t *testing.T) {
 	a.running(t, "test", fixtures.Image+":"+fixtures.V1, "test after the failure")
 }
 
-// TestStep_ImageVerificationWrongKeyFails: a signature by another key fails
-// at once, without waiting for the timeout.
+// TestStep_ImageVerificationWrongKeyFails: a signature by another key is
+// present but not ours: the verification waits for one that verifies until
+// the timeout, then fails with reason SignatureNotVerified.
 //
 // Covers IMGV-WRONGKEY-01.
 func TestStep_ImageVerificationWrongKeyFails(t *testing.T) {
@@ -203,11 +216,13 @@ func TestStep_ImageVerificationWrongKeyFails(t *testing.T) {
 	_, otherPEM, err := signtest.Bundle(fixtures.Image, fixtures.V2Digest)
 	require.NoError(t, err)
 	p := a.pipeline(nil)
-	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, otherPEM, "10m")
+	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, otherPEM, "40s")
 	a.apply(t, p)
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
 	iv := waitImageVerification(t, e, a.ns, bundle, "Failed")
-	assert.Contains(t, iv.Status.Message, "no signature verifies against the policy's authorities")
+	assert.Equal(t, "SignatureNotVerified", iv.Status.Reason)
+	assert.Contains(t, iv.Status.Message, "not verified within the 40s timeout")
+	assert.Contains(t, iv.Status.Message, "no signature verifies against the policy's authorities yet")
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", time.Minute)
 	a.fileHas(t, "test", fixtures.V1, "test in git")
 }
@@ -256,4 +271,139 @@ func TestStep_ImageVerificationUnsignedCommit(t *testing.T) {
 	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", time.Minute)
 	assert.Contains(t, ps.Status.Message, "image verification")
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
+}
+
+// TestStep_ImageVerificationAttestationIsNotASignature: an attestation
+// (another in-toto predicate) signed with the policy's key, attached first,
+// is present but not an image signature: the verification waits; the
+// cosign signature pushed later verifies it (regression, QA #1521).
+//
+// Covers IMGV-PREDICATE-01.
+func TestStep_ImageVerificationAttestationIsNotASignature(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	s := newSignatures(t, a.ns)
+	key, err := signtest.NewKey()
+	require.NoError(t, err)
+	attestation, err := key.BundleWithPredicate(fixtures.Image, fixtures.V2Digest, "https://slsa.dev/provenance/v1")
+	require.NoError(t, err)
+	s.pushBundle(t, fixtures.V2Digest, attestation)
+	pem, err := key.PublicPEM()
+	require.NoError(t, err)
+	p := a.pipeline(nil)
+	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, pem, "")
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
+
+	framework.Eventually(t, 2*time.Minute, "the attestation is no verdict", func(ctx context.Context) (bool, string) {
+		iv, err := imageVerification(ctx, e, a.ns, bundle)
+		if err != nil {
+			return false, err.Error()
+		}
+		return iv.Status.Phase == "Pending" && strings.Contains(iv.Status.Message, "not a cosign image signature"),
+			fmt.Sprintf("phase=%q message=%q", iv.Status.Phase, iv.Status.Message)
+	})
+	signature, err := key.Bundle(fixtures.Image, fixtures.V2Digest)
+	require.NoError(t, err)
+	s.pushBundle(t, fixtures.V2Digest, signature)
+	waitImageVerification(t, e, a.ns, bundle, "Verified")
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+}
+
+// TestStep_ImageVerificationSecretNotReferenceable: a key Secret without
+// kardinal.io/referenceable: "true" is not read: the verification waits
+// with reason SecretNotReferenceable, and labelling the Secret lets it
+// verify (regression, QA #1521).
+//
+// Covers IMGV-REFERENCEABLE-01.
+func TestStep_ImageVerificationSecretNotReferenceable(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	s := newSignatures(t, a.ns)
+	bundleJSON, pem, err := signtest.Bundle(fixtures.Image, fixtures.V2Digest)
+	require.NoError(t, err)
+	s.pushBundle(t, fixtures.V2Digest, bundleJSON)
+	p := a.pipeline(nil)
+	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, pem, "")
+	var secret corev1.Secret
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: "cosign"}, &secret))
+	secret.Labels = nil
+	require.NoError(t, e.Client.Update(ctx, &secret))
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
+
+	framework.Eventually(t, 2*time.Minute, "SecretNotReferenceable", func(ctx context.Context) (bool, string) {
+		iv, err := imageVerification(ctx, e, a.ns, bundle)
+		if err != nil {
+			return false, err.Error()
+		}
+		return iv.Status.Phase == "Pending" && iv.Status.Reason == "SecretNotReferenceable",
+			fmt.Sprintf("phase=%q reason=%q message=%q", iv.Status.Phase, iv.Status.Reason, iv.Status.Message)
+	})
+	a.fileHas(t, "test", fixtures.V1, "test in git while the key is not referenceable")
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: "cosign"}, &secret))
+	secret.Labels = map[string]string{"kardinal.io/referenceable": "true"}
+	require.NoError(t, e.Client.Update(ctx, &secret))
+	waitImageVerification(t, e, a.ns, bundle, "Verified")
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+}
+
+// TestStep_ImageVerificationPolicyChangeReverifies: a policy change while a
+// root step still waits gives a new ImageVerification, and the step waits
+// for that one (regression, QA #1521: the old verdict was reused).
+//
+// Covers IMGV-POLICYCHANGE-01.
+func TestStep_ImageVerificationPolicyChangeReverifies(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	s := newSignatures(t, a.ns)
+	_, pem, err := signtest.Bundle(fixtures.Image, fixtures.V2Digest)
+	require.NoError(t, err)
+	p := a.pipeline(nil)
+	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, pem, "")
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
+	first := waitImageVerificationPending(t, e, a.ns, bundle)
+
+	// Rotate to a new key (a new Secret) that did sign.
+	key, err := signtest.NewKey()
+	require.NoError(t, err)
+	signature, err := key.Bundle(fixtures.Image, fixtures.V2Digest)
+	require.NoError(t, err)
+	s.pushBundle(t, fixtures.V2Digest, signature)
+	newPEM, err := key.PublicPEM()
+	require.NoError(t, err)
+	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cosign-2026", Namespace: a.ns, Labels: map[string]string{"kardinal.io/referenceable": "true"}},
+		Data:       map[string][]byte{"cosign.pub": newPEM}}))
+	var live v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: pipelineName}, &live))
+	live.Spec.ImageVerification.Authorities[0].Key.SecretRef.Name = "cosign-2026"
+	require.NoError(t, e.Client.Update(ctx, &live))
+
+	iv := waitImageVerification(t, e, a.ns, bundle, "Verified")
+	assert.NotEqual(t, first, iv.Name, "a new ImageVerification for the new policy")
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, iv.Name, ps.Spec.ImageVerification)
+}
+
+// waitImageVerificationPending returns the name of a Bundle's
+// ImageVerification once it is Pending.
+func waitImageVerificationPending(t *testing.T, e *framework.Env, ns, bundle string) string {
+	t.Helper()
+	var name string
+	framework.Eventually(t, 2*time.Minute, "a Pending ImageVerification", func(ctx context.Context) (bool, string) {
+		iv, err := imageVerification(ctx, e, ns, bundle)
+		if err != nil {
+			return false, err.Error()
+		}
+		name = iv.Name
+		return iv.Status.Phase == "Pending", "phase " + iv.Status.Phase
+	})
+	return name
 }
