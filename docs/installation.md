@@ -538,14 +538,19 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 Each controller reconciles several objects at once. A PromotionStep holds its worker through
 every git and SCM round trip, so one worker made the steps of every Pipeline in the cluster wait
 for each other: one slow repository or git host slowed every promotion. The defaults below
-were measured with the scale suite (200 Pipelines x 3 automatic environments, one Bundle each,
-started together; controller built with `-race`, 4 CPU, 2 replicas):
+were measured with the scale suite's `full` profile (`TestScale_LoadPipelines`: 200 Pipelines
+x 3 automatic environments, one Bundle each, started together; `TestScale_LoadBurst`: 1,000
+Bundles over 100 Pipelines; controller built with `-race`, 4 CPU, 2 replicas):
 
-| Workers | Step created to Verified p50 / p99 | Bundle end to end p50 / p99 | All settled | Peak work queue |
+| Controller | 200 Pipelines: step p50 / p99 | Bundle end to end p50 / p99 | All settled | 1,000 Bundles: Bundle end to end p50 / p99 |
 |---|---|---|---|---|
-| 1 each (before) | 53 s / 65 s | 225 s / 281 s | 281 s | bundle 200, pipeline 198, promotionstep 138 |
-| defaults | 1 s / 2 s | 57 s / 177 s | 184 s | bundle 197, pipeline 82 |
-| defaults, 16 for Bundles | 1 s / 2 s | 66 s / 182 s | 201 s | bundle 185 |
+| 1 worker each (before) | 65 s / 81 s | 245 s / 319 s | 324 s | 201 s / 221 s |
+| the worker defaults | 1 s / 3 s | 110 s / 314 s | 325 s | 90 s / 153 s |
+| the defaults, and Graph translations of one namespace no longer list its Graphs under one lock for the whole controller | 3 s / 6 s | 52 s / 82 s | 87 s | 16 s / 26 s |
+
+With the defaults the `full` profile meets the latency objective of `TestScale_LatencySLO`
+(test/e2e/README.md, Latency SLO): automatic steps p50 2 s and p99 5 s, Bundles p99 92 s,
+against 10 s, 30 s and 2 minutes.
 
 With 1.5 s of latency on every git round trip and 2 Bundles a second over 40 Pipelines for 10
 minutes, one worker brought 180 steps to `Verified` (step p99 67 s, PromotionStep queue 84);
@@ -558,12 +563,15 @@ detector, which inflates it), so the workers add no memory of note.
 | `controller.workers.promotionStep` | `--promotionstep-workers` | `16` | git clone, commit, push, PR and health checks: almost all waiting on the network |
 | `controller.workers.prStatus` | `--prstatus-workers` | `8` | one SCM call per poll |
 | `controller.workers.policyGate` | `--policygate-workers` | `8` | CEL evaluation and a status write; the compiled programs are shared |
-| `controller.workers.bundle` | `--bundle-workers` | `4` | Graph creation; more workers did not help, kro processes the Graphs (see the last row above) |
+| `controller.workers.bundle` | `--bundle-workers` | `4` | Graph creation; the Graph identity of one namespace is bound under that namespace's lock, so Bundles of different namespaces translate in parallel |
 | `controller.workers.pipeline` | `--pipeline-workers` | `4` | status and history |
 
 One object is never reconciled by two workers at once: the work queue serializes it. Bundles
-of one Pipeline with `maxConcurrentPromotions` count the free slots under a per-Pipeline lock,
-so more workers never promote past the cap. Raise `promotionStep` for many Pipelines on slow
+of one Pipeline with `maxConcurrentPromotions` count the free slots under a per-Pipeline lock
+(as does a Failed Bundle that recovers into a slot), so more workers never promote past the
+cap. Environments that promote in parallel to one branch (waves, a fan-in) push at the same
+time and rebase onto each other's commits (git-push retries a moved branch), so a wave of 50
+regions on one branch takes about a minute even when each step is fast. Raise `promotionStep` for many Pipelines on slow
 git hosts. Each step that runs at once holds one shallow clone of its repository in the
 controller's memory and its working directory on disk.
 

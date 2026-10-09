@@ -13,7 +13,7 @@ import (
 )
 
 // TestStepStateChanged (#1509): only the PromotionStep updates the Pipeline
-// status depends on requeue the Pipeline.
+// status depends on requeue the Pipeline. Covers PERF-REQUEUE-01.
 func TestStepStateChanged(t *testing.T) {
 	step := func(state, msg, noChanges string, retry int) *kardinalv1alpha1.PromotionStep {
 		s := &kardinalv1alpha1.PromotionStep{}

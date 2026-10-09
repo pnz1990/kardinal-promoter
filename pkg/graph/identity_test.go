@@ -544,7 +544,7 @@ func TestIdentityProvisioner_NilSafe(t *testing.T) {
 
 // TestIdentityProvisioner_MayNeedPrune (#1509): a translation lists the
 // namespace's Graphs to prune only when the recorded reader namespaces
-// include one its Graph does not read.
+// include one its Graph does not read. Covers PERF-IDENTITY-01.
 func TestIdentityProvisioner_MayNeedPrune(t *testing.T) {
 	ctx := context.Background()
 	c := fake.NewClientBuilder().WithScheme(identityScheme(t)).Build()
@@ -559,7 +559,7 @@ func TestIdentityProvisioner_MayNeedPrune(t *testing.T) {
 }
 
 // TestIdentityProvisioner_LockNamespace: one namespace's callers take
-// turns; another namespace's are not held.
+// turns; another namespace's are not held. Covers PERF-IDENTITY-01.
 func TestIdentityProvisioner_LockNamespace(t *testing.T) {
 	p := &graph.IdentityProvisioner{}
 	unlock := p.LockNamespace("a")
