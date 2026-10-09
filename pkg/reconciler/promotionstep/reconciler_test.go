@@ -31,11 +31,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
@@ -1780,4 +1782,49 @@ func TestReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 			objectgonetest.AssertQuiet(t, res, err, &logs)
 		})
 	}
+}
+
+// TestReconciler_TransitionConflictRequeues (#1606): a transition whose status
+// patch finds the step changed since it was read is not dropped. The
+// reconcile ends with a requeue and no error, and the next reconcile writes
+// the transition from the stored step. The change that caused the conflict
+// may be one the predicates drop (kro relabelling the step), so no watch
+// event would reconcile the step again.
+func TestReconciler_TransitionConflictRequeues(t *testing.T) {
+	promoting := asPromoting(makeStep("step-prod", "my-app", "bundle-1", "test"), makePipeline("my-app"))
+	conflicts := 1
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithObjects(promoting, makeBundle("bundle-1", "my-app"), makePipeline("my-app")).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PolicyGate{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
+				patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if _, ok := obj.(*v1alpha1.PromotionStep); ok && conflicts > 0 {
+					conflicts--
+					return apierrors.NewConflict(schema.GroupResource{Group: "kardinal.io", Resource: "promotionsteps"},
+						obj.GetName(), errors.New("the object has been modified"))
+				}
+				return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
+	key := client.ObjectKeyFromObject(promoting)
+
+	res, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, time.Second, res.RequeueAfter, "a conflict requeues the step")
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), key, &got))
+	assert.Equal(t, promoting.Status.State, got.Status.State, "the conflicting patch wrote nothing")
+
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.NoError(t, c.Get(context.Background(), key, &got))
+	assert.NotEqual(t, promoting.Status.State, got.Status.State, "the requeued reconcile writes the transition")
 }
