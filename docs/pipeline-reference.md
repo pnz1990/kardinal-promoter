@@ -97,9 +97,11 @@ spec:
 | `url` | Yes | | HTTPS URL of the GitOps repository |
 | `branch` | No | `main` | Base branch: `git-clone` checks it out, `approval: auto` pushes to it, and `pr-review` PRs target it. The API server sets `main` when the field is omitted, and the controller also reads an empty value as `main`. |
 | `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch` (rendered manifests on per-environment branches) is **not implemented**: the `git-clone` step fails every promotion that uses it. See [Rendered Manifests](rendered-manifests.md). |
-| `provider` | No | (none) | **Not read by the controller.** The SCM provider is chosen once per controller by `--scm-provider` (`github`, `gitlab`, `forgejo`, `gitea`, `bitbucket` or `azuredevops`); see [SCM Providers](scm-providers.md). The CRD accepts only `github` or `gitlab` here. Leave it unset. |
+| `provider` | No | (none) | **Not read by the controller.** The SCM provider is the controller's `--scm-provider` (`github`, `gitlab`, `forgejo`, `gitea`, `bitbucket` or `azuredevops`), or the one `providerRef` names; see [SCM Providers](scm-providers.md). The CRD accepts only `github` or `gitlab` here. Leave it unset. |
 | `secretRef.name` | No | | `secretRef` is optional; when it is set, `name` must be too. Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token. Needed when the HTTPS remote refuses git without a token (every push to a hosted provider, and the clone of a private repository); not needed for an ssh remote or a URL that carries its credentials. When it is not set, or the Secret does not exist, and the HTTPS remote refuses `git-clone` or `git-push` without a token, the step retries until the Secret exists; the step message says what is missing (see [Troubleshooting](troubleshooting.md#symptom-authentication-required-with-git-secret-not-found-or-specgitsecretref-is-not-set)). **Label the Secret `kardinal.io/referenceable: "true"`** (`kubectl label secret github-token kardinal.io/referenceable=true`): the token goes to the Pipeline's `git.url`, which the Pipeline's author chooses, so the label records that the Secret's owner allows it. Deprecated in v0.10.0: an unlabeled Secret still works, and the Pipeline has the condition `SecretReferenceable=False` (reason `SecretNotReferenceable`); v0.11 will refuse it ([#1506](https://github.com/pnz1990/kardinal-promoter/issues/1506)). |
 | `secretRef.namespace` | No | Pipeline's namespace | Must be empty or the Pipeline's own namespace. Any other namespace fails the PromotionStep without reading the Secret, so a Pipeline cannot use another namespace's credentials. The Pipeline's `Ready` condition is `False` with reason `ValidationFailed`, and `kardinal validate` reports it when the file sets `metadata.namespace`. |
+| `providerRef.name` | No | | Name of the [ScmProvider or ClusterScmProvider](scm-providers.md#several-scm-providers-scmprovider-and-clusterscmprovider) whose API and token this Pipeline's PRs use. When `providerRef` is not set, the controller's `--scm-provider` is used. The provider is resolved when a Bundle's Graph is built. If it is missing, does not allow the Pipeline's namespace (`allowedNamespaces` of a ClusterScmProvider), or does not allow the repository (`allowedRepositories`), the Bundle waits with the reason. |
+| `providerRef.kind` | No | `ScmProvider` | `ScmProvider`, in the Pipeline's namespace, or `ClusterScmProvider`. |
 
 ### spec.environments[]
 
@@ -220,6 +222,13 @@ A `Failed` Bundle does not count, so it does not take a slot back while the cap 
 
 Default: `0`.
 
+### spec.imageVerification
+
+Requires the Bundle's images (selected by `images`, by digest) to carry a signature from one of
+`authorities` (a cosign key or a Sigstore keyless identity), and a config Bundle's commit to be
+signed when `commits.requireSigned`, before the Bundle is promoted into its first environments.
+See [Image Signature Verification](image-verification.md).
+
 ### spec.policyNamespaces
 
 Extra namespaces to read PolicyGates from. It only adds: the org policy namespaces (the controller's `--policy-namespaces`, default `platform-policies`) and the Pipeline's namespace are always read. A gate found only through it is a team gate unless it is labelled `kardinal.io/scope: org`, and it never grants a skip. See [Policy Gates](policy-gates.md).
@@ -257,9 +266,10 @@ once its upstream environments are Verified, as the nodes shape does. One differ
 an upstream leaves Verified before the environment's step starts, the compact shape deletes that
 environment's instances (they leave the collection, so kro prunes them) and creates them again once
 the upstreams are Verified; once the step has started, its instances are kept.
-[Hooks](hooks.md) (`spec.environments[].hooks`) and [analysis](analysis.md)
-(`spec.environments[].verification`) are not carried yet: both the Bundle and the Pipeline
-condition report them.
+[Hooks](hooks.md) (`spec.environments[].hooks`), [analysis](analysis.md)
+(`spec.environments[].verification`) and [image verification](image-verification.md)
+(`spec.imageVerification`) are not carried yet: both the Bundle and the Pipeline condition report
+them.
 
 The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
 each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be
@@ -570,10 +580,12 @@ The API server checks the grammar: a Pipeline with a path outside it is refused.
 
 Checks that must hold for the running workload belong where it runs, not in the promoter:
 
-- **Image signatures.** Enforce them at admission in the cluster that runs the pods, with
+- **Image signatures.** `spec.imageVerification` verifies cosign and Sigstore signatures
+  before a Bundle is promoted ([Image Signature Verification](image-verification.md)). Also
+  enforce them at admission in the cluster that runs the pods, with
   [Sigstore policy-controller](https://docs.sigstore.dev/policy-controller/overview/) or
-  [Kyverno `verifyImages`](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/).
-  A check in the promoter is bypassed by anyone who can push to the GitOps repository;
+  [Kyverno `verifyImages`](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/):
+  a check in the promoter is bypassed by anyone who can push to the GitOps repository;
   admission is not.
 - **Tests after a deploy.** Run them as a [post-deploy hook](hooks.md): a Job kardinal runs
   after the health check passed; the environment is Verified only when it succeeded. Or run

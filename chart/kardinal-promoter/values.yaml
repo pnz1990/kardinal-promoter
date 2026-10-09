@@ -70,9 +70,11 @@ leaderElect: true
 # FlowSchema sends the controller ServiceAccount's Lease requests in its
 # namespace to the built-in leader-election priority level, so a busy
 # controller (or a cluster that throttles it) cannot starve its own lease
-# renewals and lose leadership. The controller also renews with a client of
-# its own (own rate limiter). Needs flowcontrol.apiserver.k8s.io/v1
-# (Kubernetes 1.29+); skipped when the API is missing.
+# renewals and lose leadership. Needs flowcontrol.apiserver.k8s.io/v1
+# (Kubernetes 1.30, kardinal's minimum); skipped when the API is missing.
+# Cluster-scoped: the installer needs create/get/update/delete on
+# flowschemas.flowcontrol.apiserver.k8s.io. Set enabled: false for GitOps
+# installs that may not manage cluster resources.
 leaderElectionFlowSchema:
   # -- Create the FlowSchema.
   enabled: true
@@ -255,6 +257,18 @@ scm:
   # environment). Empty allows every repository the token can write to, and
   # the controller logs a warning at startup. See docs/guides/security.md.
   allowedRepositories: []
+  # -- Let ScmProviders and ClusterScmProviders use an http:// spec.apiURL
+  # (--scm-providers-allow-http), for an in-cluster SCM without TLS. Off, a
+  # provider must use https://, so its token never crosses the network in
+  # clear text. Their API requests always go through the egress guard
+  # (no loopback, link-local or cloud metadata addresses).
+  providersAllowInsecureHTTP: false
+  # -- Forgejo/Gitea only: the names or emails the instance signs commits
+  # with (its repository.signing SIGNING_NAME / SIGNING_EMAIL,
+  # --scm-instance-signers). Image verification treats such a commit as a
+  # platform signature (forgejo-instance). Without it, a verified signer that
+  # is not a user of the instance is taken as the instance key.
+  instanceSigners: []
   # -- The gate results of a waiting pr-review step as a commit status on the
   # commit kardinal pushed to its PR (docs/pr-evidence.md). enabled: false
   # (--gates-commit-status=false) posts none, for a token without the

@@ -115,8 +115,14 @@ spec:
             {{- with .Values.scm.apiURL }}
             - --scm-api-url={{ . }}
             {{- end }}
+            {{- with .Values.scm.instanceSigners }}
+            - --scm-instance-signers={{ join "," . }}
+            {{- end }}
             {{- with .Values.scm.allowedRepositories }}
             - --scm-allowed-repositories={{ join "," . }}
+            {{- end }}
+            {{- if .Values.scm.providersAllowInsecureHTTP }}
+            - --scm-providers-allow-http=true
             {{- end }}
             {{- with .Values.scm.gatesCommitStatus }}
             {{- if eq (toString .enabled) "false" }}

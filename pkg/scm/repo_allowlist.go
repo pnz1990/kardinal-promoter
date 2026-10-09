@@ -283,8 +283,9 @@ func WebHost(providerType, apiURL string) (string, error) {
 // that is not allowed. That is every Pipeline whose spec.git.url is not
 // allowed, except one that never needs the shared token: ownSecret (its
 // git.secretRef names a Secret that exists, so git clone and push use its
-// token) and no environment with approval: pr-review (whose PR the shared
-// token opens, polls and closes). A nil allowlist allows every Pipeline.
+// token) and either no environment with approval: pr-review (whose PR the
+// shared token opens, polls and closes) or a spec.git.providerRef (whose
+// token does that instead). A nil allowlist allows every Pipeline.
 func (a *RepositoryAllowlist) CheckPipeline(p *v1alpha1.Pipeline, ownSecret bool) error {
 	if a == nil || a.Allows(p.Spec.Git.URL) {
 		return nil
@@ -292,7 +293,10 @@ func (a *RepositoryAllowlist) CheckPipeline(p *v1alpha1.Pipeline, ownSecret bool
 	why := "the Pipeline has no git.secretRef to a Secret that exists, so nothing but the controller's token can reach it"
 	if ownSecret {
 		env := prReviewEnv(p)
-		if env == "" {
+		// spec.git.providerRef: its PRs are opened, polled and closed with
+		// the provider's own token, checked against the provider's
+		// allowedRepositories (Registry), never the controller's.
+		if env == "" || p.Spec.Git.ProviderRef != nil {
 			return nil
 		}
 		why = fmt.Sprintf("environment %q uses approval: pr-review, and the controller's token opens and tracks its PRs", env)

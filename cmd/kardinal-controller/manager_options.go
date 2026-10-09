@@ -51,27 +51,29 @@ type managerConfig struct {
 
 // Leader election client rate limits (#1592): the Lease is renewed every
 // 2s at most, so these never throttle it, and its own limiter means
-// reconcile traffic can never take its tokens.
+// reconcile traffic in the process can never take its tokens. The fix for
+// API Priority and Fairness pressure is the chart's FlowSchema; this only
+// keeps the process-side limiter separate. controller-runtime appends
+// "/leader-election" to the user agent itself.
 const (
 	leaderElectionQPS   = 5
 	leaderElectionBurst = 10
-	// LeaderElectionUserAgent marks the Lease requests, for the API server's
-	// audit log and the chart's FlowSchema documentation.
-	LeaderElectionUserAgent = "kardinal-promoter/leader-election"
 )
 
 // leaderElectionConfig is cfg for the leader election client alone: its
-// own HTTP client and rate limiter, so the Lease renewal never waits behind
-// the reconcilers' requests in the controller process. The chart's
-// FlowSchema (templates/flowschema.yaml) does the same in the API server.
+// own rate limiter, so the Lease renewal never waits behind the
+// reconcilers' requests in the controller process. The fix for a busy or
+// throttled API server is the chart's FlowSchema (templates/flowschema.yaml),
+// which gives the Lease requests their own priority level.
 func leaderElectionConfig(cfg *rest.Config) *rest.Config {
 	if cfg == nil {
 		return nil
 	}
 	c := rest.CopyConfig(cfg)
 	c.QPS, c.Burst = leaderElectionQPS, leaderElectionBurst
+	// A RateLimiter set on cfg would be shared with the reconcilers' client;
+	// nil makes the copy build its own from QPS and Burst.
 	c.RateLimiter = nil
-	c.UserAgent = LeaderElectionUserAgent
 	return c
 }
 
