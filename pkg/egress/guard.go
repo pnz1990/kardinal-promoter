@@ -19,8 +19,10 @@
 //   - unspecified (0.0.0.0/8, ::) and multicast addresses.
 //
 // Private ranges (10/8, 172.16/12, 192.168/16, fc00::/7) stay allowed: in-cluster
-// Services, Prometheus, registries and git servers are the normal targets. Use the chart NetworkPolicy
-// (networkPolicy.enabled, networkPolicy.extraEgress) to narrow egress further.
+// Services, Prometheus, registries and git servers are the normal targets. To
+// narrow egress further, set a controller-wide Allowlist (--egress-allowlist,
+// chart value egress.allowlist; see allowlist.go), or use the chart
+// NetworkPolicy (networkPolicy.enabled, networkPolicy.extraEgress).
 //
 // When the transport uses a proxy, the connection goes to the proxy, so the
 // dial-time check sees only the proxy's address. The transport therefore also
@@ -39,6 +41,8 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -109,17 +113,24 @@ func Control(_, address string, _ syscall.RawConn) error {
 // HTTP(S)_PROXY and NO_PROXY, or nil to always connect directly. When proxy
 // picks a proxy for a request, the request's target is checked first (see
 // the package comment), on every request including redirects.
+//
+// When a controller-wide allowlist is set (SetAllowlist), every direct
+// connection and every proxied target must also pass it. The proxy's own
+// address is exempt from the allowlist (the operator configured it), not
+// from CheckAddr.
 func NewTransport(proxy func(*http.Request) (*url.URL, error)) *http.Transport {
+	proxies := &proxyHosts{}
 	if proxy != nil {
-		proxy = checkTargetBeforeProxy(proxy)
+		proxy = checkTargetBeforeProxy(proxy, proxies)
+	}
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control:   Control,
 	}
 	return &http.Transport{
-		Proxy: proxy,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-			Control:   Control,
-		}).DialContext,
+		Proxy:                 proxy,
+		DialContext:           allowlistDialer(dialer, proxies),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
@@ -128,10 +139,52 @@ func NewTransport(proxy func(*http.Request) (*url.URL, error)) *http.Transport {
 	}
 }
 
+// proxyHosts records the proxy hosts a transport's Proxy function returned,
+// so its dialer can tell a connection to the proxy from a direct one.
+type proxyHosts struct{ m sync.Map }
+
+func (p *proxyHosts) add(host string) { p.m.Store(strings.ToLower(host), true) }
+
+func (p *proxyHosts) has(host string) bool {
+	_, ok := p.m.Load(strings.ToLower(host))
+	return ok
+}
+
+// allowlistDialer wraps dialer.DialContext with the allowlist. addr still
+// carries the host name here (the dialer resolves it), so a host entry is
+// matched on the name; otherwise every address the dialer tries must be in
+// a CIDR entry, checked in Control after resolution, so a name that
+// re-resolves elsewhere is refused too.
+func allowlistDialer(dialer *net.Dialer, proxies *proxyHosts) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		al := CurrentAllowlist()
+		host, _, err := net.SplitHostPort(addr)
+		if al == nil || err != nil || proxies.has(host) || al.AllowsName(host) {
+			return dialer.DialContext(ctx, network, addr)
+		}
+		d := *dialer
+		d.Control = func(network, address string, c syscall.RawConn) error {
+			if err := Control(network, address, c); err != nil {
+				return err
+			}
+			h, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return fmt.Errorf("%w: %q", ErrBlockedAddress, address)
+			}
+			ip, err := netip.ParseAddr(h)
+			if err != nil {
+				return fmt.Errorf("%w: %q", ErrBlockedAddress, address)
+			}
+			return checkAllowlisted(al, host, ip)
+		}
+		return d.DialContext(ctx, network, addr)
+	}
+}
+
 // checkTargetBeforeProxy wraps a Transport.Proxy function. When it returns a
 // proxy, the request's target host must pass CheckAddr: an IP literal
 // directly, a host name through every address it resolves to.
-func checkTargetBeforeProxy(proxy func(*http.Request) (*url.URL, error)) func(*http.Request) (*url.URL, error) {
+func checkTargetBeforeProxy(proxy func(*http.Request) (*url.URL, error), proxies *proxyHosts) func(*http.Request) (*url.URL, error) {
 	return func(req *http.Request) (*url.URL, error) {
 		proxyURL, err := proxy(req)
 		if err != nil || proxyURL == nil {
@@ -140,14 +193,20 @@ func checkTargetBeforeProxy(proxy func(*http.Request) (*url.URL, error)) func(*h
 		if err := checkHost(req.Context(), req.URL.Hostname()); err != nil {
 			return nil, err
 		}
+		proxies.add(proxyURL.Hostname())
 		return proxyURL, nil
 	}
 }
 
-// checkHost applies CheckAddr to host, an IP literal or a name to resolve.
+// checkHost applies CheckAddr, and the allowlist when one is set, to host,
+// an IP literal or a name to resolve.
 func checkHost(ctx context.Context, host string) error {
+	al := CurrentAllowlist()
 	if ip, err := netip.ParseAddr(host); err == nil {
-		return CheckAddr(ip.WithZone(""))
+		if err := CheckAddr(ip.WithZone("")); err != nil {
+			return err
+		}
+		return checkAllowlisted(al, host, ip)
 	}
 	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	if err == nil && len(ips) == 0 {
@@ -160,6 +219,9 @@ func checkHost(ctx context.Context, host string) error {
 	for _, ip := range ips {
 		if err := CheckAddr(ip.WithZone("")); err != nil {
 			return fmt.Errorf("%w (%q resolves to it)", err, host)
+		}
+		if err := checkAllowlisted(al, host, ip.WithZone("")); err != nil {
+			return err
 		}
 	}
 	return nil

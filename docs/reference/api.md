@@ -147,17 +147,30 @@ MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler querie
 
 `kardinal.io/v1alpha1`
 
-NotificationHook defines an outbound webhook that is triggered when specific promotion events occur. The controller delivers a JSON payload to the configured URL on each qualifying event. Architecture: this CRD uses the Owned-node pattern — the reconciler watches Bundle, PolicyGate, and PromotionStep objects and writes delivery results to status. HTTP calls are made at-most-once per event (idempotent via LastEventKey).
+NotificationHook defines an outbound webhook that is triggered when specific promotion events occur. The controller delivers a JSON payload to the configured URL on each qualifying event. Architecture: this CRD uses the Owned-node pattern — the reconciler watches Bundle, PolicyGate, and PromotionStep objects and writes delivery results to status. Each event is delivered at least once and, except after a crash between a POST and its status write, exactly once (status.processedEventKeys).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | NotificationHookSpec defines the desired state of a NotificationHook. |
-| `spec.events` | []string | yes | Events is the list of event types that trigger delivery. At least one event type is required. Valid values: Bundle.Verified, Bundle.Failed, PolicyGate.Blocked, PromotionStep.Failed. |
+| `spec.events` | []string | yes | Events is the list of event types that trigger delivery. At least one event type is required. See docs/notifications.md#events. |
+| `spec.format` | string |  | Format is the shape of the request body: json (the kardinal payload, the default), slack (an incoming-webhook message with blocks), teams (a Workflows webhook message with an Adaptive Card) or template (spec.template). One of: `json`, `slack`, `teams`, `template`. |
 | `spec.pipelineSelector` | string |  | PipelineSelector restricts notifications to events originating from the named Pipeline. When empty, events from all Pipelines are delivered. |
+| `spec.template` | object |  | Template is the request body for format: template. |
+| `spec.template.body` | string | yes | Body is a Go text/template rendered over the event (docs/notifications.md#templated-body). range, define, template and block are not allowed; the rendered body is at most 64 KiB. |
+| `spec.template.contentType` | string |  | ContentType is the Content-Type header of the POST. Defaults to application/json, in which case the rendered body must be valid JSON. |
 | `spec.webhook` | object | yes | Webhook defines the HTTP endpoint to deliver notifications to. |
-| `spec.webhook.authorizationHeader` | string |  | AuthorizationHeader is the value of the Authorization header to include in the POST. Typically "Bearer &lt;token&gt;" or "Token &lt;secret&gt;". The value is stored in plain text in the spec and sent as is: anyone who can read this NotificationHook can read it. |
-| `spec.webhook.url` | string | yes | URL is the HTTPS URL to POST the notification payload to. |
+| `spec.webhook.authorizationHeader` | string |  | AuthorizationHeader is the value of the Authorization header to include in the POST. Typically "Bearer &lt;token&gt;" or "Token &lt;secret&gt;". Deprecated: use secretRef. The value is stored in plain text in the spec and sent as is: anyone who can read this NotificationHook can read it. A hook that sets it still delivers, and has the condition PlaintextCredential=True. |
+| `spec.webhook.secretRef` | object |  | SecretRef names a Secret in the hook's namespace holding the Authorization header value (key authorization) and/or the webhook URL (key url). The Secret is read on every reconcile, so a rotated value is used for the next delivery. |
+| `spec.webhook.secretRef.name` | string | yes | Name of the Secret. The key "authorization" is sent as the Authorization header; the key "url", when present, is the webhook URL and takes precedence over spec.webhook.url (Slack and Teams URLs carry their token in the path). At least one of the two keys must be set. |
+| `spec.webhook.url` | string |  | URL is the HTTPS URL to POST the notification payload to. Optional when secretRef names a Secret with a url key, which takes precedence. |
 | `status` | object |  | NotificationHookStatus defines the observed state of a NotificationHook. |
+| `status.conditions` | []object |  | Conditions: Ready is False when the hook cannot deliver (its Secret is missing or lacks a key, or its template does not parse); events wait until it is fixed. PlaintextCredential is True while spec.webhook.authorizationHeader is set. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.failedAttempts` | integer (int32) |  | FailedAttempts counts consecutive failed deliveries. The controller retries with exponential backoff and gives up on an event after 10 attempts. Reset to zero on a successful delivery. |
 | `status.failureMessage` | string |  | FailureMessage records the last webhook delivery failure, if any. Cleared on next successful delivery. |
 | `status.lastEvent` | string |  | LastEvent is the event type of the last successfully delivered notification. |
