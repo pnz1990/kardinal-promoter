@@ -62,9 +62,14 @@ An environment where that Bundle's change has not landed yet (it has not
 reached the environment, or its PR is not merged) also gets a line after the
 table with the Bundle deployed there now: the one whose change landed last,
 as kardinal rollback judges it, with its image tags or config commit.
-"deployed: none" means no change has landed there yet.
+Image and config Bundles do not supersede each other: when the last one is an
+image Bundle and a config commit landed before it, the line adds
+"; config <sha> from <bundle>", and under a config Bundle it adds
+"; images <tags> from <bundle>". "deployed: none" means no change has landed
+there yet.
 
     prod   deployed: app-v1 (sha-1a2b3c4)
+    uat    deployed: app-v2 (sha-5d6e7f8); config 9f8e7d6 from app-cfg1
 
 A gate's STATE is the one the UI shows, the first that applies:
 
@@ -305,15 +310,15 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 func writeExplainDeployed(w io.Writer, pipeline string, envNames []string, envFilter string,
 	current map[string]string, steps []v1alpha1.PromotionStep, byName map[string]*v1alpha1.Bundle) error {
 	envs := slices.Sorted(slices.Values(envNames)) // the table's order
-	deployed := deployedBundles(steps, pipeline, envs)
+	deployed := deployedBundles(steps, pipeline, envs, byName)
 	var buf strings.Builder
 	tw := tabwriter.NewWriter(&buf, 0, 0, 3, ' ', 0)
 	n := 0
 	for _, env := range envs {
-		if (envFilter != "" && env != envFilter) || current[env] == "" || deployed[env] == current[env] {
+		if (envFilter != "" && env != envFilter) || current[env] == "" || deployed[env].bundle == current[env] {
 			continue
 		}
-		if _, err := fmt.Fprintf(tw, "%s\tdeployed: %s\n", env, deployedLabel(deployed[env], byName)); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\tdeployed: %s\n", env, deployedLabelOf(deployed[env], byName)); err != nil {
 			return fmt.Errorf("write deployed bundle: %w", err)
 		}
 		n++
