@@ -236,7 +236,7 @@ A PromotionStep represents one environment promotion for one Bundle. You do not 
 Each PromotionStep tracks:
 - Which environment it targets
 - Which Bundle it promotes
-- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verified, Failed, AbortedByAlarm, RollingBack)
+- The current state (Pending, Promoting, WaitingForMerge, HealthChecking, Verifying, Verified, Failed, AbortedByAlarm, RollingBack). Verifying: the health check passed and the environment's [post-deploy hooks](hooks.md) run
 - The PR URL (for pr-review environments)
 - Per-step progress and timing (`status.steps`), the current message and conditions, and bake and retry counters. Promotion evidence (provenance, gate results, upstream verification) goes into the PR body.
 

@@ -6,7 +6,7 @@
 
 /** PromotionStep status.state values (api/v1alpha1), plus the graph API's synthetic NotStarted. */
 export type PromotionStepState =
-  | 'Pending' | 'Promoting' | 'WaitingForMerge' | 'HealthChecking'
+  | 'Pending' | 'Promoting' | 'WaitingForMerge' | 'HealthChecking' | 'Verifying'
   | 'Verified' | 'Failed' | 'AbortedByAlarm' | 'RollingBack' | 'NotStarted'
 
 /** Bundle status.phase values. */

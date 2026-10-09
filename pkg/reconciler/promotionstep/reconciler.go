@@ -119,6 +119,11 @@ const (
 //	"WaitingForMerge" → "Failed": PR closed without merge, or waitForMergeTimeout
 //	"HealthChecking"  → "Verified": the health adapter reports the promoted
 //	                    revision healthy (and any bake window completed)
+//	"HealthChecking"  → "Verifying": the same, for a step with post-deploy
+//	                    hooks (spec.postHooks)
+//	"Verifying"       → "Verified": every post-deploy hook succeeded
+//	"Verifying"       → "Failed" / "AbortedByAlarm" / "RollingBack": a post-
+//	                    deploy hook failed (onHealthFailure)
 //	"HealthChecking"  → "Failed" / "AbortedByAlarm" / "RollingBack": health
 //	                    timeout, or a terminal failure under onHealthFailure
 //	non-terminal      → "Failed": the parent Bundle was superseded
@@ -228,6 +233,22 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.syncPRFinalizer(ctx, &ps); err != nil {
 		return prFinalizerSyncFailed(log, err)
 	}
+	// Hooks added too late for this step: say so on the step (any state);
+	// hooks that ran: record them, so a recreated HookRun does not run again.
+	base := ps.DeepCopy()
+	skipped, recorded := recordSkippedHooks(&ps, r.now().UTC()), recordHookRuns(&ps)
+	if skipped || recorded {
+		// With the resourceVersion read: a merge patch of status.hookRecords
+		// from a stale copy would drop records another reconcile wrote (QA
+		// #1493). A conflict reads the step again.
+		err := r.Status().Patch(ctx, &ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		switch {
+		case apierrors.IsConflict(err):
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		case err != nil && !apierrors.IsNotFound(err):
+			return ctrl.Result{}, fmt.Errorf("patch %s condition: %w", ConditionHooksSkipped, err)
+		}
+	}
 	res, err := r.reconcileState(ctx, log, &ps)
 	if err != nil {
 		return res, err
@@ -296,6 +317,8 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 		return r.handleWaitingForMerge(ctx, log, ps)
 	case StateHealthChecking:
 		return r.handleHealthChecking(ctx, log, ps)
+	case StateVerifying:
+		return r.handleVerifying(ctx, log, ps)
 	case StateVerified, StateFailed:
 		// Terminal states — clean up workdir if present (ST-7/ST-8 short-term mitigation).
 		r.cleanWorkDir(log, ps)
@@ -324,7 +347,7 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 // supersession: every state that is not terminal.
 func isCancellable(state string) bool {
 	switch state {
-	case StatePending, StatePendingExplicit, StatePromoting, StateWaitingForMerge, StateHealthChecking:
+	case StatePending, StatePendingExplicit, StatePromoting, StateWaitingForMerge, StateHealthChecking, StateVerifying:
 		return true
 	}
 	return false
@@ -650,6 +673,12 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 
+	// Pre-deploy hooks (docs/hooks.md) run before the step starts: wait for
+	// every one to succeed, fail when one failed.
+	if held, res, holdErr := r.holdForPreHooks(ctx, log, base, ps); held {
+		return res, holdErr
+	}
+
 	// Re-check every required gate before any git or Argo CD write (#1300,
 	// #1323). The Graph created this step when every gate was ready, but that
 	// result can be older than the step, and a gate can turn false before the
@@ -867,7 +896,18 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		}
 		// More steps remain — persist index and requeue immediately.
 		ps.Status.Message = fmt.Sprintf("completed step %d/%d", nextIdx, len(seq))
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+		// Locked like the retry and state patches: a stale reconcile's
+		// progress would rewrite the step statuses a newer one wrote. (Not
+		// reached today: ExecuteFrom runs every remaining step and reports
+		// success only with nextIdx == len(seq).)
+		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+			if apierrors.IsNotFound(patchErr) {
+				return ctrl.Result{}, nil
+			}
+			if apierrors.IsConflict(patchErr) {
+				log.Debug().Str("step", ps.Name).Msg("step changed since it was read; progress not written, requeueing")
+				return ctrl.Result{Requeue: true}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("patch step progress: %w", patchErr)
 		}
 		closed.record()
@@ -1000,9 +1040,18 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		log.Warn().Err(execErr).Str("env", ps.Spec.Environment).
 			Int("retry", ps.Status.RetryCount).Int("gitCredentialRetries", ps.Status.GitCredentialRetries).
 			Dur("delay", delay).Msg("step failed, will retry")
-		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+		// Locked on the resourceVersion read: a reconcile that read a stale
+		// cached step (the retry status the one before it wrote not seen
+		// yet) would mark the credential missing again and emit a second
+		// Warning Event, and reset the backoff; its patch is refused with
+		// a Conflict instead, and it runs again on the fresh copy.
+		if patchErr := r.Status().Patch(ctx, ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
+			}
+			if apierrors.IsConflict(patchErr) {
+				log.Debug().Err(patchErr).Msg("step changed while it ran; retrying on the fresh copy")
+				return ctrl.Result{Requeue: true}, nil
 			}
 			return ctrl.Result{}, fmt.Errorf("patch step retry: %w", patchErr)
 		}
@@ -1309,7 +1358,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	if r.HealthDetector == nil {
 		// Both binaries always set HealthDetector; only unit tests of the
 		// earlier phases run without one.
-		return ctrl.Result{}, r.verify(ctx, base, ps, "Verified", "health check skipped: no health adapter configured")
+		return ctrl.Result{}, r.passHealth(ctx, base, ps, "Verified", "health check skipped: no health adapter configured")
 	}
 
 	// Parse timeout from environment config; default 10m.
@@ -1458,7 +1507,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	case result.Healthy:
 		log.Info().Str("env", ps.Spec.Environment).Str("adapter", adapter.Name()).Msg("health check passed, Verified")
 		ps.Status.ConsecutiveHealthFailures = 0 // reset on success
-		return ctrl.Result{}, r.verify(ctx, base, ps, "Verified",
+		return ctrl.Result{}, r.passHealth(ctx, base, ps, "Verified",
 			fmt.Sprintf("health check passed via %s: %s", adapter.Name(), result.Reason))
 	case result.Progressing:
 		// Rolling out or not synced yet: not a health failure.
@@ -1842,12 +1891,15 @@ func (r *Reconciler) handleBake(
 				Int64("elapsedMinutes", ps.Status.BakeElapsedMinutes).
 				Int("requiredMinutes", env.Bake.Minutes).
 				Msg("bake: complete, Verified")
+			msg := fmt.Sprintf("bake complete: %dm contiguous healthy via %s (resets=%d)",
+				env.Bake.Minutes, adapterName, ps.Status.BakeResets)
+			if verifies(ps) {
+				return ctrl.Result{}, r.passHealth(ctx, base, ps, "BakeComplete", msg)
+			}
 			ps.Status.Conditions = appendCondition(ps.Status.Conditions,
 				"Verified", metav1.ConditionTrue, "BakeComplete",
 				fmt.Sprintf("contiguous soak %dm complete", env.Bake.Minutes), now.Time)
-			return ctrl.Result{}, r.transition(ctx, base, ps, StateVerified, fmt.Sprintf(
-				"bake complete: %dm contiguous healthy via %s (resets=%d)",
-				env.Bake.Minutes, adapterName, ps.Status.BakeResets))
+			return ctrl.Result{}, r.transition(ctx, base, ps, StateVerified, msg)
 		}
 		remaining := int64(env.Bake.Minutes) - ps.Status.BakeElapsedMinutes
 		ps.Status.Message = fmt.Sprintf(

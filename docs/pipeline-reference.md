@@ -146,6 +146,8 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `bake.policy` | No | `reset-on-alarm` | What to do when a check is unhealthy during the bake window. `reset-on-alarm`: stop the window, increment `status.bakeResets`, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. A release that keeps flapping between healthy and unhealthy fails under `reset-on-alarm` when no full window completes by the first window's start + `bake.minutes` + `health.timeout` (see [Timings and failures](health-adapters.md#timings-and-failures)); `fail-on-alarm` fails it on the first unhealthy check. |
 | `bake.maxDuration` | No | `bake.minutes` + `health.timeout` | Go duration (`36h`). The longest time from the first bake window's start (`status.bakeFirstStartedAt`) to a complete window. A window that stops after it, on an alarm or a Waiting check such as a paused canary, applies `onHealthFailure`. A value shorter than `bake.minutes` counts as `bake.minutes`. |
 | `onHealthFailure` | No | `none` | What to do when `health.timeout` expires without a Healthy result, when the adapter reports a terminal failure (Deployment `ProgressDeadlineExceeded` from this promotion's rollout, Flagger `Failed`), or when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle with the artifacts of the Bundle verified before the failing one in this environment; step → RollingBack, or AbortedByAlarm when there is nothing safe to roll back to (a step of a rollback Bundle → AbortedByAlarm instead, so rollbacks do not chain). See [Automatic Rollback](rollback.md#automatic-rollback). |
+| `hooks` | No | (none) | Jobs run once per Bundle in this environment: `phase: pre` before the promotion starts (migrations), `phase: post` after the health check passed and before the environment is Verified (integration tests). Each is `{name, phase, job, timeout}`, `job` a `batch/v1` JobSpec. At most 10. A failed pre hook fails the step before it changes anything; a failed post hook applies `onHealthFailure`. See [Pre- and Post-Deploy Hooks](hooks.md). |
+| `verification` | No | (none) | Argo Rollouts analysis after the health check: `{analysisTemplates: [{name, kind}], args: [{name, value}], inconclusive, timeout}`. One AnalysisRun per template, with the Bundle's `tag`, `image`, `environment` and more as args; the environment is Verified only when every run is `Successful`, and a failed run applies `onHealthFailure`. Needs Argo Rollouts installed: without it the Bundle fails. See [Analysis](analysis.md). |
 | `regions` | No | (none) | **Deprecated, not supported.** Declare one environment per region instead (for example `prod-us` and `prod-eu`) and promote them in parallel with `wave` or `dependsOn`; each gets its own path, PR, gates and health check. Two or more regions set the Pipeline `Ready=False`, `kardinal validate` fails, and every Bundle fails when its Graph is built with `regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`. A single region is accepted and ignored. |
 
 **Reserved and unsupported fields.** `layout: branch` (on `spec.git` or an environment) and
@@ -255,6 +257,9 @@ once its upstream environments are Verified, as the nodes shape does. One differ
 an upstream leaves Verified before the environment's step starts, the compact shape deletes that
 environment's instances (they leave the collection, so kro prunes them) and creates them again once
 the upstreams are Verified; once the step has started, its instances are kept.
+[Hooks](hooks.md) (`spec.environments[].hooks`) and [analysis](analysis.md)
+(`spec.environments[].verification`) are not carried yet: both the Bundle and the Pipeline
+condition report them.
 
 The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
 each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be
@@ -469,7 +474,9 @@ describes each step.
 
 kardinal has no custom step engine. `spec.environments[].steps` and
 `spec.environments[].promotionTemplate` are deprecated and cannot change the sequence: the
-API server rejects a Pipeline that sets either, and `kardinal validate` reports it.
+API server rejects a Pipeline that sets either, and `kardinal validate` reports it. To run
+your own work around the sequence, use [hooks](hooks.md): Jobs before the step starts and
+after its health check.
 
 ### How `kustomize-set-image` matches images
 
@@ -568,13 +575,17 @@ Checks that must hold for the running workload belong where it runs, not in the 
   [Kyverno `verifyImages`](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/).
   A check in the promoter is bypassed by anyone who can push to the GitOps repository;
   admission is not.
-- **Tests after a deploy.** Run them as an Argo CD
+- **Tests after a deploy.** Run them as a [post-deploy hook](hooks.md): a Job kardinal runs
+  after the health check passed; the environment is Verified only when it succeeded. Or run
+  them as an Argo CD
   [PostSync hook](https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/) Job and
   set `health.type: argocd`. Argo CD keeps the sync operation open while the hook runs and
   marks it failed when a PostSync hook fails. The argocd adapter is healthy only when the
   Application is Healthy and Synced on the promoted revision and its last operation is
   `Succeeded` (or there is none), so the step waits for the tests; a `Failed` or `Error`
   operation on that revision is a health failure and applies `onHealthFailure`.
+- **Analysis.** Name Argo Rollouts AnalysisTemplates in `verification` (any Rollouts
+  provider: Prometheus, Datadog, CloudWatch, New Relic, web, Job); see [Analysis](analysis.md).
 - **Metric checks.** Create a `MetricCheck` and read it from a PolicyGate on the next
   environment, for example `metrics["error-rate"].result == "Pass"`. See
   [Policy Gates: Metric-based](policy-gates.md#metric-based).
