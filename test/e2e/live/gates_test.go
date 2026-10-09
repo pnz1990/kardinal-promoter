@@ -137,11 +137,13 @@ func TestGate_BadExpressionsFailClosed(t *testing.T) {
 	e.NoStep(t, a.ns, pipelineName, bundle, "prod", holdFor)
 	bad := e.WaitGateReady(t, a.ns, bundle, "prod", "bad-syntax", false, "CEL compile error: ", gateTimeout)
 
+	// The identity policy admits an override only in the requester's name.
+	oncall := whoAmI(t, e)
 	e.Override(t, bad, v1alpha1.PolicyGateOverride{
-		Reason: "e2e: release the bad expression", Stage: "prod", CreatedBy: "e2e-oncall",
+		Reason: "e2e: release the bad expression", Stage: "prod", CreatedBy: oncall,
 		ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour)),
 	})
-	e.WaitGateReady(t, a.ns, bundle, "prod", "bad-syntax", true, "OVERRIDDEN by e2e-oncall", gateTimeout)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "bad-syntax", true, "OVERRIDDEN by "+oncall, gateTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
 }
@@ -997,11 +999,13 @@ func TestGate_OverrideLimits(t *testing.T) {
 	gate := e.WaitGateReady(t, a.ns, bundle, "prod", "hold", false, "= false", gateTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "WaitingForMerge", promoteTimeout)
 
+	// The identity policy admits an override only in the requester's name.
+	user := whoAmI(t, e)
 	patched := metav1.NewTime(time.Now().Truncate(time.Second))
 	e.Override(t, gate, v1alpha1.PolicyGateOverride{Stage: "prod", Reason: "expired",
-		CreatedBy: "e2e-expired", ExpiresAt: metav1.NewTime(time.Now().Add(-time.Minute))})
+		CreatedBy: user, ExpiresAt: metav1.NewTime(time.Now().Add(-time.Minute))})
 	e.Override(t, gate, v1alpha1.PolicyGateOverride{Stage: "staging", Reason: "other stage",
-		CreatedBy: "e2e-other-stage", ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
+		CreatedBy: user, ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
 	e.WaitGate(t, a.ns, bundle, "prod", "hold", gateTimeout, "re-evaluated after the overrides", func(g *v1alpha1.PolicyGate) bool {
 		return len(g.Spec.Overrides) == 2 && !g.Status.LastEvaluatedAt.Before(&patched)
 	})
@@ -1017,16 +1021,16 @@ func TestGate_OverrideLimits(t *testing.T) {
 	clockMu.Lock()
 	expires := time.Now().Add(20 * time.Second)
 	e.Override(t, gate, v1alpha1.PolicyGateOverride{Stage: "prod", Reason: "short",
-		CreatedBy: "e2e-short", ExpiresAt: metav1.NewTime(expires)})
-	e.WaitGateReady(t, a.ns, bundle, "prod", "hold", true, "OVERRIDDEN by e2e-short: short", gateTimeout)
+		CreatedBy: user, ExpiresAt: metav1.NewTime(expires)})
+	e.WaitGateReady(t, a.ns, bundle, "prod", "hold", true, "OVERRIDDEN by "+user+": short", gateTimeout)
 	after := e.WaitGateReady(t, a.ns, bundle, "prod", "hold", false, "= false", time.Minute)
 	clockMu.Unlock()
 	assert.WithinDuration(t, expires, after.Status.LastEvaluatedAt.Time, 5*time.Second,
 		"re-evaluated at expiry, not at the next recheck or clock tick")
 
 	e.Override(t, gate, v1alpha1.PolicyGateOverride{Reason: "every stage",
-		CreatedBy: "e2e-all-stages", ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
-	e.WaitGateReady(t, a.ns, bundle, "prod", "hold", true, "OVERRIDDEN by e2e-all-stages: every stage", gateTimeout)
+		CreatedBy: user, ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
+	e.WaitGateReady(t, a.ns, bundle, "prod", "hold", true, "OVERRIDDEN by "+user+": every stage", gateTimeout)
 	pr := e.WaitPR(t, a.repo, time.Minute, "test PR", func(pr gitserver.PR) bool { return pr.State == "open" })
 	require.NoError(t, e.Git.MergePR(ctx, a.repo, pr.Number))
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)

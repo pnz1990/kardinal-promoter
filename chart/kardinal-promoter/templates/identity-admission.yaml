@@ -1,0 +1,159 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+Identity admission policies (docs/guides/security.md, Verified identity).
+Records that name a person must name the person who wrote them: the API server
+admits them only when the name equals request.userInfo.username. They are not
+optional: without them anyone with write access could record someone else's
+name. Kubernetes 1.30+ serves admissionregistration.k8s.io/v1
+ValidatingAdmissionPolicy (the chart's kubeVersion).
+*/}}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
+{{- /* PolicyGate spec fields a gate instance copies from its template (all but overrides). */}}
+{{- $instanceSpecFields := list "expression" "message" "recheckInterval" "skipPermission" "when" "selector" "generated" }}
+{{- /* Gate instance metadata a caller other than kro and the controller may not change: all of it but
+managedFields, resourceVersion and generation, which the API server writes (name and namespace are immutable). */}}
+{{- $instanceMetaFields := list "labels" "ownerReferences" "finalizers" "generateName" }}
+{{- /* The garbage collector and the namespace controller remove owner references and finalizers. */}}
+{{- $cleanup := list "system:serviceaccount:kube-system:generic-garbage-collector" "system:serviceaccount:kube-system:namespace-controller" "system:kube-controller-manager" }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-bundle-rejection
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["bundles"]
+  validations:
+    # kardinal reject (spec.rejected) records the rejecting user. A new
+    # rejection must name the requester; an existing one is immutable (CRD
+    # transition rule), so only its first write is checked.
+    - expression: >-
+        !has(object.spec.rejected) ||
+        (oldObject != null && has(oldObject.spec.rejected)) ||
+        object.spec.rejected.by == request.userInfo.username
+      messageExpression: >-
+        'spec.rejected.by must be your own username "' + request.userInfo.username +
+        '", not "' + object.spec.rejected.by + '"; kardinal reject sets it for you'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-bundle-rejection
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kardinal-promoter.fullname" . }}-bundle-rejection
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-gate-overrides
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["policygates"]
+  variables:
+    # The controller writes overrides for the UI, which authenticates its
+    # callers itself (docs/guides/security.md, UI API Access Control).
+    - name: controller
+      expression: request.userInfo.username == {{ $controller | quote }}
+    # kro applies gate instances as the Graph ServiceAccount of the namespace.
+    - name: graph
+      expression: >-
+        request.userInfo.username == 'system:serviceaccount:' + object.metadata.namespace +
+        ':' + {{ .Values.graph.serviceAccountName | squote }}
+    # A gate instance is what a Graph made from a gate template: it has, or
+    # had, the kardinal.io/bundle label.
+    - name: instance
+      expression: >-
+        (has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels) ||
+        (oldObject != null && has(oldObject.metadata.labels) &&
+         'kardinal.io/bundle' in oldObject.metadata.labels)
+    # The garbage collector and the namespace controller clean up owner
+    # references and finalizers.
+    - name: cleanup
+      expression: request.userInfo.username in {{ $cleanup | toJson }}
+    # The annotations are unchanged but kardinal.io/force-recheck, which
+    # anyone who may patch the gate sets to have it evaluated at once
+    # (docs/policy-gates.md).
+    - name: annotationsKept
+      expression: >-
+        oldObject != null &&
+        (has(object.metadata.annotations) ? object.metadata.annotations : {}).all(k,
+          k == 'kardinal.io/force-recheck' ||
+          (has(oldObject.metadata.annotations) && k in oldObject.metadata.annotations &&
+           object.metadata.annotations[k] == oldObject.metadata.annotations[k])) &&
+        (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}).all(k,
+          k == 'kardinal.io/force-recheck' ||
+          (has(object.metadata.annotations) && k in object.metadata.annotations))
+    # Everything in spec but overrides, and the metadata but managedFields,
+    # resourceVersion, generation and the force-recheck annotation, are
+    # unchanged.
+    - name: onlyOverrides
+      expression: >-
+        oldObject != null &&
+        {{- range $i, $f := $instanceSpecFields }}
+        {{ if $i }}&& {{ end }}has(object.spec.{{ $f }}) == has(oldObject.spec.{{ $f }}) &&
+        (!has(object.spec.{{ $f }}) || object.spec.{{ $f }} == oldObject.spec.{{ $f }})
+        {{- end }}
+        {{- range $f := $instanceMetaFields }}
+        && has(object.metadata.{{ $f }}) == has(oldObject.metadata.{{ $f }}) &&
+        (!has(object.metadata.{{ $f }}) || object.metadata.{{ $f }} == oldObject.metadata.{{ $f }})
+        {{- end }}
+        && variables.annotationsKept
+  validations:
+    # kardinal override (spec.overrides[]) records who overrode the gate.
+    # Every entry that is new, or changed, must name the requester.
+    - expression: >-
+        variables.controller || !has(object.spec.overrides) ||
+        object.spec.overrides.all(o,
+          (oldObject != null && has(oldObject.spec.overrides) && o in oldObject.spec.overrides) ||
+          (has(o.createdBy) && o.createdBy == request.userInfo.username))
+      messageExpression: >-
+        'every new spec.overrides entry must have createdBy "' + request.userInfo.username +
+        '", your own username; kardinal override sets it for you'
+      reason: Forbidden
+    # Only kro and the controller create gate instances or change anything
+    # in them but spec.overrides: an instance decides a promotion, and
+    # overriding it is the audited way to pass it.
+    - expression: >-
+        !variables.instance || variables.graph || variables.controller || variables.onlyOverrides ||
+        (variables.cleanup && oldObject != null)
+      message: >-
+        only kardinal creates a gate instance (label kardinal.io/bundle) or changes its spec
+        or metadata; change the gate template, or record an override with kardinal override
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-gate-overrides
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kardinal-promoter.fullname" . }}-gate-overrides
+  validationActions: ["Deny"]
+  {{- with .Values.controller.watchNamespace }}
+  # Namespace mode: the controller exemption above is this release's, so the
+  # policy applies only to the namespace this release's controller manages.
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ . | quote }}
+  {{- end }}

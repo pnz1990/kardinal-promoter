@@ -439,9 +439,12 @@ func TestBundleMapper(t *testing.T) {
 	sort.Strings(got)
 	assert.Equal(t, []string{"health", "pending", "waiting"}, got)
 
-	assert.True(t, isSuperseded(old))
-	assert.False(t, isSuperseded(&v1alpha1.Bundle{Status: v1alpha1.BundleStatus{Phase: "Promoting"}}))
-	assert.False(t, isSuperseded(&v1alpha1.PromotionStep{}))
+	assert.True(t, isHalted(old))
+	assert.True(t, isHalted(&v1alpha1.Bundle{Status: v1alpha1.BundleStatus{Phase: "Rejected"}}))
+	assert.True(t, isHalted(&v1alpha1.Bundle{Spec: v1alpha1.BundleSpec{Rejected: &v1alpha1.BundleRejection{By: "alice", Reason: "bad"}},
+		Status: v1alpha1.BundleStatus{Phase: "Promoting"}}), "spec.rejected halts before the phase is written")
+	assert.False(t, isHalted(&v1alpha1.Bundle{Status: v1alpha1.BundleStatus{Phase: "Promoting"}}))
+	assert.False(t, isHalted(&v1alpha1.PromotionStep{}))
 }
 
 // TestCollectGateResults verifies the PR body gets one row per required gate,

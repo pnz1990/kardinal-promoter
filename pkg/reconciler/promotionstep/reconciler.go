@@ -291,7 +291,12 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 		// C03-promotionstep-08). HealthChecking counts: without it a superseded
 		// step could still turn Verified and, with onHealthFailure=rollback,
 		// open a rollback of a version nobody promotes any more.
-		if parentBundle.Status.Phase == "Superseded" && isCancellable(ps.Status.State) {
+		//
+		// Rejection guard (#1451): a rejected Bundle's steps that have not
+		// delivered the change stop the same way. A step already
+		// HealthChecking keeps checking: the change is live in its
+		// environment, and reject does not revert it (rollback does).
+		if h := haltOf(&parentBundle); h != nil && h.cancels(ps.Status.State) {
 			fresh, err := r.supersededStep(ctx, log, ps)
 			if err != nil || fresh == nil {
 				return ctrl.Result{}, err
@@ -300,8 +305,14 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 			switch {
 			case !ps.DeletionTimestamp.IsZero():
 				return ctrl.Result{}, nil // handleDeleted closes its PR
-			case isCancellable(ps.Status.State):
-				return r.handleSuperseded(ctx, log, ps)
+			case h.cancels(ps.Status.State):
+				res, live, err := r.handleSuperseded(ctx, log, ps, h)
+				if !live {
+					return res, err
+				}
+				// The PR merged before the rejection: the change is live, so
+				// the step goes on to its health check (DESIGN §6) and the
+				// state's handler runs below.
 			}
 			// The cache lagged a transition out of a cancellable state: the
 			// fresh state's handler runs below (RollingBack cleans the workdir).
@@ -353,6 +364,63 @@ func isCancellable(state string) bool {
 	return false
 }
 
+// halt is why a Bundle's in-flight steps are cancelled: it was superseded by
+// a newer Bundle, or rejected (kardinal reject).
+type halt struct {
+	// verb is the participle used in messages: "superseded" or "rejected".
+	verb string
+	// closeReason is the comment left on a closed PR.
+	closeReason string
+	// auditAction is the AuditEvent action of a cancelled started step.
+	auditAction string
+	// eventReason is the Kubernetes Event reason of a cancellation.
+	eventReason string
+	// healthChecking reports whether a HealthChecking step is cancelled.
+	healthChecking bool
+	// mergedIsLive reports whether a step whose PR has merged keeps going:
+	// the change is in the environment, so it is health-checked, and
+	// onHealthFailure and the deployed-Bundle history see it.
+	mergedIsLive bool
+}
+
+// haltOf returns the halt for b, or nil when b's steps may continue.
+// Supersession is read from status.phase, which only the Bundle reconciler
+// writes. A rejection is read from spec.rejected as well as the phase, so a
+// step stops before the Bundle reconciler has recorded the phase.
+func haltOf(b *v1alpha1.Bundle) *halt {
+	switch {
+	case b.Spec.Rejected != nil || b.Status.Phase == "Rejected":
+		by := ""
+		if b.Spec.Rejected != nil {
+			by = " by " + b.Spec.Rejected.By
+		}
+		return &halt{
+			verb:         "rejected",
+			closeReason:  "bundle " + b.Name + " was rejected" + by,
+			auditAction:  AuditActionPromotionRejected,
+			eventReason:  "Rejected",
+			mergedIsLive: true,
+		}
+	case b.Status.Phase == "Superseded":
+		return &halt{
+			verb:           "superseded",
+			closeReason:    "bundle " + b.Name + " was superseded by a newer Bundle",
+			auditAction:    AuditActionPromotionSuperseded,
+			eventReason:    "Superseded",
+			healthChecking: true,
+		}
+	}
+	return nil
+}
+
+// cancels reports whether a step in state is cancelled by h.
+func (h *halt) cancels(state string) bool {
+	if state == StateHealthChecking {
+		return h.healthChecking
+	}
+	return isCancellable(state)
+}
+
 // supersededStep reads ps, whose Bundle is Superseded and whose cached state
 // is cancellable, from the API server, so that the supersession guard cancels
 // it from the status the server has, not the cached one. The cache can lag
@@ -386,7 +454,7 @@ func (r *Reconciler) supersededStep(ctx context.Context, log zerolog.Logger, ps 
 const ConditionSupersededCloseFailed = "SupersededCloseFailed"
 
 // handleSuperseded closes the step's PR, if it opened one that is still open,
-// and fails the step. A failed close is retried with backoff up to
+// and fails the step, because its Bundle was superseded or rejected (h). A failed close is retried with backoff up to
 // maxStepRetries times; after that the step fails anyway and the message
 // tells the operator to close the PR by hand (C03-promotionstep-08). A step
 // that never left Pending is failed without an AuditEvent (cancelUnstarted).
@@ -398,21 +466,28 @@ const ConditionSupersededCloseFailed = "SupersededCloseFailed"
 // superseded, and sets ConditionSupersededCloseFailed. Only with it is
 // nextRetryAt the close's: a step superseded during a git retry's backoff is
 // cancelled at once, not when that retry was due.
-func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
-	return r.cancelStep(ctx, log, ps, lifecycle.SupersededMessage(ps.Spec.BundleName),
-		"bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle", AuditActionPromotionSuperseded)
+//
+// With h.mergedIsLive (a rejection), a step whose PR has already merged is
+// not cancelled: live is true and nothing is written, and the caller runs the
+// state's handler, which moves it to HealthChecking on the merge.
+func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep, h *halt) (res ctrl.Result, live bool, err error) {
+	// "bundle X was superseded" is lifecycle.SupersededMessage.
+	return r.cancelStep(ctx, log, ps, fmt.Sprintf("bundle %s was %s", ps.Spec.BundleName, h.verb),
+		h.closeReason, h.auditAction, h.eventReason, h.mergedIsLive)
 }
 
 // cancelStep is handleSuperseded for any reason: why opens the step's
-// message, prComment is the comment on the closed PR and action the
-// AuditEvent of a started step. A close that fails is retried the same way,
-// under ConditionSupersededCloseFailed.
+// message, prComment is the comment on the closed PR, action the AuditEvent
+// of a started step and eventReason the Event of an unstarted one. A close
+// that fails is retried the same way, under ConditionSupersededCloseFailed.
+// With mergedIsLive, a step whose PR already merged is left to its handler
+// (live true).
 func (r *Reconciler) cancelStep(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
-	why, prComment, action string) (ctrl.Result, error) {
+	why, prComment, action, eventReason string, mergedIsLive bool) (ctrl.Result, bool, error) {
 	closing := meta.IsStatusConditionTrue(ps.Status.Conditions, ConditionSupersededCloseFailed)
 	if closing && ps.Status.NextRetryAt != nil {
 		if wait := ps.Status.NextRetryAt.Sub(r.now()); wait > 0 {
-			return ctrl.Result{RequeueAfter: wait}, nil
+			return ctrl.Result{RequeueAfter: wait}, false, nil
 		}
 	}
 	base := ps.DeepCopy()
@@ -433,7 +508,13 @@ func (r *Reconciler) cancelStep(ctx context.Context, log zerolog.Logger, ps *v1a
 	if unstarted {
 		msg = why + " before this step started"
 	}
-	if closeErr := r.closeStepPR(ctx, ps, prComment, false); closeErr != nil {
+	merged, closeErr := r.closeStepPRMerged(ctx, ps, prComment, false)
+	if closeErr == nil && merged && mergedIsLive {
+		log.Info().Str("bundle", ps.Spec.BundleName).Str("env", ps.Spec.Environment).
+			Msgf("the PR merged before this: %s; the change is live, so the step is health-checked", why)
+		return ctrl.Result{}, true, nil
+	}
+	if closeErr != nil {
 		if !closing {
 			ps.Status.RetryCount = 0
 		}
@@ -453,21 +534,21 @@ func (r *Reconciler) cancelStep(ctx context.Context, log zerolog.Logger, ps *v1a
 			ps.Status.Message = fmt.Sprintf("%s; closing its PR failed, retrying in %s (%d/%d): %v", why,
 				delay, ps.Status.RetryCount, maxStepRetries, closeErr)
 			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
-				return ctrl.Result{}, fmt.Errorf("patch supersession retry: %w", err)
+				return ctrl.Result{}, false, fmt.Errorf("patch supersession retry: %w", err)
 			}
-			return ctrl.Result{RequeueAfter: delay}, nil
+			return ctrl.Result{RequeueAfter: delay}, false, nil
 		}
 		msg += fmt.Sprintf("; closing its PR failed after %d retries (%v) — %s", maxStepRetries, closeErr, closeByHand(closeErr))
 	} else {
 		meta.RemoveStatusCondition(&ps.Status.Conditions, ConditionSupersededCloseFailed)
 	}
 	if unstarted {
-		return ctrl.Result{}, r.cancelUnstarted(ctx, base, ps, msg)
+		return ctrl.Result{}, false, r.cancelUnstarted(ctx, base, ps, msg, eventReason)
 	}
 	if err := r.transitionAudit(ctx, base, ps, StateFailed, msg, action); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, false, err
 	}
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, false, nil
 }
 
 // closeStepPR closes the PR this step opened, if it is still open, and leaves
@@ -500,19 +581,26 @@ func (r *Reconciler) cancelStep(ctx context.Context, log zerolog.Logger, ps *v1a
 // Forgejo and Gitea (handleDeleted, B79). The status read, the close and the
 // delete can fail; the comment is best-effort.
 func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) error {
-	err := r.closeStepPRWithSCM(ctx, ps, reason, keepBranch)
+	_, err := r.closeStepPRMerged(ctx, ps, reason, keepBranch)
+	return err
+}
+
+// closeStepPRMerged is closeStepPR that also reports whether the step's PR
+// had already merged, in which case nothing was closed.
+func (r *Reconciler) closeStepPRMerged(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) (bool, error) {
+	merged, err := r.closeStepPRWithSCM(ctx, ps, reason, keepBranch)
 	if errors.Is(err, scm.ErrRepositoryNotAllowed) {
 		// The shared token may not act on this repository (#1332): kardinal
 		// opened nothing there with it, and retrying cannot change that.
 		zerolog.Ctx(ctx).Warn().Err(err).Str("step", ps.Name).
 			Msg("left the PR and branch of the step alone: the repository is not allowed")
-		return nil
+		return false, nil
 	}
-	return err
+	return merged, err
 }
 
-// closeStepPRWithSCM is closeStepPR without the allowlist handling.
-func (r *Reconciler) closeStepPRWithSCM(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) error {
+// closeStepPRWithSCM is closeStepPRMerged without the allowlist handling.
+func (r *Reconciler) closeStepPRWithSCM(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) (bool, error) {
 	repo, num := "", 0
 	if ps.Spec.PRStatusRef != "" {
 		var prs v1alpha1.PRStatus
@@ -520,14 +608,14 @@ func (r *Reconciler) closeStepPRWithSCM(ctx context.Context, ps *v1alpha1.Promot
 		switch {
 		case err == nil && prStatusOfStepPR(&prs, ps.Status.Outputs):
 			if prs.Status.Merged {
-				return nil // a merge is final: nothing to close
+				return true, nil // a merge is final: nothing to close
 			}
 			repo, num = prs.Spec.Repo, prs.Spec.PRNumber
 		case err == nil:
 			// The PRStatus still names, or reports, the PR from before the
 			// step was recreated (B72): close the step's own PR, below.
 		case !apierrors.IsNotFound(err):
-			return fmt.Errorf("get prstatus %s: %w", ps.Spec.PRStatusRef, err)
+			return false, fmt.Errorf("get prstatus %s: %w", ps.Spec.PRStatusRef, err)
 		}
 	}
 	if num == 0 {
@@ -546,28 +634,28 @@ func (r *Reconciler) closeStepPRWithSCM(ctx context.Context, ps *v1alpha1.Promot
 		if keepBranch {
 			zerolog.Ctx(ctx).Info().Str("step", ps.Name).Str("branch", prHeadBranch(ps)).
 				Msg("kept the head branch of a step that opened no PR: the step comes back and pushes it again")
-			return nil
+			return false, nil
 		}
-		return r.deleteBranchWithoutPR(ctx, ps)
+		return false, r.deleteBranchWithoutPR(ctx, ps)
 	}
 	if r.SCM == nil {
-		return fmt.Errorf("no SCM provider configured to close PR #%d", num)
+		return false, fmt.Errorf("no SCM provider configured to close PR #%d", num)
 	}
 	log := zerolog.Ctx(ctx)
 	merged, open, err := r.SCM.GetPRStatus(ctx, repo, num)
 	if err != nil {
-		return fmt.Errorf("get PR #%d status: %w", num, err)
+		return false, fmt.Errorf("get PR #%d status: %w", num, err)
 	}
 	if !open {
 		log.Info().Int("pr", num).Str("step", ps.Name).Bool("merged", merged).
 			Msg("PR of cancelled step is no longer open; not closing it")
 		if merged {
-			return nil
+			return true, nil
 		}
-		return r.closedPRBranch(ctx, ps, repo, num, keepBranch)
+		return false, r.closedPRBranch(ctx, ps, repo, num, keepBranch)
 	}
 	if err := r.SCM.ClosePR(ctx, repo, num); err != nil {
-		return fmt.Errorf("close PR #%d: %w", num, err)
+		return false, fmt.Errorf("close PR #%d: %w", num, err)
 	}
 	log.Info().Int("pr", num).Str("step", ps.Name).Msg("closed PR of cancelled step")
 	r.markPRStatusClosedByKardinal(ctx, ps, num)
@@ -576,7 +664,7 @@ func (r *Reconciler) closeStepPRWithSCM(ctx context.Context, ps *v1alpha1.Promot
 	if err := r.SCM.CommentOnPR(ctx, repo, num, body); err != nil {
 		log.Warn().Err(err).Int("pr", num).Msg("could not comment on the closed PR (non-fatal)")
 	}
-	return r.closedPRBranch(ctx, ps, repo, num, keepBranch)
+	return false, r.closedPRBranch(ctx, ps, repo, num, keepBranch)
 }
 
 // markPRStatusClosedByKardinal records on the step's PRStatus that kardinal
@@ -1129,10 +1217,11 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	// cancelled as supersession cancels one, with its PR closed and a comment
 	// saying why. A step already HealthChecking has merged; it finishes.
 	if h := lifecycle.HeldFrom(pipeline, ps.Spec.Environment, ps.Spec.BundleName); h != nil {
-		return r.cancelStep(ctx, log, ps, lifecycle.HeldMessage(ps.Spec.PipelineName, h),
+		res, _, err := r.cancelStep(ctx, log, ps, lifecycle.HeldMessage(ps.Spec.PipelineName, h),
 			fmt.Sprintf("environment %s is held on rollback %s (%s), so kardinal cancelled this promotion; "+
 				"once the hold is released, a newer Bundle promotes here", h.Environment, h.Bundle, h.Reason),
-			AuditActionPromotionFailed)
+			AuditActionPromotionFailed, "Superseded", false)
+		return res, err
 	}
 
 	// Apply WaitForMerge timeout if configured (#905).
@@ -2024,16 +2113,17 @@ func (r *Reconciler) pipelineHoldMapper(ctx context.Context, obj client.Object) 
 	return reqs
 }
 
-// isSuperseded passes Bundle events of superseded Bundles.
-func isSuperseded(obj client.Object) bool {
+// isHalted passes Bundle events of superseded and rejected Bundles.
+func isHalted(obj client.Object) bool {
 	b, ok := obj.(*v1alpha1.Bundle)
-	return ok && b.Status.Phase == "Superseded"
+	return ok && haltOf(b) != nil
 }
 
-// bundleMapper wakes the unfinished PromotionSteps of a superseded Bundle so
-// the supersession guard closes their PRs at once, and the steps of a Bundle
-// whose maxConcurrentPromotions hold was set or lifted (holdForSlot). Without it a step in
-// WaitingForMerge saw the new phase only at its next poll
+// bundleMapper wakes the unfinished PromotionSteps of a superseded or
+// rejected Bundle so the supersession guard closes their PRs at once, and the
+// steps of a Bundle whose maxConcurrentPromotions hold was set or lifted
+// (holdForSlot). Without it a step in WaitingForMerge saw the new phase only
+// at its next poll
 // (requeueWaitForMerge), and the superseded PR stayed open, and mergeable,
 // until then.
 func (r *Reconciler) bundleMapper(ctx context.Context, obj client.Object) []reconcile.Request {

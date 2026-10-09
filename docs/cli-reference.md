@@ -39,6 +39,7 @@
 | [`kardinal policy test`](reference/cli/kardinal-policy-test.md) | Validate PolicyGate YAML syntax and dry-run CEL expressions |
 | [`kardinal promote`](reference/cli/kardinal-promote.md) | Promote the Bundle verified upstream into an environment |
 | [`kardinal refresh`](reference/cli/kardinal-refresh.md) | Force re-reconciliation of a Pipeline |
+| [`kardinal reject`](reference/cli/kardinal-reject.md) | Reject a Bundle: it is never promoted again, and rollback never picks it |
 | [`kardinal release-hold`](reference/cli/kardinal-release-hold.md) | Release the hold of a rollback on an environment |
 | [`kardinal resume`](reference/cli/kardinal-resume.md) | Resume a paused pipeline |
 | [`kardinal rollback`](reference/cli/kardinal-rollback.md) | Roll back a pipeline environment to a previous Bundle |
