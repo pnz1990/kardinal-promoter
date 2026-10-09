@@ -191,15 +191,26 @@ const appCheckTimeout = 15 * time.Second
 // credentials and logs a warning when GitHub refuses them. The token is
 // cached for the provider's first requests.
 func (w *SecretWatcher) checkApp(ctx context.Context, log zerolog.Logger) {
-	g, ok := w.Provider.Current().(*GitHubProvider)
-	if !ok || g.tokens == nil {
-		return
-	}
 	ctx, cancel := context.WithTimeout(ctx, appCheckTimeout)
 	defer cancel()
-	if _, err := g.tokens.Token(ctx); err != nil {
+	if err := CheckGitHubApp(ctx, w.Provider.Current()); err != nil {
 		log.Warn().Err(err).Msg("SCM GITHUB APP WARNING — cannot mint an installation token; promotion steps will fail until the App ID, installation ID or private key is fixed")
 		return
 	}
 	log.Info().Msg("SCM GitHub App installation token minted")
+}
+
+// CheckGitHubApp mints an installation token with p's GitHub App
+// credentials. It returns nil for a provider that does not use a GitHub
+// App.
+func CheckGitHubApp(ctx context.Context, p SCMProvider) error {
+	if d, ok := p.(*DynamicProvider); ok {
+		p = d.Current()
+	}
+	g, ok := p.(*GitHubProvider)
+	if !ok || g.tokens == nil {
+		return nil
+	}
+	_, err := g.tokens.Token(ctx)
+	return err
 }

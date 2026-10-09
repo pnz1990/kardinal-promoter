@@ -17,9 +17,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"slices"
 	"testing"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

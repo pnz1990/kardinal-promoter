@@ -5,8 +5,9 @@ package promotionstep_test
 
 import (
 	"context"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"testing"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

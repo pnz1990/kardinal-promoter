@@ -15,12 +15,13 @@ package scm
 
 import (
 	"fmt"
-	"github.com/go-git/go-git/v5/plumbing/transport"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/go-git/go-git/v5/plumbing/transport"
 )
 
 // scpLikeURL matches the scp-like git remote syntax "user@host:path".

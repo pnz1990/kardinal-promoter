@@ -18,11 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

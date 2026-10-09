@@ -48,6 +48,9 @@ type mockGitClient struct {
 	cloneAtSHA   string
 	cloneAtDir   string
 	cloneAtToken string
+	cloneAtAuth  scm.GitAuth
+	cloneAuth    scm.GitAuth
+	pushAuth     scm.GitAuth
 	pushBranch   string
 	pushForce    bool
 	failClone    bool
@@ -64,7 +67,7 @@ type mockGitClient struct {
 func (m *mockGitClient) Clone(_ context.Context, url, _, dir string, auth scm.GitAuth) error {
 	token := auth.Token
 	m.cloneCalls++
-	m.cloneURL, m.cloneDir, m.cloneToken = url, dir, token
+	m.cloneURL, m.cloneDir, m.cloneToken, m.cloneAuth = url, dir, token, auth
 	if m.cloneErr != nil {
 		return m.cloneErr
 	}
@@ -77,7 +80,7 @@ func (m *mockGitClient) Clone(_ context.Context, url, _, dir string, auth scm.Gi
 func (m *mockGitClient) CloneAt(_ context.Context, url, sha, dir string, auth scm.GitAuth) error {
 	token := auth.Token
 	m.cloneAtCalls++
-	m.cloneAtURL, m.cloneAtSHA, m.cloneAtDir, m.cloneAtToken = url, sha, dir, token
+	m.cloneAtURL, m.cloneAtSHA, m.cloneAtDir, m.cloneAtToken, m.cloneAtAuth = url, sha, dir, token, auth
 	if m.cloneAtErr != nil {
 		return m.cloneAtErr
 	}
@@ -95,8 +98,9 @@ func (m *mockGitClient) CommitAll(_ context.Context, _, _, _, _ string) error {
 	return nil
 }
 
-func (m *mockGitClient) Push(_ context.Context, _, _, branch string, _ scm.GitAuth, force bool) error {
+func (m *mockGitClient) Push(_ context.Context, _, _, branch string, auth scm.GitAuth, force bool) error {
 	m.pushCalls++
+	m.pushAuth = auth
 	m.pushBranch = branch
 	m.pushForce = force
 	if len(m.pushErrs) > 0 {

@@ -17,11 +17,12 @@ package promotionstep_test
 import (
 	"context"
 	"errors"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -8,6 +8,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub App authentication** (#1460) — the controller's Secret (or `--github-app-id`, `--github-app-installation-id`, `--github-app-private-key-file`) can hold a GitHub App's ID, installation ID and private key instead of a PAT. Installation tokens are minted, cached and replaced 10 minutes before they expire; a key rotation in the Secret is picked up without a restart, as for a token; GitHub Enterprise Server works through `--scm-api-url`. A Pipeline's git Secret can hold the same keys for git. Chart: `github.app.enabled`. See [GitHub App](scm-providers.md#github-app)
+- **SSH git** (#1460) — `spec.git.url` can be an ssh URL with `sshPrivateKey` and `knownHosts` in the Pipeline's git Secret, for every provider; unknown host keys are refused. See [SSH git authentication](scm-providers.md#ssh-git-authentication)
+
 ### Docs
 
 - **Comparison** — resurveyed Kargo v1.12.1 and GitOps Promoter v0.42.1 (2026-10-03). The matrix corrects cells that had gone stale, such as GitOps Promoter's CLI, PR body and Flux support, and Kargo's gates, steps and engines. It adds rows for pause, supersession, `explain`/`policy simulate` and audit trails, plus sections on what changed in 2026 and where Kargo or GitOps Promoter is ahead. The home table, the rollback page and the Kargo migration guide match it

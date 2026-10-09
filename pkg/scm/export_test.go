@@ -55,3 +55,9 @@ func (w *SecretWatcher) CheckAndReloadForTest(ctx context.Context) {
 		Logger()
 	w.checkAndReload(ctx, log)
 }
+
+// SetAppTokenClockForTest replaces the clock of a GitHubAppTokenSource.
+func SetAppTokenClockForTest(s *GitHubAppTokenSource, now func() time.Time) { s.now = now }
+
+// AuthMethodForTest exposes authMethod.
+var AuthMethodForTest = authMethod
