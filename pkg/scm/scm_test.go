@@ -438,7 +438,7 @@ func TestGoGitClient_PushNotARepo(t *testing.T) {
 	}
 	// Push against a non-git directory should fail at PlainOpen (before any network call).
 	c := scm.NewGoGitClient()
-	err := c.Push(context.Background(), t.TempDir(), "origin", "main", "tok", false)
+	err := c.Push(context.Background(), t.TempDir(), "origin", "main", scm.TokenAuth("tok"), false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "open repo")
 }

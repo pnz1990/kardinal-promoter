@@ -15,6 +15,7 @@ package scm
 
 import (
 	"context"
+	"net"
 	"sync/atomic"
 	"time"
 
@@ -55,6 +56,37 @@ func (w *SecretWatcher) CheckAndReloadForTest(ctx context.Context) {
 		Str("key", w.SecretKey).
 		Logger()
 	w.checkAndReload(ctx, log)
+}
+
+// SetAppTokenClockForTest replaces the clock of a GitHubAppTokenSource.
+func SetAppTokenClockForTest(s *GitHubAppTokenSource, now func() time.Time) { s.now = now }
+
+// AuthMethodForTest exposes authMethod.
+var AuthMethodForTest = authMethod
+
+// SetSSHTimeoutsForTest replaces the ssh connect and receive-pack wait
+// limits and returns a function that restores them.
+func SetSSHTimeoutsForTest(dial, wait time.Duration) (restore func()) {
+	oldDial, oldWait := sshDialTimeout, receivePackWait
+	sshDialTimeout, receivePackWait = dial, wait
+	return func() { sshDialTimeout, receivePackWait = oldDial, oldWait }
+}
+
+// SetGitIdleTimeoutForTest shortens the git connection idle bound.
+func SetGitIdleTimeoutForTest(d time.Duration) (restore func()) {
+	old := gitIdleTimeout
+	gitIdleTimeout = d
+	return func() { gitIdleTimeout = old }
+}
+
+// NewIdleConnForTest wraps c in the git idle bound.
+func NewIdleConnForTest(c net.Conn, idle time.Duration) net.Conn { return newIdleConn(c, idle) }
+
+// SetDialTCPForTest replaces the git TCP dial.
+func SetDialTCPForTest(f func(ctx context.Context, network, addr string) (net.Conn, error)) (restore func()) {
+	old := dialTCP
+	dialTCP = f
+	return func() { dialTCP = old }
 }
 
 // CountEvidenceRendersForTest counts the evidence renders of the PR template
