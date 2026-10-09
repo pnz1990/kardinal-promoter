@@ -14,6 +14,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
 
 func TestTagIn(t *testing.T) {
@@ -237,4 +238,18 @@ func TestRetiredSteps(t *testing.T) {
 	if at, ok := lifecycle.VerifiedTime(&s); !ok || !at.Equal(verifiedAt.Time) {
 		t.Fatalf("verifiedAt = %v, %v; want %v", at, ok, verifiedAt.Time)
 	}
+}
+
+// TestCountsFromZero (#1578 QA): a counter series that appears during the
+// window counts from zero, not from its first sample; one that existed at
+// the start counts from its value then; a reset series counts its end value.
+func TestCountsFromZero(t *testing.T) {
+	s := func(pod, result, v string) framework.PromSample {
+		return framework.PromSample{Metric: map[string]string{"__name__": "x", "pod": pod, "result": result}, Value: v}
+	}
+	end := []framework.PromSample{s("a", "ok", "151"), s("a", "non_fast_forward", "3"), s("b", "ok", "40"), s("c", "ok", "5")}
+	start := []framework.PromSample{s("b", "ok", "30"), s("c", "ok", "9")}
+	got := countsFromZero(end, start, "result")
+	assert.InDelta(t, 151+10+5, got["ok"], 0, "a new series from 0, an old one from its start, a reset one its end")
+	assert.InDelta(t, 3, got["non_fast_forward"], 0, "early refusals are not hidden")
 }
