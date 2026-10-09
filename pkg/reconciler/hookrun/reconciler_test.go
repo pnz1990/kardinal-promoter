@@ -418,3 +418,104 @@ func TestHookRun_WaitsWhilePaused(t *testing.T) {
 	assert.Equal(t, h.now.Add(10*time.Minute), h.hookRun().Status.Deadline.UTC())
 	assert.Equal(t, 1, h.creates)
 }
+
+// TestHookRun_PreHookOfHaltedBundle: a pre hook whose Bundle was superseded
+// or rejected never runs its Job, whether that happened before the start or
+// between the start and the Job (QA #1602: v1's migration, waiting through a
+// pause, ran after v2 superseded it). A pre hook of an environment held for
+// another Bundle waits, without a deadline, and runs once the hold ends; one
+// held for its own Bundle runs. Post hooks are never held.
+func TestHookRun_PreHookOfHaltedBundle(t *testing.T) {
+	ctx := context.Background()
+	setBundle := func(h *harness, mut func(*v1alpha1.Bundle)) {
+		t.Helper()
+		var b v1alpha1.Bundle
+		require.NoError(t, h.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "v1"}, &b))
+		mut(&b)
+		require.NoError(t, h.c.Update(ctx, &b))
+	}
+	superseded := func(b *v1alpha1.Bundle) { b.Status.Phase = "Superseded" }
+	rejected := func(b *v1alpha1.Bundle) {
+		b.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "bad build"}
+	}
+
+	for name, tc := range map[string]struct {
+		mut  func(*v1alpha1.Bundle)
+		want string
+	}{
+		"superseded": {superseded, "not run: Bundle v1 was superseded by a newer Bundle"},
+		"rejected":   {rejected, "not run: Bundle v1 was rejected"},
+	} {
+		t.Run(name+" before the start", func(t *testing.T) {
+			h := newHarness(t, newHookRun(jobJSON("")))
+			setBundle(h, tc.mut)
+			h.reconcile()
+			hr := h.hookRun()
+			assert.Equal(t, v1alpha1.HookRunSkipped, hr.Status.Phase)
+			assert.Equal(t, tc.want, hr.Status.Message)
+			h.reconcile()
+			assert.Zero(t, h.creates, "no Job")
+		})
+		t.Run(name+" between the start and the Job", func(t *testing.T) {
+			h := newHarness(t, newHookRun(jobJSON("")))
+			h.reconcile() // start: deadline recorded
+			require.NotNil(t, h.hookRun().Status.Deadline)
+			setBundle(h, tc.mut)
+			h.reconcile()
+			hr := h.hookRun()
+			assert.Equal(t, v1alpha1.HookRunSkipped, hr.Status.Phase)
+			assert.Equal(t, tc.want, hr.Status.Message)
+			assert.Zero(t, h.creates, "no Job")
+		})
+	}
+
+	t.Run("superseded while paused", func(t *testing.T) {
+		freeze := lifecycle.DesiredFreezeGate(&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: ns}})
+		h := newHarness(t, newHookRun(jobJSON("")), freeze)
+		h.reconcile()
+		require.Contains(t, h.hookRun().Status.Message, "is paused")
+		setBundle(h, superseded)
+		require.NoError(t, h.c.Delete(ctx, freeze)) // resume
+		h.reconcile()
+		h.reconcile()
+		assert.Equal(t, v1alpha1.HookRunSkipped, h.hookRun().Status.Phase)
+		assert.Zero(t, h.creates)
+	})
+
+	held := func(bundle string) *v1alpha1.Pipeline {
+		return &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: ns},
+			Spec: v1alpha1.PipelineSpec{Holds: []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: bundle, Reason: "rollback"}}}}
+	}
+	t.Run("held for another Bundle", func(t *testing.T) {
+		p := held("v0-rollback")
+		h := newHarness(t, newHookRun(jobJSON("")), p)
+		for range 2 {
+			h.reconcile()
+			hr := h.hookRun()
+			assert.Equal(t, v1alpha1.HookRunPending, hr.Status.Phase)
+			assert.Equal(t, "not started: environment prod is held for Bundle v0-rollback", hr.Status.Message)
+			assert.Nil(t, hr.Status.Deadline, "the timeout does not run while held")
+		}
+		assert.Zero(t, h.creates)
+		require.NoError(t, h.c.Get(ctx, client.ObjectKeyFromObject(p), p))
+		p.Spec.Holds = nil
+		require.NoError(t, h.c.Update(ctx, p))
+		h.run()
+		assert.Equal(t, 1, h.creates)
+	})
+	t.Run("held for its own Bundle", func(t *testing.T) {
+		h := newHarness(t, newHookRun(jobJSON("")), held("v1"))
+		h.run()
+		assert.Equal(t, 1, h.creates)
+	})
+
+	t.Run("post hooks are not held", func(t *testing.T) {
+		freeze := lifecycle.DesiredFreezeGate(&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: ns}})
+		hr := newHookRun(jobJSON(""))
+		hr.Spec.Phase = v1alpha1.HookPhasePost
+		h := newHarness(t, hr, freeze, held("v0-rollback"))
+		setBundle(h, superseded)
+		h.run()
+		assert.Equal(t, 1, h.creates, "a post hook runs during a pause, a hold and after a supersede: its change is live")
+	})
+}

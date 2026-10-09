@@ -678,6 +678,56 @@ func TestStep_CompactPauseHoldsNextPreHook(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout+hookTimeout)
 }
 
+// TestStep_PausedPreHookOfSupersededBundleSkipped: a pre hook that waits
+// through a pause does not run on resume once its Bundle was superseded
+// meanwhile (QA #1602: v1's migration then ran next to v2's). v1's second
+// pre hook waits Pending while the Pipeline is paused; v2 supersedes v1;
+// after resume v1's hook ends Skipped (or is pruned with v1's Graph) without
+// a Job, and v2 runs its own hooks and is Verified.
+//
+// Covers HOOK-HALT-01.
+func TestStep_PausedPreHookOfSupersededBundleSkipped(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{
+		{Name: "migrate", Phase: "pre", Job: hookJob(t, `sleep 15; echo migrated`, "")},
+		{Name: "seed", Phase: "pre", Job: hookJob(t, `echo seed`, "")},
+	}
+	a.apply(t, p)
+	v1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	seed := graph.HookRunName(pipelineName, v1, "test", "pre", "seed")
+	waitHookRun(t, e, a.ns, graph.HookRunName(pipelineName, v1, "test", "pre", "migrate"), v1alpha1.HookRunRunning)
+	e.MustKardinal(t, a.ns, "pause", pipelineName)
+	framework.Eventually(t, 2*time.Minute, "v1's second pre hook waiting for the pause", func(ctx context.Context) (bool, string) {
+		hr, ok, err := hookRun(ctx, e, a.ns, seed)
+		if err != nil || !ok {
+			return false, fmt.Sprint("not created yet ", err)
+		}
+		return hr.Status.Phase == v1alpha1.HookRunPending && strings.Contains(hr.Status.Message, "is paused"),
+			fmt.Sprintf("phase=%q message=%q", hr.Status.Phase, hr.Status.Message)
+	})
+
+	v2 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	e.WaitBundlePhase(t, a.ns, v1, "Superseded", 2*time.Minute)
+	e.MustKardinal(t, a.ns, "resume", pipelineName)
+	waitHookRun(t, e, a.ns, graph.HookRunName(pipelineName, v2, "test", "pre", "seed"), v1alpha1.HookRunSucceeded)
+	e.WaitStepState(t, a.ns, pipelineName, v2, "test", "Verified", promoteTimeout+hookTimeout)
+
+	hr, ok, err := hookRun(ctx, e, a.ns, seed)
+	require.NoError(t, err)
+	if ok {
+		assert.Equal(t, v1alpha1.HookRunSkipped, hr.Status.Phase, hr.Status.Message)
+		assert.Contains(t, hr.Status.Message, "was superseded")
+		assert.Empty(t, hr.Status.JobUID, "no Job")
+	}
+	pods, err := hookPods(ctx, e, a.ns, seed)
+	require.NoError(t, err)
+	assert.Empty(t, pods, "v1's second pre hook never ran")
+}
+
 // TestStep_HookDeletedWhileRunningRunsOnce: deleting a pre-hook HookRun
 // while its Job runs does not run the migration twice. The finalizer holds
 // the HookRun until the Job ends and records its result, the step keeps the
