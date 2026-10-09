@@ -1321,3 +1321,56 @@ func TestUIAPI_ListPipelines_Deployed(t *testing.T) {
 	assert.Equal(t, "app-v2", resp[0].ActiveBundleName)
 	assert.Equal(t, "2.0.0", resp[0].ActiveBundleVersion)
 }
+
+// TestUIAPI_ListPipelines_DeployedImageAndConfig (#1519 QA, #1353): image
+// and config Bundles do not supersede each other, so an environment whose last
+// change was an image Bundle also reports the config commit of the last config
+// Bundle there (configFrom), and one whose last change was a config Bundle the
+// images of the last image Bundle (imagesFrom), as kardinal status does.
+func TestUIAPI_ListPipelines_DeployedImageAndConfig(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	p := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec:       v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}}},
+	}
+	img := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-img", Namespace: "default", CreationTimestamp: metav1.NewTime(t0)},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app", Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/x/app", Tag: "1.4.0"}}}}
+	cfg := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-cfg", Namespace: "default", CreationTimestamp: metav1.NewTime(t0.Add(time.Hour))},
+		Spec: v1alpha1.BundleSpec{Type: "config", Pipeline: "app", ConfigRef: &v1alpha1.ConfigRef{GitRepo: "https://git/x", CommitSHA: "abcdef0123456789"}}}
+	step := func(b, env string, at time.Time) *v1alpha1.PromotionStep {
+		return &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: b + "-" + env, Namespace: "default", CreationTimestamp: metav1.NewTime(at)},
+			Spec:       v1alpha1.PromotionStepSpec{BundleName: b, Environment: env, PipelineName: "app"},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified", Conditions: []metav1.Condition{{Type: "Verified",
+				Status: metav1.ConditionTrue, Reason: "Verified", LastTransitionTime: metav1.NewTime(at)}}},
+		}
+	}
+	// test: config then image (image last). prod: image then config (config last).
+	objs := []client.Object{p, img, cfg,
+		step("app-cfg", "test", t0.Add(time.Hour)), step("app-img", "test", t0.Add(2*time.Hour)),
+		step("app-img", "prod", t0.Add(time.Minute)), step("app-cfg", "prod", t0.Add(3*time.Hour)),
+	}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs...).Build()
+	mux := http.NewServeMux()
+	newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiPipelineResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+
+	test := resp[0].Deployed["test"]
+	assert.Equal(t, "app-img", test.Bundle)
+	assert.Equal(t, "1.4.0", test.Version)
+	assert.Equal(t, "app-cfg", test.ConfigFrom)
+	assert.Equal(t, "config abcdef0", test.ConfigVersion)
+	assert.Empty(t, test.ImagesFrom)
+
+	prod := resp[0].Deployed["prod"]
+	assert.Equal(t, "app-cfg", prod.Bundle)
+	assert.Equal(t, "config abcdef0", prod.Version)
+	assert.Equal(t, "app-img", prod.ImagesFrom)
+	assert.Equal(t, "1.4.0", prod.ImagesVersion)
+	assert.Empty(t, prod.ConfigFrom)
+}

@@ -159,9 +159,24 @@ func (b *Builder) serviceAccountName() string {
 // resolveOrdering reads spec.environments, builds the dependency map,
 // and returns the topologically sorted environment names.
 func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string][]string, error) {
+	sorted, deps, cycle, err := orderEnvironments(pipeline, nil)
+	if cycle != nil {
+		// Only a cycle needs to know where each edge came from: record it
+		// on a second pass rather than on every call (the UI lists every
+		// Pipeline's ordering on each poll).
+		why := map[string]map[string]edgeSource{}
+		_, _, cycle, _ = orderEnvironments(pipeline, why)
+		return nil, nil, cycleError(cycle, why, pipeline.Spec.Environments)
+	}
+	return sorted, deps, err
+}
+
+// orderEnvironments is resolveOrdering's work. With why non-nil it records
+// where each edge came from. It returns the cycle, if there is one.
+func orderEnvironments(pipeline *kardinalv1alpha1.Pipeline, why map[string]map[string]edgeSource) ([]string, map[string][]string, []string, error) {
 	envs := pipeline.Spec.Environments
 	if len(envs) == 0 {
-		return nil, nil, fmt.Errorf("build: pipeline has no environments")
+		return nil, nil, nil, fmt.Errorf("build: pipeline has no environments")
 	}
 
 	// Build name set and dependency map
@@ -175,16 +190,17 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 	waves := indexWaves(envs)
 
 	deps := make(map[string][]string, len(envs)) // env → []dependsOn
-	// why records where each edge came from, so a cycle error can say which
-	// part of the spec made it.
-	why := make(map[string]map[string]edgeSource, len(envs))
 	for i, e := range envs {
-		why[e.Name] = map[string]edgeSource{}
 		var merged []string
 		add := func(dep string, src edgeSource) {
 			if !containsStr(merged, dep) {
 				merged = append(merged, dep)
-				why[e.Name][dep] = src
+				if why != nil {
+					if why[e.Name] == nil {
+						why[e.Name] = map[string]edgeSource{}
+					}
+					why[e.Name][dep] = src
+				}
 			}
 		}
 		// Start with the edges to the previous wave, if there is one.
@@ -194,7 +210,7 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 		// Union with explicit DependsOn.
 		for _, dep := range e.DependsOn {
 			if !nameSet[dep] {
-				return nil, nil, fmt.Errorf("build: environment %q dependsOn unknown environment %q",
+				return nil, nil, nil, fmt.Errorf("build: environment %q dependsOn unknown environment %q",
 					e.Name, dep)
 			}
 			add(dep, fromDependsOn)
@@ -210,10 +226,9 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 	// Topological sort (Kahn's algorithm) to detect cycles
 	sorted, cycle := topoSort(nameSet, deps)
 	if cycle != nil {
-		return nil, nil, cycleError(cycle, why, envs)
+		return nil, nil, cycle, nil
 	}
-
-	return sorted, deps, nil
+	return sorted, deps, nil, nil
 }
 
 // edgeSource is the part of a Pipeline spec an ordering edge comes from.
@@ -299,36 +314,49 @@ func waveOrder(cycle []string, wave map[string]int) string {
 // the graph has a cycle it returns nil and the cycle as a path that starts
 // and ends at the same environment.
 func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, []string) {
-	// Compute in-degree
-	inDegree := make(map[string]int, len(nodes))
+	// Index-based Kahn's algorithm: the names are sorted once, so a node's
+	// index orders it as its name does, and the queue and each node's
+	// dependents need only integer sorts.
+	names := make([]string, 0, len(nodes))
 	for n := range nodes {
-		inDegree[n] = 0
+		names = append(names, n)
 	}
-	// Build reverse map: node → dependents (nodes that depend on it)
-	dependents := make(map[string][]string, len(nodes))
+	sort.Strings(names)
+	idx := make(map[string]int, len(names))
+	for i, n := range names {
+		idx[n] = i
+	}
+	inDegree := make([]int, len(names))
+	dependents := make([][]int, len(names))
 	for n, ds := range deps {
+		ni, ok := idx[n]
+		if !ok {
+			continue
+		}
 		for _, d := range ds {
-			dependents[d] = append(dependents[d], n)
-			inDegree[n]++
+			di, ok := idx[d]
+			if !ok {
+				continue
+			}
+			dependents[di] = append(dependents[di], ni)
+			inDegree[ni]++
 		}
 	}
-
-	// Start with nodes that have no prerequisites
-	var queue []string
-	for n := range nodes {
-		if inDegree[n] == 0 {
-			queue = append(queue, n)
+	queue := make([]int, 0, len(names))
+	for i := range names {
+		if inDegree[i] == 0 {
+			queue = append(queue, i) // ascending: names are sorted
 		}
 	}
-	sort.Strings(queue) // deterministic order
-
-	var sorted []string
+	sorted := make([]string, 0, len(names))
 	for len(queue) > 0 {
 		n := queue[0]
 		queue = queue[1:]
-		sorted = append(sorted, n)
+		sorted = append(sorted, names[n])
 		next := dependents[n]
-		sort.Strings(next)
+		if len(next) > 1 {
+			sort.Ints(next)
+		}
 		for _, d := range next {
 			inDegree[d]--
 			if inDegree[d] == 0 {
@@ -336,7 +364,6 @@ func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, []stri
 			}
 		}
 	}
-
 	if len(sorted) != len(nodes) {
 		return nil, findCycle(nodes, deps, sorted)
 	}

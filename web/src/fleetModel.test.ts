@@ -88,6 +88,25 @@ describe('fleetRow', () => {
   }
 })
 
+describe('fleetRow: image and config Bundles (#1353)', () => {
+  it('a station also names what it runs from another Bundle', () => {
+    const r = fleetRow(base({
+      environmentTopology: [{ name: 'test' }, { name: 'prod', upstreams: ['test'] }],
+      deployed: {
+        test: { bundle: 'app-img', version: '1.4.0', configFrom: 'app-cfg', configVersion: 'config abcdef0' },
+        prod: { bundle: 'app-cfg', version: 'config abcdef0', imagesFrom: 'app-img', imagesVersion: '1.4.0' },
+      },
+    }))
+    const [[test], [prod]] = r.groups
+    expect(test).toMatchObject({ version: '1.4.0', alsoRuns: 'config abcdef0', alsoFrom: 'app-cfg' })
+    expect(prod).toMatchObject({ version: 'config abcdef0', alsoRuns: '1.4.0', alsoFrom: 'app-img' })
+  })
+  it('a station of one Bundle names nothing else', () => {
+    const r = fleetRow(base({ environmentTopology: [{ name: 'test' }], deployed: { test: { bundle: 'a', version: '1' } } }))
+    expect(r.groups[0][0].alsoRuns).toBeUndefined()
+  })
+})
+
 describe('ageOf', () => {
   const now = Date.parse('2026-10-01T12:00:00Z')
   const cases: [string | undefined, string][] = [

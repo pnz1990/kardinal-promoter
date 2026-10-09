@@ -17,7 +17,11 @@ test.describe('Journey 012 — Fleet board', () => {
     await expect(prod).toContainText('sha-9f8e7d6')
     await expect(prod).toContainText('waiting for merge')
     await expect(board.locator('.fleet-rail__version', { hasText: 'sha-abc1234' })).toBeVisible()
-    await expect(board.getByRole('button', { name: /^kardinal-test-app uat:/ })).toContainText(/verified \d+m ago/)
+    const uat = board.getByRole('button', { name: /^kardinal-test-app uat:/ })
+    await expect(uat).toContainText(/verified \d+m ago/)
+    // An image Bundle runs with the config of the last config Bundle (#1353).
+    await expect(uat).toContainText('+ config 77aa001')
+    await expect(uat).toHaveAccessibleName(/with config 77aa001 from kardinal-test-app-cfg9/)
   })
 
   test('a station opens its pipeline and the logo returns to the fleet', async ({ page }) => {

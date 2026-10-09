@@ -54,6 +54,16 @@ describe('FleetBoard', () => {
     expect(within(empty).getByText('nothing deployed')).toBeInTheDocument()
   })
 
+  it('shows the config an image Bundle runs with, as kardinal status does (#1353)', () => {
+    const p: Pipeline = {
+      name: 'mixed', namespace: 'team-c', phase: 'Ready', environmentCount: 1, environmentTopology: [{ name: 'test' }],
+      deployed: { test: { bundle: 'mixed-img', version: '1.4.0', configFrom: 'mixed-cfg', configVersion: 'config abcdef0' } },
+    }
+    render(<FleetBoard pipelines={[p]} total={1} onSelect={() => {}} now={now} />)
+    const st = screen.getByRole('button', { name: /^mixed test: 1\.4\.0, with config abcdef0 from mixed-cfg,/ })
+    expect(within(st).getByText('+ config abcdef0')).toHaveAttribute('title', 'from mixed-cfg')
+  })
+
   it('lists pipelines by namespace, then name', () => {
     render(<FleetBoard pipelines={pipelines} total={3} onSelect={() => {}} now={now} />)
     const names = screen.getAllByRole('listitem').map(li => li.querySelector('.fleet-line__name')?.textContent)

@@ -47,7 +47,7 @@ const PIPELINES = [
     environmentTopology: [{ name: 'test' }, { name: 'uat', upstreams: ['test'] }, { name: 'prod', upstreams: ['uat'], approval: 'pr-review' }],
     deployed: {
       test: { bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', verifiedAt: new Date(Date.now() - 420_000).toISOString() },
-      uat: { bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', verifiedAt: new Date(Date.now() - 240_000).toISOString() },
+      uat: { bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', verifiedAt: new Date(Date.now() - 240_000).toISOString(), configFrom: 'kardinal-test-app-cfg9', configVersion: 'config 77aa001' },
       prod: { bundle: 'kardinal-test-app-prev111', version: 'sha-9f8e7d6', verifiedAt: new Date(Date.now() - 7_000_000).toISOString() },
     },
   },

@@ -66,10 +66,13 @@ function StationPlate({ s, pipeline, now, onSelect }: {
       className="fleet-station"
       data-state={s.state}
       onClick={() => onSelect(pipeline.name, pipeline.namespace)}
-      aria-label={`${pipeline.name} ${s.env}: ${s.version ? `${s.version}, ` : ''}${stationNote(s, now)}`}
+      aria-label={`${pipeline.name} ${s.env}: ${s.version ? `${s.version}, ` : ''}${s.alsoRuns ? `with ${s.alsoRuns} from ${s.alsoFrom}, ` : ''}${stationNote(s, now)}`}
     >
       <span className="fleet-station__env">{s.env}</span>
       <span className="fleet-station__version" title={s.bundle || undefined}>{s.version || s.bundle || '—'}</span>
+      {s.alsoRuns && (
+        <span className="fleet-station__also" title={`from ${s.alsoFrom}`}>+ {s.alsoRuns}</span>
+      )}
       <span className="fleet-station__note">{stationNote(s, now)}</span>
     </button>
   )

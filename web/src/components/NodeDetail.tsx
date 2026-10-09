@@ -320,6 +320,8 @@ function StepProgress({ step }: { step: PromotionStep }) {
                     {bars[i] && (
                       <span
                         data-testid="step-bar"
+                        data-offset={bars[i]!.offset.toFixed(1)}
+                        data-width={bars[i]!.width.toFixed(1)}
                         style={{
                           position: 'absolute', top: 0, bottom: 0, borderRadius: '2px',
                           left: `${bars[i]!.offset}%`, width: `${bars[i]!.width}%`,

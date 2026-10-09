@@ -208,6 +208,18 @@
   text-overflow: ellipsis;
 }
 
+/* What the environment runs from another Bundle (#1353): config under an
+   image Bundle, images under a config Bundle. */
+.fleet-station__also {
+  font-family: var(--fleet-mono);
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 .fleet-station__note {
   font-size: 0.68rem;
   color: var(--station-note, var(--color-text-muted));

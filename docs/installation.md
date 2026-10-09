@@ -236,7 +236,10 @@ release name other than `kardinal-promoter`, the Service is named
   line of stations, one per environment in promotion order; environments promoted in parallel
   are stacked. A station shows the version the environment runs and when it was Verified.
   That is the newest promotion there whose change landed, the Bundle `kardinal status` reports
-  as deployed. A lit rail marks the active Bundle's version on its way into an environment:
+  as deployed. Image and config Bundles do not replace each other, so a station also shows, under
+  `+`, what the environment runs from another Bundle: the config commit of the last config Bundle
+  under an image Bundle, or the image tags of the last image Bundle under a config Bundle, as
+  `kardinal status` does. A lit rail marks the active Bundle's version on its way into an environment:
   amber and moving while it promotes, waits for its PR or is health checked; amber and still
   while a PolicyGate holds it; red where it failed. A station opens its Pipeline. The board
   follows the sidebar's health filter.

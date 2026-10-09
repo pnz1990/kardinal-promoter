@@ -23,6 +23,11 @@ export interface Station {
   /** Bundle it runs, '' when never deployed. */
   bundle: string
   verifiedAt?: string
+  /** What else it runs from another Bundle: "config abc1234" under an image
+   *  Bundle, the image tags under a config Bundle, as kardinal status says (#1353). */
+  alsoRuns?: string
+  /** The Bundle alsoRuns comes from. */
+  alsoFrom?: string
   state: StationState
   /** The active Bundle's step state here, when it has one. */
   incomingState?: string
@@ -98,7 +103,9 @@ export function fleetRow(p: Pipeline): FleetRow {
     // with no state there is still ahead of it.
     else if (active) state = 'ahead'
     else state = d ? 'settled' : 'empty'
-    return { env, version: d?.version ?? '', bundle: d?.bundle ?? '', verifiedAt: d?.verifiedAt, state, incomingState: incoming }
+    const alsoRuns = d?.configVersion || d?.imagesVersion || undefined
+    const alsoFrom = d?.configVersion ? d.configFrom : d?.imagesVersion ? d.imagesFrom : undefined
+    return { env, version: d?.version ?? '', bundle: d?.bundle ?? '', verifiedAt: d?.verifiedAt, alsoRuns, alsoFrom, state, incomingState: incoming }
   }))
 
   let liveGroup = groups.findIndex(g => g.some(s => s.state === 'failed'))

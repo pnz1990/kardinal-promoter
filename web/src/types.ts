@@ -53,6 +53,14 @@ export interface DeployedRelease {
   version?: string
   /** RFC 3339; absent while the change is still being health checked. */
   verifiedAt?: string
+  /** Under an image Bundle: the last Bundle that deployed a config commit here,
+   *  and that commit ("config abc1234"). Image and config Bundles do not
+   *  supersede each other, so the environment runs both (#1353). */
+  configFrom?: string
+  configVersion?: string
+  /** Under a config Bundle: the last Bundle that deployed images here, and their tags. */
+  imagesFrom?: string
+  imagesVersion?: string
 }
 
 /** #525: one environment in the static Pipeline spec topology. */
