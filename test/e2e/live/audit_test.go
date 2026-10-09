@@ -30,7 +30,8 @@ import (
 // namespace, none in kardinal-system. Each step has PromotionStarted (Pending)
 // and PromotionSucceeded (Success), named <step>-started and <step>-succeeded;
 // the gate instance has GateEvaluated Failure with the gate's message, then
-// GateEvaluated Success with the override. Every record carries the
+// GateEvaluated Success with the override, and the override its
+// GateOverridden record (#1450). Every record carries the
 // documented spec fields and the kardinal.io/pipeline, bundle, environment and
 // action labels, the action label filters them, `kubectl get auditevents`
 // shows them, and the API server refuses to change a record's spec.
@@ -68,7 +69,7 @@ func TestAudit_PromotionRecords(t *testing.T) {
 	}
 	sort.Strings(keys)
 	assert.Equal(t, []string{
-		"prod GateEvaluated Failure", "prod GateEvaluated Success",
+		"prod GateEvaluated Failure", "prod GateEvaluated Success", "prod GateOverridden Success",
 		"prod PromotionStarted Pending", "prod PromotionSucceeded Success",
 		"test PromotionStarted Pending", "test PromotionSucceeded Success",
 	}, keys, "the Bundle's AuditEvents (environment, action, outcome)")

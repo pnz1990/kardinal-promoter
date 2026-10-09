@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	celast "github.com/google/cel-go/common/ast"
+	"github.com/google/cel-go/ext"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -152,7 +153,7 @@ func freeIdentifiers(t *testing.T, env *cel.Env, expr string) []string {
 // comprehension (QA #1543), so a node ID that shares a loop variable's name
 // and is read outside the loop is still reported.
 func TestFreeIdentifiers(t *testing.T) {
-	env, err := cel.NewEnv(cel.OptionalTypes())
+	env, err := cel.NewEnv(cel.OptionalTypes(), ext.Lists()) // ext.Lists: sortBy is a macro (kro has it)
 	require.NoError(t, err)
 	for expr, want := range map[string][]string{
 		"steps.map(s, s.name)":                                          {"steps"},
@@ -182,7 +183,7 @@ func assertRefsResolve(t *testing.T, g *graph.Graph) {
 // unresolvedRefs is assertRefsResolve's list of offending expressions.
 func unresolvedRefs(t *testing.T, g *graph.Graph) []string {
 	t.Helper()
-	env, err := cel.NewEnv(cel.OptionalTypes())
+	env, err := cel.NewEnv(cel.OptionalTypes(), ext.Lists()) // ext.Lists: sortBy is a macro (kro has it)
 	require.NoError(t, err)
 	nodes := map[string]bool{}
 	for _, n := range g.Spec.Nodes {
@@ -240,7 +241,7 @@ func TestKroExpressions(t *testing.T) {
 // TestAssertRefsResolve checks that the reference check catches a Graph that
 // names a node it does not have.
 func TestAssertRefsResolve(t *testing.T) {
-	env, err := cel.NewEnv(cel.OptionalTypes())
+	env, err := cel.NewEnv(cel.OptionalTypes(), ext.Lists()) // ext.Lists: sortBy is a macro (kro has it)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"uat", "PromotionState"},
 		freeIdentifiers(t, env, `uat.status.state == "Verified" && PromotionState.steps.all(s, s in uat.list)`))

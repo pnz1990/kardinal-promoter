@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -101,6 +102,9 @@ func labelsRefused(t *testing.T, gitURL string, p scm.SCMProvider, calls func() 
 	all := calls()
 	require.Greater(t, len(all), 2, "the PR create, the label request and the status reads: %+v", all)
 	for _, c := range all[2:] {
+		if strings.Contains(c.Route, "/statuses/") {
+			continue // the kardinal/gates commit status (#1452)
+		}
 		assert.Equal(t, status, c.Route, "after the label request the step only reads the PR status")
 	}
 	return all[:2]
