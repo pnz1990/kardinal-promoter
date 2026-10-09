@@ -6,6 +6,7 @@ package policygate_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,4 +52,25 @@ func TestIdentityPolicyCheck(t *testing.T) {
 	}
 	var nilCheck *policygate.IdentityPolicyCheck
 	assert.False(t, nilCheck.Active(context.Background()))
+}
+
+// TestIdentityPolicyCheck_TTL: an answer is kept for TTL on the injected
+// clock, then read again: a binding deleted meanwhile turns verification off.
+func TestIdentityPolicyCheck_TTL(t *testing.T) {
+	const name = "kardinal-promoter-gate-overrides"
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	binding := &admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: admissionregistrationv1.ValidatingAdmissionPolicyBindingSpec{PolicyName: name,
+			ValidationActions: []admissionregistrationv1.ValidationAction{admissionregistrationv1.Deny}}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: name}}, binding).Build()
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	check := &policygate.IdentityPolicyCheck{Reader: c, Name: name, TTL: time.Minute, NowFn: func() time.Time { return now }}
+	require.True(t, check.Active(context.Background()))
+	require.NoError(t, c.Delete(context.Background(), binding))
+	now = now.Add(30 * time.Second)
+	assert.True(t, check.Active(context.Background()), "kept for the TTL")
+	now = now.Add(31 * time.Second)
+	assert.False(t, check.Active(context.Background()), "read again after the TTL")
 }

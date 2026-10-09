@@ -63,6 +63,9 @@ func overrideKey(o *kardinalv1alpha1.PolicyGateOverride) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
+// OverrideKey is the status.overrides key of override o.
+func OverrideKey(o *kardinalv1alpha1.PolicyGateOverride) string { return overrideKey(o) }
+
 // overrideRecords indexes status.overrides by key.
 func overrideRecords(gate *kardinalv1alpha1.PolicyGate) map[string]kardinalv1alpha1.OverrideRecord {
 	m := make(map[string]kardinalv1alpha1.OverrideRecord, len(gate.Status.Overrides))

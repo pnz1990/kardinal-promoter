@@ -28,6 +28,8 @@ type IdentityPolicyCheck struct {
 	Name string
 	// TTL is how long an answer is kept; zero is 30s.
 	TTL time.Duration
+	// NowFn is the clock; nil is time.Now (tests inject one).
+	NowFn func() time.Time
 
 	mu      sync.Mutex
 	checked time.Time
@@ -45,11 +47,15 @@ func (c *IdentityPolicyCheck) Active(ctx context.Context) bool {
 	if ttl <= 0 {
 		ttl = 30 * time.Second
 	}
-	if !c.checked.IsZero() && time.Since(c.checked) < ttl {
+	now := time.Now
+	if c.NowFn != nil {
+		now = c.NowFn
+	}
+	if !c.checked.IsZero() && now().Sub(c.checked) < ttl {
 		return c.active
 	}
 	c.active = c.read(ctx)
-	c.checked = time.Now()
+	c.checked = now()
 	return c.active
 }
 
