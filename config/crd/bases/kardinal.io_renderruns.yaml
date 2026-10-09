@@ -95,16 +95,19 @@ spec:
                         digest:
                           description: Digest is the image digest (sha256:...), in
                             the OCI digest grammar.
+                          maxLength: 256
                           pattern: ^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$
                           type: string
                         repository:
                           description: Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
+                          maxLength: 512
                           minLength: 1
                           type: string
                         tag:
                           description: |-
                             Tag is the image tag, in the OCI distribution grammar: up to 128
                             characters of [A-Za-z0-9_.-], not starting with "." or "-".
+                          maxLength: 128
                           pattern: ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$
                           type: string
                       required:
