@@ -11,6 +11,8 @@ In kardinal-promoter, rollback is not a special operation. It is a forward promo
 
 If there is nothing safe to roll back to (no earlier Verified Bundle, or only ones with the same artifacts as the failing Bundle), the command fails and creates nothing. The failing image is never promoted again.
 
+A [rejected](#reject-a-bundle) Bundle is never a target, and never the source of an image or config commit a rollback restores, even when it was Verified in the environment before it was rejected. Neither is any other Bundle that carries one of its artifacts (the same image digest or tag, or the same config commit). `--to` such a Bundle is refused.
+
 ### Images the target does not name
 
 A Bundle does not have to name every image of the application. If the deployed Bundle `v2` names only `b:2`, and the target `v1` names only `a:1`, copying `v1` would leave `b:2`, the failing version, in place. So for each image repository the deployed Bundle names and the target does not, the rollback Bundle also carries the version from the newest Bundle that was Verified in the environment, other than the deployed one and the ones an earlier rollback rolled back from.
@@ -322,6 +324,35 @@ For example, in a pipeline `dev -> staging -> [prod-us, prod-eu]`, if `prod-us` 
 | Argo Rollouts | Automatic in-cluster rollback on AnalysisRun failure (no cross-env awareness) |
 
 ---
+
+## Reject a Bundle
+
+A Bundle that must never reach another environment, for example a build with a known vulnerability, can be rejected:
+
+```bash
+kardinal reject my-app-v1-29-0 --reason "CVE-2026-1234 in the base image"
+```
+
+```
+Bundle my-app-v1-29-0 rejected by alice@example.com (was Promoting): CVE-2026-1234 in the base image
+It is never promoted again; its unfinished steps are cancelled.
+An environment that already runs it keeps it: roll back with kardinal rollback my-app --env <env>.
+```
+
+`kardinal reject` writes `spec.rejected` on the Bundle: the reason, the time and your Kubernetes username, which the CLI reads from the API server (a SelfSubjectReview, the call `kubectl auth whoami` makes). The chart's ValidatingAdmissionPolicy admits a rejection only when `spec.rejected.by` is the requesting user, so a rejection always names who made it (see [Verified identity](guides/security.md#verified-identity)). That check is the admission policy's: the CRD alone does not check `by`, so a cluster where the kardinal CRDs are installed without the chart's policy (`kubectl apply -f config/crd/bases`) records whatever name the writer puts there. Rejecting is final: the CRD refuses to change or remove `spec.rejected`.
+
+What happens, whatever phase the Bundle was in (Verified and Superseded included):
+
+- The Bundle turns `Rejected`. Its `Ready` condition is `False` with reason `Rejected`, and its `Rejected` condition names who rejected it and why. A Warning Event `Rejected` is emitted.
+- No new PromotionStep is created for it: every step of the Bundle's Graph holds on the Bundle phase, the same hold a Superseded Bundle gets. The Graph and the existing steps stay, as the record of what ran.
+- Its steps that have not delivered the change (Pending, Promoting, or WaitingForMerge with the PR still open) fail with `bundle <name> was rejected — promotion cancelled` (or `... rejected before this step started` for a step that never started), and an open PR is closed with a comment naming who rejected the Bundle. A started step writes a `PromotionRejected` AuditEvent.
+- A step that already delivered the change keeps going: a HealthChecking step keeps checking health, and a WaitingForMerge step whose PR merged before the rejection moves to HealthChecking as any merged step does. The change is live in that environment, so it is health-checked (`onHealthFailure` applies) and counts as what the environment runs; reject does not revert it.
+- A rejection is about the artifacts. `kardinal rollback`, the UI Rollback button, `onHealthFailure: rollback` and RollbackPolicy never roll back to the Bundle, or to any Bundle that carries one of its images or its config commit, and `kardinal promote` never copies one. A Subscription that sees one of those artifacts again creates no Bundle for it: its status message names the rejected Bundle. A Bundle created another way (CI, the CLI, the Bundle API) that carries one, and has not finished promoting, turns `Rejected` too, with the condition reason `RejectedArtifact` naming the rejected Bundle; its `spec.rejected` stays unset.
+- A rejection rejects what the Bundle changed, not everything it names. When the controller marks the Bundle `Rejected` it records the rejected artifacts in `status.rejectedArtifacts`: the images (and config commit) that differ from the Bundle Verified before it in each environment it reached (`comparedWith` names those Bundles; an environment counts once its change got past the merge, even if the health check then failed, but not when it failed before the merge), or, if it reached none, in each environment it targeted. Rejecting `app:2` + `sidecar:s1`, when the Bundle before ran `app:1` + `sidecar:s1`, rejects `app:2` only: a rollback to that Bundle, or any Bundle with `sidecar:s1`, stays possible, while a Bundle reusing `app:2` is refused. With no Verified Bundle before it in one of those environments, every artifact is rejected. Until the set is recorded (a moment after `kardinal reject`) a rollback treats every artifact as rejected, and no other Bundle is marked `RejectedArtifact`.
+- An image is matched by digest when the rejected Bundle's image has one: rejecting `r/app:latest@sha256:bad` blocks that digest under any tag, and not a fixed image pushed later under the same moving tag (`r/app:latest@sha256:fixed`). A rejected image without a digest is known only by its tag, so it blocks every image with that repository and tag.
+- A rejected Bundle supersedes nothing, and rejecting it does not bring back an older Bundle it already superseded: create a new Bundle to promote again.
+
+To take a rejected Bundle out of an environment that already runs it, roll that environment back. `historyLimit` never deletes a rejected Bundle (`spec.rejected`), whatever its phase, and does not count it: it is the record that its artifacts must not be promoted again (delete it by hand to lift the rejection). A Bundle that is `Rejected` only because it carries a rejected artifact (reason `RejectedArtifact`) adds nothing to that record and is history like a Superseded one, unless its change is live in an environment (see below): then it is kept. `kardinal get bundles --active` hides Rejected Bundles, and the pipeline views (`kardinal get pipelines`, `status`, `get steps`, `logs`, `explain`, the UI) treat them as history, as they treat Superseded ones, except where the rejected change is live: in an environment where a step of the Rejected Bundle is HealthChecking or Verified, that Bundle stays the current one there, marked Rejected (`<bundle>(Rejected)` in `kardinal get pipelines`), with the hint `rejected change is live; roll back (kardinal rollback <pipeline> --env <env>)`, and the Pipeline is `Degraded` until a rollback or a newer Bundle replaces it. This holds for a Bundle whose Graph was retired too: its `status.retiredSteps` say where it is live, and rejecting a retired Bundle works like rejecting any other. Rejecting from the UI is not available yet: the UI writes as the controller, not as you, so the identity policy would refuse it.
 
 ## Pause and Resume
 

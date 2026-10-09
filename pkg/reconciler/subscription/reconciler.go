@@ -217,6 +217,19 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// New artifact detected — create a Bundle.
 	bundleName, createErr := r.createBundle(ctx, &sub, result, now)
+	var rejected *artifactRejectedError
+	if errors.As(createErr, &rejected) {
+		// A rejected artifact is never promoted again (#1451): record it as
+		// seen, so the next poll does not try again, and say why.
+		log.Info().Str("digest", result.Digest).Str("rejectedBundle", rejected.bundle).
+			Msg("artifact was rejected; no Bundle created")
+		return ctrl.Result{RequeueAfter: interval}, r.patchStatus(ctx, &sub, func(s *kardinalv1alpha1.SubscriptionStatus) {
+			s.Phase = "Watching"
+			s.LastCheckedAt = now.UTC().Format(time.RFC3339)
+			s.LastSeenDigest = result.Digest
+			s.Message = rejected.Error()
+		})
+	}
 	if createErr != nil {
 		return r.writeError(ctx, &sub, now, fmt.Sprintf("create bundle: %s", createErr))
 	}
@@ -351,7 +364,15 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 	}
 	lifecycle.StampCreatedAt(bundle, now) // sub-second creation order for supersession
 
-	if err := r.Create(ctx, bundle); err != nil {
+	rej, err := lifecycle.LoadRejectedArtifacts(ctx, r.Client, ns, sub.Spec.Pipeline)
+	if err != nil {
+		return "", fmt.Errorf("createBundle: %w", err)
+	}
+	if name, bad := rej.Carries(bundle); bad {
+		return "", &artifactRejectedError{digest: result.Digest, bundle: name}
+	}
+
+	if err := lifecycle.CreateBundleAs(ctx, r.Client, bundle, "subscription:"+sub.Name); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return "", fmt.Errorf("create bundle %s: %w", bundleName, err)
 		}
@@ -545,6 +566,16 @@ func (r *Reconciler) now() time.Time {
 		return r.NowFn()
 	}
 	return time.Now().UTC()
+}
+
+// artifactRejectedError is returned by createBundle when the new artifact is
+// one a rejected Bundle of the pipeline carries (lifecycle.RejectedArtifacts).
+type artifactRejectedError struct {
+	digest, bundle string
+}
+
+func (e *artifactRejectedError) Error() string {
+	return fmt.Sprintf("artifact %s was rejected (bundle %s): no Bundle is created for it", e.digest, e.bundle)
 }
 
 // bundlesForDigest lists the Subscription's Bundles (label

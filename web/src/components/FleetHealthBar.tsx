@@ -34,7 +34,7 @@ export interface FleetHealthSummary {
  * PromotionStep states that mean a promotion is in flight. RollingBack is an
  * end state: the rollback Bundle's own step is the one in flight.
  */
-const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking'])
+const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
 
 /**
  * A pipeline is promoting when any environment of its active bundle is in

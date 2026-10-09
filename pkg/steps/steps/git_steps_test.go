@@ -335,8 +335,41 @@ func TestGitPushStep_Modes(t *testing.T) {
 				assert.Equal(t, tc.wantForce, git.pushForce)
 			}
 			assert.Contains(t, res.Message, tc.wantMsg)
+			assert.Empty(t, res.Outputs[steps.OutputPushedSHA], "this git client cannot report the commit")
 		})
 	}
+}
+
+// headGitClient is a mockGitClient that reports HEAD.
+type headGitClient struct {
+	mockGitClient
+	sha string
+}
+
+func (h *headGitClient) HeadCommit(_ context.Context, _ string) (string, error) { return h.sha, nil }
+
+// TestGitPushStep_RecordsPushedSHA: a successful push records the commit it
+// pushed (HEAD of the work directory) as the pushedSHA output, which the
+// step's status persists (the kardinal/gates status is set on it, #1452).
+// A failed push records none.
+func TestGitPushStep_RecordsPushedSHA(t *testing.T) {
+	git := &headGitClient{sha: "abc123"}
+	state := makeState(t, &git.mockGitClient, nil)
+	state.GitClient = git
+	state.Sequence = parentsteps.DefaultSequenceForBundle("pr-review", "image", "", "")
+	state.Environment.Approval = "pr-review"
+	res, err := runStep(t, "git-push", state)
+	require.NoError(t, err)
+	assert.Equal(t, "abc123", res.Outputs[steps.OutputPushedSHA])
+
+	git = &headGitClient{sha: "abc123", mockGitClient: mockGitClient{pushErrs: []error{errors.New("denied")}}}
+	state = makeState(t, &git.mockGitClient, nil)
+	state.GitClient = git
+	state.Sequence = parentsteps.DefaultSequenceForBundle("pr-review", "image", "", "")
+	state.Environment.Approval = "pr-review"
+	res, err = runStep(t, "git-push", state)
+	require.Error(t, err)
+	assert.Empty(t, res.Outputs[steps.OutputPushedSHA])
 }
 
 // TestPRBranch covers the one definition of the branch kardinal promotes

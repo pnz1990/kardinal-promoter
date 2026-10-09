@@ -38,7 +38,7 @@ func newGetBundlesCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&activeOnly, "active", false,
-		"Hide Superseded bundles")
+		"Hide Superseded and Rejected bundles")
 	return cmd
 }
 
@@ -76,12 +76,13 @@ func getBundlesFn(out io.Writer, client sigs_client.Client, ns string, args []st
 		}
 	}
 
-	// Apply --active filter if requested: exclude Superseded bundles.
+	// Apply --active filter if requested: exclude Superseded and Rejected
+	// bundles, which never promote again.
 	items := bundles.Items
 	if activeOnly {
 		filtered := items[:0]
 		for _, b := range items {
-			if b.Status.Phase != "Superseded" {
+			if b.Status.Phase != "Superseded" && b.Status.Phase != "Rejected" {
 				filtered = append(filtered, b)
 			}
 		}
