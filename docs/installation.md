@@ -247,7 +247,9 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
-| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed, so the chart grants no Job access |
+| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
+| `hooks.serviceAccounts` | `[default]` | ServiceAccounts a [hook](hooks.md)'s Pod may run as (`--hook-service-accounts`), in the Pipeline namespace. The Graph ServiceAccount is never allowed |
+| `hooks.podSecurityLevel` | `baseline` | Pod Security Standard a [hook](hooks.md) Pod must meet (`--hook-pod-security-level`): `baseline`, `restricted` or `privileged` (no Pod checks); below `privileged`, `nodeName` and `hostPort` are refused too |
 | `resources.limits.cpu` | `500m` | CPU limit |
 | `resources.limits.memory` | `1Gi` | Memory limit; see [Sizing the controller](#sizing-the-controller) |
 | `resources.requests.cpu` | `10m` | CPU request |
@@ -637,8 +639,8 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
     yq 'del(.krocodile)' values.yaml > values-new.yaml
     ```
 
-- **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The chart ships no ValidatingAdmissionPolicy; the CRD schemas validate these fields.
-- **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart no longer grants `batch/jobs`.
+- **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The CRD schemas validate the kardinal fields; the chart's only ValidatingAdmissionPolicies are the identity policies ([Verified identity](guides/security.md#verified-identity)) and the hold-writes policy (only `pipelines/hold` may change `spec.holds`), which are always installed.
+- **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart grants `batch/jobs` (create, get, list, watch, delete) for [hooks](hooks.md) whatever it says.
 - **`--reuse-values`** fails with `additional properties 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
 
 #### Other notes

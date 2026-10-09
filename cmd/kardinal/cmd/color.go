@@ -69,7 +69,8 @@ func isTerminal(w io.Writer) bool {
 // uses the Pending color of its palette (yellow here, slate grey in the UI):
 //   - Verified / Pass                                               → green
 //   - Failed / AbortedByAlarm / RollingBack / Block                 → red
-//   - Pending / Waiting / Promoting / WaitingForMerge / HealthChecking → yellow
+//   - Pending / Waiting / Promoting / WaitingForMerge / HealthChecking /
+//     Verifying                                                     → yellow
 //   - anything else, such as Superseded                             → no color
 func (c colorizer) colorState(state string) string {
 	if !c.enabled {
@@ -80,7 +81,7 @@ func (c colorizer) colorState(state string) string {
 		return ansiGreen + state + ansiReset
 	case "Block", "Failed", "AbortedByAlarm", "RollingBack":
 		return ansiRed + state + ansiReset
-	case "Pending", "Waiting", "Promoting", "WaitingForMerge", "HealthChecking":
+	case "Pending", "Waiting", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
 		return ansiYellow + state + ansiReset
 	default:
 		return state

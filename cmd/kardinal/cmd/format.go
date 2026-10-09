@@ -70,7 +70,7 @@ func truncateRunes(s string, n int) string {
 
 // stepStatePriority returns a sort priority for a PromotionStep state.
 // Higher priority = displayed first. Used by the pipeline, steps and explain views.
-// Active states (Promoting/WaitingForMerge/HealthChecking) take precedence,
+// Active states (Promoting/WaitingForMerge/HealthChecking/Verifying) take precedence,
 // then Pending (step queued but not started), then Verified, AbortedByAlarm
 // and RollingBack, then Failed. AbortedByAlarm and RollingBack rank with
 // Verified because the alarm fires after merge: the environment runs that
@@ -82,7 +82,7 @@ func truncateRunes(s string, n int) string {
 // terminal-state bundles (#260).
 func stepStatePriority(state string) int {
 	switch state {
-	case "Promoting", "WaitingForMerge", "HealthChecking":
+	case "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
 		return 4
 	case "Pending":
 		return 3
@@ -124,6 +124,9 @@ func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, bundles
 type pipelineRow struct {
 	bundle string
 	envs   map[string]string
+	// hints are the roll-back hints of a current Bundle that is Rejected
+	// with its change live (lifecycle.RejectedLiveStep).
+	hints []string
 }
 
 // pipelineEnvStates returns, per namespace/pipeline, the BUNDLE and
@@ -150,11 +153,20 @@ func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 	for i := range pipelines {
 		p := &pipelines[i]
 		key := p.Namespace + "/" + p.Name
-		b := lifecycle.CurrentBundle(bundlesByPipeline[key])
+		b := lifecycle.CurrentBundle(bundlesByPipeline[key], steps)
 		if b == nil {
 			continue
 		}
 		row := pipelineRow{bundle: b.Name, envs: make(map[string]string, len(p.Spec.Environments))}
+		if lifecycle.Rejected(b) {
+			// Current only because its change is live somewhere
+			// (lifecycle.CurrentBundle): say so.
+			row.bundle = b.Name + "(Rejected)"
+			for _, env := range lifecycle.RejectedLiveEnvs(b, steps) {
+				row.hints = append(row.hints, fmt.Sprintf("WARNING: pipeline %s: bundle %s is Rejected in %s: %s (kardinal rollback %s --env %s)",
+					p.Name, b.Name, env, lifecycle.RejectedLiveHint, p.Name, env))
+			}
+		}
 		if lifecycle.InFlightPhase(b.Status.Phase) {
 			for _, e := range p.Spec.Environments {
 				if _, err := graph.DirectUpstreams(p, b, e.Name); err == nil {
@@ -299,11 +311,18 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, row
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("flush pipeline table: %w", err)
 	}
+	for _, p := range pipelines {
+		for _, h := range rows[p.Namespace+"/"+p.Name].hints {
+			if _, err := fmt.Fprintln(w, h); err != nil {
+				return fmt.Errorf("write pipeline hint: %w", err)
+			}
+		}
+	}
 	return nil
 }
 
 // FormatBundleErrors writes a plain-text error notice for each pipeline whose
-// newest Bundle that is not Superseded is Failed. A newer Bundle, promoting or
+// newest Bundle that is not Superseded or Rejected is Failed. A newer Bundle, promoting or
 // Verified, means the failure is history, so it is not reported (E2E-R16).
 // The notice is printed after the pipeline table so the root cause of a
 // silent "Phase: Error" is visible without `kubectl describe graph`.
@@ -321,7 +340,7 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, row
 func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bool) error {
 	sorted := make([]v1alpha1.Bundle, 0, len(bundles))
 	for _, b := range bundles {
-		if b.Status.Phase != "Superseded" {
+		if !lifecycle.Halted(&b) {
 			sorted = append(sorted, b)
 		}
 	}

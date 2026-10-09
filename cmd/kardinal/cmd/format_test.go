@@ -544,6 +544,10 @@ func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
 			Status:     v1alpha1.PromotionStepStatus{State: state},
 		}
 	}
+	rejectedB := func(b v1alpha1.Bundle) v1alpha1.Bundle {
+		b.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "CVE"}
+		return b
+	}
 	b1Everywhere := func(more ...v1alpha1.PromotionStep) []v1alpha1.PromotionStep {
 		return append([]v1alpha1.PromotionStep{
 			step("app-b1", "dev", "Verified", old), step("app-b1", "stage", "Verified", old),
@@ -556,6 +560,7 @@ func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
 		bundles []v1alpha1.Bundle
 		steps   []v1alpha1.PromotionStep
 		want    map[string]string
+		hint    string
 	}{
 		{
 			// scenA.log: B2 failed at the first env; the table said B1 and
@@ -614,6 +619,21 @@ func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
 			steps:   b1Everywhere(step("app-b2", "dev", "Promoting", recent)),
 			want:    map[string]string{"BUNDLE": "app-b2", "DEV": "Promoting", "STAGE": "Waiting", "PROD": "Waiting"},
 		},
+		{
+			// QA #1489: a Rejected bundle whose change is live stays current,
+			// marked Rejected, with a roll-back hint.
+			name:    "a rejected change that is live stays current, marked Rejected",
+			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), rejectedB(bundle("app-b2", "Rejected", recent))},
+			steps:   b1Everywhere(step("app-b2", "dev", "Verified", recent), step("app-b2", "stage", "Failed", recent)),
+			want:    map[string]string{"BUNDLE": "app-b2(Rejected)", "DEV": "Verified", "STAGE": "Failed", "PROD": "-"},
+			hint:    "WARNING: pipeline app: bundle app-b2 is Rejected in dev: rejected change is live; roll back (kardinal rollback app --env dev)",
+		},
+		{
+			name:    "a rejected bundle that never went live is skipped",
+			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), rejectedB(bundle("app-b2", "Rejected", recent))},
+			steps:   b1Everywhere(step("app-b2", "dev", "Failed", recent)),
+			want:    map[string]string{"BUNDLE": "app-b1", "DEV": "Verified", "STAGE": "Verified", "PROD": "Verified"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -623,8 +643,13 @@ func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
 			for col, want := range tt.want {
 				assert.Equal(t, want, row[col], "column %s in:\n%s", col, buf.String())
 			}
-			if b := lifecycle.CurrentBundle(tt.bundles); assert.NotNil(t, b) {
-				assert.Equal(t, b.Name, row["BUNDLE"], "BUNDLE is the UI's activeBundleName")
+			if b := lifecycle.CurrentBundle(tt.bundles, tt.steps); assert.NotNil(t, b) {
+				assert.Equal(t, b.Name, strings.TrimSuffix(row["BUNDLE"], "(Rejected)"), "BUNDLE is the UI's activeBundleName")
+			}
+			if tt.hint != "" {
+				assert.Contains(t, buf.String(), tt.hint)
+			} else {
+				assert.NotContains(t, buf.String(), "WARNING")
 			}
 		})
 	}

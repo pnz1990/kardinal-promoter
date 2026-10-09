@@ -411,8 +411,9 @@ var inFlightBundlePhases = map[string]bool{
 // DerivePhase computes the Pipeline.status.phase from the Bundles and the
 // PromotionSteps of pipeline pipelineName:
 //   - "Degraded"  — the newest Bundle in some environment is Failed,
-//     AbortedByAlarm or RollingBack there, or the newest Bundle of the
-//     Pipeline is Failed (it may have failed before any step was created)
+//     AbortedByAlarm or RollingBack there, or is a Rejected Bundle whose
+//     change is live there, or the newest Bundle of the Pipeline is Failed
+//     (it may have failed before any step was created)
 //   - "Promoting" — a Bundle is new, Available or Promoting (held by a gate
 //     or a maxConcurrentPromotions slot counts), or the newest Bundle in some
 //     environment is not Verified there yet (E2E-R05)
@@ -422,8 +423,11 @@ var inFlightBundlePhases = map[string]bool{
 //     UI shows "Idle")
 //
 // Newest follows the rule the UI (ui_api.go) and the CLI (current_bundle.go)
-// use to pick the current Bundle: Superseded Bundles and their steps are
-// skipped (handleSuperseded fails a superseded Bundle's cancelled steps), and
+// use to pick the current Bundle: Superseded and Rejected Bundles
+// (lifecycle.Halted) and their steps are skipped (handleSuperseded fails a superseded Bundle's cancelled steps),
+// except that a Rejected Bundle stays the newest in an environment where its
+// change is live (lifecycle.RejectedLiveStep), which makes the Pipeline
+// Degraded until a rollback or a newer Bundle replaces it, and
 // Bundles are ordered by lifecycle.CompareCreation, the order supersession
 // uses. A step whose Bundle is not listed (another pipeline's, or being
 // deleted) is skipped too. Each environment is judged by every step its newest
@@ -431,11 +435,18 @@ var inFlightBundlePhases = map[string]bool{
 // is, whatever the List order.
 func DerivePhase(pipelineName string, bundles []kardinalv1alpha1.Bundle, steps []kardinalv1alpha1.PromotionStep) string {
 	byName := make(map[string]*kardinalv1alpha1.Bundle, len(bundles))
+	rejected := make(map[string]*kardinalv1alpha1.Bundle)
 	inFlight := false
 	var newestBundle *kardinalv1alpha1.Bundle
 	for i := range bundles {
 		b := &bundles[i]
-		if b.Spec.Pipeline != pipelineName || b.Status.Phase == "Superseded" {
+		if b.Spec.Pipeline != pipelineName {
+			continue
+		}
+		if lifecycle.Halted(b) {
+			if lifecycle.Rejected(b) {
+				rejected[b.Name] = b
+			}
 			continue
 		}
 		byName[b.Name] = b
@@ -447,13 +458,18 @@ func DerivePhase(pipelineName string, bundles []kardinalv1alpha1.Bundle, steps [
 		}
 	}
 
-	// Pass 1: the newest Bundle per environment.
+	// Pass 1: the newest Bundle per environment. A Rejected Bundle counts in
+	// an environment where its change is live (lifecycle.RejectedLiveStep).
 	newest := make(map[string]*kardinalv1alpha1.Bundle)
 	for i := range steps {
 		s := &steps[i]
 		b, ok := byName[s.Spec.BundleName]
 		if !ok {
-			continue
+			rb, isRejected := rejected[s.Spec.BundleName]
+			if !isRejected || !lifecycle.RejectedLiveStep(rb, s) {
+				continue
+			}
+			b = rb
 		}
 		if cur, ok := newest[s.Spec.Environment]; !ok || lifecycle.CompareCreation(b, cur) > 0 {
 			newest[s.Spec.Environment] = b
@@ -464,10 +480,15 @@ func DerivePhase(pipelineName string, bundles []kardinalv1alpha1.Bundle, steps [
 	counted, hasDegraded, allVerified := 0, false, true
 	for i := range steps {
 		s := &steps[i]
-		if b, ok := newest[s.Spec.Environment]; !ok || b.Name != s.Spec.BundleName {
+		b, ok := newest[s.Spec.Environment]
+		if !ok || b.Name != s.Spec.BundleName {
 			continue
 		}
 		counted++
+		if lifecycle.RejectedLiveStep(b, s) {
+			// A rejected change is deployed here: roll back.
+			hasDegraded = true
+		}
 		if degradedStates[s.Status.State] {
 			hasDegraded = true
 		}

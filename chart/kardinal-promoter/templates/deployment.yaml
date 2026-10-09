@@ -51,6 +51,8 @@ spec:
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
             - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
+            - --hook-service-accounts={{ join "," .Values.hooks.serviceAccounts }}
+            - --hook-pod-security-level={{ .Values.hooks.podSecurityLevel }}
             {{- if not (kindIs "invalid" .Values.graph.compactAbove) }}
             - --graph-compact-above={{ .Values.graph.compactAbove }}
             {{- end }}
@@ -96,6 +98,10 @@ spec:
             {{- end }}
             {{- with (.Values.graph.retire).verified }}
             - --graph-retire-verified-after={{ . }}
+            {{- end }}
+            - --override-identity-policy={{ include "kardinal-promoter.fullname" . }}-gate-overrides
+            {{- with .Values.controller.gateOverrideMaxMinutes }}
+            - --gate-override-max-minutes={{ . }}
             {{- end }}
             {{- with .Values.controller.watchNamespace }}
             - --watch-namespace={{ . }}

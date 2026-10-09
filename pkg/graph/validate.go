@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -134,6 +135,56 @@ func validateNodeIDs(nodes []GraphNode) error {
 				describeNode(n), n.ID, owner)
 		}
 	}
+	return validateObjectNames(nodes)
+}
+
+// resolvableName matches a metadata.name built by resolvableWhen around a
+// string literal: ${["<name>"].filter(x_, ...)[0]}.
+var resolvableName = regexp.MustCompile(`^\$\{\[("(?:[^"\\]|\\.)*")\]\.filter\(x_, `)
+
+// templateObjectName returns the metadata.name a template node renders, when
+// the builder knows it: a literal, or a resolvableWhen around a literal.
+func templateObjectName(n GraphNode) (string, bool) {
+	if n.Template == nil || len(n.ForEach) > 0 {
+		return "", false
+	}
+	md, _ := n.Template["metadata"].(map[string]interface{})
+	name, _ := md["name"].(string)
+	if name == "" {
+		return "", false
+	}
+	if !strings.Contains(name, "${") {
+		return name, true
+	}
+	m := resolvableName.FindStringSubmatch(name)
+	if m == nil {
+		return "", false
+	}
+	lit, err := strconv.Unquote(m[1])
+	if err != nil {
+		return "", false
+	}
+	return lit, true
+}
+
+// validateObjectNames rejects two template nodes that render the same
+// object (kind and name): kro rejects the Graph with a duplicate identity,
+// or, for names that only resolve later, the second object would overwrite
+// the first.
+func validateObjectNames(nodes []GraphNode) error {
+	seen := map[string]GraphNode{}
+	for _, n := range nodes {
+		name, ok := templateObjectName(n)
+		if !ok {
+			continue
+		}
+		key := fmt.Sprint(n.Template["apiVersion"], "/", n.Template["kind"], "/", name)
+		if prev, dup := seen[key]; dup {
+			return fmt.Errorf("build: %s and %s both render %s %q; rename one",
+				describeNode(prev), describeNode(n), n.Template["kind"], name)
+		}
+		seen[key] = n
+	}
 	return nil
 }
 
@@ -142,6 +193,9 @@ func describeNode(n GraphNode) string {
 	obj := n.Template
 	if obj == nil {
 		obj = n.Ref
+	}
+	if obj == nil {
+		obj = n.Patch
 	}
 	kind, _ := obj["kind"].(string)
 	meta, _ := obj["metadata"].(map[string]interface{})

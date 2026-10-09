@@ -14,7 +14,7 @@ This guide walks through migrating a Kargo-managed delivery pipeline to kardinal
 | `FreightRequest` | `Bundle.spec.intent` | Targets a specific environment; can skip others |
 | `Promotion` | `PromotionStep` CRD | Created automatically by the Graph controller |
 | `VerifiedIn` / approval required | `approval: pr-review` on environment | PR approval required before HealthChecking |
-| `AnalysisTemplate` | `MetricCheck` CRD | A Prometheus, Datadog, CloudWatch, New Relic or JSON web query with a pass/fail threshold; `perPromotion: true` with `{{ bundle.version }}` replaces AnalysisRun arguments ([Metric Checks](../metric-checks.md)) |
+| `AnalysisTemplate` (verification) | `spec.environments[].verification` | The same AnalysisTemplates, run as AnalysisRuns after the health check; needs Argo Rollouts ([Analysis](../analysis.md)). Without it, a `MetricCheck` (Prometheus, Datadog, CloudWatch, New Relic or a JSON web query with a threshold; `perPromotion: true` with `{{ bundle.version }}` replaces AnalysisRun arguments, [Metric Checks](../metric-checks.md)) read by a PolicyGate |
 | Stage that updates an Argo CD Application in another cluster | Environment with `health.type: argocd` on that Application in the hub | Multi-cluster through an Argo CD or Flux hub; `health.cluster` kubeconfig Secrets are not supported |
 | `Project` | Kubernetes Namespace | RBAC isolation is namespace-scoped |
 | Argo Rollouts integration | `health.type: argoRollouts` on environment | Reads Rollout `.status.phase` |
@@ -183,7 +183,22 @@ webhook receivers map to `spec.webhook` and
 
 kardinal creates `PromotionStep` objects automatically via the Graph controller. You do not create them manually.
 
-### Step 4: Convert AnalysisTemplates to MetricChecks
+### Step 4: Keep your AnalysisTemplates
+
+Name them in the environment's `verification`; kardinal runs each as an AnalysisRun after the
+health check, with the Bundle's `tag`, `image` and `environment` as args, and the environment is
+Verified only when they all succeed ([Analysis](../analysis.md)):
+
+```yaml
+environments:
+  - name: prod
+    verification:
+      analysisTemplates:
+        - name: success-rate
+```
+
+Without Argo Rollouts, convert a Prometheus template to a MetricCheck and gate the next
+environment on it:
 
 ```yaml
 # Kargo: AnalysisTemplate
@@ -298,8 +313,8 @@ helm uninstall kargo -n kargo
 | Manual approval | Promote by hand (any Stage without auto-promotion) | `approval: pr-review` |
 | Stage sequencing | `requestedFreight.sources.stages` | `dependsOn` |
 | Parallel stages (fan-out) | Multiple Stages with same upstream | Multiple environments with same `dependsOn` |
-| Argo Rollouts | Verification with Argo Rollouts AnalysisTemplates | `health.type: argoRollouts` |
-| Metrics gates | `AnalysisTemplate` + `AnalysisRun` | `MetricCheck` CRD + `PolicyGate` CEL |
+| Argo Rollouts | Verification with Argo Rollouts AnalysisTemplates | `health.type: argoRollouts` for the Rollout; `verification` for the AnalysisTemplates |
+| Metrics gates | `AnalysisTemplate` + `AnalysisRun` | `verification` (the same AnalysisTemplates), or `MetricCheck` CRD + `PolicyGate` CEL |
 | Time-based gates | Promotion windows (Kargo Enterprise, v1.12+) | `PolicyGate` with `schedule.isWeekend` |
 | Pause/freeze | Turn off auto-promotion; freeze windows in Kargo Enterprise (v1.12+) | `kardinal pause my-app` |
 | Rollback | Manual re-promotion of older Freight (pins the Stage since v1.11); auto-rollback in Kargo Enterprise (beta) | `kardinal rollback my-app --env prod`, or `onHealthFailure: rollback` |

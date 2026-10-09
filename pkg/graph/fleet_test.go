@@ -391,3 +391,17 @@ func TestFleet_PerPromotionMetricChecks(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{"prod-t00", "prod-t01", "prod-t02", "prod-t03"}, envs, "one MetricCheck instance per target")
 }
+
+// TestFleet_CompactUnsupportedFeatures: a Pipeline with a fleet is always
+// compact, so a feature the compact shape does not carry (hooks) refuses
+// its Bundles with the feature's name instead of building a Graph without it.
+//
+// Covers FLEET-06.
+func TestFleet_CompactUnsupportedFeatures(t *testing.T) {
+	p := bigFleet(3, 1, nil)
+	p.Spec.Environments[1].Hooks = []kardinalv1alpha1.HookSpec{hook("smoke", "post", hookJob)}
+	_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hooks")
+	assert.NotEmpty(t, graph.CompactUnsupported(graph.BuildInput{Pipeline: p}), "the Pipeline reconciler reports it too")
+}

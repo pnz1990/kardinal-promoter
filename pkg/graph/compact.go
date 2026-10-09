@@ -52,8 +52,10 @@ const (
 	iterStep = "Step"
 )
 
-// LabelBundleUID is the label of a compact Graph's PromotionSteps that holds
-// the Bundle's UID; the Graph reads back only the steps that carry it.
+// LabelBundleUID is the label that holds the Bundle's UID: on a compact
+// Graph's PromotionSteps (the Graph reads back only the steps that carry it)
+// and on HookRuns (the HookRun reconciler and the mirror ignore one whose
+// value is not its Bundle's UID, a HookRun someone created by hand).
 const LabelBundleUID = "kardinal.io/bundle-uid"
 
 // LabelGraphShape is the label on a Graph that shows its shape. It is

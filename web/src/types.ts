@@ -6,11 +6,11 @@
 
 /** PromotionStep status.state values (api/v1alpha1), plus the graph API's synthetic NotStarted. */
 export type PromotionStepState =
-  | 'Pending' | 'Promoting' | 'WaitingForMerge' | 'HealthChecking'
+  | 'Pending' | 'Promoting' | 'WaitingForMerge' | 'HealthChecking' | 'Verifying'
   | 'Verified' | 'Failed' | 'AbortedByAlarm' | 'RollingBack' | 'NotStarted'
 
 /** Bundle status.phase values. */
-export type BundlePhase = 'Available' | 'Promoting' | 'Verified' | 'Failed' | 'Superseded'
+export type BundlePhase = 'Available' | 'Promoting' | 'Verified' | 'Failed' | 'Superseded' | 'Rejected'
 
 /** status.steps[].state values. */
 export type StepExecutionState = 'Pending' | 'InProgress' | 'Completed' | 'Failed'
@@ -137,6 +137,10 @@ export interface Bundle {
   environments?: BundleEnvStatus[]
   /** #563: Container images in this Bundle — used by NodeDetail diff preview. */
   images?: ImageRef[]
+  /** Environments where this Rejected bundle's change is live (its step is
+   *  HealthChecking or Verified there): it stays current, marked Rejected,
+   *  with a roll-back hint (RejectedLiveBanner). */
+  rejectedLiveEnvironments?: string[]
 }
 
 /** #563: A container image reference — repository, tag, and optional digest. */
@@ -242,10 +246,11 @@ export interface StepStatus {
 /**
  * PolicyGate state from the UI API, decided by graph.GateState:
  * Pass (ready), Block (holds the bundle back; only these count as blocked),
- * Superseded (its bundle was superseded; final), Pending (not evaluated yet),
+ * Superseded (its bundle was superseded; final), Rejected (its bundle was
+ * rejected with kardinal reject; final), Pending (not evaluated yet),
  * Waiting (not ready, not holding the bundle; E2E-R19).
  */
-export type GateState = 'Pass' | 'Block' | 'Superseded' | 'Pending' | 'Waiting'
+export type GateState = 'Pass' | 'Block' | 'Superseded' | 'Rejected' | 'Pending' | 'Waiting'
 
 export interface PolicyGate {
   name: string
