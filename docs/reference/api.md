@@ -53,6 +53,11 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | BundleSpec defines the desired state of a Bundle. An image Bundle deploys only its images, so a configRef on it is refused instead of ignored (#1353). Bundles stored before the rule keep working: CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest supported) lets an update through when spec is unchanged. |
+| `spec.chart` | object |  | Chart is the Helm chart version a "chart" Bundle promotes. The helm-set-image step writes chart.version at update.helm.chartVersionPath. |
+| `spec.chart.digest` | string |  | Digest is the chart package digest (index.yaml digest, or the OCI manifest digest). |
+| `spec.chart.name` | string | yes | Name is the chart name: letters, digits, ".", "_" and "-", starting and ending with a letter or digit. It is joined into the chart's index and OCI paths, so a "/", "]" or other path character would point the version lookup elsewhere. |
+| `spec.chart.repoURL` | string |  | RepoURL is the chart repository (https://... or oci://...). |
+| `spec.chart.version` | string | yes | Version is the chart version. |
 | `spec.configRef` | object |  | ConfigRef points to the GitOps repository commit this Bundle represents when the bundle type is "config" or "mixed". |
 | `spec.configRef.commitSHA` | string |  | CommitSHA is the exact commit SHA for this config snapshot: 4 to 64 hex characters. |
 | `spec.configRef.gitRepo` | string |  | GitRepo is the GitOps repository URL. |
@@ -70,7 +75,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle: 4 to 64 hex characters, or an image digest (a Subscription records the digest it found). |
 | `spec.provenance.rollbackOf` | string |  | RollbackOf is the name of the Bundle this Bundle rolls back (if any). |
 | `spec.provenance.timestamp` | string (date-time) |  | Timestamp is when the bundle was built. |
-| `spec.type` | string | yes | Type classifies the bundle content. Supersession rule (BU-4): each bundle type supersedes only bundles of the same type. An image bundle does NOT supersede a config bundle and vice versa. This allows image and config promotions to coexist independently in the same pipeline. One of: `image`, `config`, `mixed`. |
+| `spec.type` | string | yes | Type classifies the bundle content. Supersession rule (BU-4): each bundle type supersedes only bundles of the same type. An image bundle does NOT supersede a config bundle and vice versa. This allows image and config promotions to coexist independently in the same pipeline. A chart Bundle promotes a Helm chart version (spec.chart) with update.strategy helm. One of: `image`, `config`, `mixed`, `chart`. |
 | `status` | object |  | BundleStatus defines the observed state of a Bundle. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
@@ -426,6 +431,8 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].update.argocd.imageKey` | string |  | ImageKey is the dot-separated key path within spec.source.helm.valuesObject where the image tag should be written. Example: "image.tag" writes to spec.source.helm.valuesObject.image.tag. Defaults to "image.tag" if empty. |
 | `spec.environments[].update.argocd.namespace` | string |  | Namespace is the Kubernetes namespace where the ArgoCD Application lives. Defaults to "argocd" if empty. |
 | `spec.environments[].update.helm` | object |  | Helm holds Helm-specific update configuration. Used when Strategy is "helm". |
+| `spec.environments[].update.helm.chartVersionFile` | string |  | ChartVersionFile is the file a chart Bundle's version is written to, relative to the environment path: an umbrella Chart.yaml, an Argo CD Application, a Flux HelmRelease or a kustomization.yaml with helmCharts. Defaults to "Chart.yaml". |
+| `spec.environments[].update.helm.chartVersionPath` | string |  | ChartVersionPath is the YAML dot-path of the chart version in chartVersionFile. A numeric segment indexes a list, and "[field=value]" selects the list element whose field has that value. Defaults to ".dependencies[name=&lt;chart&gt;].version": the umbrella chart's dependency named after the Bundle's chart (an error when there is none). For example ".spec.source.targetRevision" (Argo CD Application), ".spec.chart.spec.version" (Flux HelmRelease) or ".helmCharts[name=podinfo].version" (kustomize). |
 | `spec.environments[].update.helm.imagePathTemplate` | string |  | ImagePathTemplate is the YAML dot-path to the image tag in values.yaml. Example: ".image.tag" updates the `image.tag` key. If empty, defaults to ".image.tag". |
 | `spec.environments[].update.helm.valuesFile` | string |  | ValuesFile is the name of the values file to update (relative to the environment path). Defaults to "values.yaml". |
 | `spec.environments[].update.strategy` | string |  | Strategy selects the manifest update strategy: kustomize (default, kustomization.yaml images), helm (one values key), argocd (patch the Application, no git), or yaml (any YAML paths in any files of the environment directory). One of: `kustomize`, `helm`, `argocd`, `yaml`. Default: `kustomize`. |
@@ -668,26 +675,62 @@ ScheduleClock writes a timestamp to status.tick on a configurable interval, gene
 
 `kardinal.io/v1alpha1`
 
-Subscription watches an OCI registry or Git repository for new artifacts and automatically creates Bundle CRDs when new tags or commits are detected. Architecture: this is an Owned node (Q2 in Graph-first question stack). The reconciler polls an external source, writes the result to its own CRD status, and creates Bundle objects as child resources. It never mutates other CRDs' status. Stage 18 implementation. Removes the CI dependency for artifact discovery.
+Subscription watches an OCI registry, a Git repository or a Helm chart repository for new artifacts and automatically creates Bundle CRDs when new tags, commits or chart versions are detected. Architecture: this is an Owned node (Q2 in Graph-first question stack). The reconciler polls an external source, writes the result to its own CRD status, and creates Bundle objects, which enter the normal Graph flow. It never mutates other CRDs' status. The webhook receiver only sets the kardinal.io/refresh annotation; the reconciler does the poll.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | SubscriptionSpec defines the desired state of a Subscription. |
 | `spec.git` | object |  | Git holds Git repository watching parameters. Required when type=git. |
 | `spec.git.branch` | string |  | Branch is the branch to watch. Defaults to "main". Default: `main`. |
+| `spec.git.discoveryLimit` | integer (int32) |  | DiscoveryLimit is the most commits a pathGlob poll reads back from the branch head (a shallow fetch of that depth). Default 20. |
 | `spec.git.interval` | string |  | Interval is how often to poll the repository. Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised to 30s; empty or "0" means the 5m default. Default: `5m`. |
-| `spec.git.pathGlob` | string |  | PathGlob is reserved for path filtering, which is not implemented. A non-empty value puts the Subscription in phase Error; leave it empty (every new commit on the branch creates a Bundle). |
-| `spec.git.repoURL` | string | yes | RepoURL is the HTTPS Git repository URL. Loopback (the controller's own pod), link-local, cloud metadata, unspecified and multicast addresses are refused. |
+| `spec.git.pathGlob` | string |  | PathGlob limits the commits that create a Bundle to those that change a file matching the glob ("apps/web/**", "*.yaml", "{base,overlays}/**"). "**" matches any number of directories. Matching walks the branch's first-parent history back from its head, at most discoveryLimit commits, and the Bundle is for the newest matching commit. |
+| `spec.git.repoURL` | string | yes | RepoURL is the Git repository URL: https:// (or http:// for an in-cluster server), ssh://user@host[:port]/path, or the scp-like user@host:path. Loopback (the controller's own pod), link-local, cloud metadata, unspecified and multicast addresses are refused. |
+| `spec.git.secretRef` | object |  | SecretRef names a Secret with Git credentials, in the Subscription's namespace. HTTPS: key token (sent as the password, with key username or "git" as the user), or keys username and password. SSH: key ssh-privatekey (a kubernetes.io/ssh-auth Secret) and key known_hosts, which is required: the host key is always verified. |
+| `spec.git.secretRef.name` | string | yes | Name is the Secret name. |
+| `spec.helm` | object |  | Helm holds Helm chart watching parameters. Required when type=helm. |
+| `spec.helm.allowTags` | []string |  | AllowTags, when not empty, keeps only the listed tags. |
+| `spec.helm.chart` | string | yes | Chart is the chart name: letters, digits, ".", "_" and "-", starting and ending with a letter or digit (Bundle spec.chart.name takes it as is, with the same rule). |
+| `spec.helm.excludeTagFilter` | string |  | ExcludeTagFilter is an optional regular expression (RE2): tags that match it are dropped (for example "-rc\\.\|-debug$"). |
+| `spec.helm.ignoreTags` | []string |  | IgnoreTags drops the listed tags. |
+| `spec.helm.interval` | string |  | Interval is how often to poll the repository. Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised to 30s; empty or "0" means the 5m default. Default: `5m`. |
+| `spec.helm.repoURL` | string | yes | RepoURL is the chart repository: an HTTP(S) repository that serves index.yaml ("https://charts.example.com"), or an OCI registry path ("oci://ghcr.io/myorg/charts"), under which the chart is a repository named after it. Loopback, link-local, cloud metadata, unspecified and multicast addresses are refused. |
+| `spec.helm.secretRef` | object |  | SecretRef names a Secret with repository credentials, in the Subscription's namespace: keys username and password (HTTP basic auth, or an OCI registry login), or a kubernetes.io/dockerconfigjson Secret for an OCI repository. |
+| `spec.helm.secretRef.name` | string | yes | Name is the Secret name. |
+| `spec.helm.semverConstraint` | string |  | SemverConstraint keeps only tags that are semantic versions satisfying the constraint, such as "&gt;=1.4.0 &lt;2.0.0", "^1.4" or "~1.4.2" (github.com/Masterminds/semver syntax). A constraint without a pre-release part excludes pre-releases. Tags that are not semantic versions are dropped. |
+| `spec.helm.tagFilter` | string |  | TagFilter is an optional regular expression (RE2) that tags must match. Empty matches every tag. |
 | `spec.image` | object |  | Image holds OCI registry watching parameters. Required when type=image. |
+| `spec.image.allowTags` | []string |  | AllowTags, when not empty, keeps only the listed tags. |
+| `spec.image.discoveryLimit` | integer (int32) |  | DiscoveryLimit is the most tags newest-build ordering inspects; it reads each tag's manifest and image config on every poll. More remaining tags is an error. Default 50. |
+| `spec.image.excludeTagFilter` | string |  | ExcludeTagFilter is an optional regular expression (RE2): tags that match it are dropped (for example "-rc\\.\|-debug$"). |
+| `spec.image.ignoreTags` | []string |  | IgnoreTags drops the listed tags. |
 | `spec.image.interval` | string |  | Interval is how often to poll the registry. Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised to 30s; empty or "0" means the 5m default. Default: `5m`. |
-| `spec.image.registry` | string | yes | Registry is the image repository to poll, without a tag or digest (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or "http://registry.registry.svc.cluster.local:5000/myapp" for a plain-HTTP in-cluster registry). Only public repositories are supported: the watcher uses the registry's anonymous token flow and sends no credentials. Loopback (the controller's own pod), link-local, cloud metadata, unspecified and multicast addresses are refused. |
-| `spec.image.tagFilter` | string |  | TagFilter is an optional regular expression that image tags must match. Empty string matches all tags. With one matching tag its digest is tracked (a moving tag such as "^main$"); when every matching tag is a semantic version the highest wins; otherwise the most recently built image wins (at most 50 matching tags). No matching tag is an error. |
+| `spec.image.registry` | string | yes | Registry is the image repository to poll, without a tag or digest (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or "http://registry.registry.svc.cluster.local:5000/myapp" for a plain-HTTP in-cluster registry). Loopback (the controller's own pod), link-local, cloud metadata, unspecified and multicast addresses are refused. |
+| `spec.image.secretRef` | object |  | SecretRef names a Secret with registry credentials, in the Subscription's namespace: a kubernetes.io/dockerconfigjson Secret (the entry for the registry host is used; username/password, auth, identitytoken and registrytoken are understood) or a Secret with keys username and password. Without it only anonymous pulls are made. |
+| `spec.image.secretRef.name` | string | yes | Name is the Secret name. |
+| `spec.image.semverConstraint` | string |  | SemverConstraint keeps only tags that are semantic versions satisfying the constraint, such as "&gt;=1.4.0 &lt;2.0.0", "^1.4" or "~1.4.2" (github.com/Masterminds/semver syntax). A constraint without a pre-release part excludes pre-releases. Tags that are not semantic versions are dropped. |
+| `spec.image.strategy` | string |  | Strategy orders the remaining tags. Auto (the default): the only tag; the highest semantic version when every tag is one; otherwise the most recently built image. SemVer: the highest semantic version, other tags ignored. Lexical: the tag that sorts last. NewestBuild: the most recently built image. One of: `Auto`, `SemVer`, `Lexical`, `NewestBuild`. Default: `Auto`. |
+| `spec.image.tagFilter` | string |  | TagFilter is an optional regular expression (RE2) that tags must match. Empty matches every tag. |
 | `spec.namespace` | string |  | Namespace must be empty or equal to the Subscription's own namespace. Bundles are always created in the Subscription's namespace; any other value puts the Subscription in phase Error and creates no Bundle. Leave it empty: the field is kept only so existing manifests still apply. |
 | `spec.pipeline` | string | yes | Pipeline is the name of the Pipeline CRD that Bundles should target. |
-| `spec.type` | string | yes | Type identifies the artifact source: "image" (OCI) or "git". |
+| `spec.type` | string | yes | Type identifies the artifact source: "image" (OCI), "git" or "helm" (a Helm chart repository). |
+| `spec.webhook` | object |  | Webhook enables the inbound webhook receiver for this Subscription: a registry or SCM that posts to /webhook/subscriptions/&lt;namespace&gt;/&lt;name&gt;/&lt;provider&gt; makes the controller poll at once. Without it the receiver refuses every request for the Subscription. |
+| `spec.webhook.secretRef` | object | yes | SecretRef names a Secret in the Subscription's namespace whose key "token" (at least 16 characters) authenticates webhook deliveries: as the last path segment of the receiver URL (Docker Hub, Quay, Harbor, Artifactory, generic), as the Authorization header (Harbor's auth header), the X-JFrog-Event-Auth header (Artifactory), or as the HMAC-SHA256 key of the X-Hub-Signature-256 (GitHub) or X-Kardinal-Signature-256 (generic) header. |
+| `spec.webhook.secretRef.name` | string | yes | Name is the Secret name. |
 | `status` | object |  | SubscriptionStatus defines the observed state of a Subscription. |
+| `status.conditions` | []object |  | Conditions: Ready is True while the Subscription polls its source (phase Watching) and False with the reason otherwise, for example SecretNotReferenceable, SecretNotFound or WatchFailed. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.lastBundleCreated` | string |  | LastBundleCreated is the name of the last Bundle created by this Subscription. |
 | `status.lastCheckedAt` | string |  | LastCheckedAt is the RFC3339 timestamp of the last poll. |
-| `status.lastSeenDigest` | string |  | LastSeenDigest is the OCI digest or Git commit SHA from the last successful check. The first check only records it (no Bundle); a later check that sees a different value creates a Bundle. |
+| `status.lastRefreshRequest` | string |  | LastRefreshRequest is the kardinal.io/refresh annotation value the last poll answered. |
+| `status.lastSeenDigest` | string |  | LastSeenDigest is the OCI digest, Git commit SHA or chart digest from the last successful check. The first check only records it (no Bundle); a later check that sees a different value creates a Bundle. |
+| `status.lastSeenRevision` | string |  | LastSeenRevision is the branch head the last pathGlob poll read up to. The next poll only reads commits after it. Empty without pathGlob. |
+| `status.lastSeenTag` | string |  | LastSeenTag is the image tag, short commit SHA or chart version of lastSeenDigest. |
 | `status.message` | string |  | Message provides a human-readable reason for the current phase (e.g. error details). |
+| `status.observedPathGlob` | string |  | ObservedPathGlob is the spec.git.pathGlob the last successful poll used. When the glob changes, the next poll records a new baseline and creates no Bundle. |
 | `status.phase` | string |  | Phase is the current subscription state. One of: `Watching`, `Idle`, `Error`. |

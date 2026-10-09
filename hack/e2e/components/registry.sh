@@ -8,8 +8,9 @@
 #     manifests, pushed byte for byte from the host's docker with
 #     hack/e2e/ocipush); tests copy tags from there into their own
 #     repositories.
-#   - registry-private: htpasswd auth, empty; every anonymous request gets
-#     401 with a Basic challenge. Nobody logs in to it.
+#   - registry-private: htpasswd auth (user e2e, a generated password),
+#     empty; every anonymous request gets 401 with a Basic challenge. Tests
+#     push to it with the login and point Subscriptions at it with a Secret.
 # Both keep their data in emptyDir: it lives as long as the pod, and this
 # script re-seeds on every run. Idempotent.
 #
@@ -18,6 +19,9 @@
 #   KARDINAL_E2E_REGISTRY_API      the same registry from the host (NodePort)
 #   KARDINAL_E2E_REGISTRY_SEED     the seeded repository (e2e/podinfo)
 #   KARDINAL_E2E_PRIVATE_REGISTRY  private registry base URL, in-cluster
+#   KARDINAL_E2E_PRIVATE_REGISTRY_API       the same registry from the host
+#   KARDINAL_E2E_PRIVATE_REGISTRY_USER      its login
+#   KARDINAL_E2E_PRIVATE_REGISTRY_PASSWORD
 #
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
@@ -33,9 +37,13 @@ SEED_TAGS=(6.13.0 6.14.0 6.15.0)
 
 pull_images "$REGISTRY_IMAGE"
 "${KUBECTL[@]}" create namespace "$NS" --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f - >/dev/null
-# One user whose "hash" is not a bcrypt hash, so no password matches: the
-# private registry refuses every login as well as every anonymous request.
-"${KUBECTL[@]}" -n "$NS" create secret generic registry-htpasswd --from-literal=htpasswd='e2e:!no-login' \
+# One user, e2e, with a generated password (bcrypt, the only hash the
+# registry reads). The hash is regenerated on every run; the password is kept.
+work=$(mktemp -d)
+(cd "$REPO_ROOT" && go build -o "$work/ocipush" ./hack/e2e/ocipush && go build -o "$work/htpasswd" ./hack/e2e/htpasswd)
+PRIVATE_PASSWORD=$(secret_gen registry-private-password 16)
+"${KUBECTL[@]}" -n "$NS" create secret generic registry-htpasswd \
+  --from-literal=htpasswd="$(printf '%s\n' "$PRIVATE_PASSWORD" | "$work/htpasswd" e2e)" \
   --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f - >/dev/null
 
 # registry NAME EXTRA_ENV_YAML
@@ -106,8 +114,19 @@ for _ in $(seq 30); do
 done
 [ "$code" = 401 ] || die "registry-private at $PRIVATE answered $code to an anonymous request, want 401"
 
-work=$(mktemp -d)
-(cd "$REPO_ROOT" && go build -o "$work/ocipush" ./hack/e2e/ocipush)
+# The login works (the htpasswd Secret may have changed since the pod
+# started: restart it then).
+if [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' -u "e2e:$PRIVATE_PASSWORD" "$PRIVATE/v2/")" != 200 ]; then
+  "${KUBECTL[@]}" -n "$NS" rollout restart deploy/registry-private >/dev/null
+  "${KUBECTL[@]}" -n "$NS" rollout status deploy/registry-private --timeout=120s >/dev/null
+  for _ in $(seq 30); do
+    code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -u "e2e:$PRIVATE_PASSWORD" "$PRIVATE/v2/") || code=000
+    [ "$code" = 200 ] && break
+    sleep 2
+  done
+  [ "$code" = 200 ] || die "registry-private at $PRIVATE refuses the e2e login ($code)"
+fi
+
 for tag in "${SEED_TAGS[@]}"; do
   docker image inspect "$SEED_IMAGE:$tag" >/dev/null 2>&1 || pull_retry docker pull -q "$SEED_IMAGE:$tag" >/dev/null ||
     die "can't pull $SEED_IMAGE:$tag"
@@ -120,4 +139,7 @@ env_set KARDINAL_E2E_REGISTRY "http://registry.$NS.svc.cluster.local:5000"
 env_set KARDINAL_E2E_REGISTRY_API "$BASE"
 env_set KARDINAL_E2E_REGISTRY_SEED "$SEED_REPO"
 env_set KARDINAL_E2E_PRIVATE_REGISTRY "http://registry-private.$NS.svc.cluster.local:5000"
+env_set KARDINAL_E2E_PRIVATE_REGISTRY_API "$PRIVATE"
+env_set KARDINAL_E2E_PRIVATE_REGISTRY_USER e2e
+env_set KARDINAL_E2E_PRIVATE_REGISTRY_PASSWORD "$PRIVATE_PASSWORD"
 log "registry at $BASE ($SEED_REPO: ${SEED_TAGS[*]}), private registry at $PRIVATE"

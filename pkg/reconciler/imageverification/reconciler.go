@@ -56,11 +56,11 @@ const (
 // LabelReferenceable must be "true" on every Secret an image policy names
 // (key, trusted root, registry credentials), as for every Secret a
 // kardinal resource names: the Secret's owner opts in to its use.
-const LabelReferenceable = "kardinal.io/referenceable"
+const LabelReferenceable = v1alpha1.LabelSecretReferenceable
 
 // Status reasons (status.reason).
 const (
-	ReasonSecretNotReferenceable     = "SecretNotReferenceable"
+	ReasonSecretNotReferenceable     = v1alpha1.ReasonSecretNotReferenceable
 	ReasonSecretNotFound             = "SecretNotFound"
 	ReasonInvalidPublicKey           = "InvalidPublicKey"
 	ReasonInvalidTrustedRoot         = "InvalidTrustedRoot"

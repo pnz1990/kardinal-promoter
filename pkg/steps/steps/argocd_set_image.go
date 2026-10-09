@@ -71,7 +71,7 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: argoCDPRReviewRejected},
 			parentsteps.Permanent(errors.New(argoCDPRReviewRejected))
 	}
-	if state.Bundle.Type == "config" || state.Bundle.Type == "mixed" {
+	if state.Bundle.Type == "config" || state.Bundle.Type == "mixed" || state.Bundle.Type == "chart" {
 		msg := state.Bundle.Type + " Bundles are not supported by update.strategy argocd"
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, parentsteps.Permanent(errors.New(msg))
 	}
