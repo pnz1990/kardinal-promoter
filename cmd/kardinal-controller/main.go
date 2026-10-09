@@ -340,6 +340,13 @@ func main() {
 			"except kube-system, kube-public and kube-node-lease. Health checks in other namespaces "+
 			"get no Graph ref.")
 
+	var scmInstanceSigners string
+	flag.StringVar(&scmInstanceSigners, "scm-instance-signers", "",
+		"Comma-separated names or emails the Forgejo/Gitea instance signs commits with (repository.signing "+
+			"SIGNING_NAME / SIGNING_EMAIL). Image verification treats a commit signed by one as a platform "+
+			"signature (forgejo-instance), refused unless commits.allowedSigners lists forgejo-instance. Without "+
+			"it, a verified signer that is not a user of the instance is the instance key.")
+
 	var hookServiceAccounts string
 	flag.StringVar(&hookServiceAccounts, "hook-service-accounts", hookrunrecon.DefaultServiceAccount,
 		"Comma-separated ServiceAccount names a Pipeline hook's Job Pod may run as (in the Pipeline "+
@@ -667,10 +674,11 @@ func main() {
 		logger.Warn().Err(ivHostErr).Msg("no SCM host: image policies with commits.requireSigned will fail")
 	}
 	if err := (&ivrecon.Reconciler{
-		Client:   mgr.GetClient(),
-		Registry: &ivrecon.OCIRegistry{},
-		SCM:      scmProvider,
-		SCMHost:  ivSCMHost,
+		Client:          mgr.GetClient(),
+		Registry:        &ivrecon.OCIRegistry{},
+		SCM:             scmProvider,
+		SCMHost:         ivSCMHost,
+		InstanceSigners: splitCSV(scmInstanceSigners),
 		PublicGoodRoot: ivrecon.PublicGoodRoot(func() (sigroot.TrustedMaterial, error) {
 			// In memory: the controller's root file system is read-only.
 			// Every TUF request is time-bounded and egress-guarded.

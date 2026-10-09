@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -21,6 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	iv "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification"
@@ -119,7 +121,17 @@ type harness struct {
 
 func newHarness(t *testing.T, s scm.SCMProvider, objs ...client.Object) *harness {
 	h := &harness{t: t, reg: &fakeRegistry{sigs: map[string]iv.Signatures{}}, now: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)}
-	h.c = fake.NewClientBuilder().WithScheme(scheme(t)).WithStatusSubresource(&v1alpha1.ImageVerification{}).WithObjects(objs...).Build()
+	// A status write with a done context fails, as with a real API server:
+	// the reconciler must write status with the reconcile context, not
+	// the check deadline.
+	h.c = fake.NewClientBuilder().WithScheme(scheme(t)).WithStatusSubresource(&v1alpha1.ImageVerification{}).WithObjects(objs...).
+		WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+			patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		}}).Build()
 	h.r = &iv.Reconciler{Client: h.c, Registry: h.reg, SCM: s, SCMHost: "github.com", NowFn: func() time.Time { return h.now }}
 	return h
 }
@@ -454,4 +466,58 @@ func TestImageVerification_HungSCMTimesOut(t *testing.T) {
 	assert.Equal(t, v1alpha1.ImageVerificationPending, got.Status.Phase)
 	assert.Contains(t, got.Status.Message, "SCM: context deadline exceeded")
 	assert.Positive(t, res.RequeueAfter)
+}
+
+// TestImageVerification_StatusWrittenAfterCheckDeadline: when the checks
+// run out their deadline, the status is still written (with the reconcile
+// context): the harness's client fails a status write whose context is done.
+func TestImageVerification_StatusWrittenAfterCheckDeadline(t *testing.T) {
+	commit := &v1alpha1.VerifiedCommit{Repo: "https://github.com/org/config", SHA: strings.Repeat("abc1", 10)}
+	h := newHarness(t, &fakeSCM{hang: true}, newIV(nil, commit, ""))
+	h.r.CheckTimeout = 20 * time.Millisecond
+	got, _ := h.reconcile()
+	assert.Equal(t, v1alpha1.ImageVerificationPending, got.Status.Phase, "the status write succeeded")
+	assert.Contains(t, got.Status.Message, "context deadline exceeded")
+}
+
+// TestImageVerification_TrustedRootUsesReconcilerClock: the public-good
+// root is asked for with the reconciler's clock (NowFn), which ages the
+// cached root.
+func TestImageVerification_TrustedRootUsesReconcilerClock(t *testing.T) {
+	sigs, _ := signed(t)
+	v := newIV([]v1alpha1.VerifiedImage{{Repository: repo, Digest: digestA}}, nil, "")
+	v.Spec.Policy.Authorities = []v1alpha1.SignatureAuthority{{Name: "ci", Keyless: &v1alpha1.KeylessAuthority{
+		Issuer: "https://issuer", Subject: "s"}}}
+	h := newHarness(t, nil, v)
+	h.reg.sigs[digestA] = sigs
+	var asked []time.Time
+	h.r.PublicGoodRoot = func(_ context.Context, now time.Time) (root.TrustedMaterial, error) {
+		asked = append(asked, now)
+		return nil, errors.New("offline")
+	}
+	h.reconcile()
+	require.NotEmpty(t, asked)
+	assert.Equal(t, h.now, asked[0])
+}
+
+// TestImageVerification_InstanceSigners: a commit signed by an
+// operator-configured instance identity (--scm-instance-signers) is a
+// platform signature even when a user of that name exists: refused unless
+// allowedSigners lists forgejo-instance.
+func TestImageVerification_InstanceSigners(t *testing.T) {
+	sha := strings.Repeat("abc1", 10)
+	commit := &v1alpha1.VerifiedCommit{Repo: "https://github.com/org/config", SHA: sha}
+	sig := scm.CommitSignature{Verified: true, Signer: "forgejo-bot", SHA: sha, Identities: []string{"forgejo-bot", "bot@forgejo.example"}}
+	for _, tc := range []struct {
+		allowed []string
+		phase   string
+	}{{nil, v1alpha1.ImageVerificationFailed}, {[]string{"forgejo-bot"}, v1alpha1.ImageVerificationFailed},
+		{[]string{scm.PlatformSignerForgejo}, v1alpha1.ImageVerificationVerified}} {
+		v := newIV(nil, commit, "")
+		v.Spec.Policy.Commits.AllowedSigners = tc.allowed
+		h := newHarness(t, &fakeSCM{sig: sig}, v)
+		h.r.InstanceSigners = []string{"BOT@forgejo.example"}
+		got, _ := h.reconcile()
+		assert.Equal(t, tc.phase, got.Status.Phase, "%v: %s", tc.allowed, got.Status.Message)
+	}
 }

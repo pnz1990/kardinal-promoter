@@ -64,23 +64,72 @@ func TestVerifyCommit(t *testing.T) {
 			provider: func(u string) scm.CommitVerifier { return scm.NewGitHubProvider("t", u, "") },
 			repo:     "org/config", wantErr: true,
 		},
+		// Forgejo and Gitea payloads as services/convert ToVerification
+		// writes them: Forgejo sets signer.name to the login and no
+		// username; Gitea sets username to the login and name to the
+		// display name; the instance key reports SIGNING_NAME, not a user.
 		{
-			name: "forgejo verified",
+			name: "forgejo person",
 			routes: map[string]struct {
 				code int
 				body string
-			}{"/api/v1/repos/org/config/git/commits/abc": {200, `{"sha":"abc","commit":{"verification":{"verified":true,"reason":"","signer":{"username":"bob","email":"b@x"}}}}`}},
+			}{
+				"/api/v1/repos/org/config/git/commits/abc": {200, `{"sha":"abc","commit":{"verification":{"verified":true,"reason":"alice / 3AA5C34371567BD2","signature":"-----BEGIN PGP SIGNATURE-----","signer":{"name":"alice","email":"alice@example.com"},"payload":"tree ..."}}}`},
+				"/api/v1/users/alice":                      {200, `{"id":2,"login":"alice","email":"alice@example.com"}`},
+			},
 			provider: func(u string) scm.CommitVerifier { return scm.NewForgejoProvider("t", u, "") },
-			repo:     "org/config", want: scm.CommitSignature{Verified: true, Signer: "bob", SHA: "abc", Identities: []string{"bob", "b@x"}},
+			repo:     "org/config", want: scm.CommitSignature{Verified: true, Signer: "alice", Reason: "alice / 3AA5C34371567BD2", SHA: "abc", Identities: []string{"alice", "alice@example.com"}},
 		},
 		{
 			name: "forgejo instance key",
 			routes: map[string]struct {
 				code int
 				body string
-			}{"/api/v1/repos/org/config/git/commits/abc": {200, `{"sha":"abc","commit":{"verification":{"verified":true,"reason":"","signer":{"name":"Forgejo","email":"noreply@forgejo.example","username":""}}}}`}},
+			}{"/api/v1/repos/org/config/git/commits/abc": {200, `{"sha":"abc","commit":{"verification":{"verified":true,"reason":"Forgejo / 7D2F1C8A9B0E4D11","signer":{"name":"Forgejo","email":"noreply@forgejo.example"}}}}`}},
 			provider: func(u string) scm.CommitVerifier { return scm.NewForgejoProvider("t", u, "") },
-			repo:     "org/config", want: scm.CommitSignature{Verified: true, Signer: scm.PlatformSignerForgejo, SHA: "abc", Identities: []string{scm.PlatformSignerForgejo}, Platform: true},
+			repo:     "org/config", want: scm.CommitSignature{Verified: true, Signer: scm.PlatformSignerForgejo, Reason: "Forgejo / 7D2F1C8A9B0E4D11", SHA: "abc", Identities: []string{scm.PlatformSignerForgejo}, Platform: true},
+		},
+		{
+			name: "gitea person",
+			routes: map[string]struct {
+				code int
+				body string
+			}{
+				"/api/v1/repos/org/config/git/commits/abc": {200, `{"sha":"abc","commit":{"verification":{"verified":true,"reason":"alice / 3AA5C34371567BD2","signer":{"name":"Alice Doe","email":"alice@example.com","username":"alice"}}}}`},
+				"/api/v1/users/alice":                      {200, `{"id":2,"login":"alice"}`},
+			},
+			provider: func(u string) scm.CommitVerifier { return scm.NewForgejoProvider("t", u, "") },
+			repo:     "org/config", want: scm.CommitSignature{Verified: true, Signer: "alice", Reason: "alice / 3AA5C34371567BD2", SHA: "abc", Identities: []string{"alice", "alice@example.com"}},
+		},
+		{
+			name: "gitea instance key",
+			routes: map[string]struct {
+				code int
+				body string
+			}{"/api/v1/repos/org/config/git/commits/abc": {200, `{"sha":"abc","commit":{"verification":{"verified":true,"reason":"Gitea / 7D2F1C8A9B0E4D11","signer":{"name":"Gitea","email":"teabot@gitea.io","username":"Gitea"}}}}`}},
+			provider: func(u string) scm.CommitVerifier { return scm.NewForgejoProvider("t", u, "") },
+			repo:     "org/config", want: scm.CommitSignature{Verified: true, Signer: scm.PlatformSignerForgejo, Reason: "Gitea / 7D2F1C8A9B0E4D11", SHA: "abc", Identities: []string{scm.PlatformSignerForgejo}, Platform: true},
+		},
+		{
+			name: "forgejo unverified: no user lookup",
+			routes: map[string]struct {
+				code int
+				body string
+			}{"/api/v1/repos/org/config/git/commits/abc": {200, `{"sha":"abc","commit":{"verification":{"verified":false,"reason":"gpg.error.not_signed_commit","signer":null}}}`}},
+			provider: func(u string) scm.CommitVerifier { return scm.NewForgejoProvider("t", u, "") },
+			repo:     "org/config", want: scm.CommitSignature{Reason: "gpg.error.not_signed_commit", SHA: "abc"},
+		},
+		{
+			name: "forgejo user lookup fails: error, not a guess",
+			routes: map[string]struct {
+				code int
+				body string
+			}{
+				"/api/v1/repos/org/config/git/commits/abc": {200, `{"sha":"abc","commit":{"verification":{"verified":true,"reason":"x","signer":{"name":"alice","email":"a@x"}}}}`},
+				"/api/v1/users/alice":                      {500, `{"message":"boom"}`},
+			},
+			provider: func(u string) scm.CommitVerifier { return scm.NewForgejoProvider("t", u, "") },
+			repo:     "org/config", wantErr: true,
 		},
 		{
 			name: "gitlab verified",

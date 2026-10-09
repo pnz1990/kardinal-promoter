@@ -25,6 +25,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification/signtest"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 )
 
 // signatures is a test's signature repository in the suite's registry:
@@ -250,19 +251,22 @@ func TestStep_ImageVerificationNeedsDigest(t *testing.T) {
 }
 
 // TestStep_ImageVerificationUnsignedCommit: with commits.requireSigned, a
-// config Bundle whose commit is not signed (Forgejo reports it unverified)
+// config Bundle whose commit is not signed (a user pushed it unsigned)
 // fails before its first environment changes.
 //
 // Covers IMGV-COMMIT-01.
 func TestStep_ImageVerificationUnsignedCommit(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
+	requireGiteaFamily(t, e)
 	a := newArgoApp(t, e, "test")
 	p := a.pipeline(nil)
 	p.Spec.ImageVerification = &v1alpha1.ImageVerificationPolicy{
 		Commits: &v1alpha1.CommitSignaturePolicy{RequireSigned: true}}
 	a.apply(t, p)
-	cfg, sha := a.configRepo(t, "test")
+	cfg, _ := a.configRepo(t, "test")
+	sha, err := gitserver.CommitAs(context.Background(), e.Git, cfg, "nosig-"+a.ns[len(a.ns)-8:], "README.md", []byte("unsigned\n"), false)
+	require.NoError(t, err)
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
 	iv := waitImageVerification(t, e, a.ns, bundle, "Failed")
 	assert.Contains(t, iv.Status.Message, "is not signed with a verified signature")
@@ -271,6 +275,88 @@ func TestStep_ImageVerificationUnsignedCommit(t *testing.T) {
 	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Failed", time.Minute)
 	assert.Contains(t, ps.Status.Message, "image verification")
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
+}
+
+// requireGiteaFamily skips a test that needs Forgejo or Gitea users and GPG
+// keys (CommitAs).
+func requireGiteaFamily(t *testing.T, e *framework.Env) {
+	t.Helper()
+	if k := e.Git.Kind(); k != "forgejo" && k != "gitea" {
+		t.Skipf("needs Forgejo or Gitea, the suite's git server is %s", k)
+	}
+}
+
+// TestSCM_SignedCommitPerson: on Forgejo and on Gitea (whose signer payloads
+// differ: Forgejo names the login in signer.name, Gitea in
+// signer.username), a config commit a user signed with a GPG key registered
+// on the server is a person's signature: the Bundle verifies with
+// allowedSigners naming the user, and fails when it names someone else
+// (regression, QA #1521 round 3: Forgejo person signatures were taken as
+// the instance key).
+//
+// Covers IMGV-SIGNER-01.
+func TestSCM_SignedCommitPerson(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireGiteaFamily(t, e)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	signer := "signer-" + a.ns[len(a.ns)-8:]
+	p := a.pipeline(nil)
+	p.Spec.ImageVerification = &v1alpha1.ImageVerificationPolicy{
+		Commits: &v1alpha1.CommitSignaturePolicy{RequireSigned: true, AllowedSigners: []string{signer}}}
+	a.apply(t, p)
+	cfg, _ := a.configRepo(t, "test")
+	sha, err := gitserver.CommitAs(ctx, e.Git, cfg, signer, "README.md", []byte("signed\n"), true)
+	require.NoError(t, err)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
+	iv := waitImageVerification(t, e, a.ns, bundle, "Verified")
+	require.NotNil(t, iv.Status.Commit)
+	assert.Equal(t, signer, iv.Status.Commit.Signer)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+
+	// Another allowed signer: the same commit is refused.
+	var live v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: pipelineName}, &live))
+	live.Spec.ImageVerification.Commits.AllowedSigners = []string{"someone-else"}
+	require.NoError(t, e.Client.Update(ctx, &live))
+	second := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
+	iv = waitImageVerification(t, e, a.ns, second, "Failed")
+	assert.Contains(t, iv.Status.Message, "who is not in commits.allowedSigners")
+}
+
+// TestSCM_SignedCommitInstance: a commit the server signed with its
+// instance key (an API file edit, with repository.signing set up) is a
+// platform signature on Forgejo and on Gitea (Gitea reports SIGNING_NAME as
+// signer.username): refused by default, accepted when allowedSigners lists
+// forgejo-instance (regression, QA #1521 round 3: Gitea instance
+// signatures passed as a person).
+//
+// Covers IMGV-SIGNER-02.
+func TestSCM_SignedCommitInstance(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	requireGiteaFamily(t, e)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	p := a.pipeline(nil)
+	p.Spec.ImageVerification = &v1alpha1.ImageVerificationPolicy{
+		Commits: &v1alpha1.CommitSignaturePolicy{RequireSigned: true}}
+	a.apply(t, p)
+	cfg, sha := a.configRepo(t, "test") // committed through the API: instance-signed
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
+	iv := waitImageVerification(t, e, a.ns, bundle, "Failed")
+	assert.Contains(t, iv.Status.Message, "signed by the SCM platform (forgejo-instance")
+	a.fileHas(t, "test", fixtures.V1, "test in git")
+
+	var live v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: pipelineName}, &live))
+	live.Spec.ImageVerification.Commits.AllowedSigners = []string{"forgejo-instance"}
+	require.NoError(t, e.Client.Update(ctx, &live))
+	second := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
+	iv = waitImageVerification(t, e, a.ns, second, "Verified")
+	assert.Equal(t, "forgejo-instance", iv.Status.Commit.Signer)
+	e.WaitStepState(t, a.ns, pipelineName, second, "test", "Verified", promoteTimeout)
 }
 
 // TestStep_ImageVerificationAttestationIsNotASignature: an attestation

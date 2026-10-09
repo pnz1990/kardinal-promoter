@@ -138,18 +138,48 @@ func (f *ForgejoProvider) VerifyCommit(ctx context.Context, repo, sha string) (C
 	}
 	v := result.Commit.Verification
 	sig := CommitSignature{Verified: v.Verified, Reason: v.Reason, SHA: result.SHA}
-	switch {
-	case v.Signer != nil && v.Signer.Username != "":
-		sig.Signer = v.Signer.Username
-		sig.Identities = nonEmpty(v.Signer.Username, v.Signer.Email)
-	case v.Verified:
-		// A verified signature with no user behind it is the instance key
-		// (Forgejo/Gitea sign web UI commits and merges with it).
-		sig.Signer, sig.Identities, sig.Platform = PlatformSignerForgejo, []string{PlatformSignerForgejo}, true
-	case v.Signer != nil:
+	if v.Signer == nil {
+		return sig, nil
+	}
+	// Forgejo sets signer.name to the signing user's login and never sets
+	// username; Gitea sets username to the login and name to the display
+	// name (services/convert ToVerification in both). For the instance key
+	// both report the instance's SIGNING_NAME, which is not a user.
+	login := v.Signer.Username
+	if login == "" {
+		login = v.Signer.Name
+	}
+	sig.Signer = login
+	if sig.Signer == "" {
 		sig.Signer = v.Signer.Email
 	}
+	sig.Identities = nonEmpty(login, v.Signer.Email)
+	if !v.Verified || login == "" {
+		return sig, nil
+	}
+	user, err := f.userExists(ctx, login)
+	if err != nil {
+		return CommitSignature{}, fmt.Errorf("look up commit %s@%s signer %q: %w", repo, sha, login, err)
+	}
+	if !user {
+		// No such user: the instance key (repository.signing).
+		sig.Signer, sig.Identities, sig.Platform = PlatformSignerForgejo, []string{PlatformSignerForgejo}, true
+	}
 	return sig, nil
+}
+
+// userExists reports whether login is a user of the instance
+// (GET /api/v1/users/{login}; 404 means no such user).
+func (f *ForgejoProvider) userExists(ctx context.Context, login string) (bool, error) {
+	err := f.do(ctx, http.MethodGet, "/api/v1/users/"+url.PathEscape(login), nil, nil)
+	var apiErr *APIError
+	switch {
+	case errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound:
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return true, nil
 }
 
 // VerifyCommit implements CommitVerifier with

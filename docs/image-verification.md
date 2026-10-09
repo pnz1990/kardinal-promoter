@@ -129,7 +129,8 @@ SCM host (`--scm-api-url`; `api.github.com` is `github.com`). The SCM is asked a
 commit, and the SHA it answers for must be the same.
 
 The SCM's verdict is about the key it holds for the signer; `allowedSigners` narrows it to the
-people you accept, by login or email as the SCM reports the verified signer. GitLab is matched on
+people you accept, by login or email as the SCM reports the verified signer. Forgejo reports the
+signer's login in `signer.name`, Gitea in `signer.username`; kardinal reads either. GitLab is matched on
 the key owner's verified email (for SSH signatures, whose response names the key only by a title
 its owner chose, on the commit's committer email, which GitLab checked against the key's owner);
 it reports no full GPG fingerprint, so keys are not matched.
@@ -141,7 +142,7 @@ lists the platform identity explicitly:
 |---|---|---|
 | GitHub | `web-flow` | web UI edits, merges, squash merges and reverts, signed with GitHub's key |
 | GitLab | `gitlab-system` | commits GitLab created and signed itself (status `verified_system`: web UI, API) |
-| Forgejo / Gitea | `forgejo-instance` | commits signed with the instance key (a verified signature with no user) |
+| Forgejo / Gitea | `forgejo-instance` | commits signed with the instance key (`repository.signing`): a verified signature whose signer is not a user of the instance (`GET /api/v1/users/{name}` answers 404), or one named in `--scm-instance-signers` (Helm `scm.instanceSigners`: the instance's `SIGNING_NAME` or `SIGNING_EMAIL`) |
 
 To accept PRs merged in the web UI (the usual GitOps flow), list the identity, for example
 `allowedSigners: [web-flow, alice, bob@example.com]`. Anyone who can merge through the web UI then

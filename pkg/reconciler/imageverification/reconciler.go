@@ -98,6 +98,12 @@ type Reconciler struct {
 	// policy with commits.requireSigned.
 	SCM scm.SCMProvider
 
+	// InstanceSigners are the names or emails the Forgejo/Gitea instance
+	// signs with (its repository.signing SIGNING_NAME / SIGNING_EMAIL,
+	// --scm-instance-signers). A commit signed by one is a platform
+	// signature (forgejo-instance), even when a user of that name exists.
+	InstanceSigners []string
+
 	// SCMHost is the web host of the controller's SCM provider
 	// (scm.WebHost). A commit in a repository on another host is refused:
 	// the provider would be asked about a repository it does not serve.
@@ -332,6 +338,9 @@ func (r *Reconciler) checkCommit(ctx context.Context, iv *v1alpha1.ImageVerifica
 		iv.Status.Commit = &v1alpha1.CommitVerificationResult{Message: reason, Signer: sig.Signer}
 		return outcome{failed: fmt.Sprintf("commit %s of %s is not signed with a verified signature (%s)", c.SHA, repo, reason),
 			reason: ReasonCommitNotVerified}
+	}
+	if !sig.Platform && signerAllowed(sig, r.InstanceSigners) {
+		sig.Signer, sig.Identities, sig.Platform = scm.PlatformSignerForgejo, []string{scm.PlatformSignerForgejo}, true
 	}
 	allowed := commitAllowedSigners(iv)
 	if sig.Platform && !signerAllowed(sig, allowed) {

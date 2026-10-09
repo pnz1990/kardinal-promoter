@@ -111,6 +111,9 @@ spec:
             {{- with .Values.scm.apiURL }}
             - --scm-api-url={{ . }}
             {{- end }}
+            {{- with .Values.scm.instanceSigners }}
+            - --scm-instance-signers={{ join "," . }}
+            {{- end }}
             {{- with .Values.scm.allowedRepositories }}
             - --scm-allowed-repositories={{ join "," . }}
             {{- end }}

@@ -6,10 +6,12 @@ toolchain go1.26.9
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
+	github.com/ProtonMail/go-crypto v1.1.6
 	github.com/aws/aws-sdk-go-v2 v1.47.2
 	github.com/aws/aws-sdk-go-v2/config v1.33.8
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.8
 	github.com/bmatcuk/doublestar/v4 v4.10.0
+	github.com/go-git/go-billy/v5 v5.9.0
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/google/cel-go v0.31.0
 	github.com/google/go-containerregistry v0.22.1
@@ -51,7 +53,6 @@ require (
 	cel.dev/expr v0.25.2 // indirect
 	dario.cat/mergo v1.0.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/ProtonMail/go-crypto v1.1.6 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.2 // indirect
@@ -87,7 +88,6 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/go-errors/errors v1.5.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
-	github.com/go-git/go-billy/v5 v5.9.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
