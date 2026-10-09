@@ -51,7 +51,9 @@ interface Props {
 }
 
 /** PromotionStep states in which work is running (Go never reports "Running"). */
-const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'RollingBack'])
+// RollingBack is an end state: the step failed health and a rollback Bundle
+// took over; the rollback Bundle's own step is the one in flight.
+const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking'])
 
 /** Format an ISO timestamp to a human-readable string. */
 function formatTimestamp(iso: string): string {
@@ -418,7 +420,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
   const elapsedDisplay = isActiveNode
     ? formatElapsedSince(node.startedAt ?? node.lastEvaluatedAt)
     : ''
-  const showsImages = node.state !== 'RollingBack' && IN_FLIGHT_STATES.has(node.state)
+  const showsImages = IN_FLIGHT_STATES.has(node.state)
   // The selected node is a copy taken at click time; the graph has its current state.
   const liveNode = nodes.find(n => n.id === node.id) ?? node
   const canAct = isPromotionStep && !!pipelineName && !!node.environment

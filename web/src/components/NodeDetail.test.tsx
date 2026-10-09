@@ -292,6 +292,20 @@ describe('NodeDetail — elapsed timer (C10b-web-25)', () => {
     )
     expect(screen.getByText(/^Elapsed:/).parentElement).toHaveTextContent(/Elapsed:\s*2m \d+s/)
   })
+
+  // #1365: RollingBack is an end state (the rollback Bundle's step is the
+  // one in flight), so its node shows no running timer, as the CLI shows it.
+  it('shows no timer for a RollingBack step', () => {
+    const startedAt = new Date(Date.now() - 125_000).toISOString()
+    render(
+      <NodeDetail
+        node={makePromotionStepNode({ startedAt, state: 'RollingBack' })}
+        onClose={vi.fn()}
+        steps={[makeStep({ state: 'RollingBack' })]}
+      />,
+    )
+    expect(screen.queryByText(/^Elapsed:/)).toBeNull()
+  })
 })
 
 // uat → gate → prod, the shape the graph API sends. Promote and Roll back follow
