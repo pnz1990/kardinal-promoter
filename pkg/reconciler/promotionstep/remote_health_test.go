@@ -238,3 +238,46 @@ func TestRemoteClusters_CacheExpires(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, r.Len(), "the expired entry was evicted")
 }
+
+// TestRemoteClusters_CacheEvictsLeastRecentlyUsed: at most 128 client sets
+// are kept. The 129th evicts the least recently used one, not the oldest
+// built: an entry used again stays.
+func TestRemoteClusters_CacheEvictsLeastRecentlyUsed(t *testing.T) {
+	now := time.Now()
+	r := &health.RemoteClusters{Dial: loopbackDial, NowFn: func() time.Time { return now }}
+	secrets := make([]*corev1.Secret, 129)
+	for i := range secrets {
+		secrets[i] = kubeconfigSecret(fmt.Sprintf("spoke-%03d", i), remoteKubeconfig(fmt.Sprintf("https://spoke-%03d.example:6443", i), ""))
+	}
+	first := map[int]*health.AutoDetector{}
+	for i := range 128 {
+		now = now.Add(time.Second)
+		d, err := r.Detector(secrets[i], "")
+		require.NoError(t, err)
+		first[i] = d
+	}
+	require.Equal(t, 128, r.Len())
+	// spoke-000 is used again, so spoke-001 is now the least recently used.
+	now = now.Add(time.Second)
+	d, err := r.Detector(secrets[0], "")
+	require.NoError(t, err)
+	require.Same(t, first[0], d)
+
+	now = now.Add(time.Second)
+	_, err = r.Detector(secrets[128], "")
+	require.NoError(t, err)
+	assert.Equal(t, 128, r.Len(), "the cap holds")
+
+	d, err = r.Detector(secrets[0], "")
+	require.NoError(t, err)
+	assert.Same(t, first[0], d, "the recently used entry was kept")
+	for i := 2; i < 128; i++ {
+		d, err := r.Detector(secrets[i], "")
+		require.NoError(t, err)
+		assert.Same(t, first[i], d, "spoke-%03d was kept", i)
+	}
+	assert.Equal(t, 128, r.Len())
+	d, err = r.Detector(secrets[1], "")
+	require.NoError(t, err)
+	assert.NotSame(t, first[1], d, "spoke-001, the least recently used, was evicted and is rebuilt")
+}

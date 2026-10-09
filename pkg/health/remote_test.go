@@ -57,7 +57,10 @@ func TestRemoteConfig(t *testing.T) {
 		{name: "proxy-url", cluster: server + `, proxy-url: "http://127.0.0.1:3128"`, user: "token: t", wantErr: "proxy-url"},
 		{name: "insecure-skip-tls-verify", cluster: server + ", insecure-skip-tls-verify: true", user: "token: t", wantErr: "insecure-skip-tls-verify"},
 		{name: "no server", cluster: `certificate-authority-data: ""`, user: "token: t", wantErr: "server is empty"},
-		{name: "not a URL", cluster: `server: "ftp://x"`, user: "token: t", wantErr: "http or https URL"},
+		{name: "not a URL", cluster: `server: "ftp://x"`, user: "token: t", wantErr: "must be an https URL"},
+		{name: "http server", cluster: `server: "http://spoke.example:6443"`, user: "token: t", wantErr: "must be an https URL"},
+		{name: "http server, no credentials", cluster: `server: "http://spoke.example"`, user: "", wantErr: "must be an https URL"},
+		{name: "no host", cluster: `server: "https://"`, user: "token: t", wantErr: "must be an https URL"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

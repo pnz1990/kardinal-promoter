@@ -120,9 +120,12 @@ func allowedKubeconfig(cluster *clientcmdapi.Cluster, user *clientcmdapi.AuthInf
 	case cluster.Server == "":
 		return fmt.Errorf("%w: clusters[].cluster.server is empty", ErrKubeconfigNotAllowed)
 	}
+	// https only: over http the health check would read an unauthenticated
+	// answer anyone on the path can forge, and client-go drops the bearer
+	// token there anyway.
 	u, err := url.Parse(cluster.Server)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return fmt.Errorf("%w: clusters[].cluster.server must be an http or https URL", ErrKubeconfigNotAllowed)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("%w: clusters[].cluster.server must be an https URL", ErrKubeconfigNotAllowed)
 	}
 	return nil
 }

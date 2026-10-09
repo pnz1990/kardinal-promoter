@@ -276,8 +276,9 @@ health:
   for the Secrets of MetricChecks, NotificationHooks and Subscriptions. The
   controller reads it at every check, so a rotated Secret is used from the next check.
 - Only inline credentials work: a bearer token (`token`), a client certificate and key
-  (`client-certificate-data`, `client-key-data`), or `username` and `password`, sent only to an
-  `https` server. A kubeconfig with `exec`, `auth-provider`, `tokenFile`, a file path
+  (`client-certificate-data`, `client-key-data`), or `username` and `password`, and the
+  `server` must be an `https` URL (an `http` server fails the step: anyone on the path could forge
+  its answers). A kubeconfig with `exec`, `auth-provider`, `tokenFile`, a file path
   (`client-certificate`, `client-key`, `certificate-authority`), `proxy-url` or
   `insecure-skip-tls-verify` is refused and the step fails with `kubeconfig not allowed: ... is not
   supported`: these would run a command or read a file inside the controller, or send the
