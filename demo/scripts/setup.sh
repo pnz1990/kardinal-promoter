@@ -80,9 +80,14 @@ GITOPS_REPO="${GITOPS_REPO:-https://github.com/pnz1990/kardinal-demo}"
 # The test application repo
 TEST_APP_REPO="${TEST_APP_REPO:-pnz1990/kardinal-test-app}"
 
-ARGOCD_VERSION="${ARGOCD_VERSION:-v2.10.3}"
-FLUX_VERSION="${FLUX_VERSION:-v2.3.0}"
-ARGO_ROLLOUTS_VERSION="${ARGO_ROLLOUTS_VERSION:-v1.7.1}"
+# Argo CD, Flux, Argo Rollouts and Flagger: the versions the live e2e suites
+# install and test, from hack/e2e/versions.env, the one place they are set.
+# shellcheck source=hack/e2e/versions.env
+source "${REPO_ROOT}/hack/e2e/versions.env"
+ARGOCD_VERSION="${ARGOCD_VERSION:-${ARGOCD_RELEASE}}"
+FLUX_VERSION="${FLUX_VERSION:-${FLUX_RELEASE}}"
+ARGO_ROLLOUTS_VERSION="${ARGO_ROLLOUTS_VERSION:-${ROLLOUTS_RELEASE}}"
+FLAGGER_VERSION="${FLAGGER_VERSION:-${FLAGGER_RELEASE}}"
 # The controller image built from this checkout and loaded into the control cluster.
 KARDINAL_IMAGE_REPO="${KARDINAL_IMAGE_REPO:-ghcr.io/pnz1990/kardinal-promoter}"
 KARDINAL_IMAGE_TAG="${KARDINAL_IMAGE_TAG:-dev}"
@@ -189,9 +194,9 @@ success "[1/10] Clusters ready"
 info "[2/10] Installing ArgoCD on control cluster..."
 kubectl config use-context "kind-${CONTROL_CLUSTER}"
 kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -n argocd \
-  -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml" \
-  --wait=false
+# Server-side: the Argo CD 3 Application CRD is too large for client-side apply.
+kubectl apply -n argocd --server-side --force-conflicts \
+  -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml"
 kubectl rollout status deployment/argocd-server -n argocd --timeout=240s
 success "[2/10] ArgoCD installed"
 
@@ -375,7 +380,7 @@ info "[7/10] Configuring ArgoCD applications..."
 kubectl config use-context "kind-${CONTROL_CLUSTER}"
 kubectl apply -f "${DEMO_DIR}/manifests/argocd/"
 
-# argocd-application-controller is a StatefulSet in Argo CD v2.x.
+# argocd-application-controller is a StatefulSet.
 kubectl rollout status statefulset/argocd-application-controller -n argocd --timeout=120s
 
 success "[7/10] ArgoCD applications configured"
@@ -391,7 +396,9 @@ if [[ "$INSTALL_FLUX" == "true" ]]; then
   kubectl config use-context "kind-${DEV_CLUSTER}"
   # Install Flux controllers (no bootstrap — we apply Kustomizations manually)
   kubectl create namespace flux-system --dry-run=client -o yaml | kubectl apply -f -
-  kubectl apply -f "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/install.yaml"
+  # Server-side: the Flux CRDs are too large for client-side apply.
+  kubectl apply --server-side --force-conflicts \
+    -f "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/install.yaml"
   kubectl -n flux-system rollout status deploy/source-controller --timeout=120s
   kubectl -n flux-system rollout status deploy/kustomize-controller --timeout=120s
 
@@ -413,7 +420,7 @@ if [[ "$INSTALL_ARGO_ROLLOUTS" == "true" ]]; then
   info "[9/10] Installing Argo Rollouts..."
   kubectl config use-context "kind-${DEV_CLUSTER}"
   kubectl create namespace argo-rollouts --dry-run=client -o yaml | kubectl apply -f -
-  kubectl apply -n argo-rollouts \
+  kubectl apply -n argo-rollouts --server-side --force-conflicts \
     -f "https://github.com/argoproj/argo-rollouts/releases/download/${ARGO_ROLLOUTS_VERSION}/install.yaml"
   kubectl -n argo-rollouts rollout status deploy/argo-rollouts --timeout=120s
 
@@ -434,15 +441,13 @@ if [[ "$INSTALL_FLAGGER" == "true" ]]; then
   info "[10/10] Installing Flagger..."
   kubectl config use-context "kind-${DEV_CLUSTER}"
   # Install Flagger (no service mesh — uses Kubernetes provider)
-  helm repo add flagger https://flagger.app 2>/dev/null || true
-  helm repo update 2>/dev/null || true
-  kubectl create namespace flagger-system --dry-run=client -o yaml | kubectl apply -f -
-  helm upgrade -i flagger flagger/flagger \
-    --namespace flagger-system \
+  # The chart includes the Canary CRDs.
+  helm upgrade -i flagger flagger --repo https://flagger.app \
+    --version "${FLAGGER_VERSION#v}" \
+    --namespace flagger-system --create-namespace \
     --set prometheus.install=false \
     --set meshProvider=kubernetes \
-    --wait --timeout=120s 2>/dev/null || \
-  kubectl apply -f "https://raw.githubusercontent.com/fluxcd/flagger/main/artifacts/flagger/crd.yaml" 2>/dev/null || true
+    --wait --timeout=120s
 
   # Apply Flagger Canary and Deployment only (pipeline.yaml requires the control cluster)
   kubectl create namespace kardinal-test-app-test --dry-run=client -o yaml | kubectl apply -f -
