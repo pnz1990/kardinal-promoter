@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # hack/e2e/components/giteafamily.sh forgejo|gitea
 #
-# Installs a single-pod Forgejo or Gitea (rootless image, SQLite, no SSH) in
-# namespace <flavor> and seeds it for the live suites:
+# Installs a single-pod Forgejo or Gitea (rootless image, SQLite, the built-in
+# SSH server on port 2222) in namespace <flavor> and seeds it for the live
+# suites:
 #   - admin user; its token (scope all) is the test runner's
 #     KARDINAL_E2E_GIT_TOKEN, used to create per-test repos, merge and close PRs
 #   - bot user whose token has only the scopes docs/scm-providers.md lists
@@ -13,6 +14,9 @@
 #     kardinal-system/scm-webhook (key secret)
 # Webhooks go to the controller's ClusterIP, which the webhook allow list
 # must let through; each test registers its own.
+# KARDINAL_E2E_GIT_ROOT_URL, when set, is the URL in-cluster clients use
+# instead of the server's Service (the scale suite's Toxiproxy in front of
+# it): the server's ROOT_URL, so its clone URLs, and the controller's SCM API.
 # Idempotent.
 #
 # Copyright 2026 The kardinal-promoter Authors.
@@ -32,7 +36,7 @@ case "$FLAVOR" in
   *) die "flavor must be forgejo or gitea" ;;
 esac
 NS=$FLAVOR
-INCLUSTER="http://$FLAVOR.$NS.svc.cluster.local:3000"
+INCLUSTER=${KARDINAL_E2E_GIT_ROOT_URL:-"http://$FLAVOR.$NS.svc.cluster.local:3000"}
 ORG=kardinal
 
 load_image "$IMAGE"
@@ -66,8 +70,9 @@ spec:
             - {name: ${PFX}__database__DB_TYPE, value: sqlite3}
             - {name: ${PFX}__server__ROOT_URL, value: "$INCLUSTER/"}
             - {name: ${PFX}__server__HTTP_PORT, value: "3000"}
-            # The built-in ssh server serves git over ssh for the SSH tests
-            # (TestForgejo_SSHGit, TestGitea_SSHGit).
+            # The built-in SSH server: git over ssh for the SSH tests
+            # (TestForgejo_SSHGit, TestGitea_SSHGit) and Subscriptions on
+            # ssh:// repoURLs.
             - {name: ${PFX}__server__DISABLE_SSH, value: "false"}
             - {name: ${PFX}__server__START_SSH_SERVER, value: "true"}
             - {name: ${PFX}__server__SSH_DOMAIN, value: "$FLAVOR.$NS.svc.cluster.local"}
@@ -174,6 +179,8 @@ env_set KARDINAL_E2E_GIT_API "$BASE"
 env_set KARDINAL_E2E_GIT_CLONE_BASE "$INCLUSTER"
 env_set KARDINAL_E2E_GIT_SSH_BASE "ssh://git@$FLAVOR.$NS.svc.cluster.local:2222"
 env_set KARDINAL_E2E_GIT_SSH_ADDR "$(node_ip):$(nodeport "$NS" "$FLAVOR" ssh)"
+env_set KARDINAL_E2E_GIT_SSH "$FLAVOR.$NS.svc.cluster.local:2222"
+env_set KARDINAL_E2E_GIT_SSH_API "$(node_ip):$(nodeport "$NS" "$FLAVOR" ssh)"
 env_set KARDINAL_E2E_GIT_OWNER "$ORG"
 env_set KARDINAL_E2E_GIT_TOKEN "$(secret_get "$FLAVOR-admin-token")"
 env_set KARDINAL_E2E_WEBHOOK_URL "$KARDINAL_WEBHOOK_URL"

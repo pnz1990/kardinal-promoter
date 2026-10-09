@@ -369,25 +369,43 @@ func TestGitPushStep_Modes(t *testing.T) {
 }
 
 // TestPRBranch covers the one definition of the branch kardinal promotes
-// through: git-push pushes PRBranch(bundle, env), open-pr opens the PR from it
-// when git-push reported no branch, and both are under PRBranchPrefix, the
-// only prefix the PromotionStep reconciler deletes a branch under. Three
-// literals of the same name used to live in these places (B70 nit).
+// through: git-push pushes PRBranch(namespace, bundle, env),
+// kardinal/<first 8 hex of sha256(namespace)>/<bundle>/<env>, open-pr opens
+// the PR from it when git-push reported no branch, and both are under
+// PRBranchPrefix, the only prefix the PromotionStep reconciler deletes a
+// branch under. The same Bundle name in two namespaces gets two branches; a
+// promotion that already pushed a branch of the old form,
+// kardinal/<bundle>/<env>, keeps it (#1504 QA).
 func TestPRBranch(t *testing.T) {
-	want := "kardinal/nginx-demo-v1-29-0/prod"
-	assert.Equal(t, want, steps.PRBranch("nginx-demo-v1-29-0", "prod"))
+	want := "kardinal/37a8eec1/nginx-demo-v1-29-0/prod" // sha256("default")
+	assert.Equal(t, want, steps.PRBranch("default", "nginx-demo-v1-29-0", "prod"))
+	assert.NotEqual(t, want, steps.PRBranch("team-b", "nginx-demo-v1-29-0", "prod"))
+	assert.Equal(t, "kardinal/nginx-demo-v1-29-0/prod", steps.PRBranch("", "nginx-demo-v1-29-0", "prod"))
 	assert.True(t, strings.HasPrefix(want, steps.PRBranchPrefix))
 
 	git := &mockGitClient{}
 	state := makeState(t, git, nil)
+	state.Namespace = "default"
 	state.Sequence = parentsteps.DefaultSequenceForBundle("pr-review", "image", "", "")
 	state.Environment.Approval = "pr-review"
-	_, err := runStep(t, "git-push", state)
+	res, err := runStep(t, "git-push", state)
 	require.NoError(t, err)
 	assert.Equal(t, want, git.pushBranch, "git-push pushes the PR branch")
+	assert.Equal(t, want, res.Outputs["branch"])
+
+	legacy := "kardinal/nginx-demo-v1-29-0/prod"
+	git = &mockGitClient{}
+	state = makeState(t, git, nil)
+	state.Namespace = "default"
+	state.Outputs["branch"] = legacy
+	state.Sequence = parentsteps.DefaultSequenceForBundle("pr-review", "image", "", "")
+	_, err = runStep(t, "git-push", state)
+	require.NoError(t, err)
+	assert.Equal(t, legacy, git.pushBranch, "an in-flight PR keeps its branch")
 
 	scmP := &mockSCMProvider{prURL: "https://example/pr/7", prNumber: 7}
 	state = makeState(t, &mockGitClient{}, scmP)
+	state.Namespace = "default"
 	delete(state.Outputs, "branch")
 	_, err = runStep(t, "open-pr", state)
 	require.NoError(t, err)

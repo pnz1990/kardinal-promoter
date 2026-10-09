@@ -25,8 +25,6 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/plumbing/transport/client"
-	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"golang.org/x/net/proxy"
 )
 
@@ -65,7 +63,14 @@ func init() {
 	proxy.RegisterDialerType(dialScheme, func(u *url.URL, _ proxy.Dialer) (proxy.Dialer, error) {
 		return scopedDialer{id: u.Host}, nil
 	})
-	// HTTPS (and HTTP) git: the same idle bound on every connection.
+}
+
+// gitIdleTransport carries HTTPS (and HTTP) git: http.DefaultTransport's
+// settings, with the idle bound on every connection. git_transport.go
+// installs it under the byte counter.
+var gitIdleTransport = newGitIdleTransport()
+
+func newGitIdleTransport() *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		c, err := (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, network, addr)
@@ -74,9 +79,7 @@ func init() {
 		}
 		return newIdleConn(c, gitIdleTimeout), nil
 	}
-	httpClient := gogithttp.NewClient(&http.Client{Transport: tr})
-	client.InstallProtocol("https", httpClient)
-	client.InstallProtocol("http", httpClient)
+	return tr
 }
 
 // newDialScope registers ctx for the ssh connections of one git operation

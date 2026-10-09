@@ -51,14 +51,57 @@ spec:
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
             - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
+            {{- if not (kindIs "invalid" .Values.graph.compactAbove) }}
+            - --graph-compact-above={{ .Values.graph.compactAbove }}
+            {{- end }}
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
+            {{- end }}
+            {{- with .Values.controller.workers }}
+            {{- with .promotionStep }}
+            - --promotionstep-workers={{ . }}
+            {{- end }}
+            {{- with .prStatus }}
+            - --prstatus-workers={{ . }}
+            {{- end }}
+            {{- with .policyGate }}
+            - --policygate-workers={{ . }}
+            {{- end }}
+            {{- with .bundle }}
+            - --bundle-workers={{ . }}
+            {{- end }}
+            {{- with .pipeline }}
+            - --pipeline-workers={{ . }}
+            {{- end }}
             {{- end }}
             {{- with .Values.controller.gateStatusHeartbeat }}
             - --gate-status-heartbeat={{ . }}
             {{- end }}
+            {{- with .Values.controller.accessLog }}
+            {{- if .allRequests }}
+            - --access-log-all-requests=true
+            {{- end }}
+            {{- if .sourceIP }}
+            - --access-log-source-ip=true
+            {{- end }}
+            {{- with .trustedProxies }}
+            - --access-log-trusted-proxies={{ join "," . }}
+            {{- end }}
+            {{- end }}
+            {{- with (.Values.graph.retire).superseded }}
+            - --graph-retire-superseded-after={{ . }}
+            {{- end }}
+            {{- with (.Values.graph.retire).failed }}
+            - --graph-retire-failed-after={{ . }}
+            {{- end }}
+            {{- with (.Values.graph.retire).verified }}
+            - --graph-retire-verified-after={{ . }}
+            {{- end }}
             {{- with .Values.controller.watchNamespace }}
             - --watch-namespace={{ . }}
+            {{- end }}
+            {{- with .Values.controller.namespaceShard }}
+            - --namespace-shard={{ . }}
             {{- end }}
             {{- with .Values.scm.provider }}
             - --scm-provider={{ . }}
@@ -106,6 +149,15 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # The container's memory limit in bytes: the controller sets the
+            # Go runtime's soft memory limit (GOMEMLIMIT) to 90% of it. A
+            # GOMEMLIMIT in controller.extraEnv takes precedence.
+            - name: KARDINAL_MEMORY_LIMIT
+              valueFrom:
+                resourceFieldRef:
+                  containerName: controller
+                  resource: limits.memory
+                  divisor: "1"
             {{- with include "kardinal-promoter.githubSecretName" . }}
             {{- if not $.Values.github.app.enabled }}
             - name: GITHUB_TOKEN

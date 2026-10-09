@@ -88,6 +88,15 @@ controller:
   # into the namespace it watches); org-level PolicyGates are read from this
   # namespace too.
   watchNamespace: ""
+  # -- Controller shard (--namespace-shard). Empty = no sharding: this
+  # controller reconciles every namespace. Set, it reconciles the namespaces
+  # labelled kardinal.io/shard=<name>; "default" also takes the namespaces
+  # without the label and the cluster-scoped kinds. Install one release per
+  # shard (one of them "default"), each in its own namespace labelled with its
+  # shard. Grants list/watch on Namespaces and Leases cluster-wide: each shard
+  # holds a Lease kardinal-shard in every namespace it reconciles. Cannot be
+  # combined with watchNamespace. See docs/sharding.md.
+  namespaceShard: ""
   # -- Namespaces holding org-level PolicyGates (--policy-namespaces).
   # Empty keeps the controller default, platform-policies. In namespace
   # mode org gates are read from watchNamespace, and an entry other than
@@ -98,6 +107,30 @@ controller:
   # default, 10m. "0s" writes the status on every evaluation; each write makes
   # kro re-check the gate's whole Graph.
   gateStatusHeartbeat: ""
+  # -- Workers per controller: how many objects of a kind are reconciled at
+  # once (--promotionstep-workers, ...). One object is never reconciled twice
+  # at once. Unset keeps the controller defaults, measured with the scale
+  # suite: promotionStep 16, prStatus 8, policyGate 8, bundle 4, pipeline 4.
+  # Raise promotionStep for many Pipelines on slow git hosts. See
+  # docs/installation.md (Controller concurrency).
+  workers: {}
+  #   promotionStep: 16
+  #   prStatus: 8
+  #   policyGate: 8
+  #   bundle: 4
+  #   pipeline: 4
+  # -- Access log of the UI API and the Bundle API: logins (TokenReviews),
+  # refusals (401/403/429, with the reason) and writes are always logged as
+  # structured lines (component=access). Tokens are never logged.
+  accessLog:
+    # -- Log every request (--access-log-all-requests).
+    allRequests: false
+    # -- Add the client address (--access-log-source-ip).
+    sourceIP: false
+    # -- CIDRs of proxies (an Ingress controller) whose X-Forwarded-For gives
+    # the client address (--access-log-trusted-proxies). Other clients'
+    # X-Forwarded-For is ignored.
+    trustedProxies: []
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).
@@ -125,13 +158,20 @@ service:
   # and /api/v1/bundles
   webhookPort: 8083
 
+# -- Controller resources. The controller caches every Pipeline, Bundle,
+# PromotionStep, PRStatus and PolicyGate it watches, so its memory grows with
+# Pipelines times the Bundle history. Measured peaks (scale suite, #1553):
+# 166 MiB for 200 Pipelines with a Bundle each, 409 MiB for 2 Bundles a second
+# over 40 Pipelines with leader kills; 55-70 MiB with no Pipelines. The
+# defaults give the larger load 2.5x headroom; see "Sizing the controller" in
+# docs/installation.md.
 resources:
   limits:
     cpu: 500m
-    memory: 128Mi
+    memory: 1Gi
   requests:
     cpu: 10m
-    memory: 64Mi
+    memory: 256Mi
 
 # -- Node selector for the controller Pod
 nodeSelector: {}
@@ -271,6 +311,28 @@ graph:
   # -- Ship a ClusterRole aggregated into kro's controller role, for kro
   # installed with rbac.mode=aggregation (the hack/install-kro.sh default).
   aggregateToKro: true
+  # -- Environment count above which a Bundle's Graph uses the compact shape
+  # (--graph-compact-above): one PromotionStep collection instead of one node
+  # per environment. null keeps the controller default, 100; 0 makes every
+  # Graph compact. A Pipeline's kardinal.io/graph-shape annotation overrides it.
+  compactAbove: null
+  # -- When the Graph of a finished Bundle is retired: deleted, with the
+  # Bundle's PromotionSteps kept in status.retiredSteps. kro holds every Graph
+  # in memory (3 to 6 MB each), so keeping the Graph of every finished Bundle
+  # until spec.historyLimit prunes it runs kro out of memory. Go durations;
+  # empty keeps the controller default; "0s" keeps those Graphs. A Pipeline's
+  # kardinal.io/graph-retire-after annotation replaces all three for its
+  # Bundles. See docs/installation.md#sizing-kro.
+  retire:
+    # -- A Superseded Bundle, or a Verified one that a newer Bundle replaced
+    # in every environment (--graph-retire-superseded-after, default 1m).
+    superseded: ""
+    # -- A Failed Bundle (--graph-retire-failed-after, default 24h). A retired
+    # Failed Bundle no longer recovers.
+    failed: ""
+    # -- A Verified Bundle still deployed in an environment
+    # (--graph-retire-verified-after, default 1h).
+    verified: ""
 
 # -- Deprecated, no effect. The chart no longer ships ValidatingAdmissionPolicies;
 # the CRD schemas validate these fields instead. Kept so existing
@@ -335,7 +397,9 @@ metricCheck:
   # rest wait first come, first served (status reason WaitingForSlot). The
   # sustained throughput is about global / query time: with 12 slots and
   # 0.5 s queries, 24 queries a second, so 1,440 MetricChecks at a 60 s
-  # interval. One namespace gets at most perNamespace / query time.
+  # interval. One namespace gets at most perNamespace / query time. The
+  # MetricCheck controller runs global + 4 workers (at least 16), so every
+  # slot can be used.
   querySlots:
     global: 12
     perNamespace: 1

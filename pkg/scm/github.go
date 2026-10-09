@@ -333,7 +333,9 @@ func (g *GitHubProvider) AddLabelsToPR(ctx context.Context, repo string, prNumbe
 func (g *GitHubProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
 	// Check circuit breaker before making the call.
 	owner := ownerFromPath(path, "/repos/")
+	call := startSCMCall("github", owner, method, path)
 	if err := g.circuits.Allow(owner); err != nil {
+		call.circuitOpen(g.circuits, owner)
 		return fmt.Errorf("github scm: %w", err)
 	}
 
@@ -362,6 +364,8 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 	}
 
 	resp, err := g.client.Do(req)
+	// Arguments are taken now; the circuit states are read at return, after Record.
+	defer call.done(resp, err, g.circuits, owner)
 	if err != nil {
 		// Network error — record as failure with no retry-after hint.
 		g.circuits.Record(owner, nil, err)

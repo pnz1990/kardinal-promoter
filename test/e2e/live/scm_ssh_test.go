@@ -109,7 +109,7 @@ func scmSSHGit(t *testing.T, e *framework.Env) {
 	prs, err := e.Git.PullRequests(ctx, a.repo)
 	require.NoError(t, err)
 	for _, pr := range prs {
-		assert.NotEqual(t, prHead(bundle, "prod"), pr.Head, "no PR while the host key is refused")
+		assert.NotEqual(t, prHead(a.ns, bundle, "prod"), pr.Head, "no PR while the host key is refused")
 	}
 
 	secret.Data["knownHosts"] = []byte(knownHostsLine(t, sshURL, hostKey))

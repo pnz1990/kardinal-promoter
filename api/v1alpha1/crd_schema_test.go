@@ -660,6 +660,25 @@ spec:
 	}
 }
 
+// TestCRDSchemaEnvironmentCount: a Pipeline may have 1 to 500 environments
+// (#1473; it was 100).
+func TestCRDSchemaEnvironmentCount(t *testing.T) {
+	crds := loadCRDs(t)
+	envs := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("region-%03d", i)
+		}
+		return out
+	}
+	for _, n := range []int{1, 101, 300, 500} {
+		assert.Empty(t, validateCR(t, crds, pipelineWithEnvs(envs(n)...)), "%d environments must be accepted", n)
+	}
+	errs := validateCR(t, crds, pipelineWithEnvs(envs(501)...))
+	require.NotEmpty(t, errs, "501 environments must be rejected")
+	assert.Contains(t, strings.Join(errs, "\n"), "at most 500 items")
+}
+
 // TestCRDYAMLUpdateFile (#1448 QA): update.yaml.updates[].file is a path
 // inside the environment directory.
 func TestCRDYAMLUpdateFile(t *testing.T) {
@@ -789,5 +808,40 @@ func TestCRDBundleDigestAndCommit(t *testing.T) {
 		"configRef with colon": bundle(d, "abc1234", d),
 	} {
 		assert.NotEmpty(t, validateCR(t, crds, b), "%s must be rejected", name)
+	}
+}
+
+// TestCRDBundleRetiredAtSticky (#1492): once set, status.retiredAt cannot be
+// removed, so no writer can make a retired Bundle unretired.
+func TestCRDBundleRetiredAtSticky(t *testing.T) {
+	status := loadCRDs(t)["Bundle"].structural.Properties["status"]
+	var rule string
+	for _, r := range status.XValidations {
+		if strings.Contains(r.Rule, "retiredAt") {
+			rule = r.Rule
+		}
+	}
+	require.NotEmpty(t, rule, "Bundle status needs the retiredAt transition rule")
+	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	require.NoError(t, err)
+	ast, iss := env.Compile(rule)
+	require.NoError(t, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	at := map[string]interface{}{"phase": "Superseded", "retiredAt": "2026-10-09T00:00:00Z"}
+	notYet := map[string]interface{}{"phase": "Superseded"}
+	for _, c := range []struct {
+		name     string
+		old, new map[string]interface{}
+		allow    bool
+	}{
+		{"set", notYet, at, true},
+		{"kept", at, at, true},
+		{"never set", notYet, notYet, true},
+		{"removed", at, notYet, false},
+	} {
+		out, _, err := prg.Eval(map[string]interface{}{"self": c.new, "oldSelf": c.old})
+		require.NoError(t, err, c.name)
+		assert.Equal(t, c.allow, out.Value(), c.name)
 	}
 }

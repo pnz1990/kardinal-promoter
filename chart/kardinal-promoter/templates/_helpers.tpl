@@ -103,6 +103,9 @@ Install-mode checks. Rendered from deployment.yaml so a bad combination fails
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- if and $w .Values.controller.namespaceShard -}}
+{{- fail "controller.namespaceShard cannot be combined with controller.watchNamespace: a namespace-scoped controller already owns exactly one namespace" -}}
+{{- end -}}
 {{- if and .Values.github.token .Values.github.secretRef.name -}}
 {{- fail "set github.token or github.secretRef.name, not both" -}}
 {{- end -}}

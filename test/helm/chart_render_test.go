@@ -165,25 +165,31 @@ var allFeatures = []string{
 	"--set", "rbac.integrationTestJobs=true",
 }
 
-// ── C08-api-config-04, -16, -21: no ValidatingAdmissionPolicy ─────────────────
+// ── C08-api-config-04, -16, -21: only the hold admission policy ─────────────
 
-// TestChartRendersNoValidatingAdmissionPolicy: the chart's VAPs denied every
+// TestChartRendersOnlyHoldAdmissionPolicy: the chart's old VAPs denied every
 // Pipeline (spec.gitRepo does not exist), denied promote/rollback Bundles and
-// valid durations, needed Kubernetes 1.30, and collided across releases.
-// Validation lives in the CRD schema (api/v1alpha1/crd_schema_test.go);
-// validatingAdmissionPolicy.enabled is kept as a deprecated no-op so existing
-// `--set validatingAdmissionPolicy.enabled=false` installs keep working.
-func TestChartRendersNoValidatingAdmissionPolicy(t *testing.T) {
+// valid durations, and collided across releases. Validation lives in the CRD
+// schema (api/v1alpha1/crd_schema_test.go). The only admission objects are
+// the hold-writes policy and binding (hold-admission.yaml, #1528), named per
+// release and shipped whatever validatingAdmissionPolicy.enabled says, which
+// stays a deprecated no-op so existing --set values keep working.
+func TestChartRendersOnlyHoldAdmissionPolicy(t *testing.T) {
 	for _, args := range [][]string{
 		nil,
 		{"--set", "validatingAdmissionPolicy.enabled=true"},
 		{"--set", "validatingAdmissionPolicy.enabled=false"},
 	} {
-		docs := render(t, "kardinal-promoter", args...)
-		for _, d := range docs {
-			assert.NotContains(t, d.APIVersion, "admissionregistration.k8s.io",
-				"args %v: chart must not render %s %s", args, d.Kind, d.Name)
+		var got []string
+		for _, d := range render(t, "kardinal-promoter", args...) {
+			if strings.HasPrefix(d.APIVersion, "admissionregistration.k8s.io") {
+				got = append(got, d.Kind+"/"+d.Name)
+			}
 		}
+		assert.ElementsMatch(t, []string{
+			"ValidatingAdmissionPolicy/kardinal-promoter-hold-writes",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-hold-writes",
+		}, got, "args %v", args)
 	}
 }
 
@@ -435,14 +441,22 @@ func controllerAccess() []apiAccess {
 var optionalAccess = []struct {
 	set string
 	acc []apiAccess
+	// clusterOnly: the value cannot be set in namespace mode.
+	clusterOnly bool
 }{
 	{"ui.auth.tokenReview=true", []apiAccess{
 		{"authentication.k8s.io", "tokenreviews", []string{"create"}, inCluster, "", "pkg/uiauth TokenReview"},
 		{"authorization.k8s.io", "subjectaccessreviews", []string{"create"}, inCluster, "", "pkg/uiauth SubjectAccessReview"},
-	}},
+	}, false},
+	{"controller.namespaceShard=b", []apiAccess{
+		{"", "namespaces", []string{"list", "watch"}, inCluster, "", "pkg/shard Gate.Pass (Namespace informer)"},
+		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "update"}, inCluster, "kardinal-shard", "pkg/shard Gate.take/release/resync (token Lease per namespace)"},
+		{"coordination.k8s.io", "leases", []string{"create"}, inCluster, "", "pkg/shard Gate.take (first token of a namespace)"},
+		{"coordination.k8s.io", "leases", []string{"get", "list"}, inCluster, "kardinal-shard-heartbeat-b", "pkg/shard Gate.heartbeatStopped/warnUnrunShards"},
+	}, true},
 	{"rbac.argocdApplicationsWrite=true", []apiAccess{
 		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"},
-	}},
+	}, false},
 }
 
 func checkAccess(t *testing.T, v rbacView, mode string, watched []string, acc apiAccess, want bool) {
@@ -486,6 +500,9 @@ func TestChartRBACGrantsControllerAccess(t *testing.T) {
 			for _, opt := range optionalAccess {
 				for _, acc := range opt.acc {
 					checkAccess(t, v, m.name+" default (no "+opt.set+")", m.watched, acc, false)
+				}
+				if opt.clusterOnly && m.watched[0] == releaseNS && len(m.watched) == 1 {
+					continue
 				}
 				on := newRBACView(t, render(t, "kardinal-promoter", append(m.args, "--set", opt.set)...))
 				for _, acc := range opt.acc {
@@ -1284,6 +1301,41 @@ func TestChartGitHubApp(t *testing.T) {
 	assert.Contains(t, out, "github.app.enabled needs github.secretRef.name")
 }
 
+// TestChartNamespaceShard: controller.namespaceShard passes --namespace-shard,
+// and cannot be combined with namespace mode or be an invalid label value.
+func TestChartNamespaceShard(t *testing.T) {
+	found := false
+	for _, d := range render(t, "kardinal-promoter", "--set", "controller.namespaceShard=b") {
+		if d.Kind == "Deployment" && strings.Contains(string(d.raw), `"--namespace-shard=b"`) {
+			found = true
+		}
+	}
+	assert.True(t, found, "--namespace-shard=b in the controller args")
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "controller.namespaceShard=b",
+		"--set", "controller.watchNamespace="+releaseNS)
+	require.Error(t, err)
+	assert.Contains(t, out, "cannot be combined with controller.watchNamespace")
+	_, err = helmTemplate(t, "kardinal-promoter", "--set", "controller.namespaceShard=a/b")
+	require.Error(t, err, "not a label value")
+
+	// #1505 QA: writes are limited to the shard tokens by name (only create
+	// cannot be); other shards' heartbeats and leader election Leases are
+	// read-only, and nothing but the tokens can be watched.
+	v := newRBACView(t, render(t, "kardinal-promoter", "--set", "controller.namespaceShard=b"))
+	sa := "kardinal-promoter"
+	for _, d := range []struct{ verb, name string }{
+		{"update", "kardinal-promoter-leader"}, {"delete", "kardinal-promoter-leader"},
+		{"watch", ""}, {"delete", "kardinal-shard"}, {"patch", "kardinal-shard"},
+		{"update", "kardinal-shard-heartbeat-a"}, {"watch", "kardinal-shard-heartbeat-a"}, {"update", "other-lease"},
+	} {
+		assert.False(t, v.allowed(releaseNS, sa, "team-a", "coordination.k8s.io", "leases", d.verb, d.name),
+			"a sharded controller must not %s Lease %q in another namespace", d.verb, d.name)
+	}
+	assert.True(t, v.allowed(releaseNS, sa, "team-a", "coordination.k8s.io", "leases", "update", "kardinal-shard"))
+	assert.True(t, v.allowed(releaseNS, sa, releaseNS, "coordination.k8s.io", "leases", "update", "kardinal-shard-heartbeat-b"),
+		"its own heartbeat, through the release Role")
+}
+
 // TestChartGateStatusHeartbeat: controller.gateStatusHeartbeat sets
 // --gate-status-heartbeat; empty keeps the controller default (10m), and the
 // schema refuses a value that is not a Go duration.
@@ -1296,6 +1348,44 @@ func TestChartGateStatusHeartbeat(t *testing.T) {
 	}
 	out, err := helmTemplate(t, "kardinal-promoter", "--set", "controller.gateStatusHeartbeat=10 minutes")
 	assert.Error(t, err, "a value that is not a Go duration must fail:\n%s", out)
+}
+
+// TestChartControllerWorkers: controller.workers sets the workers of each
+// controller; unset keeps the controller defaults (no flag); the schema
+// refuses 0 and unknown controllers.
+//
+// Covers PERF-WORKERS-01.
+func TestChartControllerWorkers(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	for _, f := range []string{"promotionstep-workers", "prstatus-workers", "policygate-workers", "bundle-workers", "pipeline-workers"} {
+		assert.NotContains(t, argValues(c), f)
+	}
+	c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "controller.workers.promotionStep=32",
+		"--set", "controller.workers.prStatus=12", "--set", "controller.workers.policyGate=6",
+		"--set", "controller.workers.bundle=2", "--set", "controller.workers.pipeline=1"))
+	assert.Equal(t, "32", argValues(c)["promotionstep-workers"])
+	assert.Equal(t, "12", argValues(c)["prstatus-workers"])
+	assert.Equal(t, "6", argValues(c)["policygate-workers"])
+	assert.Equal(t, "2", argValues(c)["bundle-workers"])
+	assert.Equal(t, "1", argValues(c)["pipeline-workers"])
+	for _, bad := range []string{"controller.workers.promotionStep=0", "controller.workers.metricCheck=4"} {
+		out, err := helmTemplate(t, "kardinal-promoter", "--set", bad)
+		assert.Error(t, err, "%s must fail:\n%s", bad, out)
+	}
+}
+
+// TestChartGraphCompactAbove: graph.compactAbove sets --graph-compact-above
+// (0 included); null keeps the controller default, and a negative value is
+// refused by the schema.
+func TestChartGraphCompactAbove(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	assert.NotContains(t, argValues(c), "graph-compact-above")
+	for _, v := range []string{"0", "50", "200"} {
+		c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "graph.compactAbove="+v))
+		assert.Equal(t, v, argValues(c)["graph-compact-above"])
+	}
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "graph.compactAbove=-1")
+	assert.Error(t, err, "a negative value must fail:\n%s", out)
 }
 
 // TestChartMetricCheckQuerySlots: metricCheck.querySlots sets the
@@ -1319,4 +1409,34 @@ func TestChartMetricCheckQuerySlots(t *testing.T) {
 		assert.Contains(t, out, "/metricCheck/querySlots/", bad)
 		assert.Regexp(t, `minimum|greater than or equal to 1`, out, bad)
 	}
+}
+
+// TestChartControllerMemoryDefaults (#1553): the default memory request and
+// limit fit the loads the scale suite measured (peak 409 MiB), so a default
+// install is not OOMKilled at 200 Pipelines as the old 128Mi limit was.
+func TestChartControllerMemoryDefaults(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	limit, request := c.Resources.Limits.Memory(), c.Resources.Requests.Memory()
+	assert.Equal(t, "1Gi", limit.String())
+	assert.Equal(t, "256Mi", request.String())
+	assert.GreaterOrEqual(t, limit.Value(), int64(2*409<<20), "at least twice the largest measured peak")
+}
+
+// TestChartControllerMemoryLimitEnv (#1553): the controller gets its memory
+// limit from the downward API, from which it sets GOMEMLIMIT to 90%.
+func TestChartControllerMemoryLimitEnv(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	var found bool
+	for _, e := range c.Env {
+		if e.Name != "KARDINAL_MEMORY_LIMIT" {
+			continue
+		}
+		found = true
+		require.NotNil(t, e.ValueFrom)
+		require.NotNil(t, e.ValueFrom.ResourceFieldRef)
+		assert.Equal(t, "limits.memory", e.ValueFrom.ResourceFieldRef.Resource)
+		assert.Equal(t, "controller", e.ValueFrom.ResourceFieldRef.ContainerName)
+		assert.Equal(t, "1", e.ValueFrom.ResourceFieldRef.Divisor.String())
+	}
+	assert.True(t, found, "KARDINAL_MEMORY_LIMIT env")
 }

@@ -21,14 +21,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"slices"
 	"strconv"
 	"sync"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +41,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	builderutil "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -45,6 +50,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
@@ -52,6 +58,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 
 	// Import built-in steps to trigger init() registration.
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
@@ -126,6 +133,11 @@ const (
 // the last persisted index, so every step must be safe to repeat (the git and
 // open-pr steps are).
 type Reconciler struct {
+	// Workers is how many objects are reconciled at once (--promotionstep-workers);
+	// 0 is the manager's default. One object is never reconciled twice at
+	// once: the work queue serializes it.
+	Workers int
+
 	client.Client
 
 	// APIReader reads straight from the API server (mgr.GetAPIReader()). A
@@ -149,6 +161,9 @@ type Reconciler struct {
 
 	// GitClient is the Git operations client.
 	GitClient scm.GitClient
+
+	// remotes caches the remote reads of PR branch refreshes (remoteCache).
+	remotes remoteCache
 
 	// HealthDetector selects the health adapter for health checking.
 	// If nil, the health-check step stub (always-success) is used.
@@ -369,6 +384,16 @@ const ConditionSupersededCloseFailed = "SupersededCloseFailed"
 // nextRetryAt the close's: a step superseded during a git retry's backoff is
 // cancelled at once, not when that retry was due.
 func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
+	return r.cancelStep(ctx, log, ps, lifecycle.SupersededMessage(ps.Spec.BundleName),
+		"bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle", AuditActionPromotionSuperseded)
+}
+
+// cancelStep is handleSuperseded for any reason: why opens the step's
+// message, prComment is the comment on the closed PR and action the
+// AuditEvent of a started step. A close that fails is retried the same way,
+// under ConditionSupersededCloseFailed.
+func (r *Reconciler) cancelStep(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
+	why, prComment, action string) (ctrl.Result, error) {
 	closing := meta.IsStatusConditionTrue(ps.Status.Conditions, ConditionSupersededCloseFailed)
 	if closing && ps.Status.NextRetryAt != nil {
 		if wait := ps.Status.NextRetryAt.Sub(r.now()); wait > 0 {
@@ -381,18 +406,19 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 		Str("bundle", ps.Spec.BundleName).
 		Str("env", ps.Spec.Environment).
 		Str("state", ps.Status.State).
-		Msg("parent bundle superseded — closing open PR and cancelling step")
+		Str("why", why).
+		Msg("closing open PR and cancelling step")
 
 	// A step still Pending never started: no PromotionStarted record, no
 	// branch, no PR. It can exist when its Graph created it just before the
 	// Bundle was superseded (E2E-R20). It is not a cancelled promotion, so it
 	// is failed without a PromotionSuperseded record or step metrics.
 	unstarted := base.Status.State == StatePending || base.Status.State == StatePendingExplicit
-	msg := lifecycle.SupersededMessage(ps.Spec.BundleName) + " — promotion cancelled"
+	msg := why + " — promotion cancelled"
 	if unstarted {
-		msg = lifecycle.SupersededMessage(ps.Spec.BundleName) + " before this step started"
+		msg = why + " before this step started"
 	}
-	if closeErr := r.closeStepPR(ctx, ps, "bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle", false); closeErr != nil {
+	if closeErr := r.closeStepPR(ctx, ps, prComment, false); closeErr != nil {
 		if !closing {
 			ps.Status.RetryCount = 0
 		}
@@ -409,7 +435,7 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 			delay := retryDelay(ps.Status.RetryCount)
 			next := metav1.NewTime(r.now().Add(delay))
 			ps.Status.NextRetryAt = &next
-			ps.Status.Message = fmt.Sprintf("%s; closing its PR failed, retrying in %s (%d/%d): %v", lifecycle.SupersededMessage(ps.Spec.BundleName),
+			ps.Status.Message = fmt.Sprintf("%s; closing its PR failed, retrying in %s (%d/%d): %v", why,
 				delay, ps.Status.RetryCount, maxStepRetries, closeErr)
 			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("patch supersession retry: %w", err)
@@ -423,7 +449,7 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 	if unstarted {
 		return ctrl.Result{}, r.cancelUnstarted(ctx, base, ps, msg)
 	}
-	if err := r.transitionAudit(ctx, base, ps, StateFailed, msg, AuditActionPromotionSuperseded); err != nil {
+	if err := r.transitionAudit(ctx, base, ps, StateFailed, msg, action); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
@@ -593,6 +619,16 @@ func retryDelay(n int) time.Duration {
 	return d
 }
 
+// contendedDelay jitters the backoff of a step that lost to other writers of
+// its branch, so writers that collided do not come back in lockstep: half the
+// delay plus up to the whole of it again, at most retryMaxDelay.
+func contendedDelay(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	return min(d/2+time.Duration(rand.Int64N(int64(d))), retryMaxDelay)
+}
+
 // handlePending initializes the step sequence and transitions to Promoting.
 // Before transitioning, it re-checks every PolicyGate in spec.requiredGates
 // (checkRequiredGates): each must exist, be ready, and have been evaluated at
@@ -605,6 +641,9 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
 	}
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
+		return res, holdErr
+	}
+	if held, res, holdErr := r.holdIfEnvironmentHeld(ctx, log, ps, pipeline); held {
 		return res, holdErr
 	}
 	if held, res, holdErr := r.holdForSlot(ctx, log, ps); held {
@@ -711,6 +750,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
 		return res, holdErr
 	}
+	if held, res, holdErr := r.holdIfEnvironmentHeld(ctx, log, ps, pipeline); held {
+		return res, holdErr
+	}
 	bundle, err := r.loadBundle(ctx, ps)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
@@ -759,34 +801,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// The git token from Pipeline spec.git.secretRef. A git step that fails
 	// without one says why (B48).
 	cred := r.resolveGitCredential(ctx, log, pipeline)
-
-	state := &steps.StepState{
-		Pipeline:     pipeline.Spec,
-		PipelineName: ps.Spec.PipelineName,
-		Namespace:    ps.Namespace,
-		Environment:  env,
-		Bundle:       bundle.Spec,
-		BundleName:   ps.Spec.BundleName,
-		WorkDir:      workDir,
-		Outputs:      cloneMap(ps.Status.Outputs),
-		Git: steps.GitConfig{
-			URL:           pipeline.Spec.Git.URL,
-			Branch:        baseBranch(pipeline),
-			Token:         cred.token,
-			SSHPrivateKey: cred.sshKey,
-			SSHKnownHosts: cred.knownHosts,
-			AuthorName:    "kardinal-promoter",
-			AuthorEmail:   "kardinal@kardinal.io",
-		},
-		SCM:                  r.SCM,
-		GitClient:            r.GitClient,
-		K8sClient:            r.Client,
-		StepTimeoutSeconds:   env.StepTimeoutSeconds,
-		GateResults:          r.collectGateResults(ctx, log, ps),
-		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
-		Sequence:             seq,
-	}
-	r.setRollbackState(ctx, log, state, bundle)
+	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, workDir, cred)
 
 	prevIdx := ps.Status.CurrentStepIndex
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, prevIdx)
@@ -797,7 +812,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	ps.Status.CurrentStepIndex = nextIdx
 	if nextIdx > prevIdx {
 		// Progress resets the retry budget.
-		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
+		ps.Status.RetryCount, ps.Status.GitCredentialRetries, ps.Status.ContendedRetries = 0, 0, 0
 	}
 	if prURL := state.Outputs["prURL"]; prURL != "" {
 		ps.Status.PRURL = prURL
@@ -874,6 +889,40 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 }
 
+// stepState is the state the step engine runs seq with for ps.
+func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
+	pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle, seq []string,
+	workDir string, cred gitCredential) *steps.StepState {
+	state := &steps.StepState{
+		Pipeline:     pipeline.Spec,
+		PipelineName: ps.Spec.PipelineName,
+		Environment:  env,
+		Bundle:       bundle.Spec,
+		BundleName:   ps.Spec.BundleName,
+		Namespace:    ps.Namespace,
+		WorkDir:      workDir,
+		Outputs:      cloneMap(ps.Status.Outputs),
+		Git: steps.GitConfig{
+			URL:           pipeline.Spec.Git.URL,
+			Branch:        baseBranch(pipeline),
+			Token:         cred.token,
+			SSHPrivateKey: cred.sshKey,
+			SSHKnownHosts: cred.knownHosts,
+			AuthorName:    "kardinal-promoter",
+			AuthorEmail:   "kardinal@kardinal.io",
+		},
+		SCM:                  r.SCM,
+		GitClient:            r.GitClient,
+		K8sClient:            r.Client,
+		StepTimeoutSeconds:   env.StepTimeoutSeconds,
+		GateResults:          r.collectGateResults(ctx, log, ps),
+		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
+		Sequence:             seq,
+	}
+	r.setRollbackState(ctx, log, state, bundle)
+	return state
+}
+
 // prOpenedAt is when the promotion PR was opened: when the open-pr step
 // completed, else when wait-for-merge started. ok is false when the step
 // statuses record neither.
@@ -933,17 +982,27 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		emitCredential = markGitCredentialMissing(ps, cred.reason, note)
 		waitForSecret = cred.waitsForSecret()
 	}
-	if retryable && (waitForSecret || ps.Status.RetryCount < maxStepRetries) {
+	contended := retryable && errors.Is(execErr, steps.ErrContended)
+	if retryable && (waitForSecret || contended || ps.Status.RetryCount < maxStepRetries) {
 		var count string
-		if waitForSecret {
+		switch {
+		case waitForSecret:
 			ps.Status.GitCredentialRetries++
 			count = fmt.Sprintf("%d, no limit while git has no credentials", ps.Status.GitCredentialRetries)
-		} else {
+		case contended:
+			// Losing to other writers is not the step's fault: it backs off
+			// with no limit and does not use up retryCount.
+			ps.Status.ContendedRetries++
+			count = fmt.Sprintf("%d, no limit while other writers keep moving the branch", ps.Status.ContendedRetries)
+		default:
 			ps.Status.RetryCount++
 			count = fmt.Sprintf("%d/%d", ps.Status.RetryCount, maxStepRetries)
 		}
-		// Both kinds of retry back off together.
-		delay := retryDelay(ps.Status.RetryCount + ps.Status.GitCredentialRetries)
+		// Every kind of retry backs off together.
+		delay := retryDelay(ps.Status.RetryCount + ps.Status.GitCredentialRetries + ps.Status.ContendedRetries)
+		if contended {
+			delay = contendedDelay(delay)
+		}
 		next := metav1.NewTime(r.now().Add(delay))
 		ps.Status.NextRetryAt = &next
 		ps.Status.Message = fmt.Sprintf("retrying in %s (%s) after error: %v", delay, count, execErr)
@@ -1024,6 +1083,17 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	pipeline, err := r.loadPipeline(ctx, ps)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
+	}
+
+	// The environment is held on another Bundle's rollback (spec.holds,
+	// #1528): this PR would deploy over it once merged, so the promotion is
+	// cancelled as supersession cancels one, with its PR closed and a comment
+	// saying why. A step already HealthChecking has merged; it finishes.
+	if h := lifecycle.HeldFrom(pipeline, ps.Spec.Environment, ps.Spec.BundleName); h != nil {
+		return r.cancelStep(ctx, log, ps, lifecycle.HeldMessage(ps.Spec.PipelineName, h),
+			fmt.Sprintf("environment %s is held on rollback %s (%s), so kardinal cancelled this promotion; "+
+				"once the hold is released, a newer Bundle promotes here", h.Environment, h.Bundle, h.Reason),
+			AuditActionPromotionFailed)
 	}
 
 	// Apply WaitForMerge timeout if configured (#905).
@@ -1163,6 +1233,19 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		ps.Status.WaitForMergeExpiry = nil
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed,
 			fmt.Sprintf("PR #%d cannot be polled: %s", prs.Spec.PRNumber, prs.Status.PollError))
+	}
+
+	// An open PR follows its base branch: when the base moved, the PR
+	// branch is rebuilt on the new head (refreshPRBranch). Not while the
+	// Pipeline is paused: that holds every git write.
+	if prs.Status.Open && !pipeline.Spec.Paused {
+		wrote, err := r.refreshPRBranch(ctx, log, base, ps, pipeline, env)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if wrote {
+			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+		}
 	}
 
 	// Closed but still in the grace window: the PRStatus reconciler keeps
@@ -1849,16 +1932,54 @@ func bakeDeadlineMessage(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpe
 //     gate, so a Pending step starts as soon as its gates are re-evaluated
 //     (checkRequiredGates).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{},
-				predicate.LabelChangedPredicate{}, predicate.AnnotationChangedPredicate{}),
+				eventfilter.LabelChangedExceptKro, predicate.AnnotationChangedPredicate{}),
 		)).
 		Watches(&v1alpha1.PRStatus{}, handler.EnqueueRequestsFromMapFunc(r.prStatusMapper)).
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
 		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleMapper),
 			builderutil.WithPredicates(bundleWakesSteps)).
-		Complete(tracing.WrapReconciler("promotionstep", r))
+		// A hold added or released (spec.holds) takes effect on the held
+		// environment's steps at once (holdIfEnvironmentHeld).
+		Watches(&v1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineHoldMapper),
+			builderutil.WithPredicates(holdsChanged))
+	return shard.Active().Complete(b, tracing.WrapReconciler("promotionstep", r), &v1alpha1.PromotionStepList{})
+}
+
+// holdsChanged passes Pipeline updates that change spec.holds.
+var holdsChanged = predicate.Funcs{
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, ok1 := e.ObjectOld.(*v1alpha1.Pipeline)
+		n, ok2 := e.ObjectNew.(*v1alpha1.Pipeline)
+		return ok1 && ok2 && !equality.Semantic.DeepEqual(o.Spec.Holds, n.Spec.Holds)
+	},
+}
+
+// pipelineHoldMapper wakes the unfinished steps of a Pipeline whose holds
+// changed.
+func (r *Reconciler) pipelineHoldMapper(ctx context.Context, obj client.Object) []reconcile.Request {
+	var stepList v1alpha1.PromotionStepList
+	if err := r.List(ctx, &stepList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range stepList.Items {
+		s := &stepList.Items[i]
+		if s.Spec.PipelineName != obj.GetName() {
+			continue
+		}
+		switch s.Status.State {
+		case StatePending, "Pending", StatePromoting, StateWaitingForMerge:
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(s)})
+		}
+	}
+	return reqs
 }
 
 // isSuperseded passes Bundle events of superseded Bundles.

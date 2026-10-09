@@ -67,7 +67,7 @@ The controller uses a GitHub Personal Access Token (PAT) to:
 1. Open pull requests (one per environment promotion)
 2. Read PR status (merged, closed, open)
 3. Post comments on PRs (soak time, gate results, rollback evidence)
-4. Delete the head branch of a PR it closed without a merge (`kardinal/<bundle>/<env>`)
+4. Delete the head branch of a PR it closed without a merge (`kardinal/<namespace hash>/<bundle>/<env>`)
 
 ### Minimum required scopes (classic PAT)
 
@@ -165,7 +165,7 @@ The namespace is kardinal's tenancy unit. There is no Project CRD, and none is p
 Git clone and push use the Pipeline's `git.secretRef` token. The controller uses its own SCM
 token (`github.token` or `github.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
 comment on and close PRs. When it closes a PR that was not merged, it also deletes the PR's head
-branch, `kardinal/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
+branch, `kardinal/<namespace hash>/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
 deletes that branch too when a step that pushed it ends before it opens a PR. It deletes only
 branches under `kardinal/`. So the controller token needs write access to repository contents,
 not only to pull requests.
@@ -466,6 +466,54 @@ rules:
     # Intentionally no "delete" or "update"
 ```
 
+### API access log
+
+The controller logs access to the UI API (`:8082/api/v1/ui/*`) and the Bundle API
+(`POST :8083/api/v1/bundles`). Each access is one structured log line with
+`component=access`, written to the controller's log next to its other lines. By default
+these accesses are logged:
+
+| `access` | When |
+|----------|------|
+| `login` | A token was checked with the API server (a TokenReview), or the shared static token was used for the first time in 30 seconds on that server. Repeated requests within the 30-second review cache are not logins |
+| `denied` | The request was answered `401`, `403`, `429` or `503` (authentication unavailable: the review API failed and the API fails closed). `reason` holds kardinal's message, for example `forbidden: user "…" cannot update pipelines.kardinal.io in namespace team-a` |
+| `write` | Any request that is not `GET`, `HEAD` or `OPTIONS`: promote, roll back, pause, resume, approve, create Bundle |
+| `request` | Any other request, only with `controller.accessLog.allRequests=true` (`--access-log-all-requests`) |
+
+```json
+{"level":"warn","component":"access","access":"denied","server":"ui","method":"POST","path":"/api/v1/ui/pause","status":403,"durationMs":4,"user":"system:serviceaccount:team-a:dashboard","groups":["system:serviceaccounts","system:serviceaccounts:team-a","system:authenticated"],"auth":"tokenreview","reason":"forbidden: user \"system:serviceaccount:team-a:dashboard\" cannot update pipelines.kardinal.io in namespace team-a","message":"api access"}
+```
+
+**Fields:**
+
+- `server`: `ui` or `bundle-api`.
+- `method`, `path`, `status` and `durationMs`.
+- `user` and `groups`: the authenticated caller, in TokenReview mode.
+- `auth`: `tokenreview` or `static-token`. A shared static token has no user, so its line says only `static-token`.
+
+**Source address.** With `controller.accessLog.sourceIP=true` (`--access-log-source-ip`), each
+line also has `sourceIP`, the address of the connecting peer. Behind an Ingress, list the
+Ingress controller's addresses in `controller.accessLog.trustedProxies`
+(`--access-log-trusted-proxies`, CIDRs). kardinal then takes the client address from the
+nearest `X-Forwarded-For` entry that is not a trusted proxy. It ignores `X-Forwarded-For`
+from any other peer, so clients cannot forge it.
+
+**What is never logged.** Tokens, request headers, request bodies and query strings are never
+logged. The request path is logged, cut to 256 bytes. It holds only route segments and object
+names, and a caller controls it, so it could carry anything put in a URL. For refusals, kardinal's own refusal
+message is logged: at most 256 bytes of the response, only for `401`, `403`, `429` and `503`.
+
+**Rate limit.** `login` and `write` lines are never dropped. `denied` and `request` lines each
+have a budget of 50 a second. Lines over a budget are not written. Every 10 seconds one line
+reports how many of each kind were dropped (`dropped_denied`, `dropped_request`), and the
+counter `kardinal_api_access_log_dropped_total{kind}` counts them. So a flood of refused
+requests cannot fill the log, and it cannot hide a login or a write.
+
+The access log covers the HTTP APIs. What the controller then does (promotions, gate
+results, rollbacks) is in the AuditEvents above, with the caller in `kardinal.io/requested-by`
+where the UI or Bundle API made the change. Ship the controller's log to your SIEM to keep
+both records.
+
 ---
 
 ## NetworkPolicy
@@ -511,8 +559,8 @@ the Pipeline's git and SCM hosts.
 
 NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`,
 `datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`)
-and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`)
-send HTTP requests from the controller to a URL a user wrote into a resource. The controller
+and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`,
+`spec.helm.repoURL`) send HTTP requests from the controller to a URL a user wrote into a resource. The controller
 refuses to connect when the address is one of these:
 
 - loopback (`127.0.0.0/8`, `::1`), which includes the controller's own UI API;
@@ -523,7 +571,9 @@ refuses to connect when the address is one of these:
 - unspecified (`0.0.0.0/8`, `::`) and multicast addresses.
 
 The check runs when the connection is opened, on the resolved address, for every
-connection including redirects. A host name that resolves, or later re-resolves, to one of
+connection including redirects. An SSH `spec.git.repoURL` is checked the same way: the host
+is resolved and every address checked before the connection, which then goes to the address
+that was checked, and the host key is verified against the Secret's `known_hosts`. A host name that resolves, or later re-resolves, to one of
 these addresses is refused too. The failure reads `destination address is not allowed:
 127.0.0.1 is loopback` and appears where that resource reports errors: NotificationHook
 `status.failureMessage`, MetricCheck `status.reason` or Subscription `status.message`.
@@ -562,8 +612,19 @@ The allowlist works at the HTTP level and on any CNI. To enforce egress at the n
 level as well, enable the NetworkPolicy and list the allowed destinations in
 `networkPolicy.extraEgress`.
 
-NotificationHook, MetricCheck and Subscription requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
-`NO_PROXY`.
+NotificationHook, MetricCheck and Subscription HTTP requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY` (SSH connections do not use a proxy).
+
+Subscription credentials (`spec.*.secretRef`) and webhook tokens (`spec.webhook.secretRef`)
+are read only from the Subscription's own namespace, so whoever can create a Subscription
+can use only the Secrets of that namespace. The controller reads them with `get` on every
+poll or delivery; it never lists Secrets. The webhook receiver
+(`/webhook/subscriptions/...`, see [Subscription webhooks](../subscription-webhooks.md))
+answers every authentication failure, and a Subscription that does not exist, with the
+same 401, limits requests per source address and per Subscription, and writes only the
+`kardinal.io/refresh` annotation. Any Secret a Subscription reads (credentials and the
+webhook token) must be labelled `kardinal.io/referenceable: "true"`; an unlabelled Secret
+is not read and nothing is sent.
 Through a proxy, the controller connects to the proxy, so before it sends a request there it
 checks the target itself: an IP address against the list above, and a host name by resolving
 it and checking every address it resolves to. This applies to every request, including
