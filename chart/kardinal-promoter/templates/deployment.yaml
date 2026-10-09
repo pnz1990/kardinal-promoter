@@ -69,6 +69,9 @@ spec:
             {{- if .Values.ui.auth.tokenReview }}
             - --ui-tokenreview-auth=true
             {{- end }}
+            {{- if .Values.bundleAPI.tokenReview }}
+            - --bundle-api-tokenreview-auth=true
+            {{- end }}
             {{- with .Values.ui.corsAllowedOrigins }}
             - --cors-allowed-origins={{ join "," . }}
             {{- end }}

@@ -262,6 +262,33 @@ Every request with the right token counts, including ones rejected with `400`; a
 over the limit gets `429`. The window is a fixed minute kept in the controller process, and
 the limit cannot be changed.
 
+The static token is a **single-tenant admin credential**. For several teams, give each CI
+system its own Kubernetes identity instead:
+
+### Kubernetes tokens (TokenReview)
+
+With `bundleAPI.tokenReview=true` (`--bundle-api-tokenreview-auth`), `POST /api/v1/bundles`
+also accepts a Kubernetes token, for example a ServiceAccount token from
+`kubectl create token ci -n team-a --duration=1h` or a projected token in a CI pod. The
+controller authenticates it with a `TokenReview` and checks with a `SubjectAccessReview` that
+the caller may `get` the Pipeline and `create` bundles in the target namespace, the
+[promoter role](guides/security.md#user-roles):
+
+```bash
+kubectl create rolebinding ci-promoter -n team-a \
+  --clusterrole=kardinal-promoter-promoter --serviceaccount=team-a:ci
+TOKEN=$(kubectl create token ci -n team-a --duration=1h)
+curl -X POST https://kardinal.example.com/api/v1/bundles -H "Authorization: Bearer $TOKEN" \
+  -d '{"pipeline":"app","namespace":"team-a","type":"image","images":[{"repository":"ghcr.io/org/app","tag":"1.2.3"}]}'
+```
+
+An invalid token gets `401`, a caller RBAC denies `403` naming the verb, resource and
+namespace, and an unreachable review API `503`. The Bundle records the caller in
+`kardinal.io/requested-by`. Each caller has its own 60-a-minute window. The static token, when
+set, keeps working beside it (a request whose token is the static token acts as the
+controller). The chart grants the controller `create` on `tokenreviews` and
+`subjectaccessreviews` when this is on.
+
 ### kubectl access
 
 When using the kubectl approach, CI needs a kubeconfig with a ServiceAccount that has permission to create Bundle CRDs. This is standard Kubernetes RBAC.

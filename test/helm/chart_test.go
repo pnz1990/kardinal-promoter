@@ -443,3 +443,93 @@ func TestHelmTemplatePrometheusRuleAdditionalLabels(t *testing.T) {
 	assert.Contains(t, rendered, "release: kube-prometheus-stack",
 		"additionalLabels must be propagated to the PrometheusRule metadata")
 }
+
+// userRoles returns the user ClusterRoles of a render by name suffix.
+func userRoles(docs []map[string]interface{}, fullname string) map[string]map[string]interface{} {
+	out := map[string]map[string]interface{}{}
+	for _, d := range docs {
+		if d["kind"] != "ClusterRole" {
+			continue
+		}
+		name, _ := dig(d, "metadata", "name").(string)
+		for _, r := range []string{"viewer", "promoter", "approver", "admin-extra", "admin"} {
+			if name == fullname+"-"+r {
+				out[r] = d
+			}
+		}
+	}
+	return out
+}
+
+// rulesGrant reports whether rules grant verb on group/resource.
+func rulesGrant(d map[string]interface{}, group, resource, verb string) bool {
+	rules, _ := d["rules"].([]interface{})
+	for _, r := range rules {
+		in := func(key, want string) bool {
+			vals, _ := dig(r, key).([]interface{})
+			for _, v := range vals {
+				if v == want || v == "*" {
+					return true
+				}
+			}
+			return false
+		}
+		if in("apiGroups", group) && in("resources", resource) && in("verbs", verb) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestHelmTemplateUserRoles verifies rbac.userRoles: the four ClusterRoles
+// and admin-extra with the documented grants, the admin aggregating this
+// release's roles only, the aggregation into view/edit/admin and its opt-out,
+// and nothing when disabled.
+func TestHelmTemplateUserRoles(t *testing.T) {
+	roles := userRoles(renderChart(t, "kardinal-promoter"), "kardinal-promoter")
+	require.Len(t, roles, 5)
+	viewer, promoter, approver, admin := roles["viewer"], roles["promoter"], roles["approver"], roles["admin"]
+	for _, kind := range []string{"pipelines", "bundles", "policygates", "promotionsteps", "auditevents"} {
+		for _, r := range []map[string]interface{}{viewer, promoter, approver} {
+			assert.True(t, rulesGrant(r, "kardinal.io", kind, "list"), "%v lists %s", dig(r, "metadata", "name"), kind)
+		}
+	}
+	assert.True(t, rulesGrant(viewer, "", "events", "list"))
+	assert.False(t, rulesGrant(viewer, "kardinal.io", "bundles", "create"), "the viewer cannot create")
+	assert.True(t, rulesGrant(promoter, "kardinal.io", "bundles", "create"))
+	assert.True(t, rulesGrant(promoter, "kardinal.io", "pipelines", "update"))
+	assert.False(t, rulesGrant(promoter, "kardinal.io", "policygates", "update"), "a promoter cannot approve")
+	assert.True(t, rulesGrant(approver, "kardinal.io", "policygates", "update"))
+	assert.False(t, rulesGrant(approver, "kardinal.io", "bundles", "create"), "an approver cannot promote")
+	assert.True(t, rulesGrant(roles["admin-extra"], "kardinal.io", "pipelines", "delete"))
+	assert.Equal(t, map[string]interface{}{"kardinal.io/aggregate-to-admin": "true", "app.kubernetes.io/instance": "kardinal-promoter"},
+		dig(admin, "aggregationRule", "clusterRoleSelectors").([]interface{})[0].(map[string]interface{})["matchLabels"])
+	assert.Equal(t, "true", dig(viewer, "metadata", "labels", "rbac.authorization.k8s.io/aggregate-to-view"))
+	assert.Equal(t, "true", dig(promoter, "metadata", "labels", "rbac.authorization.k8s.io/aggregate-to-edit"))
+	assert.Equal(t, "true", dig(roles["admin-extra"], "metadata", "labels", "rbac.authorization.k8s.io/aggregate-to-admin"))
+
+	noAgg := userRoles(renderChart(t, "kardinal-promoter", "--set", "rbac.userRoles.aggregateToDefaultRoles=false"), "kardinal-promoter")
+	for name, r := range noAgg {
+		labels, _ := dig(r, "metadata", "labels").(map[string]interface{})
+		for k := range labels {
+			assert.NotContains(t, k, "rbac.authorization.k8s.io/aggregate-to-", "%s", name)
+		}
+	}
+	assert.Empty(t, userRoles(renderChart(t, "kardinal-promoter", "--set", "rbac.userRoles.enabled=false"), "kardinal-promoter"))
+}
+
+// TestHelmTemplateBundleAPITokenReview verifies bundleAPI.tokenReview: the
+// flag and the TokenReview/SubjectAccessReview grants.
+func TestHelmTemplateBundleAPITokenReview(t *testing.T) {
+	helm := helmBin(t)
+	chartDir := filepath.Join(repoRoot(t), "chart", "kardinal-promoter")
+	out, err := exec.Command(helm, "template", "kardinal-promoter", chartDir).CombinedOutput()
+	require.NoError(t, err, string(out))
+	assert.NotContains(t, string(out), "--bundle-api-tokenreview-auth")
+	assert.NotContains(t, string(out), "tokenreviews")
+	out, err = exec.Command(helm, "template", "kardinal-promoter", chartDir, "--set", "bundleAPI.tokenReview=true").CombinedOutput()
+	require.NoError(t, err, string(out))
+	assert.Contains(t, string(out), "- --bundle-api-tokenreview-auth=true\n")
+	assert.Contains(t, string(out), `resources: ["tokenreviews"]`)
+	assert.Contains(t, string(out), `resources: ["subjectaccessreviews"]`)
+}

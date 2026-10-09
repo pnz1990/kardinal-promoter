@@ -185,6 +185,11 @@ bundleAPI:
   tokenSecretRef:
     name: ""
     key: "token"
+  # -- Accept Kubernetes tokens on POST /api/v1/bundles (--bundle-api-tokenreview-auth):
+  # each caller is authenticated with a TokenReview and needs create on
+  # bundles (and get on the Pipeline) in the namespace, e.g. the promoter role.
+  # The static token, when set, still works as a single-tenant admin token.
+  tokenReview: false
 
 # -- Embedded UI (:8082).
 ui:
@@ -222,6 +227,14 @@ rbac:
   # removed, so the chart no longer grants batch Jobs access. Kept so existing
   # --set rbac.integrationTestJobs=... keeps passing the values schema.
   integrationTestJobs: false
+  userRoles:
+    # -- ClusterRoles for users and automation: <fullname>-viewer, -promoter,
+    # -approver and -admin (templates/user-roles.yaml). Bind them per namespace
+    # with RoleBindings. See docs/guides/security.md#user-roles.
+    enabled: true
+    # -- Also aggregate them into the built-in view (viewer), edit (promoter,
+    # approver) and admin ClusterRoles.
+    aggregateToDefaultRoles: true
 
 # -- kro Graph integration.
 # kardinal renders one kro Graph (kro.run/v1alpha1) per Bundle. kro v0.10.0-rc.0

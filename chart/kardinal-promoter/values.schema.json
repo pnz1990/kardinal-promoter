@@ -244,6 +244,9 @@
               "default": "token"
             }
           }
+        },
+        "tokenReview": {
+          "type": "boolean"
         }
       }
     },
@@ -299,6 +302,14 @@
         "integrationTestJobs": {
           "type": "boolean",
           "description": "Deprecated, no effect, removed in v0.10."
+        },
+        "userRoles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "aggregateToDefaultRoles": {"type": "boolean"}
+          }
         }
       }
     },

@@ -528,7 +528,10 @@ Authorization: Bearer <token>
 
 Requests without the token get `HTTP 401` with a `Www-Authenticate: Bearer realm="kardinal-ui"`
 header. The comparison is constant-time. Everyone who has the token has full UI access:
-there is no per-user authorization in this mode.
+there is no per-user authorization in this mode. **The shared token is a single-tenant admin
+credential**: it acts as the controller, in every namespace the controller watches. Use it for
+one team, or behind an authenticating proxy; for several teams, use Option 2 and the
+[user roles](#user-roles).
 
 ### Option 2: Kubernetes tokens (TokenReview)
 
@@ -573,37 +576,44 @@ reads are the view permissions, so a user who can view needs only the write verb
 Pause and resume only set `spec.paused` on the Pipeline. The controller manages the freeze
 gate itself, so the user needs no rights on `policygates` to pause.
 
-The list views read all namespaces, so the user needs a ClusterRole bound with a
-ClusterRoleBinding. When the controller runs with `--watch-namespace`, lists are checked
-against that namespace only, and a Role and RoleBinding there are enough.
+The list views respect namespace RBAC. A user who may list a kind cluster-wide gets every
+namespace; one bound only in some namespaces (a RoleBinding) gets exactly the objects of those
+namespaces, and the rest are left out without an error; one who may list it nowhere gets `403`.
+When the controller runs with `--watch-namespace`, lists are checked against that namespace.
+The chart's [user roles](#user-roles) hold these permissions.
 
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: kardinal-ui-viewer
-rules:
-  - apiGroups: ["kardinal.io"]
-    resources: ["pipelines", "bundles", "policygates", "promotionsteps"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["list"]
----
-# Bind this as well to let the user act: create Bundles, promote, roll back,
-# pause and resume Pipelines, and approve gates.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: kardinal-ui-operator
-rules:
-  - apiGroups: ["kardinal.io"]
-    resources: ["bundles"]
-    verbs: ["create"]
-  - apiGroups: ["kardinal.io"]
-    resources: ["pipelines", "policygates"]
-    verbs: ["update"]
+### User roles
+
+The chart installs four ClusterRoles (`rbac.userRoles.enabled`, default `true`) to bind people,
+CI and bots to. Bind them with a **RoleBinding** in a namespace for that namespace only, or with a
+ClusterRoleBinding for all. In TokenReview mode they decide what a caller can do through the UI
+API and the Bundle API, and they work the same for `kubectl` and the `kardinal` CLI.
+
+| ClusterRole | Grants | For |
+|-------------|--------|-----|
+| `<fullname>-viewer` | `get`, `list`, `watch` on every kardinal kind; `get`, `list`, `watch` on `events` | Dashboards, read-only users |
+| `<fullname>-promoter` | viewer, `create` on `bundles`, `update`/`patch` on `pipelines` | CI (Bundle API, `kardinal create bundle`), promote, roll back, pause, resume |
+| `<fullname>-approver` | viewer, `update`/`patch` on `policygates` | Gate overrides (approving from the UI or `kardinal override`) |
+| `<fullname>-admin` | every verb on every kardinal kind; aggregates the three above | Pipeline owners |
+
+`<fullname>` is the release's full name: `kardinal-promoter` for the default release, so
+`kardinal-promoter-viewer` and so on. With `rbac.userRoles.aggregateToDefaultRoles` (default
+`true`) the roles also aggregate into Kubernetes' built-in roles: the viewer into `view`, the
+promoter and approver into `edit`, and the admin rules into `admin`. A namespace RoleBinding to
+`view`, `edit` or `admin` then grants the matching kardinal access. Set it to `false` to grant
+kardinal access only through the four roles.
+
+```bash
+# Team A's CI may create Bundles in team-a only; its release managers approve gates there.
+kubectl create rolebinding ci-promoter -n team-a \
+  --clusterrole=kardinal-promoter-promoter --serviceaccount=team-a:ci
+kubectl create rolebinding release-managers -n team-a \
+  --clusterrole=kardinal-promoter-approver --group=team-a-release-managers
 ```
+
+Promote and roll back also read the environment's history (the viewer rules, included). The
+approver role cannot create Bundles and the promoter role cannot override gates, so a CI token
+cannot approve its own promotion.
 
 ### Signing in from the browser
 
