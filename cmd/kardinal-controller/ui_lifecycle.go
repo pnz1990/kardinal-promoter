@@ -84,11 +84,7 @@ func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Pipeline    string `json:"pipeline"`
-		Environment string `json:"environment"`
-		Namespace   string `json:"namespace"`
-	}
+	var req uiPromoteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -129,10 +125,10 @@ func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"bundle": plan.Bundle.Name,
-		"source": plan.Source.Name,
-		"message": "promoting " + plan.Source.Name + " (Verified in " + strings.Join(plan.Upstreams, ", ") +
+	_ = json.NewEncoder(w).Encode(uiPromoteResponse{
+		Bundle: plan.Bundle.Name,
+		Source: plan.Source.Name,
+		Message: "promoting " + plan.Source.Name + " (Verified in " + strings.Join(plan.Upstreams, ", ") +
 			") to " + req.Environment + " — track with kardinal get bundles " + req.Pipeline,
 	})
 }
@@ -157,12 +153,7 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Pipeline    string `json:"pipeline"`
-		Environment string `json:"environment"`
-		Namespace   string `json:"namespace"`
-		ToBundle    string `json:"toBundle"`
-	}
+	var req uiRollbackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -205,10 +196,10 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"bundle":     plan.Bundle.Name,
-		"rollbackOf": plan.Target.Name,
-		"message":    "rollback started — rolling " + req.Environment + " back to " + plan.Target.Name,
+	_ = json.NewEncoder(w).Encode(uiRollbackResponse{
+		Bundle:     plan.Bundle.Name,
+		RollbackOf: plan.Target.Name,
+		Message:    "rollback started — rolling " + req.Environment + " back to " + plan.Target.Name,
 	})
 }
 
@@ -239,10 +230,7 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Pipeline  string `json:"pipeline"`
-		Namespace string `json:"namespace"`
-	}
+	var req uiPipelineActionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -277,9 +265,7 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 	s.log.Info().Str("pipeline", req.Pipeline).Bool("paused", pause).
 		Str("requestedBy", uiRequester(r.Context())).Msg("ui: pipeline " + done)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"message": "pipeline " + req.Pipeline + " " + done,
-	})
+	_ = json.NewEncoder(w).Encode(uiMessageResponse{Message: "pipeline " + req.Pipeline + " " + done})
 }
 
 // actionAuthorizer is the AuthorizingClient of TokenReview mode.
