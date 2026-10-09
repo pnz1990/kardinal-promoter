@@ -247,9 +247,16 @@ spec:
         resources: ["bundles"]
   variables:
     # The controller creates Bundles for the UI, the Bundle API,
-    # Subscriptions and automatic rollbacks and names their creator.
+    # Subscriptions and automatic rollbacks and names their creator. Any
+    # ServiceAccount in the release namespace counts as a controller here, so
+    # extra controller instances (watchNamespace variants, a second
+    # Deployment) can stamp too: creating ServiceAccount tokens there already
+    # grants the controller's access.
     - name: controller
-      expression: request.userInfo.username == {{ $controller | quote }}
+      expression: >-
+        request.userInfo.username == {{ $controller | quote }} ||
+        ('system:serviceaccounts:{{ .Release.Namespace }}' in request.userInfo.groups &&
+          request.userInfo.username.startsWith('system:serviceaccount:{{ .Release.Namespace }}:'))
     - name: creator
       expression: >-
         has(object.metadata.annotations) && 'kardinal.io/created-by' in object.metadata.annotations ?

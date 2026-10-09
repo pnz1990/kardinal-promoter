@@ -56,6 +56,19 @@ func identityPolicy(t *testing.T, suffix string) *admissionregistrationv1.Valida
 	return &vap
 }
 
+// groupsOf returns the groups the API server gives user: a ServiceAccount
+// "system:serviceaccount:<ns>:<name>" is in system:serviceaccounts and
+// system:serviceaccounts:<ns>.
+func groupsOf(user string) []interface{} {
+	groups := []interface{}{"system:authenticated"}
+	if rest, ok := strings.CutPrefix(user, "system:serviceaccount:"); ok {
+		if ns, _, ok := strings.Cut(rest, ":"); ok {
+			groups = append(groups, "system:serviceaccounts", "system:serviceaccounts:"+ns)
+		}
+	}
+	return groups
+}
+
 // admits evaluates every validation of vap the way the API server binds the
 // variables (object, oldObject, request) and reports whether all pass.
 func admits(t *testing.T, vap *admissionregistrationv1.ValidatingAdmissionPolicy, object, oldObject map[string]interface{}, user string) bool {
@@ -64,7 +77,8 @@ func admits(t *testing.T, vap *admissionregistrationv1.ValidatingAdmissionPolicy
 		cel.Variable("request", cel.DynType), cel.Variable("variables", cel.DynType))
 	require.NoError(t, err)
 	vars := map[string]interface{}{
-		"object": object, "request": map[string]interface{}{"userInfo": map[string]interface{}{"username": user},
+		"object": object, "request": map[string]interface{}{
+			"userInfo":  map[string]interface{}{"username": user, "groups": groupsOf(user)},
 			"operation": operation(object, oldObject)},
 	}
 	if object == nil {
@@ -465,6 +479,14 @@ func TestIdentityAdmission_BundleCreator(t *testing.T) {
 		{name: "create without the annotation", cur: bundle(""), user: "alice", want: true},
 		{name: "create in someone else's name", cur: bundle("bob"), user: "alice", want: false},
 		{name: "the controller names the creator", cur: bundle("subscription:app"), user: controller, want: true},
+		// A second controller instance (a watchNamespace variant) runs as
+		// another ServiceAccount in the release namespace.
+		{name: "another controller instance names the creator", cur: bundle("bundle-api"),
+			user: "system:serviceaccount:" + releaseNS + ":variant-1", want: true},
+		{name: "a ServiceAccount elsewhere cannot", cur: bundle("bundle-api"),
+			user: "system:serviceaccount:team-a:kardinal-promoter", want: false},
+		{name: "a user named like a release ServiceAccount cannot", cur: bundle("bundle-api"),
+			user: "system:serviceaccount" + releaseNS, want: false},
 		{name: "unchanged on update", old: bundle("alice"), cur: bundle("alice"), user: "bob", want: true},
 		{name: "added later", old: bundle(""), cur: bundle("bob"), user: "bob", want: false},
 		{name: "changed later", old: bundle("alice"), cur: bundle("bob"), user: "bob", want: false},
