@@ -6,6 +6,7 @@ package translator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -207,9 +208,11 @@ func TestTranslate_EndToEnd(t *testing.T) {
 
 	var gateTemplates, health []string
 	for _, n := range g.Spec.Nodes {
-		if n.Template != nil && n.Template["kind"] == "PolicyGate" {
-			labels := n.Template["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
-			gateTemplates = append(gateTemplates, labels["kardinal.io/gate-template"].(string))
+		if n.ID == graph.NodePolicyGateData {
+			templates, _ := n.Def["templates"].([]interface{})
+			for _, tmpl := range templates {
+				gateTemplates = append(gateTemplates, tmpl.(map[string]interface{})["template"].(string))
+			}
 		}
 		if n.Ref != nil && n.ID != "bundle" {
 			health = append(health, n.ID)
@@ -276,6 +279,33 @@ func TestTranslate_PermanentErrors(t *testing.T) {
 		_, err := newTranslator(apierrors.NewServiceUnavailable("etcd")).Translate(ctx, p, teamBundle(nil))
 		require.Error(t, err)
 		assert.NotErrorIs(t, err, graph.ErrInvalid)
+	})
+	t.Run("graph over the size limit (G10)", func(t *testing.T) {
+		var envs []kardinalv1alpha1.EnvironmentSpec
+		var gates []client.Object
+		for i := 0; i < 400; i++ {
+			name := fmt.Sprintf("region%03d", i)
+			envs = append(envs, kardinalv1alpha1.EnvironmentSpec{Name: name})
+			for g := 0; g < 3; g++ {
+				gates = append(gates, &kardinalv1alpha1.PolicyGate{
+					ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-gate%d", name, g), Namespace: "team-a",
+						Labels: map[string]string{"kardinal.io/applies-to": name}},
+					Spec: kardinalv1alpha1.PolicyGateSpec{Expression: `!schedule.isWeekend && upstream.uat.soakMinutes >= 30`},
+				})
+			}
+		}
+		c := fake.NewClientBuilder().WithScheme(translateScheme(t)).WithObjects(gates...).Build()
+		dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+			map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
+		tr := New(graph.NewGraphClient(dyn, zerolog.Nop()), graph.NewBuilder(), c,
+			[]string{"platform-policies"}, zerolog.Nop())
+		_, err := tr.Translate(ctx, teamPipeline(envs...), teamBundle(nil))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, graph.ErrInvalid)
+		assert.True(t, strings.HasPrefix(err.Error(), "translator.Translate: graph size: the Graph for this Bundle would be about "), err.Error())
+		list, lerr := dyn.Resource(graph.GraphGVR).Namespace("team-a").List(ctx, metav1.ListOptions{})
+		require.NoError(t, lerr)
+		assert.Empty(t, list.Items, "no Graph is created")
 	})
 }
 

@@ -133,6 +133,28 @@ func TestCore_KroInstalled(t *testing.T) {
 	assert.True(t, stepManaged, "managedResources lists the step %s; kinds %v", ps.Name, kinds)
 }
 
+// TestCore_KroTuned checks the kro tuning hack/install-kro.sh applies
+// (docs/installation.md, Install kro; ledger gap G9): the kro Deployment runs
+// 8 Graph workers instead of kro's 1, with client QPS 300 and burst 500, so
+// one large promotion does not hold up every other Graph.
+//
+// Covers INST-KRO-02.
+func TestCore_KroTuned(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	dep, err := e.Kube.AppsV1().Deployments(kroNamespace).Get(context.Background(), "kro", metav1.GetOptions{})
+	require.NoError(t, err, "the kro Deployment in %s", kroNamespace)
+	require.Len(t, dep.Spec.Template.Spec.Containers, 1)
+	env := map[string]string{}
+	for _, v := range dep.Spec.Template.Spec.Containers[0].Env {
+		env[v.Name] = v.Value
+	}
+	assert.Equal(t, "8", env["KRO_GRAPH_CONCURRENT_RECONCILES"], "Graph workers (--graph-concurrent-reconciles)")
+	assert.Equal(t, "300", env["KRO_CLIENT_QPS"], "client QPS")
+	assert.Equal(t, "500", env["KRO_CLIENT_BURST"], "client burst")
+	assert.True(t, deploymentAvailable(dep), "the kro Deployment is Available: %+v", dep.Status.Conditions)
+}
+
 // kroPin is KRO_VERSION's default in hack/install-kro.sh.
 func kroPin(t *testing.T) string {
 	t.Helper()

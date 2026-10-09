@@ -99,8 +99,12 @@ func main() {
 		webhookSecret          string
 		scmProviderType        string
 		scmAPIURL              string
+		gateStatusHeartbeat    time.Duration
 	)
 
+	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
+		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
+			"re-check the gate's whole Graph. 0 writes the status on every evaluation.")
 	flag.BoolVar(&leaderElect, "leader-elect", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&zerologLevel, "log-level", "info",
@@ -114,11 +118,11 @@ func main() {
 	flag.StringVar(&policyNamespaces, "policy-namespaces", "platform-policies",
 		"Comma-separated list of namespaces to scan for org-level PolicyGates.")
 	flag.StringVar(&githubToken, "github-token", os.Getenv("GITHUB_TOKEN"),
-		"SCM token for API operations (GitHub PAT or GitLab private token).")
+		"SCM token for API operations (a GitHub, GitLab, Forgejo/Gitea, Bitbucket or Azure DevOps token).")
 	flag.StringVar(&webhookSecret, "webhook-secret", os.Getenv("KARDINAL_WEBHOOK_SECRET"),
-		"Secret for validating incoming SCM webhooks (HMAC for GitHub, plaintext token for GitLab).")
+		"Secret for validating incoming SCM webhooks (an HMAC key or a shared token, depending on the provider; see docs/scm-providers.md).")
 	flag.StringVar(&scmProviderType, "scm-provider", os.Getenv("KARDINAL_SCM_PROVIDER"),
-		"SCM provider type: \"github\" (default) or \"gitlab\".")
+		"SCM provider type for the whole controller: \"github\" (default), \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\" or \"azuredevops\".")
 	flag.StringVar(&scmAPIURL, "scm-api-url", os.Getenv("KARDINAL_SCM_API_URL"),
 		"SCM API base URL override (e.g. for GitHub Enterprise or self-managed GitLab).")
 
@@ -298,7 +302,7 @@ func main() {
 	graphIdentity.Writer = mgr.GetClient()
 	graphIdentity.Reader = mgr.GetAPIReader()
 
-	// SCM provider — dispatches to GitHub or GitLab based on --scm-provider flag.
+	// SCM provider — scm.NewProvider dispatches on the --scm-provider flag.
 	// When --scm-token-secret-name is set, a DynamicProvider is used so that
 	// credential rotation (Secret update) reloads the provider without a restart.
 	var scmProvider scm.SCMProvider
@@ -399,6 +403,7 @@ func main() {
 	// An org gate's instance reads metrics.* from its template's org policy
 	// namespace, the same namespaces the translator takes org gates from.
 	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
+	pgReconciler.StatusHeartbeat = gateStatusHeartbeat
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}

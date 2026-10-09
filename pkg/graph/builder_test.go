@@ -63,7 +63,8 @@ func makePolicyGate(name, ns, appliesTo, expression string) kardinalv1alpha1.Pol
 }
 
 // Test 1: Linear 3-env pipeline, no gates, default intent.
-// Expected: 1 Bundle ref + 3 PromotionStep + 3 PRStatus nodes = 7 total.
+// Expected: 1 Bundle ref + 3 PromotionStep nodes + the PRStatus data and
+// collection nodes = 6 total.
 func TestBuilder_Linear3EnvNoGates(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := makeLinearPipeline("nginx-demo", "test", "uat", "prod")
@@ -76,9 +77,11 @@ func TestBuilder_Linear3EnvNoGates(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assertKroValid(t, result.Graph)
-	// 1 Bundle ref + 3 envs × (1 PRStatus + 1 PromotionStep) = 7
-	assert.Equal(t, 7, result.NodeCount)
-	assert.Len(t, result.Graph.Spec.Nodes, 7)
+	// 1 Bundle ref + 3 PromotionSteps + PRStatusData + PRStatuses = 6
+	assert.Equal(t, 6, result.NodeCount)
+	assert.Len(t, result.Graph.Spec.Nodes, 6)
+	assert.Len(t, renderedOf(t, result.Graph, "PRStatus"), 3, "one PRStatus per environment")
+	assert.Empty(t, result.GateInstances)
 
 	// Verify sequential dependency: uat depends on test, prod depends on uat
 	nodeMap := make(map[string]graph.GraphNode)
@@ -102,7 +105,8 @@ func TestBuilder_Linear3EnvNoGates(t *testing.T) {
 }
 
 // Test 2: Linear 3-env with 2 org gates on prod.
-// Expected: 1 Bundle ref + 3 PromotionStep + 3 PRStatus + 2 PolicyGate nodes = 9 total.
+// Expected: 1 Bundle ref + 3 PromotionSteps + the PolicyGate and PRStatus
+// data and collection nodes = 8 total, rendering 2 gate instances.
 func TestBuilder_Linear3EnvWithProdGates(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := makeLinearPipeline("nginx-demo", "test", "uat", "prod")
@@ -120,28 +124,33 @@ func TestBuilder_Linear3EnvWithProdGates(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assertKroValid(t, result.Graph)
-	assert.Equal(t, 9, result.NodeCount, "3 PromotionStep + 3 PRStatus + 2 PolicyGate + 1 Bundle Watch = 9 nodes")
-	assert.Len(t, result.Graph.Spec.Nodes, 9)
+	assert.Equal(t, 8, result.NodeCount, "1 Bundle ref + 3 PromotionSteps + 2 data + 2 collection nodes")
+	assert.Len(t, result.Graph.Spec.Nodes, 8)
 
-	// Verify PolicyGate nodes carry a readyWhen health signal and that the
+	// The PolicyGates collection carries a readyWhen health signal, and the
 	// prod PromotionStep blocks on each gate via spec.requiredGates.
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
-	var gateIDs []string
-	for _, n := range result.Graph.Spec.Nodes {
-		if containsStr(n.ID, "noWeekendDeploys") || containsStr(n.ID, "stagingSoak30m") {
-			gateIDs = append(gateIDs, n.ID)
-			require.NotEmpty(t, n.ReadyWhen, "PolicyGate node %q must have ReadyWhen set", n.ID)
-			assert.Equal(t, "${"+n.ID+".status.ready == true}", n.ReadyWhen[0])
-		}
+	gatesNode, ok := nodeMap[graph.NodePolicyGates]
+	require.True(t, ok, "PolicyGates collection node")
+	assert.Equal(t, []string{"${each.?status.?ready.orValue(false) == true}"}, gatesNode.ReadyWhen)
+	assert.Equal(t, []map[string]string{{"Gate": "${PolicyGateData.gates}"}}, gatesNode.ForEach)
+
+	rendered := renderedOf(t, result.Graph, "PolicyGate")
+	require.Len(t, rendered, 2)
+	require.Len(t, result.GateInstances, 2)
+	var names []string
+	for i, g := range rendered {
+		assert.Equal(t, result.GateInstances[i].Name, objName(g), "GateInstances matches the rendered gates")
+		assert.Equal(t, "prod", objLabels(g)["kardinal.io/environment"])
+		names = append(names, objName(g))
 	}
-	require.Len(t, gateIDs, 2)
 	prodSpec, _ := nodeMap["prod"].Template["spec"].(map[string]interface{})
 	required, _ := prodSpec["requiredGates"].([]interface{})
 	require.Len(t, required, 2, "prod must require both gates")
-	for _, gid := range gateIDs {
+	for _, name := range names {
 		assert.Contains(t, required,
-			"${["+gid+".metadata.name].filter(x_, "+gid+".status.ready == true)[0]}",
-			"requiredGates must only resolve once gate %q is ready", gid)
+			fmt.Sprintf(`${[%q].filter(x_, PolicyGates.exists(g, g.metadata.name == %q && g.?status.?ready.orValue(false) == true))[0]}`, name, name),
+			"requiredGates must only resolve once gate %q is ready", name)
 	}
 }
 
@@ -164,8 +173,8 @@ func TestBuilder_FanOut(t *testing.T) {
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
 	assertKroValid(t, result.Graph)
-	// 1 Bundle ref + 4 envs × (1 PRStatus + 1 PromotionStep) = 9
-	assert.Equal(t, 9, result.NodeCount)
+	// 1 Bundle ref + 4 PromotionSteps + PRStatusData + PRStatuses = 7
+	assert.Equal(t, 7, result.NodeCount)
 
 	// Both prod nodes must reference staging (using CEL-safe underscore IDs)
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
@@ -417,21 +426,17 @@ func TestBuilder_PolicyGateGatesDependentStep(t *testing.T) {
 	require.NoError(t, err)
 	assertKroValid(t, result.Graph)
 
-	// Find the gate node (IDs use camelCase: "no-weekend" → "noWeekend")
-	var gateNode *graph.GraphNode
-	for i := range result.Graph.Spec.Nodes {
-		if containsStr(result.Graph.Spec.Nodes[i].ID, "noWeekend") {
-			gateNode = &result.Graph.Spec.Nodes[i]
-			break
-		}
-	}
-	require.NotNil(t, gateNode, "gate node must be present")
-	assert.NotEmpty(t, gateNode.ReadyWhen, "PolicyGate node must have ReadyWhen (health signal)")
+	gatesNode, ok := nodeByID(result.Graph.Spec.Nodes)[graph.NodePolicyGates]
+	require.True(t, ok, "PolicyGates collection must be present")
+	assert.NotEmpty(t, gatesNode.ReadyWhen, "PolicyGates must have ReadyWhen (health signal)")
+	require.Len(t, result.GateInstances, 1)
+	name := result.GateInstances[0].Name
 
 	prodSpec, _ := nodeByID(result.Graph.Spec.Nodes)["prod"].Template["spec"].(map[string]interface{})
 	required, _ := prodSpec["requiredGates"].([]interface{})
 	require.Len(t, required, 1)
-	assert.Contains(t, required[0].(string), gateNode.ID+".status.ready == true",
+	assert.Contains(t, required[0].(string),
+		fmt.Sprintf("PolicyGates.exists(g, g.metadata.name == %q && g.?status.?ready.orValue(false) == true)", name),
 		"prod must not resolve until the gate is ready")
 	testSpec, _ := nodeByID(result.Graph.Spec.Nodes)["test"].Template["spec"].(map[string]interface{})
 	assert.NotContains(t, testSpec, "requiredGates", "test is not gated")
@@ -490,35 +495,29 @@ func TestBuilder_PRStatusWatchNode(t *testing.T) {
 	assertKroValid(t, result.Graph)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
-
-	prStatusNode := func(env string) *graph.GraphNode {
-		for id, n := range nodeMap {
-			if containsStr(id, "prstatus") && containsStr(id, env) {
-				n := n
-				return &n
-			}
-		}
-		return nil
-	}
-
-	// PRStatus Watch node for "test" env must exist
-	prStatusTestNode := prStatusNode("test")
-	require.NotNil(t, prStatusTestNode, "PRStatus Watch node for 'test' must be present")
-
-	// Check kind is PRStatus
-	kind, _ := prStatusTestNode.Template["kind"].(string)
-	assert.Equal(t, "PRStatus", kind, "Watch node kind must be PRStatus")
-
+	prNode, ok := nodeMap[graph.NodePRStatuses]
+	require.True(t, ok, "PRStatuses collection must be present")
+	assert.Equal(t, "PRStatus", prNode.Template["kind"])
 	// The PRStatus template carries no spec: the SCM step fills it in later
 	// and kro's SSA must not own (and revert) those fields.
-	assert.NotContains(t, prStatusTestNode.Template, "spec",
-		"PRStatus template must not carry a spec")
+	assert.NotContains(t, prNode.Template, "spec", "PRStatus template must not carry a spec")
 
-	// Check PromotionStep node has prStatusRef referencing the Watch node
+	byEnv := map[string]map[string]interface{}{}
+	for _, o := range renderedOf(t, result.Graph, "PRStatus") {
+		byEnv[fmt.Sprint(objLabels(o)["kardinal.io/environment"])] = o
+		assert.NotContains(t, o, "spec")
+	}
+	require.Contains(t, byEnv, "test", "a PRStatus for 'test'")
+	require.Contains(t, byEnv, "prod", "a PRStatus for 'prod'")
+
+	// The PromotionStep names its PRStatus literally: no reference to the
+	// PRStatuses collection, so a PRStatus that cannot be created holds only
+	// its own environment (G11).
 	testStepNode, ok := nodeMap["test"]
 	require.True(t, ok, "PromotionStep node for 'test' must exist")
-	assert.True(t, containsCELRef(testStepNode.Template, prStatusTestNode.ID),
-		"PromotionStep node must have CEL reference to PRStatus Watch node")
+	spec, _ := testStepNode.Template["spec"].(map[string]interface{})
+	assert.Equal(t, objName(byEnv["test"]), spec["prStatusRef"])
+	assert.False(t, containsCELRef(testStepNode.Template, graph.NodePRStatuses), "no edge to the PRStatuses collection")
 }
 
 // TestBuilder_PRStatusNodeHasNoReadyWhen checks that no PRStatus node has a
@@ -600,23 +599,6 @@ func containsInMapFunc(m map[string]interface{}, match func(string) bool) bool {
 	return false
 }
 
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr ||
-		len(s) > 0 && findSubstr(s, substr))
-}
-
-func findSubstr(s, sub string) bool {
-	if len(sub) == 0 {
-		return true
-	}
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
-
 // findUpstreamRefs returns all upstream state CEL references from the upstreamStates
 // list field. Returns empty slice if no upstreams are set.
 // Updated in #625: upstreamVerified/upstreamVerified2 → upstreamStates []string.
@@ -674,22 +656,11 @@ func TestBuilder_PolicyGateScopeLabelsPropagate(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Find the instantiated PolicyGate node.
-	var gateNode *graph.GraphNode
-	for i := range result.Graph.Spec.Nodes {
-		n := result.Graph.Spec.Nodes[i]
-		if containsStr(n.ID, "noWeekendDeploys") {
-			gateNode = &n
-			break
-		}
-	}
-	require.NotNil(t, gateNode, "PolicyGate node must exist")
-
-	// Extract labels from template.metadata.labels.
-	meta, ok := gateNode.Template["metadata"].(map[string]interface{})
-	require.True(t, ok, "template must have metadata")
-	labels, ok := meta["labels"].(map[string]interface{})
-	require.True(t, ok, "metadata must have labels")
+	// The instantiated PolicyGate.
+	gates := renderedOf(t, result.Graph, "PolicyGate")
+	require.Len(t, gates, 1, "PolicyGate instance must exist")
+	labels := objLabels(gates[0])
+	assert.Equal(t, "no-weekend-deploys", labels["kardinal.io/gate-name"])
 
 	assert.Equal(t, "org", labels["kardinal.io/scope"],
 		"scope label must be propagated from the original gate template")
@@ -730,20 +701,9 @@ func TestBuilder_PolicyGateScopeDefault(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var gateNode *graph.GraphNode
-	for i := range result.Graph.Spec.Nodes {
-		n := result.Graph.Spec.Nodes[i]
-		if containsStr(n.ID, "teamGate") {
-			gateNode = &n
-			break
-		}
-	}
-	require.NotNil(t, gateNode, "PolicyGate node must exist")
-
-	meta, ok := gateNode.Template["metadata"].(map[string]interface{})
-	require.True(t, ok)
-	labels, ok := meta["labels"].(map[string]interface{})
-	require.True(t, ok)
+	gates := renderedOf(t, result.Graph, "PolicyGate")
+	require.Len(t, gates, 1, "PolicyGate instance must exist")
+	labels := objLabels(gates[0])
 
 	assert.Equal(t, "team", labels["kardinal.io/scope"],
 		"default scope must be 'team' when label is absent")
@@ -977,6 +937,8 @@ var kroReservedNodeIDs = map[string]bool{
 	"true": true, "false": true, "null": true, "in": true, "as": true, "break": true, "const": true,
 	"continue": true, "else": true, "for": true, "function": true, "if": true, "import": true, "let": true,
 	"loop": true, "package": true, "return": true, "var": true, "void": true, "while": true,
+	// Proposed as reserved by kro#1434 (KREP-025), not merged; reserved ahead of it.
+	"time": true,
 }
 
 // assertKroValid checks a built Graph the way kro and the API server will,
@@ -999,7 +961,6 @@ func assertKroValid(t *testing.T, g *graph.Graph) {
 		}
 	}
 	seen := map[string]bool{}
-	names := map[string]string{}
 	for _, n := range g.Spec.Nodes {
 		id := n.ID
 		assert.True(t, reKroNodeID.MatchString(id),
@@ -1008,24 +969,23 @@ func assertKroValid(t *testing.T, g *graph.Graph) {
 		assert.False(t, seen[id], "duplicate node ID %q", id)
 		assert.False(t, iterators[id], "node ID %q is a forEach iterator name", id)
 		seen[id] = true
-		if n.Template == nil {
-			continue
+		if n.Template != nil {
+			_, ok := n.Template["metadata"].(map[string]interface{})
+			require.True(t, ok, "node %s has no template metadata", id)
 		}
-		md, ok := n.Template["metadata"].(map[string]interface{})
-		require.True(t, ok, "node %s has no template metadata", id)
-		name, _ := md["name"].(string)
-		key := fmt.Sprint(n.Template["kind"]) + "/" + name
+	}
+	names := map[string]string{}
+	for _, o := range renderObjects(t, g) {
+		name := objName(o.Object)
+		key := fmt.Sprint(o.Object["kind"]) + "/" + name
 		if prev, dup := names[key]; dup {
-			t.Errorf("nodes %s and %s both render %s", prev, id, key)
+			t.Errorf("nodes %s and %s both render %s", prev, o.NodeID, key)
 		}
-		names[key] = id
-		// A forEach name ends in "-${region}"; a region is a DNS-1123 label.
-		rendered := strings.ReplaceAll(name, "${region}", "us-east-1")
-		assert.Empty(t, validation.IsDNS1123Subdomain(rendered), "node %s metadata.name %q", id, name)
-		labels, _ := md["labels"].(map[string]interface{})
-		for k, v := range labels {
+		names[key] = o.NodeID
+		assert.Empty(t, validation.IsDNS1123Subdomain(name), "node %s metadata.name %q", o.NodeID, name)
+		for k, v := range objLabels(o.Object) {
 			if s, ok := v.(string); ok && !strings.Contains(s, "${") {
-				assert.Empty(t, validation.IsValidLabelValue(s), "node %s label %s=%q", id, k, s)
+				assert.Empty(t, validation.IsValidLabelValue(s), "node %s label %s=%q", o.NodeID, k, s)
 			}
 		}
 	}
@@ -1057,10 +1017,11 @@ func TestNodeIDs_KroValid(t *testing.T) {
 	}
 }
 
-// TestNodeIDs_LongGateNodeIDsKept verifies that long composite gate node IDs
-// are emitted in full: kro imposes no length limit on node IDs, so the IDs
-// stay readable and collision-free.
-func TestNodeIDs_LongGateNodeIDsKept(t *testing.T) {
+// TestNodeIDs_LongGateNames verifies that gates with long names in a long
+// environment and namespace still render valid, distinct instance names: the
+// instances are items of the PolicyGates collection, so their names, not
+// node IDs, must be unique, and a name over the limit is hash-bounded.
+func TestNodeIDs_LongGateNames(t *testing.T) {
 	// Long names in all components: gate name, namespace, env name, bundle.
 	pipeline := &kardinalv1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-application", Namespace: "default"},
@@ -1081,17 +1042,11 @@ func TestNodeIDs_LongGateNodeIDsKept(t *testing.T) {
 	require.NoError(t, err)
 	assertKroValid(t, result.Graph)
 
-	nodeMap := nodeByID(result.Graph.Spec.Nodes)
-	var gateIDs []string
-	for id := range nodeMap {
-		if strings.HasPrefix(id, "noWeekendDeploys0") || strings.HasPrefix(id, "requireUatSoak30m0") {
-			gateIDs = append(gateIDs, id)
-		}
-	}
-	require.Len(t, gateIDs, 2, "both gates must be emitted")
-	for _, id := range gateIDs {
-		assert.Greater(t, len(id), 63, "gate node ID %q must not be truncated", id)
-		assert.Contains(t, id, "0platformPolicies0kardinalTestAppProd00")
+	gatesOut := renderedOf(t, result.Graph, "PolicyGate")
+	require.Len(t, gatesOut, 2, "both gates must be emitted")
+	assert.NotEqual(t, objName(gatesOut[0]), objName(gatesOut[1]))
+	for _, g := range gatesOut {
+		assert.LessOrEqual(t, len(objName(g)), 253, "instance name %q", objName(g))
 	}
 }
 
