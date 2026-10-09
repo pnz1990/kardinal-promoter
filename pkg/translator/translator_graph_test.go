@@ -306,7 +306,7 @@ func TestTranslate_PermanentErrors(t *testing.T) {
 	t.Run("graph over the size limit (G10)", func(t *testing.T) {
 		var envs []kardinalv1alpha1.EnvironmentSpec
 		var gates []client.Object
-		for i := 0; i < 400; i++ {
+		for i := 0; i < 500; i++ {
 			name := fmt.Sprintf("region%03d", i)
 			envs = append(envs, kardinalv1alpha1.EnvironmentSpec{Name: name})
 			for g := 0; g < 3; g++ {
@@ -383,6 +383,42 @@ func TestTranslate_ErrorPrefixes(t *testing.T) {
 			require.Error(t, err)
 			assert.Equal(t, tc.want, err.Error())
 			assert.Equal(t, 1, strings.Count(err.Error(), tc.once), "%q appears once: %v", tc.once, err)
+		})
+	}
+}
+
+// TestTranslate_CompactHasNoHealthNodes: a compact Graph gets no health ref
+// nodes (they only feed Graph readiness, ledger G3), so it stays one node per
+// kind instead of one per environment; the node shape keeps them.
+func TestTranslate_CompactHasNoHealthNodes(t *testing.T) {
+	ctx := zerolog.Nop().WithContext(context.Background())
+	for _, shape := range []string{graph.GraphShapeCompact, graph.GraphShapeNodes} {
+		t.Run(shape, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(translateScheme(t)).Build()
+			dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
+			gc := graph.NewGraphClient(dyn, zerolog.Nop())
+			tr := New(gc, graph.NewBuilder(), c, []string{"platform-policies"}, zerolog.Nop())
+			p := teamPipeline(
+				kardinalv1alpha1.EnvironmentSpec{Name: "test", Health: resourceHealth("team-a")},
+				kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: resourceHealth("team-a")},
+			)
+			p.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
+			name, err := tr.Translate(ctx, p, teamBundle(nil))
+			require.NoError(t, err)
+			g, err := gc.Get(ctx, "team-a", name)
+			require.NoError(t, err)
+			var health []string
+			for _, n := range g.Spec.Nodes {
+				if strings.HasPrefix(n.ID, "health") {
+					health = append(health, n.ID)
+				}
+			}
+			if shape == graph.GraphShapeCompact {
+				assert.Empty(t, health)
+			} else {
+				assert.ElementsMatch(t, []string{"healthTest", "healthProd"}, health)
+			}
 		})
 	}
 }

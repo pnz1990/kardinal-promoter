@@ -95,7 +95,8 @@ spec:
 
 ### spec.environments[]
 
-A Pipeline has 1 to 100 environments. The CRD rejects, at `kubectl apply` time:
+A Pipeline has 1 to 500 environments (see [Large Pipelines](#large-pipelines) for what fits in
+one Bundle's Graph). The CRD rejects, at `kubectl apply` time:
 
 - a name that is not a DNS label: lowercase letters, digits and `-`, starting and ending
   with a letter or digit, at most 63 characters. The name is used as a namespace
@@ -172,6 +173,29 @@ Default: `0`.
 Extra namespaces to read PolicyGates from. It only adds: the org policy namespaces (the controller's `--policy-namespaces`, default `platform-policies`) and the Pipeline's namespace are always read. A gate found only through it is a team gate unless it is labelled `kardinal.io/scope: org`, and it never grants a skip. See [Policy Gates](policy-gates.md).
 
 Default: none.
+
+### Large Pipelines
+
+Each Bundle is promoted by one kro Graph, and a Graph is one Kubernetes object, which etcd stores
+only up to 1.5 MiB. Two Graph shapes keep it in bounds:
+
+- **nodes** (Pipelines with up to 100 environments): one Graph node per environment. `kubectl get
+  graph -o yaml` shows each environment's PromotionStep as a node.
+- **compact** (above 100 environments): the promotion order is data in the Graph, and one node
+  creates every PromotionStep the order allows (upstream environments Verified, gates ready, the
+  Bundle not superseded). A step that exists is never removed by the Graph. The Graph has about a
+  dozen nodes whatever the number of environments, and no health ref nodes (health is checked by
+  the PromotionStep as in the nodes shape).
+
+Both shapes promote the same way: the same PromotionSteps, PolicyGate instances and PRStatuses,
+with the same names. Choose one for a Pipeline with the annotation `kardinal.io/graph-shape:
+compact` or `nodes`; the controller's `--graph-compact-above` (chart `graph.compactAbove`) moves
+the threshold.
+
+The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
+each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be
+over 1.2 MB, or create more than 4,500 objects, fails with `GraphBuildFailed` and the size in the
+message.
 
 ## Health Check Defaults
 

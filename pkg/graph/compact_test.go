@@ -1,0 +1,340 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+
+package graph_test
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+)
+
+// compactSim evaluates a compact Graph's state and wave def nodes with
+// cel-go, given the steps, gates and PRStatuses that exist, the way kro does
+// on each walk.
+type compactSim struct {
+	t     *testing.T
+	g     *graph.Graph
+	nodes map[string]graph.GraphNode
+	// steps maps environment → state of its PromotionStep ("" for created).
+	steps map[string]string
+	// gatesReady maps gate instance name → ready.
+	gatesReady map[string]bool
+	prs        bool
+	phase      string
+}
+
+func newCompactSim(t *testing.T, g *graph.Graph) *compactSim {
+	t.Helper()
+	sim := &compactSim{t: t, g: g, nodes: nodeByID(g.Spec.Nodes), steps: map[string]string{},
+		gatesReady: map[string]bool{}, prs: true, phase: "Promoting"}
+	for _, o := range renderedOf(t, g, "PolicyGate") {
+		sim.gatesReady[objName(o)] = false
+	}
+	return sim
+}
+
+// vars is the scope kro evaluates the compact defs in.
+func (s *compactSim) vars() map[string]interface{} {
+	v := map[string]interface{}{}
+	for _, n := range s.g.Spec.Nodes {
+		if n.Def != nil && n.ID != graph.NodePromotionState && n.ID != graph.NodePromotionWave &&
+			n.ID != graph.NodePromotionProgress {
+			v[n.ID] = n.Def
+		}
+	}
+	var observed []interface{}
+	for env, state := range s.steps {
+		obj := map[string]interface{}{"metadata": map[string]interface{}{
+			"labels": map[string]interface{}{"kardinal.io/environment": env}}}
+		if state != "" {
+			obj["status"] = map[string]interface{}{"state": state}
+		}
+		observed = append(observed, obj)
+	}
+	v[graph.NodeStepsObserved] = observed
+	for _, o := range renderObjects(s.t, s.g) {
+		if o.Object["kind"] != "PolicyGate" {
+			continue
+		}
+		list, _ := v[o.NodeID].([]interface{})
+		v[o.NodeID] = append(list, map[string]interface{}{
+			"metadata": map[string]interface{}{"name": objName(o.Object)},
+			"status":   map[string]interface{}{"ready": s.gatesReady[objName(o.Object)]},
+		})
+	}
+	var prs []interface{}
+	if s.prs {
+		for _, o := range renderedOf(s.t, s.g, "PRStatus") {
+			prs = append(prs, map[string]interface{}{"metadata": map[string]interface{}{"name": objName(o)}})
+		}
+	}
+	v[graph.NodePRStatuses] = prs
+	v["bundle"] = map[string]interface{}{"status": map[string]interface{}{"phase": s.phase}}
+	return v
+}
+
+// def evaluates every field of def node id over vars.
+func (s *compactSim) def(id string, vars map[string]interface{}) map[string]interface{} {
+	s.t.Helper()
+	out := map[string]interface{}{}
+	for k, v := range s.nodes[id].Def {
+		if str, ok := v.(string); ok {
+			out[k] = evalCEL(s.t, str, vars)
+		} else {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// wave returns the environments the Graph creates PromotionSteps for, and
+// whether the Graph's PromotionProgress is ready.
+func (s *compactSim) wave() (envs []string, complete bool) {
+	s.t.Helper()
+	vars := s.vars()
+	vars[graph.NodePromotionState] = s.def(graph.NodePromotionState, vars)
+	wave := s.def(graph.NodePromotionWave, vars)
+	for _, e := range wave["steps"].([]interface{}) {
+		envs = append(envs, e.(map[string]interface{})["environment"].(string))
+	}
+	sort.Strings(envs)
+	progress := s.def(graph.NodePromotionProgress, vars)
+	vars[graph.NodePromotionProgress] = progress
+	ready := s.nodes[graph.NodePromotionProgress].ReadyWhen
+	require.Len(s.t, ready, 1)
+	return envs, evalCEL(s.t, ready[0], vars).(bool)
+}
+
+// advance creates the steps the wave admits (state "") and returns them.
+func (s *compactSim) advance() []string {
+	envs, _ := s.wave()
+	for _, e := range envs {
+		if _, ok := s.steps[e]; !ok {
+			s.steps[e] = ""
+		}
+	}
+	return envs
+}
+
+func compactPipeline(envs ...kardinalv1alpha1.EnvironmentSpec) *kardinalv1alpha1.Pipeline {
+	p := pipelineOf("app", envs...)
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	return p
+}
+
+// TestCompact_Shape checks the compact Graph: one PromotionSteps collection
+// over the PromotionWave def instead of a node per environment, the DAG as
+// data, and the steps rendered as the node shape renders them.
+func TestCompact_Shape(t *testing.T) {
+	p := compactPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "uat"}, kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
+	gate := makePolicyGate("no-weekend", "platform-policies", "prod", "!schedule.isWeekend")
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app"),
+		PolicyGates: []kardinalv1alpha1.PolicyGate{gate}})
+	require.NoError(t, err)
+	assertKroValid(t, res.Graph)
+	assert.True(t, res.Compact)
+	var ids []string
+	for _, n := range res.Graph.Spec.Nodes {
+		ids = append(ids, n.ID)
+	}
+	assert.ElementsMatch(t, []string{"bundle", "PolicyGateData", "PolicyGates", "PRStatusData", "PRStatuses",
+		"PromotionDAG", "StepsObserved", "PromotionState", "PromotionWave", "PromotionSteps", "PromotionProgress"}, ids)
+	assert.Equal(t, map[string][]string{"test": nil, "uat": {"test"}, "prod": {"uat"}}, res.Upstreams)
+
+	// The node shape's step for prod, and the compact one, are the same object.
+	nodes, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipelineOf("app",
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"}, kardinalv1alpha1.EnvironmentSpec{Name: "uat"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod"}),
+		Bundle: makeBundle("app-x7k2m", "app"), PolicyGates: []kardinalv1alpha1.PolicyGate{gate}})
+	require.NoError(t, err)
+	assert.False(t, nodes.Compact)
+	prodNode := nodeByID(nodes.Graph.Spec.Nodes)["prod"].Template
+
+	sim := newCompactSim(t, res.Graph)
+	for name := range sim.gatesReady {
+		sim.gatesReady[name] = true
+	}
+	sim.steps["test"], sim.steps["uat"] = "Verified", "Verified"
+	vars := sim.vars()
+	vars[graph.NodePromotionState] = sim.def(graph.NodePromotionState, vars)
+	vars[graph.NodePromotionWave] = sim.def(graph.NodePromotionWave, vars)
+	var prod map[string]interface{}
+	for _, item := range vars[graph.NodePromotionWave].(map[string]interface{})["steps"].([]interface{}) {
+		if item.(map[string]interface{})["environment"] == "prod" {
+			vars["Step"] = item
+			prod = renderValue(t, nodeByID(res.Graph.Spec.Nodes)[graph.NodePromotionSteps].Template, vars).(map[string]interface{})
+		}
+	}
+	require.NotNil(t, prod, "prod is admitted")
+	assert.Equal(t, objName(prodNode), objName(prod))
+	assert.Equal(t, objLabels(prodNode), objLabels(prod))
+	spec := prod["spec"].(map[string]interface{})
+	nodeSpec := prodNode["spec"].(map[string]interface{})
+	assert.Equal(t, nodeSpec["pipelineName"], spec["pipelineName"])
+	assert.Equal(t, "app-x7k2m", spec["bundleName"])
+	assert.Equal(t, nodeSpec["stepType"], spec["stepType"])
+	assert.Equal(t, []interface{}{"Verified"}, spec["upstreamStates"])
+	assert.Equal(t, []interface{}{res.GateInstances[0].Name}, spec["requiredGates"])
+	assert.Equal(t, nodeSpec["prStatusRef"], spec["prStatusRef"])
+}
+
+// TestCompact_Admission walks a compact Graph through a promotion: an
+// environment is admitted once its upstreams are Verified and its gates
+// ready, whether or not the PRStatuses collection is published, and never
+// after the Bundle is Superseded; a step that exists stays admitted whatever happens later; the
+// Graph is complete only when every environment is Verified.
+func TestCompact_Admission(t *testing.T) {
+	p := compactPipeline(
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "eu", DependsOn: []string{"test"}},
+		kardinalv1alpha1.EnvironmentSpec{Name: "us", DependsOn: []string{"test"}},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", DependsOn: []string{"eu", "us"}},
+	)
+	gates := []kardinalv1alpha1.PolicyGate{
+		makePolicyGate("soak", "platform-policies", "prod", "true"),
+		makePolicyGate("eu-window", "platform-policies", "eu", "true"),
+	}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app"), PolicyGates: gates})
+	require.NoError(t, err)
+	sim := newCompactSim(t, res.Graph)
+	gate := func(env string) string {
+		for _, g := range res.GateInstances {
+			if g.Labels["kardinal.io/environment"] == env {
+				return g.Name
+			}
+		}
+		t.Fatalf("no gate for %s", env)
+		return ""
+	}
+
+	// The wave does not wait for the PRStatuses collection (G11): a PRStatus
+	// that cannot be created holds only its own environment.
+	sim.prs = false
+	envs, done := sim.wave()
+	assert.Equal(t, []string{"test"}, envs, "the root starts without the PRStatuses collection")
+	assert.False(t, done)
+	assert.Equal(t, []string{"test"}, sim.advance(), "the root starts")
+
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"test", "us"}, sim.advance(), "eu waits for its gate")
+	sim.gatesReady[gate("eu")] = true
+	assert.Equal(t, []string{"eu", "test", "us"}, sim.advance())
+
+	sim.steps["eu"] = "Verified"
+	assert.Equal(t, []string{"eu", "test", "us"}, sim.advance(), "prod waits for us")
+	sim.gatesReady[gate("eu")] = false
+	assert.Equal(t, []string{"eu", "test", "us"}, sim.advance(), "a started step stays when its gate closes")
+
+	sim.steps["us"] = "Verified"
+	assert.Equal(t, []string{"eu", "test", "us"}, sim.advance(), "prod waits for its gate")
+	sim.phase = "Superseded"
+	sim.gatesReady[gate("prod")] = true
+	envs, done = sim.wave()
+	assert.Equal(t, []string{"eu", "test", "us"}, envs, "a Superseded Bundle starts nothing new")
+	assert.False(t, done)
+
+	sim.phase = "Promoting"
+	assert.Equal(t, []string{"eu", "prod", "test", "us"}, sim.advance())
+	_, done = sim.wave()
+	assert.False(t, done, "not complete until prod is Verified")
+	sim.steps["prod"] = "Verified"
+	_, done = sim.wave()
+	assert.True(t, done)
+
+	delete(sim.steps, "us")
+	envs, _ = sim.wave()
+	assert.Contains(t, envs, "us", "a deleted step whose upstreams are Verified is admitted again")
+}
+
+// TestCompact_ShapeChoice checks when the builder uses the compact shape: above
+// DefaultCompactAbove environments, or when the Pipeline's
+// kardinal.io/graph-shape annotation says so; an unknown value is refused.
+func TestCompact_ShapeChoice(t *testing.T) {
+	envs := func(n int) []kardinalv1alpha1.EnvironmentSpec {
+		var out []kardinalv1alpha1.EnvironmentSpec
+		for i := 0; i < n; i++ {
+			out = append(out, kardinalv1alpha1.EnvironmentSpec{Name: fmt.Sprintf("e%03d", i)})
+		}
+		return out
+	}
+	tests := []struct {
+		name       string
+		envs       int
+		annotation string
+		above      int
+		want       bool
+		wantErr    string
+	}{
+		{name: "100 environments", envs: 100},
+		{name: "101 environments", envs: 101, want: true},
+		{name: "annotation compact", envs: 3, annotation: "compact", want: true},
+		{name: "annotation nodes", envs: 150, annotation: "nodes"},
+		{name: "builder threshold", envs: 3, above: 2, want: true},
+		{name: "builder threshold zero", envs: 1, above: 0, want: true},
+		{name: "unknown annotation", envs: 3, annotation: "flat", wantErr: `kardinal.io/graph-shape="flat"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := pipelineOf("app", envs(tc.envs)...)
+			if tc.annotation != "" {
+				p.Annotations = map[string]string{graph.AnnotationGraphShape: tc.annotation}
+			}
+			b := graph.NewBuilder()
+			if tc.above != 0 || strings.Contains(tc.name, "zero") {
+				b.CompactAbove = tc.above
+			}
+			res, err := b.Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app")})
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, graph.ErrInvalid)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, res.Compact)
+			assertKroValid(t, res.Graph)
+		})
+	}
+}
+
+// TestCompact_ChunksGateCollections checks that more gate instances than one
+// collection may hold (kro's 1,000-item forEach limit) go into further
+// collection nodes, and that the compact shape reads readiness from all of them.
+func TestCompact_ChunksGateCollections(t *testing.T) {
+	var envs []kardinalv1alpha1.EnvironmentSpec
+	var gates []kardinalv1alpha1.PolicyGate
+	for i := 0; i < 260; i++ {
+		name := fmt.Sprintf("r%03d", i)
+		envs = append(envs, kardinalv1alpha1.EnvironmentSpec{Name: name})
+		for g := 0; g < 4; g++ {
+			gates = append(gates, makePolicyGate(fmt.Sprintf("%s-g%d", name, g), "platform-policies", name, "true"))
+		}
+	}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipelineOf("app", envs...),
+		Bundle: makeBundle("app-v1", "app"), PolicyGates: gates})
+	require.NoError(t, err)
+	assert.True(t, res.Compact)
+	nodes := nodeByID(res.Graph.Spec.Nodes)
+	require.Contains(t, nodes, "PolicyGates")
+	require.Contains(t, nodes, "PolicyGates2")
+	assert.Len(t, renderedOf(t, res.Graph, "PolicyGate"), 1040)
+	byNode := map[string]int{}
+	for _, o := range renderObjects(t, res.Graph) {
+		byNode[o.NodeID]++
+	}
+	assert.Equal(t, graph.MaxCollectionItems, byNode["PolicyGates"])
+	assert.Equal(t, 40, byNode["PolicyGates2"])
+	state := nodes[graph.NodePromotionState].Def["readyGates"].(string)
+	assert.Contains(t, state, "PolicyGates.filter(")
+	assert.Contains(t, state, "PolicyGates2.filter(")
+	assert.Equal(t, 1040+260+260, graph.ObjectCount(res.Graph))
+}

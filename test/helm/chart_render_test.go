@@ -1280,3 +1280,17 @@ func TestChartGateStatusHeartbeat(t *testing.T) {
 	out, err := helmTemplate(t, "kardinal-promoter", "--set", "controller.gateStatusHeartbeat=10 minutes")
 	assert.Error(t, err, "a value that is not a Go duration must fail:\n%s", out)
 }
+
+// TestChartGraphCompactAbove: graph.compactAbove sets --graph-compact-above
+// (0 included); null keeps the controller default, and a negative value is
+// refused by the schema.
+func TestChartGraphCompactAbove(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	assert.NotContains(t, argValues(c), "graph-compact-above")
+	for _, v := range []string{"0", "50", "200"} {
+		c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "graph.compactAbove="+v))
+		assert.Equal(t, v, argValues(c)["graph-compact-above"])
+	}
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "graph.compactAbove=-1")
+	assert.Error(t, err, "a negative value must fail:\n%s", out)
+}

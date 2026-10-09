@@ -563,8 +563,14 @@ bytes (collections count one entry per item). Over it, the Bundle fails with `Gr
 and a message that names the size and the fix (a new Bundle or a Pipeline edit retries). Gate
 instances and PRStatuses are `forEach`
 collections over a `def` node (`pkg/graph/gates.go`): 150 environments with 3 gates each went from
-646,536 to 471,305 bytes of spec. A compact shape that keeps the promotion DAG as data in a `def`
-node is planned for Pipelines with more than about 200 environments.
+646,536 to 471,305 bytes of spec. Above 100 environments (`--graph-compact-above`, or the
+Pipeline annotation `kardinal.io/graph-shape`) the Graph is compact (`pkg/graph/compact.go`): the
+promotion DAG is data in a `def` node, the PromotionSteps are one collection admitted by a `def`
+over the steps read back through a selector `ref` (the G11 pacing pattern), and there are no
+health ref nodes. The Graph has 9 to 12 nodes whatever the environment count. Measured on kind: 300
+environments (30 waves of 10, a gate each) promoted end to end in 8 minutes, with the applied
+Graph at 472,213 bytes; estimated 0.9 MB with 3 gates each. Graphs also may not create more than
+4,500 objects (kro's inventory holds 5,000). The Pipeline CRD allows 500 environments (#1473).
 
 **Upstream work.** None filed. Optional ask: keep the inventory out of the Graph object (an
 ApplySet-style parent or a child object), so the spec alone bounds the size.

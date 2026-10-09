@@ -154,6 +154,7 @@ kardinal version
 | `metricsBindAddress` / `healthProbeBindAddress` | `:8080` / `:8081` | `--metrics-bind-address` / `--health-probe-bind-address` (the container ports) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
+| `graph.compactAbove` | `null` | Environment count above which a Bundle's Graph uses the compact shape (`--graph-compact-above`; default `100`; `0` makes every Graph compact). See [Large Pipelines](pipeline-reference.md#large-pipelines) |
 | `controller.gateStatusHeartbeat` | `""` | Longest a PolicyGate's status goes unwritten while its result does not change (`--gate-status-heartbeat`; default `10m`; `0s` writes on every evaluation). See [Policy gates](policy-gates.md#re-evaluation) |
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |

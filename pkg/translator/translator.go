@@ -127,7 +127,13 @@ func (t *Translator) Translate(ctx context.Context,
 			return t.identity.MayRead(result.Graph.Namespace, ns)
 		},
 	}
-	injected := h.inject(pipeline, result.Graph, result.Environments)
+	// A compact Graph gets no health ref nodes: they only feed Graph
+	// readiness (G3), and one scalar node per environment would undo the
+	// compact shape. The PromotionStep reconciler checks health either way.
+	var injected map[string]string
+	if !result.Compact {
+		injected = h.inject(pipeline, result.Graph, result.Environments)
+	}
 	if err := graph.ValidateNodeIDs(result.Graph.Spec.Nodes); err != nil {
 		return "", fmt.Errorf("translator.Translate: health nodes: %w", err)
 	}
