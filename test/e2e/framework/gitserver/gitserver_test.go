@@ -29,6 +29,8 @@ type fakeAPI struct {
 	header http.Header
 	// fail holds, per route, status codes to answer before the canned body.
 	fail map[string][]int
+	// failBody is the body of those answers, per route (default "not yet").
+	failBody map[string]string
 }
 
 func newFake(t *testing.T, routes map[string]string) (*fakeAPI, *httptest.Server) {
@@ -52,7 +54,11 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if codes := f.fail[key]; len(codes) > 0 {
 		f.fail[key] = codes[1:]
-		http.Error(w, `{"message":"not yet"}`, codes[0])
+		body := `{"message":"not yet"}`
+		if b, ok := f.failBody[key]; ok {
+			body = b
+		}
+		http.Error(w, body, codes[0])
 		return
 	}
 	body, ok := f.routes[key]
