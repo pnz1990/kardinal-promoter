@@ -163,3 +163,62 @@ func TestPipelineHolds_AuditOutbox(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, holdAudits(t, c), 1, "written once")
 }
+
+// staleGet serves the Pipeline from a stale copy while stale is set, as a
+// lagging informer cache does.
+type staleGet struct {
+	client.Client
+	stale   *kardinalv1alpha1.Pipeline
+	creates int
+}
+
+func (s *staleGet) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if _, ok := obj.(*kardinalv1alpha1.AuditEvent); ok {
+		s.creates++
+	}
+	return s.Client.Create(ctx, obj, opts...)
+}
+
+func (s *staleGet) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if p, ok := obj.(*kardinalv1alpha1.Pipeline); ok && s.stale != nil && key.Name == s.stale.Name {
+		s.stale.DeepCopyInto(p)
+		return nil
+	}
+	return s.Client.Get(ctx, key, obj, opts...)
+}
+
+// TestPipelineHolds_StaleReadStoresNoSecondRecord (#1552 QA): a reconcile
+// that reads the Pipeline from before a newer reconcile recorded a hold sees
+// the hold as new. Its patch carries the resourceVersion it read, so it gets
+// a Conflict, stores nothing in the outbox and runs again shortly: one
+// HoldCreated record.
+//
+// Covers AUDIT-OUTBOX-01.
+func TestPipelineHolds_StaleReadStoresNoSecondRecord(t *testing.T) {
+	t0 := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	at := metav1.NewTime(t0)
+	p := makePipelineWithEnvs("app", "default", "test", "prod")
+	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{
+		{Environment: "prod", Bundle: "app-rollback-1", Reason: "INC-42", CreatedBy: "alice", CreatedAt: &at},
+	}
+	c := &staleGet{Client: newClientWithIndex(newPipelineScheme(), p)}
+	r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return t0 }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+
+	var before kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Client.Get(context.Background(), req.NamespacedName, &before))
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, holdAudits(t, c), 1)
+
+	c.stale = before.DeepCopy()
+	c.creates = 0
+	res, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err, "a Conflict is retried, not returned")
+	assert.Positive(t, res.RequeueAfter)
+	var got kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Client.Get(context.Background(), req.NamespacedName, &got))
+	assert.Empty(t, got.Status.PendingAuditEvents, "the stale reconcile stored nothing")
+	assert.Zero(t, c.creates, "and wrote no AuditEvent again")
+	assert.Len(t, holdAudits(t, c), 1, "one HoldCreated")
+}

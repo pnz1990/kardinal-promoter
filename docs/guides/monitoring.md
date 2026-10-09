@@ -463,12 +463,12 @@ Only OTLP over HTTP (protobuf, port 4318) is supported, not OTLP/gRPC. The stand
 | `<controller>.Reconcile` (`bundle`, `promotionstep`, `policygate`, `notificationhook`, ...) | internal | `kardinal.controller`, `k8s.namespace.name`, `kardinal.object.name`, `kardinal.requeue_after_ms`; error status when the reconcile fails |
 | `step <name>` (`step git-clone`, `step open-pr`, ...) | internal | `kardinal.step`, `kardinal.step.index`, `kardinal.environment`, `kardinal.step.status` |
 | `git clone`, `git push` | internal | `server.address`, `kardinal.git.branch` (or `kardinal.git.commit`), `kardinal.git.force` |
-| `HTTP <method>` | client | `http.request.method`, `server.address`, `url.scheme`, `http.response.status_code`: SCM API requests, MetricCheck queries (every provider) and NotificationHook deliveries |
+| `HTTP <method>` | client | `http.request.method`, `server.address`, `url.scheme`, `http.response.status_code`: SCM API requests, MetricCheck queries (every provider), Subscription polls (registry, Helm repository and git over HTTP) and NotificationHook deliveries |
 | `webhook.scm`, `bundleapi.create` | server | `http.request.method`, `http.response.status_code`: inbound SCM webhooks and Bundle API calls |
 
 **Trace context.** NotificationHook deliveries carry the W3C `traceparent` (and `tracestate`,
 `baggage`) of their client span, so a receiver that traces can join the trace. SCM API
-requests and MetricCheck queries do not carry trace headers. `/webhook/scm` and `/api/v1/bundles` are reached before
+requests, MetricCheck queries and Subscription polls do not carry trace headers. `/webhook/scm` and `/api/v1/bundles` are reached before
 the caller is authenticated, so an inbound `traceparent` is not trusted: their server span
 starts a new trace, sampled by the controller's own sampler, with a link to the caller's span
 (a CI job that traces sees the link, not a child).

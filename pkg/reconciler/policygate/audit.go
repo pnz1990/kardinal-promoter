@@ -69,20 +69,7 @@ func gateAuditEntry(gate *kardinalv1alpha1.PolicyGate, outcome, reason string,
 	}
 	name := sanitizeGateName(base + suffix)
 
-	aeLabels := map[string]string{
-		"kardinal.io/pipeline":    pipelineName,
-		"kardinal.io/bundle":      bundleName,
-		"kardinal.io/environment": envName,
-		"kardinal.io/action":      action,
-	}
-	// kardinal.io/gate is the user-facing gate name. Instances carry it in
-	// kardinal.io/gate-name; gate-template is the fallback for instances created
-	// before that label existed.
-	if g := labels["kardinal.io/gate-name"]; g != "" {
-		aeLabels["kardinal.io/gate"] = g
-	} else if g := labels["kardinal.io/gate-template"]; g != "" {
-		aeLabels["kardinal.io/gate"] = g
-	}
+	aeLabels := gateAuditLabels(labels, action)
 
 	return audit.Entry(name, aeLabels, kardinalv1alpha1.AuditEventSpec{
 		BundleName:   bundleName,
@@ -122,6 +109,26 @@ func (r *Reconciler) flushAudit(ctx context.Context, gate *kardinalv1alpha1.Poli
 		return ferr
 	}
 	return nil
+}
+
+// gateAuditLabels returns the labels of an AuditEvent about a gate instance
+// with the given labels.
+func gateAuditLabels(labels map[string]string, action string) map[string]string {
+	aeLabels := map[string]string{
+		"kardinal.io/pipeline":    labels["kardinal.io/pipeline"],
+		"kardinal.io/bundle":      labels["kardinal.io/bundle"],
+		"kardinal.io/environment": labels["kardinal.io/environment"],
+		"kardinal.io/action":      action,
+	}
+	// kardinal.io/gate is the user-facing gate name. Instances carry it in
+	// kardinal.io/gate-name; gate-template is the fallback for instances created
+	// before that label existed.
+	if g := labels["kardinal.io/gate-name"]; g != "" {
+		aeLabels["kardinal.io/gate"] = g
+	} else if g := labels["kardinal.io/gate-template"]; g != "" {
+		aeLabels["kardinal.io/gate"] = g
+	}
+	return aeLabels
 }
 
 // sanitizeGateName produces a valid Kubernetes name from a gate event name.

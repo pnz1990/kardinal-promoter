@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
 // TestCRDs_NoOldSelfUnderUncorrelatableLists: the API server refuses a CRD
@@ -67,4 +69,25 @@ func oldSelfUnderLists(node map[string]interface{}, path string, inList bool) []
 		out = append(out, oldSelfUnderLists(extra, path+"{}", inList)...)
 	}
 	return out
+}
+
+// TestAuditActionsMatchEnum: v1alpha1.AuditActions and AuditOutcomes, which
+// the audit outbox validates entries against, list what the CRD accepts.
+func TestAuditActionsMatchEnum(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", "..", "config", "crd", "bases", "kardinal.io_auditevents.yaml"))
+	require.NoError(t, err)
+	var crd map[string]interface{}
+	require.NoError(t, yaml.Unmarshal(raw, &crd))
+	spec := crd["spec"].(map[string]interface{})["versions"].([]interface{})[0].(map[string]interface{})["schema"].(map[string]interface{})["openAPIV3Schema"].(map[string]interface{})["properties"].(map[string]interface{})["spec"].(map[string]interface{})["properties"].(map[string]interface{})
+	enum := func(field string) []string {
+		var out []string
+		for _, v := range spec[field].(map[string]interface{})["enum"].([]interface{}) {
+			out = append(out, v.(string))
+		}
+		return out
+	}
+	assert.ElementsMatch(t, enum("action"), v1alpha1.AuditActions)
+	assert.ElementsMatch(t, enum("outcome"), v1alpha1.AuditOutcomes)
 }

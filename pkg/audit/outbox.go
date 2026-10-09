@@ -31,13 +31,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
@@ -65,10 +70,16 @@ func init() {
 	ctrlmetrics.Registry.MustRegister(WriteFailures, Dropped)
 }
 
+// MaxMessageBytes bounds an entry's spec.message: the outbox lives in the
+// writer's status, next to the state it records.
+const MaxMessageBytes = 1024
+
 // Entry builds the outbox entry for an AuditEvent named name, with labels
-// and spec, created at at. spec.Timestamp is set from at.
+// and spec, created at at. spec.Timestamp is set from at, and spec.message
+// is cut to MaxMessageBytes.
 func Entry(name string, labels map[string]string, spec v1alpha1.AuditEventSpec, at metav1.Time) v1alpha1.PendingAuditEvent {
 	spec.Timestamp = at
+	spec.Message = truncate(spec.Message, MaxMessageBytes)
 	return v1alpha1.PendingAuditEvent{
 		Name:      name,
 		Labels:    labels,
@@ -81,8 +92,18 @@ func Entry(name string, labels map[string]string, spec v1alpha1.AuditEventSpec, 
 // there. When the outbox is full, the oldest entry is dropped, logged and
 // counted: the outbox is bounded so a long API outage cannot grow the
 // writer's status without limit. kind labels the metric.
+//
+// An entry the CRD would refuse (Validate) is dropped, logged and counted
+// instead: stored, it would make the status patch that carries the
+// transition fail.
 func Enqueue(ctx context.Context, kind string, pending []v1alpha1.PendingAuditEvent,
 	e v1alpha1.PendingAuditEvent) []v1alpha1.PendingAuditEvent {
+	if err := Validate(e); err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("auditEvent", e.Name).Str("kind", kind).
+			Msg("invalid AuditEvent not recorded")
+		Dropped.WithLabelValues(kind, "invalid").Inc()
+		return pending
+	}
 	for _, p := range pending {
 		if p.Name == e.Name {
 			return pending
@@ -96,6 +117,55 @@ func Enqueue(ctx context.Context, kind string, pending []v1alpha1.PendingAuditEv
 		pending = pending[1:]
 	}
 	return pending
+}
+
+// Validate checks e against what the CRD accepts for an outbox entry and an
+// AuditEvent: a DNS subdomain name, valid labels, the required spec fields,
+// and a known action and outcome.
+func Validate(e v1alpha1.PendingAuditEvent) error {
+	var errs []string
+	if msgs := validation.IsDNS1123Subdomain(e.Name); len(msgs) > 0 {
+		errs = append(errs, fmt.Sprintf("name %q: %s", e.Name, strings.Join(msgs, "; ")))
+	}
+	for k, v := range e.Labels {
+		if msgs := validation.IsQualifiedName(k); len(msgs) > 0 {
+			errs = append(errs, fmt.Sprintf("label key %q: %s", k, strings.Join(msgs, "; ")))
+		}
+		if msgs := validation.IsValidLabelValue(v); len(msgs) > 0 {
+			errs = append(errs, fmt.Sprintf("label %s value %q: %s", k, v, strings.Join(msgs, "; ")))
+		}
+	}
+	for field, v := range map[string]string{"bundleName": e.Spec.BundleName, "pipelineName": e.Spec.PipelineName,
+		"environment": e.Spec.Environment} {
+		if v == "" {
+			errs = append(errs, "spec."+field+" is empty")
+		}
+	}
+	if !slices.Contains(v1alpha1.AuditActions, e.Spec.Action) {
+		errs = append(errs, fmt.Sprintf("spec.action %q is not an AuditEvent action", e.Spec.Action))
+	}
+	if !slices.Contains(v1alpha1.AuditOutcomes, e.Spec.Outcome) {
+		errs = append(errs, fmt.Sprintf("spec.outcome %q is not Success, Failure or Pending", e.Spec.Outcome))
+	}
+	if len(errs) > 0 {
+		sort.Strings(errs)
+		return errors.New(strings.Join(errs, ", "))
+	}
+	return nil
+}
+
+// truncate cuts s to at most n bytes on a UTF-8 boundary, ending in "…"
+// when cut.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	const ellipsis = "…"
+	cut := n - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + ellipsis
 }
 
 // Flush creates the AuditEvents of pending in namespace and returns the

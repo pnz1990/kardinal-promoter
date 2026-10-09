@@ -108,12 +108,21 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 	if !equality.Semantic.DeepEqual(p.Status.ObservedHolds, p.Spec.Holds) {
 		// The records go in the same patch as observedHolds, so a crash or a
 		// failed create cannot lose them (#1552).
-		patch := client.MergeFrom(p.DeepCopy())
+		// Locked on the resourceVersion p was read at: a reconcile from a
+		// stale cache would see a hold a newer one already recorded as new
+		// and store its record again.
+		patch := client.MergeFromWithOptions(p.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		p.Status.ObservedHolds = append([]kardinalv1alpha1.EnvironmentHold(nil), p.Spec.Holds...)
 		for _, e := range entries {
 			p.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, p.Status.PendingAuditEvents, e)
 		}
 		if err := r.Status().Patch(ctx, p, patch); err != nil {
+			if k8serrors.IsConflict(err) {
+				// Changed since it was read: the next reconcile works from
+				// what is stored.
+				log.Debug().Msg("pipeline changed since it was read; holds not recorded, retrying")
+				return holdConflictRetry, false, nil
+			}
 			return 0, false, fmt.Errorf("patch observed holds: %w", err)
 		}
 		auditErr = r.flushAudit(ctx, p)
@@ -149,6 +158,10 @@ func expiresNote(h *kardinalv1alpha1.EnvironmentHold) string {
 
 // auditKind labels the audit outbox metrics of Pipeline records.
 const auditKind = "Pipeline"
+
+// holdConflictRetry is how soon a reconcile whose holds patch lost to a
+// newer write runs again.
+const holdConflictRetry = time.Second
 
 // auditRetryDelay is how soon a Pipeline whose audit outbox still holds
 // unwritten records is reconciled again.

@@ -19,8 +19,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -122,4 +124,33 @@ func TestPending(t *testing.T) {
 	assert.True(t, audit.Pending([]v1alpha1.PendingAuditEvent{a}, []v1alpha1.PendingAuditEvent{b}))
 	assert.False(t, audit.Pending([]v1alpha1.PendingAuditEvent{a}, nil))
 	assert.False(t, audit.Pending([]v1alpha1.PendingAuditEvent{a}, []v1alpha1.PendingAuditEvent{a}))
+}
+
+// TestEnqueue_Validates (#1552 QA): an entry the CRD would refuse is
+// dropped and counted, not stored: it would make the status patch carrying
+// the transition fail. A long message is cut on a UTF-8 boundary.
+func TestEnqueue_Validates(t *testing.T) {
+	ctx := context.Background()
+	at := time.Now()
+	before := testutil.ToFloat64(audit.Dropped.WithLabelValues("Test", "invalid"))
+	bad := []v1alpha1.PendingAuditEvent{
+		entry("Not_A_Name", at),
+		audit.Entry("ok", nil, v1alpha1.AuditEventSpec{BundleName: "b", PipelineName: "p", Environment: "e",
+			Action: "Promoted", Outcome: "Success"}, metav1.NewTime(at)),
+		audit.Entry("ok", nil, v1alpha1.AuditEventSpec{BundleName: "b", PipelineName: "p",
+			Action: "PromotionStarted", Outcome: "Pending"}, metav1.NewTime(at)),
+		audit.Entry("ok", map[string]string{"kardinal.io/env": "no spaces allowed"}, v1alpha1.AuditEventSpec{
+			BundleName: "b", PipelineName: "p", Environment: "e", Action: "PromotionStarted", Outcome: "Pending"}, metav1.NewTime(at)),
+	}
+	for _, e := range bad {
+		assert.Empty(t, audit.Enqueue(ctx, "Test", nil, e), "%+v", e)
+	}
+	assert.InDelta(t, before+float64(len(bad)), testutil.ToFloat64(audit.Dropped.WithLabelValues("Test", "invalid")), 0)
+
+	long := audit.Entry("ok", nil, v1alpha1.AuditEventSpec{BundleName: "b", PipelineName: "p", Environment: "e",
+		Action: "PromotionFailed", Outcome: "Failure", Message: strings.Repeat("é", 2000)}, metav1.NewTime(at))
+	assert.LessOrEqual(t, len(long.Spec.Message), audit.MaxMessageBytes)
+	assert.True(t, utf8.ValidString(long.Spec.Message))
+	assert.True(t, strings.HasSuffix(long.Spec.Message, "…"))
+	require.Len(t, audit.Enqueue(ctx, "Test", nil, long), 1)
 }

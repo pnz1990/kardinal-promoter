@@ -30,13 +30,19 @@ type AuditEventSpec struct {
 
 	// Action is a short verb describing what happened.
 	// Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
-	//               "PromotionSuperseded", "RollbackStarted", "RollbackSucceeded",
-	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated", "HoldCreated", "HoldReleased".
+	//               "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
+	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
+	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased".
+	// ApprovalRecorded and ApprovalRevoked are written by an approval gate
+	// when a decision (kardinal approve) appears in or leaves its
+	// spec.approvals.
+	// GateOverridden is written once per spec.overrides entry of a gate
+	// instance, naming who created it (kardinal override or the UI).
 	// HealthCheckFailed and GateBlocked are accepted but never written: a
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;HoldCreated;HoldReleased
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.
@@ -80,6 +86,17 @@ type AuditEventList struct {
 func init() {
 	SchemeBuilder.Register(&AuditEvent{}, &AuditEventList{})
 }
+
+// AuditActions are the values spec.action accepts: the Enum marker on
+// AuditEventSpec.Action lists the same (TestAuditActionsMatchEnum).
+var AuditActions = []string{
+	"PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected",
+	"RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated",
+	"GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
+}
+
+// AuditOutcomes are the values spec.outcome accepts.
+var AuditOutcomes = []string{"Success", "Failure", "Pending"}
 
 // MaxPendingAuditEvents bounds status.pendingAuditEvents, the audit outbox
 // of a PromotionStep or PolicyGate.
