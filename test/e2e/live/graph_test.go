@@ -16,7 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -260,6 +262,130 @@ func TestGraph_SizeLimitRefused(t *testing.T) {
 	})
 	e.WaitStepState(t, ns, pipelineName, next, envs[0], "Verified", promoteTimeout)
 	a.fileHas(t, envs[0], fixtures.V3, "the first environment is promoted")
+}
+
+// TestGraph_GateAndPRStatusCollections checks the Graph shape for gate
+// instances and PRStatuses (ledger gaps G9, G10): the Bundle's gate
+// instances come from one PolicyGates collection node and its PRStatuses
+// from one PRStatuses collection node, each a forEach over a def node, with
+// one PromotionStep node per environment. kro labels each object with its
+// collection node and lists it in the Graph's managedResources. The gate in
+// the collection holds prod back while its expression is false, and prod
+// promotes once it is true.
+//
+// Covers GRAPH-COLLECTIONS-01.
+func TestGraph_GateAndPRStatusCollections(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "needs-open-label", "prod", openExpr, recheck))
+	e.CreateGate(t, framework.Gate(a.ns, "always-open", "prod", "true", recheck))
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+
+	name := a.bundle(t, bundle).Status.GraphRef
+	require.NotEmpty(t, name)
+	g, err := e.Dynamic.Resource(framework.GraphGVR).Namespace(a.ns).Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, err)
+	nodes, _, _ := unstructured.NestedSlice(g.Object, "spec", "nodes")
+	var ids []string
+	for _, n := range nodes {
+		ids = append(ids, fmt.Sprint(n.(map[string]interface{})["id"]))
+	}
+	assert.ElementsMatch(t, []string{"bundle", "test", "prod", "PolicyGateData", "PolicyGates",
+		"PRStatusData", "PRStatuses", "healthTest", "healthProd"}, ids, "Graph nodes")
+
+	// Both gate instances exist, made by the PolicyGates collection.
+	for _, tmpl := range []string{"needs-open-label", "always-open"} {
+		gate := e.WaitGateReady(t, a.ns, bundle, "prod", tmpl, tmpl == "always-open", "", gateTimeout)
+		assert.Equal(t, "PolicyGates", gate.Labels["kro.run/node-id"], "%s: made by the PolicyGates collection", tmpl)
+		assert.Equal(t, "2", gate.Labels["kro.run/collection-size"], tmpl)
+		assert.Equal(t, pipelineName, gate.Labels["kardinal.io/pipeline"], tmpl)
+		assert.Equal(t, tmpl, gate.Labels["kardinal.io/gate-name"], tmpl)
+		assert.Equal(t, "team", gate.Labels["kardinal.io/scope"], tmpl)
+		assert.True(t, gate.Spec.Generated, tmpl)
+	}
+	var prs v1alpha1.PRStatusList
+	require.NoError(t, e.Client.List(ctx, &prs, client.InNamespace(a.ns), client.MatchingLabels{"kardinal.io/bundle": bundle}))
+	require.Len(t, prs.Items, 2, "one PRStatus per environment")
+	for _, pr := range prs.Items {
+		assert.Equal(t, "PRStatuses", pr.Labels["kro.run/node-id"], pr.Name)
+	}
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", time.Minute)
+	assert.Contains(t, []string{prs.Items[0].Name, prs.Items[1].Name}, ps.Spec.PRStatusRef,
+		"the step's prStatusRef names its PRStatus")
+
+	// The gate holds prod, then lets it through.
+	e.NoStep(t, a.ns, pipelineName, bundle, "prod", holdFor)
+	assertEnvAt(t, a, "prod", fixtures.V1)
+	e.SetBundleLabel(t, a.ns, bundle, openLabel, "true")
+	e.WaitGateReady(t, a.ns, bundle, "prod", "needs-open-label", true, "= true", gateTimeout)
+	prod := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assert.Len(t, prod.Spec.RequiredGates, 2, "prod requires both gate instances")
+	assertEnvAt(t, a, "prod", fixtures.V2)
+
+	g, err = e.Dynamic.Resource(framework.GraphGVR).Namespace(a.ns).Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, err)
+	managed, _, _ := unstructured.NestedSlice(g.Object, "status", "managedResources")
+	byNode := map[string]int{}
+	for _, m := range managed {
+		byNode[fmt.Sprint(m.(map[string]interface{})["nodeID"])]++
+	}
+	assert.Equal(t, map[string]int{"PolicyGates": 2, "PRStatuses": 2, "test": 1, "prod": 1}, byNode,
+		"managedResources by node")
+}
+
+// TestGraph_GateApplyFailureSurfaced checks what an operator sees when a gate
+// instance cannot be created (ledger gap G11): with a ResourceQuota that allows
+// one PolicyGate in the namespace, the second instance is refused, kro does
+// not publish the PolicyGates collection, and prod waits. The Bundle's
+// GatesCreated condition is False and names the missing instance and the
+// quota error, and the Bundle does not fail. Once the quota is gone the
+// instance is created, the condition turns True and prod promotes.
+//
+// Covers GRAPH-COLLECTIONS-02.
+func TestGraph_GateApplyFailureSurfaced(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "first", "prod", "true", recheck))
+	e.CreateGate(t, framework.Gate(a.ns, "second", "prod", "true", recheck))
+	quota := &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: "one-gate-instance", Namespace: a.ns},
+		// The two templates count too: room for them and one instance.
+		Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{"count/policygates.kardinal.io": resource.MustParse("3")}},
+	}
+	require.NoError(t, e.Client.Create(ctx, quota))
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+
+	b := e.WaitBundle(t, a.ns, bundle, 2*time.Minute, "GatesCreated False naming the refused instance",
+		func(b *v1alpha1.Bundle) (bool, string) {
+			c := findCond(b.Status.Conditions, "GatesCreated")
+			if c.Type == "" {
+				return false, "no GatesCreated condition"
+			}
+			return c.Status == metav1.ConditionFalse && c.Reason == "ApplyFailed" &&
+				strings.Contains(c.Message, "1 of 2 PolicyGate instances are not created") &&
+				strings.Contains(c.Message, "exceeded quota"), string(c.Status) + " " + c.Reason + ": " + c.Message
+		})
+	assert.NotEqual(t, "Failed", b.Status.Phase, "a gate that cannot be created holds the Bundle; it does not fail it")
+	e.NoStep(t, a.ns, pipelineName, bundle, "prod", holdFor)
+	assertEnvAt(t, a, "prod", fixtures.V1)
+
+	require.NoError(t, e.Client.Delete(ctx, quota))
+	e.WaitBundle(t, a.ns, bundle, 3*time.Minute, "GatesCreated True", func(b *v1alpha1.Bundle) (bool, string) {
+		c := findCond(b.Status.Conditions, "GatesCreated")
+		if c.Type == "" {
+			return false, "no GatesCreated condition"
+		}
+		return c.Status == metav1.ConditionTrue, string(c.Status) + " " + c.Message
+	})
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
 }
 
 // TestGraph_SkipEnvironmentsBridges checks intent.skipEnvironments: a Bundle
