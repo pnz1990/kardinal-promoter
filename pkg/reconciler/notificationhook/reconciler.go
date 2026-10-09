@@ -61,6 +61,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 )
 
 const (
@@ -537,14 +538,14 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return reqs
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		// Status writes of the hook itself must not re-trigger it; retries use RequeueAfter.
 		For(&v1alpha1.NotificationHook{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(mapToAllHooks)).
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(mapToAllHooks)).
 		Watches(&v1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(mapToAllHooks)).
-		Named("notificationhook").
-		Complete(r)
+		Named("notificationhook")
+	return shard.Active().Complete(b, r, &v1alpha1.NotificationHookList{})
 }
 
 // now returns the current time, using NowFn if set (for testing).

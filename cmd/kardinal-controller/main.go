@@ -60,6 +60,7 @@ import (
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
@@ -228,6 +229,15 @@ func main() {
 			"instead of a ClusterRole/ClusterRoleBinding. "+
 			"Also readable from KARDINAL_WATCH_NAMESPACE environment variable.")
 
+	// --namespace-shard splits the reconcilers across controller
+	// installations by the namespace label kardinal.io/shard (pkg/shard).
+	var namespaceShard string
+	flag.StringVar(&namespaceShard, "namespace-shard", os.Getenv("KARDINAL_NAMESPACE_SHARD"),
+		"Shard this controller reconciles: namespaces labelled kardinal.io/shard=<name>; \"default\" also "+
+			"takes namespaces without the label and the cluster-scoped kinds. Empty (the default): no sharding, "+
+			"every namespace. Every controller of a sharded cluster needs a shard name. "+
+			"Also readable from KARDINAL_NAMESPACE_SHARD.")
+
 	// Graph identity: kro applies each Graph as this ServiceAccount in the
 	// Pipeline's namespace. The controller creates it and binds it to the two
 	// ClusterRoles the chart ships (templates/graph-rbac.yaml). The translator,
@@ -285,15 +295,32 @@ func main() {
 		logger.Info().Str("watchNamespace", watchNamespace).
 			Msg("namespace-scoped mode: controller cache limited to single namespace")
 	}
+	if namespaceShard != "" {
+		if err := shard.ValidateName(namespaceShard); err != nil {
+			logger.Fatal().Err(err).Msg("invalid --namespace-shard")
+		}
+		if watchNamespace != "" {
+			logger.Fatal().Msg("--namespace-shard and --watch-namespace cannot be combined: " +
+				"a namespace-scoped controller already owns exactly one namespace")
+		}
+		logger.Info().Str("shard", namespaceShard).Msg("sharded: reconciling the namespaces of this shard only")
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), buildManagerOptions(managerConfig{
 		metricsBindAddress:     metricsBindAddress,
 		healthProbeBindAddress: healthProbeBindAddress,
 		leaderElect:            leaderElect,
 		watchNamespace:         watchNamespace,
+		namespaceShard:         namespaceShard,
 	}))
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create manager")
+	}
+	// The shard gate must be in place before the reconcilers are set up:
+	// each wraps itself in shard.Active().
+	gate := shard.New(namespaceShard, mgr.GetClient(), mgr.GetClient(), logger)
+	if err := shard.Setup(mgr, gate); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up the shard gate")
 	}
 	graphIdentity.Writer = mgr.GetClient()
 	graphIdentity.Reader = mgr.GetAPIReader()
@@ -376,7 +403,8 @@ func main() {
 	// The sweep lists RoleBindings cluster-wide, which namespace mode does not
 	// grant; there the controller binds the reader role only in the watched
 	// namespace, and the reconciler's prune covers it.
-	if watchNamespace == "" {
+	// The sweep lists cluster-wide; in a sharded cluster the default shard runs it.
+	if watchNamespace == "" && gate.OwnsClusterScoped() {
 		if err := mgr.Add(&graphcleanup.Sweep{
 			APIReader: mgr.GetAPIReader(),
 			Graphs:    graphLister,

@@ -49,6 +49,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 )
 
@@ -494,7 +495,7 @@ func digestLabelChars(digest string) string {
 // or git poll (C04-gates-36). Polling is driven by RequeueAfter; a spec edit or
 // an annotation change polls at once.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.Subscription{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
-		Complete(r)
+	b := ctrl.NewControllerManagedBy(mgr).
+		For(&kardinalv1alpha1.Subscription{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged))
+	return shard.Active().Complete(b, r, &kardinalv1alpha1.SubscriptionList{})
 }

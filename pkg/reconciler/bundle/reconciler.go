@@ -55,6 +55,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 )
 
 // Bundle phases.
@@ -1392,15 +1393,15 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	graphObject := &unstructured.Unstructured{}
 	graphObject.SetGroupVersionKind(graph.GraphGVK)
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Bundle{}).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.waitingSiblings),
 			builder.WithPredicates(bundlePhaseChanged)).
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(bundleLabelMapper)).
 		Watches(graphObject, handler.EnqueueRequestsFromMapFunc(bundleLabelMapper)).
 		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineBundles),
-			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Complete(r)
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}))
+	return shard.Active().Complete(b, r, &kardinalv1alpha1.BundleList{})
 }
 
 // bundlePipelineIndex is the spec.pipeline index function.

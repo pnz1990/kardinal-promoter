@@ -23,6 +23,9 @@
 #   upgrade Forgejo + Argo CD + kardinal-promoter v0.8.1 (kardinal-v081.sh) and
 #           no kro: the TestUpgrade_ test upgrades v0.8.1 to this checkout,
 #           so the cluster serves one run; delete it before the next
+#   shard   Forgejo + Argo CD and two controllers that split the namespaces
+#           (--namespace-shard): the main release is shard "default",
+#           components/shard.sh installs shard "b"
 #   multi-cluster  the hub (Forgejo, Argo CD, Flux, Argo Rollouts, kardinal)
 #           and a second kind cluster, <cluster>-spoke, with Argo Rollouts,
 #           which the hub's Argo CD and Flux manage (spoke.sh); both have
@@ -86,6 +89,9 @@ case "$SUITE" in
   # check cannot find is missing from the hub, not from its API.
   multi-cluster) COMPONENTS=("giteafamily.sh forgejo" argocd.sh flux.sh rollouts.sh podinfo.sh spoke.sh)
     RUN='^TestMultiCluster_' ;;
+  # Two controllers splitting the namespaces by the kardinal.io/shard label.
+  shard) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(shard.sh) RUN='^TestShard_'
+    HELM_ARGS='--set controller.namespaceShard=default' ;;
   *)
     echo "unknown suite $SUITE" >&2
     exit 1

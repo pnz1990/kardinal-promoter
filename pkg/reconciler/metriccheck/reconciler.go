@@ -25,6 +25,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 )
 
 const (
@@ -201,10 +202,10 @@ func (r *Reconciler) now() time.Time {
 // would otherwise cause a second Prometheus query right after each one.
 // Re-evaluation is driven by RequeueAfter.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.MetricCheck{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
-		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles}).
-		Complete(r)
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles})
+	return shard.Active().Complete(b, r, &kardinalv1alpha1.MetricCheckList{})
 }
 
 // evaluateThreshold compares value against threshold and returns "Pass" or "Fail" with reason.

@@ -78,6 +78,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 )
 
 const (
@@ -506,7 +507,7 @@ func (r *Reconciler) fetchMergeCommit(ctx context.Context, log zerolog.Logger, p
 
 // SetupWithManager registers the PRStatus reconciler with controller-runtime.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.PRStatus{}).
-		Complete(r)
+	b := ctrl.NewControllerManagedBy(mgr).
+		For(&v1alpha1.PRStatus{})
+	return shard.Active().Complete(b, r, &v1alpha1.PRStatusList{})
 }

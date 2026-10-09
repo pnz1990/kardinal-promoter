@@ -86,6 +86,7 @@ pattern of its tests.
 | `chart` | Forgejo, Argo CD, cert-manager; no controller release: each test installs its own | `TestChart_*`, `TestDeprecated_*` |
 | `upgrade` | Forgejo, Argo CD, kardinal-promoter v0.8.1 with its bundled Graph controller and no kro; the test follows the upgrade guide, so a cluster serves one run. `KIND_K8S=1.30` runs it on Kubernetes 1.30 | `TestUpgrade_*` |
 | `multi-cluster` | Forgejo, Argo CD, Flux and Argo Rollouts in the hub, and a second kind cluster (`<cluster>-spoke`, Argo Rollouts) registered with the hub's Argo CD and Flux | `TestMultiCluster_*` |
+| `shard` | Forgejo, Argo CD, and two controllers splitting the namespaces: the main release as shard `default`, `components/shard.sh`'s release as shard `b` | `TestShard_*` |
 
 `TestSCM_*` tests use only `Env.Git`, so they run against every git server;
 a test that needs one provider is named after it and checks `Env.Git.Kind()`

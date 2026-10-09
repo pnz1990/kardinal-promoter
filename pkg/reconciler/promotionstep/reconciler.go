@@ -50,6 +50,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 
 	// Import built-in steps to trigger init() registration.
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
@@ -1635,7 +1636,7 @@ func (r *Reconciler) handleBake(
 //     gate, so a Pending step starts as soon as its gates are re-evaluated
 //     (checkRequiredGates).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{},
 				predicate.LabelChangedPredicate{}, predicate.AnnotationChangedPredicate{}),
@@ -1643,8 +1644,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1alpha1.PRStatus{}, handler.EnqueueRequestsFromMapFunc(r.prStatusMapper)).
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
 		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleMapper),
-			builderutil.WithPredicates(predicate.NewPredicateFuncs(isSuperseded))).
-		Complete(r)
+			builderutil.WithPredicates(predicate.NewPredicateFuncs(isSuperseded)))
+	return shard.Active().Complete(b, r, &v1alpha1.PromotionStepList{})
 }
 
 // isSuperseded passes Bundle events of superseded Bundles.

@@ -38,6 +38,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 )
 
 const (
@@ -1106,7 +1107,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return r.instanceGateRequests(ctx, "ChangeWindow", "changewindow")
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		// Watch MetricCheck objects: when a MetricCheck's result or value changes,
 		// the gates that read its namespace as metrics.* are re-evaluated
@@ -1123,8 +1124,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Watch PromotionStep creates: a new unstarted step's required gates
 		// are re-evaluated at once (#1300).
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(stepRequiredGateRequests),
-			builder.WithPredicates(unstartedStepCreated)).
-		Complete(r)
+			builder.WithPredicates(unstartedStepCreated))
+	return shard.Active().Complete(b, r, &kardinalv1alpha1.PolicyGateList{})
 }
 
 // instanceGateRequests lists PolicyGates and returns a request for every instance

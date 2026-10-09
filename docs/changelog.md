@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Controller sharding by namespace** — `controller.namespaceShard` (`--namespace-shard`) splits the reconcilers across controller installations by the namespace label `kardinal.io/shard`; shard `default` takes unlabelled namespaces and the cluster-scoped kinds. A per-namespace Lease `kardinal-shard` hands a relabelled namespace over only after the old shard's in-flight reconciles return; each shard elects its own leader. kro is not sharded (ledger G13). See [Sharding controllers](sharding.md) (#1462)
+
 ### Changed
 
 - **kro tuning for large promotions** — `hack/install-kro.sh` now installs kro with 8 Graph workers (`config.graphConcurrentReconciles`, kro's default is 1) and client QPS 300 / burst 500 (`KRO_GRAPH_CONCURRENT_RECONCILES`, `KRO_CLIENT_QPS`, `KRO_CLIENT_BURST` override them). With one worker, one 150-environment promotion delayed every other Graph in the cluster by up to about 30 seconds. Re-run the script to apply it to an existing kro, or set the same Helm values if you install kro another way. See [Install kro](https://pnz1990.github.io/kardinal-promoter/installation/#install-kro)

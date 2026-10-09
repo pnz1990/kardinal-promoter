@@ -29,6 +29,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 )
 
 // Ready condition reasons.
@@ -418,7 +419,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index PromotionStep by spec.pipelineName: %w", err)
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Pipeline{}).
 		// Deleting the freeze gate by hand while the pipeline is paused, or
 		// removing a user gate that has its name, re-enqueues the Pipeline.
@@ -441,8 +442,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 					},
 				}}
 			}),
-		).
-		Complete(r)
+		)
+	return shard.Active().Complete(b, r, &kardinalv1alpha1.PipelineList{})
 }
 
 // deploymentMetricsEqual returns true when a and b represent the same metrics.

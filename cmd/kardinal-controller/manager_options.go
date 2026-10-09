@@ -25,6 +25,8 @@ type managerConfig struct {
 	healthProbeBindAddress string
 	leaderElect            bool
 	watchNamespace         string
+	// namespaceShard is --namespace-shard: each shard elects its own leader.
+	namespaceShard string
 }
 
 // buildManagerOptions returns the options main passes to ctrl.NewManager.
@@ -47,7 +49,7 @@ func buildManagerOptions(cfg managerConfig) ctrl.Options {
 		},
 		HealthProbeBindAddress:        cfg.healthProbeBindAddress,
 		LeaderElection:                cfg.leaderElect,
-		LeaderElectionID:              "kardinal-promoter-leader",
+		LeaderElectionID:              leaderElectionID(cfg.namespaceShard),
 		LeaderElectionReleaseOnCancel: true,
 		GracefulShutdownTimeout:       ptr(gracefulShutdownTimeout),
 		Cache:                         buildCacheOpts(cfg.watchNamespace),
@@ -55,6 +57,15 @@ func buildManagerOptions(cfg managerConfig) ctrl.Options {
 			Cache: &sigs_client.CacheOptions{DisableFor: uncachedObjects()},
 		},
 	}
+}
+
+// leaderElectionID is the leader election Lease name: one per shard, so
+// every shard has its own leader.
+func leaderElectionID(shard string) string {
+	if shard == "" {
+		return "kardinal-promoter-leader"
+	}
+	return "kardinal-promoter-leader-" + shard
 }
 
 // buildCacheOpts limits the informer cache to watchNamespace when it is set.

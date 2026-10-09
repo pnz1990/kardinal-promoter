@@ -434,14 +434,20 @@ func controllerAccess() []apiAccess {
 var optionalAccess = []struct {
 	set string
 	acc []apiAccess
+	// clusterOnly: the value cannot be set in namespace mode.
+	clusterOnly bool
 }{
 	{"ui.auth.tokenReview=true", []apiAccess{
 		{"authentication.k8s.io", "tokenreviews", []string{"create"}, inCluster, "", "pkg/uiauth TokenReview"},
 		{"authorization.k8s.io", "subjectaccessreviews", []string{"create"}, inCluster, "", "pkg/uiauth SubjectAccessReview"},
-	}},
+	}, false},
+	{"controller.namespaceShard=b", []apiAccess{
+		{"", "namespaces", []string{"list", "watch"}, inCluster, "", "pkg/shard Gate.Pass (Namespace informer)"},
+		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "create", "update"}, inCluster, "", "pkg/shard Gate.take/release (per-namespace Lease)"},
+	}, true},
 	{"rbac.argocdApplicationsWrite=true", []apiAccess{
 		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"},
-	}},
+	}, false},
 }
 
 func checkAccess(t *testing.T, v rbacView, mode string, watched []string, acc apiAccess, want bool) {
@@ -485,6 +491,9 @@ func TestChartRBACGrantsControllerAccess(t *testing.T) {
 			for _, opt := range optionalAccess {
 				for _, acc := range opt.acc {
 					checkAccess(t, v, m.name+" default (no "+opt.set+")", m.watched, acc, false)
+				}
+				if opt.clusterOnly && m.watched[0] == releaseNS && len(m.watched) == 1 {
+					continue
 				}
 				on := newRBACView(t, render(t, "kardinal-promoter", append(m.args, "--set", opt.set)...))
 				for _, acc := range opt.acc {
@@ -1262,4 +1271,22 @@ func TestChartRequiresKubernetes130(t *testing.T) {
 			assert.Contains(t, out, "chart requires kubeVersion: >=1.30.0-0")
 		})
 	}
+}
+
+// TestChartNamespaceShard: controller.namespaceShard passes --namespace-shard,
+// and cannot be combined with namespace mode or be an invalid label value.
+func TestChartNamespaceShard(t *testing.T) {
+	found := false
+	for _, d := range render(t, "kardinal-promoter", "--set", "controller.namespaceShard=b") {
+		if d.Kind == "Deployment" && strings.Contains(string(d.raw), `"--namespace-shard=b"`) {
+			found = true
+		}
+	}
+	assert.True(t, found, "--namespace-shard=b in the controller args")
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "controller.namespaceShard=b",
+		"--set", "controller.watchNamespace="+releaseNS)
+	require.Error(t, err)
+	assert.Contains(t, out, "cannot be combined with controller.watchNamespace")
+	_, err = helmTemplate(t, "kardinal-promoter", "--set", "controller.namespaceShard=a/b")
+	require.Error(t, err, "not a label value")
 }

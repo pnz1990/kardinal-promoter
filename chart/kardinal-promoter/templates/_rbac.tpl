@@ -146,6 +146,17 @@ rules exist for. A new client call needs a row there and a rule here.
   {{- with .Values.controller.watchNamespace }}
   resourceNames: [{{ . | quote }}]
   {{- end }}
+{{- if .Values.controller.namespaceShard }}
+# controller.namespaceShard: the shard gate (pkg/shard) watches Namespaces for
+# their kardinal.io/shard label and holds a Lease kardinal-shard in each
+# namespace it reconciles.
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["list", "watch"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update"]
+{{- end }}
 {{- if .Values.ui.auth.tokenReview }}
 # ui.auth.tokenReview: the UI API validates each bearer token with a
 # TokenReview and authorizes it with a SubjectAccessReview.

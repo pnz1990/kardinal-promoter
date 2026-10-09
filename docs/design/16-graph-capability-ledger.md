@@ -629,8 +629,11 @@ the Job started. Planned for v0.10.0 (#1443).
 (`controller/graph/controller.go` `SetupWithManager`); there is no label selector or shard flag
 for Graphs.
 
-**kardinal workaround.** kardinal shards only its own controllers, by namespace label (#1462).
-Graph throughput stays bounded by the one kro instance (G9).
+**kardinal workaround.** kardinal shards only its own controllers, by namespace label
+(`--namespace-shard`, `pkg/shard`, #1462): a per-namespace Lease `kardinal-shard` decides which
+installation reconciles the namespace. Every shard's Graphs still go through the one kro leader and
+its one queue, so Graph throughput stays bounded by that instance (G9) and its
+`graphConcurrentReconciles`.
 
 **Upstream work.** None filed. Ask: a `--graph-selector` label selector on the Graph
 controller, so several kro installations can split Graphs.

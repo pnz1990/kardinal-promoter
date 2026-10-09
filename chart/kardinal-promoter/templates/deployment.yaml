@@ -57,6 +57,9 @@ spec:
             {{- with .Values.controller.watchNamespace }}
             - --watch-namespace={{ . }}
             {{- end }}
+            {{- with .Values.controller.namespaceShard }}
+            - --namespace-shard={{ . }}
+            {{- end }}
             {{- with .Values.scm.provider }}
             - --scm-provider={{ . }}
             {{- end }}

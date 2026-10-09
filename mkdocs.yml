@@ -109,6 +109,7 @@ nav:
     - Subscriptions: subscription.md
     - Notifications: notifications.md
     - Multi-Cluster: distributed-mode.md
+    - Sharding Controllers: sharding.md
     - SCM Providers: scm-providers.md
     - Advanced Patterns: advanced-patterns.md
     - Security: guides/security.md
