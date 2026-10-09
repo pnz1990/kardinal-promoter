@@ -354,12 +354,22 @@ type StepSpec struct {
 }
 
 // UpdateConfig holds manifest update strategy configuration.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.strategy) || self.strategy != 'yaml' || (has(self.yaml) && size(self.yaml.updates) > 0)",message="update.strategy yaml requires update.yaml.updates"
 type UpdateConfig struct {
-	// Strategy selects the manifest update strategy.
-	// +kubebuilder:validation:Enum=kustomize;helm;argocd
+	// Strategy selects the manifest update strategy: kustomize (default,
+	// kustomization.yaml images), helm (one values key), argocd (patch the
+	// Application, no git), or yaml (any YAML paths in any files of the
+	// environment directory).
+	// +kubebuilder:validation:Enum=kustomize;helm;argocd;yaml
 	// +kubebuilder:default=kustomize
 	// +optional
 	Strategy string `json:"strategy,omitempty"`
+
+	// YAML holds the edits of the yaml strategy.
+	// Used when Strategy is "yaml".
+	// +optional
+	YAML *YAMLUpdateConfig `json:"yaml,omitempty"`
 
 	// Helm holds Helm-specific update configuration.
 	// Used when Strategy is "helm".
@@ -371,6 +381,47 @@ type UpdateConfig struct {
 	// spec.source.helm.valuesObject directly without a git commit.
 	// +optional
 	ArgoCD *ArgoCDUpdateConfig `json:"argocd,omitempty"`
+}
+
+// YAMLUpdateConfig lists the edits of the yaml update strategy. All of them
+// are applied in one commit; when one cannot be applied, none is written.
+type YAMLUpdateConfig struct {
+	// Updates are the values to set.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
+	Updates []YAMLUpdate `json:"updates"`
+}
+
+// YAMLUpdate sets one scalar in one YAML file to a value taken from a Bundle
+// image.
+type YAMLUpdate struct {
+	// File is the YAML file, relative to the environment path, for example
+	// "values.yaml" or "deploy/deployment.yaml". It must stay inside the
+	// repository. A file with several documents (---) is not supported.
+	// +kubebuilder:validation:MinLength=1
+	File string `json:"file"`
+
+	// Path is the key path of the scalar to set: keys separated by ".", with
+	// "[N]" to index a list, for example "image.tag" or
+	// "spec.template.spec.containers[0].image". Missing mapping keys are
+	// created; list elements are not. A key that contains "." is not supported.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]+(\[[0-9]+\])*(\.[A-Za-z0-9_-]+(\[[0-9]+\])*)*$`
+	Path string `json:"path"`
+
+	// Image is the repository of the Bundle image whose value is written,
+	// for example "ghcr.io/org/app". It may be empty when the Bundle has
+	// exactly one image.
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Value is what to write: tag (default), digest, tagWithDigest
+	// ("<tag>@<digest>"), image ("<repository>:<tag>"), or imageWithDigest
+	// ("<repository>:<tag>@<digest>", or "<repository>@<digest>" without a
+	// tag). A value the image does not have (a digest of a tag-only image)
+	// fails the step.
+	// +kubebuilder:validation:Enum=tag;digest;tagWithDigest;image;imageWithDigest
+	// +optional
+	Value string `json:"value,omitempty"`
 }
 
 // HelmUpdateConfig holds Helm-specific update strategy configuration.

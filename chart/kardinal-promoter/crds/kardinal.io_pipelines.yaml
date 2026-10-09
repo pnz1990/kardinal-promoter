@@ -475,13 +475,79 @@ spec:
                           type: object
                         strategy:
                           default: kustomize
-                          description: Strategy selects the manifest update strategy.
+                          description: |-
+                            Strategy selects the manifest update strategy: kustomize (default,
+                            kustomization.yaml images), helm (one values key), argocd (patch the
+                            Application, no git), or yaml (any YAML paths in any files of the
+                            environment directory).
                           enum:
                           - kustomize
                           - helm
                           - argocd
+                          - yaml
                           type: string
+                        yaml:
+                          description: |-
+                            YAML holds the edits of the yaml strategy.
+                            Used when Strategy is "yaml".
+                          properties:
+                            updates:
+                              description: Updates are the values to set.
+                              items:
+                                description: |-
+                                  YAMLUpdate sets one scalar in one YAML file to a value taken from a Bundle
+                                  image.
+                                properties:
+                                  file:
+                                    description: |-
+                                      File is the YAML file, relative to the environment path, for example
+                                      "values.yaml" or "deploy/deployment.yaml". It must stay inside the
+                                      repository. A file with several documents (---) is not supported.
+                                    minLength: 1
+                                    type: string
+                                  image:
+                                    description: |-
+                                      Image is the repository of the Bundle image whose value is written,
+                                      for example "ghcr.io/org/app". It may be empty when the Bundle has
+                                      exactly one image.
+                                    type: string
+                                  path:
+                                    description: |-
+                                      Path is the key path of the scalar to set: keys separated by ".", with
+                                      "[N]" to index a list, for example "image.tag" or
+                                      "spec.template.spec.containers[0].image". Missing mapping keys are
+                                      created; list elements are not. A key that contains "." is not supported.
+                                    pattern: ^[A-Za-z0-9_-]+(\[[0-9]+\])*(\.[A-Za-z0-9_-]+(\[[0-9]+\])*)*$
+                                    type: string
+                                  value:
+                                    description: |-
+                                      Value is what to write: tag (default), digest, tagWithDigest
+                                      ("<tag>@<digest>"), image ("<repository>:<tag>"), or imageWithDigest
+                                      ("<repository>:<tag>@<digest>", or "<repository>@<digest>" without a
+                                      tag). A value the image does not have (a digest of a tag-only image)
+                                      fails the step.
+                                    enum:
+                                    - tag
+                                    - digest
+                                    - tagWithDigest
+                                    - image
+                                    - imageWithDigest
+                                    type: string
+                                required:
+                                - file
+                                - path
+                                type: object
+                              maxItems: 64
+                              minItems: 1
+                              type: array
+                          required:
+                          - updates
+                          type: object
                       type: object
+                      x-kubernetes-validations:
+                      - message: update.strategy yaml requires update.yaml.updates
+                        rule: '!has(self.strategy) || self.strategy != ''yaml'' ||
+                          (has(self.yaml) && size(self.yaml.updates) > 0)'
                     waitForMergeTimeout:
                       description: |-
                         WaitForMergeTimeout is the maximum duration a PromotionStep will wait
