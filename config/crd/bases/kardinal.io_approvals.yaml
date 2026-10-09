@@ -1,0 +1,137 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: approvals.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    kind: Approval
+    listKind: ApprovalList
+    plural: approvals
+    shortNames:
+    - appr
+    singular: approval
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.bundle
+      name: Bundle
+      type: string
+    - jsonPath: .spec.environment
+      name: Environment
+      type: string
+    - jsonPath: .spec.user
+      name: User
+      type: string
+    - jsonPath: .spec.decision
+      name: Decision
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Approval records that a person approved, or rejected, a Bundle for an
+          environment. The promotion Graph copies the Approvals of its Bundle into the
+          approval gates of that environment (PolicyGate spec.approvals), and the
+          PolicyGate reconciler counts them against spec.approval.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ApprovalSpec is one person's decision on one Bundle in one environment.
+              An Approval is created by kardinal approve and never changed: delete it to
+              revoke the decision. The chart's ValidatingAdmissionPolicy admits it only
+              when spec.user is the requesting user, spec.groups are among the
+              requester's groups, and the kardinal.io/bundle and kardinal.io/environment
+              labels match spec.bundle and spec.environment.
+            properties:
+              bundle:
+                description: |-
+                  Bundle is the name of the Bundle the decision is about, in the
+                  Approval's namespace.
+                maxLength: 253
+                minLength: 1
+                type: string
+              bundleUID:
+                description: |-
+                  BundleUID is the UID of that Bundle: the Graph counts the Approval
+                  only for the Bundle with this UID, so an Approval cannot carry over to
+                  a new Bundle that reuses the name.
+                maxLength: 64
+                minLength: 1
+                type: string
+              comment:
+                default: ""
+                description: Comment is a free-form note shown with the decision.
+                maxLength: 1024
+                type: string
+              decision:
+                default: approve
+                description: |-
+                  Decision is approve, or reject: a reject from an allowed approver
+                  blocks the gate whatever the other approvals.
+                enum:
+                - approve
+                - reject
+                type: string
+              environment:
+                description: Environment is the Pipeline environment the decision
+                  is for.
+                maxLength: 63
+                minLength: 1
+                type: string
+              groups:
+                default: []
+                description: |-
+                  Groups are the approver's Kubernetes groups that count for the gate's
+                  approval.allowedGroups. Each must be one of the requester's groups.
+                items:
+                  maxLength: 253
+                  type: string
+                maxItems: 64
+                type: array
+              user:
+                description: |-
+                  User is the Kubernetes username of the approver, as the API server
+                  authenticates them (kubectl auth whoami).
+                maxLength: 253
+                minLength: 1
+                type: string
+            required:
+            - bundle
+            - bundleUID
+            - decision
+            - environment
+            - user
+            type: object
+            x-kubernetes-validations:
+            - message: 'an Approval is immutable: delete it and create a new one'
+              rule: self == oldSelf
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

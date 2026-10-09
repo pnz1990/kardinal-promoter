@@ -279,6 +279,11 @@ func baseObject(kind string) map[string]interface{} {
 			"provider": "prometheus", "prometheusURL": "http://prometheus:9090", "query": "up",
 			"threshold": map[string]interface{}{"value": int64(1), "operator": "gte"},
 		}
+	case "HookRun":
+		obj["spec"] = map[string]interface{}{
+			"pipelineName": "p", "bundleName": "b", "environment": "prod", "hook": "migrate", "phase": "pre",
+			"job": map[string]interface{}{"template": map[string]interface{}{}},
+		}
 	case "Subscription":
 		obj["spec"] = map[string]interface{}{
 			"type": "image", "pipeline": "p",
@@ -306,6 +311,7 @@ func TestCRDSchemaDurationFields(t *testing.T) {
 		{"MetricCheck", []string{"spec", "interval"}},
 		{"Subscription", []string{"spec", "image", "interval"}},
 		{"Subscription", []string{"spec", "git", "interval"}},
+		{"HookRun", []string{"spec", "timeout"}},
 	}
 	good := []string{"", "0", "30s", "5m", "1h", "1h30m", "1.5h", "500ms", "2h45m30s", "10us", "10µs"}
 	bad := []string{"15 minutes", "2 days", "5", "1d", "-5m", "5M", "1h 30m", "m"}
@@ -415,6 +421,223 @@ func TestCRDAuditEventSpecImmutable(t *testing.T) {
 	}
 }
 
+// TestCRDHookRunPhaseLatched: the API server refuses to change a HookRun's
+// phase once it is Succeeded, Failed or Skipped (regression, QA #1493: a
+// reconcile from a stale copy overwrote Succeeded with Failed).
+func TestCRDHookRunPhaseLatched(t *testing.T) {
+	phase := loadCRDs(t)["HookRun"].structural.Properties["status"].Properties["phase"]
+	var rule string
+	for _, r := range phase.XValidations {
+		if strings.Contains(r.Rule, "oldSelf") {
+			rule = r.Rule
+		}
+	}
+	require.NotEmpty(t, rule, "HookRun status.phase needs a transition rule")
+	env, err := cel.NewEnv(cel.Variable("self", cel.StringType), cel.Variable("oldSelf", cel.StringType))
+	require.NoError(t, err)
+	ast, iss := env.Compile(rule)
+	require.NoError(t, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	cases := []struct {
+		old, new string
+		allow    bool
+	}{
+		{"Pending", "Running", true},
+		{"Running", "Succeeded", true},
+		{"Running", "Failed", true},
+		{"Pending", "Skipped", true},
+		{"Succeeded", "Succeeded", true},
+		{"Succeeded", "Failed", false},
+		{"Failed", "Succeeded", false},
+		{"Skipped", "Running", false},
+	}
+	for _, c := range cases {
+		out, _, err := prg.Eval(map[string]interface{}{"self": c.new, "oldSelf": c.old})
+		require.NoError(t, err)
+		assert.Equal(t, c.allow, out.Value(), "%s -> %s", c.old, c.new)
+	}
+}
+
+// TestCRDImageVerificationPhaseLatched: the API server refuses to change a
+// Verified or Failed ImageVerification's phase.
+func TestCRDImageVerificationPhaseLatched(t *testing.T) {
+	phase := loadCRDs(t)["ImageVerification"].structural.Properties["status"].Properties["phase"]
+	var rule string
+	for _, r := range phase.XValidations {
+		if strings.Contains(r.Rule, "oldSelf") {
+			rule = r.Rule
+		}
+	}
+	require.NotEmpty(t, rule)
+	env, err := cel.NewEnv(cel.Variable("self", cel.StringType), cel.Variable("oldSelf", cel.StringType))
+	require.NoError(t, err)
+	ast, iss := env.Compile(rule)
+	require.NoError(t, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	for _, c := range []struct {
+		old, new string
+		allow    bool
+	}{{"Pending", "Verified", true}, {"Pending", "Failed", true}, {"Verified", "Failed", false}, {"Failed", "Verified", false}} {
+		out, _, err := prg.Eval(map[string]interface{}{"self": c.new, "oldSelf": c.old})
+		require.NoError(t, err)
+		assert.Equal(t, c.allow, out.Value(), "%s -> %s", c.old, c.new)
+	}
+}
+
+// TestCRDImageVerificationSpecImmutable: an ImageVerification's spec cannot
+// change; a policy change gives a new one (QA #1521: an edited spec would
+// keep the old verdict).
+func TestCRDImageVerificationSpecImmutable(t *testing.T) {
+	spec := loadCRDs(t)["ImageVerification"].structural.Properties["spec"]
+	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	require.NoError(t, err)
+	var prgs []cel.Program
+	for _, r := range spec.XValidations {
+		if !strings.Contains(r.Rule, "oldSelf") {
+			continue
+		}
+		ast, iss := env.Compile(r.Rule)
+		require.NoError(t, iss.Err(), r.Rule)
+		prg, err := env.Program(ast)
+		require.NoError(t, err)
+		prgs = append(prgs, prg)
+	}
+	require.NotEmpty(t, prgs, "ImageVerification spec needs a transition rule")
+	base := func() map[string]interface{} {
+		return map[string]interface{}{"pipelineName": "app", "bundleName": "v1",
+			"images": []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "digest": "sha256:" + strings.Repeat("a", 64)}},
+			"policy": map[string]interface{}{"authorities": []interface{}{map[string]interface{}{"name": "release",
+				"key": map[string]interface{}{"secretRef": map[string]interface{}{"name": "cosign", "key": "cosign.pub"}}}}}}
+	}
+	cases := []struct {
+		name  string
+		edit  func(m map[string]interface{})
+		allow bool
+	}{
+		{"unchanged", func(map[string]interface{}) {}, true},
+		{"digest changed", func(m map[string]interface{}) {
+			m["images"] = []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "digest": "sha256:" + strings.Repeat("b", 64)}}
+		}, false},
+		{"authority key changed", func(m map[string]interface{}) {
+			m["policy"] = map[string]interface{}{"authorities": []interface{}{map[string]interface{}{"name": "release",
+				"key": map[string]interface{}{"secretRef": map[string]interface{}{"name": "other", "key": "cosign.pub"}}}}}
+		}, false},
+		{"commit added", func(m map[string]interface{}) { m["commit"] = map[string]interface{}{"repo": "r", "sha": "s"} }, false},
+	}
+	for _, c := range cases {
+		next := base()
+		c.edit(next)
+		allowed := true
+		for _, prg := range prgs {
+			out, _, err := prg.Eval(map[string]interface{}{"self": next, "oldSelf": base()})
+			require.NoError(t, err, c.name)
+			allowed = allowed && out.Value() == true
+		}
+		assert.Equal(t, c.allow, allowed, c.name)
+	}
+}
+
+// TestCRDBundleArtifactImmutable: a Bundle's artifact (type, pipeline,
+// images, configRef, provenance) cannot change after creation: gates and
+// image verification were checked against it, so an edit would promote
+// something nobody checked (QA #1521). spec.intent is immutable too: an edit
+// would apply only at a later, unrelated re-translation. Metadata stays
+// mutable.
+func TestCRDBundleArtifactImmutable(t *testing.T) {
+	spec := loadCRDs(t)["Bundle"].structural.Properties["spec"]
+	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	require.NoError(t, err)
+	var prgs []cel.Program
+	for _, r := range spec.XValidations {
+		if !strings.Contains(r.Rule, "oldSelf") {
+			continue
+		}
+		ast, iss := env.Compile(r.Rule)
+		require.NoError(t, iss.Err(), r.Rule)
+		prg, err := env.Program(ast)
+		require.NoError(t, err)
+		prgs = append(prgs, prg)
+	}
+	require.GreaterOrEqual(t, len(prgs), 7, "one transition rule per spec field")
+	base := func() map[string]interface{} {
+		return map[string]interface{}{
+			"type": "mixed", "pipeline": "app",
+			"images":     []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "tag": "1.0", "digest": "sha256:" + strings.Repeat("a", 64)}},
+			"configRef":  map[string]interface{}{"gitRepo": "https://github.com/org/cfg", "commitSHA": strings.Repeat("b", 40)},
+			"provenance": map[string]interface{}{"commitSHA": "abc1234", "author": "ci"},
+			"chart":      map[string]interface{}{"name": "app", "version": "1.2.0"},
+			"intent":     map[string]interface{}{"targetEnvironment": "uat"},
+		}
+	}
+	cases := []struct {
+		name  string
+		edit  func(m map[string]interface{})
+		allow bool
+	}{
+		{"unchanged", func(map[string]interface{}) {}, true},
+		{"intent changed", func(m map[string]interface{}) { m["intent"] = map[string]interface{}{"targetEnvironment": "prod"} }, false},
+		{"intent removed", func(m map[string]interface{}) { delete(m, "intent") }, false},
+		{"image tag changed", func(m map[string]interface{}) {
+			m["images"] = []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "tag": "evil", "digest": "sha256:" + strings.Repeat("a", 64)}}
+		}, false},
+		{"image digest changed", func(m map[string]interface{}) {
+			m["images"] = []interface{}{map[string]interface{}{"repository": "ghcr.io/org/app", "tag": "1.0", "digest": "sha256:" + strings.Repeat("c", 64)}}
+		}, false},
+		{"image added", func(m map[string]interface{}) {
+			m["images"] = append(m["images"].([]interface{}), map[string]interface{}{"repository": "ghcr.io/org/other", "tag": "1"})
+		}, false},
+		{"images removed", func(m map[string]interface{}) { delete(m, "images") }, false},
+		{"configRef commit changed", func(m map[string]interface{}) {
+			m["configRef"] = map[string]interface{}{"gitRepo": "https://github.com/org/cfg", "commitSHA": strings.Repeat("d", 40)}
+		}, false},
+		{"configRef removed", func(m map[string]interface{}) { delete(m, "configRef") }, false},
+		{"provenance changed", func(m map[string]interface{}) {
+			m["provenance"] = map[string]interface{}{"commitSHA": "abc1234", "author": "someone"}
+		}, false},
+		{"provenance removed", func(m map[string]interface{}) { delete(m, "provenance") }, false},
+		{"chart version changed", func(m map[string]interface{}) { m["chart"] = map[string]interface{}{"name": "app", "version": "1.3.0"} }, false},
+		{"chart removed", func(m map[string]interface{}) { delete(m, "chart") }, false},
+		{"type changed", func(m map[string]interface{}) { m["type"] = "image" }, false},
+		{"pipeline changed", func(m map[string]interface{}) { m["pipeline"] = "other" }, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			next := base()
+			c.edit(next)
+			allowed := true
+			for _, prg := range prgs {
+				out, _, err := prg.Eval(map[string]interface{}{"self": next, "oldSelf": base()})
+				require.NoError(t, err)
+				allowed = allowed && out.Value() == true
+			}
+			assert.Equal(t, c.allow, allowed)
+		})
+	}
+
+	// An artifact field added on update is refused too.
+	old := base()
+	delete(old, "provenance")
+	allowed := true
+	for _, prg := range prgs {
+		out, _, err := prg.Eval(map[string]interface{}{"self": base(), "oldSelf": old})
+		require.NoError(t, err)
+		allowed = allowed && out.Value() == true
+	}
+	assert.False(t, allowed, "provenance added after creation")
+
+	old = base()
+	delete(old, "intent")
+	allowed = true
+	for _, prg := range prgs {
+		out, _, err := prg.Eval(map[string]interface{}{"self": base(), "oldSelf": old})
+		require.NoError(t, err)
+		allowed = allowed && out.Value() == true
+	}
+	assert.False(t, allowed, "intent added after creation")
+}
+
 // ── C08-api-config-24, -28: printer columns, enums, short names ──────────────
 
 // listFilter matches a JSONPath list filter such as [?(@.type=="Ready")],
@@ -481,7 +704,7 @@ func TestPromotionStepStateEnum(t *testing.T) {
 		got = append(got, fmt.Sprint(e.Object))
 	}
 	want := []string{
-		"Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verified",
+		"Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying", "Verified",
 		"Failed", "AbortedByAlarm", "RollingBack",
 	}
 	sort.Strings(got)

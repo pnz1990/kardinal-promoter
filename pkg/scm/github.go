@@ -375,8 +375,9 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		g.circuits.Record(owner, resp, nil)
-		return newAPIError("GitHub", method, path, resp, raw)
+		apiErr := newAPIError("GitHub", method, path, resp, raw)
+		g.circuits.RecordAPIError(owner, resp, apiErr)
+		return apiErr
 	}
 
 	g.circuits.Record(owner, resp, nil)

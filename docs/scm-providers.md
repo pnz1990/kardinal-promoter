@@ -11,14 +11,14 @@ below.
 
 ## Supported Providers
 
-| Provider | `--scm-provider` value | PR type | Webhook header checked | PR labels | Approvals read |
-|---|---|---|---|---|---|
-| GitHub / GitHub Enterprise | `github` (default) | Pull Requests | `X-Hub-Signature-256` (HMAC-SHA256) | Yes | Yes |
-| GitLab (incl. subgroups) | `gitlab` | Merge Requests | `X-Gitlab-Token` (shared token) | Yes | Yes |
-| Forgejo / Codeberg | `forgejo` | Pull Requests | `X-Forgejo-Signature` or `X-Gitea-Signature` (HMAC-SHA256) | Yes | Yes |
-| Gitea | `gitea` | Pull Requests | `X-Gitea-Signature` or `X-Hub-Signature-256` (HMAC-SHA256) | Yes | Yes |
-| Bitbucket Cloud | `bitbucket` | Pull Requests | `X-Hub-Signature` (HMAC-SHA256) | No (Bitbucket has no PR labels) | Yes |
-| Azure DevOps | `azuredevops` | Pull Requests | `X-AzureDevOps-Token` (custom header you add to the service hook) | Yes (PR tags) | Yes |
+| Provider | `--scm-provider` value | PR type | Webhook header checked | PR labels | Approvals read | [`kardinal/gates` status](pr-evidence.md#gate-status-check-kardinalgates) |
+|---|---|---|---|---|---|---|
+| GitHub / GitHub Enterprise | `github` (default) | Pull Requests | `X-Hub-Signature-256` (HMAC-SHA256) | Yes | Yes | Commit status |
+| GitLab (incl. subgroups) | `gitlab` | Merge Requests | `X-Gitlab-Token` (shared token) | Yes | Yes | Commit status (name `kardinal/gates`) |
+| Forgejo / Codeberg | `forgejo` | Pull Requests | `X-Forgejo-Signature` or `X-Gitea-Signature` (HMAC-SHA256) | Yes | Yes | Commit status |
+| Gitea | `gitea` | Pull Requests | `X-Gitea-Signature` or `X-Hub-Signature-256` (HMAC-SHA256) | Yes | Yes | Commit status |
+| Bitbucket Cloud | `bitbucket` | Pull Requests | `X-Hub-Signature` (HMAC-SHA256) | No (Bitbucket has no PR labels) | Yes | Build status (key `kardinal/gates`) |
+| Azure DevOps | `azuredevops` | Pull Requests | `X-AzureDevOps-Token` (custom header you add to the service hook) | Yes (PR tags) | Yes | PR iteration status (genre `kardinal`, name `gates`) |
 
 All providers send webhooks to the same endpoint, `http://<controller-host>:8083/webhook/scm`.
 Webhooks only speed things up: without them, the controller still sees merges by polling.
@@ -64,12 +64,13 @@ export KARDINAL_SCM_PROVIDER=github
 
 | Scope | Purpose |
 |---|---|
-| `repo` | Create/close pull requests, post comments, read PR status, delete the head branch of a PR kardinal closed, or of a step that ended before it opened a PR |
+| `repo` | Create/close pull requests, post comments, read PR status, set the `kardinal/gates` commit status, delete the head branch of a PR kardinal closed, or of a step that ended before it opened a PR |
 
 These are classic token scopes. With a fine-grained personal access token or a GitHub App
 token, deleting the head branch is a git refs call and needs the **Contents: read and write**
 repository permission, besides the pull request permissions kardinal already needs; without it
-every PR kardinal closes ends with its step asking you to delete the branch by hand.
+every PR kardinal closes ends with its step asking you to delete the branch by hand. The
+`kardinal/gates` status needs **Commit statuses: read and write**.
 
 ### Webhook configuration
 
@@ -253,7 +254,7 @@ export KARDINAL_SCM_API_URL=https://codeberg.org   # or your self-hosted Forgejo
 | Scope | Purpose |
 |---|---|
 | `write:issue` | Post comments on pull requests |
-| `write:repository` | Create and close pull requests, add labels, delete the head branch of a PR kardinal closed, or of a step that ended before it opened a PR |
+| `write:repository` | Create and close pull requests, add labels, set the `kardinal/gates` commit status, delete the head branch of a PR kardinal closed, or of a step that ended before it opened a PR |
 
 Create an API token in your Forgejo/Gitea instance under **Settings → Applications → Access Tokens**.
 The startup token check cannot see these scopes; see [Token check at startup](#token-check-at-startup).
@@ -334,7 +335,7 @@ kardinal-controller \
   --webhook-secret $KARDINAL_WEBHOOK_SECRET
 ```
 
-Use a PAT with **Code (Read & write)**. The repository is `org/project/repo`, taken
+Use a PAT with **Code (Read & write)** (with **Code (Status)** if your organization splits it, for the `kardinal/gates` pull request status). The repository is `org/project/repo`, taken
 from `spec.git.url` (`https://dev.azure.com/org/project/_git/repo`).
 
 Webhook: create a **Web Hooks** service hook for **Pull request updated**, set the URL

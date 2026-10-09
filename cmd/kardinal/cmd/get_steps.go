@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/spf13/cobra"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -76,24 +77,20 @@ func getStepsOnce(w io.Writer, c sigs_client.Client, ns, pipeline string) error 
 		return fmt.Errorf("list promotion steps: %w", err)
 	}
 
-	// Steps of Superseded Bundles are history, not the current view.
+	// Steps of Superseded and Rejected Bundles are history, not the current
+	// view, except the steps of a Rejected Bundle whose change is live
+	// (lifecycle.RejectedLiveStep): those are what is deployed, shown with a
+	// roll-back hint.
 	var bundles v1alpha1.BundleList
 	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
 		return fmt.Errorf("list bundles: %w", err)
 	}
 	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
 	steps.Items = lifecycle.AddRetiredSteps(steps.Items, bundles.Items, map[string]string{"kardinal.io/pipeline": pipeline})
+	activeSteps, hints := currentSteps(pipeline, bundles.Items, steps.Items)
 	activeBundles := make(map[string]bool)
-	for _, b := range bundles.Items {
-		if b.Spec.Pipeline == pipeline && b.Status.Phase != "Superseded" {
-			activeBundles[b.Name] = true
-		}
-	}
-	activeSteps := []v1alpha1.PromotionStep{}
-	for _, s := range steps.Items {
-		if activeBundles[s.Spec.BundleName] {
-			activeSteps = append(activeSteps, s)
-		}
+	for _, s := range activeSteps {
+		activeBundles[s.Spec.BundleName] = true
 	}
 
 	switch OutputFormat() {
@@ -108,6 +105,49 @@ func getStepsOnce(w io.Writer, c sigs_client.Client, ns, pipeline string) error 
 			}
 			return nil
 		}
-		return FormatStepsTable(w, activeSteps)
+		if err := FormatStepsTable(w, activeSteps); err != nil {
+			return err
+		}
+		for _, h := range hints {
+			if _, err := fmt.Fprintln(w, h); err != nil {
+				return fmt.Errorf("write: %w", err)
+			}
+		}
+		return nil
 	}
+}
+
+// currentSteps returns the steps of pipeline that the current views list:
+// the steps of its Bundles that are not Halted, and the steps of a Rejected
+// Bundle whose change is live (lifecycle.RejectedLiveStep), with one
+// roll-back hint per such environment.
+func currentSteps(pipeline string, bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionStep) ([]v1alpha1.PromotionStep, []string) {
+	byName := make(map[string]*v1alpha1.Bundle, len(bundles))
+	for i := range bundles {
+		if bundles[i].Spec.Pipeline == pipeline {
+			byName[bundles[i].Name] = &bundles[i]
+		}
+	}
+	out := []v1alpha1.PromotionStep{}
+	var hints []string
+	seen := map[string]bool{}
+	for i := range steps {
+		s := &steps[i]
+		b := byName[s.Spec.BundleName]
+		switch {
+		case b == nil:
+			continue
+		case !lifecycle.Halted(b):
+			out = append(out, *s)
+		case lifecycle.RejectedLiveStep(b, s):
+			out = append(out, *s)
+			if key := b.Name + "/" + s.Spec.Environment; !seen[key] {
+				seen[key] = true
+				hints = append(hints, fmt.Sprintf("WARNING: bundle %s is Rejected in %s: %s (kardinal rollback %s --env %s)",
+					b.Name, s.Spec.Environment, lifecycle.RejectedLiveHint, pipeline, s.Spec.Environment))
+			}
+		}
+	}
+	sort.Strings(hints)
+	return out, hints
 }

@@ -174,7 +174,7 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	e := framework.New(t)
 	c := e.CLI(t)
 	ctx := context.Background()
-	user := cliUser(t)
+	user := whoAmI(t, e) // override records the authenticated user (#1450)
 	a := newArgoApp(t, e, "test", "prod")
 	ns := a.ns
 	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
@@ -438,10 +438,9 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	})
 	row := e.WaitExplainGate(t, ns, pipelineName, "prod", "hold", "Superseded", gateTimeout)
 	t.Logf("explain: %s", row)
-	ps, ok, err := e.Step(ctx, ns, pipelineName, b1, "prod")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "Failed", ps.Status.State)
+	// B1's prod step is cancelled after its PR is closed on the git server,
+	// which can take seconds after B1 turned Superseded (#1550).
+	ps := e.WaitStepState(t, ns, pipelineName, b1, "prod", "Failed", time.Minute)
 	assert.Equal(t, "bundle "+b1+" was superseded — promotion cancelled", ps.Status.Message)
 	out = c.Must(ns, "explain", pipelineName, "--env", "prod")
 	assert.Equal(t, []map[string]string{

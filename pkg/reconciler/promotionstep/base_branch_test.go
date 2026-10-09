@@ -50,13 +50,14 @@ func TestBaseBranchDefault(t *testing.T) {
 		wantPushes              []string
 		wantBases               []string
 		wantCommit              string
+		wantHead                string // status.outputs.prHeadSHA
 	}{
 		{name: "unset pr-review", branch: "", env: "prod", want: "main", wantState: "WaitingForMerge",
-			wantPushes: []string{"kardinal/37a8eec1/bundle-1/prod force=true"}, wantBases: []string{"main"}},
+			wantPushes: []string{"kardinal/37a8eec1/bundle-1/prod force=true"}, wantBases: []string{"main"}, wantHead: newSHA},
 		{name: "unset auto", branch: "", env: "test", want: "main", wantState: "HealthChecking",
 			wantPushes: []string{"main force=false"}, wantCommit: newSHA},
 		{name: "set pr-review", branch: "release", env: "prod", want: "release", wantState: "WaitingForMerge",
-			wantPushes: []string{"kardinal/37a8eec1/bundle-1/prod force=true"}, wantBases: []string{"release"}},
+			wantPushes: []string{"kardinal/37a8eec1/bundle-1/prod force=true"}, wantBases: []string{"release"}, wantHead: newSHA},
 		{name: "set auto", branch: "release", env: "test", want: "release", wantState: "HealthChecking",
 			wantPushes: []string{"release force=false"}, wantCommit: newSHA},
 	}
@@ -80,6 +81,7 @@ func TestBaseBranchDefault(t *testing.T) {
 			assert.Equal(t, tt.wantPushes, git.pushes)
 			assert.Equal(t, tt.wantBases, m.bases, "PR base")
 			assert.Equal(t, tt.wantCommit, got.Status.Outputs["commitSHA"], "pushed commit recorded")
+			assert.Equal(t, tt.wantHead, got.Status.Outputs["prHeadSHA"], "commit pushed to the PR branch recorded")
 		})
 	}
 }

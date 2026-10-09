@@ -459,3 +459,43 @@ func TestGitCredentialPresent_KeepsTheRetryLimit(t *testing.T) {
 		})
 	}
 }
+
+// TestGitCredentialMissing_StaleReadEmitsOneEvent: a reconcile that reads
+// the step from a stale cache, before the GitCredentialMissing condition the
+// reconcile before it wrote, used to see the credential "newly" missing and
+// emit a second Warning Event 150ms after the first (TestStep_GitSecretRefNotSet
+// under load). The retry patch is locked on the resourceVersion it read, so
+// the stale reconcile gets a Conflict, emits nothing, and requeues.
+func TestGitCredentialMissing_StaleReadEmitsOneEvent(t *testing.T) {
+	pipeline := makePipeline("nginx-demo")
+	ps := asPromoting(makeStep("step-cred", "nginx-demo", "b1", "test"), pipeline)
+	var stale *v1alpha1.PromotionStep
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		WithObjects(ps, pipeline, makeBundle("b1", "nginx-demo")).
+		WithInterceptorFuncs(interceptor.Funcs{Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if s, ok := obj.(*v1alpha1.PromotionStep); ok && stale != nil {
+				stale.DeepCopyInto(s)
+				return nil
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		}}).Build()
+	rec := events.NewFakeRecorder(50)
+	workDir := filepath.Join(t.TempDir(), "w")
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &authGit{failPush: true},
+		Recorder: rec, WorkDirFn: func(_, _ string) string { return workDir }, NowFn: pastBackoff()}
+
+	before := getStep(t, c, "step-cred")
+	reconcileStep(t, r, "step-cred")
+	require.Len(t, credentialWarnings(rec), 1)
+	after := getStep(t, c, "step-cred")
+	require.Equal(t, 1, after.Status.GitCredentialRetries)
+
+	stale = &before // the cache has not seen the retry yet
+	reconcileStep(t, r, "step-cred")
+	stale = nil
+	assert.Empty(t, credentialWarnings(rec), "no second Warning Event for the same missing credential")
+	got := getStep(t, c, "step-cred")
+	assert.Equal(t, 1, got.Status.GitCredentialRetries, "the stale reconcile wrote nothing")
+	assert.Equal(t, after.Status.NextRetryAt, got.Status.NextRetryAt)
+}

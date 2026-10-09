@@ -150,8 +150,12 @@ The step creates intermediate maps as needed if they do not exist.
 ## Multi-image bundles
 
 When a Bundle contains multiple images, the `argocd-set-image` step uses the **first image
-with a non-empty tag**. A Bundle whose images have only digests sets nothing: the step succeeds
-with `no image tag to set`. Setting different tags for different keys in one promotion is not
+with a tag**. An image pinned by digest is written as `<tag>@<digest>` (for example
+`1.29.0@sha256:...`), as `helm-set-image` does, so a chart that renders
+`image: {{ .Values.image.repository }}:{{ .Values.image.tag }}` pulls exactly that digest; this
+is what [image verification](image-verification.md) needs, since a tag can be moved after it was
+verified. An image with a digest but no tag is skipped (the key holds a tag); a Bundle whose
+images have no tag sets nothing: the step succeeds with `no image tag to set`. Setting different tags for different keys in one promotion is not
 supported. kardinal has no custom step sequence to do it (a Pipeline that sets
 `spec.environments[].steps` is rejected; see [Promotion Steps](pipeline-reference.md#promotion-steps)).
 

@@ -42,6 +42,9 @@ type DynamicProvider struct {
 	// the circuit state: an outage or an exhausted quota stays respected
 	// (#1274).
 	circuits *CircuitRegistry
+
+	// tokenID is TokenID's value for the current token.
+	tokenID atomic.Pointer[string]
 }
 
 // NewDynamicProvider creates a DynamicProvider initialised with the given token.
@@ -86,11 +89,24 @@ func (d *DynamicProvider) ReloadCredentials(cred Credentials) error {
 		return fmt.Errorf("creating SCM provider during reload: %w", err)
 	}
 	d.inner.Store(&p)
+	// The credentials' fingerprint: a new token, or new App credentials,
+	// is another identity.
+	id := tokenIdentity(cred.fingerprint())
+	d.tokenID.Store(&id)
 	return nil
 }
 
 // Current returns the provider the DynamicProvider delegates to now.
 func (d *DynamicProvider) Current() SCMProvider { return d.current() }
+
+// TokenID implements TokenIdentifier: it changes when Reload installs
+// another token.
+func (d *DynamicProvider) TokenID() string {
+	if id := d.tokenID.Load(); id != nil {
+		return *id
+	}
+	return ""
+}
 
 // current returns the active inner SCMProvider. It panics if no provider has
 // been initialised — this should never happen after NewDynamicProvider.
