@@ -15,7 +15,8 @@
 // (they outlive the Bundles and steps they record), so without retention
 // they accumulate in etcd for ever. Pruner is a leader-only manager Runnable
 // that, every Interval, deletes the records older than MaxAge and, per
-// Pipeline, all but the MaxPerPipeline newest. It is opt-in
+// Pipeline, all but the MaxPerPipeline newest, except records created
+// within the last Interval. It is opt-in
 // (--audit-retention), and housekeeping like the Pipeline's Bundle
 // historyLimit: no promotion decision reads its result.
 //
@@ -213,6 +214,19 @@ func (r *run) tooOld(rec record) bool {
 	return r.p.MaxAge > 0 && rec.created.Before(r.now.Add(-r.p.MaxAge))
 }
 
+// inGrace reports whether rec was created less than one Interval ago. The
+// count cap never deletes such a record: a burst of records, such as a
+// writer's audit outbox (status.pendingAuditEvents) flushed after an etcd
+// outage, each stays at least one Interval, so an exporter polling that
+// often sees every one (#1552).
+func (r *run) inGrace(rec record) bool {
+	interval := r.p.Interval
+	if interval <= 0 {
+		interval = DefaultInterval
+	}
+	return rec.created.After(r.now.Add(-interval))
+}
+
 func (r *run) capped() bool { return r.deleted >= maxDeletesPerRun }
 
 // list streams the records matching opts, page by page, metadata only, to
@@ -275,6 +289,10 @@ func (r *run) prunePipeline(ctx context.Context, key string) error {
 	sort.Slice(recs, func(i, j int) bool { return newer(recs[i], recs[j]) })
 	excess := recs[r.p.MaxPerPipeline:]
 	for i := len(excess) - 1; i >= 0 && !r.capped(); i-- { // oldest first
+		if r.inGrace(excess[i]) {
+			// The rest of excess is newer still (sorted by creation).
+			break
+		}
 		if err := r.delete(ctx, excess[i]); err != nil {
 			return err
 		}

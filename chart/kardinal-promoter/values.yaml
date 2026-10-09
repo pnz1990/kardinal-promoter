@@ -446,7 +446,8 @@ audit:
     maxAge: "2160h"
     # -- Keep this many newest records per Pipeline
     # (--audit-retention-max-per-pipeline). 0 keeps any number. A gate that
-    # flips often writes a record per flip and reaches it quickly.
+    # flips often writes a record per flip and reaches it quickly. A record
+    # created in the last 10 minutes is kept even past it.
     maxPerPipeline: 1000
 
 # -- MetricCheck providers.
