@@ -52,7 +52,7 @@ type gateCollections struct {
 	// node, in chunks of at most MaxCollectionItems (kro's default forEach
 	// limit).
 	gates, skipGates, approvalGates [][]interface{}
-	instances        []kardinalv1alpha1.PolicyGate
+	instances                       []kardinalv1alpha1.PolicyGate
 	// collection is the collection node of each instance name.
 	collection map[string]string
 	what       map[string]string
