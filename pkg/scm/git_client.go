@@ -30,6 +30,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // ErrNothingToCommit is returned by CommitAll when the work tree has no
@@ -81,7 +84,10 @@ func httpAuth(remoteURL, token string) transport.AuthMethod {
 // with token over HTTP(S) when it is set. dir must not already contain a repo.
 // A clone error reads "git clone <url>: <reason>". Every error names the URL
 // once and never contains URL credentials.
-func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string) error {
+func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string) (err error) {
+	ctx, span := tracing.Start(ctx, "git clone", attribute.String("server.address", tracing.HostOf(url)),
+		attribute.String("kardinal.git.branch", branch))
+	defer func() { tracing.End(span, err) }()
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create clone dir for %s: %w", RedactURL(url), err)
 	}
@@ -104,7 +110,10 @@ func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir, token string)
 
 // CloneAt clones url into dir and checks out commitSHA (detached). It is used
 // to read the content of a specific commit, e.g. the source of a config Bundle.
-func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir, token string) error {
+func (c *GoGitClient) CloneAt(ctx context.Context, url, commitSHA, dir, token string) (err error) {
+	ctx, span := tracing.Start(ctx, "git clone", attribute.String("server.address", tracing.HostOf(url)),
+		attribute.String("kardinal.git.commit", commitSHA))
+	defer func() { tracing.End(span, err) }()
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create clone dir for %s: %w", RedactURL(url), err)
 	}
@@ -173,7 +182,10 @@ func (c *GoGitClient) CommitAll(ctx context.Context, dir, message, authorName, a
 // With force=false it returns ErrNonFastForward when the remote branch has
 // commits that HEAD does not contain. force=true overwrites the remote branch;
 // callers use it only for branches kardinal owns (kardinal/<bundle>/<env>).
-func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token string, force bool) error {
+func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token string, force bool) (err error) {
+	ctx, span := tracing.Start(ctx, "git push", attribute.String("server.address", tracing.HostOf(remote)),
+		attribute.String("kardinal.git.branch", branch), attribute.Bool("kardinal.git.force", force))
+	defer func() { tracing.End(span, err) }()
 	repo, err := gogit.PlainOpen(dir)
 	if err != nil {
 		return fmt.Errorf("open repo at %s: %w", dir, err)

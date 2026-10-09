@@ -329,6 +329,16 @@
       },
       "description": "Deprecated, no effect."
     },
+    "tracing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "endpoint": {"type": "string", "pattern": "^$|^https?://[^\\s/]+(/\\S*)?$|^[^\\s/:]+:[0-9]{1,5}$"},
+        "insecure": {"type": "boolean"},
+        "samplingRatio": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
     "networkPolicy": {
       "type": "object",
       "additionalProperties": false,

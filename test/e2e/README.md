@@ -83,7 +83,7 @@ pattern of its tests.
 | `delivery` | Forgejo, Argo CD, Argo Rollouts, Flagger | `TestRollouts_*`, `TestFlagger_*`, `TestDelivery_*` |
 | `ui` | Forgejo, Argo CD, four more chart releases (static token and CORS, TokenReview, TokenReview without its RBAC, TLS), Playwright's Chromium | `TestUI_*` |
 | `flux` | Forgejo, Flux, Prometheus Operator, Prometheus, Pushgateway, Grafana | `TestFlux_*`, `TestMetric_*`, `TestObs_*` |
-| `chart` | Forgejo, Argo CD, cert-manager; no controller release: each test installs its own | `TestChart_*`, `TestDeprecated_*` |
+| `chart` | Forgejo, Argo CD, cert-manager, the webhook receiver, Jaeger; no controller release: each test installs its own | `TestChart_*`, `TestDeprecated_*` |
 | `upgrade` | Forgejo, Argo CD, kardinal-promoter v0.8.1 with its bundled Graph controller and no kro; the test follows the upgrade guide, so a cluster serves one run. `KIND_K8S=1.30` runs it on Kubernetes 1.30 | `TestUpgrade_*` |
 | `multi-cluster` | Forgejo, Argo CD, Flux and Argo Rollouts in the hub, and a second kind cluster (`<cluster>-spoke`, Argo Rollouts) registered with the hub's Argo CD and Flux | `TestMultiCluster_*` |
 

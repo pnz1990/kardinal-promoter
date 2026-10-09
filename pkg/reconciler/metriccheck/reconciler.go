@@ -25,6 +25,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -204,7 +205,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.MetricCheck{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles}).
-		Complete(r)
+		Complete(tracing.WrapReconciler("metriccheck", r))
 }
 
 // evaluateThreshold compares value against threshold and returns "Pass" or "Fail" with reason.

@@ -55,6 +55,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // Bundle phases.
@@ -1400,7 +1401,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(graphObject, handler.EnqueueRequestsFromMapFunc(bundleLabelMapper)).
 		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineBundles),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Complete(r)
+		Complete(tracing.WrapReconciler("bundle", r))
 }
 
 // bundlePipelineIndex is the spec.pipeline index function.

@@ -251,6 +251,22 @@ graph:
 validatingAdmissionPolicy:
   enabled: true
 
+tracing:
+  # -- Export OpenTelemetry traces over OTLP/HTTP (--tracing-enabled): spans for
+  # reconciles, promotion steps, git clone/push, SCM API calls and
+  # NotificationHook deliveries (which carry a traceparent header), and server
+  # spans for /webhook/scm and /api/v1/bundles. See docs/guides/monitoring.md.
+  enabled: false
+  # -- OTLP/HTTP endpoint: a URL (http://otel-collector.observability:4318) or
+  # host:port. Empty uses OTEL_EXPORTER_OTLP_ENDPOINT (set it with
+  # controller.extraEnv), else localhost:4318.
+  endpoint: ""
+  # -- Plain HTTP to a host:port endpoint (a URL's scheme decides by itself).
+  insecure: false
+  # -- Fraction of new traces recorded, 0 to 1. Requests that carry a sampled
+  # traceparent are always recorded.
+  samplingRatio: 0.1
+
 # -- NetworkPolicy for the controller Pod. Needs a CNI that enforces
 # NetworkPolicy. Egress: DNS, :443/:6443 (API server, SCM, git, registries),
 # graph.kroNamespace and extraEgress. Ingress: the four Service ports.

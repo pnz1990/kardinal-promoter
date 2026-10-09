@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **OpenTelemetry tracing** — `tracing.enabled` (`--tracing-enabled`, off by default) exports traces over OTLP/HTTP to `tracing.endpoint`, with `tracing.samplingRatio` (default 0.1, parent-based). Spans cover every reconcile, every promotion step, git clone and push, SCM API requests and NotificationHook deliveries, and inbound `/webhook/scm` and `/api/v1/bundles` requests. NotificationHook webhooks carry a W3C `traceparent`; an inbound `traceparent` is continued. Spans name hosts only, never URL paths or headers ([Tracing](guides/monitoring.md#tracing-opentelemetry))
+
 ### Docs
 
 - **Comparison** — resurveyed Kargo v1.12.1 and GitOps Promoter v0.42.1 (2026-10-03). The matrix corrects cells that had gone stale, such as GitOps Promoter's CLI, PR body and Flux support, and Kargo's gates, steps and engines. It adds rows for pause, supersession, `explain`/`policy simulate` and audit trails, plus sections on what changed in 2026 and where Kargo or GitOps Promoter is ahead. The home table, the rollback page and the Kargo migration guide match it

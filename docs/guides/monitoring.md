@@ -334,6 +334,48 @@ datasource.
 
 ---
 
+## Tracing (OpenTelemetry)
+
+The controller can export OpenTelemetry traces over OTLP/HTTP to any collector or backend
+that accepts it (the OpenTelemetry Collector, Jaeger, Tempo, Honeycomb, Datadog Agent, ...).
+Tracing is off by default.
+
+```yaml
+tracing:
+  enabled: true
+  endpoint: http://otel-collector.observability:4318   # /v1/traces is added
+  samplingRatio: 0.1                                   # default
+```
+
+| Value | Flag | Meaning |
+|-------|------|---------|
+| `tracing.enabled` | `--tracing-enabled` | Export traces. Default `false` |
+| `tracing.endpoint` | `--tracing-endpoint` | An `http://` or `https://` URL, or `host:port`. Empty uses `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` (set them with `controller.extraEnv`), else `localhost:4318` |
+| `tracing.insecure` | `--tracing-insecure` | Plain HTTP to a `host:port` endpoint. A URL's scheme decides by itself |
+| `tracing.samplingRatio` | `--tracing-sampling-ratio` | Fraction of new traces recorded, 0 to 1. A request that carries a sampled `traceparent` is always recorded |
+
+Only OTLP over HTTP (protobuf, port 4318) is supported, not OTLP/gRPC. The standard
+`OTEL_EXPORTER_OTLP_*` variables for headers, certificates and timeouts apply, through
+`controller.extraEnv`. Spans have the resource `service.name=kardinal-controller` and
+`service.version` set to the controller version.
+
+| Span | Kind | Attributes |
+|------|------|------------|
+| `<controller>.Reconcile` (`bundle`, `promotionstep`, `policygate`, `notificationhook`, ...) | internal | `kardinal.controller`, `k8s.namespace.name`, `kardinal.object.name`, `kardinal.requeue_after_ms`; error status when the reconcile fails |
+| `step <name>` (`step git-clone`, `step open-pr`, ...) | internal | `kardinal.step`, `kardinal.step.index`, `kardinal.environment`, `kardinal.step.status` |
+| `git clone`, `git push` | internal | `server.address`, `kardinal.git.branch` (or `kardinal.git.commit`), `kardinal.git.force` |
+| `HTTP <method>` | client | `http.request.method`, `server.address`, `url.scheme`, `http.response.status_code`: SCM API requests and NotificationHook deliveries |
+| `webhook.scm`, `bundleapi.create` | server | `http.request.method`, `http.response.status_code`: inbound SCM webhooks and Bundle API calls |
+
+**Trace context.** NotificationHook deliveries carry the W3C `traceparent` (and `tracestate`,
+`baggage`) of their client span, so a receiver that traces can join the trace. SCM API
+requests do not carry trace headers. An inbound `/webhook/scm` or `/api/v1/bundles` request
+with a `traceparent` (a CI job that traces, for example) continues that trace.
+
+**What spans never hold.** No URL path, query or user info, no headers, no request or
+response bodies: incoming-webhook URLs and git remotes can carry tokens. A span names only
+the host it talked to.
+
 ## Changing the Metrics Port
 
 Set `metricsBindAddress` in Helm values to use a different port. The container port and

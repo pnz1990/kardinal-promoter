@@ -29,6 +29,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // Ready condition reasons.
@@ -442,7 +443,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}}
 			}),
 		).
-		Complete(r)
+		Complete(tracing.WrapReconciler("pipeline", r))
 }
 
 // deploymentMetricsEqual returns true when a and b represent the same metrics.

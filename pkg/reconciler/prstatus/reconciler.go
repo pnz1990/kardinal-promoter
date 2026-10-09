@@ -78,6 +78,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -508,5 +509,5 @@ func (r *Reconciler) fetchMergeCommit(ctx context.Context, log zerolog.Logger, p
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PRStatus{}).
-		Complete(r)
+		Complete(tracing.WrapReconciler("prstatus", r))
 }

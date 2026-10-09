@@ -156,6 +156,10 @@ kardinal version
 | `networkPolicy.enabled` | `false` | NetworkPolicy for the controller Pod |
 | `networkPolicy.ingressFrom.{metrics,health,ui,webhook}` | `[]` | Allowed peers per ingress port (empty admits any source) |
 | `networkPolicy.extraEgress` | `[]` | Extra egress rules (e.g. Prometheus for MetricChecks) |
+| `tracing.enabled` | `false` | Export OpenTelemetry traces over OTLP/HTTP ([Tracing](guides/monitoring.md#tracing-opentelemetry)) |
+| `tracing.endpoint` | `""` | OTLP/HTTP endpoint URL or `host:port`; empty uses `OTEL_EXPORTER_OTLP_ENDPOINT` |
+| `tracing.insecure` | `false` | Plain HTTP to a `host:port` endpoint |
+| `tracing.samplingRatio` | `0.1` | Fraction of new traces recorded (parent-based) |
 | `scheduleClock.enabled` / `.interval` | `true` / `"1m"` | ScheduleClock `kardinal-clock` in the release namespace. Each tick re-evaluates every PolicyGate instance |
 | `validatingAdmissionPolicy.enabled` | `true` | Deprecated, no effect. The CRD schemas validate these fields |
 

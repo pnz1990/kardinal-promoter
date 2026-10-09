@@ -66,6 +66,7 @@ import (
 
 	// Import built-in steps to register them via init().
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 
 	// Embed the IANA timezone database. The runtime image has no tzdata, and
 	// ChangeWindow spec.schedule.timezone ("America/Los_Angeles") needs it:
@@ -251,6 +252,21 @@ func main() {
 			"except kube-system, kube-public and kube-node-lease. Health checks in other namespaces "+
 			"get no Graph ref.")
 
+	var tracingCfg tracing.Config
+	flag.BoolVar(&tracingCfg.Enabled, "tracing-enabled", os.Getenv("KARDINAL_TRACING_ENABLED") == "true",
+		"Export OpenTelemetry traces over OTLP/HTTP: a span per reconcile, promotion step, git clone and push, "+
+			"SCM API request and NotificationHook delivery, and server spans for /webhook/scm and /api/v1/bundles. "+
+			"Off by default. Chart value: tracing.enabled. Also readable from KARDINAL_TRACING_ENABLED.")
+	flag.StringVar(&tracingCfg.Endpoint, "tracing-endpoint", os.Getenv("KARDINAL_TRACING_ENDPOINT"),
+		"OTLP/HTTP endpoint: a URL (http://otel-collector.observability:4318; /v1/traces is added) or host:port. "+
+			"Empty uses OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT, else localhost:4318. "+
+			"Chart value: tracing.endpoint.")
+	flag.BoolVar(&tracingCfg.Insecure, "tracing-insecure", os.Getenv("KARDINAL_TRACING_INSECURE") == "true",
+		"Send traces over plain HTTP to a host:port --tracing-endpoint. Chart value: tracing.insecure.")
+	flag.Float64Var(&tracingCfg.SamplingRatio, "tracing-sampling-ratio", 0.1,
+		"Fraction of new traces recorded, 0 to 1. A request carrying a sampled traceparent is always "+
+			"recorded. Chart value: tracing.samplingRatio.")
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -275,6 +291,16 @@ func main() {
 	}
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
+
+	tracingCfg.ServiceVersion = ControllerVersion
+	shutdownTracing, err := tracing.Setup(context.Background(), tracingCfg)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid tracing configuration")
+	}
+	if tracingCfg.Enabled {
+		logger.Info().Str("endpoint", tracingCfg.Endpoint).Float64("samplingRatio", tracingCfg.SamplingRatio).
+			Msg("OpenTelemetry tracing enabled")
+	}
 
 	uiHosts, err := parseUIAllowedHosts(uiAllowedHosts)
 	if err != nil {
@@ -519,7 +545,7 @@ func main() {
 	}
 	bundleAPIToken := bundleToken
 	mux := http.NewServeMux()
-	mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
+	mux.Handle("/webhook/scm", tracing.Handler("webhook.scm", webhookSrv.Handler()))
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
 	// Bundle API endpoint — only mounted if a token is configured.
 	if bundleAPIToken != "" {
@@ -532,7 +558,7 @@ func main() {
 		bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
 		bundleAPI.onlyNamespace = watchNamespace
 		bundleAPI.reader = mgr.GetAPIReader()
-		mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
+		mux.Handle("/api/v1/bundles", tracing.Handler("bundleapi.create", bundleAPI.Handler()))
 		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
 	}
 	// The webhook and UI servers are manager Runnables: they start after the
@@ -603,6 +629,11 @@ func main() {
 		log:       logger,
 	}); err != nil {
 		logger.Warn().Err(err).Msg("failed to register version ConfigMap runnable")
+	}
+
+	// Flush buffered spans when the manager stops, on every replica.
+	if err := mgr.Add(tracingFlusher{shutdown: shutdownTracing, log: logger}); err != nil {
+		logger.Warn().Err(err).Msg("failed to register the trace flusher")
 	}
 
 	// Nothing may run after Start returns: a leader has released its Lease by
