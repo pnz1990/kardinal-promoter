@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -211,8 +212,8 @@ func TestWaitingForMerge_RebuildsPRBranchOnMovedBase(t *testing.T) {
 	assert.Equal(t, "rewritten\n", pr.file(t, "README.md"))
 	assert.Equal(t, forced, st.outputs["baseSHA"])
 	assert.Equal(t, "2", st.outputs["prBranchRebuilds"])
-	assert.Contains(t, st.message, "the base branch history since the PR was built could not be read (force-pushed, "+
-		"or the read timed out), so the PR branch was rebuilt to be safe", "the rebuild names why")
+	assert.Contains(t, st.message, "the commit the PR was built on is no longer in the base branch history (force-pushed), "+
+		"so the PR branch was rebuilt on the new base", "the rebuild names why")
 
 	// Someone pushes to the PR branch; then main moves under the PR's path.
 	human := remote.commitOn(branch, map[string]string{"environments/prod/fix.yaml": "by hand\n"}, false)
@@ -240,23 +241,30 @@ type promotionstepState struct {
 }
 
 // slowHistory is a git client whose branch history reads never answer before
-// their context ends.
+// their context ends, until fixed is set.
+// The controller reads it from a shared-read goroutine, hence the atomics.
 type slowHistory struct {
 	*scm.GoGitClient
-	calls int
+	calls atomic.Int32
+	fixed atomic.Bool
 }
 
-func (s *slowHistory) BranchHistory(ctx context.Context, _, _, _ string, _ int) ([]scm.CommitPaths, error) {
-	s.calls++
+func (s *slowHistory) BranchHistory(ctx context.Context, url, branch, token string, max int) ([]scm.CommitPaths, error) {
+	s.calls.Add(1)
+	if s.fixed.Load() {
+		return s.GoGitClient.BranchHistory(ctx, url, branch, token, max)
+	}
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
 
-// TestWaitingForMerge_HistoryTimeoutRebuilds (#1504 QA): a base branch
-// history read that takes longer than its timeout counts as history not
-// found. The reconcile does not wait for it: the PR branch is rebuilt on the
-// moved base, which is always safe, and the message says why.
-func TestWaitingForMerge_HistoryTimeoutRebuilds(t *testing.T) {
+// TestWaitingForMerge_HistoryTimeoutKeepsPR (#1504 QA, #1584): a base branch
+// history read that takes longer than its timeout decides nothing. The
+// reconcile does not wait for it, the PR branch is kept as it is (a rebuild
+// on uncertainty churns the PR and can dismiss its reviews), the message
+// says why, and the next check reads again: once the history reads, a
+// commit at another path only moves baseSHA.
+func TestWaitingForMerge_HistoryTimeoutKeepsPR(t *testing.T) {
 	defer promotionstep.SetHistoryTimeout(50 * time.Millisecond)()
 	remote := newGitRemote(t)
 	pl, b := makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")
@@ -278,8 +286,9 @@ func TestWaitingForMerge_HistoryTimeoutRebuilds(t *testing.T) {
 	require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
 	branch := got.Status.Outputs["branch"]
 
-	// A commit at another path: with the history readable this would not
-	// rebuild; with a read that times out it does.
+	pushed := remote.head(branch).Hash
+	built := got.Status.Outputs["baseSHA"]
+
 	moved := remote.commit(map[string]string{"notes/ci.txt": "note\n"}, false)
 	now = now.Add(31 * time.Second)
 	start := time.Now()
@@ -287,8 +296,101 @@ func TestWaitingForMerge_HistoryTimeoutRebuilds(t *testing.T) {
 	assert.Less(t, time.Since(start), 20*time.Second, "the reconcile does not wait for the slow read")
 	got = getStep(t, c, step.Name)
 	require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
-	assert.Positive(t, git.calls, "the history was asked for")
-	assert.Equal(t, []plumbing.Hash{plumbing.NewHash(moved)}, remote.head(branch).Parents, "rebuilt on the new head")
-	assert.Equal(t, "1", got.Status.Outputs["prBranchRebuilds"])
-	assert.Contains(t, got.Status.Message, "could not be read (force-pushed, or the read timed out), so the PR branch was rebuilt to be safe")
+	assert.Positive(t, git.calls.Load(), "the history was asked for")
+	assert.Equal(t, pushed, remote.head(branch).Hash, "the PR branch is kept")
+	assert.Empty(t, got.Status.Outputs["prBranchRebuilds"])
+	assert.Equal(t, built, got.Status.Outputs["baseSHA"], "nothing recorded: nothing was decided")
+	assert.Contains(t, got.Status.Message, "its history since the PR was built could not be read "+
+		"(the read took longer than 50ms), so the PR branch is kept and checked again")
+
+	// The next check reads the history: a commit at another path, no rebuild.
+	git.fixed.Store(true)
+	now = now.Add(31 * time.Second)
+	reconcileStep(t, r, step.Name)
+	got = getStep(t, c, step.Name)
+	require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	assert.Equal(t, pushed, remote.head(branch).Hash)
+	assert.Empty(t, got.Status.Outputs["prBranchRebuilds"])
+	assert.Equal(t, moved, got.Status.Outputs["baseSHA"])
+}
+
+// staleHeads is a git client whose next ls-remote answers stale (once), as
+// the shared heads cache does when another step read it before this step's
+// PR was built.
+type staleHeads struct {
+	*scm.GoGitClient
+	stale map[string]string
+	// staleHistory, when set, answers the next history read (once): the
+	// history the cache holds for the stale head.
+	staleHistory []scm.CommitPaths
+}
+
+func (s *staleHeads) BranchHistory(ctx context.Context, url, branch, token string, max int) ([]scm.CommitPaths, error) {
+	if h := s.staleHistory; h != nil {
+		s.staleHistory = nil
+		return h, nil
+	}
+	return s.GoGitClient.BranchHistory(ctx, url, branch, token, max)
+}
+
+func (s *staleHeads) RemoteHeads(ctx context.Context, url, token string) (map[string]string, error) {
+	if h := s.stale; h != nil {
+		s.stale = nil
+		return h, nil
+	}
+	return s.GoGitClient.RemoteHeads(ctx, url, token)
+}
+
+// TestWaitingForMerge_StaleHeadsDoNotRebuild (#1575): the heads a waiting
+// step reads can be older than the commit its PR was built on. That head is
+// not a move of the base, and built is not in its history: the step reads
+// the heads again instead of rebuilding the PR branch "to be safe", and then
+// follows the real head as usual (a commit at another path: no rebuild).
+func TestWaitingForMerge_StaleHeadsDoNotRebuild(t *testing.T) {
+	remote := newGitRemote(t)
+	older := remote.head("main").Hash.String()
+	remote.commit(map[string]string{"notes/before.txt": "x\n"}, false)
+	pl, b := makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")
+	pl.Spec.Git.URL = remote.url()
+	pl.Spec.Environments[1].Path = "environments/prod"
+	b.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/test/app", Tag: "1.2.3"}}
+	step := builtStep(t, pl, b, "prod")
+	step.Status.State = "Promoting"
+	c := newClient(t, step, pl, b, openPRStatus(step.Spec.PRStatusRef, "", 0))
+	m := &mockSCM{open: true, prURL: "https://github.com/test/repo/pull/5", prNumber: 5}
+	git := &staleHeads{GoGitClient: scm.NewGoGitClient()}
+	now := time.Now()
+	r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: git,
+		NowFn:     func() time.Time { return now },
+		WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+	reconcileStep(t, r, step.Name)
+	reconcileStep(t, r, step.Name)
+	got := getStep(t, c, step.Name)
+	require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	branch := got.Status.Outputs["branch"]
+	pushed := remote.head(branch).Hash
+
+	git.stale = map[string]string{"main": older, branch: pushed.String()}
+	elsewhere := remote.commit(map[string]string{"notes/ci.txt": "note\n"}, false)
+	now = now.Add(31 * time.Second)
+	reconcileStep(t, r, step.Name)
+	got = getStep(t, c, step.Name)
+	require.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	assert.Equal(t, pushed, remote.head(branch).Hash, "not rebuilt for a head older than its base")
+	assert.Empty(t, got.Status.Outputs["prBranchRebuilds"], got.Status.Message)
+	assert.Equal(t, elsewhere, got.Status.Outputs["baseSHA"], "follows the head read again")
+	assert.NotContains(t, got.Status.Message, "rebuilt")
+
+	// The cache also holds the stale head's history, which ends before the
+	// PR's base: the heads are read again, and the real move at another
+	// path does not rebuild either.
+	git.stale = map[string]string{"main": older, branch: pushed.String()}
+	git.staleHistory = []scm.CommitPaths{{SHA: older}}
+	again := remote.commit(map[string]string{"notes/ci2.txt": "note\n"}, false)
+	now = now.Add(31 * time.Second)
+	reconcileStep(t, r, step.Name)
+	got = getStep(t, c, step.Name)
+	assert.Equal(t, pushed, remote.head(branch).Hash, "not rebuilt for a stale history")
+	assert.Empty(t, got.Status.Outputs["prBranchRebuilds"], got.Status.Message)
+	assert.Equal(t, again, got.Status.Outputs["baseSHA"])
 }
