@@ -4,6 +4,7 @@
 package promotionstep
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -11,16 +12,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBranchQueue_OneTurnAtATime (#1578): one step holds a branch's turn;
-// the others wait, the longer the further back they are, and the turn goes
-// to the next step once it is released. Another branch, or the same branch
-// of another repository, is independent.
+func noTurnJitter(t *testing.T) {
+	t.Helper()
+	old := turnJitter
+	turnJitter = func(d time.Duration) time.Duration { return d }
+	t.Cleanup(func() { turnJitter = old })
+}
+
+// TestBranchQueue_FIFO (#1578): one step holds a branch's turn; the others
+// wait, the longer the further back they are. A released turn goes to the
+// oldest live waiter, who is woken at once: a newcomer, or a younger waiter
+// that asks first, is refused while it waits. Another branch, or the same
+// branch of another repository, is independent.
 //
 // Covers PERF-PUSH-QUEUE-01.
-func TestBranchQueue_OneTurnAtATime(t *testing.T) {
-	defer func(old func(time.Duration) time.Duration) { turnJitter = old }(turnJitter)
-	turnJitter = func(d time.Duration) time.Duration { return d }
-	var q branchQueue
+func TestBranchQueue_FIFO(t *testing.T) {
+	noTurnJitter(t)
+	var woken []string
+	q := branchQueue{wake: func(step string) { woken = append(woken, step) }}
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 
 	release, _, ok := q.tryTurn("repo#main", "ns/a", now)
@@ -36,30 +45,42 @@ func TestBranchQueue_OneTurnAtATime(t *testing.T) {
 	_, _, ok = q.tryTurn("repo#other", "ns/b", now)
 	assert.True(t, ok, "another branch has its own turn")
 
-	release(now.Add(7 * time.Second))
-	_, _, ok = q.tryTurn("repo#main", "ns/b", now.Add(7*time.Second))
-	require.True(t, ok, "released: the next step takes the turn")
-	assert.Equal(t, []string{"ns/c"}, q.waiting("repo#main"))
-	_, waitC, _ = q.tryTurn("repo#main", "ns/c", now.Add(7*time.Second))
-	assert.Equal(t, (4*initialTurn+7*time.Second)/5, waitC, "the average turn follows the measured one")
+	at := now.Add(time.Second)
+	release(at)
+	release(at) // idempotent
+	assert.Equal(t, []string{"ns/b"}, woken, "the oldest waiter is woken once")
+	_, _, ok = q.tryTurn("repo#main", "ns/c", at)
+	assert.False(t, ok, "a younger waiter asking first is refused")
+	_, _, ok = q.tryTurn("repo#main", "ns/new", at)
+	assert.False(t, ok, "so is a newcomer")
+	_, _, ok = q.tryTurn("repo#main", "ns/b", at)
+	require.True(t, ok, "the oldest waiter takes it")
+	assert.Equal(t, []string{"ns/c", "ns/new"}, q.waiting("repo#main"))
+	_, waitC, _ = q.tryTurn("repo#main", "ns/c", at)
+	assert.Equal(t, (4*initialTurn+time.Second)/5, waitC, "the average turn follows the measured one")
 }
 
-// TestBranchQueue_Bounds: waits stay within minTurnWait and maxTurnWait, a
-// waiter that stopped asking is forgotten, and a branch with no holder and
-// no waiters is dropped.
-func TestBranchQueue_Bounds(t *testing.T) {
-	defer func(old func(time.Duration) time.Duration) { turnJitter = old }(turnJitter)
-	turnJitter = func(d time.Duration) time.Duration { return d }
+// TestBranchQueue_GoneWaitersAndBounds: waits stay within minTurnWait and
+// maxTurnWait; a waiter that does not ask again by its due time (plus
+// waiterGrace) is dropped and the turn goes to the next one, so a deleted or
+// finished step cannot block the branch; a branch nobody holds or waits for
+// is dropped.
+func TestBranchQueue_GoneWaitersAndBounds(t *testing.T) {
+	noTurnJitter(t)
 	var q branchQueue
 	now := time.Now()
-	_, _, _ = q.tryTurn("k", "holder", now)
+	release, _, _ := q.tryTurn("k", "holder", now)
 	var wait time.Duration
 	for i := 0; i < 50; i++ {
-		_, wait, _ = q.tryTurn("k", string(rune('a'+i%26))+string(rune('a'+i/26)), now.Add(time.Duration(i)))
+		_, wait, _ = q.tryTurn("k", fmt.Sprintf("ns/w%02d", i), now.Add(time.Duration(i)))
 	}
 	assert.Equal(t, maxTurnWait, wait, "fifty in line: capped")
-	_, _, _ = q.tryTurn("k", "late", now.Add(waiterTTL+time.Second))
-	assert.Equal(t, []string{"late"}, q.waiting("k"), "waiters that stopped asking are forgotten")
+	release(now.Add(time.Second))
+
+	// w00 never asks again; w01 does, after w00's due time and grace.
+	later := now.Add(initialTurn + waiterGrace + time.Second)
+	_, _, ok := q.tryTurn("k", "ns/w01", later)
+	assert.True(t, ok, "the gone head is dropped; the next live waiter takes the turn")
 
 	var q2 branchQueue
 	rel, _, _ := q2.tryTurn("k", "a", now)

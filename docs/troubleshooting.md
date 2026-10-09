@@ -202,9 +202,12 @@ time, and the others wait without cloning (#1578). A wide wave of environments
 on one branch makes about one push per environment instead of racing for the
 branch. A waiting step uses no retry and gives its worker back, at low priority,
 so steps of other Pipelines and namespaces are not held up behind the wave
-(#1577). It is requeued after about its place in line times the length of a
-turn (at most 15 seconds). PR-review promotions push to their own `kardinal/`
-branches and do not wait.
+(#1577). Turns go oldest first: when one ends, the oldest waiting step is woken at once
+and the others keep their place (each asks again after about its place in line
+times the length of a turn, at most 15 seconds). The turn is per repository
+branch, whatever the namespace: two teams whose Pipelines write one branch take
+turns, because their pushes would collide. PR-review promotions push to their
+own `kardinal/` branches and do not wait.
 
 ### Symptom: "base branch ... moved while promoting"
 

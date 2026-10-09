@@ -25,6 +25,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -44,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -934,6 +936,13 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		release, wait, got := r.pushTurns.tryTurn(key, client.ObjectKeyFromObject(ps).String(), r.now())
 		if !got {
 			return r.waitForBranchTurn(ctx, base, ps, state.Git.Branch, wait)
+		}
+		// The turn ends once git-push has landed; at the latest when the
+		// reconcile does.
+		eng.OnStepDone = func(_ int, name string) {
+			if name == "git-push" {
+				release(r.now())
+			}
 		}
 		defer func() {
 			release(r.now())
@@ -2120,8 +2129,28 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A hold added or released (spec.holds) takes effect on the held
 		// environment's steps at once (holdIfEnvironmentHeld).
 		Watches(&v1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineHoldMapper),
-			builderutil.WithPredicates(holdsChanged))
+			builderutil.WithPredicates(holdsChanged)).
+		// A branch turn that ends wakes the oldest step waiting for it
+		// (branchQueue), so the branch does not sit idle until its requeue.
+		WatchesRawSource(source.Channel(r.turnWakeups(), &handler.EnqueueRequestForObject{}))
 	return shard.Active().Complete(b, tracing.WrapReconciler("promotionstep", r), &v1alpha1.PromotionStepList{})
+}
+
+// turnWakeups connects the branch queue's wake to a channel of events for
+// the controller: a full buffer drops the wake, and the waiter's own requeue
+// still comes.
+func (r *Reconciler) turnWakeups() <-chan event.GenericEvent {
+	ch := make(chan event.GenericEvent, 256)
+	r.pushTurns.mu.Lock()
+	r.pushTurns.wake = func(step string) {
+		ns, name, _ := strings.Cut(step, "/")
+		select {
+		case ch <- event.GenericEvent{Object: &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}}:
+		default:
+		}
+	}
+	r.pushTurns.mu.Unlock()
+	return ch
 }
 
 // holdsChanged passes Pipeline updates that change spec.holds.
