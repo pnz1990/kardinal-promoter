@@ -159,7 +159,6 @@ Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, 
 - `layout: branch`: promote rendered manifests (#1271)
 - `scm.allowedRepositories`: limit the repositories the SCM token may open PRs in (#1332)
 - `kardinal override` writes an AuditEvent with the cluster identity (#1286)
-- Secret-backed auth header for NotificationHook (#1267; MetricCheck done)
 - `rollback` and `promote --env` without re-running upstream environments (#1311)
 - `kardinal approve`: a real gate bypass, or removal (#1309)
 

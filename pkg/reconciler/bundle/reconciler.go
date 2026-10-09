@@ -56,6 +56,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
@@ -1572,7 +1573,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.gateBundles),
 			builder.WithPredicates(gateTemplateChanged)).
-		Complete(r)
+		Complete(tracing.WrapReconciler("bundle", r))
 }
 
 // bundlePipelineIndex is the spec.pipeline index function.

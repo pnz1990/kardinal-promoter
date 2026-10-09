@@ -35,6 +35,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -412,7 +413,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 		b = b.WatchesRawSource(source.Channel(wake, &handler.EnqueueRequestForObject{}))
 	}
-	return b.Complete(r)
+	return b.Complete(tracing.WrapReconciler("metriccheck", r))
 }
 
 // cancelSlot leaves the Limiter's queue: the check no longer queries.
