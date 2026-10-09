@@ -174,6 +174,13 @@ type RenderRunStatus struct {
 	// +optional
 	KnownMarkerDigests []string `json:"knownMarkerDigests,omitempty"`
 
+	// UnconfirmedBundles are the Bundles of the environment's RenderRuns that
+	// Failed after its last Succeeded one: their Job may have pushed before
+	// its result was lost. A rendered branch whose marker names one of them,
+	// and whose files match that marker, is accepted as kardinal's.
+	// +optional
+	UnconfirmedBundles []string `json:"unconfirmedBundles,omitempty"`
+
 	// StartedAt is when the Job was created.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`

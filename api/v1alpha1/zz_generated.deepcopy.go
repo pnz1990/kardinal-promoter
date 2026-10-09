@@ -1917,6 +1917,11 @@ func (in *RenderRunStatus) DeepCopyInto(out *RenderRunStatus) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.UnconfirmedBundles != nil {
+		in, out := &in.UnconfirmedBundles, &out.UnconfirmedBundles
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.StartedAt != nil {
 		in, out := &in.StartedAt, &out.StartedAt
 		*out = (*in).DeepCopy()

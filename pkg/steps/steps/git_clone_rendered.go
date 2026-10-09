@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -241,6 +242,12 @@ func trustedRender(ctx context.Context, tr scm.TreeReader, state *parentsteps.St
 	m, err := parseMarker(raw)
 	if err != nil {
 		return err.Error()
+	}
+	// With a record of kardinal's renders (the RenderRun status), only a
+	// marker kardinal recorded, or one of an unconfirmed render, is trusted.
+	if rc := state.Render; rc != nil && len(rc.KnownMarkerDigests) > 0 && !slices.Contains(rc.KnownMarkerDigests, digest(raw)) &&
+		!slices.Contains(rc.UnconfirmedBundles, m.Bundle) {
+		return "its marker is not one of kardinal's recorded renders"
 	}
 	if why := markerOwner(m, state); why != "" {
 		return why

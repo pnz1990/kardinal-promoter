@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -132,11 +133,19 @@ func TestEstimateKustomizeObjects(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		k := fmt.Sprintf("resources: [../l%d, ../l%d-copy]\n", i-1, i-1)
 		require.NoError(t, mem.WriteFile(fmt.Sprintf("/l%d/kustomization.yaml", i), []byte(k)))
-		require.NoError(t, mem.WriteFile(fmt.Sprintf("/l%d-copy/kustomization.yaml", i-1), []byte(fmt.Sprintf("resources: [../l%d]\nnamePrefix: c-\n", i-1))))
+		require.NoError(t, mem.WriteFile(fmt.Sprintf("/l%d-copy/kustomization.yaml", i-1), []byte(fmt.Sprintf("resources: [../l%d]\nnamePrefix: c%d-\n", i-1, i))))
 	}
 	n, err := estimateKustomizeObjects(mem, "/l3")
 	require.NoError(t, err)
 	assert.Equal(t, 3*8, n, "3 objects at the bottom, doubled three times")
+	// The estimate is what kustomize builds for the diamond.
+	for _, top := range []string{"/l1", "/l2", "/l3", "/l4"} {
+		want, err := estimateKustomizeObjects(mem, top)
+		require.NoError(t, err)
+		rm, err := krusty.MakeKustomizer(krusty.MakeDefaultOptions()).Run(mem, top)
+		require.NoError(t, err, top)
+		assert.Equal(t, rm.Size(), want, "%s: the estimate is the built object count", top)
+	}
 	n, err = estimateKustomizeObjects(mem, "/l20")
 	require.NoError(t, err)
 	assert.Greater(t, n, maxRenderedObjects, "3 x 2^20 saturates past the limit")
@@ -205,4 +214,56 @@ func TestTemplateFuncs_Nondeterministic(t *testing.T) {
 func TestTrailers(t *testing.T) {
 	msg := "[kardinal] Promote b to prod\n\nBundle: b\nPipeline: p\n\nKardinal-Dry-Commit: abc\nKardinal-Bundle: b\n"
 	assert.Equal(t, map[string]string{"Kardinal-Dry-Commit": "abc", "Kardinal-Bundle": "b"}, trailers(msg))
+}
+
+// TestCheckKustomizations_PluginConfigs (QA round 2 on #1515, H1): the
+// SSRF moved one file over: a generator, transformer or validator
+// configuration file (gen.yaml) or inline configuration with a URL in a
+// loaded field is refused, as is HelmChartInflationGenerator; its literals
+// and metadata are data.
+func TestCheckKustomizations_PluginConfigs(t *testing.T) {
+	const url = "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+	cases := []struct {
+		name, kustomization string
+		files               map[string]string
+		wantErr             string
+	}{
+		{"generator file (the gen.yaml repro)", "generators: [gen.yaml]\n",
+			map[string]string{"/env/gen.yaml": "apiVersion: builtin\nkind: ConfigMapGenerator\nmetadata: {name: stolen}\nfiles: [creds=" + url + "]\n"},
+			"/env/gen.yaml: files[]: remote reference"},
+		{"generator file, second document", "generators: [gen.yaml]\n",
+			map[string]string{"/env/gen.yaml": "kind: ConfigMapGenerator\nmetadata: {name: ok}\nliterals: [a=b]\n---\nkind: SecretGenerator\nmetadata: {name: s}\nenvs: [" + url + "]\n"},
+			"envs[]: remote reference"},
+		{"transformer file", "transformers: [t.yaml]\n",
+			map[string]string{"/env/t.yaml": "apiVersion: builtin\nkind: PatchTransformer\nmetadata: {name: p}\npath: " + url + "\n"},
+			"/env/t.yaml: path: remote reference"},
+		{"validator file", "validators: [v.yaml]\n",
+			map[string]string{"/env/v.yaml": "kind: X\nmetadata: {name: v}\nconfig: {source: \"" + url + "\"}\n"},
+			"config.source: remote reference"},
+		{"inline generator", "generators:\n- |-\n  kind: ConfigMapGenerator\n  metadata: {name: x}\n  files: [" + url + "]\n",
+			nil, "files[]: remote reference"},
+		{"helm chart inflation", "generators: [h.yaml]\n",
+			map[string]string{"/env/h.yaml": "apiVersion: builtin\nkind: HelmChartInflationGenerator\nmetadata: {name: h}\nchartName: x\n"},
+			"HelmChartInflationGenerator is not supported"},
+		{"generator literals and metadata are data", "generators: [gen.yaml]\n",
+			map[string]string{"/env/gen.yaml": "kind: ConfigMapGenerator\nmetadata: {name: ok, annotations: {u: \"https://x\"}}\nliterals: [URL=https://api.example.com]\n"},
+			""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mem := filesys.MakeFsInMemory()
+			require.NoError(t, mem.WriteFile("/env/kustomization.yaml", []byte(tc.kustomization)))
+			for p, c := range tc.files {
+				require.NoError(t, mem.WriteFile(p, []byte(c)))
+			}
+			err := checkKustomizations(mem)
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, parentsteps.ErrPermanent))
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }

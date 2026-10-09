@@ -375,6 +375,12 @@ func TestRenderBranch_OtherPipelinesBranch(t *testing.T) {
 			res, err := promote(t, state)
 			require.Error(t, err)
 			assert.True(t, errors.Is(err, parentsteps.ErrPermanent))
+			if state.Render.Namespace != "team" {
+				assert.Contains(t, res.Message, "rendered branch env/prod is not this environment's: it was rendered for a Pipeline in another namespace",
+					"another namespace's Pipeline is not named")
+				assert.NotContains(t, res.Message, "web")
+				return
+			}
 			assert.Contains(t, res.Message, "rendered branch env/prod is not this environment's: it was rendered for Pipeline team/web environment prod")
 		})
 	}
@@ -558,14 +564,35 @@ func TestRenderBranch_HelmRefusals(t *testing.T) {
 func TestRenderManifests_OnlyInTheRenderJob(t *testing.T) {
 	render, err := parentsteps.Lookup("render-manifests")
 	require.NoError(t, err)
-	state := &parentsteps.StepState{Environment: v1alpha1.EnvironmentSpec{Name: "prod", Layout: "branch"}, WorkDir: t.TempDir()}
-	res, err := render.Execute(context.Background(), state)
-	require.Error(t, err)
-	assert.Contains(t, res.Message, "only in the kardinal-render Job")
+	state := func(withContext bool) *parentsteps.StepState {
+		st := &parentsteps.StepState{Environment: v1alpha1.EnvironmentSpec{Name: "prod"}, WorkDir: t.TempDir()}
+		if withContext {
+			st.Render = &parentsteps.RenderContext{Namespace: "team"}
+		}
+		return st
+	}
+	const refused = "only in the kardinal-render Job, never in the controller"
+	for _, tc := range []struct {
+		name    string
+		env     string
+		context bool
+	}{{"neither", "", false}, {"the Job's render context only", "", true}, {"the variable only", "1", false},
+		{"another value", "true", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(parentsteps.RenderJobEnv, tc.env)
+			res, err := render.Execute(context.Background(), state(tc.context))
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, parentsteps.ErrPermanent))
+			assert.Contains(t, res.Message, refused)
+		})
+	}
+	// Both: the guard lets it through (and the step goes on to its own
+	// checks: this state is not layout: branch).
 	t.Setenv(parentsteps.RenderJobEnv, "1")
-	res, err = render.Execute(context.Background(), state)
-	require.Error(t, err, "the Job's render context is needed too")
-	assert.Contains(t, res.Message, "only in the kardinal-render Job")
+	res, err := render.Execute(context.Background(), state(true))
+	require.Error(t, err)
+	assert.NotContains(t, res.Message, refused)
+	assert.Contains(t, res.Message, "runs only with layout: branch")
 }
 
 // TestRenderBranch_DryPathTrailerDefaultPath (QA on #1515): an environment
@@ -580,4 +607,88 @@ func TestRenderBranch_DryPathTrailerDefaultPath(t *testing.T) {
 	assert.Contains(t, msg, "Kardinal-Dry-Path: environments/prod\n")
 	assert.Contains(t, files[".kardinal/rendered.yaml"], "dryPath: environments/prod")
 	assert.Contains(t, files[".kardinal/rendered.yaml"], "namespace: team")
+}
+
+// TestRenderBranch_LostResultMarkerAdopted (QA round 2 on #1515, M1): a
+// render that pushed but whose result was lost leaves a marker no recorded
+// render has. Listed as unconfirmed, its Bundle's marker is accepted when
+// its files are unchanged, so the environment is not wedged; with a file
+// changed it is still drift, and a marker naming another Bundle is not
+// accepted.
+func TestRenderBranch_LostResultMarkerAdopted(t *testing.T) {
+	url, _ := seedRemote(t, dryRepo)
+	env := v1alpha1.EnvironmentSpec{Name: "prod", Path: "environments/prod"}
+	first := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v2", "2.0.0")
+	_, err := promote(t, first)
+	require.NoError(t, err)
+	known := []string{first.Outputs["markerDigest"]}
+	lost := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v3", "3.0.0")
+	lost.Render.KnownMarkerDigests = known
+	_, err = promote(t, lost) // pushed; its result never reached the RenderRun
+	require.NoError(t, err)
+
+	next := func(unconfirmed ...string) (*parentsteps.StepState, parentsteps.StepResult, error) {
+		st := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v4", "4.0.0")
+		st.Render.KnownMarkerDigests, st.Render.UnconfirmedBundles = known, unconfirmed
+		res, err := promote(t, st)
+		return st, res, err
+	}
+	_, res, err := next()
+	require.Error(t, err, "without the unconfirmed Bundle the marker is unknown")
+	assert.Contains(t, res.Message, "is not one kardinal wrote")
+	_, res, err = next("web-x")
+	require.Error(t, err, "another Bundle's render is not adopted")
+	assert.Contains(t, res.Message, "is not one kardinal wrote")
+
+	pushFiles(t, url, "env/prod", map[string]*string{"web-prod_deployment-web.yaml": strp("edited by hand\n")})
+	_, res, err = next("web-v3")
+	require.Error(t, err, "a file changed since that render is still drift")
+	assert.Contains(t, res.Message, "web-prod_deployment-web.yaml changed")
+}
+
+// TestRenderBranch_LostResultMarkerAdoptedClean: the unconfirmed Bundle's
+// unchanged render is adopted and the next render goes ahead.
+func TestRenderBranch_LostResultMarkerAdoptedClean(t *testing.T) {
+	url, _ := seedRemote(t, dryRepo)
+	env := v1alpha1.EnvironmentSpec{Name: "prod", Path: "environments/prod"}
+	first := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v2", "2.0.0")
+	_, err := promote(t, first)
+	require.NoError(t, err)
+	known := []string{first.Outputs["markerDigest"]}
+	lost := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v3", "3.0.0")
+	lost.Render.KnownMarkerDigests = known
+	_, err = promote(t, lost)
+	require.NoError(t, err)
+	st := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v4", "4.0.0")
+	st.Render.KnownMarkerDigests, st.Render.UnconfirmedBundles = known, []string{"web-v3"}
+	_, err = promote(t, st)
+	require.NoError(t, err)
+	assert.Equal(t, "web-v3", st.Outputs["markerAdopted"])
+	files, _ := branchFiles(t, url, "env/prod")
+	assert.Contains(t, files["web-prod_deployment-web.yaml"], "ghcr.io/org/web:4.0.0")
+}
+
+// TestRenderBranch_RollbackUsesKnownDigests (QA round 2 on #1515): with a
+// record of kardinal's renders, a rollback trusts only a render whose marker
+// is in it.
+func TestRenderBranch_RollbackUsesKnownDigests(t *testing.T) {
+	url, _ := seedRemote(t, dryRepo)
+	env := v1alpha1.EnvironmentSpec{Name: "prod", Path: "environments/prod"}
+	first := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v2", "2.0.0")
+	_, err := promote(t, first)
+	require.NoError(t, err)
+	second := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v3", "3.0.0")
+	_, err = promote(t, second)
+	require.NoError(t, err)
+	rollback := func(known []string) (parentsteps.StepResult, error) {
+		st := renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-rb", "2.0.0")
+		st.Bundle.Provenance = &v1alpha1.BundleProvenance{RollbackOf: "web-v2"}
+		st.Render.KnownMarkerDigests = known
+		return promote(t, st)
+	}
+	res, err := rollback([]string{strings.Repeat("0", 64), second.Outputs["markerDigest"]})
+	require.Error(t, err)
+	assert.Contains(t, res.Message, "its marker is not one of kardinal's recorded renders")
+	_, err = rollback([]string{first.Outputs["markerDigest"], second.Outputs["markerDigest"]})
+	assert.NoError(t, err, "web-v2's recorded render is trusted")
 }

@@ -360,8 +360,11 @@ which also meets the `restricted` standard:
   `RuntimeDefault` seccomp, no service links;
 - CPU, memory and time limits (`render.resources.limits`, `render.timeout`): a template or overlay
   that explodes is stopped by the kernel or the Job deadline, not by the controller's memory;
-- optionally (`render.networkPolicy`), egress to DNS and the git host only: no cloud metadata
-  endpoint, no Kubernetes API, no other Service.
+- no network in the render process but git to the host of `spec.git.url`, through the egress
+  guard: every other HTTP request is refused;
+- recommended (`render.networkPolicy`, opt-in because it needs a CNI that enforces it): egress to
+  DNS and the git host only, so even a process that escaped the renderer reaches no cloud
+  metadata endpoint, no Kubernetes API and no other Service.
 
 Inside the Job the renderer refuses remote references in any kustomization field, symbolic links
 anywhere in the DRY source, overlay diamonds past the object limit, oversized Helm template values

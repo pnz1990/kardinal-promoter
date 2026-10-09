@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/storage/memory"
 )
 
 // BranchCloner is implemented by git clients that can check out a branch
@@ -207,4 +208,31 @@ func (c *GoGitClient) ReachableFrom(_ context.Context, dir, commit, branch strin
 		return false, fmt.Errorf("walk origin/%s: %w", branch, err)
 	}
 	return ok, nil
+}
+
+// RemoteHeadReader is implemented by git clients that can read the head of
+// a branch on the remote without cloning it (git ls-remote).
+type RemoteHeadReader interface {
+	// RemoteBranchHead returns the commit branch points at on url, or ""
+	// when the branch does not exist.
+	RemoteBranchHead(ctx context.Context, url, branch, token string) (string, error)
+}
+
+// RemoteBranchHead implements RemoteHeadReader.
+func (c *GoGitClient) RemoteBranchHead(ctx context.Context, url, branch, token string) (string, error) {
+	rem := gogit.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{url}})
+	refs, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: httpAuth(url, token)})
+	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("git ls-remote %s: %s", RedactURL(url), gitErrorText(err))
+	}
+	want := plumbing.NewBranchReferenceName(branch)
+	for _, r := range refs {
+		if r.Name() == want {
+			return r.Hash().String(), nil
+		}
+	}
+	return "", nil
 }

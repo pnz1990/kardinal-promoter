@@ -375,6 +375,15 @@ spec:
                 description: StartedAt is when the Job was created.
                 format: date-time
                 type: string
+              unconfirmedBundles:
+                description: |-
+                  UnconfirmedBundles are the Bundles of the environment's RenderRuns that
+                  Failed after its last Succeeded one: their Job may have pushed before
+                  its result was lost. A rendered branch whose marker names one of them,
+                  and whose files match that marker, is accepted as kardinal's.
+                items:
+                  type: string
+                type: array
             type: object
         type: object
     served: true

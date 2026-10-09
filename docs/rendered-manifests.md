@@ -139,17 +139,36 @@ The RenderRun reconciler creates the Job, owned by the RenderRun, from the `kard
   `automountServiceAccountToken: false`: the Pod has no Kubernetes credentials at all;
 - non-root (uid 65532), read-only root filesystem, no privilege escalation, every capability
   dropped, the `RuntimeDefault` seccomp profile, no service links, and an `emptyDir` for its work;
+- no network but git to the Pipeline's repository: inside the render process every request through
+  Go's default HTTP transport is refused (so a generator or transformer that fetches a URL reaches
+  nothing), and git dials only the host and port of `spec.git.url`, through the egress guard (no
+  loopback, link-local or cloud metadata addresses), never through a proxy;
 - CPU and memory limits (`render.resources.limits`, default 1 CPU and 512Mi) and an
   `activeDeadlineSeconds` (`render.timeout`, default 5m). A render that runs out of memory fails
-  with `the render ran out of memory (512Mi) and was stopped`; one that runs out of time is
-  deleted with its Pod;
+  with `the render ran out of memory (512Mi) and was stopped`; one that runs out of time is ended by
+  Kubernetes, and the reconciler gives up on it 2 minutes later;
+- a Pod that fails for a reason other than the render (evicted or preempted: the
+  `DisruptionTarget` condition) does not count, other failures are retried up to 3 times, and a
+  render that failed for good (a template error, drift, a refused input; exit code 2) fails at once;
+- a Pod that cannot start says why in the RenderRun message (`ImagePullBackOff`,
+  `Unschedulable`, ...). The chart's `imagePullSecrets` are added to the render Pods
+  (`--render-image-pull-secrets`); they must exist in the Pipeline namespace;
 - `render.networkPolicy.enabled` adds, in each namespace of `render.networkPolicy.namespaces`, a
   NetworkPolicy that lets the render Pods reach DNS and the git hosts of
-  `render.networkPolicy.gitEgress` only (needs a CNI that enforces NetworkPolicy).
+  `render.networkPolicy.gitEgress` only (needs a CNI that enforces NetworkPolicy). It is off by
+  default, and **recommended**: it is the boundary outside the render process.
 
 The result comes back through the Pod's termination message, which the RenderRun reconciler
-copies to `status.result`. A finished RenderRun never runs again; a RenderRun is never run in the
-controller's own namespace.
+copies to `status.result` only from a Pod the Job owns, and only when it can be true: a full
+commit id on the rendered branch (or the promotion branch of a `pr-review` step), rendered from a
+full DRY commit. The step then reads the branch head on the remote (`git ls-remote`) and fails if
+it is not the reported commit. A finished RenderRun never runs again; a RenderRun is never run in
+the controller's own namespace.
+
+A render whose Job pushed but whose result was lost (its Pod gone, or a result that could not be
+read) fails, and the next render of the environment knows that Bundle as unconfirmed
+(`status.unconfirmedBundles`): if the rendered branch's marker names it and its files are
+unchanged, the marker is accepted as kardinal's instead of failing as drift.
 
 The rendered commit's message ends with:
 
@@ -167,7 +186,8 @@ Kardinal-Bundle: my-app-v1-29-0
   render Job looks through the last 500 commits of the rendered branch for a render kardinal made
   of the target Bundle: a commit whose `Kardinal-Bundle` trailer names it and whose
   `Kardinal-Dry-Commit` is a full 40-character commit id, and whose tree holds a render marker for
-  this Pipeline, environment, Bundle and DRY commit with every file it lists unchanged. Other
+  this Pipeline, environment, Bundle and DRY commit with every file it lists unchanged, and, when
+  the environment has a record of its renders, a marker digest in it. Other
   commits that name the Bundle are skipped. The DRY commit must also be on `spec.git.branch`: one
   that is not (a commit on another branch, pushed by someone who can write to the rendered branch)
   is refused. If no such render is there, the step fails (pin the commit with
@@ -188,8 +208,10 @@ never runs a command. Before anything is rendered:
 - every value of every kustomization is checked, whatever the field: a remote reference (any
   `://`, `git@...`, `?ref=`, `github.com/...`) is refused in `resources`, `components`, `bases`,
   generator `files` and `envs`, patch paths, `openapi`, `crds`, `replacements` and every other field
-  kustomize loads from. Only data fields may hold a URL: generator `literals`, `commonAnnotations`,
-  `commonLabels`, `labels[].pairs`, `metadata`, and inline patches. `helmCharts` is refused;
+  kustomize loads from, and in every generator, transformer and validator configuration a
+  kustomization names (a file of the DRY source, or inline). Only data fields may hold a URL:
+  generator `literals`, `commonAnnotations`, `commonLabels`, `labels[].pairs`, `metadata`, and
+  inline patches. `helmCharts` and `HelmChartInflationGenerator` are refused;
 - the objects a kustomization would produce are counted through its overlays and bases, so a
   "diamond" of overlays that multiplies them is refused before kustomize builds it.
 
@@ -210,12 +232,13 @@ compares the branch with it:
   good: `rendered branch env/prod is not this environment's: it was rendered for Pipeline
   team-a/web environment prod; set render.branch to a branch of its own`. Two Pipelines (in any
   namespace) that render to the same branch of one repository also get `Ready=False` with reason
-  `RenderedBranchConflict` on the newer one, before a Bundle reaches it;
+  `RenderedBranchConflict` on the newer one, before a Bundle reaches it (a Pipeline of another
+  namespace is not named, in either message);
 - drift is a file kardinal wrote that was edited or deleted, any YAML or JSON file anywhere on the
   branch that kardinal did not write (Argo CD or Flux would apply it with the render), or a branch
   with files but no marker (one kardinal did not write);
 - the marker itself is anchored: the RenderRun passes the render Job the marker digests of the
-  environment's last 20 successful renders (`status.knownMarkerDigests`), and a marker that is not
+  environment's last 50 successful renders (`status.knownMarkerDigests`), and a marker that is not
   one of them is drift, so a push that edits a file and rewrites the marker to match is caught
   too. An environment whose earlier RenderRuns are gone (their Bundles were deleted) has none, and
   its branch's marker is used as it is.

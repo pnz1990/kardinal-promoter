@@ -62,8 +62,13 @@ func (r *Reconciler) renderedBranchConflict(ctx context.Context, p *kardinalv1al
 		}
 		for branch, theirs := range renderedBranches(q) {
 			if env, ok := mine[branch]; ok {
-				found = append(found, fmt.Sprintf("environment %q renders to %s, which environment %q of Pipeline %s/%s renders to",
-					env, branch, theirs, q.Namespace, q.Name))
+				// Another namespace's Pipeline is not named: its name is
+				// not this tenant's to read.
+				who := fmt.Sprintf("environment %q of Pipeline %s/%s", theirs, q.Namespace, q.Name)
+				if q.Namespace != p.Namespace {
+					who = "a Pipeline in another namespace"
+				}
+				found = append(found, fmt.Sprintf("environment %q renders to %s, which %s renders to", env, branch, who))
 			}
 		}
 	}

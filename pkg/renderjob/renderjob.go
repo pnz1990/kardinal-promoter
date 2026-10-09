@@ -41,6 +41,10 @@ const (
 	TerminationMessagePath = "/dev/termination-log"
 	// maxTerminationMessage is the kubelet's limit on a termination message.
 	maxTerminationMessage = 4096
+	// ExitPermanent is the exit code of a render that failed for good (a
+	// template error, drift, a refused input): the Job fails at once
+	// (podFailurePolicy). Other failures exit 1 and are retried.
+	ExitPermanent = 2
 )
 
 // Config is everything the render Job needs, written by the RenderRun
@@ -60,6 +64,8 @@ type Config struct {
 	// KnownMarkerDigests are the marker digests of earlier renders of this
 	// Pipeline environment.
 	KnownMarkerDigests []string `json:"knownMarkerDigests,omitempty"`
+	// UnconfirmedBundles: see RenderRunStatus.UnconfirmedBundles.
+	UnconfirmedBundles []string `json:"unconfirmedBundles,omitempty"`
 }
 
 // Result is the termination message of the render Job.
@@ -70,7 +76,7 @@ type Result struct {
 }
 
 // ConfigFromRun is the Config of RenderRun run.
-func ConfigFromRun(run *v1alpha1.RenderRun, known []string, authorName, authorEmail string) Config {
+func ConfigFromRun(run *v1alpha1.RenderRun, authorName, authorEmail string) Config {
 	b := run.Spec.Bundle
 	bundle := v1alpha1.BundleSpec{Type: b.Type, Images: b.Images, ConfigRef: b.ConfigRef}
 	if b.RollbackOf != "" {
@@ -80,7 +86,7 @@ func ConfigFromRun(run *v1alpha1.RenderRun, known []string, authorName, authorEm
 		Namespace: run.Namespace, Pipeline: run.Spec.PipelineName, Environment: run.Spec.Environment,
 		Path: run.Spec.Path, BundleName: run.Spec.BundleName, Bundle: bundle, Git: run.Spec.Git,
 		Update: run.Spec.Update, Render: run.Spec.Render, AuthorName: authorName, AuthorEmail: authorEmail,
-		KnownMarkerDigests: known,
+		KnownMarkerDigests: run.Status.KnownMarkerDigests, UnconfirmedBundles: run.Status.UnconfirmedBundles,
 	}
 }
 
@@ -106,7 +112,8 @@ func Run(ctx context.Context, cfg Config, workDir, token string, git scm.GitClie
 			Token: token, AuthorName: cfg.AuthorName, AuthorEmail: cfg.AuthorEmail},
 		GitClient: git,
 		Sequence:  stateSeq,
-		Render:    &steps.RenderContext{Namespace: cfg.Namespace, KnownMarkerDigests: cfg.KnownMarkerDigests},
+		Render: &steps.RenderContext{Namespace: cfg.Namespace, KnownMarkerDigests: cfg.KnownMarkerDigests,
+			UnconfirmedBundles: cfg.UnconfirmedBundles},
 	}
 	// The engine restarts the sequence from a fresh clone when the rendered
 	// branch moved while rendering (git-push).
@@ -142,16 +149,18 @@ func Run(ctx context.Context, cfg Config, workDir, token string, git scm.GitClie
 // 4096 bytes, the error cut to fit.
 func Message(r Result) []byte {
 	b, _ := json.Marshal(r)
-	for len(b) > maxTerminationMessage && r.Error != "" {
-		cut := len(r.Error) - (len(b) - maxTerminationMessage) - 16
-		if cut < 0 {
-			cut = 0
+	for _, field := range []*string{&r.DriftOverwritten, &r.Error} {
+		for len(b) > maxTerminationMessage && *field != "" {
+			cut := len(*field) - (len(b) - maxTerminationMessage) - 16
+			if cut < 0 {
+				cut = 0
+			}
+			for cut > 0 && !utf8.RuneStart((*field)[cut]) {
+				cut--
+			}
+			*field = (*field)[:cut] + " (cut)"
+			b, _ = json.Marshal(r)
 		}
-		for cut > 0 && !utf8.RuneStart(r.Error[cut]) {
-			cut--
-		}
-		r.Error = r.Error[:cut] + " (cut)"
-		b, _ = json.Marshal(r)
 	}
 	return b
 }
@@ -183,6 +192,10 @@ func Main(ctx context.Context) int {
 	if b, err := os.ReadFile(TokenFile); err == nil {
 		token = strings.TrimSpace(string(b))
 	}
+	if err := LockNetwork(cfg.Git.URL); err != nil {
+		write(Result{Error: err.Error()})
+		return 1
+	}
 	if err := os.Setenv(steps.RenderJobEnv, "1"); err != nil {
 		write(Result{Error: err.Error()})
 		return 1
@@ -190,6 +203,9 @@ func Main(ctx context.Context) int {
 	res, err := Run(ctx, cfg, WorkDir, token, scm.NewGoGitClient())
 	if err != nil {
 		write(Result{Error: scm.RedactText(err.Error())})
+		if errors.Is(err, steps.ErrPermanent) {
+			return ExitPermanent
+		}
 		return 1
 	}
 	write(res)

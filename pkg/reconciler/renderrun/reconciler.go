@@ -19,7 +19,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -36,7 +39,10 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/renderjob"
+	stepsimpl "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
+
+func ptrTo[T any](v T) *T { return &v }
 
 const (
 	// LabelRenderRun is set on the Job and its Pod: the RenderRun name.
@@ -54,8 +60,17 @@ const (
 	// DefaultTimeout bounds a render Job.
 	DefaultTimeout = 5 * time.Minute
 	// knownDigests is how many earlier renders' marker digests a render
-	// accepts on the rendered branch.
-	knownDigests = 20
+	// accepts on the rendered branch (and a rollback trusts): as many as a
+	// Pipeline keeps Bundles by default (historyLimit).
+	knownDigests = 50
+	// deadlineGrace is how much longer than the Job's activeDeadlineSeconds
+	// the reconciler waits for the Job, from its creation, before it gives up
+	// on its result: Kubernetes ends the Job first.
+	deadlineGrace = 2 * time.Minute
+	// backoffLimit retries a render whose Pod failed for a reason that is not
+	// the render's (a node lost, a git server that hung up); a permanent
+	// render error fails the Job at once (exit code ExitPermanent).
+	backoffLimit = 3
 
 	requeueRunning = 30 * time.Second
 )
@@ -89,6 +104,9 @@ type Reconciler struct {
 	ControllerNamespace string
 	// AuthorName and AuthorEmail sign the rendered commits.
 	AuthorName, AuthorEmail string
+	// ImagePullSecrets are added to the render Pods (they must exist in the
+	// Pipeline namespace).
+	ImagePullSecrets []string
 	// NowFn returns the current time; nil means time.Now.
 	NowFn func() time.Time
 }
@@ -190,12 +208,15 @@ func (r *Reconciler) start(ctx context.Context, base, run *v1alpha1.RenderRun) (
 		r.finish(run, v1alpha1.RenderRunFailed, fmt.Sprintf("renders may not run in the controller's namespace %s", run.Namespace), nil)
 		return ctrl.Result{}, r.patch(ctx, base, run)
 	}
-	known, err := r.knownMarkerDigests(ctx, run)
+	known, unconfirmed, err := r.earlierRenders(ctx, run)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// Until its Job exists, a RenderRun waits at most the timeout; the Job
+	// gets its own deadline when it is created (createJob).
 	deadline := metav1.NewTime(now.Add(r.timeout()))
 	run.Status.KnownMarkerDigests = known
+	run.Status.UnconfirmedBundles = unconfirmed
 	run.Status.Deadline = &deadline
 	run.Status.JobName = run.Name
 	run.Status.Phase = v1alpha1.RenderRunPending
@@ -206,39 +227,47 @@ func (r *Reconciler) start(ctx context.Context, base, run *v1alpha1.RenderRun) (
 	return ctrl.Result{Requeue: true}, nil
 }
 
-// knownMarkerDigests are the marker digests of the newest Succeeded
-// RenderRuns of the same Pipeline environment: the rendered branch's marker
-// must be one of them (a push that rewrites the files and the marker
-// together is drift too). None means the first render, or an environment
-// whose earlier RenderRuns are gone: the branch's own marker is used.
-func (r *Reconciler) knownMarkerDigests(ctx context.Context, run *v1alpha1.RenderRun) ([]string, error) {
+// earlierRenders reads the earlier RenderRuns of the same Pipeline
+// environment and rendered branch. known are the marker digests of the
+// newest Succeeded ones: the rendered branch's marker must be one of them (a
+// push that rewrites the files and the marker together is drift too).
+// unconfirmed are the Bundles of the ones that Failed after the newest
+// Succeeded one: a Job may have pushed and then lost its result (its Pod
+// deleted, the controller past its deadline), so the branch's marker may
+// name one of them. None of either means the first render, or an
+// environment whose earlier RenderRuns are gone: the branch's own marker is
+// used.
+func (r *Reconciler) earlierRenders(ctx context.Context, run *v1alpha1.RenderRun) (known, unconfirmed []string, err error) {
 	var list v1alpha1.RenderRunList
 	if err := r.List(ctx, &list, client.InNamespace(run.Namespace), client.MatchingLabels{
 		"kardinal.io/pipeline": run.Spec.PipelineName, "kardinal.io/environment": run.Spec.Environment,
 	}); err != nil {
-		return nil, fmt.Errorf("list renderruns: %w", err)
+		return nil, nil, fmt.Errorf("list renderruns: %w", err)
 	}
 	done := make([]v1alpha1.RenderRun, 0, len(list.Items))
 	for _, o := range list.Items {
-		if o.Name != run.Name && o.Status.Phase == v1alpha1.RenderRunSucceeded && o.Status.Result != nil &&
-			o.Status.Result.MarkerDigest != "" && o.Status.FinishedAt != nil && o.Spec.Git.RenderedBranch == run.Spec.Git.RenderedBranch {
+		if o.Name != run.Name && terminal(o.Status.Phase) && o.Status.FinishedAt != nil &&
+			o.Spec.Git.RenderedBranch == run.Spec.Git.RenderedBranch {
 			done = append(done, o)
 		}
 	}
 	sort.Slice(done, func(i, j int) bool { return done[j].Status.FinishedAt.Before(done[i].Status.FinishedAt) })
-	var out []string
 	seen := map[string]bool{}
+	confirmed := false
 	for _, o := range done {
-		d := o.Status.Result.MarkerDigest
-		if !seen[d] {
-			seen[d] = true
-			out = append(out, d)
+		if o.Status.Phase == v1alpha1.RenderRunFailed {
+			if !confirmed && !slices.Contains(unconfirmed, o.Spec.BundleName) {
+				unconfirmed = append(unconfirmed, o.Spec.BundleName)
+			}
+			continue
 		}
-		if len(out) == knownDigests {
-			break
+		confirmed = true
+		if res := o.Status.Result; res != nil && res.MarkerDigest != "" && !seen[res.MarkerDigest] && len(known) < knownDigests {
+			seen[res.MarkerDigest] = true
+			known = append(known, res.MarkerDigest)
 		}
 	}
-	return out, nil
+	return known, unconfirmed, nil
 }
 
 func (r *Reconciler) job(ctx context.Context, run *v1alpha1.RenderRun) (*batchv1.Job, bool, error) {
@@ -283,7 +312,7 @@ func (r *Reconciler) ensureServiceAccount(ctx context.Context, ns string) error 
 
 // JobSpec is the render Job's spec for run.
 func (r *Reconciler) JobSpec(run *v1alpha1.RenderRun) (*batchv1.JobSpec, error) {
-	cfg := renderjob.ConfigFromRun(run, run.Status.KnownMarkerDigests, r.AuthorName, r.AuthorEmail)
+	cfg := renderjob.ConfigFromRun(run, r.AuthorName, r.AuthorEmail)
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("encode render config: %w", err)
@@ -294,7 +323,7 @@ func (r *Reconciler) JobSpec(run *v1alpha1.RenderRun) (*batchv1.JobSpec, error) 
 	}
 	yes, no := true, false
 	uid := int64(65532)
-	zero := int32(0)
+	retries := int32(backoffLimit)
 	secs := int64(r.timeout().Seconds())
 	workSize := resource.MustParse("1Gi")
 	tmpSize := resource.MustParse("64Mi")
@@ -333,9 +362,23 @@ func (r *Reconciler) JobSpec(run *v1alpha1.RenderRun) (*batchv1.JobSpec, error) 
 			SecretName: name, DefaultMode: &mode, Items: []corev1.KeyToPath{{Key: "token", Path: "token"}}}}})
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: "git", MountPath: "/var/run/kardinal/git", ReadOnly: true})
 	}
+	var pullSecrets []corev1.LocalObjectReference
+	for _, n := range r.ImagePullSecrets {
+		pullSecrets = append(pullSecrets, corev1.LocalObjectReference{Name: n})
+	}
 	return &batchv1.JobSpec{
-		BackoffLimit:          &zero,
+		BackoffLimit:          &retries,
 		ActiveDeadlineSeconds: &secs,
+		// A Pod evicted or preempted (DisruptionTarget) is not a render
+		// failure and does not count; a render that failed for good (exit
+		// renderjob.ExitPermanent) fails the Job at once; other failures are
+		// retried up to backoffLimit.
+		PodFailurePolicy: &batchv1.PodFailurePolicy{Rules: []batchv1.PodFailurePolicyRule{
+			{Action: batchv1.PodFailurePolicyActionIgnore, OnPodConditions: []batchv1.PodFailurePolicyOnPodConditionsPattern{
+				{Type: corev1.DisruptionTarget, Status: corev1.ConditionTrue}}},
+			{Action: batchv1.PodFailurePolicyActionFailJob, OnExitCodes: &batchv1.PodFailurePolicyOnExitCodesRequirement{
+				ContainerName: ptrTo("render"), Operator: batchv1.PodFailurePolicyOnExitCodesOpIn, Values: []int32{renderjob.ExitPermanent}}},
+		}},
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec: corev1.PodSpec{
@@ -345,8 +388,9 @@ func (r *Reconciler) JobSpec(run *v1alpha1.RenderRun) (*batchv1.JobSpec, error) 
 				RestartPolicy:                corev1.RestartPolicyNever,
 				SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: &yes, RunAsUser: &uid, RunAsGroup: &uid, FSGroup: &uid,
 					SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
-				Containers: []corev1.Container{container},
-				Volumes:    volumes,
+				Containers:       []corev1.Container{container},
+				Volumes:          volumes,
+				ImagePullSecrets: pullSecrets,
 			},
 		},
 	}, nil
@@ -396,6 +440,11 @@ func (r *Reconciler) createJob(ctx context.Context, log zerolog.Logger, base, ru
 		return ctrl.Result{}, fmt.Errorf("create job %s: %w", job.Name, err)
 	}
 	log.Info().Str("job", job.Name).Msg("render Job created")
+	// The Job's own deadline (activeDeadlineSeconds) runs from its start;
+	// the reconciler waits longer, from the creation, so Kubernetes ends a
+	// slow Job first and its Pod's result is not lost to a race.
+	deadline := metav1.NewTime(r.now().Add(r.timeout() + deadlineGrace))
+	run.Status.Deadline = &deadline
 	run.Status.JobUID = string(job.UID)
 	run.Status.Phase = v1alpha1.RenderRunRunning
 	run.Status.Message = "Job " + job.Name + " running"
@@ -428,10 +477,27 @@ func (r *Reconciler) adopt(ctx context.Context, base, run *v1alpha1.RenderRun, j
 // past its deadline).
 func (r *Reconciler) observe(ctx context.Context, log zerolog.Logger, base, run *v1alpha1.RenderRun, job *batchv1.Job) (ctrl.Result, error) {
 	complete, failed := jobCondition(job, batchv1.JobComplete), jobCondition(job, batchv1.JobFailed)
-	if complete != nil || failed != nil {
-		res, why, err := r.podResult(ctx, job)
+	if complete == nil && failed == nil {
+		// Running: say why the Pod is not running yet, if it is stuck.
+		pods, err := r.jobPods(ctx, job)
 		if err != nil {
 			return ctrl.Result{}, err
+		}
+		msg := "Job " + job.Name + " running"
+		if why := waitingReason(pods); why != "" {
+			msg += "; " + why
+		}
+		run.Status.Message = msg
+	}
+	if complete != nil || failed != nil {
+		res, why, err := r.podResult(ctx, job, complete != nil)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if complete != nil && why == "" && res.Error == "" {
+			if invalid := validResult(run, &res.RenderRunResult); invalid != "" {
+				why = "the render Job reported a result that does not hold: " + invalid
+			}
 		}
 		switch {
 		case complete != nil && why == "" && res.Error == "":
@@ -461,38 +527,134 @@ func (r *Reconciler) observe(ctx context.Context, log zerolog.Logger, base, run 
 		r.finish(run, v1alpha1.RenderRunFailed, fmt.Sprintf("the render did not finish within %s; its Job was deleted", r.timeout()), nil)
 		return ctrl.Result{}, r.patch(ctx, base, run)
 	}
-	return ctrl.Result{RequeueAfter: r.untilDeadline(run)}, nil
+	if run.Status.Message != base.Status.Message {
+		// Only when it changes: every write re-walks the Bundle's Graph.
+		if err := r.patch(ctx, base, run); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{RequeueAfter: min(r.untilDeadline(run), 15*time.Second)}, nil
 }
 
-// podResult reads the render Pod's termination message. why says how the
-// Pod ended when it wrote none (OOMKilled, an error before main ran).
-func (r *Reconciler) podResult(ctx context.Context, job *batchv1.Job) (renderjob.Result, string, error) {
+// jobPods lists the Pods of job: those whose controller is job (by UID) and
+// whose name starts with the Job's, so a Pod someone else created with the
+// Job's labels is never read.
+func (r *Reconciler) jobPods(ctx context.Context, job *batchv1.Job) ([]corev1.Pod, error) {
 	var pods corev1.PodList
 	if err := r.reader().List(ctx, &pods, client.InNamespace(job.Namespace),
 		client.MatchingLabels{"batch.kubernetes.io/controller-uid": string(job.UID)}); err != nil {
-		return renderjob.Result{}, "", fmt.Errorf("list pods of job %s: %w", job.Name, err)
+		return nil, fmt.Errorf("list pods of job %s: %w", job.Name, err)
 	}
+	var out []corev1.Pod
 	for _, p := range pods.Items {
+		owner := metav1.GetControllerOf(&p)
+		if owner != nil && owner.UID == job.UID && owner.Kind == "Job" && strings.HasPrefix(p.Name, job.Name+"-") {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// podResult reads the render Pod's termination message: of the Pod that
+// exited 0 when the Job completed, else of the Pod that terminated last.
+// why says how the Pod ended when it wrote none (OOMKilled, an error before
+// main ran), or that no Pod of the Job is left.
+func (r *Reconciler) podResult(ctx context.Context, job *batchv1.Job, complete bool) (renderjob.Result, string, error) {
+	pods, err := r.jobPods(ctx, job)
+	if err != nil {
+		return renderjob.Result{}, "", err
+	}
+	var best *corev1.ContainerStateTerminated
+	for _, p := range pods {
 		for _, cs := range p.Status.ContainerStatuses {
 			t := cs.State.Terminated
 			if cs.Name != "render" || t == nil {
 				continue
 			}
-			if t.Reason == "OOMKilled" {
-				limit := ""
-				if m, ok := job.Spec.Template.Spec.Containers[0].Resources.Limits[corev1.ResourceMemory]; ok {
-					limit = " (" + m.String() + ")"
-				}
-				return renderjob.Result{}, "the render ran out of memory" + limit + " and was stopped", nil
+			switch {
+			case best == nil,
+				complete && t.ExitCode == 0 && best.ExitCode != 0,
+				(t.ExitCode == 0) == (best.ExitCode == 0) && best.FinishedAt.Before(&t.FinishedAt):
+				best = t
 			}
-			res, err := renderjob.ParseMessage(t.Message)
-			if err != nil {
-				return renderjob.Result{}, fmt.Sprintf("the render Pod exited %d (%s): %v", t.ExitCode, t.Reason, err), nil
-			}
-			return res, "", nil
 		}
 	}
-	return renderjob.Result{}, "the render Job finished but its Pod is gone, so its result is unknown", nil
+	if best == nil {
+		return renderjob.Result{}, "the render Job finished but its Pod is gone, so its result is unknown", nil
+	}
+	if best.Reason == "OOMKilled" {
+		limit := ""
+		if m, ok := job.Spec.Template.Spec.Containers[0].Resources.Limits[corev1.ResourceMemory]; ok {
+			limit = " (" + m.String() + ")"
+		}
+		return renderjob.Result{}, "the render ran out of memory" + limit + " and was stopped", nil
+	}
+	res, err := renderjob.ParseMessage(best.Message)
+	if err != nil {
+		return renderjob.Result{}, fmt.Sprintf("the render Pod exited %d (%s): %v", best.ExitCode, best.Reason, err), nil
+	}
+	return res, "", nil
+}
+
+// waitingReasons are the container waiting reasons that mean the render Pod
+// will not start by itself.
+var waitingReasons = []string{"ImagePullBackOff", "ErrImagePull", "InvalidImageName", "CreateContainerConfigError",
+	"CreateContainerError"}
+
+// waitingReason says why a render Pod is not running: a container that
+// cannot start (its image cannot be pulled) or a Pod that cannot be
+// scheduled, or "".
+func waitingReason(pods []corev1.Pod) string {
+	for _, p := range pods {
+		for _, cs := range p.Status.ContainerStatuses {
+			if w := cs.State.Waiting; w != nil && slices.Contains(waitingReasons, w.Reason) {
+				return fmt.Sprintf("Pod %s: %s: %s", p.Name, w.Reason, truncate(w.Message, 300))
+			}
+		}
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Reason == corev1.PodReasonUnschedulable {
+				return fmt.Sprintf("Pod %s: Unschedulable: %s", p.Name, truncate(c.Message, 300))
+			}
+		}
+	}
+	return ""
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// sha1RE is a full git commit id.
+var sha1RE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// validResult returns "" when a render result can be true for run, or what
+// does not hold: a pushed render names a full commit, on the rendered branch
+// (or the promotion branch of a pr-review step), rendered from a full DRY
+// commit. The step then checks the branch head itself.
+func validResult(run *v1alpha1.RenderRun, res *v1alpha1.RenderRunResult) string {
+	if res.DryCommit != "" && !sha1RE.MatchString(res.DryCommit) {
+		return fmt.Sprintf("dryCommit %q is not a commit id", res.DryCommit)
+	}
+	if res.NoChanges {
+		if res.CommitSHA != "" || res.Branch != "" {
+			return "an unchanged render reports a pushed commit"
+		}
+		return ""
+	}
+	if !sha1RE.MatchString(res.CommitSHA) {
+		return fmt.Sprintf("commitSHA %q is not a commit id", res.CommitSHA)
+	}
+	want := run.Spec.Git.RenderedBranch
+	if run.Spec.Git.PullRequest {
+		want = stepsimpl.PRBranch(run.Spec.BundleName, run.Spec.Environment)
+	}
+	if res.Branch != want {
+		return fmt.Sprintf("branch %q is not %q", res.Branch, want)
+	}
+	return ""
 }
 
 func renderedMessage(res *v1alpha1.RenderRunResult) string {

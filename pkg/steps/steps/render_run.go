@@ -10,6 +10,7 @@ import (
 	"time"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
@@ -46,7 +47,7 @@ func init() {
 
 func (s *renderStep) Name() string { return parentsteps.RenderStepName }
 
-func (s *renderStep) Execute(_ context.Context, state *parentsteps.StepState) (parentsteps.StepResult, error) {
+func (s *renderStep) Execute(ctx context.Context, state *parentsteps.StepState) (parentsteps.StepResult, error) {
 	if state.Outputs[parentsteps.OutputRenderRequested] != "true" {
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepPending,
@@ -82,6 +83,23 @@ func (s *renderStep) Execute(_ context.Context, state *parentsteps.StepState) (p
 	if res == nil {
 		err := parentsteps.Permanent(errors.New("RenderRun " + run.Name + " succeeded without a result"))
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
+	}
+	// The Job's report is checked against the remote: the branch it names
+	// must point at the commit it names (git ls-remote), so a report that is
+	// not true never reaches open-pr or the health check.
+	if !res.NoChanges {
+		if rh, ok := state.GitClient.(scm.RemoteHeadReader); ok {
+			head, err := rh.RemoteBranchHead(ctx, state.Git.URL, res.Branch, state.Git.Token)
+			if err != nil {
+				msg := "check the rendered commit: " + scm.RedactText(err.Error())
+				return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, errors.New(msg)
+			}
+			if head != res.CommitSHA {
+				err := parentsteps.Permanent(fmt.Errorf("RenderRun %s reported %s pushed to %s, but the branch is at %q",
+					run.Name, shortSHA(res.CommitSHA), res.Branch, shortSHA(head)))
+				return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
+			}
+		}
 	}
 	outputs := map[string]string{
 		outputRenderRun:      run.Name,

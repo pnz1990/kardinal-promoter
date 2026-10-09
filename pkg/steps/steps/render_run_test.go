@@ -6,12 +6,14 @@ package steps_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
@@ -80,4 +82,44 @@ func TestRenderStep(t *testing.T) {
 	a.LiveRenders = []v1alpha1.LiveRenderRun{{Name: "rr", Phase: "Succeeded"}}
 	_, err = step.Execute(context.Background(), a)
 	assert.Error(t, err, "a success without a result is refused")
+}
+
+// headGit reports a branch head, as git ls-remote would.
+type headGit struct {
+	scm.GitClient
+	head string
+	err  error
+}
+
+func (g headGit) RemoteBranchHead(context.Context, string, string, string) (string, error) {
+	return g.head, g.err
+}
+
+// TestRenderStep_ChecksTheRemoteHead (QA round 2 on #1515, M2): the commit
+// the render Job reported must be the head of the branch it named on the
+// remote; a report that does not hold fails the step for good, and an
+// ls-remote error is retried.
+func TestRenderStep_ChecksTheRemoteHead(t *testing.T) {
+	step, err := parentsteps.Lookup(parentsteps.RenderStepName)
+	require.NoError(t, err)
+	commit := strings.Repeat("c", 40)
+	run := func(g scm.GitClient) (parentsteps.StepResult, error) {
+		st := &parentsteps.StepState{Outputs: map[string]string{"renderRequested": "true"}, GitClient: g,
+			Sequence: []string{"render", "health-check"}, Git: parentsteps.GitConfig{URL: "https://git.example.com/r.git", Branch: "env/prod"},
+			LiveRenders: []v1alpha1.LiveRenderRun{{Name: "rr", Phase: "Succeeded",
+				Result: &v1alpha1.RenderRunResult{CommitSHA: commit, Branch: "env/prod"}}}}
+		return step.Execute(context.Background(), st)
+	}
+	res, err := run(headGit{head: commit})
+	require.NoError(t, err)
+	assert.Equal(t, commit, res.Outputs["commitSHA"])
+
+	res, err = run(headGit{head: strings.Repeat("e", 40)})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, parentsteps.ErrPermanent))
+	assert.Contains(t, res.Message, "but the branch is at \"eeeeeeee\"")
+
+	_, err = run(headGit{err: errors.New("connection refused")})
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, parentsteps.ErrPermanent), "an ls-remote error is retried")
 }

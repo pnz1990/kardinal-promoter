@@ -4,11 +4,14 @@
 package steps
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"path"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -65,6 +68,10 @@ func kustomizationDataField(field []string, value string) bool {
 	case "patches", "patchesJson6902":
 		// <patches>[].patch is the patch itself; .path is loaded.
 		return len(field) >= 3 && field[2] == "patch"
+	case "generators", "transformers", "validators":
+		// An inline configuration is checked by checkPluginConfigs, field
+		// by field.
+		return strings.Contains(value, "\n")
 	case "patchesStrategicMerge":
 		// An entry is a file path or an inline patch (a YAML document,
 		// always several lines).
@@ -92,39 +99,114 @@ func checkKustomizations(mem filesys.FileSystem) error {
 		if err := yaml.Unmarshal(raw, &doc); err != nil {
 			return parentsteps.Permanent(fmt.Errorf("parse %s: %w", p, err))
 		}
-		return walkKustomization(p, &doc, nil)
+		if err := walkKustomization(p, &doc, nil, kustomizationDataField); err != nil {
+			return err
+		}
+		return checkPluginConfigs(mem, p, &doc)
 	})
 }
 
-func walkKustomization(file string, n *yaml.Node, field []string) error {
+// pluginFields are the kustomization fields whose entries are generator,
+// transformer or validator configurations: a file of the DRY source, or the
+// configuration inline. Their own fields (a ConfigMapGenerator's files, a
+// PatchTransformer's path) are loaded too, so they are checked like a
+// kustomization's.
+var pluginFields = []string{"generators", "transformers", "validators"}
+
+// pluginDataField reports whether a scalar of a plugin configuration is
+// data: its metadata, generator literals and an inline patch.
+func pluginDataField(field []string, _ string) bool {
+	if len(field) == 0 {
+		return false
+	}
+	switch field[0] {
+	case "metadata", "literals", "patch":
+		return true
+	}
+	return false
+}
+
+// checkPluginConfigs checks every generator, transformer and validator
+// configuration a kustomization names, in a file or inline, for remote
+// references (the configMapGenerator SSRF through a generator file).
+func checkPluginConfigs(mem filesys.FileSystem, kustomization string, doc *yaml.Node) error {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	m := doc.Content[0]
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if !slices.Contains(pluginFields, m.Content[i].Value) || m.Content[i+1].Kind != yaml.SequenceNode {
+			continue
+		}
+		for _, e := range m.Content[i+1].Content {
+			if e.Kind != yaml.ScalarNode {
+				continue
+			}
+			name, raw := kustomization+": "+m.Content[i].Value+" (inline)", []byte(e.Value)
+			if !strings.Contains(e.Value, "\n") {
+				p := filepath.Join(path.Dir(kustomization), e.Value)
+				if mem.IsDir(p) {
+					continue // a directory is a kustomization, checked on its own
+				}
+				b, err := mem.ReadFile(p)
+				if err != nil {
+					continue // kustomize reports the missing file
+				}
+				name, raw = p, b
+			}
+			dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+			for {
+				var cfg yaml.Node
+				err := dec.Decode(&cfg)
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					return parentsteps.Permanent(fmt.Errorf("parse %s: %w", name, err))
+				}
+				if cfg.Kind == yaml.DocumentNode && len(cfg.Content) == 1 && cfg.Content[0].Kind == yaml.MappingNode &&
+					scalarValue(cfg.Content[0], "kind") == "HelmChartInflationGenerator" {
+					return parentsteps.Permanent(fmt.Errorf("%s: HelmChartInflationGenerator is not supported by layout: branch; "+
+						"put the chart at the environment path instead", name))
+				}
+				if err := walkKustomization(name, &cfg, nil, pluginDataField); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func walkKustomization(file string, n *yaml.Node, field []string, data func([]string, string) bool) error {
 	switch n.Kind {
 	case yaml.DocumentNode:
 		for _, c := range n.Content {
-			if err := walkKustomization(file, c, field); err != nil {
+			if err := walkKustomization(file, c, field, data); err != nil {
 				return err
 			}
 		}
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			key := n.Content[i].Value
-			if len(field) == 0 && (key == "helmCharts" || key == "helmGlobals" || key == "helmChartInflationGenerator") {
+			if len(field) == 0 && data != nil && (key == "helmCharts" || key == "helmGlobals" || key == "helmChartInflationGenerator") {
 				return parentsteps.Permanent(fmt.Errorf("%s: %s is not supported by layout: branch; "+
 					"put the chart at the environment path instead", file, key))
 			}
-			if err := walkKustomization(file, n.Content[i+1], append(append([]string(nil), field...), key)); err != nil {
+			if err := walkKustomization(file, n.Content[i+1], append(append([]string(nil), field...), key), data); err != nil {
 				return err
 			}
 		}
 	case yaml.SequenceNode:
 		for _, c := range n.Content {
-			if err := walkKustomization(file, c, append(append([]string(nil), field...), "[]")); err != nil {
+			if err := walkKustomization(file, c, append(append([]string(nil), field...), "[]"), data); err != nil {
 				return err
 			}
 		}
 	case yaml.AliasNode:
 		return parentsteps.Permanent(fmt.Errorf("%s: YAML aliases are not supported by layout: branch", file))
 	case yaml.ScalarNode:
-		if !kustomizationDataField(field, n.Value) && remoteRef(n.Value) {
+		if !data(field, n.Value) && remoteRef(n.Value) {
 			return parentsteps.Permanent(fmt.Errorf("%s: %s: remote reference %q is not supported by layout: branch; "+
 				"vendor it into the repository", file, fieldPath(field), n.Value))
 		}

@@ -562,6 +562,14 @@ were 1,119,167 bytes once everything was applied. 300 environments (1,716,336 by
 were refused at create. The ceiling with 3 gates per environment is about 280 environments,
 with 3 gates and 2 hooks about 210.
 
+A `layout: branch` environment adds its RenderRun node and the mirror patch node that copies
+the result onto its step: about 2 KB of spec per environment (measured: a linear Pipeline of
+150 environments is 201,865 bytes as `directory` and 499,882 bytes as `branch`; 300 are
+403,015 and 998,632 bytes), plus one selector ref per Graph. The ceiling is therefore about
+360 rendering environments without gates, and about 185 with 3 gates each (about 160 with 3
+gates and 2 hooks, which share the mirror node). Over it the Bundle fails with
+`GraphBuildFailed` as above.
+
 **kardinal workaround.** `pkg/graph/size.go` `CheckSize`, called by the translator before the
 Graph is written: the JSON size plus 260 bytes per template node may not exceed 1,200,000
 bytes (collections count one entry per item). Over it, the Bundle fails with `GraphBuildFailed`

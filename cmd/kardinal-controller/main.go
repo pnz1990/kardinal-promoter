@@ -288,6 +288,9 @@ func main() {
 	flag.StringVar(&renderServiceAccount, "render-service-account", renderrunrecon.DefaultServiceAccount,
 		"ServiceAccount the render Jobs run as, in the Pipeline namespace. The controller creates it there, "+
 			"without a token, when it is missing; bind no role to it.")
+	var renderPullSecrets string
+	flag.StringVar(&renderPullSecrets, "render-image-pull-secrets", "",
+		"Comma-separated imagePullSecrets of the render Pods (Secrets in the Pipeline namespace).")
 	flag.StringVar(&renderCPU, "render-cpu-limit", "1", "CPU limit of a render Job.")
 	flag.StringVar(&renderMemory, "render-memory-limit", "512Mi", "Memory limit of a render Job; a render that needs more fails.")
 	flag.DurationVar(&renderTimeout, "render-timeout", renderrunrecon.DefaultTimeout,
@@ -535,6 +538,7 @@ func main() {
 		Resources:           renderResources,
 		Timeout:             renderTimeout,
 		ControllerNamespace: hookControllerNS,
+		ImagePullSecrets:    splitCSV(renderPullSecrets),
 		AuthorName:          "kardinal-promoter",
 		AuthorEmail:         "kardinal@kardinal.io",
 	}).SetupWithManager(mgr); err != nil {

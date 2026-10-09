@@ -104,6 +104,11 @@ func markerOwner(m renderMarker, state *parentsteps.StepState) string {
 		(m.Namespace == "" || ns == "" || m.Namespace == ns) {
 		return ""
 	}
+	// Another namespace's Pipeline is not named: its name is not this
+	// tenant's to read.
+	if m.Namespace != "" && ns != "" && m.Namespace != ns {
+		return "it was rendered for a Pipeline in another namespace"
+	}
 	owner := m.Pipeline
 	if m.Namespace != "" {
 		owner = m.Namespace + "/" + m.Pipeline
@@ -290,10 +295,16 @@ func (s *renderManifestsStep) Execute(ctx context.Context, state *parentsteps.St
 	}
 	// The marker itself is anchored: a push that edits files and the marker
 	// together is still drift, unless the marker is one kardinal wrote.
-	if known := state.Render.KnownMarkerDigests; hasMarker && len(known) > 0 && !slices.Contains(known, digest(rawMarker)) {
-		drift = append([]string{renderMarkerPath + " is not one kardinal wrote (sha256 " + shortSHA(digest(rawMarker)) + ")"}, drift...)
-	}
 	outputs := map[string]string{"renderer": string(kind), "renderedFiles": fmt.Sprint(len(files))}
+	// A marker of a render whose result was lost (its Bundle is
+	// unconfirmed) is kardinal's too when the files it lists are unchanged.
+	if known := state.Render.KnownMarkerDigests; hasMarker && len(known) > 0 && !slices.Contains(known, digest(rawMarker)) {
+		if len(drift) == 0 && marker.Bundle != "" && slices.Contains(state.Render.UnconfirmedBundles, marker.Bundle) {
+			outputs["markerAdopted"] = marker.Bundle
+		} else {
+			drift = append([]string{renderMarkerPath + " is not one kardinal wrote (sha256 " + shortSHA(digest(rawMarker)) + ")"}, drift...)
+		}
+	}
 	if len(drift) > 0 {
 		summary := strings.Join(firstN(drift, 5), "; ")
 		if len(drift) > 5 {

@@ -73,6 +73,12 @@ func TestRun(t *testing.T) {
 	assert.Equal(t, "kustomize", res.Renderer)
 	assert.Equal(t, 1, res.Objects)
 	assert.False(t, res.NoChanges)
+	head, err := git.RemoteBranchHead(ctx, url, "env/prod", "")
+	require.NoError(t, err)
+	assert.Equal(t, res.CommitSHA, head, "ls-remote sees the pushed commit")
+	none, err := git.RemoteBranchHead(ctx, url, "env/none", "")
+	require.NoError(t, err)
+	assert.Empty(t, none)
 
 	again := config(url, false)
 	again.KnownMarkerDigests = []string{res.MarkerDigest}
@@ -107,6 +113,14 @@ func TestMessage(t *testing.T) {
 	r, err := renderjob.ParseMessage(string(msg))
 	require.NoError(t, err)
 	assert.True(t, strings.HasSuffix(r.Error, " (cut)"))
+
+	drift := renderjob.Message(renderjob.Result{RenderRunResult: v1alpha1.RenderRunResult{CommitSHA: strings.Repeat("c", 40),
+		DriftOverwritten: strings.Repeat("a-very-long-file-name.yaml changed; ", 300)}})
+	assert.LessOrEqual(t, len(drift), 4096, "a long success message is cut too")
+	r, err = renderjob.ParseMessage(string(drift))
+	require.NoError(t, err)
+	assert.Equal(t, strings.Repeat("c", 40), r.CommitSHA, "the result itself is kept")
+	assert.True(t, strings.HasSuffix(r.DriftOverwritten, " (cut)"))
 
 	ok := renderjob.Message(renderjob.Result{RenderRunResult: v1alpha1.RenderRunResult{CommitSHA: "abc", Objects: 2}})
 	r, err = renderjob.ParseMessage(string(ok))

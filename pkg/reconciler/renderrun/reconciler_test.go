@@ -6,6 +6,7 @@ package renderrun_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,7 +66,8 @@ func newEnv(t *testing.T, objs ...client.Object) *env {
 			return c.Create(ctx, obj, opts...)
 		}}).Build()
 	e.r = &renderrun.Reconciler{Client: e.c, Image: "ghcr.io/x/render:v1", ControllerNamespace: "kardinal-system",
-		AuthorName: "kardinal-promoter", AuthorEmail: "k@example.com", NowFn: func() time.Time { return e.now }}
+		ImagePullSecrets: []string{"regcred"},
+		AuthorName:       "kardinal-promoter", AuthorEmail: "k@example.com", NowFn: func() time.Time { return e.now }}
 	return e
 }
 
@@ -96,8 +98,10 @@ func (e *env) finishJob(t *testing.T, job *batchv1.Job, complete bool, term core
 	}
 	job.Status.Conditions = []batchv1.JobCondition{{Type: cond, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
 	require.NoError(t, e.c.Status().Update(ctx, job))
+	yes := true
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: job.Name + "-x", Namespace: "team",
-		Labels: map[string]string{"batch.kubernetes.io/controller-uid": string(job.UID)}},
+		Labels:          map[string]string{"batch.kubernetes.io/controller-uid": string(job.UID)},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID, Controller: &yes}}},
 		Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "render", Image: "i"}}},
 		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "render", State: corev1.ContainerState{Terminated: &term}}}}}
 	require.NoError(t, e.c.Create(ctx, pod))
@@ -129,7 +133,15 @@ func TestRenderRun_Succeeds(t *testing.T) {
 	assert.False(t, *pod.EnableServiceLinks)
 	assert.Equal(t, "render", job.Spec.Template.Labels["kardinal.io/component"], "the NetworkPolicy selects it")
 	assert.Equal(t, int64(300), *job.Spec.ActiveDeadlineSeconds)
-	assert.Equal(t, int32(0), *job.Spec.BackoffLimit)
+	assert.Equal(t, int32(3), *job.Spec.BackoffLimit, "transient failures are retried")
+	require.NotNil(t, job.Spec.PodFailurePolicy)
+	rules := job.Spec.PodFailurePolicy.Rules
+	require.Len(t, rules, 2)
+	assert.Equal(t, batchv1.PodFailurePolicyActionIgnore, rules[0].Action, "an evicted Pod does not count")
+	assert.Equal(t, corev1.DisruptionTarget, rules[0].OnPodConditions[0].Type)
+	assert.Equal(t, batchv1.PodFailurePolicyActionFailJob, rules[1].Action, "a permanent render error is not retried")
+	assert.Equal(t, []int32{renderjob.ExitPermanent}, rules[1].OnExitCodes.Values)
+	assert.Equal(t, []corev1.LocalObjectReference{{Name: "regcred"}}, job.Spec.Template.Spec.ImagePullSecrets)
 	c := pod.Containers[0]
 	assert.Equal(t, "ghcr.io/x/render:v1", c.Image)
 	assert.True(t, *c.SecurityContext.ReadOnlyRootFilesystem)
@@ -151,8 +163,8 @@ func TestRenderRun_Succeeds(t *testing.T) {
 	assert.Equal(t, "git-creds", gitVol.Secret.SecretName)
 	assert.Equal(t, []corev1.KeyToPath{{Key: "token", Path: "token"}}, gitVol.Secret.Items)
 
-	msg := renderjob.Message(renderjob.Result{RenderRunResult: v1alpha1.RenderRunResult{CommitSHA: "c0ffee1234", Branch: "env/prod",
-		DryCommit: "d00d", Renderer: "kustomize", Objects: 4, MarkerDigest: "m1"}})
+	msg := renderjob.Message(renderjob.Result{RenderRunResult: v1alpha1.RenderRunResult{CommitSHA: sha("c"), Branch: "env/prod",
+		DryCommit: sha("d"), Renderer: "kustomize", Objects: 4, MarkerDigest: "m1"}})
 	e.finishJob(t, job, true, corev1.ContainerStateTerminated{ExitCode: 0, Message: string(msg)})
 	_, got = e.reconcile(t, "rr")
 	assert.Equal(t, "Succeeded", got.Status.Phase)
@@ -215,6 +227,9 @@ func TestRenderRun_Failures(t *testing.T) {
 		start(t, e)
 		e.now = e.now.Add(6 * time.Minute)
 		_, got := e.reconcile(t, "rr")
+		assert.Equal(t, "Running", got.Status.Phase, "the Job's own deadline (5m) ends it first; the reconciler waits 2m more")
+		e.now = e.now.Add(2 * time.Minute)
+		_, got = e.reconcile(t, "rr")
 		assert.Equal(t, "Failed", got.Status.Phase)
 		assert.Contains(t, got.Status.Message, "did not finish within 5m0s")
 		var jobs batchv1.JobList
@@ -254,4 +269,128 @@ func TestRenderRun_KnownMarkerDigests(t *testing.T) {
 		done("c", "d3", base.Add(2*time.Hour), "env/other"), other)
 	_, got := e.reconcile(t, "rr")
 	assert.Equal(t, []string{"d2", "d1"}, got.Status.KnownMarkerDigests, "newest first, same branch only")
+}
+
+func sha(c string) string { return strings.Repeat(c, 40)[:40] }
+
+// TestRenderRun_ResultTrust (QA round 2 on #1515, M2): the result is read
+// only from a Pod the Job owns (by UID, with the Job's name prefix), and a
+// result that cannot be true (another branch, a short commit id) fails the
+// RenderRun instead of succeeding it.
+func TestRenderRun_ResultTrust(t *testing.T) {
+	good := v1alpha1.RenderRunResult{CommitSHA: sha("c"), Branch: "env/prod", DryCommit: sha("d"), Renderer: "kustomize", Objects: 1}
+	start := func(t *testing.T) (*env, *batchv1.Job) {
+		e := newEnv(t, run("rr"))
+		e.reconcile(t, "rr")
+		e.reconcile(t, "rr")
+		return e, e.job(t, "rr")
+	}
+	t.Run("a Pod with the Job's labels it does not own", func(t *testing.T) {
+		e, job := start(t)
+		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+		require.NoError(t, e.c.Status().Update(context.Background(), job))
+		forged := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "rr-forged", Namespace: "team",
+			Labels: map[string]string{"batch.kubernetes.io/controller-uid": string(job.UID)}},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "render", Image: "i"}}},
+			Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "render", State: corev1.ContainerState{
+				Terminated: &corev1.ContainerStateTerminated{Message: string(renderjob.Message(renderjob.Result{RenderRunResult: good}))}}}}}}
+		require.NoError(t, e.c.Create(context.Background(), forged))
+		_, got := e.reconcile(t, "rr")
+		assert.Equal(t, "Failed", got.Status.Phase)
+		assert.Contains(t, got.Status.Message, "its result is unknown", "the forged Pod is not read")
+	})
+	for name, tc := range map[string]struct {
+		mutate func(*v1alpha1.RenderRunResult)
+		want   string
+	}{
+		"another branch": {func(r *v1alpha1.RenderRunResult) { r.Branch = "main" }, `branch "main" is not "env/prod"`},
+		"short commit":   {func(r *v1alpha1.RenderRunResult) { r.CommitSHA = "c0ffee" }, `commitSHA "c0ffee" is not a commit id`},
+		"short dry":      {func(r *v1alpha1.RenderRunResult) { r.DryCommit = "d00d" }, `dryCommit "d00d" is not a commit id`},
+		"unchanged with a commit": {func(r *v1alpha1.RenderRunResult) { r.NoChanges = true },
+			"an unchanged render reports a pushed commit"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, job := start(t)
+			res := good
+			tc.mutate(&res)
+			e.finishJob(t, job, true, corev1.ContainerStateTerminated{Message: string(renderjob.Message(renderjob.Result{RenderRunResult: res}))})
+			_, got := e.reconcile(t, "rr")
+			assert.Equal(t, "Failed", got.Status.Phase)
+			assert.Contains(t, got.Status.Message, tc.want)
+		})
+	}
+	t.Run("pr-review pushes the promotion branch", func(t *testing.T) {
+		r := run("rr")
+		r.Spec.Git.PullRequest = true
+		e := newEnv(t, r)
+		e.reconcile(t, "rr")
+		e.reconcile(t, "rr")
+		res := good
+		res.Branch = "kardinal/web-v2/prod"
+		e.finishJob(t, e.job(t, "rr"), true, corev1.ContainerStateTerminated{Message: string(renderjob.Message(renderjob.Result{RenderRunResult: res}))})
+		_, got := e.reconcile(t, "rr")
+		assert.Equal(t, "Succeeded", got.Status.Phase, got.Status.Message)
+	})
+}
+
+// TestRenderRun_WaitingReason (QA round 2 on #1515, M3): a render Pod that
+// cannot start says why in the RenderRun's message.
+func TestRenderRun_WaitingReason(t *testing.T) {
+	e := newEnv(t, run("rr"))
+	e.reconcile(t, "rr")
+	e.reconcile(t, "rr")
+	job := e.job(t, "rr")
+	yes := true
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "rr-abcde", Namespace: "team",
+		Labels:          map[string]string{"batch.kubernetes.io/controller-uid": string(job.UID)},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID, Controller: &yes}}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "render", Image: "i"}}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "render", State: corev1.ContainerState{
+			Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "Back-off pulling image ghcr.io/x/render:v1"}}}}}}
+	require.NoError(t, e.c.Create(context.Background(), pod))
+	_, got := e.reconcile(t, "rr")
+	assert.Equal(t, "Running", got.Status.Phase)
+	assert.Equal(t, "Job rr running; Pod rr-abcde: ImagePullBackOff: Back-off pulling image ghcr.io/x/render:v1", got.Status.Message)
+}
+
+// TestRenderRun_LostResult (QA round 2 on #1515, M1): a render whose result
+// was lost (its Pod gone) fails, and the next RenderRun of the environment
+// lists its Bundle as unconfirmed, so the render Job accepts the branch's
+// marker if that render did push; a Succeeded render after it confirms the
+// branch again.
+func TestRenderRun_LostResult(t *testing.T) {
+	ctx := context.Background()
+	first := run("rr1")
+	first.Spec.BundleName = "web-v2"
+	e := newEnv(t, first)
+	e.reconcile(t, "rr1")
+	e.reconcile(t, "rr1")
+	job := e.job(t, "rr1")
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	require.NoError(t, e.c.Status().Update(ctx, job))
+	_, got := e.reconcile(t, "rr1")
+	require.Equal(t, "Failed", got.Status.Phase)
+	assert.Contains(t, got.Status.Message, "its result is unknown")
+
+	second := run("rr2")
+	second.Spec.BundleName = "web-v3"
+	require.NoError(t, e.c.Create(ctx, second))
+	e.now = e.now.Add(time.Minute)
+	_, got = e.reconcile(t, "rr2")
+	assert.Equal(t, []string{"web-v2"}, got.Status.UnconfirmedBundles)
+	var cfg renderjob.Config
+	e.reconcile(t, "rr2")
+	require.NoError(t, json.Unmarshal([]byte(e.job(t, "rr2").Spec.Template.Spec.Containers[0].Env[0].Value), &cfg))
+	assert.Equal(t, []string{"web-v2"}, cfg.UnconfirmedBundles, "the render Job gets them")
+
+	e.finishJob(t, e.job(t, "rr2"), true, corev1.ContainerStateTerminated{Message: string(renderjob.Message(renderjob.Result{
+		RenderRunResult: v1alpha1.RenderRunResult{CommitSHA: sha("c"), Branch: "env/prod", DryCommit: sha("d"), MarkerDigest: "m2"}}))})
+	_, got = e.reconcile(t, "rr2")
+	require.Equal(t, "Succeeded", got.Status.Phase)
+	third := run("rr3")
+	require.NoError(t, e.c.Create(ctx, third))
+	e.now = e.now.Add(time.Minute)
+	_, got = e.reconcile(t, "rr3")
+	assert.Empty(t, got.Status.UnconfirmedBundles, "confirmed by the later Succeeded render")
+	assert.Equal(t, []string{"m2"}, got.Status.KnownMarkerDigests)
 }

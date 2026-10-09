@@ -247,7 +247,7 @@ func renderFails(t *testing.T, e *framework.Env, a *app, p *v1alpha1.Pipeline, e
 // the in-controller renderer, now each in its own render Job, and checks
 // that each is refused and nothing is pushed:
 //   - SSRF through a configMapGenerator file URL (the cloud metadata
-//     endpoint);
+//     endpoint), in the kustomization or in a generator configuration file;
 //   - a symbolic link in the DRY source to the ServiceAccount token path
 //     (the render Pod mounts no token anyway);
 //   - a Helm template that doubles a string until it fills the memory;
@@ -266,6 +266,18 @@ func TestCore_RenderedBranchRefusesAttacks(t *testing.T) {
 		}, "test")
 		msg := renderFails(t, e, a, a.renderedPipeline(nil), "test")
 		assert.Contains(t, msg, "configMapGenerator[].files[]: remote reference")
+	})
+	t.Run("ssrf through a generator file", func(t *testing.T) {
+		a := renderedApp(t, e, func(app fixtures.App) map[string][]byte {
+			files := fixtures.KustomizeRepo(app)
+			files[fixtures.Path("test")+"/kustomization.yaml"] = append(files[fixtures.Path("test")+"/kustomization.yaml"],
+				[]byte("generators: [gen.yaml]\n")...)
+			files[fixtures.Path("test")+"/gen.yaml"] = []byte("apiVersion: builtin\nkind: ConfigMapGenerator\nmetadata: {name: stolen}\n" +
+				"files: [creds=http://169.254.169.254/latest/meta-data/iam/security-credentials/]\n")
+			return files
+		}, "test")
+		msg := renderFails(t, e, a, a.renderedPipeline(nil), "test")
+		assert.Contains(t, msg, "gen.yaml: files[]: remote reference")
 	})
 	t.Run("symlink to the token", func(t *testing.T) {
 		a := renderedApp(t, e, fixtures.KustomizeRepo, "test")

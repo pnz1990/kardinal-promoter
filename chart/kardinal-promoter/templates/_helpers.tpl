@@ -221,5 +221,21 @@ addresses; the UI and webhook servers listen on their Service ports.
 The kardinal-render image of the render Jobs (layout: branch).
 */}}
 {{- define "kardinal-promoter.renderImage" -}}
+{{- if .Values.render.image.digest -}}
+{{ .Values.render.image.repository }}@{{ .Values.render.image.digest }}
+{{- else -}}
 {{ .Values.render.image.repository }}:{{ .Values.render.image.tag | default .Chart.AppVersion }}
+{{- end }}
+{{- end }}
+
+{{/*
+The controller image: repository@digest when image.digest is set, else
+repository:tag (the chart's appVersion by default).
+*/}}
+{{- define "kardinal-promoter.controllerImage" -}}
+{{- if .Values.image.digest -}}
+{{ .Values.image.repository }}@{{ .Values.image.digest }}
+{{- else -}}
+{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+{{- end }}
 {{- end }}

@@ -23,8 +23,12 @@ image:
   pullPolicy: IfNotPresent
   # -- Image tag (defaults to chart appVersion)
   tag: ""
+  # -- Image digest (sha256:...); when set the image is repository@digest
+  # and the tag is not used.
+  digest: ""
 
-# -- Image pull secrets for private registries
+# -- Image pull secrets for private registries. The render Jobs get them too
+# (--render-image-pull-secrets); they must exist in the Pipeline namespaces.
 imagePullSecrets: []
 
 # -- Override the name of the chart
@@ -290,6 +294,9 @@ render:
     repository: ghcr.io/pnz1990/kardinal-promoter/render
     # -- Tag (defaults to chart appVersion).
     tag: ""
+    # -- Digest (sha256:...); when set the image is repository@digest and
+    # the tag is not used.
+    digest: ""
     # -- imagePullPolicy of the render Jobs (empty: Kubernetes' default).
     pullPolicy: ""
   # -- ServiceAccount the render Pods run as. The controller creates it in a

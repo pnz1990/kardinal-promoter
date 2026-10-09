@@ -176,6 +176,10 @@ type RenderContext struct {
 	// Pipeline environment (RenderRun status). When there are some, the
 	// rendered branch's marker must have one of them.
 	KnownMarkerDigests []string
+	// UnconfirmedBundles are Bundles whose render may have pushed without
+	// its result being recorded: a marker that names one of them, with the
+	// files it lists unchanged, is accepted too.
+	UnconfirmedBundles []string
 }
 
 // RenderJobEnv is set to "1" in the kardinal-render Job. render-manifests

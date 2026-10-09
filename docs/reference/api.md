@@ -538,6 +538,7 @@ RenderRun is one render of a layout: branch environment for one Bundle: a Kubern
 | `status.result.renderer` | string |  | Renderer is kustomize or helm. |
 | `status.specHash` | string |  | SpecHash is a hash of the spec when the Job was created. A later spec change is not applied. |
 | `status.startedAt` | string (date-time) |  | StartedAt is when the Job was created. |
+| `status.unconfirmedBundles` | []string |  | UnconfirmedBundles are the Bundles of the environment's RenderRuns that Failed after its last Succeeded one: their Job may have pushed before its result was lost. A rendered branch whose marker names one of them, and whose files match that marker, is accepted as kardinal's. |
 
 ## RollbackPolicy
 
