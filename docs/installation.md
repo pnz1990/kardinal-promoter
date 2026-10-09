@@ -179,6 +179,7 @@ kardinal version
 | `networkPolicy.enabled` | `false` | NetworkPolicy for the controller Pod |
 | `networkPolicy.ingressFrom.{metrics,health,ui,webhook}` | `[]` | Allowed peers per ingress port (empty admits any source) |
 | `networkPolicy.extraEgress` | `[]` | Extra egress rules (e.g. Prometheus for MetricChecks) |
+| `egress.allowlist` | `[]` | Destinations NotificationHook, MetricCheck and Subscription requests may reach (`--egress-allowlist`): host names, `*.` wildcards, CIDRs. Empty allows any destination outside the always-refused loopback, link-local and metadata addresses. See [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls) |
 | `scheduleClock.enabled` / `.interval` | `true` / `"1m"` | ScheduleClock `kardinal-clock` in the release namespace. Each tick re-evaluates every PolicyGate instance |
 | `validatingAdmissionPolicy.enabled` | `true` | Deprecated, no effect. The CRD schemas validate these fields |
 
