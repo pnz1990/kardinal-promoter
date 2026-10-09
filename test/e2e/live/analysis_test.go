@@ -472,11 +472,11 @@ func TestRollouts_AnalysisInCompactGraph(t *testing.T) {
 	slow["interval"] = "10s"
 	slow["count"] = int64(60)
 	createAnalysisTemplate(t, e, a.ns, "slow", nil, slow)
-	p = a.pipeline(nil)
-	p.Annotations = map[string]string{"kardinal.io/graph-shape": "compact"}
-	p.Spec.Environments[1].Verification = &v1alpha1.VerificationSpec{
+	var live v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
+	live.Spec.Environments[1].Verification = &v1alpha1.VerificationSpec{
 		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "fails"}, {Name: "slow"}}}
-	a.apply(t, p)
+	require.NoError(t, e.Client.Update(ctx, &live))
 	second := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
 	e.WaitStepState(t, a.ns, pipelineName, second, "prod", "Failed", promoteTimeout)
 	framework.Eventually(t, 2*time.Minute, "the slow run to be terminated", func(ctx context.Context) (bool, string) {
