@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -128,8 +129,9 @@ func jaegerTraces(ctx context.Context, api, traceID string) ([]jaegerTrace, erro
 // traceparent whose trace is in Jaeger with the notificationhook reconcile
 // and the client span. The traces of the release's namespace hold
 // reconcile spans, a span per promotion step, git clone and git push, and
-// SCM API client spans to the git server. No span carries the hook URL's
-// path.
+// SCM API client spans to the git server, and a MetricCheck query's client
+// span to its web API (the receiver). No span carries the hook URL's path or
+// the MetricCheck URL's path.
 //
 // Covers OBS-TRACING-01.
 func TestChart_Tracing(t *testing.T) {
@@ -151,6 +153,14 @@ func TestChart_Tracing(t *testing.T) {
 
 	bucket := a.ns + "-traced"
 	newHook(t, e, a.ns, "traced", rcv.URL(bucket, "services/T0/B0/hookpath"), "", "", v1alpha1.NotificationEventBundleVerified)
+	// A web MetricCheck that queries the receiver: its GET is a client span
+	// under metriccheck.Reconcile.
+	e.CreateMetricCheck(t, &v1alpha1.MetricCheck{
+		ObjectMeta: metav1.ObjectMeta{Name: "traced-query", Namespace: a.ns},
+		Spec: v1alpha1.MetricCheckSpec{Provider: "web", Interval: "20s",
+			Threshold: v1alpha1.MetricThreshold{Operator: "lt", Value: 1},
+			Web:       &v1alpha1.WebProviderSpec{URL: rcv.URL(bucket+"-metric", "querypath"), JSONPath: "{.status}"}},
+	})
 	a.apply(t, a.resourcePipeline(map[string]string{"test": "pr-review"}))
 	promote(t, a, fixtures.V2, map[string]bool{"test": true})
 
@@ -188,13 +198,14 @@ func TestChart_Tracing(t *testing.T) {
 	require.NoError(t, err)
 	gitHost := scmAPI.Hostname()
 	want := []string{"promotionstep.Reconcile", "bundle.Reconcile", "step git-clone", "git clone",
-		"step git-push", "git push", "step open-pr"}
+		"step git-push", "git push", "step open-pr", "metriccheck.Reconcile"}
+	receiverHost := "receiver.webhook-receiver.svc.cluster.local"
 	framework.Eventually(t, time.Minute, "the namespace's promotion spans in Jaeger", func(ctx context.Context) (bool, string) {
 		traces, err := jaegerTraces(ctx, api, "")
 		if err != nil {
 			return false, err.Error()
 		}
-		ops, scm := map[string]bool{}, 0
+		ops, scm, metric := map[string]bool{}, 0, 0
 		for _, tr := range traces {
 			mine := false
 			for _, s := range tr.Spans {
@@ -210,8 +221,12 @@ func TestChart_Tracing(t *testing.T) {
 				if strings.HasPrefix(s.Name, "HTTP ") && s.tag("server.address") == gitHost {
 					scm++
 				}
+				if s.Name == "HTTP GET" && s.tag("server.address") == receiverHost {
+					metric++
+				}
 				for _, at := range s.Attributes {
 					assert.NotContains(t, fmt.Sprint(at.Value), "hookpath", "%s attribute %s", s.Name, at.Key)
+					assert.NotContains(t, fmt.Sprint(at.Value), "querypath", "%s attribute %s", s.Name, at.Key)
 				}
 			}
 		}
@@ -221,6 +236,7 @@ func TestChart_Tracing(t *testing.T) {
 				missing = append(missing, op)
 			}
 		}
-		return len(missing) == 0 && scm > 0, fmt.Sprintf("missing %v, %d SCM spans to %s", missing, scm, gitHost)
+		return len(missing) == 0 && scm > 0 && metric > 0, fmt.Sprintf("missing %v, %d SCM spans to %s, %d MetricCheck spans to %s",
+			missing, scm, gitHost, metric, receiverHost)
 	})
 }
