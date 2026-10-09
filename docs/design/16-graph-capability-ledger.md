@@ -598,7 +598,10 @@ over the steps read back through a selector `ref` (the G11 pacing pattern), and 
 health ref nodes. The Graph has 9 to 12 nodes whatever the environment count. Measured on kind: 300
 environments (30 waves of 10, a gate each) promoted end to end in 8 minutes, with the applied
 Graph at 472,213 bytes; estimated 0.9 MB with 3 gates each. Graphs also may not create more than
-4,500 objects (kro's inventory holds 5,000). The Pipeline CRD allows 500 environments (#1473).
+4,500 objects (kro's inventory holds 5,000). The Pipeline CRD allows 500 environments (#1473). With a
+pre hook, a post hook and an analysis on each of 150 environments (15 waves of 10, a gate each:
+300 HookRuns and 150 AnalysisRuns from collections), the Graph had 21 nodes and 672,098 bytes
+(spec and status) and promoted end to end on kind in 22 minutes.
 
 **Upstream work.** None filed. Optional ask: keep the inventory out of the Graph object (an
 ApplySet-style parent or a child object), so the spec alone bounds the size.
@@ -720,6 +723,11 @@ target an object a template node of the same Graph owns; the two field managers 
 Verified on kind: the mirrored gate result followed the gate (true, false, true) while the step
 node was Unresolved. Hooks use it (`live0<env>` writes `spec.live.hooks`, `pkg/graph/hooks.go`,
 #1443); gate commit statuses (#1452) use it as well.
+The compact shape needs no mirror for hooks and analyses: its PromotionSteps template
+carries no gating field (a `def` admits the items), so it renders `spec.live.hooks` and
+`spec.live.analyses` from the `refHookRuns` and `refAnalysisRuns` selector refs, which never pend
+(an empty list when nothing matches). HookRuns and AnalysisRuns are collections admitted the same
+way and kept once they exist (`pkg/graph/compact_extras.go`).
 
 **Upstream work.** None filed.
 
