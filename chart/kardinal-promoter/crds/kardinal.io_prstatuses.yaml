@@ -99,6 +99,30 @@ spec:
                 maxLength: 512
                 pattern: ^([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*)*)?$
                 type: string
+              scmProvider:
+                description: |-
+                  ScmProvider is the provider the PR was opened on, copied from the
+                  PromotionStep. Unset uses the controller's --scm-provider.
+                properties:
+                  kind:
+                    description: Kind is ScmProvider or ClusterScmProvider.
+                    enum:
+                    - ScmProvider
+                    - ClusterScmProvider
+                    type: string
+                  name:
+                    description: Name is the provider's name; a ScmProvider is in
+                      the step's namespace.
+                    type: string
+                  uid:
+                    description: UID is the provider's metadata.uid when the Graph
+                      was built.
+                    type: string
+                required:
+                - kind
+                - name
+                - uid
+                type: object
             type: object
           status:
             description: |-
