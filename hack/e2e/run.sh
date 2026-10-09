@@ -14,6 +14,8 @@
 #   SHARD         i/n runs every nth of the matching tests, starting at the
 #                 ith (CI splits the core suite across jobs this way)
 #   KIND_CLUSTER  cluster name (default kardinal-e2e-SUITE)
+#   TIMEOUT       go test -timeout (default 90m per repetition; the scale
+#                 suite's full and soak profiles need more, e.g. 4h)
 #
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
@@ -54,6 +56,6 @@ if [ -n "${SHARD:-}" ]; then
   RUN="^($(IFS='|'; echo "${mine[*]}"))\$"
   echo "shard $SHARD: ${#mine[@]} of ${#tests[@]} tests"
 fi
-# 90 minutes per repetition.
-go test -tags e2e ./test/e2e/live -run "$RUN" -count="$COUNT" -timeout "$((90 * COUNT))m" -json 2>&1 |
+# 90 minutes per repetition unless TIMEOUT says.
+go test -tags e2e ./test/e2e/live -run "$RUN" -count="$COUNT" -timeout "${TIMEOUT:-$((90 * COUNT))m}" -json 2>&1 |
   tee "$E2E_OUT/test.json" | "$E2E_OUT/bin/report" -suite "$SUITE" -out "$E2E_OUT/summary.json"

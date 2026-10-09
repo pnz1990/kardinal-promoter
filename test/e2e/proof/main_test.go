@@ -18,14 +18,21 @@ import (
 )
 
 type testResult = struct {
-	Test   string `json:"test"`
-	Action string `json:"action"`
+	Test     string `json:"test"`
+	Action   string `json:"action"`
+	KnownBug int    `json:"knownBug,omitempty"`
 }
 
+// suiteRun is a suite's summary; action "known-bug" is a skip as known bug
+// #1473.
 func suiteRun(suite string, results map[string]string) summary {
 	s := summary{Suite: suite}
 	for name, action := range results {
-		s.Results = append(s.Results, testResult{Test: name, Action: action})
+		r := testResult{Test: name, Action: action}
+		if action == "known-bug" {
+			r.Action, r.KnownBug = "skip", 1473
+		}
+		s.Results = append(s.Results, r)
 	}
 	return s
 }
@@ -74,6 +81,12 @@ func TestProve(t *testing.T) {
 		})},
 		want: map[string]string{"CORE-01": passed, "CORE-02": failed, "CORE-03": passed},
 	}, {
+		name: "a known-bug skip is a known bug, not a failure",
+		summaries: []summary{suiteRun("core", map[string]string{
+			"TestCore_A": "pass", "TestCore_B": "known-bug", "TestCore_C": "skip",
+		})},
+		want: map[string]string{"CORE-01": passed, "CORE-02": known, "CORE-03": failed},
+	}, {
 		name: "every suite ran",
 		summaries: []summary{
 			suiteRun("core", map[string]string{"TestCore_A": "pass", "TestCore_B": "pass", "TestCore_C": "pass"}),
@@ -116,6 +129,7 @@ func TestOK(t *testing.T) {
 		{"a missing row", []rowResult{rr("live", missing)}, false, false},
 		{"a live row not run", []rowResult{rr("live", passed), rr("live", notRun)}, true, false},
 		{"a live row todo", []rowResult{rr("live", todo)}, true, false},
+		{"a live row a known bug", []rowResult{rr("live", passed), rr("live", known)}, true, false},
 		{"a deprecated row todo", []rowResult{rr("deprecated", todo)}, true, false},
 		{"a contract row todo", []rowResult{rr("contract", todo)}, true, true},
 	}
@@ -137,7 +151,7 @@ func TestMarkdown(t *testing.T) {
 	markdown(&b, results, false)
 	out := b.String()
 	assert.Contains(t, out, "### Coverage proof: FAILED")
-	assert.Contains(t, out, "| contract | 1 | 0 | 0 | 0 | 0 | 1 | 0 |")
+	assert.Contains(t, out, "| contract | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |")
 	assert.Contains(t, out, "| live | 2 | 1 | 1 | 0 | 0 | 0 | 0 |")
 	assert.Contains(t, out, "| CORE-01 | live | core | passed | `TestCore_A` |")
 }

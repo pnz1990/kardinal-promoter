@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Testing
+
+- **Scale suite** — a new live e2e suite, `scale` (`make e2e-up SUITE=scale`), tests kardinal at the size of a large company: 100-stage chains and wave fan-outs, 200 Pipelines, bursts of 1,000 Bundles, sustained load, operator and SCM races, and chaos (leader kills, kro restarts, git latency and outages through Toxiproxy, API server throttling, SCM token rotation), with the controller built with `-race`. Every test ends with a reusable invariants checker (git content, PRs, branches, Graphs, AuditEvents, controller logs, Prometheus metrics) that writes a JSON report and a markdown summary. See [the suite's README](https://github.com/pnz1990/kardinal-promoter/blob/main/test/e2e/README.md#scale-suite)
+
 ### Docs
 
 - **Comparison** — resurveyed Kargo v1.12.1 and GitOps Promoter v0.42.1 (2026-10-03). The matrix corrects cells that had gone stale, such as GitOps Promoter's CLI, PR body and Flux support, and Kargo's gates, steps and engines. It adds rows for pause, supersession, `explain`/`policy simulate` and audit trails, plus sections on what changed in 2026 and where Kargo or GitOps Promoter is ahead. The home table, the rollback page and the Kargo migration guide match it

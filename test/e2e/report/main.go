@@ -4,6 +4,9 @@
 // Command report reads `go test -json` from stdin, prints the test output as
 // it arrives, and ends with a summary. It exits 1 when a test failed, when a
 // test skipped (a skipped live test proves nothing), or when no test ran.
+// A test that skips with "KNOWN BUG #<issue>" (the scale suite's
+// scale.KnownBug: the rest of the test reproduces an open bug) is listed as
+// a known bug and does not fail the run.
 // With GITHUB_STEP_SUMMARY set it also writes the summary there as Markdown;
 // with -out it writes the results as JSON for test/e2e/proof.
 //
@@ -17,7 +20,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -36,7 +41,13 @@ type result struct {
 	Test    string  `json:"test"`
 	Action  string  `json:"action"`
 	Elapsed float64 `json:"elapsed"`
+	// KnownBug is the issue a skipped test named in its "KNOWN BUG #n"
+	// skip message.
+	KnownBug int `json:"knownBug,omitempty"`
 }
+
+// knownBug matches the skip message of scale.KnownBug.
+var knownBug = regexp.MustCompile(`KNOWN BUG #([0-9]+)`)
 
 type summary struct {
 	results []result
@@ -55,7 +66,18 @@ type file struct {
 func (s *summary) count(action string) int {
 	n := 0
 	for _, r := range s.results {
-		if r.Action == action {
+		if r.Action == action && (action != "skip" || r.KnownBug == 0) {
+			n++
+		}
+	}
+	return n
+}
+
+// knownBugs counts the tests skipped as known bugs.
+func (s *summary) knownBugs() int {
+	n := 0
+	for _, r := range s.results {
+		if r.Action == "skip" && r.KnownBug > 0 {
 			n++
 		}
 	}
@@ -71,6 +93,7 @@ func (s *summary) ok() bool {
 // JSON (build errors go test prints before any event) are copied as-is.
 func read(in io.Reader, out io.Writer) (*summary, error) {
 	s := &summary{}
+	bugs := map[string]int{}
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for sc.Scan() {
@@ -83,6 +106,9 @@ func read(in io.Reader, out io.Writer) (*summary, error) {
 		switch ev.Action {
 		case "output":
 			_, _ = fmt.Fprint(out, ev.Output)
+			if m := knownBug.FindStringSubmatch(ev.Output); m != nil && ev.Test != "" {
+				bugs[ev.Test], _ = strconv.Atoi(m[1])
+			}
 		case "pass", "fail", "skip":
 			if ev.Test == "" {
 				if ev.Action == "fail" {
@@ -90,7 +116,12 @@ func read(in io.Reader, out io.Writer) (*summary, error) {
 				}
 				continue
 			}
-			s.results = append(s.results, result{Test: ev.Test, Action: ev.Action, Elapsed: ev.Elapsed})
+			r := result{Test: ev.Test, Action: ev.Action, Elapsed: ev.Elapsed}
+			if ev.Action == "skip" {
+				r.KnownBug = bugs[ev.Test]
+			}
+			delete(bugs, ev.Test)
+			s.results = append(s.results, r)
 		}
 	}
 	return s, sc.Err()
@@ -104,7 +135,7 @@ func (s *summary) markdown(suite string) string {
 		verdict = "FAILED"
 	}
 	fmt.Fprintf(&b, "### Live e2e suite `%s`: %s\n\n", suite, verdict)
-	fmt.Fprintf(&b, "%d passed, %d failed, %d skipped", s.count("pass"), s.count("fail"), s.count("skip"))
+	fmt.Fprintf(&b, "%d passed, %d failed, %d skipped, %d known bugs", s.count("pass"), s.count("fail"), s.count("skip"), s.knownBugs())
 	if s.pkgFailed {
 		b.WriteString(", and the test binary failed outside a test")
 	}
@@ -112,7 +143,11 @@ func (s *summary) markdown(suite string) string {
 	rs := append([]result(nil), s.results...)
 	sort.SliceStable(rs, func(i, j int) bool { return rs[i].Test < rs[j].Test })
 	for _, r := range rs {
-		fmt.Fprintf(&b, "| `%s` | %s | %.0fs |\n", r.Test, r.Action, r.Elapsed)
+		action := r.Action
+		if r.KnownBug > 0 {
+			action = fmt.Sprintf("known bug [#%d](https://github.com/pnz1990/kardinal-promoter/issues/%d)", r.KnownBug, r.KnownBug)
+		}
+		fmt.Fprintf(&b, "| `%s` | %s | %.0fs |\n", r.Test, action, r.Elapsed)
 	}
 	return b.String()
 }
@@ -127,9 +162,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "report: read go test output: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("\n=== suite %s: %d passed, %d failed, %d skipped\n", *suite, s.count("pass"), s.count("fail"), s.count("skip"))
+	fmt.Printf("\n=== suite %s: %d passed, %d failed, %d skipped, %d known bugs\n", *suite, s.count("pass"), s.count("fail"), s.count("skip"), s.knownBugs())
 	for _, r := range s.results {
-		if r.Action != "pass" {
+		switch {
+		case r.KnownBug > 0:
+			fmt.Printf("    KNOWN BUG #%d %s\n", r.KnownBug, r.Test)
+		case r.Action != "pass":
 			fmt.Printf("    %s %s\n", strings.ToUpper(r.Action), r.Test)
 		}
 	}

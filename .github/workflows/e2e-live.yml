@@ -68,8 +68,9 @@ jobs:
     name: ${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }} on Kubernetes ${{ matrix.k8s }}
     needs: image
     runs-on: ubuntu-latest
-    # The weekly run repeats every test three times.
-    timeout-minutes: ${{ (github.event_name == 'schedule' || inputs.count != '1') && 180 || 60 }}
+    # The weekly run repeats every test three times. The scale suite runs
+    # once (its ci profile takes about an hour).
+    timeout-minutes: ${{ matrix.suite == 'scale' && 120 || (github.event_name == 'schedule' || inputs.count != '1') && 180 || 60 }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.image.outputs.matrix) }}
@@ -77,8 +78,9 @@ jobs:
       SUITE: ${{ matrix.suite }}
       KIND_K8S: ${{ matrix.k8s }}
       KARDINAL_E2E_BUILD: none
-      # hack/e2e/run.sh refuses COUNT above 1 for the upgrade suite.
-      COUNT: ${{ matrix.suite == 'upgrade' && '1' || github.event_name == 'schedule' && '3' || inputs.count || '1' }}
+      # hack/e2e/run.sh refuses COUNT above 1 for the upgrade suite; the
+      # scale suite runs once too (hack/e2e/all.sh does the same).
+      COUNT: ${{ (matrix.suite == 'upgrade' || matrix.suite == 'scale') && '1' || github.event_name == 'schedule' && '3' || inputs.count || '1' }}
       SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

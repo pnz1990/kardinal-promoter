@@ -20,7 +20,7 @@
 #               memory, gitlab's about 7 GB; multi-cluster's job has two)
 #   SUITES      only these suites, e.g. 'core gitea' (default every suite)
 #   COUNT       go test -count (default 1; the upgrade jobs always 1: the
-#               test upgrades its cluster). RUN is ignored: every job runs
+#               test upgrades its cluster; the scale job always 1). RUN is ignored: every job runs
 #               its whole suite (for some tests, use make test-e2e-live RUN=)
 #   KEEP        set to keep the clusters (default: each is deleted when its
 #               job ends)
@@ -151,8 +151,9 @@ run_job() {
     unset RUN
     [ "$suite" = github ] || unset KARDINAL_E2E_GITHUB_TOKEN_FILE DEMO_GITHUB_TOKEN
     export KIND_CLUSTER="$PREFIX-$id" KIND_K8S="$k8s" SHARD="$shard" COUNT="${COUNT:-1}"
-    # run.sh refuses COUNT above 1 for the upgrade suite.
-    [ "$suite" != upgrade ] || COUNT=1
+    # run.sh refuses COUNT above 1 for the upgrade suite; the scale suite's
+    # load and chaos tests are long, and repeat nothing a second run adds.
+    [ "$suite" != upgrade ] && [ "$suite" != scale ] || COUNT=1
     export E2E_OUT="$OUT/$id" KUBECONFIG="$OUT/$id/kubeconfig"
     mkdir -p "$E2E_OUT"
     bash "$E2E_DIR/up.sh" "$suite" && bash "$E2E_DIR/run.sh" "$suite"

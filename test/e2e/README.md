@@ -86,6 +86,7 @@ pattern of its tests.
 | `chart` | Forgejo, Argo CD, cert-manager; no controller release: each test installs its own | `TestChart_*`, `TestDeprecated_*` |
 | `upgrade` | Forgejo, Argo CD, kardinal-promoter v0.8.1 with its bundled Graph controller and no kro; the test follows the upgrade guide, so a cluster serves one run. `KIND_K8S=1.30` runs it on Kubernetes 1.30 | `TestUpgrade_*` |
 | `multi-cluster` | Forgejo, Argo CD, Flux and Argo Rollouts in the hub, and a second kind cluster (`<cluster>-spoke`, Argo Rollouts) registered with the hub's Argo CD and Flux | `TestMultiCluster_*` |
+| `scale` | Forgejo behind Toxiproxy, Prometheus Operator and Prometheus, two controller replicas built with `-race` | `TestScale_*` (see [Scale suite](#scale-suite)) |
 
 `TestSCM_*` tests use only `Env.Git`, so they run against every git server;
 a test that needs one provider is named after it and checks `Env.Git.Kind()`
@@ -103,6 +104,74 @@ first. The `github` suite takes its token from `KARDINAL_E2E_GITHUB_TOKEN_FILE`,
 > fine-grained token for the test repo only, with Contents and Pull requests
 > read and write, and pass it in `DEMO_GITHUB_TOKEN` (or a file named by
 > `KARDINAL_E2E_GITHUB_TOKEN_FILE`).
+
+## Scale suite
+
+The `scale` suite tests kardinal the way a large company runs it: Pipelines
+of over 100 stages and 150 environments, hundreds of Pipelines, bursts of
+1,000 Bundles, operators and CI racing the controller, and faults in every
+dependency. Each test ends with the invariants checker
+(`test/e2e/framework/invariants`), which any live test can run.
+
+```bash
+KIND_CLUSTER=kp-scale KARDINAL_E2E_BUILD=host KARDINAL_E2E_NODE_MEMORY=24g make e2e-up SUITE=scale
+KIND_CLUSTER=kp-scale make test-e2e-live SUITE=scale                          # the ci profile
+KIND_CLUSTER=kp-scale KARDINAL_E2E_SCALE_PROFILE=full make test-e2e-live SUITE=scale
+KIND_CLUSTER=kp-scale KARDINAL_E2E_SCALE_PROFILE=soak RUN='^TestScale_LoadSustained$' make test-e2e-live SUITE=scale
+```
+
+The controller is built with `-race` (`KARDINAL_E2E_RACE=1`, the suite's
+default; on the host, with cgo, whatever `KARDINAL_E2E_BUILD` says) and runs
+two replicas, so a killed leader fails over. It reaches Forgejo through
+Toxiproxy (`hack/e2e/components/toxiproxy.sh`), which the git chaos tests
+slow down and cut off; the test runner reaches Forgejo directly. Every
+environment's health check reads one Deployment that runs the pause image,
+so the suite measures kardinal rather than a GitOps engine syncing 150
+environments: the invariants read what kardinal wrote to git.
+
+`KARDINAL_E2E_SCALE_PROFILE` sets the sizes (`test/e2e/framework/scale/profile.go`):
+
+| Profile | Sizes | Time |
+|---|---|---|
+| `ci` (default) | 50-stage chain, 4 waves x 5 regions, 30 Pipelines, a burst of 150 Bundles, 0.5 Bundles/s for 2 min, chaos for 3 min | about 40 min on a 4-CPU runner |
+| `full` | 100-stage chain, canary and 9 waves x 11 regions (100 environments, the cap), fan-in of 50, 200 Pipelines, a burst of 1,000 Bundles over 100 Pipelines, 2 Bundles/s for 10 min, chaos for 10 min | about 2 h; give the kind node 24 GB (`KARDINAL_E2E_NODE_MEMORY`) |
+| `soak` | `full`, with 5 Bundles/s for 30 min over 100 Pipelines | `full` plus 40 min |
+
+Any size can be set on its own: `KARDINAL_E2E_SCALE_<FIELD>`, the field name
+in upper snake case (`KARDINAL_E2E_SCALE_SUSTAINED_RATE=5`,
+`KARDINAL_E2E_SCALE_SUSTAINED_FOR=1h`, `KARDINAL_E2E_SCALE_PIPELINES=500`).
+
+| Tests | What they do |
+|---|---|
+| `TestScale_Topology*` | a 100-stage chain, the 120-stage chain and 150-environment fan-out a large company asks for, waves, a diamond lattice, a fan-in, mixed auto and pr-review approval, several Pipelines writing one repo and branch |
+| `TestScale_Load*` | 200 Pipelines with a Bundle each, a burst of 1,000 Bundles (the newest per Pipeline must end Verified), a sustained rate for a duration |
+| `TestScale_Race*` | rapid-fire Bundles, Pipeline edits, gate flapping, a ChangeWindow switched on while a step waits for merge, pause/resume storms, rollback during a promotion, PRs closed, reopened and merged from outside, a force-pushed branch, a namespace deleted mid-flight, duplicate, forged and out-of-order webhooks |
+| `TestScale_Chaos*` | the leader killed every 20-60 s, kro restarted, git latency and outages, API Priority and Fairness throttling the controller to one seat, the SCM token rotated mid-flight |
+
+The load and chaos tests run one at a time, first; the topology and race
+tests then run in parallel.
+
+The invariants, after every Bundle settled:
+
+- every environment's git content is the image of the last Bundle Verified there;
+- no environment has two open PRs, and no open PR belongs to a finished Bundle;
+- no `kardinal/` branch is left without an open or merged PR;
+- every Bundle (and each of its steps) reached a terminal phase within the profile's `Settle`;
+- no Graph outlived its Bundle, stayed deleting, reports an error or nears etcd's request limit;
+- AuditEvents agree with the step states;
+- the controller logged no `DATA RACE`, no panic and no error-level line outside the allowlist (`invariants.Benign` plus the faults a test injects), and no container restarted;
+- Prometheus: the reconcile error ratio stays under the test's limit, every work queue drains, and no controller Pod that ran the whole test grew its goroutines past 1.5x or its memory past 90% of the limit.
+
+Each test writes `diagnostics/scale/<test>/report.json` (every number:
+latency per stage, Bundle end to end, Graph sizes, reconcile errors, queue
+depth, memory and goroutines per Pod) and `report.md`, and keeps the raw
+controller and kro logs next to them.
+
+A test that reproduces an open bug calls `scale.KnownBug(t, issue, ...)`:
+it skips with `KNOWN BUG #<issue>`, which `test/e2e/report` and
+`test/e2e/proof` list as a known bug instead of a failure.
+`KARDINAL_E2E_SCALE_KNOWN_BUGS=1` runs those tests to reproduce the bugs.
+Remove the call when the bug is fixed.
 
 ## Coverage
 
@@ -129,7 +198,8 @@ lists every row's result. `-complete` also fails on rows still todo.
 ## Rules
 
 - **A live test never skips.** A missing cluster, component or credential
-  fails the test. CI treats a skipped test as a failure too.
+  fails the test. CI treats a skipped test as a failure too. The one
+  exception is `scale.KnownBug`: a skip that names an open bug issue.
 - **Each test owns its state.** `Env.Namespace` gives the test its own
   namespace and `Env.Repo` its own repo (a branch of one shared repo on
   GitHub), so tests run in any order and never see each other's PRs.
