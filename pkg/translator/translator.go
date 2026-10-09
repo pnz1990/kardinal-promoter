@@ -110,7 +110,7 @@ func (t *Translator) Translate(ctx context.Context,
 		PolicyNamespaces: t.policyNS,
 	})
 	if err != nil {
-		return "", fmt.Errorf("translator.Translate: %w", err)
+		return "", &BuildError{Err: fmt.Errorf("translator.Translate: %w", err), Gates: gates}
 	}
 
 	log.Debug().

@@ -25,7 +25,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // ForgejoProvider implements SCMProvider against the Forgejo/Gitea REST API v1.
@@ -46,8 +45,10 @@ type ForgejoProvider struct {
 	// Empty refuses every event (ErrNoWebhookSecret).
 	WebhookSecret string
 
-	// circuit guards all outbound Forgejo API calls.
-	circuit *CircuitBreaker
+	// circuits guards all outbound API calls: one circuit per repository
+	// owner and one for the token's rate limit (CircuitRegistry). A
+	// DynamicProvider shares its registry with every provider it builds.
+	circuits *CircuitRegistry
 
 	client *http.Client
 }
@@ -62,7 +63,7 @@ func NewForgejoProvider(token, apiURL, webhookSecret string) *ForgejoProvider {
 		Token:         token,
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
-		circuit:       NewCircuitBreaker(),
+		circuits:      NewCircuitRegistry(),
 		client:        &http.Client{Timeout: providerHTTPTimeout},
 	}
 }
@@ -389,7 +390,8 @@ func (f *ForgejoProvider) ensureLabels(ctx context.Context, owner, repo string, 
 
 // do executes an authenticated Forgejo/Gitea API request.
 func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
-	if err := f.circuit.Allow(); err != nil {
+	owner := ownerFromPath(path, "/api/v1/repos/")
+	if err := f.circuits.Allow(owner); err != nil {
 		return fmt.Errorf("forgejo scm: %w", err)
 	}
 
@@ -414,18 +416,18 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		f.circuit.RecordFailure(time.Time{})
+		f.circuits.Record(owner, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		f.circuit.RecordResponse(resp)
+		f.circuits.Record(owner, resp, nil)
 		return newAPIError("forgejo", method, path, resp, raw)
 	}
 
-	f.circuit.RecordSuccess()
+	f.circuits.Record(owner, resp, nil)
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)

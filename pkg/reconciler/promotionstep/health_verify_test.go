@@ -731,3 +731,100 @@ func TestBakeWaitingIsNotAnAlarm(t *testing.T) {
 		})
 	}
 }
+
+// TestBakeFlappingEnds proves #1423: under bake.policy reset-on-alarm, a
+// release that turns healthy and then unhealthy within every health.timeout
+// used to re-arm the timeout on each alarm and stay HealthChecking forever.
+// The step must now complete one full window by
+// status.bakeFirstStartedAt + bake.minutes + health.timeout: a window that
+// stops at or after that deadline applies onHealthFailure, a stopped window's
+// timeout never passes it, and a window running at the deadline may still
+// complete.
+func TestBakeFlappingEnds(t *testing.T) {
+	env := func(policy string) v1alpha1.EnvironmentSpec {
+		return v1alpha1.EnvironmentSpec{Name: "test", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "1m"},
+			Bake: &v1alpha1.BakeConfig{Minutes: 30, Policy: policy}}
+	}
+	withMax := func(max string) v1alpha1.EnvironmentSpec {
+		e := env("reset-on-alarm")
+		e.Bake.MaxDuration = max
+		return e
+	}
+	ago := func(d time.Duration) *metav1.Time { t := metav1.NewTime(time.Now().Add(-d)); return &t }
+	in := func(d time.Duration) *metav1.Time { t := metav1.NewTime(time.Now().Add(d)); return &t }
+	// running is a window that started 20s ago, the first window at first.
+	running := func(first *metav1.Time) v1alpha1.PromotionStepStatus {
+		return v1alpha1.PromotionStepStatus{HealthCheckExpiry: ago(time.Hour), BakeStartedAt: ago(20 * time.Second),
+			BakeFirstStartedAt: first, BakeResets: 7}
+	}
+	const deadlineMsg = "bake: no 30m contiguous healthy window within 31m0s of the first healthy check (bake.minutes + health.timeout; resets="
+	tests := []struct {
+		name       string
+		env        v1alpha1.EnvironmentSpec
+		status     v1alpha1.PromotionStepStatus
+		deploy     *appsv1.Deployment
+		wantState  string
+		wantMsg    string
+		wantResets int
+		// wantExpiry, for a HealthChecking result, is when healthCheckExpiry
+		// should be, give or take 5s.
+		wantExpiry time.Duration
+		wantFirst  *metav1.Time // bakeFirstStartedAt kept; nil: not checked
+	}{
+		{name: "an alarm after the deadline fails the flapping release", env: env("reset-on-alarm"),
+			status: running(ago(40 * time.Minute)), deploy: degradedDeployment("p", "test"),
+			wantState: "Failed", wantMsg: deadlineMsg + "8); last result: Deployment", wantResets: 8},
+		{name: "an alarm before the deadline resets the window", env: env("reset-on-alarm"),
+			status: running(ago(10 * time.Minute)), deploy: degradedDeployment("p", "test"),
+			wantState: "HealthChecking", wantMsg: "timer reset (resets=8", wantResets: 8, wantExpiry: time.Minute},
+		{name: "a stopped window's timeout stops at the deadline", env: env("reset-on-alarm"),
+			status: running(ago(30*time.Minute + 30*time.Second)), deploy: degradedDeployment("p", "test"),
+			wantState: "HealthChecking", wantMsg: "timer reset (resets=8", wantResets: 8, wantExpiry: 30 * time.Second},
+		{name: "not healthy again by the deadline fails with the deadline", env: env("reset-on-alarm"),
+			status: v1alpha1.PromotionStepStatus{HealthCheckExpiry: ago(time.Second), BakeFirstStartedAt: ago(31*time.Minute + time.Second),
+				BakeResets: 7, Message: "bake: waiting for a healthy check to restart the window"}, deploy: degradedDeployment("p", "test"),
+			wantState: "Failed", wantMsg: deadlineMsg + "7); last result: bake: waiting for a healthy check", wantResets: 7},
+		{name: "a Waiting result after the deadline fails", env: env("fail-on-alarm"),
+			status: running(ago(40 * time.Minute)), deploy: rollingDeployment("p", "test"),
+			wantState: "Failed", wantMsg: deadlineMsg + "7); last result: Deployment", wantResets: 7},
+		{name: "a window running at the deadline continues", env: env("reset-on-alarm"),
+			status: running(ago(40 * time.Minute)), deploy: healthyDeployment("p", "test"),
+			wantState: "HealthChecking", wantMsg: "bake: 0m/30m", wantResets: 7, wantFirst: ago(40 * time.Minute)},
+		{name: "the first window records its start", env: env("reset-on-alarm"),
+			status: v1alpha1.PromotionStepStatus{HealthCheckExpiry: in(time.Minute)}, deploy: healthyDeployment("p", "test"),
+			wantState: "HealthChecking", wantMsg: "bake: 0m/30m", wantFirst: in(0)},
+		{name: "a restarted window keeps the first start", env: env("reset-on-alarm"),
+			status: v1alpha1.PromotionStepStatus{HealthCheckExpiry: in(time.Minute), BakeFirstStartedAt: ago(10 * time.Minute), BakeResets: 2},
+			deploy: healthyDeployment("p", "test"), wantState: "HealthChecking", wantMsg: "bake: 0m/30m", wantResets: 2,
+			wantFirst: ago(10 * time.Minute)},
+		{name: "bake.maxDuration widens the deadline: an alarm resets", env: withMax("24h"),
+			status: running(ago(40 * time.Minute)), deploy: degradedDeployment("p", "test"),
+			wantState: "HealthChecking", wantMsg: "timer reset (resets=8", wantResets: 8, wantExpiry: time.Minute},
+		{name: "bake.maxDuration: an alarm after it fails", env: withMax("2h"),
+			status: running(ago(3 * time.Hour)), deploy: degradedDeployment("p", "test"),
+			wantState: "Failed", wantResets: 8,
+			wantMsg: "bake: no 30m contiguous healthy window within 2h0m0s of the first healthy check (bake.maxDuration; resets=8)"},
+		{name: "a bake.maxDuration shorter than the window counts as one window", env: withMax("10m"),
+			status: running(ago(20 * time.Minute)), deploy: degradedDeployment("p", "test"),
+			wantState: "HealthChecking", wantMsg: "timer reset (resets=8", wantResets: 8, wantExpiry: time.Minute},
+		{name: "a window from before bakeFirstStartedAt existed sets the deadline", env: env("reset-on-alarm"),
+			status: v1alpha1.PromotionStepStatus{HealthCheckExpiry: ago(time.Hour), BakeStartedAt: ago(32 * time.Minute)},
+			deploy: degradedDeployment("p", "test"), wantState: "Failed", wantMsg: deadlineMsg + "1)", wantResets: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, got, _ := healthCase{env: tt.env, status: tt.status, objs: []client.Object{tt.deploy}}.run(t)
+			assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
+			assert.Contains(t, got.Status.Message, tt.wantMsg)
+			assert.Equal(t, tt.wantResets, got.Status.BakeResets)
+			if tt.wantFirst != nil {
+				require.NotNil(t, got.Status.BakeFirstStartedAt)
+				assert.WithinDuration(t, tt.wantFirst.Time, got.Status.BakeFirstStartedAt.Time, 5*time.Second)
+			}
+			if tt.wantState == "HealthChecking" && tt.wantExpiry != 0 {
+				require.NotNil(t, got.Status.HealthCheckExpiry)
+				assert.WithinDuration(t, time.Now().Add(tt.wantExpiry), got.Status.HealthCheckExpiry.Time, 5*time.Second)
+			}
+		})
+	}
+}

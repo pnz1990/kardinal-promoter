@@ -172,30 +172,32 @@ func unlabelled(s *corev1.Secret) *corev1.Secret {
 	return s
 }
 
-// TestRemoteClusterHealth_UnreachableStopsBake (QA #1495): a bake whose
-// window started 40 minutes ago must not complete on a check that cannot
-// reach the cluster: the window stops, no failure is counted, and
-// health.timeout bounds the wait for the next healthy check again.
+// TestRemoteClusterHealth_UnreachableStopsBake (QA #1495): a 30-minute bake
+// whose window started 35 minutes ago must not complete on a check that
+// cannot reach the cluster: the window stops, no failure is counted, and the
+// wait for the next healthy check is bounded again (by the bake deadline).
 func TestRemoteClusterHealth_UnreachableStopsBake(t *testing.T) {
 	closed := httptest.NewTLSServer(http.NotFoundHandler())
 	fakeRemoteAPI(t) // sets remoteCA
 	closedURL := closed.URL
 	closed.Close()
-	started := metav1.NewTime(time.Now().Add(-40 * time.Minute))
+	started := metav1.NewTime(time.Now().Add(-35 * time.Minute))
 	env := v1alpha1.EnvironmentSpec{Name: "test", Bake: &v1alpha1.BakeConfig{Minutes: 30},
 		Health: v1alpha1.HealthConfig{Type: "argocd", Timeout: "10m", ArgoCD: &v1alpha1.HealthTargetRef{Name: "custom"},
 			KubeconfigSecretRef: &v1alpha1.KubeconfigSecretRef{Name: "spoke"}}}
 	hc := healthCase{env: env, remote: &health.RemoteClusters{Dial: loopbackDial},
 		objs:   []client.Object{kubeconfigSecret("spoke", remoteKubeconfig(closedURL, ""))},
-		status: v1alpha1.PromotionStepStatus{BakeStartedAt: &started, BakeElapsedMinutes: 39}}
+		status: v1alpha1.PromotionStepStatus{BakeStartedAt: &started, BakeElapsedMinutes: 34}}
 	_, ps, _ := hc.run(t)
 	assert.Equal(t, "HealthChecking", ps.Status.State, ps.Status.Message)
 	assert.Nil(t, ps.Status.BakeStartedAt, "the bake window stopped")
 	assert.Contains(t, ps.Status.Message, "bake: window stopped, waiting for argocd: ClusterUnreachable: ")
 	assert.Zero(t, ps.Status.ConsecutiveHealthFailures)
 	require.NotNil(t, ps.Status.HealthCheckExpiry)
-	assert.WithinDuration(t, time.Now().Add(10*time.Minute), ps.Status.HealthCheckExpiry.Time, time.Minute,
-		"health.timeout is in force again")
+	// health.timeout is in force again, capped by the bake deadline (the
+	// first window's start + bake.minutes + health.timeout, #1485).
+	assert.WithinDuration(t, started.Add(40*time.Minute), ps.Status.HealthCheckExpiry.Time, time.Minute,
+		"the wait ends at the bake deadline")
 }
 
 // TestRemoteClusters_CacheFollowsSecretVersion: the clients are reused while
