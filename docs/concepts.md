@@ -40,10 +40,11 @@ same Pipeline, the older Bundle is **superseded**:
   step keeps its state and retries after 10s, 20s, 40s, 80s and 2m, with the
   `SupersededCloseFailed` condition `True` and `status.nextRetryAt`; after the last retry it
   fails, and its message says to close the PR (or delete its branch) by hand
-- Its Graph, PromotionSteps and PolicyGates are kept as history, but the Graph creates no
-  new PromotionStep (a Graph built before this behaviour can still create one at the
-  moment of supersession), and its PolicyGates are no longer evaluated: they keep the
-  status they had when the Bundle was superseded
+- Its Graph, PromotionSteps and PolicyGates are kept as history until the Graph is retired
+  ([Graph retirement](#graph-retirement)), but the Graph creates no new PromotionStep (a
+  Graph built before this behaviour can still create one at the moment of supersession),
+  and its PolicyGates are no longer evaluated: they keep the status they had when the
+  Bundle was superseded
 - A step the Graph created just before the Bundle was superseded, and that never started,
   is failed with "superseded before this step started" and writes no AuditEvent
 - Deleting the Bundle deletes its Graph and everything the Graph created, and closes, with a
@@ -58,6 +59,50 @@ kardinal get bundles my-app
 # my-app-7xk2p   image   Superseded   10m
 # my-app-9qd4s   image   Promoting    3m
 ```
+
+### Graph retirement
+
+kro keeps every Graph in memory, so kardinal does not keep the Graph of every finished Bundle.
+Once a Bundle has finished, and every one of its PromotionSteps has settled (`Verified`, `Failed`,
+`RollingBack` or `AbortedByAlarm`, with no PR left to close), its Graph is **retired** after a delay
+that starts when the last step settles:
+
+| Bundle | Retired after (chart value, controller flag) |
+|---|---|
+| Superseded, or Verified and replaced in every environment by a newer Verified Bundle of the same type | 1m (`graph.retire.superseded`, `--graph-retire-superseded-after`) |
+| Verified and still deployed in an environment | 1h (`graph.retire.verified`, `--graph-retire-verified-after`) |
+| Failed, unless a newer Verified Bundle replaced it in every environment it touched (then the first row); or not Superseded with a step stopped by a health alarm (`AbortedByAlarm`, which waits for a person to resume or roll back) | 24h (`graph.retire.failed`, `--graph-retire-failed-after`) |
+
+When a Bundle turns Verified, the older Verified and Failed Bundles of its Pipeline and type are
+checked again, so one it replaced everywhere retires after the first delay. `0s` keeps those Graphs;
+with all three at `0s` only the Bundles of Pipelines that set the annotation below are retired. A negative flag stops the controller at startup. The
+annotation `kardinal.io/graph-retire-after: <duration>` on a Pipeline replaces all three delays for
+its Bundles (`"0"` keeps them); a value that is not a duration is ignored, named in the
+`GraphRetired` condition and in a Warning Event `InvalidRetireDelay`.
+
+Retiring writes one record per PromotionStep to the Bundle's `status.retiredSteps` (name,
+environment, step type, final state and message, PR URL, creation and Verified times, health check
+expiry), sets the condition `GraphRetired` to `True`, and deletes the Graph. kro then deletes the
+Graph's PromotionSteps, PolicyGate instances and PRStatuses. `GraphRetired` is `Unknown` with
+reason `WaitingForSteps` while a step has not settled, and `False` with reason `Scheduled` while the
+delay runs. A Bundle with more than 1,000 PromotionSteps, or whose records would take more than
+512 KiB, keeps its Graph (reason `TooManySteps`).
+
+What a retired Bundle keeps and loses:
+
+- **Kept**: rollback and `kardinal promote` (which Bundle is deployed where, which were Verified),
+  `kardinal history`, `kardinal metrics` and the Pipeline's `status.deploymentMetrics`, the
+  Pipeline phase, `kardinal status`, `kardinal explain` and `kardinal get pipelines`, the UI's
+  graph and step list (state, message and PR link per environment), `status.environments`, and
+  the AuditEvents, which never belonged to the Graph.
+- **Lost**: the PolicyGate instances (gate results and overrides; the AuditEvents keep each
+  evaluation), the PRStatuses, a step's per-step detail (`status.steps[]`, outputs other than the
+  PR URL) and its Kubernetes Events.
+- A retired Bundle is final: a retired Failed Bundle no longer recovers, and a Pipeline change
+  does not rebuild it. Roll back or create a new Bundle instead.
+
+`spec.historyLimit` still decides how many finished Bundles, and so how many records, a Pipeline
+keeps.
 
 ### Bundle types
 
@@ -294,7 +339,7 @@ When `health.type` is omitted the adapter is `resource`, or the `delivery.delega
 
 A Subscription watches external sources and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
 
-**Image Subscription** (watches a public OCI repository for new images):
+**Image Subscription** (watches an OCI repository for new images):
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -328,8 +373,10 @@ spec:
 
 The first poll records the current digest or commit as a baseline. After that, each new
 image or commit creates a Bundle of the matching type (`image` or `config`) in the
-Subscription's own namespace. Only public repositories are supported. See
-[Subscription](subscription.md) for tag selection rules and limits.
+Subscription's own namespace. A `helm` Subscription watches a chart repository and creates
+`chart` Bundles. Private sources read credentials from a Secret (`secretRef`), and registry
+and SCM [webhooks](subscription-webhooks.md) make a Subscription poll at once. See
+[Subscription](subscription.md) for tag filters, `pathGlob` and limits.
 
 ## Rendered Manifests
 

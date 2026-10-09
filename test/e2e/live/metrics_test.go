@@ -428,22 +428,30 @@ func TestMetric_EgressGuard(t *testing.T) {
 	e.WaitMetricCheck(t, ns, "in-cluster", metricTimeout, "passing", framework.MetricResult("Pass", "0 lt 1 = true"))
 }
 
-// TestMetric_OnlyPrometheusProvider checks that prometheus is the only
-// provider: the API server rejects any other, and a MetricCheck that sets
-// none gets prometheus and evaluates.
+// TestMetric_ProviderValidation checks the provider field: the API server
+// rejects a provider kardinal does not have and a provider without its
+// settings block, and a MetricCheck that sets none gets prometheus and
+// evaluates.
 //
 // Covers METRIC-07.
-func TestMetric_OnlyPrometheusProvider(t *testing.T) {
+func TestMetric_ProviderValidation(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	ctx := context.Background()
 	ns := e.Namespace(t)
-	other := framework.MetricCheck(t, ns, "datadog", "vector(0)", "lt", 1, metricInterval)
-	other.Spec.Provider = "datadog"
+	other := framework.MetricCheck(t, ns, "graphite", "vector(0)", "lt", 1, metricInterval)
+	other.Spec.Provider = "graphite"
 	err := e.Client.Create(ctx, other)
-	require.Error(t, err, "provider datadog is rejected")
+	require.Error(t, err, "provider graphite is rejected")
 	assert.True(t, apierrors.IsInvalid(err), "rejected by validation: %v", err)
-	assert.Contains(t, err.Error(), `Unsupported value: "datadog"`)
+	assert.Contains(t, err.Error(), `Unsupported value: "graphite"`)
+
+	noBlock := framework.MetricCheck(t, ns, "datadog", "avg:x{*}", "lt", 1, metricInterval)
+	noBlock.Spec.Provider = "datadog"
+	err = e.Client.Create(ctx, noBlock)
+	require.Error(t, err, "provider datadog without spec.datadog is rejected")
+	assert.True(t, apierrors.IsInvalid(err), "rejected by validation: %v", err)
+	assert.Contains(t, err.Error(), "provider datadog requires datadog")
 
 	unset := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": v1alpha1.GroupVersion.String(),
@@ -611,7 +619,12 @@ func TestObs_ControllerMetrics(t *testing.T) {
 		assert.True(t, after.Has("controller_runtime_active_workers", l), "%s active workers", c)
 		want := 1.0
 		if c == "metriccheck" {
-			want = 4
+			// maxConcurrentReconciles in pkg/reconciler/metriccheck: 16 since
+			// #1479 (docs/changelog.md), more than the 12 default query slots
+			// so templates, suspended checks and checks waiting for a slot are
+			// served while the slots are busy. The query slots
+			// (--metriccheck-*-slots) are a separate limit.
+			want = 16
 		}
 		assert.Equal(t, want, after.Sum("controller_runtime_max_concurrent_reconciles", l), "%s max concurrent reconciles", c)
 		q := map[string]string{"name": c}

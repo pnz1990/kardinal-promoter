@@ -28,6 +28,7 @@ ui            1.37        -
 # same minor.
 multi-cluster 1.36        -
 flux          1.37        -
+shard         1.37        -
 # 1.30: KIND_NODE_UPGRADE_1_30, the oldest minor kardinal supports.
 # all.sh and CI run the upgrade test once whatever COUNT is: it upgrades its
 # cluster.

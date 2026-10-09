@@ -14,7 +14,7 @@ This guide walks through migrating a Kargo-managed delivery pipeline to kardinal
 | `FreightRequest` | `Bundle.spec.intent` | Targets a specific environment; can skip others |
 | `Promotion` | `PromotionStep` CRD | Created automatically by the Graph controller |
 | `VerifiedIn` / approval required | `approval: pr-review` on environment | PR approval required before HealthChecking |
-| `AnalysisTemplate` | `MetricCheck` CRD | A Prometheus query with a pass/fail threshold; Prometheus is the only provider |
+| `AnalysisTemplate` | `MetricCheck` CRD | A Prometheus, Datadog, CloudWatch, New Relic or JSON web query with a pass/fail threshold; `perPromotion: true` with `{{ bundle.version }}` replaces AnalysisRun arguments ([Metric Checks](../metric-checks.md)) |
 | Stage that updates an Argo CD Application in another cluster | Environment with `health.type: argocd` on that Application in the hub | Multi-cluster through an Argo CD or Flux hub; `health.cluster` kubeconfig Secrets are not supported |
 | `Project` | Kubernetes Namespace | RBAC isolation is namespace-scoped |
 | Argo Rollouts integration | `health.type: argoRollouts` on environment | Reads Rollout `.status.phase` |
@@ -165,16 +165,19 @@ Kargo Warehouses poll container registries. kardinal's equivalent is the `Subscr
 ```bash
 # For each Warehouse, create a Subscription:
 kubectl get warehouse my-app -n kargo-demo -o yaml
-# Translate repoURL → spec.image.registry
-# Translate semverConstraint → spec.image.tagFilter (Go regex)
+# Translate repoURL → spec.image.registry (image), spec.git.repoURL, or spec.helm.repoURL + chart
+# Translate semverConstraint → spec.image.semverConstraint (same syntax)
+# Translate allowTags / ignoreTags / discoveryLimit as they are; allowTagsRegexes → tagFilter
+# Translate imageSelectionStrategy → spec.image.strategy (SemVer, Lexical, NewestBuild; Digest is a
+#   tagFilter matching one tag)
+# Translate includePaths → spec.git.pathGlob
+# Registry and repository credentials → spec.<type>.secretRef (a Secret in the Subscription's namespace)
 ```
 
-When every tag matching `tagFilter` is a semantic version, the highest version is
-selected (Kargo `SemVer`). A filter that matches exactly one tag tracks that tag's
-digest (Kargo `Digest`). Other tag sets are ordered by image build time (Kargo
-`NewestBuild`), limited to 50 matching tags. Subscriptions only poll public
-repositories; Warehouses that use registry credentials should create Bundles from CI
-instead. See [Subscription](../subscription.md).
+A Warehouse with several subscriptions becomes one Subscription per source. Kargo's
+webhook receivers map to `spec.webhook` and
+[`/webhook/subscriptions/...`](../subscription-webhooks.md). See
+[Subscription](../subscription.md).
 
 ### Step 3: Remove Kargo `Promotion` objects (if any)
 
@@ -215,10 +218,16 @@ spec:
     sum(rate(http_requests_total[5m]))
   prometheusURL: http://prometheus.monitoring.svc:9090
   threshold:
-    operator: gte   # one of lt, gt, lte, gte, eq
+    operator: gte   # one of lt, gt, lte, gte, eq, ne
     value: 0.95
   interval: 1m
 ```
+
+An AnalysisTemplate that takes the Freight's version as an argument becomes a per-promotion
+MetricCheck: set `perPromotion: true` and write `{{ bundle.version }}` (or
+`{{ environment.name }}`, see [Per-promotion analysis](../metric-checks.md#per-promotion-analysis))
+in the query. Datadog, CloudWatch, New Relic and `web` providers take their credentials from
+Secret refs.
 
 ### Step 5: Convert AnalysisRunArguments to PolicyGate CEL expressions
 

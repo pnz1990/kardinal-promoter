@@ -82,10 +82,11 @@ pattern of its tests.
 | `github` | GitHub (branches of `pnz1990/kardinal-demo`), Argo CD, the webhook receiver (the other API host `TestGitHub_SCMAPIURL` points the controller at) | `TestCore_*`, `TestSCM_*`, `TestGitHub_*` |
 | `delivery` | Forgejo, Argo CD, Argo Rollouts, Flagger | `TestRollouts_*`, `TestFlagger_*`, `TestDelivery_*` |
 | `ui` | Forgejo, Argo CD, four more chart releases (static token and CORS, TokenReview, TokenReview without its RBAC, TLS), Playwright's Chromium | `TestUI_*` |
-| `flux` | Forgejo, Flux, Prometheus Operator, Prometheus, Pushgateway, Grafana | `TestFlux_*`, `TestMetric_*`, `TestObs_*` |
-| `chart` | Forgejo, Argo CD, cert-manager; no controller release: each test installs its own | `TestChart_*`, `TestDeprecated_*` |
+| `flux` | Forgejo, Flux, Prometheus Operator, Prometheus, Pushgateway, Grafana, fake Datadog, New Relic, CloudWatch and web metrics APIs (`hack/e2e/metricsapi`) that check credentials as the real services do | `TestFlux_*`, `TestMetric_*`, `TestObs_*` |
+| `chart` | Forgejo, Argo CD, cert-manager, the webhook receiver, Jaeger; no controller release: each test installs its own | `TestChart_*`, `TestDeprecated_*` |
 | `upgrade` | Forgejo, Argo CD, kardinal-promoter v0.8.1 with its bundled Graph controller and no kro; the test follows the upgrade guide, so a cluster serves one run. `KIND_K8S=1.30` runs it on Kubernetes 1.30 | `TestUpgrade_*` |
 | `multi-cluster` | Forgejo, Argo CD, Flux and Argo Rollouts in the hub, and a second kind cluster (`<cluster>-spoke`, Argo Rollouts) registered with the hub's Argo CD and Flux | `TestMultiCluster_*` |
+| `shard` | Forgejo, Argo CD, and two controllers splitting the namespaces: the main release as shard `default`, `components/shard.sh`'s release as shard `b` | `TestShard_*` |
 | `scale` | Forgejo behind Toxiproxy, Prometheus Operator and Prometheus, two controller replicas built with `-race` | `TestScale_*` (see [Scale suite](#scale-suite)) |
 
 `TestSCM_*` tests use only `Env.Git`, so they run against every git server;
@@ -134,7 +135,7 @@ environments: the invariants read what kardinal wrote to git.
 | Profile | Sizes | Time |
 |---|---|---|
 | `ci` (default) | 30-stage chain, canary and 3 waves x 4 regions, 20 Pipelines, a burst of 100 Bundles, 0.5 Bundles/s for 2 min, chaos for 3 min, 10 min to settle; sized for a GitHub-hosted runner (4 vCPUs, 16 GB), 4 tests at a time (`KARDINAL_E2E_PARALLEL`) | 25 min on a 32-core host |
-| `full` | 100-stage chain, canary and 9 waves x 11 regions (100 environments, the cap), fan-in of 50, 200 Pipelines, a burst of 1,000 Bundles over 100 Pipelines, 2 Bundles/s for 10 min, chaos for 10 min | 2 h on a 32-core host; give the kind node 24 GB (`KARDINAL_E2E_NODE_MEMORY=24g`) and kro 8 GB (`KARDINAL_E2E_KRO_MEMORY=8Gi`) until #1492 is fixed |
+| `full` | 100-stage chain, canary and 9 waves x 11 regions (100 environments), fan-in of 50, 200 Pipelines, a burst of 1,000 Bundles over 100 Pipelines, 2 Bundles/s for 10 min, chaos for 10 min | 2 h on a 32-core host; give the kind node 24 GB (`KARDINAL_E2E_NODE_MEMORY=24g`) and kro 8 GB (`KARDINAL_E2E_KRO_MEMORY=8Gi`) until #1492 is fixed |
 | `soak` | `full`, with 5 Bundles/s for 30 min over 100 Pipelines | `full` plus 40 min |
 
 Any size can be set on its own: `KARDINAL_E2E_SCALE_<FIELD>`, the field name

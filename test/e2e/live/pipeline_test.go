@@ -18,7 +18,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -168,8 +171,8 @@ func TestPipeline_NotImplemented(t *testing.T) {
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
 			env.Health.Cluster = "remote" //nolint:staticcheck // SA1019: set to check it is refused
 		},
-		ready: `environment "test": health.cluster is not supported: kardinal checks health only in the cluster it runs in`,
-		step:  "health.cluster is not supported: kardinal checks health only in the cluster it runs in;",
+		ready: `environment "test": health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef`,
+		step:  "health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef to a kubeconfig Secret",
 	}, {
 		name: "regions",
 		set: func(_ *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec) {
@@ -225,7 +228,10 @@ func TestPipeline_NotImplemented(t *testing.T) {
 func TestPipeline_RejectedFields(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
-	a := &app{e: e, ns: e.Namespace(t), envs: []string{"test"}, repo: gitserver.Repo{CloneURL: "https://git.example.com/podinfo.git", Branch: "main"}}
+	ns := e.Namespace(t)
+	// A repository of its own: Pipelines of other tests at the same path
+	// would get PathConflict.
+	a := &app{e: e, ns: ns, envs: []string{"test"}, repo: gitserver.Repo{CloneURL: "https://git.example.com/" + ns + "/podinfo.git", Branch: "main"}}
 	cases := []struct {
 		name string
 		set  func(p *v1alpha1.Pipeline, env *v1alpha1.EnvironmentSpec)
@@ -296,8 +302,9 @@ func TestPipeline_RejectedFields(t *testing.T) {
 func TestPipeline_NameAndDurationRules(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
-	a := &app{e: e, ns: e.Namespace(t), envs: []string{"test", "prod"},
-		repo: gitserver.Repo{CloneURL: "https://git.example.com/podinfo.git", Branch: "main"}}
+	ns := e.Namespace(t)
+	a := &app{e: e, ns: ns, envs: []string{"test", "prod"},
+		repo: gitserver.Repo{CloneURL: "https://git.example.com/" + ns + "/podinfo.git", Branch: "main"}}
 	const dnsLabel = "should match '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'"
 	cases := []struct {
 		name string
@@ -507,4 +514,47 @@ func leadMinutes(t *testing.T, a *app, bundle string) int64 {
 	c := findCond(ps.Status.Conditions, "Verified")
 	require.Equal(t, metav1.ConditionTrue, c.Status, "%s prod step Verified condition", bundle)
 	return int64(c.LastTransitionTime.Sub(a.bundle(t, bundle).CreationTimestamp.Time).Minutes())
+}
+
+// TestPipeline_GitSecretNotReferenceable checks the v0.10.0 deprecation of
+// unlabeled git Secrets: a Pipeline whose spec.git.secretRef names a Secret
+// without kardinal.io/referenceable=true still promotes, and has
+// SecretReferenceable=False (reason SecretNotReferenceable); labeling the
+// Secret removes the warning.
+//
+// Covers PIPE-GITSECRET-LABEL-01.
+func TestPipeline_GitSecretNotReferenceable(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	var secret corev1.Secret
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: framework.GitSecretName}, &secret))
+	unlabeled := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "unlabeled-git", Namespace: a.ns}, Data: secret.Data}
+	require.NoError(t, e.Client.Create(ctx, unlabeled))
+	p := a.pipeline(nil)
+	p.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "unlabeled-git"}
+	a.apply(t, p)
+
+	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "the SecretReferenceable warning", func(p *v1alpha1.Pipeline) (bool, string) {
+		c := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable")
+		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "SecretNotReferenceable", fmt.Sprintf("%+v", c)
+	})
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	a.running(t, "test", imageV2, "the unlabeled Secret still works in v0.10.0")
+
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: "unlabeled-git"}, unlabeled))
+	unlabeled.Labels = map[string]string{"kardinal.io/referenceable": "true"}
+	require.NoError(t, e.Client.Update(ctx, unlabeled))
+	// The Secret is not watched; a Pipeline edit (an annotation) reconciles at once.
+	var cur v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &cur))
+	patch := client.MergeFrom(cur.DeepCopy())
+	cur.Annotations = map[string]string{"e2e.kardinal.io/poke": time.Now().Format(time.RFC3339Nano)}
+	require.NoError(t, e.Client.Patch(ctx, &cur, patch))
+	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "the warning to clear", func(p *v1alpha1.Pipeline) (bool, string) {
+		c := meta.FindStatusCondition(p.Status.Conditions, "SecretReferenceable")
+		return c == nil, fmt.Sprintf("%+v", c)
+	})
 }

@@ -29,6 +29,8 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // KroFinalizer is the finalizer kro keeps on a Graph until it has deleted the
@@ -280,13 +282,22 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(graph.GraphGVK)
 	deleting := func(o client.Object) bool { return IsKardinalGraph(o) && o.GetDeletionTimestamp() != nil }
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		Named("graphcleanup").
 		For(g, builder.WithPredicates(predicate.Funcs{
 			CreateFunc:  func(e event.CreateEvent) bool { return deleting(e.Object) },
 			UpdateFunc:  func(e event.UpdateEvent) bool { return deleting(e.ObjectNew) },
 			DeleteFunc:  func(e event.DeleteEvent) bool { return IsKardinalGraph(e.Object) },
 			GenericFunc: func(event.GenericEvent) bool { return false },
-		})).
-		Complete(r)
+		}))
+	return shard.Active().Complete(b, tracing.WrapReconciler("graphcleanup", r), graphList())
+}
+
+// graphList is an empty list of kro Graphs, for the shard gate's re-enqueue.
+func graphList() *unstructured.UnstructuredList {
+	l := &unstructured.UnstructuredList{}
+	gvk := graph.GraphGVK
+	gvk.Kind += "List"
+	l.SetGroupVersionKind(gvk)
+	return l
 }

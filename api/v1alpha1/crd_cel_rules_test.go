@@ -171,6 +171,63 @@ func TestPromotionTemplateAndStepInputsRemoved(t *testing.T) {
 	assert.NotContains(t, spec["properties"], "inputs")
 }
 
+// TestNotificationHookCRDRules verifies the NotificationHook admission rules:
+// a webhook needs a url or a secretRef, authorizationHeader and secretRef
+// are exclusive, and spec.template comes with format: template only.
+func TestNotificationHookCRDRules(t *testing.T) {
+	webhook := crdSchema(t, "kardinal.io_notificationhooks.yaml", "spec", "webhook")
+	ref := map[string]interface{}{"name": "creds"}
+	whTests := []struct {
+		name string
+		self map[string]interface{}
+		want []string
+	}{
+		{"url", map[string]interface{}{"url": "https://x"}, nil},
+		{"secretRef", map[string]interface{}{"secretRef": ref}, nil},
+		{"url and secretRef", map[string]interface{}{"url": "https://x", "secretRef": ref}, nil},
+		{"plaintext header", map[string]interface{}{"url": "https://x", "authorizationHeader": "Bearer t"}, nil},
+		{"nothing", map[string]interface{}{}, []string{"webhook: set url, or secretRef with a url key"}},
+		{"empty url", map[string]interface{}{"url": ""}, []string{"webhook: set url, or secretRef with a url key"}},
+		{"header and secretRef", map[string]interface{}{"secretRef": ref, "authorizationHeader": "Bearer t"},
+			[]string{"webhook: authorizationHeader and secretRef are mutually exclusive; move the header into the Secret's authorization key"}},
+	}
+	for _, tt := range whTests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, failingRules(t, webhook, tt.self))
+		})
+	}
+
+	spec := crdSchema(t, "kardinal.io_notificationhooks.yaml", "spec")
+	tmpl := map[string]interface{}{"body": "{{ .Event }}"}
+	const msg = "template is required with format: template and not allowed with any other format"
+	specTests := []struct {
+		name string
+		self map[string]interface{}
+		want []string
+	}{
+		{"default format", map[string]interface{}{}, nil},
+		{"slack", map[string]interface{}{"format": "slack"}, nil},
+		{"template with body", map[string]interface{}{"format": "template", "template": tmpl}, nil},
+		{"template without body", map[string]interface{}{"format": "template"}, []string{msg}},
+		{"body without format", map[string]interface{}{"template": tmpl}, []string{msg}},
+		{"body with teams", map[string]interface{}{"format": "teams", "template": tmpl}, []string{msg}},
+	}
+	for _, tt := range specTests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, failingRules(t, spec, tt.self))
+		})
+	}
+
+	ct := crdSchema(t, "kardinal.io_notificationhooks.yaml", "spec", "template", "contentType")
+	re := regexp.MustCompile(ct["pattern"].(string))
+	for _, ok := range []string{"application/json", "text/plain; charset=utf-8", "application/vnd.api+json"} {
+		assert.True(t, re.MatchString(ok), ok)
+	}
+	for _, bad := range []string{"json", "text/plain\r\nX-Evil: 1", "/json", ""} {
+		assert.False(t, re.MatchString(bad), "%q", bad)
+	}
+}
+
 // TestBundleCRDRejectsConfigRefOnImage: the API server refuses an image
 // Bundle with a configRef, which it would deploy without (#1353). The
 // Bundle API and kardinal create bundle refuse it first with the same advice.

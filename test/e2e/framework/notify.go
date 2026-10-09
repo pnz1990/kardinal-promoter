@@ -33,6 +33,9 @@ type Received struct {
 	Body    string              `json:"body"`
 	// Status is what the receiver answered.
 	Status int `json:"status"`
+	// Signature is "valid" or why verification failed, for a bucket set to
+	// verify signatures (VerifySignatures).
+	Signature string `json:"signature,omitempty"`
 }
 
 // Header is the first value of header name (canonical form).
@@ -58,7 +61,7 @@ func NewReceiver(t *testing.T) *Receiver {
 		api: strings.TrimRight(os.Getenv(EnvReceiverAPI), "/"),
 	}
 	if r.url == "" || r.api == "" {
-		t.Fatalf("%s and %s must be set; the core and github suites run hack/e2e/components/webhook-receiver.sh",
+		t.Fatalf("%s and %s must be set; the core, github and chart suites run hack/e2e/components/webhook-receiver.sh",
 			EnvReceiverURL, EnvReceiverAPI)
 	}
 	return r
@@ -119,4 +122,16 @@ func (r *Receiver) FailRetryAfter(t *testing.T, bucket string, status, times int
 		t.Fatalf("set receiver mode for %s: HTTP %d %s", bucket, res.Status, clip(res.Body))
 	}
 	t.Logf("receiver bucket %s answers HTTP %d with Retry-After %s (times %d)", bucket, status, retryAfter, times)
+}
+
+// VerifySignatures makes the receiver check X-Kardinal-Signature on bucket's
+// requests with secret, the way docs/notifications.md#signed-requests says a
+// receiver should, answering 401 when it fails.
+func (r *Receiver) VerifySignatures(t *testing.T, bucket, secret string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]interface{}{"secret": secret, "maxSkewSeconds": 300})
+	res := HTTP(t, http.MethodPost, r.api+"/_signing/"+bucket, map[string]string{"Content-Type": "application/json"}, body)
+	if res.Status != http.StatusNoContent {
+		t.Fatalf("set receiver signing for %s: HTTP %d %s", bucket, res.Status, clip(res.Body))
+	}
 }

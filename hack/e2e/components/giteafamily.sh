@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # hack/e2e/components/giteafamily.sh forgejo|gitea
 #
-# Installs a single-pod Forgejo or Gitea (rootless image, SQLite, no SSH) in
-# namespace <flavor> and seeds it for the live suites:
+# Installs a single-pod Forgejo or Gitea (rootless image, SQLite, the built-in
+# SSH server on port 2222) in namespace <flavor> and seeds it for the live
+# suites:
 #   - admin user; its token (scope all) is the test runner's
 #     KARDINAL_E2E_GIT_TOKEN, used to create per-test repos, merge and close PRs
 #   - bot user whose token has only the scopes docs/scm-providers.md lists
@@ -63,14 +64,18 @@ spec:
         - name: $FLAVOR
           image: $IMAGE
           imagePullPolicy: IfNotPresent
-          ports: [{name: http, containerPort: 3000}]
+          ports: [{name: http, containerPort: 3000}, {name: ssh, containerPort: 2222}]
           env:
             - {name: ${PFX}__security__INSTALL_LOCK, value: "true"}
             - {name: ${PFX}__database__DB_TYPE, value: sqlite3}
             - {name: ${PFX}__server__ROOT_URL, value: "$INCLUSTER/"}
             - {name: ${PFX}__server__HTTP_PORT, value: "3000"}
-            - {name: ${PFX}__server__DISABLE_SSH, value: "true"}
-            - {name: ${PFX}__server__START_SSH_SERVER, value: "false"}
+            # The built-in SSH server, for Subscriptions on ssh:// repoURLs.
+            - {name: ${PFX}__server__DISABLE_SSH, value: "false"}
+            - {name: ${PFX}__server__START_SSH_SERVER, value: "true"}
+            - {name: ${PFX}__server__SSH_DOMAIN, value: "$FLAVOR.$NS.svc.cluster.local"}
+            - {name: ${PFX}__server__SSH_PORT, value: "2222"}
+            - {name: ${PFX}__server__SSH_LISTEN_PORT, value: "2222"}
             - {name: ${PFX}__server__OFFLINE_MODE, value: "true"}
             # The default ("external") blocks webhooks to the controller's ClusterIP.
             - {name: ${PFX}__${ALLOW_SECTION}__ALLOWED_HOST_LIST, value: "$ALLOW_HOSTS"}
@@ -103,7 +108,7 @@ metadata:
 spec:
   type: NodePort
   selector: {app: $FLAVOR}
-  ports: [{name: http, port: 3000, targetPort: http}]
+  ports: [{name: http, port: 3000, targetPort: http}, {name: ssh, port: 2222, targetPort: ssh}]
 EOF
 "${KUBECTL[@]}" -n "$NS" rollout status "deploy/$FLAVOR" --timeout=300s >/dev/null
 BASE="http://$(node_ip):$(nodeport "$NS" "$FLAVOR" http)"
@@ -170,6 +175,8 @@ env_set KARDINAL_E2E_SCM_API "$INCLUSTER"
 env_set KARDINAL_E2E_GIT_KIND "$FLAVOR"
 env_set KARDINAL_E2E_GIT_API "$BASE"
 env_set KARDINAL_E2E_GIT_CLONE_BASE "$INCLUSTER"
+env_set KARDINAL_E2E_GIT_SSH "$FLAVOR.$NS.svc.cluster.local:2222"
+env_set KARDINAL_E2E_GIT_SSH_API "$(node_ip):$(nodeport "$NS" "$FLAVOR" ssh)"
 env_set KARDINAL_E2E_GIT_OWNER "$ORG"
 env_set KARDINAL_E2E_GIT_TOKEN "$(secret_get "$FLAVOR-admin-token")"
 env_set KARDINAL_E2E_WEBHOOK_URL "$KARDINAL_WEBHOOK_URL"

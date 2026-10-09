@@ -30,6 +30,8 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // secretRecheckInterval is how often a Pipeline refused for a missing
@@ -56,6 +58,46 @@ const (
 	reasonFreezeGateNameConflict = "FreezeGateNameConflict"
 )
 
+// The SecretReferenceable condition warns that the git Secret
+// (spec.git.secretRef) lacks the kardinal.io/referenceable: "true" label
+// (docs/guides/security.md#secrets-referenced-by-custom-resources). In
+// v0.10.0 the Secret is still used; v0.11 refuses it (#1506). The condition is
+// absent when no Secret is named, when the Secret does not exist (the steps
+// report that), and when it is labeled.
+const (
+	conditionSecretReferenceable = "SecretReferenceable"
+	reasonSecretNotReferenceable = "SecretNotReferenceable"
+	labelReferenceable           = "kardinal.io/referenceable"
+	// secretRecheck re-reads an unlabeled git Secret: Secrets are not
+	// watched, so labeling one is seen at the next recheck or Pipeline event.
+	secretRecheck = 5 * time.Minute
+)
+
+// gitSecretCondition returns the SecretReferenceable warning for p, or nil.
+// The Secret is read from the API server (Secrets are not cached).
+func (r *Reconciler) gitSecretCondition(ctx context.Context, p *kardinalv1alpha1.Pipeline) (*metav1.Condition, error) {
+	ref := p.Spec.Git.SecretRef
+	if ref == nil || ref.Name == "" {
+		return nil, nil
+	}
+	var secret corev1.Secret
+	if err := r.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: ref.Name}, &secret); err != nil {
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get git secret %s: %w", ref.Name, err)
+	}
+	if secret.Labels[labelReferenceable] == "true" {
+		return nil, nil
+	}
+	return &metav1.Condition{
+		Type: conditionSecretReferenceable, Status: metav1.ConditionFalse, Reason: reasonSecretNotReferenceable,
+		ObservedGeneration: p.Generation,
+		Message: fmt.Sprintf("git Secret %s is not labeled %s=true; it is still used in v0.10.0 but will be refused "+
+			"in v0.11: label it (kubectl label secret %s %s=true)", ref.Name, labelReferenceable, ref.Name, labelReferenceable),
+	}, nil
+}
+
 // Reconciler watches Pipeline objects, validates them, and sets status.conditions
 // and status.phase.
 type Reconciler struct {
@@ -65,6 +107,11 @@ type Reconciler struct {
 	// would need the shared SCM token for a spec.git.url it does not allow is
 	// Ready=False/RepositoryNotAllowed (#1332). Nil allows every repository.
 	AllowedRepositories *scm.RepositoryAllowlist
+
+	// CompactAbove is --graph-compact-above: a Pipeline whose new Bundles
+	// would get a compact Graph and that uses a feature the compact shape
+	// does not carry yet is Ready=False. Nil is graph.DefaultCompactAbove.
+	CompactAbove *int
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -119,9 +166,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 	desired := r.validate(&p, ownSecret)
-	// Nothing watches Secrets: a git.secretRef Secret created later is seen
-	// by this periodic re-check.
+	desiredSecret, err := r.gitSecretCondition(ctx, &p)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// Nothing watches Secrets: a git.secretRef Secret created later, or a
+	// label added to one, is seen by these periodic re-checks.
 	var result ctrl.Result
+	if desiredSecret != nil {
+		result.RequeueAfter = secretRecheck
+	}
 	if desired.Reason == scm.ReasonRepositoryNotAllowed && p.Spec.Git.SecretRef != nil && !ownSecret {
 		result.RequeueAfter = secretRecheckInterval
 	}
@@ -146,8 +200,19 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", p.Name, err)
 	}
-	desiredPhase := DerivePhase(p.Name, bundleList.Items, stepList.Items)
-	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, stepList.Items, time.Now().UTC())
+	// Pipelines that share a repository and branch must write separate paths
+	// (PathConflict). Reads Pipelines, writes only this Pipeline's status.
+	var pipelines kardinalv1alpha1.PipelineList
+	if err := r.List(ctx, &pipelines); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list pipelines: %w", err)
+	}
+	desiredConflict := pathConflict(&p, pipelines.Items)
+
+	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+	steps := lifecycle.AddRetiredSteps(stepList.Items, bundleList.Items,
+		map[string]string{lifecycle.LabelPipeline: p.Name})
+	desiredPhase := DerivePhase(p.Name, bundleList.Items, steps)
+	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, steps, time.Now().UTC())
 
 	// Idempotency: only patch if something changed.
 	condMatch := conditionMatches(p.Status.Conditions, desired)
@@ -157,7 +222,15 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredPaused != nil {
 		pausedMatch = conditionMatches(p.Status.Conditions, *desiredPaused)
 	}
-	if condMatch && phaseMatch && metricsMatch && pausedMatch {
+	conflictMatch := meta.FindStatusCondition(p.Status.Conditions, conditionPathConflict) == nil
+	if desiredConflict != nil {
+		conflictMatch = conditionMatches(p.Status.Conditions, *desiredConflict)
+	}
+	secretMatch := meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil
+	if desiredSecret != nil {
+		secretMatch = conditionMatches(p.Status.Conditions, *desiredSecret)
+	}
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -173,6 +246,20 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		meta.SetStatusCondition(&p.Status.Conditions, *desiredPaused)
 	} else {
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPaused)
+	}
+	if desiredConflict != nil {
+		meta.SetStatusCondition(&p.Status.Conditions, *desiredConflict)
+		log.Warn().Msg(desiredConflict.Message)
+	} else {
+		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPathConflict)
+	}
+	if desiredSecret != nil {
+		if meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil {
+			log.Warn().Str("secret", p.Spec.Git.SecretRef.Name).Msg(desiredSecret.Message)
+		}
+		meta.SetStatusCondition(&p.Status.Conditions, *desiredSecret)
+	} else {
+		meta.RemoveStatusCondition(&p.Status.Conditions, conditionSecretReferenceable)
 	}
 	p.Status.DeploymentMetrics = desiredMetrics
 
@@ -357,6 +444,28 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 		}
 	}
 
+	// The Graph shape annotation must name a shape; a Bundle of this Pipeline
+	// would fail with GraphBuildFailed otherwise.
+	if v, ok := p.Annotations[graph.AnnotationGraphShape]; ok && v != graph.GraphShapeCompact && v != graph.GraphShapeNodes {
+		return invalid(fmt.Sprintf("annotation %s=%q: use %q or %q, or remove it",
+			graph.AnnotationGraphShape, v, graph.GraphShapeCompact, graph.GraphShapeNodes))
+	}
+
+	// A Pipeline whose new Bundles would get a compact Graph must not use a
+	// feature the compact shape does not carry yet: each Bundle would fail
+	// with GraphBuildFailed.
+	b := graph.NewBuilder()
+	if r.CompactAbove != nil {
+		b.CompactAbove = *r.CompactAbove
+	}
+	if b.WouldBeCompact(p, len(p.Spec.Environments)) {
+		if f := graph.CompactUnsupported(graph.BuildInput{Pipeline: p}); len(f) > 0 {
+			return invalid(fmt.Sprintf("its Bundles get a compact Graph (more than %d environments, or the %s annotation), "+
+				"and the compact shape does not support %s yet; use the annotation %s: %s or remove the feature",
+				b.CompactAbove, graph.AnnotationGraphShape, strings.Join(f, ", "), graph.AnnotationGraphShape, graph.GraphShapeNodes))
+		}
+	}
+
 	// Check for duplicate environment names
 	seen := make(map[string]struct{}, len(p.Spec.Environments))
 	for _, env := range p.Spec.Environments {
@@ -452,8 +561,11 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index PromotionStep by spec.pipelineName: %w", err)
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Pipeline{}).
+		// A Pipeline on the same repository and branch changed: re-check
+		// PathConflict on the others.
+		Watches(&kardinalv1alpha1.Pipeline{}, r.pipelinePeers()).
 		// Deleting the freeze gate by hand while the pipeline is paused, or
 		// removing a user gate that has its name, re-enqueues the Pipeline.
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(pipelineForFreezeGate)).
@@ -475,8 +587,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 					},
 				}}
 			}),
-		).
-		Complete(r)
+		)
+	return shard.Active().Complete(b, tracing.WrapReconciler("pipeline", r), &kardinalv1alpha1.PipelineList{})
 }
 
 // deploymentMetricsEqual returns true when a and b represent the same metrics.
@@ -496,5 +608,10 @@ func deploymentMetricsEqual(a, b *kardinalv1alpha1.PipelineDeploymentMetrics) bo
 		a.AutoRollbackRateMillis == b.AutoRollbackRateMillis &&
 		a.OperatorInterventionRateMillis == b.OperatorInterventionRateMillis &&
 		a.StaleProdDays == b.StaleProdDays &&
-		a.SampleSize == b.SampleSize
+		a.SampleSize == b.SampleSize &&
+		a.Deployments == b.Deployments &&
+		a.FailedDeployments == b.FailedDeployments &&
+		a.ChangeFailureRateMillis == b.ChangeFailureRateMillis &&
+		a.MeanTimeToRestoreMinutes == b.MeanTimeToRestoreMinutes &&
+		a.RestoredFailures == b.RestoredFailures
 }

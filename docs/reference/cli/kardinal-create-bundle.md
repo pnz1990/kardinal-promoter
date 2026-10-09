@@ -36,15 +36,16 @@ kardinal create bundle <pipeline> [flags]
 ### Options
 
 ```
-      --author string          Author or CI actor of the build (provenance)
-      --ci-run-url string      Absolute http(s) URL of the CI run that built the Bundle (provenance)
-      --commit string          Source commit SHA that produced the Bundle (provenance)
-      --config-commit string   Commit SHA of the config repository to promote; required for config and mixed Bundles
-      --config-repo string     Git URL of the config repository (default: the Pipeline's git.url)
-      --dry-run                Preview the promotion graph without creating any cluster resources
-  -h, --help                   help for bundle
-      --image stringArray      Container image reference (can be specified multiple times); required for image and mixed Bundles
-      --type string            Bundle type: image, config, or mixed (default "image")
+      --author string             Author or CI actor of the build (provenance)
+      --ci-run-url string         Absolute http(s) URL of the CI run that built the Bundle (provenance)
+      --commit string             Source commit SHA that produced the Bundle (provenance)
+      --config-commit string      Commit SHA of the config repository to promote; required for config and mixed Bundles
+      --config-repo string        Git URL of the config repository (default: the Pipeline's git.url)
+      --dry-run                   Preview the promotion graph without creating any cluster resources
+      --graph-compact-above int   With --dry-run: the controller's --graph-compact-above (chart graph.compactAbove), the environment count above which the Graph is compact (default 100)
+  -h, --help                      help for bundle
+      --image stringArray         Container image reference (can be specified multiple times); required for image and mixed Bundles
+      --type string               Bundle type: image, config, or mixed (default "image")
 ```
 
 ### Options inherited from parent commands

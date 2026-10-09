@@ -8,11 +8,8 @@ package live
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
-
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -24,7 +21,7 @@ import (
 // with the other topology and race tests.
 
 // TestScale_TopologyChain promotes one Bundle through a linear chain of the
-// profile's ChainStages environments (100, the most a Pipeline accepts) and
+// profile's ChainStages environments (100 in full) and
 // checks the invariants. Covers SCALE-TOPO-CHAIN-01.
 func TestScale_TopologyChain(t *testing.T) {
 	r := scale.BeginParallel(t)
@@ -35,27 +32,14 @@ func TestScale_TopologyChain(t *testing.T) {
 	r.Finish()
 }
 
-// tooManyEnvironments is the bug the API server's 100-environment cap is
-// filed as: a Pipeline cannot have the 120-stage chain or the 150-region
-// fan-out a large company runs.
-const tooManyEnvironments = 1473
-
-// applyBig creates a Pipeline over its own repo. A refusal of the
-// environment count is the known bug; any other error fails the test.
+// applyBig creates a Pipeline of more than 100 environments over its own
+// repo: a compact Graph since #1516.
 func applyBig(t *testing.T, r *scale.Run, name string, envs []v1alpha1.EnvironmentSpec) *v1alpha1.Pipeline {
 	t.Helper()
 	repo := r.Fleet.Repo(t, r.Fleet.NS+"-"+name, map[string][]string{name: scale.Names(envs)})
 	p := r.Fleet.PipelineSpec(name, repo, envs)
-	err := r.E.Client.Create(context.Background(), p)
-	// Only the cap on spec.environments is the known bug; any other
-	// refusal is a failure of its own.
-	if apierrors.IsInvalid(err) && strings.Contains(err.Error(), "spec.environments: Too many") &&
-		strings.Contains(err.Error(), "must have at most") {
-		t.Logf("the API server refused a %d-environment Pipeline: %v", len(envs), err)
-		scale.KnownBug(t, tooManyEnvironments, fmt.Sprintf("a Pipeline of %d environments is refused (spec.environments has maxItems 100)", len(envs)))
-	}
-	if err != nil {
-		t.Fatalf("create Pipeline %s: %v", name, err)
+	if err := r.E.Client.Create(context.Background(), p); err != nil {
+		t.Fatalf("create Pipeline %s (%d environments): %v", name, len(envs), err)
 	}
 	r.Fleet.Track(p, repo)
 	return p

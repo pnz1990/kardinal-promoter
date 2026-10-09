@@ -414,7 +414,7 @@ func TestPRFinalizer_DeleteWithoutPR(t *testing.T) {
 		{name: "an auto step in Failed", step: auto("Failed")},
 		{name: "a pr-review step in Pending", step: prStep("Pending", 0)},
 		{name: "a pr-review step in Promoting, before it opened its PR", step: prStep("Promoting", 0),
-			wantDeleted: []string{"test/repo:kardinal/bundle-1/prod"}},
+			wantDeleted: []string{"test/repo:kardinal/37a8eec1/bundle-1/prod"}},
 		{name: "a pr-review step in Failed", step: prStep("Failed", 0)},
 	}
 	for _, tt := range tests {
@@ -552,7 +552,7 @@ func TestPRFinalizer_DeleteMergedPRProviders(t *testing.T) {
 			wantCalls: []string{"GET /2.0/repositories/ws/repo/pullrequests/5",
 				"POST /2.0/repositories/ws/repo/pullrequests/5/decline",
 				"POST /2.0/repositories/ws/repo/pullrequests/5/comments",
-				"DELETE /2.0/repositories/ws/repo/refs/branches/kardinal/bundle-1/prod"}},
+				"DELETE /2.0/repositories/ws/repo/refs/branches/kardinal/37a8eec1/bundle-1/prod"}},
 		{name: "Azure DevOps, completed", repo: "org/proj/repo", state: `{"status":"completed"}`,
 			provider:  func(u string) scm.SCMProvider { return scm.NewAzureDevOpsProvider("t", u, "") },
 			wantCalls: []string{"GET /org/proj/_apis/git/repositories/repo/pullrequests/5"}},
@@ -1035,7 +1035,7 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 				assert.Equal(t, 1, m.getPRCalled, "the SCM is asked whether the PR is open")
 			}
 			if tt.wantClosed && !tt.keepsBranch {
-				assert.Equal(t, []string{"test/repo:kardinal/bundle-1/prod"}, m.deleted, "the closed PR's branch is deleted")
+				assert.Equal(t, []string{"test/repo:kardinal/37a8eec1/bundle-1/prod"}, m.deleted, "the closed PR's branch is deleted")
 			} else {
 				assert.Empty(t, m.deleted, "the branch is kept")
 			}

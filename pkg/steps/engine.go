@@ -19,6 +19,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // Engine executes a named sequence of steps, accumulating outputs between steps.
@@ -71,7 +74,9 @@ const MaxSequenceRestarts = 3
 //
 // A step that returns StepRestart (for example git-push after the base branch
 // moved) makes the engine run the sequence again from index 0, at most
-// MaxSequenceRestarts times; after that the step is reported as Failed.
+// MaxSequenceRestarts times; after that the step is reported as Failed with
+// an error that wraps ErrContended, which the reconciler retries with
+// backoff.
 // ExecuteFrom never returns StepRestart.
 //
 // When state.StepTimeoutSeconds > 0, each step is executed with a per-step
@@ -91,7 +96,15 @@ func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex i
 		log.Info().Str("step", name).Int("index", i).Msg("executing step")
 
 		started := e.now()
-		result, err = executeStep(ctx, step, state)
+		stepCtx, span := tracing.Start(ctx, "step "+name,
+			attribute.String("kardinal.step", name), attribute.Int("kardinal.step.index", i),
+			attribute.String("kardinal.environment", state.Environment.Name))
+		result, err = executeStep(stepCtx, step, state)
+		span.SetAttributes(attribute.String("kardinal.step.status", string(result.Status)))
+		if err == nil && result.Status == StepFailed {
+			tracing.Fail(span, result.Message)
+		}
+		tracing.End(span, err)
 		e.timings[i] = StepTiming{Started: started, Finished: e.now()}
 		if err != nil {
 			return i, result, fmt.Errorf("step %s: %w", name, err)
@@ -114,8 +127,8 @@ func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex i
 		case StepRestart:
 			if restarts >= MaxSequenceRestarts {
 				result.Status = StepFailed
-				result.Message = fmt.Sprintf("%s (gave up after %d restarts)", result.Message, restarts)
-				return i, result, fmt.Errorf("step %s: %s", name, result.Message)
+				result.Message = fmt.Sprintf("%s (gave up after %d restarts in this reconcile)", result.Message, restarts)
+				return i, result, fmt.Errorf("step %s: %s: %w", name, result.Message, ErrContended)
 			}
 			restarts++
 			log.Info().Str("step", name).Int("restart", restarts).Str("reason", result.Message).
