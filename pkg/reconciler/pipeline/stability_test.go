@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 )
 
@@ -300,19 +301,76 @@ func TestComputeDeploymentMetrics_FanOutAndQADecisions(t *testing.T) {
 		assert.Equal(t, 1, m.RestoredFailures)
 		assert.Equal(t, int64(40), m.MeanTimeToRestoreMinutes, "from v1 deployed (5m) to the rollback Verified in prod-us (45m)")
 	})
-	t.Run("the steps of a superseded Bundle are not deployments", func(t *testing.T) {
+	t.Run("the steps a supersession cancelled are not deployments", func(t *testing.T) {
 		sup := bundleAt("v2", at(60))
 		sup.Status.Phase = "Superseded"
+		cancelled := envStep("v2", "prod-eu", "Failed", at(65), at(66)) // cancelled while health checking
+		cancelled.Status.Message = lifecycle.SupersededMessage("v2") + " — promotion cancelled"
+		inFlight := envStep("v2", "prod-us", "HealthChecking", at(65), at(66)) // the guard has not run yet
 		m := pipeline.ComputeDeploymentMetrics(p,
 			[]kardinalv1alpha1.Bundle{bundleAt("v1", at(0)), sup},
 			[]kardinalv1alpha1.PromotionStep{
 				envStep("v1", "prod-eu", "Verified", at(5), at(10)),
 				envStep("v1", "prod-us", "Verified", at(6), at(12)),
-				envStep("v2", "prod-eu", "Failed", at(65), at(66)), // cancelled while health checking
+				cancelled, inFlight,
 			}, at(24*60))
 		require.NotNil(t, m)
 		assert.Equal(t, 1, m.Deployments)
 		assert.Zero(t, m.FailedDeployments)
+	})
+	t.Run("a fan-out Bundle superseded after one final environment failed is a failed deployment", func(t *testing.T) {
+		sup := bundleAt("v2", at(60))
+		sup.Status.Phase = "Superseded"
+		failed := envStep("v2", "prod-eu", "Failed", at(65), at(70))
+		failed.Status.Message = "health check timeout after 5m0s"
+		cancelled := envStep("v2", "prod-us", "Failed", at(66), at(72))
+		cancelled.Status.Message = lifecycle.SupersededMessage("v2") + " — promotion cancelled"
+		m := pipeline.ComputeDeploymentMetrics(p,
+			[]kardinalv1alpha1.Bundle{bundleAt("v1", at(0)), sup, bundleAt("v3", at(90))},
+			[]kardinalv1alpha1.PromotionStep{
+				envStep("v1", "prod-eu", "Verified", at(5), at(10)),
+				envStep("v1", "prod-us", "Verified", at(6), at(12)),
+				failed, cancelled,
+				envStep("v3", "prod-eu", "Verified", at(95), at(100)),
+				envStep("v3", "prod-us", "Verified", at(96), at(110)),
+			}, at(24*60))
+		require.NotNil(t, m)
+		assert.Equal(t, 3, m.Deployments)
+		assert.Equal(t, 1, m.FailedDeployments, "v2 failed in prod-eu before it was superseded")
+		assert.Equal(t, 1, m.RestoredFailures)
+		assert.Equal(t, int64(45), m.MeanTimeToRestoreMinutes, "from v2 deployed (65m) to v3 Verified in both (110m)")
+	})
+	t.Run("a restore needs every region of a final environment Verified", func(t *testing.T) {
+		region := func(bundle, env, name, state string, deployed, end time.Time) kardinalv1alpha1.PromotionStep {
+			s := envStep(bundle, env, state, deployed, end)
+			s.Name += "-" + name
+			return s
+		}
+		base := []kardinalv1alpha1.PromotionStep{
+			envStep("v1", "prod-eu", "Failed", at(5), at(10)),
+			envStep("v1", "prod-us", "Verified", at(6), at(12)),
+			region("v2", "prod-eu", "a", "Verified", at(65), at(70)),
+			region("v2", "prod-us", "a", "Verified", at(66), at(72)),
+		}
+		bundles := []kardinalv1alpha1.Bundle{bundleAt("v1", at(0)), bundleAt("v2", at(60))}
+		tests := []struct {
+			name     string
+			second   kardinalv1alpha1.PromotionStep
+			restored int
+			mttr     int64
+		}{
+			{"one region still health checking", region("v2", "prod-us", "b", "HealthChecking", at(67), at(75)), 0, 0},
+			{"every region Verified: the last gives the time", region("v2", "prod-us", "b", "Verified", at(67), at(95)), 1, 90},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				m := pipeline.ComputeDeploymentMetrics(p, bundles, append(append([]kardinalv1alpha1.PromotionStep{}, base...), tt.second), at(24*60))
+				require.NotNil(t, m)
+				assert.Equal(t, 1, m.FailedDeployments)
+				assert.Equal(t, tt.restored, m.RestoredFailures)
+				assert.Equal(t, tt.mttr, m.MeanTimeToRestoreMinutes)
+			})
+		}
 	})
 	t.Run("a deployed Bundle rejected later is a failure", func(t *testing.T) {
 		rej := bundleAt("v1", at(0))
@@ -331,4 +389,28 @@ func TestComputeDeploymentMetrics_FanOutAndQADecisions(t *testing.T) {
 		assert.Equal(t, 1, m.RestoredFailures)
 		assert.Equal(t, int64(67), m.MeanTimeToRestoreMinutes, "from v1 deployed (5m) to v2 Verified in both (72m)")
 	})
+}
+
+// TestComputeDeploymentMetrics_AutoRollback covers the onHealthFailure:
+// rollback path: the rollback Bundle supersedes the failing one while its
+// prod step is RollingBack. That step is a failed deployment, not one the
+// supersession cancelled, and the rollback restores it.
+func TestComputeDeploymentMetrics_AutoRollback(t *testing.T) {
+	p := makePipelineWithEnvs("app", "default", "test", "prod")
+	at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
+	v2 := bundleAt("v2", at(60))
+	v2.Status.Phase = "Superseded"
+	rb := rollbackBundle("rb", "v2", "prod", at(75))
+	m := pipeline.ComputeDeploymentMetrics(p,
+		[]kardinalv1alpha1.Bundle{bundleAt("v1", at(0)), v2, rb},
+		[]kardinalv1alpha1.PromotionStep{
+			deployedStep("v1", "Verified", at(5), at(10)),
+			deployedStep("v2", "RollingBack", at(65), at(75)),
+			deployedStep("rb", "Verified", at(80), at(90)),
+		}, at(24*60))
+	require.NotNil(t, m)
+	assert.Equal(t, 2, m.Deployments, "v1 and v2; the rollback is a restore")
+	assert.Equal(t, 1, m.FailedDeployments)
+	assert.Equal(t, 1, m.RestoredFailures)
+	assert.Equal(t, int64(25), m.MeanTimeToRestoreMinutes, "from v2 deployed (65m) to the rollback Verified (90m)")
 }

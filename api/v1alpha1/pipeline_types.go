@@ -617,8 +617,10 @@ type PipelineDeploymentMetrics struct {
 	// time to restore are computed over: the last 30 Bundles whose change
 	// reached a final environment (one nothing depends on; its health check
 	// started), whatever the outcome, once per Bundle. Not deployments: a
-	// no-op promotion (outputs.noChanges), the unverified steps of a
-	// superseded Bundle, and rollback Bundles (they count only as restores).
+	// no-op promotion (outputs.noChanges), the steps a supersession
+	// cancelled (a RollingBack, AbortedByAlarm or already Failed step of a
+	// superseded Bundle still counts), and rollback Bundles (they count only
+	// as restores).
 	// +optional
 	Deployments int `json:"deployments,omitempty"`
 

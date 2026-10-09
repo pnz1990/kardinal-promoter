@@ -315,8 +315,8 @@ func stepDeployedAt(s *kardinalv1alpha1.PromotionStep) (time.Time, bool) {
 // A deployment is a Bundle at least one of whose final-environment steps
 // started its health check with a change to apply (not outputs.noChanges).
 // Not deployments: rollback Bundles, which count only as restore events, and
-// the steps of a superseded Bundle that never reached Verified (cancelled by
-// the supersession). A deployment failed when one of its final-environment
+// the steps of a superseded Bundle that the supersession cancelled
+// (lifecycle.CancelledBySupersession). A deployment failed when one of its final-environment
 // steps ended Failed, AbortedByAlarm or RollingBack, when a rollback Bundle
 // for one of those environments names it in kardinal.io/rollback-from, or
 // when the Bundle was rejected (phase Rejected) after it was deployed.
@@ -376,8 +376,12 @@ func computeStability(pipelineName string, finalEnvs []string, bundles []kardina
 		} else {
 			notVerified[name] = true
 		}
-		if b != nil && b.Status.Phase == "Superseded" && !verified {
-			continue // cancelled by the supersession
+		// Only the steps the supersession cancelled are skipped. A step that
+		// failed on its own, is AbortedByAlarm, or is RollingBack (an
+		// auto-rollback supersedes the failing Bundle while its step rolls
+		// back) is a failed deployment.
+		if b != nil && b.Status.Phase == "Superseded" && !verified && lifecycle.CancelledBySupersession(s) {
+			continue
 		}
 		at, ok := stepDeployedAt(s)
 		if !ok {
