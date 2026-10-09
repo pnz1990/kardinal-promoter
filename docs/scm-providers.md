@@ -335,29 +335,31 @@ provider applies:
 | `reviewers` | Usernames | Usernames | Usernames | Account IDs or `{UUID}`s | Identity IDs |
 | `teamReviewers` | Team slugs (organisation repos) | No | Team names (organisation repos) | No | Group identity IDs |
 | `assignees` | Usernames | Usernames | Usernames | No (no PR assignees) | No (no PR assignees) |
-| `merge.auto` | Auto-merge (GraphQL `enablePullRequestAutoMerge`) | Auto-merge (`auto_merge`, or `merge_when_pipeline_succeeds` before GitLab 17.11) | Scheduled merge (`merge_when_checks_succeed`), or a merge at once without commit statuses | No (no auto-merge API) | Auto-complete |
+| `merge.auto` | Auto-merge (GraphQL `enablePullRequestAutoMerge` / `disablePullRequestAutoMerge`) | Auto-merge (`auto_merge`, or `merge_when_pipeline_succeeds` before GitLab 17.11; cancelled with `cancel_merge_when_pipeline_succeeds`) | Scheduled merge (`merge_when_checks_succeed`; cancelled with `DELETE .../merge`) | No (no auto-merge API) | Auto-complete (cleared to turn it off) |
 | `merge.method` | `merge`, `squash`, `rebase` | `merge`, `squash` (a rebase merge is the project's merge method setting) | `merge`, `squash`, `rebase` | — | `merge` (no fast-forward), `squash`, `rebase` |
 | `merge.commitMessageTemplate` | Yes | Yes (merge and squash commits) | Yes | — | Yes |
 
 A control the provider does not apply fails the step before the PR is opened, with a message
 such as `environment prod: pr.teamReviewers is not supported by the gitlab SCM provider`.
 
-What auto-merge needs on each provider:
+What auto-merge needs, and what "nothing pending" means, on each provider. With nothing
+pending the SCM would merge at once, so kardinal leaves the PR for a merge by hand
+(`prAutoMerge: failed`) unless `pr.merge.allowImmediate` is set:
 
-- **GitHub**: the repository must allow auto-merge (**Settings → General → Allow auto-merge**)
-  for a PR that waits for checks or reviews. GitHub refuses auto-merge on a PR that can be
-  merged already ("clean status"); kardinal then merges it at once with the merge method and
-  message, through the REST merge endpoint, which applies branch protection too. The token
-  needs **Contents: Read and write** and **Pull requests: Read and write**.
-- **GitLab**: an MR without a running pipeline is merged at once. A project whose merge
-  method is merge commit makes a merge commit over the squash commit; both get the message.
-- **Forgejo / Gitea**: a PR whose head commit has commit statuses is scheduled to merge
-  once they succeed. Forgejo merges a scheduled PR only when a later status or review
-  arrives, so a PR with no commit status is merged at once (branch protection applies);
-  when branch protection refuses that merge, for example for missing approvals, the merge
-  is scheduled and runs after the next status or approving review.
-- **Azure DevOps**: auto-complete is set by the token's identity, which opened the PR, and
-  completes the PR once its branch policies pass.
+- **GitHub**: the repository must allow auto-merge (**Settings → General → Allow auto-merge**).
+  Nothing pending: GitHub refuses auto-merge on a PR in "clean status" (no required check or
+  review pending); with `allowImmediate` kardinal merges it with the REST merge endpoint, which
+  applies branch protection too. The token needs **Contents: Read and write** and **Pull
+  requests: Read and write**.
+- **GitLab**: nothing pending: the MR's `detailed_merge_status` is `mergeable`. While GitLab is
+  still checking a new MR (`checking`, `unchecked`), kardinal tries again later. A project whose
+  merge method is merge commit makes a merge commit over the squash commit; both get the message.
+- **Forgejo / Gitea**: nothing pending: no commit status that is still pending or failing, and
+  no base branch protection that requires approvals or status checks. Forgejo and Gitea run a
+  scheduled merge when the checks succeed or an approval arrives.
+- **Azure DevOps**: nothing pending: no branch policy evaluation queued, running or rejected.
+  Auto-complete is set by the token's identity, which opened the PR, and completes the PR once
+  its branch policies pass.
 
 kardinal keeps the PR's head branch when the SCM merges it, as it does for a merge by hand.
 

@@ -165,9 +165,34 @@ const OutputPRLabelsError = "prLabelsError"
 // error.
 const OutputPRControlsError = "prControlsError"
 
-// OutputPRAutoMerge is the open-pr output set to "enabled" once the SCM took
-// the auto-merge of pr.merge.auto.
+// OutputPRAutoMerge is the state of the auto-merge of pr.merge.auto:
+// AutoMergePending, AutoMergeEnabled, AutoMergeSuspended or
+// AutoMergeFailed. open-pr sets it pending; the PromotionStep reconciler
+// moves it while the step waits for the merge.
 const OutputPRAutoMerge = "prAutoMerge"
+
+// The values of OutputPRAutoMerge.
+const (
+	AutoMergePending   = "pending"
+	AutoMergeEnabled   = "enabled"
+	AutoMergeSuspended = "suspended"
+	AutoMergeFailed    = "failed"
+)
+
+// OutputPRMergeOptions is the open-pr output that keeps the rendered merge
+// options of pr.merge.auto (scm.MergeOptions as JSON).
+const OutputPRMergeOptions = "prMergeOptions"
+
+// OutputPRAutoMergeError says why auto-merge is not on: the SCM's error, or
+// what suspended it (the Pipeline is paused, a gate is closed).
+const OutputPRAutoMergeError = "prAutoMergeError"
+
+// OutputPRAutoMergeAttempts and OutputPRAutoMergeRetryAt count the attempts
+// to enable auto-merge and when the next one may run (RFC 3339).
+const (
+	OutputPRAutoMergeAttempts = "prAutoMergeAttempts"
+	OutputPRAutoMergeRetryAt  = "prAutoMergeRetryAt"
+)
 
 // OpensPR reports whether the sequence being run opens a PR.
 func (s *StepState) OpensPR() bool {

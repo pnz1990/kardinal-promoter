@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"text/template"
 	"time"
 	"unicode/utf8"
 
@@ -107,85 +106,105 @@ type PRTemplatePR struct {
 // NewPRTemplateData returns the template data of the PR whose default body
 // is body.
 func NewPRTemplateData(body PRBody) PRTemplateData {
+	images := body.Bundle.Images
+	if len(images) > maxTemplateImages {
+		images = images[:maxTemplateImages]
+	}
+	short := func(s string) string { return tmplsafe.TruncateRunes(s, maxTemplateValue) }
 	d := PRTemplateData{
 		Pipeline:    body.PipelineName,
 		Environment: body.Environment,
 		Bundle: PRTemplateBundle{
 			Name:    body.BundleName,
 			Type:    body.Bundle.Type,
-			Version: BundleVersion(body.Bundle),
-			Images:  body.Bundle.Images,
+			Version: short(BundleVersion(body.Bundle)),
+			Images:  images,
 		},
 		IsRollback: body.RollbackOf != "",
 	}
 	if c := body.Bundle.ConfigRef; c != nil {
-		d.Bundle.ConfigCommitSHA = c.CommitSHA
+		d.Bundle.ConfigCommitSHA = short(c.CommitSHA)
 	}
 	if p := body.Bundle.Provenance; p != nil {
-		d.Bundle.Author, d.Bundle.CommitSHA, d.Bundle.CIRunURL = p.Author, p.CommitSHA, p.CIRunURL
+		d.Bundle.Author, d.Bundle.CommitSHA, d.Bundle.CIRunURL = short(p.Author), short(p.CommitSHA), short(p.CIRunURL)
 	}
 	if d.IsRollback {
-		d.Rollback = PRTemplateRollback{Of: body.RollbackOf, From: body.RollbackFrom, By: body.RolledBackBy, Restores: body.RestoredVersion}
+		d.Rollback = PRTemplateRollback{Of: body.RollbackOf, From: body.RollbackFrom, By: short(body.RolledBackBy), Restores: short(body.RestoredVersion)}
 	}
 	return d
 }
 
-// prTemplateFuncs returns the functions of a pr template. The evidence
-// functions render the sections of the default body for body.
-func prTemplateFuncs(body PRBody) template.FuncMap {
-	section := func(name string) func() (string, error) {
-		return func() (string, error) {
-			s, err := renderSection(name, body)
-			return strings.Trim(s, "\n"), err
+// The template data is bounded: a range over .Bundle.Images runs at most
+// maxTemplateImages times, and each string value is at most
+// maxTemplateValue characters.
+const (
+	maxTemplateImages = 20
+	maxTemplateValue  = 1024
+)
+
+// multiLineValue names a data value with a line break. A list template
+// renders one entry per line, so such a value (an author "alice\nbob")
+// would make two entries; the list is refused instead.
+func multiLineValue(d PRTemplateData) string {
+	for name, v := range map[string]string{
+		".Bundle.Author": d.Bundle.Author, ".Bundle.CommitSHA": d.Bundle.CommitSHA, ".Bundle.CIRunURL": d.Bundle.CIRunURL,
+		".Bundle.Version": d.Bundle.Version, ".Rollback.By": d.Rollback.By, ".Rollback.Restores": d.Rollback.Restores,
+	} {
+		if strings.ContainsAny(v, "\r\n") {
+			return name
 		}
 	}
-	return template.FuncMap{
-		// The default body, whole.
-		"evidence": func() (string, error) { return RenderPRBody(body) },
-		// Its sections.
-		"heading":         section("heading"),
-		"rollbackNotice":  section("rollbackNotice"),
-		"provenanceTable": section("provenance"),
-		"gatesTable":      section("gates"),
-		"upstreamTable":   section("upstream"),
-		// Text helpers.
-		"mdcell":     mdCellReplacer.Replace,
-		"join":       func(sep string, items []string) string { return strings.Join(items, sep) },
-		"lower":      strings.ToLower,
-		"upper":      strings.ToUpper,
-		"trimSpace":  strings.TrimSpace,
-		"trimPrefix": func(prefix, s string) string { return strings.TrimPrefix(s, prefix) },
-		"replace":    func(old, repl, s string) string { return strings.ReplaceAll(s, old, repl) },
-		"contains":   func(substr, s string) bool { return strings.Contains(s, substr) },
-		"hasPrefix":  func(prefix, s string) bool { return strings.HasPrefix(s, prefix) },
-		"truncate":   func(n int, s string) string { return truncateRunes(s, n) },
-		"default": func(def, s string) string {
-			if s == "" {
-				return def
-			}
-			return s
-		},
+	for _, img := range d.Bundle.Images {
+		if strings.ContainsAny(img.Repository+img.Tag+img.Digest, "\r\n") {
+			return ".Bundle.Images"
+		}
 	}
+	return ""
 }
 
-// truncateRunes returns the first n characters of s.
-func truncateRunes(s string, n int) string {
-	if n < 0 {
-		n = 0
+// prTemplateFuncs returns the functions of a pr template. The evidence
+// functions return the sections of the default body for body, rendered once
+// before the template (their size is known before a call). The text helpers
+// are tmplsafe.StringFuncs.
+func prTemplateFuncs(body PRBody) (tmplsafe.FuncMap, error) {
+	funcs := tmplsafe.StringFuncs()
+	whole, err := RenderPRBody(body)
+	if err != nil {
+		return nil, err
 	}
-	if utf8.RuneCountInString(s) <= n {
-		return s
+	funcs["evidence"] = tmplsafe.Const(whole)
+	for fn, section := range map[string]string{
+		"heading": "heading", "rollbackNotice": "rollbackNotice", "provenanceTable": "provenance",
+		"gatesTable": "gates", "upstreamTable": "upstream",
+	} {
+		text, err := renderSection(section, body)
+		if err != nil {
+			return nil, err
+		}
+		funcs[fn] = tmplsafe.Const(strings.Trim(text, "\n"))
 	}
-	return string([]rune(s)[:n])
+	// mdcell at most doubles its input (| becomes \|).
+	funcs["mdcell"] = tmplsafe.Func{Fn: mdCellReplacer.Replace, Size: func(a []interface{}) (int, error) {
+		s, _ := a[0].(string)
+		return 2 * len(s), nil
+	}}
+	return funcs, nil
 }
 
 // The limits of the pr templates (pkg/tmplsafe): a body may be as long as
 // GitHub takes (65536 characters), and the other fields far less.
 var (
-	prBodyLimits  = tmplsafe.Limits{MaxOutput: 64 << 10, MaxFuncInput: 64 << 10, MaxFuncOutput: 64 << 10, MaxRangeDepth: 2}
-	prShortLimits = tmplsafe.Limits{MaxOutput: 4 << 10, MaxFuncInput: 64 << 10, MaxFuncOutput: 64 << 10, MaxRangeDepth: 2}
-	prMergeLimits = tmplsafe.Limits{MaxOutput: 16 << 10, MaxFuncInput: 64 << 10, MaxFuncOutput: 64 << 10, MaxRangeDepth: 2}
+	prBodyLimits  = prLimits(64 << 10)
+	prShortLimits = prLimits(4 << 10)
+	prMergeLimits = prLimits(16 << 10)
 )
+
+// prLimits are tmplsafe.DefaultLimits with output at most maxOutput bytes.
+func prLimits(maxOutput int) tmplsafe.Limits {
+	l := tmplsafe.DefaultLimits
+	l.MaxOutput = maxOutput
+	return l
+}
 
 // renderPRTemplate parses and executes one pr template in the tmplsafe
 // sandbox: a template written in a Pipeline runs in the controller, so it
@@ -194,7 +213,11 @@ var (
 // parsing is cheap, and it keeps the shared state of a render out of the
 // template.
 func renderPRTemplate(field, text string, lim tmplsafe.Limits, body PRBody, data PRTemplateData) (string, error) {
-	t, err := tmplsafe.Parse(field, text, prTemplateFuncs(body), lim)
+	funcs, err := prTemplateFuncs(body)
+	if err != nil {
+		return "", fmt.Errorf("pr.%s: %w", field, err)
+	}
+	t, err := tmplsafe.Parse(field, text, funcs, lim)
 	if err != nil {
 		return "", fmt.Errorf("pr.%s: %w", field, err)
 	}
@@ -240,7 +263,7 @@ func RenderPR(cfg *v1alpha1.PRConfig, defaultTitle string, body PRBody) (Rendere
 		if title == "" {
 			return RenderedPR{}, errors.New("pr.titleTemplate: rendered an empty title")
 		}
-		out.Title = truncateRunes(title, maxPRTitle)
+		out.Title = tmplsafe.TruncateRunes(title, maxPRTitle)
 	}
 	if cfg.BodyTemplate != "" {
 		b, err := renderPRTemplate("bodyTemplate", cfg.BodyTemplate, prBodyLimits, body, data)
@@ -279,6 +302,12 @@ func RenderPR(cfg *v1alpha1.PRConfig, defaultTitle string, body PRBody) (Rendere
 // output is one entry; blank lines and repeats are dropped, so a template
 // that renders nothing (an empty .Bundle.Author) adds nothing.
 func renderPRList(field string, templates []string, body PRBody, data PRTemplateData) ([]string, error) {
+	if len(templates) == 0 {
+		return nil, nil
+	}
+	if v := multiLineValue(data); v != "" {
+		return nil, fmt.Errorf("pr.%s: %s has a line break, which would split into several entries", field, v)
+	}
 	var out []string
 	seen := map[string]bool{}
 	for i, text := range templates {
@@ -304,17 +333,20 @@ func renderPRList(field string, templates []string, body PRBody, data PRTemplate
 // MergeOptions is how the SCM merges a PR kardinal enabled auto-merge on.
 type MergeOptions struct {
 	// Method is merge, squash or rebase. Empty means merge.
-	Method string
+	Method string `json:"method,omitempty"`
+	// AllowImmediate lets kardinal merge a PR that has nothing pending
+	// (pr.merge.allowImmediate).
+	AllowImmediate bool `json:"allowImmediate,omitempty"`
 	// CommitTitle and CommitBody are the merge commit message. Empty leaves
 	// the SCM's default.
-	CommitTitle string
-	CommitBody  string
+	CommitTitle string `json:"commitTitle,omitempty"`
+	CommitBody  string `json:"commitBody,omitempty"`
 }
 
 // RenderMergeOptions renders the merge options of m for the PR whose default
 // body is body. pr is the opened PR.
 func RenderMergeOptions(m *v1alpha1.PRMergeConfig, body PRBody, pr PRTemplatePR) (MergeOptions, error) {
-	opts := MergeOptions{Method: m.Method}
+	opts := MergeOptions{Method: m.Method, AllowImmediate: m.AllowImmediate}
 	if opts.Method == "" {
 		opts.Method = MergeMethodMerge
 	}
@@ -328,7 +360,7 @@ func RenderMergeOptions(m *v1alpha1.PRMergeConfig, body PRBody, pr PRTemplatePR)
 		return MergeOptions{}, err
 	}
 	title, rest, _ := strings.Cut(strings.TrimSpace(msg), "\n")
-	opts.CommitTitle = truncateRunes(strings.TrimSpace(title), maxPRTitle)
+	opts.CommitTitle = tmplsafe.TruncateRunes(strings.TrimSpace(title), maxPRTitle)
 	opts.CommitBody = strings.TrimSpace(rest)
 	if opts.CommitTitle == "" {
 		return MergeOptions{}, errors.New("pr.merge.commitMessageTemplate: rendered an empty message")

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +19,6 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
 // apiCall is one request the fake API got: "METHOD /escaped/path?query" and
@@ -120,92 +118,59 @@ func runOpenPR(t *testing.T, state *parentsteps.StepState) (parentsteps.StepResu
 	return step.Execute(context.Background(), state)
 }
 
+// assertMergePending checks that open-pr left auto-merge to the reconciler:
+// state pending and the rendered merge options.
+func assertMergePending(t *testing.T, outputs map[string]string, want scm.MergeOptions) {
+	t.Helper()
+	assert.Equal(t, parentsteps.AutoMergePending, outputs[parentsteps.OutputPRAutoMerge])
+	var got scm.MergeOptions
+	require.NoError(t, json.Unmarshal([]byte(outputs[parentsteps.OutputPRMergeOptions]), &got))
+	assert.Equal(t, want, got)
+}
+
 // TestOpenPRControls_GitHub: the PR gets the rendered title and body, the
-// labels, reviewers, team reviewers and assignees, and auto-merge through
-// GraphQL with the merge method and rendered commit message; a PR GitHub
-// says needs nothing more is merged at once with the REST endpoint; GitHub
-// Enterprise's GraphQL endpoint is /api/graphql. Covers SCM-PRCTL-GH-01.
+// labels, reviewers, team reviewers and assignees; auto-merge is not turned
+// on by open-pr but left pending with the rendered merge options for the
+// reconciler. Covers SCM-PRCTL-GH-01.
 func TestOpenPRControls_GitHub(t *testing.T) {
-	defer steps.SetAutoMergeRetryDelays([]time.Duration{0})()
-	const (
-		pulls = "POST /repos/acme/web/pulls"
-		pr    = "GET /repos/acme/web/pulls/5"
-	)
-	base := map[string][]apiReply{
-		pulls:                                  {{201, `{"number":5,"html_url":"https://github.com/acme/web/pull/5"}`}},
-		"POST /repos/acme/web/issues/5/labels": {{200, `[]`}},
+	srv, calls := routedAPI(t, map[string][]apiReply{
+		"POST /repos/acme/web/pulls":                       {{201, `{"number":5,"html_url":"https://github.com/acme/web/pull/5"}`}},
+		"POST /repos/acme/web/issues/5/labels":             {{200, `[]`}},
 		"POST /repos/acme/web/pulls/5/requested_reviewers": {{201, `{}`}},
 		"POST /repos/acme/web/issues/5/assignees":          {{201, `{}`}},
-		pr: {{200, `{"node_id":"PR_kw5"}`}},
-	}
-	tests := []struct {
-		name, prefix, graphql string
-		graphqlReply          string
-		wantMerge             bool
-	}{
-		{name: "auto-merge", graphql: "POST /graphql", graphqlReply: `{"data":{"enablePullRequestAutoMerge":{"pullRequest":{"number":5}}}}`},
-		{name: "clean status merges at once", graphql: "POST /graphql",
-			graphqlReply: `{"data":null,"errors":[{"type":"UNPROCESSABLE","message":"Pull request Pull request is in clean status"}]}`, wantMerge: true},
-		{name: "enterprise", prefix: "/api/v3", graphql: "POST /api/graphql", graphqlReply: `{"data":{}}`},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rs := map[string][]apiReply{tt.graphql: {{200, tt.graphqlReply}}}
-			for k, v := range base {
-				method, path, _ := strings.Cut(k, " ")
-				rs[method+" "+tt.prefix+path] = v
-			}
-			rs["PUT "+tt.prefix+"/repos/acme/web/pulls/5/merge"] = []apiReply{{200, `{"merged":true}`}}
-			srv, calls := routedAPI(t, rs)
-			p, err := scm.NewProvider("github", "ghp", srv.URL+tt.prefix, "")
-			require.NoError(t, err)
+	})
+	p, err := scm.NewProvider("github", "ghp", srv.URL, "")
+	require.NoError(t, err)
 
-			result, err := runOpenPR(t, controlsState(t, "https://github.com/acme/web.git", p, fullPRConfig("squash")))
-			require.NoError(t, err)
-			assert.Equal(t, parentsteps.StepSuccess, result.Status, result.Message)
-			assert.Equal(t, "enabled", result.Outputs[parentsteps.OutputPRAutoMerge])
-			assert.NotContains(t, result.Message, "failed")
+	result, err := runOpenPR(t, controlsState(t, "https://github.com/acme/web.git", p, fullPRConfig("squash")))
+	require.NoError(t, err)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status, result.Message)
+	assert.NotContains(t, result.Message, "failed")
+	assertMergePending(t, result.Outputs, scm.MergeOptions{Method: "squash", CommitTitle: "deploy 1.29.0 to prod (#5)", CommitBody: "Bundle nginx-demo-v1-29-0"})
 
-			got := calls()
-			want := []string{"POST " + tt.prefix + "/repos/acme/web/pulls", "POST " + tt.prefix + "/repos/acme/web/issues/5/labels",
-				"POST " + tt.prefix + "/repos/acme/web/pulls/5/requested_reviewers", "POST " + tt.prefix + "/repos/acme/web/issues/5/assignees",
-				"GET " + tt.prefix + "/repos/acme/web/pulls/5", tt.graphql}
-			if tt.wantMerge {
-				want = append(want, "PUT "+tt.prefix+"/repos/acme/web/pulls/5/merge")
-			}
-			assert.Equal(t, want, routes(got))
-
-			open := got[0].Body
-			assert.Equal(t, "deploy 1.29.0 to prod", open["title"])
-			assert.True(t, strings.HasPrefix(open["body"].(string), "<!-- kardinal-promoter auto-generated PR -->\nby octocat\n### Policy Gate Compliance"), open["body"])
-			assert.Equal(t, []interface{}{"kardinal", "kardinal/promotion", "env/prod"}, got[1].Body["labels"])
-			assert.Equal(t, []interface{}{"alice"}, got[2].Body["reviewers"])
-			assert.Equal(t, []interface{}{"platform"}, got[2].Body["team_reviewers"])
-			assert.Equal(t, []interface{}{"octocat"}, got[3].Body["assignees"])
-			vars := got[5].Body["variables"].(map[string]interface{})
-			assert.Equal(t, map[string]interface{}{"id": "PR_kw5", "method": "SQUASH",
-				"title": "deploy 1.29.0 to prod (#5)", "body": "Bundle nginx-demo-v1-29-0"}, vars)
-			assert.Contains(t, got[5].Body["query"], "enablePullRequestAutoMerge")
-			if tt.wantMerge {
-				assert.Equal(t, map[string]interface{}{"merge_method": "squash", "commit_title": "deploy 1.29.0 to prod (#5)",
-					"commit_message": "Bundle nginx-demo-v1-29-0"}, got[6].Body)
-			}
-		})
-	}
+	got := calls()
+	assert.Equal(t, []string{"POST /repos/acme/web/pulls", "POST /repos/acme/web/issues/5/labels",
+		"POST /repos/acme/web/pulls/5/requested_reviewers", "POST /repos/acme/web/issues/5/assignees"}, routes(got),
+		"no merge or auto-merge call from open-pr")
+	open := got[0].Body
+	assert.Equal(t, "deploy 1.29.0 to prod", open["title"])
+	assert.True(t, strings.HasPrefix(open["body"].(string), "<!-- kardinal-promoter auto-generated PR -->\nby octocat\n### Policy Gate Compliance"), open["body"])
+	assert.Equal(t, []interface{}{"kardinal", "kardinal/promotion", "env/prod"}, got[1].Body["labels"])
+	assert.Equal(t, []interface{}{"alice"}, got[2].Body["reviewers"])
+	assert.Equal(t, []interface{}{"platform"}, got[2].Body["team_reviewers"])
+	assert.Equal(t, []interface{}{"octocat"}, got[3].Body["assignees"])
 }
 
 // TestOpenPRControls_GitLab: reviewers and assignees are set by user ID,
-// keeping the ones the MR has, and auto-merge squashes with the rendered
-// squash commit message. Covers SCM-PRCTL-GL-01.
+// keeping the ones the MR has; team reviewers are refused before the MR.
+// Covers SCM-PRCTL-GL-01.
 func TestOpenPRControls_GitLab(t *testing.T) {
-	defer steps.SetAutoMergeRetryDelays([]time.Duration{0})()
 	const mr = "/api/v4/projects/acme%2Fweb/merge_requests/3"
 	srv, calls := routedAPI(t, map[string][]apiReply{
 		"POST /api/v4/projects/acme%2Fweb/merge_requests": {{201, `{"iid":3,"web_url":"https://gitlab.com/acme/web/-/merge_requests/3"}`}},
-		"PUT " + mr:            {{200, `{}`}},
-		"GET " + mr:            {{200, `{"reviewers":[{"id":7}],"assignees":[]}`}},
-		"GET /api/v4/users":    {{200, `[{"id":11,"username":"x"}]`}},
-		"PUT " + mr + "/merge": {{405, `{"message":"405 Method Not Allowed"}`}, {200, `{"state":"opened","merge_when_pipeline_succeeds":true}`}},
+		"PUT " + mr:         {{200, `{}`}},
+		"GET " + mr:         {{200, `{"reviewers":[{"id":7}],"assignees":[]}`}},
+		"GET /api/v4/users": {{200, `[{"id":11,"username":"x"}]`}},
 	})
 	p, err := scm.NewProvider("gitlab", "glpat", srv.URL, "")
 	require.NoError(t, err)
@@ -215,7 +180,7 @@ func TestOpenPRControls_GitLab(t *testing.T) {
 	result, err := runOpenPR(t, controlsState(t, "https://gitlab.com/acme/web.git", p, cfg))
 	require.NoError(t, err)
 	assert.Equal(t, parentsteps.StepSuccess, result.Status, result.Message)
-	assert.Equal(t, "enabled", result.Outputs[parentsteps.OutputPRAutoMerge], "the 405 of a merge request GitLab is still checking is retried")
+	assertMergePending(t, result.Outputs, scm.MergeOptions{Method: "squash", CommitTitle: "deploy 1.29.0 to prod (#3)", CommitBody: "Bundle nginx-demo-v1-29-0"})
 
 	got := calls()
 	assert.Equal(t, []string{
@@ -223,14 +188,10 @@ func TestOpenPRControls_GitLab(t *testing.T) {
 		"PUT " + mr,                                                  // labels
 		"GET " + mr, "GET /api/v4/users?username=alice", "PUT " + mr, // reviewers
 		"GET " + mr, "GET /api/v4/users?username=octocat", "PUT " + mr, // assignees
-		"PUT " + mr + "/merge", "PUT " + mr + "/merge",
 	}, routes(got))
 	assert.Equal(t, "kardinal,kardinal/promotion,env/prod", got[1].Body["add_labels"])
 	assert.Equal(t, []interface{}{float64(7), float64(11)}, got[4].Body["reviewer_ids"], "the MR's reviewer is kept")
 	assert.Equal(t, []interface{}{float64(11)}, got[7].Body["assignee_ids"])
-	assert.Equal(t, map[string]interface{}{"auto_merge": true, "merge_when_pipeline_succeeds": true, "squash": true,
-		"squash_commit_message": "deploy 1.29.0 to prod (#3)\n\nBundle nginx-demo-v1-29-0",
-		"merge_commit_message":  "deploy 1.29.0 to prod (#3)\n\nBundle nginx-demo-v1-29-0"}, got[9].Body)
 
 	t.Run("team reviewers refused before the MR", func(t *testing.T) {
 		srv, calls := routedAPI(t, nil)
@@ -245,11 +206,9 @@ func TestOpenPRControls_GitLab(t *testing.T) {
 	})
 }
 
-// TestOpenPRControls_Forgejo: reviewers and teams are requested, assignees
-// added to the PR's, and the PR is scheduled to merge when its checks
-// succeed with the method and message. Covers SCM-PRCTL-FJ-01.
+// TestOpenPRControls_Forgejo: labels (created when missing), reviewers and
+// teams, and assignees added to the PR's. Covers SCM-PRCTL-FJ-01.
 func TestOpenPRControls_Forgejo(t *testing.T) {
-	defer steps.SetAutoMergeRetryDelays([]time.Duration{0})()
 	const repo = "/api/v1/repos/acme/web"
 	srv, calls := routedAPI(t, map[string][]apiReply{
 		"POST " + repo + "/pulls":                       {{201, `{"number":4,"html_url":"https://forgejo.example/acme/web/pulls/4"}`}},
@@ -259,9 +218,6 @@ func TestOpenPRControls_Forgejo(t *testing.T) {
 		"POST " + repo + "/pulls/4/requested_reviewers": {{201, `[]`}},
 		"GET " + repo + "/issues/4":                     {{200, `{"assignees":[{"login":"bob"}]}`}},
 		"PATCH " + repo + "/issues/4":                   {{201, `{}`}},
-		"GET " + repo + "/pulls/4":                      {{200, `{"head":{"sha":"h3ad"}}`}},
-		"GET " + repo + "/commits/h3ad/status":          {{200, `{"state":"success","total_count":2}`}},
-		"POST " + repo + "/pulls/4/merge":               {{200, ``}},
 	})
 	p, err := scm.NewProvider("forgejo", "fj", srv.URL, "")
 	require.NoError(t, err)
@@ -269,58 +225,15 @@ func TestOpenPRControls_Forgejo(t *testing.T) {
 	result, err := runOpenPR(t, controlsState(t, "https://forgejo.example/acme/web.git", p, fullPRConfig("rebase")))
 	require.NoError(t, err)
 	assert.Equal(t, parentsteps.StepSuccess, result.Status, result.Message)
-	assert.Equal(t, "enabled", result.Outputs[parentsteps.OutputPRAutoMerge])
-
+	assertMergePending(t, result.Outputs, scm.MergeOptions{Method: "rebase", CommitTitle: "deploy 1.29.0 to prod (#4)", CommitBody: "Bundle nginx-demo-v1-29-0"})
 	got := calls()
 	assert.Equal(t, []string{"POST " + repo + "/pulls", "GET " + repo + "/labels?limit=50&page=1", "POST " + repo + "/labels",
 		"POST " + repo + "/issues/4/labels", "POST " + repo + "/pulls/4/requested_reviewers", "GET " + repo + "/issues/4",
-		"PATCH " + repo + "/issues/4", "GET " + repo + "/pulls/4", "GET " + repo + "/commits/h3ad/status",
-		"POST " + repo + "/pulls/4/merge"}, routes(got))
+		"PATCH " + repo + "/issues/4"}, routes(got))
 	assert.Equal(t, "env/prod", got[2].Body["name"])
 	assert.Equal(t, []interface{}{float64(1), float64(2), float64(3)}, got[3].Body["labels"])
 	assert.Equal(t, map[string]interface{}{"reviewers": []interface{}{"alice"}, "team_reviewers": []interface{}{"platform"}}, got[4].Body)
 	assert.Equal(t, []interface{}{"bob", "octocat"}, got[6].Body["assignees"], "the PR's assignee is kept")
-	assert.Equal(t, map[string]interface{}{"Do": "rebase", "merge_when_checks_succeed": true, "delete_branch_after_merge": false,
-		"MergeTitleField": "deploy 1.29.0 to prod (#4)", "MergeMessageField": "Bundle nginx-demo-v1-29-0"}, got[9].Body,
-		"a PR with commit checks is scheduled to merge when they succeed")
-
-	// Forgejo merges a scheduled PR only on a later status or review event,
-	// so a PR whose head has no commit status is merged at once, and
-	// scheduled when branch protection refuses that merge.
-	for name, tc := range map[string]struct {
-		merges    []apiReply
-		wantMerge []bool // merge_when_checks_succeed of each merge request
-	}{
-		"no checks: merged at once": {merges: []apiReply{{200, ``}}, wantMerge: []bool{false}},
-		"no checks, protection refuses: scheduled": {
-			merges:    []apiReply{{405, `{"message":"Does not have enough approvals"}`}, {201, ``}},
-			wantMerge: []bool{false, true}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			srv, calls := routedAPI(t, map[string][]apiReply{
-				"POST " + repo + "/pulls":              {{201, `{"number":4,"html_url":"https://forgejo.example/acme/web/pulls/4"}`}},
-				"GET " + repo + "/labels":              {{200, `[{"id":1,"name":"kardinal"},{"id":2,"name":"kardinal/promotion"}]`}},
-				"POST " + repo + "/issues/4/labels":    {{200, `[]`}},
-				"GET " + repo + "/pulls/4":             {{200, `{"head":{"sha":"h3ad"}}`}},
-				"GET " + repo + "/commits/h3ad/status": {{200, `{"state":"","total_count":0}`}},
-				"POST " + repo + "/pulls/4/merge":      tc.merges,
-			})
-			p, err := scm.NewProvider("forgejo", "fj", srv.URL, "")
-			require.NoError(t, err)
-			result, err := runOpenPR(t, controlsState(t, "https://forgejo.example/acme/web.git", p,
-				&v1alpha1.PRConfig{Merge: &v1alpha1.PRMergeConfig{Auto: true}}))
-			require.NoError(t, err)
-			assert.Equal(t, "enabled", result.Outputs[parentsteps.OutputPRAutoMerge], result.Message)
-			var got []bool
-			for _, c := range calls() {
-				if c.Route == "POST "+repo+"/pulls/4/merge" {
-					assert.Equal(t, "merge", c.Body["Do"])
-					got = append(got, c.Body["merge_when_checks_succeed"] == true)
-				}
-			}
-			assert.Equal(t, tc.wantMerge, got)
-		})
-	}
 }
 
 // TestOpenPRControls_Bitbucket: reviewers are added to the PR's by UUID or
@@ -364,18 +277,14 @@ func TestOpenPRControls_Bitbucket(t *testing.T) {
 }
 
 // TestOpenPRControls_AzureDevOps: reviewers and team reviewers are added by
-// identity ID, and auto-complete is set by the PR's creator with the merge
-// strategy and message. Covers SCM-PRCTL-ADO-01.
+// identity ID. Covers SCM-PRCTL-ADO-01.
 func TestOpenPRControls_AzureDevOps(t *testing.T) {
-	defer steps.SetAutoMergeRetryDelays([]time.Duration{0})()
 	const repo = "/contoso/Web/_apis/git/repositories/web"
 	srv, calls := routedAPI(t, map[string][]apiReply{
 		"POST " + repo + "/pullrequests":                      {{201, `{"pullRequestId":12,"repository":{"webUrl":"https://dev.azure.com/contoso/Web/_git/web"}}`}},
 		"POST " + repo + "/pullRequests/12/labels":            {{200, `{}`}},
 		"PUT " + repo + "/pullRequests/12/reviewers/alice-id": {{200, `{}`}},
 		"PUT " + repo + "/pullRequests/12/reviewers/team-id":  {{200, `{}`}},
-		"GET " + repo + "/pullrequests/12":                    {{200, `{"createdBy":{"id":"creator-id"}}`}},
-		"PATCH " + repo + "/pullrequests/12":                  {{200, `{}`}},
 	})
 	p, err := scm.NewProvider("azuredevops", "pat", srv.URL, "")
 	require.NoError(t, err)
@@ -386,27 +295,20 @@ func TestOpenPRControls_AzureDevOps(t *testing.T) {
 	result, err := runOpenPR(t, controlsState(t, "https://dev.azure.com/contoso/Web/_git/web", p, cfg))
 	require.NoError(t, err)
 	assert.Equal(t, parentsteps.StepSuccess, result.Status, result.Message)
-	assert.Equal(t, "enabled", result.Outputs[parentsteps.OutputPRAutoMerge])
-	got := calls()
+	assertMergePending(t, result.Outputs, scm.MergeOptions{Method: "merge", CommitTitle: "deploy 1.29.0 to prod (#12)", CommitBody: "Bundle nginx-demo-v1-29-0"})
 	assert.Equal(t, []string{"POST " + repo + "/pullrequests?api-version=7.1",
 		"POST " + repo + "/pullRequests/12/labels?api-version=7.1", "POST " + repo + "/pullRequests/12/labels?api-version=7.1",
 		"POST " + repo + "/pullRequests/12/labels?api-version=7.1",
-		"PUT " + repo + "/pullRequests/12/reviewers/alice-id?api-version=7.1", "PUT " + repo + "/pullRequests/12/reviewers/team-id?api-version=7.1",
-		"GET " + repo + "/pullrequests/12?api-version=7.1", "PATCH " + repo + "/pullrequests/12?api-version=7.1"}, routes(got))
-	assert.Equal(t, map[string]interface{}{
-		"autoCompleteSetBy": map[string]interface{}{"id": "creator-id"},
-		"completionOptions": map[string]interface{}{"mergeStrategy": "noFastForward", "deleteSourceBranch": false,
-			"mergeCommitMessage": "deploy 1.29.0 to prod (#12)\n\nBundle nginx-demo-v1-29-0"},
-	}, got[7].Body)
+		"PUT " + repo + "/pullRequests/12/reviewers/alice-id?api-version=7.1", "PUT " + repo + "/pullRequests/12/reviewers/team-id?api-version=7.1"},
+		routes(calls()))
 }
 
 // TestOpenPRControls_Failures: a template that does not render fails the
 // step before the PR; a control the SCM refuses after the PR is open does
 // not fail the step and is kept in prControlsError, the others still
-// applied; a permanent auto-merge error is not retried; a re-run with the PR
-// recorded sends nothing. Covers SCM-PRCTL-ERR-01.
+// applied; a re-run with the PR recorded sends nothing. Covers
+// SCM-PRCTL-ERR-01.
 func TestOpenPRControls_Failures(t *testing.T) {
-	defer steps.SetAutoMergeRetryDelays([]time.Duration{0, 0, 0})()
 	const repo = "/api/v1/repos/acme/web"
 	opened := apiReply{201, `{"number":4,"html_url":"https://forgejo.example/acme/web/pulls/4"}`}
 
@@ -430,9 +332,6 @@ func TestOpenPRControls_Failures(t *testing.T) {
 			"POST " + repo + "/pulls/4/requested_reviewers": {{422, `{"message":"reviewer is not a collaborator"}`}},
 			"GET " + repo + "/issues/4":                     {{200, `{"assignees":[]}`}},
 			"PATCH " + repo + "/issues/4":                   {{201, `{}`}},
-			"GET " + repo + "/pulls/4":                      {{200, `{"head":{"sha":"h3ad"}}`}},
-			"GET " + repo + "/commits/h3ad/status":          {{200, `{"total_count":0}`}},
-			"POST " + repo + "/pulls/4/merge":               {{403, `{"message":"user does not have permission"}`}},
 		})
 		p, err := scm.NewProvider("forgejo", "fj", srv.URL, "")
 		require.NoError(t, err)
@@ -445,17 +344,9 @@ func TestOpenPRControls_Failures(t *testing.T) {
 		e := result.Outputs[parentsteps.OutputPRControlsError]
 		assert.Contains(t, e, "reviewers: request reviewers on PR acme/web#4")
 		assert.Contains(t, e, "reviewer is not a collaborator")
-		assert.Contains(t, e, "auto-merge: merge PR acme/web#4, which has no commit checks")
 		assert.NotContains(t, e, "assignees")
 		assert.Contains(t, result.Message, "(PR controls failed: ")
-		assert.Empty(t, result.Outputs[parentsteps.OutputPRAutoMerge])
-		merges := 0
-		for _, r := range routes(calls()) {
-			if r == "POST "+repo+"/pulls/4/merge" {
-				merges++
-			}
-		}
-		assert.Equal(t, 1, merges, "a 403 is permanent and not retried")
+		assertMergePending(t, result.Outputs, scm.MergeOptions{Method: "merge"})
 		assert.Contains(t, routes(calls()), "PATCH "+repo+"/issues/4", "the assignees are applied after the reviewers failed")
 
 		// Re-run with the PR recorded: nothing is sent again.
@@ -465,30 +356,6 @@ func TestOpenPRControls_Failures(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, parentsteps.StepSuccess, again.Status)
 		assert.Len(t, calls(), n)
-	})
-
-	t.Run("auto-merge retries run out", func(t *testing.T) {
-		srv, calls := routedAPI(t, map[string][]apiReply{
-			"POST " + repo + "/pulls":              {opened},
-			"GET " + repo + "/labels":              {{200, `[{"id":1,"name":"kardinal"},{"id":2,"name":"kardinal/promotion"}]`}},
-			"POST " + repo + "/issues/4/labels":    {{200, `[]`}},
-			"GET " + repo + "/pulls/4":             {{200, `{"head":{"sha":"h3ad"}}`}},
-			"GET " + repo + "/commits/h3ad/status": {{200, `{"total_count":0}`}},
-			"POST " + repo + "/pulls/4/merge":      {{405, `{"message":"Please try again later"}`}},
-		})
-		p, err := scm.NewProvider("forgejo", "fj", srv.URL, "")
-		require.NoError(t, err)
-		result, err := runOpenPR(t, controlsState(t, "https://forgejo.example/acme/web.git", p,
-			&v1alpha1.PRConfig{Merge: &v1alpha1.PRMergeConfig{Auto: true}}))
-		require.NoError(t, err)
-		assert.Contains(t, result.Outputs[parentsteps.OutputPRControlsError], "Please try again later")
-		merges := 0
-		for _, r := range routes(calls()) {
-			if r == "POST "+repo+"/pulls/4/merge" {
-				merges++
-			}
-		}
-		assert.Equal(t, 4, merges, "one attempt and three retries")
 	})
 
 	t.Run("a later PR without errors clears the output", func(t *testing.T) {

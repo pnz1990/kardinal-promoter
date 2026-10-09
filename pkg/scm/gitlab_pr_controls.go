@@ -106,19 +106,40 @@ func (g *GitLabProvider) userID(ctx context.Context, username string) (int, erro
 	return 0, fmt.Errorf("no GitLab user %s", username)
 }
 
-// EnableAutoMerge sets the merge request to merge once its pipeline
-// succeeds (GitLab auto-merge). A merge request without a running pipeline
-// is merged at once. auto_merge is the parameter since GitLab 17.11 and
-// merge_when_pipeline_succeeds the one before; GitLab ignores the one it
-// does not know.
+// gitlabUnknown are the detailed_merge_status values of an MR whose
+// mergeability GitLab is still computing.
+var gitlabUnknown = map[string]bool{"unchecked": true, "checking": true, "preparing": true, "approvals_syncing": true}
+
+// EnableAutoMerge sets the merge request to merge once its checks pass
+// (GitLab auto-merge: the pipeline, and on GitLab 17 and later approvals and
+// the other merge checks too). An MR whose detailed_merge_status is
+// mergeable has nothing to wait for, and GitLab would merge it at once: that
+// needs opts.AllowImmediate, otherwise ErrNothingPending. While GitLab is
+// still checking the MR, ErrMergeabilityUnknown is returned. auto_merge is
+// the parameter since GitLab 17.11 and merge_when_pipeline_succeeds the one
+// before; GitLab ignores the one it does not know.
 func (g *GitLabProvider) EnableAutoMerge(ctx context.Context, repo string, prNumber int, opts MergeOptions) error {
 	if opts.Method != MergeMethodMerge && opts.Method != MergeMethodSquash {
 		return fmt.Errorf("enable auto-merge on MR %s!%d: merge method %q: %w", repo, prNumber, opts.Method, ErrPRControlUnsupported)
 	}
-	payload := map[string]interface{}{
-		"auto_merge":                   true,
-		"merge_when_pipeline_succeeds": true,
-		"squash":                       opts.Method == MergeMethodSquash,
+	mrPath := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%d", encodeProjectID(repo), prNumber)
+	var mr struct {
+		DetailedMergeStatus string `json:"detailed_merge_status"`
+	}
+	if err := g.do(ctx, http.MethodGet, mrPath, nil, &mr); err != nil {
+		return fmt.Errorf("enable auto-merge on MR %s!%d: %w", repo, prNumber, err)
+	}
+	immediate := mr.DetailedMergeStatus == "mergeable"
+	switch {
+	case gitlabUnknown[mr.DetailedMergeStatus]:
+		return fmt.Errorf("enable auto-merge on MR %s!%d: %w", repo, prNumber, ErrMergeabilityUnknown)
+	case immediate && !opts.AllowImmediate:
+		return fmt.Errorf("enable auto-merge on MR %s!%d: %w", repo, prNumber, ErrNothingPending)
+	}
+	payload := map[string]interface{}{"squash": opts.Method == MergeMethodSquash}
+	if !immediate {
+		payload["auto_merge"] = true
+		payload["merge_when_pipeline_succeeds"] = true
 	}
 	if opts.CommitTitle != "" {
 		// A squash on a project whose merge method makes merge commits
@@ -128,9 +149,20 @@ func (g *GitLabProvider) EnableAutoMerge(ctx context.Context, repo string, prNum
 			payload["squash_commit_message"] = commitMessage(opts)
 		}
 	}
-	if err := g.do(ctx, http.MethodPut,
-		fmt.Sprintf("/api/v4/projects/%s/merge_requests/%d/merge", encodeProjectID(repo), prNumber), payload, nil); err != nil {
+	if err := g.do(ctx, http.MethodPut, mrPath+"/merge", payload, nil); err != nil {
 		return fmt.Errorf("enable auto-merge on MR %s!%d: %w", repo, prNumber, err)
+	}
+	return nil
+}
+
+// DisableAutoMerge cancels the MR's auto-merge
+// (cancel_merge_when_pipeline_succeeds). GitLab answers 406 when the MR
+// has none, which is not an error.
+func (g *GitLabProvider) DisableAutoMerge(ctx context.Context, repo string, prNumber int) error {
+	err := g.do(ctx, http.MethodPost,
+		fmt.Sprintf("/api/v4/projects/%s/merge_requests/%d/cancel_merge_when_pipeline_succeeds", encodeProjectID(repo), prNumber), nil, nil)
+	if _, none := statusIs(err, http.StatusNotAcceptable); err != nil && !none {
+		return fmt.Errorf("disable auto-merge on MR %s!%d: %w", repo, prNumber, err)
 	}
 	return nil
 }

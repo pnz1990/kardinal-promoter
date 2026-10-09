@@ -58,9 +58,12 @@ var adoMergeStrategies = map[string]string{
 }
 
 // EnableAutoMerge sets auto-complete on the PR: Azure DevOps completes it
-// once its branch policies pass. Auto-complete is set by the identity that
-// created the PR, the token's. The source branch is kept: kardinal deletes
-// it when the step ends.
+// once its branch policies pass. Something must be pending: a policy
+// evaluation that is queued, running or rejected. Without one Azure DevOps
+// completes the PR at once, which needs opts.AllowImmediate; otherwise
+// ErrNothingPending. Auto-complete is set by the identity that created the
+// PR, the token's. The source branch is kept: kardinal deletes it when the
+// step ends.
 func (a *AzureDevOpsProvider) EnableAutoMerge(ctx context.Context, repo string, prNumber int, opts MergeOptions) error {
 	strategy, ok := adoMergeStrategies[opts.Method]
 	if !ok {
@@ -76,9 +79,21 @@ func (a *AzureDevOpsProvider) EnableAutoMerge(ctx context.Context, repo string, 
 		CreatedBy struct {
 			ID string `json:"id"`
 		} `json:"createdBy"`
+		Repository struct {
+			Project struct {
+				ID string `json:"id"`
+			} `json:"project"`
+		} `json:"repository"`
 	}
 	if err := a.do(ctx, http.MethodGet, path, nil, &pr); err != nil {
 		return fmt.Errorf("enable auto-complete on ADO PR %s#%d: %w", repo, prNumber, err)
+	}
+	pending, err := a.policiesPending(ctx, org, project, pr.Repository.Project.ID, prNumber)
+	if err != nil {
+		return fmt.Errorf("enable auto-complete on ADO PR %s#%d: %w", repo, prNumber, err)
+	}
+	if !pending && !opts.AllowImmediate {
+		return fmt.Errorf("enable auto-complete on ADO PR %s#%d: %w", repo, prNumber, ErrNothingPending)
 	}
 	completion := map[string]interface{}{"mergeStrategy": strategy, "deleteSourceBranch": false}
 	if opts.CommitTitle != "" {
@@ -90,6 +105,45 @@ func (a *AzureDevOpsProvider) EnableAutoMerge(ctx context.Context, repo string, 
 	}
 	if err := a.do(ctx, http.MethodPatch, path, payload, nil); err != nil {
 		return fmt.Errorf("enable auto-complete on ADO PR %s#%d: %w", repo, prNumber, err)
+	}
+	return nil
+}
+
+// policiesPending reports whether a branch policy evaluation of the PR is
+// queued, running or rejected.
+func (a *AzureDevOpsProvider) policiesPending(ctx context.Context, org, project, projectID string, prNumber int) (bool, error) {
+	q := url.Values{"artifactId": {fmt.Sprintf("vstfs:///CodeReview/CodeReviewId/%s/%d", projectID, prNumber)},
+		"api-version": {"7.1-preview.1"}}
+	var res struct {
+		Value []struct {
+			Status string `json:"status"`
+		} `json:"value"`
+	}
+	if err := a.do(ctx, http.MethodGet, fmt.Sprintf("/%s/%s/_apis/policy/evaluations?%s", org, project, q.Encode()), nil, &res); err != nil {
+		return false, fmt.Errorf("read policy evaluations: %w", err)
+	}
+	for _, e := range res.Value {
+		switch e.Status {
+		case "queued", "running", "rejected":
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// adoNoIdentity clears autoCompleteSetBy.
+const adoNoIdentity = "00000000-0000-0000-0000-000000000000"
+
+// DisableAutoMerge clears auto-complete on the PR.
+func (a *AzureDevOpsProvider) DisableAutoMerge(ctx context.Context, repo string, prNumber int) error {
+	org, project, repoName, err := splitADORepo(repo)
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/%s/%s/_apis/git/repositories/%s/pullrequests/%d?api-version=%s",
+		org, project, repoName, prNumber, azureDevOpsAPIVersion)
+	if err := a.do(ctx, http.MethodPatch, path, map[string]interface{}{"autoCompleteSetBy": map[string]string{"id": adoNoIdentity}}, nil); err != nil {
+		return fmt.Errorf("disable auto-complete on ADO PR %s#%d: %w", repo, prNumber, err)
 	}
 	return nil
 }

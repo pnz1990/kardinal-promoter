@@ -77,31 +77,33 @@ const enableAutoMergeMutation = `mutation($id: ID!, $method: PullRequestMergeMet
 // EnableAutoMerge enables auto-merge on the PR with the GraphQL
 // enablePullRequestAutoMerge mutation. GitHub refuses it for a PR that can
 // be merged already ("clean status": no required check or review is
-// pending), so such a PR is merged at once with the REST merge endpoint,
-// which applies branch protection too. The repository must allow auto-merge
-// (Settings > General > Allow auto-merge) for a PR that has to wait.
+// pending). Such a PR is merged with the REST merge endpoint, which applies
+// branch protection too, only with opts.AllowImmediate; otherwise
+// ErrNothingPending is returned and the PR waits for a merge by hand. The
+// repository must allow auto-merge (Settings > General > Allow auto-merge).
 func (g *GitHubProvider) EnableAutoMerge(ctx context.Context, repo string, prNumber int, opts MergeOptions) error {
 	method, ok := githubMergeMethods[opts.Method]
 	if !ok {
 		return fmt.Errorf("enable auto-merge on PR %s#%d: merge method %q: %w", repo, prNumber, opts.Method, ErrPRControlUnsupported)
 	}
-	var pr struct {
-		NodeID string `json:"node_id"`
-	}
-	if err := g.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/pulls/%d", repo, prNumber), nil, &pr); err != nil {
+	nodeID, err := g.prNodeID(ctx, repo, prNumber)
+	if err != nil {
 		return fmt.Errorf("enable auto-merge on PR %s#%d: %w", repo, prNumber, err)
 	}
-	vars := map[string]interface{}{"id": pr.NodeID, "method": method}
+	vars := map[string]interface{}{"id": nodeID, "method": method}
 	if opts.CommitTitle != "" {
 		vars["title"] = opts.CommitTitle
 		vars["body"] = opts.CommitBody
 	}
-	err := g.graphql(ctx, enableAutoMergeMutation, vars)
+	err = g.graphql(ctx, enableAutoMergeMutation, vars)
 	if err == nil {
 		return nil
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "clean status") {
 		return fmt.Errorf("enable auto-merge on PR %s#%d: %w", repo, prNumber, err)
+	}
+	if !opts.AllowImmediate {
+		return fmt.Errorf("enable auto-merge on PR %s#%d: %w", repo, prNumber, ErrNothingPending)
 	}
 	merge := map[string]string{"merge_method": opts.Method}
 	if opts.CommitTitle != "" {
@@ -112,6 +114,37 @@ func (g *GitHubProvider) EnableAutoMerge(ctx context.Context, repo string, prNum
 		return fmt.Errorf("merge PR %s#%d, which needs no more checks or reviews: %w", repo, prNumber, err)
 	}
 	return nil
+}
+
+// disableAutoMergeMutation is GitHub's disablePullRequestAutoMerge mutation.
+const disableAutoMergeMutation = `mutation($id: ID!) {
+  disablePullRequestAutoMerge(input: {pullRequestId: $id}) {
+    pullRequest { number }
+  }
+}`
+
+// DisableAutoMerge turns auto-merge off with the GraphQL
+// disablePullRequestAutoMerge mutation.
+func (g *GitHubProvider) DisableAutoMerge(ctx context.Context, repo string, prNumber int) error {
+	nodeID, err := g.prNodeID(ctx, repo, prNumber)
+	if err == nil {
+		err = g.graphql(ctx, disableAutoMergeMutation, map[string]interface{}{"id": nodeID})
+	}
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "not enabled") {
+		return fmt.Errorf("disable auto-merge on PR %s#%d: %w", repo, prNumber, err)
+	}
+	return nil
+}
+
+// prNodeID returns the GraphQL node ID of the PR.
+func (g *GitHubProvider) prNodeID(ctx context.Context, repo string, prNumber int) (string, error) {
+	var pr struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := g.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/pulls/%d", repo, prNumber), nil, &pr); err != nil {
+		return "", err
+	}
+	return pr.NodeID, nil
 }
 
 // graphqlURL is the GraphQL endpoint next to the REST API: api.github.com

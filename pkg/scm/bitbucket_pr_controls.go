@@ -94,3 +94,9 @@ func (b *BitbucketProvider) AddAssignees(_ context.Context, repo string, prNumbe
 func (b *BitbucketProvider) EnableAutoMerge(_ context.Context, repo string, prNumber int, _ MergeOptions) error {
 	return fmt.Errorf("enable auto-merge on Bitbucket PR %s#%d: %w", repo, prNumber, ErrPRControlUnsupported)
 }
+
+// DisableAutoMerge is not supported: the Bitbucket Cloud REST API has no
+// auto-merge.
+func (b *BitbucketProvider) DisableAutoMerge(_ context.Context, repo string, prNumber int) error {
+	return fmt.Errorf("disable auto-merge on Bitbucket PR %s#%d: %w", repo, prNumber, ErrPRControlUnsupported)
+}
