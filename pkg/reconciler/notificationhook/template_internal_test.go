@@ -324,3 +324,17 @@ func TestRenderTemplate_Functions(t *testing.T) {
 	_, err := parseBodyTemplate("  ")
 	assert.ErrorContains(t, err, "empty template")
 }
+
+// TestParseBodyTemplate_HookSpecificErrors: the range refusal names what a
+// hook template has, not the PR template's list functions, and join (for
+// lists, which hook data has none of) is not a function here.
+func TestParseBodyTemplate_HookSpecificErrors(t *testing.T) {
+	_, err := parseBodyTemplate(`{{ range .Message }}{{ end }}`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "range is not allowed: the template language has no loops; an event is one notification")
+	assert.NotContains(t, err.Error(), "provenanceTable")
+
+	_, err = parseBodyTemplate(`{{ join "," .Message }}`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `function "join" not defined`)
+}

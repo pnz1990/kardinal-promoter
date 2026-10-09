@@ -179,7 +179,7 @@ func TestPRTemplates_Sandbox(t *testing.T) {
 		{"doubling message", v1alpha1.PRConfig{Merge: &v1alpha1.PRMergeConfig{Auto: true, CommitMessageTemplate: doubling}},
 			"pr.merge.commitMessageTemplate: variables are not allowed"},
 		{"recursion", v1alpha1.PRConfig{BodyTemplate: `{{ define "r" }}{{ template "r" }}{{ end }}{{ template "r" }}`}, "pr.bodyTemplate: define and block are not allowed"},
-		{"range over a number", v1alpha1.PRConfig{BodyTemplate: `{{ range 100000000 }}{{ end }}`}, "range is not allowed"},
+		{"range over a number", v1alpha1.PRConfig{BodyTemplate: `{{ range 100000000 }}{{ end }}`}, "range is not allowed: the template language has no loops; use the functions that list the data (provenanceTable"},
 		{"range over the images", v1alpha1.PRConfig{Labels: []string{`{{ range .Bundle.Images }}{{ .Tag }}{{ end }}`}}, "pr.labels[0]: range is not allowed"},
 		{"printf", v1alpha1.PRConfig{TitleTemplate: `{{ printf "%999999999d" 1 }}`}, "printf is not available in this template"},
 		{"printf argument indexes", v1alpha1.PRConfig{BodyTemplate: `{{ printf "%[1]s%[1]s%[1]s%[1]s" .Bundle.Name }}`}, "printf is not available in this template"},

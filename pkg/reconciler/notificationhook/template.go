@@ -74,15 +74,19 @@ func hookLimits() tmplsafe.Limits {
 	return tmplsafe.Limits{
 		MaxOutput: maxRenderedBody, MaxFuncOutput: maxRenderedBody, MaxBuild: maxFuncOutput,
 		MaxFuncCalls: maxFuncCalls, MaxExecTime: renderDeadline,
+		RangeHint: "an event is one notification, so the data has no lists to loop over",
 	}
 }
 
 // templateFuncs are the functions a body template may call besides the
 // tmplsafe builtins: tmplsafe.StringFuncs (lower, upper, trimSpace,
-// trimPrefix, contains, hasPrefix, default, replace, join), json, and
+// trimPrefix, contains, hasPrefix, default, replace; not join: the data
+// has no lists), json, and
 // truncate, which ends a cut string with "…".
 func templateFuncs() tmplsafe.FuncMap {
 	funcs := tmplsafe.StringFuncs()
+	// The hook data has no lists, so join has nothing to join.
+	delete(funcs, "join")
 	funcs["truncate"] = tmplsafe.Func{
 		Fn: truncateRunes,
 		Size: func(a []interface{}) (int, error) {

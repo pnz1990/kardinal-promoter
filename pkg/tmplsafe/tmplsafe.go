@@ -68,6 +68,10 @@ type Limits struct {
 	MaxFuncCalls int
 	// MaxExecTime bounds one render.
 	MaxExecTime time.Duration
+	// RangeHint, when set, follows the refusal of range: what the caller's
+	// template uses instead of a loop (such as the functions that list its
+	// data).
+	RangeHint string
 }
 
 // DefaultLimits suit a PR body or a notification body. The call and byte
@@ -131,7 +135,7 @@ func Parse(name, text string, funcs FuncMap, lim Limits) (*Template, error) {
 		return nil, errors.New("define and block are not allowed")
 	}
 	if t.Tree != nil && t.Root != nil {
-		if err := walk(t.Root); err != nil {
+		if err := walk(t.Root, lim.RangeHint); err != nil {
 			return nil, err
 		}
 	}
@@ -328,7 +332,7 @@ var errVariables = errors.New("variables are not allowed: use the data ($ or .) 
 
 // walk visits every node of the parse tree and refuses what the package doc
 // lists.
-func walk(n parse.Node) error {
+func walk(n parse.Node, rangeHint string) error {
 	switch n := n.(type) {
 	case nil:
 		return nil
@@ -337,12 +341,12 @@ func walk(n parse.Node) error {
 			return nil
 		}
 		for _, x := range n.Nodes {
-			if err := walk(x); err != nil {
+			if err := walk(x, rangeHint); err != nil {
 				return err
 			}
 		}
 	case *parse.ActionNode:
-		return walk(n.Pipe)
+		return walk(n.Pipe, rangeHint)
 	case *parse.PipeNode:
 		if n == nil {
 			return nil
@@ -351,29 +355,31 @@ func walk(n parse.Node) error {
 			return errVariables
 		}
 		for _, cmd := range n.Cmds {
-			if err := walk(cmd); err != nil {
+			if err := walk(cmd, rangeHint); err != nil {
 				return err
 			}
 		}
 	case *parse.CommandNode:
 		for _, a := range n.Args {
-			if err := walk(a); err != nil {
+			if err := walk(a, rangeHint); err != nil {
 				return err
 			}
 		}
 	case *parse.ChainNode:
-		return walk(n.Node)
+		return walk(n.Node, rangeHint)
 	case *parse.VariableNode:
 		if len(n.Ident) == 0 || n.Ident[0] != "$" {
 			return errVariables
 		}
 	case *parse.IfNode:
-		return walkBranch(&n.BranchNode)
+		return walkBranch(&n.BranchNode, rangeHint)
 	case *parse.WithNode:
-		return walkBranch(&n.BranchNode)
+		return walkBranch(&n.BranchNode, rangeHint)
 	case *parse.RangeNode:
-		return errors.New("range is not allowed: the template language has no loops; " +
-			"use the functions that list the data (provenanceTable, gatesTable, upstreamTable, imageList)")
+		if rangeHint != "" {
+			return errors.New("range is not allowed: the template language has no loops; " + rangeHint)
+		}
+		return errors.New("range is not allowed: the template language has no loops")
 	case *parse.BreakNode, *parse.ContinueNode:
 		return errors.New("break and continue are not allowed")
 	case *parse.TemplateNode:
@@ -389,14 +395,14 @@ func walk(n parse.Node) error {
 	return nil
 }
 
-func walkBranch(b *parse.BranchNode) error {
-	if err := walk(b.Pipe); err != nil {
+func walkBranch(b *parse.BranchNode, rangeHint string) error {
+	if err := walk(b.Pipe, rangeHint); err != nil {
 		return err
 	}
-	if err := walk(b.List); err != nil {
+	if err := walk(b.List, rangeHint); err != nil {
 		return err
 	}
-	return walk(b.ElseList)
+	return walk(b.ElseList, rangeHint)
 }
 
 // scalarSize is the most bytes fmt.Sprint makes of a scalar: a string, a
