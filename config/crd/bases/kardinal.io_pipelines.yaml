@@ -594,9 +594,9 @@ spec:
                       the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)'
                     rule: '!has(self.promotionTemplate)'
                   - message: 'reserved environment name: the name becomes a kro Graph
-                      node ID; bundle, kro reserved IDs (spec, status, metadata, graph,
-                      self, each, item, ...) and CEL keywords are not allowed'
-                    rule: '!(self.name in [''api-version'',''kind'',''metadata'',''namespace'',''spec'',''status'',''graph'',''graphengine'',''kro'',''each'',''item'',''items'',''object'',''self'',''this'',''context'',''true'',''false'',''null'',''in'',''as'',''break'',''const'',''continue'',''else'',''for'',''function'',''if'',''import'',''let'',''loop'',''package'',''return'',''var'',''void'',''while'',''bundle''])'
+                      node ID; bundle, time, kro reserved IDs (spec, status, metadata,
+                      graph, self, each, item, ...) and CEL keywords are not allowed'
+                    rule: '!(self.name in [''api-version'',''kind'',''metadata'',''namespace'',''spec'',''status'',''graph'',''graphengine'',''kro'',''each'',''item'',''items'',''object'',''self'',''this'',''context'',''true'',''false'',''null'',''in'',''as'',''break'',''const'',''continue'',''else'',''for'',''function'',''if'',''import'',''let'',''loop'',''package'',''return'',''var'',''void'',''while'',''bundle'',''time''])'
                 maxItems: 100
                 minItems: 1
                 type: array
