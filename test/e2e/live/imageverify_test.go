@@ -345,7 +345,7 @@ func TestSCM_SignedCommitInstance(t *testing.T) {
 		Commits: &v1alpha1.CommitSignaturePolicy{RequireSigned: true}}
 	a.apply(t, p)
 	cfg, _ := a.configRepo(t, "test")
-	sha, err := gitserver.InstanceCommitAs(ctx, e.Git, cfg, "apiuser-"+a.ns[len(a.ns)-8:], "README.md", []byte("instance-signed\n"))
+	sha, err := gitserver.InstanceCommitAs(ctx, e.Git, cfg, "apiuser-"+a.ns[len(a.ns)-8:], "SIGNED.md", []byte("instance-signed\n"))
 	require.NoError(t, err)
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--type", "config", "--config-commit", sha, "--config-repo", cfg.CloneURL)
 	iv := waitImageVerification(t, e, a.ns, bundle, "Failed")
