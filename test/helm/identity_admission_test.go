@@ -754,7 +754,8 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	bindings := func(args ...string) map[string]admissionregistrationv1.ValidatingAdmissionPolicyBinding {
 		out := map[string]admissionregistrationv1.ValidatingAdmissionPolicyBinding{}
 		for _, d := range render(t, "kardinal-promoter", args...) {
-			if d.Kind == "ValidatingAdmissionPolicyBinding" {
+			if d.Kind == "ValidatingAdmissionPolicyBinding" && d.Name != "kardinal-promoter-hold-writes" {
+				// hold-writes (hold-admission.yaml, #1528) is not an identity policy.
 				var b admissionregistrationv1.ValidatingAdmissionPolicyBinding
 				decodeStrict(t, d, &b)
 				out[b.Name] = b
