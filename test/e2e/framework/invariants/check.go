@@ -108,6 +108,7 @@ func Check(t *testing.T, e *framework.Env, o Options) *Report {
 		r.add(checkLogs(r.Logs, o))
 	}
 	r.add(checkRestarts(ctx, e, o))
+	r.add(checkKroRestarts(ctx, e, o))
 	if o.Metrics {
 		m, res := checkMetrics(ctx, e, o)
 		r.Metrics = m

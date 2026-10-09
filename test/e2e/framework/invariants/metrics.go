@@ -242,11 +242,21 @@ func memoryLimitMiB(ctx context.Context, e *framework.Env) float64 {
 // a crash) during the run. Pods the test deleted are new Pods, not
 // restarts, so a test that kills leaders still gets this check.
 func checkRestarts(ctx context.Context, e *framework.Env, o Options) Result {
-	res := Result{Name: "controller-no-restarts"}
+	return restarts(ctx, e, o, "controller-no-restarts", framework.ControllerNamespace, framework.ControllerName)
+}
+
+// checkKroRestarts is checkRestarts for the kro controller: an OOMKilled kro
+// stops every Graph in the cluster.
+func checkKroRestarts(ctx context.Context, e *framework.Env, o Options) Result {
+	return restarts(ctx, e, o, "kro-no-restarts", "kro-system", "kro")
+}
+
+func restarts(ctx context.Context, e *framework.Env, o Options, check, ns, name string) Result {
+	res := Result{Name: check}
 	var pods corev1.PodList
-	if err := e.Client.List(ctx, &pods, client.InNamespace(framework.ControllerNamespace),
-		client.MatchingLabels{"app.kubernetes.io/name": framework.ControllerName}); err != nil {
-		res.Violations = append(res.Violations, "list controller Pods: "+err.Error())
+	if err := e.Client.List(ctx, &pods, client.InNamespace(ns),
+		client.MatchingLabels{"app.kubernetes.io/name": name}); err != nil {
+		res.Violations = append(res.Violations, "list "+name+" Pods: "+err.Error())
 		return res
 	}
 	for _, p := range pods.Items {

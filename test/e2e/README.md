@@ -159,7 +159,7 @@ The invariants, after every Bundle settled:
 - every Bundle (and each of its steps) reached a terminal phase within the profile's `Settle`;
 - no Graph outlived its Bundle, stayed deleting, reports an error or nears etcd's request limit;
 - AuditEvents agree with the step states;
-- the controller logged no `DATA RACE`, no panic and no error-level line outside the allowlist (`invariants.Benign` plus the faults a test injects), and no container restarted;
+- the controller logged no `DATA RACE`, no panic and no error-level line outside the allowlist (`invariants.Benign` plus the faults a test injects), and neither its containers nor kro's restarted (OOMKilled, crashed);
 - Prometheus: the reconcile error ratio stays under the test's limit, every work queue drains, and no controller Pod that ran the whole test grew its goroutines past 1.5x or its memory past 90% of the limit.
 
 Each test writes `diagnostics/scale/<test>/report.json` (every number:

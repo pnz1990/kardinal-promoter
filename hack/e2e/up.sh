@@ -45,6 +45,9 @@
 #   KARDINAL_E2E_NODE_MEMORY  docker memory limit of the kind node, e.g. 24g
 #                    (default none; the scale suite's full profile wants one
 #                    on a shared host)
+#   KARDINAL_E2E_KRO_MEMORY  memory limit of the kro controller, e.g. 8Gi
+#                    (default: the kro chart's, 1Gi; the scale suite's full
+#                    profile needs more until #1492 is fixed)
 #   KARDINAL_E2E_TOOLS  pinned (default): install the kind, kubectl and helm
 #                    of hack/tool-versions.env into bin/e2e (tools.sh) and use
 #                    them; path: use the ones on PATH
@@ -153,7 +156,11 @@ env_set KUBECONFIG "$KUBECONFIG"
 
 if [ "${KARDINAL_E2E_KRO:-1}" = 1 ]; then
   KUBE_CONTEXT="$CTX" bash "$REPO_ROOT/hack/install-kro.sh" >/dev/null
-  log "kro ready"
+  if [ -n "${KARDINAL_E2E_KRO_MEMORY:-}" ]; then
+    "${KUBECTL[@]}" -n kro-system set resources deploy/kro --limits="memory=$KARDINAL_E2E_KRO_MEMORY" >/dev/null
+    "${KUBECTL[@]}" -n kro-system rollout status deploy/kro --timeout=180s >/dev/null
+  fi
+  log "kro ready${KARDINAL_E2E_KRO_MEMORY:+ (memory limit $KARDINAL_E2E_KRO_MEMORY)}"
 fi
 for c in "${COMPONENTS[@]}"; do
   # shellcheck disable=SC2086
