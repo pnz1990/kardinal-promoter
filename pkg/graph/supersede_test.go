@@ -16,13 +16,14 @@ import (
 )
 
 // supersededHold is the spec.bundleName every PromotionStep node must carry:
-// the Bundle name, but only while the Bundle is not Superseded.
-const supersededHold = `${[bundle.metadata.name].filter(x_, bundle.status.phase != "Superseded" && ` +
+// the Bundle name, but only while the Bundle is neither Superseded nor
+// Rejected (#1451) and does not wait for a maxConcurrentPromotions slot.
+const supersededHold = `${[bundle.metadata.name].filter(x_, bundle.status.phase != "Superseded" && bundle.status.phase != "Rejected" && ` +
 	`!(has(bundle.status.conditions) && bundle.status.conditions.exists(c_, c_.type == "WaitingForSlot" && c_.status == "True")))[0]}`
 
 // TestBuilder_StepsHeldOnceBundleSuperseded verifies that every PromotionStep
 // node, including roots, resolves spec.bundleName only while
-// the Bundle is not Superseded (E2E-R20). Without it a Superseded Bundle's
+// the Bundle is not Superseded (E2E-R20) or Rejected (#1451). Without it a Superseded Bundle's
 // Graph kept creating steps whenever a gate or upstream turned ready.
 func TestBuilder_StepsHeldOnceBundleSuperseded(t *testing.T) {
 	gated := makeLinearPipeline("gated", "test", "uat", "prod")
@@ -63,7 +64,7 @@ func TestBuilder_StepsHeldOnceBundleSuperseded(t *testing.T) {
 }
 
 // TestBuilder_SupersededHoldIsDataPending evaluates the spec.bundleName
-// expression the way kro does. A Superseded Bundle must produce "index out of
+// expression the way kro does. A Superseded or Rejected Bundle must produce "index out of
 // bounds", which kro classifies as data-pending (pkg/graphengine/runtime/
 // errors.go celDataPendingPatterns): the node stays Unresolved, is not applied
 // and is not pruned. Every other phase, including the recoverable Failed,
@@ -110,6 +111,7 @@ func TestBuilder_SupersededHoldIsDataPending(t *testing.T) {
 		{name: "Failed waiting for a slot", phase: "Failed", conds: slot("True"), pending: true},
 		{name: "Failed with a free slot", phase: "Failed", conds: slot("False")},
 		{name: "Promoting with conditions", phase: "Promoting", conds: slot("False")[:1]},
+		{phase: "Rejected", pending: true},
 	}
 	for _, tc := range cases {
 		name := tc.name

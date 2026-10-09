@@ -165,16 +165,17 @@ var allFeatures = []string{
 	"--set", "rbac.integrationTestJobs=true",
 }
 
-// ── C08-api-config-04, -16, -21: only the hold admission policy ─────────────
+// ── C08-api-config-04, -16, -21: only the identity and hold admission policies ─
 
-// TestChartRendersOnlyHoldAdmissionPolicy: the chart's old VAPs denied every
-// Pipeline (spec.gitRepo does not exist), denied promote/rollback Bundles and
-// valid durations, and collided across releases. Validation lives in the CRD
-// schema (api/v1alpha1/crd_schema_test.go). The only admission objects are
-// the hold-writes policy and binding (hold-admission.yaml, #1528), named per
-// release and shipped whatever validatingAdmissionPolicy.enabled says, which
-// stays a deprecated no-op so existing --set values keep working.
-func TestChartRendersOnlyHoldAdmissionPolicy(t *testing.T) {
+// TestChartRendersOnlyIdentityAdmissionPolicies: the chart's old VAPs denied
+// every Pipeline (spec.gitRepo does not exist), denied promote/rollback
+// Bundles and valid durations, and collided across releases. Validation lives
+// in the CRD schema (api/v1alpha1/crd_schema_test.go). The only admission
+// objects are the identity policies (identity-admission.yaml) and the
+// hold-writes policy (hold-admission.yaml, #1528), named per release and
+// shipped whatever validatingAdmissionPolicy.enabled says, which stays a
+// deprecated no-op so existing --set values keep working.
+func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 	for _, args := range [][]string{
 		nil,
 		{"--set", "validatingAdmissionPolicy.enabled=true"},
@@ -186,10 +187,10 @@ func TestChartRendersOnlyHoldAdmissionPolicy(t *testing.T) {
 				got = append(got, d.Kind+"/"+d.Name)
 			}
 		}
-		assert.ElementsMatch(t, []string{
+		assert.ElementsMatch(t, append(identityAdmissionObjects("kardinal-promoter"),
 			"ValidatingAdmissionPolicy/kardinal-promoter-hold-writes",
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-hold-writes",
-		}, got, "args %v", args)
+		), got, "args %v", args)
 	}
 }
 
@@ -392,7 +393,7 @@ type apiAccess struct {
 var kardinalNamespacedKinds = []string{
 	"pipelines", "bundles", "policygates", "rollbackpolicies", "subscriptions",
 	"promotionsteps", "prstatuses", "metricchecks",
-	"scheduleclocks", "notificationhooks",
+	"scheduleclocks", "notificationhooks", "hookruns",
 }
 
 var rwVerbs = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
@@ -418,8 +419,11 @@ func controllerAccess() []apiAccess {
 		{"", "pods", []string{"list"}, inWatched, "", "health adapter resource: podProblemLookup (uncached dynamic List of the new ReplicaSet's pods)"},
 		{"argoproj.io", "applications", readVerbs, inWatched, "", "health adapter argocd, argocd update strategy"},
 		{"argoproj.io", "rollouts", readVerbs, inWatched, "", "health adapter argoRollouts"},
+		{"argoproj.io", "analysistemplates", []string{"get"}, inWatched, "", "translator analysis.go collectAnalyses (uncached Get)"},
+		{"argoproj.io", "clusteranalysistemplates", []string{"get"}, inCluster, "", "translator analysis.go collectAnalyses (uncached Get)"},
 		{"kustomize.toolkit.fluxcd.io", "kustomizations", readVerbs, inWatched, "", "health adapter flux"},
 		{"flagger.app", "canaries", readVerbs, inWatched, "", "health adapter flagger"},
+		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "hookrun reconciler.go: hook Jobs (Owns, create, delete on timeout)"},
 		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "create", "update", "patch", "delete"}, inRelease, "", "leader election"},
 		{"", "configmaps", []string{"create"}, inRelease, "", "ensureVersionConfigMap"},
 		{"", "configmaps", []string{"get", "update", "patch"}, inRelease, "kardinal-version", "ensureVersionConfigMap"},
@@ -545,11 +549,9 @@ func TestChartRBACLeastPrivilege(t *testing.T) {
 		{releaseNS, "", "secrets", "list", ""},
 		{releaseNS, "", "secrets", "watch", ""},
 		{"team-a", "rbac.authorization.k8s.io", "clusterroles", "bind", "cluster-admin"},
-		// The integration-test step was removed (#1278); rbac.integrationTestJobs
-		// is a no-op, so even with it set the controller gets no Job access.
-		{"team-a", "batch", "jobs", "create", ""},
-		{"team-a", "batch", "jobs", "delete", ""},
-		{releaseNS, "batch", "jobs", "create", ""},
+		// Hook Jobs are created and deleted, never changed (docs/hooks.md).
+		{"team-a", "batch", "jobs", "update", ""},
+		{"team-a", "batch", "jobs", "patch", ""},
 	}
 	for _, d := range denied {
 		assert.False(t, v.allowed(releaseNS, sa, d.ns, d.group, d.resource, d.verb, d.name),

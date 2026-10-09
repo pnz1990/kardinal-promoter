@@ -30,6 +30,7 @@ describe('kardinalStateToHealth', () => {
     ['Promoting', 'Reconciling'],
     ['WaitingForMerge', 'Reconciling'],
     ['HealthChecking', 'Reconciling'],
+    ['Verifying', 'Reconciling'],      // post-deploy hooks running
     ['Verified', 'Ready'],
     ['Failed', 'Error'],
     ['AbortedByAlarm', 'Error'],
@@ -38,6 +39,7 @@ describe('kardinalStateToHealth', () => {
     // Bundle phases.
     ['Available', 'Pending'],
     ['Superseded', 'Unknown'],
+    ['Rejected', 'Error'], // kardinal reject: never promoted again
     // Pipeline phases (DerivePhase) and the paused pseudo-state.
     ['Ready', 'Ready'],
     ['Degraded', 'Degraded'],
@@ -59,6 +61,7 @@ describe('kardinalStateToHealth', () => {
       ['Pending', 'Pending'],
       ['Waiting', 'Pending'], // E2E-R19: not ready, not holding the bundle
       ['Superseded', 'Unknown'], // bundle superseded; not evaluated again
+      ['Rejected', 'Unknown'], // bundle rejected; not evaluated again
       ['SomeUnknown', 'Unknown'],
     ])('maps %s → %s', (state, expected) => {
       expect(kardinalStateToHealth(state, 'PolicyGate')).toBe(expected)
