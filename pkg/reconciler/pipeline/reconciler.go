@@ -111,6 +111,11 @@ type Reconciler struct {
 	// would get a compact Graph and that uses a feature the compact shape
 	// does not carry yet is Ready=False. Nil is graph.DefaultCompactAbove.
 	CompactAbove *int
+
+	// Reader reads the Argo CD Applications a fleet selector matches. It is
+	// not cached: the controller does not watch Applications, whose CRD may
+	// be missing. Nil uses Client.
+	Reader client.Reader
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -169,14 +174,19 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	desiredFleets := r.resolveFleets(ctx, &p)
 	// Nothing watches Secrets: a git.secretRef Secret created later, or a
-	// label added to one, is seen by these periodic re-checks.
+	// label added to one, is seen by these periodic re-checks. A selector
+	// fleet is re-resolved as often.
 	var result ctrl.Result
 	if desiredSecret != nil {
 		result.RequeueAfter = secretRecheck
 	}
 	if desired.Reason == scm.ReasonRepositoryNotAllowed && p.Spec.Git.SecretRef != nil && !ownSecret {
 		result.RequeueAfter = secretRecheckInterval
+	}
+	if hasSelectorFleet(&p) && (result.RequeueAfter == 0 || fleetResync < result.RequeueAfter) {
+		result.RequeueAfter = fleetResync
 	}
 
 	// Derive status.phase from Bundle phases and PromotionStep states.
@@ -214,7 +224,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredSecret != nil {
 		secretMatch = conditionMatches(p.Status.Conditions, *desiredSecret)
 	}
-	if condMatch && phaseMatch && metricsMatch && pausedMatch && secretMatch {
+	fleetsMatch := fleetsEqual(p.Status.Fleets, desiredFleets)
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && secretMatch && fleetsMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -240,6 +251,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionSecretReferenceable)
 	}
 	p.Status.DeploymentMetrics = desiredMetrics
+	p.Status.Fleets = desiredFleets
 
 	if err := r.Status().Patch(ctx, &p, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pipeline status: %w", err)

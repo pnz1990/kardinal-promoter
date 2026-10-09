@@ -31,6 +31,8 @@ type compactSim struct {
 	phase      string
 	// waitingForSlot sets the Bundle's WaitingForSlot condition True.
 	waitingForSlot bool
+	// fleet maps a fleet target's environment to its fleet (the step label).
+	fleet map[string]string
 }
 
 func newCompactSim(t *testing.T, g *graph.Graph) *compactSim {
@@ -48,14 +50,17 @@ func (s *compactSim) vars() map[string]interface{} {
 	v := map[string]interface{}{}
 	for _, n := range s.g.Spec.Nodes {
 		if n.Def != nil && n.ID != graph.NodePromotionState && n.ID != graph.NodePromotionWave &&
-			n.ID != graph.NodePromotionProgress {
+			n.ID != graph.NodePromotionProgress && n.ID != graph.NodePromotionEligible {
 			v[n.ID] = n.Def
 		}
 	}
 	var observed []interface{}
 	for env, state := range s.steps {
-		obj := map[string]interface{}{"metadata": map[string]interface{}{
-			"labels": map[string]interface{}{"kardinal.io/environment": env}}}
+		labels := map[string]interface{}{"kardinal.io/environment": env}
+		if f := s.fleet[env]; f != "" {
+			labels[graph.LabelFleet] = f
+		}
+		obj := map[string]interface{}{"metadata": map[string]interface{}{"labels": labels}}
 		if state != "" {
 			obj["status"] = map[string]interface{}{"state": state}
 		}
@@ -110,6 +115,9 @@ func (s *compactSim) wave() (envs []string, complete bool) {
 	s.t.Helper()
 	vars := s.vars()
 	vars[graph.NodePromotionState] = s.def(graph.NodePromotionState, vars)
+	if _, ok := s.nodes[graph.NodePromotionEligible]; ok {
+		vars[graph.NodePromotionEligible] = s.def(graph.NodePromotionEligible, vars)
+	}
 	wave := s.def(graph.NodePromotionWave, vars)
 	for _, e := range wave["steps"].([]interface{}) {
 		envs = append(envs, e.(map[string]interface{})["environment"].(string))

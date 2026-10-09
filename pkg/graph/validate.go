@@ -275,11 +275,19 @@ func validateSkipNames(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 		return nil
 	}
 	known := make(map[string]bool, len(pipeline.Spec.Environments))
+	fleets := map[string]bool{}
 	for _, e := range pipeline.Spec.Environments {
 		known[e.Name] = true
+		if e.Fleet != nil {
+			fleets[e.Name] = true
+		}
 	}
 	var unknown []string
 	for _, s := range bundle.Spec.Intent.SkipEnvironments {
+		if fleets[s] {
+			return fmt.Errorf("build: intent.skipEnvironments names fleet environment %q; skipping a fleet is not supported "+
+				"(use intent.targetEnvironment to stop before it)", s)
+		}
 		if !known[s] {
 			unknown = append(unknown, s)
 		}

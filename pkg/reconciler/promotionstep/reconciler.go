@@ -2047,10 +2047,10 @@ func (r *Reconciler) cleanWorkDir(log zerolog.Logger, ps *v1alpha1.PromotionStep
 
 // findEnv returns the EnvironmentSpec for the named environment, or empty spec if not found.
 func findEnv(pipeline *v1alpha1.Pipeline, envName string) v1alpha1.EnvironmentSpec {
-	for _, e := range pipeline.Spec.Environments {
-		if e.Name == envName {
-			return e
-		}
+	// A fleet target is an environment of its own: the fleet environment
+	// with the target's name, path and health.
+	if env, ok := graph.EnvironmentSpecFor(pipeline, envName); ok {
+		return env
 	}
 	return v1alpha1.EnvironmentSpec{Name: envName}
 }

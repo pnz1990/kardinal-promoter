@@ -34,6 +34,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
@@ -263,12 +264,10 @@ func getPipeline(ctx context.Context, c sigs_client.Reader, ns, name string) (*v
 	return &pipe, nil
 }
 
+// pipelineEnvNames lists pipe's environments, each fleet followed by its
+// targets' environments.
 func pipelineEnvNames(pipe *v1alpha1.Pipeline) []string {
-	names := make([]string, 0, len(pipe.Spec.Environments))
-	for _, e := range pipe.Spec.Environments {
-		names = append(names, e.Name)
-	}
-	return names
+	return graph.EnvironmentNames(pipe)
 }
 
 // simulatedBundle is the Bundle simulate evaluates gates for: an image Bundle
