@@ -67,3 +67,22 @@ func TestDeployedBundle(t *testing.T) {
 		})
 	}
 }
+
+// TestDeployedBundleMatching: only the Bundles match accepts count, and the
+// newest of them that landed wins (#1353).
+func TestDeployedBundleMatching(t *testing.T) {
+	steps := []v1alpha1.PromotionStep{
+		*step("img1", "app", "prod", "Verified", 1),
+		*step("cfg1", "app", "prod", "Verified", 2),
+		*step("img2", "app", "prod", "Verified", 3),
+		*step("cfg2", "app", "prod", "WaitingForMerge", 4),
+		*step("cfg9", "app", "test", "Verified", 9),
+	}
+	isConfig := func(b string) bool { return len(b) > 3 && b[:3] == "cfg" }
+	isImage := func(b string) bool { return len(b) > 3 && b[:3] == "img" }
+	assert.Equal(t, "img2", lifecycle.DeployedBundle(steps, "app", "prod"))
+	assert.Equal(t, "cfg1", lifecycle.DeployedBundleMatching(steps, "app", "prod", isConfig),
+		"cfg2 has not landed, cfg9 is another environment")
+	assert.Equal(t, "img2", lifecycle.DeployedBundleMatching(steps, "app", "prod", isImage))
+	assert.Empty(t, lifecycle.DeployedBundleMatching(steps, "app", "prod", func(string) bool { return false }))
+}
