@@ -177,7 +177,7 @@ The Bundle was created but no Graph was generated. Check that `spec.pipeline` na
 kubectl get bundle <name> -o jsonpath='{.spec.pipeline}{"\n"}{range .status.conditions[*]}{.type} {.reason}: {.message}{"\n"}{end}'
 ```
 
-Reason `PipelineNotFound` means no such Pipeline exists. Reason `WaitingForSlot` means the Pipeline's `maxConcurrentPromotions` Bundles are already promoting; the Bundle starts when one of them finishes.
+Reason `PipelineNotFound` means no such Pipeline exists. Reason `WaitingForSlot` means the Pipeline's `maxConcurrentPromotions` Bundles are already promoting; the Bundle starts when one of them finishes. A `Failed` Bundle waits the same way before it recovers: see [spec.maxConcurrentPromotions](pipeline-reference.md#specmaxconcurrentpromotions).
 
 ### Symptom: Bundle is Failed with "skip denied"
 
@@ -187,7 +187,7 @@ The Bundle's `intent.skipEnvironments` lists an environment that an org gate app
 kubectl get bundle <name> -o jsonpath='{.status.conditions[*].message}'
 ```
 
-Either remove the environment from `intent.skipEnvironments`, or have the platform team create a skip-permission gate for it: a PolicyGate in an org policy namespace (`--policy-namespaces`, default `platform-policies`) labelled `kardinal.io/type: skip-permission` and `kardinal.io/applies-to: <env>`, with `spec.skipPermission: true`. A gate in the Pipeline's namespace or in `spec.policyNamespaces` cannot grant a skip. See [Skip Permissions](policy-gates.md#skip-permissions).
+Either remove the environment from `intent.skipEnvironments`, or have the platform team create a skip-permission gate for it (the Failed Bundle is then retried; it promotes unless a newer Bundle of the Pipeline is in flight or Verified): a PolicyGate in an org policy namespace (`--policy-namespaces`, default `platform-policies`) labelled `kardinal.io/type: skip-permission` and `kardinal.io/applies-to: <env>`, with `spec.skipPermission: true`. A gate in the Pipeline's namespace or in `spec.policyNamespaces` cannot grant a skip. See [Skip Permissions](policy-gates.md#skip-permissions).
 
 ## Git errors
 
