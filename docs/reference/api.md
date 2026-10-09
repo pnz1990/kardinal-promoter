@@ -575,13 +575,17 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.analysisPolicy.timeout` | string |  | Timeout is the verification timeout (default 30m). |
 | `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment this step promotes into. |
-| `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs (a patch node, not the step's template, so they keep updating after the step's own template stopped resolving). The reconciler reads only this copy, never the source objects. |
+| `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs, each part with its own patch node (its own field manager), not the step's template, so they keep updating after the step's own template stopped resolving: the environment's hook and analysis runs, and the current results of its gates. The reconciler reads only this copy, never the source objects; while the step's PR waits for its merge it mirrors the gates to the PR's head commit as the kardinal/gates commit status. Do not set it. |
 | `spec.live.analyses` | []object |  | Analyses are the environment's AnalysisRuns for this Bundle. |
 | `spec.live.analyses[].created` | string |  | Created is the AnalysisRun's creationTimestamp (RFC 3339). The newest run of a template is the one the step waits for. |
 | `spec.live.analyses[].message` | string |  | Message is the AnalysisRun's status.message. |
 | `spec.live.analyses[].name` | string | yes | Name is the AnalysisRun name. |
 | `spec.live.analyses[].phase` | string |  | Phase is the AnalysisRun's status.phase (Pending when it has none yet): Pending, Running, Successful, Failed, Error or Inconclusive. |
 | `spec.live.analyses[].template` | string |  | Template is the AnalysisTemplate or ClusterAnalysisTemplate it runs. |
+| `spec.live.gates` | []object |  | Gates are the gate instances of the step's environment for its Bundle, with their current result. |
+| `spec.live.gates[].name` | string | yes | Name is the gate instance name. |
+| `spec.live.gates[].ready` | boolean | yes | Ready is the instance's status.ready. |
+| `spec.live.gates[].reason` | string |  | Reason is the instance's status.reason. |
 | `spec.live.hooks` | []object |  | Hooks are the environment's HookRuns for this Bundle. |
 | `spec.live.hooks[].hook` | string |  | Hook is the hook's name in the Pipeline. |
 | `spec.live.hooks[].message` | string |  | Message is the HookRun's status.message. |
