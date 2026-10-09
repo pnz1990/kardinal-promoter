@@ -78,6 +78,9 @@ spec:
             {{- with .Values.scm.apiURL }}
             - --scm-api-url={{ . }}
             {{- end }}
+            {{- with .Values.scm.allowedRepositories }}
+            - --scm-allowed-repositories={{ join "," . }}
+            {{- end }}
             {{- if .Values.ui.auth.tokenReview }}
             - --ui-tokenreview-auth=true
             {{- end }}
