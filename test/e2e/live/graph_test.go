@@ -178,6 +178,90 @@ func TestGraph_DependencyErrorsStopPromotion(t *testing.T) {
 	assert.Equal(t, len(before), len(after), "nothing is committed")
 }
 
+// TestGraph_SizeLimitRefused checks the Graph size guard (ledger gap G10): a
+// Pipeline whose Graph would not fit in one etcd object (here 20 environments
+// with 4 PolicyGates of 16 KB expressions each, about 1.4 MB) fails its
+// Bundle with GraphBuildFailed and a message that names the size and the fix,
+// and no Graph, PromotionStep or gate instance is created. The same Pipeline
+// with one small gate on its first environment builds its Graph and
+// promotes the first environment.
+//
+// Covers GRAPH-SIZE-01.
+func TestGraph_SizeLimitRefused(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	var envs []string
+	for i := 0; i < 20; i++ {
+		envs = append(envs, fmt.Sprintf("region%02d", i))
+	}
+	ns := e.Namespace(t)
+	a := &app{e: e, ns: ns, envs: envs,
+		repo: e.Repo(t, ns, fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: envs}))}
+	// Only the first environment is deployed (Argo CD) and health-checked;
+	// the test ends once it is Verified.
+	e.ArgoApp(t, a.argoApp(envs[0]), a.repo, fixtures.Path(envs[0]), ns)
+	e.WaitArgoApp(t, a.argoApp(envs[0]), syncTimeout)
+	p := a.pipeline(nil)
+	for i := 1; i < len(p.Spec.Environments); i++ {
+		p.Spec.Environments[i].Health = v1alpha1.HealthConfig{}
+	}
+	a.apply(t, p)
+	long := strings.TrimSuffix(strings.Repeat("bundle.version != \"\" && ", 640), " && ")
+	for _, env := range envs {
+		for g := 0; g < 4; g++ {
+			gate := &v1alpha1.PolicyGate{
+				ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-big-%d", env, g), Namespace: ns,
+					Labels: map[string]string{"kardinal.io/applies-to": env}},
+				Spec: v1alpha1.PolicyGateSpec{Expression: long, Message: strings.Repeat("m", 1000)},
+			}
+			require.NoError(t, e.Client.Create(ctx, gate))
+		}
+	}
+
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+	b := e.WaitBundle(t, ns, bundle, 2*time.Minute, "Failed with GraphBuildFailed (graph size)",
+		failedWith("GraphBuildFailed", "graph size: the Graph for this Bundle would be about "))
+	msg := findCond(b.Status.Conditions, "InvalidSpec").Message
+	assert.Contains(t, msg, "over kardinal's limit of 1200000 bytes")
+	assert.Contains(t, msg, "split the Pipeline")
+	assert.Empty(t, b.Status.GraphRef, "no Graph is built")
+	graphs, err := e.Dynamic.Resource(framework.GraphGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, graphs.Items, "no Graph object")
+	var steps v1alpha1.PromotionStepList
+	require.NoError(t, e.Client.List(ctx, &steps, client.InNamespace(ns)))
+	assert.Empty(t, steps.Items, "no PromotionStep")
+
+	// Within the limit: one small gate, and the Bundle promotes.
+	var gates v1alpha1.PolicyGateList
+	require.NoError(t, e.Client.List(ctx, &gates, client.InNamespace(ns)))
+	for i := range gates.Items {
+		require.NoError(t, e.Client.Delete(ctx, &gates.Items[i]))
+	}
+	small := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "small", Namespace: ns,
+			Labels: map[string]string{"kardinal.io/applies-to": envs[0]}},
+		Spec: v1alpha1.PolicyGateSpec{Expression: `bundle.version != ""`},
+	}
+	require.NoError(t, e.Client.Create(ctx, small))
+	next := e.CreateBundle(t, ns, pipelineName, "--image", imageV3)
+	framework.Eventually(t, 2*time.Minute, "the smaller Graph to be accepted", func(ctx context.Context) (bool, string) {
+		name := a.bundle(t, next).Status.GraphRef
+		if name == "" {
+			return false, "no status.graphRef"
+		}
+		g, err := e.Dynamic.Resource(framework.GraphGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, err.Error()
+		}
+		st, reason, msg := graphCondition(g, "Accepted")
+		return st == "True", fmt.Sprintf("Accepted=%s %s: %s", st, reason, msg)
+	})
+	e.WaitStepState(t, ns, pipelineName, next, envs[0], "Verified", promoteTimeout)
+	a.fileHas(t, envs[0], fixtures.V3, "the first environment is promoted")
+}
+
 // TestGraph_SkipEnvironmentsBridges checks intent.skipEnvironments: a Bundle
 // that skips uat goes from test straight to prod. uat gets no PromotionStep
 // and keeps its version, and the Bundle is Verified.
