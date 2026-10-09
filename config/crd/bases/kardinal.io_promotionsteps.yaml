@@ -376,9 +376,6 @@ spec:
                       - pipelineName
                       - timestamp
                       type: object
-                      x-kubernetes-validations:
-                      - message: AuditEvent spec is immutable
-                        rule: self == oldSelf
                   required:
                   - name
                   - spec

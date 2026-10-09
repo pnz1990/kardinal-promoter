@@ -33,7 +33,7 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `spec` | object |  | AuditEventSpec defines the immutable record of a single promotion event. AuditEvents are created by the PromotionStep and PolicyGate reconcilers at key lifecycle transitions (started, succeeded, failed). The spec is set at creation; the CRD rejects any later change to it. |
+| `spec` | object |  | AuditEventSpec defines the immutable record of a single promotion event. AuditEvents are created by the PromotionStep and PolicyGate reconcilers at key lifecycle transitions (started, succeeded, failed). The spec is set at creation; the CRD rejects any later change to it (the rule is on AuditEvent.Spec, so the outbox entries that embed the type, PendingAuditEvent, can be stored in a list). |
 | `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated". HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`. |
 | `spec.bundleName` | string | yes | BundleName is the name of the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment name where the event occurred. |
