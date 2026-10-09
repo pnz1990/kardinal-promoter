@@ -424,6 +424,7 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/resume", s.handleResume)
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
 	mux.HandleFunc("/api/v1/ui/steps/", s.handleStepsSubpath)
+	mux.HandleFunc(openAPIPath, handleOpenAPI)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
@@ -1203,9 +1204,7 @@ func (s *uiAPIServer) handleValidateCEL(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var req struct {
-		Expression string `json:"expression"`
-	}
+	var req uiValidateCELRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Expression == "" {
 		http.Error(w, "expression field required", http.StatusBadRequest)
 		return
@@ -1219,15 +1218,10 @@ func (s *uiAPIServer) handleValidateCEL(w http.ResponseWriter, r *http.Request) 
 		if len(msg) > 200 {
 			msg = msg[:197] + "…"
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"valid": false,
-			"error": fmt.Sprintf("CEL compile error: %s", msg),
-		})
+		_ = json.NewEncoder(w).Encode(uiValidateCELResponse{Valid: false, Error: fmt.Sprintf("CEL compile error: %s", msg)})
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"valid": true,
-	})
+	_ = json.NewEncoder(w).Encode(uiValidateCELResponse{Valid: true})
 }
 
 // handleGatesSubpath handles:
@@ -1275,12 +1269,7 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var req struct {
-		Reason           string `json:"reason"`
-		Namespace        string `json:"namespace"`
-		Stage            string `json:"stage"`
-		ExpiresInMinutes int    `json:"expiresInMinutes"`
-	}
+	var req uiGateOverrideRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -1340,9 +1329,7 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		Msg("ui: gate approved via override")
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"message": "gate overridden until " + expiresAt.UTC().Format(time.RFC3339),
-	})
+	_ = json.NewEncoder(w).Encode(uiMessageResponse{Message: "gate overridden until " + expiresAt.UTC().Format(time.RFC3339)})
 }
 
 // buildUIConditions converts Kubernetes metav1.Condition slice to UI-friendly shape (#341).
@@ -1570,13 +1557,7 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Pipeline  string `json:"pipeline"`
-		Image     string `json:"image"`
-		CommitSHA string `json:"commitSHA"`
-		Author    string `json:"author"`
-		Namespace string `json:"namespace"`
-	}
+	var req uiCreateBundleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -1657,9 +1638,9 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"bundle":  bundle.Name,
-		"message": "bundle created — track with kardinal get bundles " + req.Pipeline,
+	_ = json.NewEncoder(w).Encode(uiCreateBundleResponse{
+		Bundle:  bundle.Name,
+		Message: "bundle created — track with kardinal get bundles " + req.Pipeline,
 	})
 }
 
