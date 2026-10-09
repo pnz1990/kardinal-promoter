@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 )
@@ -169,10 +170,18 @@ func (f *ForgejoProvider) VerifyCommit(ctx context.Context, repo, sha string) (C
 }
 
 // userExists reports whether login is a user of the instance
-// (GET /api/v1/users/{login}; 404 means no such user).
+// (GET /api/v1/users/{login}; 404 means no such user). A token without the
+// read:user scope gets 403, so the lookup is then made anonymously, which
+// sees public and limited users. A private user then reads as no user, and
+// its signatures as the instance key: refused, never accepted as a person.
+// Grant the token read:user to resolve private users.
 func (f *ForgejoProvider) userExists(ctx context.Context, login string) (bool, error) {
-	err := f.do(ctx, http.MethodGet, "/api/v1/users/"+url.PathEscape(login), nil, nil)
+	path := "/api/v1/users/" + url.PathEscape(login)
+	err := f.do(ctx, http.MethodGet, path, nil, nil)
 	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
+		err = f.getAnonymous(ctx, path)
+	}
 	switch {
 	case errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound:
 		return false, nil
@@ -180,6 +189,25 @@ func (f *ForgejoProvider) userExists(ctx context.Context, login string) (bool, e
 		return false, err
 	}
 	return true, nil
+}
+
+// getAnonymous is a GET without the token.
+func (f *ForgejoProvider) getAnonymous(ctx context.Context, path string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.APIURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("execute request GET %s: %w", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(resp.Body)
+		return newAPIError("forgejo", http.MethodGet, path, resp, raw)
+	}
+	return nil
 }
 
 // VerifyCommit implements CommitVerifier with

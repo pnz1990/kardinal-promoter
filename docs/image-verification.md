@@ -130,7 +130,10 @@ commit, and the SHA it answers for must be the same.
 
 The SCM's verdict is about the key it holds for the signer; `allowedSigners` narrows it to the
 people you accept, by login or email as the SCM reports the verified signer. Forgejo reports the
-signer's login in `signer.name`, Gitea in `signer.username`; kardinal reads either. GitLab is matched on
+signer's login in `signer.name`, Gitea in `signer.username`; kardinal reads either, and looks
+the login up (`GET /api/v1/users/{login}`) to tell a person from the instance key. Give the
+controller's token the `read:user` scope; without it the lookup is made anonymously, so a
+private user's signature reads as the instance key and is refused. GitLab is matched on
 the key owner's verified email (for SSH signatures, whose response names the key only by a title
 its owner chose, on the commit's committer email, which GitLab checked against the key's owner);
 it reports no full GPG fingerprint, so keys are not matched.

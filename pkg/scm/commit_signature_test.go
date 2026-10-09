@@ -212,3 +212,30 @@ func TestVerifyCommit(t *testing.T) {
 		})
 	}
 }
+
+// TestVerifyCommit_ForgejoUserLookupWithoutReadUser: a token without
+// read:user gets 403 on GET /api/v1/users/{login}; the lookup is retried
+// without the token (a public user is found), so a person's signature is
+// not mistaken for the instance key (found live: the e2e bot token has no
+// read:user).
+func TestVerifyCommit_ForgejoUserLookupWithoutReadUser(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/repos/org/config/git/commits/abc":
+			_, _ = w.Write([]byte(`{"sha":"abc","commit":{"verification":{"verified":true,"reason":"alice / K","signer":{"name":"alice","email":"alice@example.com","username":""}}}}`))
+		case r.URL.Path == "/api/v1/users/alice" && r.Header.Get("Authorization") != "":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"token does not have at least one of required scope(s): [read:user]"}`))
+		case r.URL.Path == "/api/v1/users/alice":
+			_, _ = w.Write([]byte(`{"login":"alice"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	got, err := scm.NewForgejoProvider("t", srv.URL, "").VerifyCommit(context.Background(), "org/config", "abc")
+	require.NoError(t, err)
+	assert.False(t, got.Platform)
+	assert.Equal(t, "alice", got.Signer)
+}
