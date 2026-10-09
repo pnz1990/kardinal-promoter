@@ -51,14 +51,40 @@ spec:
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
             - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
+            {{- if not (kindIs "invalid" .Values.graph.compactAbove) }}
+            - --graph-compact-above={{ .Values.graph.compactAbove }}
+            {{- end }}
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
             {{- end }}
             {{- with .Values.controller.gateStatusHeartbeat }}
             - --gate-status-heartbeat={{ . }}
             {{- end }}
+            {{- with .Values.controller.accessLog }}
+            {{- if .allRequests }}
+            - --access-log-all-requests=true
+            {{- end }}
+            {{- if .sourceIP }}
+            - --access-log-source-ip=true
+            {{- end }}
+            {{- with .trustedProxies }}
+            - --access-log-trusted-proxies={{ join "," . }}
+            {{- end }}
+            {{- end }}
+            {{- with (.Values.graph.retire).superseded }}
+            - --graph-retire-superseded-after={{ . }}
+            {{- end }}
+            {{- with (.Values.graph.retire).failed }}
+            - --graph-retire-failed-after={{ . }}
+            {{- end }}
+            {{- with (.Values.graph.retire).verified }}
+            - --graph-retire-verified-after={{ . }}
+            {{- end }}
             {{- with .Values.controller.watchNamespace }}
             - --watch-namespace={{ . }}
+            {{- end }}
+            {{- with .Values.controller.namespaceShard }}
+            - --namespace-shard={{ . }}
             {{- end }}
             {{- with .Values.scm.provider }}
             - --scm-provider={{ . }}
@@ -72,10 +98,27 @@ spec:
             {{- if .Values.ui.auth.tokenReview }}
             - --ui-tokenreview-auth=true
             {{- end }}
+            {{- if .Values.metricCheck.cloudWatch.ambientCredentials }}
+            - --metriccheck-cloudwatch-ambient-credentials=true
+            {{- end }}
+            - --metriccheck-global-slots={{ .Values.metricCheck.querySlots.global }}
+            - --metriccheck-namespace-slots={{ .Values.metricCheck.querySlots.perNamespace }}
             {{- with .Values.ui.corsAllowedOrigins }}
             - --cors-allowed-origins={{ join "," . }}
             {{- end }}
             - --ui-allowed-hosts={{ include "kardinal-promoter.uiAllowedHosts" . }}
+            {{- with .Values.tracing }}
+            {{- if .enabled }}
+            - --tracing-enabled=true
+            {{- with .endpoint }}
+            - --tracing-endpoint={{ . }}
+            {{- end }}
+            {{- if .insecure }}
+            - --tracing-insecure=true
+            {{- end }}
+            - --tracing-sampling-ratio={{ if kindIs "invalid" .samplingRatio }}0.1{{ else }}{{ .samplingRatio }}{{ end }}
+            {{- end }}
+            {{- end }}
             {{- with (.Values.egress).allowlist }}
             - --egress-allowlist={{ join "," . }}
             {{- end }}

@@ -149,3 +149,40 @@ test('selecting a row opens its pipeline, with its paused state', async ({ page 
   await expect(page.getByRole('heading', { level: 1, name: PIPELINE })).toBeVisible()
   await expect(page.getByText('⏸ PAUSED — no new promotions')).toHaveCount(0)
 })
+
+// UI-FLEET-01: with no pipeline selected, the fleet board draws each pipeline
+// as stations: podinfo runs its Bundle in test and is held by a gate before
+// prod, the broken pipeline failed in its only environment, and the paused
+// one has nothing deployed. A station opens its pipeline; the logo returns.
+test('the fleet board shows what each environment runs and where releases are', async ({ page }) => {
+  await page.goto(`${base}/ui/`)
+  const board = page.getByRole('region', { name: 'Fleet' })
+  const line = (name: string) => board.getByRole('listitem').filter({ has: page.locator('.fleet-line__ns', { hasText: new RegExp(`^${ns}$`) }) })
+    .filter({ has: page.getByRole('button', { name, exact: true }) })
+
+  const held = line(PIPELINE)
+  await expect(held).toHaveCount(1)
+  const testStation = held.getByRole('button', { name: new RegExp(`^${PIPELINE} test:`) })
+  await expect(testStation).toHaveAttribute('data-state', 'settled')
+  await expect(testStation.locator('.fleet-station__version')).not.toHaveText('—')
+  await expect(testStation).toContainText(/verified (just now|\d+[mhd] ago)/)
+  await expect(held.getByRole('button', { name: new RegExp(`^${PIPELINE} prod:`) })).toHaveAttribute('data-state', 'held')
+  await expect(held).toHaveAttribute('data-live', 'held')
+  await expect(held.locator('.fleet-flag[data-kind="held"]')).toBeVisible()
+
+  const failed = line(broken)
+  await expect(failed.getByRole('button', { name: new RegExp(`^${broken} \\S+:`) })).toHaveAttribute('data-state', 'failed')
+  await expect(failed).toHaveAttribute('data-live', 'failed')
+
+  const idle = line(paused)
+  await expect(idle.locator('.fleet-flag[data-kind="paused"]')).toHaveText('paused')
+  for (const station of await idle.locator('.fleet-station').all()) {
+    await expect(station).toHaveAttribute('data-state', 'empty')
+  }
+
+  await testStation.click()
+  await expect(page.getByRole('heading', { level: 1, name: PIPELINE })).toBeVisible()
+  expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('ns')).toBe(ns)
+  await page.getByRole('button', { name: 'Show the fleet' }).click()
+  await expect(board).toBeVisible()
+})

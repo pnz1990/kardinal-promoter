@@ -42,12 +42,68 @@ The script also tunes kro for kardinal's Graphs:
 | `config.graphConcurrentReconciles` | 1 | 8 | `KRO_GRAPH_CONCURRENT_RECONCILES` |
 | `config.clientQps` | 100 | 300 | `KRO_CLIENT_QPS` |
 | `config.clientBurst` | 150 | 500 | `KRO_CLIENT_BURST` |
+| `deployment.resources.limits.memory` | 1024Mi | 2Gi | `KRO_MEMORY_LIMIT` |
+| `deployment.resources.requests.memory` | 128Mi | 768Mi | `KRO_MEMORY_REQUEST` |
 
 kro reconciles one Graph at a time by default, and each reconcile makes about three API calls per
 object the Graph applies. With one worker, one large promotion (a Pipeline with 150 environments)
 delays every other Graph in the cluster by several seconds, up to about 30 seconds while two such
 promotions run. Eight workers keep that under half a second. If you install kro another way, set
 the same values.
+
+### Sizing kro
+
+kro keeps every Graph it reconciles in memory: its compiled program and its watches, 3 to 6 MB
+for a kardinal Graph whatever its size (#1492: OOMKilled at 337 Graphs in 1 GiB; 5.4 MB per Graph
+measured for 14 KB Graphs under load). kardinal creates one Graph per
+Bundle and retires it once the Bundle has finished: the Graph is deleted, and the Bundle keeps a
+record of each PromotionStep in `status.retiredSteps`, which rollback, promote, history, metrics,
+the CLI and the UI read. So the Graphs kro holds are:
+
+| Graphs | How many |
+|---|---|
+| Bundles promoting | about one per Pipeline and Bundle type (a newer Bundle supersedes an older one) |
+| Superseded Bundles, and Verified or Failed ones a newer Verified Bundle replaced in every environment they touched | those whose steps settled in the last `graph.retire.superseded` (1m), plus the ones the controller has not reached yet |
+| Verified Bundles still deployed | those verified in the last `graph.retire.verified` (1h) |
+| Failed Bundles not replaced yet (and Bundles with a step stopped by a health alarm) | those failed in the last `graph.retire.failed` (24h) |
+
+Why these delays: nothing reads a Superseded Bundle's Graph once its steps have settled (a Graph
+is retired only when every step is `Verified`, `Failed`, `RollingBack` or `AbortedByAlarm` and none
+still holds a PR finalizer), so
+its delay is only a grace period, and it is the one that grows with the Bundle rate. At 2 Bundles a
+second, 1 minute keeps about 120 Superseded Graphs (about 650 MB); 10 minutes would keep about
+1,200 (about 6.5 GB, over kro's 1 GiB default). A Verified Bundle still deployed keeps its Graph
+an hour after it finished, and a Failed one a day, for a person to look at it before it becomes
+final (a retired Failed Bundle no longer recovers).
+
+Measured with the scale suite (`full` profile: 40 Pipelines, 2 Bundles a second for 10 minutes,
+1,200 Bundles), with the default delays:
+
+| Run | Live Graphs (peak) | kro working set (peak) |
+|---|---|---|
+| Steady load | 126 | 668 MiB |
+| Same load, controller leader killed 13 times | 91 | 657 MiB |
+| Before retirement had its own work queue, leader kills | about 300 | OOMKilled at 1 GiB |
+
+`hack/install-kro.sh` sets 2Gi: about three times that steady state, enough for the Graphs a
+restarted or lagging controller has not retired yet (some 300).
+
+Set `KRO_MEMORY_LIMIT` to about 256 MiB plus 6 MB times the live Graphs, with headroom for bursts.
+Per Pipeline, the live Graphs are about:
+
+    1 (in flight) + 1 (deployed, for an hour after it verified)
+      + B x 1m (Superseded: B Bundles a minute)
+      + F x 24h (Failed Bundles a minute that no newer Verified Bundle replaced yet)
+
+The failure term dominates for a Pipeline that fails often and is not fixed: 10 failures a day that
+stay unreplaced keep 10 Graphs. For 200 Pipelines that each promote a few Bundles an hour and fail
+one a day, about 600 Graphs, use 4Gi. A burst of
+Bundles, for example 2 a second for 10 minutes over 40 Pipelines, holds a few hundred Graphs while
+the controller catches up; size for the burst. A kro that
+runs out of memory restarts and stops promoting every Pipeline until it has compiled every Graph
+again. `kubectl get graphs -A --no-headers | wc -l` shows the live count. Shorter retirement delays
+(chart `graph.retire.*`, or a Pipeline's `kardinal.io/graph-retire-after` annotation) hold fewer
+Graphs; see [Bundle history](concepts.md#graph-retirement) for what a retired Bundle keeps.
 
 !!! warning "Version compatibility"
     The kro version kardinal-promoter is tested against is pinned in `hack/install-kro.sh`.
@@ -146,6 +202,8 @@ kardinal version
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
+| `controller.accessLog.allRequests` | `false` | `--access-log-all-requests`: log every UI API and Bundle API request, not only logins, refusals and writes ([API access log](guides/security.md#api-access-log)) |
+| `controller.accessLog.sourceIP` / `.trustedProxies` | `false` / `[]` | `--access-log-source-ip`, `--access-log-trusted-proxies`: add the client address; believe `X-Forwarded-For` only from these proxy CIDRs |
 | `ui.corsAllowedOrigins` | `[]` | `--cors-allowed-origins` |
 | `ui.allowedHosts` | `[]` | Extra host names for `--ui-allowed-hosts` (Ingress host, node IP). localhost and the Service DNS names are always allowed |
 | `service.uiPort` | `8082` | UI and UI API port (container and Service) |
@@ -154,6 +212,7 @@ kardinal version
 | `metricsBindAddress` / `healthProbeBindAddress` | `:8080` / `:8081` | `--metrics-bind-address` / `--health-probe-bind-address` (the container ports) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
+| `graph.compactAbove` | `null` | Environment count above which a Bundle's Graph uses the compact shape (`--graph-compact-above`; default `100`; `0` makes every Graph compact). See [Large Pipelines](pipeline-reference.md#large-pipelines) |
 | `controller.gateStatusHeartbeat` | `""` | Longest a PolicyGate's status goes unwritten while its result does not change (`--gate-status-heartbeat`; default `10m`; `0s` writes on every evaluation). See [Policy gates](policy-gates.md#re-evaluation) |
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
@@ -172,6 +231,10 @@ kardinal version
 | `networkPolicy.enabled` | `false` | NetworkPolicy for the controller Pod |
 | `networkPolicy.ingressFrom.{metrics,health,ui,webhook}` | `[]` | Allowed peers per ingress port (empty admits any source) |
 | `networkPolicy.extraEgress` | `[]` | Extra egress rules (e.g. Prometheus for MetricChecks) |
+| `tracing.enabled` | `false` | Export OpenTelemetry traces over OTLP/HTTP ([Tracing](guides/monitoring.md#tracing-opentelemetry)) |
+| `tracing.endpoint` | `""` | OTLP/HTTP endpoint URL or `host:port`; empty uses `OTEL_EXPORTER_OTLP_ENDPOINT` |
+| `tracing.insecure` | `false` | Plain HTTP to a `host:port` endpoint |
+| `tracing.samplingRatio` | `0.1` | Fraction of traces recorded, decided at each trace's root; an inbound `traceparent` does not force recording |
 | `egress.allowlist` | `[]` | Destinations NotificationHook, MetricCheck and Subscription requests may reach (`--egress-allowlist`): host names, `*.` wildcards, CIDRs. Empty allows any destination outside the always-refused loopback, link-local and metadata addresses. See [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls) |
 | `scheduleClock.enabled` / `.interval` | `true` / `"1m"` | ScheduleClock `kardinal-clock` in the release namespace. Each tick re-evaluates every PolicyGate instance |
 | `validatingAdmissionPolicy.enabled` | `true` | Deprecated, no effect. The CRD schemas validate these fields |
@@ -187,6 +250,9 @@ The monitoring values (`serviceMonitor`, `prometheusRule`, `grafanaDashboard`) a
 | `graph.kroNamespace` | `kro-system` | Namespace kro runs in (NetworkPolicy egress; `""` drops the rule) |
 | `graph.aggregateToKro` | `true` | Ship a ClusterRole aggregated into kro's controller role (kro with `rbac.mode=aggregation`) |
 | `graph.readerNamespaces` | `[argocd, flux-system]` | `--graph-reader-namespaces`: namespaces, besides a Graph's own, where the Graph identity may be bound to the reader role for health `ref` nodes. A health ref into any other namespace is dropped from the Graph with a warning (health refs are observational; the PromotionStep reconciler still checks health). Add the namespaces your `health.resource` targets live in. `["*"]` allows every namespace; use it only when every Pipeline author may read every namespace. `kube-system`, `kube-public` and `kube-node-lease` are never allowed |
+| `graph.retire.superseded` | `""` | How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, is kept before it is retired (`--graph-retire-superseded-after`; default `1m`; `0s` keeps it). See [Graph retirement](concepts.md#graph-retirement) |
+| `graph.retire.verified` | `""` | The same for a Verified Bundle still deployed in an environment (`--graph-retire-verified-after`; default `1h`) |
+| `graph.retire.failed` | `""` | The same for a Failed Bundle, which no longer recovers once retired (`--graph-retire-failed-after`; default `24h`) |
 
 ---
 
@@ -230,6 +296,27 @@ release name other than `kardinal-promoter`, the Service is named
     DNS names. If you browse to an Ingress host or a node IP, add it to
     `ui.allowedHosts` (`--ui-allowed-hosts`) as well as setting an auth mode. See
     [Host names (DNS rebinding)](guides/security.md#host-names-dns-rebinding).
+
+### What the UI shows
+
+- **Fleet board** (the start page, and the kardinal logo from anywhere). Each Pipeline is a
+  line of stations, one per environment in promotion order; environments promoted in parallel
+  are stacked. A station shows the version the environment runs and when it was Verified.
+  That is the newest promotion there whose change landed, the Bundle `kardinal status` reports
+  as deployed. Image and config Bundles do not replace each other, so a station also shows, under
+  `+`, what the environment runs from another Bundle: the config commit of the last config Bundle
+  under an image Bundle, or the image tags of the last image Bundle under a config Bundle, as
+  `kardinal status` does. A lit rail marks the active Bundle's version on its way into an environment:
+  amber and moving while it promotes, waits for its PR or is health checked; amber and still
+  while a PolicyGate holds it; red where it failed. A station opens its Pipeline. The board
+  follows the sidebar's health filter.
+- **Pipeline view.** The lane, the promotion graph, policy gates with their CEL expressions,
+  the Bundle history and comparison, and pause, resume, promote, roll back and create bundle.
+- **Step timings.** Selecting an environment step lists the steps of that promotion
+  (`git-clone` … `health-check`) with their durations, and a bar for each that shows where it
+  ran in the promotion's time. A slow health check or push stands out at once.
+- **Dark and light themes.** The UI follows the operating system's setting until you pick one
+  with the ☀ / ☾ button next to the refresh indicator; the choice is kept in the browser.
 
 ### With TLS (production)
 
@@ -276,6 +363,13 @@ Graph and its namespace then never finish deleting. After you downgrade, remove 
 from every step that holds it with the command under [Uninstall](#uninstall). The older
 controller does not close the PR of a deleted step, so close by hand the PRs of the steps you
 delete after the downgrade.
+
+A controller older than this release does not know the compact Graph shape (Pipelines with more
+than 100 environments, or the `kardinal.io/graph-shape: compact` annotation; see
+[Large Pipelines](pipeline-reference.md#large-pipelines)). When it rebuilds the Graph of a
+Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it builds the node
+shape, and kro then deletes every PromotionStep the compact Graph created: the Bundle promotes
+again from its first environment. Before you downgrade, let the Bundles of those Pipelines finish, or delete them.
 
 ### Upgrading from v0.8.1
 
@@ -550,7 +644,7 @@ is bounded at **30 seconds**: when a request is still open then, the controller 
 `failed waiting for all runnables to end within grace period of 30s` and exits.
 
 This leaves no inconsistent state. After the restart the step runs again from its last saved
-step. A `pr-review` step force-pushes its branch `kardinal/<bundle>/<env>`, so a step stopped
+step. A `pr-review` step force-pushes its branch `kardinal/<namespace hash>/<bundle>/<env>`, so a step stopped
 after its push and before its PR opens one PR with one commit, and the base branch changes
 only when the PR is merged.
 

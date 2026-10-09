@@ -832,3 +832,41 @@ func TestUIAPI_GateState(t *testing.T) {
 		})
 	}
 }
+
+// TestUIAPI_RetiredBundle checks that the graph and steps of a Bundle whose
+// Graph was retired (#1492) still show each environment's state and PR, read
+// from status.retiredSteps.
+func TestUIAPI_RetiredBundle(t *testing.T) {
+	at := metav1.NewTime(time.Now().Add(-time.Hour).Truncate(time.Second))
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}}}},
+		&v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "default"},
+			Spec: v1alpha1.BundleSpec{Pipeline: "app"},
+			Status: v1alpha1.BundleStatus{Phase: "Verified",
+				Conditions: []metav1.Condition{{Type: "GraphRetired", Status: metav1.ConditionTrue, Reason: "Retired", LastTransitionTime: at}},
+				RetiredAt:  &at,
+				RetiredSteps: []v1alpha1.RetiredStep{
+					{Name: "app-v1-test", Environment: "test", State: "Verified", CreatedAt: at, VerifiedAt: &at},
+					{Name: "app-v1-prod", Environment: "prod", State: "Verified", PRURL: "https://git.example/pr/2", CreatedAt: at, VerifiedAt: &at},
+				}}},
+	).Build()
+
+	rec := uiReadGet(t, c, "/api/v1/ui/bundles/app-v1/graph")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var g uiGraphResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &g))
+	states := map[string]string{}
+	prs := map[string]string{}
+	for _, n := range g.Nodes {
+		states[n.Environment] = n.State
+		prs[n.Environment] = n.PRURL
+	}
+	assert.Equal(t, map[string]string{"test": "Verified", "prod": "Verified"}, states)
+	assert.Equal(t, "https://git.example/pr/2", prs["prod"])
+
+	rec = uiReadGet(t, c, "/api/v1/ui/bundles/app-v1/steps")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "app-v1-prod")
+	assert.Contains(t, rec.Body.String(), "app-v1-test")
+}

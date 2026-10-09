@@ -332,9 +332,9 @@ func deploysConfig(b *v1alpha1.Bundle) bool {
 }
 
 // deploysImages reports whether promoting b deploys its images: every Bundle
-// but a config Bundle does.
+// but a config or chart Bundle does.
 func deploysImages(b *v1alpha1.Bundle) bool {
-	return b.Spec.Type != "config"
+	return b.Spec.Type != "config" && b.Spec.Type != "chart"
 }
 
 // sameDeployed reports whether deploying the rollback artifacts r changes
@@ -347,6 +347,11 @@ func deploysImages(b *v1alpha1.Bundle) bool {
 // from. When the history has none, the version is not known and counts as a
 // change.
 func (s *restoreSources) sameDeployed(ctx context.Context, r, cur *v1alpha1.Bundle) (bool, error) {
+	if r.Spec.Type == "chart" {
+		// A chart Bundle deploys only its chart version; cur is the
+		// deployed chart Bundle (a rollback stays within its type).
+		return cur.Spec.Type == "chart" && chartKey(r) == chartKey(cur), nil
+	}
 	if deploysImages(r) {
 		for _, img := range r.Spec.Images {
 			at, err := s.deployedImage(ctx, cur, img.Repository)
@@ -675,11 +680,12 @@ type envHistory struct {
 }
 
 func loadEnvHistory(ctx context.Context, c client.Reader, ns, pipeline, env string) (*envHistory, error) {
-	var steps v1alpha1.PromotionStepList
-	if err := c.List(ctx, &steps, client.InNamespace(ns), client.MatchingLabels{LabelPipeline: pipeline}); err != nil {
-		return nil, fmt.Errorf("list promotion steps of pipeline %s: %w", pipeline, err)
+	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+	steps, err := ListPromotionSteps(ctx, c, ns, client.MatchingLabels{LabelPipeline: pipeline})
+	if err != nil {
+		return nil, fmt.Errorf("steps of pipeline %s: %w", pipeline, err)
 	}
-	return historyOf(steps.Items, pipeline, env), nil
+	return historyOf(steps, pipeline, env), nil
 }
 
 // deployed returns the Bundle whose change landed last in the environment: the

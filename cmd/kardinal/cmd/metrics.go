@@ -15,6 +15,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func newMetricsCmd() *cobra.Command {
@@ -112,6 +113,8 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	); err != nil {
 		return fmt.Errorf("list steps: %w", err)
 	}
+	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+	stepList.Items = lifecycle.AddRetiredSteps(stepList.Items, bundleList.Items, map[string]string{"kardinal.io/pipeline": pipeline})
 
 	// Filter bundles for this pipeline in the lookback window.
 	var pipelineBundles []v1alpha1.Bundle

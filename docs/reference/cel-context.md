@@ -131,6 +131,8 @@ The `metrics` map contains one entry per `MetricCheck` CRD in the gate's metrics
 | `metrics.<name>.result` | string | `"Pass"` | `"Pass"` or `"Fail"` — result of the MetricCheck threshold; `"Stale"` when the result is stale |
 | `metrics.<name>.stale` | bool | `false` | `true` when the MetricCheck's `status.validUntil` is unset (for example before its first evaluation) or earlier than the gate's evaluation time |
 
+**Per-promotion MetricChecks.** For a MetricCheck with `spec.perPromotion: true`, `metrics.<name>` is the instance the Graph made from it for the gate's own Bundle and environment (labels `kardinal.io/metric-template`, `kardinal.io/bundle`, `kardinal.io/environment`). Until that instance exists, or when two objects claim to be it, the entry is stale. Instances are not listed under their own names. See [Per-promotion analysis](../metric-checks.md#per-promotion-analysis).
+
 **Populated** when a `MetricCheck` CRD with the given name exists in the gate's metrics namespace. `double("")` is an evaluation error, so a value-based gate blocks until the MetricCheck has a fresh value.
 
 **Staleness.** Each MetricCheck evaluation sets `status.validUntil` to the evaluation time plus

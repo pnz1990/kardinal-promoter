@@ -281,7 +281,9 @@ func TestGraph_GateAndPRStatusCollections(t *testing.T) {
 	a := newArgoApp(t, e, "test", "prod")
 	e.CreateGate(t, framework.Gate(a.ns, "needs-open-label", "prod", openExpr, recheck))
 	e.CreateGate(t, framework.Gate(a.ns, "always-open", "prod", "true", recheck))
-	a.apply(t, a.pipeline(nil))
+	// The node list is the nodes shape's, whatever --graph-compact-above;
+	// TestGraph_CompactShapeSmall checks the compact one.
+	a.apply(t, nodesShape(a.pipeline(nil)))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 
@@ -594,7 +596,7 @@ func TestGraph_DeletedGraphIsRecreated(t *testing.T) {
 	assert.Len(t, prs, 1, "no second PR is opened")
 	var prodPRs []string
 	for _, p := range prs {
-		if p.Head == prHead(bundle, "prod") {
+		if p.Head == prHead(a.ns, bundle, "prod") {
 			prodPRs = append(prodPRs, fmt.Sprintf("#%d %s", p.Number, p.State))
 		}
 	}

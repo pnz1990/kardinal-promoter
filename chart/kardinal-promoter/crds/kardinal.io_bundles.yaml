@@ -62,14 +62,47 @@ spec:
               CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
               supported) lets an update through when spec is unchanged.
             properties:
+              chart:
+                description: |-
+                  Chart is the Helm chart version a "chart" Bundle promotes. The
+                  helm-set-image step writes chart.version at update.helm.chartVersionPath.
+                properties:
+                  digest:
+                    description: |-
+                      Digest is the chart package digest (index.yaml digest, or the OCI
+                      manifest digest).
+                    type: string
+                  name:
+                    description: |-
+                      Name is the chart name: letters, digits, ".", "_" and "-", starting
+                      and ending with a letter or digit. It is joined into the chart's
+                      index and OCI paths, so a "/", "]" or other path character would
+                      point the version lookup elsewhere.
+                    maxLength: 250
+                    minLength: 1
+                    pattern: ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$
+                    type: string
+                  repoURL:
+                    description: RepoURL is the chart repository (https://... or oci://...).
+                    type: string
+                  version:
+                    description: Version is the chart version.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                - version
+                type: object
               configRef:
                 description: |-
                   ConfigRef points to the GitOps repository commit this Bundle represents
                   when the bundle type is "config" or "mixed".
                 properties:
                   commitSHA:
-                    description: CommitSHA is the exact commit SHA for this config
-                      snapshot.
+                    description: |-
+                      CommitSHA is the exact commit SHA for this config snapshot: 4 to 64
+                      hex characters.
+                    pattern: ^[0-9a-fA-F]{4,64}$
                     type: string
                   gitRepo:
                     description: GitRepo is the GitOps repository URL.
@@ -82,14 +115,19 @@ spec:
                     tag, and/or digest.
                   properties:
                     digest:
-                      description: Digest is the image digest (sha256:...).
+                      description: Digest is the image digest (sha256:...), in the
+                        OCI digest grammar.
+                      pattern: ^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$
                       type: string
                     repository:
                       description: Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
                       minLength: 1
                       type: string
                     tag:
-                      description: Tag is the image tag.
+                      description: |-
+                        Tag is the image tag, in the OCI distribution grammar: up to 128
+                        characters of [A-Za-z0-9_.-], not starting with "." or "-".
+                      pattern: ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$
                       type: string
                   required:
                   - repository
@@ -128,8 +166,11 @@ spec:
                       Bundle.
                     type: string
                   commitSHA:
-                    description: CommitSHA is the application source commit that produced
-                      this Bundle.
+                    description: |-
+                      CommitSHA is the application source commit that produced this Bundle:
+                      4 to 64 hex characters, or an image digest (a Subscription records
+                      the digest it found).
+                    pattern: ^([0-9a-fA-F]{4,64}|[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,})$
                     type: string
                   rollbackOf:
                     description: RollbackOf is the name of the Bundle this Bundle
@@ -146,10 +187,13 @@ spec:
                   Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
                   An image bundle does NOT supersede a config bundle and vice versa.
                   This allows image and config promotions to coexist independently in the same pipeline.
+                  A chart Bundle promotes a Helm chart version (spec.chart) with
+                  update.strategy helm.
                 enum:
                 - image
                 - config
                 - mixed
+                - chart
                 type: string
             required:
             - pipeline
@@ -311,7 +355,76 @@ spec:
                   templates retries the Bundle, as a Pipeline change does. Empty
                   otherwise.
                 type: string
+              retiredAt:
+                description: |-
+                  RetiredAt is when the Bundle's Graph was retired: set in the same
+                  write as RetiredSteps, and never cleared. A Bundle with RetiredAt is
+                  final; the GraphRetired condition only shows the retirement's progress.
+                format: date-time
+                type: string
+              retiredSteps:
+                description: |-
+                  RetiredSteps records the PromotionSteps of a Bundle whose Graph was
+                  retired (condition GraphRetired=True). Deleting a finished Bundle's
+                  Graph deletes the PromotionSteps, PolicyGate instances and PRStatuses
+                  it created, so kro does not hold every finished Graph in memory
+                  (#1492). Rollback, promote, history, metrics, the CLI and the UI read
+                  these records where they read the steps of a Bundle that is still
+                  promoting.
+                items:
+                  description: RetiredStep is what a retired Bundle keeps of one of
+                    its PromotionSteps.
+                  properties:
+                    createdAt:
+                      description: CreatedAt is the PromotionStep's creationTimestamp.
+                      format: date-time
+                      type: string
+                    environment:
+                      description: Environment is the PromotionStep's spec.environment.
+                      type: string
+                    healthCheckExpiry:
+                      description: |-
+                        HealthCheckExpiry is the PromotionStep's status.healthCheckExpiry: set
+                        once its change merged and the health check started.
+                      format: date-time
+                      type: string
+                    message:
+                      description: Message is the PromotionStep's final status.message,
+                        cut to 512 bytes.
+                      maxLength: 512
+                      type: string
+                    name:
+                      description: Name is the PromotionStep's name.
+                      type: string
+                    prURL:
+                      description: PRURL is the PromotionStep's status.prURL.
+                      maxLength: 2048
+                      type: string
+                    state:
+                      description: State is the PromotionStep's final status.state.
+                      type: string
+                    stepType:
+                      description: StepType is the PromotionStep's spec.stepType.
+                      type: string
+                    verifiedAt:
+                      description: VerifiedAt is when the PromotionStep became Verified.
+                      format: date-time
+                      type: string
+                  required:
+                  - createdAt
+                  - environment
+                  - name
+                  type: object
+                maxItems: 1000
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
             type: object
+            x-kubernetes-validations:
+            - message: 'status.retiredAt cannot be removed: a retired Bundle stays
+                retired'
+              rule: '!has(oldSelf.retiredAt) || has(self.retiredAt)'
         type: object
     served: true
     storage: true
