@@ -52,9 +52,10 @@ type Config struct {
 	// Insecure sends plain HTTP to a host:port Endpoint. A URL Endpoint's
 	// scheme decides by itself.
 	Insecure bool
-	// SamplingRatio is the fraction of new traces sampled, 0 to 1. A trace
-	// started by an inbound request carrying a sampled traceparent is always
-	// recorded (parent-based).
+	// SamplingRatio is the fraction of traces sampled, 0 to 1, decided at
+	// each trace's root; its child spans follow (parent-based). Inbound
+	// requests start a new root linked to their traceparent (Handler), so a
+	// sampled traceparent does not force recording.
 	SamplingRatio float64
 	// ServiceVersion is the service.version resource attribute.
 	ServiceVersion string

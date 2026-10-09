@@ -352,7 +352,7 @@ tracing:
 | `tracing.enabled` | `--tracing-enabled` | Export traces. Default `false` |
 | `tracing.endpoint` | `--tracing-endpoint` | An `http://` or `https://` URL, or `host:port`. Empty uses `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` (set them with `controller.extraEnv`), else `localhost:4318` |
 | `tracing.insecure` | `--tracing-insecure` | Plain HTTP to a `host:port` endpoint. A URL's scheme decides by itself |
-| `tracing.samplingRatio` | `--tracing-sampling-ratio` | Fraction of new traces recorded, 0 to 1. A request that carries a sampled `traceparent` is always recorded |
+| `tracing.samplingRatio` | `--tracing-sampling-ratio` | Fraction of traces recorded, 0 to 1, decided at each trace's root (a reconcile or an inbound request); a span's children follow it. An inbound `traceparent` is linked, not trusted, so it does not force recording |
 
 Only OTLP over HTTP (protobuf, port 4318) is supported, not OTLP/gRPC. The standard
 `OTEL_EXPORTER_OTLP_*` variables for headers, certificates and timeouts apply, through

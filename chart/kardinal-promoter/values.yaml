@@ -278,8 +278,8 @@ tracing:
   endpoint: ""
   # -- Plain HTTP to a host:port endpoint (a URL's scheme decides by itself).
   insecure: false
-  # -- Fraction of new traces recorded, 0 to 1. Requests that carry a sampled
-  # traceparent are always recorded.
+  # -- Fraction of traces recorded, 0 to 1, decided at each trace's root. An
+  # inbound traceparent is linked, not trusted, so it does not force recording.
   samplingRatio: 0.1
 
 # -- NetworkPolicy for the controller Pod. Needs a CNI that enforces

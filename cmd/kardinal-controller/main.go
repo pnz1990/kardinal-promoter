@@ -274,8 +274,9 @@ func main() {
 	flag.BoolVar(&tracingCfg.Insecure, "tracing-insecure", os.Getenv("KARDINAL_TRACING_INSECURE") == "true",
 		"Send traces over plain HTTP to a host:port --tracing-endpoint. Chart value: tracing.insecure.")
 	flag.Float64Var(&tracingCfg.SamplingRatio, "tracing-sampling-ratio", 0.1,
-		"Fraction of new traces recorded, 0 to 1. A request carrying a sampled traceparent is always "+
-			"recorded. Chart value: tracing.samplingRatio.")
+		"Fraction of traces recorded, 0 to 1, decided once per trace at its root (a reconcile, or an inbound "+
+			"request: an inbound traceparent is linked, not trusted, so it does not force sampling). "+
+			"Chart value: tracing.samplingRatio.")
 
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}

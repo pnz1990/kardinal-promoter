@@ -175,7 +175,7 @@ kardinal version
 | `tracing.enabled` | `false` | Export OpenTelemetry traces over OTLP/HTTP ([Tracing](guides/monitoring.md#tracing-opentelemetry)) |
 | `tracing.endpoint` | `""` | OTLP/HTTP endpoint URL or `host:port`; empty uses `OTEL_EXPORTER_OTLP_ENDPOINT` |
 | `tracing.insecure` | `false` | Plain HTTP to a `host:port` endpoint |
-| `tracing.samplingRatio` | `0.1` | Fraction of new traces recorded (parent-based) |
+| `tracing.samplingRatio` | `0.1` | Fraction of traces recorded, decided at each trace's root; an inbound `traceparent` does not force recording |
 | `scheduleClock.enabled` / `.interval` | `true` / `"1m"` | ScheduleClock `kardinal-clock` in the release namespace. Each tick re-evaluates every PolicyGate instance |
 | `validatingAdmissionPolicy.enabled` | `true` | Deprecated, no effect. The CRD schemas validate these fields |
 
