@@ -363,3 +363,31 @@ func TestFleet_TargetRemovedMidRollout(t *testing.T) {
 	sim.steps["prod-ap"] = "Verified"
 	assert.Contains(t, sim.advance(), "post", "post waits only for the targets that remain")
 }
+
+// TestFleet_PerPromotionMetricChecks: a gate on a fleet environment that
+// reads a per-promotion MetricCheck gets an instance per target, each
+// admitted once the fleet's upstreams are Verified (the compact shape's rule,
+// #1543), and the fleet still paces the steps.
+//
+// Covers FLEET-06.
+func TestFleet_PerPromotionMetricChecks(t *testing.T) {
+	p := bigFleet(4, 1, nil)
+	gates := []kardinalv1alpha1.PolicyGate{makePolicyGate("errors", "default", "prod", `metrics["error-rate"].result == "Pass"`)}
+	metrics := []kardinalv1alpha1.MetricCheck{metricTemplate("error-rate", `rate(errors{v="{{ bundle.version }}"}[5m])`)}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-x7k2m", "app"),
+		PolicyGates: gates, MetricChecks: metrics})
+	require.NoError(t, err)
+	assertKroValid(t, res.Graph)
+	assert.Len(t, res.GateInstances, 4, "one gate instance per target")
+	var items []interface{}
+	for _, n := range res.Graph.Spec.Nodes {
+		if n.ID == graph.NodeMetricCheckData {
+			items = n.Def["items"].([]interface{})
+		}
+	}
+	var envs []string
+	for _, it := range items {
+		envs = append(envs, it.(map[string]interface{})["environment"].(string))
+	}
+	assert.ElementsMatch(t, []string{"prod-t00", "prod-t01", "prod-t02", "prod-t03"}, envs, "one MetricCheck instance per target")
+}

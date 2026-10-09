@@ -364,7 +364,8 @@ How a fleet is promoted:
   depends on are Verified, its own gates are ready and the fleet has a free place.
 - **Gates.** A PolicyGate that applies to the fleet environment (`kardinal.io/applies-to: prod`)
   applies to each target, which gets its own instance. A gate can also name one target
-  (`prod-eu-west`).
+  (`prod-eu-west`). A per-promotion MetricCheck that such a gate reads gets one instance per
+  target. Each instance starts once the fleet's upstreams are Verified.
 - **After the fleet.** An environment that depends on the fleet waits for every target to be
   Verified. A failed target holds it until that target is Verified. With `maxUnavailable` unset,
   the Bundle is `Failed` while the other targets keep promoting.
