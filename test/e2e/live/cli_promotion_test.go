@@ -12,6 +12,7 @@ import (
 	"io"
 	"os/user"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -242,16 +243,25 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	assert.Equal(t, "No pipelines found.\n  To get started, apply a Pipeline CRD:\n    kubectl apply -f examples/quickstart/pipeline.yaml\n  Or check CRD installation with: kardinal doctor\n",
 		c.Must(a.ns, "get", "pipelines", "nope"))
 	all := c.Must("", "get", "pipelines", "-A")
-	// The environment columns are the union over every namespace's Pipelines.
 	header := cliCellGap.Split(strings.SplitN(all, "\n", 2)[0], -1)
-	require.GreaterOrEqual(t, len(header), 7, all)
-	assert.Equal(t, []string{"NAMESPACE", "PIPELINE", "BUNDLE"}, header[:3])
-	assert.Equal(t, []string{"SUB", "AGE"}, header[len(header)-2:])
-	assert.Subset(t, header, []string{"TEST", "PROD"})
 	row = framework.TableRow(all, "NAMESPACE", a.ns)
 	require.NotNil(t, row, "-A lists the test's namespace:\n%s", all)
 	assert.Equal(t, pipelineName, row["PIPELINE"])
 	assert.Equal(t, b1, row["BUNDLE"])
+	if slices.Contains(header, "PROGRESS") {
+		// Another test's Pipeline in the cluster has more than 8
+		// environments: one summary row per Pipeline (CLI-GET-PIPELINES-02).
+		assert.Equal(t, []string{"NAMESPACE", "PIPELINE", "BUNDLE", "ENVS", "PROGRESS", "FURTHEST", "SUB", "AGE"}, header)
+		assert.Equal(t, "2", row["ENVS"])
+		assert.Equal(t, "1 Verified, 1 WaitingForMerge", row["PROGRESS"])
+		assert.Equal(t, "test", row["FURTHEST"])
+	} else {
+		// The environment columns are the union over every namespace's Pipelines.
+		require.GreaterOrEqual(t, len(header), 7, all)
+		assert.Equal(t, []string{"NAMESPACE", "PIPELINE", "BUNDLE"}, header[:3])
+		assert.Equal(t, []string{"SUB", "AGE"}, header[len(header)-2:])
+		assert.Subset(t, header, []string{"TEST", "PROD"})
+	}
 
 	var pipelines []v1alpha1.Pipeline
 	require.NoError(t, json.Unmarshal([]byte(c.Must(a.ns, "get", "pipelines", "-o", "json")), &pipelines))

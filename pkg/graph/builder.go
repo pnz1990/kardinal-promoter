@@ -261,8 +261,12 @@ func orderEnvironments(pipeline *kardinalv1alpha1.Pipeline, why map[string]map[s
 	deps := make(map[string][]string, len(envs)) // env → []dependsOn
 	for i, e := range envs {
 		var merged []string
+		// A set beside merged: a wave env has every env of the previous wave
+		// as an edge, and a linear scan per edge made that cubic (#1579 QA).
+		inMerged := map[string]bool{}
 		add := func(dep string, src edgeSource) {
-			if !containsStr(merged, dep) {
+			if !inMerged[dep] {
+				inMerged[dep] = true
 				merged = append(merged, dep)
 				if why != nil {
 					if why[e.Name] == nil {
