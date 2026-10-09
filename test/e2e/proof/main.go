@@ -5,12 +5,14 @@
 // live test covers must have passed in the suites that ran. It reads the
 // summary.json test/e2e/report wrote for each suite run and prints one line
 // per row: passed, failed, missing (the test should have run and did not),
-// not run (none of its suites ran here), known bug (its test skipped with
-// scale.KnownBug, action "xfail": it reproduces an open bug), unit (a
+// not run (none of its suites ran here), known bug (its test is an expected
+// failure, scale.KnownBug, action "xfail": it reproduces an open bug), unit (a
 // contract row; ci.yml runs its unit tests) or todo. A known bug whose issue
 // is closed is failed: with GITHUB_TOKEN set, proof asks the GitHub API
 // whether each one is still open (CI has the token). A row marked covered
-// whose test is an expected failure is failed too: mark it known-bug. It
+// whose test is an expected failure is failed too: mark it known-bug. A
+// known-bug row whose test passed is passed, and proof says to mark it
+// covered. It
 // exits 1 when a row failed or is missing, and with -complete also when a
 // row is todo, not run or a known bug.
 //
@@ -304,6 +306,9 @@ func run(root string, files []string, complete bool, outFile string) error {
 			byTier[tier][failed], byTier[tier][missing])
 	}
 	for _, r := range results {
+		if r.Status == "known-bug" && r.Result == passed {
+			fmt.Printf("    %s is marked known-bug but its tests passed: mark it covered in %s and remove scale.KnownBug\n", r.ID, coverage.File)
+		}
 		if r.Result == failed || r.Result == missing {
 			fmt.Printf("    %s %s %v\n", strings.ToUpper(r.Result), r.ID, r.Tests)
 		}

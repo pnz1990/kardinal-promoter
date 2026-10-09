@@ -20,6 +20,7 @@ func TestRead(t *testing.T) {
 		pass, fail, skip  int
 		knownBugs         int
 		pkgFailed         bool
+		crashed           bool
 		wantOut, wantInMD string
 	}{
 		{
@@ -65,6 +66,25 @@ func TestRead(t *testing.T) {
 			fail: 2, pkgFailed: true, wantInMD: "FAILED",
 		},
 		{
+			name: "an expected failure does not hide a test binary that timed out",
+			in: `{"Action":"run","Test":"TestScale_B"}
+{"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
+{"Action":"fail","Test":"TestScale_B"}
+{"Action":"run","Test":"TestScale_C"}
+{"Action":"output","Test":"TestScale_C","Output":"panic: test timed out after 1h30m0s\n"}
+{"Action":"fail"}`,
+			fail: 1, knownBugs: 1, pkgFailed: true, crashed: true, wantInMD: "FAILED",
+		},
+		{
+			name: "a crash reported outside any test still fails the run",
+			in: `{"Action":"run","Test":"TestScale_B"}
+{"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
+{"Action":"fail","Test":"TestScale_B"}
+{"Action":"output","Output":"fatal error: concurrent map writes\n"}
+{"Action":"fail"}`,
+			knownBugs: 1, pkgFailed: true, crashed: true, wantInMD: "FAILED",
+		},
+		{
 			name: "a skip still fails the run",
 			in: `{"Action":"pass","Test":"TestScale_A"}
 {"Action":"skip","Test":"TestScale_C"}
@@ -106,6 +126,7 @@ live/core_test.go:1: undefined: foo
 			assert.Equal(t, tt.skip, s.count("skip"))
 			assert.Equal(t, tt.knownBugs, s.knownBugs())
 			assert.Equal(t, tt.pkgFailed, s.pkgFailed)
+			assert.Equal(t, tt.crashed, s.crashed)
 			if tt.wantOut != "" {
 				assert.Contains(t, out.String(), tt.wantOut)
 			}

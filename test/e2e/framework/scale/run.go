@@ -123,7 +123,8 @@ func KnownBug(t *testing.T, issue int, what string) {
 	})
 }
 
-// KnownBugMessage is the skip message test/e2e/report recognizes.
+// KnownBugMessage is the line KnownBug logs, which test/e2e/report
+// recognizes.
 func KnownBugMessage(issue int, what string) string {
 	return fmt.Sprintf("KNOWN BUG #%d https://github.com/pnz1990/kardinal-promoter/issues/%d: %s", issue, issue, what)
 }

@@ -3,7 +3,8 @@
 
 // Command report reads `go test -json` from stdin, prints the test output as
 // it arrives, and ends with a summary. It exits 1 when a test failed, when a
-// test skipped (a skipped live test proves nothing), or when no test ran.
+// test skipped (a skipped live test proves nothing), when no test ran, or
+// when the test binary crashed or timed out (a test started and never ended).
 // A scale test that reproduces an open bug (scale.KnownBug) is an expected
 // failure: when it fails it is listed as a known bug (action "xfail") and
 // does not fail the run; when it passes, scale.KnownBug fails it with "KNOWN
@@ -49,6 +50,10 @@ type result struct {
 // The lines scale.KnownBug logs, as testing prints a t.Log line (indented
 // "file.go:N: "): the bug the test reproduces, and the line its cleanup
 // adds when the test passed anyway. Only TestScale_ tests use KnownBug.
+// crashLine is what the Go runtime prints when the test binary dies: a
+// timeout or a panic outside a test's own recovery.
+var crashLine = regexp.MustCompile(`^(panic: test timed out|panic: |fatal error: )`)
+
 var (
 	knownBug      = regexp.MustCompile(`^\s+[\w./-]+\.go:[0-9]+: KNOWN BUG #([0-9]+) https://github\.com/pnz1990/kardinal-promoter/issues/[0-9]+: `)
 	knownBugFixed = regexp.MustCompile(`^\s+[\w./-]+\.go:[0-9]+: KNOWN BUG #[0-9]+ FIXED`)
@@ -59,6 +64,9 @@ type summary struct {
 	// pkgFailed is set when a package failed outside any test (a build error,
 	// a panic in TestMain, a timeout).
 	pkgFailed bool
+	// crashed is set when the test binary panicked or timed out, or a test
+	// started and never ended: the run proves nothing, xfails or not.
+	crashed bool
 }
 
 // file is the -out JSON: test/e2e/proof reads one per suite run.
@@ -84,7 +92,7 @@ func (s *summary) knownBugs() int { return s.count("xfail") }
 // ok reports whether the run proves anything: tests ran and all passed.
 func (s *summary) ok() bool {
 	// go test fails the package when a test fails, an expected failure too.
-	pkgOK := !s.pkgFailed || (s.count("xfail") > 0 && s.count("fail") == 0)
+	pkgOK := !s.crashed && (!s.pkgFailed || (s.count("xfail") > 0 && s.count("fail") == 0))
 	return pkgOK && s.count("pass") > 0 && s.count("fail") == 0 && s.count("skip") == 0
 }
 
@@ -94,6 +102,10 @@ func read(in io.Reader, out io.Writer) (*summary, error) {
 	s := &summary{}
 	bugs, fixed := map[string]int{}, map[string]bool{}
 	pkgFail := false
+	// running holds the tests that started and have not ended: a test
+	// binary that crashed or timed out leaves them there.
+	running := map[string]bool{}
+	var order []string
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for sc.Scan() {
@@ -104,8 +116,16 @@ func read(in io.Reader, out io.Writer) (*summary, error) {
 			continue
 		}
 		switch ev.Action {
+		case "run":
+			if ev.Test != "" && !running[ev.Test] {
+				running[ev.Test] = true
+				order = append(order, ev.Test)
+			}
 		case "output":
 			_, _ = fmt.Fprint(out, ev.Output)
+			if crashLine.MatchString(ev.Output) {
+				s.crashed = true
+			}
 			if !strings.HasPrefix(ev.Test, "TestScale_") {
 				break
 			}
@@ -128,7 +148,16 @@ func read(in io.Reader, out io.Writer) (*summary, error) {
 			}
 			delete(bugs, ev.Test)
 			delete(fixed, ev.Test)
+			delete(running, ev.Test)
 			s.results = append(s.results, r)
+		}
+	}
+	// A test that never ended failed: the binary crashed or timed out
+	// under it, and its expected failure (if any) does not count.
+	for _, t := range order {
+		if running[t] {
+			s.results = append(s.results, result{Test: t, Action: "fail"})
+			s.crashed = true
 		}
 	}
 	s.pkgFailed = pkgFail
