@@ -513,6 +513,7 @@ func main() {
 		AllowedRepositories: allowedRepos,
 		GitClient:           gitClient,
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
+		RemoteClusters:      &healthpkg.RemoteClusters{},
 		Recorder:            eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
