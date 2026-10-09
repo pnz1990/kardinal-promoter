@@ -594,6 +594,38 @@ func TestUIAPI_ListPipelines_PausedBadge(t *testing.T) {
 	assert.Equal(t, "my-app", resp[0].Name)
 }
 
+// TestUIAPI_ListPipelines_DeploymentMetrics: the pipeline list carries the
+// controller's status.deploymentMetrics (change failure rate and time to
+// restore included) as written, and omits it when the Pipeline has none.
+func TestUIAPI_ListPipelines_DeploymentMetrics(t *testing.T) {
+	dm := &v1alpha1.PipelineDeploymentMetrics{SampleSize: 4, Deployments: 4, FailedDeployments: 1,
+		ChangeFailureRateMillis: 250, MeanTimeToRestoreMinutes: 42, RestoredFailures: 1}
+	with := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"},
+		Spec:   v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}},
+		Status: v1alpha1.PipelineStatus{Phase: "Ready", DeploymentMetrics: dm}}
+	without := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(with, without).Build()
+	mux := http.NewServeMux()
+	newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var raw []map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	require.Len(t, raw, 2)
+	byName := map[string]map[string]interface{}{}
+	for _, p := range raw {
+		byName[p["name"].(string)] = p
+	}
+	got, ok := byName["a"]["deploymentMetrics"].(map[string]interface{})
+	require.True(t, ok, "deploymentMetrics: %v", byName["a"])
+	assert.Equal(t, map[string]interface{}{"sampleSize": 4.0, "deployments": 4.0, "failedDeployments": 1.0,
+		"changeFailureRateMillis": 250.0, "meanTimeToRestoreMinutes": 42.0, "restoredFailures": 1.0}, got)
+	assert.NotContains(t, byName["b"], "deploymentMetrics")
+}
+
 // TestUIAPI_ListPipelines_OpsFields verifies that the operations table fields
 // (blockerCount, failedStepCount, inventoryAgeDays, lastMergedAt) are
 // populated correctly from active Bundle, PolicyGate, and PromotionStep CRDs (#462).
@@ -1246,4 +1278,131 @@ func TestParseUIImageRef(t *testing.T) {
 			assert.Equal(t, tc.wantDigest, ref.Digest, "Digest")
 		})
 	}
+}
+
+// TestUIAPI_ListPipelines_Deployed checks the fleet board fields: per
+// environment the Bundle it runs (the newest step that landed its change),
+// that Bundle's version and when it was Verified, and the active Bundle's
+// version. A step that has not landed (Promoting) does not change what an
+// environment runs; an environment that never got a change is absent.
+func TestUIAPI_ListPipelines_Deployed(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	p := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{
+			{Name: "test"}, {Name: "uat", DependsOn: []string{"test"}}, {Name: "prod", DependsOn: []string{"uat"}},
+		}},
+	}
+	bundle := func(name, tag string, created time.Time) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: metav1.NewTime(created)},
+			Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app",
+				Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/x/app", Tag: tag}}},
+			Status: v1alpha1.BundleStatus{Phase: "Promoting"},
+		}
+	}
+	step := func(bundle, env, state string, created time.Time, verified *time.Time) *v1alpha1.PromotionStep {
+		ps := &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: bundle + "-" + env, Namespace: "default", CreationTimestamp: metav1.NewTime(created)},
+			Spec:       v1alpha1.PromotionStepSpec{BundleName: bundle, Environment: env, PipelineName: "app"},
+			Status:     v1alpha1.PromotionStepStatus{State: state},
+		}
+		if verified != nil {
+			ps.Status.Conditions = []metav1.Condition{{Type: "Verified", Status: metav1.ConditionTrue,
+				Reason: "Verified", LastTransitionTime: metav1.NewTime(*verified)}}
+		}
+		return ps
+	}
+	v1Test, v1Uat, v2Test := t0.Add(time.Minute), t0.Add(2*time.Minute), t0.Add(time.Hour+time.Minute)
+	objs := []client.Object{p,
+		bundle("app-v1", "1.0.0", t0), bundle("app-v2", "2.0.0", t0.Add(time.Hour)),
+		step("app-v1", "test", "Verified", t0, &v1Test),
+		step("app-v1", "uat", "Verified", t0, &v1Uat),
+		step("app-v2", "test", "Verified", t0.Add(time.Hour), &v2Test),
+		step("app-v2", "uat", "Promoting", t0.Add(time.Hour), nil),
+	}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs...).Build()
+	mux := http.NewServeMux()
+	newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiPipelineResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+
+	tests := []struct {
+		env  string
+		want *uiDeployed
+	}{
+		{"test", &uiDeployed{Bundle: "app-v2", Version: "2.0.0", VerifiedAt: v2Test.Format(time.RFC3339)}},
+		{"uat", &uiDeployed{Bundle: "app-v1", Version: "1.0.0", VerifiedAt: v1Uat.Format(time.RFC3339)}},
+		{"prod", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.env, func(t *testing.T) {
+			got, ok := resp[0].Deployed[tt.env]
+			if tt.want == nil {
+				assert.False(t, ok, "never deployed: absent")
+				return
+			}
+			require.True(t, ok)
+			assert.Equal(t, *tt.want, got)
+		})
+	}
+	assert.Equal(t, "app-v2", resp[0].ActiveBundleName)
+	assert.Equal(t, "2.0.0", resp[0].ActiveBundleVersion)
+}
+
+// TestUIAPI_ListPipelines_DeployedImageAndConfig (#1519 QA, #1353): image
+// and config Bundles do not supersede each other, so an environment whose last
+// change was an image Bundle also reports the config commit of the last config
+// Bundle there (configFrom), and one whose last change was a config Bundle the
+// images of the last image Bundle (imagesFrom), as kardinal status does.
+func TestUIAPI_ListPipelines_DeployedImageAndConfig(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	p := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec:       v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}}},
+	}
+	img := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-img", Namespace: "default", CreationTimestamp: metav1.NewTime(t0)},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app", Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/x/app", Tag: "1.4.0"}}}}
+	cfg := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-cfg", Namespace: "default", CreationTimestamp: metav1.NewTime(t0.Add(time.Hour))},
+		Spec: v1alpha1.BundleSpec{Type: "config", Pipeline: "app", ConfigRef: &v1alpha1.ConfigRef{GitRepo: "https://git/x", CommitSHA: "abcdef0123456789"}}}
+	step := func(b, env string, at time.Time) *v1alpha1.PromotionStep {
+		return &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: b + "-" + env, Namespace: "default", CreationTimestamp: metav1.NewTime(at)},
+			Spec:       v1alpha1.PromotionStepSpec{BundleName: b, Environment: env, PipelineName: "app"},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified", Conditions: []metav1.Condition{{Type: "Verified",
+				Status: metav1.ConditionTrue, Reason: "Verified", LastTransitionTime: metav1.NewTime(at)}}},
+		}
+	}
+	// test: config then image (image last). prod: image then config (config last).
+	objs := []client.Object{p, img, cfg,
+		step("app-cfg", "test", t0.Add(time.Hour)), step("app-img", "test", t0.Add(2*time.Hour)),
+		step("app-img", "prod", t0.Add(time.Minute)), step("app-cfg", "prod", t0.Add(3*time.Hour)),
+	}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs...).Build()
+	mux := http.NewServeMux()
+	newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiPipelineResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+
+	test := resp[0].Deployed["test"]
+	assert.Equal(t, "app-img", test.Bundle)
+	assert.Equal(t, "1.4.0", test.Version)
+	assert.Equal(t, "app-cfg", test.ConfigFrom)
+	assert.Equal(t, "config abcdef0", test.ConfigVersion)
+	assert.Empty(t, test.ImagesFrom)
+
+	prod := resp[0].Deployed["prod"]
+	assert.Equal(t, "app-cfg", prod.Bundle)
+	assert.Equal(t, "config abcdef0", prod.Version)
+	assert.Equal(t, "app-img", prod.ImagesFrom)
+	assert.Equal(t, "1.4.0", prod.ImagesVersion)
+	assert.Empty(t, prod.ConfigFrom)
 }

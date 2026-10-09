@@ -41,7 +41,8 @@ When --env is the pipeline's last environment and --days is 30 (the defaults,
 whether the flags are given or not), the controller's metrics from
 Pipeline.status.deploymentMetrics are shown instead when present: rollouts_last_30d, p50/p90_commit_to_prod,
 auto_rollback_rate, operator_intervention_rate and stale_prod_days, over
-the last 30 Bundles Verified in the last environment.
+the last 30 Bundles Verified in the last environment, and change_failure_rate
+and time_to_restore (DORA stability) over the last 30 deployments to it.
 
 Example:
   kardinal metrics --pipeline nginx-demo
@@ -250,13 +251,30 @@ func renderFromCRD(w interface{ Write([]byte) (int, error) }, pipelineName, env 
 		pipelineName, dm.SampleSize, env)
 	_, _ = fmt.Fprintf(tw, "target_env\t%s\t\n", env)
 	_, _ = fmt.Fprintf(tw, "rollouts_last_30d\t%d\t\n", dm.RolloutsLast30Days)
-	_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t%dm\t\n", dm.P50CommitToProdMinutes)
-	_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t%dm\t\n", dm.P90CommitToProdMinutes)
+	if dm.SampleSize > 0 {
+		_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t%dm\t\n", dm.P50CommitToProdMinutes)
+		_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t%dm\t\n", dm.P90CommitToProdMinutes)
+	} else {
+		_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t-\t(nothing Verified yet)\n")
+		_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t-\t(nothing Verified yet)\n")
+	}
 	_, _ = fmt.Fprintf(tw, "auto_rollback_rate\t%.1f%%\t(%d per thousand)\n",
 		float64(dm.AutoRollbackRateMillis)/10, dm.AutoRollbackRateMillis)
 	_, _ = fmt.Fprintf(tw, "operator_intervention_rate\t%.1f%%\t(%d per thousand)\n",
 		float64(dm.OperatorInterventionRateMillis)/10, dm.OperatorInterventionRateMillis)
-	_, _ = fmt.Fprintf(tw, "stale_prod_days\t%d\t\n", dm.StaleProdDays)
+	if dm.SampleSize > 0 {
+		_, _ = fmt.Fprintf(tw, "stale_prod_days\t%d\t\n", dm.StaleProdDays)
+	} else {
+		_, _ = fmt.Fprintf(tw, "stale_prod_days\t-\t(nothing Verified yet)\n")
+	}
+	_, _ = fmt.Fprintf(tw, "change_failure_rate\t%.1f%%\t(%d of %d deployments failed)\n",
+		float64(dm.ChangeFailureRateMillis)/10, dm.FailedDeployments, dm.Deployments)
+	if dm.RestoredFailures > 0 {
+		_, _ = fmt.Fprintf(tw, "time_to_restore\t%dm\t(mean of %d restored failures)\n",
+			dm.MeanTimeToRestoreMinutes, dm.RestoredFailures)
+	} else {
+		_, _ = fmt.Fprintf(tw, "time_to_restore\t-\t(no restored failure)\n")
+	}
 	if dm.ComputedAt != nil {
 		_, _ = fmt.Fprintf(tw, "metrics_age\t%s\t(last computed by controller)\n",
 			formatDuration(now.Sub(dm.ComputedAt.Time)))

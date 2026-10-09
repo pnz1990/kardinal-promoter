@@ -265,3 +265,25 @@ func VerifiedTime(s *v1alpha1.PromotionStep) (time.Time, bool) {
 	}
 	return cond.LastTransitionTime.Time, true
 }
+
+// SupersededMessage starts the message of every PromotionStep the
+// supersession of its Bundle cancels (the PromotionStep reconciler writes
+// it), so readers can tell such a step from one that failed on its own.
+func SupersededMessage(bundle string) string {
+	return "bundle " + bundle + " was superseded"
+}
+
+// CancelledBySupersession reports whether s ended because its Bundle was
+// superseded, not because its promotion failed: it is Failed with
+// SupersededMessage, or still in a state the supersession guard cancels
+// (it has not run yet). A RollingBack or AbortedByAlarm step, or one that
+// failed before the supersession, is not.
+func CancelledBySupersession(s *v1alpha1.PromotionStep) bool {
+	switch s.Status.State {
+	case "Failed":
+		return strings.HasPrefix(s.Status.Message, SupersededMessage(s.Spec.BundleName))
+	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking":
+		return true
+	}
+	return false
+}
