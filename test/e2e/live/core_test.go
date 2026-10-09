@@ -187,6 +187,9 @@ func TestCore_NewerBundleSupersedes(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, newer, "prod", "Verified", promoteTimeout)
 	assert.Equal(t, fixtures.Image+":"+fixtures.V3, e.DeploymentImage(t, a.ns, fixtures.Workload("prod")))
 	e.WaitBundlePhase(t, a.ns, newer, "Verified", time.Minute)
-	assert.Equal(t, "closed", e.WaitPRState(t, a.repo, olderPR.Number, "closed", time.Second).State,
+	// The older PR was closed above; this reads it once more. One list of
+	// the repo's PRs can take seconds on a loaded git server, so the read
+	// gets 30s, not 1s.
+	assert.Equal(t, "closed", e.WaitPRState(t, a.repo, olderPR.Number, "closed", 30*time.Second).State,
 		"the superseded PR was never merged")
 }
