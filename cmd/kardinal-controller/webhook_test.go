@@ -475,7 +475,7 @@ func prJSON(provider string, open bool) string {
 			return `{"state":"opened"}`
 		}
 		return `{"state":"merged"}`
-	case "bitbucket":
+	case "bitbucket", "bitbucket-datacenter":
 		if open {
 			return `{"state":"OPEN"}`
 		}
