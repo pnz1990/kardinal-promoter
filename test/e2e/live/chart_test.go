@@ -2504,7 +2504,7 @@ func TestChart_RestartMidStep(t *testing.T) {
 	}
 	assert.Less(t, exited, 10*time.Second, "with no request in flight the controller exits within seconds of the SIGTERM, long before the 60s SIGKILL")
 
-	promotion := fmt.Sprintf("kardinal/%s/prod", bundle)
+	promotion := prHead(a.ns, bundle, "prod") // kardinal/<namespace hash>/<bundle>/prod since #1504
 	kustomization, err := e.Git.ReadFile(ctx, a.repo, promotion, fixtures.Path("prod")+"/kustomization.yaml")
 	require.NoError(t, err, "the step pushed %s before the restart", promotion)
 	assert.Contains(t, string(kustomization), fixtures.V2)
