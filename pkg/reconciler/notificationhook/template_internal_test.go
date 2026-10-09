@@ -4,7 +4,7 @@
 package notificationhook
 
 import (
-	"os"
+	"errors"
 	"runtime"
 	"strconv"
 	"strings"
@@ -141,8 +141,7 @@ func TestRenderTemplate_TruncatesData(t *testing.T) {
 // TestRenderTemplate_CountedBuiltins: the comparison, logic and indexing
 // builtins still work, and every call counts against maxFuncCalls.
 func TestRenderTemplate_CountedBuiltins(t *testing.T) {
-	// The count, not the deadline, must stop the long bodies (TestMain
-	// raises the deadline for every test but the ones about it).
+	// The count, not the 500 ms deadline, stops the long bodies.
 	data := &TemplateData{Event: "Bundle.Failed", Environment: "prod", Message: "abc"}
 	tests := []struct{ body, want, err string }{
 		{body: `{{if eq .Environment "prod"}}P{{end}}`, want: "P"},
@@ -203,12 +202,13 @@ func TestFuncBudget_Stopped(t *testing.T) {
 	assert.ErrorIs(t, err, errRenderTime)
 }
 
-// TestRenderTemplate_WorstCaseTime renders the slowest bodies that fit in
-// 16 KiB: the most calls, and the most bytes built. Each finishes in under
-// 50 ms and leaves no goroutine behind: Execute runs on the caller's
-// goroutine and the timer is stopped.
+// TestRenderTemplate_WorstCaseTime renders the costliest bodies that fit in
+// 16 KiB: the most calls, the most bytes built, nested escapes, and the data
+// as every operand. The budgets, not the clock, decide each: a render either
+// completes or stops on a call, byte or argument budget, never on the
+// deadline (500 ms, a backstop). Execute runs on the caller's goroutine and
+// the timer is stopped, so no goroutine is left behind.
 func TestRenderTemplate_WorstCaseTime(t *testing.T) {
-	useProductionDeadline(t)
 	data := &TemplateData{Message: strings.Repeat("<m>", 60<<10)}
 	big := "(print" + strings.Repeat(" .Message", 15) + ")"
 	bodies := map[string]string{
@@ -217,17 +217,22 @@ func TestRenderTemplate_WorstCaseTime(t *testing.T) {
 		"nested escapes":    strings.Repeat(`{{len (json (js (html (urlquery .Message))))}}`, 16384/50),
 		"print of the data": "{{print" + strings.Repeat(" .", 16384/2-8) + "}}",
 	}
+	budget := func(err error) bool {
+		if err == nil || errors.Is(err, errTooManyCalls) || errors.Is(err, errFuncBudget) || errors.Is(err, errBodyTooLarge) {
+			return true
+		}
+		msg := err.Error()
+		return strings.Contains(msg, "input is over") || strings.Contains(msg, "takes strings, numbers and bools only")
+	}
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
 			require.LessOrEqual(t, len(body), 16384)
 			tmpl, err := parseBodyTemplate(body)
 			require.NoError(t, err)
 			before := runtime.NumGoroutine()
-			start := time.Now()
-			_, _ = renderTemplate(tmpl, data, "text/plain")
-			elapsed := time.Since(start)
-			assert.Less(t, elapsed, 50*time.Millisecond)
-			time.Sleep(maxRenderTime + 5*time.Millisecond) // a timer that fired would have run by now
+			_, err = renderTemplate(tmpl, data, "text/plain")
+			assert.NotErrorIs(t, err, errRenderTime, "a budget stops it, not the clock")
+			assert.True(t, budget(err), "completes or stops on a budget: %v", err)
 			assert.LessOrEqual(t, runtime.NumGoroutine(), before, "no goroutine left after Execute")
 		})
 	}
@@ -269,14 +274,14 @@ func TestRenderTemplate_RefusesNonScalarArguments(t *testing.T) {
 // real timer sets the stopped flag, so the next call or write ends the
 // render with errRenderTime. That error is retryable: not errTemplate.
 func TestRenderTemplate_DeadlineStopsARender(t *testing.T) {
-	useProductionDeadline(t)
+	useShortDeadline(t)
 	for name, body := range map[string]string{
 		"next call":  `{{slow}}{{print "x"}}`,
 		"next write": `{{slow}}after`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			tmpl, err := template.New("body").Option("missingkey=error").Funcs(templateFuncs(nil)).
-				Funcs(template.FuncMap{"slow": func() string { time.Sleep(maxRenderTime + 15*time.Millisecond); return "" }}).
+				Funcs(template.FuncMap{"slow": func() string { time.Sleep(renderDeadline + 15*time.Millisecond); return "" }}).
 				Parse(body)
 			require.NoError(t, err)
 			start := time.Now()
@@ -289,19 +294,11 @@ func TestRenderTemplate_DeadlineStopsARender(t *testing.T) {
 	}
 }
 
-// TestMain gives renders a generous deadline: under -race and a loaded CI
-// machine a legitimate render can pass 20 ms, and a test that expects a
-// result must not fail on the clock. The tests about the deadline itself
-// use the production value (useProductionDeadline). No test in the package
-// runs in parallel with those.
-func TestMain(m *testing.M) {
-	renderDeadline = 10 * time.Second
-	os.Exit(m.Run())
-}
-
-// useProductionDeadline sets the 20 ms production deadline for one test.
-func useProductionDeadline(t *testing.T) {
+// useShortDeadline makes the render deadline 20 ms for one test about the
+// deadline itself, so it does not wait the production 500 ms. No test in the
+// package runs in parallel with it.
+func useShortDeadline(t *testing.T) {
 	t.Helper()
-	renderDeadline = maxRenderTime
-	t.Cleanup(func() { renderDeadline = 10 * time.Second })
+	renderDeadline = 20 * time.Millisecond
+	t.Cleanup(func() { renderDeadline = maxRenderTime })
 }
