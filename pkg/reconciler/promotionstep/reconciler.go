@@ -238,7 +238,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	base := ps.DeepCopy()
 	skipped, recorded := recordSkippedHooks(&ps, r.now().UTC()), recordHookRuns(&ps)
 	if skipped || recorded {
-		if err := r.Status().Patch(ctx, &ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+		// With the resourceVersion read: a merge patch of status.hookRecords
+		// from a stale copy would drop records another reconcile wrote (QA
+		// #1493). A conflict reads the step again.
+		err := r.Status().Patch(ctx, &ps, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		switch {
+		case apierrors.IsConflict(err):
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		case err != nil && !apierrors.IsNotFound(err):
 			return ctrl.Result{}, fmt.Errorf("patch %s condition: %w", ConditionHooksSkipped, err)
 		}
 	}

@@ -141,6 +141,10 @@ func TestHookRun_FinalizerHoldsRunningJob(t *testing.T) {
 	assert.True(t, controllerutil.ContainsFinalizer(hr, hookrun.Finalizer), "held briefly so the mirror carries the result")
 	assert.Positive(t, res.RequeueAfter)
 
+	// A reconcile within the grace period keeps the finalizer (QA #1493).
+	h.reconcile()
+	assert.True(t, controllerutil.ContainsFinalizer(h.hookRun(), hookrun.Finalizer), "still held within the grace period")
+
 	h.now = h.now.Add(31 * time.Second)
 	h.reconcile()
 	var gone v1alpha1.HookRun
