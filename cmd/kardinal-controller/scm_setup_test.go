@@ -67,4 +67,3 @@ func TestBuildControllerSCM_DataCenter(t *testing.T) {
 	_, _, _, err = buildControllerSCM(controllerSCMConfig{providerType: "bitbucket-datacenter", token: "t", allowed: allowed})
 	assert.Error(t, err, "Data Center needs --scm-api-url")
 }
-

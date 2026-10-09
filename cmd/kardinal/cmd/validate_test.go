@@ -311,7 +311,8 @@ func TestValidate_AllowedRepositories(t *testing.T) {
 			content: secretRefDoc("", "team-a"), wantOut: "✓ f.yaml is valid"},
 		{name: "flag not set", content: validPipelineDoc, wantOut: "✓ f.yaml is valid"},
 		{name: "bad pattern", args: []string{"--allowed-repositories", "github.com/[x"}, content: validPipelineDoc,
-			wantOut: "", wantErr: true},		// --scm-provider bitbucket-datacenter matches KEY/slug, as the
+			wantOut: "", wantErr: true},
+		// --scm-provider bitbucket-datacenter matches KEY/slug, as the
 		// controller does; without it the /scm/ path is not KEY/slug.
 		{name: "data center", args: []string{"--allowed-repositories", "git.example.com/PLAT/*", "--scm-provider", "bitbucket-datacenter"},
 			content: strings.ReplaceAll(validPipelineDoc, "https://github.com/o/r", "https://git.example.com/scm/PLAT/web.git"), wantOut: "✓ f.yaml is valid"},
