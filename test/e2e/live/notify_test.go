@@ -132,8 +132,10 @@ func waitHook(t *testing.T, e *framework.Env, ns, name, what string, cond func(v
 	return &h
 }
 
-// annotate changes an annotation on obj (a Bundle, a hook): a write the
-// controller sees, with no other effect.
+// annotate changes an annotation on obj (a Bundle, a hook, a PromotionStep):
+// a write the controller sees, with no other effect. It is
+// kardinal.io/force-recheck, the one change the graph-objects admission
+// policy lets a user make on a PromotionStep.
 func annotate(t *testing.T, e *framework.Env, obj client.Object) {
 	t.Helper()
 	ctx := context.Background()
@@ -143,7 +145,7 @@ func annotate(t *testing.T, e *framework.Env, obj client.Object) {
 	if ann == nil {
 		ann = map[string]string{}
 	}
-	ann["e2e.kardinal.io/poke"] = time.Now().UTC().Format(time.RFC3339Nano)
+	ann["kardinal.io/force-recheck"] = time.Now().UTC().Format(time.RFC3339Nano)
 	obj.SetAnnotations(ann)
 	require.NoError(t, e.Client.Patch(ctx, obj, patch))
 }

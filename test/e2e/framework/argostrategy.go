@@ -20,6 +20,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // ControllerServiceAccount is the controller's ServiceAccount in
@@ -137,4 +139,21 @@ func ChartApplicationRules(t *testing.T, set ...string) []rbacv1.PolicyRule {
 		}
 	}
 	return rules
+}
+
+// AsController returns a client that acts as the controller's ServiceAccount
+// (impersonation). The chart's graph-objects admission policy lets only the
+// promotion Graph and kardinal's controllers create or change PromotionSteps
+// and PRStatuses, cluster admins included, so a test that stands in for the
+// controller writes through it.
+func (e *Env) AsController(t *testing.T) client.Client {
+	t.Helper()
+	cfg := rest.CopyConfig(e.Config)
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:" + ControllerNamespace + ":" + ControllerServiceAccount,
+		Groups: []string{"system:serviceaccounts", "system:serviceaccounts:" + ControllerNamespace, "system:authenticated"}}
+	c, err := client.New(cfg, client.Options{Scheme: e.Client.Scheme()})
+	if err != nil {
+		t.Fatalf("controller client: %v", err)
+	}
+	return c
 }
