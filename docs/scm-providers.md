@@ -564,6 +564,9 @@ the `helm upgrade` in [Upgrade](installation.md#upgrade) with `--set github.toke
      --namespace <pipeline-namespace> \
      --from-literal=token=<NEW_TOKEN> \
      --dry-run=client -o yaml | kubectl apply -f -
+   # A Secret a Pipeline names stays labelled referenceable (docs/guides/security.md).
+   kubectl label secret <pipeline-git-secret> --namespace <pipeline-namespace> \
+     kardinal.io/referenceable=true --overwrite
    ```
 4. Within 30 seconds the controller picks up the change. No controller restart is needed.
    Promotions in flight are not interrupted — the atomic swap completes before the next

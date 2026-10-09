@@ -1,7 +1,7 @@
 # Definition of Done
 
 > This is the north star. The project is complete when every journey below passes end-to-end.
-> Every agent reads this document before starting work.
+> Read this before working on a journey.
 > Every feature is implemented to make these journeys pass — not to satisfy internal specs.
 > If a journey fails, the project is not done, regardless of what the code says.
 
@@ -36,6 +36,7 @@ kardinal version
 # 3. Create git credentials in the Pipeline's namespace (default)
 kubectl create secret generic github-token \
   --from-literal=token=$GITHUB_PAT
+kubectl label secret github-token kardinal.io/referenceable=true
 
 # 4. Apply the Pipeline
 kubectl apply -f examples/quickstart/pipeline.yaml
