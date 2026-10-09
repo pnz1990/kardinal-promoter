@@ -340,13 +340,14 @@ func TestNotify_Authorization(t *testing.T) {
 	e := framework.New(t)
 	rcv := framework.NewReceiver(t)
 	a := holdApp(t, e, e.Namespace(t), pipelineName)
-	holdBundle(t, a, pipelineName)
 	token := "T0E2E/B0E2E/" + a.ns
 	ev := v1alpha1.NotificationEventPolicyGateBlocked
 
+	// The hooks exist before the event: a new hook sends nothing older.
 	newHook(t, e, a.ns, "bearer", rcv.URL(a.ns+"-bearer", "kardinal-events"), "Bearer ${ALERT_TOKEN}", "", ev)
 	newHook(t, e, a.ns, "slack", rcv.URL(a.ns+"-slack", "services/"+token), "", "", ev)
 	newHook(t, e, a.ns, "refused", "http://127.0.0.1:8082/services/"+token, "", "", ev)
+	holdBundle(t, a, pipelineName)
 
 	bearer := waitRecords(t, rcv, a.ns+"-bearer", 1, time.Minute)[0]
 	assert.Equal(t, "Bearer ${ALERT_TOKEN}", bearer.Header("Authorization"), "sent verbatim")
@@ -415,10 +416,9 @@ func TestNotify_Egress(t *testing.T) {
 	e := framework.New(t)
 	rcv := framework.NewReceiver(t)
 	a := holdApp(t, e, e.Namespace(t), pipelineName)
-	_, gate := holdBundle(t, a, pipelineName)
-	key := gateKey(gate)
 	ev := v1alpha1.NotificationEventPolicyGateBlocked
 
+	// The hooks exist before the event: a new hook sends nothing older.
 	// 169.254.1.1 is link-local but not a metadata endpoint: the test must not
 	// reach a real one if the guard were missing.
 	refused := map[string][2]string{
@@ -433,6 +433,8 @@ func TestNotify_Egress(t *testing.T) {
 	rcv.Fail(t, a.ns+"-redirect", http.StatusFound, 0, rcv.URL(a.ns+"-target", "hook"))
 	newHook(t, e, a.ns, "redirect", rcv.URL(a.ns+"-redirect", "hook"), "", "", ev)
 	newHook(t, e, a.ns, "allowed", rcv.URL(a.ns, "hook"), "", "", ev)
+	_, gate := holdBundle(t, a, pipelineName)
+	key := gateKey(gate)
 
 	attempt1 := fmt.Sprintf("delivery of %s failed (attempt 1 of 10): ", key)
 	for name, c := range refused {
@@ -468,10 +470,11 @@ func TestNotify_RetryBackoff(t *testing.T) {
 	e := framework.New(t)
 	rcv := framework.NewReceiver(t)
 	a := holdApp(t, e, e.Namespace(t), pipelineName)
+	rcv.Fail(t, a.ns, http.StatusServiceUnavailable, 0, "")
+	// The hook exists before the event: a new hook sends nothing older.
+	newHook(t, e, a.ns, "retry", rcv.URL(a.ns, "hook"), "", "", v1alpha1.NotificationEventPolicyGateBlocked)
 	bundle, gate := holdBundle(t, a, pipelineName)
 	key := gateKey(gate)
-	rcv.Fail(t, a.ns, http.StatusServiceUnavailable, 0, "")
-	newHook(t, e, a.ns, "retry", rcv.URL(a.ns, "hook"), "", "", v1alpha1.NotificationEventPolicyGateBlocked)
 
 	// attempt waits for delivery n, changing the Bundle on every poll: each
 	// change reconciles the hook, and none may POST before nextRetryAt.
@@ -549,10 +552,11 @@ func TestNotify_GiveUp(t *testing.T) {
 	e := framework.New(t)
 	rcv := framework.NewReceiver(t)
 	a := holdApp(t, e, e.Namespace(t), pipelineName, "other")
+	rcv.Fail(t, a.ns, http.StatusServiceUnavailable, 0, "")
+	// The hook exists before the event: a new hook sends nothing older.
+	newHook(t, e, a.ns, "giveup", rcv.URL(a.ns, "hook"), "", "", v1alpha1.NotificationEventPolicyGateBlocked)
 	_, gate := holdBundle(t, a, pipelineName)
 	key := gateKey(gate)
-	rcv.Fail(t, a.ns, http.StatusServiceUnavailable, 0, "")
-	newHook(t, e, a.ns, "giveup", rcv.URL(a.ns, "hook"), "", "", v1alpha1.NotificationEventPolicyGateBlocked)
 	waitRecords(t, rcv, a.ns, 1, time.Minute)
 	h := waitHook(t, e, a.ns, "giveup", "the first failure recorded", func(s v1alpha1.NotificationHookStatus) bool { return s.FailedAttempts == 1 })
 

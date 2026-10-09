@@ -627,12 +627,27 @@ func TestChart_DeprecatedValues(t *testing.T) {
 	runningPod(t, r)
 
 	sel := metav1.ListOptions{LabelSelector: "app.kubernetes.io/instance=" + r.Name}
+	// The removed value controlled the CRD validation policies only. The
+	// hold-writes policy (#1528) is not one of them and is always created.
+	holdWrites := r.Fullname + "-hold-writes"
 	vaps, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicies().List(ctx, sel)
 	require.NoError(t, err)
-	assert.Empty(t, vaps.Items, "validatingAdmissionPolicy.enabled creates no policy")
+	var vapNames []string
+	for _, v := range vaps.Items {
+		if v.Name != holdWrites {
+			vapNames = append(vapNames, v.Name)
+		}
+	}
+	assert.Empty(t, vapNames, "validatingAdmissionPolicy.enabled creates no policy")
 	bindings, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().List(ctx, sel)
 	require.NoError(t, err)
-	assert.Empty(t, bindings.Items)
+	var bindingNames []string
+	for _, b := range bindings.Items {
+		if b.Name != holdWrites {
+			bindingNames = append(bindingNames, b.Name)
+		}
+	}
+	assert.Empty(t, bindingNames)
 	// The names the removed template gave its policies and bindings, in
 	// case one is created without the instance label.
 	for _, name := range []string{"kardinal-policygate-validation", "kardinal-pipeline-validation", "kardinal-bundle-validation"} {
