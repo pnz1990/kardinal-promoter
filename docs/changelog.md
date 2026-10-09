@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **OpenAPI description of the REST API** — the controller serves an OpenAPI 3.1 document of the UI API, the Bundle API and the webhook health endpoint at `GET /api/v1/openapi.json` on both listeners (no credentials needed), also published as [`docs/reference/openapi.json`](reference/openapi.json). It is generated from the controller's request and response types, and a test fails when it drifts. The new [REST API](reference/rest-api.md) page lists the endpoints and shows how to give scripts their own ServiceAccount tokens (TokenRequest) with TokenReview auth
+
 ### Changed
 
 - **Smaller Graphs: gate instances and PRStatuses are collections** — a Bundle's Graph now creates its PolicyGate instances from one `PolicyGates` node (and `SkipPermissionGates` for skip permissions) and its PRStatuses from one `PRStatuses` node, each a `forEach` over the data in a `def` node, instead of one node per object. A 150-environment Pipeline with 3 gates per environment has 155 nodes instead of 751, and 471 KB of Graph spec instead of 647 KB. The objects keep their names and labels; kro adds `kro.run/node-id: PolicyGates` (or `PRStatuses`) and its collection labels. A Graph that is updated in place keeps its existing gates and PRStatuses
@@ -19,6 +23,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **No duplicate gate audit records from a stale read** — the PolicyGate status write now carries the resourceVersion the gate was read at. A reconcile that read the gate from a stale cache, and so saw a flip that a newer reconcile had already written, wrote a second `GateEvaluated` AuditEvent milliseconds after the first. Now its write fails with a Conflict and is retried on the current gate, which writes nothing (#1513)
 - **A git outage no longer fails promotions** (#1476) — a 60-second outage of the git host kept the SCM circuit open for 10 minutes and failed every promotion waiting to open or close a PR, leaving `kardinal/` branches behind. The circuit now opens for 5 seconds and doubles only when its probe fails (up to 2 minutes), requests that were in flight when it opened no longer count, and a step or a superseded step's PR close that meets an open circuit waits for it without spending a retry. Deleting a Forgejo or Gitea branch that is already gone no longer counts against the circuit
 - **A PR kardinal closes gets one comment** — a PR kardinal closed itself (superseded, failed, `waitForMergeTimeout`) got "kardinal closed this PR" and, five minutes later, "kardinal stopped tracking this PR" too. The close now marks the PRStatus (`kardinal.io/closed-by-kardinal`), and the stopped-tracking comment is left for PRs a person closed ([#1351](https://github.com/pnz1990/kardinal-promoter/issues/1351))
 - **SCM circuit breaker per repository owner** — one failing org or user opened the circuit for every Pipeline on the same SCM host, and a token rotation reset an open circuit. Each owner now has its own circuit, an exhausted rate limit opens one shared circuit until the reset, and the circuits survive a token reload; circuits that hold no state are dropped, so the registry stays bounded ([#1274](https://github.com/pnz1990/kardinal-promoter/issues/1274))
