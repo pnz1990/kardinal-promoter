@@ -67,7 +67,9 @@ spec:
               AuditEventSpec defines the immutable record of a single promotion event.
               AuditEvents are created by the PromotionStep and PolicyGate reconcilers at
               key lifecycle transitions (started, succeeded, failed). The spec is set at
-              creation; the CRD rejects any later change to it.
+              creation; the CRD rejects any later change to it (the rule is on
+              AuditEvent.Spec, so the outbox entries that embed the type,
+              PendingAuditEvent, can be stored in a list).
             properties:
               action:
                 description: |-
