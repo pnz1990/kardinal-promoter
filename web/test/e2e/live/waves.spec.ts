@@ -19,12 +19,14 @@ test('the fleet board shows the wave as one plate', async ({ page }) => {
   await page.goto(`${base}/ui/`)
   await filterSidebar(page, ns)
   const board = page.getByRole('region', { name: 'Fleet' })
-  const plate = board.getByRole('button', { name: new RegExp(`^${PIPELINE} w1 to w6, 6 environments:`) })
+  const plateName = new RegExp(`^${PIPELINE} w1 to w6, 6 environments:`)
+  const plate = board.getByRole('button', { name: plateName })
   await expect(plate).toContainText('6 environments')
   await expect(plate).toContainText('w1 … w6')
   await expect(plate).toHaveAttribute('data-state', 'settled')
-  // test's station and the wave plate: no station per wave environment.
-  await expect(board.getByRole('button', { name: new RegExp(`^${PIPELINE} `) })).toHaveCount(2)
+  // Its line has test's station and the wave plate: no station per wave environment.
+  const line = board.locator('li.fleet-line').filter({ has: page.getByRole('button', { name: plateName }) })
+  await expect(line.locator('.fleet-station')).toHaveCount(2)
 })
 
 test('the lane counts the wave, the DAG keeps spec order, the metrics count the final wave', async ({ page }) => {
