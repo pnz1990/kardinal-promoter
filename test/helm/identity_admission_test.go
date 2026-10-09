@@ -431,6 +431,10 @@ func TestIdentityAdmission_Approvals(t *testing.T) {
 	}
 	controller := "system:serviceaccount:" + releaseNS + ":kardinal-promoter"
 	mine := []interface{}{"release-managers", "system:authenticated"}
+	viaUI := func(a map[string]interface{}) map[string]interface{} {
+		a["metadata"].(map[string]interface{})["annotations"] = map[string]interface{}{"kardinal.io/recorded-via": "ui"}
+		return a
+	}
 	tests := []struct {
 		name     string
 		obj, old map[string]interface{}
@@ -455,6 +459,17 @@ func TestIdentityAdmission_Approvals(t *testing.T) {
 			user: "system:serviceaccount:kube-system:namespace-controller", want: true},
 		{name: "kardinal's controller cannot revoke it", old: approval("alice", []interface{}{}, "app-v1", "prod"),
 			user: controller, want: false},
+		// The UI API records decisions for its TokenReview user (E6).
+		{name: "the controller records a UI decision in the UI user's name",
+			obj: viaUI(approval("alice", []interface{}{"release-managers"}, "app-v1", "prod")), user: controller, want: true},
+		{name: "the controller cannot create an unmarked Approval in another name",
+			obj: approval("alice", []interface{}{}, "app-v1", "prod"), user: controller, want: false},
+		{name: "the controller revokes a UI decision",
+			old: viaUI(approval("alice", []interface{}{}, "app-v1", "prod")), user: controller, want: true},
+		{name: "the UI mark does not let anyone else write in another name",
+			obj: viaUI(approval("bob", []interface{}{}, "app-v1", "prod")), user: "mallory", want: false},
+		{name: "the UI mark does not let anyone else revoke",
+			old: viaUI(approval("alice", []interface{}{}, "app-v1", "prod")), user: "mallory", want: false},
 		// The only owner an Approval may name is the Bundle it approves.
 		{name: "owned by its Bundle", obj: owned(approval("alice", []interface{}{}, "app-v1", "prod"), "Bundle", "app-v1", "uid-1"),
 			user: "alice", want: true},

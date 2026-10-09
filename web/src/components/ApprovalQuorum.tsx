@@ -4,12 +4,13 @@
 // components/ApprovalQuorum.tsx — an approval gate's quorum and who decided:
 // one pip per approval the gate needs, filled for each counted approval;
 // every decision with whether it counted (and why not), its comment and age;
-// and the command that records an approval. Read-only: approving from the UI
-// needs the caller's own identity, which the UI does not have yet (the
-// gate's admission policy refuses an Approval in another name).
+// and how to decide: Approve, Reject and Revoke mine (ApprovalActions, for
+// the user the UI authenticated) and the equivalent kardinal approve
+// command.
 
 import type { GateApproval, GateDecision } from '../types'
 import CopyButton from './CopyButton'
+import { ApprovalActions } from './ApprovalActions'
 import { formatRelativeAge } from './approvalAge'
 import '../styles/ApprovalQuorum.css'
 
@@ -20,6 +21,10 @@ interface Props {
   approval: GateApproval
   bundle?: string
   environment?: string
+  /** Namespace of the gate; with bundle and environment it enables the actions. */
+  namespace?: string
+  /** Called after a decision from the UI, so the parent can refresh. */
+  onDecided?: () => void
   now?: number
 }
 
@@ -56,7 +61,7 @@ function DecisionRow({ d, now }: { d: GateDecision; now: number }) {
   )
 }
 
-export function ApprovalQuorum({ approval: a, bundle, environment, now = Date.now() }: Props) {
+export function ApprovalQuorum({ approval: a, bundle, environment, namespace, onDecided, now = Date.now() }: Props) {
   const pips = a.required <= MAX_PIPS ? a.required : 0
   const state = a.rejected ? 'rejected' : a.approved >= a.required ? 'approved' : 'waiting'
   const command = bundle && environment ? `kardinal approve ${bundle} --env ${environment}` : ''
@@ -87,9 +92,12 @@ export function ApprovalQuorum({ approval: a, bundle, environment, now = Date.no
       ) : (
         <div className="approval-quorum__none">No decisions yet.</div>
       )}
+      {bundle && environment && namespace && (
+        <ApprovalActions bundle={bundle} environment={environment} namespace={namespace} onDone={onDecided} />
+      )}
       {command && state !== 'approved' && (
         <div className="approval-quorum__how">
-          <span>Approve from the CLI:</span>
+          <span>Or from the CLI:</span>
           <code>{command}</code>
           <CopyButton text={command} title="Copy the approve command" />
         </div>

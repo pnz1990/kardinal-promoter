@@ -22,11 +22,13 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
+	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
 
 // The OpenAPI spec (openapi.json, served at /api/v1/openapi.json and copied
@@ -106,6 +108,10 @@ var apiRoutes = []apiRoute{
 	{method: "POST", path: "/api/v1/ui/promote", server: serverUI, tag: "UI", id: "promote",
 		summary: "Promote the Bundle Verified upstream into an environment (kardinal promote)",
 		request: uiPromoteRequest{}, status: 201, response: uiPromoteResponse{}, errors: []int{400, 401, 403, 404, 409, 500}, security: "uiAuth"},
+	{method: "POST", path: "/api/v1/ui/approvals", server: serverUI, tag: "UI", id: "recordApproval",
+		summary: "Approve, reject or revoke a Bundle for an environment's approval gates as the UI user (kardinal approve)",
+		desc:    "Needs TokenReview UI auth: the decision is recorded for the authenticated user and groups.",
+		request: uiApprovalRequest{}, status: 200, response: uiApprovalResponse{}, errors: []int{400, 401, 403, 404, 409, 500}, security: "uiAuth"},
 	{method: "POST", path: "/api/v1/ui/rollback", server: serverUI, tag: "UI", id: "rollback",
 		summary: "Roll an environment back to an earlier Verified Bundle (kardinal rollback)",
 		request: uiRollbackRequest{}, status: 201, response: uiRollbackResponse{}, errors: []int{400, 401, 403, 404, 409, 500}, security: "uiAuth"},
@@ -533,7 +539,9 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 			Spec: v1alpha1.PolicyGateSpec{Expression: "true"}}
 		p := uiLcPipeline()
 		p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "test", Bundle: "app-v1", Reason: "r"}}
-		return []client.Object{p, uiLcBundle("app-v1", "1", 0), uiLcBundle("app-v2", "2", 10),
+		live := uiLcBundle("app-live", "4", -5)
+		live.Status.Phase = "Promoting"
+		return []client.Object{live, p, uiLcBundle("app-v1", "1", 0), uiLcBundle("app-v2", "2", 10),
 			uiLcStep("app-v1", "uat", "Verified", 3), uiLcStep("app-v1", "prod", "Verified", 5),
 			uiLcStep("app-v2", "prod", "Verified", 15),
 			// app-v3 is Verified in uat only: promote copies it to prod.
@@ -550,6 +558,7 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 		"overrideGateInNamespace": {"/api/v1/ui/gates/default/g/approve", `{"reason":"r"}`},
 		"promote":                 {"/api/v1/ui/promote", `{"pipeline":"app","environment":"prod"}`},
 		"rollback":                {"/api/v1/ui/rollback", `{"pipeline":"app","environment":"prod"}`},
+		"recordApproval":          {"/api/v1/ui/approvals", `{"bundle":"app-live","environment":"prod","decision":"approve"}`},
 		"pausePipeline":           {"/api/v1/ui/pause", `{"pipeline":"app"}`},
 		"releaseHold":             {"/api/v1/ui/release-hold", `{"pipeline":"app","environment":"test"}`},
 		"resumePipeline":          {"/api/v1/ui/resume", `{"pipeline":"app"}`},
@@ -577,6 +586,8 @@ func TestOpenAPIRoutesSucceed(t *testing.T) {
 			hr := httptest.NewRequest(r.method, req.path, body)
 			hr.Header.Set("Content-Type", "application/json")
 			hr.Header.Set("Authorization", "Bearer token")
+			// As TokenReview mode would: the approval endpoint needs a user.
+			hr = hr.WithContext(uiauth.WithUser(hr.Context(), authv1.UserInfo{Username: "alice"}))
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, hr)
 			require.Equal(t, r.status, w.Code, "%s %s answers the documented status: %s", r.method, req.path, w.Body.String())

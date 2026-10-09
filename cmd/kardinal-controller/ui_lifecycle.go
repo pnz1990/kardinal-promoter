@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -293,6 +294,67 @@ func (s *uiAPIServer) handleReleaseHold(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(uiMessageResponse{
 		Message: "released the hold of " + req.Environment + " (rollback " + h.Bundle + ")"})
+}
+
+// handleApproval handles POST /api/v1/ui/approvals: the UI's kardinal
+// approve. It records the authenticated UI user's decision (approve or
+// reject) on a Bundle for an environment's approval gates, replaces it, or
+// revokes it (lifecycle.RecordApproval). An Approval names a person, so it
+// needs a verified identity: only TokenReview mode (ui.auth.tokenReview) has
+// one; with a static UI token or no UI auth the request is refused (403).
+// The user's groups are the ones TokenReview returned, which the gate's
+// allowedGroups are matched against. The controller writes the Approval
+// after a SubjectAccessReview of the user (create/delete approvals); the
+// chart's approvals policy admits the controller's write only with
+// kardinal.io/recorded-via: ui, and lets it revoke only such Approvals.
+//
+// Request body (JSON):
+//
+//	{"bundle": "app-v2", "environment": "prod", "namespace": "default", "decision": "approve", "comment": "LGTM"}
+//
+// 400 bad decision or unknown environment; 403 no verified identity or not
+// allowed; 404 unknown Bundle or nothing to revoke; 409 a halted Bundle.
+func (s *uiAPIServer) handleApproval(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req uiApprovalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Bundle == "" || req.Environment == "" {
+		http.Error(w, "bundle and environment are required", http.StatusBadRequest)
+		return
+	}
+	user, ok := uiauth.UserFrom(r.Context())
+	if !ok || user.Username == "" {
+		http.Error(w, "an approval names who decided: it needs the UI's TokenReview mode (ui.auth.tokenReview), "+
+			"or use kardinal approve", http.StatusForbidden)
+		return
+	}
+	ns := req.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+	outcome, a, err := lifecycle.RecordApproval(r.Context(), s.client, lifecycle.ApprovalRequest{
+		Namespace: ns, Bundle: req.Bundle, Environment: req.Environment, User: user.Username, Groups: user.Groups,
+		Decision: req.Decision, Comment: req.Comment, Revoke: req.Revoke, Via: "ui",
+	})
+	if err != nil {
+		s.writeLifecycleError(w, "approval", err)
+		return
+	}
+	s.log.Info().Str("bundle", req.Bundle).Str("env", req.Environment).Str("decision", a.Spec.Decision).
+		Str("outcome", string(outcome)).Str("requestedBy", user.Username).Msg("ui: approval")
+	verb := a.Spec.Decision + "s"
+	msg := fmt.Sprintf("%s: %s %s %s for %s", outcome, user.Username, verb, req.Bundle, req.Environment)
+	if outcome == lifecycle.ApprovalRevoked {
+		msg = fmt.Sprintf("Revoked: %s no longer %s %s for %s", user.Username, verb, req.Bundle, req.Environment)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(uiApprovalResponse{Outcome: string(outcome), Approval: a.Name, User: user.Username, Message: msg})
 }
 
 // handlePause handles POST /api/v1/ui/pause. It sets spec.paused
