@@ -802,7 +802,9 @@ func TestStep_OrphansCleanedUp(t *testing.T) {
 		Spec: v1alpha1.PromotionStepSpec{PipelineName: pipelineName, BundleName: "gone", Environment: "test",
 			StepType: "kustomize-set-image"},
 	}
-	require.NoError(t, e.Client.Create(ctx, orphan))
+	// Only kardinal creates PromotionSteps (graph-objects policy): the test
+	// stands in for a Graph that is gone.
+	require.NoError(t, e.AsController(t).Create(ctx, orphan))
 	framework.Eventually(t, time.Minute, "the orphaned PromotionStep deletes itself", func(ctx context.Context) (bool, string) {
 		var ps v1alpha1.PromotionStep
 		err := e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: orphan.Name}, &ps)

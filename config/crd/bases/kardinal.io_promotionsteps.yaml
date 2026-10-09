@@ -103,10 +103,14 @@ spec:
                 type: string
               live:
                 description: |-
-                  Live holds results the Graph mirrors onto the step while it runs (a
-                  patch node, not the step's template, so they keep updating after the
-                  step's own template stopped resolving). The reconciler reads only this
-                  copy, never the source objects.
+                  Live holds results the Graph mirrors onto the step while it runs, each
+                  part with its own patch node (its own field manager), not the step's
+                  template, so they keep updating after the step's own template stopped
+                  resolving: the environment's hook and analysis runs, the current
+                  results of its gates, and the Bundle's image verification. The
+                  reconciler reads only this copy, never the source objects; while the
+                  step's PR waits for its merge it mirrors the gates to the PR's head
+                  commit as the kardinal/gates commit status. Do not set it.
                 properties:
                   analyses:
                     description: Analyses are the environment's AnalysisRuns for this
@@ -137,6 +141,27 @@ spec:
                           type: string
                       required:
                       - name
+                      type: object
+                    type: array
+                  gates:
+                    description: |-
+                      Gates are the gate instances of the step's environment for its Bundle,
+                      with their current result.
+                    items:
+                      description: LiveGate is one gate instance's current result.
+                      properties:
+                        name:
+                          description: Name is the gate instance name.
+                          type: string
+                        ready:
+                          description: Ready is the instance's status.ready.
+                          type: boolean
+                        reason:
+                          description: Reason is the instance's status.reason.
+                          type: string
+                      required:
+                      - name
+                      - ready
                       type: object
                     type: array
                   hooks:

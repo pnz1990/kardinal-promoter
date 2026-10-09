@@ -199,6 +199,14 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["leases"]
   verbs: ["create"]
 {{- end }}
+
+# The PolicyGate reconciler records an override's createdBy as verified only
+# while the chart's gate-overrides admission policy and its binding exist
+# (--override-identity-policy): get on those two objects by name.
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+  verbs: ["get"]
+  resourceNames: [{{ printf "%s-gate-overrides" (include "kardinal-promoter.fullname" .) | quote }}]
 {{- if .Values.ui.auth.tokenReview }}
 # ui.auth.tokenReview: the UI API validates each bearer token with a
 # TokenReview and authorizes it with a SubjectAccessReview.

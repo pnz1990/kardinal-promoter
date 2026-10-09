@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -65,6 +66,7 @@ func overridePipeline(name string) *v1alpha1.Pipeline {
 // TestOverrideFn_BasicOverride verifies that the override CLI function
 // appends an override to PolicyGate.spec.overrides[].
 func TestOverrideFn_BasicOverride(t *testing.T) {
+	cmd.StubIdentity(t, "oidc:alice@example.com")
 	gate := makeTestGate("no-weekend-deploy", "default")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
@@ -93,6 +95,25 @@ func TestOverrideFn_BasicOverride(t *testing.T) {
 	assert.Equal(t, "P0 hotfix — incident #4521", o.Reason)
 	assert.Equal(t, "prod", o.Stage)
 	assert.False(t, o.ExpiresAt.IsZero())
+	assert.Equal(t, "oidc:alice@example.com", o.CreatedBy, "createdBy is the authenticated username (#1450)")
+	assert.Contains(t, buf.String(), "Created by: oidc:alice@example.com")
+}
+
+// TestOverrideFn_NoIdentityWritesNothing: when the API server does not say
+// who the caller is, override fails and records nothing, rather than write
+// a name the identity policy would refuse.
+func TestOverrideFn_NoIdentityWritesNothing(t *testing.T) {
+	gate := makeTestGate("no-weekend-deploy", "default")
+	s := newOverrideTestScheme()
+	require.NoError(t, authenticationv1.AddToScheme(s))
+	fc := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, overridePipeline("my-app")).Build()
+
+	err := cmd.ExportedOverrideFn(io.Discard, fc, "default", "my-app", "prod", "no-weekend-deploy", "x", "1h")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read your identity (SelfSubjectReview)")
+	var got v1alpha1.PolicyGate
+	require.NoError(t, fc.Get(context.Background(), types.NamespacedName{Name: "no-weekend-deploy", Namespace: "default"}, &got))
+	assert.Empty(t, got.Spec.Overrides)
 }
 
 // TestOverrideFn_InvalidExpiry verifies that an invalid --expires-in returns an error.
@@ -163,6 +184,7 @@ func TestOverrideFn_Pipeline(t *testing.T) {
 
 // TestOverrideFn_MultipleOverrides verifies that multiple overrides accumulate.
 func TestOverrideFn_MultipleOverrides(t *testing.T) {
+	cmd.StubIdentity(t, "oidc:alice@example.com")
 	gate := makeTestGate("rate-limit-gate", "default")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
@@ -189,6 +211,7 @@ func TestOverrideFn_MultipleOverrides(t *testing.T) {
 // TestOverrideFn_EmptyStageAppliesGlobally verifies that an empty stage
 // means the override applies to all environments.
 func TestOverrideFn_EmptyStageAppliesGlobally(t *testing.T) {
+	cmd.StubIdentity(t, "oidc:alice@example.com")
 	gate := makeTestGate("global-gate", "default")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
@@ -236,6 +259,7 @@ func overrideBundle(name, pipeline, phase string) *v1alpha1.Bundle {
 // PolicyGate reconciler evaluates, and never on the template (C01-graph-05,
 // C09b-cli-05, C12-examples-demo-03, E2E-20).
 func TestOverrideFn_TemplateName(t *testing.T) {
+	cmd.StubIdentity(t, "oidc:alice@example.com")
 	tests := []struct {
 		name      string
 		stage     string
@@ -303,6 +327,7 @@ func TestOverrideFn_TemplateName(t *testing.T) {
 
 // C09b-cli-06: an override that lands between our read and our write is kept.
 func TestOverrideFn_ConcurrentOverridesBothKept(t *testing.T) {
+	cmd.StubIdentity(t, "oidc:alice@example.com")
 	calls := 0
 	c := fake.NewClientBuilder().WithScheme(newOverrideTestScheme()).
 		WithObjects(makeTestGate("g", "default"), overridePipeline("demo")).
@@ -354,6 +379,7 @@ func selectorCheckingClient(t *testing.T, objs ...sigs_client.Object) sigs_clien
 // instance patches it without a label lookup, and a template name patches
 // the instances of the pipeline's in-progress Bundles directly.
 func TestOverrideFn_LongInstanceNames(t *testing.T) {
+	cmd.StubIdentity(t, "oidc:alice@example.com")
 	const (
 		current  = "kardinal-test-app-9smn4"
 		verified = "kardinal-test-app-4cqnl"

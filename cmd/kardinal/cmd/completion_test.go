@@ -26,8 +26,7 @@ import (
 // coreSubcommands are the CLI subcommands that must be reachable via completion.
 // We verify these by exercising the __complete protocol directly, since cobra
 // generates dynamic completion scripts that do not embed command names statically.
-// approve is deprecated (it had no effect), so cobra leaves it out of completion.
-var coreSubcommands = []string{"get", "explain", "logs", "status", "rollback", "override"}
+var coreSubcommands = []string{"get", "explain", "logs", "status", "rollback", "override", "approve", "reject"}
 
 // C09a-cli-22: each script starts with its shell's header and defines the
 // kardinal entry point.

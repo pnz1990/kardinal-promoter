@@ -629,12 +629,16 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	if ivNode != nil {
 		nodes = append(nodes, *ivNode)
 	}
+	if anyNeedsApprovals(gatesByEnv) {
+		nodes = append(nodes, approvalsRefNode(bundle)) // approval gates (approvals.go)
+	}
 
 	gates := newGateCollections(pipelineName, bundle.Name)
 	var prItems []interface{}
 	var compactSteps []compactStep
 	var compactMetrics []compactMetric
 	upstreamEnvs := make(map[string][]string, len(filteredEnvs))
+	var mirrorSteps []interface{} // pr-review steps with gates (mirror.go)
 
 	for _, envName := range filteredEnvs {
 		// Compute upstream deps for this env (filtered to only include surviving envs)
@@ -698,6 +702,11 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		prName := prStatusNodeK8sName(bundle.Name, envName)
 		prItems = append(prItems, map[string]interface{}{"name": prName, "environment": envName})
 
+		if len(envGates) > 0 && envApproval(pipeline, envName) == "pr-review" {
+			mirrorSteps = append(mirrorSteps, map[string]interface{}{
+				"name": promotionStepK8sName(pipelineName, bundle.Name, envName), "environment": envName})
+		}
+
 		if compact {
 			compactSteps = append(compactSteps, compactStep{env: envName,
 				name:      promotionStepK8sName(pipelineName, bundle.Name, envName),
@@ -735,6 +744,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 
 	nodes = append(nodes, gates.nodes()...)
+	nodes = append(nodes, gateMirrorNodes(mirrorSteps, gates.collectionIDs())...)
 	nodes = append(nodes, GraphNode{ID: NodePRStatusData, Def: map[string]interface{}{"items": prItems}},
 		prStatusesNode(pipelineName, bundle.Name))
 	if compact {

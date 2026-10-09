@@ -48,6 +48,11 @@ The override is time-limited and creates a mandatory audit record in
 PolicyGate.spec.overrides[]. The gate passes immediately without evaluating
 the CEL expression until the override expires.
 
+The record names you by your Kubernetes username, read from the API server
+with a SelfSubjectReview (as kubectl auth whoami does); the chart's
+ValidatingAdmissionPolicy refuses an override in anyone else's name. The
+controller writes a GateOverridden AuditEvent for each override.
+
 Expired overrides stay in spec.overrides[] as an audit record for as long
 as the Bundle exists. Deleting a Bundle deletes its gate instances and their
 overrides, and the Pipeline's historyLimit cleanup deletes old finished
@@ -129,8 +134,13 @@ func overrideFn(
 		return err
 	}
 
-	// Determine who is creating the override (best-effort)
-	createdBy := currentUser()
+	// createdBy is the username the API server authenticates this CLI as:
+	// the chart's identity policy refuses any other name.
+	id, err := identityOf(ctx, c)
+	if err != nil {
+		return fmt.Errorf("override: %w", err)
+	}
+	createdBy := id.Username
 
 	now := time.Now().UTC()
 	expiresAt := metav1.NewTime(now.Add(expDuration))

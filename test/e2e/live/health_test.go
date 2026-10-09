@@ -1435,7 +1435,7 @@ func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
 		write[i].ResourceNames = []string{app}
 	}
 	e.BindArgoRules(t, ns, write)
-	require.True(t, e.ControllerCan(t, "patch", app))
+	e.WaitControllerCan(t, "patch", app, time.Minute)
 	require.False(t, e.ControllerCan(t, "patch", ""), "patch is granted on %s only", app)
 
 	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)

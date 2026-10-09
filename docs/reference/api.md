@@ -12,6 +12,7 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 
 | Kind | Resource | Scope | Short names |
 |---|---|---|---|
+| [Approval](#approval) | `approvals.kardinal.io` | Namespaced | `appr` |
 | [AuditEvent](#auditevent) | `auditevents.kardinal.io` | Namespaced | `ae`, `audit` |
 | [Bundle](#bundle) | `bundles.kardinal.io` | Namespaced | `bnd` |
 | [ChangeWindow](#changewindow) | `changewindows.kardinal.io` | Cluster | `cw` |
@@ -27,6 +28,23 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [ScheduleClock](#scheduleclock) | `scheduleclocks.kardinal.io` | Namespaced | `sclock` |
 | [Subscription](#subscription) | `subscriptions.kardinal.io` | Namespaced | `sub` |
 
+## Approval
+
+`kardinal.io/v1alpha1`
+
+Approval records that a person approved, or rejected, a Bundle for an environment. The promotion Graph copies the Approvals of its Bundle into the approval gates of that environment (PolicyGate spec.approvals), and the PolicyGate reconciler counts them against spec.approval.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object | yes | ApprovalSpec is one person's decision on one Bundle in one environment. An Approval is created by kardinal approve and never changed: delete it to revoke the decision. The chart's ValidatingAdmissionPolicy admits it only when spec.user is the requesting user, spec.groups are among the requester's groups, and the kardinal.io/bundle and kardinal.io/environment labels match spec.bundle and spec.environment. |
+| `spec.bundle` | string | yes | Bundle is the name of the Bundle the decision is about, in the Approval's namespace. |
+| `spec.bundleUID` | string | yes | BundleUID is the UID of that Bundle: the Graph counts the Approval only for the Bundle with this UID, so an Approval cannot carry over to a new Bundle that reuses the name. |
+| `spec.comment` | string |  | Comment is a free-form note shown with the decision. Default: ``. |
+| `spec.decision` | string | yes | Decision is approve, or reject: a reject from an allowed approver blocks the gate whatever the other approvals. One of: `approve`, `reject`. Default: `approve`. |
+| `spec.environment` | string | yes | Environment is the Pipeline environment the decision is for. |
+| `spec.groups` | []string |  | Groups are the approver's Kubernetes groups that count for the gate's approval.allowedGroups. Each must be one of the requester's groups. Default: `[]`. |
+| `spec.user` | string | yes | User is the Kubernetes username of the approver, as the API server authenticates them (kubectl auth whoami). |
+
 ## AuditEvent
 
 `kardinal.io/v1alpha1`
@@ -36,7 +54,7 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | AuditEventSpec defines the immutable record of a single promotion event. AuditEvents are created by the PromotionStep and PolicyGate reconcilers at key lifecycle transitions (started, succeeded, failed). The spec is set at creation; the CRD rejects any later change to it. |
-| `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "HoldCreated", "HoldReleased". HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `HoldCreated`, `HoldReleased`. |
+| `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`. |
 | `spec.bundleName` | string | yes | BundleName is the name of the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment name where the event occurred. |
 | `spec.message` | string |  | Message is a human-readable description of the event. |
@@ -571,12 +589,25 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | PolicyGateSpec defines the desired state of a PolicyGate. |
+| `spec.approval` | object |  | Approval makes the gate wait for people: it is ready only when its expression is true and at least approval.required allowed people have approved the Bundle for the environment (kardinal approve), and none of them rejected it. Copied from the template to every gate instance. For a gate that only waits for approvals, use the expression "true". |
+| `spec.approval.allowedGroups` | []string |  | AllowedGroups are Kubernetes groups: an approval counts when one of the approval's groups is listed. With neither allowedUsers nor allowedGroups, every approval counts; who may approve is then decided by RBAC on approvals. |
+| `spec.approval.allowedUsers` | []string |  | AllowedUsers are Kubernetes usernames whose approvals count. |
+| `spec.approval.excludeAuthor` | boolean |  | ExcludeAuthor does not count an approval whose user created the Bundle (no self-approval): the kardinal.io/created-by annotation, which the chart's admission policy pins to the creating user (kardinal create bundle, the Bundle API and the UI set it). A Bundle without it blocks the gate: the rule cannot be enforced. |
+| `spec.approval.required` | integer |  | Required is how many distinct allowed people must approve. Default: `1`. |
+| `spec.approvals` | []object |  | Approvals is written by the promotion Graph on gate instances: the Approvals of the instance's Bundle and environment, copied from the Approval objects, at most 101 (more than 100 blocks the gate). Do not set it; on a template it is ignored. |
+| `spec.approvals[].bundle` | string | yes | Bundle is the Bundle the decision is about. |
+| `spec.approvals[].bundleUID` | string | yes | BundleUID is that Bundle's UID. |
+| `spec.approvals[].comment` | string |  | Comment is the approver's note. |
+| `spec.approvals[].decision` | string | yes | Decision is approve or reject. |
+| `spec.approvals[].environment` | string | yes | Environment is the environment the decision is for. |
+| `spec.approvals[].groups` | []string |  | Groups are the approver's groups that count for allowedGroups. |
+| `spec.approvals[].user` | string | yes | User is the approver's Kubernetes username. |
 | `spec.expression` | string | yes | Expression is the CEL expression evaluated to determine if promotion is allowed. Must evaluate to a boolean. |
 | `spec.generated` | boolean |  | Generated is set by kardinal on the PolicyGates it creates: the gate instances a promotion Graph makes from a template, and the freeze gate of a paused Pipeline. Kardinal never uses a generated PolicyGate as a template, so only a generated PolicyGate may have a name longer than 63 characters. Do not set it on a gate you write: a generated gate never applies to an environment. |
 | `spec.message` | string |  | Message is a human-readable explanation shown when the gate blocks. |
 | `spec.overrides` | []object |  | Overrides holds time-limited emergency overrides (K-09). When any non-expired override exists (matching Stage or with empty Stage), the gate passes immediately. Expired overrides are kept as audit records. |
 | `spec.overrides[].createdAt` | string (date-time) |  | CreatedAt is when the override was created (set by the CLI). |
-| `spec.overrides[].createdBy` | string |  | CreatedBy is the user who created the override (informational). |
+| `spec.overrides[].createdBy` | string |  | CreatedBy is the Kubernetes username of whoever created the override. The chart's ValidatingAdmissionPolicy admits a new override only when createdBy equals the requesting user (kardinal override reads it with a SelfSubjectReview), or when the controller writes it for the UI. |
 | `spec.overrides[].expiresAt` | string (date-time) | yes | ExpiresAt is when this override stops being effective. After this time the gate evaluates CEL normally. |
 | `spec.overrides[].reason` | string | yes | Reason is the mandatory human-readable justification for the override. |
 | `spec.overrides[].stage` | string |  | Stage is the environment name this override applies to. An empty string applies to all environments. |
@@ -590,6 +621,13 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.skipPermission` | boolean |  | SkipPermission marks a skip-permission gate as granting skips. A Bundle may skip (intent.skipEnvironments) an environment an org gate applies to only when a gate labelled kardinal.io/type=skip-permission, with skipPermission true, in an org policy namespace, applies to that environment. Gates in other namespaces never grant a skip. The permission gate's expression is evaluated like any gate, in front of the next environment the Bundle promotes, so that environment waits until it is true. On any other gate this field has no effect. Default: `false`. |
 | `spec.when` | string |  | When has no effect. Every gate on an environment is re-checked right before that environment's PromotionStep starts: the step stays in Pending, with no git operation, until each gate it requires exists, is ready, and was evaluated at or after the step was created. A step that has started is not stopped by a gate that turns false later. Deprecated: remove this field. Every gate is re-checked before its PromotionStep starts, whatever the value; pre-deploy and post-deploy behave the same. One of: `pre-deploy`, `post-deploy`. Default: `post-deploy`. |
 | `status` | object |  | PolicyGateStatus defines the observed state of a PolicyGate. |
+| `status.approvals` | []object |  | Approvals records each decision in spec.approvals and whether the gate counted it (spec.approval), for kardinal explain, the PR evidence and the UI. |
+| `status.approvals[].comment` | string |  | Comment is the approver's comment. |
+| `status.approvals[].counted` | boolean | yes | Counted reports whether the decision counts for the gate. |
+| `status.approvals[].decision` | string | yes | Decision is approve or reject. |
+| `status.approvals[].firstSeenAt` | string (date-time) |  | FirstSeenAt is when the gate first saw the decision. |
+| `status.approvals[].reason` | string |  | Reason says why a decision does not count. |
+| `status.approvals[].user` | string | yes | User is the approver. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
@@ -598,6 +636,12 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is when the gate's result was last written. The controller re-evaluates more often, but writes the status only when the result or reason changes, when a PromotionStep that has not started needs a newer result, after a spec change, and otherwise at least every 10 minutes. |
+| `status.overrides` | []object |  | Overrides records each spec.overrides entry the controller has seen: when it first saw it, whether its createdBy was checked by the chart's identity admission policy, and whether its GateOverridden AuditEvent is written. An override counts from firstSeen: it ends at the earlier of its expiresAt and firstSeen plus the override cap (--gate-override-max-minutes). Records are never dropped, so an entry removed and added again keeps its firstSeen; past 200 records new overrides are not counted (condition OverrideIgnored). |
+| `status.overrides[].audited` | boolean |  | Audited is true once the GateOverridden AuditEvent is written. |
+| `status.overrides[].firstSeen` | string (date-time) | yes | FirstSeen is when the controller first saw the override. It is the AuditEvent timestamp and the start of the override cap. |
+| `status.overrides[].key` | string | yes | Key identifies the override: a hash of its stage, reason, createdBy, createdAt and expiresAt, so an edited entry is a new override. |
+| `status.overrides[].verified` | boolean |  | Verified is true when createdBy was checked: the chart's identity admission policy was bound when the controller first saw the override, on a gate it was already checking. |
+| `status.overridesVerifiedSince` | string (date-time) |  | OverridesVerifiedSince is when the controller first reconciled this gate with override identity checks (the chart's admission policy). Overrides already on the gate then were not checked: their createdBy is shown as unverified. |
 | `status.ready` | boolean | yes | Ready indicates whether the gate is currently allowing promotion. The kro Graph gates downstream nodes on status.ready == true. Default: `false`. |
 | `status.reason` | string |  | Reason explains the current ready state in human-readable form. |
 
@@ -617,13 +661,17 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment this step promotes into. |
 | `spec.imageVerification` | string |  | ImageVerification names the Bundle's ImageVerification when this step must wait for it: a step with no upstream in the Graph stays Pending until spec.live.imageVerification.phase is Verified, and fails when it is Failed. |
-| `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs (a patch node, not the step's template, so they keep updating after the step's own template stopped resolving). The reconciler reads only this copy, never the source objects. |
+| `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs, each part with its own patch node (its own field manager), not the step's template, so they keep updating after the step's own template stopped resolving: the environment's hook and analysis runs, the current results of its gates, and the Bundle's image verification. The reconciler reads only this copy, never the source objects; while the step's PR waits for its merge it mirrors the gates to the PR's head commit as the kardinal/gates commit status. Do not set it. |
 | `spec.live.analyses` | []object |  | Analyses are the environment's AnalysisRuns for this Bundle. |
 | `spec.live.analyses[].created` | string |  | Created is the AnalysisRun's creationTimestamp (RFC 3339). The newest run of a template is the one the step waits for. |
 | `spec.live.analyses[].message` | string |  | Message is the AnalysisRun's status.message. |
 | `spec.live.analyses[].name` | string | yes | Name is the AnalysisRun name. |
 | `spec.live.analyses[].phase` | string |  | Phase is the AnalysisRun's status.phase (Pending when it has none yet): Pending, Running, Successful, Failed, Error or Inconclusive. |
 | `spec.live.analyses[].template` | string |  | Template is the AnalysisTemplate or ClusterAnalysisTemplate it runs. |
+| `spec.live.gates` | []object |  | Gates are the gate instances of the step's environment for its Bundle, with their current result. |
+| `spec.live.gates[].name` | string | yes | Name is the gate instance name. |
+| `spec.live.gates[].ready` | boolean | yes | Ready is the instance's status.ready. |
+| `spec.live.gates[].reason` | string |  | Reason is the instance's status.reason. |
 | `spec.live.hooks` | []object |  | Hooks are the environment's HookRuns for this Bundle. |
 | `spec.live.hooks[].hook` | string |  | Hook is the hook's name in the Pipeline. |
 | `spec.live.hooks[].message` | string |  | Message is the HookRun's status.message. |

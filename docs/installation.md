@@ -228,6 +228,8 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |
 | `scm.allowedRepositories` | `[]` | `--scm-allowed-repositories`: `host/repository` globs (`github.com/acme/*`, `gitlab.example.com/team/**`) the controller's SCM token may act on. Every SCM call for another repository is refused, and a Pipeline that would need the token for one is `Ready=False/RepositoryNotAllowed`. Empty allows every repository. See [Security](guides/security.md#the-shared-scm-token-and-scmallowedrepositories) |
 | `scm.instanceSigners` | `[]` | `--scm-instance-signers`: Forgejo/Gitea only, the names or emails the instance signs commits with (`repository.signing` `SIGNING_NAME` / `SIGNING_EMAIL`). [Image verification](image-verification.md#signed-commits) treats such a commit as a platform signature. Without it, a verified signer that is not a user of the instance is taken as the instance key |
+| `scm.gatesCommitStatus.enabled` | `true` | `--gates-commit-status`: post the gate results of a waiting pr-review step as the commit status on the commit kardinal pushed to its PR ([Gate status check](pr-evidence.md#gate-status-check-kardinalgates)). `false` posts none. |
+| `scm.gatesCommitStatus.context` | `kardinal/gates` | `--gates-status-context`: the status name branch protection requires; reserved for kardinal. |
 | `webhook.secretRef.name` / `.key` | `""` / `secret` | Secret with the SCM webhook secret (`KARDINAL_WEBHOOK_SECRET`): the HMAC key, or for GitLab and Azure DevOps the plain token |
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
@@ -638,7 +640,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
     yq 'del(.krocodile)' values.yaml > values-new.yaml
     ```
 
-- **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The chart ships no ValidatingAdmissionPolicy; the CRD schemas validate these fields.
+- **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The CRD schemas validate the kardinal fields; the chart's only ValidatingAdmissionPolicies are the identity policies ([Verified identity](guides/security.md#verified-identity)) and the hold-writes policy (only `pipelines/hold` may change `spec.holds`), which are always installed.
 - **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart grants `batch/jobs` (create, get, list, watch, delete) for [hooks](hooks.md) whatever it says.
 - **`--reuse-values`** fails with `additional properties 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
 
@@ -810,7 +812,8 @@ kubectl delete crd --ignore-not-found \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
   promotiontemplates.kardinal.io \
-  auditevents.kardinal.io
+  auditevents.kardinal.io \
+  approvals.kardinal.io
 
 # Optional: remove kro and its CRDs (only if nothing else uses kro)
 helm uninstall kro -n kro-system

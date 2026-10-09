@@ -9,6 +9,57 @@ optional: without them anyone with write access could record someone else's
 name. Kubernetes 1.30+ serves admissionregistration.k8s.io/v1
 ValidatingAdmissionPolicy (the chart's kubeVersion).
 */}}
+{{- /*
+identityBindings renders the Deny binding(s) of identity policy .policy.
+Each exempts this release's controller, so each is limited to the
+namespaces this release manages: the watched namespace (namespace mode), the
+namespaces labelled kardinal.io/shard=<shard> (controller.namespaceShard), and
+for the "default" shard also the unlabelled ones (a second binding:
+selectors cannot OR). Cluster mode binds every namespace.
+*/}}
+{{- define "kardinal-promoter.identityBindings" -}}
+{{- $root := .root }}
+{{- $name := printf "%s-%s" (include "kardinal-promoter.fullname" $root) .policy }}
+{{- $selectors := list }}
+{{- $shard := $root.Values.controller.namespaceShard | default "" }}
+{{- if $root.Values.controller.watchNamespace }}
+{{- $selectors = list (dict "suffix" "" "selector" (dict "matchLabels" (dict "kubernetes.io/metadata.name" $root.Values.controller.watchNamespace))) }}
+{{- else if $shard }}
+{{- $selectors = list (dict "suffix" "" "selector" (dict "matchLabels" (dict "kardinal.io/shard" $shard))) }}
+{{- if eq $shard "default" }}
+{{- $selectors = append $selectors (dict "suffix" "-unlabelled" "selector" (dict "matchExpressions" (list (dict "key" "kardinal.io/shard" "operator" "DoesNotExist")))) }}
+{{- end }}
+{{- else }}
+{{- $selectors = list (dict "suffix" "" "selector" nil) }}
+{{- end }}
+{{- range $i, $sel := $selectors }}
+{{- if $i }}
+---
+{{- end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}{{ $sel.suffix }}
+  labels:
+    {{- include "kardinal-promoter.labels" $root | nindent 4 }}
+spec:
+  policyName: {{ $name }}
+  validationActions: ["Deny"]
+  {{- with $sel.selector }}
+  matchResources:
+    namespaceSelector:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
+{{- /* PolicyGate spec fields a gate instance copies from its template (all but overrides). */}}
+{{- $instanceSpecFields := list "expression" "message" "recheckInterval" "skipPermission" "when" "selector" "approval" "approvals" "generated" }}
+{{- /* Gate instance metadata a caller other than kro and the controller may not change: all of it but
+managedFields, resourceVersion and generation, which the API server writes (name and namespace are immutable). */}}
+{{- $instanceMetaFields := list "labels" "ownerReferences" "finalizers" "generateName" }}
+{{- /* The garbage collector and the namespace controller remove owner references and finalizers. */}}
+{{- $cleanup := list "system:serviceaccount:kube-system:generic-garbage-collector" "system:serviceaccount:kube-system:namespace-controller" "system:kube-controller-manager" }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -36,12 +87,374 @@ spec:
         '", not "' + object.spec.rejected.by + '"; kardinal reject sets it for you'
       reason: Forbidden
 ---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "bundle-rejection") }}
+---
 apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingAdmissionPolicyBinding
+kind: ValidatingAdmissionPolicy
 metadata:
-  name: {{ include "kardinal-promoter.fullname" . }}-bundle-rejection
+  name: {{ include "kardinal-promoter.fullname" . }}-gate-overrides
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 spec:
-  policyName: {{ include "kardinal-promoter.fullname" . }}-bundle-rejection
-  validationActions: ["Deny"]
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["policygates"]
+  variables:
+    # The controller writes overrides for the UI, which authenticates its
+    # callers itself (docs/guides/security.md, UI API Access Control). Other
+    # kardinal controllers: admission.controllerUsernames (exact usernames).
+    - name: controller
+      expression: >-
+        request.userInfo.username in {{ prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
+    # kro applies gate instances as the Graph ServiceAccount of the namespace.
+    # kro acts as the Graph ServiceAccount by impersonating it, so its
+    # requests carry no credential of their own. The Graph ServiceAccount
+    # lives in the tenant's namespace, where anyone with edit can mint its
+    # token (kubectl create token) or run a Pod as it: those requests carry
+    # authentication.kubernetes.io/credential-id (TokenRequest and bound
+    # tokens) or .../pod-name, and are not kro.
+    - name: impersonated
+      expression: >-
+        !has(request.userInfo.extra) ||
+        !('authentication.kubernetes.io/credential-id' in request.userInfo.extra ||
+          'authentication.kubernetes.io/pod-name' in request.userInfo.extra)
+    - name: graph
+      expression: >-
+        request.userInfo.username == 'system:serviceaccount:' + request.namespace +
+        ':' + {{ .Values.graph.serviceAccountName | squote }} && variables.impersonated
+    # A gate instance is what a Graph made from a gate template: it has, or
+    # had, the kardinal.io/bundle label.
+    - name: instance
+      expression: >-
+        (has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels) ||
+        (oldObject != null && has(oldObject.metadata.labels) &&
+         'kardinal.io/bundle' in oldObject.metadata.labels)
+    # The garbage collector and the namespace controller clean up owner
+    # references and finalizers.
+    - name: cleanup
+      expression: request.userInfo.username in {{ $cleanup | toJson }}
+    # The annotations are unchanged but kardinal.io/force-recheck, which
+    # anyone who may patch the gate sets to have it evaluated at once
+    # (docs/policy-gates.md).
+    - name: annotationsKept
+      expression: >-
+        oldObject != null &&
+        (has(object.metadata.annotations) ? object.metadata.annotations : {}).all(k,
+          k == 'kardinal.io/force-recheck' ||
+          (has(oldObject.metadata.annotations) && k in oldObject.metadata.annotations &&
+           object.metadata.annotations[k] == oldObject.metadata.annotations[k])) &&
+        (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}).all(k,
+          k == 'kardinal.io/force-recheck' ||
+          (has(object.metadata.annotations) && k in object.metadata.annotations))
+    # Everything in spec but overrides, and the metadata but managedFields,
+    # resourceVersion, generation and the force-recheck annotation, are
+    # unchanged.
+    - name: onlyOverrides
+      expression: >-
+        oldObject != null &&
+        {{- range $i, $f := $instanceSpecFields }}
+        {{ if $i }}&& {{ end }}has(object.spec.{{ $f }}) == has(oldObject.spec.{{ $f }}) &&
+        (!has(object.spec.{{ $f }}) || object.spec.{{ $f }} == oldObject.spec.{{ $f }})
+        {{- end }}
+        {{- range $f := $instanceMetaFields }}
+        && has(object.metadata.{{ $f }}) == has(oldObject.metadata.{{ $f }}) &&
+        (!has(object.metadata.{{ $f }}) || object.metadata.{{ $f }} == oldObject.metadata.{{ $f }})
+        {{- end }}
+        && variables.annotationsKept
+  validations:
+    # kardinal override (spec.overrides[]) records who overrode the gate.
+    # Every entry that is new, or changed, must name the requester.
+    - expression: >-
+        variables.controller || !has(object.spec.overrides) ||
+        object.spec.overrides.all(o,
+          (oldObject != null && has(oldObject.spec.overrides) && o in oldObject.spec.overrides) ||
+          (has(o.createdBy) && o.createdBy == request.userInfo.username))
+      messageExpression: >-
+        'every new spec.overrides entry must have createdBy "' + request.userInfo.username +
+        '", your own username; kardinal override sets it for you'
+      reason: Forbidden
+    # Only kro and the controller create gate instances or change anything
+    # in them but spec.overrides: an instance decides a promotion, and
+    # overriding it is the audited way to pass it.
+    - expression: >-
+        !variables.instance || variables.graph || variables.controller || variables.onlyOverrides ||
+        (variables.cleanup && oldObject != null)
+      message: >-
+        only kardinal creates a gate instance (label kardinal.io/bundle) or changes its spec
+        or metadata; change the gate template, or record an override with kardinal override
+      reason: Forbidden
+    # kro adopts an object that already has the name it applies (server-side
+    # apply, then force), keeping the fields its template does not set. A
+    # PolicyGate made ahead of kro under an instance's name, without the
+    # kardinal.io/bundle label, would become that instance with whatever
+    # else its maker put there. No one, kro included, may turn an existing
+    # PolicyGate into an instance: kro's apply is refused (Forbidden, so it
+    # retries rather than treat the object as converged) and the promotion
+    # waits until the squatter is deleted.
+    - expression: >-
+        oldObject == null ||
+        (has(oldObject.metadata.labels) && 'kardinal.io/bundle' in oldObject.metadata.labels) ||
+        !(has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels)
+      message: >-
+        a PolicyGate made without the kardinal.io/bundle label cannot become a gate instance;
+        delete it, and the promotion Graph creates the instance under that name
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "gate-overrides") }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-approvals
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["approvals"]
+  variables:
+    # Deleting an Approval revokes it: only its approver may, besides the
+    # garbage collector (an Approval is owned by its Bundle) and the
+    # namespace controller (namespace deletion). kardinal's controller never
+    # deletes Approvals, so it is not exempt.
+    - name: cleanup
+      expression: >-
+        request.userInfo.username in [
+          'system:serviceaccount:kube-system:generic-garbage-collector',
+          'system:serviceaccount:kube-system:namespace-controller',
+          'system:kube-controller-manager']
+    - name: owners
+      expression: >-
+        object != null && has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []
+  validations:
+    # kardinal approve records the approver. The spec is immutable (CRD
+    # rule), so only the create is checked.
+    - expression: request.operation != 'CREATE' || object.spec.user == request.userInfo.username
+      messageExpression: >-
+        'spec.user must be your own username "' + request.userInfo.username +
+        '"; kardinal approve sets it for you'
+      reason: Forbidden
+    # Groups are checked when the Approval is created: removing someone from
+    # a group later does not revoke the approval they gave.
+    - expression: >-
+        request.operation != 'CREATE' || !has(object.spec.groups) ||
+        object.spec.groups.all(g, g in request.userInfo.groups)
+      messageExpression: >-
+        'spec.groups may only list your own groups (' +
+        request.userInfo.groups.join(', ') + ')'
+      reason: Forbidden
+    # The promotion Graph selects Approvals by the kardinal.io/bundle label
+    # and filters on spec.environment and spec.bundleUID: the labels must say
+    # the same as the spec, so an Approval cannot be counted for another
+    # Bundle.
+    - expression: >-
+        request.operation == 'DELETE' || (
+        has(object.metadata.labels) &&
+        'kardinal.io/bundle' in object.metadata.labels &&
+        object.metadata.labels['kardinal.io/bundle'] == object.spec.bundle &&
+        'kardinal.io/environment' in object.metadata.labels &&
+        object.metadata.labels['kardinal.io/environment'] == object.spec.environment)
+      message: >-
+        the kardinal.io/bundle and kardinal.io/environment labels must equal spec.bundle
+        and spec.environment
+      reason: Invalid
+    # The garbage collector deletes an Approval with its Bundle: the only
+    # owner an Approval may name is the Bundle it approves (spec.bundleUID),
+    # so owning it by something else cannot delete it early, and owning it
+    # by its Bundle cannot be dropped to keep it past the Bundle.
+    - expression: >-
+        request.operation != 'CREATE' ||
+        variables.owners.all(r, r.kind == 'Bundle' && r.apiVersion.startsWith('kardinal.io/') &&
+          r.uid == object.spec.bundleUID && r.name == object.spec.bundle)
+      message: an Approval may be owned only by the Bundle it approves (spec.bundle and spec.bundleUID)
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'UPDATE' || variables.cleanup ||
+        variables.owners == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
+      message: the ownerReferences of an Approval cannot change
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'DELETE' || variables.cleanup ||
+        oldObject.spec.user == request.userInfo.username
+      messageExpression: >-
+        'only ' + oldObject.spec.user + ' can revoke this Approval (kardinal approve --revoke)'
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "approvals") }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-bundle-creator
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["bundles"]
+  variables:
+    # The controller creates Bundles for the UI, the Bundle API,
+    # Subscriptions and automatic rollbacks and names their creator: this
+    # release's controller ServiceAccount, exactly, plus the exact usernames
+    # listed in admission.controllerUsernames (another kardinal controller).
+    # Never a namespace or a group: in namespace mode that namespace is the
+    # tenant's.
+    - name: controller
+      expression: >-
+        request.userInfo.username in {{ prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
+    - name: creator
+      expression: >-
+        has(object.metadata.annotations) && 'kardinal.io/created-by' in object.metadata.annotations ?
+        object.metadata.annotations['kardinal.io/created-by'] : ''
+  validations:
+    # kardinal.io/created-by is who created the Bundle; an approval gate's
+    # excludeAuthor compares approvers with it. Optional, but when set it
+    # must be the requester.
+    - expression: >-
+        request.operation != 'CREATE' || variables.controller || variables.creator == '' ||
+        variables.creator == request.userInfo.username
+      messageExpression: >-
+        'the kardinal.io/created-by annotation must be your own username "' + request.userInfo.username +
+        '" (kardinal create bundle sets it), or absent'
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'UPDATE' || variables.controller ||
+        variables.creator == (has(oldObject.metadata.annotations) &&
+          'kardinal.io/created-by' in oldObject.metadata.annotations ?
+          oldObject.metadata.annotations['kardinal.io/created-by'] : '')
+      message: the kardinal.io/created-by annotation cannot be added, changed or removed after the Bundle is created
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "bundle-creator") }}
+---
+{{- /* The kinds a promotion Graph (or the controller) makes and nobody else
+does: every object of them decides a promotion. */}}
+{{- $graphKinds := list "promotionsteps" "prstatuses" "hookruns" "renderruns" "imageverifications" }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-graph-objects
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      # Spec, metadata and status. DELETE is not checked here: deleting one
+      # makes the Graph recreate it (deleting a failed PromotionStep is the
+      # documented retry), which forges nothing. HookRuns below are.
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources:
+          {{- range $graphKinds }}
+          - {{ . }}
+          - {{ . }}/status
+          {{- end }}
+      # A HookRun records that a hook ran: deleting one would let the Graph
+      # recreate it and run the hook again, so only kardinal deletes them
+      # (with the garbage collector and the namespace controller).
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["DELETE"]
+        resources: ["hookruns"]
+      # Per-promotion MetricCheck instances (label kardinal.io/bundle); a
+      # MetricCheck people write (no such label) is not checked.
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["metricchecks", "metricchecks/status"]
+      # Argo Rollouts AnalysisRuns kardinal creates (label kardinal.io/bundle):
+      # only their creation, since the Rollouts controller writes them after.
+      - apiGroups: ["argoproj.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE"]
+        resources: ["analysisruns"]
+  variables:
+    # This release's controller and the other kardinal controllers listed in
+    # admission.controllerUsernames (exact usernames).
+    - name: controller
+      expression: >-
+        request.userInfo.username in {{ prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
+    # kro applies a Graph's objects as the Graph ServiceAccount of the namespace.
+    # kro acts as the Graph ServiceAccount by impersonating it, so its
+    # requests carry no credential of their own. The Graph ServiceAccount
+    # lives in the tenant's namespace, where anyone with edit can mint its
+    # token (kubectl create token) or run a Pod as it: those requests carry
+    # authentication.kubernetes.io/credential-id (TokenRequest and bound
+    # tokens) or .../pod-name, and are not kro.
+    - name: impersonated
+      expression: >-
+        !has(request.userInfo.extra) ||
+        !('authentication.kubernetes.io/credential-id' in request.userInfo.extra ||
+          'authentication.kubernetes.io/pod-name' in request.userInfo.extra)
+    - name: graph
+      expression: >-
+        request.userInfo.username == 'system:serviceaccount:' + request.namespace +
+        ':' + {{ .Values.graph.serviceAccountName | squote }} && variables.impersonated
+    # The garbage collector and the namespace controller remove owner
+    # references and finalizers.
+    - name: cleanup
+      expression: request.userInfo.username in {{ $cleanup | toJson }}
+    - name: foreignRun
+      expression: >-
+        request.resource.group == 'argoproj.io' && object != null &&
+        !(has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels)
+    # A MetricCheck is a Graph's when it has, or had, kardinal.io/bundle.
+    - name: userMetricCheck
+      expression: >-
+        request.resource.resource == 'metricchecks' && object != null &&
+        !(has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels) &&
+        !(oldObject != null && has(oldObject.metadata.labels) && 'kardinal.io/bundle' in oldObject.metadata.labels)
+    # Anyone who may patch the object may set kardinal.io/force-recheck to
+    # have it reconciled at once (docs/troubleshooting.md): an update of the
+    # object itself that changes nothing else in spec or metadata.
+    - name: recheckOnly
+      expression: >-
+        object != null && oldObject != null && (!has(request.subResource) || request.subResource == '') &&
+        has(object.spec) == has(oldObject.spec) && (!has(object.spec) || object.spec == oldObject.spec)
+        {{- range $f := list "labels" "ownerReferences" "finalizers" }}
+        && has(object.metadata.{{ $f }}) == has(oldObject.metadata.{{ $f }}) &&
+        (!has(object.metadata.{{ $f }}) || object.metadata.{{ $f }} == oldObject.metadata.{{ $f }})
+        {{- end }}
+        && (has(object.metadata.annotations) ? object.metadata.annotations : {}).all(k,
+          k == 'kardinal.io/force-recheck' ||
+          (has(oldObject.metadata.annotations) && k in oldObject.metadata.annotations &&
+           object.metadata.annotations[k] == oldObject.metadata.annotations[k])) &&
+        (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}).all(k,
+          k == 'kardinal.io/force-recheck' ||
+          (has(object.metadata.annotations) && k in object.metadata.annotations))
+  validations:
+    - expression: >-
+        variables.foreignRun || variables.userMetricCheck || variables.graph || variables.controller ||
+        (variables.cleanup && oldObject != null) || variables.recheckOnly
+      message: >-
+        only kardinal (the promotion Graph or the controller) creates or changes this object, its
+        status included: it decides a promotion. Delete it and the promotion Graph recreates it;
+        the kardinal.io/force-recheck annotation is the one change open to you
+      reason: Forbidden
+    # As for gate instances: kro adopts an existing object of the name it
+    # applies, so no one may turn an existing MetricCheck into a
+    # per-promotion instance.
+    - expression: >-
+        request.resource.resource != 'metricchecks' || oldObject == null ||
+        (has(oldObject.metadata.labels) && 'kardinal.io/bundle' in oldObject.metadata.labels) ||
+        !(has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels)
+      message: >-
+        a MetricCheck made without the kardinal.io/bundle label cannot become a per-promotion
+        instance; delete it, and the promotion Graph creates the instance under that name
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "graph-objects") }}

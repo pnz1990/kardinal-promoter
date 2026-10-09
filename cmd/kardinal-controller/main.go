@@ -133,6 +133,14 @@ func main() {
 		flag.IntVar(v, w.name+"-workers", w.def, "How many "+w.what+" are reconciled at once.")
 	}
 
+	var gateOverrideMaxMinutes int
+	flag.IntVar(&gateOverrideMaxMinutes, "gate-override-max-minutes", int(policygaterecon.DefaultMaxOverride.Minutes()),
+		"Longest a gate override counts, from when the controller first saw it; an override ends at the earlier of "+
+			"its expiresAt and this cap (Helm gates.overrideMaxMinutes).")
+	var overrideIdentityPolicy string
+	flag.StringVar(&overrideIdentityPolicy, "override-identity-policy", "",
+		"Name of the chart's gate-overrides ValidatingAdmissionPolicy and binding. The controller records an "+
+			"override's createdBy as verified only while both exist; empty records every override unverified.")
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
 		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
 			"re-check the gate's whole Graph. 0 writes the status on every evaluation.")
@@ -172,6 +180,16 @@ func main() {
 			"repositories the controller's SCM token may act on. Every SCM call for another repository is "+
 			"refused, and a Pipeline that would need the token for one is Ready=False/RepositoryNotAllowed "+
 			"and its steps fail. Empty allows every repository.")
+
+	gatesCommitStatus := true
+	flag.BoolVar(&gatesCommitStatus, "gates-commit-status", true,
+		"Post the gate results of a waiting pr-review step as a commit status on its PR (Helm "+
+			"scm.gatesCommitStatus.enabled). false posts none, for a token without the commit-status permission.")
+	var gatesStatusContext string
+	flag.StringVar(&gatesStatusContext, "gates-status-context", scm.GatesStatusContext,
+		"Commit status context (GitLab name, Bitbucket key, Azure DevOps genre/name) the gate results are "+
+			"posted under (Helm scm.gatesCommitStatus.context). Reserved for kardinal: branch protection "+
+			"requires it, so nothing else may post under it.")
 
 	var bundleToken string
 	flag.StringVar(&bundleToken, "bundle-api-token", os.Getenv("KARDINAL_BUNDLE_TOKEN"),
@@ -633,6 +651,11 @@ func main() {
 	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
 	pgReconciler.StatusHeartbeat = gateStatusHeartbeat
 	pgReconciler.Workers = *workers["policygate"]
+	pgReconciler.MaxOverride = time.Duration(gateOverrideMaxMinutes) * time.Minute
+	pgReconciler.IdentityPolicy = &policygaterecon.IdentityPolicyCheck{Reader: mgr.GetAPIReader(), Name: overrideIdentityPolicy}
+	if overrideIdentityPolicy == "" {
+		logger.Warn().Msg("--override-identity-policy is not set: gate overrides are recorded with an unverified createdBy")
+	}
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
@@ -644,6 +667,8 @@ func main() {
 		SCM:                 scmProvider,
 		AllowedRepositories: allowedRepos,
 		GitClient:           gitClient,
+		GatesStatusDisabled: !gatesCommitStatus,
+		GatesStatusContext:  gatesStatusContext,
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		RemoteClusters:      &healthpkg.RemoteClusters{},
 		Recorder:            eventRecorder,
