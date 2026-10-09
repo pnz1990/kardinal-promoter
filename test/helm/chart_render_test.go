@@ -165,16 +165,17 @@ var allFeatures = []string{
 	"--set", "rbac.integrationTestJobs=true",
 }
 
-// ── C08-api-config-04, -16, -21: only the hold admission policy ─────────────
+// ── C08-api-config-04, -16, -21: only the identity and hold admission policies ─
 
-// TestChartRendersOnlyHoldAdmissionPolicy: the chart's old VAPs denied every
-// Pipeline (spec.gitRepo does not exist), denied promote/rollback Bundles and
-// valid durations, and collided across releases. Validation lives in the CRD
-// schema (api/v1alpha1/crd_schema_test.go). The only admission objects are
-// the hold-writes policy and binding (hold-admission.yaml, #1528), named per
-// release and shipped whatever validatingAdmissionPolicy.enabled says, which
-// stays a deprecated no-op so existing --set values keep working.
-func TestChartRendersOnlyHoldAdmissionPolicy(t *testing.T) {
+// TestChartRendersOnlyIdentityAdmissionPolicies: the chart's old VAPs denied
+// every Pipeline (spec.gitRepo does not exist), denied promote/rollback
+// Bundles and valid durations, and collided across releases. Validation lives
+// in the CRD schema (api/v1alpha1/crd_schema_test.go). The only admission
+// objects are the identity policies (identity-admission.yaml) and the
+// hold-writes policy (hold-admission.yaml, #1528), named per release and
+// shipped whatever validatingAdmissionPolicy.enabled says, which stays a
+// deprecated no-op so existing --set values keep working.
+func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 	for _, args := range [][]string{
 		nil,
 		{"--set", "validatingAdmissionPolicy.enabled=true"},
@@ -186,10 +187,10 @@ func TestChartRendersOnlyHoldAdmissionPolicy(t *testing.T) {
 				got = append(got, d.Kind+"/"+d.Name)
 			}
 		}
-		assert.ElementsMatch(t, []string{
+		assert.ElementsMatch(t, append(identityAdmissionObjects("kardinal-promoter"),
 			"ValidatingAdmissionPolicy/kardinal-promoter-hold-writes",
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-hold-writes",
-		}, got, "args %v", args)
+		), got, "args %v", args)
 	}
 }
 
@@ -865,6 +866,8 @@ var everyValue = []string{
 	"--set", "scm.provider=gitlab",
 	"--set", "scm.apiURL=https://gitlab.example.com",
 	"--set", "scm.allowedRepositories={gitlab.example.com/acme/*,gitlab.example.com/platform/**}",
+	"--set", "scm.gatesCommitStatus.enabled=false",
+	"--set", "scm.gatesCommitStatus.context=acme/gates",
 	"--set", "github.secretRef.name=scm-token",
 	"--set", "webhook.secretRef.name=webhook-secret",
 	"--set", "bundleAPI.tokenSecretRef.name=bundle-token",
@@ -901,6 +904,8 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 		"scm-provider":             "gitlab",
 		"scm-api-url":              "https://gitlab.example.com",
 		"scm-allowed-repositories": "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
+		"gates-commit-status":      "false",
+		"gates-status-context":     "acme/gates",
 		"ui-tokenreview-auth":      "true",
 		"cors-allowed-origins":     "https://a.example.com,https://b.example.com",
 	}

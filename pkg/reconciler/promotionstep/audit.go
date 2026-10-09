@@ -35,7 +35,10 @@ const (
 	AuditActionPromotionSucceeded  = "PromotionSucceeded"
 	AuditActionPromotionFailed     = "PromotionFailed"
 	AuditActionPromotionSuperseded = "PromotionSuperseded"
-	AuditActionRollbackStarted     = "RollbackStarted"
+	// AuditActionPromotionRejected is written when a started step is
+	// cancelled because its Bundle was rejected (kardinal reject, #1451).
+	AuditActionPromotionRejected = "PromotionRejected"
+	AuditActionRollbackStarted   = "RollbackStarted"
 	// AuditActionRollbackSucceeded is written, besides PromotionSucceeded,
 	// when a step of a rollback Bundle reaches Verified (B50).
 	AuditActionRollbackSucceeded = "RollbackSucceeded"
@@ -137,6 +140,8 @@ func slugifyAction(action string) string {
 		return "failed"
 	case AuditActionPromotionSuperseded:
 		return "superseded"
+	case AuditActionPromotionRejected:
+		return "rejected"
 	case AuditActionRollbackStarted:
 		return "rollback-started"
 	case AuditActionRollbackSucceeded:

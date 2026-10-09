@@ -48,6 +48,11 @@ The override is time-limited and creates a mandatory audit record in
 PolicyGate.spec.overrides[]. The gate passes immediately without evaluating
 the CEL expression until the override expires.
 
+The record names you by your Kubernetes username, read from the API server
+with a SelfSubjectReview (as kubectl auth whoami does); the chart's
+ValidatingAdmissionPolicy refuses an override in anyone else's name. The
+controller writes a GateOverridden AuditEvent for each override.
+
 Expired overrides stay in spec.overrides[] as an audit record for as long
 as the Bundle exists. Deleting a Bundle deletes its gate instances and their
 overrides, and the Pipeline's historyLimit cleanup deletes old finished
@@ -57,8 +62,8 @@ Bundles (50 by default). Use --expires-in to control the override window
 --gate takes the gate template name (for example no-weekend-deploys). The
 override is recorded on the instances of that gate that the Pipeline's
 in-progress Bundles have for --stage (every stage when --stage is not set),
-so run it while the Bundle waits on the gate. Instances of Verified, Failed
-and Superseded Bundles are left alone, because no promotion waits on them; if
+so run it while the Bundle waits on the gate. Instances of Verified, Failed,
+Superseded and Rejected Bundles are left alone, because no promotion waits on them; if
 a Failed Bundle resumes, run the override again. The name of one gate
 instance, as kubectl get policygates shows it, is also accepted; that instance
 alone gets the override.
@@ -129,8 +134,13 @@ func overrideFn(
 		return err
 	}
 
-	// Determine who is creating the override (best-effort)
-	createdBy := currentUser()
+	// createdBy is the username the API server authenticates this CLI as:
+	// the chart's identity policy refuses any other name.
+	id, err := identityOf(ctx, c)
+	if err != nil {
+		return fmt.Errorf("override: %w", err)
+	}
+	createdBy := id.Username
 
 	now := time.Now().UTC()
 	expiresAt := metav1.NewTime(now.Add(expDuration))
@@ -181,7 +191,7 @@ func overrideFn(
 // that is an instance is read directly and never used in a label selector
 // (E2E-R08). A template name is resolved to the instances of the Bundles
 // still in progress. No promotion waits on the instances of a Verified,
-// Failed or Superseded Bundle, so they are left alone.
+// Failed, Superseded or Rejected Bundle, so they are left alone.
 func overrideTargets(ctx context.Context, c sigs_client.Client, ns, pipeline, stage, gateName string) (
 	[]v1alpha1.PolicyGate, error) {
 	var gate v1alpha1.PolicyGate
@@ -229,7 +239,7 @@ func overrideTargets(ctx context.Context, c sigs_client.Client, ns, pipeline, st
 	inProgress := make(map[string]bool, len(bundles.Items))
 	for _, b := range bundles.Items {
 		switch b.Status.Phase {
-		case "Verified", "Failed", "Superseded":
+		case "Verified", "Failed", "Superseded", "Rejected":
 		default:
 			inProgress[b.Name] = true
 		}
