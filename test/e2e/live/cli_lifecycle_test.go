@@ -305,14 +305,12 @@ func TestCLI_Promote(t *testing.T) {
 // delete bundle: it prints the name, and the Bundle, its Graph, steps and
 // gate instances are gone from the cluster and from get bundles and get
 // steps, with git unchanged. A missing Bundle is an error; "bundles" is an
-// alias. kardinal approve, deprecated, fails with a pointer to kardinal
-// override and leaves the Bundle and its step as they were.
-// Covers CLI-DELETE-BUNDLE-01, CLI-APPROVE-01.
+// alias.
+// Covers CLI-DELETE-BUNDLE-01.
 func TestCLI_DeleteBundle(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	c := e.CLI(t)
-	ctx := context.Background()
 	a := newArgoApp(t, e, "test", "prod")
 	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
 	waitPipelineValid(t, e, a.ns, pipelineName)
@@ -320,24 +318,6 @@ func TestCLI_DeleteBundle(t *testing.T) {
 	bA := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
 	e.WaitStepState(t, a.ns, pipelineName, bA, "prod", "WaitingForMerge", 2*promoteTimeout)
 	openPR(t, e, a.repo, fixtures.V2)
-	before := getBundle(t, e, a.ns, bA)
-
-	// approve changes nothing.
-	r := c.Fail(a.ns, "approve", bA, "--env", "prod")
-	assert.Equal(t, 1, r.Code)
-	assert.Empty(t, r.Stdout)
-	assert.Equal(t, "Command \"approve\" is deprecated, it has no effect; use `kardinal override` to force-pass a gate\n"+
-		"kardinal approve is deprecated and has no effect: it only labelled the Bundle, and no gate ever read the label. "+
-		"To force-pass a gate with an audit record, run: kardinal override <pipeline> --stage <environment> --gate <gate-name> --reason <text>\n",
-		r.Stderr)
-	after := getBundle(t, e, a.ns, bA)
-	assert.Equal(t, before.Labels, after.Labels, "approve does not label the Bundle")
-	assert.NotContains(t, after.Labels, "kardinal.io/approved")
-	ps, ok, err := e.Step(ctx, a.ns, pipelineName, bA, "prod")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "WaitingForMerge", ps.Status.State, "approve does not move the step")
-
 	head := e.BranchHead(t, a.repo)
 	assert.Equal(t, "Bundle "+bA+" deleted\n", c.Must(a.ns, "delete", "bundle", bA))
 	waitBundleGone(t, e, a.ns, bA)

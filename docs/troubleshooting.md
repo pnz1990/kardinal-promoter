@@ -18,8 +18,11 @@ Common cases:
 | PolicyGate `spec.expression` | Add a CEL expression to your PolicyGate spec |
 | PolicyGate `spec.recheckInterval` | Use Go duration format: `5m`, `30s`, `1h` (not `5 minutes`) |
 
-These checks are part of the CRDs and cannot be turned off. The chart no longer installs a
-`ValidatingAdmissionPolicy`, and the `validatingAdmissionPolicy.enabled` value has no effect.
+These checks are part of the CRDs and cannot be turned off. The chart's only
+ValidatingAdmissionPolicies are the identity policies (a rejection, an override or an approval
+must name the requesting user, see [Verified identity](guides/security.md#verified-identity)); an
+`admission webhook "..." denied the request` or `ValidatingAdmissionPolicy '<release>-...' ... denied
+request` error names the rule. The `validatingAdmissionPolicy.enabled` value has no effect.
 
 ---
 

@@ -246,6 +246,10 @@ lists every row's result. `-complete` also fails on rows still todo.
   `test/e2e/results/kardinal-e2e-<suite>/diagnostics/<namespace>/`. The
   namespace is `e2e-<test name>-<hash>`, new on every run.
   `KARDINAL_E2E_KEEP=1` keeps namespaces and repos for debugging.
+- Repos are created at most 4 at a time (`KARDINAL_E2E_GIT_CREATE_SLOTS`), and a
+  Forgejo or Gitea create that times out or gets a 5xx is retried from scratch:
+  when a shard's parallel tests start together, about 100 creates at once
+  queued past the client's 30s timeout (#1557).
 
 ## Test app
 

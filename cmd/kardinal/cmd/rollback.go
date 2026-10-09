@@ -137,6 +137,7 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 	if err != nil {
 		return err
 	}
+	stampCreator(ctx, w, c, plan.Bundle)
 	if createErr := c.Create(ctx, plan.Bundle); createErr != nil {
 		return fmt.Errorf("create rollback bundle: %w", createErr)
 	}
@@ -174,6 +175,7 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 		},
 		HoldReason: reason,
 		ExpiresIn:  expiresIn,
+		Creator:    creatorOf(context.Background(), w, c),
 	})
 	if err != nil {
 		return err

@@ -279,6 +279,26 @@ If the PRStatus records that it will not get the commit, `argocd` checks the Bun
 instead, and `flux` waits until `health.timeout`; see
 [When the merge commit is not known yet](health-adapters.md#when-the-merge-commit-is-not-known-yet).
 
+## Gate status check (`kardinal/gates`)
+
+While a PR waits for its merge, kardinal keeps the results of the environment's PolicyGates on the PR as a commit status named `kardinal/gates` on **the commit kardinal pushed to the PR branch** (a build status on Bitbucket Cloud, a pull request iteration status with genre `kardinal` and name `gates` on Azure DevOps):
+
+| State | When |
+|---|---|
+| `success` | every gate of the environment passes (`all 2 gates pass`), or the environment has none (`no kardinal gates on prod`) |
+| `failure` | a gate blocks: the description names it and its reason, for example `app-v1-freeze-prod: prod is frozen: release freeze` |
+| `error` (GitLab and Bitbucket show `failed`) | the gate results are unknown: the step's Graph does not mirror them, which happens to a step whose Graph was built before the upgrade that added the mirror. Re-promote (or let the next Bundle supersede it) to get the status |
+
+The gates are re-checked the whole time the PR waits, not only before the step started: a change window that starts while the PR is open, a soak or metric gate that turns false, or an approval that is revoked flips the status to `failure` within a gate recheck, and back to `success` when the gate passes again. The step itself keeps waiting; it does not fail or close the PR.
+
+**kardinal cannot stop a person from merging.** The status blocks the merge only when the repository requires it: make `kardinal/gates` a required status check of the environment branch (GitHub and Forgejo/Gitea branch protection, a GitLab "Pipelines must succeed"/external status check rule, a Bitbucket merge check on builds, an Azure DevOps status policy on genre `kardinal`, name `gates`, with "reset status whenever there are new changes"). Without that, a PR can be merged while a gate blocks. kardinal then treats the change as live: the step goes on to its health check, records the blocking gate in `status.outputs.mergedWhileBlocked` and emits a Warning Event `MergedWhileBlocked`. Failing the step would not revert the change; roll back if it should not have shipped.
+
+**Only kardinal's commit gets the status.** The git-push step records the commit it pushed (`status.outputs.pushedSHA`), the step keeps it as `status.outputs.prHeadSHA` when it opens the PR, and the status is set there, never on whatever the PR head is now. A commit someone else pushes to the PR branch has no `kardinal/gates` status, so a required check holds that head until kardinal pushes again; kardinal never marks a head it did not push `success`. When kardinal pushes the PR branch again (a re-run after a restart, or a rebuild of the PR branch on a moved base branch, which updates `pushedSHA`), the status follows to the new commit. A PR opened by a release before this one has no recorded commit and gets no status; so does a step whose git client could not report the pushed commit, with a Warning Event `GatesStatusNoCommit`.
+
+The status name is reserved for kardinal: nothing else should post `kardinal/gates`, or a required check could be satisfied by it. Change it with the Helm value `scm.gatesCommitStatus.context` (`--gates-status-context`), and turn the feature off with `scm.gatesCommitStatus.enabled: false` (`--gates-commit-status=false`), for example when the token may not set commit statuses.
+
+How it works: the promotion Graph mirrors the live gate results onto each pr-review step (`spec.live.gates`, through a `patch` node, because the step's own template is frozen once a gate turns false), and the step reconciler posts the status when the result or the commit changes (`status.outputs.gatesStatus` records the last one, so a reconcile with nothing new makes no SCM call; posting needs one call, two on Azure DevOps, which looks up the PR iteration). A failed post never fails the step. It is recorded as `error:<hash>@<retry time>#<failures>` with one Warning Event `GatesStatusFailed`: a transient error (5xx, rate limit) is retried after 30s, doubling up to an hour; a permanent one (401, a 403 that is not a rate limit, 404) waits an hour whatever the gates do, so a token without the commit-status permission does not spend the rate limit on every poll; rotating the SCM token tries again at once. After any other failure a new gate result or commit is tried at once. Only GitHub's 403 is read for a rate limit in its JSON `message` (its secondary limit can come without the rate-limit headers); the headers decide first. Every provider kardinal supports sets it; the token needs permission to set commit statuses (included in the scopes listed in [SCM providers](scm-providers.md)).
+
 ## Environments Without a PR
 
 For environments with `approval: auto`, no PR is created. The controller pushes directly to the target branch (or directory). For a PR the SCM merges on its own, use `approval: pr-review` with `pr.merge.auto` ([Customising the PR](#customising-the-pr)).
