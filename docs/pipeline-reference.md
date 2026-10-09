@@ -212,7 +212,10 @@ Bundle's `GatesCreated` condition names a gate that cannot be created). A featur
 does not carry yet fails the Bundle with `GraphBuildFailed` naming the feature, and sets the
 Pipeline `Ready=False` while its new Bundles would get a compact Graph. Per-promotion MetricChecks
 (`spec.perPromotion`) are carried: the `MetricChecks` collection creates an environment's instances
-once its upstream environments are Verified, as the nodes shape does.
+once its upstream environments are Verified, as the nodes shape does. One difference in pruning: if
+an upstream leaves Verified before the environment's step starts, the compact shape deletes that
+environment's instances (they leave the collection, so kro prunes them) and creates them again once
+the upstreams are Verified; once the step has started, its instances are kept.
 
 The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
 each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be

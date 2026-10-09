@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	celast "github.com/google/cel-go/common/ast"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -81,30 +82,90 @@ func freeIdentifiers(t *testing.T, env *cel.Env, expr string) []string {
 	t.Helper()
 	ast, iss := env.Parse(expr)
 	require.NoError(t, iss.Err(), "parse %q", expr)
-	bound := map[string]bool{}
-	var idents []string
-	celast.PreOrderVisit(ast.NativeRep().Expr(), celast.NewExprVisitor(func(e celast.Expr) {
-		switch e.Kind() {
-		case celast.ComprehensionKind:
-			c := e.AsComprehension()
-			bound[c.IterVar()] = true
-			bound[c.AccuVar()] = true
-			if v := c.IterVar2(); v != "" {
-				bound[v] = true
-			}
-		case celast.IdentKind:
-			idents = append(idents, e.AsIdent())
-		}
-	}))
 	var free []string
 	seen := map[string]bool{}
-	for _, id := range idents {
-		if !bound[id] && !seen[id] {
-			seen[id] = true
-			free = append(free, id)
+	// walk visits e with the loop variables in scope. A comprehension's
+	// variables are bound only inside it: the iteration and accumulator
+	// variables in its condition and step, the accumulator in its result,
+	// neither in its range or initial value, and nothing after it. So
+	// "l.map(x, x) + [x]" reads a free x.
+	var walk func(e celast.Expr, scope map[string]bool)
+	walk = func(e celast.Expr, scope map[string]bool) {
+		if e == nil {
+			return
+		}
+		with := func(names ...string) map[string]bool {
+			inner := make(map[string]bool, len(scope)+len(names))
+			for k := range scope {
+				inner[k] = true
+			}
+			for _, n := range names {
+				if n != "" {
+					inner[n] = true
+				}
+			}
+			return inner
+		}
+		switch e.Kind() {
+		case celast.IdentKind:
+			if id := e.AsIdent(); !scope[id] && !seen[id] {
+				seen[id] = true
+				free = append(free, id)
+			}
+		case celast.SelectKind:
+			walk(e.AsSelect().Operand(), scope)
+		case celast.CallKind:
+			c := e.AsCall()
+			walk(c.Target(), scope)
+			for _, a := range c.Args() {
+				walk(a, scope)
+			}
+		case celast.ListKind:
+			for _, el := range e.AsList().Elements() {
+				walk(el, scope)
+			}
+		case celast.MapKind:
+			for _, en := range e.AsMap().Entries() {
+				m := en.AsMapEntry()
+				walk(m.Key(), scope)
+				walk(m.Value(), scope)
+			}
+		case celast.StructKind:
+			for _, f := range e.AsStruct().Fields() {
+				walk(f.AsStructField().Value(), scope)
+			}
+		case celast.ComprehensionKind:
+			c := e.AsComprehension()
+			walk(c.IterRange(), scope)
+			walk(c.AccuInit(), scope)
+			loop := with(c.IterVar(), c.IterVar2(), c.AccuVar())
+			walk(c.LoopCondition(), loop)
+			walk(c.LoopStep(), loop)
+			walk(c.Result(), with(c.AccuVar()))
 		}
 	}
+	walk(ast.NativeRep().Expr(), map[string]bool{})
 	return free
+}
+
+// TestFreeIdentifiers: a loop variable is bound only inside its own
+// comprehension (QA #1543), so a node ID that shares a loop variable's name
+// and is read outside the loop is still reported.
+func TestFreeIdentifiers(t *testing.T) {
+	env, err := cel.NewEnv(cel.OptionalTypes())
+	require.NoError(t, err)
+	for expr, want := range map[string][]string{
+		"steps.map(s, s.name)":                                          {"steps"},
+		"steps.map(s, s.name) + [s]":                                    {"steps", "s"},
+		"a.all(x, x > 0) && b.exists(y, y == x)":                        {"a", "b", "x"},
+		"a.map(x, b.filter(y, y == x))":                                 {"a", "b"},
+		"a.map(x, x).size() > 0 ? x : y":                                {"a", "x", "y"},
+		"{'k': v}.exists(k, k == w)":                                    {"v", "w"},
+		`has(bundle.status.phase) && bundle.status.phase == "Verified"`: {"bundle"},
+	} {
+		got := freeIdentifiers(t, env, expr)
+		assert.ElementsMatch(t, want, got, expr)
+	}
 }
 
 // assertRefsResolve checks that every CEL expression of g (templates, defs,

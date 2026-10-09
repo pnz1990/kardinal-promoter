@@ -525,6 +525,13 @@ func TestCompact_MetricCheckAdmission(t *testing.T) {
 	assert.Equal(t, []string{"test"}, admitted(), "prod waits for test to be Verified")
 	sim.steps["test"] = "Verified"
 	assert.Equal(t, []string{"prod", "test"}, admitted(), "prod's instance exists before prod's step")
+	// Before prod's step starts, test leaving Verified takes prod's instance
+	// out of the collection, so kro prunes it (QA #1543; documented in
+	// pipeline-reference).
+	sim.steps["test"] = "Failed"
+	assert.Equal(t, []string{"test"}, admitted(), "an instance of an environment not started yet is deleted")
+	sim.steps["test"] = "Verified"
+	assert.Equal(t, []string{"prod", "test"}, admitted(), "and created again once test is Verified again")
 	sim.steps["prod"] = ""
 	sim.steps["test"] = "Failed"
 	assert.Equal(t, []string{"prod", "test"}, admitted(), "a started environment keeps its instance")
