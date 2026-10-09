@@ -481,8 +481,9 @@ with `approval: pr-review`.
 
 ### Committing templated sources to rendered branches
 
-kardinal does not write rendered branches (`layout: branch` is not implemented). This applies
-only if your own CI renders manifests to a branch.
+With `layout: branch`, kardinal renders each environment and commits only plain manifests to its
+rendered branch ([Rendered Manifests](rendered-manifests.md)). This section applies when your own
+CI renders manifests to a branch instead.
 
 Do not commit Kustomize `kustomization.yaml` files or Helm `values.yaml` files to a
 rendered branch. Rendered branches must contain only plain Kubernetes YAML. Argo CD's
