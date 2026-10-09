@@ -977,6 +977,8 @@ var kroReservedNodeIDs = map[string]bool{
 	"true": true, "false": true, "null": true, "in": true, "as": true, "break": true, "const": true,
 	"continue": true, "else": true, "for": true, "function": true, "if": true, "import": true, "let": true,
 	"loop": true, "package": true, "return": true, "var": true, "void": true, "while": true,
+	// Proposed as reserved by kro#1434 (KREP-025), not merged; reserved ahead of it.
+	"time": true,
 }
 
 // assertKroValid checks a built Graph the way kro and the API server will,
