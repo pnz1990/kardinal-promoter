@@ -109,16 +109,18 @@ func TestRollback_Hold(t *testing.T) {
 	// A user with update on pipelines but not pipelines/hold cannot hold,
 	// even in its own name.
 	const editor = "e2e-pipeline-editor"
-	require.NoError(t, e.Client.Create(ctx, &rbacv1.Role{
+	_, err = e.Kube.RbacV1().Roles(a.ns).Create(ctx, &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: "pipeline-editor", Namespace: a.ns},
 		Rules: []rbacv1.PolicyRule{{APIGroups: []string{"kardinal.io"}, Resources: []string{"pipelines"},
 			Verbs: []string{"get", "update"}}},
-	}))
-	require.NoError(t, e.Client.Create(ctx, &rbacv1.RoleBinding{
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = e.Kube.RbacV1().RoleBindings(a.ns).Create(ctx, &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "pipeline-editor", Namespace: a.ns},
 		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: "pipeline-editor"},
 		Subjects:   []rbacv1.Subject{{APIGroup: "rbac.authorization.k8s.io", Kind: "User", Name: editor}},
-	}))
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
 	cfg := rest.CopyConfig(e.Config)
 	cfg.Impersonate = rest.ImpersonationConfig{UserName: editor}
 	asEditor, err := client.New(cfg, client.Options{Scheme: e.Client.Scheme()})
