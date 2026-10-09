@@ -551,3 +551,31 @@ func TestStep_HookForgedHookRunIgnored(t *testing.T) {
 		return hr.Status.Phase == "" && len(hr.Finalizers) == 0, fmt.Sprintf("phase=%q finalizers=%v", hr.Status.Phase, hr.Finalizers)
 	})
 }
+
+// TestStep_HooksRefusedInCompactGraph: the compact Graph shape does not
+// carry hooks, so a Pipeline with hooks and kardinal.io/graph-shape: compact
+// is Ready=False naming them, and its Bundle fails with GraphBuildFailed
+// instead of promoting without its hooks.
+//
+// Covers HOOK-COMPACT-01.
+func TestStep_HooksRefusedInCompactGraph(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{graph.AnnotationGraphShape: graph.GraphShapeCompact}
+	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{{Name: "migrate", Phase: "pre", Job: hookJob(t, `echo migrated`, "")}}
+	a.apply(t, p)
+	const feature = "pre- and post-deploy hooks (spec.environments[].hooks)"
+	e.WaitPipeline(t, a.ns, pipelineName, time.Minute, "Ready=False naming hooks", func(p *v1alpha1.Pipeline) bool {
+		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+		return c != nil && c.Status == metav1.ConditionFalse && strings.Contains(c.Message, feature)
+	})
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitBundle(t, a.ns, bundle, time.Minute, "Failed with GraphBuildFailed", failedWith("GraphBuildFailed", feature))
+	_, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+	require.NoError(t, err)
+	assert.False(t, ok, "nothing promoted without its hooks")
+	a.fileHas(t, "test", fixtures.V1, "test in git")
+}

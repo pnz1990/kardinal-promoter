@@ -24,6 +24,9 @@ type renderedObject struct {
 	Object map[string]interface{}
 }
 
+// reDefField matches a forEach over a def node's field: ${Node.field}.
+var reDefField = regexp.MustCompile(`^\$\{([A-Za-z][A-Za-z0-9]*)\.([A-Za-z][A-Za-z0-9]*)\}$`)
+
 // reWholeExpr matches a field whose whole value is one ${...} expression.
 var reWholeExpr = regexp.MustCompile(`^\$\{(.*)\}$`)
 
@@ -51,6 +54,15 @@ func renderObjects(t *testing.T, g *graph.Graph) []renderedObject {
 		}
 		require.Len(t, n.ForEach, 1, "node %s: one forEach dimension", n.ID)
 		for iter, expr := range n.ForEach[0] {
+			// A collection over a computed def field (the compact shape's
+			// PromotionWave) depends on cluster state: compactSim renders it.
+			if m := reDefField.FindStringSubmatch(expr); m != nil {
+				if def, ok := defs[m[1]].(map[string]interface{}); ok {
+					if _, computed := def[m[2]].(string); computed {
+						continue
+					}
+				}
+			}
 			vars := map[string]interface{}{}
 			for k, v := range defs {
 				vars[k] = v

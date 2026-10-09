@@ -58,10 +58,6 @@ const (
 const (
 	LabelHookPhase = "kardinal.io/hook-phase"
 	LabelHook      = "kardinal.io/hook"
-	// LabelBundleUID is the UID of the Bundle whose Graph created the
-	// object. The HookRun reconciler and the mirror ignore a HookRun whose
-	// value is not the Bundle's UID (a HookRun someone created by hand).
-	LabelBundleUID = "kardinal.io/bundle-uid"
 	// LabelKRONodeID is the label kro's Graph executor stamps on every object
 	// it applies (kro.run/node-id, pkg/metadata/labels.go).
 	LabelKRONodeID = "kro.run/node-id"
@@ -412,4 +408,26 @@ func stepAdvanced(stepK8sName, phase string) string {
 		states = `s.?status.?state.orValue("") in ["Verified", "Failed", "AbortedByAlarm", "RollingBack"]`
 	}
 	return fmt.Sprintf(`${%s.exists(s, s.metadata.name == %s && %s)}`, refStepsNodeID, strconv.Quote(stepK8sName), states)
+}
+
+// The compact shape does not build HookRun nodes or the mirror patch node:
+// both are per environment and read the environment's step node, which the
+// compact shape folds into the PromotionSteps collection. A Pipeline with
+// hooks is built in the node shape, or refused (compactUnsupported).
+func init() {
+	RegisterCompactUnsupported(hooksUsed)
+}
+
+// hooksUsed returns the feature name when an environment of the Pipeline
+// has hooks.
+func hooksUsed(in BuildInput) string {
+	if in.Pipeline == nil {
+		return ""
+	}
+	for _, env := range in.Pipeline.Spec.Environments {
+		if len(env.Hooks) > 0 {
+			return "pre- and post-deploy hooks (spec.environments[].hooks)"
+		}
+	}
+	return ""
 }

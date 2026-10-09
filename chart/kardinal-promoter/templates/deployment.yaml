@@ -53,6 +53,9 @@ spec:
             - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
             - --hook-service-accounts={{ join "," .Values.hooks.serviceAccounts }}
             - --hook-pod-security-level={{ .Values.hooks.podSecurityLevel }}
+            {{- if not (kindIs "invalid" .Values.graph.compactAbove) }}
+            - --graph-compact-above={{ .Values.graph.compactAbove }}
+            {{- end }}
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
             {{- end }}
