@@ -244,3 +244,63 @@ func TestUIAPI_Pipelines_OpsColumns(t *testing.T) {
 		})
 	}
 }
+
+// TestUIAPI_Gates_Approval (E6): an approval gate reports its quorum, who may
+// approve, and each decision as the gate counted it (status.approvals): the
+// counted approvals, a counted reject, and the decisions that do not count
+// with the reason. A gate without spec.approval has no approval field.
+func TestUIAPI_Gates_Approval(t *testing.T) {
+	seen := metav1.NewTime(time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC))
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "prod-approval", Namespace: "default",
+			Labels: map[string]string{"kardinal.io/bundle": "app-1", "kardinal.io/environment": "prod", "kardinal.io/pipeline": "app"}},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "true",
+			Approval: &v1alpha1.GateApprovalPolicy{AllowedGroups: []string{"release-managers"}, ExcludeAuthor: true}},
+		Status: v1alpha1.PolicyGateStatus{Approvals: []v1alpha1.GateApprovalStatus{
+			{User: "alice", Decision: "approve", Counted: true, Comment: "looks good", FirstSeenAt: &seen},
+			{User: "mallory", Decision: "approve", Counted: false, Reason: "not in allowedUsers or allowedGroups"},
+			{User: "bob", Decision: "reject", Counted: true, Comment: "wait for the freeze"},
+		}},
+	}
+	plain := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "plain", Namespace: "default"},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "true"}}
+	w := uiGet(t, "/api/v1/ui/gates", gate, plain)
+	var resp []uiGateResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 2)
+	byName := map[string]uiGateResponse{resp[0].Name: resp[0], resp[1].Name: resp[1]}
+	assert.Nil(t, byName["plain"].Approval)
+	got := byName["prod-approval"].Approval
+	require.NotNil(t, got)
+	assert.Equal(t, &uiGateApproval{
+		Required: 1, AllowedGroups: []string{"release-managers"}, ExcludeAuthor: true,
+		Approved: 1, Rejected: true,
+		Decisions: []uiGateDecision{
+			{User: "alice", Decision: "approve", Counted: true, Comment: "looks good", FirstSeenAt: "2026-10-09T08:00:00Z"},
+			{User: "mallory", Decision: "approve", Reason: "not in allowedUsers or allowedGroups"},
+			{User: "bob", Decision: "reject", Counted: true, Comment: "wait for the freeze"},
+		},
+	}, got)
+}
+
+// TestUIAPI_Bundles_Rejected (E6): a rejected Bundle carries who rejected it,
+// why and when (spec.rejected).
+func TestUIAPI_Bundles_Rejected(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 10, 9, 9, 0, 0, 0, time.UTC))
+	b := uiBundle("app-1", "default", "app", time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC))
+	b.Spec.Rejected = &v1alpha1.BundleRejection{Reason: "CVE-2026-1234 in the base image", By: "alice", At: &at}
+	b.Status.Phase = "Rejected"
+	ok := uiBundle("app-2", "default", "app", time.Date(2026, 10, 9, 8, 30, 0, 0, time.UTC))
+	w := uiGet(t, "/api/v1/ui/pipelines/app/bundles", b, ok)
+	var resp []uiBundleResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 2)
+	for _, r := range resp {
+		if r.Name == "app-1" {
+			assert.Equal(t, &uiBundleRejection{Reason: "CVE-2026-1234 in the base image", By: "alice", At: "2026-10-09T09:00:00Z"}, r.Rejected)
+			assert.Equal(t, "Rejected", r.Phase)
+		} else {
+			assert.Nil(t, r.Rejected)
+		}
+	}
+}

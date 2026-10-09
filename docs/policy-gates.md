@@ -655,6 +655,7 @@ Trust: anyone allowed to impersonate users or groups (`impersonate` RBAC) can ap
 Limits:
 
 - An Approval is for one Bundle: the next Bundle needs new approvals.
+- In the UI, an approval gate in the Policy Gates panel shows its quorum: one pip per approval it needs, filled for each counted approval, with `1 of 2 approvals`, `Approved (2 of 2)` or `Rejected by bob@example.com`. Below it are who may approve and every decision: who decided, whether it counts and why not, the comment, and when the gate saw it. While the quorum is not met, it shows the `kardinal approve <bundle> --env <env>` command to copy.
 - Approving from the UI is not available yet: the UI writes as the controller's ServiceAccount, and the identity policy would refuse an Approval in another name. It comes with per-caller identity in the UI (#1466).
 - Upgrading: `helm upgrade` does not update CRDs. Apply `chart/kardinal-promoter/crds/kardinal.io_approvals.yaml` and the updated `kardinal.io_policygates.yaml` before you add `spec.approval` to a gate; a Graph with an approval gate cannot be built without the Approval CRD.
 

@@ -7,6 +7,7 @@
 import { useState, useEffect } from 'react'
 import type { GateState, PolicyGate } from '../types'
 import { HealthChip, healthChipColors, type HealthState } from './HealthChip'
+import { ApprovalQuorum } from './ApprovalQuorum'
 
 interface Props {
   gates: PolicyGate[]
@@ -190,6 +191,9 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
                 }}>
                   {gate.reason}
                 </div>
+              )}
+              {gate.approval && (
+                <ApprovalQuorum approval={gate.approval} bundle={gate.bundle} environment={gate.environment} />
               )}
             </div>
           ))}

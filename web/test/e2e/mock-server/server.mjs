@@ -102,6 +102,15 @@ const BUNDLES = {
       pipeline: 'payments-service',
       createdAt: new Date(Date.now() - 120_000).toISOString(),
     },
+    {
+      name: 'payments-service-rej77',
+      namespace: 'default',
+      phase: 'Rejected',
+      type: 'image',
+      pipeline: 'payments-service',
+      createdAt: new Date(Date.now() - 900_000).toISOString(),
+      rejected: { by: 'bob', reason: 'CVE-2026-1234 in the base image', at: new Date(Date.now() - 300_000).toISOString() },
+    },
   ],
 }
 
@@ -149,6 +158,17 @@ const GATES = [
   { name: 'no-weekend-deploys-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: '!schedule.isWeekend', ready: false, holding: true, state: 'Block', reason: 'Today is a weekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
   { name: 'business-hours-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: 'schedule.hour >= 9 && schedule.hour < 17', ready: true, state: 'Pass', lastEvaluatedAt: new Date(Date.now() - 10_000).toISOString() },
   { name: 'no-weekend-deploys', namespace: 'default', expression: '!schedule.isWeekend', ready: false, template: true, state: 'Pending' },
+  {
+    name: 'release-approval-payments-service-def456-prod', namespace: 'default', pipeline: 'payments-service', bundle: 'payments-service-def456', environment: 'prod',
+    expression: 'true', ready: false, holding: true, state: 'Block', reason: 'waiting for approvals: 1 of 2 (alice)', lastEvaluatedAt: new Date(Date.now() - 20_000).toISOString(),
+    approval: {
+      required: 2, allowedGroups: ['release-managers'], excludeAuthor: true, approved: 1,
+      decisions: [
+        { user: 'alice', decision: 'approve', counted: true, comment: 'canary looks clean', firstSeenAt: new Date(Date.now() - 3_600_000).toISOString() },
+        { user: 'ci-bot', decision: 'approve', counted: false, reason: 'the Bundle\'s creator (excludeAuthor)', firstSeenAt: new Date(Date.now() - 600_000).toISOString() },
+      ],
+    },
+  },
 ]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
