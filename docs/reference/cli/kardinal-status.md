@@ -14,8 +14,8 @@ When called with a pipeline name: shows in-flight promotion details for that
 pipeline — the current bundle per environment (the newest bundle that is not
 Superseded and has a PromotionStep there, or a gate instance there and has not
 failed; see kardinal explain), its PromotionSteps (one row per environment it
-has a step in, ▶ marking a step that is Promoting, WaitingForMerge or
-HealthChecking, with the Bundle each row belongs to, the step it is on, and the
+has a step in, ▶ marking a step that is Promoting, WaitingForMerge,
+HealthChecking or Verifying, with the Bundle each row belongs to, the step it is on, and the
 last 40 characters of the step's PR URL, open or merged; REGION is - unless the
 step was created by a Graph built before multi-region fan-out was removed;
 spec.regions is deprecated), the Bundle deployed in every environment (the
