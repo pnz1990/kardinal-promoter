@@ -189,9 +189,10 @@ objectives allow for the `-race` build, which makes each reconcile about
 | `full`, `soak` | 200 | 10 s | 30 s | 2 min |
 
 `KARDINAL_E2E_SCALE_SLO_STEP_P50`, `_SLO_STEP_P99`, `_SLO_BUNDLE_P99` and
-`_SLO_PIPELINES` override them. The test is a known bug (#1509) until the
-reconcilers run more than one worker: today the `ci` run measures a step
-p50 of 11-14 s, and the `full` run 65 s.
+`_SLO_PIPELINES` override them. With the reconciler worker defaults
+(#1509) the `full` run measures automatic steps p50 2 s and p99 5 s, and
+Bundles p99 92 s (docs/installation.md, Controller concurrency); with one worker
+each it was a step p50 of 65 s.
 
 A test that reproduces an open bug calls `scale.KnownBug(t, issue, ...)`
 and runs on: it is an expected failure. When it fails, `test/e2e/report`

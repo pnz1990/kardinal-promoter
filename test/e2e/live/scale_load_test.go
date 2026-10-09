@@ -81,17 +81,12 @@ func TestScale_LoadSustained(t *testing.T) {
 	assertNewestVerified(t, r)
 }
 
-// latencyBug is the one-worker reconcilers': 200 Pipelines promote through
-// three environments in minutes, not seconds.
-const latencyBug = 1509
-
 // TestScale_LatencySLO holds the controller to the profile's latency
 // objective (test/e2e/README.md#latency-slo): SLOPipelines Pipelines of
 // PipelineEnvs automatic environments each get one Bundle at once, as a
 // monorepo release does, and the automatic steps' and the Bundles' latency
 // quantiles must stay under the objective. Covers SCALE-LOAD-SLO-01.
 func TestScale_LatencySLO(t *testing.T) {
-	scale.KnownBug(t, latencyBug, "every reconciler runs one worker, so the steps of many Pipelines queue behind each other")
 	r := scale.Begin(t)
 	names := r.Fleet.Pipelines(t, "slo", r.P.SLOPipelines, scale.Chain(r.P.PipelineEnvs))
 	r.Note("pipelines", len(names))
