@@ -167,6 +167,9 @@ export function PipelineLaneView({
             Position absolute, covers the card, z-index 0 so visible content renders above. */}
         <button
           aria-label={isSelected ? `Deselect ${node.environment}` : `Select ${node.environment}`}
+          title={[node.environment, activeBundleName, node.message,
+            hold && `Held on ${hold.bundle} by ${hold.createdBy || 'unknown'}: ${hold.reason}` +
+              (hold.expiresAt ? ` (until ${hold.expiresAt})` : '')].filter(Boolean).join('\n')}
           aria-pressed={isSelected}
           onClick={e => { e.stopPropagation(); onSelectNode?.(isSelected ? null : node) }}
           style={{
@@ -180,7 +183,11 @@ export function PipelineLaneView({
           }}
         />
         {/* Card content sits above the invisible button */}
-        <div style={{ position: 'relative', zIndex: 1 }}>
+        {/* The content is drawn over the select button but lets the pointer
+            through to it (#1580 QA: it intercepted real clicks), except the
+            PR link and the action buttons, which take their own clicks. The
+            button's title carries the tooltips of the truncated lines. */}
+        <div className="stage-card__content" style={{ position: 'relative', zIndex: 1, pointerEvents: 'none' }}>
         {/* Environment name + state chip */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.3rem' }}>
           <span style={{
@@ -219,6 +226,7 @@ export function PipelineLaneView({
             rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
             style={{
+              pointerEvents: 'auto',
               fontSize: '0.65rem',
               color: 'var(--color-accent)',
               textDecoration: 'none',
@@ -257,7 +265,7 @@ export function PipelineLaneView({
 
         {/* Action buttons row */}
         {(showPromote || showRollback || (hold && !!pipelineName)) && (
-          <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.1rem' }}>
+          <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.1rem', pointerEvents: 'auto' }}>
             {showPromote && (
               <button
                 type="button"

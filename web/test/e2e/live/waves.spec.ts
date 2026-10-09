@@ -37,6 +37,9 @@ test('the lane counts the wave, the DAG keeps spec order, the metrics count the 
   await expect(lane.getByRole('button', { name: /^Select / })).toHaveCount(1)
   await wave.getByRole('button', { name: 'Show environments' }).click()
   for (const env of WAVE) await expect(wave.getByRole('button', { name: `Select ${env}` })).toBeVisible()
+  // A real click reaches the card's select button (#1580 QA): no force.
+  await wave.getByRole('button', { name: 'Select w3' }).click()
+  await expect(wave.getByRole('button', { name: 'Deselect w3' })).toHaveAttribute('aria-pressed', 'true')
 
   const ys: number[] = []
   for (const env of WAVE) {

@@ -40,11 +40,34 @@ const graph = {
   edges: WAVE.map(env => ({ from: 'step-env-000', to: `step-${env}` })),
 }
 
+// Every environment in wave 1: only roots, so no entry has upstreams and the
+// controller says topologyResolved (#1580 QA). regions has no Bundle (the DAG
+// is the static topology); regions-live has one Verified in all three.
+const REGIONS = ['eu', 'us', 'ap']
+const allWave1 = (name: string, bundle?: string) => ({
+  name, namespace: 'waves', phase: 'Ready', environmentCount: 3, blockerCount: 0, failedStepCount: 0,
+  environmentTopology: REGIONS.map(env => ({ name: env })),
+  topologyResolved: true,
+  ...(bundle ? { activeBundleName: bundle, environmentStates: Object.fromEntries(REGIONS.map(e => [e, 'Verified'])) } : {}),
+})
+const regionBundles = [{
+  name: 'regions-live-1', namespace: 'waves', phase: 'Verified', type: 'image', pipeline: 'regions-live',
+  createdAt: new Date(created).toISOString(),
+  environments: REGIONS.map((e, i) => verified(e, i + 1)),
+}]
+const regionGraph = {
+  nodes: REGIONS.map(env => ({ id: `step-${env}`, type: 'PromotionStep', label: env, environment: env, state: 'Verified' })),
+  edges: [],
+}
+
 async function serveWave(page: Page) {
   await page.route('**/api/v1/ui/pipelines', async route => {
     const res = await route.fetch()
-    await route.fulfill({ response: res, json: [...await res.json(), pipeline] })
+    await route.fulfill({ response: res, json: [...await res.json(), pipeline, allWave1('regions'), allWave1('regions-live', 'regions-live-1')] })
   })
+  await page.route('**/api/v1/ui/pipelines/regions/bundles**', route => route.fulfill({ json: [] }))
+  await page.route('**/api/v1/ui/pipelines/regions-live/bundles**', route => route.fulfill({ json: regionBundles }))
+  await page.route('**/api/v1/ui/bundles/regions-live-1/graph**', route => route.fulfill({ json: regionGraph }))
   await page.route('**/api/v1/ui/pipelines/fleet/bundles**', route => route.fulfill({ json: bundles }))
   await page.route('**/api/v1/ui/bundles/fleet-2/graph**', route => route.fulfill({ json: graph }))
 }
@@ -76,6 +99,10 @@ test.describe('Journey 014 — Waves', () => {
     await expect(lane.getByRole('button', { name: /^Select env-/ })).toHaveCount(1)
     await wave.getByRole('button', { name: 'Show environments' }).click()
     await expect(wave.getByRole('button', { name: /^Select env-/ })).toHaveCount(149)
+    // A real click on a card reaches its select button: the card's content
+    // does not intercept it (#1580 QA), so no force is needed.
+    await wave.getByRole('button', { name: 'Select env-005' }).click()
+    await expect(wave.getByRole('button', { name: 'Deselect env-005' })).toHaveAttribute('aria-pressed', 'true')
 
     // DAG nodes of the wave run top to bottom from env-001.
     const y = async (env: string) => (await page.locator(`[data-node-id="step-${env}"]`).boundingBox())!.y
@@ -92,4 +119,29 @@ test.describe('Journey 014 — Waves', () => {
     const axe = await new AxeBuilder({ page }).include('[aria-label="Pipeline stages"]').withTags(['wcag2a', 'wcag2aa']).analyze()
     expect(axe.violations.map(v => `${v.id}: ${v.nodes[0]?.target[0]}`)).toEqual([])
   })
+
+  test('an all-wave-1 Pipeline is drawn as parallel roots, not a chain', async ({ page }) => {
+    await serveWave(page)
+    await page.goto('/')
+    // The fleet board stacks the three in one stop.
+    const board = page.getByRole('region', { name: 'Fleet' })
+    const line = board.locator('li.fleet-line').filter({ has: page.getByRole('button', { name: /^regions$/ }) })
+    await expect(line.locator('.fleet-stop')).toHaveCount(1)
+    await expect(line.locator('.fleet-station')).toHaveCount(3)
+
+    // With no Bundle the DAG is the static topology: three roots in one column, no edges.
+    await page.locator('aside').getByText('regions', { exact: true }).click()
+    await expect(page.getByRole('heading', { level: 1, name: 'regions' })).toBeVisible()
+    const xs = await Promise.all(REGIONS.map(async env => (await page.locator(`[data-node-id="${env}"]`).boundingBox())!.x))
+    expect(new Set(xs).size, 'one column').toBe(1)
+    await expect(page.locator('svg path[marker-end]')).toHaveCount(0)
+
+    // With a Bundle the metrics count all three as final environments.
+    await page.locator('aside').getByText('regions-live', { exact: true }).click()
+    const metrics = page.getByRole('region', { name: 'Release metrics' })
+    await expect(metrics).toContainText('Time to all 3 final envs')
+    // The last of them (ap) was Verified 3h after creation.
+    await expect(metrics).toContainText('3h')
+  })
 })
+
