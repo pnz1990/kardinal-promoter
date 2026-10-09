@@ -57,7 +57,7 @@ func TestGateAudit_FlipsWithinOneSecond(t *testing.T) {
 		var got []string
 		for _, ae := range items {
 			got = append(got, ae.Spec.Outcome)
-			assert.Equal(t, base.Truncate(time.Second), ae.Spec.Timestamp.Time.UTC(), "stored with second resolution")
+			assert.Equal(t, base.Truncate(time.Second), ae.Spec.Timestamp.UTC(), "stored with second resolution")
 		}
 		assert.Equal(t, []string{"Failure", "Success", "Failure", "Success"}, got)
 	}
