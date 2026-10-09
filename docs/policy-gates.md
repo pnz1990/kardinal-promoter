@@ -80,7 +80,10 @@ Limits:
 
 - **A step that has started is not stopped.** Once the step leaves `Pending`, a gate that turns
   false does not interrupt it: gates are not evaluated against a deployment in progress. Use `bake`
-  for post-deployment soak and `health` for health checks.
+  for post-deployment soak and `health` for health checks. While a `pr-review` step's PR waits for
+  its merge, the gates keep being evaluated and are shown on the PR as the `kardinal/gates` commit
+  status; with branch protection requiring that check, a gate that turns false blocks the merge
+  ([Gate status check](pr-evidence.md#gate-status-check-kardinalgates)).
 - **Steps wait if gates cannot be evaluated.** A step that needs a fresh result waits until the
   controller writes one (it fails closed).
 - **Clock skew.** The API server sets the step's `creationTimestamp`; the controller's clock sets
