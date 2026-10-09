@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // AuditAction describes what happened at a promotion lifecycle transition.
@@ -102,6 +103,10 @@ func writeAuditEvent(
 			Message:      message,
 		},
 	}
+
+	// spec.timestamp is stored with one-second resolution; the annotation
+	// orders records within a second (lifecycle.CompareAuditEvents).
+	lifecycle.StampCreatedAt(ae, now.Time)
 
 	// Idempotent: if the event already exists (re-reconcile), ignore the conflict.
 	err := c.Create(ctx, ae)
