@@ -1304,3 +1304,26 @@ func TestChartControllerWorkers(t *testing.T) {
 		assert.Error(t, err, "%s must fail:\n%s", bad, out)
 	}
 }
+
+// TestChartMetricCheckQuerySlots: metricCheck.querySlots sets the
+// controller's MetricCheck query caps, 12 and 1 by default; 0 is refused by
+// the schema.
+func TestChartMetricCheckQuerySlots(t *testing.T) {
+	for _, tc := range []struct {
+		args               []string
+		global, perNamespc string
+	}{
+		{nil, "12", "1"},
+		{[]string{"--set", "metricCheck.querySlots.global=40", "--set", "metricCheck.querySlots.perNamespace=4"}, "40", "4"},
+	} {
+		args := argValues(controllerContainer(t, render(t, "kardinal-promoter", tc.args...)))
+		assert.Equal(t, tc.global, args["metriccheck-global-slots"], "%v", tc.args)
+		assert.Equal(t, tc.perNamespc, args["metriccheck-namespace-slots"], "%v", tc.args)
+	}
+	for _, bad := range []string{"metricCheck.querySlots.global=0", "metricCheck.querySlots.perNamespace=0"} {
+		out, err := helmTemplate(t, "kardinal-promoter", "--set", bad)
+		require.Error(t, err, bad)
+		assert.Contains(t, out, "/metricCheck/querySlots/", bad)
+		assert.Regexp(t, `minimum|greater than or equal to 1`, out, bad)
+	}
+}

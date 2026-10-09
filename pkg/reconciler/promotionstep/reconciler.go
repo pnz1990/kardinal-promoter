@@ -53,6 +53,7 @@ import (
 
 	// Import built-in steps to trigger init() registration.
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -1836,7 +1837,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
 		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleMapper),
 			builderutil.WithPredicates(bundleWakesSteps)).
-		Complete(r)
+		Complete(tracing.WrapReconciler("promotionstep", r))
 }
 
 // isSuperseded passes Bundle events of superseded Bundles.
