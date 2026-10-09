@@ -1,0 +1,85 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+Admission policies for user writes (docs/guides/security.md#user-roles).
+Kubernetes 1.30+ serves admissionregistration.k8s.io/v1
+ValidatingAdmissionPolicy (the chart's kubeVersion).
+*/}}
+{{- $fullname := include "kardinal-promoter.fullname" . }}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $fullname }}-scoped-writes
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE"]
+        resources: ["pipelines", "policygates"]
+  # The virtual subresources of user-roles.yaml: <resource>/pause (pipelines)
+  # or <resource>/override (policygates) lets a caller make one change;
+  # <resource>/edit lets it change anything its RBAC update allows. A caller
+  # with the first and not the second may change only that field
+  # (rbac.userRoles.directWrites grants such callers update). Callers with
+  # neither are not limited here: their RBAC decides.
+  variables:
+    - name: field
+      expression: "request.resource.resource == 'pipelines' ? 'paused' : 'overrides'"
+    - name: check
+      expression: >-
+        authorizer.group('kardinal.io').resource(request.resource.resource)
+        .namespace(object.metadata.namespace).name(object.metadata.name)
+    - name: exempt
+      expression: >-
+        request.userInfo.username == {{ $controller | quote }} ||
+        request.userInfo.username == 'system:serviceaccount:' + object.metadata.namespace +
+        ':' + {{ .Values.graph.serviceAccountName | squote }}
+    - name: limited
+      expression: >-
+        !variables.exempt &&
+        variables.check.subresource(request.resource.resource == 'pipelines' ? 'pause' : 'override').check('update').allowed() &&
+        !variables.check.subresource('edit').check('update').allowed()
+    - name: labels
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+    - name: oldLabels
+      expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
+    - name: annotations
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+    - name: oldAnnotations
+      expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+  validations:
+    - expression: >-
+        !variables.limited ||
+        (object.spec.all(k, k == variables.field || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])) &&
+         oldObject.spec.all(k, k == variables.field || k in object.spec) &&
+         variables.labels == variables.oldLabels && variables.annotations == variables.oldAnnotations)
+      messageExpression: >-
+        'you may change only spec.' + variables.field + ' of this ' + request.resource.resource +
+        ' (you have ' + request.resource.resource + '/' +
+        (request.resource.resource == 'pipelines' ? 'pause' : 'override') + ' but not ' +
+        request.resource.resource + '/edit)'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $fullname }}-scoped-writes
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $fullname }}-scoped-writes
+  validationActions: ["Deny"]
+  {{- with .Values.controller.watchNamespace }}
+  # Namespace mode: the controller exemption above is this release's, so the
+  # policy applies only to the namespace this release's controller manages.
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ . | quote }}
+  {{- end }}

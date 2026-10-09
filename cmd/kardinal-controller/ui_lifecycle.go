@@ -15,6 +15,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
@@ -261,7 +262,14 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 	}
 	// SetPaused retries a conflict, so a concurrent write to the Pipeline (for
 	// example its status) does not fail the request.
-	if err := lifecycle.SetPaused(r.Context(), s.client, ns, req.Pipeline, pause); err != nil {
+	// In TokenReview mode the caller needs only the pause action
+	// (pipelines/pause), not update on the Pipeline: the controller writes it.
+	writer, err := s.actionClient(r.Context(), "pipelines", "pause", ns, req.Pipeline)
+	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := lifecycle.SetPaused(r.Context(), writer, ns, req.Pipeline, pause); err != nil {
 		s.writeLifecycleError(w, action+" pipeline", err)
 		return
 	}
@@ -272,4 +280,28 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"message": "pipeline " + req.Pipeline + " " + done,
 	})
+}
+
+// actionAuthorizer is the AuthorizingClient of TokenReview mode.
+type actionAuthorizer interface {
+	AuthorizeAction(ctx context.Context, verb, group, resource, subresource, namespace, name string) error
+	Privileged() client.Client
+}
+
+// actionClient returns the client to write the named object with for an
+// action the caller asked for. In TokenReview mode it checks that the
+// caller may perform the action, the virtual subresource resource/action
+// (pipelines/pause, policygates/override), and returns the controller's
+// client: the caller does not need update on the whole object, and the
+// handler records the caller as the requester. Otherwise (no auth mode, the
+// shared token) it returns the handler's client.
+func (s *uiAPIServer) actionClient(ctx context.Context, resource, action, namespace, name string) (client.Client, error) {
+	az, ok := s.client.(actionAuthorizer)
+	if !ok {
+		return s.client, nil
+	}
+	if err := az.AuthorizeAction(ctx, "update", "kardinal.io", resource, action, namespace, name); err != nil {
+		return nil, err
+	}
+	return az.Privileged(), nil
 }

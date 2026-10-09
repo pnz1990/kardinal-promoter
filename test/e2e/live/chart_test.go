@@ -1725,7 +1725,7 @@ func TestChart_UIAuth(t *testing.T) {
 	saToken := func(name string) string {
 		expiry := int64(600)
 		tr, err := e.Kube.CoreV1().ServiceAccounts(ns).CreateToken(ctx, name, &authenticationv1.TokenRequest{
-			Spec: authenticationv1.TokenRequestSpec{ExpirationSeconds: &expiry},
+			Spec: authenticationv1.TokenRequestSpec{ExpirationSeconds: &expiry, Audiences: []string{"kardinal-promoter"}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
 		return tr.Status.Token

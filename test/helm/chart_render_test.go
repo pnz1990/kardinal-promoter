@@ -165,25 +165,28 @@ var allFeatures = []string{
 	"--set", "rbac.integrationTestJobs=true",
 }
 
-// ── C08-api-config-04, -16, -21: no ValidatingAdmissionPolicy ─────────────────
+// ── C08-api-config-04, -16, -21: only the identity admission policies ─────────
 
-// TestChartRendersNoValidatingAdmissionPolicy: the chart's VAPs denied every
-// Pipeline (spec.gitRepo does not exist), denied promote/rollback Bundles and
-// valid durations, needed Kubernetes 1.30, and collided across releases.
-// Validation lives in the CRD schema (api/v1alpha1/crd_schema_test.go);
-// validatingAdmissionPolicy.enabled is kept as a deprecated no-op so existing
-// `--set validatingAdmissionPolicy.enabled=false` installs keep working.
-func TestChartRendersNoValidatingAdmissionPolicy(t *testing.T) {
+// TestChartRendersOnlyIdentityAdmissionPolicies: the chart's old VAPs denied
+// every Pipeline (spec.gitRepo does not exist), denied promote/rollback
+// Bundles and valid durations, and collided across releases. Validation lives
+// in the CRD schema (api/v1alpha1/crd_schema_test.go). The only admission
+// objects are the identity policies (identity-admission.yaml), named per
+// release and shipped whatever validatingAdmissionPolicy.enabled says, which
+// stays a deprecated no-op so existing --set values keep working.
+func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 	for _, args := range [][]string{
 		nil,
 		{"--set", "validatingAdmissionPolicy.enabled=true"},
 		{"--set", "validatingAdmissionPolicy.enabled=false"},
 	} {
-		docs := render(t, "kardinal-promoter", args...)
-		for _, d := range docs {
-			assert.NotContains(t, d.APIVersion, "admissionregistration.k8s.io",
-				"args %v: chart must not render %s %s", args, d.Kind, d.Name)
+		var got []string
+		for _, d := range render(t, "kardinal-promoter", args...) {
+			if strings.HasPrefix(d.APIVersion, "admissionregistration.k8s.io") {
+				got = append(got, d.Kind+"/"+d.Name)
+			}
 		}
+		assert.ElementsMatch(t, identityAdmissionObjects("kardinal-promoter"), got, "args %v", args)
 	}
 }
 
@@ -850,6 +853,9 @@ var everyValue = []string{
 	"--set", "bundleAPI.tokenSecretRef.name=bundle-token",
 	"--set", "ui.auth.tokenSecretRef.name=ui-token",
 	"--set", "ui.auth.tokenReview=true",
+	"--set", "ui.auth.allowStaticTokenWithTokenReview=true",
+	"--set", "tokenReview.audiences={kardinal-promoter,ci}",
+	"--set", "tokenReview.acceptAPIServerAudience=true",
 	"--set", "ui.corsAllowedOrigins={https://a.example.com,https://b.example.com}",
 }
 
@@ -877,11 +883,14 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 	env := envByName(c)
 
 	wantArgs := map[string]string{
-		"policy-namespaces":    "platform-policies",
-		"scm-provider":         "gitlab",
-		"scm-api-url":          "https://gitlab.example.com",
-		"ui-tokenreview-auth":  "true",
-		"cors-allowed-origins": "https://a.example.com,https://b.example.com",
+		"policy-namespaces":                     "platform-policies",
+		"scm-provider":                          "gitlab",
+		"scm-api-url":                           "https://gitlab.example.com",
+		"ui-tokenreview-auth":                   "true",
+		"cors-allowed-origins":                  "https://a.example.com,https://b.example.com",
+		"ui-auth-static-overrides-tokenreview":  "true",
+		"tokenreview-audiences":                 "kardinal-promoter,ci",
+		"tokenreview-accept-apiserver-audience": "true",
 	}
 	for k, v := range wantArgs {
 		assert.Equal(t, v, args[k], "--%s", k)

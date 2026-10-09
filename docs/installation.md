@@ -145,6 +145,9 @@ kardinal version
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
+| `ui.auth.allowStaticTokenWithTokenReview` | `false` | Install with both a static UI token and `ui.auth.tokenReview` (the static token wins); refused otherwise |
+| `tokenReview.audiences` | `["kardinal-promoter"]` | `--tokenreview-audiences`: token audiences the UI API and Bundle API accept (`kubectl create token <sa> --audience kardinal-promoter`) |
+| `tokenReview.acceptAPIServerAudience` | `false` | `--tokenreview-accept-apiserver-audience`: also accept kubeconfig and default ServiceAccount tokens |
 | `ui.corsAllowedOrigins` | `[]` | `--cors-allowed-origins` |
 | `ui.allowedHosts` | `[]` | Extra host names for `--ui-allowed-hosts` (Ingress host, node IP). localhost and the Service DNS names are always allowed |
 | `service.uiPort` | `8082` | UI and UI API port (container and Service) |

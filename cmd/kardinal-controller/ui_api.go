@@ -1117,15 +1117,22 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		CreatedAt: &createdAt,
 		CreatedBy: createdBy,
 	}
+	// In TokenReview mode the caller needs only the override action
+	// (policygates/override), not update on the gate: the controller writes it.
+	writer, err := s.actionClient(r.Context(), "policygates", "override", gateNS, gateName)
+	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	// Re-read and re-apply on a conflict: the reconciler and other approvers
 	// write the same gate, and a stale resourceVersion is not a user error.
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var gate v1alpha1.PolicyGate
-		if err := s.client.Get(r.Context(), client.ObjectKey{Name: gateName, Namespace: gateNS}, &gate); err != nil {
+		if err := writer.Get(r.Context(), client.ObjectKey{Name: gateName, Namespace: gateNS}, &gate); err != nil {
 			return err
 		}
 		gate.Spec.Overrides = append(gate.Spec.Overrides, override)
-		return s.client.Update(r.Context(), &gate)
+		return writer.Update(r.Context(), &gate)
 	})
 	switch {
 	case apierrors.IsNotFound(err):

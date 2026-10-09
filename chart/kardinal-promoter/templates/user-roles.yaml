@@ -12,10 +12,24 @@ SubjectAccessReview, so these roles decide what a caller can do there too
   <fullname>-viewer    read pipelines, bundles, gates, steps and the other
                        kardinal kinds, and step events
   <fullname>-promoter  viewer + create Bundles (CI, create bundle, promote,
-                       rollback) + pause and resume Pipelines
+                       rollback) + pause and resume Pipelines (pipelines/pause)
   <fullname>-approver  viewer + override (approve) PolicyGates
-  <fullname>-admin     every verb on every kardinal kind; aggregates the
-                       other three and <fullname>-admin-extra
+                       (policygates/override) + create Approvals
+  <fullname>-admin     every verb on every kardinal kind, and pipelines/edit
+                       and policygates/edit; aggregates the other three and
+                       <fullname>-admin-extra
+
+pipelines/pause, pipelines/edit, policygates/override and policygates/edit
+are virtual subresources: the API server serves no such endpoint, RBAC grants
+them and SubjectAccessReview checks them. The UI API authorizes pause, resume
+and gate approval on them and writes the change as the controller, recording
+the caller. The promoter and approver roles grant no update on Pipelines or
+PolicyGates, so they cannot edit a Pipeline or a gate. With
+rbac.userRoles.directWrites they also get update and patch, for kardinal pause
+and kardinal override from a kubeconfig; the ValidatingAdmissionPolicy in
+identity-admission.yaml then limits a caller who has pipelines/pause but not
+pipelines/edit to spec.paused, and one who has policygates/override but not
+policygates/edit to spec.overrides.
 
 With rbac.userRoles.aggregateToDefaultRoles the roles also aggregate into the
 built-in view, edit and admin ClusterRoles (viewer into view; promoter and
@@ -24,7 +38,7 @@ to those roles grant kardinal access too.
 */}}
 {{- define "kardinal-promoter.userRoles.readRules" }}
 - apiGroups: ["kardinal.io"]
-  resources: ["pipelines", "bundles", "policygates", "promotionsteps", "prstatuses", "metricchecks", "subscriptions", "notificationhooks", "rollbackpolicies", "scheduleclocks", "changewindows", "auditevents"]
+  resources: ["pipelines", "bundles", "policygates", "promotionsteps", "prstatuses", "metricchecks", "subscriptions", "notificationhooks", "rollbackpolicies", "scheduleclocks", "changewindows", "auditevents", "approvals"]
   verbs: ["get", "list", "watch"]
 # Step events in the UI.
 - apiGroups: [""]
@@ -34,6 +48,7 @@ to those roles grant kardinal access too.
 {{- if .Values.rbac.userRoles.enabled }}
 {{- $fullname := include "kardinal-promoter.fullname" . }}
 {{- $aggregate := .Values.rbac.userRoles.aggregateToDefaultRoles }}
+{{- $direct := .Values.rbac.userRoles.directWrites }}
 
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -64,10 +79,17 @@ rules:
 - apiGroups: ["kardinal.io"]
   resources: ["bundles"]
   verbs: ["create"]
-# Pause and resume: spec.paused on the Pipeline.
+# Pause and resume in the UI.
+- apiGroups: ["kardinal.io"]
+  resources: ["pipelines/pause"]
+  verbs: ["update"]
+{{- if $direct }}
+# kardinal pause from a kubeconfig. identity-admission.yaml limits the write
+# to spec.paused.
 - apiGroups: ["kardinal.io"]
   resources: ["pipelines"]
   verbs: ["update", "patch"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -81,10 +103,21 @@ metadata:
     {{- end }}
 rules:
 {{- include "kardinal-promoter.userRoles.readRules" . }}
-# Override (approve) a gate: an entry in PolicyGate spec.overrides.
+# Override (approve) a gate in the UI.
+- apiGroups: ["kardinal.io"]
+  resources: ["policygates/override"]
+  verbs: ["update"]
+# Record an approval (approval gates).
+- apiGroups: ["kardinal.io"]
+  resources: ["approvals"]
+  verbs: ["create"]
+{{- if $direct }}
+# kardinal override from a kubeconfig. identity-admission.yaml limits the
+# write to spec.overrides.
 - apiGroups: ["kardinal.io"]
   resources: ["policygates"]
   verbs: ["update", "patch"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -100,6 +133,10 @@ rules:
 - apiGroups: ["kardinal.io"]
   resources: ["*"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+# "*" does not cover subresources: name the virtual ones.
+- apiGroups: ["kardinal.io"]
+  resources: ["pipelines/pause", "pipelines/edit", "policygates/override", "policygates/edit"]
+  verbs: ["update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

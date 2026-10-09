@@ -21,9 +21,12 @@ import (
 	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -51,7 +54,7 @@ func newRoleUser(t *testing.T, e *framework.Env, ns, name, clusterRole string) r
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
 	tr, err := e.Kube.CoreV1().ServiceAccounts(ns).CreateToken(ctx, name, &authnv1.TokenRequest{
-		Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](1800)}}, metav1.CreateOptions{})
+		Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](1800), Audiences: []string{"kardinal-promoter"}}}, metav1.CreateOptions{})
 	require.NoError(t, err)
 	return roleUser{name: name, ns: ns, token: tr.Status.Token}
 }
@@ -83,9 +86,14 @@ func postBundle(t *testing.T, base, token, ns string) (int, string) {
 //     and may not override a gate (403);
 //   - approver overrides A's gate and may not create Bundles (403);
 //   - a binding to Kubernetes' built-in view role grants the viewer rules
-//     (aggregation).
+//     (aggregation);
+//   - promoter and approver hold pipelines/pause and policygates/override,
+//     not update on Pipelines or PolicyGates; the UI writes as the
+//     controller and records the caller;
+//   - a token for the API server's audience gets 401 from both APIs: they
+//     accept only --audience kardinal-promoter tokens by default.
 //
-// Covers RBAC-ROLES-01, BUNDLEAPI-TR-01.
+// Covers RBAC-ROLES-01, BUNDLEAPI-TR-01, TOKENREVIEW-AUD-01.
 func TestUI_UserRoles(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -129,7 +137,7 @@ func TestUI_UserRoles(t *testing.T) {
 		}{
 			{"system:serviceaccount:" + framework.ControllerNamespace + ":" + v.Name, authzv1.ResourceAttributes{Verb: "create", Group: "authentication.k8s.io", Resource: "tokenreviews"}},
 			{promoter.username(), authzv1.ResourceAttributes{Namespace: nsA, Verb: "create", Group: "kardinal.io", Resource: "bundles"}},
-			{approver.username(), authzv1.ResourceAttributes{Namespace: nsA, Verb: "update", Group: "kardinal.io", Resource: "policygates"}},
+			{approver.username(), authzv1.ResourceAttributes{Namespace: nsA, Verb: "update", Group: "kardinal.io", Resource: "policygates", Subresource: "override"}},
 			{builtin.username(), authzv1.ResourceAttributes{Namespace: nsA, Verb: "list", Group: "kardinal.io", Resource: "pipelines"}},
 		} {
 			sar, err := e.Kube.AuthorizationV1().SubjectAccessReviews().Create(ctx, &authzv1.SubjectAccessReview{
@@ -143,6 +151,32 @@ func TestUI_UserRoles(t *testing.T) {
 		}
 		return true, ""
 	})
+
+	// Least privilege: the action roles grant the virtual subresources, not
+	// update on the objects.
+	for _, c := range []struct {
+		who                   roleUser
+		resource, subresource string
+		want                  bool
+	}{
+		{promoter, "pipelines", "pause", true},
+		{promoter, "pipelines", "", false},
+		{approver, "policygates", "override", true},
+		{approver, "policygates", "", false},
+		{promoter, "policygates", "override", false},
+	} {
+		assert.Equal(t, c.want, e.Can(t, c.who.username(), framework.Access{Verb: "update", Group: "kardinal.io",
+			Resource: c.resource, Subresource: c.subresource, Namespace: nsA}), "%s update %s/%s", c.who.name, c.resource, c.subresource)
+	}
+
+	// A token for the API server's audience (no --audience) is refused.
+	apiToken, err := e.Kube.CoreV1().ServiceAccounts(nsA).CreateToken(ctx, viewer.name, &authnv1.TokenRequest{
+		Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](600)}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	r := framework.UIClient{BaseURL: v.UIURL, Token: apiToken.Status.Token}.Get(t, uiAPI+"/pipelines")
+	assert.Equal(t, http.StatusUnauthorized, r.Status, "API server audience token on the UI: %s", r)
+	code, body := postBundle(t, v.URL, apiToken.Status.Token, nsA)
+	assert.Equal(t, http.StatusUnauthorized, code, "API server audience token on the Bundle API: %s", body)
 
 	ui := func(u roleUser) framework.UIClient { return framework.UIClient{BaseURL: v.UIURL, Token: u.token} }
 	listed := func(u roleUser) map[string]bool {
@@ -164,9 +198,9 @@ func TestUI_UserRoles(t *testing.T) {
 	}
 
 	pause := map[string]string{"pipeline": pipelineName, "namespace": nsA}
-	r := ui(viewer).Post(t, uiAPI+"/pause", pause)
+	r = ui(viewer).Post(t, uiAPI+"/pause", pause)
 	assert.Equal(t, http.StatusForbidden, r.Status, "viewer may not pause: %s", r)
-	code, body := postBundle(t, v.URL, viewer.token, nsA)
+	code, body = postBundle(t, v.URL, viewer.token, nsA)
 	assert.Equal(t, http.StatusForbidden, code, "viewer may not create Bundles: %s", body)
 	assert.Contains(t, body, fmt.Sprintf(`forbidden: user %q cannot create bundles.kardinal.io in namespace %s`, viewer.username(), nsA))
 
@@ -195,4 +229,110 @@ func TestUI_UserRoles(t *testing.T) {
 	assert.Equal(t, approver.username(), g.Spec.Overrides[len(g.Spec.Overrides)-1].CreatedBy)
 	code, body = postBundle(t, v.URL, approver.token, nsA)
 	assert.Equal(t, http.StatusForbidden, code, "approver may not create Bundles: %s", body)
+}
+
+// TestUI_ScopedWritesAdmission checks the chart's scoped-writes
+// ValidatingAdmissionPolicy (identity-admission.yaml) with kubeconfig-style
+// writes, as rbac.userRoles.directWrites grants them: a ServiceAccount with
+// the promoter role plus update on Pipelines may change spec.paused and
+// nothing else; one with the approver role plus update on PolicyGates may
+// add spec.overrides entries and not change the expression; one that also
+// holds pipelines/edit may change the rest.
+//
+// Covers RBAC-SCOPED-WRITES-01.
+func TestUI_ScopedWritesAdmission(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	ns := e.Namespace(t)
+	require.NoError(t, e.Client.Create(ctx, &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: pipelineName, Namespace: ns},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://git.example/kardinal/" + ns + ".git", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "test", Path: fixtures.Path("test"), Approval: "auto",
+				Update: v1alpha1.UpdateConfig{Strategy: "kustomize"}}},
+		}}))
+	e.CreateGate(t, framework.Gate(ns, "hold", "test", "false", recheck))
+
+	direct := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "direct-writes", Namespace: ns}, Rules: []rbacv1.PolicyRule{
+		{APIGroups: []string{"kardinal.io"}, Resources: []string{"pipelines", "policygates"}, Verbs: []string{"update", "patch"}}}}
+	edit := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "pipelines-edit", Namespace: ns}, Rules: []rbacv1.PolicyRule{
+		{APIGroups: []string{"kardinal.io"}, Resources: []string{"pipelines/edit"}, Verbs: []string{"update"}}}}
+	for _, r := range []*rbacv1.Role{direct, edit} {
+		_, err := e.Kube.RbacV1().Roles(ns).Create(ctx, r, metav1.CreateOptions{})
+		require.NoError(t, err)
+	}
+	bind := func(u roleUser, role string) {
+		_, err := e.Kube.RbacV1().RoleBindings(ns).Create(ctx, &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: u.name + "-" + role, Namespace: ns},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: role},
+			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: u.name, Namespace: ns}},
+		}, metav1.CreateOptions{})
+		require.NoError(t, err)
+	}
+	role := func(r string) string { return framework.ControllerDeployment + "-" + r }
+	pauser := newRoleUser(t, e, ns, "pauser", role("promoter"))
+	bind(pauser, direct.Name)
+	gater := newRoleUser(t, e, ns, "gater", role("approver"))
+	bind(gater, direct.Name)
+	editor := newRoleUser(t, e, ns, "editor", role("promoter"))
+	bind(editor, direct.Name)
+	bind(editor, edit.Name)
+
+	as := func(u roleUser) client.Client {
+		cfg := rest.AnonymousClientConfig(e.Config)
+		cfg.BearerToken = u.token
+		c, err := client.New(cfg, client.Options{Scheme: framework.Scheme()})
+		require.NoError(t, err)
+		return c
+	}
+	framework.Eventually(t, time.Minute, "the bindings to take effect", func(context.Context) (bool, string) {
+		return e.Can(t, pauser.username(), framework.Access{Verb: "update", Group: "kardinal.io", Resource: "pipelines", Namespace: ns}) &&
+			e.Can(t, gater.username(), framework.Access{Verb: "update", Group: "kardinal.io", Resource: "policygates", Subresource: "override", Namespace: ns}) &&
+			e.Can(t, editor.username(), framework.Access{Verb: "update", Group: "kardinal.io", Resource: "pipelines", Subresource: "edit", Namespace: ns}), "not yet"
+	})
+
+	key := types.NamespacedName{Namespace: ns, Name: pipelineName}
+	updatePipeline := func(u roleUser, change func(*v1alpha1.Pipeline)) error {
+		c := as(u)
+		var p v1alpha1.Pipeline
+		require.NoError(t, c.Get(ctx, key, &p))
+		change(&p)
+		return c.Update(ctx, &p)
+	}
+	tests := []struct {
+		name   string
+		who    roleUser
+		change func(*v1alpha1.Pipeline)
+		wantOK bool
+	}{
+		{"pauser pauses", pauser, func(p *v1alpha1.Pipeline) { p.Spec.Paused = true }, true},
+		{"pauser resumes", pauser, func(p *v1alpha1.Pipeline) { p.Spec.Paused = false }, true},
+		{"pauser may not change the branch", pauser, func(p *v1alpha1.Pipeline) { p.Spec.Git.Branch = "other" }, false},
+		{"pauser may not change labels", pauser, func(p *v1alpha1.Pipeline) { p.Labels = map[string]string{"x": "y"} }, false},
+		{"editor changes the branch", editor, func(p *v1alpha1.Pipeline) { p.Spec.Git.Branch = "other" }, true},
+	}
+	for _, tt := range tests {
+		err := updatePipeline(tt.who, tt.change)
+		if tt.wantOK {
+			assert.NoError(t, err, tt.name)
+			continue
+		}
+		require.Error(t, err, tt.name)
+		assert.True(t, apierrors.IsForbidden(err) || apierrors.IsInvalid(err), "%s: %v", tt.name, err)
+		assert.Contains(t, err.Error(), "you may change only spec.paused", tt.name)
+	}
+
+	gk := types.NamespacedName{Namespace: ns, Name: "hold"}
+	gc := as(gater)
+	var g v1alpha1.PolicyGate
+	require.NoError(t, gc.Get(ctx, gk, &g))
+	g.Spec.Overrides = append(g.Spec.Overrides, v1alpha1.PolicyGateOverride{
+		Reason: "e2e scoped write", CreatedBy: gater.username(),
+		ExpiresAt: metav1.NewTime(time.Now().Add(5 * time.Minute)), CreatedAt: ptr.To(metav1.Now())})
+	assert.NoError(t, gc.Update(ctx, &g), "gater adds an override")
+	require.NoError(t, gc.Get(ctx, gk, &g))
+	g.Spec.Expression = "true"
+	err := gc.Update(ctx, &g)
+	require.Error(t, err, "gater may not change the expression")
+	assert.Contains(t, err.Error(), "you may change only spec.overrides")
 }

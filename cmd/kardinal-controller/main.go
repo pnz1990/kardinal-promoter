@@ -62,6 +62,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
 	// Import built-in steps to register them via init().
@@ -183,6 +184,26 @@ func main() {
 			"When true and --ui-auth-token is not set, each request's bearer token is "+
 			"validated via authenticationv1.TokenReview. Fail-closed: API errors return 503. "+
 			"Also readable from KARDINAL_UI_TOKENREVIEW_AUTH environment variable (set to 'true').")
+
+	tokenReviewAudiences := uiauth.DefaultAudience
+	if v, ok := os.LookupEnv("KARDINAL_TOKENREVIEW_AUDIENCES"); ok {
+		tokenReviewAudiences = v
+	}
+	flag.StringVar(&tokenReviewAudiences, "tokenreview-audiences", tokenReviewAudiences,
+		"Comma-separated token audiences the UI API and the Bundle API accept in TokenReview mode. Mint tokens with "+
+			"kubectl create token <sa> --audience kardinal-promoter. Chart value: tokenReview.audiences. "+
+			"Also readable from KARDINAL_TOKENREVIEW_AUDIENCES.")
+	var tokenReviewAcceptAPIServer bool
+	flag.BoolVar(&tokenReviewAcceptAPIServer, "tokenreview-accept-apiserver-audience",
+		os.Getenv("KARDINAL_TOKENREVIEW_ACCEPT_APISERVER_AUDIENCE") == "true",
+		"Also accept tokens for the API server's own audience (kubeconfig and default ServiceAccount tokens). "+
+			"Such a token also works against the API server, so kardinal could replay it; off by default. "+
+			"Chart value: tokenReview.acceptAPIServerAudience.")
+	var uiAllowStaticWithTokenReview bool
+	flag.BoolVar(&uiAllowStaticWithTokenReview, "ui-auth-static-overrides-tokenreview", false,
+		"Start even when both --ui-auth-token and --ui-tokenreview-auth are set; the static token then wins and "+
+			"every UI caller acts as the controller. Without it that combination stops the controller. "+
+			"Chart value: ui.auth.allowStaticTokenWithTokenReview.")
 
 	var tlsCertFile string
 	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
@@ -531,6 +552,7 @@ func main() {
 		logger.Warn().Msg("SCM webhooks disabled: no --webhook-secret set, /webhook/scm rejects every event; merges are detected by PR status polling")
 	}
 	bundleAPIToken := bundleToken
+	review := reviewOptions{audiences: splitCSV(tokenReviewAudiences), acceptAPIServer: tokenReviewAcceptAPIServer}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
@@ -546,7 +568,7 @@ func main() {
 		bundleAPI.onlyNamespace = watchNamespace
 		bundleAPI.reader = mgr.GetAPIReader()
 		if bundleTokenReviewAuth {
-			tokens, access, err := newReviewers(mgr.GetConfig())
+			tokens, access, err := newReviewers(mgr.GetConfig(), review)
 			if err != nil {
 				logger.Fatal().Err(err).Msg("bundle API TokenReview auth")
 			}
@@ -570,9 +592,12 @@ func main() {
 	// UI API authentication. TokenReview mode fails closed: the controller does
 	// not start when the review clients cannot be built, instead of serving an
 	// open UI.
-	uiAuth, err := buildUIAuth(mgr.GetConfig(), uiAuthToken, uiTokenReviewAuth, watchNamespace)
+	uiAuth, err := buildUIAuth(mgr.GetConfig(), uiAuthFlags{
+		staticToken: uiAuthToken, tokenReview: uiTokenReviewAuth,
+		allowStaticWithTokenReview: uiAllowStaticWithTokenReview, review: review, scopeNamespace: watchNamespace,
+	})
 	if err != nil {
-		logger.Fatal().Err(err).Msg("UI API TokenReview: unable to create the review clients")
+		logger.Fatal().Err(err).Msg("UI API authentication")
 	}
 	switch {
 	case uiAuth.staticToken != "":

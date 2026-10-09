@@ -191,6 +191,20 @@ bundleAPI:
   # The static token, when set, still works as a single-tenant admin token.
   tokenReview: false
 
+# -- TokenReview settings shared by ui.auth.tokenReview and
+# bundleAPI.tokenReview.
+tokenReview:
+  # -- Token audiences accepted (--tokenreview-audiences). Mint a token for
+  # kardinal with: kubectl create token <sa> --audience kardinal-promoter.
+  # Such a token is refused by the API server itself, so kardinal cannot
+  # replay it there. At least one, unless acceptAPIServerAudience is set.
+  audiences: ["kardinal-promoter"]
+  # -- Also accept tokens for the API server's own audience
+  # (--tokenreview-accept-apiserver-audience): kubeconfig tokens and default
+  # ServiceAccount tokens. Such a token also works against the API server, so
+  # whoever holds kardinal's traffic can use it there; opt in knowingly.
+  acceptAPIServerAudience: false
+
 # -- Embedded UI (:8082).
 ui:
   # -- Origins allowed by CORS on the UI API (--cors-allowed-origins).
@@ -217,6 +231,11 @@ ui:
     # (--ui-tokenreview-auth). Adds tokenreviews and subjectaccessreviews
     # create to the controller's ClusterRole.
     tokenReview: false
+    # -- Install even when tokenSecretRef.name and tokenReview are both set
+    # (--ui-auth-static-overrides-tokenreview). The static token then wins and
+    # every UI caller acts as the controller, so by default that combination
+    # fails the install.
+    allowStaticTokenWithTokenReview: false
 
 # -- Optional controller permissions, off by default.
 rbac:
@@ -235,6 +254,11 @@ rbac:
     # -- Also aggregate them into the built-in view (viewer), edit (promoter,
     # approver) and admin ClusterRoles.
     aggregateToDefaultRoles: true
+    # -- Also grant the promoter update on Pipelines and the approver update
+    # on PolicyGates, so kardinal pause and kardinal override work from their
+    # kubeconfigs. An admission policy limits those writes to spec.paused and
+    # spec.overrides. Off: they act through the UI API only.
+    directWrites: false
 
 # -- kro Graph integration.
 # kardinal renders one kro Graph (kro.run/v1alpha1) per Bundle. kro v0.10.0-rc.0

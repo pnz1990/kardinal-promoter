@@ -37,16 +37,41 @@ type uiAuthConfig struct {
 	scopeNamespace string
 }
 
+// reviewOptions are the TokenReview settings shared by the UI API and the
+// Bundle API (--tokenreview-audiences, --tokenreview-accept-apiserver-audience).
+type reviewOptions struct {
+	audiences       []string
+	acceptAPIServer bool
+}
+
+// uiAuthFlags are the UI API auth flags.
+type uiAuthFlags struct {
+	staticToken string
+	tokenReview bool
+	// allowStaticWithTokenReview (--ui-auth-static-overrides-tokenreview)
+	// accepts both modes set, the static token winning; without it that
+	// combination is a startup error, since the static token silently turns
+	// per-user RBAC off.
+	allowStaticWithTokenReview bool
+	review                     reviewOptions
+	scopeNamespace             string
+}
+
 // buildUIAuth picks the UI API auth mode from the flags. The static token
-// takes precedence (spec issue-975 O4). In TokenReview mode an error building
-// either review client is returned, so the caller can refuse to start rather
-// than serve an open UI (C13b-design-09).
-func buildUIAuth(cfg *rest.Config, staticToken string, tokenReview bool, scopeNamespace string) (uiAuthConfig, error) {
-	auth := uiAuthConfig{staticToken: staticToken, scopeNamespace: scopeNamespace}
-	if staticToken != "" || !tokenReview {
+// takes precedence (spec issue-975 O4) when both are allowed. In TokenReview
+// mode an error building either review client is returned, so the caller can
+// refuse to start rather than serve an open UI (C13b-design-09).
+func buildUIAuth(cfg *rest.Config, f uiAuthFlags) (uiAuthConfig, error) {
+	if f.staticToken != "" && f.tokenReview && !f.allowStaticWithTokenReview {
+		return uiAuthConfig{}, fmt.Errorf("both --ui-auth-token and --ui-tokenreview-auth are set: the static token " +
+			"would win and every UI caller would act as the controller; unset one, or set " +
+			"--ui-auth-static-overrides-tokenreview (Helm ui.auth.allowStaticTokenWithTokenReview) to keep the static token")
+	}
+	auth := uiAuthConfig{staticToken: f.staticToken, scopeNamespace: f.scopeNamespace}
+	if f.staticToken != "" || !f.tokenReview {
 		return auth, nil
 	}
-	tokens, access, err := newReviewers(cfg)
+	tokens, access, err := newReviewers(cfg, f.review)
 	if err != nil {
 		return uiAuthConfig{}, err
 	}
@@ -56,8 +81,9 @@ func buildUIAuth(cfg *rest.Config, staticToken string, tokenReview bool, scopeNa
 
 // newReviewers builds the cached TokenReview and SubjectAccessReview clients
 // the UI API and the Bundle API authenticate and authorize callers with.
-func newReviewers(cfg *rest.Config) (uiauth.TokenReviewer, uiauth.AccessReviewer, error) {
-	tokens, err := uiauth.NewKubeTokenReviewer(cfg)
+// TokenReviews that miss the cache are limited per client address.
+func newReviewers(cfg *rest.Config, opts reviewOptions) (uiauth.TokenReviewer, uiauth.AccessReviewer, error) {
+	tokens, err := uiauth.NewKubeTokenReviewer(cfg, opts.audiences, opts.acceptAPIServer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("token reviewer: %w", err)
 	}
@@ -65,7 +91,8 @@ func newReviewers(cfg *rest.Config) (uiauth.TokenReviewer, uiauth.AccessReviewer
 	if err != nil {
 		return nil, nil, fmt.Errorf("access reviewer: %w", err)
 	}
-	return uiauth.NewCachedTokenReviewer(tokens, uiauth.DefaultCacheTTL),
+	limited := uiauth.NewRateLimitedTokenReviewer(tokens, uiauth.DefaultReviewsPerClientPerMinute)
+	return uiauth.NewCachedTokenReviewer(limited, uiauth.DefaultCacheTTL),
 		uiauth.NewCachedAccessReviewer(access, uiauth.DefaultCacheTTL), nil
 }
 

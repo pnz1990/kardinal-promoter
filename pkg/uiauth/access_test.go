@@ -6,6 +6,7 @@ package uiauth_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
@@ -392,4 +394,50 @@ func TestMiddlewareFor_GuardsItsPrefixOnly(t *testing.T) {
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/webhook/scm/health", nil))
 	assert.Equal(t, http.StatusOK, w.Code, "other paths are not guarded")
+}
+
+// flakyAccess denies the cluster-wide list check and fails the review for
+// one namespace.
+type flakyAccess struct{ failNS string }
+
+func (f flakyAccess) Allowed(_ context.Context, _ authv1.UserInfo, a authzv1.ResourceAttributes) (bool, string, error) {
+	if a.Namespace == f.failNS {
+		return false, "", fmt.Errorf("review API down")
+	}
+	return a.Namespace == "team-a", "", nil
+}
+
+// TestAuthorizingClient_ListErrorLeavesNoItems: the fallback lists every
+// namespace as the controller before filtering. When a per-namespace review
+// fails, or the controller list itself fails, the call returns an error and
+// the list holds no items, so a caller that ignores the error shows nothing
+// it should not.
+func TestAuthorizingClient_ListErrorLeavesNoItems(t *testing.T) {
+	objs := []client.Object{uiauthPipeline("team-a", "a1"), uiauthPipeline("team-b", "b1")}
+	tests := []struct {
+		name    string
+		listErr error
+		failNS  string
+	}{
+		{name: "per-namespace review fails", failNS: "team-b"},
+		{name: "controller list fails", listErr: fmt.Errorf("etcd down")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := fake.NewClientBuilder().WithScheme(uiauthScheme(t)).WithObjects(objs...)
+			if tt.listErr != nil {
+				b = b.WithInterceptorFuncs(interceptor.Funcs{
+					List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+						require.NoError(t, cl.List(ctx, list, opts...)) // a partial result
+						return tt.listErr
+					},
+				})
+			}
+			ac := uiauth.NewAuthorizingClient(b.Build(), flakyAccess{failNS: tt.failNS}, "")
+			ctx := uiauth.WithUser(context.Background(), authv1.UserInfo{Username: "alice"})
+			var list v1alpha1.PipelineList
+			require.Error(t, ac.List(ctx, &list))
+			assert.Empty(t, list.Items, "no items survive an error")
+		})
+	}
 }

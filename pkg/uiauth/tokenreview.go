@@ -26,6 +26,7 @@ package uiauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -46,38 +47,84 @@ type TokenReviewer interface {
 	Review(ctx context.Context, token string) (*authv1.TokenReviewStatus, error)
 }
 
+// DefaultAudience is the token audience kardinal accepts by default: mint
+// tokens for it with kubectl create token <sa> --audience kardinal-promoter.
+const DefaultAudience = "kardinal-promoter"
+
 // KubeTokenReviewer implements TokenReviewer using the Kubernetes authenticationv1 API.
 type KubeTokenReviewer struct {
 	clientset kubernetes.Interface
+	// audiences are the token audiences accepted. A token is accepted when
+	// the API server returns one of them in status.audiences.
+	audiences []string
+	// acceptAPIServer also accepts tokens for the API server's own audience
+	// (any kubeconfig token): an explicit opt-in, since such a token is
+	// meant for the API server and a service that receives one can replay it.
+	acceptAPIServer bool
 }
 
-// NewKubeTokenReviewer creates a KubeTokenReviewer from a rest.Config.
-// The controller's existing rest.Config (from ctrl.GetConfigOrDie()) can be passed directly.
-func NewKubeTokenReviewer(cfg *rest.Config) (*KubeTokenReviewer, error) {
+// NewKubeTokenReviewer creates a KubeTokenReviewer from a rest.Config. It
+// accepts tokens whose audience is one of audiences, and, when
+// acceptAPIServer is set, tokens for the API server's audience too. With no
+// audiences acceptAPIServer must be set.
+func NewKubeTokenReviewer(cfg *rest.Config, audiences []string, acceptAPIServer bool) (*KubeTokenReviewer, error) {
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("uiauth: creating Kubernetes clientset for TokenReviewer: %w", err)
 	}
-	return &KubeTokenReviewer{clientset: cs}, nil
+	return newKubeTokenReviewer(cs, audiences, acceptAPIServer)
 }
 
-// Review submits a TokenReview to the Kubernetes API server.
+func newKubeTokenReviewer(cs kubernetes.Interface, audiences []string, acceptAPIServer bool) (*KubeTokenReviewer, error) {
+	if len(audiences) == 0 && !acceptAPIServer {
+		return nil, fmt.Errorf("uiauth: no token audience: set an audience or accept the API server audience")
+	}
+	return &KubeTokenReviewer{clientset: cs, audiences: audiences, acceptAPIServer: acceptAPIServer}, nil
+}
+
+// Review submits a TokenReview to the Kubernetes API server, first for the
+// configured audiences and then, when allowed, for the API server's own.
 // Timeout is capped at 5 seconds to satisfy O6: fail-closed on slow API servers.
 func (r *KubeTokenReviewer) Review(ctx context.Context, token string) (*authv1.TokenReviewStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	review := &authv1.TokenReview{
-		Spec: authv1.TokenReviewSpec{
-			Token: token,
-		},
+	if len(r.audiences) > 0 {
+		st, err := r.review(ctx, token, r.audiences)
+		if err != nil {
+			return nil, err
+		}
+		// An authenticator that is not audience-aware authenticates the
+		// token but returns no audience: the token is for the API server.
+		if st.Authenticated && hasAudience(st.Audiences, r.audiences) {
+			return st, nil
+		}
+		if !r.acceptAPIServer {
+			return &authv1.TokenReviewStatus{Authenticated: false,
+				Error: fmt.Sprintf("token audience is not %s", strings.Join(r.audiences, " or "))}, nil
+		}
 	}
+	return r.review(ctx, token, nil)
+}
 
+func (r *KubeTokenReviewer) review(ctx context.Context, token string, audiences []string) (*authv1.TokenReviewStatus, error) {
+	review := &authv1.TokenReview{Spec: authv1.TokenReviewSpec{Token: token, Audiences: audiences}}
 	result, err := r.clientset.AuthenticationV1().TokenReviews().Create(ctx, review, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("uiauth: TokenReview API call failed: %w", err)
 	}
 	return &result.Status, nil
+}
+
+func hasAudience(got, want []string) bool {
+	for _, g := range got {
+		for _, w := range want {
+			if g == w {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Middleware wraps an http.Handler with Kubernetes TokenReview authentication.
@@ -121,7 +168,12 @@ func MiddlewareFor(next http.Handler, reviewer TokenReviewer, prefix, realm stri
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 
 		// O3: Call Kubernetes TokenReview.
-		status, err := reviewer.Review(r.Context(), token)
+		status, err := reviewer.Review(withClientAddr(r.Context(), r.RemoteAddr), token)
+		if errors.Is(err, ErrRateLimited) {
+			w.Header().Set("Retry-After", "60")
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
 		if err != nil {
 			// O6: API failure → fail-closed with 503.
 			http.Error(w, "auth unavailable", http.StatusServiceUnavailable)

@@ -254,28 +254,35 @@ func TestBuildUIAuth(t *testing.T) {
 	good := &rest.Config{Host: "https://127.0.0.1:6443"}
 	// client-go refuses a QPS limit without a burst.
 	bad := &rest.Config{Host: "https://127.0.0.1:6443", QPS: 5, Burst: 0}
+	review := reviewOptions{audiences: []string{"kardinal-promoter"}}
 	tests := []struct {
-		name        string
-		cfg         *rest.Config
-		static      string
-		tokenReview bool
-		wantErr     bool
-		wantReview  bool
+		name       string
+		cfg        *rest.Config
+		flags      uiAuthFlags
+		wantErr    string
+		wantReview bool
 	}{
 		{name: "open", cfg: bad},
-		{name: "static token wins over TokenReview", cfg: bad, static: "s3cret", tokenReview: true},
-		{name: "TokenReview", cfg: good, tokenReview: true, wantReview: true},
-		{name: "TokenReview client cannot be built", cfg: bad, tokenReview: true, wantErr: true},
+		{name: "static token and TokenReview refused", cfg: bad,
+			flags: uiAuthFlags{staticToken: "s3cret", tokenReview: true, review: review}, wantErr: "--ui-auth-static-overrides-tokenreview"},
+		{name: "static token wins over TokenReview when allowed", cfg: bad,
+			flags: uiAuthFlags{staticToken: "s3cret", tokenReview: true, allowStaticWithTokenReview: true, review: review}},
+		{name: "static token", cfg: bad, flags: uiAuthFlags{staticToken: "s3cret"}},
+		{name: "TokenReview", cfg: good, flags: uiAuthFlags{tokenReview: true, review: review}, wantReview: true},
+		{name: "TokenReview needs an audience", cfg: good, flags: uiAuthFlags{tokenReview: true}, wantErr: "audience"},
+		{name: "TokenReview client cannot be built", cfg: bad, flags: uiAuthFlags{tokenReview: true, review: review}, wantErr: "token reviewer"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			auth, err := buildUIAuth(tt.cfg, tt.static, tt.tokenReview, "team-a")
-			if tt.wantErr {
+			tt.flags.scopeNamespace = "team-a"
+			auth, err := buildUIAuth(tt.cfg, tt.flags)
+			if tt.wantErr != "" {
 				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.static, auth.staticToken)
+			assert.Equal(t, tt.flags.staticToken, auth.staticToken)
 			assert.Equal(t, tt.wantReview, auth.tokens != nil)
 			assert.Equal(t, tt.wantReview, auth.access != nil)
 			assert.Equal(t, "team-a", auth.scopeNamespace)
@@ -385,4 +392,69 @@ func TestUIHandler_BodyLimit(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+}
+
+// exactAccess allows "user verb resource[/subresource] namespace" tuples.
+type exactAccess map[string]bool
+
+func (a exactAccess) Allowed(_ context.Context, u authv1.UserInfo, attrs authzv1.ResourceAttributes) (bool, string, error) {
+	res := attrs.Resource
+	if attrs.Subresource != "" {
+		res += "/" + attrs.Subresource
+	}
+	return a[u.Username+" "+attrs.Verb+" "+res+" "+attrs.Namespace], "", nil
+}
+
+// TestUIHandler_ActionsUseVirtualSubresources: in TokenReview mode pausing
+// needs update on pipelines/pause and overriding a gate update on
+// policygates/override, not update on the object: a caller with only the
+// action permission succeeds (the controller writes, createdBy is the
+// caller); one with update on the object but not the action is refused.
+func TestUIHandler_ActionsUseVirtualSubresources(t *testing.T) {
+	tokens := &uiTestTokens{users: map[string]string{"p": "promoter", "a": "approver", "e": "editor"}}
+	access := exactAccess{
+		"promoter update pipelines/pause team-a":      true,
+		"approver update policygates/override team-a": true,
+		"editor update pipelines team-a":              true,
+		"editor update policygates team-a":            true,
+		"editor get pipelines team-a":                 true,
+		"editor get policygates team-a":               true,
+	}
+	tests := []struct {
+		name, token, path, body string
+		want                    int
+	}{
+		{"pause with pipelines/pause only", "p", "/api/v1/ui/pause", `{"pipeline":"app","namespace":"team-a"}`, http.StatusOK},
+		{"pause with update pipelines but no pipelines/pause", "e", "/api/v1/ui/pause", `{"pipeline":"app","namespace":"team-a"}`, http.StatusForbidden},
+		{"override with policygates/override only", "a", "/api/v1/ui/gates/team-a/g/approve", `{"reason":"r"}`, http.StatusOK},
+		{"override with update policygates but no override", "e", "/api/v1/ui/gates/team-a/g/approve", `{"reason":"r"}`, http.StatusForbidden},
+		{"promoter cannot override", "p", "/api/v1/ui/gates/team-a/g/approve", `{"reason":"r"}`, http.StatusForbidden},
+		{"approver cannot pause", "a", "/api/v1/ui/pause", `{"pipeline":"app","namespace":"team-a"}`, http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+				&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}},
+				&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "team-a"}},
+			).Build()
+			h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: access}, "", nil, zerolog.Nop())
+			rec := uiAuthDo(t, h, http.MethodPost, tt.path, "Bearer "+tt.token, tt.body)
+			require.Equal(t, tt.want, rec.Code, rec.Body.String())
+			var p v1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "app"}, &p))
+			var g v1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "g"}, &g))
+			if tt.want != http.StatusOK {
+				assert.False(t, p.Spec.Paused, "nothing written")
+				assert.Empty(t, g.Spec.Overrides, "nothing written")
+				return
+			}
+			if strings.Contains(tt.path, "pause") {
+				assert.True(t, p.Spec.Paused)
+			} else {
+				require.Len(t, g.Spec.Overrides, 1)
+				assert.Equal(t, "approver", g.Spec.Overrides[0].CreatedBy)
+			}
+		})
+	}
 }

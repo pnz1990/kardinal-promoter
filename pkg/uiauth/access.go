@@ -227,11 +227,16 @@ func (c *AuthorizingClient) List(ctx context.Context, list client.ObjectList, op
 	if allowed {
 		return c.Client.List(ctx, list, opts...)
 	}
+	// The controller lists everything into list; every return below either
+	// replaces it with the filtered items or empties it, so an error never
+	// leaves items of a namespace the user may not list in it.
 	if err := c.Client.List(ctx, list, opts...); err != nil {
+		_ = meta.SetList(list, nil)
 		return err
 	}
 	items, err := meta.ExtractList(list)
 	if err != nil {
+		_ = meta.SetList(list, nil)
 		return fmt.Errorf("uiauth: extract list: %w", err)
 	}
 	byNamespace := map[string]bool{}
@@ -247,6 +252,7 @@ func (c *AuthorizingClient) List(ctx context.Context, list client.ObjectList, op
 			if ns == "" {
 				ok = false // cluster-scoped item; the cluster-wide check denied it
 			} else if ok, err = c.check(ctx, "list", list, ns); err != nil {
+				_ = meta.SetList(list, nil)
 				return c.authorize(ctx, "list", list, ns, "", "")
 			}
 			byNamespace[ns] = ok
@@ -257,6 +263,49 @@ func (c *AuthorizingClient) List(ctx context.Context, list client.ObjectList, op
 	}
 	return meta.SetList(list, kept)
 }
+
+// AuthorizeAction checks that the request's user may perform verb on
+// group/resource/subresource (a virtual subresource such as pipelines/pause or
+// policygates/override) for the named object, recording a denial like any
+// other check. Callers that pass it write with Privileged(), as the
+// controller, and record the user as the requester: the user needs only the
+// narrow action permission, not update on the whole object.
+func (c *AuthorizingClient) AuthorizeAction(ctx context.Context, verb, group, resource, subresource, namespace, name string) error {
+	gr := schema.GroupResource{Group: group, Resource: resource + "/" + subresource}
+	state := requestAuthFrom(ctx)
+	if state != nil && state.get() != nil {
+		return apierrors.NewForbidden(gr, name, fmt.Errorf("an earlier check in this request was denied"))
+	}
+	fail := func(d denial, err error) error {
+		if state != nil {
+			state.record(d)
+		}
+		return err
+	}
+	user, ok := UserFrom(ctx)
+	if !ok || user.Username == "" {
+		return fail(denial{code: 401, msg: "unauthorized"}, apierrors.NewUnauthorized("no authenticated user"))
+	}
+	allowed, reason, err := c.access.Allowed(ctx, user, authzv1.ResourceAttributes{
+		Namespace: namespace, Verb: verb, Group: group, Resource: resource, Subresource: subresource, Name: name,
+	})
+	if err != nil {
+		return fail(denial{code: 503, msg: "auth unavailable"}, apierrors.NewServiceUnavailable(err.Error()))
+	}
+	if !allowed {
+		msg := fmt.Sprintf("forbidden: user %q cannot %s %s/%s.%s %q in namespace %s",
+			user.Username, verb, resource, subresource, group, name, namespace)
+		if reason != "" {
+			msg += ": " + reason
+		}
+		return fail(denial{code: 403, msg: msg}, apierrors.NewForbidden(gr, name, fmt.Errorf("%s", msg)))
+	}
+	return nil
+}
+
+// Privileged is the wrapped client, which acts as the controller. Use it
+// only after AuthorizeAction allowed the action.
+func (c *AuthorizingClient) Privileged() client.Client { return c.Client }
 
 // check reports whether the request's user may perform verb on obj's kind in
 // namespace, without recording a denial. err is set when there is no user or

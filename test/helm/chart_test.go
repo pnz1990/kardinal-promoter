@@ -461,14 +461,15 @@ func userRoles(docs []map[string]interface{}, fullname string) map[string]map[st
 	return out
 }
 
-// rulesGrant reports whether rules grant verb on group/resource.
+// rulesGrant reports whether rules grant verb on group/resource. As in RBAC,
+// "*" in resources does not match a subresource ("pipelines/pause").
 func rulesGrant(d map[string]interface{}, group, resource, verb string) bool {
 	rules, _ := d["rules"].([]interface{})
 	for _, r := range rules {
 		in := func(key, want string) bool {
 			vals, _ := dig(r, key).([]interface{})
 			for _, v := range vals {
-				if v == want || v == "*" {
+				if v == want || (v == "*" && (key != "resources" || !strings.Contains(want, "/"))) {
 					return true
 				}
 			}
@@ -497,11 +498,23 @@ func TestHelmTemplateUserRoles(t *testing.T) {
 	assert.True(t, rulesGrant(viewer, "", "events", "list"))
 	assert.False(t, rulesGrant(viewer, "kardinal.io", "bundles", "create"), "the viewer cannot create")
 	assert.True(t, rulesGrant(promoter, "kardinal.io", "bundles", "create"))
-	assert.True(t, rulesGrant(promoter, "kardinal.io", "pipelines", "update"))
-	assert.False(t, rulesGrant(promoter, "kardinal.io", "policygates", "update"), "a promoter cannot approve")
-	assert.True(t, rulesGrant(approver, "kardinal.io", "policygates", "update"))
+	assert.True(t, rulesGrant(promoter, "kardinal.io", "pipelines/pause", "update"))
+	assert.False(t, rulesGrant(promoter, "kardinal.io", "policygates/override", "update"), "a promoter cannot approve")
+	assert.True(t, rulesGrant(approver, "kardinal.io", "policygates/override", "update"))
+	assert.True(t, rulesGrant(approver, "kardinal.io", "approvals", "create"))
 	assert.False(t, rulesGrant(approver, "kardinal.io", "bundles", "create"), "an approver cannot promote")
+	// Least privilege: no update on the objects themselves by default.
+	for _, r := range []map[string]interface{}{viewer, promoter, approver} {
+		for _, kind := range []string{"pipelines", "policygates", "pipelines/edit", "policygates/edit"} {
+			for _, verb := range []string{"update", "patch"} {
+				assert.False(t, rulesGrant(r, "kardinal.io", kind, verb), "%v %s %s", dig(r, "metadata", "name"), verb, kind)
+			}
+		}
+	}
 	assert.True(t, rulesGrant(roles["admin-extra"], "kardinal.io", "pipelines", "delete"))
+	for _, sub := range []string{"pipelines/pause", "pipelines/edit", "policygates/override", "policygates/edit"} {
+		assert.True(t, rulesGrant(roles["admin-extra"], "kardinal.io", sub, "update"), "admin %s", sub)
+	}
 	assert.Equal(t, map[string]interface{}{"kardinal.io/aggregate-to-admin": "true", "app.kubernetes.io/instance": "kardinal-promoter"},
 		dig(admin, "aggregationRule", "clusterRoleSelectors").([]interface{})[0].(map[string]interface{})["matchLabels"])
 	assert.Equal(t, "true", dig(viewer, "metadata", "labels", "rbac.authorization.k8s.io/aggregate-to-view"))
@@ -516,6 +529,64 @@ func TestHelmTemplateUserRoles(t *testing.T) {
 		}
 	}
 	assert.Empty(t, userRoles(renderChart(t, "kardinal-promoter", "--set", "rbac.userRoles.enabled=false"), "kardinal-promoter"))
+
+	direct := userRoles(renderChart(t, "kardinal-promoter", "--set", "rbac.userRoles.directWrites=true"), "kardinal-promoter")
+	assert.True(t, rulesGrant(direct["promoter"], "kardinal.io", "pipelines", "patch"), "directWrites: kardinal pause")
+	assert.False(t, rulesGrant(direct["promoter"], "kardinal.io", "policygates", "patch"))
+	assert.True(t, rulesGrant(direct["approver"], "kardinal.io", "policygates", "patch"), "directWrites: kardinal override")
+	assert.False(t, rulesGrant(direct["approver"], "kardinal.io", "pipelines", "patch"))
+}
+
+// TestHelmTemplateTokenReviewOptions verifies the audience flags, the
+// API-server-audience opt-in and the refusal of a static UI token together
+// with TokenReview.
+func TestHelmTemplateTokenReviewOptions(t *testing.T) {
+	helm := helmBin(t)
+	chartDir := filepath.Join(repoRoot(t), "chart", "kardinal-promoter")
+	render := func(args ...string) (string, error) {
+		out, err := exec.Command(helm, append([]string{"template", "kardinal-promoter", chartDir}, args...)...).CombinedOutput()
+		return string(out), err
+	}
+	out, err := render()
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "--tokenreview-audiences", "no TokenReview mode, no flag")
+	tests := []struct {
+		name    string
+		args    []string
+		want    []string
+		absent  []string
+		wantErr string
+	}{
+		{name: "default audience", args: []string{"--set", "ui.auth.tokenReview=true"},
+			want: []string{"- --tokenreview-audiences=kardinal-promoter\n"}, absent: []string{"accept-apiserver-audience", "static-overrides"}},
+		{name: "bundle API alone", args: []string{"--set", "bundleAPI.tokenReview=true", "--set", "tokenReview.audiences={ci,people}"},
+			want: []string{"- --tokenreview-audiences=ci,people\n"}},
+		{name: "API server audience opt-in", args: []string{"--set", "ui.auth.tokenReview=true", "--set", "tokenReview.acceptAPIServerAudience=true"},
+			want: []string{"- --tokenreview-accept-apiserver-audience=true\n"}},
+		{name: "no audience refused", args: []string{"--set", "ui.auth.tokenReview=true", "--set", "tokenReview.audiences=null"},
+			wantErr: "tokenReview.audiences is empty"},
+		{name: "static token and TokenReview refused", args: []string{"--set", "ui.auth.tokenReview=true", "--set", "ui.auth.tokenSecretRef.name=ui"},
+			wantErr: "ui.auth.allowStaticTokenWithTokenReview=true"},
+		{name: "static token and TokenReview allowed", args: []string{"--set", "ui.auth.tokenReview=true", "--set", "ui.auth.tokenSecretRef.name=ui",
+			"--set", "ui.auth.allowStaticTokenWithTokenReview=true"}, want: []string{"- --ui-auth-static-overrides-tokenreview=true\n"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := render(tt.args...)
+			if tt.wantErr != "" {
+				require.Error(t, err, out)
+				assert.Contains(t, out, tt.wantErr)
+				return
+			}
+			require.NoError(t, err, out)
+			for _, w := range tt.want {
+				assert.Contains(t, out, w)
+			}
+			for _, a := range tt.absent {
+				assert.NotContains(t, out, a)
+			}
+		})
+	}
 }
 
 // TestHelmTemplateBundleAPITokenReview verifies bundleAPI.tokenReview: the
