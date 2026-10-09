@@ -65,6 +65,7 @@ import (
 	prstatusrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	rbprecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
+	scmproviderrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scmprovider"
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
@@ -291,6 +292,11 @@ func main() {
 	// --scm-token-secret-name is set, the --github-token flag is used only as
 	// the initial value (bootstrapping) and the Secret becomes the authoritative
 	// source thereafter.
+	var scmProvidersAllowHTTP bool
+	flag.BoolVar(&scmProvidersAllowHTTP, "scm-providers-allow-http", false,
+		"Let ScmProviders and ClusterScmProviders use an http:// spec.apiURL, for an in-cluster SCM without TLS. "+
+			"Off, a provider must use https://, so its token never crosses the network in clear text.")
+
 	var scmTokenSecretName string
 	flag.StringVar(&scmTokenSecretName, "scm-token-secret-name",
 		os.Getenv("KARDINAL_SCM_TOKEN_SECRET_NAME"),
@@ -584,6 +590,24 @@ func main() {
 	}
 	gitClient := scm.NewGoGitClient()
 
+	// ScmProviders and ClusterScmProviders: a Pipeline with
+	// spec.git.providerRef opens its PRs with that provider's client, built
+	// here from its Secret; a Pipeline without one keeps scmProvider.
+	providers := &scm.Registry{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		// A provider's apiURL is written by a namespace user: its requests
+		// go through the egress guard (no loopback, link-local or cloud
+		// metadata addresses), and http:// only with the admin's opt-in.
+		Transport: egress.NewTransport(http.ProxyFromEnvironment),
+		AllowHTTP: scmProvidersAllowHTTP,
+	}
+	for _, cluster := range []bool{false, true} {
+		if err := (&scmproviderrecon.Reconciler{Client: mgr.GetClient(), Registry: providers, Cluster: cluster}).SetupWithManager(mgr); err != nil {
+			logger.Fatal().Err(err).Bool("cluster", cluster).Msg("unable to set up ScmProviderReconciler")
+		}
+	}
+
 	// Reconcilers write events.k8s.io/v1 Events. The chart grants create and
 	// patch on events.k8s.io events for this recorder.
 	eventRecorder := mgr.GetEventRecorder("kardinal-controller")
@@ -600,7 +624,7 @@ func main() {
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
 		APIReader:        mgr.GetAPIReader(),
-		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), graphCompactAbove, logger),
+		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), providers, graphCompactAbove, logger),
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),
@@ -666,6 +690,7 @@ func main() {
 		APIReader:           mgr.GetAPIReader(),
 		SCM:                 scmProvider,
 		AllowedRepositories: allowedRepos,
+		Providers:           providers,
 		GitClient:           gitClient,
 		GatesStatusDisabled: !gatesCommitStatus,
 		GatesStatusContext:  gatesStatusContext,
@@ -727,9 +752,10 @@ func main() {
 	}
 
 	if err := (&prstatusrecon.Reconciler{
-		Workers: *workers["prstatus"],
-		Client:  mgr.GetClient(),
-		SCM:     scmProvider,
+		Workers:   *workers["prstatus"],
+		Client:    mgr.GetClient(),
+		SCM:       scmProvider,
+		Providers: providers,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PRStatusReconciler")
 	}
@@ -817,6 +843,10 @@ func main() {
 	// Subscription opts in with spec.webhook and its own token.
 	mux.HandleFunc(subscriptionWebhookPrefix, newSubscriptionWebhook(mgr.GetClient(), logger).Handler())
 	mux.HandleFunc(openAPIPath, handleOpenAPI)
+	// Each ScmProvider and ClusterScmProvider has its own endpoint, checked
+	// with its own webhook secret (docs/scm-providers.md).
+	mux.HandleFunc("POST /webhook/scm/namespaces/{namespace}/{name}", webhookSrv.ProviderHandler(providers))
+	mux.HandleFunc("POST /webhook/scm/cluster/{name}", webhookSrv.ProviderHandler(providers))
 	// Bundle API endpoint — only mounted if a token is configured.
 	if bundleAPIToken != "" {
 		// Default to the watched namespace; in namespace-scoped mode it is
@@ -991,7 +1021,7 @@ func newHealthDetector(cfg *rest.Config, k8s sigs_client.Client, log zerolog.Log
 // newTranslator constructs the Translator wired with a GraphClient, Builder,
 // and the Graph identity provisioner.
 func newTranslator(mgr ctrl.Manager, identity *graphpkg.IdentityProvisioner,
-	policyNS []string, compactAbove int, log zerolog.Logger) *translator.Translator {
+	policyNS []string, providers *scm.Registry, compactAbove int, log zerolog.Logger) *translator.Translator {
 	dynClient, err := dynamic.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		log.Fatal().Err(err).Msg("unable to create dynamic client for graph")
@@ -1002,7 +1032,8 @@ func newTranslator(mgr ctrl.Manager, identity *graphpkg.IdentityProvisioner,
 	builder.CompactAbove = compactAbove
 	return translator.New(graphClient, builder, mgr.GetClient(), policyNS, log).
 		WithIdentity(identity).
-		WithRESTMapper(mgr.GetRESTMapper())
+		WithRESTMapper(mgr.GetRESTMapper()).
+		WithProviders(providers)
 }
 
 // newGraphClient constructs a GraphClient for use as a GraphChecker in the Bundle reconciler.
