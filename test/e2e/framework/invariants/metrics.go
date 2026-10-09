@@ -34,6 +34,11 @@ type Metrics struct {
 	StepSeconds map[string]Quantiles `json:"stepDurationSeconds"`
 	// Pods holds each controller Pod's memory and goroutines over the run.
 	Pods []PodSeries `json:"pods"`
+	// PushesLanded and PushesRefused are the git pushes over the run that
+	// landed and that the server refused as non-fast-forward
+	// (kardinal_git_operations_total).
+	PushesLanded  float64 `json:"pushesLanded"`
+	PushesRefused float64 `json:"pushesRefused"`
 }
 
 // Quantiles are p50 and p99 in seconds.
@@ -145,7 +150,32 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 
 	m.Pods = podSeries(ctx, e, start, end)
 	leak.Violations = leaks(m.Pods, start, end, memoryLimitMiB(ctx, e), o.SharedController, o.RaceBuild)
-	return m, []Result{errs, queue, leak}
+
+	push := Result{Name: "metrics-push-efficiency"}
+	pushes := byLabel(ctx, e, `sum by (result) (increase(kardinal_git_operations_total{`+ctrlSel+`,operation="push"}[`+window+`]))`, "result")
+	m.PushesLanded, m.PushesRefused = round(pushes["ok"]), round(pushes["non_fast_forward"])
+	push.Violations = pushEfficiency(m.PushesLanded, m.PushesRefused, o.MaxRefusedPushRatio, o.SharedController)
+	push.Note = fmt.Sprintf("%.0f pushes landed, %.0f refused as non-fast-forward", m.PushesLanded, m.PushesRefused)
+	if o.SharedController {
+		push.Note += " (shared with parallel tests: reported only)"
+	}
+	return m, []Result{errs, queue, leak, push}
+}
+
+// pushEfficiency fails a run whose git pushes were refused more than
+// maxRatio times per push that landed (#1578): the promotions of one
+// controller that write one branch take turns, so a refusal means another
+// writer moved the branch. Each environment of a wave racing the others
+// for the branch made 13 refusals per landed push at 150 environments.
+func pushEfficiency(landed, refused, maxRatio float64, shared bool) []string {
+	if shared || refused == 0 {
+		return nil
+	}
+	if refused > maxRatio*math.Max(landed, 1) {
+		return []string{fmt.Sprintf("%.0f pushes refused as non-fast-forward for %.0f that landed (%.2f per landed push; limit %.2f)",
+			refused, landed, refused/math.Max(landed, 1), maxRatio)}
+	}
+	return nil
 }
 
 func round(v float64) float64 {
