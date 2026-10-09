@@ -139,7 +139,7 @@ func TestHookRun_CreatesOwnedJob(t *testing.T) {
 	assert.Equal(t, v1alpha1.HookRunPending, hr.Status.Phase)
 	assert.NotEmpty(t, hr.Status.SpecHash)
 	require.NotNil(t, hr.Status.Deadline)
-	assert.Equal(t, h.now.Add(10*time.Minute), hr.Status.Deadline.Time.UTC())
+	assert.Equal(t, h.now.Add(10*time.Minute), hr.Status.Deadline.UTC())
 	_, exists := h.job()
 	assert.False(t, exists, "the Job is created after the start is recorded")
 
