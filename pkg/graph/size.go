@@ -21,6 +21,12 @@ import (
 // docs/design/16-graph-capability-ledger.md gap G10.
 const MaxGraphBytes = 1_200_000
 
+// MaxGraphObjects is the most objects kardinal lets one Graph create. kro's
+// status.managedResources holds at most 5000 entries (kro.run_graphs CRD
+// maxItems), and its write-ahead briefly holds the previous and next
+// inventory, so the limit leaves room below that.
+const MaxGraphObjects = 4500
+
 // managedResourceBytes is the measured size of one status.managedResources
 // entry on a kardinal Graph (kro v0.10.0-rc.0, kind, 1,050 entries: 242
 // bytes each), rounded up. It assumes short names: an entry holds the node
@@ -48,9 +54,13 @@ var reDefList = regexp.MustCompile(`^\$\{([A-Za-z][A-Za-z0-9]*)\.([A-Za-z][A-Za-
 
 // ObjectCount is the number of objects g's template nodes create: one per
 // scalar template node, and one per item of a collection whose forEach reads
-// a def node's list (the builder's collections). A collection over anything
-// else counts as one.
+// a def node's list (the builder's collections), or one per environment for
+// the compact shape's PromotionSteps. A collection over anything else counts
+// as one.
 func ObjectCount(g *Graph) int {
+	if g == nil {
+		return 0
+	}
 	defs := map[string]map[string]interface{}{}
 	for _, n := range g.Spec.Nodes {
 		if n.Def != nil {
@@ -63,6 +73,14 @@ func ObjectCount(g *Graph) int {
 			continue
 		}
 		items := 1
+		if n.ID == NodePromotionSteps {
+			// The compact shape's step collection reads a computed list; at
+			// most one step per environment of the DAG.
+			if list, ok := defs[NodePromotionDAG]["steps"].([]interface{}); ok {
+				count += len(list)
+				continue
+			}
+		}
 		if len(n.ForEach) == 1 {
 			for _, expr := range n.ForEach[0] {
 				if m := reDefList.FindStringSubmatch(expr); m != nil {
@@ -84,6 +102,13 @@ func CheckSize(g *Graph) error {
 	size, err := EstimateSize(g)
 	if err != nil {
 		return fmt.Errorf("graph size: %w", err)
+	}
+	if n := ObjectCount(g); n > MaxGraphObjects {
+		return asInvalid(fmt.Errorf(
+			"graph size: the Graph for this Bundle would create %d objects, over kardinal's limit of %d "+
+				"(kro tracks at most 5000 per Graph in status.managedResources); reduce the environments or "+
+				"PolicyGates per environment, or split the Pipeline; a new Bundle or a Pipeline edit retries",
+			n, MaxGraphObjects))
 	}
 	if size <= MaxGraphBytes {
 		return nil

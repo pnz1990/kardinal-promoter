@@ -19,10 +19,10 @@ type PipelineSpec struct {
 	// has no upstream dependency. This sequential default means a list of N environments
 	// without dependsOn fields produces a linear chain. Override with dependsOn to
 	// express parallel fan-out or explicit DAG structure.
-	// Environment names must be unique; at most 100 environments (a bound
+	// Environment names must be unique; at most 500 environments (a bound
 	// the API server needs to cost the CEL rules on each entry).
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=100
+	// +kubebuilder:validation:MaxItems=500
 	// +listType=map
 	// +listMapKey=name
 	Environments []EnvironmentSpec `json:"environments"`
@@ -464,6 +464,23 @@ type HelmUpdateConfig struct {
 	// environment path). Defaults to "values.yaml".
 	// +optional
 	ValuesFile string `json:"valuesFile,omitempty"`
+	// ChartVersionFile is the file a chart Bundle's version is written to,
+	// relative to the environment path: an umbrella Chart.yaml, an Argo CD
+	// Application, a Flux HelmRelease or a kustomization.yaml with
+	// helmCharts. Defaults to "Chart.yaml".
+	// +optional
+	ChartVersionFile string `json:"chartVersionFile,omitempty"`
+
+	// ChartVersionPath is the YAML dot-path of the chart version in
+	// chartVersionFile. A numeric segment indexes a list, and "[field=value]"
+	// selects the list element whose field has that value. Defaults to
+	// ".dependencies[name=<chart>].version": the umbrella chart's dependency
+	// named after the Bundle's chart (an error when there is none). For
+	// example ".spec.source.targetRevision" (Argo CD Application),
+	// ".spec.chart.spec.version" (Flux HelmRelease) or
+	// ".helmCharts[name=podinfo].version" (kustomize).
+	// +optional
+	ChartVersionPath string `json:"chartVersionPath,omitempty"`
 }
 
 // ArgoCDUpdateConfig holds ArgoCD-native update strategy configuration.
