@@ -44,6 +44,35 @@ type managerConfig struct {
 	watchNamespace         string
 	// namespaceShard is --namespace-shard: each shard elects its own leader.
 	namespaceShard string
+	// restConfig is the controller's API server config; nil leaves the
+	// leader election client to the manager's default.
+	restConfig *rest.Config
+}
+
+// Leader election client rate limits (#1592): the Lease is renewed every
+// 2s at most, so these never throttle it, and its own limiter means
+// reconcile traffic can never take its tokens.
+const (
+	leaderElectionQPS   = 5
+	leaderElectionBurst = 10
+	// LeaderElectionUserAgent marks the Lease requests, for the API server's
+	// audit log and the chart's FlowSchema documentation.
+	LeaderElectionUserAgent = "kardinal-promoter/leader-election"
+)
+
+// leaderElectionConfig is cfg for the leader election client alone: its
+// own HTTP client and rate limiter, so the Lease renewal never waits behind
+// the reconcilers' requests in the controller process. The chart's
+// FlowSchema (templates/flowschema.yaml) does the same in the API server.
+func leaderElectionConfig(cfg *rest.Config) *rest.Config {
+	if cfg == nil {
+		return nil
+	}
+	c := rest.CopyConfig(cfg)
+	c.QPS, c.Burst = leaderElectionQPS, leaderElectionBurst
+	c.RateLimiter = nil
+	c.UserAgent = LeaderElectionUserAgent
+	return c
 }
 
 // buildManagerOptions returns the options main passes to ctrl.NewManager.
@@ -68,6 +97,7 @@ func buildManagerOptions(cfg managerConfig) ctrl.Options {
 		LeaderElection:                cfg.leaderElect,
 		LeaderElectionID:              leaderElectionID(cfg.namespaceShard),
 		LeaderElectionReleaseOnCancel: true,
+		LeaderElectionConfig:          leaderElectionConfig(cfg.restConfig),
 		GracefulShutdownTimeout:       ptr(gracefulShutdownTimeout),
 		Cache:                         shardCacheOpts(buildCacheOpts(cfg.watchNamespace), cfg.namespaceShard),
 		Client: sigs_client.Options{

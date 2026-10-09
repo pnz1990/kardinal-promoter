@@ -221,6 +221,9 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `securityContext` | non-root, read-only root filesystem, no privilege escalation, all capabilities dropped | Container security context |
 | `logLevel` | `info` | Log verbosity (`debug`, `info`, `warn`, `error`). Sets both `--log-level` and `--zap-log-level` (`warn` maps to `error` there) |
 | `leaderElect` | `true` | Enable leader election (required for HA) |
+| `leaderElectionFlowSchema.enabled` | `true` | Create a FlowSchema that sends the controller's leader election Lease requests to the `leader-election` priority level, so a busy or throttled controller does not lose leadership ([Leader election under API pressure](#leader-election-under-api-pressure)). Needs `flowcontrol.apiserver.k8s.io/v1` (Kubernetes 1.29+) |
+| `leaderElectionFlowSchema.matchingPrecedence` | `90` | The FlowSchema's precedence: lower than any FlowSchema matching the controller's other requests |
+| `leaderElectionFlowSchema.priorityLevel` | `leader-election` | Priority level for the Lease requests |
 | `github.secretRef.name` | `""` | Existing Secret (release namespace) holding the SCM token. Recommended |
 | `github.secretRef.key` | `token` | Key in the Secret |
 | `github.token` | `""` | Token value. The chart stores it in Secret `<fullname>-github-token` (`kardinal-promoter-github-token` for release `kardinal-promoter`); the value stays in the Helm release history. Setting both this and `secretRef.name` fails |
@@ -707,6 +710,23 @@ time and rebase onto each other's commits (git-push retries a moved branch), so 
 regions on one branch takes about a minute even when each step is fast. Raise `promotionStep` for many Pipelines on slow
 git hosts. Each step that runs at once holds one shallow clone of its repository in the
 controller's memory and its working directory on disk.
+
+### Leader election under API pressure
+
+The leader renews its Lease every 2 seconds and gives up leadership when a
+renewal has not succeeded within 10 seconds. The controller's reconcilers
+can send many requests at once (see the worker table above), and a cluster
+can throttle a ServiceAccount through API Priority and Fairness. Either way,
+renewals used to wait behind reconcile traffic, and the leader exited
+("leader election lost") (#1592). Two things now keep renewals separate:
+
+- the controller renews with a client of its own (its own rate limiter, user
+  agent `kardinal-promoter/leader-election`);
+- the chart's FlowSchema (`leaderElectionFlowSchema`) puts the controller
+  ServiceAccount's Lease requests in its namespace into the built-in
+  `leader-election` priority level, as Kubernetes does for its own
+  controllers. Keep its `matchingPrecedence` below any FlowSchema that
+  matches the controller's other requests.
 
 ## Graceful shutdown
 

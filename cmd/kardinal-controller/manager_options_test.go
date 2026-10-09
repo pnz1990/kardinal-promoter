@@ -166,3 +166,25 @@ func TestLeaderElectionIDPerShard(t *testing.T) {
 	assert.Equal(t, "kardinal-promoter-leader", buildManagerOptions(managerConfig{}).LeaderElectionID)
 	assert.Equal(t, "kardinal-promoter-leader-b", buildManagerOptions(managerConfig{namespaceShard: "b"}).LeaderElectionID)
 }
+
+// TestManagerOptions_LeaderElectionClient (#1592): the Lease is renewed
+// with a config of its own: its own rate limiter and user agent, on a copy,
+// so reconcile traffic in the process cannot take its tokens. Without a
+// config the manager's default is kept.
+//
+// Covers CHART-LEASE-APF-01.
+func TestManagerOptions_LeaderElectionClient(t *testing.T) {
+	base := &rest.Config{Host: "https://api.example", QPS: -1, UserAgent: "kardinal-promoter"}
+	opts := buildManagerOptions(managerConfig{leaderElect: true, restConfig: base})
+	le := opts.LeaderElectionConfig
+	require.NotNil(t, le)
+	assert.NotSame(t, base, le)
+	assert.Equal(t, "https://api.example", le.Host)
+	assert.InDelta(t, leaderElectionQPS, le.QPS, 0)
+	assert.Equal(t, leaderElectionBurst, le.Burst)
+	assert.Equal(t, LeaderElectionUserAgent, le.UserAgent)
+	assert.InDelta(t, -1, base.QPS, 0, "the controller's config is not changed")
+	assert.Equal(t, "kardinal-promoter", base.UserAgent)
+
+	assert.Nil(t, buildManagerOptions(managerConfig{leaderElect: true}).LeaderElectionConfig)
+}
