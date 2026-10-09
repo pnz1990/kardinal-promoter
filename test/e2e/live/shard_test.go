@@ -137,7 +137,7 @@ func TestShard_Handoff(t *testing.T) {
 	require.NoError(t, err)
 	n := 0
 	for _, p := range prs {
-		if p.Head == prHead(bundle, "test") {
+		if p.Head == prHead(a.ns, bundle, "test") {
 			n++
 		}
 	}
