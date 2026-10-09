@@ -373,6 +373,12 @@ How a fleet is promoted:
   refused: its Bundles fail with `GraphBuildFailed` and `status.fleets[].message` says why. The
   controller reads ClusterProfiles with the `get` and `list` the chart grants. Argo CD
   Applications are covered by the controller's existing read access.
+- **Checks.** While a fleet cannot be built, the Pipeline is `Ready=False` with reason
+  `ValidationFailed` and the reason in its message: no targets, a selector that cannot be
+  resolved, or a target name that does not make a DNS label or is already used.
+  `kardinal validate` checks static targets. For an `Application` or `ClusterProfile`
+  selector it cannot read the cluster, so it checks the rest of the Pipeline with a
+  stand-in target and prints a warning.
 - **Targets changed mid-rollout.** An edit to `fleet.targets`, or a change in what a selector
   selects, updates the Graph of a Bundle in flight in place. An added target joins the queue
   after the others. A removed target's PromotionStep is deleted: an open PR is closed and its

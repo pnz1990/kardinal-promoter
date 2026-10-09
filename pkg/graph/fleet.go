@@ -221,6 +221,18 @@ func FleetTargetEnvironments(p *kardinalv1alpha1.Pipeline) (map[string][]string,
 	return byFleet, err
 }
 
+// ValidateFleets returns what keeps p's fleets from being built: a fleet
+// without targets, a selector that is not resolved (status.fleets) or could
+// not be, and a target whose environment name is not a DNS label or is
+// taken. Every Bundle of p fails with the same error when its Graph is built.
+func ValidateFleets(p *kardinalv1alpha1.Pipeline) error {
+	if !hasFleets(p) {
+		return nil
+	}
+	_, _, err := fleetMembers(p)
+	return err
+}
+
 // hasFleets reports whether any environment of p is a fleet.
 func hasFleets(p *kardinalv1alpha1.Pipeline) bool {
 	for _, e := range p.Spec.Environments {

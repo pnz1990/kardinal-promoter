@@ -169,12 +169,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, err
 		}
 	}
-	desired := r.validate(&p, ownSecret)
+	// The fleets are resolved first: validate checks them as the Graph
+	// builder will see them.
+	desiredFleets := r.resolveFleets(ctx, &p)
+	validated := p.DeepCopy()
+	validated.Status.Fleets = desiredFleets
+	desired := r.validate(validated, ownSecret)
 	desiredSecret, err := r.gitSecretCondition(ctx, &p)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	desiredFleets := r.resolveFleets(ctx, &p)
 	// Nothing watches Secrets: a git.secretRef Secret created later, or a
 	// label added to one, is seen by these periodic re-checks. A selector
 	// fleet is re-resolved as often.
@@ -480,6 +484,11 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 	// Check the promotion order resolves (no dependsOn or wave cycle). Every
 	// Bundle of a cyclic pipeline would fail with CircularDependency.
 	if err := graph.DetectCycle(p); err != nil {
+		return invalid(err.Error())
+	}
+
+	// A fleet whose targets cannot be resolved fails every Bundle's build.
+	if err := graph.ValidateFleets(p); err != nil {
 		return invalid(err.Error())
 	}
 
