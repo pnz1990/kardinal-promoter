@@ -9,11 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"text/template"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tmplsafe"
 )
 
 // doublingBody is the QA reproduction: 24 assignments double a 16-byte
@@ -24,12 +25,12 @@ func doublingBody() string {
 
 func TestParseBodyTemplate_RefusesVariables(t *testing.T) {
 	tests := map[string]struct{ body, want string }{
-		"doubling (QA repro)":   {doublingBody(), "variable declaration is not allowed"},
-		"assignment only":       {`{{$ = .Event}}`, "variable assignment is not allowed"},
-		"declaration in if":     {`{{if $x := .Event}}{{$x}}{{end}}`, "variable declaration is not allowed"},
-		"declaration in with":   {`{{with $x := .Event}}x{{end}}`, "variable declaration is not allowed"},
-		"declaration in else":   {`{{if .Event}}a{{else}}{{$x := 1}}{{end}}`, "variable declaration is not allowed"},
-		"declaration in nested": {`{{if .Event}}{{with .Bundle}}{{$y := .}}{{end}}{{end}}`, "variable declaration is not allowed"},
+		"doubling (QA repro)":   {doublingBody(), "variables are not allowed"},
+		"assignment only":       {`{{$ = .Event}}`, "variables are not allowed"},
+		"declaration in if":     {`{{if $x := .Event}}{{$x}}{{end}}`, "variables are not allowed"},
+		"declaration in with":   {`{{with $x := .Event}}x{{end}}`, "variables are not allowed"},
+		"declaration in else":   {`{{if .Event}}a{{else}}{{$x := 1}}{{end}}`, "variables are not allowed"},
+		"declaration in nested": {`{{if .Event}}{{with .Bundle}}{{$y := .}}{{end}}{{end}}`, "variables are not allowed"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -44,25 +45,25 @@ func TestParseBodyTemplate_RefusesVariables(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestRenderTemplate_BoundsFunctionAllocation: every string-producing
-// function refuses an input over 64 KiB, and the functions of one render
-// produce at most maxFuncOutput bytes together, however the calls nest.
+// TestRenderTemplate_BoundsFunctionAllocation: no function call may build
+// more than 64 KiB, and the calls of one render build at most maxFuncOutput
+// bytes together, however they nest; each bound is charged before the call.
 func TestRenderTemplate_BoundsFunctionAllocation(t *testing.T) {
 	// Fields are cut to 4 KiB, so a 60 KiB string is built by joining one.
 	data := &TemplateData{Event: "Bundle.Failed", Message: strings.Repeat("m", maxDataField)}
 	big := "(print" + strings.Repeat(" .Message", 15) + ")"
 	tests := map[string]struct{ body, want string }{
-		"print over input limit":             {`{{len (print ` + big + ` ` + big + `)}}`, "print: input is over 65536 bytes"},
-		"println over input limit":           {`{{len (println ` + big + ` ` + big + `)}}`, "println: input is over"},
-		"html over input limit":              {`{{len (html ` + big + ` ` + big + `)}}`, "html: input is"},
-		"js over input limit":                {`{{len (js ` + big + ` ` + big + `)}}`, "js: input is"},
-		"urlquery over input limit":          {`{{len (urlquery ` + big + ` ` + big + `)}}`, "urlquery: input is"},
-		"json charges 6x its input up front": {`{{len (json (print ` + big + ` "x"))}}`, "json: function output is over 262144 bytes in total"},
+		"print over the call limit":    {`{{len (print ` + big + ` ` + big + `)}}`, "print: would build"},
+		"println over the call limit":  {`{{len (println ` + big + ` ` + big + `)}}`, "println: would build"},
+		"html over the call limit":     {`{{len (html ` + big + `)}}`, "html: would build"},
+		"js over the call limit":       {`{{len (js ` + big + `)}}`, "js: would build"},
+		"urlquery over the call limit": {`{{len (urlquery ` + big + `)}}`, "urlquery: would build"},
+		"json charges 6x its input":    {`{{len (json (print ` + big + `))}}`, "json: would build"},
 
-		"budget across calls": {strings.Repeat(`{{len (upper `+big+`)}}`, 5),
-			"function output is over 262144 bytes in total"},
-		"budget across nested calls": {strings.Repeat(`{{len (lower (print `+big+`))}}`, 3),
-			"function output is over 262144 bytes in total"},
+		"budget across calls": {strings.Repeat(`{{len (lower (print .Message .Message .Message .Message))}}`, 6),
+			"the template would build more than 262144 bytes"},
+		"budget across nested calls": {strings.Repeat(`{{len (print (print .Message .Message .Message .Message .Message .Message .Message .Message))}}`, 5),
+			"the template would build more than 262144 bytes"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -76,12 +77,12 @@ func TestRenderTemplate_BoundsFunctionAllocation(t *testing.T) {
 	}
 
 	// The budget is per render: the same template renders again.
-	tmpl, err := parseBodyTemplate(`{{len (upper ` + big + `)}}`)
+	tmpl, err := parseBodyTemplate(`{{len (upper (print .Message .Message .Message))}}`)
 	require.NoError(t, err)
 	for i := 0; i < 10; i++ {
 		out, err := renderTemplate(tmpl, data, "text/plain")
 		require.NoError(t, err)
-		assert.Equal(t, "61440", string(out))
+		assert.Equal(t, "12288", string(out))
 	}
 }
 
@@ -101,7 +102,7 @@ func TestRenderTemplate_WorstCaseAllocation(t *testing.T) {
 	_, err = renderTemplate(tmpl, data, "text/plain")
 	runtime.ReadMemStats(&after)
 	require.Error(t, err, "the budget stops it")
-	assert.ErrorIs(t, err, errFuncBudget)
+	assert.ErrorIs(t, err, errTemplate)
 	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(16<<20), "allocated %d bytes", after.TotalAlloc-before.TotalAlloc)
 
 	// The data as an operand, as often as fits: refused before formatting.
@@ -151,13 +152,13 @@ func TestRenderTemplate_CountedBuiltins(t *testing.T) {
 		{body: `{{or .Bundle "none"}}`, want: "none"},
 		{body: `{{and .Message .Environment}}`, want: "prod"},
 		{body: `{{not .Bundle}}`, want: "true"},
-		{body: `{{gt 3 2}} {{ge 2 2}} {{le 1.5 2}} {{lt "a" "b"}}`, want: "true true true true"},
+		{body: `{{gt 3 2}} {{ge 2 2}} {{le 1.5 2.5}} {{lt "a" "b"}}`, want: "true true true true"},
 		{body: `{{eq true true}} {{ne true false}}`, want: "true true"},
 		{body: `{{slice .Message 1 2}}{{index .Message 0}}`, want: "b97"},
-		{body: `{{lt .Message 3}}`, err: "lt: incompatible types for comparison"},
+		{body: `{{lt .Message 3}}`, err: "incompatible types for comparison"},
 		{body: `{{slice .Message 2 9}}`, err: "out of range"},
-		{body: strings.Repeat(`{{eq "a" "a"}}`, maxFuncCalls+1), err: errTooManyCalls.Error()},
-		{body: strings.Repeat(`{{not .Message}}`, maxFuncCalls+1), err: errTooManyCalls.Error()},
+		{body: strings.Repeat(`{{eq "a" "a"}}`, maxFuncCalls+1), err: "more than 2000 function calls"},
+		{body: strings.Repeat(`{{not .Message}}`, maxFuncCalls+1), err: "more than 2000 function calls"},
 	}
 	for _, tt := range tests {
 		name := tt.body
@@ -185,21 +186,7 @@ func TestRenderTemplate_CountedBuiltins(t *testing.T) {
 func TestParseBodyTemplate_RefusesCall(t *testing.T) {
 	_, err := parseBodyTemplate(`{{call .Message}}`)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "call is not allowed")
-}
-
-// TestFuncBudget_Stopped: once the render's time is up, every function call
-// and every write fails, so Execute returns at the next action.
-func TestFuncBudget_Stopped(t *testing.T) {
-	b := &funcBudget{}
-	require.NoError(t, b.tick("eq"))
-	b.stopped.Store(true)
-	assert.ErrorIs(t, b.tick("eq"), errRenderTime)
-	_, err := b.guard("print", []interface{}{"x"}, times(1), func() (string, error) { return "x", nil })
-	assert.ErrorIs(t, err, errRenderTime)
-	buf := &limitedBuffer{max: 10, stopped: &b.stopped}
-	_, err = buf.Write([]byte("x"))
-	assert.ErrorIs(t, err, errRenderTime)
+	assert.Contains(t, err.Error(), "call is not available")
 }
 
 // TestRenderTemplate_WorstCaseTime renders the costliest bodies that fit in
@@ -218,11 +205,16 @@ func TestRenderTemplate_WorstCaseTime(t *testing.T) {
 		"print of the data": "{{print" + strings.Repeat(" .", 16384/2-8) + "}}",
 	}
 	budget := func(err error) bool {
-		if err == nil || errors.Is(err, errTooManyCalls) || errors.Is(err, errFuncBudget) || errors.Is(err, errBodyTooLarge) {
+		if err == nil || errors.Is(err, tmplsafe.ErrOutputTooLarge) {
 			return true
 		}
 		msg := err.Error()
-		return strings.Contains(msg, "input is over") || strings.Contains(msg, "takes strings, numbers and bools only")
+		for _, b := range []string{"function calls", "would build", "takes strings, numbers and bools only"} {
+			if strings.Contains(msg, b) {
+				return true
+			}
+		}
+		return false
 	}
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
@@ -231,7 +223,7 @@ func TestRenderTemplate_WorstCaseTime(t *testing.T) {
 			require.NoError(t, err)
 			before := runtime.NumGoroutine()
 			_, err = renderTemplate(tmpl, data, "text/plain")
-			assert.NotErrorIs(t, err, errRenderTime, "a budget stops it, not the clock")
+			assert.NotErrorIs(t, err, tmplsafe.ErrStopped, "a budget stops it, not the clock")
 			assert.True(t, budget(err), "completes or stops on a budget: %v", err)
 			assert.LessOrEqual(t, runtime.NumGoroutine(), before, "no goroutine left after Execute")
 		})
@@ -271,8 +263,8 @@ func TestRenderTemplate_RefusesNonScalarArguments(t *testing.T) {
 
 // TestRenderTemplate_DeadlineStopsARender: a function call that blocks past
 // the render deadline is not interrupted (text/template cannot be), but the
-// real timer sets the stopped flag, so the next call or write ends the
-// render with errRenderTime. That error is retryable: not errTemplate.
+// next call or write ends the render with tmplsafe.ErrStopped. That error is
+// retryable: not errTemplate.
 func TestRenderTemplate_DeadlineStopsARender(t *testing.T) {
 	useShortDeadline(t)
 	for name, body := range map[string]string{
@@ -280,14 +272,15 @@ func TestRenderTemplate_DeadlineStopsARender(t *testing.T) {
 		"next write": `{{slow}}after`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			tmpl, err := template.New("body").Option("missingkey=error").Funcs(templateFuncs(nil)).
-				Funcs(template.FuncMap{"slow": func() string { time.Sleep(renderDeadline + 15*time.Millisecond); return "" }}).
-				Parse(body)
+			tmpl, err := parseTemplate(body, tmplsafe.FuncMap{"slow": {Fn: func() string {
+				time.Sleep(renderDeadline + 15*time.Millisecond)
+				return ""
+			}}})
 			require.NoError(t, err)
 			start := time.Now()
 			_, err = renderTemplate(tmpl, &TemplateData{}, "text/plain")
 			require.Error(t, err)
-			assert.ErrorIs(t, err, errRenderTime)
+			assert.ErrorIs(t, err, tmplsafe.ErrStopped)
 			assert.NotErrorIs(t, err, errTemplate, "out of time is retried, not given up on")
 			assert.Less(t, time.Since(start), 100*time.Millisecond)
 		})
@@ -301,4 +294,33 @@ func useShortDeadline(t *testing.T) {
 	t.Helper()
 	renderDeadline = 20 * time.Millisecond
 	t.Cleanup(func() { renderDeadline = maxRenderTime })
+}
+
+// TestRenderTemplate_Functions: the functions docs/notifications.md lists,
+// tmplsafe's string functions included, in pipelines.
+func TestRenderTemplate_Functions(t *testing.T) {
+	data := &TemplateData{Event: "Bundle.Failed", Pipeline: "  app  ", Environment: "prod", Message: "héllo wörld"}
+	tests := map[string]string{
+		`{{ json .Message }}`:                             `"héllo wörld"`,
+		`{{ .Message | truncate 5 }}`:                     "héll…",
+		`{{ .Message | truncate 50 }}`:                    "héllo wörld",
+		`{{ .Pipeline | trimSpace | upper }}`:             "APP",
+		`{{ .Bundle | default "none" }}`:                  "none",
+		`{{ .Event | replace "." "-" | lower }}`:          "bundle-failed",
+		`{{ .Event | trimPrefix "Bundle." }}`:             "Failed",
+		`{{ if .Event | hasPrefix "Bundle." }}B{{ end }}`: "B",
+		`{{ if contains "rod" .Environment }}P{{ end }}`:  "P",
+		`{{ print "kardinal/" .Environment }}`:            "kardinal/prod",
+	}
+	for body, want := range tests {
+		t.Run(body, func(t *testing.T) {
+			tmpl, err := parseBodyTemplate(body)
+			require.NoError(t, err)
+			out, err := renderTemplate(tmpl, data, "text/plain")
+			require.NoError(t, err)
+			assert.Equal(t, want, string(out))
+		})
+	}
+	_, err := parseBodyTemplate("  ")
+	assert.ErrorContains(t, err, "empty template")
 }

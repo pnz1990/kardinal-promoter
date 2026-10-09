@@ -260,11 +260,15 @@ spec:
   events: [Bundle.Failed, PromotionStep.Failed, PromotionStep.WaitingForApproval]
 ```
 
+The body is rendered by the same sandbox as custom PR templates (`pkg/tmplsafe`).
 Functions, on top of the text/template builtins (`if`, `with`, `eq`, `and`, `index`,
 `len`, ...): `json` (the value as JSON, quotes and escapes included: use it for every
-string in a JSON body), `lower`, `upper`, `truncate N` (at most N characters, with `…` when
-cut) and `print` (joins its operands: `print "kardinal/" .Namespace`). `printf` is refused:
-with argument indexes (`%[1]s`) it repeats an operand without bound. `call` is refused too.
+string in a JSON body), `truncate N` (at most N characters, with `…` when cut), `print`
+(joins its operands: `print "kardinal/" .Namespace`), and the string functions `lower`,
+`upper`, `trimSpace`, `trimPrefix P`, `contains S`, `hasPrefix P`, `default D` (D when the
+value is empty) and `replace OLD NEW`, each taking the string last so it works in a
+pipeline (`{{ .Bundle | default "none" }}`). `printf` is refused: with argument indexes
+(`%[1]s`) it repeats an operand without bound. `call` is refused too.
 The comparison, logic and indexing builtins (`eq`, `ne`, `lt`, `le`, `gt`, `ge`, `and`, `or`,
 `not`, `len`, `index`, `slice`) take strings, numbers and bools; `and` and `or` evaluate every
 operand.
@@ -274,11 +278,10 @@ Limits, so a template cannot run away with the controller:
 - `range`, `define`, `block`, `template` and variables (`{{ $x := ... }}`, `{{ $x = ... }}`)
   are refused: every action runs once, so rendering is linear in the template's size. The
   body is at most 16 KiB, the rendered body at most 64 KiB.
-- Each function (`print`, `println`, `html`, `js`, `urlquery`, `json`, `lower`, `upper`,
-  `truncate`) refuses an input over 64 KiB. Before it runs, the most it can produce from
-  that input (6 times the input for `json`, `html` and `js`, 3 times for `urlquery`, `lower`
-  and `upper`) is charged to a budget of 256 KiB per render, so no render allocates much more
-  than that.
+- Before a function runs, the most it can build from its arguments (6 times the input for
+  `json`, `html`, `js` and `urlquery`, 3 times for `lower` and `upper`) is computed: one call
+  may build at most 64 KiB, and the calls of one render at most 256 KiB together, so no
+  render allocates much more than that.
 - Function arguments may only be strings, numbers or bools. A struct (such as `.` itself),
   a list or a map is refused before it is formatted: `{{ print . }}` is an error.
 - A render makes at most 2,000 function calls, builtins included. Together with the byte

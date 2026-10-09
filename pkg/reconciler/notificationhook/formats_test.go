@@ -351,7 +351,7 @@ func TestDelivery_TemplateRenderFailureGivesUpAtOnce(t *testing.T) {
 	for name, tc := range map[string]struct{ body, want string }{
 		"invalid JSON":  {`{"text": "{{ .Message }}`, "rendered body is not valid JSON (content type application/json); quote values with {{ json .Field }}"},
 		"missing field": {`{{ .Nope }}`, "render: "},
-		"too large":     {strings.Repeat("x", 70000), "rendered body is over 65536 bytes"},
+		"too large":     {strings.Repeat("x", 70000), "template output is too large (more than 65536 bytes)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv, url := newRecorder(t)

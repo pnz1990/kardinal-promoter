@@ -50,7 +50,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -70,6 +69,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tmplsafe"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
@@ -157,7 +157,7 @@ type deliveryConfig struct {
 	url           string
 	authorization string
 	format        v1alpha1.NotificationHookFormat
-	tmpl          *template.Template
+	tmpl          *tmplsafe.Template
 	contentType   string
 	// signingKey, when set, signs every request (spec.signing).
 	signingKey []byte

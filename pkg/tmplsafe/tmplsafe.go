@@ -194,12 +194,12 @@ func (t *Template) Execute(data interface{}) (string, error) {
 		case errors.Is(err, ErrOutputTooLarge):
 			return "", fmt.Errorf("%w (more than %d bytes)", ErrOutputTooLarge, lim.MaxOutput)
 		case r.stopped:
-			return "", fmt.Errorf("template took longer than %s", lim.MaxExecTime)
+			return "", fmt.Errorf("%w: template took longer than %s", ErrStopped, lim.MaxExecTime)
 		}
 		return "", shorten(err)
 	}
 	if r.stopped {
-		return "", fmt.Errorf("template took longer than %s", lim.MaxExecTime)
+		return "", fmt.Errorf("%w: template took longer than %s", ErrStopped, lim.MaxExecTime)
 	}
 	return w.String(), nil
 }
