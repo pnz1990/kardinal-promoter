@@ -456,11 +456,9 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 }
 
 // gatesHashFor returns the hash of the PolicyGate templates that apply to
-// pipeline's environments, read as the Translator reads them
-// (translator.CollectGates): name, namespace, labels and spec. A template
-// whose kardinal.io/applies-to names none of the environments is left out,
-// so a change to an org gate of other Pipelines does not retry this one. ""
-// when the templates cannot be read; no retry is keyed on it then.
+// pipeline's environments as they are now, read as the Translator reads them
+// (translator.CollectGates, translator.GatesHash). "" when they cannot be
+// read; no retry is keyed on it then.
 func (r *Reconciler) gatesHashFor(ctx context.Context, log zerolog.Logger, pipeline *kardinalv1alpha1.Pipeline) string {
 	if pipeline == nil {
 		return ""
@@ -470,31 +468,18 @@ func (r *Reconciler) gatesHashFor(ctx context.Context, log zerolog.Logger, pipel
 		log.Warn().Err(err).Msg("failed to read policy gates for the retry hash (non-fatal)")
 		return ""
 	}
-	envs := make(map[string]bool, len(pipeline.Spec.Environments))
-	for _, e := range pipeline.Spec.Environments {
-		envs[e.Name] = true
-	}
-	type entry struct {
-		Namespace string                          `json:"namespace"`
-		Name      string                          `json:"name"`
-		Labels    map[string]string               `json:"labels,omitempty"`
-		Spec      kardinalv1alpha1.PolicyGateSpec `json:"spec"`
-	}
-	entries := []entry{}
-	for i := range gates {
-		g := &gates[i]
-		if !slices.ContainsFunc(strings.Split(g.Labels["kardinal.io/applies-to"], ","),
-			func(e string) bool { return envs[strings.TrimSpace(e)] }) {
-			continue
-		}
-		entries = append(entries, entry{Namespace: g.Namespace, Name: g.Name, Labels: g.Labels, Spec: g.Spec})
-	}
-	data, err := json.Marshal(entries) // CollectGates sorts by namespace and name
-	if err != nil {
+	return translator.GatesHash(pipeline, gates)
+}
+
+// usedGatesHash returns the hash of the PolicyGate templates the failed
+// Graph build was given (translator.BuildError), or "" when cause carries
+// none: then the gates did not take part, and no gate change retries.
+func usedGatesHash(pipeline *kardinalv1alpha1.Pipeline, cause error) string {
+	var be *translator.BuildError
+	if !errors.As(cause, &be) {
 		return ""
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	return translator.GatesHash(pipeline, be.Gates)
 }
 
 // gatesChanged reports whether b failed with GraphBuildFailed and the
@@ -938,7 +923,7 @@ func (r *Reconciler) namespaceDeleting(ctx context.Context, log zerolog.Logger, 
 func (r *Reconciler) markInvalid(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle,
 	pipeline *kardinalv1alpha1.Pipeline, cause error) (ctrl.Result, error) {
 	patch := client.MergeFrom(b.DeepCopy())
-	reason, msg, _ := setInvalid(b, pipeline, cause, r.gatesHashFor(ctx, log, pipeline))
+	reason, msg, _ := setInvalid(b, pipeline, cause, usedGatesHash(pipeline, cause))
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -1070,7 +1055,6 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	b.Status.Environments = environmentStatuses(b, pipeline, steps, now)
 
 	var after []func()
-	heldForSlot := false
 	invalidBuild := errors.Is(syncErr, graph.ErrInvalid)
 	graphDeleted := errors.Is(syncErr, errGraphDeletedAfterFailure)
 	switch {
@@ -1083,7 +1067,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		}
 	case invalidBuild:
 		wasFailed := before.Status.Phase == phaseFailed
-		reason, msg, changed := setInvalid(b, pipeline, syncErr, r.gatesHashFor(ctx, log, pipeline))
+		reason, msg, changed := setInvalid(b, pipeline, syncErr, usedGatesHash(pipeline, syncErr))
 		setBundleCondition(b, condGraphSynced, metav1.ConditionFalse, "InvalidSpec", syncErr.Error())
 		if changed {
 			log.Warn().Str("reason", reason).Err(syncErr).Msg("bundle failed: graph cannot be built")
@@ -1151,7 +1135,14 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		}
 	case phaseFailed:
 		stepsObserved := len(steps) > 0 || !failedPromoting(before)
-		if failedEnv != nil && rejected == nil && onlyRollingBack(steps) {
+		// One read decides the three cases below: a newer same-type Bundle
+		// (in flight or Verified) supersedes this one instead of letting it
+		// recover, so it is never held for a slot either.
+		newer, newerErr := r.hasNewerSibling(ctx, b, true)
+		if newerErr != nil {
+			log.Warn().Err(newerErr).Msg("failed to check for newer bundle (non-fatal)")
+		}
+		if newerErr == nil && newer && failedEnv != nil && rejected == nil && onlyRollingBack(steps) {
 			// Every failing environment is RollingBack: the rollback Bundle
 			// carries it from here. The Bundle reconciler can see the step's
 			// RollingBack before its cache has the rollback Bundle, which
@@ -1159,38 +1150,31 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			// newer Bundle is seen (its create event re-queues this one, see
 			// waitingSiblings) the outcome is Superseded, as when it was seen
 			// first.
-			newer, err := r.hasNewerSibling(ctx, b, true)
-			switch {
-			case err != nil:
-				log.Warn().Err(err).Msg("failed to check for the rollback bundle (non-fatal)")
-			case newer:
-				supersede(b)
-				after = append(after, func() { r.superseded(b) })
-			}
-		}
-		if b.Status.Phase != phaseFailed {
+			supersede(b)
+			after = append(after, func() { r.superseded(b) })
 			break
+		}
+		if newerErr != nil {
+			break // keep the hold and the phase as they are; the next event retries
 		}
 		// maxConcurrentPromotions (#1349): a Failed Bundle does not hold a
 		// slot, so while the cap is full it is held (WaitingForSlot): its
 		// Graph creates no step and its Pending steps wait, and it does not
-		// recover into Promoting. The hold is lifted when a slot frees (the
-		// sibling's phase change re-queues it, see waitingSiblings).
-		limit, held, err := r.slotTaken(ctx, b, pipeline)
-		if err != nil {
-			// A failed read is not a free slot: keep the hold as it is and retry.
-			return ctrl.Result{}, err
+		// recover into Promoting. The hold is lifted when a slot frees: the
+		// sibling's phase change re-queues it (waitingSiblings). A Bundle a
+		// newer one replaced is not held: it can only be superseded.
+		limit, held := 0, false
+		if !newer {
+			var err error
+			if limit, held, err = r.slotTaken(ctx, b, pipeline); err != nil {
+				// A failed read is not a free slot: keep the hold as it is and retry.
+				return ctrl.Result{}, err
+			}
 		}
 		setSlotHold(b, held, limit)
-		if held {
-			heldForSlot = true
-		}
 		if failedEnv == nil && rejected == nil && !graphDeleted && stepsObserved &&
 			!meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec) {
-			newer, err := r.hasNewerSibling(ctx, b, true)
 			switch {
-			case err != nil:
-				log.Warn().Err(err).Msg("failed to check for newer bundle before recovering (non-fatal)")
 			case newer:
 				supersede(b)
 				after = append(after, func() { r.superseded(b) })
@@ -1210,9 +1194,6 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	}
 
 	result := soakRequeue(b)
-	if heldForSlot {
-		result = ctrl.Result{RequeueAfter: requeueSlow}
-	}
 	if syncErr != nil && !invalidBuild && !graphDeleted {
 		log.Error().Err(syncErr).Msg("graph sync failed — requeuing")
 		result = ctrl.Result{RequeueAfter: requeueSlow}

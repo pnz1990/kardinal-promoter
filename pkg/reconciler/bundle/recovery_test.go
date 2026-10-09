@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -134,7 +136,7 @@ func TestLifecycle_FailedBundleRecoveryWaitsForSlot(t *testing.T) {
 	require.NotNil(t, ready)
 	assert.Equal(t, "WaitingForSlot", ready.Reason)
 	assert.Equal(t, "maxConcurrentPromotions (1) reached; waiting for a promoting bundle to finish", ready.Message)
-	assert.Positive(t, res.RequeueAfter)
+	assert.Zero(t, res.RequeueAfter, "no polling: a sibling's phase change lifts the hold")
 
 	rv := got.ResourceVersion
 	lcReconcile(t, r, "app-a")
@@ -184,6 +186,47 @@ func TestLifecycle_FailedBundleHeldOnlyWhenCapFull(t *testing.T) {
 			got := lcGet(t, c, "app-a")
 			assert.Equal(t, "Failed", got.Status.Phase)
 			assert.Equal(t, tc.want, meta.IsStatusConditionTrue(got.Status.Conditions, graph.CondBundleWaitingForSlot))
+		})
+	}
+}
+
+// #1349 (QA on #1487): a Failed Bundle that a newer Bundle of its type
+// replaced is never held for a slot. With cap 1 and steady traffic, every
+// abandoned Failed Bundle would otherwise show WaitingForSlot, re-read the
+// namespace's Bundles from the API server and wake its steps on every
+// sibling change. A newer Bundle that is in flight or Verified both count.
+func TestLifecycle_ReplacedFailedBundleNotHeld(t *testing.T) {
+	for _, newerPhase := range []string{"Promoting", "Verified", "Available"} {
+		t.Run(newerPhase, func(t *testing.T) {
+			t0 := time.Now().UTC().Add(-time.Hour)
+			p := lcPipeline("app", lcEnvs("test")...)
+			p.Spec.MaxConcurrentPromotions = 1
+			a := lcBundle("app-v1", "image", "Failed", t0)
+			a.Status.GraphRef = "app-app-v1"
+			listed := 0
+			c := indexedBuilder(newScheme()).
+				WithObjects(p, a, lcBundle("app-v2", "image", newerPhase, t0.Add(time.Minute)),
+					lcBundle("app-c1", "config", "Promoting", t0.Add(2*time.Minute)),
+					lcStep("app-v1", "test", "s-v1", "Failed")).
+				WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}, &kardinalv1alpha1.PromotionStep{}).
+				Build()
+			api := interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+				List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					listed++
+					return cl.List(ctx, list, opts...)
+				},
+			})
+			r := &bundle.Reconciler{Client: c, APIReader: api}
+			res := lcReconcile(t, r, "app-v1")
+			got := lcGet(t, c, "app-v1")
+			assert.Equal(t, "Failed", got.Status.Phase)
+			assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, graph.CondBundleWaitingForSlot))
+			assert.Zero(t, res.RequeueAfter)
+			assert.Zero(t, listed, "no uncached cap count for a replaced Bundle")
+
+			rv := got.ResourceVersion
+			lcReconcile(t, r, "app-v1")
+			assert.Equal(t, rv, lcGet(t, c, "app-v1").ResourceVersion, "nothing is written")
 		})
 	}
 }

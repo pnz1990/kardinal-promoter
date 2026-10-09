@@ -21,23 +21,30 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
 // gateTranslator fails with graph.ErrInvalid while the PolicyGate template
 // default/permit does not exist or does not grant a skip, the way the Graph
-// builder refuses a skip without permission.
+// builder refuses a skip without permission. Like the real Translator it
+// returns a translator.BuildError with the gates the build was given.
 type gateTranslator struct {
 	c     client.Client
 	calls int
 }
 
-func (m *gateTranslator) Translate(ctx context.Context, _ *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) (string, error) {
+func (m *gateTranslator) Translate(ctx context.Context, p *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) (string, error) {
 	m.calls++
-	var g kardinalv1alpha1.PolicyGate
-	if err := m.c.Get(ctx, types.NamespacedName{Name: "permit", Namespace: "default"}, &g); err != nil || !g.Spec.SkipPermission {
-		return "", fmt.Errorf("build: skip denied for environment uat: %w", graph.ErrInvalid)
+	gates, err := translator.CollectGates(ctx, m.c, nil, p)
+	if err != nil {
+		return "", err
 	}
-	return "app-" + b.Name, nil
+	for _, g := range gates {
+		if g.Name == "permit" && g.Spec.SkipPermission {
+			return "app-" + b.Name, nil
+		}
+	}
+	return "", &translator.BuildError{Err: fmt.Errorf("build: skip denied for environment uat: %w", graph.ErrInvalid), Gates: gates}
 }
 
 func gateTemplate(name, appliesTo string, skip bool) *kardinalv1alpha1.PolicyGate {
@@ -162,4 +169,33 @@ func TestLifecycle_GateChangeRetranslatesInFlightGraph(t *testing.T) {
 	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "InvalidSpec"))
 	assert.Empty(t, got.Status.PolicyGatesHash)
 	assert.Equal(t, "Promoting", got.Status.Phase, "nothing is failing any more")
+}
+
+// #1312 (QA on #1487): the hash recorded is of the gates the failed build
+// was given (translator.BuildError), not of a second read. A build error
+// without them (the gates took no part) records no hash, so no gate change
+// retries the Bundle.
+func TestLifecycle_GatesHashFromFailedBuild(t *testing.T) {
+	t0 := time.Now().UTC().Add(-time.Hour)
+	p := lcPipeline("app", lcEnvs("test", "uat")...)
+	used := []kardinalv1alpha1.PolicyGate{*gateTemplate("permit", "uat", false)}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "build error with its gates", want: translator.GatesHash(p, used),
+			err: &translator.BuildError{Err: fmt.Errorf("build: x: %w", graph.ErrInvalid), Gates: used}},
+		{name: "invalid without gates", err: fmt.Errorf("build: x: %w", graph.ErrInvalid)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The cache holds a different gate than the build used.
+			c := lcClient(p.DeepCopy(), lcBundle("app-v1", "image", "Available", t0), gateTemplate("permit", "uat", true))
+			r := &bundle.Reconciler{Client: c, Translator: &mockTranslator{err: tc.err}}
+			lcReconcile(t, r, "app-v1")
+			got := lcGet(t, c, "app-v1")
+			require.Equal(t, "Failed", got.Status.Phase)
+			assert.Equal(t, tc.want, got.Status.PolicyGatesHash)
+		})
+	}
 }

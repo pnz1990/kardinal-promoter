@@ -69,9 +69,21 @@ func TestBuilder_StepsHeldOnceBundleSuperseded(t *testing.T) {
 // and is not pruned. Every other phase, including the recoverable Failed,
 // resolves to the Bundle name.
 func TestBuilder_SupersededHoldIsDataPending(t *testing.T) {
+	// Evaluate the expression the builder emits, not a copy of it, so the
+	// test fails when the builder drops a hold.
+	p := makeLinearPipeline("one", "test")
+	result, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("one-v1", p.Name)})
+	require.NoError(t, err)
+	var emitted string
+	for _, n := range result.Graph.Spec.Nodes {
+		if n.Template["kind"] == "PromotionStep" {
+			emitted, _ = n.Template["spec"].(map[string]interface{})["bundleName"].(string)
+		}
+	}
+	require.NotEmpty(t, emitted, "a PromotionStep node with spec.bundleName")
 	env, err := cel.NewEnv(cel.Variable("bundle", cel.DynType))
 	require.NoError(t, err)
-	expr := strings.TrimSuffix(strings.TrimPrefix(supersededHold, "${"), "}")
+	expr := strings.TrimSuffix(strings.TrimPrefix(emitted, "${"), "}")
 	ast, iss := env.Compile(expr)
 	require.NoError(t, iss.Err())
 	prg, err := env.Program(ast)

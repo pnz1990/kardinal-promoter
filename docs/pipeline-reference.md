@@ -161,7 +161,7 @@ Default: `false`.
 
 Maximum number of this Pipeline's Bundles in the `Promoting` phase at once. A Bundle over the cap stays `Available` with the `Ready` condition reason `WaitingForSlot`, and starts when a promoting Bundle becomes Verified, Failed or Superseded. `0` means no cap.
 
-A `Failed` Bundle does not count, so it does not take a slot back while the cap is full. While the cap is full it has the condition `WaitingForSlot=True`: its Graph creates no new PromotionStep and its `Pending` steps do not start, so a failed step that is deleted is not recreated until a slot frees. A step that was already running keeps running. When a slot frees the condition is removed, and once nothing is failing the Bundle returns to `Promoting`.
+A `Failed` Bundle does not count, so it does not take a slot back while the cap is full. While the cap is full it has the condition `WaitingForSlot=True`: its Graph creates no new PromotionStep and its `Pending` steps do not start, so a failed step that is deleted is not recreated until a slot frees. A step that was already running keeps running. When a slot frees the condition is removed, and once nothing is failing the Bundle returns to `Promoting`. A `Failed` Bundle that a newer Bundle of its type replaced (one that is in flight or `Verified`) is never held: it can only be superseded. When several `Failed` Bundles wait and one slot frees, the hold is lifted on all of them at once, so a step recreated for each can start before the first of them returns to `Promoting`; the next ones are then held again, but their started steps keep running.
 
 Default: `0`.
 
