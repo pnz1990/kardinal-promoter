@@ -127,52 +127,6 @@ func (r *Reconciler) holdForPreHooks(ctx context.Context, log zerolog.Logger, ba
 	return true, ctrl.Result{RequeueAfter: requeueGateWait}, nil
 }
 
-// passHealth is called when the health check (and bake window) passed: a
-// step with post-deploy hooks enters Verifying, every other step is
-// Verified. reason and message are those of the Verified condition and state
-// message.
-func (r *Reconciler) passHealth(ctx context.Context, base, ps *v1alpha1.PromotionStep, reason, message string) error {
-	if len(ps.Spec.PostHooks) == 0 {
-		return r.verify(ctx, base, ps, reason, message)
-	}
-	if ps.Status.VerificationStartedAt == nil {
-		now := metav1.NewTime(r.now().UTC())
-		ps.Status.VerificationStartedAt = &now
-	}
-	return r.transition(ctx, base, ps, StateVerifying,
-		fmt.Sprintf("%s; running %d post-deploy hook(s): %s", message, len(ps.Spec.PostHooks),
-			strings.Join(ps.Spec.PostHooks, ", ")))
-}
-
-// handleVerifying waits for the post-deploy hooks. All succeeded: Verified.
-// One failed: onHealthFailure applies (none: Failed; abort: AbortedByAlarm;
-// rollback: a rollback Bundle), as for a failed health check.
-func (r *Reconciler) handleVerifying(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
-	base := ps.DeepCopy()
-	v := hookResults(ps, ps.Spec.PostHooks)
-	switch {
-	case v.succeeded():
-		log.Info().Str("env", ps.Spec.Environment).Msg("post-deploy hooks succeeded, Verified")
-		return ctrl.Result{}, r.verify(ctx, base, ps, "PostHooksSucceeded",
-			fmt.Sprintf("post-deploy hooks succeeded: %s", strings.Join(ps.Spec.PostHooks, ", ")))
-	case v.failed != nil:
-		pipeline, err := r.loadPipeline(ctx, ps)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
-		}
-		env := findEnv(pipeline, ps.Spec.Environment)
-		log.Info().Str("hook", v.failed.String()).Str("onHealthFailure", env.OnHealthFailure).Msg("post-deploy hook failed")
-		return r.applyHealthFailurePolicy(ctx, log, base, ps, env, "post-deploy hooks", v.failMessage("post"))
-	}
-	if msg := v.waitMessage("post"); ps.Status.Message != msg {
-		ps.Status.Message = msg
-		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("patch post-hook wait message: %w", err)
-		}
-	}
-	return ctrl.Result{RequeueAfter: requeueGateWait}, nil
-}
-
 // ConditionHooksSkipped is True when hooks were added to the Pipeline after
 // this step passed the point they run at; they were not run for this
 // Bundle (their HookRuns are Skipped).

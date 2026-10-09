@@ -128,8 +128,8 @@ func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.Promotio
 		eventAction = "CheckHealth"
 		note = fmt.Sprintf("env %s: change delivered, running health check", env)
 	case StateVerifying:
-		eventAction = "RunHooks"
-		note = fmt.Sprintf("env %s: health check passed, running post-deploy hooks", env)
+		eventAction = "RunVerification"
+		note = fmt.Sprintf("env %s: health check passed, verifying (post-deploy hooks and analyses)", env)
 	case StateVerified:
 		eventAction = "Verify"
 		note = fmt.Sprintf("env %s: step completed successfully", env)
