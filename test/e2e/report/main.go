@@ -101,6 +101,9 @@ func (s *summary) ok() bool {
 func read(in io.Reader, out io.Writer) (*summary, error) {
 	s := &summary{}
 	bugs, fixed := map[string]int{}, map[string]bool{}
+	// crashedUnder holds the tests a crash line was printed under: their
+	// failure is the crash, not the known bug.
+	crashedUnder := map[string]bool{}
 	pkgFail := false
 	// running holds the tests that started and have not ended: a test
 	// binary that crashed or timed out leaves them there.
@@ -125,6 +128,9 @@ func read(in io.Reader, out io.Writer) (*summary, error) {
 			_, _ = fmt.Fprint(out, ev.Output)
 			if crashLine.MatchString(ev.Output) {
 				s.crashed = true
+				if ev.Test != "" {
+					crashedUnder[ev.Test] = true
+				}
 			}
 			if !strings.HasPrefix(ev.Test, "TestScale_") {
 				break
@@ -143,11 +149,12 @@ func read(in io.Reader, out io.Writer) (*summary, error) {
 				continue
 			}
 			r := result{Test: ev.Test, Action: ev.Action, Elapsed: ev.Elapsed}
-			if ev.Action == "fail" && bugs[ev.Test] > 0 && !fixed[ev.Test] {
+			if ev.Action == "fail" && bugs[ev.Test] > 0 && !fixed[ev.Test] && !crashedUnder[ev.Test] {
 				r.Action, r.KnownBug = "xfail", bugs[ev.Test]
 			}
 			delete(bugs, ev.Test)
 			delete(fixed, ev.Test)
+			delete(crashedUnder, ev.Test)
 			delete(running, ev.Test)
 			s.results = append(s.results, r)
 		}
@@ -173,7 +180,9 @@ func (s *summary) markdown(suite string) string {
 	}
 	fmt.Fprintf(&b, "### Live e2e suite `%s`: %s\n\n", suite, verdict)
 	fmt.Fprintf(&b, "%d passed, %d failed, %d skipped, %d known bugs", s.count("pass"), s.count("fail"), s.count("skip"), s.knownBugs())
-	if s.pkgFailed {
+	if s.crashed {
+		b.WriteString(", and the test binary crashed")
+	} else if s.pkgFailed {
 		b.WriteString(", and the test binary failed outside a test")
 	}
 	b.WriteString("\n\n| Test | Result | Time |\n|---|---|---|\n")
@@ -200,6 +209,9 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("\n=== suite %s: %d passed, %d failed, %d skipped, %d known bugs\n", *suite, s.count("pass"), s.count("fail"), s.count("skip"), s.knownBugs())
+	if s.crashed {
+		fmt.Println("    test binary crashed: the run proves nothing (a panic, a fatal error, a timeout, or a test that never ended)")
+	}
 	for _, r := range s.results {
 		switch {
 		case r.KnownBug > 0:

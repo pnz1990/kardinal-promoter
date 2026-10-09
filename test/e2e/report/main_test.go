@@ -67,22 +67,34 @@ func TestRead(t *testing.T) {
 		},
 		{
 			name: "an expected failure does not hide a test binary that timed out",
-			in: `{"Action":"run","Test":"TestScale_B"}
+			in: `{"Action":"pass","Test":"TestScale_A"}
+{"Action":"run","Test":"TestScale_B"}
 {"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
 {"Action":"fail","Test":"TestScale_B"}
 {"Action":"run","Test":"TestScale_C"}
 {"Action":"output","Test":"TestScale_C","Output":"panic: test timed out after 1h30m0s\n"}
 {"Action":"fail"}`,
-			fail: 1, knownBugs: 1, pkgFailed: true, crashed: true, wantInMD: "FAILED",
+			pass: 1, fail: 1, knownBugs: 1, pkgFailed: true, crashed: true, wantInMD: "the test binary crashed",
 		},
 		{
 			name: "a crash reported outside any test still fails the run",
-			in: `{"Action":"run","Test":"TestScale_B"}
+			in: `{"Action":"pass","Test":"TestScale_A"}
+{"Action":"run","Test":"TestScale_B"}
 {"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
 {"Action":"fail","Test":"TestScale_B"}
 {"Action":"output","Output":"fatal error: concurrent map writes\n"}
 {"Action":"fail"}`,
-			knownBugs: 1, pkgFailed: true, crashed: true, wantInMD: "FAILED",
+			pass: 1, knownBugs: 1, pkgFailed: true, crashed: true, wantInMD: "the test binary crashed",
+		},
+		{
+			name: "a known-bug test the binary crashed under is a failure, not a known bug",
+			in: `{"Action":"pass","Test":"TestScale_A"}
+{"Action":"run","Test":"TestScale_B"}
+{"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
+{"Action":"output","Test":"TestScale_B","Output":"panic: runtime error: index out of range [3] with length 3\n"}
+{"Action":"fail","Test":"TestScale_B"}
+{"Action":"fail"}`,
+			pass: 1, fail: 1, pkgFailed: true, crashed: true, wantInMD: "| `TestScale_B` | fail |",
 		},
 		{
 			name: "a skip still fails the run",
