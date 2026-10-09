@@ -14,7 +14,7 @@ ValidatingAdmissionPolicy (the chart's kubeVersion).
 {{- $instanceSpecFields := list "expression" "message" "recheckInterval" "skipPermission" "when" "selector" "generated" }}
 {{- /* Gate instance metadata a caller other than kro and the controller may not change: all of it but
 managedFields, resourceVersion and generation, which the API server writes (name and namespace are immutable). */}}
-{{- $instanceMetaFields := list "labels" "annotations" "ownerReferences" "finalizers" "generateName" }}
+{{- $instanceMetaFields := list "labels" "ownerReferences" "finalizers" "generateName" }}
 {{- /* The garbage collector and the namespace controller remove owner references and finalizers. */}}
 {{- $cleanup := list "system:serviceaccount:kube-system:generic-garbage-collector" "system:serviceaccount:kube-system:namespace-controller" "system:kube-controller-manager" }}
 apiVersion: admissionregistration.k8s.io/v1
@@ -89,8 +89,22 @@ spec:
     # references and finalizers.
     - name: cleanup
       expression: request.userInfo.username in {{ $cleanup | toJson }}
+    # The annotations are unchanged but kardinal.io/force-recheck, which
+    # anyone who may patch the gate sets to have it evaluated at once
+    # (docs/policy-gates.md).
+    - name: annotationsKept
+      expression: >-
+        oldObject != null &&
+        (has(object.metadata.annotations) ? object.metadata.annotations : {}).all(k,
+          k == 'kardinal.io/force-recheck' ||
+          (has(oldObject.metadata.annotations) && k in oldObject.metadata.annotations &&
+           object.metadata.annotations[k] == oldObject.metadata.annotations[k])) &&
+        (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}).all(k,
+          k == 'kardinal.io/force-recheck' ||
+          (has(object.metadata.annotations) && k in object.metadata.annotations))
     # Everything in spec but overrides, and the metadata but managedFields,
-    # resourceVersion and generation, are unchanged.
+    # resourceVersion, generation and the force-recheck annotation, are
+    # unchanged.
     - name: onlyOverrides
       expression: >-
         oldObject != null &&
@@ -102,6 +116,7 @@ spec:
         && has(object.metadata.{{ $f }}) == has(oldObject.metadata.{{ $f }}) &&
         (!has(object.metadata.{{ $f }}) || object.metadata.{{ $f }} == oldObject.metadata.{{ $f }})
         {{- end }}
+        && variables.annotationsKept
   validations:
     # kardinal override (spec.overrides[]) records who overrode the gate.
     # Every entry that is new, or changed, must name the requester.

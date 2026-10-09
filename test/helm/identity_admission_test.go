@@ -234,6 +234,16 @@ func TestIdentityAdmission_GateOverrides(t *testing.T) {
 		// The metadata is frozen too, but for what the API server writes.
 		{name: "annotate an instance", old: gate("x", true), cur: withMeta(gate("x", true), "annotations",
 			map[string]interface{}{"note": "x"}), user: "alice", want: false},
+		{name: "force a recheck", old: withMeta(gate("x", true), "annotations", map[string]interface{}{"a": "1"}),
+			cur: withMeta(gate("x", true), "annotations", map[string]interface{}{"a": "1", "kardinal.io/force-recheck": "123"}),
+			user: "alice", want: true},
+		{name: "force a recheck on an instance without annotations", old: gate("x", true),
+			cur: withMeta(gate("x", true), "annotations", map[string]interface{}{"kardinal.io/force-recheck": "123"}), user: "alice", want: true},
+		{name: "change another annotation with the recheck", old: withMeta(gate("x", true), "annotations", map[string]interface{}{"a": "1"}),
+			cur: withMeta(gate("x", true), "annotations", map[string]interface{}{"a": "2", "kardinal.io/force-recheck": "123"}),
+			user: "alice", want: false},
+		{name: "drop an annotation", old: withMeta(gate("x", true), "annotations", map[string]interface{}{"a": "1"}),
+			cur: gate("x", true), user: "alice", want: false},
 		{name: "re-own an instance", old: owned(), cur: withMeta(owned(), "ownerReferences", []interface{}{
 			map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Bundle", "name": "other", "uid": "u2"}}),
 			user: "alice", want: false},
@@ -313,6 +323,10 @@ func TestIdentityAdmission_GateInstanceFieldsComplete(t *testing.T) {
 	for i := 0; i < meta.NumField(); i++ {
 		name := strings.Split(meta.Field(i).Tag.Get("json"), ",")[0]
 		if serverOwned[name] {
+			continue
+		}
+		if name == "annotations" {
+			assert.Contains(t, only, "variables.annotationsKept", "annotations are compared but for kardinal.io/force-recheck")
 			continue
 		}
 		assert.Contains(t, only, "object.metadata."+name+" == oldObject.metadata."+name, "metadata.%s must not change on a gate instance", name)
