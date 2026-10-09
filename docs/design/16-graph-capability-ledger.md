@@ -648,8 +648,9 @@ the Job started. Planned for v0.10.0 (#1443).
 for Graphs.
 
 **kardinal workaround.** kardinal shards only its own controllers, by namespace label
-(`--namespace-shard`, `pkg/shard`, #1462): a per-namespace Lease `kardinal-shard` decides which
-installation reconciles the namespace. Every shard's Graphs still go through the one kro leader and
+(`--namespace-shard`, `pkg/shard`, #1462): a per-namespace token Lease `kardinal-shard` decides which
+installation reconciles the namespace, and a per-shard heartbeat Lease says whether that
+installation is alive. Every shard's Graphs still go through the one kro leader and
 its one queue, so Graph throughput stays bounded by that instance (G9) and its
 `graphConcurrentReconciles`.
 

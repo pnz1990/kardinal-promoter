@@ -322,7 +322,12 @@ func main() {
 	}
 	// The shard gate must be in place before the reconcilers are set up:
 	// each wraps itself in shard.Active().
-	gate := shard.New(namespaceShard, mgr.GetClient(), mgr.GetClient(), logger)
+	shardHome := os.Getenv("POD_NAMESPACE")
+	if shardHome == "" {
+		shardHome = "kardinal-system"
+	}
+	gate := shard.New(shard.Options{Name: namespaceShard, Home: shardHome, Client: mgr.GetClient(),
+		Reader: mgr.GetAPIReader(), Recorder: mgr.GetEventRecorder("kardinal-shard"), Log: logger})
 	if err := shard.Setup(mgr, gate); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up the shard gate")
 	}

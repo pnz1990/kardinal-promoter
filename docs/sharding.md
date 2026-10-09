@@ -39,27 +39,59 @@ ClusterRoles (named after the release). `--namespace-shard` cannot be combined w
 
 ## How a namespace changes hands
 
-The label says where a namespace should go; a Lease says who has it. A shard
-reconciles a namespace only while its leader holds the Lease `kardinal-shard` in
-that namespace (`kubectl get lease kardinal-shard -n team-payments` shows the
-holder, `kardinal-shard/<shard>`).
+The label says where a namespace should go; two kinds of Lease say who has it and
+whether that shard is alive:
+
+- **The token**, Lease `kardinal-shard` in each namespace, names the shard that holds it
+  (`kubectl get lease kardinal-shard -n team-payments` shows the holder,
+  `kardinal-shard/<shard>`). It is written only when the namespace changes hands.
+- **The heartbeat**, Lease `kardinal-shard-heartbeat` in each shard's own namespace, is
+  renewed by the shard's leader every 10 seconds. That is the only write a shard makes in
+  steady state, however many namespaces it holds: with 1000 namespaces, 0.1 writes per
+  second per shard, and no API reads beyond the renewal (namespaces and tokens come from
+  the watch cache).
 
 When you relabel a namespace:
 
 1. The shard that holds it stops starting reconciles there within about 5 seconds,
-   waits for the reconciles already running (a git push or a PR in progress is not
-   repeated by another controller), and releases the Lease.
-2. The shard the label now names takes the Lease and enqueues every kardinal object
+   waits for the reconciles already running, however long they take (a git push or a
+   PR in progress is not repeated by another controller; its heartbeat keeps the token
+   valid meanwhile), and gives the token up.
+2. The shard the label now names takes the token and enqueues every kardinal object
    of the namespace. In-flight promotions continue where they are: a step waiting
-   for its PR keeps the same PR.
+   for its PR keeps the same PR. Until then it retries the namespace's objects with a
+   delay that grows from 5 seconds to 2 minutes.
 
-There is never a moment with two owners. A shard whose controller is down keeps its
-namespaces until their Leases expire (60 seconds without renewal); then the shard the
-label names takes them. A new leader of the same shard takes its Leases at once.
+There is never a moment with two owners:
 
-Every replica of every shard serves the UI, the Bundle API and the webhooks: a
-webhook only writes an object (a PRStatus, a Subscription annotation), and the
-shard that owns its namespace reconciles it.
+- A shard whose controller is down keeps its namespaces until its heartbeat has not
+  changed for 60 seconds. The shard taking over measures that on its own clock, from
+  when it saw the heartbeat change, as Kubernetes leader election does, so a clock that
+  is off on either host does not shorten the wait. A new leader of the same shard takes
+  its tokens at once.
+- A shard that cannot renew its heartbeat (the API server is unreachable, or it cannot
+  list namespaces and so cannot see a relabel) fences itself 45 seconds after the start
+  of its last renewal, before any other shard may take its namespaces: it starts no
+  reconcile and cancels the ones running. Once it renews again it re-reads its tokens
+  and gives up those another shard took meanwhile.
+
+A namespace labelled with a shard that no controller runs is not reconciled. The
+default shard emits a `ShardNotRunning` Warning Event on such a namespace (once, a
+minute after it starts), and logs it:
+
+```bash
+kubectl get events -A --field-selector reason=ShardNotRunning
+```
+
+Every replica of every shard serves the UI, the Bundle API and the SCM webhook, for
+every namespace. The UI actions and the Bundle API create or edit kardinal objects,
+which the namespace's shard then reconciles. The webhook is the exception that
+writes reconciler state: a merged-PR event marks the matching PRStatus
+`status.merged` in whichever namespace and shard it is, after confirming the merge
+with the SCM credentials of the shard that received it. Configure one webhook URL
+for all shards only if they share the SCM token; otherwise point each repository's
+webhook at the shard whose namespaces use it. A missed or refused event costs only
+latency: the owning shard's PRStatus poll records the merge.
 
 ## What sharding does not split
 
@@ -72,5 +104,8 @@ shard that owns its namespace reconciles it.
 
 ## RBAC
 
-With `controller.namespaceShard` set the chart also grants `list` and `watch` on
-Namespaces and `get`, `list`, `watch`, `create` and `update` on Leases cluster-wide.
+With `controller.namespaceShard` set the chart also grants, cluster-wide: `list` and
+`watch` on Namespaces; `get`, `list`, `watch` and `update` on Leases named
+`kardinal-shard` (the controller lists and watches them by that name); `get` and `list`
+on Leases named `kardinal-shard-heartbeat`; and `create` on Leases, which RBAC cannot
+limit by name. Its own heartbeat is written through the release namespace's Role.

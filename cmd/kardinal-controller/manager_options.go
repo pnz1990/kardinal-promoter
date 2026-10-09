@@ -11,6 +11,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 )
 
 // gracefulShutdownTimeout is how long the controller waits on shutdown for
@@ -52,7 +54,7 @@ func buildManagerOptions(cfg managerConfig) ctrl.Options {
 		LeaderElectionID:              leaderElectionID(cfg.namespaceShard),
 		LeaderElectionReleaseOnCancel: true,
 		GracefulShutdownTimeout:       ptr(gracefulShutdownTimeout),
-		Cache:                         buildCacheOpts(cfg.watchNamespace),
+		Cache:                         shardCacheOpts(buildCacheOpts(cfg.watchNamespace), cfg.namespaceShard),
 		Client: sigs_client.Options{
 			Cache: &sigs_client.CacheOptions{DisableFor: uncachedObjects()},
 		},
@@ -76,6 +78,16 @@ func buildCacheOpts(watchNamespace string) cache.Options {
 	opts := cache.Options{}
 	if watchNamespace != "" {
 		opts.DefaultNamespaces = map[string]cache.Config{watchNamespace: {}}
+	}
+	return opts
+}
+
+// shardCacheOpts limits the Lease cache of a sharded controller to the
+// shard tokens (shard.CacheByObject): without it the shard gate's reads
+// would cache every Lease in the cluster, leader election Leases included.
+func shardCacheOpts(opts cache.Options, namespaceShard string) cache.Options {
+	if namespaceShard != "" {
+		opts.ByObject = shard.CacheByObject()
 	}
 	return opts
 }

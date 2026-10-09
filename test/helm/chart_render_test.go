@@ -444,7 +444,9 @@ var optionalAccess = []struct {
 	}, false},
 	{"controller.namespaceShard=b", []apiAccess{
 		{"", "namespaces", []string{"list", "watch"}, inCluster, "", "pkg/shard Gate.Pass (Namespace informer)"},
-		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "create", "update"}, inCluster, "", "pkg/shard Gate.take/release (per-namespace Lease)"},
+		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "update"}, inCluster, "kardinal-shard", "pkg/shard Gate.take/release/resync (token Lease per namespace)"},
+		{"coordination.k8s.io", "leases", []string{"create"}, inCluster, "", "pkg/shard Gate.take (first token of a namespace)"},
+		{"coordination.k8s.io", "leases", []string{"get", "list"}, inCluster, "kardinal-shard-heartbeat", "pkg/shard Gate.heartbeatStopped/warnUnrunShards"},
 	}, true},
 	{"rbac.argocdApplicationsWrite=true", []apiAccess{
 		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"},
@@ -1290,6 +1292,22 @@ func TestChartNamespaceShard(t *testing.T) {
 	assert.Contains(t, out, "cannot be combined with controller.watchNamespace")
 	_, err = helmTemplate(t, "kardinal-promoter", "--set", "controller.namespaceShard=a/b")
 	require.Error(t, err, "not a label value")
+
+	// #1505 QA: the shard Lease grants name the shard Leases; only create
+	// cannot. Leader election Leases and others' heartbeats stay unwritable.
+	v := newRBACView(t, render(t, "kardinal-promoter", "--set", "controller.namespaceShard=b"))
+	sa := "kardinal-promoter"
+	for _, d := range []struct{ verb, name string }{
+		{"get", "kardinal-promoter-leader"}, {"update", "kardinal-promoter-leader"},
+		{"list", ""}, {"watch", ""}, {"delete", "kardinal-shard"}, {"patch", "kardinal-shard"},
+		{"update", "kardinal-shard-heartbeat"}, {"watch", "kardinal-shard-heartbeat"}, {"get", "other-lease"},
+	} {
+		assert.False(t, v.allowed(releaseNS, sa, "team-a", "coordination.k8s.io", "leases", d.verb, d.name),
+			"a sharded controller must not %s Lease %q in another namespace", d.verb, d.name)
+	}
+	assert.True(t, v.allowed(releaseNS, sa, "team-a", "coordination.k8s.io", "leases", "update", "kardinal-shard"))
+	assert.True(t, v.allowed(releaseNS, sa, releaseNS, "coordination.k8s.io", "leases", "update", "kardinal-shard-heartbeat"),
+		"its own heartbeat, through the release Role")
 }
 
 // TestChartGateStatusHeartbeat: controller.gateStatusHeartbeat sets

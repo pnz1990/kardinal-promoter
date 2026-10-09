@@ -155,14 +155,28 @@ rules exist for. A new client call needs a row there and a rule here.
   {{- end }}
 {{- if .Values.controller.namespaceShard }}
 # controller.namespaceShard: the shard gate (pkg/shard) watches Namespaces for
-# their kardinal.io/shard label and holds a Lease kardinal-shard in each
-# namespace it reconciles.
+# their kardinal.io/shard label and holds the token Lease kardinal-shard in
+# each namespace it reconciles. The cache lists and watches only that name
+# (field selector metadata.name), so resourceNames limits list and watch too.
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["list", "watch"]
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
-  verbs: ["get", "list", "watch", "create", "update"]
+  resourceNames: ["kardinal-shard"]
+  verbs: ["get", "list", "watch", "update"]
+# The other shards' heartbeats, read only: whether a token's holder is alive,
+# and (default shard) which shards run. This shard's own heartbeat is written
+# through rules.release.
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  resourceNames: ["kardinal-shard-heartbeat"]
+  verbs: ["get", "list"]
+# A token is created the first time a namespace is taken; create cannot be
+# limited by resourceNames.
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["create"]
 {{- end }}
 {{- if .Values.ui.auth.tokenReview }}
 # ui.auth.tokenReview: the UI API validates each bearer token with a
