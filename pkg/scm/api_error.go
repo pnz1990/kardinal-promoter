@@ -4,6 +4,7 @@
 package scm
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,6 +30,10 @@ type APIError struct {
 }
 
 // newAPIError builds the APIError for resp, whose body has been read into raw.
+// The rate-limit headers decide first (IsTransientResponse); only for GitHub
+// (and GitHub Enterprise Server, the same provider), whose secondary rate
+// limit can come as a 403 with neither header, the JSON message decides
+// next.
 func newAPIError(provider, method, path string, resp *http.Response, raw []byte) *APIError {
 	body := string(raw)
 	return &APIError{
@@ -37,21 +42,33 @@ func newAPIError(provider, method, path string, resp *http.Response, raw []byte)
 		Path:       path,
 		StatusCode: resp.StatusCode,
 		Body:       body,
-		Transient:  IsTransientResponse(resp) || (resp.StatusCode == http.StatusForbidden && isRateLimitBody(body)),
+		Transient: IsTransientResponse(resp) ||
+			(provider == githubAPIName && resp.StatusCode == http.StatusForbidden && isGitHubRateLimitMessage(raw)),
 	}
 }
+
+// githubAPIName is the Provider of GitHub's APIErrors.
+const githubAPIName = "GitHub"
 
 // Error keeps the message format the providers have always used.
 func (e *APIError) Error() string {
 	return fmt.Sprintf("%s API %s %s: status %d: %s", e.Provider, e.Method, e.Path, e.StatusCode, e.Body)
 }
 
-// isRateLimitBody reports whether a 403 body describes a rate limit. GitHub
-// can send a secondary rate limit as a 403 with neither Retry-After nor
-// X-RateLimit-Remaining set; the message is the only signal.
-func isRateLimitBody(body string) bool {
-	b := strings.ToLower(body)
-	return strings.Contains(b, "rate limit") || strings.Contains(b, "abuse detection")
+// isGitHubRateLimitMessage reports whether a GitHub 403 body is a JSON error
+// whose message is a rate limit ("You have exceeded a secondary rate
+// limit", "API rate limit exceeded", abuse detection). Text elsewhere in the
+// body, or a body that is not JSON, does not count: a permission error that
+// quotes the words must stay permanent.
+func isGitHubRateLimitMessage(raw []byte) bool {
+	var e struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &e); err != nil {
+		return false
+	}
+	m := strings.ToLower(e.Message)
+	return strings.Contains(m, "rate limit") || strings.Contains(m, "abuse detection")
 }
 
 // IsPermanentError reports whether err carries an SCM API response that

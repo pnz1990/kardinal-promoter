@@ -54,7 +54,7 @@ interface Props {
 /** PromotionStep states in which work is running (Go never reports "Running"). */
 // RollingBack is an end state: the step failed health and a rollback Bundle
 // took over; the rollback Bundle's own step is the one in flight.
-const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking'])
+const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
 
 /** Format an ISO timestamp to a human-readable string. */
 function formatTimestamp(iso: string): string {
@@ -236,6 +236,8 @@ function stepNote(s: StepStatus, shown: StepStatus['state'], promotion: Promotio
   if (shown === 'InProgress') {
     if (promotion.state === 'WaitingForMerge') return 'waiting for merge'
     if (promotion.state === 'HealthChecking') return 'checking health'
+    // Verifying waits for post-deploy hooks and Argo Rollouts analyses.
+    if (promotion.state === 'Verifying') return 'verifying: post-deploy hooks and analyses'
     return null
   }
   if (shown === 'Completed' && s.durationMs) return formatDuration(s.durationMs)

@@ -797,7 +797,8 @@ func TestUIAPI_GetSteps_NoBakeFieldsWhenNoPipeline(t *testing.T) {
 // TestUIAPI_ListGates_OverrideHistory verifies that PolicyGate override records
 // are included in the gate response (#502).
 func TestUIAPI_ListGates_OverrideHistory(t *testing.T) {
-	future := metav1.NewTime(time.Now().Add(time.Hour))
+	// Whole seconds, as the API server stores them: the record key hashes expiresAt.
+	future := metav1.NewTime(time.Now().Add(time.Hour).Truncate(time.Second))
 	past := metav1.NewTime(time.Now().Add(-time.Hour))
 	gate := &v1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{Name: "no-weekend", Namespace: "default"},
@@ -818,6 +819,11 @@ func TestUIAPI_ListGates_OverrideHistory(t *testing.T) {
 			},
 		},
 	}
+
+	// alice's override was recorded verified (the identity policy was bound);
+	// bob's was never recorded.
+	gate.Status.Overrides = []v1alpha1.OverrideRecord{{Key: policygate.OverrideKey(&gate.Spec.Overrides[0]),
+		FirstSeen: metav1.Now(), Verified: true, Audited: true}}
 
 	s := uiScheme()
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
@@ -841,11 +847,13 @@ func TestUIAPI_ListGates_OverrideHistory(t *testing.T) {
 	assert.Equal(t, "alice", active.CreatedBy)
 	assert.Equal(t, "prod", active.Stage)
 	assert.NotEmpty(t, active.ExpiresAt, "ExpiresAt must be set")
+	assert.True(t, active.CreatedByVerified, "recorded verified")
 
 	// Expired override
 	expired := resp[0].Overrides[1]
 	assert.Equal(t, "old override", expired.Reason)
 	assert.Equal(t, "bob", expired.CreatedBy)
+	assert.False(t, expired.CreatedByVerified, "never recorded: unverified")
 }
 
 // TestUIAPI_ListGates_NoOverrides verifies that Overrides is omitted when empty (#502).

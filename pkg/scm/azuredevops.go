@@ -393,8 +393,9 @@ func (a *AzureDevOpsProvider) do(ctx context.Context, method, path string, body,
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		a.circuits.Record(owner, resp, nil)
-		return newAPIError("azuredevops", method, path, resp, raw)
+		apiErr := newAPIError("azuredevops", method, path, resp, raw)
+		a.circuits.RecordAPIError(owner, resp, apiErr)
+		return apiErr
 	}
 
 	a.circuits.Record(owner, resp, nil)

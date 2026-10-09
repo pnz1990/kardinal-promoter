@@ -214,7 +214,7 @@ func shortenPRURL(url string) string {
 func deriveDuration(s v1alpha1.PromotionStep) string {
 	switch s.Status.State {
 	case "Verified", "Failed", "AbortedByAlarm", "RollingBack":
-	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking":
+	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verifying":
 		return "..."
 	default:
 		return "--"

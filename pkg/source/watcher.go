@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -57,10 +58,16 @@ const (
 // default transport did.
 var guardedTransport = egress.NewTransport(http.ProxyFromEnvironment)
 
+// watcherTransport is guardedTransport with an OpenTelemetry client span per
+// request (registry, Helm repository and git HTTP requests, redirects and
+// token fetches) when tracing is on. It sends no trace headers (traceparent,
+// tracestate, baggage): a registry or git host is a third party.
+var watcherTransport = tracing.Transport(guardedTransport, false)
+
 // newHTTPClient returns the client the watchers use by default: it times out,
-// and its transport applies the egress guard.
+// its transport applies the egress guard, and its requests are traced.
 func newHTTPClient() *http.Client {
-	return &http.Client{Timeout: defaultHTTPTimeout, Transport: guardedTransport}
+	return &http.Client{Timeout: defaultHTTPTimeout, Transport: watcherTransport}
 }
 
 // credentialRedirects returns c with a redirect policy for requests that

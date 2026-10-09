@@ -174,6 +174,35 @@ kardinal version
 
 ---
 
+### Sizing the controller
+
+The controller keeps an informer cache of every Pipeline, Bundle, PromotionStep, PRStatus and
+PolicyGate it watches, so its memory grows with the number of Pipelines times the Bundles each
+keeps (`historyLimit`), more than with the promotion rate. Measured with the scale suite (`full`
+profile, controller built without `-race`, 2 replicas; peak resident memory of the leader,
+[#1553](https://github.com/pnz1990/kardinal-promoter/issues/1553)):
+
+| Load | Controller memory (peak) |
+|---|---|
+| No Pipelines | 55-70 MiB |
+| 200 Pipelines x 3 environments, one Bundle each | 166 MiB |
+| 1,000 Bundles over 100 Pipelines | 175 MiB |
+| 200 Pipelines, one Bundle each, latency run | 187 MiB |
+| 2 Bundles a second for 10 minutes over 50 Pipelines (1,200 Bundles) | 366 MiB |
+| 2 Bundles a second over 40 Pipelines, leader killed 12 times | 409 MiB |
+
+The chart requests 256 MiB and limits the controller to 1 GiB: 2.5 times the largest load
+measured. A controller that runs out of memory is OOMKilled, re-lists everything when it
+restarts and can be killed again, and no promotion in the cluster moves while it is down. For
+more Pipelines or a longer history, raise `resources.limits.memory` in proportion: about
+0.5 MiB per Pipeline with one Bundle (the 200-Pipeline run above), plus what the kept Bundles
+and their steps hold. Watch
+`container_memory_working_set_bytes` of the controller Pod, or `process_resident_memory_bytes`
+on its metrics port. The controller sets the Go runtime's soft memory limit (`GOMEMLIMIT`) to 90% of
+its container limit, which the chart passes in from the downward API, so the garbage collector
+works harder before the kernel would OOMKill it; set `GOMEMLIMIT` in `controller.extraEnv` to
+choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
+
 ## Helm values reference
 
 ### kardinal-promoter controller
@@ -198,6 +227,8 @@ kardinal version
 | `scm.provider` | `""` | `--scm-provider`: `github` (default), `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops` |
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |
 | `scm.allowedRepositories` | `[]` | `--scm-allowed-repositories`: `host/repository` globs (`github.com/acme/*`, `gitlab.example.com/team/**`) the controller's SCM token may act on. Every SCM call for another repository is refused, and a Pipeline that would need the token for one is `Ready=False/RepositoryNotAllowed`. Empty allows every repository. See [Security](guides/security.md#the-shared-scm-token-and-scmallowedrepositories) |
+| `scm.gatesCommitStatus.enabled` | `true` | `--gates-commit-status`: post the gate results of a waiting pr-review step as the commit status on the commit kardinal pushed to its PR ([Gate status check](pr-evidence.md#gate-status-check-kardinalgates)). `false` posts none. |
+| `scm.gatesCommitStatus.context` | `kardinal/gates` | `--gates-status-context`: the status name branch protection requires; reserved for kardinal. |
 | `webhook.secretRef.name` / `.key` | `""` / `secret` | Secret with the SCM webhook secret (`KARDINAL_WEBHOOK_SECRET`): the HMAC key, or for GitLab and Azure DevOps the plain token |
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
@@ -218,11 +249,13 @@ kardinal version
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
-| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed, so the chart grants no Job access |
+| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
+| `hooks.serviceAccounts` | `[default]` | ServiceAccounts a [hook](hooks.md)'s Pod may run as (`--hook-service-accounts`), in the Pipeline namespace. The Graph ServiceAccount is never allowed |
+| `hooks.podSecurityLevel` | `baseline` | Pod Security Standard a [hook](hooks.md) Pod must meet (`--hook-pod-security-level`): `baseline`, `restricted` or `privileged` (no Pod checks); below `privileged`, `nodeName` and `hostPort` are refused too |
 | `resources.limits.cpu` | `500m` | CPU limit |
-| `resources.limits.memory` | `128Mi` | Memory limit |
+| `resources.limits.memory` | `1Gi` | Memory limit; see [Sizing the controller](#sizing-the-controller) |
 | `resources.requests.cpu` | `10m` | CPU request |
-| `resources.requests.memory` | `64Mi` | Memory request |
+| `resources.requests.memory` | `256Mi` | Memory request |
 | `nodeSelector` | `{}` | Node selector |
 | `tolerations` | `[]` | Pod tolerations |
 | `affinity` | `{}` | Pod affinity |
@@ -606,8 +639,8 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
     yq 'del(.krocodile)' values.yaml > values-new.yaml
     ```
 
-- **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The chart ships no ValidatingAdmissionPolicy; the CRD schemas validate these fields.
-- **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart no longer grants `batch/jobs`.
+- **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The CRD schemas validate the kardinal fields; the chart's only ValidatingAdmissionPolicies are the identity policies ([Verified identity](guides/security.md#verified-identity)) and the hold-writes policy (only `pipelines/hold` may change `spec.holds`), which are always installed.
+- **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart grants `batch/jobs` (create, get, list, watch, delete) for [hooks](hooks.md) whatever it says.
 - **`--reuse-values`** fails with `additional properties 'krocodile' not allowed` (Helm before 3.18.5: `Additional property krocodile is not allowed`), even when you never set `krocodile`. Use `--reset-then-reuse-values`.
 
 #### Other notes
@@ -778,7 +811,8 @@ kubectl delete crd --ignore-not-found \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
   promotiontemplates.kardinal.io \
-  auditevents.kardinal.io
+  auditevents.kardinal.io \
+  approvals.kardinal.io
 
 # Optional: remove kro and its CRDs (only if nothing else uses kro)
 helm uninstall kro -n kro-system

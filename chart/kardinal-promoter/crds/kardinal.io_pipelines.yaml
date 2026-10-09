@@ -313,6 +313,63 @@ spec:
                           - flagger
                           type: string
                       type: object
+                    hooks:
+                      description: |-
+                        Hooks are Jobs that run for each Bundle in this environment: "pre"
+                        hooks before the promotion starts (database migrations), "post" hooks
+                        after the health check passed and before the environment is Verified
+                        (integration tests). Each runs once per Bundle, as a HookRun the
+                        Bundle's Graph creates. See docs/hooks.md.
+                      items:
+                        description: |-
+                          HookSpec is one pre- or post-deploy hook of a Pipeline environment: a
+                          Kubernetes Job the controller runs once per Bundle and environment.
+                        properties:
+                          job:
+                            description: |-
+                              Job is a batch/v1 JobSpec. The controller creates the Job in the
+                              Pipeline namespace with the HookRun as its owner. The Pod's
+                              serviceAccountName (default "default") must be in the controller's
+                              --hook-service-accounts list. restartPolicy defaults to Never, and
+                              activeDeadlineSeconds to the timeout.
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                          name:
+                            description: |-
+                              Name identifies the hook within its environment and phase. It is part of
+                              the HookRun and Job names.
+                            maxLength: 40
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                          phase:
+                            description: |-
+                              Phase is when the hook runs. "pre": after the environment's upstreams
+                              are Verified and its gates are ready, before the promotion starts; the
+                              promotion starts only when every pre hook succeeded. "post": after the
+                              health check passed; the environment is Verified only when every post
+                              hook succeeded, and a failed post hook applies onHealthFailure. Hooks of
+                              one phase run one after another, in list order.
+                            enum:
+                            - pre
+                            - post
+                            type: string
+                          timeout:
+                            description: |-
+                              Timeout bounds the hook from the moment its HookRun starts: a hook that
+                              has not finished by then fails and its Job is deleted. Empty or "0" means 30m.
+                            pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                            type: string
+                        required:
+                        - job
+                        - name
+                        - phase
+                        type: object
+                      maxItems: 10
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - name
+                      x-kubernetes-list-type: map
                     layout:
                       default: directory
                       description: |-
@@ -621,6 +678,86 @@ spec:
                       - message: update.strategy yaml requires update.yaml.updates
                         rule: '!has(self.strategy) || self.strategy != ''yaml'' ||
                           (has(self.yaml) && size(self.yaml.updates) > 0)'
+                    verification:
+                      description: |-
+                        Verification runs Argo Rollouts analyses after the environment passed
+                        its health check: one AnalysisRun per template, with the Bundle's
+                        version and environment as args. The environment is Verified only when
+                        every analysis is Successful. Needs Argo Rollouts' CRDs: without them
+                        the Bundle fails (it never promotes unverified). See docs/analysis.md.
+                      properties:
+                        analysisTemplates:
+                          description: AnalysisTemplates are the templates to run,
+                            each as its own AnalysisRun.
+                          items:
+                            description: |-
+                              AnalysisTemplateRef names an Argo Rollouts AnalysisTemplate (in the
+                              Pipeline namespace) or ClusterAnalysisTemplate.
+                            properties:
+                              kind:
+                                description: Kind is AnalysisTemplate (default) or
+                                  ClusterAnalysisTemplate.
+                                enum:
+                                - AnalysisTemplate
+                                - ClusterAnalysisTemplate
+                                type: string
+                              name:
+                                description: Name is the template name.
+                                maxLength: 63
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          maxItems: 10
+                          minItems: 1
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                        args:
+                          description: |-
+                            Args set template args by name. They take precedence over the args
+                            kardinal sets (bundle, pipeline, environment, image, tag, digest,
+                            commit) and over the template's defaults. Only args a template declares
+                            are passed to its AnalysisRun.
+                          items:
+                            description: AnalysisArg is one AnalysisRun arg.
+                            properties:
+                              name:
+                                description: Name is the arg name the template declares.
+                                minLength: 1
+                                type: string
+                              value:
+                                description: Value is the arg value.
+                                type: string
+                            required:
+                            - name
+                            - value
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                        inconclusive:
+                          description: |-
+                            Inconclusive is what an Inconclusive AnalysisRun counts as: "fail"
+                            (default) or "pass".
+                          enum:
+                          - fail
+                          - pass
+                          type: string
+                        timeout:
+                          description: |-
+                            Timeout bounds the analyses from the moment the environment entered
+                            Verifying. An analysis still running then fails the environment.
+                            Empty or "0" means 30m.
+                          pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                          type: string
+                      required:
+                      - analysisTemplates
+                      type: object
                     waitForMergeTimeout:
                       description: |-
                         WaitForMergeTimeout is the maximum duration a PromotionStep will wait
@@ -742,6 +879,70 @@ spec:
                   beyond this limit are deleted oldest-first on each new Bundle creation.
                 minimum: 1
                 type: integer
+              holds:
+                description: |-
+                  Holds pin environments to a rollback (kardinal rollback --hold): while
+                  an environment has a hold, no Bundle but the hold's own promotes into
+                  it, the hold's Bundle is never superseded or garbage-collected, and,
+                  when the controller can verify it restores artifacts Verified in the
+                  environment, it passes that environment's PolicyGates, each pass
+                  recorded (GateExempted). kardinal release-hold removes it, and so does
+                  the controller at expiresAt. At most one hold per environment. Changing
+                  spec.holds needs update on the virtual subresource pipelines/hold
+                  (chart: <release>-hold-writes ValidatingAdmissionPolicy).
+                items:
+                  description: EnvironmentHold pins one environment of a Pipeline
+                    to a rollback Bundle.
+                  properties:
+                    artifacts:
+                      description: |-
+                        Artifacts is the digest of the rollback Bundle's artifacts (type,
+                        images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+                        The gate exemption applies only while the Bundle still has them.
+                      type: string
+                    bundle:
+                      description: |-
+                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle that promotes into it while the hold lasts.
+                      minLength: 1
+                      type: string
+                    createdAt:
+                      description: CreatedAt is when.
+                      format: date-time
+                      type: string
+                    createdBy:
+                      description: |-
+                        CreatedBy is who held the environment: the Kubernetes user name of the
+                        request that added the hold (the admission policy refuses another
+                        value), or, for a hold added through the UI, the UI user the
+                        controller authenticated.
+                      type: string
+                    environment:
+                      description: Environment is the held environment.
+                      minLength: 1
+                      type: string
+                    expiresAt:
+                      description: ExpiresAt, when set, is when the controller removes
+                        the hold.
+                      format: date-time
+                      type: string
+                    reason:
+                      description: |-
+                        Reason says why the environment is held. It is shown wherever the hold
+                        or a gate it exempts is.
+                      maxLength: 1024
+                      minLength: 1
+                      type: string
+                  required:
+                  - bundle
+                  - environment
+                  - reason
+                  type: object
+                maxItems: 100
+                type: array
+                x-kubernetes-list-map-keys:
+                - environment
+                x-kubernetes-list-type: map
               maxConcurrentPromotions:
                 default: 0
                 description: |-
@@ -952,6 +1153,63 @@ spec:
                       Until a Bundle is Verified there, deploymentMetrics is not set at all.
                     type: integer
                 type: object
+              observedHolds:
+                description: |-
+                  ObservedHolds is spec.holds as the Pipeline reconciler last recorded
+                  it: the HoldCreated and HoldReleased AuditEvents are written from the
+                  difference, whichever client changed spec.holds.
+                items:
+                  description: EnvironmentHold pins one environment of a Pipeline
+                    to a rollback Bundle.
+                  properties:
+                    artifacts:
+                      description: |-
+                        Artifacts is the digest of the rollback Bundle's artifacts (type,
+                        images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+                        The gate exemption applies only while the Bundle still has them.
+                      type: string
+                    bundle:
+                      description: |-
+                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle that promotes into it while the hold lasts.
+                      minLength: 1
+                      type: string
+                    createdAt:
+                      description: CreatedAt is when.
+                      format: date-time
+                      type: string
+                    createdBy:
+                      description: |-
+                        CreatedBy is who held the environment: the Kubernetes user name of the
+                        request that added the hold (the admission policy refuses another
+                        value), or, for a hold added through the UI, the UI user the
+                        controller authenticated.
+                      type: string
+                    environment:
+                      description: Environment is the held environment.
+                      minLength: 1
+                      type: string
+                    expiresAt:
+                      description: ExpiresAt, when set, is when the controller removes
+                        the hold.
+                      format: date-time
+                      type: string
+                    reason:
+                      description: |-
+                        Reason says why the environment is held. It is shown wherever the hold
+                        or a gate it exempts is.
+                      maxLength: 1024
+                      minLength: 1
+                      type: string
+                  required:
+                  - bundle
+                  - environment
+                  - reason
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - environment
+                x-kubernetes-list-type: map
               phase:
                 default: Unknown
                 description: |-

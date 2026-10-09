@@ -66,6 +66,31 @@ func (r *Reconciler) holdIfPaused(ctx context.Context, log zerolog.Logger, ps *v
 	return true, ctrl.Result{RequeueAfter: requeuePaused}, nil
 }
 
+// holdIfEnvironmentHeld holds a step whose environment the Pipeline holds on
+// another Bundle's rollback (spec.holds, #1528), before its next git step,
+// as a pause does: the Graph creates no new step there for other Bundles,
+// and this holds the ones created before the hold. A step of the hold's own
+// Bundle runs. Releasing the hold (a Pipeline spec change) wakes the step
+// through the Pipeline watch; requeuePaused is the fallback. The step writes
+// only its own status message.
+func (r *Reconciler) holdIfEnvironmentHeld(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
+	pipeline *v1alpha1.Pipeline) (bool, ctrl.Result, error) {
+	h := lifecycle.HeldFrom(pipeline, ps.Spec.Environment, ps.Spec.BundleName)
+	if h == nil {
+		return false, ctrl.Result{}, nil
+	}
+	msg := lifecycle.HeldMessage(ps.Spec.PipelineName, h)
+	if ps.Status.Message != msg {
+		patch := client.MergeFrom(ps.DeepCopy())
+		ps.Status.Message = msg
+		if err := r.Status().Patch(ctx, ps, patch); err != nil {
+			return true, ctrl.Result{}, fmt.Errorf("patch held message: %w", err)
+		}
+		log.Info().Str("env", ps.Spec.Environment).Str("hold", h.Bundle).Msg("environment held — step held")
+	}
+	return true, ctrl.Result{RequeueAfter: lifecycle.UntilExpiry(h, requeuePaused)}, nil
+}
+
 // holdForSlot keeps a Pending step Pending while its Bundle waits for a
 // maxConcurrentPromotions slot (#1349): the Bundle is Failed, and the Bundle
 // reconciler set its graph.CondBundleWaitingForSlot condition because other
@@ -111,13 +136,14 @@ func slotHeld(b *v1alpha1.Bundle) bool {
 }
 
 // bundleWakesSteps passes the Bundle events that steps act on: a Bundle that
-// is Superseded (the supersession guard) and a slot hold set or lifted.
+// is Superseded or Rejected (the supersession guard, isHalted) and a slot
+// hold set or lifted.
 var bundleWakesSteps = predicate.Funcs{
-	CreateFunc:  func(e event.CreateEvent) bool { return isSuperseded(e.Object) },
-	DeleteFunc:  func(e event.DeleteEvent) bool { return isSuperseded(e.Object) },
-	GenericFunc: func(e event.GenericEvent) bool { return isSuperseded(e.Object) },
+	CreateFunc:  func(e event.CreateEvent) bool { return isHalted(e.Object) },
+	DeleteFunc:  func(e event.DeleteEvent) bool { return isHalted(e.Object) },
+	GenericFunc: func(e event.GenericEvent) bool { return isHalted(e.Object) },
 	UpdateFunc: func(e event.UpdateEvent) bool {
-		if isSuperseded(e.ObjectNew) {
+		if isHalted(e.ObjectNew) {
 			return true
 		}
 		oldB, okOld := e.ObjectOld.(*v1alpha1.Bundle)
@@ -176,7 +202,7 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 		}
 		return "", nil, fmt.Errorf("plan rollback: %w", planErr)
 	}
-	if createErr := r.Create(ctx, plan.Bundle); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+	if createErr := lifecycle.CreateBundleAs(ctx, r.Client, plan.Bundle, lifecycle.ControllerCreator); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
 		return "", nil, fmt.Errorf("create rollback bundle %s: %w", name, createErr)
 	}
 	return name, nil, nil
