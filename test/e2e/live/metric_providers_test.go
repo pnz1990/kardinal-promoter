@@ -8,6 +8,7 @@ package live
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -282,4 +283,144 @@ func TestMetric_PerPromotionAnalysis(t *testing.T) {
 	e.WaitMetricCheck(t, a.ns, inst.Name, time.Minute, "suspended by the Graph", func(mc *v1alpha1.MetricCheck) bool {
 		return mc.Spec.Suspend && mc.Status.Reason == "Suspended: spec.suspend is set; the last result goes stale at validUntil"
 	})
+}
+
+// TestMetric_QuerySlots: queries are rationed, one per namespace at a time
+// by default. Four web MetricChecks in one namespace whose endpoint answers
+// after 6 seconds take turns: their queries never overlap, a check that waits
+// longer than its 20s interval shows WaitingForSlot, and every one of them is
+// still served (FIFO, woken when its slot frees, not starved). A check in
+// another namespace queries at once meanwhile.
+//
+// Covers METRIC-SLOTS-01.
+func TestMetric_QuerySlots(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	noisy, quiet := e.Namespace(t), e.Namespace(t)
+	for _, ns := range []string{noisy, quiet} {
+		e.CreateSecretData(t, ns, metricCredsSecret, true, goodMetricCreds)
+	}
+	path := noisy + "/slow"
+	e.SetFakeWebDoc(t, path, map[string]interface{}{"errorRate": 0.1})
+	e.SetFakeWebDoc(t, quiet+"/fast", map[string]interface{}{"errorRate": 0.1})
+	web := func(ns, name, url string) *v1alpha1.MetricCheck {
+		return &v1alpha1.MetricCheck{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec: v1alpha1.MetricCheckSpec{Provider: "web", Interval: "20s",
+				Threshold: v1alpha1.MetricThreshold{Operator: "lt", Value: 0.5},
+				Web: &v1alpha1.WebProviderSpec{URL: url, JSONPath: "{.errorRate}",
+					Headers: []v1alpha1.WebHeader{{Name: "Authorization",
+						ValueFromSecret: &v1alpha1.SecretKeyRef{Name: metricCredsSecret, Key: "web"}}}}},
+		}
+	}
+	slowURL := framework.MetricsAPIURL(t) + "/web/" + path + "?sleep=6s"
+	names := []string{"slow-a", "slow-b", "slow-c", "slow-d"}
+	for _, n := range names {
+		e.CreateMetricCheck(t, web(noisy, n, slowURL))
+	}
+
+	var waited string
+	framework.Eventually(t, 2*time.Minute, "a noisy check waiting for a slot", func(ctx context.Context) (bool, string) {
+		for _, n := range names {
+			mc, err := e.GetMetricCheck(ctx, noisy, n)
+			if err != nil {
+				return false, err.Error()
+			}
+			if strings.HasPrefix(mc.Status.Reason, "WaitingForSlot: ") {
+				waited = n
+				return true, ""
+			}
+		}
+		return false, "no WaitingForSlot yet"
+	})
+	t.Logf("%s showed WaitingForSlot", waited)
+
+	// The noisy namespace holds its one slot; the quiet one is not held up.
+	created := time.Now()
+	e.CreateMetricCheck(t, web(quiet, "fast", framework.MetricsAPIURL(t)+"/web/"+quiet+"/fast"))
+	mc := e.WaitMetricCheck(t, quiet, "fast", 30*time.Second, "queried at once", framework.MetricResult("Pass", "0.1 lt 0.5 = true"))
+	t.Logf("quiet check evaluated %s after it was created", mc.Status.LastEvaluatedAt.Sub(created).Round(time.Second))
+
+	for _, n := range names {
+		e.WaitMetricCheck(t, noisy, n, 2*time.Minute, "served", framework.MetricResult("Pass", "0.1 lt 0.5 = true"))
+	}
+	recs, err := e.FakeMetricRecords(ctx, "web", "/web/"+path+"?sleep=6s")
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(recs), len(names))
+	for i := range recs {
+		for j := i + 1; j < len(recs); j++ {
+			a, b := recs[i], recs[j]
+			overlap := a.Start.Before(b.Time.Add(-100*time.Millisecond)) && b.Start.Before(a.Time.Add(-100*time.Millisecond))
+			assert.False(t, overlap, "two queries of one namespace ran at once: %s-%s and %s-%s",
+				a.Start.Format(time.StampMilli), a.Time.Format(time.StampMilli), b.Start.Format(time.StampMilli), b.Time.Format(time.StampMilli))
+		}
+	}
+}
+
+// TestMetric_TemplateHostIsFixed: a per-promotion web MetricCheck may put
+// placeholders in the URL path and query, never in the host. The instance of
+// a template with {{ environment.name }} in the host keeps it unrendered and
+// fails closed without a request, so its gate blocks; the instance of a
+// template with the placeholder in the path is rendered and queried.
+//
+// Covers METRIC-TMPL-HOST-01.
+func TestMetric_TemplateHostIsFixed(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newFluxApp(t, e, "test", "prod")
+	e.CreateSecretData(t, a.ns, metricCredsSecret, true, goodMetricCreds)
+	base, err := url.Parse(framework.MetricsAPIURL(t))
+	require.NoError(t, err)
+	template := func(name, rawURL string) *v1alpha1.MetricCheck {
+		return &v1alpha1.MetricCheck{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: a.ns},
+			Spec: v1alpha1.MetricCheckSpec{Provider: "web", Interval: metricInterval, PerPromotion: true,
+				Threshold: v1alpha1.MetricThreshold{Operator: "lt", Value: 0.5},
+				Web: &v1alpha1.WebProviderSpec{URL: rawURL, JSONPath: "{.errorRate}",
+					Headers: []v1alpha1.WebHeader{{Name: "Authorization",
+						ValueFromSecret: &v1alpha1.SecretKeyRef{Name: metricCredsSecret, Key: "web"}}}}},
+		}
+	}
+	hostTmpl := base.Scheme + "://{{ environment.name }}." + base.Host + "/web/" + a.ns + "/host"
+	e.CreateMetricCheck(t, template("in-host", hostTmpl))
+	e.CreateMetricCheck(t, template("in-path", framework.MetricsAPIURL(t)+"/web/"+a.ns+"/{{ environment.name }}?v={{ bundle.version }}"))
+	e.SetFakeWebDoc(t, a.ns+"/prod", map[string]interface{}{"errorRate": 0.1})
+
+	exprs := map[string]string{"host-gate": `metrics["in-host"].result == "Pass"`, "path-gate": `metrics["in-path"].result == "Pass"`}
+	for name, expr := range exprs {
+		e.CreateGate(t, framework.Gate(a.ns, name, "prod", expr, "5m"))
+	}
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+
+	instance := func(tmpl string) v1alpha1.MetricCheck {
+		var inst v1alpha1.MetricCheck
+		labels := map[string]string{"kardinal.io/metric-template": tmpl, "kardinal.io/bundle": bundle, "kardinal.io/environment": "prod"}
+		framework.Eventually(t, time.Minute, "the prod instance of "+tmpl, func(ctx context.Context) (bool, string) {
+			items, err := e.ListMetricChecks(ctx, a.ns, labels)
+			if err != nil {
+				return false, err.Error()
+			}
+			if len(items) != 1 {
+				return false, fmt.Sprintf("%d instances", len(items))
+			}
+			inst = items[0]
+			return true, ""
+		})
+		return inst
+	}
+	inHost, inPath := instance("in-host"), instance("in-path")
+	assert.Equal(t, hostTmpl, inHost.Spec.Web.URL, "a placeholder in the host is left unrendered")
+	assert.Equal(t, framework.MetricsAPIURL(t)+"/web/"+a.ns+"/prod?v="+fixtures.V2, inPath.Spec.Web.URL)
+
+	e.WaitMetricCheck(t, a.ns, inHost.Name, metricTimeout, "failing closed", framework.MetricResult("Fail", "unrendered placeholder {{ environment.name }}"))
+	e.WaitMetricCheck(t, a.ns, inPath.Name, metricTimeout, "passing", framework.MetricResult("Pass", "0.1 lt 0.5 = true"))
+	e.WaitGateReady(t, a.ns, bundle, "prod", "host-gate", false, exprs["host-gate"]+" = false", gateTimeout)
+	e.NoStep(t, a.ns, pipelineName, bundle, "prod", holdFor)
+	recs, err := e.FakeMetricRecords(ctx, "web", "/web/"+a.ns+"/host")
+	require.NoError(t, err)
+	assert.Empty(t, recs, "the unrendered instance sent nothing")
 }

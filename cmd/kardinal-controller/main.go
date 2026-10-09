@@ -185,6 +185,14 @@ func main() {
 		"Let cloudwatch MetricChecks without credential Secret refs use the controller's own AWS identity "+
 			"(SDK default chain: environment, IRSA, EKS Pod Identity). Off by default.")
 
+	// --metriccheck-global-slots and --metriccheck-namespace-slots cap the
+	// outbound MetricCheck queries (metriccheckrecon.Limiter).
+	var metricGlobalSlots, metricNamespaceSlots int
+	flag.IntVar(&metricGlobalSlots, "metriccheck-global-slots", metriccheckrecon.DefaultGlobalSlots,
+		"Most MetricCheck queries running at once in the cluster (at least 1). The rest wait, first come, first served.")
+	flag.IntVar(&metricNamespaceSlots, "metriccheck-namespace-slots", metriccheckrecon.DefaultNamespaceSlots,
+		"Most MetricCheck queries of one namespace running at once (at least 1).")
+
 	var tlsCertFile string
 	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
 		"Path to the TLS certificate file (PEM). When set together with --tls-key-file, "+
@@ -278,6 +286,10 @@ func main() {
 	}
 	zerolog.SetGlobalLevel(level)
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	if metricGlobalSlots < 1 || metricNamespaceSlots < 1 {
+		logger.Fatal().Int("globalSlots", metricGlobalSlots).Int("namespaceSlots", metricNamespaceSlots).
+			Msg("--metriccheck-global-slots and --metriccheck-namespace-slots must be at least 1")
+	}
 	// Reconcilers log through zerolog.Ctx(ctx). controller-runtime does not put a
 	// zerolog logger in the reconcile context, so without this default every
 	// reconciler line, errors included, goes to a disabled logger.
@@ -431,7 +443,7 @@ func main() {
 	if err := (&metriccheckrecon.Reconciler{
 		Client:   mgr.GetClient(),
 		Backends: metriccheckrecon.DefaultBackends(cloudWatchAmbient),
-		Limiter:  metriccheckrecon.NewLimiter(metriccheckrecon.DefaultGlobalSlots, metriccheckrecon.DefaultNamespaceSlots),
+		Limiter:  metriccheckrecon.NewLimiter(metricGlobalSlots, metricNamespaceSlots),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up MetricCheckReconciler")
 	}

@@ -245,8 +245,10 @@ func TestReconciler_NonFiniteFails(t *testing.T) {
 
 // TestReconciler_WaitsForSlot: an overdue check that finds no free query
 // slot writes WaitingForSlot (keeping its last result, which still goes
-// stale), sends nothing, and asks again in 250ms; once the slot is free it
-// queries. A check that is not overdue waits without writing.
+// stale), sends nothing and waits for the Limiter's wake-up (asking again
+// at most every 30s if it is lost); once a slot is reserved for it, it
+// queries. A check that is not overdue waits without writing, and a waiting
+// check that is suspended leaves the queue.
 func TestReconciler_WaitsForSlot(t *testing.T) {
 	mc := newMetricCheck("m", "lt", 1)
 	until := metav1.NewTime(fixedNow.Add(time.Minute))
@@ -261,7 +263,7 @@ func TestReconciler_WaitsForSlot(t *testing.T) {
 		Limiter: lim, NowFn: func() time.Time { return fixedNow }}
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(mc)})
 	require.NoError(t, err)
-	assert.Equal(t, 250*time.Millisecond, res.RequeueAfter)
+	assert.Equal(t, 30*time.Second, res.RequeueAfter, "the safety re-ask; the wake-up comes first")
 	assert.Zero(t, b.calls, "nothing is sent while waiting")
 	var got kardinalv1alpha1.MetricCheck
 	require.NoError(t, c.Get(context.Background(), key(mc), &got))
@@ -282,10 +284,24 @@ func TestReconciler_WaitsForSlot(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), key(fresh), &after))
 	assert.Equal(t, before.ResourceVersion, after.ResourceVersion, "a short wait writes nothing")
 
+	assert.Equal(t, 2, lim.Waiting())
+	var woken []types.NamespacedName
+	lim.Wake = func(k types.NamespacedName) { woken = append(woken, k) }
 	hold()
+	assert.Equal(t, []types.NamespacedName{key(mc)}, woken, "the first waiter is woken")
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(mc)})
 	require.NoError(t, err)
 	assert.Equal(t, 1, b.calls)
 	require.NoError(t, c.Get(context.Background(), key(mc), &got))
 	assert.Equal(t, "0 lt 1 = true", got.Status.Reason)
+	assert.Equal(t, []types.NamespacedName{key(mc), key(fresh)}, woken, "its release wakes the next")
+
+	// fresh holds a reserved slot; suspended, it gives it up.
+	require.NoError(t, c.Get(context.Background(), key(fresh), &after))
+	after.Spec.Suspend = true
+	require.NoError(t, c.Update(context.Background(), &after))
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(fresh)})
+	require.NoError(t, err)
+	assert.Zero(t, lim.InUse(), "the suspended check's reservation is given back")
+	assert.Zero(t, lim.Waiting())
 }

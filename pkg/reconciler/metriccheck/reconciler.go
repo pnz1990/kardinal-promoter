@@ -22,10 +22,14 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -52,12 +56,18 @@ const (
 	// status write: a write that failed once, for example on a conflict or
 	// a brief API server outage, is likely to work at once.
 	firstWriteRetry = 5 * time.Second
-	// DefaultGlobalSlots and DefaultNamespaceSlots are the Limiter caps the
-	// controller uses: one query per namespace at a time, twelve in the cluster.
+	// DefaultGlobalSlots and DefaultNamespaceSlots are the default Limiter
+	// caps (--metriccheck-global-slots, --metriccheck-namespace-slots): one
+	// query per namespace at a time, twelve in the cluster.
 	DefaultGlobalSlots    = 12
 	DefaultNamespaceSlots = 1
-	// busyRetry is how soon a check that found no free query slot asks again.
-	busyRetry = 250 * time.Millisecond
+	// waitingRecheck is when a check waiting for a query slot asks again if
+	// the Limiter's wake-up was lost (a leader change); normally the Limiter
+	// wakes it as soon as a slot is reserved for it.
+	waitingRecheck = 30 * time.Second
+	// wakeBuffer is the capacity of the channel that turns Limiter wake-ups
+	// into reconciles.
+	wakeBuffer = 1024
 )
 
 // MetricsProvider queries a Prometheus-compatible backend and returns a
@@ -137,15 +147,18 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	var mc kardinalv1alpha1.MetricCheck
 	if err := r.Get(ctx, req.NamespacedName, &mc); err != nil {
 		if apierrors.IsNotFound(err) {
+			r.cancelSlot(req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get metriccheck: %w", err)
 	}
 
 	if mc.Spec.PerPromotion {
+		r.cancelSlot(req.NamespacedName)
 		return ctrl.Result{}, r.markNotQueried(ctx, &mc, templateReason(&mc.Spec), true)
 	}
 	if mc.Spec.Suspend {
+		r.cancelSlot(req.NamespacedName)
 		return ctrl.Result{}, r.markNotQueried(ctx, &mc, ReasonSuspended, false)
 	}
 
@@ -157,25 +170,26 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if ph := unrenderedPlaceholders(&mc.Spec); len(ph) > 0 {
 		reason := fmt.Sprintf("unrendered placeholder {{ %s }}: only a per-promotion MetricCheck's instances "+
 			"have their placeholders replaced, with values made of [A-Za-z0-9._+-] or a digest", strings.Join(ph, " }}, {{ "))
+		r.cancelSlot(req.NamespacedName)
 		return r.record(ctx, log, &mc, interval, "", "Fail", reason)
 	}
 
 	if r.Limiter != nil {
 		release, ok := r.Limiter.TryAcquire(req.NamespacedName)
 		if !ok {
-			// No free slot: wait in the queue without a result. The last
-			// result still goes stale at its validUntil (fail closed). The
-			// reason is written only once the check is overdue (no
+			// No free slot: wait in the queue without a result; the
+			// Limiter wakes this check when a slot is reserved for it. The
+			// last result still goes stale at its validUntil (fail closed).
+			// The reason is written only once the check is overdue (no
 			// evaluation for an interval), so a short wait writes nothing.
-			// A failed write is not returned: the error backoff would delay
-			// the next ask, and a waiter that does not ask again holds up
-			// the queue until it expires.
+			// A failed write is not returned: the error backoff would only
+			// delay the safety re-ask.
 			if last := mc.Status.LastEvaluatedAt; last == nil || r.now().Sub(last.Time) >= interval {
 				if err := r.markNotQueried(ctx, &mc, ReasonWaitingForSlot, false); err != nil {
 					log.Warn().Err(err).Msg("metriccheck WaitingForSlot status write failed")
 				}
 			}
-			return ctrl.Result{RequeueAfter: busyRetry}, nil
+			return ctrl.Result{RequeueAfter: min(waitingRecheck, interval)}, nil
 		}
 		defer release()
 	}
@@ -376,11 +390,36 @@ func (r *Reconciler) now() time.Time {
 // would otherwise cause a second query right after each one. A spec change
 // includes the Graph flipping spec.suspend on a per-promotion instance.
 // Re-evaluation is driven by RequeueAfter.
+//
+// The Limiter's wake-ups (a query slot reserved for a waiting check) come in
+// through a channel source.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.MetricCheck{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
-		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles}).
-		Complete(r)
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles})
+	if r.Limiter != nil {
+		wake := make(chan event.GenericEvent, wakeBuffer)
+		r.Limiter.Wake = func(key types.NamespacedName) {
+			ev := event.GenericEvent{Object: &kardinalv1alpha1.MetricCheck{
+				ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}}
+			select {
+			case wake <- ev:
+			default:
+				// Full: never block the Limiter's caller. The reservation
+				// waits ClaimTTL, and the check re-asks at waitingRecheck.
+				go func() { wake <- ev }()
+			}
+		}
+		b = b.WatchesRawSource(source.Channel(wake, &handler.EnqueueRequestForObject{}))
+	}
+	return b.Complete(r)
+}
+
+// cancelSlot leaves the Limiter's queue: the check no longer queries.
+func (r *Reconciler) cancelSlot(key types.NamespacedName) {
+	if r.Limiter != nil {
+		r.Limiter.Cancel(key)
+	}
 }
 
 // evaluateThreshold compares value against threshold and returns "Pass" or "Fail" with reason.

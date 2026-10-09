@@ -297,13 +297,13 @@ func TestCloudWatchProvider(t *testing.T) {
 		})}
 		p := &metriccheck.CloudWatchProvider{HTTPClient: toFake, AmbientCredentials: true}
 		v, err := p.Evaluate(context.Background(),
-			metriccheck.Query{Spec: spec("https://vpce-0a1b-xyz.monitoring.eu-west-1.vpce.amazonaws.com", false), Secret: keys, Now: queryNow})
+			metriccheck.Query{Spec: spec("https://vpce-0a1b2c3d4e5f60718-abcdefgh.monitoring.eu-west-1.vpce.amazonaws.com", false), Secret: keys, Now: queryNow})
 		require.NoError(t, err)
 		assert.Equal(t, 4.5, v.Number)
 		assert.Contains(t, rec.req.Header.Get("Authorization"), "Credential=AKIDAMBIENT/")
 
 		// QA #1479: the controller's own credentials never go to another host.
-		for _, endpoint := range []string{srv.URL, "https://evil.example.com", "http://monitoring.eu-west-1.amazonaws.com", "https://s3.eu-west-1.amazonaws.com",
+		for _, endpoint := range []string{srv.URL, "https://evil.example.com", "http://monitoring.eu-west-1.amazonaws.com", "https://s3.eu-west-1.amazonaws.com", "https://monitoring.s3.amazonaws.com", "https://monitoring.s3-website-us-east-1.amazonaws.com",
 			"https://amazonaws.com.evil.example"} {
 			before := rec.req
 			_, err := p.Evaluate(context.Background(),

@@ -43,9 +43,18 @@ spec:
   [Stale metric results](policy-gates.md#stale-metric-results)).
 - `suspend: true` stops the queries. The last result goes stale at `validUntil`, so gates that read
   it block.
-- Queries are rationed: at most one query per namespace and twelve in the cluster run at once, in
-  first-come order; a MetricCheck that waits longer than its interval shows `WaitingForSlot` and keeps its last
+- Queries are rationed: at most one query per namespace and twelve in the cluster run at once
+  (`metricCheck.querySlots.perNamespace` and `.global`, controller flags
+  `--metriccheck-namespace-slots` and `--metriccheck-global-slots`). A freed slot goes to the
+  MetricCheck that has waited longest among the namespaces under their cap, which is woken at once.
+  A MetricCheck that waits longer than its interval shows `WaitingForSlot` and keeps its last
   result, which goes stale as usual. A namespace with slow endpoints delays only its own checks.
+- The slots bound the throughput. The cluster runs at most `global / query time` queries a
+  second, so it keeps up with at most `global × interval / query time` MetricChecks: with the
+  defaults, 0.5-second queries and a 60-second interval, 12 × 60 / 0.5 = 1,440. One namespace
+  keeps up with at most `perNamespace × interval / query time` (120 here), and an endpoint that
+  never answers holds its slot for the query timeout (10 seconds; for `web`, `timeoutSeconds` up to half the interval). Raise
+  the slots when checks show `WaitingForSlot` and their endpoints are healthy.
 
 ## Credentials
 

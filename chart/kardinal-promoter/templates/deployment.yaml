@@ -72,6 +72,8 @@ spec:
             {{- if .Values.metricCheck.cloudWatch.ambientCredentials }}
             - --metriccheck-cloudwatch-ambient-credentials=true
             {{- end }}
+            - --metriccheck-global-slots={{ .Values.metricCheck.querySlots.global }}
+            - --metriccheck-namespace-slots={{ .Values.metricCheck.querySlots.perNamespace }}
             {{- with .Values.ui.corsAllowedOrigins }}
             - --cors-allowed-origins={{ join "," . }}
             {{- end }}

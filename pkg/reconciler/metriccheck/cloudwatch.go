@@ -96,7 +96,7 @@ func (p *CloudWatchProvider) Evaluate(ctx context.Context, q Query) (Value, erro
 	// override with ambient credentials must be an https amazonaws.com host
 	// (regional or VPC endpoint). Checked before the credentials are fetched.
 	ambient := cw.AccessKeyIDSecretRef == nil || cw.SecretAccessKeySecretRef == nil
-	if ambient && p.AmbientCredentials && (endpoint.Scheme != "https" || !awsHostRE.MatchString(endpoint.Hostname())) {
+	if ambient && p.AmbientCredentials && (endpoint.Scheme != "https" || !awsMonitoringHost(endpoint.Hostname())) {
 		return Value{}, errors.New("cloudwatch endpoint: with the controller's own AWS identity the endpoint " +
 			"must be an https monitoring.<region>.amazonaws.com(.cn) host or its VPC endpoint")
 	}
@@ -197,11 +197,28 @@ func (p *CloudWatchProvider) credentials(ctx context.Context, q Query) (aws.Cred
 	return c, nil
 }
 
-// awsHostRE matches the CloudWatch API hosts: the regional and FIPS
-// endpoints and their VPC endpoint (PrivateLink) forms, in the aws and
-// aws-cn partitions.
-var awsHostRE = regexp.MustCompile(`^(monitoring(-fips)?\.[a-z0-9-]+\.amazonaws\.com(\.cn)?|` +
-	`vpce-[a-z0-9-]+\.monitoring\.[a-z0-9-]+\.vpce\.amazonaws\.com(\.cn)?)$`)
+// awsHostRE matches the CloudWatch API hosts and nothing else under
+// amazonaws.com: monitoring[-fips].<region>.amazonaws.com(.cn), and the VPC
+// endpoint (PrivateLink) names vpce-<id>-<suffix>[-<az>].monitoring.<region>.vpce.amazonaws.com(.cn).
+// The region is a real region shape (us-east-1, us-gov-west-1, cn-north-1),
+// so an S3 bucket host such as monitoring.s3.amazonaws.com or
+// monitoring.s3-website-us-east-1.amazonaws.com does not match. Group 1 or
+// 2 is the region, group 3 the .cn suffix.
+var awsHostRE = regexp.MustCompile(`^(?:monitoring(?:-fips)?\.([a-z]{2}(?:-gov)?-[a-z]+-[0-9]{1,2})|` +
+	`vpce-[0-9a-f]{8,17}-[a-z0-9]{8}(?:-[a-z]{2}(?:-gov)?-[a-z]+-[0-9]{1,2}[a-z])?\.monitoring\.([a-z]{2}(?:-gov)?-[a-z]+-[0-9]{1,2})\.vpce)` +
+	`\.amazonaws\.com(\.cn)?$`)
+
+// awsMonitoringHost reports whether host is a CloudWatch API host
+// (awsHostRE) in the partition its region belongs to: cn- regions only
+// under amazonaws.com.cn, every other region only under amazonaws.com.
+func awsMonitoringHost(host string) bool {
+	m := awsHostRE.FindStringSubmatch(host)
+	if m == nil {
+		return false
+	}
+	region := m[1] + m[2]
+	return strings.HasPrefix(region, "cn-") == (m[3] == ".cn")
+}
 
 // cloudWatchValue returns the latest point of the single result.
 func cloudWatchValue(resp cloudWatchResponse) (Value, error) {

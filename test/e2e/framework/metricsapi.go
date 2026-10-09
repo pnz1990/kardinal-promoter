@@ -47,6 +47,8 @@ func MetricsAPIURL(t *testing.T) string {
 
 // FakeMetricRecord is one request a fake metrics API got.
 type FakeMetricRecord struct {
+	// Start is when the request came in, Time when it was answered.
+	Start  time.Time         `json:"start"`
 	Time   time.Time         `json:"time"`
 	Method string            `json:"method"`
 	Path   string            `json:"path"`

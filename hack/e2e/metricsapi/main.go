@@ -28,6 +28,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -60,6 +61,8 @@ type creds struct {
 
 // record is one request as a fake service got it.
 type record struct {
+	// Start is when the request came in, Time when it was answered.
+	Start  time.Time `json:"start"`
 	Time   time.Time `json:"time"`
 	Method string    `json:"method"`
 	Path   string    `json:"path"`
@@ -103,6 +106,7 @@ func newServer(c creds) *server {
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(context.WithValue(r.Context(), startKey{}, time.Now().UTC()))
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -189,7 +193,8 @@ func (s *server) record(provider string, r *http.Request, query, auth string, st
 		}
 		h[k] = r.Header.Get(k)
 	}
-	rec := record{Time: time.Now().UTC(), Method: r.Method, Path: r.URL.Path, Query: query, Auth: auth,
+	start, _ := r.Context().Value(startKey{}).(time.Time)
+	rec := record{Start: start, Time: time.Now().UTC(), Method: r.Method, Path: r.URL.Path, Query: query, Auth: auth,
 		Status: status, Header: h, Body: string(body)}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -291,7 +296,22 @@ func (s *server) cloudWatch(w http.ResponseWriter, r *http.Request, body []byte)
 		`</MetricDataResults><Messages/></GetMetricDataResult></GetMetricDataResponse>`, xmlEscape(id), xmlEscape(id), points)
 }
 
+// startKey keys the arrival time of a request in its context.
+type startKey struct{}
+
+// maxSleep bounds the ?sleep= delay of a web request.
+const maxSleep = 30 * time.Second
+
 func (s *server) web(w http.ResponseWriter, r *http.Request, path string, body []byte) {
+	// ?sleep=<duration> answers late, like a slow endpoint (query slot tests).
+	if d, err := time.ParseDuration(r.URL.Query().Get("sleep")); err == nil && d > 0 && d <= maxSleep {
+		select {
+		case <-time.After(d):
+		case <-r.Context().Done():
+			s.record("web", r, r.URL.RequestURI(), "ok", 0, body)
+			return
+		}
+	}
 	if r.Header.Get("Authorization") != s.creds.webAuth {
 		s.record("web", r, r.URL.RequestURI(), "bad Authorization", http.StatusUnauthorized, body)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
