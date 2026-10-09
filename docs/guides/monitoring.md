@@ -369,12 +369,18 @@ Only OTLP over HTTP (protobuf, port 4318) is supported, not OTLP/gRPC. The stand
 
 **Trace context.** NotificationHook deliveries carry the W3C `traceparent` (and `tracestate`,
 `baggage`) of their client span, so a receiver that traces can join the trace. SCM API
-requests do not carry trace headers. An inbound `/webhook/scm` or `/api/v1/bundles` request
-with a `traceparent` (a CI job that traces, for example) continues that trace.
+requests do not carry trace headers. `/webhook/scm` and `/api/v1/bundles` are reached before
+the caller is authenticated, so an inbound `traceparent` is not trusted: their server span
+starts a new trace, sampled by the controller's own sampler, with a link to the caller's span
+(a CI job that traces sees the link, not a child).
 
-**What spans never hold.** No URL path, query or user info, no headers, no request or
-response bodies: incoming-webhook URLs and git remotes can carry tokens. A span names only
-the host it talked to.
+**What spans never hold.** No URL path, query or user info in attributes, no headers, no
+request or response bodies: incoming-webhook URLs and git remotes can carry tokens. A span
+names only the host it talked to. When a span records an error, every URL in the error text
+is cut to its scheme and host (`https://github.com/…`).
+
+**Shutdown.** Buffered spans are exported every 5 seconds and once more when the controller
+stops, after every reconciler and HTTP server has drained (at most 5 seconds more).
 
 ## Changing the Metrics Port
 

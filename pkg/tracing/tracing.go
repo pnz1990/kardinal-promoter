@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -151,10 +152,33 @@ func Start(ctx context.Context, name string, attrs ...attribute.KeyValue) (conte
 // End records err on span (when not nil) and ends it.
 func End(span trace.Span, err error) {
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		msg := Sanitize(err.Error())
+		span.AddEvent("exception", trace.WithAttributes(attribute.String("exception.message", msg)))
+		span.SetStatus(codes.Error, msg)
 	}
 	span.End()
+}
+
+// urlInText matches a URL inside an error message.
+var urlInText = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"'<>]+`)
+
+// Sanitize cuts every URL in msg to its scheme and host, so an error text
+// recorded on a span (a git remote, an SCM API path, a webhook URL) carries
+// no path, query or user info.
+func Sanitize(msg string) string {
+	return urlInText.ReplaceAllStringFunc(msg, func(raw string) string {
+		trimmed := strings.TrimRight(raw, ".,;:)")
+		tail := raw[len(trimmed):]
+		u, err := url.Parse(trimmed)
+		if err != nil || u.Host == "" {
+			return "<url>" + tail
+		}
+		out := u.Scheme + "://" + u.Host
+		if u.Path != "" && u.Path != "/" || u.RawQuery != "" {
+			out += "/…"
+		}
+		return out + tail
+	})
 }
 
 // errFailed marks a span failed without an error value.
@@ -165,7 +189,7 @@ func Fail(span trace.Span, message string) {
 	if message == "" {
 		message = errFailed.Error()
 	}
-	span.SetStatus(codes.Error, message)
+	span.SetStatus(codes.Error, Sanitize(message))
 }
 
 // HostOf returns the host of a URL for span attributes, or "" when raw does

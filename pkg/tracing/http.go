@@ -54,7 +54,8 @@ func (t *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	resp, err := base.RoundTrip(req)
 	if err != nil {
-		span.RecordError(err)
+		// *url.Error repeats the full URL: record only the sanitized text.
+		span.AddEvent("exception", trace.WithAttributes(attribute.String("exception.message", Sanitize(err.Error()))))
 		span.SetStatus(codes.Error, "request failed")
 		return resp, err
 	}
@@ -88,15 +89,25 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
-// Handler wraps h with a server span named name that continues the trace of
-// an inbound traceparent header (a CI job, an SCM that sends one) or starts
-// a new one.
+// Handler wraps h with a server span named name. The endpoints it wraps are
+// public (SCM webhooks, the Bundle API) and the trace context arrives before
+// the caller is authenticated, so an inbound traceparent is not trusted as
+// the parent: the span starts a new trace, sampled by the controller's own
+// sampler, and links to the caller's span context (otelhttp's
+// WithPublicEndpoint).
 func Handler(name string, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-		ctx, span := Tracer().Start(ctx, name,
+		remote := trace.SpanContextFromContext(
+			otel.GetTextMapPropagator().Extract(context.Background(), propagation.HeaderCarrier(r.Header)))
+		opts := []trace.SpanStartOption{
+			trace.WithNewRoot(),
 			trace.WithSpanKind(trace.SpanKindServer),
-			trace.WithAttributes(attribute.String("http.request.method", r.Method)))
+			trace.WithAttributes(attribute.String("http.request.method", r.Method)),
+		}
+		if remote.IsValid() {
+			opts = append(opts, trace.WithLinks(trace.Link{SpanContext: remote}))
+		}
+		ctx, span := Tracer().Start(r.Context(), name, opts...)
 		defer span.End()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		h.ServeHTTP(rec, r.WithContext(ctx))

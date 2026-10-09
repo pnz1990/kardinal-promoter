@@ -10,7 +10,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **OpenTelemetry tracing** — `tracing.enabled` (`--tracing-enabled`, off by default) exports traces over OTLP/HTTP to `tracing.endpoint`, with `tracing.samplingRatio` (default 0.1, parent-based). Spans cover every reconcile, every promotion step, git clone and push, SCM API requests and NotificationHook deliveries, and inbound `/webhook/scm` and `/api/v1/bundles` requests. NotificationHook webhooks carry a W3C `traceparent`; an inbound `traceparent` is continued. Spans name hosts only, never URL paths or headers ([Tracing](guides/monitoring.md#tracing-opentelemetry))
+- **OpenTelemetry tracing** — `tracing.enabled` (`--tracing-enabled`, off by default) exports traces over OTLP/HTTP to `tracing.endpoint`, with `tracing.samplingRatio` (default 0.1, parent-based). Spans cover every reconcile, every promotion step, git clone and push, SCM API requests and NotificationHook deliveries, and inbound `/webhook/scm` and `/api/v1/bundles` requests. NotificationHook webhooks carry a W3C `traceparent`; an inbound `traceparent` on the public endpoints is linked, not trusted as the parent. Spans name hosts only, never URL paths or headers, and URLs in recorded errors are cut to scheme and host ([Tracing](guides/monitoring.md#tracing-opentelemetry))
 
 ### Changed
 

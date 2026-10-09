@@ -632,14 +632,13 @@ func main() {
 		logger.Warn().Err(err).Msg("failed to register version ConfigMap runnable")
 	}
 
-	// Flush buffered spans when the manager stops, on every replica.
-	if err := mgr.Add(tracingFlusher{shutdown: shutdownTracing, log: logger}); err != nil {
-		logger.Warn().Err(err).Msg("failed to register the trace flusher")
-	}
-
-	// Nothing may run after Start returns: a leader has released its Lease by
-	// then (LeaderElectionReleaseOnCancel), and a standby may already lead.
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	// Nothing may reconcile after Start returns: a leader has released its
+	// Lease by then (LeaderElectionReleaseOnCancel), and a standby may
+	// already lead. Flushing buffered spans is not reconciling: it runs
+	// after every reconciler and HTTP server has drained, so their last
+	// spans are exported too.
+	signals := ctrl.SetupSignalHandler()
+	if err := runThenFlush(func() error { return mgr.Start(signals) }, shutdownTracing, logger); err != nil {
 		logger.Fatal().Err(err).Msg("problem running manager")
 	}
 }

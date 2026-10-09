@@ -10,28 +10,18 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// tracingFlushTimeout bounds the export of buffered spans at shutdown; it
-// fits in the controller's 30s shutdown budget.
+// tracingFlushTimeout bounds the export of buffered spans at shutdown.
 const tracingFlushTimeout = 5 * time.Second
 
-// tracingFlusher is a manager runnable that waits for the manager to stop
-// and then flushes the trace exporter. It runs on every replica, leader or
-// not.
-type tracingFlusher struct {
-	shutdown func(context.Context) error
-	log      zerolog.Logger
-}
-
-// NeedLeaderElection is false: standby replicas export spans too.
-func (tracingFlusher) NeedLeaderElection() bool { return false }
-
-// Start blocks until ctx is done, then flushes.
-func (f tracingFlusher) Start(ctx context.Context) error {
-	<-ctx.Done()
-	flushCtx, cancel := context.WithTimeout(context.Background(), tracingFlushTimeout)
+// runThenFlush runs run (the manager, until it has stopped every runnable)
+// and then flushes the trace exporter with shutdown, so spans ended while
+// reconcilers and servers drained are exported. It returns run's error.
+func runThenFlush(run func() error, shutdown func(context.Context) error, log zerolog.Logger) error {
+	err := run()
+	ctx, cancel := context.WithTimeout(context.Background(), tracingFlushTimeout)
 	defer cancel()
-	if err := f.shutdown(flushCtx); err != nil {
-		f.log.Warn().Err(err).Msg("flush traces at shutdown")
+	if ferr := shutdown(ctx); ferr != nil {
+		log.Warn().Err(ferr).Msg("flush traces at shutdown")
 	}
-	return nil
+	return err
 }

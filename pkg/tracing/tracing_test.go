@@ -141,7 +141,7 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestHandler_ContinuesInboundTrace(t *testing.T) {
+func TestHandler_LinksInboundTraceWithoutTrustingIt(t *testing.T) {
 	rec := recordSpans(t)
 	h := tracing.Handler("webhook.scm", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.True(t, trace.SpanFromContext(r.Context()).SpanContext().IsValid(), "the handler runs in the span")
@@ -154,12 +154,48 @@ func TestHandler_ContinuesInboundTrace(t *testing.T) {
 
 	spans := rec.Ended()
 	require.Len(t, spans, 2)
-	assert.Equal(t, "webhook.scm", spans[0].Name())
-	assert.Equal(t, trace.SpanKindServer, spans[0].SpanKind())
-	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", spans[0].SpanContext().TraceID().String())
-	assert.Equal(t, "00f067aa0ba902b7", spans[0].Parent().SpanID().String())
-	assert.Equal(t, int64(202), attrs(spans[0])["http.response.status_code"].AsInt64())
-	assert.False(t, spans[1].Parent().IsValid(), "no traceparent: a new trace")
+	s := spans[0]
+	assert.Equal(t, "webhook.scm", s.Name())
+	assert.Equal(t, trace.SpanKindServer, s.SpanKind())
+	assert.NotEqual(t, "4bf92f3577b34da6a3ce929d0e0e4736", s.SpanContext().TraceID().String(),
+		"an unauthenticated caller's trace is not continued")
+	assert.False(t, s.Parent().IsValid(), "a new root")
+	require.Len(t, s.Links(), 1, "the caller's span is linked")
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", s.Links()[0].SpanContext.TraceID().String())
+	assert.Equal(t, "00f067aa0ba902b7", s.Links()[0].SpanContext.SpanID().String())
+	assert.Equal(t, int64(202), attrs(s)["http.response.status_code"].AsInt64())
+	assert.False(t, spans[1].Parent().IsValid())
+	assert.Empty(t, spans[1].Links(), "no traceparent: no link")
+}
+
+func TestSanitize(t *testing.T) {
+	tests := map[string]string{
+		`git clone https://x-access-token:SECRET@github.com/org/repo.git: authentication required`: `git clone https://github.com/…: authentication required`,
+		`Post "https://hooks.slack.com/services/T0/B0/TOKEN?x=1": dial tcp: refused`:               `Post "https://hooks.slack.com/…": dial tcp: refused`,
+		`GET https://api.github.com/repos/o/r/pulls/7: 404`:                                         `GET https://api.github.com/…: 404`,
+		`no url here`:                         `no url here`,
+		`root http://forgejo:3000/ ok`:        `root http://forgejo:3000 ok`,
+		`ssh://git@git.example.com:22/r.git.`: `ssh://git.example.com:22/….`,
+	}
+	for in, want := range tests {
+		assert.Equal(t, want, tracing.Sanitize(in), in)
+	}
+}
+
+// TestEnd_RecordsSanitizedErrors: a failed span's status and exception
+// event carry the error text with its URLs cut to scheme and host.
+func TestEnd_RecordsSanitizedErrors(t *testing.T) {
+	rec := recordSpans(t)
+	_, span := tracing.Start(context.Background(), "git push")
+	tracing.End(span, errors.New("git push https://user:SECRET@git.example.com/org/repo.git: rejected"))
+	s := rec.Ended()[0]
+	assert.Equal(t, "git push https://git.example.com/…: rejected", s.Status().Description)
+	for _, ev := range s.Events() {
+		for _, kv := range ev.Attributes {
+			assert.NotContains(t, kv.Value.String(), "SECRET")
+			assert.NotContains(t, kv.Value.String(), "org/repo")
+		}
+	}
 }
 
 type fakeReconciler struct {
