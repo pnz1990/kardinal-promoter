@@ -31,6 +31,7 @@ import (
 	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/lru"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -64,9 +65,11 @@ type webhookServer struct {
 	eventsTotal         atomic.Int64
 	mergedPREventsTotal atomic.Int64
 
-	// limiters are the per-endpoint token buckets of ProviderHandler.
+	// limiters are the per-endpoint token buckets of ProviderHandler, for
+	// providers that exist, least recently used out past
+	// maxWebhookLimiters.
 	limitersMu sync.Mutex
-	limiters   map[string]*rate.Limiter
+	limiters   *lru.Cache
 }
 
 // newWebhookServerWithConfig constructs a webhookServer and records whether a webhook
@@ -112,14 +115,20 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 	}
 }
 
-// Provider webhook endpoint limits: each endpoint takes providerWebhookRate
-// deliveries a second, bursts of providerWebhookBurst, before it answers
-// 429, so a flood at one endpoint costs neither Secret reads nor SCM calls.
+// Provider webhook endpoint limits: each endpoint of an existing provider
+// takes providerWebhookRate deliveries a second, bursts of
+// providerWebhookBurst, before it answers 429, so a flood at one endpoint
+// costs neither Secret reads nor SCM calls. A delivery for a provider that
+// does not exist costs one read of the manager's cache and gets no bucket,
+// so made-up names cannot push out the buckets of real endpoints.
 const (
 	providerWebhookRate  = 10
 	providerWebhookBurst = 20
-	maxWebhookLimiters   = 4096
 )
+
+// maxWebhookLimiters bounds the buckets (least recently used out); a
+// variable so a test can lower it.
+var maxWebhookLimiters = 4096
 
 // ProviderHandler returns the webhook endpoint of each ScmProvider
 // (POST /webhook/scm/namespaces/{namespace}/{name}) and ClusterScmProvider
@@ -135,10 +144,6 @@ func (s *webhookServer) ProviderHandler(registry *scm.Registry) http.HandlerFunc
 		if ns == "" {
 			kind = v1alpha1.KindClusterScmProvider
 		}
-		if !s.allowDelivery(kind + "/" + ns + "/" + name) {
-			http.Error(w, "too many requests", http.StatusTooManyRequests)
-			return
-		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		// The same answer for a provider that does not exist, one without a
@@ -151,6 +156,10 @@ func (s *webhookServer) ProviderHandler(registry *scm.Registry) http.HandlerFunc
 		spec, err := scm.GetProvider(ctx, s.client, ns, kind, name)
 		if err != nil {
 			refuse(err)
+			return
+		}
+		if !s.allowDelivery(spec.Identity.UID) {
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
 			return
 		}
 		secret, err := registry.WebhookSecret(ctx, spec)
@@ -172,17 +181,19 @@ func (s *webhookServer) ProviderHandler(registry *scm.Registry) http.HandlerFunc
 	}
 }
 
-// allowDelivery takes a token from the endpoint's bucket.
-func (s *webhookServer) allowDelivery(endpoint string) bool {
+// allowDelivery takes a token from the bucket of the provider uid.
+func (s *webhookServer) allowDelivery(uid string) bool {
 	s.limitersMu.Lock()
 	defer s.limitersMu.Unlock()
-	l, ok := s.limiters[endpoint]
-	if !ok {
-		if s.limiters == nil || len(s.limiters) >= maxWebhookLimiters {
-			s.limiters = map[string]*rate.Limiter{}
-		}
+	if s.limiters == nil {
+		s.limiters = lru.New(maxWebhookLimiters)
+	}
+	var l *rate.Limiter
+	if v, ok := s.limiters.Get(uid); ok {
+		l = v.(*rate.Limiter)
+	} else {
 		l = rate.NewLimiter(providerWebhookRate, providerWebhookBurst)
-		s.limiters[endpoint] = l
+		s.limiters.Add(uid, l)
 	}
 	return l.Allow()
 }

@@ -418,7 +418,9 @@ How it works:
   namespace whose label is removed loses the provider within 30 seconds, including for
   steps and PRs already in flight. A provider's Secrets are also cached for 30 seconds:
   a rotated token is used within 30 seconds, and a change to a provider's `spec` is used
-  at the next call. A deleted provider's client is dropped from memory.
+  at the next call. **When you rotate a provider's token, keep the old token valid for at
+  least 30 seconds after you update the Secret**, so calls made from the cached Secret do
+  not fail. A deleted provider's client and its cached Secrets are dropped from memory.
 - **`allowedRepositories`** lists globs over the repository path the SCM API uses, such
   as `owner/repo` or `group/subgroup/repo`, on the provider's host. Matching ignores
   case. `*` matches one path segment, and a trailing `/**` matches any depth below. A
@@ -463,8 +465,12 @@ not exist. Its merges are still seen by polling.
 
 Before the signature is checked, the endpoint reads only the provider and its webhook
 Secret. The Secret read is cached for 30 seconds, whether the Secret is found or not.
-The token and the SCM are used only to confirm a signed merge event. Each endpoint takes
-10 deliveries a second, with bursts of 20. Past that it answers 429, which SCMs retry.
+The token and the SCM are used only to confirm a signed merge event. Each endpoint of a
+provider that exists takes 10 deliveries a second, with bursts of 20. Past that it answers
+429. GitHub does not redeliver a delivery that got 429, and other SCMs may not either; the
+merge is not lost, because the PRStatus poll sees it at its next interval. A delivery for a
+provider that does not exist gets 401 without using a rate-limit bucket, so deliveries to
+made-up names do not push out the buckets of real endpoints.
 
 ### Install modes and RBAC
 

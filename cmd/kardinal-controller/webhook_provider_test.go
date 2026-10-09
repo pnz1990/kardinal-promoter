@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -18,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -124,26 +126,120 @@ func hmacHex(secret string, body []byte) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// TestWebhook_ProviderEndpointRateLimit: a flood at one provider endpoint
-// gets 429 once its bucket is empty, before any Secret is read; another
-// endpoint keeps its own bucket.
-func TestWebhook_ProviderEndpointRateLimit(t *testing.T) {
+// secretGets counts the Secret reads per name.
+type secretGets struct {
+	client.Client
+	mu    sync.Mutex
+	reads map[string]int
+}
+
+func (c *secretGets) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*corev1.Secret); ok {
+		c.mu.Lock()
+		if c.reads == nil {
+			c.reads = map[string]int{}
+		}
+		c.reads[key.Name]++
+		c.mu.Unlock()
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func (c *secretGets) count(name string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reads[name]
+}
+
+// providerWebhookFixture is two ScmProviders in namespace a ("p1", "p2")
+// with a token Secret and a webhook Secret ("v"), and a mux serving their
+// endpoints.
+func providerWebhookFixture(t *testing.T) (*webhookServer, *secretGets, func(path string, sig string) int) {
+	t.Helper()
 	s := webhookScheme()
 	require.NoError(t, corev1.AddToScheme(s))
-	c := fake.NewClientBuilder().WithScheme(s).Build()
+	var objs []client.Object
+	for _, n := range []string{"p1", "p2"} {
+		objs = append(objs, &v1alpha1.ScmProvider{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: n, UID: types.UID("uid-" + n)},
+			Spec: v1alpha1.ScmProviderSpec{Type: "github", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "tok"},
+				WebhookSecretRef: &v1alpha1.ScmSecretKeyRef{Name: "hook"}}})
+	}
+	for name, key := range map[string]string{"tok": "token", "hook": "secret"} {
+		objs = append(objs, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "a", Name: name,
+			Labels: map[string]string{scm.LabelReferenceable: "true"}}, Data: map[string][]byte{key: []byte("v")}})
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+	api := &secretGets{Client: c}
 	srv := newWebhookServerWithConfig(&mockSCMProvider{}, c, zerolog.Nop(), true)
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /webhook/scm/namespaces/{namespace}/{name}", srv.ProviderHandler(&scm.Registry{Client: c}))
-	post := func(path string) int {
+	mux.HandleFunc("POST /webhook/scm/namespaces/{namespace}/{name}", srv.ProviderHandler(&scm.Registry{Client: c, APIReader: api}))
+	body := []byte(`{"action":"closed","pull_request":{"number":7,"merged":true},"repository":{"full_name":"acme/app"}}`)
+	post := func(path, sig string) int {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+		req.Header.Set("X-GitHub-Event", "pull_request")
+		req.Header.Set("X-Hub-Signature-256", sig)
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{}`))))
+		mux.ServeHTTP(w, req)
 		return w.Code
 	}
+	return srv, api, post
+}
+
+// TestWebhook_ProviderEndpointRateLimit: a flood at one provider endpoint
+// gets 429 once its bucket is empty, before its webhook Secret is read
+// again; another endpoint keeps its own bucket. A delivery for a provider
+// that does not exist is refused without taking a bucket, so made-up names
+// do not push out the buckets of real endpoints.
+//
+// Covers SCM-PROVIDERCRD-06.
+func TestWebhook_ProviderEndpointRateLimit(t *testing.T) {
+	srv, api, post := providerWebhookFixture(t)
 	codes := map[int]int{}
 	for range providerWebhookBurst + 5 {
-		codes[post("/webhook/scm/namespaces/a/flood")]++
+		codes[post("/webhook/scm/namespaces/a/p1", "sha256=00")]++
 	}
-	assert.Equal(t, providerWebhookBurst, codes[http.StatusUnauthorized], "the burst is answered (no such provider)")
+	assert.Equal(t, providerWebhookBurst, codes[http.StatusUnauthorized], "the burst is answered (bad signature)")
 	assert.Equal(t, 5, codes[http.StatusTooManyRequests])
-	assert.Equal(t, http.StatusUnauthorized, post("/webhook/scm/namespaces/a/other"), "another endpoint has its own bucket")
+	assert.Equal(t, 1, api.count("hook"), "the webhook Secret is read once (cached), and not for the refused deliveries")
+	assert.Equal(t, http.StatusUnauthorized, post("/webhook/scm/namespaces/a/p2", "sha256=00"), "another endpoint has its own bucket")
+
+	for range 3 * providerWebhookBurst {
+		require.Equal(t, http.StatusUnauthorized, post("/webhook/scm/namespaces/a/nope", "sha256=00"), "an unknown provider is never rate limited")
+	}
+	assert.Equal(t, 2, srv.limiters.Len(), "only existing providers get a bucket")
+}
+
+// TestWebhook_ProviderLimitersLRU: past maxWebhookLimiters the least
+// recently used bucket is dropped, not every bucket: an endpoint in use
+// keeps its empty bucket.
+//
+// Covers SCM-PROVIDERCRD-06.
+func TestWebhook_ProviderLimitersLRU(t *testing.T) {
+	prev := maxWebhookLimiters
+	maxWebhookLimiters = 1
+	t.Cleanup(func() { maxWebhookLimiters = prev })
+	srv, _, post := providerWebhookFixture(t)
+	for range providerWebhookBurst {
+		post("/webhook/scm/namespaces/a/p1", "sha256=00")
+	}
+	assert.Equal(t, http.StatusTooManyRequests, post("/webhook/scm/namespaces/a/p1", "sha256=00"))
+	assert.Equal(t, http.StatusUnauthorized, post("/webhook/scm/namespaces/a/p2", "sha256=00"), "p2 takes the only bucket")
+	assert.Equal(t, 1, srv.limiters.Len(), "the buckets are bounded")
+	assert.Equal(t, http.StatusUnauthorized, post("/webhook/scm/namespaces/a/p1", "sha256=00"), "p1's bucket was the least recently used")
+}
+
+// TestWebhook_ProviderNoTokenBeforeSignature: a delivery whose signature
+// does not match reads the provider's webhook Secret only; its token Secret
+// is read only for a signed merge event, to confirm the merge.
+//
+// Covers SCM-PROVIDERCRD-06.
+func TestWebhook_ProviderNoTokenBeforeSignature(t *testing.T) {
+	_, api, post := providerWebhookFixture(t)
+	assert.Equal(t, http.StatusUnauthorized, post("/webhook/scm/namespaces/a/p1", "sha256=00"))
+	assert.Equal(t, 1, api.count("hook"))
+	assert.Zero(t, api.count("tok"), "the token is not read before the signature is checked")
+
+	body := []byte(`{"action":"closed","pull_request":{"number":7,"merged":true},"repository":{"full_name":"acme/app"}}`)
+	post("/webhook/scm/namespaces/a/p1", "sha256="+hmacHex("v", body))
+	assert.Equal(t, 1, api.count("tok"), "a signed merge event reads the token to confirm the merge")
 }

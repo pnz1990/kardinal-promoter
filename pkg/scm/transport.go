@@ -3,7 +3,11 @@
 
 package scm
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
+)
 
 // transportSetter is implemented by the providers whose API client can take
 // another http.RoundTripper.
@@ -14,10 +18,11 @@ type transportSetter interface {
 // WithTransport makes p send its API requests through rt, when p supports
 // it, and returns p. The Registry uses it to send the requests of
 // ScmProviders, whose apiURL a namespace user writes, through
-// egress.NewTransport.
+// egress.NewTransport. rt is wrapped in tracing.Transport, so a provider
+// keeps its client spans when its transport is replaced.
 func WithTransport(p SCMProvider, rt http.RoundTripper) SCMProvider {
 	if s, ok := p.(transportSetter); ok && rt != nil {
-		s.setTransport(rt)
+		s.setTransport(tracing.Transport(rt, false))
 	}
 	return p
 }

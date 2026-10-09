@@ -163,12 +163,14 @@ const (
 	// ClusterScmProvider's allowedNamespaces. A namespace whose label is
 	// removed loses the provider within this time.
 	DefaultNamespaceTTL = 30 * time.Second
-	// maxRegistryClients bounds the client cache (least recently used out).
-	maxRegistryClients = 512
-	// maxCacheEntries bounds the Secret and Namespace caches; past it they
-	// are emptied.
+	// maxCacheEntries bounds the Secret and Namespace caches: a write drops
+	// the expired entries, and past the bound the cache is emptied.
 	maxCacheEntries = 4096
 )
+
+// maxRegistryClients bounds the client cache (least recently used out). A
+// variable so a test can lower it.
+var maxRegistryClients = 512
 
 // Registry builds and caches one SCMProvider per ScmProvider or
 // ClusterScmProvider. Every lookup re-reads the provider (cached client),
@@ -208,6 +210,9 @@ type Registry struct {
 	mu         sync.Mutex
 	secrets    map[types.NamespacedName]secretEntry
 	namespaces map[string]namespaceEntry
+	// secretsOf is the Secrets read for a provider (identityKey), which
+	// Evict forgets with its client.
+	secretsOf map[string][]types.NamespacedName
 }
 
 type registryEntry struct {
@@ -355,6 +360,11 @@ func (r *Registry) namespaceLabels(ctx context.Context, ns string) (map[string]s
 		ttl = DefaultNamespaceTTL
 	}
 	r.mu.Lock()
+	for k, old := range r.namespaces {
+		if !now.Before(old.expires) {
+			delete(r.namespaces, k)
+		}
+	}
 	if r.namespaces == nil || len(r.namespaces) >= maxCacheEntries {
 		r.namespaces = map[string]namespaceEntry{}
 	}
@@ -380,7 +390,9 @@ func (r *Registry) WebhookSecret(ctx context.Context, spec ProviderSpec) (string
 	if ref == nil {
 		return "", fmt.Errorf("%s %s has no spec.webhookSecretRef: %w", spec.Identity.Kind, spec.Identity.Name, ErrProviderConfig)
 	}
-	v, _, err := r.secretValue(ctx, webhookSecretNamespace(spec), *ref, "secret")
+	nn := types.NamespacedName{Namespace: webhookSecretNamespace(spec), Name: ref.Name}
+	r.recordSecrets(spec, nn)
+	v, _, err := r.secretValue(ctx, nn.Namespace, *ref, "secret")
 	if err != nil {
 		return "", fmt.Errorf("%s %s: webhook secret: %w", spec.Identity.Kind, spec.Identity.Name, err)
 	}
@@ -395,13 +407,43 @@ func webhookSecretNamespace(spec ProviderSpec) string {
 }
 
 // Evict drops the cached client of the provider kind/name (ns for a
-// ScmProvider), for a provider that was deleted: its token is not kept in
-// memory after it is gone.
+// ScmProvider) and the Secrets read for it, for a provider that was
+// deleted: its token and webhook secret are not kept in memory after it is
+// gone.
 func (r *Registry) Evict(kind, ns, name string) {
 	r.init()
-	if uid, ok := r.uids.LoadAndDelete(identityKey(kind, ns, name)); ok {
+	key := identityKey(kind, ns, name)
+	if uid, ok := r.uids.LoadAndDelete(key); ok {
 		r.clients.Remove(uid)
 	}
+	r.mu.Lock()
+	for _, nn := range r.secretsOf[key] {
+		delete(r.secrets, nn)
+	}
+	delete(r.secretsOf, key)
+	r.mu.Unlock()
+}
+
+// recordSecrets notes that the Secrets nns were read for spec, so Evict
+// forgets them.
+func (r *Registry) recordSecrets(spec ProviderSpec, nns ...types.NamespacedName) {
+	key := identityKey(spec.Identity.Kind, spec.SecretNamespace, spec.Identity.Name)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.secretsOf == nil || len(r.secretsOf) >= maxCacheEntries {
+		r.secretsOf = map[string][]types.NamespacedName{}
+	}
+	have := r.secretsOf[key]
+	for _, nn := range nns {
+		found := false
+		for _, h := range have {
+			found = found || h == nn
+		}
+		if !found {
+			have = append(have, nn)
+		}
+	}
+	r.secretsOf[key] = have
 }
 
 func identityKey(kind, ns, name string) string {
@@ -418,6 +460,10 @@ func (r *Registry) client(ctx context.Context, spec ProviderSpec) (SCMProvider, 
 	r.init()
 	if err := r.checkURL(spec); err != nil {
 		return nil, err
+	}
+	r.recordSecrets(spec, types.NamespacedName{Namespace: spec.SecretNamespace, Name: spec.Spec.SecretRef.Name})
+	if ref := spec.Spec.WebhookSecretRef; ref != nil {
+		r.recordSecrets(spec, types.NamespacedName{Namespace: webhookSecretNamespace(spec), Name: ref.Name})
 	}
 	token, tokenRV, err := r.secretValue(ctx, spec.SecretNamespace, spec.Spec.SecretRef, "token")
 	if err != nil {
@@ -499,6 +545,11 @@ func (r *Registry) secret(ctx context.Context, nn types.NamespacedName) (*corev1
 			return nil, fmt.Errorf("read Secret %s: %w", nn, err)
 		}
 		r.mu.Lock()
+		for k, old := range r.secrets {
+			if !now.Before(old.expires) {
+				delete(r.secrets, k)
+			}
+		}
 		if r.secrets == nil || len(r.secrets) >= maxCacheEntries {
 			r.secrets = map[types.NamespacedName]secretEntry{}
 		}

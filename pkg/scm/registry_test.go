@@ -300,3 +300,113 @@ func TestRegistry_SecretReadErrorNotCached(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "s", got)
 }
+
+// TestRegistry_EvictForgetsSecrets: Evict (the provider was deleted) drops
+// the cached token and webhook Secrets with the client, so they are not kept
+// in memory and the next use reads them again, within SecretTTL too.
+//
+// Covers SCM-PROVIDERCRD-06.
+func TestRegistry_EvictForgetsSecrets(t *testing.T) {
+	p := &v1alpha1.ScmProvider{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "gh", UID: "u1"},
+		Spec: v1alpha1.ScmProviderSpec{Type: "github", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "tok"},
+			WebhookSecretRef: &v1alpha1.ScmSecretKeyRef{Name: "hook"}}}
+	c := fake.NewClientBuilder().WithScheme(registryScheme(t)).WithObjects(p,
+		refSecret("team-a", "tok", map[string]string{"token": "t"}), refSecret("team-a", "hook", map[string]string{"secret": "h"})).Build()
+	api := &countingReader{Reader: c}
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	r := &scm.Registry{Client: c, APIReader: api, Now: func() time.Time { return now },
+		New: func(string, string, string, string) (scm.SCMProvider, error) { return &builtProvider{}, nil }}
+	ctx := context.Background()
+	id := v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindScmProvider, Name: "gh", UID: "u1"}
+	_, err := r.ForIdentity(ctx, "team-a", id, "")
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), api.secrets.Load())
+	secrets, _ := r.CacheSizesForTest()
+	assert.Equal(t, 2, secrets)
+
+	r.Evict(v1alpha1.KindScmProvider, "team-a", "gh")
+	secrets, _ = r.CacheSizesForTest()
+	assert.Zero(t, secrets, "the provider's Secrets are forgotten with its client")
+	_, err = r.ForIdentity(ctx, "team-a", id, "")
+	require.NoError(t, err)
+	assert.Equal(t, int32(4), api.secrets.Load(), "the next use reads the Secrets again")
+
+	// A webhook delivery only reads the webhook Secret; Evict forgets it too.
+	r2 := &scm.Registry{Client: c, APIReader: api, Now: func() time.Time { return now }}
+	spec, err := scm.GetProvider(ctx, c, "team-a", v1alpha1.KindScmProvider, "gh")
+	require.NoError(t, err)
+	_, err = r2.WebhookSecret(ctx, spec)
+	require.NoError(t, err)
+	r2.Evict(v1alpha1.KindScmProvider, "team-a", "gh")
+	secrets, _ = r2.CacheSizesForTest()
+	assert.Zero(t, secrets)
+}
+
+// TestRegistry_ExpiredEntriesPruned: a cache write drops the expired
+// Secrets and Namespaces, so entries of Secrets and namespaces no longer in
+// use do not stay until the cache is full.
+//
+// Covers SCM-PROVIDERCRD-06.
+func TestRegistry_ExpiredEntriesPruned(t *testing.T) {
+	var objs []client.Object
+	for _, ns := range []string{"n1", "n2", "n3"} {
+		objs = append(objs, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns, Labels: map[string]string{"scm": "ok"}}})
+	}
+	c := fake.NewClientBuilder().WithScheme(registryScheme(t)).WithObjects(objs...).Build()
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	r := &scm.Registry{Client: c, Now: func() time.Time { return now }}
+	ctx := context.Background()
+	webhook := func(name string) {
+		spec := scm.ProviderSpec{Identity: v1alpha1.ScmProviderIdentity{Kind: "ScmProvider", Name: name}, SecretNamespace: "team-a",
+			Spec: v1alpha1.ScmProviderSpec{WebhookSecretRef: &v1alpha1.ScmSecretKeyRef{Name: name}}}
+		_, _ = r.WebhookSecret(ctx, spec)
+	}
+	cluster := scm.ProviderSpec{Identity: v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindClusterScmProvider, Name: "c"},
+		AllowedNamespaces: &metav1.LabelSelector{MatchLabels: map[string]string{"scm": "ok"}}}
+	webhook("a")
+	webhook("b")
+	require.NoError(t, r.Check(ctx, cluster, "n1", ""))
+	require.NoError(t, r.Check(ctx, cluster, "n2", ""))
+	secrets, namespaces := r.CacheSizesForTest()
+	assert.Equal(t, []int{2, 2}, []int{secrets, namespaces})
+
+	now = now.Add(time.Hour)
+	webhook("c")
+	require.NoError(t, r.Check(ctx, cluster, "n3", ""))
+	secrets, namespaces = r.CacheSizesForTest()
+	assert.Equal(t, []int{1, 1}, []int{secrets, namespaces}, "the expired entries were dropped on write")
+}
+
+// TestRegistry_ClientCacheBounded: the client cache keeps the most recently
+// used clients; past its bound the least recently used one is rebuilt at
+// its next use.
+//
+// Covers SCM-PROVIDERCRD-06.
+func TestRegistry_ClientCacheBounded(t *testing.T) {
+	defer scm.SetMaxRegistryClientsForTest(2)()
+	objs := []client.Object{refSecret("team-a", "tok", map[string]string{"token": "t"})}
+	for _, n := range []string{"p1", "p2", "p3"} {
+		objs = append(objs, &v1alpha1.ScmProvider{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: n, UID: types.UID(n)},
+			Spec: v1alpha1.ScmProviderSpec{Type: "github", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "tok"}}})
+	}
+	c := fake.NewClientBuilder().WithScheme(registryScheme(t)).WithObjects(objs...).Build()
+	builds := map[string]int{}
+	var current string
+	r := &scm.Registry{Client: c, New: func(string, string, string, string) (scm.SCMProvider, error) {
+		builds[current]++
+		return &builtProvider{}, nil
+	}}
+	use := func(n string) {
+		current = n
+		_, err := r.ForIdentity(context.Background(), "team-a", v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindScmProvider, Name: n, UID: n}, "")
+		require.NoError(t, err)
+	}
+	use("p1")
+	use("p2")
+	use("p1")
+	use("p3") // p2 is the least recently used
+	use("p1")
+	assert.Equal(t, map[string]int{"p1": 1, "p2": 1, "p3": 1}, builds, "p1 stays cached")
+	use("p2")
+	assert.Equal(t, 2, builds["p2"], "p2 was dropped past the bound and is built again")
+}
