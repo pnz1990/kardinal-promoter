@@ -98,6 +98,18 @@ controller:
   # default, 10m. "0s" writes the status on every evaluation; each write makes
   # kro re-check the gate's whole Graph.
   gateStatusHeartbeat: ""
+  # -- Workers per controller: how many objects of a kind are reconciled at
+  # once (--promotionstep-workers, ...). One object is never reconciled twice
+  # at once. Unset keeps the controller defaults, measured with the scale
+  # suite: promotionStep 16, prStatus 8, policyGate 8, bundle 4, pipeline 4.
+  # Raise promotionStep for many Pipelines on slow git hosts. See
+  # docs/installation.md (Controller concurrency).
+  workers: {}
+  #   promotionStep: 16
+  #   prStatus: 8
+  #   policyGate: 8
+  #   bundle: 4
+  #   pipeline: 4
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).

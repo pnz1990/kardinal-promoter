@@ -54,6 +54,23 @@ spec:
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
             {{- end }}
+            {{- with .Values.controller.workers }}
+            {{- with .promotionStep }}
+            - --promotionstep-workers={{ . }}
+            {{- end }}
+            {{- with .prStatus }}
+            - --prstatus-workers={{ . }}
+            {{- end }}
+            {{- with .policyGate }}
+            - --policygate-workers={{ . }}
+            {{- end }}
+            {{- with .bundle }}
+            - --bundle-workers={{ . }}
+            {{- end }}
+            {{- with .pipeline }}
+            - --pipeline-workers={{ . }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.controller.gateStatusHeartbeat }}
             - --gate-status-heartbeat={{ . }}
             {{- end }}

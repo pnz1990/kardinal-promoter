@@ -32,7 +32,10 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
@@ -128,6 +131,14 @@ type graphReader interface {
 // manages Bundle supersession, syncs evidence from PromotionStep status into
 // Bundle.status.environments, and derives the Verified and Failed phases.
 type Reconciler struct {
+	// Workers is how many Bundles are reconciled at once (--bundle-workers);
+	// 0 is the manager's default. One Bundle is never reconciled twice at
+	// once (the work queue); the maxConcurrentPromotions count of one
+	// Pipeline runs under lockPipeline.
+	Workers int
+	// slotLocks are the per-Pipeline locks of lockPipeline.
+	slotLocks sync.Map
+
 	client.Client
 	// APIReader reads straight from the API server (mgr.GetAPIReader()). The
 	// maxConcurrentPromotions count reads through it, so a Bundle this
@@ -748,6 +759,10 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// Failed or Superseded, and that phase change re-queues the waiting
 	// siblings (see waitingSiblings). Reads only Bundle status.
 	if limit := pipeline.Spec.MaxConcurrentPromotions; limit > 0 {
+		// With several workers two Available Bundles of the Pipeline could
+		// both count a free slot: the count and the Promoting write that
+		// takes the slot run under the Pipeline's lock.
+		defer r.lockPipeline(b.Namespace, b.Spec.Pipeline)()
 		active, err := r.countPromoting(ctx, b)
 		if err != nil {
 			// A failed read is not a free slot: retry instead of promoting past the cap.
@@ -1563,6 +1578,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	graphObject.SetGroupVersionKind(graph.GraphGVK)
 
 	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&kardinalv1alpha1.Bundle{}).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.waitingSiblings),
 			builder.WithPredicates(bundlePhaseChanged)).
@@ -1712,4 +1728,13 @@ func (r *Reconciler) pipelineBundles(ctx context.Context, obj client.Object) []r
 		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&bundles[i])})
 	}
 	return reqs
+}
+
+// lockPipeline locks the maxConcurrentPromotions slot count of one
+// Pipeline and returns the unlock.
+func (r *Reconciler) lockPipeline(namespace, pipeline string) (unlock func()) {
+	v, _ := r.slotLocks.LoadOrStore(namespace+"/"+pipeline, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }

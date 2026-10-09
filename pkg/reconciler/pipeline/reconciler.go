@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -59,6 +61,11 @@ const (
 // Reconciler watches Pipeline objects, validates them, and sets status.conditions
 // and status.phase.
 type Reconciler struct {
+	// Workers is how many objects are reconciled at once (--pipeline-workers);
+	// 0 is the manager's default. One object is never reconciled twice at
+	// once: the work queue serializes it.
+	Workers int
+
 	client.Client
 
 	// AllowedRepositories is --scm-allowed-repositories: a Pipeline that
@@ -453,6 +460,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&kardinalv1alpha1.Pipeline{}).
 		// Deleting the freeze gate by hand while the pipeline is paused, or
 		// removing a user gate that has its name, re-enqueues the Pipeline.

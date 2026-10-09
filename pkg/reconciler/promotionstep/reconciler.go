@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -123,6 +125,11 @@ const (
 // the last persisted index, so every step must be safe to repeat (the git and
 // open-pr steps are).
 type Reconciler struct {
+	// Workers is how many objects are reconciled at once (--promotionstep-workers);
+	// 0 is the manager's default. One object is never reconciled twice at
+	// once: the work queue serializes it.
+	Workers int
+
 	client.Client
 
 	// APIReader reads straight from the API server (mgr.GetAPIReader()). A
@@ -1819,6 +1826,7 @@ func bakeDeadlineMessage(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpe
 //     (checkRequiredGates).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{},
 				predicate.LabelChangedPredicate{}, predicate.AnnotationChangedPredicate{}),
