@@ -778,8 +778,8 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "expr": "sum by (service, direction) (rate(kardinal_git_transfer_bytes_total[5m]))",
-          "legendFormat": "{{service}} {{direction}}"
+          "expr": "sum by (git_service, direction) (rate(kardinal_git_transfer_bytes_total[5m]))",
+          "legendFormat": "{{git_service}} {{direction}}"
         }
       ]
     },

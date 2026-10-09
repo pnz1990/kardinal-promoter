@@ -15,6 +15,7 @@ package steps_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -407,4 +408,48 @@ func newArgoCDScheme(t *testing.T) *runtime.Scheme {
 		&unstructured.UnstructuredList{},
 	)
 	return s
+}
+
+// TestArgoCDSetImageStep_WritesDigest: an image pinned by digest is written
+// as "<tag>@<digest>", so the Application pulls the digest the Bundle pins
+// (and image verification checked), not whatever the tag points to
+// (regression, QA #1521).
+func TestArgoCDSetImageStep_WritesDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	cases := []struct {
+		name  string
+		image v1alpha1.ImageRef
+		want  string
+	}{
+		{"tag and digest", v1alpha1.ImageRef{Repository: "ghcr.io/myorg/app", Tag: "1.29.0", Digest: digest}, "1.29.0@" + digest},
+		{"tag only", v1alpha1.ImageRef{Repository: "ghcr.io/myorg/app", Tag: "1.29.0"}, "1.29.0"},
+		{"digest only: nothing to write", v1alpha1.ImageRef{Repository: "ghcr.io/myorg/app", Digest: digest}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := makeArgoCDApp("argocd", "my-app", map[string]interface{}{"image": map[string]interface{}{"tag": "1.28.0"}})
+			k8s := fake.NewClientBuilder().WithScheme(newArgoCDScheme(t)).WithObjects(app).Build()
+			state := &parentsteps.StepState{
+				K8sClient: k8s,
+				Environment: v1alpha1.EnvironmentSpec{Name: "prod", Update: v1alpha1.UpdateConfig{Strategy: "argocd",
+					ArgoCD: &v1alpha1.ArgoCDUpdateConfig{Application: "my-app", Namespace: "argocd", ImageKey: "image.tag"}}},
+				Bundle:  v1alpha1.BundleSpec{Type: "image", Images: []v1alpha1.ImageRef{tc.image}},
+				Outputs: map[string]string{},
+			}
+			step, err := parentsteps.Lookup("argocd-set-image")
+			require.NoError(t, err)
+			res, execErr := step.Execute(context.Background(), state)
+			require.NoError(t, execErr)
+			if tc.want == "" {
+				assert.Equal(t, "no image tag to set", res.Message)
+				return
+			}
+			assert.Equal(t, tc.want, res.Outputs["imageTag"])
+			got := &unstructured.Unstructured{}
+			got.SetGroupVersionKind(argoCDAppGVK)
+			require.NoError(t, k8s.Get(context.Background(), client.ObjectKey{Namespace: "argocd", Name: "my-app"}, got))
+			v, _, _ := unstructured.NestedString(got.Object, "spec", "source", "helm", "valuesObject", "image", "tag")
+			assert.Equal(t, tc.want, v)
+		})
+	}
 }

@@ -719,7 +719,8 @@ func (e *Env) RewindToOpenPR(t *testing.T, ps *v1alpha1.PromotionStep) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Client.Status().Patch(context.Background(), ps, client.RawPatch(types.JSONPatchType, raw)); err != nil {
+	// As the controller: only kardinal writes a step's status (graph-objects policy).
+	if err := e.AsController(t).Status().Patch(context.Background(), ps, client.RawPatch(types.JSONPatchType, raw)); err != nil {
 		t.Fatalf("rewind step %s to open-pr: %v", ps.Name, err)
 	}
 	t.Logf("rewound step %s to open-pr (index %d)", ps.Name, idx)

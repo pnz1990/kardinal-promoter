@@ -131,6 +131,11 @@ controller:
     # the client address (--access-log-trusted-proxies). Other clients'
     # X-Forwarded-For is ignored.
     trustedProxies: []
+
+  # -- Longest a gate override counts, in minutes from when the controller
+  # first saw it (--gate-override-max-minutes): an override ends at the
+  # earlier of its expiresAt and this cap. Empty keeps the default, 1440 (24h).
+  gateOverrideMaxMinutes: ""
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).
@@ -208,6 +213,18 @@ github:
 # -- SCM provider (--scm-provider): github (default when empty), gitlab,
 # forgejo, gitea, bitbucket or azuredevops, and its API base URL
 # (--scm-api-url) for self-hosted instances. See docs/scm-providers.md.
+
+# Identity admission policies (templates/identity-admission.yaml,
+# docs/guides/security.md#verified-identity).
+admission:
+  # -- Usernames, besides this release's controller ServiceAccount, that run
+  # a kardinal controller: they may name any Bundle's kardinal.io/created-by
+  # and write the objects a promotion Graph manages. Exact usernames only,
+  # for example "system:serviceaccount:kardinal-system:kardinal-promoter-b";
+  # there are no wildcards. Never list a ServiceAccount of a tenant's
+  # namespace: whoever can mint tokens for a listed ServiceAccount passes
+  # these checks.
+  controllerUsernames: []
 scm:
   provider: ""
   apiURL: ""
@@ -227,6 +244,20 @@ scm:
   # clear text. Their API requests always go through the egress guard
   # (no loopback, link-local or cloud metadata addresses).
   providersAllowInsecureHTTP: false
+  # -- Forgejo/Gitea only: the names or emails the instance signs commits
+  # with (its repository.signing SIGNING_NAME / SIGNING_EMAIL,
+  # --scm-instance-signers). Image verification treats such a commit as a
+  # platform signature (forgejo-instance). Without it, a verified signer that
+  # is not a user of the instance is taken as the instance key.
+  instanceSigners: []
+  # -- The gate results of a waiting pr-review step as a commit status on the
+  # commit kardinal pushed to its PR (docs/pr-evidence.md). enabled: false
+  # (--gates-commit-status=false) posts none, for a token without the
+  # commit-status permission. context (--gates-status-context) is the status
+  # name branch protection requires; it is reserved for kardinal.
+  gatesCommitStatus:
+    enabled: true
+    context: kardinal/gates
 
 # -- Webhook secret for :8083/webhook/scm (KARDINAL_WEBHOOK_SECRET): the HMAC
 # key, or for GitLab and Azure DevOps the plain token the SCM sends.
@@ -275,8 +306,9 @@ rbac:
   # (update.strategy: argocd).
   argocdApplicationsWrite: false
   # -- Deprecated, no effect, removed in v0.10. The integration-test step was
-  # removed, so the chart no longer grants batch Jobs access. Kept so existing
-  # --set rbac.integrationTestJobs=... keeps passing the values schema.
+  # removed; the Job access the chart grants is for hooks (hooks.serviceAccounts),
+  # whatever this says. Kept so existing --set rbac.integrationTestJobs=...
+  # keeps passing the values schema.
   integrationTestJobs: false
 
 # -- kro Graph integration.
@@ -328,9 +360,30 @@ graph:
     # (--graph-retire-verified-after, default 1h).
     verified: ""
 
-# -- Deprecated, no effect. The chart no longer ships ValidatingAdmissionPolicies;
-# the CRD schemas validate these fields instead. Kept so existing
-# --set validatingAdmissionPolicy.enabled=... keeps working.
+# -- Pipeline pre- and post-deploy hooks (spec.environments[].hooks,
+# docs/hooks.md). The controller runs each hook as a Job in the Pipeline
+# namespace.
+hooks:
+  # -- ServiceAccount names a hook's Job Pod may run as (--hook-service-accounts),
+  # in the Pipeline namespace. A hook whose Pod names another one fails
+  # without running. Anyone who can edit a Pipeline can run a Pod as one of
+  # these, so list only ServiceAccounts with the rights a hook needs. The
+  # Graph ServiceAccount (graph.serviceAccountName) is never allowed.
+  serviceAccounts:
+    - default
+  # -- Pod Security Standard a hook's Pod must meet (--hook-pod-security-level):
+  # baseline (no privileged containers, host namespaces, hostPath volumes,
+  # added capabilities beyond the baseline set...), restricted (also non-root,
+  # no privilege escalation, seccomp RuntimeDefault, all capabilities
+  # dropped), or privileged (no Pod checks). Below privileged, nodeName and
+  # hostPort are refused too. A hook that breaks it fails without running.
+  podSecurityLevel: baseline
+
+# -- Deprecated, no effect. The CRD schemas validate the kardinal fields. The
+# chart always ships the identity ValidatingAdmissionPolicies
+# (templates/identity-admission.yaml), which pin the user a record names
+# (spec.rejected.by) to the requesting user; they cannot be turned off. Kept
+# so existing --set validatingAdmissionPolicy.enabled=... keeps working.
 validatingAdmissionPolicy:
   enabled: true
 

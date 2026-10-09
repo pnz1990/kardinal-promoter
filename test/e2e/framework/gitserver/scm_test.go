@@ -156,8 +156,18 @@ func TestGitLabSCM(t *testing.T) {
 	del := "DELETE /api/v4/projects/e2e%2Fr"
 	f.fail[del] = []int{http.StatusInternalServerError, http.StatusInternalServerError}
 	require.NoError(t, s.DeleteRepo(ctx, r), "a 500 from a delete racing a push job is retried")
-	f.fail[del] = []int{http.StatusInternalServerError, http.StatusInternalServerError, http.StatusInternalServerError}
-	require.Error(t, s.DeleteRepo(ctx, r), "the delete gives up after 3 tries")
+	f.fail[del] = []int{500, 500, 500, 500, 500, 500}
+	require.Error(t, s.DeleteRepo(ctx, r), "the delete gives up after 6 tries")
+	f.failBody = map[string]string{del: `{"message":"Project could not be updated!"}`}
+	f.fail[del] = []int{http.StatusBadRequest, http.StatusConflict}
+	require.NoError(t, s.DeleteRepo(ctx, r), "a delete racing GitLab's own update of the project is retried (#1558)")
+	f.failBody = map[string]string{del: `{"message":"Project has been already marked for deletion"}`}
+	f.fail[del] = []int{http.StatusBadRequest}
+	require.NoError(t, s.DeleteRepo(ctx, r), "a project marked for deletion is deleted")
+	f.failBody = map[string]string{del: `{"message":"name is invalid"}`}
+	f.fail[del] = []int{http.StatusBadRequest}
+	require.Error(t, s.DeleteRepo(ctx, r), "another 400 is not retried")
+	f.failBody = nil
 	f.fail[del] = []int{http.StatusNotFound}
 	require.NoError(t, s.DeleteRepo(ctx, r), "a missing project is already deleted")
 	f.fail[del] = []int{http.StatusForbidden}

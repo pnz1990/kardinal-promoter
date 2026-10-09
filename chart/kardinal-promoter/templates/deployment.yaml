@@ -51,6 +51,8 @@ spec:
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
             - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
+            - --hook-service-accounts={{ join "," .Values.hooks.serviceAccounts }}
+            - --hook-pod-security-level={{ .Values.hooks.podSecurityLevel }}
             {{- if not (kindIs "invalid" .Values.graph.compactAbove) }}
             - --graph-compact-above={{ .Values.graph.compactAbove }}
             {{- end }}
@@ -97,6 +99,10 @@ spec:
             {{- with (.Values.graph.retire).verified }}
             - --graph-retire-verified-after={{ . }}
             {{- end }}
+            - --override-identity-policy={{ include "kardinal-promoter.fullname" . }}-gate-overrides
+            {{- with .Values.controller.gateOverrideMaxMinutes }}
+            - --gate-override-max-minutes={{ . }}
+            {{- end }}
             {{- with .Values.controller.watchNamespace }}
             - --watch-namespace={{ . }}
             {{- end }}
@@ -109,11 +115,22 @@ spec:
             {{- with .Values.scm.apiURL }}
             - --scm-api-url={{ . }}
             {{- end }}
+            {{- with .Values.scm.instanceSigners }}
+            - --scm-instance-signers={{ join "," . }}
+            {{- end }}
             {{- with .Values.scm.allowedRepositories }}
             - --scm-allowed-repositories={{ join "," . }}
             {{- end }}
             {{- if .Values.scm.providersAllowInsecureHTTP }}
             - --scm-providers-allow-http=true
+            {{- end }}
+            {{- with .Values.scm.gatesCommitStatus }}
+            {{- if eq (toString .enabled) "false" }}
+            - --gates-commit-status=false
+            {{- end }}
+            {{- if and .context (ne .context "kardinal/gates") }}
+            - --gates-status-context={{ .context }}
+            {{- end }}
             {{- end }}
             {{- if .Values.ui.auth.tokenReview }}
             - --ui-tokenreview-auth=true
