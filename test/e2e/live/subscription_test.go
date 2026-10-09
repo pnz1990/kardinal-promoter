@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -333,7 +334,9 @@ func TestSub_ImageReturningDigest(t *testing.T) {
 // for one; with a wrong password it reports the refused credentials; with a
 // kubernetes.io/dockerconfigjson Secret for the registry host it records the
 // baseline and creates a Bundle for a new tag, and a username/password
-// Secret works the same. No message contains the password.
+// Secret works the same. A Secret without kardinal.io/referenceable is not
+// read (Ready False, SecretNotReferenceable, nothing polled). No message
+// contains the password.
 //
 // Covers SUB-OCI-04, SUB-AUTH-OCI-01.
 func TestSub_ImagePrivate(t *testing.T) {
@@ -362,6 +365,21 @@ func TestSub_ImagePrivate(t *testing.T) {
 		corev1.DockerConfigJsonKey: fmt.Sprintf(`{"auths":{%q:{"auth":%q}}}`, reg.Host(),
 			base64.StdEncoding.EncodeToString([]byte(user+":"+password)))})
 	createSecret(t, e, a.ns, "login", corev1.SecretTypeBasicAuth, map[string]string{"username": user, "password": password})
+
+	// The right login in a Secret without kardinal.io/referenceable is not read.
+	unlabelled := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "unlabelled", Namespace: a.ns},
+		Type: corev1.SecretTypeBasicAuth, StringData: map[string]string{"username": user, "password": password}}
+	require.NoError(t, e.Client.Create(context.Background(), unlabelled))
+	spec := imageSub(reg.Ref(repo), semverTags, "30s")
+	spec.Image.SecretRef = &v1alpha1.SubscriptionSecretRef{Name: "unlabelled"}
+	newSub(t, e, a.ns, "unlabelled", spec)
+	assert.Equal(t, `secretRef: Secret "unlabelled" is not labelled kardinal.io/referenceable=true; `+
+		`label it to let Subscriptions read it (kubectl label secret unlabelled kardinal.io/referenceable=true)`,
+		waitSubError(t, e, a.ns, "unlabelled"))
+	ready := meta.FindStatusCondition(getSub(t, e, a.ns, "unlabelled").Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, "SecretNotReferenceable", ready.Reason)
+	assert.Empty(t, getSub(t, e, a.ns, "unlabelled").Status.LastSeenDigest, "nothing was sent to the registry")
 	for _, secret := range []string{"pull", "login"} {
 		spec := imageSub(reg.Ref(repo), semverTags, "30s")
 		spec.Image.SecretRef = &v1alpha1.SubscriptionSecretRef{Name: secret}
@@ -379,16 +397,21 @@ func TestSub_ImagePrivate(t *testing.T) {
 		})
 		assertImageBundle(t, e, a.ns, name, want, reg.Repository(repo), "6.14.0", d14)
 	}
+	for _, name := range []string{"with-pull", "with-login"} {
+		assert.True(t, meta.IsStatusConditionTrue(getSub(t, e, a.ns, name).Status.Conditions, "Ready"), name)
+	}
 	for _, name := range []string{"anonymous", "wrong", "with-pull", "with-login"} {
 		assert.NotContains(t, getSub(t, e, a.ns, name).Status.Message, password)
 	}
 	assert.Len(t, bundles(t, e, a.ns), 2)
 }
 
-// createSecret creates Secret ns/name of type typ with data.
+// createSecret creates Secret ns/name of type typ with data, labelled
+// kardinal.io/referenceable: "true" so Subscriptions may read it.
 func createSecret(t *testing.T, e *framework.Env, ns, name string, typ corev1.SecretType, data map[string]string) {
 	t.Helper()
-	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Type: typ, StringData: data}
+	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns,
+		Labels: map[string]string{v1alpha1.LabelSecretReferenceable: "true"}}, Type: typ, StringData: data}
 	require.NoError(t, e.Client.Create(context.Background(), s), "create Secret %s", name)
 }
 
@@ -456,7 +479,9 @@ func commitNote(t *testing.T, c gitserver.Committer, repo gitserver.Repo, messag
 // branch head (no commit in reach touches the glob); a commit outside the
 // glob creates no Bundle while status.lastSeenRevision follows the head; a
 // commit inside it creates a config Bundle for that commit, also when a
-// later commit outside the glob is on top of it.
+// later commit outside the glob is on top of it. Editing the glob records a
+// new baseline (status.observedPathGlob) without a Bundle; the next matching
+// commit creates one.
 //
 // Covers SUB-GIT-02.
 func TestSub_GitPathGlob(t *testing.T) {
@@ -494,6 +519,23 @@ func TestSub_GitPathGlob(t *testing.T) {
 	b := getBundle(t, e, a.ns, want)
 	assert.Equal(t, &v1alpha1.ConfigRef{GitRepo: a.repo.CloneURL, CommitSHA: inside}, b.Spec.ConfigRef)
 	assert.Len(t, bundles(t, e, a.ns), 1)
+	assert.Equal(t, "notes/**", s.Status.ObservedPathGlob)
+
+	// Editing the glob records a new baseline: other/ has newer matching
+	// commits than the last Bundle, and none of them becomes a Bundle.
+	cur := getSub(t, e, a.ns, "filtered")
+	cur.Spec.Git.PathGlob = "other/**"
+	require.NoError(t, e.Client.Update(context.Background(), cur))
+	s = waitSub(t, e, a.ns, "filtered", "the poll of the edited glob", func(st v1alpha1.SubscriptionStatus) bool {
+		return st.ObservedPathGlob == "other/**"
+	})
+	assert.Equal(t, top, s.Status.LastSeenDigest, "the newest commit under other/")
+	assert.Len(t, bundles(t, e, a.ns), 1, "an edited glob creates no Bundle")
+	next := commitFile(t, git, a.repo, fmt.Sprintf("other/%d.txt", time.Now().UnixNano()), "other again")
+	poke(t, e, a.ns, "filtered")
+	waitSub(t, e, a.ns, "filtered", "a Bundle for "+next, func(st v1alpha1.SubscriptionStatus) bool {
+		return st.LastBundleCreated == "filtered-"+next[:8]
+	})
 }
 
 // commitFile commits one new file at path and returns the commit SHA.

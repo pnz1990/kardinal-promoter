@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
@@ -60,6 +61,34 @@ var guardedTransport = egress.NewTransport(http.ProxyFromEnvironment)
 // and its transport applies the egress guard.
 func newHTTPClient() *http.Client {
 	return &http.Client{Timeout: defaultHTTPTimeout, Transport: guardedTransport}
+}
+
+// credentialRedirects returns c with a redirect policy for requests that
+// carry credentials: a redirect from https to http is refused, and so is a
+// redirect to another host, so the credentials go only where the
+// Subscription points. blobsMayLeave allows a cross-host redirect of a
+// registry blob download (registries send those to object storage) after
+// dropping the Authorization header.
+func credentialRedirects(c *http.Client, blobsMayLeave bool) *http.Client {
+	cc := *c
+	cc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		first := via[0]
+		if first.URL.Scheme == "https" && req.URL.Scheme != "https" {
+			return fmt.Errorf("refusing a redirect from https to %s while sending credentials", req.URL.Scheme)
+		}
+		if req.URL.Host != first.URL.Host {
+			if blobsMayLeave && req.Method == http.MethodGet && strings.Contains(first.URL.Path, "/blobs/") {
+				req.Header.Del("Authorization")
+				return nil
+			}
+			return fmt.Errorf("refusing a redirect to another host (%s) while sending credentials", req.URL.Hostname())
+		}
+		return nil
+	}
+	return &cc
 }
 
 // readLimited reads r fully and fails when it is longer than limit bytes.

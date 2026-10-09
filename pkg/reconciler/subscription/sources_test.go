@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -50,7 +51,8 @@ func getSubscription(t *testing.T, c client.Client, sub *kardinalv1alpha1.Subscr
 // Error naming the Secret and never a value.
 func TestSubscriptionReconciler_Credentials(t *testing.T) {
 	secret := func(name string, data map[string]string) *corev1.Secret {
-		s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team"}, Data: map[string][]byte{}}
+		s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team",
+			Labels: map[string]string{kardinalv1alpha1.LabelSecretReferenceable: "true"}}, Data: map[string][]byte{}}
 		for k, v := range data {
 			s.Data[k] = []byte(v)
 		}
@@ -58,11 +60,14 @@ func TestSubscriptionReconciler_Credentials(t *testing.T) {
 	}
 	elsewhere := secret("other-ns", map[string]string{"token": "t"})
 	elsewhere.Namespace = "other"
+	unlabelled := secret("unlabelled", map[string]string{"token": "do-not-print"})
+	unlabelled.Labels = nil
 	tests := []struct {
-		name    string
-		sub     func() *kardinalv1alpha1.Subscription
-		want    source.Credentials
-		wantErr string
+		name       string
+		sub        func() *kardinalv1alpha1.Subscription
+		want       source.Credentials
+		wantErr    string
+		wantReason string
 	}{
 		{name: "image dockerconfigjson", sub: func() *kardinalv1alpha1.Subscription {
 			s := makeImageSub("img", "team", "p", "ghcr.io/org/app")
@@ -86,12 +91,17 @@ func TestSubscriptionReconciler_Credentials(t *testing.T) {
 			s := makeImageSub("img", "team", "p", "ghcr.io/org/app")
 			s.Spec.Image.SecretRef = &kardinalv1alpha1.SubscriptionSecretRef{Name: "other-ns"}
 			return s
-		}, wantErr: `secretRef: Secret "other-ns" not found in namespace "team"`},
+		}, wantErr: `secretRef: Secret "other-ns" not found in namespace "team"`, wantReason: "SecretNotFound"},
+		{name: "not referenceable", sub: func() *kardinalv1alpha1.Subscription {
+			s := makeImageSub("img", "team", "p", "ghcr.io/org/app")
+			s.Spec.Image.SecretRef = &kardinalv1alpha1.SubscriptionSecretRef{Name: "unlabelled"}
+			return s
+		}, wantErr: `secretRef: Secret "unlabelled" is not labelled kardinal.io/referenceable=true`, wantReason: "SecretNotReferenceable"},
 		{name: "no known key", sub: func() *kardinalv1alpha1.Subscription {
 			s := makeImageSub("img", "team", "p", "ghcr.io/org/app")
 			s.Spec.Image.SecretRef = &kardinalv1alpha1.SubscriptionSecretRef{Name: "junk"}
 			return s
-		}, wantErr: `secretRef: Secret "junk" has none of the keys .dockerconfigjson`},
+		}, wantErr: `secretRef: Secret "junk" has none of the keys .dockerconfigjson`, wantReason: "SecretHasNoCredentials"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -102,7 +112,7 @@ func TestSubscriptionReconciler_Credentials(t *testing.T) {
 				secret("git-ssh", map[string]string{"ssh-privatekey": "KEY", "known_hosts": "HOSTS"}),
 				secret("helm-login", map[string]string{"username": "u", "password": "p"}),
 				secret("junk", map[string]string{"api-key": "do-not-print"}),
-				elsewhere,
+				elsewhere, unlabelled,
 			).WithStatusSubresource(sub).Build()
 			var got *source.Credentials
 			r := &subscription.Reconciler{Client: c,
@@ -117,12 +127,17 @@ func TestSubscriptionReconciler_Credentials(t *testing.T) {
 				assert.Equal(t, "Error", st.Phase)
 				assert.Contains(t, st.Message, tt.wantErr)
 				assert.NotContains(t, st.Message, "do-not-print")
-				assert.Nil(t, got, "no watcher without credentials")
+				assert.Nil(t, got, "no watcher without credentials: nothing is sent")
+				ready := meta.FindStatusCondition(st.Conditions, "Ready")
+				require.NotNil(t, ready)
+				assert.Equal(t, metav1.ConditionFalse, ready.Status)
+				assert.Equal(t, tt.wantReason, ready.Reason)
 				return
 			}
 			require.NotNil(t, got)
 			assert.Equal(t, tt.want, *got)
 			assert.Equal(t, "Watching", st.Phase)
+			assert.True(t, meta.IsStatusConditionTrue(st.Conditions, "Ready"))
 		})
 	}
 }
@@ -185,6 +200,7 @@ func (w *revisionWatcher) Watch(_ context.Context, last string) (*source.WatchRe
 func TestSubscriptionReconciler_PathGlobRevision(t *testing.T) {
 	sub := makeGitSub("glob", "default", "p", "https://git.example.com/org/repo")
 	sub.Spec.Git.PathGlob = "apps/**"
+	sub.Status.ObservedPathGlob = "apps/**"
 	sub.Status.LastSeenRevision = "1111111111111111111111111111111111111111"
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
 	var seen string
@@ -306,7 +322,8 @@ func TestSubscriptionReconciler_PrivateRegistryEndToEnd(t *testing.T) {
 	sub := makeImageSub("private", "default", "p", srv.URL+"/org/app")
 	sub.Spec.Image.TagFilter = ""
 	sub.Spec.Image.SecretRef = &kardinalv1alpha1.SubscriptionSecretRef{Name: "pull"}
-	pull := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "pull", Namespace: "default"},
+	pull := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "pull", Namespace: "default",
+		Labels: map[string]string{kardinalv1alpha1.LabelSecretReferenceable: "true"}},
 		Type: corev1.SecretTypeDockerConfigJson,
 		Data: map[string][]byte{".dockerconfigjson": []byte(`{"auths":{"` + host + `":{"username":"ci","password":"pw"}}}`)}}
 	c := fake.NewClientBuilder().WithScheme(schemeWithSecrets()).WithObjects(sub, pull).WithStatusSubresource(sub).Build()
@@ -323,4 +340,47 @@ func TestSubscriptionReconciler_PrivateRegistryEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	st = getSubscription(t, c, sub).Status
 	assert.Equal(t, "private-1-1-0-bbbb2222", st.LastBundleCreated)
+}
+
+// TestSubscriptionReconciler_PathGlobChangeIsBaseline: adding pathGlob to a
+// Subscription, or editing it, records a new baseline and creates no Bundle,
+// although the newest matching commit differs from lastSeenDigest; the glob
+// is recorded in status.observedPathGlob, and the next change is a Bundle.
+func TestSubscriptionReconciler_PathGlobChangeIsBaseline(t *testing.T) {
+	sub := makeGitSub("glob", "default", "p", "https://git.example.com/org/repo")
+	sub.Status.LastSeenDigest = "cccccccccccccccccccccccccccccccccccccccc" // the head before the glob
+	sub.Status.LastSeenRevision = "cccccccccccccccccccccccccccccccccccccccc"
+	sub.Spec.Git.PathGlob = "apps/**"
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	var lastRevisions []string
+	digest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // an older commit that touched apps/
+	r := &subscription.Reconciler{Client: c,
+		WatcherFn: func(s *kardinalv1alpha1.Subscription, creds source.Credentials) (source.Watcher, error) {
+			w, err := subscription.NewWatcher(s, creds)
+			require.NoError(t, err)
+			lastRevisions = append(lastRevisions, w.(*source.GitWatcher).LastRevision)
+			return &revisionWatcher{digest: digest, revision: "dddddddddddddddddddddddddddddddddddddddd"}, nil
+		}}
+	_, err := r.Reconcile(context.Background(), reqFor(sub))
+	require.NoError(t, err)
+	st := getSubscription(t, c, sub).Status
+	assert.Equal(t, []string{""}, lastRevisions, "a new glob reads without the old read position")
+	assert.Equal(t, digest, st.LastSeenDigest)
+	assert.Equal(t, "apps/**", st.ObservedPathGlob)
+	assert.Empty(t, st.LastBundleCreated, "a new glob is a baseline")
+
+	digest = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	_, err = r.Reconcile(context.Background(), reqFor(sub))
+	require.NoError(t, err)
+	assert.Equal(t, "glob-eeeeeeee", getSubscription(t, c, sub).Status.LastBundleCreated)
+
+	cur := getSubscription(t, c, sub)
+	cur.Spec.Git.PathGlob = "charts/**"
+	require.NoError(t, c.Update(context.Background(), cur))
+	digest = "ffffffffffffffffffffffffffffffffffffffff"
+	_, err = r.Reconcile(context.Background(), reqFor(sub))
+	require.NoError(t, err)
+	st = getSubscription(t, c, sub).Status
+	assert.Equal(t, "glob-eeeeeeee", st.LastBundleCreated, "an edited glob is a baseline")
+	assert.Equal(t, "charts/**", st.ObservedPathGlob)
 }

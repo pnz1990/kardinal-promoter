@@ -393,11 +393,13 @@ type HelmUpdateConfig struct {
 	ChartVersionFile string `json:"chartVersionFile,omitempty"`
 
 	// ChartVersionPath is the YAML dot-path of the chart version in
-	// chartVersionFile. A numeric segment indexes a list. Defaults to
-	// ".dependencies.0.version" (the first dependency of an umbrella chart);
-	// for example ".spec.source.targetRevision" (Argo CD Application),
-	// ".spec.chart.spec.version" (Flux HelmRelease) or ".helmCharts.0.version"
-	// (kustomize).
+	// chartVersionFile. A numeric segment indexes a list, and "[field=value]"
+	// selects the list element whose field has that value. Defaults to
+	// ".dependencies[name=<chart>].version": the umbrella chart's dependency
+	// named after the Bundle's chart (an error when there is none). For
+	// example ".spec.source.targetRevision" (Argo CD Application),
+	// ".spec.chart.spec.version" (Flux HelmRelease) or
+	// ".helmCharts[name=podinfo].version" (kustomize).
 	// +optional
 	ChartVersionPath string `json:"chartVersionPath,omitempty"`
 }

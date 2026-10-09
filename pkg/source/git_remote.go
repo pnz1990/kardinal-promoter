@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -30,7 +31,6 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
@@ -38,9 +38,9 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
-	"github.com/go-git/go-git/v5/storage/memory"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+	"golang.org/x/net/proxy"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 )
@@ -72,22 +72,40 @@ func isSSHURL(raw string) bool {
 // credentials: over HTTP(S) through w's (egress-guarded) client, over SSH to
 // an address checked by the egress guard, with the host key checked against
 // Credentials.SSHKnownHosts.
-func (w *GitWatcher) uploadPackSession() (transport.UploadPackSession, error) {
+//
+// The session is closed when ctx is done, and an SSH connection also carries
+// ctx's deadline (sshDeadlineDialer), so a server that stalls, during the
+// handshake or later, cannot hold the reconcile.
+func (w *GitWatcher) uploadPackSession(ctx context.Context) (transport.UploadPackSession, func(), error) {
 	ep, err := transport.NewEndpoint(w.RepoURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse repoURL: %w", err)
+		return nil, nil, fmt.Errorf("parse repoURL: %w", err)
 	}
+	var sess transport.UploadPackSession
 	if ep.Protocol == "ssh" {
 		auth, err := w.sshAuth(ep)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		sess, err := gitssh.DefaultClient.NewUploadPackSession(ep, auth)
-		if err != nil {
-			return nil, fmt.Errorf("open ssh session: %w", err)
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			deadline = time.Now().Add(defaultSSHSessionTimeout)
 		}
-		return sess, nil
+		ep.Proxy = transport.ProxyOptions{URL: fmt.Sprintf("%s://deadline/%d", sshDeadlineScheme, deadline.UnixNano())}
+		if sess, err = gitssh.DefaultClient.NewUploadPackSession(ep, auth); err != nil {
+			return nil, nil, fmt.Errorf("open ssh session: %w", err)
+		}
+	} else {
+		if sess, err = w.httpUploadPackSession(ep); err != nil {
+			return nil, nil, err
+		}
 	}
+	stop := context.AfterFunc(ctx, func() { _ = sess.Close() })
+	return sess, func() { stop(); _ = sess.Close() }, nil
+}
+
+// httpUploadPackSession opens an HTTP(S) session with w's client.
+func (w *GitWatcher) httpUploadPackSession(ep *transport.Endpoint) (transport.UploadPackSession, error) {
 	if ep.Protocol != "http" && ep.Protocol != "https" {
 		return nil, fmt.Errorf("unsupported repoURL scheme %q (want https, http or ssh)", ep.Protocol)
 	}
@@ -98,6 +116,7 @@ func (w *GitWatcher) uploadPackSession() (transport.UploadPackSession, error) {
 	var auth transport.AuthMethod
 	if user, pass, ok := w.httpBasic(); ok {
 		auth = &githttp.BasicAuth{Username: user, Password: pass}
+		client = credentialRedirects(client, false)
 	}
 	sess, err := githttp.NewClient(client).NewUploadPackSession(ep, auth)
 	if err != nil {
@@ -105,6 +124,50 @@ func (w *GitWatcher) uploadPackSession() (transport.UploadPackSession, error) {
 	}
 	return sess, nil
 }
+
+// sshDeadlineScheme is the proxy scheme go-git's SSH transport is pointed at
+// so that kardinal dials the connection: x/net/proxy dialers are looked up by
+// scheme. It is not a proxy; the dialer connects directly.
+const sshDeadlineScheme = "kardinal-ssh-deadline"
+
+// defaultSSHSessionTimeout bounds an SSH session when ctx has no deadline.
+const defaultSSHSessionTimeout = 2 * time.Minute
+
+func init() {
+	proxy.RegisterDialerType(sshDeadlineScheme, func(u *url.URL, _ proxy.Dialer) (proxy.Dialer, error) {
+		nanos, err := strconv.ParseInt(strings.TrimPrefix(u.Path, "/"), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ssh deadline %q", u.Path)
+		}
+		return sshDeadlineDialer{deadline: time.Unix(0, nanos)}, nil
+	})
+}
+
+// sshDeadlineDialer dials with the egress guard and sets the connection's
+// deadline, which bounds the SSH handshake and every read and write after
+// it: go-git's SSH transport sets none.
+type sshDeadlineDialer struct{ deadline time.Time }
+
+func (d sshDeadlineDialer) Dial(network, addr string) (net.Conn, error) {
+	return d.DialContext(context.Background(), network, addr)
+}
+
+func (d sshDeadlineDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	nd := &net.Dialer{Timeout: sshTimeout, Control: sshDialControl}
+	conn, err := nd.DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	if err := conn.SetDeadline(d.deadline); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("set ssh deadline: %w", err)
+	}
+	return conn, nil
+}
+
+// sshDialControl is egress.Control; tests that run an SSH server on loopback
+// replace it.
+var sshDialControl = egress.Control
 
 // sshAuth checks that the SSH host is allowed by the egress guard, points ep
 // at the address it checked (so a second resolution cannot move it), and
@@ -229,11 +292,11 @@ func checkedAddr(host string) (netip.Addr, error) {
 // sshHead returns the SHA of refs/heads/<branch> from git-upload-pack's
 // reference advertisement over SSH.
 func (w *GitWatcher) sshHead(ctx context.Context, branch string) (string, error) {
-	sess, err := w.uploadPackSession()
+	sess, done, err := w.uploadPackSession(ctx)
 	if err != nil {
 		return "", err
 	}
-	defer sess.Close() //nolint:errcheck
+	defer done()
 	ar, err := sess.AdvertisedReferencesContext(ctx)
 	if err != nil {
 		return "", fmt.Errorf("read references: %w", err)
@@ -263,7 +326,8 @@ func branchHead(ar *packp.AdvRefs, branch string) (string, error) {
 //
 //   - head is LastRevision: nothing new; lastDigest is kept.
 //   - a matching commit is found: it is the Digest, Changed unless it is
-//     lastDigest or this is the first poll.
+//     lastDigest, this is the first poll, or LastRevision is empty (no read
+//     position yet: a baseline).
 //   - none is found: lastDigest is kept, or on the first poll head is the
 //     baseline.
 //
@@ -292,7 +356,10 @@ func (w *GitWatcher) watchPath(ctx context.Context, branch, head, lastDigest str
 		return keep(lastDigest), nil
 	}
 	res := keep(match)
-	res.Changed = lastDigest != "" && match != lastDigest
+	// Without a read position (a new or edited pathGlob, or a status from
+	// before pathGlob) this poll is a baseline: the newest matching commit
+	// may be older than the last Bundle.
+	res.Changed = lastDigest != "" && w.LastRevision != "" && match != lastDigest
 	return res, nil
 }
 
@@ -301,11 +368,11 @@ func (w *GitWatcher) watchPath(ctx context.Context, branch, head, lastDigest str
 // first-parent chain. It returns the first commit that changed a matching
 // path, or "" when none did before LastRevision or the limit.
 func (w *GitWatcher) newestMatching(ctx context.Context, branch, head string, limit int) (string, error) {
-	sess, err := w.uploadPackSession()
+	sess, done, err := w.uploadPackSession(ctx)
 	if err != nil {
 		return "", err
 	}
-	defer sess.Close() //nolint:errcheck
+	defer done()
 	ar, err := sess.AdvertisedReferencesContext(ctx)
 	if err != nil {
 		return "", fmt.Errorf("read references: %w", err)
@@ -343,9 +410,9 @@ func (w *GitWatcher) newestMatching(ctx context.Context, branch, head string, li
 	case req.Capabilities.Supports(capability.Sideband):
 		pack = sideband.NewDemuxer(sideband.Sideband, resp)
 	}
-	st := memory.NewStorage()
-	if err := packfile.UpdateObjectStorage(st, &limitedPack{r: pack, left: maxPackBytes}); err != nil {
-		return "", fmt.Errorf("read pack: %w", err)
+	st, err := readPack(pack)
+	if err != nil {
+		return "", err
 	}
 
 	hash := plumbing.NewHash(head)

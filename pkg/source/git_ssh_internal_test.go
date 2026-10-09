@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -134,7 +135,9 @@ func TestGitWatcher_SSH(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	orig := sshAddrCheck
 	sshAddrCheck = netip.ParseAddr
-	t.Cleanup(func() { sshAddrCheck = orig })
+	origControl := sshDialControl
+	sshDialControl = nil
+	t.Cleanup(func() { sshAddrCheck, sshDialControl = orig, origControl })
 
 	root := t.TempDir()
 	work := filepath.Join(root, "work")
@@ -220,4 +223,55 @@ func TestLimitedPack(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "0123", string(b))
 	assert.Contains(t, err.Error(), "lower discoveryLimit")
+}
+
+// TestGitWatcher_SSHStallingServer: a server that accepts the connection and
+// then sends nothing (no SSH banner) cannot hold Watch past its context's
+// deadline: the connection carries the deadline.
+func TestGitWatcher_SSHStallingServer(t *testing.T) {
+	orig, origControl := sshAddrCheck, sshDialControl
+	sshAddrCheck, sshDialControl = netip.ParseAddr, nil
+	t.Cleanup(func() { sshAddrCheck, sshDialControl = orig, origControl })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	var conns []net.Conn
+	var mu sync.Mutex
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c) // held open, never answered
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	require.NoError(t, err)
+	signer, err := ssh.NewSignerFromKey(priv)
+	require.NoError(t, err)
+	host, port, _ := net.SplitHostPort(ln.Addr().String())
+	known := knownhosts.Line([]string{net.JoinHostPort(host, port)}, signer.PublicKey()) + "\n"
+
+	for _, glob := range []string{"", "config/**"} {
+		w := NewGitWatcher("ssh://git@"+ln.Addr().String()+"/repo.git", "main", glob)
+		w.Credentials = Credentials{SSHPrivateKey: pem.EncodeToMemory(block), SSHKnownHosts: []byte(known)}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		start := time.Now()
+		_, err = w.Watch(ctx, "")
+		cancel()
+		require.Error(t, err)
+		assert.Less(t, time.Since(start), 10*time.Second, "Watch returns at the deadline: %v", err)
+	}
 }

@@ -492,7 +492,8 @@ func TestSub_WebhookRegistries(t *testing.T) {
 // wrong URL token, an unsigned or wrongly signed GitHub delivery, a
 // Subscription without spec.webhook and one that does not exist all get the
 // same 401 and change nothing; a GitHub ping and a Harbor delete are answered
-// without a refresh; duplicate deliveries of one push create one Bundle.
+// without a refresh; a flood of deliveries of one push is rate limited (429)
+// past the per-Subscription burst and creates one Bundle.
 //
 // Covers SUB-WEBHOOK-02.
 func TestSub_WebhookAuth(t *testing.T) {
@@ -536,17 +537,25 @@ func TestSub_WebhookAuth(t *testing.T) {
 		assert.Empty(t, getSub(t, e, a.ns, name).Annotations[v1alpha1.RefreshAnnotation], "%s: nothing was refreshed", name)
 	}
 
+	// A flood at one Subscription: the receiver answers 429 past its
+	// per-Subscription burst (10), the deliveries it accepts coalesce into
+	// one refresh.
 	d14 := reg.Copy(t, "6.14.0", repo, "main")
-	for range 5 {
-		res := postSubWebhook(t, a.ns, "hooked", "dockerhub", token, nil, push)
-		require.Equal(t, http.StatusAccepted, res.Status)
+	codes := map[int]int{}
+	for range 25 {
+		codes[postSubWebhook(t, a.ns, "hooked", "dockerhub", token, nil, push).Status]++
 	}
+	assert.Positive(t, codes[http.StatusAccepted], "%v", codes)
+	assert.Positive(t, codes[http.StatusTooManyRequests], "a flood is rate limited: %v", codes)
+	assert.Equal(t, 25, codes[http.StatusAccepted]+codes[http.StatusTooManyRequests], "%v", codes)
 	want := "hooked-main-" + digestHex(d14)[:8]
 	waitSub(t, e, a.ns, "hooked", "a Bundle from the webhook", func(st v1alpha1.SubscriptionStatus) bool {
 		return st.LastBundleCreated == want
 	})
-	res = postSubWebhook(t, a.ns, "hooked", "dockerhub", token, nil, push) // redelivery after the poll
-	require.Equal(t, http.StatusAccepted, res.Status)
+	framework.Eventually(t, 30*time.Second, "a redelivery after the poll is accepted", func(context.Context) (bool, string) {
+		res := postSubWebhook(t, a.ns, "hooked", "dockerhub", token, nil, push)
+		return res.Status == http.StatusAccepted, fmt.Sprint(res.Status)
+	})
 	framework.Consistently(t, 15*time.Second, "one Bundle for the push", func(ctx context.Context) (bool, string) {
 		n := len(subBundles(t, e, a.ns, "hooked"))
 		return n == 1, fmt.Sprintf("%d Bundles", n)

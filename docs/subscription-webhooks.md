@@ -35,7 +35,7 @@ poll, and the payload's tag or digest is never trusted.
 | `401 {"status":"unauthorized"}` | Any authentication failure, a Subscription that does not exist, or one without `spec.webhook`: the answer does not reveal which Subscriptions exist |
 | `404` | The path is not `/webhook/subscriptions/<namespace>/<name>/<provider>[/<token>]` |
 | `413` | The payload is over 1 MB |
-| `429` | More than 20 requests a second (bursts of 40) reach the receiver |
+| `429` | More than 10 requests a second (bursts of 20) from one source address, or 5 a second (bursts of 10) for one Subscription. Behind an Ingress every sender has the Ingress's address, so the per-Subscription limit is what separates them |
 
 The reconciler polls at most once every 10 seconds per Subscription, however many
 deliveries arrive.
@@ -43,10 +43,12 @@ deliveries arrive.
 ## Enabling it on a Subscription
 
 Each Subscription opts in with `spec.webhook.secretRef`, a Secret in its namespace whose
-key `token` (at least 16 characters) authenticates the deliveries:
+key `token` (at least 16 characters) authenticates the deliveries. Like every Secret a
+Subscription reads, it must be labelled `kardinal.io/referenceable: "true"`:
 
 ```bash
 kubectl create secret generic my-app-webhook -n default --from-literal=token="$(openssl rand -hex 24)"
+kubectl label secret my-app-webhook -n default kardinal.io/referenceable=true
 ```
 
 ```yaml
@@ -101,6 +103,12 @@ provider's push event: Docker Hub `push_data`, Quay `updated_tags`, Harbor `type
 
 ## Troubleshooting
 
+- A refusal for a Subscription that does not exist, or has no `spec.webhook`, reads a
+  placeholder Secret and checks the token against a random key, so its 401 takes about as
+  long as a wrong token's. A sender that can measure latency precisely may still tell the
+  two apart (the Secret read of an existing and a missing Secret differ slightly); the
+  Subscription names are not secret in most clusters, but do not put anything sensitive in
+  them.
 - Every refusal is logged by the controller with the reason (`subscription webhook
   refused`), never with the token: a missing `spec.webhook`, a missing Secret, a token
   under 16 characters, or no valid token or signature.

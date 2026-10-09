@@ -38,6 +38,7 @@ package subscription
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -45,10 +46,12 @@ import (
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -72,6 +75,8 @@ const (
 	// refresh request (kardinal.io/refresh) asks for: a webhook storm costs at
 	// most one source poll per Subscription every 10 seconds.
 	minRefreshSpacing = 10 * time.Second
+	// maxConcurrentPolls is how many Subscriptions poll at once.
+	maxConcurrentPolls = 4
 )
 
 // Reconciler watches artifact sources and creates Bundle CRDs when new artifacts are detected.
@@ -126,7 +131,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// create a Subscription start promotions of an image they choose in another
 	// team's Pipeline.
 	if sub.Spec.Namespace != "" && sub.Spec.Namespace != sub.Namespace {
-		return r.writeError(ctx, &sub, now, fmt.Sprintf(
+		return r.writeErrorReason(ctx, &sub, now, reasonInvalidSpec, fmt.Sprintf(
 			"spec.namespace %q is not allowed: a Subscription creates Bundles only in its own namespace %q; "+
 				"remove spec.namespace or create the Subscription in %q",
 			sub.Spec.Namespace, sub.Namespace, sub.Spec.Namespace))
@@ -141,7 +146,23 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	creds, err := resolveCredentials(ctx, r.Client, &sub)
 	if err != nil {
-		return r.writeError(ctx, &sub, now, err.Error())
+		reason := reasonSecretUnreadable
+		var ce *credentialError
+		if errors.As(err, &ce) {
+			reason = ce.reason
+		}
+		return r.writeErrorReason(ctx, &sub, now, reason, err.Error())
+	}
+
+	// A new or edited pathGlob starts from a new baseline: the walk from an
+	// earlier read position, or for an earlier glob, would make an older
+	// commit look new.
+	globChanged := sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit && sub.Spec.Git != nil &&
+		sub.Spec.Git.PathGlob != sub.Status.ObservedPathGlob
+	forWatcher := &sub
+	if globChanged {
+		forWatcher = sub.DeepCopy()
+		forWatcher.Status.LastSeenRevision = ""
 	}
 
 	// Create the watcher for this subscription type.
@@ -149,15 +170,25 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if watcherFn == nil {
 		watcherFn = NewWatcher
 	}
-	watcher, err := watcherFn(&sub, creds)
+	watcher, err := watcherFn(forWatcher, creds)
 	if err != nil {
 		return r.writeError(ctx, &sub, now, fmt.Sprintf("create watcher: %s", err))
 	}
 
-	// Poll the artifact source.
-	result, watchErr := watcher.Watch(ctx, sub.Status.LastSeenDigest)
+	// Poll the artifact source, within a bound for the source type: a server
+	// that stalls must not hold a reconcile worker.
+	watchCtx, cancel := context.WithTimeout(ctx, watchTimeout(&sub))
+	result, watchErr := watcher.Watch(watchCtx, sub.Status.LastSeenDigest)
+	cancel()
 	if watchErr != nil {
 		return r.writeError(ctx, &sub, now, watchErr.Error())
+	}
+	if globChanged {
+		result.Changed = false
+	}
+	observedGlob := ""
+	if sub.Spec.Git != nil {
+		observedGlob = sub.Spec.Git.PathGlob
 	}
 
 	interval := r.parseInterval(&sub)
@@ -175,8 +206,10 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				s.LastSeenTag = result.Tag
 			}
 			s.LastSeenRevision = result.Revision
+			s.ObservedPathGlob = observedGlob
 			s.LastRefreshRequest = sub.Annotations[kardinalv1alpha1.RefreshAnnotation]
 			s.Message = ""
+			setReady(s, sub.Generation, now)
 		})
 	}
 
@@ -195,8 +228,10 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		s.LastSeenTag = result.Tag
 		s.LastSeenRevision = result.Revision
 		s.LastBundleCreated = bundleName
+		s.ObservedPathGlob = observedGlob
 		s.LastRefreshRequest = sub.Annotations[kardinalv1alpha1.RefreshAnnotation]
 		s.Message = ""
+		setReady(s, sub.Generation, now)
 	})
 }
 
@@ -409,14 +444,53 @@ func dnsSlug(s string) string {
 	return strings.TrimRight(b.String(), "-")
 }
 
-// writeError patches status to phase=Error and returns a requeue result.
+// Reasons of the Ready condition.
+const (
+	reasonWatching         = "Watching"
+	reasonWatchFailed      = "WatchFailed"
+	reasonInvalidSpec      = "InvalidSpec"
+	reasonSecretNotFound   = "SecretNotFound"
+	reasonSecretUnreadable = "SecretUnreadable"
+	reasonSecretNoKeys     = "SecretHasNoCredentials"
+)
+
+// setReady sets the Ready condition True.
+func setReady(s *kardinalv1alpha1.SubscriptionStatus, generation int64, now time.Time) {
+	meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue,
+		Reason: reasonWatching, Message: "polling the source", ObservedGeneration: generation,
+		LastTransitionTime: metav1.NewTime(now)})
+}
+
+// watchTimeout bounds one poll of the source: newest-build ordering reads
+// up to discoveryLimit images, a pathGlob poll fetches history.
+func watchTimeout(sub *kardinalv1alpha1.Subscription) time.Duration {
+	switch sub.Spec.Type {
+	case kardinalv1alpha1.SubscriptionTypeImage:
+		return 3 * time.Minute
+	case kardinalv1alpha1.SubscriptionTypeGit:
+		return 2 * time.Minute
+	default:
+		return time.Minute
+	}
+}
+
+// writeError patches status to phase=Error (Ready False, WatchFailed) and
+// returns a requeue result.
 func (r *Reconciler) writeError(ctx context.Context, sub *kardinalv1alpha1.Subscription, now time.Time, msg string) (ctrl.Result, error) {
-	zerolog.Ctx(ctx).Warn().Str("subscription", sub.Name).Str("error", msg).Msg("subscription watch error")
+	return r.writeErrorReason(ctx, sub, now, reasonWatchFailed, msg)
+}
+
+// writeErrorReason is writeError with the Ready condition's reason.
+func (r *Reconciler) writeErrorReason(ctx context.Context, sub *kardinalv1alpha1.Subscription, now time.Time,
+	reason, msg string) (ctrl.Result, error) {
+	zerolog.Ctx(ctx).Warn().Str("subscription", sub.Name).Str("reason", reason).Str("error", msg).Msg("subscription watch error")
 	patchErr := r.patchStatus(ctx, sub, func(s *kardinalv1alpha1.SubscriptionStatus) {
 		s.Phase = "Error"
 		s.LastCheckedAt = now.UTC().Format(time.RFC3339)
 		s.LastRefreshRequest = sub.Annotations[kardinalv1alpha1.RefreshAnnotation]
 		s.Message = msg
+		meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse,
+			Reason: reason, Message: msg, ObservedGeneration: sub.Generation, LastTransitionTime: metav1.NewTime(now)})
 	})
 	return ctrl.Result{RequeueAfter: errorRequeueInterval}, patchErr
 }
@@ -564,5 +638,9 @@ func digestLabelChars(digest string) string {
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Subscription{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
+		// Several workers, so one slow source (each poll is bounded by
+		// watchTimeout) does not delay every other Subscription. The
+		// workqueue never hands one Subscription to two workers at once.
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentPolls}).
 		Complete(r)
 }

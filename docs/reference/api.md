@@ -477,6 +477,13 @@ Subscription watches an OCI registry, a Git repository or a Helm chart repositor
 | `spec.webhook.secretRef` | object | yes | SecretRef names a Secret in the Subscription's namespace whose key "token" (at least 16 characters) authenticates webhook deliveries: as the last path segment of the receiver URL (Docker Hub, Quay, Harbor, Artifactory, generic), as the Authorization header (Harbor's auth header), the X-JFrog-Event-Auth header (Artifactory), or as the HMAC-SHA256 key of the X-Hub-Signature-256 (GitHub) or X-Kardinal-Signature-256 (generic) header. |
 | `spec.webhook.secretRef.name` | string | yes | Name is the Secret name. |
 | `status` | object |  | SubscriptionStatus defines the observed state of a Subscription. |
+| `status.conditions` | []object |  | Conditions: Ready is True while the Subscription polls its source (phase Watching) and False with the reason otherwise, for example SecretNotReferenceable, SecretNotFound or WatchFailed. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.lastBundleCreated` | string |  | LastBundleCreated is the name of the last Bundle created by this Subscription. |
 | `status.lastCheckedAt` | string |  | LastCheckedAt is the RFC3339 timestamp of the last poll. |
 | `status.lastRefreshRequest` | string |  | LastRefreshRequest is the kardinal.io/refresh annotation value the last poll answered. |
@@ -484,4 +491,5 @@ Subscription watches an OCI registry, a Git repository or a Helm chart repositor
 | `status.lastSeenRevision` | string |  | LastSeenRevision is the branch head the last pathGlob poll read up to. The next poll only reads commits after it. Empty without pathGlob. |
 | `status.lastSeenTag` | string |  | LastSeenTag is the image tag, short commit SHA or chart version of lastSeenDigest. |
 | `status.message` | string |  | Message provides a human-readable reason for the current phase (e.g. error details). |
+| `status.observedPathGlob` | string |  | ObservedPathGlob is the spec.git.pathGlob the last successful poll used. When the glob changes, the next poll records a new baseline and creates no Bundle. |
 | `status.phase` | string |  | Phase is the current subscription state. One of: `Watching`, `Idle`, `Error`. |

@@ -20,7 +20,8 @@ posts a [webhook](subscription-webhooks.md).
 | `helm` | Helm chart repository: HTTP(S) `index.yaml` or OCI | A new chart version that passes the [tag filters](#tag-selection) | `chart` |
 
 Private sources need a Secret in the Subscription's namespace (see
-[Credentials](#credentials)). Every request has a 30-second timeout.
+[Credentials](#credentials)). Every request has a 30-second timeout, and one poll at most 3 minutes (image), 2 minutes
+(Git, SSH connections included) or 1 minute (Helm). Four Subscriptions poll at once.
 
 The controller refuses to poll a registry, token realm, chart repository or Git server
 on a loopback (`localhost` is the controller's own pod), link-local, cloud metadata,
@@ -137,9 +138,23 @@ time comes from its `linux/amd64` image (or the first platform when there is non
 
 `spec.image.secretRef`, `spec.git.secretRef` and `spec.helm.secretRef` name a Secret
 in the Subscription's own namespace (a Subscription cannot read a Secret in another
-namespace). The controller reads it on every poll, so a rotated credential is used at the
-next poll. A Secret that is missing, or has none of the keys below, puts the Subscription
-in phase `Error` naming the Secret; values never appear in a message or a log.
+namespace). The Secret must carry the label `kardinal.io/referenceable: "true"`, so a user
+who can create Subscriptions can use only the Secrets someone labelled for it, not every
+Secret of the namespace:
+
+```bash
+kubectl label secret pull kardinal.io/referenceable=true
+```
+
+The controller reads the Secret on every poll, so a rotated credential is used at the next
+poll. A Secret that is missing, not labelled, or has none of the keys below puts the
+Subscription in phase `Error` with the `Ready` condition `False` (reason `SecretNotFound`,
+`SecretNotReferenceable` or `SecretHasNoCredentials`) and nothing is sent; values never
+appear in a message or a log.
+
+With credentials attached, a redirect from `https` to `http` is refused, and so is a
+redirect to another host, except a registry blob download (registries redirect those to
+object storage), which is followed without the `Authorization` header.
 
 | Source | Secret keys |
 |---|---|
@@ -256,8 +271,11 @@ newest matching commit, so later commits outside the glob do not change it. The 
 records the newest matching commit within reach, or the head when there is none.
 
 The read is a shallow fetch without file contents when the server supports partial clone
-(GitHub, GitLab, Gitea, Forgejo do), into memory, at most 64 MiB; it happens only when the
-head moved. A matching commit more than `discoveryLimit` commits behind the head when it is
+(GitHub, GitLab, Gitea, Forgejo do), into memory: at most 64 MiB on the wire, at most 32 MiB
+for one object and 128 MiB for all of them inflated (a pack that inflates past these, such
+as a compression bomb, is an error before anything is kept); it happens only when the
+head moved. Adding or editing `pathGlob` records a new baseline (the newest matching
+commit, in `status.observedPathGlob` and `status.lastSeenDigest`) and creates no Bundle. A matching commit more than `discoveryLimit` commits behind the head when it is
 first seen is not found: raise `discoveryLimit` or poll more often for busy branches.
 
 ## Example: Helm Chart Subscription
@@ -315,10 +333,10 @@ strategy fails the Bundle when its Graph is built. The `helm-set-image` step wri
 
 | Where the chart version lives | `chartVersionFile` | `chartVersionPath` |
 |---|---|---|
-| Umbrella chart, first dependency (the default) | `Chart.yaml` | `.dependencies.0.version` |
+| Umbrella chart, the dependency named after the chart (the default) | `Chart.yaml` | `.dependencies[name=<chart>].version` |
 | Argo CD Application with a Helm source | `application.yaml` | `.spec.source.targetRevision` |
 | Flux HelmRelease | `helmrelease.yaml` | `.spec.chart.spec.version` |
-| kustomize `helmCharts` | `kustomization.yaml` | `.helmCharts.0.version` |
+| kustomize `helmCharts` | `kustomization.yaml` | `.helmCharts[name=podinfo].version` |
 
 ```yaml
   environments:
@@ -330,8 +348,10 @@ strategy fails the Bundle when its Graph is built. The `helm-set-image` step wri
           chartVersionPath: .spec.chart.spec.version
 ```
 
-A numeric path segment indexes an existing list element; missing mapping keys are created,
-a missing list element or a path through a scalar fails the step. Comments and key order
+A numeric path segment indexes an existing list element and `[field=value]` selects the
+element whose field has that value (an umbrella chart without a dependency of the chart's
+name fails the step: `dependencies has no element with name "podinfo"`); missing mapping
+keys are created, a missing list element or a path through a scalar fails the step. Comments and key order
 are kept. The chart repository is not rewritten: the file keeps its own repository
 reference. Rolling back a chart Bundle restores the previous chart version Verified in the
 environment. `kardinal create bundle` does not create chart Bundles; the Bundle API does
@@ -365,6 +385,8 @@ Complete manifests for the image and git sources are in
 | `status.lastSeenTag` | The tag, short SHA or chart version of `lastSeenDigest` |
 | `status.lastSeenRevision` | With `pathGlob`: the branch head the last poll read up to |
 | `status.lastRefreshRequest` | The `kardinal.io/refresh` value the last poll answered |
+| `status.observedPathGlob` | The `pathGlob` of the last successful poll |
+| `status.conditions[type=Ready]` | `True` while polling; `False` with the reason (`SecretNotReferenceable`, `SecretNotFound`, `SecretHasNoCredentials`, `WatchFailed`, `InvalidSpec`) |
 | `status.message` | Error details when phase=Error |
 
 ## Deduplication

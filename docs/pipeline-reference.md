@@ -31,7 +31,7 @@ spec:
           imagePathTemplate: <string>   # Dot path of the image tag (default: ".image.tag")
           valuesFile: <string>          # Relative to path (default: "values.yaml")
           chartVersionFile: <string>    # chart Bundles: file with the chart version (default: "Chart.yaml")
-          chartVersionPath: <string>    # chart Bundles: its dot path (default: ".dependencies.0.version")
+          chartVersionPath: <string>    # chart Bundles: its dot path (default: ".dependencies[name=<chart>].version")
         argocd:                         # When strategy: argocd
           application: <string>         # Argo CD Application to patch (required)
           namespace: <string>           # Default: "argocd"
@@ -120,7 +120,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `update.helm.imagePathTemplate` | No | `.image.tag` | `helm` only. Dot path of the image tag in the values file. |
 | `update.helm.valuesFile` | No | `values.yaml` | `helm` only. Values file to patch, relative to the environment `path`. |
 | `update.helm.chartVersionFile` | No | `Chart.yaml` | `helm` only, for `chart` Bundles (from a [Helm Subscription](subscription.md#promoting-a-chart-version)). File the chart version is written to, relative to the environment `path`. A chart Bundle fails at build in an environment whose strategy is not `helm`. |
-| `update.helm.chartVersionPath` | No | `.dependencies.0.version` | `helm` only. Dot path of the chart version in `chartVersionFile`; a numeric segment indexes a list (`.helmCharts.0.version`, `.spec.chart.spec.version`, `.spec.source.targetRevision`). |
+| `update.helm.chartVersionPath` | No | `.dependencies[name=<chart>].version` | `helm` only. Dot path of the chart version in `chartVersionFile`; a numeric segment indexes a list and `[field=value]` selects a list element (`.helmCharts[name=podinfo].version`, `.spec.chart.spec.version`, `.spec.source.targetRevision`). The default is the umbrella chart's dependency named after the Bundle's chart; the step fails when there is none. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
 | `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. |

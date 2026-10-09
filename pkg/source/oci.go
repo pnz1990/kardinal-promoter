@@ -156,7 +156,11 @@ func (w *OCIWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 		return nil, fmt.Errorf("OCIWatcher: %w", err)
 	}
 
-	s := &registrySession{client: w.client(), base: base, name: name, auth: auth}
+	client := w.client()
+	if !auth.isZero() {
+		client = credentialRedirects(client, true)
+	}
+	s := &registrySession{client: client, base: base, name: name, auth: auth}
 	tags, err := s.listTags(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("OCIWatcher: list tags for %q: %w", w.Registry, err)

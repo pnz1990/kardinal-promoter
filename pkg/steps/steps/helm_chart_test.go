@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,9 +32,15 @@ func TestHelmSetImage_ChartVersion(t *testing.T) {
 		want          string
 		wantErr       string
 	}{
-		{name: "umbrella Chart.yaml default", file: "Chart.yaml",
-			content: "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n  - name: podinfo # the app\n    version: 6.14.0\n    repository: https://charts.example.com\n",
-			want:    "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n  - name: podinfo # the app\n    version: 6.15.0\n    repository: https://charts.example.com\n"},
+		{name: "umbrella Chart.yaml default: the dependency named after the chart", file: "Chart.yaml",
+			content: "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n  - name: redis\n    version: 1.0.0\n  - name: podinfo # the app\n    version: 6.14.0\n    repository: https://charts.example.com\n",
+			want:    "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n  - name: redis\n    version: 1.0.0\n  - name: podinfo # the app\n    version: 6.15.0\n    repository: https://charts.example.com\n"},
+		{name: "umbrella without the dependency", file: "Chart.yaml",
+			content: "dependencies:\n  - name: redis\n    version: 1.0.0\n", wantErr: `dependencies has no element with name "podinfo"`},
+		{name: "explicit index", file: "Chart.yaml",
+			helm:    &v1alpha1.HelmUpdateConfig{ChartVersionPath: ".dependencies.0.version"},
+			content: "dependencies:\n  - name: other\n    version: 1.0.0\n",
+			want:    "dependencies:\n  - name: other\n    version: 6.15.0\n"},
 		{name: "Argo CD Application", file: "app.yaml",
 			helm:    &v1alpha1.HelmUpdateConfig{ChartVersionFile: "app.yaml", ChartVersionPath: ".spec.source.targetRevision"},
 			content: "kind: Application\nspec:\n  source:\n    chart: podinfo\n    targetRevision: 6.14.0\n",
@@ -43,17 +50,19 @@ func TestHelmSetImage_ChartVersion(t *testing.T) {
 			content: "kind: HelmRelease\nspec:\n  chart:\n    spec:\n      chart: podinfo\n",
 			want:    "kind: HelmRelease\nspec:\n  chart:\n    spec:\n      chart: podinfo\n      version: 6.15.0\n"},
 		{name: "kustomize helmCharts", file: "kustomization.yaml",
-			helm:    &v1alpha1.HelmUpdateConfig{ChartVersionFile: "kustomization.yaml", ChartVersionPath: ".helmCharts.1.version"},
+			helm:    &v1alpha1.HelmUpdateConfig{ChartVersionFile: "kustomization.yaml", ChartVersionPath: ".helmCharts[name=podinfo].version"},
 			content: "helmCharts:\n- name: redis\n  version: 1.0.0\n- name: podinfo\n  version: 6.14.0\n",
 			want:    "helmCharts:\n- name: redis\n  version: 1.0.0\n- name: podinfo\n  version: 6.15.0\n"},
 		{name: "list element missing", file: "Chart.yaml", content: "dependencies: []\n",
-			wantErr: "dependencies.0: the list has 0 elements"},
+			helm: &v1alpha1.HelmUpdateConfig{ChartVersionPath: ".dependencies.0.version"}, wantErr: "dependencies.0: the list has 0 elements"},
 		{name: "list missing", file: "Chart.yaml", content: "name: app\n",
-			wantErr: "dependencies.0 does not exist"},
+			wantErr: "dependencies does not exist"},
 		{name: "non-numeric list index", file: "Chart.yaml", content: "dependencies:\n- version: 1\n",
-			helm: &v1alpha1.HelmUpdateConfig{ChartVersionPath: ".dependencies.first.version"}, wantErr: "dependencies is a list; index it with a number"},
+			helm: &v1alpha1.HelmUpdateConfig{ChartVersionPath: ".dependencies.first.version"}, wantErr: "dependencies is a list; index it with a number or [field=value]"},
 		{name: "path into a scalar", file: "Chart.yaml", content: "dependencies: none\n",
-			wantErr: "dependencies is not a mapping or list"},
+			wantErr: "dependencies is not a list"},
+		{name: "bad selector", file: "Chart.yaml", content: "dependencies: []\n",
+			helm: &v1alpha1.HelmUpdateConfig{ChartVersionPath: ".dependencies[name].version"}, wantErr: "invalid chartVersionPath"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -74,7 +83,9 @@ func TestHelmSetImage_ChartVersion(t *testing.T) {
 					require.Error(t, err)
 					// Retried, like a values path that runs into a scalar: a
 					// commit to the file can fix it.
-					assert.False(t, errors.Is(err, parentsteps.ErrPermanent), "%v", err)
+					// An unparsable path is permanent: only a Pipeline edit fixes it.
+					assert.Equal(t, strings.Contains(tt.wantErr, "invalid chartVersionPath"),
+						errors.Is(err, parentsteps.ErrPermanent), "%v", err)
 					assert.Contains(t, res.Message, tt.wantErr)
 					return
 				}

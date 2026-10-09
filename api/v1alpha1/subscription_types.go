@@ -73,7 +73,8 @@ type SubscriptionSpec struct {
 }
 
 // SubscriptionSecretRef names a Secret in the Subscription's own namespace.
-// A Subscription cannot read a Secret in another namespace.
+// A Subscription cannot read a Secret in another namespace, and reads only a
+// Secret labelled kardinal.io/referenceable: "true" (LabelSecretReferenceable).
 type SubscriptionSecretRef struct {
 	// Name is the Secret name.
 	// +kubebuilder:validation:Required
@@ -315,6 +316,20 @@ type SubscriptionStatus struct {
 	// poll answered.
 	// +optional
 	LastRefreshRequest string `json:"lastRefreshRequest,omitempty"`
+
+	// ObservedPathGlob is the spec.git.pathGlob the last successful poll
+	// used. When the glob changes, the next poll records a new baseline and
+	// creates no Bundle.
+	// +optional
+	ObservedPathGlob string `json:"observedPathGlob,omitempty"`
+
+	// Conditions: Ready is True while the Subscription polls its source
+	// (phase Watching) and False with the reason otherwise, for example
+	// SecretNotReferenceable, SecretNotFound or WatchFailed.
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
 	// Message provides a human-readable reason for the current phase (e.g. error details).
 	// +optional

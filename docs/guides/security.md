@@ -452,8 +452,10 @@ can use only the Secrets of that namespace. The controller reads them with `get`
 poll or delivery; it never lists Secrets. The webhook receiver
 (`/webhook/subscriptions/...`, see [Subscription webhooks](../subscription-webhooks.md))
 answers every authentication failure, and a Subscription that does not exist, with the
-same 401, limits itself to 20 requests a second, and writes only the `kardinal.io/refresh`
-annotation.
+same 401, limits requests per source address and per Subscription, and writes only the
+`kardinal.io/refresh` annotation. Any Secret a Subscription reads (credentials and the
+webhook token) must be labelled `kardinal.io/referenceable: "true"`; an unlabelled Secret
+is not read and nothing is sent.
 Through a proxy, the controller connects to the proxy, so before it sends a request there it
 checks the target itself: an IP address against the list above, and a host name by resolving
 it and checking every address it resolves to. This applies to every request, including

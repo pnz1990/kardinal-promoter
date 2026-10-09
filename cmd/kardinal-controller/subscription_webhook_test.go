@@ -49,7 +49,8 @@ func hookedSub(name string) *v1alpha1.Subscription {
 }
 
 func hookSecret(token string) *corev1.Secret {
-	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "hook", Namespace: "team"},
+	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "hook", Namespace: "team",
+		Labels: map[string]string{v1alpha1.LabelSecretReferenceable: "true"}},
 		Data: map[string][]byte{"token": []byte(token)}}
 }
 
@@ -161,14 +162,52 @@ func TestSubscriptionWebhook_Refusals(t *testing.T) {
 	assert.Equal(t, 404, postHook(t, h, "/webhook/subscriptions/team/app", "{}", nil).Code)
 	assert.Equal(t, 413, postHook(t, h, "/webhook/subscriptions/team/app/generic/x", strings.Repeat("a", maxWebhookBody+1), nil).Code)
 
-	s.limiter = rate.NewLimiter(rate.Every(time.Hour), 2)
-	codes := []int{}
-	for range 3 {
-		codes = append(codes, postHook(t, h, "/webhook/subscriptions/team/app/generic/x", "{}", nil).Code)
-	}
-	assert.Equal(t, []int{401, 401, 429}, codes)
 	assert.Empty(t, refreshOf(t, c, "app"))
 	assert.Empty(t, refreshOf(t, c, "nohook"))
+}
+
+// TestSubscriptionWebhook_RateLimits: the limits are per source IP and per
+// Subscription, so a flood from one sender, or at one Subscription, does not
+// take the budget of the others.
+func TestSubscriptionWebhook_RateLimits(t *testing.T) {
+	other := hookedSub("other")
+	c := webhookTestClient(t, hookedSub("app"), other, hookedSub("third"), hookSecret(testWebhookToken))
+	s := newSubscriptionWebhook(c, zerolog.Nop())
+	s.perIP = newKeyedLimiter(rate.Every(time.Hour), 3, 100)
+	s.perSub = newKeyedLimiter(rate.Every(time.Hour), 2, 100)
+	h := s.Handler()
+	post := func(ip, sub string) int {
+		req := httptest.NewRequest(http.MethodPost, "/webhook/subscriptions/team/"+sub+"/generic/x", strings.NewReader("{}"))
+		req.RemoteAddr = ip + ":40000"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	assert.Equal(t, []int{401, 401, 429}, []int{post("10.0.0.1", "app"), post("10.0.0.1", "app"), post("10.0.0.1", "app")},
+		"the Subscription's limit")
+	assert.Equal(t, 401, post("10.0.0.1", "other"), "another Subscription has its own budget")
+	assert.Equal(t, 429, post("10.0.0.1", "other"), "the source IP's limit")
+	assert.Equal(t, 429, post("10.0.0.1", "third"), "the source IP's limit, at any Subscription")
+	assert.Equal(t, 401, post("10.0.0.2", "third"), "another source IP has its own budget")
+
+	full := newKeyedLimiter(rate.Inf, 1, 2)
+	now := time.Now()
+	assert.True(t, full.allow("a", now))
+	assert.True(t, full.allow("b", now))
+	assert.False(t, full.allow("c", now), "a full table refuses new keys")
+	assert.True(t, full.allow("c", now.Add(11*time.Minute)), "idle keys are dropped")
+}
+
+// TestSubscriptionWebhook_SecretMustBeReferenceable: a webhook Secret
+// without kardinal.io/referenceable: "true" authenticates nothing.
+func TestSubscriptionWebhook_SecretMustBeReferenceable(t *testing.T) {
+	secret := hookSecret(testWebhookToken)
+	secret.Labels = nil
+	c := webhookTestClient(t, hookedSub("app"), secret)
+	rec := postHook(t, newSubscriptionWebhook(c, zerolog.Nop()).Handler(),
+		"/webhook/subscriptions/team/app/generic/"+testWebhookToken, "{}", nil)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Empty(t, refreshOf(t, c, "app"))
 }
 
 // TestSubscriptionWebhook_CoalescesPendingRefresh: while a refresh request is

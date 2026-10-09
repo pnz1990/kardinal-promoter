@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -25,8 +26,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 )
 
 const (
@@ -44,11 +48,19 @@ const (
 	subscriptionWebhookPrefix = "/webhook/subscriptions/"
 	// minWebhookTokenLen is the shortest webhook token the receiver accepts.
 	minWebhookTokenLen = 16
-	// subscriptionWebhookRate and subscriptionWebhookBurst bound the requests
-	// the receiver handles per second, across all Subscriptions: each costs a
-	// Secret read from the API server before it is authenticated.
-	subscriptionWebhookRate  = 20
-	subscriptionWebhookBurst = 40
+	// The receiver limits requests per source IP and per Subscription path,
+	// before authentication: each request costs a Secret read from the API
+	// server. A sender over its limit gets 429 and does not use up the
+	// budget of other senders or other Subscriptions.
+	webhookPerIPRate, webhookPerIPBurst   = 10, 20
+	webhookPerSubRate, webhookPerSubBurst = 5, 10
+	// webhookLimiterEntries bounds each limiter table; idle entries are
+	// dropped first.
+	webhookLimiterEntries = 10000
+	// webhookTimingPadSecret is the Secret name the receiver reads when the
+	// Subscription does not exist or has no webhook, so that answer costs
+	// the same API round trip as a real check.
+	webhookTimingPadSecret = "kardinal-webhook-timing-pad"
 )
 
 // webhookProviders are the senders the receiver understands.
@@ -75,20 +87,22 @@ var webhookProviders = map[string]bool{
 // written again, so redelivered and duplicate events cost nothing, and the
 // reconciler polls at most once every 10 seconds per Subscription.
 type subscriptionWebhook struct {
-	client  client.Client
-	log     zerolog.Logger
-	limiter *rate.Limiter
-	now     func() time.Time
+	client client.Client
+	log    zerolog.Logger
+	perIP  *keyedLimiter
+	perSub *keyedLimiter
+	now    func() time.Time
 
 	refreshes atomic.Int64
 }
 
 func newSubscriptionWebhook(c client.Client, log zerolog.Logger) *subscriptionWebhook {
 	return &subscriptionWebhook{
-		client:  c,
-		log:     log,
-		limiter: rate.NewLimiter(subscriptionWebhookRate, subscriptionWebhookBurst),
-		now:     time.Now,
+		client: c,
+		log:    log,
+		perIP:  newKeyedLimiter(webhookPerIPRate, webhookPerIPBurst, webhookLimiterEntries),
+		perSub: newKeyedLimiter(webhookPerSubRate, webhookPerSubBurst, webhookLimiterEntries),
+		now:    time.Now,
 	}
 }
 
@@ -110,15 +124,23 @@ func (s *subscriptionWebhook) Handler() http.HandlerFunc {
 			writeWebhookJSON(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		if !s.limiter.Allow() {
-			w.Header().Set("Retry-After", "1")
-			writeWebhookJSON(w, http.StatusTooManyRequests, "rate limited")
-			return
-		}
 		ns, name, provider, pathToken, ok := parseSubscriptionWebhookPath(r.URL.Path)
 		if !ok {
 			writeWebhookJSON(w, http.StatusNotFound,
 				"not found: use /webhook/subscriptions/<namespace>/<name>/<dockerhub|ghcr|github|harbor|quay|artifactory|generic>[/<token>]")
+			return
+		}
+		// The connection's address, not X-Forwarded-For, which a sender
+		// can set: behind an Ingress every sender shares the Ingress's
+		// address, and the per-Subscription limit still separates them.
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+		now := s.now()
+		if !s.perSub.allow(ns+"/"+name, now) || !s.perIP.allow(ip, now) {
+			w.Header().Set("Retry-After", "1")
+			writeWebhookJSON(w, http.StatusTooManyRequests, "rate limited")
 			return
 		}
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
@@ -194,18 +216,34 @@ func parseSubscriptionWebhookPath(p string) (ns, name, provider, token string, o
 
 // authenticate returns the Subscription when the delivery carries its
 // webhook token, or nil and why not (for the log).
+//
+// A Subscription that does not exist, or has no spec.webhook, still costs a
+// Secret read (webhookTimingPadSecret) and a token check against a random
+// key, so its 401 takes about as long as a wrong token's and the timing does
+// not tell which Subscriptions exist. The remaining difference is the cache
+// read of the Subscription, which both paths do, and the API latency of a
+// Secret that exists or not.
 func (s *subscriptionWebhook) authenticate(ctx context.Context, ns, name, provider, pathToken string,
 	body []byte, h http.Header) (*v1alpha1.Subscription, string) {
 	var sub v1alpha1.Subscription
-	if err := s.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &sub); err != nil {
-		return nil, "get subscription: " + err.Error()
+	secretName, miss := "", ""
+	switch err := s.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &sub); {
+	case err != nil:
+		miss = "get subscription: " + err.Error()
+	case sub.Spec.Webhook == nil || sub.Spec.Webhook.SecretRef.Name == "":
+		miss = "the Subscription has no spec.webhook"
+	default:
+		secretName = sub.Spec.Webhook.SecretRef.Name
 	}
-	if sub.Spec.Webhook == nil || sub.Spec.Webhook.SecretRef.Name == "" {
-		return nil, "the Subscription has no spec.webhook"
+	if miss != "" {
+		var pad corev1.Secret
+		_ = s.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: webhookTimingPadSecret}, &pad)
+		_ = verifyWebhook(provider, padToken[:], pathToken, body, h)
+		return nil, miss
 	}
-	var secret corev1.Secret
-	if err := s.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: sub.Spec.Webhook.SecretRef.Name}, &secret); err != nil {
-		return nil, "get webhook Secret: " + err.Error()
+	secret, err := subscriptionrecon.ReferenceableSecret(ctx, s.client, ns, secretName, "spec.webhook.secretRef")
+	if err != nil {
+		return nil, err.Error()
 	}
 	token := secret.Data["token"]
 	if len(token) < minWebhookTokenLen {
@@ -215,6 +253,56 @@ func (s *subscriptionWebhook) authenticate(ctx context.Context, ns, name, provid
 		return &sub, ""
 	}
 	return nil, "no valid token or signature for provider " + provider
+}
+
+// padToken is the key the miss path checks against: random, so no delivery
+// matches it.
+var padToken = func() [32]byte {
+	var b [32]byte
+	_, _ = rand.Read(b[:])
+	return b
+}()
+
+// keyedLimiter is a token bucket per key (a source IP, a Subscription), with
+// at most max keys: when full, keys idle for 10 minutes are dropped, and if
+// none is, the new key is refused (the sender gets 429).
+type keyedLimiter struct {
+	mu    sync.Mutex
+	r     rate.Limit
+	burst int
+	max   int
+	m     map[string]*keyedEntry
+}
+
+type keyedEntry struct {
+	l    *rate.Limiter
+	seen time.Time
+}
+
+func newKeyedLimiter(r rate.Limit, burst, max int) *keyedLimiter {
+	return &keyedLimiter{r: r, burst: burst, max: max, m: map[string]*keyedEntry{}}
+}
+
+func (k *keyedLimiter) allow(key string, now time.Time) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	e, ok := k.m[key]
+	if !ok {
+		if len(k.m) >= k.max {
+			for key, old := range k.m {
+				if now.Sub(old.seen) > 10*time.Minute {
+					delete(k.m, key)
+				}
+			}
+			if len(k.m) >= k.max {
+				return false
+			}
+		}
+		e = &keyedEntry{l: rate.NewLimiter(k.r, k.burst)}
+		k.m[key] = e
+	}
+	e.seen = now
+	return e.l.AllowN(now, 1)
 }
 
 // verifyWebhook checks the delivery's credential for provider.

@@ -198,6 +198,9 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 	if httpClient == nil {
 		httpClient = newHTTPClient()
 	}
+	if _, _, ok := w.httpBasic(); ok {
+		httpClient = credentialRedirects(httpClient, false)
+	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {

@@ -105,20 +105,25 @@ const (
 	keyKnownHosts    = "known_hosts"
 )
 
+// credentialError is a secretRef problem with its Ready condition reason.
+type credentialError struct {
+	reason, msg string
+}
+
+func (e *credentialError) Error() string { return e.msg }
+
 // resolveCredentials reads the Secret the source's secretRef names, in the
-// Subscription's namespace. No secretRef is anonymous access. The error
-// names the Secret and the keys, never a value.
+// Subscription's namespace. No secretRef is anonymous access. The Secret must
+// carry kardinal.io/referenceable: "true"; without it nothing is read from it
+// and nothing is sent. The error names the Secret and the keys, never a value.
 func resolveCredentials(ctx context.Context, c client.Client, sub *kardinalv1alpha1.Subscription) (source.Credentials, error) {
 	ref := secretRefOf(sub)
 	if ref == nil || ref.Name == "" {
 		return source.Credentials{}, nil
 	}
-	var secret corev1.Secret
-	if err := c.Get(ctx, client.ObjectKey{Namespace: sub.Namespace, Name: ref.Name}, &secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return source.Credentials{}, fmt.Errorf("secretRef: Secret %q not found in namespace %q", ref.Name, sub.Namespace)
-		}
-		return source.Credentials{}, fmt.Errorf("secretRef: read Secret %q: %w", ref.Name, err)
+	secret, err := referenceableSecret(ctx, c, sub.Namespace, ref.Name, "secretRef")
+	if err != nil {
+		return source.Credentials{}, err
 	}
 	d := secret.Data
 	creds := source.Credentials{
@@ -130,8 +135,35 @@ func resolveCredentials(ctx context.Context, c client.Client, sub *kardinalv1alp
 		SSHKnownHosts:    d[keyKnownHosts],
 	}
 	if creds.IsZero() {
-		return source.Credentials{}, fmt.Errorf("secretRef: Secret %q has none of the keys %s, %s and %s, %s, %s and %s",
-			ref.Name, corev1.DockerConfigJsonKey, keyUsername, keyPassword, keyToken, keySSHPrivateKey, keyKnownHosts)
+		return source.Credentials{}, &credentialError{reason: reasonSecretNoKeys, msg: fmt.Sprintf(
+			"secretRef: Secret %q has none of the keys %s, %s and %s, %s, %s and %s",
+			ref.Name, corev1.DockerConfigJsonKey, keyUsername, keyPassword, keyToken, keySSHPrivateKey, keyKnownHosts)}
 	}
 	return creds, nil
+}
+
+// ReferenceableSecret reads Secret ns/name for field (a spec field name for
+// messages) and refuses it unless it is labelled
+// kardinal.io/referenceable: "true". The webhook receiver uses it for
+// spec.webhook.secretRef.
+func ReferenceableSecret(ctx context.Context, c client.Client, ns, name, field string) (*corev1.Secret, error) {
+	return referenceableSecret(ctx, c, ns, name, field)
+}
+
+func referenceableSecret(ctx context.Context, c client.Client, ns, name, field string) (*corev1.Secret, error) {
+	var secret corev1.Secret
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, &credentialError{reason: reasonSecretNotFound,
+				msg: fmt.Sprintf("%s: Secret %q not found in namespace %q", field, name, ns)}
+		}
+		return nil, &credentialError{reason: reasonSecretUnreadable, msg: fmt.Sprintf("%s: read Secret %q: %v", field, name, err)}
+	}
+	if secret.Labels[kardinalv1alpha1.LabelSecretReferenceable] != "true" {
+		return nil, &credentialError{reason: kardinalv1alpha1.ReasonSecretNotReferenceable, msg: fmt.Sprintf(
+			"%s: Secret %q is not labelled %s=true; label it to let Subscriptions read it "+
+				"(kubectl label secret %s %s=true)", field, name, kardinalv1alpha1.LabelSecretReferenceable,
+			name, kardinalv1alpha1.LabelSecretReferenceable)}
+	}
+	return &secret, nil
 }

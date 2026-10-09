@@ -126,7 +126,11 @@ func (w *HelmWatcher) watchOCI(ctx context.Context, repoURL string, filters *com
 	if err != nil {
 		return "", "", err
 	}
-	s := &registrySession{client: w.client(), base: base, name: name, auth: auth}
+	client := w.client()
+	if !auth.isZero() {
+		client = credentialRedirects(client, true)
+	}
+	s := &registrySession{client: client, base: base, name: name, auth: auth}
 	tags, err := s.listTags(ctx)
 	if err != nil {
 		return "", "", fmt.Errorf("list tags: %w", err)
@@ -176,7 +180,11 @@ func (w *HelmWatcher) watchIndex(ctx context.Context, filters *compiledFilters) 
 	if basic {
 		req.SetBasicAuth(w.Credentials.Username, w.Credentials.Password)
 	}
-	resp, err := w.client().Do(req)
+	client := w.client()
+	if basic {
+		client = credentialRedirects(client, false)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("GET index.yaml: %w", err)
 	}

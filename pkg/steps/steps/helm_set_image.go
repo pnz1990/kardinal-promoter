@@ -67,7 +67,7 @@ func (s *helmSetImageStep) Execute(_ context.Context, state *parentsteps.StepSta
 	valuesFile := "values.yaml"
 	pathTemplate := ".image.tag"
 	chartFile := "Chart.yaml"
-	chartPath := ".dependencies.0.version"
+	chartPath := ""
 	if h := state.Environment.Update.Helm; h != nil {
 		if h.ValuesFile != "" {
 			valuesFile = h.ValuesFile
@@ -125,16 +125,20 @@ func (s *helmSetImageStep) Execute(_ context.Context, state *parentsteps.StepSta
 		if chart.Version == "" {
 			return fail(parentsteps.Permanent(fmt.Errorf("the Bundle's chart %s has no version", chart.Name)))
 		}
-		keys, err := yamlPathKeys(chartPath, "chartVersionPath")
+		if chartPath == "" {
+			// The umbrella chart's dependency of that name, not the first one.
+			chartPath = fmt.Sprintf(".dependencies[name=%s].version", chart.Name)
+		}
+		segs, err := parseYAMLPath(chartPath)
 		if err != nil {
-			return fail(parentsteps.Permanent(err))
+			return fail(parentsteps.Permanent(fmt.Errorf("invalid chartVersionPath %q: %w", chartPath, err)))
 		}
 		chartRel, err := confinedRel(filepath.Join(envRel, filepath.FromSlash(chartFile)))
 		if err != nil {
 			return fail(fmt.Errorf("chartVersionFile: %w", err))
 		}
 		if err := editYAMLFile(root, chartRel, func(doc *yamlDoc) error {
-			if err := setPathScalar(doc.root(), keys, chart.Version); err != nil {
+			if err := setPathScalar(doc.root(), segs, chart.Version); err != nil {
 				return fmt.Errorf("set %s in %s: %w", chartPath, filepath.ToSlash(chartRel), err)
 			}
 			return nil
@@ -189,53 +193,134 @@ func editYAMLFile(root *os.Root, rel string, edit func(*yamlDoc) error) error {
 	return nil
 }
 
-// setPathScalar sets the scalar at the key path, where a numeric key indexes
-// an existing list element. Missing mapping keys are created; a missing list
-// element, or a path that runs into a scalar, is an error.
-func setPathScalar(n *yaml.Node, keys []string, value string) error {
-	for i, k := range keys {
-		last := i == len(keys)-1
-		where := strings.Join(keys[:i+1], ".")
-		switch n.Kind {
-		case yaml.SequenceNode:
-			idx, err := strconv.Atoi(k)
-			if err != nil || idx < 0 {
-				return fmt.Errorf("%s is a list; index it with a number", strings.Join(keys[:i], "."))
+// yamlPathSeg is one segment of a chart version path: a mapping key, a list
+// index, or a list element selected by one of its fields ([name=podinfo]).
+type yamlPathSeg struct {
+	key        string
+	index      int // >= 0 for a list index
+	matchField string
+	matchValue string
+}
+
+func (g yamlPathSeg) String() string {
+	switch {
+	case g.matchField != "":
+		return "[" + g.matchField + "=" + g.matchValue + "]"
+	case g.index >= 0:
+		return strconv.Itoa(g.index)
+	default:
+		return g.key
+	}
+}
+
+// parseYAMLPath parses ".a.b.0.c" and ".dependencies[name=podinfo].version":
+// segments separated by dots; a numeric segment indexes a list; "[f=v]"
+// after a segment selects the list element whose field f is v.
+func parseYAMLPath(path string) ([]yamlPathSeg, error) {
+	p := strings.TrimPrefix(path, ".")
+	var segs []yamlPathSeg
+	for p != "" {
+		if strings.HasPrefix(p, "[") {
+			end := strings.Index(p, "]")
+			if end < 0 {
+				return nil, fmt.Errorf("unclosed [")
 			}
-			if idx >= len(n.Content) {
-				return fmt.Errorf("%s: the list has %d elements", where, len(n.Content))
+			field, value, ok := strings.Cut(p[1:end], "=")
+			if !ok || field == "" || value == "" {
+				return nil, fmt.Errorf("a selector is [field=value]")
 			}
-			if last {
-				if n.Content[idx].Kind != yaml.ScalarNode {
-					return fmt.Errorf("%s is not a scalar", where)
+			segs = append(segs, yamlPathSeg{index: -1, matchField: field, matchValue: value})
+			p = strings.TrimPrefix(p[end+1:], ".")
+			continue
+		}
+		end := strings.IndexAny(p, ".[")
+		if end < 0 {
+			end = len(p)
+		}
+		part := p[:end]
+		if part == "" {
+			return nil, fmt.Errorf("empty segment")
+		}
+		if n, err := strconv.Atoi(part); err == nil && n >= 0 {
+			segs = append(segs, yamlPathSeg{index: n})
+		} else {
+			segs = append(segs, yamlPathSeg{key: part, index: -1})
+		}
+		p = p[end:]
+		p = strings.TrimPrefix(p, ".")
+	}
+	if len(segs) == 0 {
+		return nil, fmt.Errorf("empty path")
+	}
+	if last := segs[len(segs)-1]; last.key == "" && last.index < 0 {
+		return nil, fmt.Errorf("the path must end in a key or an index")
+	}
+	return segs, nil
+}
+
+// setPathScalar sets the scalar at segs. A list segment (index or selector)
+// must find an existing element; missing mapping keys are created; a path
+// through a scalar is an error.
+func setPathScalar(n *yaml.Node, segs []yamlPathSeg, value string) error {
+	where := func(i int) string {
+		parts := make([]string, 0, i+1)
+		for _, g := range segs[:i+1] {
+			parts = append(parts, g.String())
+		}
+		return strings.Join(parts, ".")
+	}
+	for i, g := range segs {
+		last := i == len(segs)-1
+		var next *yaml.Node
+		switch {
+		case g.key == "" && n.Kind != yaml.SequenceNode:
+			return fmt.Errorf("%s is not a list", where(i-1))
+		case g.matchField != "":
+			for _, el := range n.Content {
+				if el.Kind == yaml.MappingNode && scalarValue(el, g.matchField) == g.matchValue {
+					next = el
+					break
 				}
-				*n.Content[idx] = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
-				return nil
 			}
-			n = n.Content[idx]
-		case yaml.MappingNode:
-			if last {
-				if v := mapValue(n, k); v != nil && v.Kind != yaml.ScalarNode {
-					return fmt.Errorf("%s is not a scalar", where)
-				}
-				setMapScalar(n, k, value)
-				return nil
+			if next == nil {
+				return fmt.Errorf("%s has no element with %s %q", where(i-1), g.matchField, g.matchValue)
 			}
-			next := mapValue(n, k)
+		case g.key == "":
+			if g.index >= len(n.Content) {
+				return fmt.Errorf("%s: the list has %d elements", where(i), len(n.Content))
+			}
+			next = n.Content[g.index]
+		case n.Kind == yaml.SequenceNode:
+			return fmt.Errorf("%s is a list; index it with a number or [field=value]", where(i-1))
+		case n.Kind != yaml.MappingNode:
+			return fmt.Errorf("%s is not a mapping or list", where(i-1))
+		case last:
+			if v := mapValue(n, g.key); v != nil && v.Kind != yaml.ScalarNode {
+				return fmt.Errorf("%s is not a scalar", where(i))
+			}
+			setMapScalar(n, g.key, value)
+			return nil
+		default:
+			next = mapValue(n, g.key)
 			switch {
 			case next == nil:
-				if _, err := strconv.Atoi(keys[i+1]); err == nil {
-					return fmt.Errorf("%s does not exist", strings.Join(keys[:i+2], "."))
+				if nxt := segs[i+1]; nxt.key == "" {
+					return fmt.Errorf("%s does not exist", where(i))
 				}
 				next = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-				n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k}, next)
+				n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: g.key}, next)
 			case next.Kind == yaml.ScalarNode && next.Tag == "!!null":
 				*next = yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 			}
-			n = next
-		default:
-			return fmt.Errorf("%s is not a mapping or list", strings.Join(keys[:i], "."))
 		}
+		if last {
+			if next.Kind != yaml.ScalarNode {
+				return fmt.Errorf("%s is not a scalar", where(i))
+			}
+			*next = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+			return nil
+		}
+		n = next
 	}
 	return nil
 }
