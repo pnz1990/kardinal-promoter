@@ -118,7 +118,7 @@ func main() {
 	flag.StringVar(&webhookSecret, "webhook-secret", os.Getenv("KARDINAL_WEBHOOK_SECRET"),
 		"Secret for validating incoming SCM webhooks (an HMAC key or a shared token, depending on the provider; see docs/scm-providers.md).")
 	flag.StringVar(&scmProviderType, "scm-provider", os.Getenv("KARDINAL_SCM_PROVIDER"),
-		"SCM provider type for the whole controller: \"github\" (default), \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\" or \"azuredevops\".")
+		"SCM provider type for the whole controller: \"github\" (default), \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\", \"azuredevops\" or \"bitbucket-datacenter\" (needs --scm-api-url).")
 	flag.StringVar(&scmAPIURL, "scm-api-url", os.Getenv("KARDINAL_SCM_API_URL"),
 		"SCM API base URL override (e.g. for GitHub Enterprise or self-managed GitLab).")
 

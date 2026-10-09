@@ -291,6 +291,9 @@ func TestCheckPRSupport(t *testing.T) {
 		require.NoError(t, err)
 		providers[kind] = p
 	}
+	dc, err := scm.NewProvider("bitbucket-datacenter", "t", "https://git.example.com", "")
+	require.NoError(t, err)
+	providers["bitbucket-datacenter"] = dc
 	dyn, err := scm.NewDynamicProvider("gitlab", "t", "", "")
 	require.NoError(t, err)
 	providers["dynamic gitlab"] = dyn
@@ -322,6 +325,10 @@ func TestCheckPRSupport(t *testing.T) {
 		{"azuredevops", &v1alpha1.PRConfig{Labels: []string{"a"}, Reviewers: []string{"id"}, TeamReviewers: []string{"id"}}, ""},
 		{"azuredevops", &v1alpha1.PRConfig{Assignees: []string{"a"}}, "pr.assignees is not supported by the azuredevops SCM provider"},
 		{"azuredevops", auto("rebase", "m"), ""},
+		{"bitbucket-datacenter", &v1alpha1.PRConfig{Reviewers: []string{"alice"}}, ""},
+		{"bitbucket-datacenter", auto("squash", "m"), ""},
+		{"bitbucket-datacenter", &v1alpha1.PRConfig{Labels: []string{"a"}}, "pr.labels is not supported by the bitbucket-datacenter SCM provider"},
+		{"bitbucket-datacenter", &v1alpha1.PRConfig{TeamReviewers: []string{"t"}}, "pr.teamReviewers is not supported"},
 	}
 	for _, c := range checks {
 		err := scm.CheckPRSupport(c.cfg, scm.SupportOf(providers[c.provider]))

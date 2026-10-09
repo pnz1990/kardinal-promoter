@@ -10,6 +10,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Bitbucket Data Center / Server** (`--scm-provider bitbucket-datacenter`, #1460) — PRs, comments, reviewers, approvals for `bundle.pr.*` gates, merge-commit detection, branch cleanup, auto-merge (`pr.merge.auto`: merged at once when the merge checks pass, else Bitbucket auto-merge on 8.15+) and signed `pr:merged` webhooks. HTTP clone, browse and ssh URLs all name the repository. Checked against the REST API 1.0 shapes only: the e2e suites cannot host Bitbucket Data Center. See [Bitbucket Data Center](scm-providers.md#bitbucket-data-center)
 - **PR controls per environment** (`environments[].pr`, #1453) — templated PR title and body (the evidence sections are template functions, so a custom body keeps them), templated labels, reviewers, team reviewers and assignees (`"{{ .Bundle.Author }}"` assigns the Bundle's author), and `merge.auto`, which enables the SCM's auto-merge with a `merge`, `squash` or `rebase` method and a templated commit message. GitHub, GitLab, Forgejo, Gitea, Bitbucket Cloud (reviewers only) and Azure DevOps; the [support matrix](scm-providers.md#pr-controls) lists what each applies. A template that does not render sets the Pipeline `Ready=False` (`ValidationFailed`), and a control the provider lacks fails the step before the PR is opened. See [Customising the PR](pr-evidence.md#customising-the-pr)
 
 ### Changed

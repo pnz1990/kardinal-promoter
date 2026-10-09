@@ -217,7 +217,7 @@ var webhookSignatureHeaders = []string{
 	"X-Forgejo-Signature", // Forgejo (bare hex)
 	"X-Gitlab-Token",      // GitLab (shared secret token)
 	"X-AzureDevOps-Token", // Azure DevOps service hook custom header
-	"X-Hub-Signature",     // Bitbucket Cloud ("sha256=<hex>")
+	"X-Hub-Signature",     // Bitbucket Cloud and Data Center ("sha256=<hex>")
 }
 
 // WebhookSignature returns the webhook signature or token carried by an SCM
@@ -253,6 +253,28 @@ var webhookEventHeaders = []string{
 	"X-Gitea-Event",   // Gitea and Forgejo
 	"X-Gitlab-Event",  // GitLab ("Merge Request Hook", "Push Hook", ...)
 	"X-GitHub-Event",  // GitHub ("pull_request", "push", "ping", ...)
+	"X-Event-Key",     // Bitbucket Cloud and Data Center ("pr:merged", "pullrequest:fulfilled", ...)
+}
+
+// RepoCanonicalizer is implemented by providers whose repository can be
+// named in more than one way (Bitbucket Data Center: an /scm/ clone path,
+// a browse path or an ssh path). CanonicalRepo returns one form for all.
+type RepoCanonicalizer interface {
+	CanonicalRepo(repo string) string
+}
+
+// SameRepo reports whether repositories a and b, as named by a Pipeline URL
+// (RepoFromURL) or a webhook payload, are the same for provider p: the
+// provider's canonical forms are equal, or, for other providers, a and b are
+// equal ignoring case.
+func SameRepo(p SCMProvider, a, b string) bool {
+	if d, ok := p.(*DynamicProvider); ok {
+		p = d.current()
+	}
+	if c, ok := p.(RepoCanonicalizer); ok {
+		return c.CanonicalRepo(a) == c.CanonicalRepo(b)
+	}
+	return strings.EqualFold(a, b)
 }
 
 // webhookEventType returns the event type named by an SCM webhook request's

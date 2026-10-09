@@ -19,7 +19,7 @@ import (
 )
 
 // NewProvider constructs an SCMProvider for the given provider type.
-// Supported types: "github" (default), "gitlab", "forgejo", "gitea", "bitbucket", "azuredevops".
+// Supported types: "github" (default), "gitlab", "forgejo", "gitea", "bitbucket", "azuredevops", "bitbucket-datacenter".
 // Returns an error for unknown provider types.
 //
 // Surrounding whitespace is trimmed from the token: a Secret written with
@@ -38,7 +38,12 @@ func NewProvider(providerType, token, apiURL, webhookSecret string) (SCMProvider
 		return NewBitbucketProvider(token, apiURL, webhookSecret), nil
 	case "azuredevops":
 		return NewAzureDevOpsProvider(token, apiURL, webhookSecret), nil
+	case "bitbucket-datacenter":
+		if apiURL == "" {
+			return nil, fmt.Errorf("SCM provider bitbucket-datacenter needs --scm-api-url, the server's base URL")
+		}
+		return NewBitbucketDCProvider(token, apiURL, webhookSecret), nil
 	default:
-		return nil, fmt.Errorf("unknown SCM provider type %q: supported types are \"github\", \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\", \"azuredevops\"", providerType)
+		return nil, fmt.Errorf("unknown SCM provider type %q: supported types are \"github\", \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\", \"azuredevops\", \"bitbucket-datacenter\"", providerType)
 	}
 }

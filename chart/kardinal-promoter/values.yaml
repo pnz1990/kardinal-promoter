@@ -161,7 +161,7 @@ github:
     key: "token"
 
 # -- SCM provider (--scm-provider): github (default when empty), gitlab,
-# forgejo, gitea, bitbucket or azuredevops, and its API base URL
+# forgejo, gitea, bitbucket, azuredevops or bitbucket-datacenter, and its API base URL
 # (--scm-api-url) for self-hosted instances. See docs/scm-providers.md.
 scm:
   provider: ""
