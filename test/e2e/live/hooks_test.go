@@ -39,19 +39,28 @@ const hookTimeout = 3 * time.Minute
 // Pod's ServiceAccount.
 func hookJob(t *testing.T, script, sa string) runtime.RawExtension {
 	t.Helper()
-	pod := map[string]interface{}{
-		"containers": []interface{}{map[string]interface{}{
-			"name": "hook", "image": fixtures.Image + ":" + fixtures.V1,
-			"command": []interface{}{"sh", "-c", script},
-		}},
+	return hookJobWith(t, script, sa, nil, nil)
+}
+
+// hookJobWith is hookJob with extra JobSpec and container fields.
+func hookJobWith(t *testing.T, script, sa string, job, container map[string]interface{}) runtime.RawExtension {
+	t.Helper()
+	c := map[string]interface{}{
+		"name": "hook", "image": fixtures.Image + ":" + fixtures.V1,
+		"command": []interface{}{"sh", "-c", script},
 	}
+	for k, v := range container {
+		c[k] = v
+	}
+	pod := map[string]interface{}{"containers": []interface{}{c}}
 	if sa != "" {
 		pod["serviceAccountName"] = sa
 	}
-	raw, err := json.Marshal(map[string]interface{}{
-		"backoffLimit": 0,
-		"template":     map[string]interface{}{"spec": pod},
-	})
+	spec := map[string]interface{}{"template": map[string]interface{}{"spec": pod}}
+	for k, v := range job {
+		spec[k] = v
+	}
+	raw, err := json.Marshal(spec)
 	require.NoError(t, err)
 	return runtime.RawExtension{Raw: raw}
 }
@@ -362,4 +371,139 @@ func TestStep_HookEditAndSupersede(t *testing.T) {
 	for _, st := range states.States(first, "prod") {
 		assert.NotEqual(t, "Promoting", st, "the superseded Bundle's step never started: %s", framework.JoinStates(states.States(first, "prod")))
 	}
+}
+
+// TestStep_HookTTLZeroStillSucceeds: a hook whose Job sets
+// ttlSecondsAfterFinished: 0 still records Succeeded (the TTL is dropped;
+// regression, QA #1493: the Job vanished as it finished and read as
+// deleted before it finished).
+//
+// Covers HOOK-TTL-01.
+func TestStep_HookTTLZeroStillSucceeds(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{
+		{Name: "migrate", Phase: "pre", Job: hookJobWith(t, `echo ok`, "", map[string]interface{}{"ttlSecondsAfterFinished": 0}, nil)},
+	}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	name := graph.HookRunName(pipelineName, bundle, "prod", "pre", "migrate")
+	waitHookRun(t, e, a.ns, name, v1alpha1.HookRunSucceeded)
+	job, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, err, "the Job is kept: its TTL was dropped")
+	assert.Nil(t, job.Spec.TTLSecondsAfterFinished)
+	require.NotNil(t, job.Spec.BackoffLimit)
+	assert.Equal(t, int32(0), *job.Spec.BackoffLimit)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+}
+
+// TestStep_HookRenamedMidFlight: renaming a pre hook while it runs does not
+// cut the running Job off (the old HookRun is held by its finalizer until
+// the Job ends) and does not overlap it (the new HookRun waits for it); the
+// step then waits for the renamed hook and promotes.
+//
+// Covers HOOK-RENAME-01.
+func TestStep_HookRenamedMidFlight(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{
+		{Name: "migrate", Phase: "pre", Job: hookJob(t, `sleep 30; echo old-done`, "")},
+	}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	oldName := graph.HookRunName(pipelineName, bundle, "prod", "pre", "migrate")
+	waitHookRun(t, e, a.ns, oldName, v1alpha1.HookRunRunning)
+
+	var live v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
+	live.Spec.Environments[0].Hooks[0].Name = "migrate-v2"
+	live.Spec.Environments[0].Hooks[0].Job = hookJob(t, `echo new-done`, "")
+	require.NoError(t, e.Client.Update(ctx, &live))
+	newName := graph.HookRunName(pipelineName, bundle, "prod", "pre", "migrate-v2")
+
+	newRun := waitHookRun(t, e, a.ns, newName, v1alpha1.HookRunSucceeded)
+	// The old Job ran to its end: its Pod succeeded and printed its output.
+	old, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, oldName, metav1.GetOptions{})
+	if err == nil {
+		assert.Equal(t, int32(1), old.Status.Succeeded, "the old Job completed")
+		require.NotNil(t, old.Status.CompletionTime)
+		require.NotNil(t, newRun.Status.StartedAt)
+		assert.False(t, newRun.Status.StartedAt.Before(old.Status.CompletionTime),
+			"the new hook started (%s) after the old one finished (%s)", newRun.Status.StartedAt, old.Status.CompletionTime)
+	} else {
+		// The old HookRun was released once its Job ended; its Job went with it.
+		require.True(t, apierrors.IsNotFound(err), "get old Job: %v", err)
+	}
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	framework.Eventually(t, time.Minute, "the old HookRun to be gone", func(ctx context.Context) (bool, string) {
+		_, ok, err := hookRun(ctx, e, a.ns, oldName)
+		if err != nil {
+			return false, err.Error()
+		}
+		return !ok, "still there"
+	})
+}
+
+// TestStep_HookAddedAfterStart: a pre hook added to the Pipeline after the
+// step started is Skipped (not run after the deploy), and the step records
+// condition HooksSkipped; the step still finishes.
+//
+// Covers HOOK-LATE-01.
+func TestStep_HookAddedAfterStart(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "WaitingForMerge", promoteTimeout)
+
+	var live v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
+	live.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{{Name: "late", Phase: "pre", Job: hookJob(t, `echo late`, "")}}
+	require.NoError(t, e.Client.Update(ctx, &live))
+	name := graph.HookRunName(pipelineName, bundle, "prod", "pre", "late")
+	hr := waitHookRun(t, e, a.ns, name, v1alpha1.HookRunSkipped)
+	assert.Contains(t, hr.Status.Message, "after the step had already started")
+	_, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "no Job for a skipped hook: %v", err)
+	framework.Eventually(t, time.Minute, "the step records the skip", func(ctx context.Context) (bool, string) {
+		ps, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "prod")
+		if err != nil || !ok {
+			return false, fmt.Sprintf("%v %v", ok, err)
+		}
+		c := meta.FindStatusCondition(ps.Status.Conditions, "HooksSkipped")
+		return c != nil && strings.Contains(c.Message, "pre-deploy hook late"), fmt.Sprintf("conditions=%v", ps.Status.Conditions)
+	})
+	a.merge(t, a.openPR(t, bundle, "prod"))
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+}
+
+// TestStep_HookPrivilegedRefused: a hook Pod with a privileged container
+// fails without a Job (no --hook-allow-privileged), and so does the step.
+//
+// Covers HOOK-PRIV-01.
+func TestStep_HookPrivilegedRefused(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Hooks = []v1alpha1.HookSpec{{Name: "migrate", Phase: "pre",
+		Job: hookJobWith(t, `echo hi`, "", nil, map[string]interface{}{"securityContext": map[string]interface{}{"privileged": true}})}}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	name := graph.HookRunName(pipelineName, bundle, "prod", "pre", "migrate")
+	hr := waitHookRun(t, e, a.ns, name, v1alpha1.HookRunFailed)
+	assert.Contains(t, hr.Status.Message, "--hook-allow-privileged")
+	_, err := e.Kube.BatchV1().Jobs(a.ns).Get(ctx, name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "no Job: %v", err)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Failed", 2*time.Minute)
+	a.fileHas(t, "prod", fixtures.V1, "prod in git")
 }

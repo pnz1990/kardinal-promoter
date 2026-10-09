@@ -272,6 +272,11 @@ hooks:
   # Graph ServiceAccount (graph.serviceAccountName) is never allowed.
   serviceAccounts:
     - default
+  # -- Allow hook Pods to be privileged: privileged containers, privilege
+  # escalation, added capabilities, host namespaces and ports, hostPath
+  # volumes, nodeName (--hook-allow-privileged). A hook that uses one fails
+  # while this is false.
+  allowPrivileged: false
 
 # -- Deprecated, no effect. The chart no longer ships ValidatingAdmissionPolicies;
 # the CRD schemas validate these fields instead. Kept so existing

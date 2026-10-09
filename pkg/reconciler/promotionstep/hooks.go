@@ -7,9 +7,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -69,7 +71,9 @@ func hookResults(ps *v1alpha1.PromotionStep, names []string) hookVerdict {
 			if v.failed == nil {
 				v.failed = ref
 			}
-		case ok && h.Result == v1alpha1.HookRunSucceeded:
+		case ok && (h.Result == v1alpha1.HookRunSucceeded || h.Result == v1alpha1.HookRunSkipped):
+			// Skipped: added to the Pipeline after the step passed the point it
+			// runs at (recordSkippedHooks notes it on the step).
 		case v.waiting == nil:
 			v.waiting = ref
 		}
@@ -166,4 +170,40 @@ func (r *Reconciler) handleVerifying(ctx context.Context, log zerolog.Logger, ps
 		}
 	}
 	return ctrl.Result{RequeueAfter: requeueGateWait}, nil
+}
+
+// ConditionHooksSkipped is True when hooks were added to the Pipeline after
+// this step passed the point they run at; they were not run for this
+// Bundle (their HookRuns are Skipped).
+const ConditionHooksSkipped = "HooksSkipped"
+
+// recordSkippedHooks sets ConditionHooksSkipped from spec.live.hooks. It
+// reports whether the condition changed.
+func recordSkippedHooks(ps *v1alpha1.PromotionStep, now time.Time) bool {
+	if ps.Spec.Live == nil {
+		return false
+	}
+	var skipped []string
+	for _, h := range ps.Spec.Live.Hooks {
+		if h.Result == v1alpha1.HookRunSkipped {
+			name := h.Hook
+			if name == "" {
+				name = h.Name
+			}
+			skipped = append(skipped, fmt.Sprintf("%s-deploy hook %s", h.Phase, name))
+		}
+	}
+	if len(skipped) == 0 {
+		return false
+	}
+	msg := "added to the Pipeline after this step passed the point they run at, not run for this Bundle: " +
+		strings.Join(skipped, ", ")
+	if c := meta.FindStatusCondition(ps.Status.Conditions, ConditionHooksSkipped); c != nil && c.Message == msg {
+		return false
+	}
+	meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
+		Type: ConditionHooksSkipped, Status: metav1.ConditionTrue, Reason: "AddedTooLate", Message: msg,
+		ObservedGeneration: ps.Generation, LastTransitionTime: metav1.NewTime(now),
+	})
+	return true
 }

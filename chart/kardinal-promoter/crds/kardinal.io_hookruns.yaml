@@ -92,6 +92,14 @@ spec:
                 description: PipelineName is the Pipeline the hook belongs to.
                 minLength: 1
                 type: string
+              stepAdvanced:
+                description: |-
+                  StepAdvanced is set by the Graph from the step's state: true once the
+                  step passed the point this hook runs at (started, for a pre hook;
+                  finished, for a post hook). A HookRun that starts with it set is
+                  Skipped: a hook added to the Pipeline too late for this Bundle does not
+                  run out of order. It is not part of the spec hash.
+                type: boolean
               timeout:
                 description: Timeout is the hook timeout (see HookSpec.Timeout).
                 pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
@@ -189,14 +197,20 @@ spec:
               phase:
                 description: |-
                   Phase is Pending until the Job is created, Running while it runs, and
-                  Succeeded or Failed once it finished. Succeeded and Failed are terminal:
-                  the Job is never created again, even when it is deleted.
+                  Succeeded or Failed once it finished, or Skipped. Succeeded, Failed and
+                  Skipped are terminal: the API server refuses to change them, and the
+                  Job is never created again, even when it is deleted.
                 enum:
                 - Pending
                 - Running
                 - Succeeded
                 - Failed
+                - Skipped
                 type: string
+                x-kubernetes-validations:
+                - message: a finished HookRun's phase cannot change
+                  rule: '!(oldSelf in [''Succeeded'', ''Failed'', ''Skipped'']) ||
+                    self == oldSelf'
               specHash:
                 description: |-
                   SpecHash is a hash of spec.job and spec.timeout when the Job was

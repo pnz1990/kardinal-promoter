@@ -160,6 +160,7 @@ kardinal version
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
 | `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed. The chart grants `batch/jobs` for [hooks](hooks.md) whatever it says |
 | `hooks.serviceAccounts` | `[default]` | ServiceAccounts a [hook](hooks.md)'s Pod may run as (`--hook-service-accounts`), in the Pipeline namespace. The Graph ServiceAccount is never allowed |
+| `hooks.allowPrivileged` | `false` | Allow privileged [hook](hooks.md) Pods (`--hook-allow-privileged`): privileged containers, privilege escalation, added capabilities, host namespaces and ports, hostPath volumes, nodeName |
 | `resources.limits.cpu` | `500m` | CPU limit |
 | `resources.limits.memory` | `128Mi` | Memory limit |
 | `resources.requests.cpu` | `10m` | CPU request |

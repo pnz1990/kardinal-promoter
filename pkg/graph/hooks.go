@@ -64,11 +64,14 @@ const (
 const DefaultHookTimeout = 30 * time.Minute
 
 // HookRunName returns the HookRun (and Job) name of hook in phase of env for
-// bundle: "<pipeline>-<bundle>-<env>-<phase>-<hook>", hash-suffixed when it
-// would lose characters or exceed 63 characters (a Job name is a label value).
+// bundle: "<pipeline>-<bundle>-<env>-<phase>-<hook>", cut to fit 63
+// characters (a Job name is a label value), then "-" and a hash of the
+// parts. The hash is always there: the readable part alone is not
+// injective ("prod" "post" "pre-smoke" and "prod-post" "pre" "smoke" both
+// read prod-post-pre-smoke).
 func HookRunName(pipeline, bundle, env, phase, hook string) string {
 	preferred := pipeline + "-" + slugify(bundle) + "-" + slugify(env) + "-" + phase + "-" + hook
-	return boundedName(preferred, isSlug(pipeline) && isSlug(bundle) && isSlug(env) && isSlug(hook),
+	return boundedName(preferred, false,
 		nameKey("hookrun", pipeline, bundle, env, phase, hook), validation.DNS1123LabelMaxLength)
 }
 
@@ -251,6 +254,9 @@ func buildHookRunNode(id, name string, in hookNodesInput, phase string,
 		"hook":         h.Name,
 		"phase":        phase,
 		"job":          literalStrings(job),
+		// A hook added to the Pipeline after its step passed the point it
+		// runs at is Skipped by its reconciler, not run out of order.
+		"stepAdvanced": stepAdvanced(in.stepK8sName, phase),
 	}
 	if h.Timeout != "" {
 		spec["timeout"] = h.Timeout
@@ -368,4 +374,15 @@ func attachHooks(step GraphNode, hooks hookNodes) {
 	if len(hooks.postHooks) > 0 {
 		spec["postHooks"] = hooks.postHooks
 	}
+}
+
+// stepAdvanced is the HookRun's spec.stepAdvanced: whether the step already
+// passed the point a hook of phase runs at (started, for a pre hook;
+// finished, for a post hook), read through refSteps.
+func stepAdvanced(stepK8sName, phase string) string {
+	states := `!(s.?status.?state.orValue("") in ["", "Pending"])`
+	if phase == kardinalv1alpha1.HookPhasePost {
+		states = `s.?status.?state.orValue("") in ["Verified", "Failed", "AbortedByAlarm", "RollingBack"]`
+	}
+	return fmt.Sprintf(`${%s.exists(s, s.metadata.name == %s && %s)}`, refStepsNodeID, strconv.Quote(stepK8sName), states)
 }

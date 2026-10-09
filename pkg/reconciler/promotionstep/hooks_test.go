@@ -173,3 +173,25 @@ func TestVerifyingStepSuperseded(t *testing.T) {
 	assert.Equal(t, "Failed", got.Status.State)
 	assert.Contains(t, got.Status.Message, "superseded")
 }
+
+// TestHooksSkippedRecorded: a hook its HookRun Skipped (added to the
+// Pipeline after the step started) is noted on the step as condition
+// HooksSkipped, in any state, and does not block it (regression, QA #1493).
+func TestHooksSkippedRecorded(t *testing.T) {
+	ps := labelled(makeStep("step", "p", "b1", "test"))
+	ps.Status.State = "WaitingForMerge"
+	ps.Spec.Live = &v1alpha1.PromotionStepLive{Hooks: []v1alpha1.LiveHookRun{{
+		Name: "p-b1-test-pre-migrate-1234", Hook: "migrate", Phase: "pre", Result: "Skipped"}}}
+	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	got, _ := reconcileHookStep(t, c, "step")
+	cond := meta.FindStatusCondition(got.Status.Conditions, promotionstep.ConditionHooksSkipped)
+	require.NotNil(t, cond)
+	assert.Contains(t, cond.Message, "pre-deploy hook migrate")
+
+	pending := labelled(makeStep("step2", "p", "b1", "test"))
+	pending.Spec.PreHooks = []string{"a"}
+	pending.Spec.Live = &v1alpha1.PromotionStepLive{Hooks: []v1alpha1.LiveHookRun{{Name: "a", Result: "Skipped"}}}
+	c2 := newClient(t, pending, makePipeline("p"), makeBundle("b1", "p"))
+	got2, _ := reconcileHookStep(t, c2, "step2")
+	assert.Equal(t, "Promoting", got2.Status.State, "a Skipped pre hook does not hold the step")
+}

@@ -136,6 +136,7 @@ HookRun is one run of a pre- or post-deploy hook (a Kubernetes Job) for one Bund
 | `spec.job` | object | yes | Job is the batch/v1 JobSpec to run (see HookSpec.Job). |
 | `spec.phase` | string | yes | Phase is "pre" or "post" (see HookSpec.Phase). One of: `pre`, `post`. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline the hook belongs to. |
+| `spec.stepAdvanced` | boolean |  | StepAdvanced is set by the Graph from the step's state: true once the step passed the point this hook runs at (started, for a pre hook; finished, for a post hook). A HookRun that starts with it set is Skipped: a hook added to the Pipeline too late for this Bundle does not run out of order. It is not part of the spec hash. |
 | `spec.timeout` | string |  | Timeout is the hook timeout (see HookSpec.Timeout). |
 | `status` | object |  | HookRunStatus is the observed state of a HookRun. |
 | `status.conditions` | []object |  | Conditions: SpecChangedAfterStart is True when spec.job or spec.timeout changed after the Job was created. |
@@ -150,7 +151,7 @@ HookRun is one run of a pre- or post-deploy hook (a Kubernetes Job) for one Bund
 | `status.jobName` | string |  | JobName is the name of the Job the reconciler created. |
 | `status.jobUID` | string |  | JobUID is the UID of that Job. A Job of that name with another UID, or none at all, while the HookRun runs, fails the HookRun: it is not run again. |
 | `status.message` | string |  | Message says why the HookRun is in its phase. |
-| `status.phase` | string |  | Phase is Pending until the Job is created, Running while it runs, and Succeeded or Failed once it finished. Succeeded and Failed are terminal: the Job is never created again, even when it is deleted. One of: `Pending`, `Running`, `Succeeded`, `Failed`. |
+| `status.phase` | string |  | Phase is Pending until the Job is created, Running while it runs, and Succeeded or Failed once it finished, or Skipped. Succeeded, Failed and Skipped are terminal: the API server refuses to change them, and the Job is never created again, even when it is deleted. One of: `Pending`, `Running`, `Succeeded`, `Failed`, `Skipped`. |
 | `status.specHash` | string |  | SpecHash is a hash of spec.job and spec.timeout when the Job was created. A later spec change is not applied (condition SpecChangedAfterStart). |
 | `status.startedAt` | string (date-time) |  | StartedAt is when the HookRun started (the Job was created). |
 

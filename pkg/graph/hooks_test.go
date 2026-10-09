@@ -82,7 +82,7 @@ func TestBuilder_HookNodes(t *testing.T) {
 	migrate := graph.HookRunName("app", "app-v1", "prod", "pre", "migrate")
 	seed := graph.HookRunName("app", "app-v1", "prod", "pre", "seed")
 	smoke := graph.HookRunName("app", "app-v1", "prod", "post", "smoke")
-	assert.Equal(t, "app-app-v1-prod-pre-migrate", migrate)
+	assert.True(t, strings.HasPrefix(migrate, "app-app-v1-prod-pre-migrate-"), migrate)
 
 	spec := hookNode(t, g, "prod").Template["spec"].(map[string]interface{})
 	assert.Equal(t, []interface{}{"${hook0pre0prod0migrate.metadata.name}", seed}, spec["preHooks"],
@@ -286,6 +286,74 @@ func TestBuilder_HookJobStringsAreLiteral(t *testing.T) {
 	assert.Equal(t, json.Number("0"), job["backoffLimit"], "numbers stay numbers")
 }
 
+// TestBuilder_HookNamesNeverCollide: a Pipeline whose environment and hook
+// names read the same once joined still builds (regression, QA #1493): every
+// HookRun has its own name.
+func TestBuilder_HookNamesNeverCollide(t *testing.T) {
+	p := makeLinearPipeline("app", "prod", "prod-post")
+	p.Spec.Environments[0].Hooks = []kardinalv1alpha1.HookSpec{hook("pre-smoke", "post", hookJob)}
+	p.Spec.Environments[1].Hooks = []kardinalv1alpha1.HookSpec{hook("smoke", "pre", hookJob)}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("v1", "app")})
+	require.NoError(t, err)
+	a := nameExpr(t, res.Graph, "hook0post0prod0preSmoke")
+	b := nameExpr(t, res.Graph, "hook0pre0prodPost0smoke")
+	assert.NotEqual(t, a, b)
+}
+
+// TestValidateNodeIDs_DuplicateObjectNames: two template nodes that render
+// the same object, literally or through resolvableWhen, are refused.
+func TestValidateNodeIDs_DuplicateObjectNames(t *testing.T) {
+	obj := func(id, name string) graph.GraphNode {
+		return graph.GraphNode{ID: id, Template: map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "HookRun",
+			"metadata": map[string]interface{}{"name": name}}}
+	}
+	err := graph.ValidateNodeIDs([]graph.GraphNode{obj("a", "x"), obj("b", `${["x"].filter(x_, true)[0]}`)})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, graph.ErrInvalid)
+	assert.Contains(t, err.Error(), `both render HookRun "x"`)
+	require.NoError(t, graph.ValidateNodeIDs([]graph.GraphNode{obj("a", "x"), obj("b", "y")}))
+}
+
+// TestBuilder_HookStepAdvanced evaluates spec.stepAdvanced: a pre hook's
+// step has advanced once it left Pending, a post hook's once it finished.
+func TestBuilder_HookStepAdvanced(t *testing.T) {
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: hookPipeline(), Bundle: makeBundle("app-v1", "app")})
+	require.NoError(t, err)
+	field := func(id string) string {
+		return hookNode(t, res.Graph, id).Template["spec"].(map[string]interface{})["stepAdvanced"].(string)
+	}
+	steps := func(state string) map[string]interface{} {
+		st := map[string]interface{}{}
+		if state != "" {
+			st["state"] = state
+		}
+		return map[string]interface{}{"refSteps": []interface{}{
+			map[string]interface{}{"metadata": map[string]interface{}{"name": "app-app-v1-prod"}, "status": st}}}
+	}
+	cases := []struct {
+		node, state string
+		want        bool
+	}{
+		{"hook0pre0prod0migrate", "", false},
+		{"hook0pre0prod0migrate", "Pending", false},
+		{"hook0pre0prod0migrate", "Promoting", true},
+		{"hook0pre0prod0migrate", "Verified", true},
+		{"hook0post0prod0smoke", "Verifying", false},
+		{"hook0post0prod0smoke", "HealthChecking", false},
+		{"hook0post0prod0smoke", "Verified", true},
+		{"hook0post0prod0smoke", "Failed", true},
+	}
+	for _, tc := range cases {
+		out, err := celEval(t, field(tc.node), steps(tc.state))
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, out, "%s with step %q", tc.node, tc.state)
+	}
+	// No step yet: not advanced.
+	out, err := celEval(t, field("hook0pre0prod0migrate"), map[string]interface{}{"refSteps": []interface{}{}})
+	require.NoError(t, err)
+	assert.Equal(t, false, out)
+}
+
 // TestBuilder_HookValidation: Build rejects hooks the CRD schema cannot
 // check: a job that is not a JobSpec, a job without containers, duplicate
 // names, a bad timeout.
@@ -315,10 +383,15 @@ func TestBuilder_HookValidation(t *testing.T) {
 	}
 }
 
-// TestHookRunName: readable when it fits, hashed and distinct otherwise,
-// always a DNS label (a Job name becomes a Pod label value).
+// TestHookRunName: readable, always hash-suffixed (the readable part alone
+// is not injective), always a DNS label (a Job name becomes a Pod label
+// value).
 func TestHookRunName(t *testing.T) {
-	assert.Equal(t, "app-v1-prod-post-smoke", graph.HookRunName("app", "v1", "prod", "post", "smoke"))
+	assert.True(t, strings.HasPrefix(graph.HookRunName("app", "v1", "prod", "post", "smoke"), "app-v1-prod-post-smoke-"))
+	// Regression (QA #1493): env "prod" post hook "pre-smoke" and env
+	// "prod-post" pre hook "smoke" read the same; the hash tells them apart.
+	assert.NotEqual(t, graph.HookRunName("app", "v1", "prod", "post", "pre-smoke"),
+		graph.HookRunName("app", "v1", "prod-post", "pre", "smoke"))
 	long := strings.Repeat("x", 40)
 	a := graph.HookRunName(long, "v1", "prod", "pre", "migrate")
 	b := graph.HookRunName(long, "v2", "prod", "pre", "migrate")

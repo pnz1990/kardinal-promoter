@@ -17,12 +17,17 @@ const (
 	HookPhasePost = "post"
 )
 
-// HookRun phases. Succeeded and Failed are terminal and never change.
+// HookRun phases. Succeeded, Failed and Skipped are terminal and never
+// change.
 const (
 	HookRunPending   = "Pending"
 	HookRunRunning   = "Running"
 	HookRunSucceeded = "Succeeded"
 	HookRunFailed    = "Failed"
+	// HookRunSkipped: the hook was added to the Pipeline after its step had
+	// passed the point it runs at (a pre hook once the step started); it is
+	// not run.
+	HookRunSkipped = "Skipped"
 )
 
 // HookSpec is one pre- or post-deploy hook of a Pipeline environment: a
@@ -95,14 +100,24 @@ type HookRunSpec struct {
 	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	Timeout string `json:"timeout,omitempty"`
+
+	// StepAdvanced is set by the Graph from the step's state: true once the
+	// step passed the point this hook runs at (started, for a pre hook;
+	// finished, for a post hook). A HookRun that starts with it set is
+	// Skipped: a hook added to the Pipeline too late for this Bundle does not
+	// run out of order. It is not part of the spec hash.
+	// +optional
+	StepAdvanced bool `json:"stepAdvanced,omitempty"`
 }
 
 // HookRunStatus is the observed state of a HookRun.
 type HookRunStatus struct {
 	// Phase is Pending until the Job is created, Running while it runs, and
-	// Succeeded or Failed once it finished. Succeeded and Failed are terminal:
-	// the Job is never created again, even when it is deleted.
-	// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed
+	// Succeeded or Failed once it finished, or Skipped. Succeeded, Failed and
+	// Skipped are terminal: the API server refuses to change them, and the
+	// Job is never created again, even when it is deleted.
+	// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Skipped
+	// +kubebuilder:validation:XValidation:rule="!(oldSelf in ['Succeeded', 'Failed', 'Skipped']) || self == oldSelf",message="a finished HookRun's phase cannot change"
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
