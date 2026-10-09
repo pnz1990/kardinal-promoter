@@ -1,0 +1,39 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * BundleTypeBadge.css — the Bundle type tag. Each type has its own token
+ * (theme.css, --color-type-*), checked for 4.5:1 on the surfaces it sits on
+ * in both themes. The tag is outlined, not filled, so it reads as a label and
+ * not as a status.
+ */
+
+.bundle-type {
+  --type-color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  padding: 0 0.4em;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--type-color);
+  font-family: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.bundle-type--compact {
+  font-size: 0.62rem;
+  padding: 0 0.35em;
+}
+
+.bundle-type[data-bundle-type='image'] { --type-color: var(--color-type-image); }
+.bundle-type[data-bundle-type='config'] { --type-color: var(--color-type-config); }
+.bundle-type[data-bundle-type='mixed'] { --type-color: var(--color-type-mixed); }
+.bundle-type[data-bundle-type='chart'] { --type-color: var(--color-type-chart); }
+
+@media (forced-colors: active) {
+  .bundle-type { border-color: CanvasText; color: CanvasText; }
+}

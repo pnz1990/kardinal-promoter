@@ -26,6 +26,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // getPipelinesWatchInterval is the polling interval of get --watch: fast
@@ -167,6 +168,8 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		if err := c.List(ctx, &bundles, opts...); err != nil {
 			return fmt.Errorf("list bundles: %w", err)
 		}
+		// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+		steps.Items = lifecycle.AddRetiredSteps(steps.Items, bundles.Items, nil)
 		// Fetch Subscriptions for the SUB column. On error: pass nil to omit
 		// the column rather than showing misleading zeros.
 		var subsItems []v1alpha1.Subscription

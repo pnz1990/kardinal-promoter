@@ -361,7 +361,76 @@ spec:
                   templates retries the Bundle, as a Pipeline change does. Empty
                   otherwise.
                 type: string
+              retiredAt:
+                description: |-
+                  RetiredAt is when the Bundle's Graph was retired: set in the same
+                  write as RetiredSteps, and never cleared. A Bundle with RetiredAt is
+                  final; the GraphRetired condition only shows the retirement's progress.
+                format: date-time
+                type: string
+              retiredSteps:
+                description: |-
+                  RetiredSteps records the PromotionSteps of a Bundle whose Graph was
+                  retired (condition GraphRetired=True). Deleting a finished Bundle's
+                  Graph deletes the PromotionSteps, PolicyGate instances and PRStatuses
+                  it created, so kro does not hold every finished Graph in memory
+                  (#1492). Rollback, promote, history, metrics, the CLI and the UI read
+                  these records where they read the steps of a Bundle that is still
+                  promoting.
+                items:
+                  description: RetiredStep is what a retired Bundle keeps of one of
+                    its PromotionSteps.
+                  properties:
+                    createdAt:
+                      description: CreatedAt is the PromotionStep's creationTimestamp.
+                      format: date-time
+                      type: string
+                    environment:
+                      description: Environment is the PromotionStep's spec.environment.
+                      type: string
+                    healthCheckExpiry:
+                      description: |-
+                        HealthCheckExpiry is the PromotionStep's status.healthCheckExpiry: set
+                        once its change merged and the health check started.
+                      format: date-time
+                      type: string
+                    message:
+                      description: Message is the PromotionStep's final status.message,
+                        cut to 512 bytes.
+                      maxLength: 512
+                      type: string
+                    name:
+                      description: Name is the PromotionStep's name.
+                      type: string
+                    prURL:
+                      description: PRURL is the PromotionStep's status.prURL.
+                      maxLength: 2048
+                      type: string
+                    state:
+                      description: State is the PromotionStep's final status.state.
+                      type: string
+                    stepType:
+                      description: StepType is the PromotionStep's spec.stepType.
+                      type: string
+                    verifiedAt:
+                      description: VerifiedAt is when the PromotionStep became Verified.
+                      format: date-time
+                      type: string
+                  required:
+                  - createdAt
+                  - environment
+                  - name
+                  type: object
+                maxItems: 1000
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
             type: object
+            x-kubernetes-validations:
+            - message: 'status.retiredAt cannot be removed: a retired Bundle stays
+                retired'
+              rule: '!has(oldSelf.retiredAt) || has(self.retiredAt)'
         type: object
     served: true
     storage: true

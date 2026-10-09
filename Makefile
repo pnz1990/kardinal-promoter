@@ -144,15 +144,17 @@ e2e-tools: ## Install the pinned kind, kubectl and helm (hack/tool-versions.env)
 	bash hack/e2e/tools.sh
 
 e2e-up: ## Create or update the kind cluster for live suite SUITE (default core)
-	KIND_CLUSTER=kardinal-e2e-$(SUITE) KIND_K8S=$(KIND_K8S) bash hack/e2e/up.sh $(SUITE)
+	KIND_CLUSTER=$${KIND_CLUSTER:-kardinal-e2e-$(SUITE)} KIND_K8S=$(KIND_K8S) bash hack/e2e/up.sh $(SUITE)
 
 test-e2e-live: ## Run live suite SUITE against the cluster from make e2e-up; fails on any skip
-	KIND_CLUSTER=kardinal-e2e-$(SUITE) COUNT=$(COUNT) RUN='$(RUN)' SHARD=$(SHARD) bash hack/e2e/run.sh $(SUITE)
+	KIND_CLUSTER=$${KIND_CLUSTER:-kardinal-e2e-$(SUITE)} COUNT=$(COUNT) RUN='$(RUN)' SHARD=$(SHARD) bash hack/e2e/run.sh $(SUITE)
 
-e2e-down: ## Delete the kind cluster of live suite SUITE (and the multi-cluster suite's spoke)
-	kc=$${KUBECONFIG:-test/e2e/results/kardinal-e2e-$(SUITE)/kubeconfig}; kc=$${kc%%:*}; \
-	kind delete cluster --name kardinal-e2e-$(SUITE) --kubeconfig "$$kc" && \
-	if kind get clusters 2>/dev/null | grep -qx kardinal-e2e-$(SUITE)-spoke; then kind delete cluster --name kardinal-e2e-$(SUITE)-spoke --kubeconfig "$$kc"; fi
+e2e-down: ## Delete the kind cluster of live suite SUITE (and the multi-cluster suite's spoke); KIND_CLUSTER must start with kardinal-e2e- or kp-
+	c=$${KIND_CLUSTER:-kardinal-e2e-$(SUITE)}; \
+	case "$$c" in kardinal-e2e-*|kp-*) ;; *) echo "e2e-down: refusing to delete kind cluster $$c: KIND_CLUSTER must start with kardinal-e2e- or kp-" >&2; exit 1 ;; esac; \
+	kc=$${KUBECONFIG:-test/e2e/results/$$c/kubeconfig}; kc=$${kc%%:*}; \
+	kind delete cluster --name "$$c" --kubeconfig "$$kc" && \
+	if kind get clusters 2>/dev/null | grep -qx "$$c-spoke"; then kind delete cluster --name "$$c-spoke" --kubeconfig "$$kc"; fi
 
 e2e-all: ## Run every live suite on this host, JOBS clusters at a time, and prove the coverage (hack/e2e/all.sh)
 	JOBS=$(JOBS) COUNT=$(COUNT) bash hack/e2e/all.sh

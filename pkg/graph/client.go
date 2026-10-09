@@ -164,6 +164,17 @@ func (c *GraphClient) GraphExists(ctx context.Context, namespace, name string) (
 	return true, nil
 }
 
+// Delete deletes the Graph namespace/name with background propagation. kro's
+// finalizer then deletes the resources the Graph created.
+func (c *GraphClient) Delete(ctx context.Context, namespace, name string) error {
+	bg := metav1.DeletePropagationBackground
+	if err := c.dynamic.Resource(GraphGVR).Namespace(namespace).Delete(ctx, name,
+		metav1.DeleteOptions{PropagationPolicy: &bg}); err != nil {
+		return fmt.Errorf("graph.Delete %s/%s: %w", namespace, name, err)
+	}
+	return nil
+}
+
 // List lists the Graph CRs in a namespace that kardinal generated (those
 // carrying the kardinal.io/bundle label).
 func (c *GraphClient) List(ctx context.Context, namespace string) ([]*Graph, error) {
