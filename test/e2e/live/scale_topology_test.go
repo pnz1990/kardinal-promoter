@@ -13,6 +13,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale"
 )
 
@@ -183,5 +184,41 @@ func TestScale_TopologySharedRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Note("pipelines", len(names))
+	r.Finish()
+}
+
+// TestScale_TopologyArgoCD is the BigWaves fan-out (canary and 10 waves of
+// 15, 151 environments) on one repository branch with Argo CD health: each
+// environment has an auto-syncing Application on its path, and its step is
+// Verified once Argo CD synced a commit that contains the promoted one. With
+// 151 environments on one branch, Argo CD has usually synced a later commit
+// by the time a step checks (#1591): the check must accept it from the branch
+// history, not wait for its own commit. It runs alone (150-environment tests
+// are serialised). Covers SCALE-TOPO-ARGOCD-01.
+func TestScale_TopologyArgoCD(t *testing.T) {
+	r := scale.Begin(t)
+	envs := scale.Waves(r.P.BigWaves, r.P.BigWaveWidth)
+	name := "argo"
+	repo := r.Fleet.Repo(t, r.Fleet.NS+"-"+name, map[string][]string{name: scale.Names(envs)})
+	app := func(env string) string { return r.Fleet.NS + "-" + env }
+	for _, env := range envs {
+		r.E.ArgoApp(t, app(env.Name), repo, scale.EnvPath(name, env.Name), r.Fleet.NS)
+	}
+	for _, env := range envs {
+		r.E.WaitArgoApp(t, app(env.Name), 10*time.Minute)
+	}
+	p := r.Fleet.PipelineSpec(name, repo, envs, func(p *v1alpha1.Pipeline) {
+		for i := range p.Spec.Environments {
+			p.Spec.Environments[i].Health = v1alpha1.HealthConfig{Type: "argocd", Timeout: "10m",
+				ArgoCD: &v1alpha1.HealthTargetRef{Name: app(p.Spec.Environments[i].Name), Namespace: framework.ArgoCDNamespace}}
+		}
+	})
+	if err := r.E.Client.Create(context.Background(), p); err != nil {
+		t.Fatalf("create Pipeline %s (%d environments): %v", name, len(envs), err)
+	}
+	r.Fleet.Track(p, repo)
+	r.Fleet.MustCreateBundle(t, p.Name, scale.Tag(p.Name, 1))
+	r.Note("environments", len(envs))
+	r.Note("argoApplications", len(envs))
 	r.Finish()
 }

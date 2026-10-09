@@ -106,10 +106,11 @@ case "$SUITE" in
     HELM_ARGS='--set controller.namespaceShard=default' ;;
   # Production-scale topologies, load, races and chaos. The controller
   # reaches Forgejo through Toxiproxy (components/toxiproxy.sh), runs two
-  # replicas so a killed leader fails over, and is built with -race; its
+  # replicas so a killed leader fails over, and is built with -race; Argo CD
+  # serves TestScale_TopologyArgoCD's 151 Applications; its
   # ServiceMonitor feeds the invariants' Prometheus queries. Info logs: the
   # invariants read every controller log line.
-  scale) COMPONENTS=("toxiproxy.sh forgejo.forgejo.svc.cluster.local:3000" "giteafamily.sh forgejo" prometheus.sh)
+  scale) COMPONENTS=("toxiproxy.sh forgejo.forgejo.svc.cluster.local:3000" "giteafamily.sh forgejo" prometheus.sh argocd.sh)
     RUN='^TestScale_'
     export KARDINAL_E2E_RACE=${KARDINAL_E2E_RACE:-1}
     # kro's chart default (1 GiB) is OOMKilled under the suite's load (#1492).

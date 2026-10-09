@@ -144,7 +144,7 @@ in upper snake case (`KARDINAL_E2E_SCALE_SUSTAINED_RATE=5`,
 
 | Tests | What they do |
 |---|---|
-| `TestScale_Topology*` | a 100-stage chain, the 120-stage chain and 150-environment fan-out a large company asks for, waves, a diamond lattice, a fan-in, mixed auto and pr-review approval, several Pipelines writing one repo and branch |
+| `TestScale_Topology*` | a 100-stage chain, the 120-stage chain and 150-environment fan-out a large company asks for, the same fan-out with 151 Argo CD Applications and `argocd` health (`TestScale_TopologyArgoCD`, run alone), waves, a diamond lattice, a fan-in, mixed auto and pr-review approval, several Pipelines writing one repo and branch |
 | `TestScale_Load*`, `TestScale_LatencySLO` | 200 Pipelines with a Bundle each, a burst of 1,000 Bundles (the newest per Pipeline must end Verified), a sustained rate for a duration, the latency objective ([Latency SLO](#latency-slo)) |
 | `TestScale_Race*` | rapid-fire Bundles, Pipeline edits, gate flapping, a ChangeWindow switched on while a step waits for merge, pause/resume storms, rollback during a promotion, PRs closed, reopened and merged from outside, a force-pushed branch, a namespace deleted mid-flight, duplicate, forged and out-of-order webhooks |
 | `TestScale_Chaos*` | the leader killed every 20-60 s, kro restarted, git latency and outages, API Priority and Fairness throttling the controller to one seat, the SCM token rotated mid-flight |
