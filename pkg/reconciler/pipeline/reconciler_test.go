@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -240,45 +241,67 @@ func TestPipelineReconciler_SecretRefNamespaceInvalid(t *testing.T) {
 	}
 }
 
-// TestPipelineReconciler_RepositoryNotAllowed covers #1332: with
-// --scm-allowed-repositories set, a Pipeline without git.secretRef whose
-// spec.git.url is not in the list is Ready=False/RepositoryNotAllowed, since
-// the controller's shared token would open its PRs. Its own secretRef, an
-// allowed URL or an unset list keeps it Valid. Reconciling again is a no-op.
+// TestPipelineReconciler_RepositoryNotAllowed covers #1332 and the QA
+// findings on #1483: with --scm-allowed-repositories set, a Pipeline whose
+// spec.git.url is not allowed is Ready=False/RepositoryNotAllowed when it
+// would need the controller's shared token: no git.secretRef to a Secret
+// that exists, or an environment with approval: pr-review. Its own existing
+// Secret and only auto environments keep it Valid, as do an allowed URL or
+// an unset list. A missing Secret is checked again every minute, since no
+// watch sees it created. Reconciling again patches nothing.
 func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 	allow, err := scm.ParseRepositoryAllowlist([]string{"github.com/myorg/*"})
 	require.NoError(t, err)
 	tests := []struct {
-		name       string
-		allow      *scm.RepositoryAllowlist
-		url        string
-		secret     string
-		wantStatus metav1.ConditionStatus
-		wantReason string
-		wantMsg    string
+		name        string
+		allow       *scm.RepositoryAllowlist
+		url         string
+		secretRef   bool
+		secret      bool
+		prReview    bool
+		wantStatus  metav1.ConditionStatus
+		wantReason  string
+		wantMsg     string
+		wantRequeue time.Duration
 	}{
 		{name: "not allowed", allow: allow, url: "https://github.com/other/gitops.git",
 			wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
 			wantMsg: `spec.git.url "https://github.com/other/gitops.git" is not in the controller's allowed repositories (github.com/myorg/*)`},
-		{name: "allowed", allow: allow, url: "https://github.com/myorg/gitops.git",
+		{name: "allowed", allow: allow, url: "https://github.com/myorg/gitops.git", prReview: true,
 			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
-		{name: "own secretRef", allow: allow, url: "https://github.com/other/gitops.git", secret: "team-token",
+		{name: "own Secret, auto only", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true, secret: true,
 			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
-		{name: "unset", url: "https://github.com/other/gitops.git",
+		{name: "own Secret, pr-review", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true, secret: true,
+			prReview: true, wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
+			wantMsg: `environment "test" uses approval: pr-review`},
+		{name: "secretRef to a missing Secret", allow: allow, url: "https://github.com/other/gitops.git", secretRef: true,
+			wantStatus: metav1.ConditionFalse, wantReason: "RepositoryNotAllowed",
+			wantMsg: "no git.secretRef to a Secret that exists", wantRequeue: time.Minute},
+		{name: "unset", url: "https://github.com/other/gitops.git", prReview: true,
 			wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
 			p.Spec.Git.URL = tc.url
-			if tc.secret != "" {
-				p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: tc.secret}
+			if tc.prReview {
+				p.Spec.Environments[0].Approval = "pr-review"
 			}
-			c := newClientWithIndex(newScheme(), p)
+			if tc.secretRef {
+				p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "team-token"}
+			}
+			scheme := newScheme()
+			require.NoError(t, corev1.AddToScheme(scheme))
+			objs := []client.Object{p}
+			if tc.secret {
+				objs = append(objs, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "team-token", Namespace: "default"}})
+			}
+			c := newClientWithIndex(scheme, objs...)
 			key := types.NamespacedName{Name: "app", Namespace: "default"}
 			r := &pipeline.Reconciler{Client: c, AllowedRepositories: tc.allow}
-			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 			require.NoError(t, err)
+			assert.Equal(t, tc.wantRequeue, res.RequeueAfter)
 
 			var got kardinalv1alpha1.Pipeline
 			require.NoError(t, c.Get(context.Background(), key, &got))
@@ -289,8 +312,9 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 			assert.Contains(t, cond.Message, tc.wantMsg)
 
 			rv := got.ResourceVersion
-			_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 			require.NoError(t, err)
+			assert.Equal(t, tc.wantRequeue, res.RequeueAfter)
 			require.NoError(t, c.Get(context.Background(), key, &got))
 			assert.Equal(t, rv, got.ResourceVersion, "a second reconcile patches nothing")
 		})

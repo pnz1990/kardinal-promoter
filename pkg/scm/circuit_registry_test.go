@@ -179,3 +179,25 @@ func TestCircuitRegistry_Concurrent(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, 5, reg.Owners())
 }
+
+// TestCircuitRegistry_Bounded covers the QA finding on #1483: a controller
+// that calls many owners does not keep a circuit for each one. Circuits that
+// hold no state are dropped once the registry would hold more than its
+// bound; an open circuit is kept, and stays open.
+func TestCircuitRegistry_Bounded(t *testing.T) {
+	reg := scm.NewCircuitRegistry()
+	fail := &http.Response{StatusCode: http.StatusBadGateway, Header: http.Header{}}
+	ok := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}}
+	for i := 0; i < 5; i++ {
+		require.NoError(t, reg.Allow("failing"))
+		reg.Record("failing", fail, nil)
+	}
+	require.Error(t, reg.Allow("failing"), "the failing owner's circuit is open")
+	for i := 0; i < 2000; i++ {
+		owner := "o" + strconv.Itoa(i)
+		require.NoError(t, reg.Allow(owner))
+		reg.Record(owner, ok, nil)
+	}
+	assert.LessOrEqual(t, reg.Owners(), 257, "idle owners are dropped")
+	assert.True(t, isCircuitOpen(reg.Allow("failing")), "an open circuit is never dropped")
+}

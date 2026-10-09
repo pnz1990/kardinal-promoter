@@ -127,10 +127,10 @@ func main() {
 		"SCM API base URL override (e.g. for GitHub Enterprise or self-managed GitLab).")
 	var scmAllowedRepositories string
 	flag.StringVar(&scmAllowedRepositories, "scm-allowed-repositories", os.Getenv("KARDINAL_SCM_ALLOWED_REPOSITORIES"),
-		"Comma-separated host/path globs (github.com/acme/*, gitlab.example.com/team/**) of the repositories "+
-			"a Pipeline without git.secretRef may promote into with the controller's SCM token. Other "+
-			"Pipelines without git.secretRef are Ready=False/RepositoryNotAllowed and their steps fail. "+
-			"Empty allows every repository.")
+		"Comma-separated host/repository globs (github.com/acme/*, gitlab.example.com/team/**) of the "+
+			"repositories the controller's SCM token may act on. Every SCM call for another repository is "+
+			"refused, and a Pipeline that would need the token for one is Ready=False/RepositoryNotAllowed "+
+			"and its steps fail. Empty allows every repository.")
 
 	var bundleToken string
 	flag.StringVar(&bundleToken, "bundle-api-token", os.Getenv("KARDINAL_BUNDLE_TOKEN"),
@@ -291,12 +291,12 @@ func main() {
 		logger.Fatal().Err(err).Msg("invalid --scm-allowed-repositories")
 	}
 	if allowedRepos == nil {
-		logger.Warn().Msg("--scm-allowed-repositories (Helm scm.allowedRepositories) is not set: a Pipeline " +
-			"without git.secretRef has the controller's SCM token open PRs and delete kardinal/ branches in " +
-			"any repository that token can write to; see docs/guides/security.md")
+		logger.Warn().Msg("--scm-allowed-repositories (Helm scm.allowedRepositories) is not set: any Pipeline " +
+			"can have the controller's SCM token open PRs and delete kardinal/ branches in any repository " +
+			"that token can write to; see docs/guides/security.md")
 	} else {
 		logger.Info().Strs("allowedRepositories", allowedRepos.Patterns()).
-			Msg("Pipelines without git.secretRef are limited to the allowed repositories")
+			Msg("the controller's SCM token is limited to the allowed repositories")
 	}
 
 	uiHosts, err := parseUIAllowedHosts(uiAllowedHosts)
@@ -365,6 +365,15 @@ func main() {
 		if provErr != nil {
 			logger.Fatal().Err(provErr).Msg("unable to create SCM provider")
 		}
+	}
+	// Every SCM call the shared token makes is checked against
+	// --scm-allowed-repositories, whichever code path makes it (#1332).
+	if allowedRepos != nil {
+		scmHost, hostErr := scm.WebHost(scmProviderType, scmAPIURL)
+		if hostErr != nil {
+			logger.Fatal().Err(hostErr).Msg("--scm-allowed-repositories needs the SCM host")
+		}
+		scmProvider = allowedRepos.Guard(scmProvider, scmHost)
 	}
 	gitClient := scm.NewGoGitClient()
 

@@ -496,22 +496,32 @@ func TestForgejo_CircuitBreakerSurvivesTokenRotation(t *testing.T) {
 
 // TestForgejo_AllowedRepositories runs the controller with
 // --scm-allowed-repositories (Helm scm.allowedRepositories) set to a
-// repository other than the test's. A Pipeline without git.secretRef would
-// have the controller's shared token open PRs in the test's repository, so
-// it is Ready=False/RepositoryNotAllowed, and "kardinal validate
-// --allowed-repositories" reports the same message offline. Its Bundle's step
-// fails before git-clone: nothing is pushed and no PR is opened. With the
-// team's own git.secretRef the same Pipeline is Valid and promotes (#1332).
+// repository other than the test's, which plays the victim (#1332):
+//   - A Pipeline without git.secretRef would have the controller's shared
+//     token open PRs there, so it is Ready=False/RepositoryNotAllowed, and
+//     "kardinal validate --allowed-repositories" reports the same message
+//     offline. Its Bundle's step fails before git-clone: nothing is pushed
+//     and no PR is opened.
+//   - Its own git.secretRef does not exempt it while an environment uses
+//     pr-review: the shared token would still open and poll that PR.
+//   - A PRStatus that names the repository is not polled: the SCM provider
+//     refuses every call the shared token would make for it, and the
+//     refusal is in status.pollError.
+//   - With its own git.secretRef and only auto environments the Pipeline
+//     never needs the shared token: it is Valid and promotes.
+//
 // Not parallel: it changes the controller's flags.
 //
 // Covers SCM-ALLOWREPO-01.
 func TestForgejo_AllowedRepositories(t *testing.T) {
 	e := framework.New(t)
 	requireKind(t, e, "forgejo")
+	ctx := context.Background()
 	a := newArgoApp(t, e, "test")
 	u, err := url.Parse(a.repo.CloneURL)
 	require.NoError(t, err)
-	owner, _, _ := strings.Cut(strings.Trim(u.Path, "/"), "/")
+	repoID := strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git")
+	owner, _, _ := strings.Cut(repoID, "/")
 	allowed := u.Hostname() + "/" + owner + "/only-this-repo"
 
 	since := time.Now()
@@ -519,20 +529,25 @@ func TestForgejo_AllowedRepositories(t *testing.T) {
 		framework.SetArg(spec, "scm-allowed-repositories", allowed)
 	})
 	e.WaitControllerLog(t, since, time.Minute, "the controller to load the allowlist",
-		framework.LogMessage("Pipelines without git.secretRef are limited to the allowed repositories"))
+		framework.LogMessage("the controller's SCM token is limited to the allowed repositories"))
 
 	p := a.pipeline(map[string]string{"test": "pr-review"})
 	p.Spec.Git.SecretRef = nil
 	a.apply(t, p)
 	want := fmt.Sprintf("spec.git.url %q is not in the controller's allowed repositories (%s)", a.repo.CloneURL, allowed)
-	refused := waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=False RepositoryNotAllowed", func(p *v1alpha1.Pipeline) (bool, string) {
-		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
-		if c == nil {
-			return false, "no Ready condition"
-		}
-		return c.Status == metav1.ConditionFalse && c.Reason == "RepositoryNotAllowed" && strings.Contains(c.Message, want),
-			fmt.Sprintf("Ready=%s/%s: %s", c.Status, c.Reason, c.Message)
-	})
+	waitRefused := func(why string) *v1alpha1.Pipeline {
+		t.Helper()
+		return waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=False RepositoryNotAllowed: "+why, func(p *v1alpha1.Pipeline) (bool, string) {
+			c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+			if c == nil {
+				return false, "no Ready condition"
+			}
+			return c.Status == metav1.ConditionFalse && c.Reason == "RepositoryNotAllowed" && c.ObservedGeneration == p.Generation &&
+					strings.Contains(c.Message, want) && strings.Contains(c.Message, why),
+				fmt.Sprintf("Ready=%s/%s: %s", c.Status, c.Reason, c.Message)
+		})
+	}
+	refused := waitRefused("no git.secretRef to a Secret that exists")
 
 	// kardinal validate says the same offline.
 	dir := t.TempDir()
@@ -555,23 +570,43 @@ func TestForgejo_AllowedRepositories(t *testing.T) {
 	for _, s := range ps.Status.Steps {
 		assert.NotEqual(t, v1alpha1.StepExecutionCompleted, s.State, "no step ran: %s did", s.Name)
 	}
-	prs, err := e.Git.PullRequests(context.Background(), a.repo)
+	prs, err := e.Git.PullRequests(ctx, a.repo)
 	require.NoError(t, err)
 	assert.Empty(t, prs, "no PR is opened")
 	assert.Equal(t, head, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/kustomization.yaml"),
 		"nothing is pushed")
 
-	// The team's own token: Valid, and the promotion runs.
-	require.NoError(t, e.Client.Get(context.Background(), client.ObjectKeyFromObject(p), p))
+	// Its own Secret, but the shared token would open the pr-review PR.
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKeyFromObject(p), p))
 	p.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: framework.GitSecretName}
-	require.NoError(t, e.Client.Update(context.Background(), p))
+	require.NoError(t, e.Client.Update(ctx, p))
+	waitRefused(`environment "test" uses approval: pr-review`)
+
+	// A PRStatus for the repository is refused by the provider, not polled.
+	victim := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "victim", Namespace: a.ns},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: strings.TrimSuffix(a.repo.CloneURL, ".git") + "/pulls/1", PRNumber: 1, Repo: repoID},
+	}
+	require.NoError(t, e.Client.Create(ctx, victim))
+	framework.Eventually(t, time.Minute, "the PRStatus poll refused by the allowlist", func(ctx context.Context) (bool, string) {
+		if err := e.Client.Get(ctx, client.ObjectKeyFromObject(victim), victim); err != nil {
+			return false, err.Error()
+		}
+		return strings.Contains(victim.Status.PollError, "not in the controller's allowed repositories") &&
+			strings.Contains(victim.Status.PollError, repoID), "pollError=" + victim.Status.PollError
+	})
+	assert.Nil(t, victim.Status.LastCheckedAt, "no poll succeeded")
+
+	// Its own Secret and only auto environments: the shared token is never
+	// used, so the Pipeline is Valid and promotes.
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKeyFromObject(p), p))
+	envSpec(t, p, "test").Approval = "auto"
+	require.NoError(t, e.Client.Update(ctx, p))
 	waitPipeline(t, e, a.ns, pipelineName, time.Minute, "Ready=True", func(p *v1alpha1.Pipeline) (bool, string) {
 		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
 		return c != nil && c.Status == metav1.ConditionTrue && c.ObservedGeneration == p.Generation, fmt.Sprintf("%v", c)
 	})
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
-	_, pr := a.waitOpenPR(t, bundle, "test")
-	a.merge(t, pr)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "test", fixtures.V2)
 }

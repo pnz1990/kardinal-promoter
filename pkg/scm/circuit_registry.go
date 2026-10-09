@@ -55,6 +55,13 @@ func NewCircuitRegistry() *CircuitRegistry {
 	return &CircuitRegistry{owners: map[string]*CircuitBreaker{}, quota: quota}
 }
 
+// maxIdleOwners bounds the owner circuits the registry keeps: when a new
+// owner would make it hold more, the circuits that hold no state (closed, no
+// failure counted, no probe) are dropped. Only owners whose calls are
+// failing keep a circuit beyond it, so the registry does not grow with every
+// owner a controller ever called.
+const maxIdleOwners = 256
+
 // owner returns the circuit of owner, creating it on first use. Owners are
 // compared case-insensitively, as GitHub, GitLab and Forgejo compare them.
 func (r *CircuitRegistry) owner(owner string) *CircuitBreaker {
@@ -63,10 +70,24 @@ func (r *CircuitRegistry) owner(owner string) *CircuitBreaker {
 	defer r.mu.Unlock()
 	cb, ok := r.owners[key]
 	if !ok {
+		if len(r.owners) >= maxIdleOwners {
+			r.pruneLocked()
+		}
 		cb = NewCircuitBreaker()
 		r.owners[key] = cb
 	}
 	return cb
+}
+
+// pruneLocked drops the owner circuits that hold no state. A call that took
+// such a circuit before it was dropped records into the dropped copy: at
+// most one failure is not counted. Must be called with r.mu held.
+func (r *CircuitRegistry) pruneLocked() {
+	for k, cb := range r.owners {
+		if cb.pristine() {
+			delete(r.owners, k)
+		}
+	}
 }
 
 // Owners returns how many owner circuits the registry holds.

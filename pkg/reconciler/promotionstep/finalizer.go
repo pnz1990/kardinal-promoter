@@ -25,7 +25,6 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
@@ -336,8 +335,12 @@ func (r *Reconciler) stepComeback(ctx context.Context, ps *v1alpha1.PromotionSte
 	case promoting && !created.Before(ps.DeletionTimestamp):
 		return comebackReusesPR, nil // the Graph was recreated before ps was reconciled
 	}
-	// The Graph is there, so kro applies the step again once ps is gone.
-	pushes, err := newStepPushesAtOnce(ctx, reader, ps, &b, &pl, g, r.AllowedRepositories)
+	// The Graph is there, so kro applies the step again once ps is gone. A
+	// step of a Pipeline whose repository is not allowed fails at once.
+	if msg, err := r.repositoryNotAllowed(ctx, &pl); err != nil || msg != "" {
+		return noComeback, err
+	}
+	pushes, err := newStepPushesAtOnce(ctx, reader, ps, &b, &pl, g)
 	if err != nil || !pushes {
 		return noComeback, err
 	}
@@ -358,8 +361,8 @@ func (r *Reconciler) stepComeback(ctx context.Context, ps *v1alpha1.PromotionSte
 // applies the step again can still make the new step wait with the kept
 // branch. docs/troubleshooting.md says how to find such a branch.
 func newStepPushesAtOnce(ctx context.Context, reader client.Reader, ps *v1alpha1.PromotionStep,
-	b *v1alpha1.Bundle, pl *v1alpha1.Pipeline, g *unstructured.Unstructured, allowed *scm.RepositoryAllowlist) (bool, error) {
-	if unsupportedConfig(pl, findEnv(pl, ps.Spec.Environment), ps, allowed) != "" {
+	b *v1alpha1.Bundle, pl *v1alpha1.Pipeline, g *unstructured.Unstructured) (bool, error) {
+	if unsupportedConfig(pl, findEnv(pl, ps.Spec.Environment), ps) != "" {
 		return false, nil
 	}
 	rejected, err := graphRejected(g, b)

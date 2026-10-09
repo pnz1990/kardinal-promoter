@@ -138,8 +138,10 @@ type Reconciler struct {
 	SCM scm.SCMProvider
 
 	// AllowedRepositories is --scm-allowed-repositories: a step of a Pipeline
-	// without git.secretRef whose spec.git.url it does not allow fails before
-	// git-clone (#1332). Nil allows every repository.
+	// that would need the shared SCM token for a spec.git.url it does not
+	// allow fails before git-clone (repositoryNotAllowed, #1332). The SCM
+	// provider is wrapped with the same list (RepositoryAllowlist.Guard), so
+	// every SCM call is checked too. Nil allows every repository.
 	AllowedRepositories *scm.RepositoryAllowlist
 
 	// GitClient is the Git operations client.
@@ -443,6 +445,19 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 // Forgejo and Gitea (handleDeleted, B79). The status read, the close and the
 // delete can fail; the comment is best-effort.
 func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) error {
+	err := r.closeStepPRWithSCM(ctx, ps, reason, keepBranch)
+	if errors.Is(err, scm.ErrRepositoryNotAllowed) {
+		// The shared token may not act on this repository (#1332): kardinal
+		// opened nothing there with it, and retrying cannot change that.
+		zerolog.Ctx(ctx).Warn().Err(err).Str("step", ps.Name).
+			Msg("left the PR and branch of the step alone: the repository is not allowed")
+		return nil
+	}
+	return err
+}
+
+// closeStepPRWithSCM is closeStepPR without the allowlist handling.
+func (r *Reconciler) closeStepPRWithSCM(ctx context.Context, ps *v1alpha1.PromotionStep, reason string, keepBranch bool) error {
 	repo, num := "", 0
 	if ps.Spec.PRStatusRef != "" {
 		var prs v1alpha1.PRStatus
@@ -578,7 +593,12 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
 		return res, holdErr
 	}
-	if msg := unsupportedConfig(pipeline, findEnv(pipeline, ps.Spec.Environment), ps, r.AllowedRepositories); msg != "" {
+	if msg := unsupportedConfig(pipeline, findEnv(pipeline, ps.Spec.Environment), ps); msg != "" {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	}
+	if msg, err := r.repositoryNotAllowed(ctx, pipeline); err != nil {
+		return ctrl.Result{}, err
+	} else if msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 
@@ -679,7 +699,12 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 	env := findEnv(pipeline, ps.Spec.Environment)
-	if msg := unsupportedConfig(pipeline, env, ps, r.AllowedRepositories); msg != "" {
+	if msg := unsupportedConfig(pipeline, env, ps); msg != "" {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	}
+	if msg, err := r.repositoryNotAllowed(ctx, pipeline); err != nil {
+		return ctrl.Result{}, err
+	} else if msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 	// Run the step list recorded when the step left Pending, never one rebuilt
@@ -1179,7 +1204,12 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 	env := findEnv(pipeline, ps.Spec.Environment)
-	if msg := unsupportedConfig(pipeline, env, ps, r.AllowedRepositories); msg != "" {
+	if msg := unsupportedConfig(pipeline, env, ps); msg != "" {
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+	}
+	if msg, err := r.repositoryNotAllowed(ctx, pipeline); err != nil {
+		return ctrl.Result{}, err
+	} else if msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 

@@ -213,7 +213,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "--scm-allowed-repositories: host/path globs a Pipeline without git.secretRef may promote into."
+          "description": "--scm-allowed-repositories: host/repository globs the controller's SCM token may act on."
         }
       }
     },

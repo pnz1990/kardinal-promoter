@@ -14,10 +14,16 @@
 package scm
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"path"
 	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -28,42 +34,73 @@ import (
 // --scm-allowed-repositories (#1332).
 const ReasonRepositoryNotAllowed = "RepositoryNotAllowed"
 
+// ErrRepositoryNotAllowed is wrapped by every error of the allowlist: a
+// Pipeline check (CheckPipeline) and a refused SCM API call (Guard).
+// IsPermanentError reports it as permanent: retrying cannot fix it.
+var ErrRepositoryNotAllowed = errors.New("repository not allowed")
+
 // RepositoryAllowlist is the controller's --scm-allowed-repositories (Helm
-// value scm.allowedRepositories): the repositories a Pipeline without its own
-// git.secretRef may promote into. Without a secretRef the controller's own
-// SCM token opens, labels, comments on and closes the PRs and deletes
-// kardinal/ branches, so anyone who can create a Pipeline could otherwise
-// reach every repository that token can write to.
+// value scm.allowedRepositories): the repositories the controller's own SCM
+// token may act on. That token opens, labels, comments on, polls and closes
+// every PR and deletes kardinal/ branches, whatever git.secretRef says (the
+// Pipeline's own token is used only for git clone and push), so without a
+// list anyone who can create a Pipeline can reach every repository the token
+// can write to.
 //
-// A pattern is host/path, matched case-insensitively against the host and
-// path of spec.git.url without scheme, userinfo, port and ".git":
-// "github.com/acme/*" matches every repository of acme, "*" one path
-// segment as in path.Match, and a pattern ending in "/**" everything under
-// it, GitLab subgroups included ("gitlab.example.com/platform/**"). A
-// pattern may carry a scheme or ".git"; both are dropped.
+// A pattern is host/repository: the host of the SCM, and the repository as
+// the SCM API names it (RepoFromURL): owner/repo on GitHub, Forgejo, Gitea
+// and Bitbucket, the full project path on GitLab, organization/project/repo
+// on Azure DevOps, whose host is always dev.azure.com (an
+// {org}.visualstudio.com or ssh.dev.azure.com URL is matched as
+// dev.azure.com/{org}/{project}/{repo}). Matching ignores case and a scheme,
+// userinfo, port or ".git" in the pattern. "*" matches one path segment as in
+// path.Match, and a pattern ending in "/**" every repository below it, GitLab
+// subgroups included. A URL that does not parse to a host and a repository
+// is never allowed.
+//
+// The list is enforced twice: up front, where the Pipeline and PromotionStep
+// reconcilers check spec.git.url (CheckPipeline), and on every SCM API call
+// the shared token makes (Guard), so no code path can reach another
+// repository.
 //
 // A nil *RepositoryAllowlist allows every repository (the flag is unset,
 // today's behaviour).
 type RepositoryAllowlist struct {
-	patterns []string
+	patterns []repoPattern
 }
+
+type repoPattern struct {
+	host, repo string // repo may end in "/**"
+}
+
+func (p repoPattern) String() string { return p.host + "/" + p.repo }
 
 // ParseRepositoryAllowlist returns the allowlist for patterns, or nil when
 // there is none (empty strings are skipped). A malformed pattern is an error.
 func ParseRepositoryAllowlist(patterns []string) (*RepositoryAllowlist, error) {
-	var out []string
+	var out []repoPattern
 	for _, raw := range patterns {
 		p := normalizeRepoPattern(raw)
 		if p == "" {
 			continue
 		}
-		if _, err := path.Match(strings.TrimSuffix(p, "/**"), ""); err != nil {
-			return nil, fmt.Errorf("allowed repository pattern %q: %w", raw, err)
+		host, repo, ok := strings.Cut(p, "/")
+		if !ok || host == "" || repo == "" {
+			return nil, fmt.Errorf("allowed repository pattern %q: want host/repository, e.g. github.com/acme/*", raw)
 		}
-		if strings.Contains(strings.TrimSuffix(p, "/**"), "**") {
-			return nil, fmt.Errorf("allowed repository pattern %q: ** is allowed only as the last path segment", raw)
+		prefix := strings.TrimSuffix(repo, "/**")
+		if repo == "**" {
+			prefix = ""
 		}
-		out = append(out, p)
+		for _, part := range []string{host, prefix} {
+			if _, err := path.Match(part, ""); err != nil {
+				return nil, fmt.Errorf("allowed repository pattern %q: %w", raw, err)
+			}
+			if strings.Contains(part, "**") {
+				return nil, fmt.Errorf("allowed repository pattern %q: ** is allowed only as the last path segment", raw)
+			}
+		}
+		out = append(out, repoPattern{host: host, repo: repo})
 	}
 	if len(out) == 0 {
 		return nil, nil
@@ -71,15 +108,25 @@ func ParseRepositoryAllowlist(patterns []string) (*RepositoryAllowlist, error) {
 	return &RepositoryAllowlist{patterns: out}, nil
 }
 
-// normalizeRepoPattern lowercases a pattern and drops a scheme, a ".git"
-// suffix and slashes at either end.
+// normalizeRepoPattern lowercases a pattern and drops a scheme, userinfo, a
+// port, a ".git" suffix and slashes at either end.
 func normalizeRepoPattern(raw string) string {
 	p := strings.ToLower(strings.TrimSpace(raw))
 	if _, rest, ok := strings.Cut(p, "://"); ok {
 		p = rest
 	}
 	p = strings.Trim(p, "/")
-	return strings.Trim(strings.TrimSuffix(p, ".git"), "/")
+	host, rest, _ := strings.Cut(p, "/")
+	if i := strings.LastIndex(host, "@"); i >= 0 {
+		host = host[i+1:]
+	}
+	if h, port, ok := strings.Cut(host, ":"); ok && port != "" && !strings.ContainsAny(port, "*?[") {
+		host = h
+	}
+	if rest == "" {
+		return host
+	}
+	return host + "/" + strings.Trim(strings.TrimSuffix(rest, ".git"), "/")
 }
 
 // Patterns returns the normalized patterns, for logs and messages.
@@ -87,28 +134,40 @@ func (a *RepositoryAllowlist) Patterns() []string {
 	if a == nil {
 		return nil
 	}
-	return append([]string(nil), a.patterns...)
+	out := make([]string, len(a.patterns))
+	for i, p := range a.patterns {
+		out[i] = p.String()
+	}
+	return out
 }
 
-// Allows reports whether gitURL matches a pattern. A nil allowlist allows
-// every URL; an allowlist never allows a URL it cannot parse.
-func (a *RepositoryAllowlist) Allows(gitURL string) bool {
+// AllowsRepo reports whether repo (as the SCM API names it) on the SCM host
+// matches a pattern. A nil allowlist allows everything; an empty host or
+// repository, or one with an empty, "." or ".." segment, is never allowed.
+func (a *RepositoryAllowlist) AllowsRepo(host, repo string) bool {
 	if a == nil {
 		return true
 	}
-	host, p, err := splitRemoteURL(gitURL)
-	if err != nil || host == "" {
+	host, repo = strings.ToLower(host), strings.ToLower(strings.Trim(repo, "/"))
+	if host == "" || repo == "" {
 		return false
 	}
-	repo := strings.Trim(strings.TrimSuffix(strings.ToLower(host+"/"+strings.Trim(p, "/")), ".git"), "/")
-	for _, pat := range a.patterns {
-		if prefix, ok := strings.CutSuffix(pat, "/**"); ok {
-			if m, _ := path.Match(prefix, repo); m {
-				return true
-			}
-			// Match the pattern's segments against the leading segments of repo.
+	segs := strings.Split(repo, "/")
+	for _, s := range segs {
+		if s == "" || s == "." || s == ".." {
+			return false
+		}
+	}
+	for _, p := range a.patterns {
+		if m, _ := path.Match(p.host, host); !m {
+			continue
+		}
+		if p.repo == "**" {
+			return true
+		}
+		if prefix, ok := strings.CutSuffix(p.repo, "/**"); ok {
+			// The prefix matches the leading segments; at least one more follows.
 			n := strings.Count(prefix, "/") + 1
-			segs := strings.Split(repo, "/")
 			if len(segs) > n {
 				if m, _ := path.Match(prefix, strings.Join(segs[:n], "/")); m {
 					return true
@@ -116,30 +175,131 @@ func (a *RepositoryAllowlist) Allows(gitURL string) bool {
 			}
 			continue
 		}
-		if m, _ := path.Match(pat, repo); m {
+		if m, _ := path.Match(p.repo, repo); m {
 			return true
 		}
 	}
 	return false
 }
 
-// ErrRepositoryNotAllowed is wrapped by CheckPipeline's error.
-var ErrRepositoryNotAllowed = errors.New("repository not allowed")
+// Allows reports whether the repository of the git remote gitURL is allowed:
+// its host (dev.azure.com for Azure DevOps) and its repository as
+// RepoFromURL parses it. A URL that does not parse is never allowed.
+func (a *RepositoryAllowlist) Allows(gitURL string) bool {
+	if a == nil {
+		return true
+	}
+	host, repo, err := RepoIdentity(gitURL)
+	if err != nil {
+		return false
+	}
+	return a.AllowsRepo(host, repo)
+}
 
-// CheckPipeline returns an error wrapping ErrRepositoryNotAllowed when p has
-// no git.secretRef and its spec.git.url is not allowed, so the controller's
-// shared token would act on it. A Pipeline with its own secretRef pushes
-// with its namespace's token, which proves its author's access, and is
-// always allowed. A nil allowlist allows every Pipeline.
-func (a *RepositoryAllowlist) CheckPipeline(p *v1alpha1.Pipeline) error {
-	if a == nil || (p.Spec.Git.SecretRef != nil && p.Spec.Git.SecretRef.Name != "") {
+// RepoIdentity returns the SCM host and the repository (RepoFromURL) of a git
+// remote URL. Azure DevOps remotes ({org}.visualstudio.com, ssh.dev.azure.com,
+// vs-ssh.visualstudio.com) are reported on dev.azure.com, the host of the
+// organization/project/repo the API acts on.
+func RepoIdentity(gitURL string) (host, repo string, err error) {
+	host, _, err = splitRemoteURL(gitURL)
+	if err != nil {
+		return "", "", err
+	}
+	if host == "" {
+		return "", "", fmt.Errorf("repository URL %q has no host", RedactURL(gitURL))
+	}
+	repo, err = RepoFromURL(gitURL)
+	if err != nil {
+		return "", "", err
+	}
+	if host == "ssh.dev.azure.com" || strings.HasSuffix(host, ".visualstudio.com") {
+		host = "dev.azure.com"
+	}
+	return host, repo, nil
+}
+
+// WebHost returns the SCM host the allowlist matches the shared token's API
+// calls on, for the controller's --scm-provider and --scm-api-url: the API
+// URL's host without an "api." prefix (api.github.com is github.com), or the
+// provider's public host when no URL is set.
+func WebHost(providerType, apiURL string) (string, error) {
+	defaults := map[string]string{"": "github.com", "github": "github.com", "gitlab": "gitlab.com",
+		"forgejo": "codeberg.org", "gitea": "codeberg.org", "bitbucket": "bitbucket.org", "azuredevops": "dev.azure.com"}
+	def, ok := defaults[providerType]
+	if !ok {
+		return "", fmt.Errorf("unknown SCM provider type %q", providerType)
+	}
+	if strings.TrimSpace(apiURL) == "" {
+		return def, nil
+	}
+	u, err := url.Parse(strings.TrimSpace(apiURL))
+	if err != nil || u.Hostname() == "" {
+		return "", fmt.Errorf("SCM API URL %q has no host", RedactURL(apiURL))
+	}
+	host := strings.ToLower(u.Hostname())
+	if providerType != "azuredevops" {
+		host = strings.TrimPrefix(host, "api.")
+	}
+	return host, nil
+}
+
+// CheckPipeline returns an error wrapping ErrRepositoryNotAllowed when the
+// Pipeline would have the controller's shared token act on a repository
+// that is not allowed. That is every Pipeline whose spec.git.url is not
+// allowed, except one that never needs the shared token: ownSecret (its
+// git.secretRef names a Secret that exists, so git clone and push use its
+// token) and no environment with approval: pr-review (whose PR the shared
+// token opens, polls and closes). A nil allowlist allows every Pipeline.
+func (a *RepositoryAllowlist) CheckPipeline(p *v1alpha1.Pipeline, ownSecret bool) error {
+	if a == nil || a.Allows(p.Spec.Git.URL) {
 		return nil
 	}
-	if a.Allows(p.Spec.Git.URL) {
-		return nil
+	why := "the Pipeline has no git.secretRef to a Secret that exists, so nothing but the controller's token can reach it"
+	if ownSecret {
+		env := prReviewEnv(p)
+		if env == "" {
+			return nil
+		}
+		why = fmt.Sprintf("environment %q uses approval: pr-review, and the controller's token opens and tracks its PRs", env)
 	}
-	return fmt.Errorf("%w: spec.git.url %q is not in the controller's allowed repositories (%s), "+
-		"so the controller's SCM token may not open PRs there; set git.secretRef to a Secret in this "+
-		"namespace with a token for the repository, or ask the cluster admin to add it to "+
-		"scm.allowedRepositories", ErrRepositoryNotAllowed, RedactURL(p.Spec.Git.URL), strings.Join(a.patterns, ", "))
+	return fmt.Errorf("%w: spec.git.url %q is not in the controller's allowed repositories (%s): %s; "+
+		"ask the cluster admin to add it to scm.allowedRepositories", ErrRepositoryNotAllowed,
+		RedactURL(p.Spec.Git.URL), strings.Join(a.Patterns(), ", "), why)
+}
+
+// prReviewEnv returns the first environment with approval: pr-review, or "".
+func prReviewEnv(p *v1alpha1.Pipeline) string {
+	for _, e := range p.Spec.Environments {
+		if e.Approval == "pr-review" {
+			return e.Name
+		}
+	}
+	return ""
+}
+
+// NotAllowedMessage returns err's text without the ErrRepositoryNotAllowed
+// prefix, for a condition or step message.
+func NotAllowedMessage(err error) string {
+	return strings.TrimPrefix(err.Error(), ErrRepositoryNotAllowed.Error()+": ")
+}
+
+// PipelineSecretExists reports whether the Pipeline's git.secretRef names a
+// Secret that exists in the Pipeline's namespace, the token git clone and
+// push use instead of none (CheckPipeline's ownSecret). A secretRef in another
+// namespace does not count. Secrets are read uncached (get only).
+func PipelineSecretExists(ctx context.Context, reader client.Reader, p *v1alpha1.Pipeline) (bool, error) {
+	ref := p.Spec.Git.SecretRef
+	if ref == nil || ref.Name == "" || (ref.Namespace != "" && ref.Namespace != p.Namespace) {
+		return false, nil
+	}
+	var s corev1.Secret
+	err := reader.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: ref.Name}, &s)
+	switch {
+	case err == nil:
+		return true, nil
+	case apierrors.IsNotFound(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("get git.secretRef Secret %s/%s: %w", p.Namespace, ref.Name, err)
+	}
 }

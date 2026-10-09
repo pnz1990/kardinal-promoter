@@ -4,6 +4,7 @@
 package promotionstep
 
 import (
+	"context"
 	"fmt"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -18,17 +19,10 @@ import (
 // Each case used to be accepted and then silently ignored or, for the Secret
 // namespace, honoured in an unsafe way. Failing the step with a clear message
 // is the only honest behaviour.
-func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep,
-	allowed *scm.RepositoryAllowlist) string {
+func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep) string {
 	// Confused deputy: refused on purpose. The Pipeline reconciler reports the
 	// same error as Ready=False/ValidationFailed.
 	if err := graph.ValidateSecretRef(pipeline); err != nil {
-		return err.Error()
-	}
-	// The controller's shared SCM token may act only on the allowed
-	// repositories (#1332). Checked before git-clone; the Pipeline reconciler
-	// reports it as Ready=False/RepositoryNotAllowed.
-	if err := allowed.CheckPipeline(pipeline); err != nil {
 		return err.Error()
 	}
 	// Distributed mode was removed. The Pipeline reconciler reports the same
@@ -51,4 +45,24 @@ func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec
 		return fmt.Sprintf("health.resource.kind %q is not supported: only Deployment is checked", res.Kind)
 	}
 	return ""
+}
+
+// repositoryNotAllowed returns why the step must not run because its
+// Pipeline would have the controller's shared SCM token act on a repository
+// --scm-allowed-repositories does not allow (#1332), or "". The Pipeline's
+// own git.secretRef exempts it only when that Secret exists and no
+// environment opens a PR (scm.RepositoryAllowlist.CheckPipeline). The
+// Pipeline reconciler reports the same as Ready=False/RepositoryNotAllowed.
+func (r *Reconciler) repositoryNotAllowed(ctx context.Context, pipeline *v1alpha1.Pipeline) (string, error) {
+	if r.AllowedRepositories.Allows(pipeline.Spec.Git.URL) {
+		return "", nil
+	}
+	own, err := scm.PipelineSecretExists(ctx, r.Client, pipeline)
+	if err != nil {
+		return "", err
+	}
+	if err := r.AllowedRepositories.CheckPipeline(pipeline, own); err != nil {
+		return err.Error(), nil
+	}
+	return "", nil
 }
