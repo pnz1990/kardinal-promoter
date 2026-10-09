@@ -292,6 +292,35 @@ spec:
                   10 minutes.
                 format: date-time
                 type: string
+              overridesSeen:
+                description: |-
+                  OverridesSeen records when the controller first saw each entry of
+                  spec.overrides. An override ends at the earlier of its expiresAt and
+                  firstSeen plus the override cap (--gate-override-max-minutes), so an
+                  entry dated in the future cannot extend it, and an entry whose
+                  createdAt is more than 5 minutes after firstSeen is ignored (condition
+                  OverrideIgnored).
+                items:
+                  description: OverrideObservation is when the controller first saw
+                    one override.
+                  properties:
+                    firstSeen:
+                      description: FirstSeen is when the controller first saw it.
+                      format: date-time
+                      type: string
+                    key:
+                      description: |-
+                        Key identifies the override: a hash of its stage, reason, createdBy,
+                        createdAt and expiresAt.
+                      type: string
+                  required:
+                  - firstSeen
+                  - key
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - key
+                x-kubernetes-list-type: map
               ready:
                 default: false
                 description: |-

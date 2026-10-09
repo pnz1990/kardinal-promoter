@@ -36,8 +36,10 @@ spec:
   #     (policygates) changes;
   #   - spec.overrides is append-only, and each new entry names the caller
   #     in createdBy and expires at most gateOverrides.maxMinutes after its
-  #     createdAt (the PolicyGate reconciler ignores an override whose
-  #     createdAt is in the future).
+  #     createdAt. CEL has no clock here, so the PolicyGate reconciler
+  #     ends each override at most gateOverrides.maxMinutes after it first
+  #     saw it (status.overridesSeen) and ignores one created more than 5
+  #     minutes after that (condition OverrideIgnored).
   # Callers with neither subresource are not limited here: their RBAC decides.
   variables:
     - name: field

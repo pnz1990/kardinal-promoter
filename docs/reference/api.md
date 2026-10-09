@@ -333,6 +333,9 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is when the gate's result was last written. The controller re-evaluates more often, but writes the status only when the result or reason changes, when a PromotionStep that has not started needs a newer result, after a spec change, and otherwise at least every 10 minutes. |
+| `status.overridesSeen` | []object |  | OverridesSeen records when the controller first saw each entry of spec.overrides. An override ends at the earlier of its expiresAt and firstSeen plus the override cap (--gate-override-max-minutes), so an entry dated in the future cannot extend it, and an entry whose createdAt is more than 5 minutes after firstSeen is ignored (condition OverrideIgnored). |
+| `status.overridesSeen[].firstSeen` | string (date-time) | yes | FirstSeen is when the controller first saw it. |
+| `status.overridesSeen[].key` | string | yes | Key identifies the override: a hash of its stage, reason, createdBy, createdAt and expiresAt. |
 | `status.ready` | boolean | yes | Ready indicates whether the gate is currently allowing promotion. The kro Graph gates downstream nodes on status.ready == true. Default: `false`. |
 | `status.reason` | string |  | Reason explains the current ready state in human-readable form. |
 

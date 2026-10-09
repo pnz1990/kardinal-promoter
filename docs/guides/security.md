@@ -708,8 +708,12 @@ callers the policy also keeps all of the metadata as it was, except what the API
 ownerReferences (an ownerReference to a deleted object would have the garbage collector
 delete the gate). It makes `spec.overrides` append-only, requires `createdBy` to be the
 caller on each new entry, and requires an `expiresAt` at most `gateOverrides.maxMinutes`
-(default 1440, the same bound the UI applies) after its `createdAt`. The PolicyGate
-reconciler ignores an override whose `createdAt` is more than 5 minutes in the future.
+(default 1440, the same bound the UI applies) after its `createdAt`. The admission policy cannot read the clock, so the PolicyGate reconciler enforces the cap
+in time: it records when it first saw each override (`status.overridesSeen`), ends an
+override at the earlier of its `expiresAt` and that time plus `gateOverrides.maxMinutes`,
+and ignores an entry whose `createdAt` is more than 5 minutes after it first saw it
+(condition `OverrideIgnored`, naming the entries). Entries chained a cap apart in advance
+therefore give one cap, not one per entry.
 
 `directWrites` weakens two guarantees. First, separation of duties: the narrow roles become
 direct write access, held back only by this policy. Second, the audit trail: such a write is

@@ -100,6 +100,20 @@ type Reconciler struct {
 	// while it does not change (unchangedResult). Zero or less writes the
 	// status on every evaluation. NewReconciler sets DefaultStatusHeartbeat.
 	StatusHeartbeat time.Duration
+	// MaxOverride bounds how long an override counts from when the
+	// controller first saw it (--gate-override-max-minutes). Zero means
+	// DefaultMaxOverride.
+	MaxOverride time.Duration
+}
+
+// DefaultMaxOverride is the --gate-override-max-minutes default.
+const DefaultMaxOverride = 24 * time.Hour
+
+func (r *Reconciler) maxOverride() time.Duration {
+	if r.MaxOverride > 0 {
+		return r.MaxOverride
+	}
+	return DefaultMaxOverride
 }
 
 // DefaultStatusHeartbeat is the controller's --gate-status-heartbeat default.
@@ -195,18 +209,22 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// this gate (matching stage or stage=""), the gate passes immediately.
 	// This check is done before building the CEL context for performance.
 	now := r.now()
-	if activeOverride := findActiveOverride(gate.Spec.Overrides, gate.Labels[labelEnvironment], now); activeOverride != nil {
+	if err := r.recordOverrides(ctx, &gate, now); err != nil {
+		return ctrl.Result{}, err
+	}
+	if activeOverride, end := findActiveOverride(gate.Spec.Overrides, gate.Labels[labelEnvironment], now,
+		firstSeenOf(gate.Status.OverridesSeen), r.maxOverride()); activeOverride != nil {
 		overrideReason := fmt.Sprintf("OVERRIDDEN by %s: %s (expires %s)",
 			activeOverride.CreatedBy,
 			activeOverride.Reason,
-			activeOverride.ExpiresAt.UTC().Format("2006-01-02T15:04Z"))
+			end.UTC().Format("2006-01-02T15:04Z"))
 		log.Info().Str("reason", overrideReason).Msg("policygate override active, passing")
 		if patchErr := r.patchStatus(ctx, &gate, true, overrideReason); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status (override): %w", patchErr)
 		}
 		// Re-evaluate just after the override expires, so the gate does not stay
 		// force-passed for up to a whole recheck interval (C04-gates-21).
-		return ctrl.Result{RequeueAfter: min(recheckInterval, activeOverride.ExpiresAt.Sub(now)+time.Second)}, nil
+		return ctrl.Result{RequeueAfter: min(recheckInterval, end.Sub(now)+time.Second)}, nil
 	}
 
 	// Build CEL context. bundleVersion is returned separately so it can be
@@ -1276,30 +1294,4 @@ func parseRecheckInterval(s string) time.Duration {
 		return minRecheckInterval
 	}
 	return d
-}
-
-// overrideClockSkew is how far in the future an override's createdAt may be
-// (clock differences between the writer and the controller).
-const overrideClockSkew = 5 * time.Minute
-
-// findActiveOverride returns the first non-expired override matching the given
-// environment name (K-09). An override with Stage="" matches any environment.
-// Returns nil if no active override is found.
-func findActiveOverride(overrides []kardinalv1alpha1.PolicyGateOverride, envName string, now time.Time) *kardinalv1alpha1.PolicyGateOverride {
-	for i := range overrides {
-		o := &overrides[i]
-		if o.ExpiresAt.Time.IsZero() || now.After(o.ExpiresAt.Time) {
-			continue // expired or zero
-		}
-		// createdAt is written by whoever made the override; one dated in the
-		// future would stretch the admission policy's bound on expiresAt -
-		// createdAt, so it does not count until then.
-		if o.CreatedAt != nil && o.CreatedAt.After(now.Add(overrideClockSkew)) {
-			continue
-		}
-		if o.Stage == "" || o.Stage == envName {
-			return o
-		}
-	}
-	return nil
 }

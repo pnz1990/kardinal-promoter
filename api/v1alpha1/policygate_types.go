@@ -129,6 +129,26 @@ type PolicyGateStatus struct {
 	// Conditions holds status conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// OverridesSeen records when the controller first saw each entry of
+	// spec.overrides. An override ends at the earlier of its expiresAt and
+	// firstSeen plus the override cap (--gate-override-max-minutes), so an
+	// entry dated in the future cannot extend it, and an entry whose
+	// createdAt is more than 5 minutes after firstSeen is ignored (condition
+	// OverrideIgnored).
+	// +optional
+	// +listType=map
+	// +listMapKey=key
+	OverridesSeen []OverrideObservation `json:"overridesSeen,omitempty"`
+}
+
+// OverrideObservation is when the controller first saw one override.
+type OverrideObservation struct {
+	// Key identifies the override: a hash of its stage, reason, createdBy,
+	// createdAt and expiresAt.
+	Key string `json:"key"`
+	// FirstSeen is when the controller first saw it.
+	FirstSeen metav1.Time `json:"firstSeen"`
 }
 
 // +kubebuilder:object:root=true

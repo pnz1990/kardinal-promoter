@@ -466,6 +466,7 @@ func main() {
 	// namespace, the same namespaces the translator takes org gates from.
 	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
 	pgReconciler.StatusHeartbeat = gateStatusHeartbeat
+	pgReconciler.MaxOverride = time.Duration(maxGateOverrideMinutes) * time.Minute
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
