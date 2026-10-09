@@ -176,9 +176,9 @@ spec:
                             supported" instead of silently checking the local cluster.
 
                             Deprecated: remove cluster. To verify a workload in another cluster,
-                            check its Argo CD Application (health.type: argocd) or Flux
-                            Kustomization (health.type: flux) in the hub cluster kardinal runs in;
-                            see docs/health-adapters.md#remote-clusters.
+                            set kubeconfigSecretRef, or check its Argo CD Application
+                            (health.type: argocd) or Flux Kustomization (health.type: flux) in the
+                            hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
                           type: string
                         flagger:
                           description: |-
@@ -204,6 +204,37 @@ spec:
                             namespace:
                               description: Namespace is the object namespace.
                               type: string
+                          type: object
+                        kubeconfigSecretRef:
+                          description: |-
+                            KubeconfigSecretRef runs the health check against another cluster: the
+                            one the kubeconfig in this Secret key selects (its current context).
+                            The Secret must be in the Pipeline's namespace. Every health type reads
+                            its object (Deployment, Application, Kustomization, Rollout, Canary)
+                            in that cluster instead of the controller's.
+
+                            Only inline credentials are accepted: a bearer token, a client
+                            certificate and key (-data fields), or a username and password. A
+                            kubeconfig with exec, auth-provider, tokenFile or any file path is
+                            refused and the step fails: it would run a command, or read a file, in
+                            the controller. The API server address goes through the controller's
+                            egress guard (no loopback, link-local or metadata addresses) and is
+                            dialled directly, not through HTTP(S)_PROXY.
+
+                            A cluster that cannot be reached is not unhealthy: the step reports
+                            ClusterUnreachable and keeps checking until health.timeout. Remote
+                            health is polled, not watched.
+                          properties:
+                            key:
+                              description: Key is the key holding the kubeconfig.
+                                Defaults to "kubeconfig".
+                              type: string
+                            name:
+                              description: Name is the Secret name.
+                              minLength: 1
+                              type: string
+                          required:
+                          - name
                           type: object
                         labelSelector:
                           additionalProperties:
