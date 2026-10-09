@@ -235,7 +235,7 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 // lost a race and can be retried on the new head, like a non-fast-forward.
 var concurrentUpdateReasons = []string{
 	"non-fast-forward", "fetch first", "failed to update ref", "failed to lock",
-	"cannot lock ref", "stale info", "reference already exists",
+	"cannot lock ref", "stale info", "reference already exists", "incorrect old value",
 }
 
 // isConcurrentUpdate reports whether a push error is a lost race on the ref.
