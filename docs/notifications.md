@@ -144,6 +144,33 @@ send neither.
 | `slack` | A Slack incoming-webhook message: fallback `text` and Block Kit `blocks` | `application/json` |
 | `teams` | A Microsoft Teams Workflows webhook message with an Adaptive Card 1.4 attachment | `application/json` |
 | `template` | `spec.template.body` rendered over the event ([Templated body](#templated-body)) | `spec.template.contentType`, default `application/json` |
+| `cloudevents` | The kardinal payload as the `data` of a [CloudEvents 1.0](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md) event, structured JSON mode ([CloudEvents](#cloudevents)) | `application/cloudevents+json; charset=utf-8` |
+
+### CloudEvents
+
+```json
+{
+  "specversion": "1.0",
+  "id": "Bundle.Verified/my-app-v1-29-0",
+  "source": "/apis/kardinal.io/v1alpha1/namespaces/default/pipelines/my-app",
+  "type": "io.kardinal.bundle.verified",
+  "subject": "my-app-v1-29-0",
+  "time": "2026-10-09T12:00:00Z",
+  "datacontenttype": "application/json",
+  "data": {"event": "Bundle.Verified", "pipeline": "my-app", "bundle": "my-app-v1-29-0", "message": "...", "timestamp": "2026-10-09T12:00:00Z"}
+}
+```
+
+| Attribute | Value |
+|-----------|-------|
+| `id` | The event key, the same as `X-Kardinal-Event-Key`: a retried delivery has the same `id`, so receivers drop duplicates on it |
+| `source` | The Pipeline the event belongs to, as an API path; the namespace path for an event without a Pipeline |
+| `type` | `io.kardinal.` + the event name in lower case (`io.kardinal.policygate.blocked`, `io.kardinal.promotionstep.failed`) |
+| `subject` | The Bundle, with `/<environment>` when the event has one |
+| `time` | When the event happened (the Bundle phase change, gate block, or step transition); a retry keeps it. The payload's `timestamp` is the send time |
+| `data` | The [Webhook payload](#webhook-payload) |
+
+The `X-Kardinal-*` headers are sent as well. Binary content mode (`ce-*` headers) is not offered.
 
 ### Slack
 
@@ -388,6 +415,100 @@ that sets both.
 The controller never writes the URL or the header to status or logs; logs show only the
 host. When the URL is in `spec.webhook.url`, `kubectl get notificationhooks` shows it in its
 URL column, which is one more reason to keep token URLs in the Secret.
+
+## Signed requests
+
+With `spec.signing`, every request carries an HMAC-SHA256 signature, so a receiver can check
+that it comes from this controller, was not changed, and is not a replay:
+
+```bash
+kubectl create secret generic hook-signing -n default \
+  --from-literal=signing-key="$(openssl rand -hex 32)"
+kubectl label secret hook-signing -n default kardinal.io/referenceable=true
+```
+
+```yaml
+spec:
+  signing:
+    secretRef:
+      name: hook-signing
+      key: signing-key   # the default
+```
+
+| Header | Value |
+|--------|-------|
+| `X-Kardinal-Timestamp` | The Unix time, in seconds, the request was signed at. Each attempt, retries included, is signed again with its own time |
+| `X-Kardinal-Signature` | `sha256=` + the lowercase hex HMAC-SHA256, keyed with the signing key, of the timestamp, a `.`, and the raw request body |
+
+To verify a request:
+
+1. Read the raw body bytes before parsing them. Any re-encoding changes the signature.
+2. Refuse the request if `X-Kardinal-Timestamp` is more than 5 minutes away from your clock. That stops replays.
+3. Compute `HMAC-SHA256(key, timestamp + "." + body)` and compare `sha256=<hex>` with `X-Kardinal-Signature` in constant time.
+4. To be safe across the 5 minutes, also drop repeated `X-Kardinal-Event-Key` values.
+
+The key is used exactly as stored, byte for byte: create it with `--from-literal`, or make sure a file has no trailing newline.
+
+Go:
+
+```go
+func verify(key []byte, r *http.Request, body []byte) bool {
+	ts := r.Header.Get("X-Kardinal-Timestamp")
+	sec, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil || math.Abs(time.Since(time.Unix(sec, 0)).Seconds()) > 300 {
+		return false
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(ts + "."))
+	mac.Write(body)
+	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(want), []byte(r.Header.Get("X-Kardinal-Signature")))
+}
+```
+
+Python:
+
+```python
+import hashlib, hmac, time
+
+def verify(key: bytes, headers, body: bytes) -> bool:
+    ts = headers["X-Kardinal-Timestamp"]
+    if abs(time.time() - int(ts)) > 300:
+        return False
+    want = "sha256=" + hmac.new(key, ts.encode() + b"." + body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(want, headers["X-Kardinal-Signature"])
+```
+
+Node.js:
+
+```js
+const crypto = require("crypto");
+function verify(key, headers, rawBody) {
+  const ts = headers["x-kardinal-timestamp"];
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false;
+  const want = "sha256=" + crypto.createHmac("sha256", key).update(ts + ".").update(rawBody).digest("hex");
+  const got = headers["x-kardinal-signature"] || "";
+  return want.length === got.length && crypto.timingSafeEqual(Buffer.from(want), Buffer.from(got));
+}
+```
+
+Shell, for a quick check:
+
+```bash
+{ printf '%s.' "$TIMESTAMP"; cat body.json; } | openssl dgst -sha256 -hmac "$KEY" | sed 's/^.* /sha256=/'
+```
+
+The signing Secret follows the same rules as the webhook Secret: it lives in the hook's
+namespace, is labeled `kardinal.io/referenceable: "true"`, and is read on every delivery, so
+a rotated key is used for the next request. The key must be at least 32 bytes.
+
+If the Secret, the label or the key is missing, or the key is shorter than that, the hook is
+`Ready=False` and sends nothing; its events wait and are delivered once it is fixed. The
+reasons are `SecretNotFound`, `SecretNotReferenceable`, `SecretKeyMissing` and
+`SigningKeyTooShort`. An unsigned request is never sent instead.
+
+To rotate the key without dropping events, have the receiver accept the old key and the new
+key for a while, then update the Secret.
 
 ---
 

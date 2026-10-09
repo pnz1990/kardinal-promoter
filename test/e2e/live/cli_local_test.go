@@ -95,7 +95,9 @@ func barePipeline(t *testing.T, e *framework.Env, ns, name string, edit ...func(
 	p := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: v1alpha1.PipelineSpec{
-			Git:          v1alpha1.PipelineGit{URL: "https://git.example/o/" + name},
+			// A repository per namespace: bare Pipelines of other tests at
+			// the same path would get PathConflict, a status change.
+			Git:          v1alpha1.PipelineGit{URL: "https://git.example/" + ns + "/" + name},
 			Environments: []v1alpha1.EnvironmentSpec{{Name: "test", Path: "environments/test"}},
 		},
 	}
