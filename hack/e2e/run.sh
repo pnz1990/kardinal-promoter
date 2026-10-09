@@ -61,6 +61,10 @@ fi
 # 90 minutes per repetition unless KARDINAL_E2E_TIMEOUT says.
 PARALLEL=${KARDINAL_E2E_PARALLEL:-}
 [ -n "$PARALLEL" ] || [ "$SUITE" != scale ] || PARALLEL=4
+# report decides: go test also fails the package for an expected failure
+# (scale.KnownBug), which report does not count as one.
+set +o pipefail
 go test -tags e2e ./test/e2e/live -run "$RUN" -count="$COUNT" -timeout "${KARDINAL_E2E_TIMEOUT:-$((90 * COUNT))m}" \
   ${PARALLEL:+-parallel "$PARALLEL"} -json 2>&1 |
   tee "$E2E_OUT/test.json" | "$E2E_OUT/bin/report" -suite "$SUITE" -out "$E2E_OUT/summary.json"
+exit "${PIPESTATUS[2]}"

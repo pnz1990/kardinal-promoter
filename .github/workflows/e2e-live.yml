@@ -217,8 +217,14 @@ jobs:
           declare -A latest
           while read -r d; do latest[${d%-attempt-*}]=$d; done < \
             <(find results -mindepth 1 -maxdepth 1 -type d -name '*-attempt-*' | sort -V)
-          [ "${#latest[@]}" -gt 0 ] || { echo "::error::no suite uploaded results"; exit 1; }
-          mapfile -t files < <(find "${latest[@]}" -name summary.json | sort)
+          if [ "${#latest[@]}" -gt 0 ]; then
+            mapfile -t files < <(find "${latest[@]}" -name summary.json | sort)
+          else
+            # download-artifact puts a single matching artifact (a dispatch
+            # of one suite) straight into results/, with no directory of its own.
+            mapfile -t files < <(find results -name summary.json | sort)
+          fi
+          [ "${#files[@]}" -gt 0 ] || { echo "::error::no suite uploaded results"; exit 1; }
           GITHUB_TOKEN="$GH_TOKEN" go run ./test/e2e/proof -out coverage-proof.json "${files[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
