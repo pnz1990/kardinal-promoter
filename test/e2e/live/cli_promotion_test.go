@@ -303,18 +303,22 @@ func TestCLI_CreateBundleAndGet(t *testing.T) {
 	active := c.Must(a.ns, "get", "bundles", "--active")
 	assert.Nil(t, framework.TableRow(active, "BUNDLE", b1), "--active hides the Superseded Bundle:\n%s", active)
 	assert.NotNil(t, framework.TableRow(active, "BUNDLE", b2), active)
-	framework.Eventually(t, time.Minute, "get steps to show only "+b2, func(context.Context) (bool, string) {
+	// b2's prod step exists only once its test step is Verified: Argo CD's
+	// sync and the health check come first, which can take minutes on a
+	// loaded cluster (#1547), so this waits as long as a promotion.
+	framework.Eventually(t, promoteTimeout, "get steps to show only "+b2, func(context.Context) (bool, string) {
 		var sl []v1alpha1.PromotionStep
 		raw := c.Must(a.ns, "get", "steps", pipelineName, "-o", "json")
 		if err := json.Unmarshal([]byte(raw), &sl); err != nil {
 			return false, err.Error()
 		}
+		seen := make([]string, 0, len(sl))
+		only := true
 		for _, s := range sl {
-			if s.Spec.BundleName != b2 {
-				return false, raw
-			}
+			seen = append(seen, s.Name+"="+s.Status.State)
+			only = only && s.Spec.BundleName == b2
 		}
-		return len(sl) == 2, raw
+		return only && len(sl) == 2, strings.Join(seen, ", ")
 	})
 
 	// The --watch streams follow b2 to prod.
