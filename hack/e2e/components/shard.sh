@@ -9,7 +9,7 @@
 #
 # Env file:
 #   KARDINAL_E2E_SHARD_B_NS       the shard b release namespace
-#   KARDINAL_E2E_SHARD_B_RELEASE  its release (and Deployment) name
+#   KARDINAL_E2E_SHARD_B_RELEASE  its release name
 #
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
@@ -40,9 +40,12 @@ existed=false
   --set logLevel=debug --set github.secretRef.name=git-token \
   --set "scm.provider=${KARDINAL_E2E_SCM_PROVIDER:?}" --set "scm.apiURL=${KARDINAL_E2E_SCM_API:-}" \
   --set controller.namespaceShard=b --skip-crds --wait --timeout 5m >/dev/null
+# The Deployment is named <release>-kardinal-promoter.
+DEPLOY=$("${KUBECTL[@]}" -n "$NS" get deploy -l "app.kubernetes.io/instance=$RELEASE" -o name)
+[ -n "$DEPLOY" ] || die "no Deployment of release $RELEASE in $NS"
 if $existed; then
-  "${KUBECTL[@]}" -n "$NS" rollout restart "deploy/$RELEASE" >/dev/null
-  "${KUBECTL[@]}" -n "$NS" rollout status "deploy/$RELEASE" --timeout=180s >/dev/null
+  "${KUBECTL[@]}" -n "$NS" rollout restart "$DEPLOY" >/dev/null
+  "${KUBECTL[@]}" -n "$NS" rollout status "$DEPLOY" --timeout=180s >/dev/null
 fi
 env_set KARDINAL_E2E_SHARD_B_NS "$NS"
 env_set KARDINAL_E2E_SHARD_B_RELEASE "$RELEASE"
