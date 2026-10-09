@@ -170,6 +170,7 @@ func TestUIHandler_TokenReviewAuthorizesActions(t *testing.T) {
 		path       string
 		body       string
 		wantCode   int
+		wantBody   string
 		wantPaused bool
 		wantGateBy string
 	}{
@@ -188,10 +189,14 @@ func TestUIHandler_TokenReviewAuthorizesActions(t *testing.T) {
 			path: "/api/v1/ui/gates/team-a/no-weekend/approve", body: `{"reason":"x"}`, wantCode: http.StatusForbidden},
 		{name: "viewer lists pipelines", token: "viewer-token", method: http.MethodGet, path: "/api/v1/ui/pipelines",
 			wantCode: http.StatusOK},
-		{name: "namespace-scoped deployer cannot list all namespaces", token: "deployer-token", method: http.MethodGet,
-			path: "/api/v1/ui/pipelines", wantCode: http.StatusForbidden},
-		{name: "unrelated service account cannot read", token: "random-token", method: http.MethodGet,
-			path: "/api/v1/ui/pipelines", wantCode: http.StatusForbidden},
+		// Lists follow namespace RBAC: a namespace-scoped user sees its
+		// namespace, an unrelated one an empty list; neither is a 403.
+		{name: "namespace-scoped deployer lists its namespace", token: "deployer-token", method: http.MethodGet,
+			path: "/api/v1/ui/pipelines", wantCode: http.StatusOK, wantBody: `"namespace":"team-a"`},
+		{name: "unrelated service account lists nothing", token: "random-token", method: http.MethodGet,
+			path: "/api/v1/ui/pipelines", wantCode: http.StatusOK, wantBody: "[]"},
+		{name: "unrelated service account cannot read a Bundle graph", token: "random-token", method: http.MethodGet,
+			path: "/api/v1/ui/bundles/b/graph?namespace=team-a", wantCode: http.StatusForbidden},
 		{name: "unknown token", token: "nope", method: http.MethodGet, path: "/api/v1/ui/pipelines",
 			wantCode: http.StatusUnauthorized},
 	}
@@ -205,6 +210,9 @@ func TestUIHandler_TokenReviewAuthorizesActions(t *testing.T) {
 
 			rec := uiAuthDo(t, h, tt.method, tt.path, "Bearer "+tt.token, tt.body)
 			require.Equal(t, tt.wantCode, rec.Code, rec.Body.String())
+			if tt.wantBody != "" {
+				assert.Contains(t, rec.Body.String(), tt.wantBody)
+			}
 
 			var pl v1alpha1.Pipeline
 			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "app"}, &pl))

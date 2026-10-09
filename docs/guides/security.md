@@ -578,7 +578,9 @@ gate itself, so the user needs no rights on `policygates` to pause.
 
 The list views respect namespace RBAC. A user who may list a kind cluster-wide gets every
 namespace; one bound only in some namespaces (a RoleBinding) gets exactly the objects of those
-namespaces, and the rest are left out without an error; one who may list it nowhere gets `403`.
+namespaces, and the rest are left out without an error; one who may list it nowhere gets an
+empty list. A read of one object, and every write, is still checked on that object and refused
+with `403`.
 When the controller runs with `--watch-namespace`, lists are checked against that namespace.
 The chart's [user roles](#user-roles) hold these permissions.
 

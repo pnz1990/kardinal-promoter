@@ -208,8 +208,9 @@ func (c *AuthorizingClient) Get(ctx context.Context, key client.ObjectKey, obj c
 // (no namespace, no --watch-namespace) that the user may not make
 // cluster-wide falls back to namespace RBAC: the controller lists, and only
 // the items in namespaces where the user may list that kind are returned. A
-// user bound in some namespaces sees those, not a 403. When the user may list
-// in none of them, the request is denied as before.
+// user bound in some namespaces sees those, not a 403; a user bound nowhere
+// gets an empty list. Nothing of a namespace the user may not list is
+// returned, and no denial is recorded.
 func (c *AuthorizingClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
 	lo := &client.ListOptions{}
 	lo.ApplyOptions(opts)
@@ -253,14 +254,6 @@ func (c *AuthorizingClient) List(ctx context.Context, list client.ObjectList, op
 		if ok {
 			kept = append(kept, it)
 		}
-	}
-	anyAllowed := false
-	for _, ok := range byNamespace {
-		anyAllowed = anyAllowed || ok
-	}
-	if !anyAllowed {
-		// Nothing the user may see: deny with the cluster-wide check's message.
-		return c.authorize(ctx, "list", list, "", "", "")
 	}
 	return meta.SetList(list, kept)
 }

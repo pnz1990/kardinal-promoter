@@ -318,8 +318,8 @@ func TestMiddleware_StoresUser(t *testing.T) {
 // TestAuthorizingClient_ListFallsBackToNamespaceRBAC: an all-namespaces
 // list by a user who may not list cluster-wide returns the items of the
 // namespaces where the user may list, without recording a denial; a user
-// who may list nowhere is denied (403); one who may list cluster-wide gets
-// everything with one review.
+// who may list nowhere gets an empty list; one who may list cluster-wide
+// gets everything with one review.
 func TestAuthorizingClient_ListFallsBackToNamespaceRBAC(t *testing.T) {
 	objs := []client.Object{uiauthPipeline("team-a", "a1"), uiauthPipeline("team-a", "a2"),
 		uiauthPipeline("team-b", "b1"), uiauthPipeline("team-c", "c1")}
@@ -335,10 +335,10 @@ func TestAuthorizingClient_ListFallsBackToNamespaceRBAC(t *testing.T) {
 		{name: "viewer in team-a and team-c", allow: func(_ string, a authzv1.ResourceAttributes) bool {
 			return a.Namespace == "team-a" || a.Namespace == "team-c"
 		}, want: []string{"team-a/a1", "team-a/a2", "team-c/c1"}, wantCalls: 4},
-		{name: "viewer nowhere", allow: func(string, authzv1.ResourceAttributes) bool { return false }, wantForb: true},
+		{name: "viewer nowhere", allow: func(string, authzv1.ResourceAttributes) bool { return false }, want: nil},
 		{name: "may list other kinds only", allow: func(_ string, a authzv1.ResourceAttributes) bool {
 			return a.Resource == "bundles"
-		}, wantForb: true},
+		}, want: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
