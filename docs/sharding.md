@@ -126,3 +126,14 @@ on Leases (the other shards' heartbeats, whose names include shard names the cha
 not know; read-only, no watch); and `create` on Leases, which RBAC cannot limit by name.
 Its own heartbeat is written through the release namespace's Role. Shard names must be
 lowercase DNS labels.
+
+## Identity admission policies
+
+Every release installs the chart's identity admission policies (gate overrides, Approvals,
+Bundle creators, the objects a promotion Graph makes; [Verified identity](guides/security.md#verified-identity)).
+They exempt their own release's controller, so with `controller.namespaceShard` each release
+binds them to its shard's namespaces (label `kardinal.io/shard=<shard>`); the `default` shard adds
+a second binding per policy for the unlabelled namespaces. During a handoff, when a namespace
+moves to another shard, the previous shard's controller can still be finishing a write there. Set
+`admission.controllerUsernames` in every shard's release to the exact controller usernames of all
+shards (`system:serviceaccount:<shard namespace>:<fullname>`), so a handoff is never refused.
