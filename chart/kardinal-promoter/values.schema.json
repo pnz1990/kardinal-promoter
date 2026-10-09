@@ -345,6 +345,24 @@
           "items": {
             "type": "string"
           }
+        },
+        "retire": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "superseded": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            },
+            "failed": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            },
+            "verified": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            }
+          }
         }
       }
     },

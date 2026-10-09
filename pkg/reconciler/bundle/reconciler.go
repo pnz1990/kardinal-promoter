@@ -100,6 +100,16 @@ var errGraphDeletedAfterFailure = errors.New("the Graph of this failed Bundle wa
 // is being deleted, so nothing was translated.
 var errNamespaceTerminating = errors.New("the namespace is being deleted")
 
+// errBundleRetired is returned by translate for a Bundle that the API server
+// says is retired (#1492) while the cache does not yet: a retired Bundle's
+// Graph is never built again.
+var errBundleRetired = errors.New("the bundle's Graph was retired")
+
+// skipTranslate reports whether a translate error means "nothing to do".
+func skipTranslate(err error) bool {
+	return errors.Is(err, errNamespaceTerminating) || errors.Is(err, errBundleRetired)
+}
+
 // indexPipeline is the Bundle field index on spec.pipeline.
 const indexPipeline = "spec.pipeline"
 
@@ -149,6 +159,9 @@ type Reconciler struct {
 	// PolicyGate templates hashed for a GraphBuildFailed retry (#1312) are
 	// the ones the Translator reads. Nil means the controller default.
 	PolicyNamespaces []string
+	// Retire says when the Graph of a finished Bundle is retired (#1492).
+	// The zero value keeps every Graph.
+	Retire RetirePolicy
 }
 
 // Reconcile is called whenever a Bundle is created or updated, and whenever a
@@ -172,7 +185,28 @@ type Reconciler struct {
 //
 // A Bundle deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	return objectgone.Reconcile(ctx, req, bundlesResource, r.reconcile)
+	res, err := objectgone.Reconcile(ctx, req, bundlesResource, r.reconcile)
+	if apierrors.IsConflict(err) {
+		// A status patch carried an older resourceVersion: another writer (the
+		// retirement controller, or this one from a stale cache) changed the
+		// Bundle. Read it again rather than overwrite it (#1492).
+		zerolog.Ctx(ctx).Debug().Err(err).Str("bundle", req.Name).Msg("bundle changed under the reconcile; requeueing")
+		return ctrl.Result{RequeueAfter: requeueConflict}, nil
+	}
+	return res, err
+}
+
+// requeueConflict is how soon a reconcile whose status patch lost a race is
+// run again.
+const requeueConflict = time.Second
+
+// statusPatch is the merge patch of a Bundle's status from before, with an
+// optimistic lock: the patch fails with a Conflict when the Bundle changed
+// since before was read. Without it, a patch computed from a stale copy can
+// put back what another writer changed: status.conditions is a list, which a
+// merge patch replaces whole, and a stale phase could undo a retirement.
+func statusPatch(before *kardinalv1alpha1.Bundle) client.Patch {
+	return client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
 }
 
 // bundlesResource is the resource objectgone matches a NotFound against.
@@ -248,6 +282,14 @@ func (r *Reconciler) handleBound(ctx context.Context, log zerolog.Logger,
 		pipeline = &pl
 	}
 
+	// A retired Bundle is final: its Graph is gone and is never rebuilt, not
+	// even by a Pipeline change, and its status is not synced from steps any
+	// more (status.retiredSteps holds them). The retirement controller
+	// (setupRetire) deletes the Graph.
+	if lifecycle.Retired(b) {
+		return ctrl.Result{}, nil
+	}
+
 	// A Bundle that failed validation before any Graph was created is retried
 	// only when the Pipeline changes.
 	if b.Status.Phase == phaseFailed && b.Status.GraphRef == "" {
@@ -307,7 +349,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		return nil // no-op in test environments without a real translator
 	}
 	if err := r.ensurePipelineSpecCurrent(ctx, log, b, pipeline); err != nil {
-		if errors.Is(err, errNamespaceTerminating) {
+		if skipTranslate(err) {
 			return nil
 		}
 		return err
@@ -329,7 +371,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 			return errGraphDeletedAfterFailure
 		}
 		graphName, tErr := r.translate(ctx, log, pipeline, b)
-		if errors.Is(tErr, errNamespaceTerminating) {
+		if skipTranslate(tErr) {
 			return nil
 		}
 		if tErr != nil {
@@ -520,7 +562,7 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 		}
 	}
 
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	b.Status.Phase = phaseAvailable
 	// Ready=False/Available lets operators observe the phase via kubectl wait
 	// and lets GitOps controllers gate on standard conditions.
@@ -668,7 +710,7 @@ func (r *Reconciler) pipelineBundleList(ctx context.Context, ns, pipeline string
 // markSuperseded sets this bundle's status.phase to "Superseded" (self-supersession).
 func (r *Reconciler) markSuperseded(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	supersede(b)
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch bundle status Superseded: %w", err)
@@ -708,7 +750,7 @@ func (r *Reconciler) markPipelineNotFound(ctx context.Context, log zerolog.Logge
 		log.Debug().Str("pipeline", b.Spec.Pipeline).Msg("namespace is being deleted — pipeline gone with it")
 		return ctrl.Result{}, nil
 	}
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	msg := fmt.Sprintf("pipeline %q not found in namespace %s; create it or fix spec.pipeline", b.Spec.Pipeline, b.Namespace)
 	if setBundleCondition(b, condReady, metav1.ConditionFalse, "PipelineNotFound", msg) {
 		if err := r.Status().Patch(ctx, b, patch); err != nil {
@@ -758,7 +800,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		if active >= limit {
 			log.Info().Int("active", active).Int("limit", limit).Str("pipeline", b.Spec.Pipeline).
 				Msg("maxConcurrentPromotions reached — Available bundle waiting")
-			patch := client.MergeFrom(b.DeepCopy())
+			patch := statusPatch(b.DeepCopy())
 			if setBundleCondition(b, condReady, metav1.ConditionFalse, "WaitingForSlot", slotMessage(limit)) {
 				pErr := r.Status().Patch(ctx, b, patch)
 				if apierrors.IsNotFound(pErr) {
@@ -777,7 +819,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// while the Pipeline's freeze gate exists (see pkg/lifecycle/pause.go), so
 	// a paused Pipeline still gets its Graph and resumes where it stopped.
 	graphName, err := r.translate(ctx, log, &pipeline, b)
-	if errors.Is(err, errNamespaceTerminating) {
+	if skipTranslate(err) {
 		return ctrl.Result{}, nil
 	}
 	if errors.Is(err, graph.ErrInvalid) {
@@ -790,7 +832,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		// An API or RBAC error (timeout, conflict, missing permission). Stay
 		// Available and retry with backoff; the condition shows the error. A
 		// Bundle deleted meanwhile needs no retry.
-		patch := client.MergeFrom(b.DeepCopy())
+		patch := statusPatch(b.DeepCopy())
 		if setBundleCondition(b, condReady, metav1.ConditionFalse, "TranslationError",
 			fmt.Sprintf("graph creation failed, retrying: %v", err)) {
 			pErr := r.Status().Patch(ctx, b, patch)
@@ -808,7 +850,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		return ctrl.Result{}, fmt.Errorf("translate bundle %s: %w", b.Name, err)
 	}
 
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	b.Status.Phase = phasePromoting
 	b.Status.GraphRef = graphName                              // for recreation detection (#490)
 	b.Status.PipelineSpecHash = pipelineSpecHashFor(&pipeline) // for change detection (#626)
@@ -906,12 +948,41 @@ func (r *Reconciler) translate(ctx context.Context, log zerolog.Logger,
 		log.Debug().Msg("namespace is being deleted — not translating the bundle")
 		return "", errNamespaceTerminating
 	}
+	// The retirement controller writes status.retiredAt; this reconcile may
+	// hold a copy from before. Rebuilding a Bundle that had a Graph is rare
+	// (a Pipeline change, a deleted Graph), so read it fresh first.
+	if b.Status.GraphRef != "" && r.retiredSince(ctx, b) {
+		log.Debug().Msg("bundle retired — its Graph is not built again")
+		return "", errBundleRetired
+	}
 	name, err := r.Translator.Translate(ctx, pipeline, b)
 	if apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause) && r.namespaceDeleting(ctx, log, b.Namespace) {
 		log.Debug().Err(err).Msg("namespace is being deleted — bundle not translated")
 		return "", errNamespaceTerminating
 	}
+	if err == nil && b.Status.GraphRef != "" && r.retiredSince(ctx, b) {
+		// Retired between the check above and Translate: delete the Graph
+		// just written (the retirement controller would too, on the Graph's
+		// create event).
+		if d, ok := r.GraphChecker.(graphDeleter); ok {
+			if dErr := d.Delete(ctx, b.Namespace, name); dErr != nil && !apierrors.IsNotFound(dErr) {
+				return "", fmt.Errorf("delete the Graph of retired bundle %s: %w", b.Name, dErr)
+			}
+		}
+		return "", errBundleRetired
+	}
 	return name, err
+}
+
+// retiredSince reports whether the API server says b is retired (its
+// status.retiredAt is set), whatever the cached copy says. Without an
+// APIReader it reports false.
+func (r *Reconciler) retiredSince(ctx context.Context, b *kardinalv1alpha1.Bundle) bool {
+	if r.APIReader == nil {
+		return false
+	}
+	var fresh kardinalv1alpha1.Bundle
+	return r.APIReader.Get(ctx, client.ObjectKeyFromObject(b), &fresh) == nil && lifecycle.Retired(&fresh)
 }
 
 // namespaceDeleting reports whether namespace is being deleted. It reads the
@@ -938,7 +1009,7 @@ func (r *Reconciler) namespaceDeleting(ctx context.Context, log zerolog.Logger, 
 // so a changed Pipeline retries the Bundle (retryIfPipelineChanged).
 func (r *Reconciler) markInvalid(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle,
 	pipeline *kardinalv1alpha1.Pipeline, cause error) (ctrl.Result, error) {
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	reason, msg, _ := setInvalid(b, pipeline, cause, usedGatesHash(pipeline, cause))
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -1019,7 +1090,7 @@ func (r *Reconciler) retryIfPipelineChanged(ctx context.Context, log zerolog.Log
 		return r.markSuperseded(ctx, log, b)
 	}
 
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	b.Status.Phase = phaseAvailable
 	b.Status.PipelineSpecHash = ""
 	b.Status.PolicyGatesHash = ""
@@ -1221,7 +1292,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		log.Debug().Msg("bundle status already up to date")
 		return result, nil
 	}
-	if err := r.Status().Patch(ctx, b, client.MergeFrom(before)); err != nil {
+	if err := r.Status().Patch(ctx, b, statusPatch(before)); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
@@ -1329,6 +1400,7 @@ var eventActions = map[string]string{
 	"GraphSyncFailed":  "SyncGraph",
 	"Verified":         "Verify",
 	"Recovered":        "Promote",
+	"GraphRetired":     "RetireGraph",
 }
 
 // event emits an Event when a Recorder is configured.
@@ -1575,6 +1647,11 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	graphObject := &unstructured.Unstructured{}
 	graphObject.SetGroupVersionKind(graph.GraphGVK)
 
+	// Registered whatever the policy: with every delay 0 a Pipeline's
+	// kardinal.io/graph-retire-after annotation still retires its Bundles.
+	if err := r.setupRetire(mgr); err != nil {
+		return fmt.Errorf("set up the bundle retirement controller: %w", err)
+	}
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Bundle{}).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.waitingSiblings),
@@ -1618,8 +1695,13 @@ var bundlePhaseChanged = predicate.Funcs{
 }
 
 // waitingSiblings maps a Bundle event to the other Bundles of its pipeline
-// that are new, Available or Promoting, and to the Failed ones created before
-// it.
+// whose state the event can change: the new, Available or Promoting ones
+// created before it (a newer Bundle supersedes them), every new, Available
+// or Promoting one when the Pipeline sets maxConcurrentPromotions (a phase
+// change can take or free their slot, #1349), and the Failed ones as below.
+// Newer in-flight siblings of an uncapped Pipeline are not re-queued: nothing
+// an older Bundle does changes them, and re-queueing every sibling on every
+// event made a burst of Bundles quadratic (#1492 scale run: 1,161 queued).
 func (r *Reconciler) waitingSiblings(ctx context.Context, obj client.Object) []reconcile.Request {
 	b, ok := obj.(*kardinalv1alpha1.Bundle)
 	if !ok {
@@ -1632,6 +1714,13 @@ func (r *Reconciler) waitingSiblings(ctx context.Context, obj client.Object) []r
 		return nil
 	}
 	var reqs []reconcile.Request
+	capped, cappedRead := false, false
+	isCapped := func() bool {
+		if !cappedRead {
+			capped, cappedRead = r.capped(ctx, b), true
+		}
+		return capped
+	}
 	for i := range siblings {
 		s := &siblings[i]
 		if s.Name == b.Name {
@@ -1639,14 +1728,16 @@ func (r *Reconciler) waitingSiblings(ctx context.Context, obj client.Object) []r
 		}
 		switch s.Status.Phase {
 		case "", phaseAvailable, phasePromoting:
-			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(s)})
+			if lifecycle.CompareCreation(b, s) > 0 || isCapped() {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(s)})
+			}
 		case phaseFailed:
 			// A Failed Bundle yields to a newer one while it rolls back
 			// (#1428), so a newer Bundle re-queues it. Under a
 			// maxConcurrentPromotions cap every phase change can take or
 			// free the slot a Failed Bundle waits for (#1349). Only a Bundle
 			// with a Graph can roll back or be held.
-			if s.Status.GraphRef != "" && (lifecycle.CompareCreation(b, s) > 0 || r.capped(ctx, b)) {
+			if s.Status.GraphRef != "" && (lifecycle.CompareCreation(b, s) > 0 || isCapped()) {
 				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(s)})
 			}
 		}
