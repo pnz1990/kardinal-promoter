@@ -201,7 +201,37 @@ When `--env` is the Pipeline's last environment and `--days` is 30 (the defaults
 the flags are given or not), the command prints the controller's own figures from
 `Pipeline.status.deploymentMetrics` instead, when they are present: `rollouts_last_30d`, `p50_commit_to_prod`,
 `p90_commit_to_prod`, `auto_rollback_rate`, `operator_intervention_rate` and
-`stale_prod_days`, over the last 30 Bundles Verified in the last environment.
+`stale_prod_days`, over the last 30 Bundles Verified in the last environment, and
+`change_failure_rate` and `time_to_restore` over the last 30 deployments to it (see
+[Change failure rate and time to restore](#change-failure-rate-and-time-to-restore)).
+
+### Change failure rate and time to restore
+
+The PipelineReconciler computes the two DORA stability metrics from PromotionStep and Bundle
+status into `Pipeline.status.deploymentMetrics`, over the Pipeline's final environments: every
+environment nothing depends on (one for a chain, several for a fan-out such as `prod-eu` and
+`prod-us`):
+
+| Field | Meaning |
+|-------|---------|
+| `deployments` | Deployments in the sample: the last 30 Bundles whose change reached a final environment (the step's `health-check` entry in `status.steps` started: after `git-push`, or after the merge for `pr-review`). A Bundle counts once, however many final environments and regions it reaches. Not deployments: a failure before that (a refused push, a closed PR), a promotion with nothing to change (`outputs.noChanges`), the steps a newer Bundle's supersession cancelled (a step that had already failed, is `AbortedByAlarm`, or is `RollingBack` when an automatic rollback supersedes its Bundle, still counts as a failed deployment), and rollback Bundles (they count only as restores) |
+| `failedDeployments` | Deployments that failed: a step in any final environment ended `Failed`, `AbortedByAlarm` or `RollingBack` after its health check started, a rollback Bundle for a final environment later rolled back from it (`kardinal rollback`, the UI, RollbackPolicy or `onHealthFailure: rollback`; annotation `kardinal.io/rollback-from`), or the Bundle was rejected after it was deployed |
+| `changeFailureRateMillis` | `failedDeployments / deployments` in thousandths (`250` = 25%) |
+| `meanTimeToRestoreMinutes` | Mean whole minutes from each failed deployment reaching a final environment (its health check started: when users got the change) to the first later Bundle Verified in every final environment it targets: all of them, or, for a rollback of one environment, that one. Every one of its steps there (all regions) must be Verified; the last gives the time. A region of the failed Bundle itself, or an older Bundle, never restores it |
+| `restoredFailures` | Failures counted in `meanTimeToRestoreMinutes`; one not restored yet is left out |
+
+`deploymentMetrics` is set once a Bundle has been Verified in the last environment, or a
+deployment there has failed. While every deployment has failed, it holds only the stability
+fields (a 100% change failure rate); the lead-time and staleness fields stay unset, and
+`kardinal metrics` prints `-` for them.
+
+### Step timings
+
+Every PromotionStep records each step of its sequence in `status.steps[]`: `name`, `state`,
+`startedAt`, `completedAt` and `durationMs`. `wait-for-merge` spans the time the PR waited,
+and `health-check` the real health check (bake included). The UI shows each step's duration
+in the node detail panel, `kardinal logs` prints them, and `kardinal_step_duration_seconds`
+exports them to Prometheus.
 
 ---
 
@@ -333,6 +363,54 @@ dashboard's **Prometheus** selector, which starts at your default Prometheus
 datasource.
 
 ---
+
+## Tracing (OpenTelemetry)
+
+The controller can export OpenTelemetry traces over OTLP/HTTP to any collector or backend
+that accepts it (the OpenTelemetry Collector, Jaeger, Tempo, Honeycomb, Datadog Agent, ...).
+Tracing is off by default.
+
+```yaml
+tracing:
+  enabled: true
+  endpoint: http://otel-collector.observability:4318   # /v1/traces is added
+  samplingRatio: 0.1                                   # default
+```
+
+| Value | Flag | Meaning |
+|-------|------|---------|
+| `tracing.enabled` | `--tracing-enabled` | Export traces. Default `false` |
+| `tracing.endpoint` | `--tracing-endpoint` | An `http://` or `https://` URL, or `host:port`. Empty uses `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` (set them with `controller.extraEnv`), else `localhost:4318` |
+| `tracing.insecure` | `--tracing-insecure` | Plain HTTP to a `host:port` endpoint. A URL's scheme decides by itself |
+| `tracing.samplingRatio` | `--tracing-sampling-ratio` | Fraction of traces recorded, 0 to 1, decided at each trace's root (a reconcile or an inbound request); a span's children follow it. An inbound `traceparent` is linked, not trusted, so it does not force recording |
+
+Only OTLP over HTTP (protobuf, port 4318) is supported, not OTLP/gRPC. The standard
+`OTEL_EXPORTER_OTLP_*` variables for headers, certificates and timeouts apply, through
+`controller.extraEnv`. Spans have the resource `service.name=kardinal-controller` and
+`service.version` set to the controller version.
+
+| Span | Kind | Attributes |
+|------|------|------------|
+| `<controller>.Reconcile` (`bundle`, `promotionstep`, `policygate`, `notificationhook`, ...) | internal | `kardinal.controller`, `k8s.namespace.name`, `kardinal.object.name`, `kardinal.requeue_after_ms`; error status when the reconcile fails |
+| `step <name>` (`step git-clone`, `step open-pr`, ...) | internal | `kardinal.step`, `kardinal.step.index`, `kardinal.environment`, `kardinal.step.status` |
+| `git clone`, `git push` | internal | `server.address`, `kardinal.git.branch` (or `kardinal.git.commit`), `kardinal.git.force` |
+| `HTTP <method>` | client | `http.request.method`, `server.address`, `url.scheme`, `http.response.status_code`: SCM API requests and NotificationHook deliveries |
+| `webhook.scm`, `bundleapi.create` | server | `http.request.method`, `http.response.status_code`: inbound SCM webhooks and Bundle API calls |
+
+**Trace context.** NotificationHook deliveries carry the W3C `traceparent` (and `tracestate`,
+`baggage`) of their client span, so a receiver that traces can join the trace. SCM API
+requests do not carry trace headers. `/webhook/scm` and `/api/v1/bundles` are reached before
+the caller is authenticated, so an inbound `traceparent` is not trusted: their server span
+starts a new trace, sampled by the controller's own sampler, with a link to the caller's span
+(a CI job that traces sees the link, not a child).
+
+**What spans never hold.** No URL path, query or user info in attributes, no headers, no
+request or response bodies: incoming-webhook URLs and git remotes can carry tokens. A span
+names only the host it talked to. When a span records an error, every URL in the error text
+is cut to its scheme and host (`https://github.com/…`).
+
+**Shutdown.** Buffered spans are exported every 5 seconds and once more when the controller
+stops, after every reconciler and HTTP server has drained (at most 5 seconds more).
 
 ## Changing the Metrics Port
 

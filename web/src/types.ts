@@ -40,6 +40,27 @@ export interface Pipeline {
   lastMergedAt?: string
   /** #525: static pipeline topology from spec — shown even when no Bundle is promoting. */
   environmentTopology?: EnvironmentNode[]
+  /** Pipeline.status.deploymentMetrics, computed by the controller (DORA). */
+  deploymentMetrics?: DeploymentMetrics
+}
+
+/** Pipeline.status.deploymentMetrics: DORA metrics for the last environment. */
+export interface DeploymentMetrics {
+  rolloutsLast30Days?: number
+  p50CommitToProdMinutes?: number
+  p90CommitToProdMinutes?: number
+  autoRollbackRateMillis?: number
+  operatorInterventionRateMillis?: number
+  staleProdDays?: number
+  sampleSize?: number
+  /** Deployments the stability pair is computed over (last 30). */
+  deployments?: number
+  failedDeployments?: number
+  /** failedDeployments / deployments, thousandths. */
+  changeFailureRateMillis?: number
+  meanTimeToRestoreMinutes?: number
+  restoredFailures?: number
+  computedAt?: string
 }
 
 /** #525: one environment in the static Pipeline spec topology. */
