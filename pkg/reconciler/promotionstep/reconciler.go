@@ -1746,6 +1746,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			health.ImageExpectation{Repository: img.Repository, Tag: img.Tag, Digest: img.Digest})
 	}
 	opts.ImagesOnly = bundle.Spec.Type == "image"
+	opts.RevisionContains = r.revisionContains(ctx, log, pipeline, env, opts.ExpectedRevision)
 	opts.Since = healthCheckStart(ps)
 	opts.ChangedAt = changeReachedGitAfter(ps)
 	if at := ps.Status.TargetUpdatedAt; at != nil {
