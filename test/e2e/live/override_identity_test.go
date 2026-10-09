@@ -67,7 +67,7 @@ func TestGate_OverrideIdentity(t *testing.T) {
 	assert.Contains(t, err.Error(), `every new spec.overrides entry must have createdBy "mallory@example.com"`)
 	err = mallory.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"spec":{"expression":"true"}}`)))
 	require.Error(t, err, "editing an instance's expression is refused")
-	assert.Contains(t, err.Error(), "only kardinal changes the expression, skipPermission or labels of a gate instance")
+	assert.Contains(t, err.Error(), "only kardinal creates a gate instance (label kardinal.io/bundle) or changes its spec or labels")
 	err = mallory.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"labels":{"kardinal.io/environment":"test"}}}`)))
 	require.Error(t, err, "relabelling an instance is refused")
 	err = mallory.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"spec":{"message":"x"}}`)))
