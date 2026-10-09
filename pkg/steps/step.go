@@ -114,7 +114,6 @@ type StepState struct {
 	// there is none or it cannot be read.
 	RollbackFromBundle *v1alpha1.BundleSpec
 
-
 	// WorkDir is the local directory where the Git work tree is checked out.
 	WorkDir string
 
