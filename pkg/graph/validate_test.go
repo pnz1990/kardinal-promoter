@@ -76,10 +76,12 @@ func TestBuild_RejectsReservedNodeIDs(t *testing.T) {
 	}
 }
 
-// TestBuild_RejectsCollidingGateNodeIDs verifies that gates whose node IDs
-// collide are rejected by Build instead of producing a Graph kro refuses
-// (C01-graph-14).
-func TestBuild_RejectsCollidingGateNodeIDs(t *testing.T) {
+// TestBuild_GatesWithSimilarNamesAreDistinct verifies that gates whose
+// camelCase forms are equal (and whose per-gate node IDs used to collide,
+// C01-graph-14) build, as two distinct instances: gate instances are items of
+// the PolicyGates collection, identified by metadata.name, which is exact or
+// hash-bounded.
+func TestBuild_GatesWithSimilarNamesAreDistinct(t *testing.T) {
 	cases := [][2]kardinalv1alpha1.PolicyGate{
 		{makePolicyGate("a", "b0c", "prod", "true"), makePolicyGate("a0b", "c", "prod", "true")},
 		{makePolicyGate("no-weekend", "platform-policies", "prod", "true"),
@@ -87,15 +89,15 @@ func TestBuild_RejectsCollidingGateNodeIDs(t *testing.T) {
 	}
 	for _, gates := range cases {
 		t.Run(gates[0].Name+"_vs_"+gates[1].Name, func(t *testing.T) {
-			_, err := graph.NewBuilder().Build(graph.BuildInput{
+			res, err := graph.NewBuilder().Build(graph.BuildInput{
 				Pipeline:    makeLinearPipeline("app", "prod"),
 				Bundle:      makeBundle("app-x7k2m", "app"),
 				PolicyGates: gates[:],
 			})
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "same node id")
-			assert.Contains(t, err.Error(), `PolicyGate "`+gates[0].Name+`"`)
-			assert.Contains(t, err.Error(), `PolicyGate "`+gates[1].Name+`"`)
+			require.NoError(t, err)
+			require.Len(t, res.GateInstances, 2)
+			assert.NotEqual(t, res.GateInstances[0].Name, res.GateInstances[1].Name)
+			assertKroValid(t, res.Graph)
 		})
 	}
 }
@@ -154,12 +156,8 @@ func TestBuild_KeepsReadableNames(t *testing.T) {
 		"prstatus-nginx-demo-x7k2m-prod":                      true,
 		"no-weekend-platform-policies-prod--nginx-demo-x7k2m": true,
 	}
-	for _, n := range res.Graph.Spec.Nodes {
-		if n.Template == nil {
-			continue
-		}
-		name := n.Template["metadata"].(map[string]interface{})["name"].(string)
-		delete(want, name)
+	for _, o := range renderObjects(t, res.Graph) {
+		delete(want, objName(o.Object))
 	}
 	assert.Empty(t, want, "readable names missing from the Graph")
 }
@@ -382,13 +380,9 @@ func TestBuild_GateInstanceSpec(t *testing.T) {
 				PolicyGates: []kardinalv1alpha1.PolicyGate{tpl},
 			})
 			require.NoError(t, err)
-			var spec map[string]interface{}
-			for _, n := range res.Graph.Spec.Nodes {
-				if n.Template != nil && n.Template["kind"] == "PolicyGate" {
-					spec = n.Template["spec"].(map[string]interface{})
-				}
-			}
-			require.NotNil(t, spec, "gate instance must be emitted")
+			gates := renderedOf(t, res.Graph, "PolicyGate")
+			require.Len(t, gates, 1, "gate instance must be emitted")
+			spec := gates[0]["spec"].(map[string]interface{})
 			assert.Equal(t, "!schedule.isWeekend", spec["expression"])
 			assert.Equal(t, "5m", spec["recheckInterval"])
 			assert.Equal(t, true, spec["generated"])
