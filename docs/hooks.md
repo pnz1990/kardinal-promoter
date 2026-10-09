@@ -77,7 +77,7 @@ the shell in the container, not by kardinal or kro.
       deployed. A failed pre hook fails the step (`pre-deploy hook <name> (HookRun <run>)
       failed: ...`) and the Bundle;
     - after the health check (and any `bake` window) passed, a step with post hooks is
-      `Verifying` until they finish. All succeeded: `Verified`. One failed: the environment's
+      `Verifying` until they finish (and any [analyses](analysis.md)). All succeeded: `Verified`. One failed: the environment's
       `onHealthFailure` applies, as for a failed health check (`none` fails the step, `abort`
       stops it for a human, `rollback` rolls the environment back). The change is already
       deployed when a post hook runs; a failed post hook does not revert it by itself.

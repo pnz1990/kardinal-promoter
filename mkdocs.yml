@@ -102,6 +102,7 @@ nav:
     - Policy Gates: policy-gates.md
     - Health Verification: health-adapters.md
     - Pre- and Post-Deploy Hooks: hooks.md
+    - Analysis (Argo Rollouts): analysis.md
     - Rollback: rollback.md
     - CI Integration: ci-integration.md
     - PR Evidence: pr-evidence.md

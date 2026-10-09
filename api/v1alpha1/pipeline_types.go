@@ -277,6 +277,14 @@ type EnvironmentSpec struct {
 	// +optional
 	Hooks []HookSpec `json:"hooks,omitempty"`
 
+	// Verification runs Argo Rollouts analyses after the environment passed
+	// its health check: one AnalysisRun per template, with the Bundle's
+	// version and environment as args. The environment is Verified only when
+	// every analysis is Successful. Needs Argo Rollouts' CRDs: without them
+	// the Bundle fails (it never promotes unverified). See docs/analysis.md.
+	// +optional
+	Verification *VerificationSpec `json:"verification,omitempty"`
+
 	// Regions is not supported: every region would edit the same path and push
 	// the same branch. With two or more regions the Pipeline is Ready=False
 	// (reason NotImplemented) and every Bundle fails when its Graph is built
@@ -286,6 +294,62 @@ type EnvironmentSpec struct {
 	// use wave.
 	// +optional
 	Regions []string `json:"regions,omitempty"`
+}
+
+// VerificationSpec configures Argo Rollouts analysis of an environment.
+type VerificationSpec struct {
+	// AnalysisTemplates are the templates to run, each as its own AnalysisRun.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=10
+	// +listType=map
+	// +listMapKey=name
+	AnalysisTemplates []AnalysisTemplateRef `json:"analysisTemplates"`
+
+	// Args set template args by name. They take precedence over the args
+	// kardinal sets (bundle, pipeline, environment, image, tag, digest,
+	// commit) and over the template's defaults. Only args a template declares
+	// are passed to its AnalysisRun.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Args []AnalysisArg `json:"args,omitempty"`
+
+	// Inconclusive is what an Inconclusive AnalysisRun counts as: "fail"
+	// (default) or "pass".
+	// +kubebuilder:validation:Enum=fail;pass
+	// +optional
+	Inconclusive string `json:"inconclusive,omitempty"`
+
+	// Timeout bounds the analyses from the moment the environment entered
+	// Verifying. An analysis still running then fails the environment.
+	// Empty or "0" means 30m.
+	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
+	// +optional
+	Timeout string `json:"timeout,omitempty"`
+}
+
+// AnalysisTemplateRef names an Argo Rollouts AnalysisTemplate (in the
+// Pipeline namespace) or ClusterAnalysisTemplate.
+type AnalysisTemplateRef struct {
+	// Name is the template name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// Kind is AnalysisTemplate (default) or ClusterAnalysisTemplate.
+	// +kubebuilder:validation:Enum=AnalysisTemplate;ClusterAnalysisTemplate
+	// +optional
+	Kind string `json:"kind,omitempty"`
+}
+
+// AnalysisArg is one AnalysisRun arg.
+type AnalysisArg struct {
+	// Name is the arg name the template declares.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// Value is the arg value.
+	Value string `json:"value"`
 }
 
 // PromotionTemplateRef is the shape of the deprecated

@@ -50,8 +50,9 @@ import (
 // Node IDs of the per-Graph read-back refs. ValidateNodeIDs rejects an
 // environment whose node ID collides with them.
 const (
-	refHookRunsNodeID = "refHookRuns"
-	refStepsNodeID    = "refSteps"
+	refHookRunsNodeID     = "refHookRuns"
+	refStepsNodeID        = "refSteps"
+	refAnalysisRunsNodeID = "refAnalysisRuns"
 )
 
 // Labels on HookRuns.
@@ -101,16 +102,6 @@ func hooksOf(env kardinalv1alpha1.EnvironmentSpec, phase string) []kardinalv1alp
 		}
 	}
 	return out
-}
-
-// hasHooks reports whether any of envs has a hook.
-func hasHooks(pipeline *kardinalv1alpha1.Pipeline, envs []string) bool {
-	for _, name := range envs {
-		if len(findEnvSpec(pipeline, name).Hooks) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func findEnvSpec(pipeline *kardinalv1alpha1.Pipeline, name string) kardinalv1alpha1.EnvironmentSpec {
@@ -198,11 +189,12 @@ type hookNodes struct {
 	nodes     []GraphNode
 	preHooks  []interface{} // spec.preHooks of the step
 	postHooks []interface{} // spec.postHooks of the step
+	names     []string      // the HookRun names rendered
 }
 
-// buildHookNodes returns the HookRun nodes and the mirror patch node of one
-// environment, and the step's spec.preHooks and spec.postHooks. It returns
-// nothing for an environment without hooks.
+// buildHookNodes returns the HookRun nodes of one environment, and the
+// step's spec.preHooks and spec.postHooks. It returns nothing for an
+// environment without hooks. The mirror patch node is buildLiveMirrorNode's.
 func buildHookNodes(in hookNodesInput) (hookNodes, error) {
 	var out hookNodes
 	if len(in.env.Hooks) == 0 {
@@ -218,9 +210,7 @@ func buildHookNodes(in hookNodesInput) (hookNodes, error) {
 			if phase == kardinalv1alpha1.HookPhasePre {
 				conds = append(conds, in.conds...)
 			} else {
-				conds = append(conds, `bundle.status.phase != "Superseded"`,
-					fmt.Sprintf(`%s.exists(s, s.metadata.name == %s && s.?status.?verificationStartedAt.hasValue())`,
-						refStepsNodeID, strconv.Quote(in.stepK8sName)))
+				conds = append(conds, `bundle.status.phase != "Superseded"`, verifyingCond(in.stepK8sName))
 			}
 			if prevID != "" {
 				conds = append(conds, fmt.Sprintf(`%s.?status.?phase.orValue("") == "Succeeded"`, prevID))
@@ -243,7 +233,7 @@ func buildHookNodes(in hookNodesInput) (hookNodes, error) {
 			prevID = id
 		}
 	}
-	out.nodes = append(out.nodes, buildLiveMirrorNode(in.env.Name, in.stepK8sName, in.bundleUID, names))
+	out.names = names
 	return out, nil
 }
 
@@ -293,58 +283,6 @@ func buildHookRunNode(id, name string, in hookNodesInput, phase string,
 	}, nil
 }
 
-// buildLiveMirrorNode builds the patch node that writes env's HookRun results
-// onto its PromotionStep (spec.live.hooks). It copies only the HookRuns this
-// build rendered (names, a literal list rebuilt at every translation) that
-// kro applied (kro.run/node-id) for this Bundle (kardinal.io/bundle-uid), so
-// a HookRun created by hand with a matching selector label is not a result.
-func buildLiveMirrorNode(env, stepK8sName, bundleUID string, names []string) GraphNode {
-	hooks := fmt.Sprintf(`${%s.filter(h, %s).map(h, {"name": h.metadata.name, "hook": h.spec.hook, `+
-		`"phase": h.spec.phase, "result": h.?status.?phase.orValue("Pending"), "message": h.?status.?message.orValue("")})}`,
-		refHookRunsNodeID, genuineFilter("h", names, bundleUID)+" && h.spec.environment == "+strconv.Quote(env))
-	return GraphNode{
-		ID: liveNodeID(env),
-		Patch: map[string]interface{}{
-			"apiVersion": "kardinal.io/v1alpha1",
-			"kind":       "PromotionStep",
-			"metadata":   map[string]interface{}{"name": stepK8sName},
-			"spec":       map[string]interface{}{"live": map[string]interface{}{"hooks": hooks}},
-		},
-	}
-}
-
-// genuineFilter is the CEL condition on v (an object read through a
-// selector ref) that it is one of names, applied by kro, for the Bundle
-// whose UID is bundleUID.
-func genuineFilter(v string, names []string, bundleUID string) string {
-	quoted := make([]string, len(names))
-	for i, n := range names {
-		quoted[i] = strconv.Quote(n)
-	}
-	return fmt.Sprintf(`%[1]s.metadata.name in [%[2]s] && %[1]s.metadata.?labels[?%[3]q].hasValue() && `+
-		`%[1]s.metadata.?labels[?%[4]q].orValue("") == %[5]s`,
-		v, strings.Join(quoted, ", "), LabelKRONodeID, LabelBundleUID, strconv.Quote(bundleUID))
-}
-
-// hookRefNodes returns the selector refs that read the Bundle's HookRuns and
-// PromotionSteps back into the Graph.
-func hookRefNodes(pipeline, bundle, namespace string) []GraphNode {
-	ref := func(id, kind string) GraphNode {
-		return GraphNode{ID: id, Ref: map[string]interface{}{
-			"apiVersion": "kardinal.io/v1alpha1",
-			"kind":       kind,
-			"metadata": map[string]interface{}{
-				"namespace": namespace,
-				"selector": map[string]interface{}{"matchLabels": map[string]interface{}{
-					"kardinal.io/pipeline": pipeline,
-					"kardinal.io/bundle":   bundle,
-				}},
-			},
-		}}
-	}
-	return []GraphNode{ref(refHookRunsNodeID, "HookRun"), ref(refStepsNodeID, "PromotionStep")}
-}
-
 // literalStrings returns v with every string that contains "${" replaced by
 // a kro expression that evaluates to the string itself. kro reads "${" in
 // any template string as the start of an expression and has no escape, so
@@ -386,21 +324,6 @@ func stepConds(upstreams, gateNames []string, gateReady func(name string) string
 		conds = append(conds, gateReady(name))
 	}
 	return conds
-}
-
-// attachHooks writes spec.preHooks and spec.postHooks onto a PromotionStep
-// node.
-func attachHooks(step GraphNode, hooks hookNodes) {
-	spec, ok := step.Template["spec"].(map[string]interface{})
-	if !ok {
-		return
-	}
-	if len(hooks.preHooks) > 0 {
-		spec["preHooks"] = hooks.preHooks
-	}
-	if len(hooks.postHooks) > 0 {
-		spec["postHooks"] = hooks.postHooks
-	}
 }
 
 // stepAdvanced is the HookRun's spec.stepAdvanced: whether the step already

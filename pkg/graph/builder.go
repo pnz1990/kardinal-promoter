@@ -30,6 +30,10 @@ type BuildInput struct {
 	// namespaces can permit skipping an org-gated environment. Empty means
 	// DefaultPolicyNamespace.
 	PolicyNamespaces []string
+
+	// Analyses are the Argo Rollouts analysis templates the environments'
+	// spec.verification names, as the translator read them.
+	Analyses AnalysisInput
 }
 
 // BuildResult is the output of the graph builder.
@@ -131,7 +135,7 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 5 & 6: build nodes and wire edges
-	nodes, instances, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates)
+	nodes, instances, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates, input.Analyses)
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +526,7 @@ func matchGatesByEnv(filteredEnvs []string,
 func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
-	skipGates map[string][]skipPermissionGate) ([]GraphNode, []kardinalv1alpha1.PolicyGate, error) {
+	skipGates map[string][]skipPermissionGate, analyses AnalysisInput) ([]GraphNode, []kardinalv1alpha1.PolicyGate, error) {
 	pipelineName := pipeline.Name
 
 	// Filter deps to only include filtered envs
@@ -549,9 +553,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		// ReadyWhen intentionally omitted — ref: is read-only.
 	}
 	nodes = append(nodes, bundleWatchNode)
-	if hasHooks(pipeline, filteredEnvs) {
-		nodes = append(nodes, hookRefNodes(pipelineName, bundle.Name, bundle.Namespace)...)
-	}
+	nodes = append(nodes, readBackRefs(pipeline, filteredEnvs, bundle)...)
 
 	gates := newGateCollections(pipelineName, bundle.Name)
 	var prItems []interface{}
@@ -598,19 +600,19 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		stepNode := buildPromotionStepNode(
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
 		)
-		hooks, err := buildHookNodes(hookNodesInput{
+		extras, err := buildEnvExtras(hookNodesInput{
 			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
 			bundleUID:   string(bundle.UID),
 			env:         findEnvSpec(pipeline, envName),
 			stepK8sName: promotionStepK8sName(pipelineName, bundle.Name, envName),
 			conds:       stepConds(upstreams, envGates, gates.readyCond),
-		})
+		}, analyses, bundle)
 		if err != nil {
 			return nil, nil, err
 		}
-		attachHooks(stepNode, hooks)
+		attachExtras(stepNode, extras)
 		nodes = append(nodes, stepNode)
-		nodes = append(nodes, hooks.nodes...)
+		nodes = append(nodes, extras.nodes...)
 	}
 
 	nodes = append(nodes, gates.nodes()...)

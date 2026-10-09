@@ -412,6 +412,8 @@ func controllerAccess() []apiAccess {
 		{"", "pods", []string{"list"}, inWatched, "", "health adapter resource: podProblemLookup (uncached dynamic List of the new ReplicaSet's pods)"},
 		{"argoproj.io", "applications", readVerbs, inWatched, "", "health adapter argocd, argocd update strategy"},
 		{"argoproj.io", "rollouts", readVerbs, inWatched, "", "health adapter argoRollouts"},
+		{"argoproj.io", "analysistemplates", []string{"get"}, inWatched, "", "translator analysis.go collectAnalyses (uncached Get)"},
+		{"argoproj.io", "clusteranalysistemplates", []string{"get"}, inCluster, "", "translator analysis.go collectAnalyses (uncached Get)"},
 		{"kustomize.toolkit.fluxcd.io", "kustomizations", readVerbs, inWatched, "", "health adapter flux"},
 		{"flagger.app", "canaries", readVerbs, inWatched, "", "health adapter flagger"},
 		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "hookrun reconciler.go: hook Jobs (Owns, create, delete on timeout)"},

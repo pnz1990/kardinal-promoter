@@ -63,6 +63,13 @@ type PromotionStepSpec struct {
 	// +optional
 	PostHooks []string `json:"postHooks,omitempty"`
 
+	// Analyses names the AnalysisRuns of the environment's verification. A
+	// step with analyses goes from HealthChecking to Verifying and is
+	// Verified only when every one of them is Successful in
+	// spec.live.analyses.
+	// +optional
+	Analyses []string `json:"analyses,omitempty"`
+
 	// Live holds results the Graph mirrors onto the step while it runs (a
 	// patch node, not the step's template, so they keep updating after the
 	// step's own template stopped resolving). The reconciler reads only this
@@ -86,6 +93,26 @@ type PromotionStepLive struct {
 	// Hooks are the environment's HookRuns for this Bundle.
 	// +optional
 	Hooks []LiveHookRun `json:"hooks,omitempty"`
+
+	// Analyses are the environment's AnalysisRuns for this Bundle.
+	// +optional
+	Analyses []LiveAnalysisRun `json:"analyses,omitempty"`
+}
+
+// LiveAnalysisRun is the result of one Argo Rollouts AnalysisRun.
+type LiveAnalysisRun struct {
+	// Name is the AnalysisRun name.
+	Name string `json:"name"`
+	// Template is the AnalysisTemplate or ClusterAnalysisTemplate it runs.
+	// +optional
+	Template string `json:"template,omitempty"`
+	// Phase is the AnalysisRun's status.phase (Pending when it has none
+	// yet): Pending, Running, Successful, Failed, Error or Inconclusive.
+	// +optional
+	Phase string `json:"phase,omitempty"`
+	// Message is the AnalysisRun's status.message.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // LiveHookRun is the result of one HookRun.
@@ -153,7 +180,8 @@ type PromotionStepStatus struct {
 	// State is the step execution state.
 	// The Graph controller uses readyWhen expressions of the form
 	// ${step.status.state == "Verified"} to advance the promotion DAG.
-	// Verifying: the health check passed and the post-deploy hooks run.
+	// Verifying: the health check passed and the post-deploy hooks and
+	// analyses run.
 	// +kubebuilder:validation:Enum=Pending;Promoting;WaitingForMerge;HealthChecking;Verifying;Verified;Failed;AbortedByAlarm;RollingBack
 	State string `json:"state,omitempty"`
 

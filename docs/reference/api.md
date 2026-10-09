@@ -301,6 +301,15 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].update.helm.imagePathTemplate` | string |  | ImagePathTemplate is the YAML dot-path to the image tag in values.yaml. Example: ".image.tag" updates the `image.tag` key. If empty, defaults to ".image.tag". |
 | `spec.environments[].update.helm.valuesFile` | string |  | ValuesFile is the name of the values file to update (relative to the environment path). Defaults to "values.yaml". |
 | `spec.environments[].update.strategy` | string |  | Strategy selects the manifest update strategy. One of: `kustomize`, `helm`, `argocd`. Default: `kustomize`. |
+| `spec.environments[].verification` | object |  | Verification runs Argo Rollouts analyses after the environment passed its health check: one AnalysisRun per template, with the Bundle's version and environment as args. The environment is Verified only when every analysis is Successful. Needs Argo Rollouts' CRDs: without them the Bundle fails (it never promotes unverified). See docs/analysis.md. |
+| `spec.environments[].verification.analysisTemplates` | []object | yes | AnalysisTemplates are the templates to run, each as its own AnalysisRun. |
+| `spec.environments[].verification.analysisTemplates[].kind` | string |  | Kind is AnalysisTemplate (default) or ClusterAnalysisTemplate. One of: `AnalysisTemplate`, `ClusterAnalysisTemplate`. |
+| `spec.environments[].verification.analysisTemplates[].name` | string | yes | Name is the template name. |
+| `spec.environments[].verification.args` | []object |  | Args set template args by name. They take precedence over the args kardinal sets (bundle, pipeline, environment, image, tag, digest, commit) and over the template's defaults. Only args a template declares are passed to its AnalysisRun. |
+| `spec.environments[].verification.args[].name` | string | yes | Name is the arg name the template declares. |
+| `spec.environments[].verification.args[].value` | string | yes | Value is the arg value. |
+| `spec.environments[].verification.inconclusive` | string |  | Inconclusive is what an Inconclusive AnalysisRun counts as: "fail" (default) or "pass". One of: `fail`, `pass`. |
+| `spec.environments[].verification.timeout` | string |  | Timeout bounds the analyses from the moment the environment entered Verifying. An analysis still running then fails the environment. Empty or "0" means 30m. |
 | `spec.environments[].waitForMergeTimeout` | string |  | WaitForMergeTimeout is the maximum duration a PromotionStep will wait in the WaitingForMerge state before transitioning to Failed. When not set or zero, the step waits indefinitely (no timeout). Accepts Go duration strings: "24h", "72h", "168h", etc. |
 | `spec.environments[].wave` | integer |  | Wave assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. An environment of a wave depends on every environment of the next lower wave present; gaps in the numbering (10, 20, 30) are allowed and create no roots. Without DependsOn, a wave also follows the last environment without a wave listed before its first environment, so a wave after "staging" starts once staging is verified, and an environment without a wave follows the environment listed before it, or every environment of that one's wave. DependsOn replaces these list-order edges but never the edges to the previous wave. Only the first listed environment is a root unless DependsOn says otherwise. |
 | `spec.git` | object | yes | Git holds the shared GitOps repository configuration for all environments in this pipeline. |
@@ -385,9 +394,15 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | PromotionStepSpec defines the desired state of a PromotionStep. PromotionStep objects are created by the Graph controller — not by users. |
+| `spec.analyses` | []string |  | Analyses names the AnalysisRuns of the environment's verification. A step with analyses goes from HealthChecking to Verifying and is Verified only when every one of them is Successful in spec.live.analyses. |
 | `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment this step promotes into. |
 | `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs (a patch node, not the step's template, so they keep updating after the step's own template stopped resolving). The reconciler reads only this copy, never the source objects. |
+| `spec.live.analyses` | []object |  | Analyses are the environment's AnalysisRuns for this Bundle. |
+| `spec.live.analyses[].message` | string |  | Message is the AnalysisRun's status.message. |
+| `spec.live.analyses[].name` | string | yes | Name is the AnalysisRun name. |
+| `spec.live.analyses[].phase` | string |  | Phase is the AnalysisRun's status.phase (Pending when it has none yet): Pending, Running, Successful, Failed, Error or Inconclusive. |
+| `spec.live.analyses[].template` | string |  | Template is the AnalysisTemplate or ClusterAnalysisTemplate it runs. |
 | `spec.live.hooks` | []object |  | Hooks are the environment's HookRuns for this Bundle. |
 | `spec.live.hooks[].hook` | string |  | Hook is the hook's name in the Pipeline. |
 | `spec.live.hooks[].message` | string |  | Message is the HookRun's status.message. |
@@ -424,7 +439,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.outputs` | map[string]string |  | Outputs accumulates key/value results from completed steps in the sequence (e.g. prURL from the open-pr step). |
 | `status.prURL` | string |  | PRURL is the GitHub pull request URL opened for this promotion. Set when the step enters WaitingForMerge state. |
 | `status.retryCount` | integer |  | RetryCount is the number of consecutive step-engine errors retried in the current state. Reset when a step makes progress. When it reaches the retry limit the PromotionStep fails. Retries counted in gitCredentialRetries are not counted here. |
-| `status.state` | string |  | State is the step execution state. The Graph controller uses readyWhen expressions of the form ${step.status.state == "Verified"} to advance the promotion DAG. Verifying: the health check passed and the post-deploy hooks run. One of: `Pending`, `Promoting`, `WaitingForMerge`, `HealthChecking`, `Verifying`, `Verified`, `Failed`, `AbortedByAlarm`, `RollingBack`. |
+| `status.state` | string |  | State is the step execution state. The Graph controller uses readyWhen expressions of the form ${step.status.state == "Verified"} to advance the promotion DAG. Verifying: the health check passed and the post-deploy hooks and analyses run. One of: `Pending`, `Promoting`, `WaitingForMerge`, `HealthChecking`, `Verifying`, `Verified`, `Failed`, `AbortedByAlarm`, `RollingBack`. |
 | `status.steps` | []object |  | Steps is the per-step execution history for this PromotionStep. Populated by the reconciler as each step in the sequence starts, completes, or fails. Provides fine-grained visibility into which sub-step is running without reading controller logs. Initialized when the step sequence starts (state → Promoting). |
 | `status.steps[].completedAt` | string (date-time) |  | CompletedAt is when the step finished (success or failure). |
 | `status.steps[].durationMs` | integer (int64) |  | DurationMs is the wall-clock duration in milliseconds from startedAt to completedAt. Zero when the step has not completed. |

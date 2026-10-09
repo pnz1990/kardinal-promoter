@@ -62,6 +62,15 @@ spec:
               PromotionStepSpec defines the desired state of a PromotionStep.
               PromotionStep objects are created by the Graph controller — not by users.
             properties:
+              analyses:
+                description: |-
+                  Analyses names the AnalysisRuns of the environment's verification. A
+                  step with analyses goes from HealthChecking to Verifying and is
+                  Verified only when every one of them is Successful in
+                  spec.live.analyses.
+                items:
+                  type: string
+                type: array
               bundleName:
                 description: BundleName is the Bundle being promoted.
                 minLength: 1
@@ -77,6 +86,32 @@ spec:
                   step's own template stopped resolving). The reconciler reads only this
                   copy, never the source objects.
                 properties:
+                  analyses:
+                    description: Analyses are the environment's AnalysisRuns for this
+                      Bundle.
+                    items:
+                      description: LiveAnalysisRun is the result of one Argo Rollouts
+                        AnalysisRun.
+                      properties:
+                        message:
+                          description: Message is the AnalysisRun's status.message.
+                          type: string
+                        name:
+                          description: Name is the AnalysisRun name.
+                          type: string
+                        phase:
+                          description: |-
+                            Phase is the AnalysisRun's status.phase (Pending when it has none
+                            yet): Pending, Running, Successful, Failed, Error or Inconclusive.
+                          type: string
+                        template:
+                          description: Template is the AnalysisTemplate or ClusterAnalysisTemplate
+                            it runs.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
                   hooks:
                     description: Hooks are the environment's HookRuns for this Bundle.
                     items:
@@ -338,7 +373,8 @@ spec:
                   State is the step execution state.
                   The Graph controller uses readyWhen expressions of the form
                   ${step.status.state == "Verified"} to advance the promotion DAG.
-                  Verifying: the health check passed and the post-deploy hooks run.
+                  Verifying: the health check passed and the post-deploy hooks and
+                  analyses run.
                 enum:
                 - Pending
                 - Promoting
