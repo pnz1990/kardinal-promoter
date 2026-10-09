@@ -155,9 +155,16 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		errs = append(errs, "spec.environments must contain at least one environment")
 	}
 
+	reserved := false
 	for _, env := range pipeline.Spec.Environments {
 		if env.Name == "" {
 			errs = append(errs, "each environment must have a non-empty name")
+		}
+		// The API server refuses it with this message (#1358); the Graph build
+		// below would report it again, naming validate's own Bundle.
+		if graph.ReservedEnvironmentName(env.Name) {
+			errs = append(errs, fmt.Sprintf("environment %q: %s", env.Name, graph.ReservedEnvironmentMessage))
+			reserved = true
 		}
 	}
 
@@ -221,7 +228,16 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		if renderedErr != nil {
 			buildable.Spec.Git.Layout = "directory"
 		}
-		if _, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: buildableBundle(dummyBundle)}); err != nil {
+		// A reserved name fails Build on its node ID, already reported above;
+		// the ordering checks (unknown dependsOn, cycles) still run.
+		check := func() error {
+			_, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: buildableBundle(dummyBundle)})
+			return err
+		}
+		if reserved {
+			check = func() error { return graph.ValidateOrdering(buildable) }
+		}
+		if err := check(); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
@@ -266,8 +282,9 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 	}
 	if !policyGateNameAllowed(&gate) {
 		errs = append(errs, fmt.Sprintf("metadata.name %q has %d characters: PolicyGate names are at most %d "+
-			"characters, because the name is copied into the kardinal.io/gate-template label of every gate instance",
-			gate.Name, len(gate.Name), maxPolicyGateNameLength))
+			"characters, because the name is copied into the kardinal.io/gate-template label of every gate instance; "+
+			"use a name of at most %d characters",
+			gate.Name, len(gate.Name), maxPolicyGateNameLength, maxPolicyGateNameLength))
 	}
 
 	// Warnings do not fail validation.

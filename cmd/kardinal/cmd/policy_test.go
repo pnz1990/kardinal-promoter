@@ -864,3 +864,11 @@ func TestValidateCELExpression(t *testing.T) {
 		})
 	}
 }
+
+// TestPolicyTest_MissingFile verifies error on missing file.
+func TestPolicyTest_MissingFile(t *testing.T) {
+	var buf bytes.Buffer
+	err := policyTestFn(&buf, "/nonexistent/path/gate.yaml", time.Now())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "nonexistent")
+}

@@ -216,6 +216,39 @@ func TestValidate_Documents(t *testing.T) {
 				"spec:\n  git:\n    url: https://github.com/o/r\n    provider: gitlab\n  environments:\n  - name: test\n",
 			wantOut: []string{"✓ f.yaml is valid", "  ! warning: spec.git.provider is deprecated and ignored"},
 		},
+		// #1358: a reserved environment name is reported the way the API
+		// server reports it, without the Bundle validate builds internally.
+		{
+			name:    "environment named bundle",
+			content: strings.Replace(validPipelineDoc, "- name: prod", "- name: bundle", 1),
+			wantOut: []string{"✗ f.yaml is invalid:\n  - environment \"bundle\": reserved environment name: the name " +
+				"becomes a kro Graph node ID; bundle, time, kro reserved IDs (spec, status, metadata, graph, self, each, item, ...) " +
+				"and CEL keywords are not allowed; rename the environment\n"},
+			wantErr: true,
+		},
+		{
+			name:    "environment named spec",
+			content: strings.Replace(validPipelineDoc, "- name: prod", "- name: spec", 1),
+			wantOut: []string{"✗ f.yaml is invalid:\n  - environment \"spec\": reserved environment name: "},
+			wantErr: true,
+		},
+		{
+			// The ordering checks still run next to a reserved name.
+			name: "environment named bundle in a cycle",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata:\n  name: web\nspec:\n  git:\n" +
+				"    url: https://github.com/o/r\n  environments:\n  - name: bundle\n    dependsOn: [prod]\n" +
+				"  - name: prod\n    dependsOn: [bundle]\n",
+			wantOut: []string{`  - environment "bundle": reserved environment name: `,
+				"  - build: circular dependency in pipeline environments: bundle → prod → bundle (cycle!)"},
+			wantErr: true,
+		},
+		{
+			name: "PolicyGate name over 63 characters says what to do",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: " + strings.Repeat("g", 64) +
+				"\nspec:\n  expression: \"true\"\n",
+			wantOut: []string{"; use a name of at most 63 characters\n"},
+			wantErr: true,
+		},
 		{
 			name:    "steps are reported once",
 			content: validPipelineDoc + "    steps:\n    - uses: git-clone\n",
@@ -237,6 +270,8 @@ func TestValidate_Documents(t *testing.T) {
 				assert.Contains(t, out, s)
 			}
 			assert.NotContains(t, out, "build: environment", "a problem is reported once")
+			assert.NotContains(t, out, "validate-dummy", "validate's internal Bundle is never named")
+			assert.NotContains(t, out, "build: PromotionStep", "a reserved name is reported once")
 		})
 	}
 }
