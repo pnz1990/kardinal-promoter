@@ -24,7 +24,7 @@ type rebasingGitClient struct {
 	rebaseErrs  []error
 }
 
-func (m *rebasingGitClient) RebaseOnRemote(context.Context, string, string, string, string) ([]string, error) {
+func (m *rebasingGitClient) RebaseOnRemote(context.Context, string, string, string, scm.GitAuth) ([]string, error) {
 	m.rebaseCalls++
 	if len(m.rebaseErrs) > 0 {
 		err := m.rebaseErrs[0]

@@ -13,13 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog"
-
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -206,25 +205,32 @@ func (r *Reconciler) recordApprovals(ctx context.Context, gate *kardinalv1alpha1
 	// them again, gets a Conflict and writes nothing. The audit records
 	// follow the status write, so only the reconcile that recorded a change
 	// audits it.
-	old := gate.Status.Approvals
+	old, oldPending := gate.Status.Approvals, gate.Status.PendingAuditEvents
 	patch := client.MergeFromWithOptions(gate.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	gate.Status.Approvals = records
-	if err := r.Status().Patch(ctx, gate, patch); err != nil {
-		gate.Status.Approvals = old
-		return fmt.Errorf("record approvals: %w", err)
-	}
 	// Audit each decision that appeared or left (an Approval created, or
-	// deleted to revoke it).
+	// deleted to revoke it). The records go in the audit outbox in the same
+	// patch (#1552).
+	enqueue := func(rec kardinalv1alpha1.GateApprovalStatus, action string) {
+		if e, ok := r.approvalAuditEntry(gate, rec, action); ok {
+			gate.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, gate.Status.PendingAuditEvents, e)
+		}
+	}
 	for _, rec := range records {
 		if !hasDecision(old, rec) {
-			r.writeApprovalAuditEvent(ctx, gate, rec, auditActionApprovalRecorded)
+			enqueue(rec, auditActionApprovalRecorded)
 		}
 	}
 	for _, o := range old {
 		if !hasDecision(records, o) {
-			r.writeApprovalAuditEvent(ctx, gate, o, auditActionApprovalRevoked)
+			enqueue(o, auditActionApprovalRevoked)
 		}
 	}
+	if err := r.Status().Patch(ctx, gate, patch); err != nil {
+		gate.Status.Approvals, gate.Status.PendingAuditEvents = old, oldPending
+		return fmt.Errorf("record approvals: %w", err)
+	}
+	_ = r.flushAudit(ctx, gate)
 	return nil
 }
 
@@ -243,15 +249,15 @@ func hasDecision(list []kardinalv1alpha1.GateApprovalStatus, rec kardinalv1alpha
 	return false
 }
 
-// writeApprovalAuditEvent records that rec appeared in (ApprovalRecorded) or
-// left (ApprovalRevoked) the gate's approvals. The name is derived from the
-// gate, the action, the user, the decision and when the gate first saw it. A
-// failure is logged: audit never blocks gate evaluation.
-func (r *Reconciler) writeApprovalAuditEvent(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
-	rec kardinalv1alpha1.GateApprovalStatus, action string) {
+// approvalAuditEntry is the outbox entry recording that rec appeared in
+// (ApprovalRecorded) or left (ApprovalRevoked) the gate's approvals, and
+// false for a gate a Graph did not create. The name is derived from the gate,
+// the action, the user, the decision and when the gate first saw it.
+func (r *Reconciler) approvalAuditEntry(gate *kardinalv1alpha1.PolicyGate,
+	rec kardinalv1alpha1.GateApprovalStatus, action string) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	labels := gate.GetLabels()
 	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" {
-		return
+		return kardinalv1alpha1.PendingAuditEvent{}, false
 	}
 	seen := ""
 	if rec.FirstSeenAt != nil {
@@ -272,15 +278,8 @@ func (r *Reconciler) writeApprovalAuditEvent(ctx context.Context, gate *kardinal
 	if rec.Comment != "" {
 		msg += ": " + rec.Comment
 	}
-	ae := &kardinalv1alpha1.AuditEvent{
-		ObjectMeta: metav1.ObjectMeta{Name: sanitizeGateName(base + suffix), Namespace: gate.Namespace,
-			Labels: gateAuditLabels(labels, action)},
-		Spec: kardinalv1alpha1.AuditEventSpec{
-			Timestamp: metav1.NewTime(r.now()), BundleName: labels[labelBundle], PipelineName: labels[labelPipeline],
-			Environment: labels[labelEnvironment], Action: action, Outcome: "Success", Message: truncateMessage(msg),
-		},
-	}
-	if err := r.Create(ctx, ae); client.IgnoreAlreadyExists(err) != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Str("gate", gate.Name).Str("action", action).Msg("failed to write approval AuditEvent")
-	}
+	return audit.Entry(sanitizeGateName(base+suffix), gateAuditLabels(labels, action), kardinalv1alpha1.AuditEventSpec{
+		BundleName: labels[labelBundle], PipelineName: labels[labelPipeline],
+		Environment: labels[labelEnvironment], Action: action, Outcome: "Success", Message: msg,
+	}, metav1.NewTime(r.now())), true
 }

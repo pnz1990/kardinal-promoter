@@ -7,6 +7,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -19,7 +21,7 @@ type cloneRecorder struct {
 	clones []string
 }
 
-func (g *cloneRecorder) Clone(_ context.Context, _, branch, _, _ string) error {
+func (g *cloneRecorder) Clone(_ context.Context, _, branch, _ string, _ scm.GitAuth) error {
 	g.clones = append(g.clones, branch)
 	return nil
 }

@@ -19,7 +19,8 @@ package e2e
 // Verified at the same time through one shared fake client and one shared
 // PromotionStep reconciler, so `go test -race` checks the reconciler's shared
 // state. It runs against a fake client and mock SCM/Git, so its wall time is
-// not a performance number; the 30s limit only stops a hung run.
+// not a performance number; the 60s limit only stops a hung run (the steps
+// take turns pushing to their one branch, #1578).
 //
 // The benchmarks run the same loop:
 //   go test ./test/e2e/... -run=^$ -bench=BenchmarkPromotion -benchmem
@@ -29,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,7 +50,7 @@ const (
 	// concurrentBundles is how many Bundles the concurrent test and benchmark drive at once.
 	concurrentBundles = 100
 	// loopTimeout stops a run whose reconcile loop hangs. It is not a latency target.
-	loopTimeout = 30 * time.Second
+	loopTimeout = 60 * time.Second
 )
 
 // BenchmarkPromotionLoop_Single measures driving one PromotionStep from
@@ -156,8 +158,13 @@ func runPromotionLoops(tb testing.TB, prefix string, n int) error {
 }
 
 // reconcileStepToVerified reconciles one PromotionStep until it is Verified.
+// Every Pipeline here pushes to one branch, so the steps take turns (#1578):
+// a reconcile that only waited for the branch's turn is not counted against
+// the 50 iterations, and the next one comes after its requeue (at most
+// turnPoll), as the controller would wake it.
 func reconcileStepToVerified(ctx context.Context, c client.Client, rec *psrec.Reconciler, name string) error {
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: "default"}}
+	const turnPoll = 20 * time.Millisecond
 	for i := 0; i < 50; i++ {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("step %s: not Verified within %v: %w", name, loopTimeout, err)
@@ -178,6 +185,12 @@ func reconcileStepToVerified(ctx context.Context, c client.Client, rec *psrec.Re
 			return fmt.Errorf("step %s reached Failed: %s", name, ps.Status.Message)
 		case result.RequeueAfter == 0 && !result.Requeue: //nolint:staticcheck
 			return fmt.Errorf("step %s stopped without Verified (state=%s)", name, ps.Status.State)
+		case strings.HasPrefix(ps.Status.Message, "waiting for its turn to push"):
+			i--
+			select {
+			case <-ctx.Done():
+			case <-time.After(min(result.RequeueAfter, turnPoll)):
+			}
 		}
 	}
 	return fmt.Errorf("step %s did not reach Verified in 50 iterations", name)
