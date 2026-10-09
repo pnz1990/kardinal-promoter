@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
@@ -27,8 +28,9 @@ import (
 // effects (C03-promotionstep-14, -15, -28):
 //
 //   - status.steps entries of the phases being left are closed (E2E-12);
-//   - an AuditEvent is written for start, success, failure and rollback,
-//     and for the success of a rollback Bundle (auditRollbackSucceeded);
+//   - an AuditEvent is recorded for start, success, failure and rollback,
+//     and for the success of a rollback Bundle (auditEntries), in the step's
+//     status outbox in the same patch as the state (#1552);
 //   - the step counter and age metrics are recorded for terminal states;
 //   - a Kubernetes Event is emitted.
 //
@@ -55,11 +57,22 @@ func (r *Reconciler) transitionAudit(ctx context.Context, base, ps *v1alpha1.Pro
 // was patched.
 func (r *Reconciler) transitionClosing(ctx context.Context, base, ps *v1alpha1.PromotionStep,
 	state, message, auditAction string, closed stepObservations) (bool, error) {
-	changed, err := r.patchState(ctx, base, ps, state, message, closed)
+	var entries []v1alpha1.PendingAuditEvent
+	if base.Status.State != state {
+		var err error
+		if entries, err = r.auditEntries(ctx, ps, state, message, auditAction); err != nil {
+			return false, err
+		}
+	}
+	changed, err := r.patchState(ctx, base, ps, state, message, closed, entries...)
 	if err != nil || !changed {
 		return false, err
 	}
-	r.recordTransition(ctx, ps, state, message, auditAction)
+	// The records are in the step's status now, so a failed create only
+	// delays them: the status patch that stored them wakes the reconciler
+	// (auditPending), and the next reconcile writes them first.
+	_ = r.flushAudit(ctx, ps)
+	r.recordTransition(ps, state, message)
 	return true, nil
 }
 
@@ -84,14 +97,21 @@ func (r *Reconciler) cancelUnstarted(ctx context.Context, base, ps *v1alpha1.Pro
 // change and no error. The steps closed before the
 // call (closed) and by the state change are observed in
 // kardinal_step_duration_seconds only after the patch succeeds.
+//
+// The audit records of the state change (entries) are stored in
+// status.pendingAuditEvents in the same patch, so the state cannot change
+// without them (#1552); flushAudit writes them.
 func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.PromotionStep,
-	state, message string, closed stepObservations) (bool, error) {
+	state, message string, closed stepObservations, entries ...v1alpha1.PendingAuditEvent) (bool, error) {
 	ps.Status.State = state
 	ps.Status.Message = message
 	changed := base.Status.State != state
 	if changed {
 		closed = append(closed, closeStepStatuses(ps, state)...)
 		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
+		for _, e := range entries {
+			ps.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, ps.Status.PendingAuditEvents, e)
+		}
 	}
 	// Locked on the resourceVersion base was read at: a reconcile that read
 	// the step from a stale cache would otherwise repeat a transition a newer
@@ -114,14 +134,52 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 	return changed, nil
 }
 
-// recordTransition writes the audit record, metrics and Event for a state change.
-func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.PromotionStep, state, message, auditAction string) {
+// auditEntries are the audit records of ps's change to state, for
+// patchState to store with it: start, success, failure and rollback, and the
+// success of a rollback Bundle. An empty auditAction is the default for the
+// state. It fails only when the Bundle cannot be read to tell whether ps
+// promotes a rollback, so the transition is retried with its records rather
+// than patched without one.
+func (r *Reconciler) auditEntries(ctx context.Context, ps *v1alpha1.PromotionStep,
+	state, message, auditAction string) ([]v1alpha1.PendingAuditEvent, error) {
+	at := r.now()
+	var out []v1alpha1.PendingAuditEvent
+	add := func(action, outcome, msg string) {
+		if e, ok := auditEntry(ps, action, outcome, msg, at); ok {
+			out = append(out, e)
+		}
+	}
+	switch state {
+	case StatePromoting:
+		add(AuditActionPromotionStarted, AuditOutcomePending, message)
+	case StateVerified:
+		add(AuditActionPromotionSucceeded, AuditOutcomeSuccess, message)
+		msg, ok, err := r.rollbackSucceededMessage(ctx, ps, message)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			add(AuditActionRollbackSucceeded, AuditOutcomeSuccess, msg)
+		}
+	case StateFailed, StateAbortedByAlarm:
+		action := auditAction
+		if action == "" {
+			action = AuditActionPromotionFailed
+		}
+		add(action, AuditOutcomeFailure, message)
+	case StateRollingBack:
+		add(AuditActionRollbackStarted, AuditOutcomePending, message)
+	}
+	return out, nil
+}
+
+// recordTransition records the metrics and Event for a state change.
+func (r *Reconciler) recordTransition(ps *v1alpha1.PromotionStep, state, message string) {
 	env := ps.Spec.Environment
 	eventType, reason, eventAction, note := corev1.EventTypeNormal, state, "Promote", ""
 	switch state {
 	case StatePromoting:
 		note = fmt.Sprintf("env %s: promotion started: %s", env, message)
-		writeAuditEvent(ctx, r.Client, ps, AuditActionPromotionStarted, AuditOutcomePending, message)
 	case StateWaitingForMerge:
 		note = fmt.Sprintf("env %s: PR opened, waiting for merge: %s", env, ps.Status.PRURL)
 	case StateHealthChecking:
@@ -133,55 +191,46 @@ func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.Promotio
 	case StateVerified:
 		eventAction = "Verify"
 		note = fmt.Sprintf("env %s: step completed successfully", env)
-		writeAuditEvent(ctx, r.Client, ps, AuditActionPromotionSucceeded, AuditOutcomeSuccess, message)
-		r.auditRollbackSucceeded(ctx, ps, message)
 		observability.StepsTotal.WithLabelValues("PromotionStep", "succeeded").Inc()
 		observability.PromotionStepAgeSeconds.Observe(time.Since(ps.CreationTimestamp.Time).Seconds())
 	case StateFailed, StateAbortedByAlarm:
 		eventType = corev1.EventTypeWarning
 		note = fmt.Sprintf("env %s: step failed: %s", env, message)
-		action := auditAction
-		if action == "" {
-			action = AuditActionPromotionFailed
-		}
-		writeAuditEvent(ctx, r.Client, ps, action, AuditOutcomeFailure, message)
 		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 		observability.PromotionStepAgeSeconds.Observe(time.Since(ps.CreationTimestamp.Time).Seconds())
 	case StateRollingBack:
 		eventType, eventAction = corev1.EventTypeWarning, "Rollback"
 		note = fmt.Sprintf("env %s: %s", env, message)
-		writeAuditEvent(ctx, r.Client, ps, AuditActionRollbackStarted, AuditOutcomePending, message)
 	default:
 		return
 	}
 	kubeevent.Emit(r.Recorder, ps, eventType, reason, eventAction, note)
 }
 
-// auditRollbackSucceeded writes the RollbackSucceeded AuditEvent when ps,
-// which has just reached Verified, promoted a rollback Bundle: the
+// rollbackSucceededMessage is the message of the RollbackSucceeded record
+// when ps, which is reaching Verified, promoted a rollback Bundle: the
 // environment runs the restored artifacts and passed its health check. It
-// runs only on the transition to Verified, and the AuditEvent is named
-// {ps.Name}-rollback-succeeded, so a step writes at most one, also when a
-// reconcile is repeated after a controller restart. Errors are logged, like
-// every audit write: they never block the promotion.
-func (r *Reconciler) auditRollbackSucceeded(ctx context.Context, ps *v1alpha1.PromotionStep, message string) {
+// reports false for any other Bundle and for a Bundle that is gone. The
+// record is named {ps.Name}-rollback-succeeded, so a step writes at most
+// one, also when a reconcile is repeated after a controller restart.
+func (r *Reconciler) rollbackSucceededMessage(ctx context.Context, ps *v1alpha1.PromotionStep,
+	message string) (string, bool, error) {
 	name := ps.Spec.BundleName
 	if name == "" {
 		name = ps.Labels["kardinal.io/bundle"]
 	}
 	if name == "" {
-		return
+		return "", false, nil
 	}
 	var bundle v1alpha1.Bundle
 	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: ps.Namespace}, &bundle); err != nil {
-		if !apierrors.IsNotFound(err) {
-			zerolog.Ctx(ctx).Error().Err(err).Str("bundle", name).
-				Msg("failed to read the Bundle; no RollbackSucceeded AuditEvent written")
+		if apierrors.IsNotFound(err) {
+			return "", false, nil
 		}
-		return
+		return "", false, fmt.Errorf("read Bundle %s for the RollbackSucceeded AuditEvent: %w", name, err)
 	}
 	if !isRollbackBundle(&bundle) {
-		return
+		return "", false, nil
 	}
 	detail := ""
 	if bundle.Spec.Provenance != nil && bundle.Spec.Provenance.RollbackOf != "" {
@@ -191,8 +240,7 @@ func (r *Reconciler) auditRollbackSucceeded(ctx context.Context, ps *v1alpha1.Pr
 		}
 		detail += ")"
 	}
-	writeAuditEvent(ctx, r.Client, ps, AuditActionRollbackSucceeded, AuditOutcomeSuccess,
-		fmt.Sprintf("rollback Bundle %s%s verified in %s: %s", name, detail, ps.Spec.Environment, message))
+	return fmt.Sprintf("rollback Bundle %s%s verified in %s: %s", name, detail, ps.Spec.Environment, message), true, nil
 }
 
 // closeStepStatuses brings status.steps in line with the state being entered

@@ -426,7 +426,7 @@ func serverMinor(t *testing.T, e *framework.Env) int {
 //     CRD validation ratcheting: on 1.30 to 1.32 status writes fail too. The
 //     cluster must run Kubernetes 1.30 or later; the suite runs on 1.30, the
 //     oldest minor kardinal supports, and the newest.
-//   - Step 7 applies all 12 CRDs by hand; the API server then enforces them
+//   - Step 7 applies every kardinal CRD by hand; the API server then enforces them
 //     (a reserved environment name and a 64-character PolicyGate name are
 //     rejected), and kardinal policy simulate reads the pre-upgrade MetricCheck
 //     result as stale. After the fixes the finder prints nothing.
@@ -608,7 +608,8 @@ spec:
 	for _, m := range regexp.MustCompile(`(?m)^customresourcedefinition\.apiextensions\.k8s\.io/(\S+) serverside-applied$`).FindAllStringSubmatch(run.Output, -1) {
 		applied = append(applied, m[1])
 	}
-	assert.Len(t, applied, 12, "the guide applies all 12 CRDs: %v", applied)
+	// Every CRD of this checkout (the chart ships config/crd/bases).
+	assert.Len(t, applied, len(crdFiles(t)), "the guide applies every kardinal CRD: %v", applied)
 	assert.Contains(t, applied, "notificationhooks.kardinal.io")
 	framework.Eventually(t, 30*time.Second, "the API server enforces the new CRDs", func(context.Context) (bool, string) {
 		reserved := e.Shell(t, u.dryRun(u.pipelineHead("e2e-dry-run", "")+legacyEnv("graph", "")))
@@ -684,11 +685,24 @@ spec:
 		"CustomResourceDefinition /graphrevisions.experimental.kro.run", "CustomResourceDefinition /graphs.experimental.kro.run",
 		"Deployment kro-system/graph-controller", "Namespace /kro-system", "ServiceAccount kro-system/graph-controller",
 	}, removed, "objects only v0.8.1 needed")
-	assert.ElementsMatch(t, []string{
+	// The Graph identity and leader election are new in v0.9; past them the
+	// chart only adds admission policies (identity, holds, Graph objects...)
+	// and ClusterRoles of its own: no other workload or binding appears
+	// with the upgrade (#1560: listing each policy broke on every feature).
+	assert.Subset(t, added, []string{
 		"ClusterRole /kardinal-promoter-graph-applier", "ClusterRole /kardinal-promoter-graph-reader",
 		"ClusterRole /kardinal-promoter-kro-watch",
 		"Role kardinal-system/kardinal-promoter-leader-election", "RoleBinding kardinal-system/kardinal-promoter-leader-election",
-	}, added, "objects the new chart adds")
+		"ValidatingAdmissionPolicy /kardinal-promoter-hold-writes", "ValidatingAdmissionPolicyBinding /kardinal-promoter-hold-writes",
+	}, "objects the new chart adds")
+	for _, o := range added {
+		ok := strings.HasPrefix(o, "ValidatingAdmissionPolicy /kardinal-promoter-") ||
+			strings.HasPrefix(o, "ValidatingAdmissionPolicyBinding /kardinal-promoter-") ||
+			strings.HasPrefix(o, "ClusterRole /kardinal-promoter-") ||
+			strings.HasPrefix(o, "Role kardinal-system/kardinal-promoter-") ||
+			strings.HasPrefix(o, "RoleBinding kardinal-system/kardinal-promoter-")
+		assert.True(t, ok, "the upgrade adds %s, which is not an admission policy or role of the chart", o)
+	}
 	framework.Eventually(t, time.Minute, "v0.8.1's Graph controller and CRDs deleted", func(ctx context.Context) (bool, string) {
 		if _, err := e.Kube.AppsV1().Deployments("kro-system").Get(ctx, "graph-controller", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 			return false, fmt.Sprintf("Deployment graph-controller: %v", err)
@@ -727,12 +741,21 @@ spec:
 	assert.NotContains(t, check, "warning(s)")
 	var warnings []string
 	for _, l := range logEntries(check) {
+		// The fixtures' Pipelines share one repository and write the same
+		// paths on purpose: each logs a PathConflict warning (#1504), which
+		// the guide describes apart from the startup warnings.
+		if strings.HasPrefix(l.Message, "environments write overlapping paths of the same repository and branch") {
+			continue
+		}
 		warnings = append(warnings, l.Level+": "+l.Message)
 	}
-	if assert.Len(t, warnings, 2, "the controller logs two warnings: %q", warnings) {
+	// The three the guide lists (docs/installation.md, step 9): the upgrade
+	// keeps the v0.8.1 values, which set none of these (#1560).
+	if assert.Len(t, warnings, 3, "the controller logs three warnings: %q", warnings) {
 		sort.Strings(warnings)
-		assert.True(t, strings.HasPrefix(warnings[0], "warn: SCM webhooks disabled: no --webhook-secret set"), warnings[0])
-		assert.True(t, strings.HasPrefix(warnings[1], "warn: UI API authentication is off"), warnings[1])
+		assert.True(t, strings.HasPrefix(warnings[0], "warn: --scm-allowed-repositories (Helm scm.allowedRepositories) is not set"), warnings[0])
+		assert.True(t, strings.HasPrefix(warnings[1], "warn: SCM webhooks disabled: no --webhook-secret set"), warnings[1])
+		assert.True(t, strings.HasPrefix(warnings[2], "warn: UI API authentication is off"), warnings[2])
 	}
 	created := map[string]bool{}
 	for _, l := range logEntries(rel.AllLogs(t)) {
@@ -840,7 +863,22 @@ spec:
 	assert.Zero(t, u.labelled(t, b0a))
 	u.get(t, "upgrade-hold", &v1alpha1.PolicyGate{})
 	u.get(t, "metrics-ok", &v1alpha1.PolicyGate{})
-	u.step(t, u.main, b1, "prod")
+	// The children of a Bundle that exists are kept. b1's own steps may be
+	// gone already: b2 replaced it in every environment, so its Graph is
+	// retired after graph.retire.superseded (#1527) and its steps live on in
+	// status.retiredSteps.
+	u.step(t, u.main, b2, "test")
+	// b1's prod step is not lost by the cleanup: it is either still a
+	// PromotionStep or, its Graph retired, a record in status.retiredSteps.
+	if _, live, err := e.Step(context.Background(), ns, u.main, b1, "prod"); assert.NoError(t, err) && !live {
+		var b v1alpha1.Bundle
+		u.get(t, b1, &b)
+		envs := []string{}
+		for _, r := range b.Status.RetiredSteps {
+			envs = append(envs, r.Environment)
+		}
+		assert.Contains(t, envs, "prod", "b1's prod step is kept in status.retiredSteps")
+	}
 }
 
 // dryRun is a script that server-side dry-runs applying y in the namespace.
