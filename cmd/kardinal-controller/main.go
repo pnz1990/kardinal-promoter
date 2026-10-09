@@ -242,7 +242,8 @@ func main() {
 	// outbound MetricCheck queries (metriccheckrecon.Limiter).
 	var metricGlobalSlots, metricNamespaceSlots int
 	flag.IntVar(&metricGlobalSlots, "metriccheck-global-slots", metriccheckrecon.DefaultGlobalSlots,
-		"Most MetricCheck queries running at once in the cluster (at least 1). The rest wait, first come, first served.")
+		"Most MetricCheck queries running at once in the cluster (at least 1). The rest wait, first come, first served. "+
+			"The MetricCheck controller runs this many workers plus 4, at least 16.")
 	flag.IntVar(&metricNamespaceSlots, "metriccheck-namespace-slots", metriccheckrecon.DefaultNamespaceSlots,
 		"Most MetricCheck queries of one namespace running at once (at least 1).")
 
@@ -387,6 +388,14 @@ func main() {
 	}
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
+
+	// The Go runtime's soft memory limit at 90% of the container limit, so
+	// the GC works harder before the kernel OOMKills the controller (#1553).
+	if limit, why, err := applyGoMemoryLimit(os.Getenv("GOMEMLIMIT"), os.Getenv("KARDINAL_MEMORY_LIMIT")); err != nil {
+		logger.Warn().Err(err).Msg("Go memory limit not set")
+	} else if limit > 0 {
+		logger.Info().Int64("bytes", limit).Str("from", why).Msg("Go soft memory limit set")
+	}
 
 	tracingCfg.ServiceVersion = ControllerVersion
 	tracingCfg.OnError = func(err error) { logger.Warn().Err(err).Msg("OpenTelemetry: span export failed") }

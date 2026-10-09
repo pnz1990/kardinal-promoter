@@ -83,7 +83,7 @@ The controller registers these on the same `/metrics` endpoint
 | `kardinal_steps_total` | Counter | `type` (always `PromotionStep`), `result` (`succeeded`, `failed`) | PromotionSteps reaching a terminal state |
 | `kardinal_gate_evaluations_total` | Counter | `result` (`allowed`, `blocked`) | PolicyGate evaluations |
 | `kardinal_api_access_log_dropped_total` | Counter | `kind` (`denied`, `request`) | API access log lines not written over their per-second budget ([API access log](security.md#api-access-log)) |
-| `kardinal_audit_write_failures_total` | Counter | `kind` (`PromotionStep`, `PolicyGate`) | AuditEvent creates that failed and stay in the writer's `status.pendingAuditEvents` to be retried ([Audit outbox](security.md#audit-outbox)) |
+| `kardinal_audit_write_failures_total` | Counter | `kind` (`PromotionStep`, `PolicyGate`, `Pipeline`) | AuditEvent creates that failed and stay in the writer's `status.pendingAuditEvents` to be retried ([Audit outbox](security.md#audit-outbox)) |
 | `kardinal_audit_events_dropped_total` | Counter | `kind`, `reason` (`overflow`, `invalid`) | Audit records never written: the outbox of 32 was full, or the API server rejected the record. Alert on any increase |
 | `kardinal_pr_duration_seconds` | Histogram | — | Time from the PR opening (the `open-pr` step completing) to the merge the controller sees, observed once, when the step's move to `HealthChecking` is written |
 | `kardinal_step_duration_seconds` | Histogram | `step` (step name, e.g. `git-clone`) | Duration of each promotion step, observed once, when the status that records it Completed or Failed is written. `wait-for-merge` lasts until the merge; `health-check` covers the health check and the bake |

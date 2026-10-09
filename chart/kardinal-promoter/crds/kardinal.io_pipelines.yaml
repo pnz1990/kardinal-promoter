@@ -742,6 +742,70 @@ spec:
                   beyond this limit are deleted oldest-first on each new Bundle creation.
                 minimum: 1
                 type: integer
+              holds:
+                description: |-
+                  Holds pin environments to a rollback (kardinal rollback --hold): while
+                  an environment has a hold, no Bundle but the hold's own promotes into
+                  it, the hold's Bundle is never superseded or garbage-collected, and,
+                  when the controller can verify it restores artifacts Verified in the
+                  environment, it passes that environment's PolicyGates, each pass
+                  recorded (GateExempted). kardinal release-hold removes it, and so does
+                  the controller at expiresAt. At most one hold per environment. Changing
+                  spec.holds needs update on the virtual subresource pipelines/hold
+                  (chart: <release>-hold-writes ValidatingAdmissionPolicy).
+                items:
+                  description: EnvironmentHold pins one environment of a Pipeline
+                    to a rollback Bundle.
+                  properties:
+                    artifacts:
+                      description: |-
+                        Artifacts is the digest of the rollback Bundle's artifacts (type,
+                        images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+                        The gate exemption applies only while the Bundle still has them.
+                      type: string
+                    bundle:
+                      description: |-
+                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle that promotes into it while the hold lasts.
+                      minLength: 1
+                      type: string
+                    createdAt:
+                      description: CreatedAt is when.
+                      format: date-time
+                      type: string
+                    createdBy:
+                      description: |-
+                        CreatedBy is who held the environment: the Kubernetes user name of the
+                        request that added the hold (the admission policy refuses another
+                        value), or, for a hold added through the UI, the UI user the
+                        controller authenticated.
+                      type: string
+                    environment:
+                      description: Environment is the held environment.
+                      minLength: 1
+                      type: string
+                    expiresAt:
+                      description: ExpiresAt, when set, is when the controller removes
+                        the hold.
+                      format: date-time
+                      type: string
+                    reason:
+                      description: |-
+                        Reason says why the environment is held. It is shown wherever the hold
+                        or a gate it exempts is.
+                      maxLength: 1024
+                      minLength: 1
+                      type: string
+                  required:
+                  - bundle
+                  - environment
+                  - reason
+                  type: object
+                maxItems: 100
+                type: array
+                x-kubernetes-list-map-keys:
+                - environment
+                x-kubernetes-list-type: map
               maxConcurrentPromotions:
                 default: 0
                 description: |-
@@ -952,6 +1016,169 @@ spec:
                       Until a Bundle is Verified there, deploymentMetrics is not set at all.
                     type: integer
                 type: object
+              observedHolds:
+                description: |-
+                  ObservedHolds is spec.holds as the Pipeline reconciler last recorded
+                  it: the HoldCreated and HoldReleased AuditEvents are written from the
+                  difference, whichever client changed spec.holds.
+                items:
+                  description: EnvironmentHold pins one environment of a Pipeline
+                    to a rollback Bundle.
+                  properties:
+                    artifacts:
+                      description: |-
+                        Artifacts is the digest of the rollback Bundle's artifacts (type,
+                        images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+                        The gate exemption applies only while the Bundle still has them.
+                      type: string
+                    bundle:
+                      description: |-
+                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle that promotes into it while the hold lasts.
+                      minLength: 1
+                      type: string
+                    createdAt:
+                      description: CreatedAt is when.
+                      format: date-time
+                      type: string
+                    createdBy:
+                      description: |-
+                        CreatedBy is who held the environment: the Kubernetes user name of the
+                        request that added the hold (the admission policy refuses another
+                        value), or, for a hold added through the UI, the UI user the
+                        controller authenticated.
+                      type: string
+                    environment:
+                      description: Environment is the held environment.
+                      minLength: 1
+                      type: string
+                    expiresAt:
+                      description: ExpiresAt, when set, is when the controller removes
+                        the hold.
+                      format: date-time
+                      type: string
+                    reason:
+                      description: |-
+                        Reason says why the environment is held. It is shown wherever the hold
+                        or a gate it exempts is.
+                      maxLength: 1024
+                      minLength: 1
+                      type: string
+                  required:
+                  - bundle
+                  - environment
+                  - reason
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - environment
+                x-kubernetes-list-type: map
+              pendingAuditEvents:
+                description: |-
+                  PendingAuditEvents are the HoldCreated and HoldReleased AuditEvents not
+                  yet written (the audit outbox, #1552). Each entry is stored in the same
+                  status patch as observedHolds and removed once the AuditEvent exists.
+                  Normally empty.
+                items:
+                  description: |-
+                    PendingAuditEvent is an AuditEvent that a reconciler has decided to write
+                    but has not yet seen created. The reconciler stores it in its own status in
+                    the same patch as the transition it records. It creates the AuditEvent on
+                    that reconcile or a later one, then removes the entry. The name is fixed
+                    when the entry is stored, so a retried create that the API server already
+                    applied returns AlreadyExists, which counts as written (#1552).
+                  properties:
+                    createdAt:
+                      description: |-
+                        CreatedAt is the transition time in RFC 3339 with nanoseconds, written
+                        to the AuditEvent's kardinal.io/created-at annotation: spec.timestamp
+                        has one-second resolution.
+                      type: string
+                    labels:
+                      additionalProperties:
+                        type: string
+                      description: Labels are the AuditEvent's labels.
+                      type: object
+                    name:
+                      description: Name is the AuditEvent's name.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    spec:
+                      description: |-
+                        Spec is the AuditEvent's spec, timestamp included: the record carries
+                        the time of the transition, not the time it was written.
+                      properties:
+                        action:
+                          description: |-
+                            Action is a short verb describing what happened.
+                            Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
+                                          "PromotionSuperseded", "RollbackStarted", "RollbackSucceeded",
+                                          "HealthCheckFailed", "GateBlocked", "GateEvaluated", "HoldCreated", "HoldReleased".
+                            HealthCheckFailed and GateBlocked are accepted but never written: a
+                            failed health check records PromotionFailed (RollbackStarted when
+                            onHealthFailure is rollback), and a blocked gate records GateEvaluated
+                            with outcome Failure.
+                          enum:
+                          - PromotionStarted
+                          - PromotionSucceeded
+                          - PromotionFailed
+                          - PromotionSuperseded
+                          - RollbackStarted
+                          - RollbackSucceeded
+                          - HealthCheckFailed
+                          - GateBlocked
+                          - GateEvaluated
+                          - HoldCreated
+                          - HoldReleased
+                          type: string
+                        bundleName:
+                          description: BundleName is the name of the Bundle being
+                            promoted.
+                          minLength: 1
+                          type: string
+                        environment:
+                          description: Environment is the environment name where the
+                            event occurred.
+                          minLength: 1
+                          type: string
+                        message:
+                          description: Message is a human-readable description of
+                            the event.
+                          type: string
+                        outcome:
+                          description: |-
+                            Outcome describes the result of the action.
+                            Valid values: "Success", "Failure", "Pending".
+                          enum:
+                          - Success
+                          - Failure
+                          - Pending
+                          type: string
+                        pipelineName:
+                          description: PipelineName is the name of the Pipeline the
+                            Bundle is promoting through.
+                          minLength: 1
+                          type: string
+                        timestamp:
+                          description: Timestamp is when the event occurred (RFC 3339
+                            format).
+                          format: date-time
+                          type: string
+                      required:
+                      - action
+                      - bundleName
+                      - environment
+                      - outcome
+                      - pipelineName
+                      - timestamp
+                      type: object
+                  required:
+                  - name
+                  - spec
+                  type: object
+                maxItems: 32
+                type: array
               phase:
                 default: Unknown
                 description: |-

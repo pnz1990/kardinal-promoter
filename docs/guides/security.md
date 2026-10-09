@@ -368,8 +368,8 @@ spec is set at creation and never mutated. Kubernetes RBAC controls who can dele
 ### Audit outbox
 
 A transition and its AuditEvent are two API writes, so an etcd timeout, a lost
-leader or a crash between them used to lose the record. Now the PromotionStep
-and PolicyGate reconcilers record the AuditEvent in their own
+leader or a crash between them used to lose the record. Now the PromotionStep,
+PolicyGate and Pipeline (holds) reconcilers record the AuditEvent in their own
 `status.pendingAuditEvents` in the same status patch as the transition. They then
 create it and remove the entry. An entry whose create fails stays in status, and
 the object is reconciled again every 5 seconds until the create succeeds. Each

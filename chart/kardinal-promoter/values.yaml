@@ -158,13 +158,20 @@ service:
   # and /api/v1/bundles
   webhookPort: 8083
 
+# -- Controller resources. The controller caches every Pipeline, Bundle,
+# PromotionStep, PRStatus and PolicyGate it watches, so its memory grows with
+# Pipelines times the Bundle history. Measured peaks (scale suite, #1553):
+# 166 MiB for 200 Pipelines with a Bundle each, 409 MiB for 2 Bundles a second
+# over 40 Pipelines with leader kills; 55-70 MiB with no Pipelines. The
+# defaults give the larger load 2.5x headroom; see "Sizing the controller" in
+# docs/installation.md.
 resources:
   limits:
     cpu: 500m
-    memory: 128Mi
+    memory: 1Gi
   requests:
     cpu: 10m
-    memory: 64Mi
+    memory: 256Mi
 
 # -- Node selector for the controller Pod
 nodeSelector: {}
@@ -378,7 +385,9 @@ metricCheck:
   # rest wait first come, first served (status reason WaitingForSlot). The
   # sustained throughput is about global / query time: with 12 slots and
   # 0.5 s queries, 24 queries a second, so 1,440 MetricChecks at a 60 s
-  # interval. One namespace gets at most perNamespace / query time.
+  # interval. One namespace gets at most perNamespace / query time. The
+  # MetricCheck controller runs global + 4 workers (at least 16), so every
+  # slot can be used.
   querySlots:
     global: 12
     perNamespace: 1
