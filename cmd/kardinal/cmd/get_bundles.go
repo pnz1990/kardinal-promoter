@@ -17,11 +17,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/spf13/cobra"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func newGetBundlesCmd() *cobra.Command {
@@ -32,7 +34,11 @@ func newGetBundlesCmd() *cobra.Command {
 		Annotations: map[string]string{outputAnnotation: "true"},
 		Aliases:     []string{"bundle"},
 		Short:       "List Bundles, optionally filtered by pipeline name",
-		Args:        cobra.MaximumNArgs(1),
+		Long: `List Bundles, newest first: by creation time, then, within the same
+second, by the kardinal.io/created-at annotation (sub-second), then by name;
+the order supersession uses and kardinal history lists. -o json and -o yaml
+list them in the same order.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGetBundles(cmd, args, activeOnly)
 		},
@@ -88,6 +94,11 @@ func getBundlesFn(out io.Writer, client sigs_client.Client, ns string, args []st
 		}
 		items = filtered
 	}
+
+	// Newest first, in the order supersession uses (creation time, then
+	// kardinal.io/created-at within a second, then name: lifecycle.CompareCreation),
+	// as kardinal history lists them.
+	sort.SliceStable(items, func(i, j int) bool { return lifecycle.CompareCreation(&items[i], &items[j]) > 0 })
 
 	switch OutputFormat() {
 	case "json":

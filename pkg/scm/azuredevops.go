@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
@@ -362,6 +363,9 @@ func (a *AzureDevOpsProvider) do(ctx context.Context, method, path string, body,
 		call.circuitOpen(a.circuits, owner)
 		return fmt.Errorf("azuredevops scm: %w", err)
 	}
+	// When the call started: a failure of a call that started before the
+	// circuit opened is not counted (CircuitBreaker.RecordFailureFrom).
+	started := time.Now()
 
 	var bodyReader io.Reader
 	if body != nil {
@@ -386,7 +390,7 @@ func (a *AzureDevOpsProvider) do(ctx context.Context, method, path string, body,
 	// Arguments are taken now; the circuit states are read at return, after Record.
 	defer call.done(resp, err, a.circuits, owner)
 	if err != nil {
-		a.circuits.Record(owner, nil, err)
+		a.circuits.Record(owner, started, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -394,11 +398,11 @@ func (a *AzureDevOpsProvider) do(ctx context.Context, method, path string, body,
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
 		apiErr := newAPIError("azuredevops", method, path, resp, raw)
-		a.circuits.RecordAPIError(owner, resp, apiErr)
+		a.circuits.RecordAPIError(owner, started, resp, apiErr)
 		return apiErr
 	}
 
-	a.circuits.Record(owner, resp, nil)
+	a.circuits.Record(owner, started, resp, nil)
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)

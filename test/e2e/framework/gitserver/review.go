@@ -23,3 +23,18 @@ func (f *forgejo) ApprovePR(ctx context.Context, r Repo, number int, body string
 	return f.do(ctx, http.MethodPost, fmt.Sprintf("%s/pulls/%d/reviews", f.repoPath(r), number),
 		map[string]string{"event": "APPROVED", "body": body}, nil)
 }
+
+// BranchProtector is a Server that can protect a branch. Forgejo and Gitea
+// implement it.
+type BranchProtector interface {
+	// ProtectBranch makes merges into r.Branch need approvals approving
+	// reviews.
+	ProtectBranch(ctx context.Context, r Repo, approvals int) error
+}
+
+var _ BranchProtector = (*forgejo)(nil)
+
+func (f *forgejo) ProtectBranch(ctx context.Context, r Repo, approvals int) error {
+	return f.do(ctx, http.MethodPost, f.repoPath(r)+"/branch_protections",
+		map[string]interface{}{"rule_name": r.Branch, "required_approvals": approvals, "enable_push": true}, nil)
+}

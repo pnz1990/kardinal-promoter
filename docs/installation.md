@@ -235,8 +235,12 @@ choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 | `securityContext` | non-root, read-only root filesystem, no privilege escalation, all capabilities dropped | Container security context |
 | `logLevel` | `info` | Log verbosity (`debug`, `info`, `warn`, `error`). Sets both `--log-level` and `--zap-log-level` (`warn` maps to `error` there) |
 | `leaderElect` | `true` | Enable leader election (required for HA) |
+| `leaderElectionFlowSchema.enabled` | `true` | Create a FlowSchema that sends the controller's leader election Lease requests to the `leader-election` priority level, so a busy or throttled controller does not lose leadership ([Leader election under API pressure](#leader-election-under-api-pressure)). Cluster-scoped: the installer needs create/get/update/delete on `flowschemas.flowcontrol.apiserver.k8s.io`; set `false` for GitOps installs that may not manage cluster resources |
+| `leaderElectionFlowSchema.matchingPrecedence` | `90` | The FlowSchema's precedence: lower than any FlowSchema matching the controller's other requests |
+| `leaderElectionFlowSchema.priorityLevel` | `leader-election` | Priority level for the Lease requests |
 | `github.secretRef.name` | `""` | Existing Secret (release namespace) holding the SCM token. Recommended |
 | `github.secretRef.key` | `token` | Key in the Secret |
+| `github.app.enabled` | `false` | The `github.secretRef.name` Secret holds GitHub App credentials (`githubAppID`, `githubAppInstallationID`, `githubAppPrivateKey`) instead of a token; see [GitHub App](scm-providers.md#github-app). Needs `github.secretRef.name` |
 | `github.token` | `""` | Token value. The chart stores it in Secret `<fullname>-github-token` (`kardinal-promoter-github-token` for release `kardinal-promoter`); the value stays in the Helm release history. Setting both this and `secretRef.name` fails |
 | `scm.provider` | `""` | `--scm-provider`: `github` (default), `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops` |
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |
@@ -576,7 +580,7 @@ What to expect:
 
 - `kardinal doctor` passes every check.
 - There is one `graphs.kro.run` Graph for each Bundle that was Promoting. The controller logs `graph created` for each.
-- The logs show only two warnings: SCM webhooks are disabled without `--webhook-secret`, and UI API authentication is off (see [Other notes](#other-notes)).
+- At startup the logs show three warnings: `scm.allowedRepositories` is not set, SCM webhooks are disabled without `--webhook-secret`, and UI API authentication is off (see [Other notes](#other-notes)). A Pipeline whose environments write the same path of the same repository and branch as another Pipeline's also logs `environments write overlapping paths` (its `PathConflict` condition); give each environment its own path.
 
 **10. Tidy up.**
 
@@ -662,6 +666,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 
 - **Custom RBAC.** If you manage the controller's RBAC yourself, allow `create` and `patch` on `events.k8s.io` events.
 - **UI.** With no UI auth mode set, `/api/` answers only local clients (`kubectl port-forward`). Set `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name` if the UI is reached another way.
+- **SCM token scope.** v0.8.1 had no `scm.allowedRepositories`, so after the upgrade any Pipeline without its own `git.secretRef` can still have the controller's SCM token open PRs in any repository the token can write, and the controller warns at startup. Set `scm.allowedRepositories` to the repositories your Pipelines use (see [The shared SCM token](guides/security.md#the-shared-scm-token-and-scmallowedrepositories)).
 - **Notes in the [changelog](changelog.md) that don't apply to v0.8.1:**
     - `promotionTemplate`, `PromotionStep.spec.inputs` and the `promotiontemplates` CRD don't exist in v0.8.1.
     - The `update.strategy: argocd` with `approval: pr-review` note doesn't apply: v0.8.1 allows only `kustomize` and `helm`.
@@ -722,6 +727,33 @@ time and rebase onto each other's commits (git-push retries a moved branch), so 
 regions on one branch takes about a minute even when each step is fast. Raise `promotionStep` for many Pipelines on slow
 git hosts. Each step that runs at once holds one shallow clone of its repository in the
 controller's memory and its working directory on disk.
+
+### Leader election under API pressure
+
+The leader renews its Lease every 2 seconds and gives up leadership when a
+renewal has not succeeded within 10 seconds. The controller's reconcilers
+can send many requests at once (see the worker table above), and a cluster
+can throttle a ServiceAccount through API Priority and Fairness. Either way,
+renewals used to wait behind reconcile traffic, and the leader exited
+("leader election lost") (#1592). Two things now keep renewals separate:
+
+- **the fix:** the chart's FlowSchema (`leaderElectionFlowSchema`) puts the
+  controller ServiceAccount's Lease requests in its namespace into the
+  built-in `leader-election` priority level, as Kubernetes does for its own
+  controllers. Keep its `matchingPrecedence` below any FlowSchema that
+  matches the controller's other requests;
+- the controller also renews with a rate limiter of its own, so in-process
+  reconcile traffic cannot take its tokens (controller-runtime appends
+  `/leader-election` to the controller's user agent for these requests).
+
+The FlowSchema is cluster-scoped: whoever installs the chart (Helm, or a
+GitOps controller such as Argo CD or Flux) needs `create`, `get`, `update`
+and `delete` on `flowschemas.flowcontrol.apiserver.k8s.io`. It needs the
+`flowcontrol.apiserver.k8s.io/v1` API, which kardinal's minimum Kubernetes
+version (1.30) has; the chart skips it when the API is missing. Where the
+installer may not manage cluster-scoped resources, set
+`leaderElectionFlowSchema.enabled=false` and, if the cluster throttles the
+controller, ask the cluster admin to create an equivalent FlowSchema.
 
 ## Graceful shutdown
 
@@ -844,11 +876,14 @@ kubectl delete namespace kro-system
 
 ## RBAC requirements
 
-The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its RBAC. In summary:
+The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its RBAC.
+The installer itself (Helm, or a GitOps controller) also creates cluster-scoped objects: CRDs, ClusterRoles and bindings, admission policies, and the leader election FlowSchema, which needs `create`, `get`, `update` and `delete` on `flowschemas.flowcontrol.apiserver.k8s.io` (`leaderElectionFlowSchema.enabled=false` leaves it out; see [Leader election under API pressure](#leader-election-under-api-pressure)).
+
+The controller's RBAC, in summary:
 
 | Resources | Verbs |
 |---|---|
-| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create) `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
+| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete only with `audit.retention.enabled: true`) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
 | `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
 | `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |
