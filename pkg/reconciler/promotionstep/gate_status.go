@@ -126,7 +126,13 @@ func (r *Reconciler) syncGatesStatus(ctx context.Context, ps *v1alpha1.Promotion
 	if r.GatesStatusDisabled {
 		return nil
 	}
-	setter, ok := r.SCM.(scm.CommitStatusSetter)
+	// The provider the step's PR was opened on (spec.scmProvider, #1517),
+	// not always the controller's default one.
+	provider, err := r.scmFor(ctx, ps)
+	if err != nil {
+		return fmt.Errorf("gates commit status: %w", err)
+	}
+	setter, ok := provider.(scm.CommitStatusSetter)
 	// The commit kardinal last pushed to the PR branch: git-push's
 	// pushedSHA, which a rebuild on a moved base branch (#1504) replaces,
 	// else the prHeadSHA recorded when the PR opened.
@@ -150,7 +156,7 @@ func (r *Reconciler) syncGatesStatus(ctx context.Context, ps *v1alpha1.Promotion
 	// a rotated token does. Any other error is keyed on the status (hash,
 	// which includes the commit): a new result or a new kardinal push
 	// retries at once.
-	token := "token-" + r.scmTokenID()
+	token := "token-" + scmTokenID(provider)
 	failures := 0
 	if key, retryAt, n, ok := failedPost(prev); ok && (key == hash || key == token) {
 		if r.now().Before(retryAt) {
@@ -158,7 +164,7 @@ func (r *Reconciler) syncGatesStatus(ctx context.Context, ps *v1alpha1.Promotion
 		}
 		failures = n
 	}
-	err := setter.SetPRCommitStatus(ctx, repo, prNumber, sha, s)
+	err = setter.SetPRCommitStatus(ctx, repo, prNumber, sha, s)
 	if errors.Is(err, scm.ErrCommitStatusUnsupported) {
 		return nil
 	}
@@ -216,10 +222,10 @@ func failedPost(out string) (string, time.Time, int, bool) {
 	return key, retryAt, failures, true
 }
 
-// scmTokenID identifies the SCM token in use (scm.TokenIdentifier), or ""
-// when the provider cannot tell.
-func (r *Reconciler) scmTokenID() string {
-	if ti, ok := r.SCM.(scm.TokenIdentifier); ok {
+// scmTokenID identifies the SCM token provider uses (scm.TokenIdentifier),
+// or "" when the provider cannot tell.
+func scmTokenID(provider scm.SCMProvider) string {
+	if ti, ok := provider.(scm.TokenIdentifier); ok {
 		return ti.TokenID()
 	}
 	return ""

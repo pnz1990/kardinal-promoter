@@ -89,6 +89,9 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 			restores = data.RollbackOf
 		}
 		title = fmt.Sprintf("[kardinal] Rollback %s to %s (restores %s)", state.Environment.Name, state.BundleName, restores)
+	} else {
+		data.CreatedBy = state.CreatedBy
+		data.RequestedBy = state.RequestedBy
 	}
 
 	prCfg := state.Environment.PR

@@ -227,6 +227,10 @@ Also:
    repositories, so a team's clones and pushes are limited by its own token.
 3. Grant `create` on `pipelines.kardinal.io` only to people you trust with the controller
    token's reach.
+4. Give a team its own SCM token with a [ScmProvider](../scm-providers.md#several-scm-providers-scmprovider-and-clusterscmprovider)
+   in its namespace. Its Pipelines name it in `spec.git.providerRef`, and its
+   `allowedRepositories` limits that token the way `scm.allowedRepositories` limits the
+   controller's. The Secrets a ScmProvider names must be labeled `kardinal.io/referenceable: "true"`.
 
 #### Stronger isolation: one install per team namespace
 
@@ -569,9 +573,11 @@ the Pipeline's git and SCM hosts.
 ### Outbound requests to user URLs
 
 NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`,
-`datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`)
-and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`,
-`spec.helm.repoURL`) send HTTP requests from the controller to a URL a user wrote into a resource. The controller
+`datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`),
+Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`,
+`spec.helm.repoURL`) and the API calls of ScmProviders and ClusterScmProviders
+(`spec.apiURL`, `https://` only unless `scm.providersAllowInsecureHTTP` is set)
+send HTTP requests from the controller to a URL a user wrote into a resource. The controller
 refuses to connect when the address is one of these:
 
 - loopback (`127.0.0.0/8`, `::1`), which includes the controller's own UI API;

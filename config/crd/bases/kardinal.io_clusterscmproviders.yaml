@@ -1,0 +1,285 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: clusterscmproviders.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    kind: ClusterScmProvider
+    listKind: ClusterScmProviderList
+    plural: clusterscmproviders
+    shortNames:
+    - cscmp
+    singular: clusterscmprovider
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .spec.apiURL
+      name: API
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ClusterScmProvider is a cluster-scoped ScmProvider: Pipelines of the
+          namespaces spec.allowedNamespaces selects may use it.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ClusterScmProviderSpec is a ScmProviderSpec that Pipelines of several
+              namespaces may use.
+            properties:
+              allowedNamespaces:
+                description: |-
+                  AllowedNamespaces selects the namespaces whose Pipelines may use the
+                  provider, by namespace labels. Empty allows none: a cluster-wide
+                  token is shared only on purpose.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: |-
+                        A label selector requirement is a selector that contains values, a key, and an operator that
+                        relates the key and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: |-
+                            operator represents a key's relationship to a set of values.
+                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                          type: string
+                        values:
+                          description: |-
+                            values is an array of string values. If the operator is In or NotIn,
+                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                            the values array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                    type: object
+                type: object
+                x-kubernetes-map-type: atomic
+              allowedRepositories:
+                description: |-
+                  AllowedRepositories, when set, are the only repositories this
+                  provider's token is used for: globs over the repository the SCM API
+                  names ("acme/*", "group/sub/**"). "*" matches one path segment and a
+                  trailing "/**" any depth. A Bundle of a Pipeline whose repository is not
+                  allowed fails when its Graph is built.
+                items:
+                  maxLength: 256
+                  type: string
+                maxItems: 100
+                type: array
+              apiURL:
+                description: |-
+                  APIURL is the SCM's API base URL (the --scm-api-url value). Empty uses
+                  the provider's public default (api.github.com, gitlab.com, ...).
+                maxLength: 2048
+                type: string
+                x-kubernetes-validations:
+                - message: apiURL must be an http(s) URL
+                  rule: self == '' || self.startsWith('https://') || self.startsWith('http://')
+              secretRef:
+                description: |-
+                  SecretRef names the Secret that holds the API token. A ScmProvider's
+                  Secret is in its own namespace; a ClusterScmProvider names the
+                  namespace.
+                properties:
+                  key:
+                    description: |-
+                      Key is the data key. Defaults to "token" for secretRef and "secret"
+                      for webhookSecretRef.
+                    type: string
+                  name:
+                    description: Name is the Secret name.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the Secret's namespace: required on a
+                      ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in
+                      its own namespace (a Pipeline author cannot borrow another namespace's
+                      token).
+                    type: string
+                required:
+                - name
+                type: object
+              type:
+                description: |-
+                  Type is the SCM: github, gitlab, forgejo, gitea, bitbucket,
+                  azuredevops or bitbucket-datacenter (the --scm-provider values). A
+                  bitbucket-datacenter provider needs apiURL, the server's base URL.
+                enum:
+                - github
+                - gitlab
+                - forgejo
+                - gitea
+                - bitbucket
+                - azuredevops
+                - bitbucket-datacenter
+                type: string
+              webhookSecretRef:
+                description: |-
+                  WebhookSecretRef names the Secret that holds the webhook secret this
+                  provider's webhook deliveries are checked with (key "secret" when
+                  unset). Without it the provider's webhook endpoint refuses every
+                  delivery, and merges are seen by polling.
+                properties:
+                  key:
+                    description: |-
+                      Key is the data key. Defaults to "token" for secretRef and "secret"
+                      for webhookSecretRef.
+                    type: string
+                  name:
+                    description: Name is the Secret name.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the Secret's namespace: required on a
+                      ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in
+                      its own namespace (a Pipeline author cannot borrow another namespace's
+                      token).
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - secretRef
+            - type
+            type: object
+          status:
+            description: |-
+              ScmProviderStatus is what the controller found when it checked the
+              provider.
+            properties:
+              conditions:
+                description: |-
+                  Conditions: Ready is True when the spec is valid and its Secrets have
+                  their keys.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: ObservedGeneration is the generation the conditions describe.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: spec.secretRef.namespace is required on a ClusterScmProvider
+          rule: has(self.spec.secretRef.__namespace__) && self.spec.secretRef.__namespace__
+            != ''
+        - message: spec.webhookSecretRef.namespace is required on a ClusterScmProvider
+          rule: '!has(self.spec.webhookSecretRef) || (has(self.spec.webhookSecretRef.__namespace__)
+            && self.spec.webhookSecretRef.__namespace__ != '''')'
+    served: true
+    storage: true
+    subresources:
+      status: {}

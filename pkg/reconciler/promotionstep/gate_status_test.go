@@ -370,3 +370,17 @@ func TestGatesCommitStatus_OnPushedCommit(t *testing.T) {
 		return false
 	}, "events: %v", evs)
 }
+
+// TestGatesCommitStatus_UsesTheStepsProvider: a step whose PR was opened on
+// a ScmProvider (spec.scmProvider, #1517) posts the gates status through that
+// provider, never the controller's default one. Here the controller has no
+// provider registry, so nothing is posted at all.
+func TestGatesCommitStatus_UsesTheStepsProvider(t *testing.T) {
+	ps, prs := waitingStep(nil)
+	ps.Spec.ScmProvider = &v1alpha1.ScmProviderIdentity{Kind: v1alpha1.KindScmProvider, Name: "team-gitlab", UID: "u1"}
+	s := &statusSCM{}
+	r, req, _ := gateStatusFixture(t, ps, prs, s)
+	_, _ = r.Reconcile(context.Background(), req)
+	_, _ = r.Reconcile(context.Background(), req)
+	assert.Zero(t, s.calls, "the default provider is not the step's")
+}

@@ -48,6 +48,12 @@ type PromotionStepSpec struct {
 	// +optional
 	PRStatusRef string `json:"prStatusRef,omitempty"`
 
+	// ScmProvider is the provider of the Pipeline's spec.git.providerRef,
+	// as the translator resolved it when it built the Graph. Unset uses the
+	// controller's --scm-provider.
+	// +optional
+	ScmProvider *ScmProviderIdentity `json:"scmProvider,omitempty"`
+
 	// PreHooks names the HookRuns of the environment's pre-deploy hooks, in
 	// order. The step stays Pending until every one of them Succeeded in
 	// spec.live.hooks, and fails when one Failed. Set by the Graph: the first
@@ -78,14 +84,21 @@ type PromotionStepSpec struct {
 	// +optional
 	AnalysisPolicy *StepAnalysisPolicy `json:"analysisPolicy,omitempty"`
 
+	// ImageVerification names the Bundle's ImageVerification when this step
+	// must wait for it: a step with no upstream in the Graph stays Pending
+	// until spec.live.imageVerification.phase is Verified, and fails when it
+	// is Failed.
+	// +optional
+	ImageVerification string `json:"imageVerification,omitempty"`
+
 	// Live holds results the Graph mirrors onto the step while it runs, each
 	// part with its own patch node (its own field manager), not the step's
 	// template, so they keep updating after the step's own template stopped
-	// resolving: the environment's hook and analysis runs, and the current
-	// results of its gates. The reconciler reads only this copy, never the
-	// source objects; while the step's PR waits for its merge it mirrors the
-	// gates to the PR's head commit as the kardinal/gates commit status. Do
-	// not set it.
+	// resolving: the environment's hook and analysis runs, the current
+	// results of its gates, and the Bundle's image verification. The
+	// reconciler reads only this copy, never the source objects; while the
+	// step's PR waits for its merge it mirrors the gates to the PR's head
+	// commit as the kardinal/gates commit status. Do not set it.
 	// +optional
 	Live *PromotionStepLive `json:"live,omitempty"`
 
@@ -125,6 +138,27 @@ type PromotionStepLive struct {
 	// with their current result.
 	// +optional
 	Gates []LiveGate `json:"gates,omitempty"`
+
+	// ImageVerification is the Bundle's ImageVerification result.
+	// +optional
+	ImageVerification *LiveImageVerification `json:"imageVerification,omitempty"`
+}
+
+// LiveImageVerification is the result of the Bundle's ImageVerification.
+type LiveImageVerification struct {
+	// Name is the ImageVerification's name.
+	// +optional
+	Name string `json:"name,omitempty"`
+	// Images are the images it verifies, "repository@digest" (repository
+	// normalized). The step refuses to promote a Bundle whose images differ.
+	// +optional
+	Images []string `json:"images,omitempty"`
+	// Phase is its status.phase (Pending when it has none yet).
+	// +optional
+	Phase string `json:"phase,omitempty"`
+	// Message is its status.message.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // StepAnalysisPolicy is a step's copy of spec.verification's verdict policy.

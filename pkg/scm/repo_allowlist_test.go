@@ -114,7 +114,8 @@ func TestWebHost(t *testing.T) {
 // TestRepositoryAllowlist_CheckPipeline covers #1332 and QA #1483: a Pipeline
 // whose spec.git.url is not allowed is refused unless it never needs the
 // shared token: its own git.secretRef Secret exists and no environment uses
-// approval: pr-review, whose PRs the shared token opens and polls.
+// approval: pr-review, whose PRs the shared token opens and polls, or it
+// names its own SCM provider (spec.git.providerRef).
 func TestRepositoryAllowlist_CheckPipeline(t *testing.T) {
 	a, err := scm.ParseRepositoryAllowlist([]string{"github.com/acme/*"})
 	require.NoError(t, err)
@@ -139,6 +140,15 @@ func TestRepositoryAllowlist_CheckPipeline(t *testing.T) {
 	assert.Contains(t, err.Error(), "github.com/acme/*")
 	assert.NotContains(t, err.Error(), "secret@", "the URL is redacted")
 	assert.NotContains(t, scm.NotAllowedMessage(err), scm.ErrRepositoryNotAllowed.Error())
+
+	// spec.git.providerRef (#1459): the provider's token opens and tracks
+	// the PRs, checked against the provider's own allowedRepositories, so
+	// the controller's list does not apply to them; git still needs the
+	// Pipeline's own Secret.
+	own := pipeline("https://github.com/evil/repo", "pr-review")
+	own.Spec.Git.ProviderRef = &v1alpha1.ScmProviderRef{Name: "team"}
+	assert.NoError(t, a.CheckPipeline(own, true), "own Secret and own provider: the shared token is never used")
+	assert.ErrorIs(t, a.CheckPipeline(own, false), scm.ErrRepositoryNotAllowed, "own provider, but no Secret for git")
 
 	var unset *scm.RepositoryAllowlist
 	assert.NoError(t, unset.CheckPipeline(pipeline("https://github.com/evil/repo", "pr-review"), false), "unset allows all")

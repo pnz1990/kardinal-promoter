@@ -32,6 +32,7 @@ import (
 	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
@@ -447,7 +448,7 @@ func TestBundleMapper(t *testing.T) {
 }
 
 // TestCollectGateResults verifies the PR body gets one row per required gate,
-// named after the template, with Pass/Fail from status.ready, and that an
+// named after the template and in the template's namespace (#1581), with Pass/Fail from status.ready, and that an
 // unreadable gate is skipped rather than failing the step.
 func TestCollectGateResults(t *testing.T) {
 	scheme := newTestScheme(t)
@@ -455,7 +456,8 @@ func TestCollectGateResults(t *testing.T) {
 	pass := &v1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "require-uat-soak-platform-policies-prod--app-abc", Namespace: "default",
-			Labels: map[string]string{"kardinal.io/gate-name": "require-uat-soak"},
+			Labels: map[string]string{"kardinal.io/gate-name": "require-uat-soak",
+				graph.LabelGateTemplateNamespace: "platform-policies"},
 		},
 		Status: v1alpha1.PolicyGateStatus{Ready: true, Reason: "soak >= 30 = true", LastEvaluatedAt: &evaluated},
 	}
@@ -475,9 +477,11 @@ func TestCollectGateResults(t *testing.T) {
 	got := r.collectGateResults(context.Background(), zerolog.Nop(), ps)
 	require.Len(t, got, 2)
 	assert.Equal(t, "require-uat-soak", got[0].GateName)
+	assert.Equal(t, "platform-policies", got[0].GateNamespace, "an org gate shows its template's namespace")
 	assert.Equal(t, "Pass", got[0].Result)
 	assert.True(t, evaluated.Time.Equal(got[0].EvaluatedAt.Time), "evaluatedAt must come from the gate")
 	assert.Equal(t, "no-weekend--app-abc", got[1].GateName)
+	assert.Equal(t, "default", got[1].GateNamespace, "without the label, the instance's namespace")
 	assert.Equal(t, "Fail", got[1].Result)
 	assert.Equal(t, "isWeekend", got[1].Reason)
 	assert.False(t, got[1].EvaluatedAt.IsZero())
@@ -498,7 +502,8 @@ func TestUpstreamEnvironments(t *testing.T) {
 }
 
 // TestSetRollbackState checks what the open-pr step learns about a rollback
-// Bundle: who asked for it (kardinal.io/requested-by) and the Bundle it
+// Bundle: who asked for it (kardinal.io/requested-by), its verified creator
+// (kardinal.io/created-by) and the Bundle it
 // replaces (kardinal.io/rollback-from) with that Bundle's spec, or only its
 // name when it was deleted. A promotion gets no replaced Bundle (spike bug 6).
 func TestSetRollbackState(t *testing.T) {
@@ -516,11 +521,12 @@ func TestSetRollbackState(t *testing.T) {
 		}
 	}
 	tests := []struct {
-		name     string
-		bundle   *v1alpha1.Bundle
-		wantBy   string
-		wantFrom string
-		wantSpec *v1alpha1.BundleSpec
+		name        string
+		bundle      *v1alpha1.Bundle
+		wantBy      string
+		wantCreator string
+		wantFrom    string
+		wantSpec    *v1alpha1.BundleSpec
 	}{
 		{
 			name: "rollback of a bundle that exists",
@@ -536,8 +542,8 @@ func TestSetRollbackState(t *testing.T) {
 		},
 		{
 			name:   "promotion",
-			bundle: bundle(map[string]string{lifecycle.AnnotationRequestedBy: "bob"}),
-			wantBy: "bob",
+			bundle: bundle(map[string]string{lifecycle.AnnotationRequestedBy: "bob", lifecycle.AnnotationCreatedBy: "oidc:bob"}),
+			wantBy: "bob", wantCreator: "oidc:bob",
 		},
 		{
 			name:   "nothing recorded",
@@ -551,6 +557,7 @@ func TestSetRollbackState(t *testing.T) {
 			state := &steps.StepState{}
 			r.setRollbackState(context.Background(), zerolog.Nop(), state, tt.bundle)
 			assert.Equal(t, tt.wantBy, state.RequestedBy)
+			assert.Equal(t, tt.wantCreator, state.CreatedBy)
 			assert.Equal(t, tt.wantFrom, state.RollbackFrom)
 			assert.Equal(t, tt.wantSpec, state.RollbackFromBundle)
 		})

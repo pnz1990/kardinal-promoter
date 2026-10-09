@@ -45,11 +45,13 @@ If adding the labels fails, the PR stays open without them: while the step waits
 |---|---|---|---|---|---|
 | ghcr.io/myorg/my-app | 1.29.0 | sha256:a1b2c3d4 | [CI run](https://github.com/myorg/my-app/actions/runs/12345) | abc123d | engineer-name |
 
+Created by: alice
+
 ### Policy Gate Compliance
 
 | Gate | Namespace | Result | Reason | Last Evaluated |
 |---|---|---|---|---|
-| no-weekend-deploys | my-app | Pass | bundle.version=1.29.0: !schedule.isWeekend = true | 2026-04-14T14:00Z |
+| no-weekend-deploys | platform-policies | Pass | bundle.version=1.29.0: !schedule.isWeekend = true | 2026-04-14T14:00Z |
 
 ### Upstream Verification
 
@@ -103,6 +105,16 @@ One row per image in the Bundle's `spec.images`:
   the author of the restored build; who rolled back is on the "Rolled back by" line
 
 The CI run, commit and author come from the Bundle's `spec.provenance` field, which is set when the Bundle is created by CI.
+`kardinal create bundle` sets them only from `--commit`, `--author` and `--ci-run-url`.
+
+"Created by", under the table, is the Bundle's verified creator: the `kardinal.io/created-by`
+annotation, which the chart's `<release>-bundle-creator` admission policy admits only in the
+requesting user's name. `kardinal create bundle` and `kardinal promote` record your Kubernetes
+user name; the UI, the Bundle API and Subscriptions record theirs (see
+[Approval gates](policy-gates.md#approval-gates)). A Bundle without it, for example one created
+with `kubectl`, shows the client-written `kardinal.io/requested-by` instead, as
+"Requested by: <name> (unverified)": nothing checks that name. With neither, the line is left
+out. A rollback PR names its actor on the "Rolled back by" line instead.
 
 A Bundle with no images, such as a `config` Bundle, gets one row of `—`. The body then shows
 neither its provenance nor its config commit.
@@ -110,7 +122,8 @@ neither its provenance nor its config commit.
 ### Policy Gate Compliance
 
 Lists the PolicyGates the PromotionStep requires (`spec.requiredGates`). For each gate it shows
-the gate name, the namespace of the gate instance, the result (`Pass` or `Fail`), the
+the gate name, the namespace of the gate's template (for an org gate, its policy namespace such
+as `platform-policies`, not the Pipeline namespace its instance lives in), the result (`Pass` or `Fail`), the
 controller's latest reason, and when the gate was last evaluated. A gate that cannot be read is
 left out. `_(none)_` means the environment has no gates. It also shows when no gate could be read.
 

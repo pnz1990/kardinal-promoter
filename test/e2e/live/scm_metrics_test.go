@@ -64,10 +64,10 @@ func TestSCM_MetricsAfterPromotion(t *testing.T) {
 			before.Sum("kardinal_git_operations_total", map[string]string{"operation": op, "result": "ok"}), op)
 		assert.Positive(t, after.Sum("kardinal_git_operation_duration_seconds_count", map[string]string{"operation": op}), op)
 	}
-	assert.Greater(t, after.Sum("kardinal_git_transfer_bytes_total", map[string]string{"service": "fetch", "direction": "received"}),
-		before.Sum("kardinal_git_transfer_bytes_total", map[string]string{"service": "fetch", "direction": "received"}), "clone bytes")
-	assert.Greater(t, after.Sum("kardinal_git_transfer_bytes_total", map[string]string{"service": "push", "direction": "sent"}),
-		before.Sum("kardinal_git_transfer_bytes_total", map[string]string{"service": "push", "direction": "sent"}), "push bytes")
+	assert.Greater(t, after.Sum("kardinal_git_transfer_bytes_total", map[string]string{"git_service": "fetch", "direction": "received"}),
+		before.Sum("kardinal_git_transfer_bytes_total", map[string]string{"git_service": "fetch", "direction": "received"}), "clone bytes")
+	assert.Greater(t, after.Sum("kardinal_git_transfer_bytes_total", map[string]string{"git_service": "push", "direction": "sent"}),
+		before.Sum("kardinal_git_transfer_bytes_total", map[string]string{"git_service": "push", "direction": "sent"}), "push bytes")
 	assert.Positive(t, after.Sum("kardinal_scm_request_duration_seconds_count", map[string]string{"provider": provider}))
 	assert.True(t, after.Has("kardinal_scm_circuit_state", map[string]string{"provider": provider, "owner": "_quota"}))
 	for _, s := range after {

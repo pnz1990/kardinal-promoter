@@ -393,7 +393,7 @@ type apiAccess struct {
 var kardinalNamespacedKinds = []string{
 	"pipelines", "bundles", "policygates", "rollbackpolicies", "subscriptions",
 	"promotionsteps", "prstatuses", "metricchecks",
-	"scheduleclocks", "notificationhooks", "hookruns",
+	"scheduleclocks", "notificationhooks", "hookruns", "imageverifications",
 }
 
 var rwVerbs = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
@@ -429,6 +429,10 @@ func controllerAccess() []apiAccess {
 		{"", "configmaps", []string{"get", "update", "patch"}, inRelease, "kardinal-version", "ensureVersionConfigMap"},
 		{"kardinal.io", "changewindows", readVerbs, inCluster, "", "policygate buildChangeWindowContext (cluster-scoped kind)"},
 		{"kardinal.io", "changewindows/status", []string{"get", "update", "patch"}, inCluster, "", "changewindow reconciler status writer (fix/audit-gates)"},
+		{"kardinal.io", "scmproviders", readVerbs, inWatched, "", "scm registry.go GetProvider; scmprovider reconciler"},
+		{"kardinal.io", "scmproviders/status", []string{"get", "update", "patch"}, inWatched, "", "scmprovider reconciler Ready condition"},
+		{"kardinal.io", "clusterscmproviders", readVerbs, inCluster, "", "scm registry.go GetProvider; scmprovider reconciler"},
+		{"kardinal.io", "clusterscmproviders/status", []string{"get", "update", "patch"}, inCluster, "", "scmprovider reconciler Ready condition"},
 		// Namespace mode limits it to the watched namespace (releaseNS in
 		// TestChartRBACGrantsControllerAccess); TestChartRBACNamespaceGet checks both modes.
 		{"", "namespaces", []string{"get"}, inCluster, releaseNS, "graphcleanup reconciler.go namespaceTerminating; bundle reconciler.go namespaceDeleting; promotionstep finalizer.go stepComeback"},
@@ -541,6 +545,12 @@ func TestChartRBACLeastPrivilege(t *testing.T) {
 		{"team-a", "coordination.k8s.io", "leases", "update", "kardinal-promoter-leader"},
 		{"", "kardinal.io", "changewindows", "create", ""},
 		{"", "kardinal.io", "changewindows", "delete", "freeze"},
+		// SCM providers are written by their owners only: the controller
+		// reads them and writes their status.
+		{"team-a", "kardinal.io", "scmproviders", "create", ""},
+		{"team-a", "kardinal.io", "scmproviders", "update", "github"},
+		{"", "kardinal.io", "clusterscmproviders", "create", ""},
+		{"", "kardinal.io", "clusterscmproviders", "delete", "github"},
 		{"team-a", "", "secrets", "create", ""},
 		// #1266: Secret reads are uncached Gets; list and watch would let the
 		// controller enumerate every Secret it can reach.
