@@ -39,7 +39,7 @@ spec:
 ```bash
 kubectl create secret generic slack-webhook -n default \
   --from-literal=url=https://hooks.slack.com/services/T000/B000/XXXX
-kubectl label secret slack-webhook -n default kardinal.io/notification-secret=true
+kubectl label secret slack-webhook -n default kardinal.io/referenceable=true
 ```
 
 Apply it with `kubectl apply -f my-hook.yaml`.
@@ -332,7 +332,7 @@ Keep credentials in a Secret in the hook's namespace and name it in `spec.webhoo
 kubectl create secret generic alerting-webhook -n default \
   --from-literal=authorization='Bearer my-secret-token' \
   --from-literal=url=https://alerting.example.com/kardinal-events
-kubectl label secret alerting-webhook -n default kardinal.io/notification-secret=true
+kubectl label secret alerting-webhook -n default kardinal.io/referenceable=true
 ```
 
 ```yaml
@@ -347,14 +347,13 @@ spec:
 | `authorization` | The `Authorization` header, sent exactly as stored (no variable expansion) |
 | `url` | The webhook URL. Takes precedence over `spec.webhook.url`. Use it for incoming-webhook URLs (Slack, Teams), which carry their token in the path |
 
-**The Secret must be labeled `kardinal.io/notification-secret: "true"`.** A hook sends the
-Secret's values to the URL its author chose, and the controller can read every Secret of the
-namespace, so without the label anyone allowed to create a NotificationHook could send
-themselves any Secret with an `authorization` key, a Secret they cannot read. The label is
-the Secret owner's consent. A hook whose Secret lacks it (or has any other value) is
-`Ready=False` with reason `SecretNotLabeled` and sends nothing; label the Secret and the
-waiting events are delivered within 30 seconds. Removing the label stops the hook again.
-Who may set the label is who may `update` or `patch` Secrets.
+**The Secret must be labeled `kardinal.io/referenceable: "true"`** (see
+[Secrets referenced by custom resources](guides/security.md#secrets-referenced-by-custom-resources)).
+A hook sends the Secret's values to the URL its author chose, so without the label anyone
+allowed to create a NotificationHook could send themselves a Secret they cannot read. A hook
+whose Secret lacks the label (or has any other value) is `Ready=False` with reason
+`SecretNotReferenceable` and sends nothing; label the Secret and the waiting events are
+delivered within 30 seconds. Removing the label stops the hook again.
 
 At least one key must be present; leading and trailing whitespace (a trailing newline from
 a file) is removed. The Secret is read on every delivery, so a rotated value is used for the
@@ -414,7 +413,7 @@ See §Delivery for the retry schedule.
 | `Ready=False` reason | Meaning |
 |----------------------|---------|
 | `SecretNotFound`, `SecretUnreadable` | The Secret `secretRef` names does not exist or cannot be read |
-| `SecretNotLabeled` | The Secret is not labeled `kardinal.io/notification-secret: "true"` ([Authorization](#authorization)) |
+| `SecretNotReferenceable` | The Secret is not labeled `kardinal.io/referenceable: "true"` ([Authorization](#authorization), [the rule](guides/security.md#secrets-referenced-by-custom-resources)) |
 | `SecretKeyMissing` | The Secret has neither an `authorization` nor a `url` key |
 | `URLMissing` | No URL in `spec.webhook.url` or the Secret |
 | `InvalidURL` | The URL is not an absolute `http://` or `https://` URL |

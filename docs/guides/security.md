@@ -23,7 +23,7 @@ What the namespaced rules grant:
 
 | Resources | Verbs | Why |
 |---|---|---|
-| `secrets` | get | Pipeline `spec.git.secretRef`, NotificationHook `spec.webhook.secretRef` (only Secrets labeled `kardinal.io/notification-secret: "true"` are used, see [Notifications](../notifications.md#authorization)) and the SCM token Secret. The controller reads Secrets straight from the API server, one by name, and never lists or watches them. In cluster mode `get` still reaches **every Secret in the cluster** by name, because the rule is in a ClusterRole |
+| `secrets` | get | Pipeline `spec.git.secretRef`, NotificationHook `spec.webhook.secretRef` (only Secrets labeled `kardinal.io/referenceable: "true"` are used, see [Secrets referenced by custom resources](#secrets-referenced-by-custom-resources)) and the SCM token Secret. The controller reads Secrets straight from the API server, one by name, and never lists or watches them. In cluster mode `get` still reaches **every Secret in the cluster** by name, because the rule is in a ClusterRole |
 | `events.k8s.io` `events` | create, patch | Events from every reconciler (the events.k8s.io/v1 API) |
 | `events` (core) | get, list, watch, create, patch | The UI step event list reads Events through core/v1; leader election writes core Events |
 | All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
@@ -227,6 +227,30 @@ install next to the per-namespace ones: it would reconcile every team's Pipeline
 ---
 
 ## Secret Management
+
+### Secrets referenced by custom resources
+
+Some custom resources name a Secret whose values the controller sends somewhere the resource's
+author chose: NotificationHook `spec.webhook.secretRef` sends its `authorization` key to the
+hook URL. The controller can read every Secret of the namespace (`get` on `secrets`, above), so
+without a guard anyone allowed to create such a resource could have the controller send them a
+Secret they cannot read themselves.
+
+**One rule:** the controller uses a Secret named by a NotificationHook, a MetricCheck or a
+Subscription only when the Secret carries the label `kardinal.io/referenceable: "true"`. The
+label is the Secret owner's consent; set it on the Secrets meant for these resources only:
+
+```bash
+kubectl label secret alerting-webhook -n team-a kardinal.io/referenceable=true
+```
+
+A resource that names a Secret without the label (or with any other value) reports reason
+`SecretNotReferenceable` where it reports errors (NotificationHook: `Ready=False`) and does not
+use the Secret. Labeling the Secret takes effect at the next reconcile; removing the label stops
+its use again. Whoever may `update` or `patch` Secrets in the namespace may set the label, so
+grant that as narrowly as reading them. Pipeline `spec.git.secretRef` and the controller's own
+SCM token Secret are not covered by the rule: they are named by the Pipeline owner or the
+operator and never sent to a URL a user writes.
 
 ### Recommended: External Secrets Operator
 

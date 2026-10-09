@@ -215,7 +215,7 @@ func TestDelivery_SlackEscapesAndPRButton(t *testing.T) {
 
 func webhookSecret(name string, data map[string]string) *corev1.Secret {
 	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns,
-		Labels: map[string]string{"kardinal.io/notification-secret": "true"}}, Data: map[string][]byte{}}
+		Labels: map[string]string{"kardinal.io/referenceable": "true"}}, Data: map[string][]byte{}}
 	for k, v := range data {
 		s.Data[k] = []byte(v)
 	}
@@ -533,9 +533,9 @@ func TestDocsTemplateExamples(t *testing.T) {
 }
 
 // TestDelivery_SecretRefRequiresLabel: a Secret without the
-// kardinal.io/notification-secret=true label is not used, so a user who can
+// kardinal.io/referenceable=true label is not used, so a user who can
 // create hooks but not read Secrets cannot send one to a URL of their own.
-// The hook is Ready=False SecretNotLabeled and sends nothing, no attempt is
+// The hook is Ready=False SecretNotReferenceable and sends nothing, no attempt is
 // counted; labeling the Secret delivers the waiting event; a label value
 // other than "true", or removing the label, stops it again.
 func TestDelivery_SecretRefRequiresLabel(t *testing.T) {
@@ -551,7 +551,7 @@ func TestDelivery_SecretRefRequiresLabel(t *testing.T) {
 		require.NoError(t, f.c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "victim"}, &s))
 		s.Labels = map[string]string{}
 		if v != "" {
-			s.Labels["kardinal.io/notification-secret"] = v
+			s.Labels["kardinal.io/referenceable"] = v
 		}
 		require.NoError(t, f.c.Update(context.Background(), &s))
 	}
@@ -562,9 +562,9 @@ func TestDelivery_SecretRefRequiresLabel(t *testing.T) {
 		h := f.hook()
 		c := readyCondition(t, h)
 		assert.Equal(t, metav1.ConditionFalse, c.Status, why)
-		assert.Equal(t, "SecretNotLabeled", c.Reason, why)
-		assert.Equal(t, "Secret victim named by spec.webhook.secretRef is not labeled kardinal.io/notification-secret=true; "+
-			"label it to allow NotificationHooks to send it", c.Message)
+		assert.Equal(t, "SecretNotReferenceable", c.Reason, why)
+		assert.Equal(t, "Secret victim named by spec.webhook.secretRef is not labeled kardinal.io/referenceable=true; "+
+			"label it to let custom resources reference it", c.Message)
 		assert.Zero(t, h.Status.FailedAttempts, why)
 		status, err := json.Marshal(h.Status)
 		require.NoError(t, err)

@@ -152,8 +152,8 @@ func TestNotify_SlackTeamsTemplate(t *testing.T) {
 // Authorization header, and neither shows in status. A hook whose Secret is
 // missing is Ready=False SecretNotFound and sends nothing; once the Secret
 // exists the waiting event is delivered. A Secret without the
-// kardinal.io/notification-secret=true label is not used (Ready=False
-// SecretNotLabeled, nothing sent) until it is labeled. The deprecated
+// kardinal.io/referenceable=true label is not used (Ready=False
+// SecretNotReferenceable, nothing sent) until it is labeled. The deprecated
 // authorizationHeader still delivers, with PlaintextCredential=True.
 //
 // Covers NOTIF-SECRET-01, NOTIF-SECRET-LABEL-01, NOTIF-PLAINTEXT-01.
@@ -166,7 +166,7 @@ func TestNotify_SecretRef(t *testing.T) {
 	ev := []v1alpha1.NotificationHookEventType{v1alpha1.NotificationEventPolicyGateBlocked}
 	secret := func(name, bucket string) *corev1.Secret {
 		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: a.ns,
-			Labels: map[string]string{"kardinal.io/notification-secret": "true"}}, StringData: map[string]string{
+			Labels: map[string]string{"kardinal.io/referenceable": "true"}}, StringData: map[string]string{
 			"url":           rcv.URL(bucket, "services/T0E2E/B0E2E/SECRETPATH") + "\n",
 			"authorization": "Bearer SECRETTOKEN-" + name,
 		}}
@@ -222,13 +222,13 @@ func TestNotify_SecretRef(t *testing.T) {
 
 	framework.Eventually(t, time.Minute, "hook unlabeled to refuse its Secret", func(context.Context) (bool, string) {
 		c := hookCondition(t, e, a.ns, "unlabeled", "Ready")
-		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "SecretNotLabeled", fmt.Sprintf("%+v", c)
+		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "SecretNotReferenceable", fmt.Sprintf("%+v", c)
 	})
 	keepRecords(t, rcv, a.ns+"-unlabeled", 0, 10*time.Second)
 	assert.Zero(t, getHook(t, e, a.ns, "unlabeled").Status.FailedAttempts)
 	var us corev1.Secret
 	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: "unlabeled-creds"}, &us))
-	us.Labels = map[string]string{"kardinal.io/notification-secret": "true"}
+	us.Labels = map[string]string{"kardinal.io/referenceable": "true"}
 	require.NoError(t, e.Client.Update(ctx, &us))
 	ur := waitRecords(t, rcv, a.ns+"-unlabeled", 1, 90*time.Second)[0]
 	assert.Equal(t, "Bearer SECRETTOKEN-unlabeled-creds", ur.Header("Authorization"), "sent once labeled")
