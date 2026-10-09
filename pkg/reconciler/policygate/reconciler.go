@@ -444,7 +444,8 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	metricsNS, err := r.metricsNamespace(ctx, gate)
 	var metricsCtx map[string]interface{}
 	if err == nil {
-		metricsCtx, err = r.buildMetricsContext(ctx, metricsNS, metricsNow)
+		metricsCtx, err = r.buildMetricsContext(ctx, metricsNS, metricsNow,
+			gate.Labels[labelBundle], gate.Labels[labelEnvironment])
 	}
 	if err != nil {
 		// Non-fatal: log and continue with empty metrics context so the gate
@@ -600,23 +601,48 @@ func (r *Reconciler) metricsNamespace(ctx context.Context, gate *kardinalv1alpha
 // an outage or while its status patch keeps failing. It is exposed as result
 // "Stale" with an empty value, so both metrics.x.result == "Pass" and
 // double(metrics.x.value) < ... fail closed, and stale is true.
-func (r *Reconciler) buildMetricsContext(ctx context.Context, ns string, now time.Time) (map[string]interface{}, error) {
+//
+// Per-promotion MetricChecks (spec.perPromotion) are templates with no result
+// of their own. The instance the Graph made from template T for this gate's
+// Bundle and environment (labels kardinal.io/metric-template=T,
+// kardinal.io/bundle, kardinal.io/environment) is exposed as metrics.T.
+// Until it exists, and when more than one object claims to be it, metrics.T
+// is stale. Instances of other Bundles and environments are not exposed.
+func (r *Reconciler) buildMetricsContext(ctx context.Context, ns string, now time.Time,
+	bundle, env string) (map[string]interface{}, error) {
 	var list kardinalv1alpha1.MetricCheckList
 	if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
 		return nil, fmt.Errorf("list metricchecks: %w", err)
 	}
 
+	entryOf := func(mc *kardinalv1alpha1.MetricCheck) map[string]interface{} {
+		if mc == nil || mc.Spec.PerPromotion || mc.Status.ValidUntil == nil || mc.Status.ValidUntil.Time.Before(now) {
+			return map[string]interface{}{"value": "", "result": metricResultStale, "stale": true}
+		}
+		return map[string]interface{}{"value": mc.Status.LastValue, "result": mc.Status.Result, "stale": false}
+	}
 	result := make(map[string]interface{}, len(list.Items))
-	for _, mc := range list.Items {
-		entry := map[string]interface{}{
-			"value":  mc.Status.LastValue,
-			"result": mc.Status.Result,
-			"stale":  false,
+	instances := map[string][]*kardinalv1alpha1.MetricCheck{}
+	for i := range list.Items {
+		mc := &list.Items[i]
+		if tmpl, ok := mc.Labels[graph.LabelMetricTemplate]; ok {
+			if bundle != "" && mc.Labels[labelBundle] == bundle && mc.Labels[labelEnvironment] == env {
+				instances[tmpl] = append(instances[tmpl], mc)
+			}
+			continue
 		}
-		if mc.Status.ValidUntil == nil || mc.Status.ValidUntil.Time.Before(now) {
-			entry["value"], entry["result"], entry["stale"] = "", metricResultStale, true
+		result[mc.Name] = entryOf(mc)
+	}
+	for i := range list.Items {
+		mc := &list.Items[i]
+		if _, isInstance := mc.Labels[graph.LabelMetricTemplate]; isInstance || !mc.Spec.PerPromotion {
+			continue
 		}
-		result[mc.Name] = entry
+		var inst *kardinalv1alpha1.MetricCheck
+		if found := instances[mc.Name]; len(found) == 1 {
+			inst = found[0]
+		}
+		result[mc.Name] = entryOf(inst)
 	}
 	return result, nil
 }
@@ -641,24 +667,7 @@ func staleMetricNotes(expr string, celCtx map[string]interface{}) string {
 // exprRefersToMetric reports whether expr names the metric: metrics["name"],
 // metrics['name'] or metrics.name.
 func exprRefersToMetric(expr, name string) bool {
-	if strings.Contains(expr, `"`+name+`"`) || strings.Contains(expr, `'`+name+`'`) {
-		return true
-	}
-	for rest := expr; ; {
-		i := strings.Index(rest, "metrics."+name)
-		if i < 0 {
-			return false
-		}
-		rest = rest[i+len("metrics."+name):]
-		if rest == "" || !isIdentChar(rest[0]) {
-			return true
-		}
-	}
-}
-
-// isIdentChar reports whether c can continue a CEL identifier.
-func isIdentChar(c byte) bool {
-	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+	return graph.ExprReadsMetric(expr, name)
 }
 
 // buildUpstreamContext reads per-environment soak minutes from bundle status.
@@ -1261,17 +1270,7 @@ func (r *Reconciler) instanceGateRequests(ctx context.Context, source, exprConta
 // extractVersion returns the version string from a Bundle.
 // For image bundles: first image tag. For config bundles: first 8 chars of commitSHA.
 func extractVersion(bundle *kardinalv1alpha1.Bundle) string {
-	if bundle.Spec.Type == "config" && bundle.Spec.ConfigRef != nil {
-		sha := bundle.Spec.ConfigRef.CommitSHA
-		if len(sha) > 8 {
-			return sha[:8]
-		}
-		return sha
-	}
-	if len(bundle.Spec.Images) > 0 {
-		return bundle.Spec.Images[0].Tag
-	}
-	return ""
+	return graph.BundleVersion(bundle)
 }
 
 // parseRecheckInterval parses a Go duration string, returning
