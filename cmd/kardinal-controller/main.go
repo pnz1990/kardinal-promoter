@@ -386,10 +386,11 @@ func main() {
 		Client: mgr.GetClient(),
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
-		APIReader:    mgr.GetAPIReader(),
-		Translator:   newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
-		GraphChecker: newGraphClient(mgr.GetConfig(), logger),
-		Recorder:     eventRecorder,
+		APIReader:        mgr.GetAPIReader(),
+		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
+		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
+		Recorder:         eventRecorder,
+		PolicyNamespaces: splitCSV(policyNamespaces),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
