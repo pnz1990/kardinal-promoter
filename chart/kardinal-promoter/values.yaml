@@ -119,6 +119,11 @@ controller:
     # the client address (--access-log-trusted-proxies). Other clients'
     # X-Forwarded-For is ignored.
     trustedProxies: []
+
+  # -- Longest a gate override counts, in minutes from when the controller
+  # first saw it (--gate-override-max-minutes): an override ends at the
+  # earlier of its expiresAt and this cap. Empty keeps the default, 1440 (24h).
+  gateOverrideMaxMinutes: ""
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).

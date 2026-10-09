@@ -31,6 +31,7 @@ func evaluateGate(t *testing.T, gate *kardinalv1alpha1.PolicyGate, objs ...clien
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC) }
+	r.IdentityPolicy = policyBound(true)
 	key := types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 	require.NoError(t, err)
@@ -101,6 +102,7 @@ func TestPolicyGateReconciler_ReasonWithoutMessageUnchanged(t *testing.T) {
 	// An override the controller found already there (an upgrade) is not
 	// presented as verified.
 	overridden.Status.OverridesVerifiedSince = nil
+	overridden.Status.LastEvaluatedAt = &since // evaluated by the release before
 	got = evaluateGate(t, overridden, bundle())
 	assert.True(t, strings.HasPrefix(got.Status.Reason, "OVERRIDDEN by alice (unverified): hotfix"), got.Status.Reason)
 }

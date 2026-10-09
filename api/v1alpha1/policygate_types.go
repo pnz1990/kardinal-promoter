@@ -133,13 +133,19 @@ type PolicyGateStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// ObservedOverrides lists a key for each spec.overrides entry the
-	// controller has recorded with a GateOverridden AuditEvent, so each
-	// override is audited once. A key ending in ":unverified" is an override
-	// that was already there when the controller started checking this gate.
+	// Overrides records each spec.overrides entry the controller has seen:
+	// when it first saw it, whether its createdBy was checked by the chart's
+	// identity admission policy, and whether its GateOverridden AuditEvent
+	// is written. An override counts from firstSeen: it ends at the earlier
+	// of its expiresAt and firstSeen plus the override cap
+	// (--gate-override-max-minutes). Records are never dropped, so an entry
+	// removed and added again keeps its firstSeen; past 200 records new
+	// overrides are not counted (condition OverrideIgnored).
 	// +optional
-	// +listType=set
-	ObservedOverrides []string `json:"observedOverrides,omitempty"`
+	// +listType=map
+	// +listMapKey=key
+	// +kubebuilder:validation:MaxItems=200
+	Overrides []OverrideRecord `json:"overrides,omitempty"`
 
 	// OverridesVerifiedSince is when the controller first reconciled this
 	// gate with override identity checks (the chart's admission policy).
@@ -147,6 +153,25 @@ type PolicyGateStatus struct {
 	// shown as unverified.
 	// +optional
 	OverridesVerifiedSince *metav1.Time `json:"overridesVerifiedSince,omitempty"`
+}
+
+// OverrideRecord is the controller's record of one spec.overrides entry.
+type OverrideRecord struct {
+	// Key identifies the override: a hash of its stage, reason, createdBy,
+	// createdAt and expiresAt, so an edited entry is a new override.
+	// +kubebuilder:validation:MaxLength=64
+	Key string `json:"key"`
+	// FirstSeen is when the controller first saw the override. It is the
+	// AuditEvent timestamp and the start of the override cap.
+	FirstSeen metav1.Time `json:"firstSeen"`
+	// Verified is true when createdBy was checked: the chart's identity
+	// admission policy was bound when the controller first saw the override,
+	// on a gate it was already checking.
+	// +optional
+	Verified bool `json:"verified,omitempty"`
+	// Audited is true once the GateOverridden AuditEvent is written.
+	// +optional
+	Audited bool `json:"audited,omitempty"`
 }
 
 // +kubebuilder:object:root=true

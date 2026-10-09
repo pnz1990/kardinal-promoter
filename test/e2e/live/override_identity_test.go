@@ -35,11 +35,13 @@ func overriddenAudits(t *testing.T, e *framework.Env, ns, bundle string) []v1alp
 // TestGate_OverrideIdentity overrides a blocking prod gate with kardinal
 // override. The override names the user the API server authenticated
 // (SelfSubjectReview), the gate passes on it, and the controller writes one
-// GateOverridden AuditEvent for it, recorded in status.observedOverrides, and
-// no second one however often the gate is re-evaluated. The chart's
+// GateOverridden AuditEvent for it, recorded in status.overrides as verified
+// (the controller found the chart's policy bound) and audited, and no second
+// one however often the gate is re-evaluated. The chart's
 // gate-overrides policy refuses, for a real user (impersonated, with patch
 // on PolicyGates): an override in someone else's name, editing another
-// user's override, changing the instance's expression, message or labels,
+// user's override, changing the instance's expression, message, labels,
+// annotations or finalizers,
 // and creating a gate instance by hand; even the test's cluster admin cannot
 // change the expression of a gate instance.
 //
@@ -67,9 +69,13 @@ func TestGate_OverrideIdentity(t *testing.T) {
 	assert.Contains(t, err.Error(), `every new spec.overrides entry must have createdBy "mallory@example.com"`)
 	err = mallory.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"spec":{"expression":"true"}}`)))
 	require.Error(t, err, "editing an instance's expression is refused")
-	assert.Contains(t, err.Error(), "only kardinal creates a gate instance (label kardinal.io/bundle) or changes its spec or labels")
+	assert.Contains(t, err.Error(), "only kardinal creates a gate instance (label kardinal.io/bundle) or changes its spec or metadata")
 	err = mallory.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"labels":{"kardinal.io/environment":"test"}}}`)))
 	require.Error(t, err, "relabelling an instance is refused")
+	err = mallory.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"annotations":{"e2e":"x"}}}`)))
+	require.Error(t, err, "annotating an instance is refused: its metadata is frozen")
+	err = mallory.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"finalizers":["e2e/hold"]}}`)))
+	require.Error(t, err, "adding a finalizer to an instance is refused")
 	err = mallory.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"spec":{"message":"x"}}`)))
 	require.Error(t, err, "changing anything but overrides on an instance is refused")
 	err = e.Client.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, []byte(`{"spec":{"expression":"true"}}`)))
@@ -108,7 +114,10 @@ func TestGate_OverrideIdentity(t *testing.T) {
 	assert.Contains(t, ae.Spec.Message, ": e2e: INC-7")
 	var cur v1alpha1.PolicyGate
 	require.NoError(t, e.Client.Get(ctx, client.ObjectKeyFromObject(passed), &cur))
-	assert.Len(t, cur.Status.ObservedOverrides, 1)
+	require.Len(t, cur.Status.Overrides, 1)
+	assert.True(t, cur.Status.Overrides[0].Verified, "the chart's identity policy is bound: %+v", cur.Status.Overrides[0])
+	assert.True(t, cur.Status.Overrides[0].Audited)
+	assert.NotContains(t, cur.Status.Reason, "unverified")
 	framework.Consistently(t, 25*time.Second, "no second GateOverridden record over two rechecks", func(context.Context) (bool, string) {
 		n := len(overriddenAudits(t, e, a.ns, bundle))
 		return n == 1, fmt.Sprintf("%d records", n)

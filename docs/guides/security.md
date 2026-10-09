@@ -670,7 +670,22 @@ chart installs a `ValidatingAdmissionPolicy` with a `Deny` binding, per release:
 | Policy | Checks |
 |---|---|
 | `<release>-bundle-rejection` | A Bundle's new `spec.rejected.by` ([`kardinal reject`](../rollback.md#reject-a-bundle)) equals the requesting user's `request.userInfo.username`. A rejection already set is immutable (CRD rule), so it is checked only when it is first written. |
-| `<release>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../policy-gates.md#emergency-overrides-k-09)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. Only the namespace's Graph ServiceAccount (kro) and the controller may create a gate instance (label `kardinal.io/bundle`) or change anything in it but `spec.overrides`, labels included. In namespace mode (`controller.watchNamespace`) it applies to the watched namespace only. |
+| `<release>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../policy-gates.md#emergency-overrides-k-09)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. Only the namespace's Graph ServiceAccount (kro) and the controller may create a gate instance (label `kardinal.io/bundle`, checked on CREATE and UPDATE) or change anything in it but `spec.overrides`: the rest of the spec and the whole metadata (labels, annotations, owner references, finalizers) are frozen, except `managedFields`, `resourceVersion` and `generation`, which the API server writes. The garbage collector and the namespace controller may update an instance (they remove owner references and finalizers). In namespace mode (`controller.watchNamespace`) it applies to the watched namespace only. |
+
+What a caller can do with overrides depends on its access. A caller allowed to update
+PolicyGates (full edit) can add an override only in its own name, but can also remove any
+override, or remove one and add it again in its own name (re-attribute it). Removing does not
+erase the record: the controller keeps a record of every override it saw (`status.overrides`,
+with its first-seen time) and its `GateOverridden` AuditEvent, and an entry added again keeps
+its first-seen time, so it cannot restart the override cap. A caller that may only record
+overrides (the `policygates/override` role) is append-only.
+
+The controller records an override's `createdBy` as **verified** only when it first sees the
+override while the `<release>-gate-overrides` policy and its `Deny` binding exist: the chart
+passes their name (`--override-identity-policy`) and lets the controller `get` those two
+objects. An override first seen while they are missing, or one already on a gate when the
+upgrade that added the check ran, stays unverified: the gate reason, the AuditEvent and the UI
+API (`createdByVerified: false`) say so.
 
 The checks exist only where the chart's policies are installed: the CRDs do not check the
 names. Installing the CRDs alone (`kubectl apply -f config/crd/bases`) or deleting a policy

@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
@@ -147,6 +149,9 @@ func TestIdentityAdmission_GateOverrides(t *testing.T) {
 	rules := vap.Spec.MatchConstraints.ResourceRules
 	require.Len(t, rules, 1)
 	assert.Equal(t, []string{"policygates"}, rules[0].Resources)
+	// CREATE is checked too: a gate instance made by hand is refused, not only an edit.
+	assert.ElementsMatch(t, []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
+		rules[0].Operations)
 
 	controller := "system:serviceaccount:" + releaseNS + ":kardinal-promoter"
 	const graphSA = "system:serviceaccount:team-a:kardinal-graph"
@@ -176,6 +181,19 @@ func TestIdentityAdmission_GateOverrides(t *testing.T) {
 		delete(g["metadata"].(map[string]interface{})["labels"].(map[string]interface{}), "kardinal.io/bundle")
 		return g
 	}
+	withMeta := func(g map[string]interface{}, k string, v interface{}) map[string]interface{} {
+		g["metadata"].(map[string]interface{})[k] = v
+		return g
+	}
+	owned := func() map[string]interface{} {
+		return withMeta(gate("x", true), "ownerReferences", []interface{}{
+			map[string]interface{}{"apiVersion": "kro.run/v1alpha1", "kind": "Graph", "name": "app-v1", "uid": "u1"}})
+	}
+	finalized := func() map[string]interface{} {
+		return withMeta(owned(), "finalizers", []interface{}{"foregroundDeletion"})
+	}
+	const gc = "system:serviceaccount:kube-system:generic-garbage-collector"
+	const nsController = "system:serviceaccount:kube-system:namespace-controller"
 	relabel := gate("x", true)
 	relabel["metadata"].(map[string]interface{})["labels"].(map[string]interface{})["kardinal.io/bundle"] = "app-v2"
 	skip := gate("x", true)
@@ -213,6 +231,21 @@ func TestIdentityAdmission_GateOverrides(t *testing.T) {
 		{name: "another namespace's Graph SA", old: gate("x", true), cur: gate("y", true), user: "system:serviceaccount:team-b:kardinal-graph", want: false},
 		{name: "the controller updates an instance", old: gate("x", true), cur: gate("y", true), user: controller, want: true},
 		{name: "edit a template gate", old: gate("x", false), cur: gate("true", false), user: "alice", want: true},
+		// The metadata is frozen too, but for what the API server writes.
+		{name: "annotate an instance", old: gate("x", true), cur: withMeta(gate("x", true), "annotations",
+			map[string]interface{}{"note": "x"}), user: "alice", want: false},
+		{name: "re-own an instance", old: owned(), cur: withMeta(owned(), "ownerReferences", []interface{}{
+			map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Bundle", "name": "other", "uid": "u2"}}),
+			user: "alice", want: false},
+		{name: "drop an instance's owner", old: owned(), cur: gate("x", true), user: "alice", want: false},
+		{name: "add a finalizer to an instance", old: owned(), cur: finalized(), user: "alice", want: false},
+		{name: "override with a new resourceVersion and managedFields", old: withMeta(gate("x", true), "resourceVersion", "1"),
+			cur: withMeta(withMeta(withMeta(gate("x", true, override("alice")), "resourceVersion", "2"), "generation", 3),
+				"managedFields", []interface{}{map[string]interface{}{"manager": "kardinal"}}), user: "alice", want: true},
+		{name: "the garbage collector removes a finalizer", old: finalized(), cur: owned(), user: gc, want: true},
+		{name: "the garbage collector removes an owner", old: owned(), cur: gate("x", true), user: gc, want: true},
+		{name: "the namespace controller updates an instance", old: finalized(), cur: owned(), user: nsController, want: true},
+		{name: "the garbage collector cannot create an instance", cur: gate("x", true), user: gc, want: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -270,5 +303,18 @@ func TestIdentityAdmission_GateInstanceFieldsComplete(t *testing.T) {
 			continue
 		}
 		assert.Contains(t, only, "object.spec."+name+" == oldObject.spec."+name, "spec.%s must not change on a gate instance", name)
+	}
+	// Every metadata field a client can set is compared, but for what the
+	// API server writes or never lets change.
+	serverOwned := map[string]bool{"managedFields": true, "resourceVersion": true, "generation": true, "name": true,
+		"namespace": true, "uid": true, "creationTimestamp": true, "selfLink": true, "deletionTimestamp": true,
+		"deletionGracePeriodSeconds": true}
+	meta := reflect.TypeOf(metav1.ObjectMeta{})
+	for i := 0; i < meta.NumField(); i++ {
+		name := strings.Split(meta.Field(i).Tag.Get("json"), ",")[0]
+		if serverOwned[name] {
+			continue
+		}
+		assert.Contains(t, only, "object.metadata."+name+" == oldObject.metadata."+name, "metadata.%s must not change on a gate instance", name)
 	}
 }

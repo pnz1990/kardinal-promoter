@@ -893,6 +893,10 @@
           "createdBy": {
             "type": "string"
           },
+          "createdByVerified": {
+            "description": "CreatedByVerified is true when the chart's identity admission policy checked createdBy (status.overrides): false for an override recorded while the policy was not bound, or before the upgrade that added it.",
+            "type": "boolean"
+          },
           "expiresAt": {
             "type": "string"
           },
@@ -904,6 +908,7 @@
           }
         },
         "required": [
+          "createdByVerified",
           "reason"
         ],
         "type": "object"

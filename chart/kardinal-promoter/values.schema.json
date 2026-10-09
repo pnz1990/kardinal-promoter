@@ -124,6 +124,12 @@
           "type": "string",
           "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
         },
+        "gateOverrideMaxMinutes": {
+          "type": ["string", "integer"],
+          "pattern": "^$|^[1-9][0-9]*$",
+          "minimum": 1,
+          "description": "--gate-override-max-minutes: the override cap in minutes; empty keeps 1440."
+        },
         "extraArgs": {
           "type": "array",
           "items": {

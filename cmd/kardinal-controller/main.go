@@ -107,6 +107,14 @@ func main() {
 		retire                 bundlereconciler.RetirePolicy
 	)
 
+	var gateOverrideMaxMinutes int
+	flag.IntVar(&gateOverrideMaxMinutes, "gate-override-max-minutes", int(policygaterecon.DefaultMaxOverride.Minutes()),
+		"Longest a gate override counts, from when the controller first saw it; an override ends at the earlier of "+
+			"its expiresAt and this cap (Helm gates.overrideMaxMinutes).")
+	var overrideIdentityPolicy string
+	flag.StringVar(&overrideIdentityPolicy, "override-identity-policy", "",
+		"Name of the chart's gate-overrides ValidatingAdmissionPolicy and binding. The controller records an "+
+			"override's createdBy as verified only while both exist; empty records every override unverified.")
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
 		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
 			"re-check the gate's whole Graph. 0 writes the status on every evaluation.")
@@ -577,6 +585,11 @@ func main() {
 	// namespace, the same namespaces the translator takes org gates from.
 	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
 	pgReconciler.StatusHeartbeat = gateStatusHeartbeat
+	pgReconciler.MaxOverride = time.Duration(gateOverrideMaxMinutes) * time.Minute
+	pgReconciler.IdentityPolicy = &policygaterecon.IdentityPolicyCheck{Reader: mgr.GetAPIReader(), Name: overrideIdentityPolicy}
+	if overrideIdentityPolicy == "" {
+		logger.Warn().Msg("--override-identity-policy is not set: gate overrides are recorded with an unverified createdBy")
+	}
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}

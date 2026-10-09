@@ -12,6 +12,11 @@ ValidatingAdmissionPolicy (the chart's kubeVersion).
 {{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
 {{- /* PolicyGate spec fields a gate instance copies from its template (all but overrides). */}}
 {{- $instanceSpecFields := list "expression" "message" "recheckInterval" "skipPermission" "when" "selector" "generated" }}
+{{- /* Gate instance metadata a caller other than kro and the controller may not change: all of it but
+managedFields, resourceVersion and generation, which the API server writes (name and namespace are immutable). */}}
+{{- $instanceMetaFields := list "labels" "annotations" "ownerReferences" "finalizers" "generateName" }}
+{{- /* The garbage collector and the namespace controller remove owner references and finalizers. */}}
+{{- $cleanup := list "system:serviceaccount:kube-system:generic-garbage-collector" "system:serviceaccount:kube-system:namespace-controller" "system:kube-controller-manager" }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -80,7 +85,12 @@ spec:
         (has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels) ||
         (oldObject != null && has(oldObject.metadata.labels) &&
          'kardinal.io/bundle' in oldObject.metadata.labels)
-    # Everything in spec but overrides, and the labels, are unchanged.
+    # The garbage collector and the namespace controller clean up owner
+    # references and finalizers.
+    - name: cleanup
+      expression: request.userInfo.username in {{ $cleanup | toJson }}
+    # Everything in spec but overrides, and the metadata but managedFields,
+    # resourceVersion and generation, are unchanged.
     - name: onlyOverrides
       expression: >-
         oldObject != null &&
@@ -88,8 +98,10 @@ spec:
         {{ if $i }}&& {{ end }}has(object.spec.{{ $f }}) == has(oldObject.spec.{{ $f }}) &&
         (!has(object.spec.{{ $f }}) || object.spec.{{ $f }} == oldObject.spec.{{ $f }})
         {{- end }}
-        && has(object.metadata.labels) == has(oldObject.metadata.labels) &&
-        (!has(object.metadata.labels) || object.metadata.labels == oldObject.metadata.labels)
+        {{- range $f := $instanceMetaFields }}
+        && has(object.metadata.{{ $f }}) == has(oldObject.metadata.{{ $f }}) &&
+        (!has(object.metadata.{{ $f }}) || object.metadata.{{ $f }} == oldObject.metadata.{{ $f }})
+        {{- end }}
   validations:
     # kardinal override (spec.overrides[]) records who overrode the gate.
     # Every entry that is new, or changed, must name the requester.
@@ -106,10 +118,11 @@ spec:
     # in them but spec.overrides: an instance decides a promotion, and
     # overriding it is the audited way to pass it.
     - expression: >-
-        !variables.instance || variables.graph || variables.controller || variables.onlyOverrides
+        !variables.instance || variables.graph || variables.controller || variables.onlyOverrides ||
+        (variables.cleanup && oldObject != null)
       message: >-
         only kardinal creates a gate instance (label kardinal.io/bundle) or changes its spec
-        or labels; change the gate template, or record an override with kardinal override
+        or metadata; change the gate template, or record an override with kardinal override
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
