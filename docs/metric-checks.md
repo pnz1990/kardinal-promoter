@@ -47,15 +47,25 @@ spec:
 ## Credentials
 
 Credentials are never written in a MetricCheck. Each provider names keys of a Secret in the
-MetricCheck's namespace (`*SecretRef: {name, key}`). The controller reads the Secret at each
+MetricCheck's namespace (`*SecretRef: {name, key}`). The Secret must carry the label
+`kardinal.io/referenceable: "true"`; without it the check fails with
+`SecretNotReferenceable: secret "<name>" does not have the label kardinal.io/referenceable: "true"`
+and nothing is sent (see [Secrets that kardinal may send](guides/security.md#secrets-that-kardinal-may-send)).
+
+```bash
+kubectl -n my-app create secret generic datadog --from-literal=api-key=... --from-literal=app-key=...
+kubectl -n my-app label secret datadog kardinal.io/referenceable=true
+```
+
+The controller reads the Secret at each
 evaluation, so a rotated Secret is used from the next one; surrounding whitespace (a trailing
 newline) is dropped. A missing Secret or key fails the check with
 `secret "<name>" not found` or `secret "<name>" has no key "<key>"`. The status never shows a
 credential, a URL, or a response body: only the HTTP status and the service's own error text.
 
-The controller can read any Secret in a namespace where someone can create a MetricCheck, and
-sends it to the MetricCheck's URL. Give `create` on MetricChecks only to those who may read that
-namespace's Secrets (the same rule as Pipeline `spec.git.secretRef`).
+The label is the Secret owner's consent: the controller can read every Secret, and a MetricCheck
+sends its credentials to a URL whoever creates the MetricCheck chooses, so without the label anyone
+with `create` on MetricChecks could send any Secret of the namespace to their own server.
 
 ## Providers
 

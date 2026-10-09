@@ -113,10 +113,18 @@ func (e *Env) FakeMetricRecords(ctx context.Context, provider, query string) ([]
 	return out, nil
 }
 
-// CreateSecretData creates the Secret ns/name with data.
-func (e *Env) CreateSecretData(t *testing.T, ns, name string, data map[string]string) {
+// LabelReferenceable must be "true" on a Secret that a MetricCheck,
+// NotificationHook or Subscription may name.
+const LabelReferenceable = "kardinal.io/referenceable"
+
+// CreateSecretData creates the Secret ns/name with data, labelled
+// kardinal.io/referenceable: "true" when referenceable.
+func (e *Env) CreateSecretData(t *testing.T, ns, name string, referenceable bool, data map[string]string) {
 	t.Helper()
 	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, StringData: data}
+	if referenceable {
+		s.Labels = map[string]string{LabelReferenceable: "true"}
+	}
 	if err := e.Client.Create(context.Background(), s); err != nil {
 		t.Fatalf("create Secret %s/%s: %v", ns, name, err)
 	}

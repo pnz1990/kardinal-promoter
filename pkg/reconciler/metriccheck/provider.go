@@ -72,8 +72,19 @@ func DefaultBackends(ambientAWS bool) map[string]Backend {
 	}
 }
 
+// labelReferenceable must be "true" on every Secret a MetricCheck names
+// (program-wide rule, shared with NotificationHook and Subscription): the
+// Secret's owner opts in to having it sent to a URL that whoever can create
+// a MetricCheck chooses. Without it the controller sends nothing.
+const labelReferenceable = "kardinal.io/referenceable"
+
+// ReasonSecretNotReferenceable starts the error for a Secret without
+// labelReferenceable.
+const ReasonSecretNotReferenceable = "SecretNotReferenceable"
+
 // secretReader returns a Query.Secret that reads Secrets in ns with c.
-// The error names the Secret and key, never the value.
+// The error names the Secret and key, never the value. A Secret without the
+// kardinal.io/referenceable: "true" label is refused.
 func secretReader(c client.Reader, ns string) func(context.Context, kardinalv1alpha1.SecretKeyRef) (string, error) {
 	return func(ctx context.Context, ref kardinalv1alpha1.SecretKeyRef) (string, error) {
 		var s corev1.Secret
@@ -82,6 +93,10 @@ func secretReader(c client.Reader, ns string) func(context.Context, kardinalv1al
 				return "", fmt.Errorf("secret %q not found", ref.Name)
 			}
 			return "", fmt.Errorf("read secret %q: %w", ref.Name, err)
+		}
+		if s.Labels[labelReferenceable] != "true" {
+			return "", fmt.Errorf("%s: secret %q does not have the label %s: \"true\"",
+				ReasonSecretNotReferenceable, ref.Name, labelReferenceable)
 		}
 		// Surrounding whitespace is dropped: a key made from a file often ends
 		// in a newline, which is not valid in a header.

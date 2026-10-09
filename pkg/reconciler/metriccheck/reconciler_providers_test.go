@@ -87,7 +87,8 @@ func webCheck(op string, text *string, value float64) *kardinalv1alpha1.MetricCh
 // threshold.text (eq, ne); a numeric threshold needs a numeric value. The
 // Secret a header names is read from the MetricCheck's namespace, trimmed.
 func TestReconciler_TextThreshold(t *testing.T) {
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default",
+		Labels: map[string]string{"kardinal.io/referenceable": "true"}},
 		Data: map[string][]byte{"auth": []byte("Bearer t0ken\n")}}
 	tests := []struct {
 		name       string
@@ -257,4 +258,25 @@ func TestReconciler_BusyProviderRetriesWithoutResult(t *testing.T) {
 	assert.Empty(t, got.Status.Result)
 	assert.Nil(t, got.Status.LastEvaluatedAt)
 	assert.Equal(t, got.ResourceVersion, second.ResourceVersion)
+}
+
+// TestReconciler_SecretMustBeReferenceable: a Secret without the label
+// kardinal.io/referenceable: "true" is never read for a MetricCheck; the
+// check fails with SecretNotReferenceable and the backend is not called.
+func TestReconciler_SecretMustBeReferenceable(t *testing.T) {
+	for name, labels := range map[string]map[string]string{
+		"no label":    nil,
+		"label false": {"kardinal.io/referenceable": "false"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default", Labels: labels},
+				Data: map[string][]byte{"auth": []byte("Bearer t0ken")}}
+			b := &valueBackend{value: metriccheck.Value{Text: "healthy"}}
+			got, _, _ := run(t, webCheck("eq", strPtr("healthy"), 0), map[string]metriccheck.Backend{"web": b}, secret)
+			assert.Equal(t, "Fail", got.Status.Result)
+			assert.Equal(t, `web query error: SecretNotReferenceable: secret "creds" does not have the label kardinal.io/referenceable: "true"`,
+				got.Status.Reason)
+			assert.Empty(t, b.secret, "no credential was read")
+		})
+	}
 }

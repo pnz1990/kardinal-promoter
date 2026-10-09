@@ -74,7 +74,8 @@ func float(v float64) *float64 { return &v }
 // the value its query returns. The credentials come only from a Secret: when
 // the Secret is rotated to wrong values the next evaluation is refused and
 // fails closed, with no credential in the reason; a Secret that does not
-// exist fails too.
+// exist fails too, and so does one without the label
+// kardinal.io/referenceable: "true", before any request is sent.
 //
 // Covers METRIC-DD-01, METRIC-NR-01, METRIC-CW-01, METRIC-AUTH-01.
 func TestMetric_ProvidersWithSecretAuth(t *testing.T) {
@@ -82,7 +83,7 @@ func TestMetric_ProvidersWithSecretAuth(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
 	ns := e.Namespace(t)
-	e.CreateSecretData(t, ns, metricCredsSecret, goodMetricCreds)
+	e.CreateSecretData(t, ns, metricCredsSecret, true, goodMetricCreds)
 
 	checks := []struct{ name, provider, query, refused string }{
 		{"dd", "datadog", fmt.Sprintf("avg:e2e.errors{ns:%s}", ns), "datadog returned HTTP 403: Forbidden"},
@@ -131,6 +132,20 @@ func TestMetric_ProvidersWithSecretAuth(t *testing.T) {
 	e.CreateMetricCheck(t, missing)
 	e.WaitMetricCheck(t, ns, "missing-secret", metricTimeout, "failing on the missing Secret",
 		framework.MetricResult("Fail", `datadog query error: datadog API key: secret "nope" not found`))
+
+	// A Secret its owner did not label kardinal.io/referenceable: "true" is
+	// never sent anywhere.
+	e.CreateSecretData(t, ns, "unlabelled", false, goodMetricCreds)
+	unlabelledQuery := fmt.Sprintf("avg:e2e.unlabelled{ns:%s}", ns)
+	unlabelled := providerCheck(t, ns, "unlabelled-secret", "datadog", unlabelledQuery)
+	unlabelled.Spec.Datadog.APIKeySecretRef = v1alpha1.SecretKeyRef{Name: "unlabelled", Key: "dd-api"}
+	unlabelled.Spec.Datadog.ApplicationKeySecretRef = v1alpha1.SecretKeyRef{Name: "unlabelled", Key: "dd-app"}
+	e.CreateMetricCheck(t, unlabelled)
+	e.WaitMetricCheck(t, ns, "unlabelled-secret", metricTimeout, "refusing the unlabelled Secret",
+		framework.MetricResult("Fail", `SecretNotReferenceable: secret "unlabelled" does not have the label kardinal.io/referenceable: "true"`))
+	sent, err := e.FakeMetricRecords(ctx, "datadog", unlabelledQuery)
+	require.NoError(t, err)
+	assert.Empty(t, sent, "no request was sent with the unlabelled Secret")
 }
 
 // TestMetric_WebProviderGate gates prod on two web MetricChecks against a
@@ -146,8 +161,8 @@ func TestMetric_WebProviderGate(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	a := newFluxApp(t, e, "prod")
-	e.CreateSecretData(t, a.ns, metricCredsSecret, goodMetricCreds)
-	e.CreateSecretData(t, a.ns, "wrong-token", map[string]string{"web": "Bearer nope"})
+	e.CreateSecretData(t, a.ns, metricCredsSecret, true, goodMetricCreds)
+	e.CreateSecretData(t, a.ns, "wrong-token", true, map[string]string{"web": "Bearer nope"})
 	path := a.ns + "/health"
 	e.SetFakeWebDoc(t, path, map[string]interface{}{"status": "degraded", "metrics": map[string]interface{}{"errorRate": 0.9}})
 
@@ -212,7 +227,7 @@ func TestMetric_PerPromotionAnalysis(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
 	a := newFluxApp(t, e, "test", "prod")
-	e.CreateSecretData(t, a.ns, metricCredsSecret, goodMetricCreds)
+	e.CreateSecretData(t, a.ns, metricCredsSecret, true, goodMetricCreds)
 
 	tmpl := providerCheck(t, a.ns, "canary", "datadog",
 		"avg:e2e.errors{ns:"+a.ns+",version:{{ bundle.version }},env:{{ environment.name }},pipeline:{{ pipeline.name }}}")
