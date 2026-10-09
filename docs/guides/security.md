@@ -487,11 +487,32 @@ The policy allows:
 
 Disable with `--set networkPolicy.enabled=false` if your CNI does not support NetworkPolicy.
 
+### Secrets that kardinal may send
+
+A MetricCheck, NotificationHook or Subscription names a Secret in its own namespace, and the
+controller sends that Secret's value to a URL the object's author chose. The controller can read
+every Secret, so a user who can create one of these objects but cannot read Secrets could
+otherwise have any Secret of the namespace sent to a server they run (a confused deputy).
+
+**Rule:** the controller reads a Secret for these kinds only when the Secret carries the label
+`kardinal.io/referenceable: "true"`. Without the label the object reports `SecretNotReferenceable`
+(a MetricCheck fails with that reason, which blocks gates on it) and no request with a credential
+is sent. Label a Secret only when it is meant to leave the cluster through kardinal:
+
+```bash
+kubectl -n my-app label secret datadog kardinal.io/referenceable=true
+```
+
+Who may set the label is who may `update` (or `patch`) Secrets in the namespace. Pipeline
+`spec.git.secretRef` is not covered: it must be in the Pipeline's namespace and is sent only to
+the Pipeline's git and SCM hosts.
+
 ### Outbound requests to user URLs
 
-NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`)
-and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`)
-send HTTP requests from the controller to a URL a user wrote into a resource. The controller
+NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`,
+`datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`)
+and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`,
+`spec.helm.repoURL`) send HTTP requests from the controller to a URL a user wrote into a resource. The controller
 refuses to connect when the address is one of these:
 
 - loopback (`127.0.0.0/8`, `::1`), which includes the controller's own UI API;
@@ -502,7 +523,9 @@ refuses to connect when the address is one of these:
 - unspecified (`0.0.0.0/8`, `::`) and multicast addresses.
 
 The check runs when the connection is opened, on the resolved address, for every
-connection including redirects. A host name that resolves, or later re-resolves, to one of
+connection including redirects. An SSH `spec.git.repoURL` is checked the same way: the host
+is resolved and every address checked before the connection, which then goes to the address
+that was checked, and the host key is verified against the Secret's `known_hosts`. A host name that resolves, or later re-resolves, to one of
 these addresses is refused too. The failure reads `destination address is not allowed:
 127.0.0.1 is loopback` and appears where that resource reports errors: NotificationHook
 `status.failureMessage`, MetricCheck `status.reason` or Subscription `status.message`.
@@ -541,8 +564,19 @@ The allowlist works at the HTTP level and on any CNI. To enforce egress at the n
 level as well, enable the NetworkPolicy and list the allowed destinations in
 `networkPolicy.extraEgress`.
 
-NotificationHook, MetricCheck and Subscription requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
-`NO_PROXY`.
+NotificationHook, MetricCheck and Subscription HTTP requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY` (SSH connections do not use a proxy).
+
+Subscription credentials (`spec.*.secretRef`) and webhook tokens (`spec.webhook.secretRef`)
+are read only from the Subscription's own namespace, so whoever can create a Subscription
+can use only the Secrets of that namespace. The controller reads them with `get` on every
+poll or delivery; it never lists Secrets. The webhook receiver
+(`/webhook/subscriptions/...`, see [Subscription webhooks](../subscription-webhooks.md))
+answers every authentication failure, and a Subscription that does not exist, with the
+same 401, limits requests per source address and per Subscription, and writes only the
+`kardinal.io/refresh` annotation. Any Secret a Subscription reads (credentials and the
+webhook token) must be labelled `kardinal.io/referenceable: "true"`; an unlabelled Secret
+is not read and nothing is sent.
 Through a proxy, the controller connects to the proxy, so before it sends a request there it
 checks the target itself: an IP address against the list above, and a host name by resolving
 it and checking every address it resolves to. This applies to every request, including
@@ -552,6 +586,15 @@ also enforce its own egress policy. The proxy's own address is checked too: a pr
 loopback address is refused.
 
 ---
+
+**MetricCheck `web` reads from wherever the controller can reach.** A `web` MetricCheck sends a
+GET or POST to a URL its author chooses and copies one JSONPath value of the answer into
+`status.lastValue` (at most 256 bytes, a string, number or boolean). The egress guard keeps it off
+loopback, link-local and metadata addresses, but private addresses stay allowed, so anyone who can
+create a MetricCheck can read a field from an in-cluster Service that answers JSON. Give `create`
+on MetricChecks only to people who may read those Services, and restrict the targets with the
+controller egress allowlist (`--egress-allowlist`, #1474) or the chart NetworkPolicy
+(`networkPolicy.enabled`, `networkPolicy.extraEgress`).
 
 ## Admission Validation
 

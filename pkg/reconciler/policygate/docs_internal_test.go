@@ -151,6 +151,7 @@ func docsCELFixture(t *testing.T) (*Reconciler, *kardinalv1alpha1.PolicyGate) {
 	validUntil := metav1.NewTime(now.Add(time.Minute))
 	for name, value := range map[string]string{
 		"error-rate": "0.001", "p99-latency": "120", "success-rate": "0.999", "staging-error-rate": "0.001",
+		"canary-errors": "0.001",
 	} {
 		objs = append(objs, &kardinalv1alpha1.MetricCheck{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},

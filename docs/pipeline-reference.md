@@ -26,14 +26,22 @@ spec:
       dependsOn: [<string>, ...]        # Environments this one depends on (default: previous in list)
       wave: <int>                       # Deployment wave, minimum 1 (default: none)
       update:
-        strategy: <string>              # "kustomize" (default), "helm" or "argocd"
+        strategy: <string>              # "kustomize" (default), "helm", "argocd" or "yaml"
         helm:                           # When strategy: helm
           imagePathTemplate: <string>   # Dot path of the image tag (default: ".image.tag")
           valuesFile: <string>          # Relative to path (default: "values.yaml")
+          chartVersionFile: <string>    # chart Bundles: file with the chart version (default: "Chart.yaml")
+          chartVersionPath: <string>    # chart Bundles: its dot path (default: ".dependencies[name=<chart>].version")
         argocd:                         # When strategy: argocd
           application: <string>         # Argo CD Application to patch (required)
           namespace: <string>           # Default: "argocd"
           imageKey: <string>            # Key in spec.source.helm.valuesObject (default: "image.tag")
+        yaml:                           # When strategy: yaml
+          updates:                      # One or more; all are applied in one commit
+            - file: <string>            # YAML file relative to path
+              path: <string>            # Key path, e.g. "spec.template.spec.containers[0].image"
+              image: <string>           # Bundle image repository (optional with one image)
+              value: <string>           # tag (default), digest, tagWithDigest, image, imageWithDigest
       approval: <string>                # "auto" (default) or "pr-review"
       health:
         type: <string>                  # "resource" (default), "argocd", "flux", "argoRollouts", "flagger"
@@ -95,7 +103,8 @@ spec:
 
 ### spec.environments[]
 
-A Pipeline has 1 to 100 environments. The CRD rejects, at `kubectl apply` time:
+A Pipeline has 1 to 500 environments (see [Large Pipelines](#large-pipelines) for what fits in
+one Bundle's Graph). The CRD rejects, at `kubectl apply` time:
 
 - a name that is not a DNS label: lowercase letters, digits and `-`, starting and ending
   with a letter or digit, at most 63 characters. The name is used as a namespace
@@ -115,14 +124,17 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `path` | No | `environments/<name>` | Directory in the GitOps repo containing the environment's manifests. It must be relative and stay inside the repository: absolute paths, `..` segments and symlinks that point outside the checkout fail the step. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
 | `wave` | No | (none) | Assigns this environment to a numbered deployment wave (K-06). Minimum 1. Environments with the same wave number are promoted in parallel. A wave depends on every environment of the next lower wave, and on the environment without a wave listed before it. Gaps in the numbers are allowed. Composable with `dependsOn`. See [Wave Topology](#wave-topology-k-06). |
-| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches the image tag at `update.helm.imagePathTemplate` in `update.helm.valuesFile`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). |
+| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches the image tag at `update.helm.imagePathTemplate` in `update.helm.valuesFile`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). `yaml`: sets any YAML paths, in any files of the environment directory, to a Bundle image's tag, digest or reference; see [The yaml update strategy](#the-yaml-update-strategy). |
 | `update.helm.imagePathTemplate` | No | `.image.tag` | `helm` only. Dot path of the image tag in the values file. |
 | `update.helm.valuesFile` | No | `values.yaml` | `helm` only. Values file to patch, relative to the environment `path`. |
+| `update.helm.chartVersionFile` | No | `Chart.yaml` | `helm` only, for `chart` Bundles (from a [Helm Subscription](subscription.md#promoting-a-chart-version)). File the chart version is written to, relative to the environment `path`. A chart Bundle fails at build in an environment whose strategy is not `helm`. |
+| `update.helm.chartVersionPath` | No | `.dependencies[name=<chart>].version` | `helm` only. Dot path of the chart version in `chartVersionFile`; a numeric segment indexes a list and `[field=value]` selects a list element (`.helmCharts[name=podinfo].version`, `.spec.chart.spec.version`, `.spec.source.targetRevision`). The default is the umbrella chart's dependency named after the Bundle's chart; the step fails when there is none. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
 | `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. |
 | `health.timeout` | No | `10m` | Maximum time from the start of health checking to the first healthy check, and from the moment a `bake` window stops to the next healthy check. When it expires, it counts as a health failure and applies `onHealthFailure`. It does not cut a running `bake` window short. |
-| `health.cluster` | No | (must be empty) | **Deprecated, not supported.** kardinal checks health only in the cluster it runs in. A non-empty value sets the Pipeline `Ready=False` and fails the PromotionStep. For a workload in another cluster, check its Argo CD Application (`type: argocd`) or a Flux Kustomization that targets the cluster (`type: flux`) in the hub; see [Remote Clusters](health-adapters.md#remote-clusters). |
+| `health.cluster` | No | (must be empty) | **Deprecated, not supported.** A non-empty value sets the Pipeline `Ready=False` and fails the PromotionStep. Use `health.kubeconfigSecretRef`, or check the hub's Argo CD Application (`type: argocd`) or Flux Kustomization (`type: flux`); see [Remote Clusters](health-adapters.md#remote-clusters). |
+| `health.kubeconfigSecretRef` | No | — | `{name, key}` of a Secret in the Pipeline's namespace holding a kubeconfig (key default `kubeconfig`). The health check reads its object in that cluster. Inline credentials only; `exec`, `auth-provider` and file paths are refused. See [Remote Clusters](health-adapters.md#remote-clusters). |
 | `health.labelSelector` | No | (none) | `health.type=resource` only. When set, **every** Deployment in the namespace that matches these labels must pass the health check. No match is unhealthy. Example: `{"app": "nginx", "kardinal.io/pipeline": "nginx-demo"}`. When unset, a single Deployment named after the Pipeline is checked. Ignored for `argocd`, `flux`, `argoRollouts`, and `flagger`. |
 | `delivery.delegate` | No | `none` | Progressive delivery delegation. `argoRollouts`: watch Argo Rollouts Rollout status after promotion. `flagger`: watch Flagger Canary status. `none`: instant deploy (rolling update). |
 | `shard` | No | (must be empty) | **Deprecated, not supported.** Distributed mode was removed. A non-empty value sets the Pipeline `Ready=False` (reason `NotImplemented`), `kardinal validate` fails, and every PromotionStep of the environment fails with `shard is not supported`. Remove it; the controller reconciles every environment. See [Multi-Cluster](distributed-mode.md). |
@@ -172,6 +184,41 @@ Default: `0`.
 Extra namespaces to read PolicyGates from. It only adds: the org policy namespaces (the controller's `--policy-namespaces`, default `platform-policies`) and the Pipeline's namespace are always read. A gate found only through it is a team gate unless it is labelled `kardinal.io/scope: org`, and it never grants a skip. See [Policy Gates](policy-gates.md).
 
 Default: none.
+
+### Large Pipelines
+
+Each Bundle is promoted by one kro Graph, and a Graph is one Kubernetes object, which etcd stores
+only up to 1.5 MiB. Two Graph shapes keep it in bounds:
+
+- **nodes** (Pipelines with up to 100 environments): one Graph node per environment. `kubectl get
+  graph -o yaml` shows each environment's PromotionStep as a node.
+- **compact** (above 100 environments): the promotion order is data in the Graph, and one node
+  creates every PromotionStep the order allows (upstream environments Verified, gates ready, the
+  Bundle not superseded, rejected or waiting for a `maxConcurrentPromotions` slot). A step that exists is not removed when a gate later closes or
+  the Bundle is superseded. The Graph has about a dozen nodes whatever the number of environments,
+  and no health ref nodes (health is checked by the PromotionStep as in the nodes shape).
+
+Both shapes promote the same way: the same PromotionSteps, PolicyGate instances and PRStatuses,
+with the same names. Choose one for a Pipeline with the annotation `kardinal.io/graph-shape:
+compact` or `nodes`; the controller's `--graph-compact-above` (chart `graph.compactAbove`) moves
+the threshold. A Bundle keeps the shape its Graph was created with: a later Pipeline edit, a changed
+annotation or threshold applies to new Bundles only, because switching the shape of a Graph in
+flight would delete its PromotionSteps. The shape is read from the Graph's nodes; the Graph's
+`kardinal.io/graph-shape` label only shows it.
+
+In the compact shape every PromotionStep comes from one collection, so a PolicyGate instance or a
+PromotionStep that kro cannot apply holds every environment of the Bundle, not only its own (the
+Bundle's `GatesCreated` condition names a gate that cannot be created). A feature the compact shape
+does not carry yet fails the Bundle with `GraphBuildFailed` naming the feature, and sets the
+Pipeline `Ready=False` while its new Bundles would get a compact Graph. Per-promotion MetricChecks
+(`spec.perPromotion`) are one: use the node shape (`kardinal.io/graph-shape: nodes`) for a Pipeline
+whose gates read one. Only the Bundle reports this one; the Pipeline condition does not, because
+the Pipeline reconciler does not read the gates and MetricChecks.
+
+The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
+each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be
+over 1.2 MB, or create more than 4,500 objects, fails with `GraphBuildFailed` and the size in the
+message.
 
 ## Health Check Defaults
 
@@ -312,7 +359,8 @@ finishes, and its Graph turns Ready once its steps are Verified and its gates pa
 | Image Bundle, `update.strategy: kustomize` (default) | `git-clone`, `kustomize-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Image Bundle, `update.strategy: helm` | `git-clone`, `helm-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Config Bundle | `git-clone`, `config-merge`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
-| Mixed Bundle | `git-clone`, `config-merge`, then the image Bundle's update step (`kustomize-set-image` or `helm-set-image`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Mixed Bundle | `git-clone`, `config-merge`, then the image Bundle's update step (`kustomize-set-image`, `helm-set-image` or `yaml-update`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Image Bundle, `update.strategy: yaml` | `git-clone`, `yaml-update`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | `update.strategy: argocd` | `argocd-set-image`, `health-check` |
 
 `open-pr` and `wait-for-merge` run only with `approval: pr-review`. When the files in git
@@ -341,6 +389,58 @@ manifests that use that name keep promoting:
   short name. It also gets `newName: ghcr.io/org/app`.
 
 A short-name entry whose `newName` points at another repository is left alone.
+
+### The yaml update strategy
+
+`update.strategy: yaml` writes values of the Bundle's images into any YAML paths of any files
+in the environment directory: plain manifests, Helm values, a Kustomize `images` entry, a
+custom resource. Each `update.yaml.updates[]` entry sets one scalar:
+
+```yaml
+update:
+  strategy: yaml
+  yaml:
+    updates:
+      - file: deploy/deployment.yaml
+        path: spec.template.spec.containers[0].image
+        image: ghcr.io/org/api           # which Bundle image; optional with one image
+        value: image                     # ghcr.io/org/api:1.4.2
+      - file: deploy/deployment.yaml
+        path: spec.template.spec.containers[1].image
+        image: ghcr.io/org/sidecar
+        value: imageWithDigest           # ghcr.io/org/sidecar:0.3.0@sha256:...
+      - file: values.yaml
+        path: api.image.tag
+        image: ghcr.io/org/api           # value defaults to tag: 1.4.2
+```
+
+| `value` | Written |
+|---|---|
+| `tag` (default) | the tag |
+| `digest` | the digest (`sha256:...`) |
+| `tagWithDigest` | `<tag>@<digest>` |
+| `image` | `<repository>:<tag>` |
+| `imageWithDigest` | `<repository>:<tag>@<digest>`, or `<repository>@<digest>` without a tag |
+
+- `path` is keys separated by `.`, with `[N]` to index a list. Missing mapping keys are created;
+  list elements are not. A key that contains `.` (an annotation such as `app.kubernetes.io/version`)
+  cannot be addressed.
+- The step computes every edit before it writes anything. An edit that cannot be applied (a
+  Bundle without the named image, a value the image does not have such as the digest of a
+  tag-only image, a missing list element, a path through a scalar, a path that would replace a
+  mapping or list, a file outside the repository) fails the step for good and no file is
+  changed.
+- Comments, key order, the quoting of the replaced value and the file mode are kept. Every edited
+  file is parsed again before it is written and must still hold every value where it was set. The
+  files are then written through new temporary files (never through a file or link already at that
+  name) and renamed; if a rename fails, the files already replaced get their old content back.
+- Refused, failing the step: a file with more than one YAML document (`---`; an empty or
+  comment-only document after the first, such as a trailing `---` or `--- # end`, is not written
+  back, and its comments move to the end of the file), an anchor or alias
+  (`&`, `*`) or a merge key (`<<`) on the edited path, a key that appears twice in one mapping, a
+  symbolic link anywhere on the path (the environment directory, a directory in `file`, or the
+  file), a file over 4 MiB, and a `file` that is absolute or contains `..`.
+- A Bundle without images (a config Bundle) changes nothing.
 
 ### Image signatures and tests
 

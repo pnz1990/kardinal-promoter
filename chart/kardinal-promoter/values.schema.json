@@ -327,6 +327,10 @@
         "aggregateToKro": {
           "type": "boolean"
         },
+        "compactAbove": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
         "readerNamespaces": {
           "type": "array",
           "items": {
@@ -396,6 +400,37 @@
         },
         "extraEgress": {
           "type": "array"
+        }
+      }
+    },
+    "metricCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cloudWatch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ambientCredentials": {
+              "type": "boolean"
+            }
+          }
+        },
+        "querySlots": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "global": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "perNamespace": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
         }
       }
     },

@@ -107,6 +107,11 @@ type Reconciler struct {
 	// would need the shared SCM token for a spec.git.url it does not allow is
 	// Ready=False/RepositoryNotAllowed (#1332). Nil allows every repository.
 	AllowedRepositories *scm.RepositoryAllowlist
+
+	// CompactAbove is --graph-compact-above: a Pipeline whose new Bundles
+	// would get a compact Graph and that uses a feature the compact shape
+	// does not carry yet is Ready=False. Nil is graph.DefaultCompactAbove.
+	CompactAbove *int
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -415,6 +420,28 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline, ownSecret bool) meta
 		return metav1.Condition{
 			Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonValidationFailed,
 			Message: msg, ObservedGeneration: p.Generation,
+		}
+	}
+
+	// The Graph shape annotation must name a shape; a Bundle of this Pipeline
+	// would fail with GraphBuildFailed otherwise.
+	if v, ok := p.Annotations[graph.AnnotationGraphShape]; ok && v != graph.GraphShapeCompact && v != graph.GraphShapeNodes {
+		return invalid(fmt.Sprintf("annotation %s=%q: use %q or %q, or remove it",
+			graph.AnnotationGraphShape, v, graph.GraphShapeCompact, graph.GraphShapeNodes))
+	}
+
+	// A Pipeline whose new Bundles would get a compact Graph must not use a
+	// feature the compact shape does not carry yet: each Bundle would fail
+	// with GraphBuildFailed.
+	b := graph.NewBuilder()
+	if r.CompactAbove != nil {
+		b.CompactAbove = *r.CompactAbove
+	}
+	if b.WouldBeCompact(p, len(p.Spec.Environments)) {
+		if f := graph.CompactUnsupported(graph.BuildInput{Pipeline: p}); len(f) > 0 {
+			return invalid(fmt.Sprintf("its Bundles get a compact Graph (more than %d environments, or the %s annotation), "+
+				"and the compact shape does not support %s yet; use the annotation %s: %s or remove the feature",
+				b.CompactAbove, graph.AnnotationGraphShape, strings.Join(f, ", "), graph.AnnotationGraphShape, graph.GraphShapeNodes))
 		}
 	}
 

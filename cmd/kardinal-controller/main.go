@@ -62,7 +62,6 @@ import (
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
@@ -103,11 +102,15 @@ func main() {
 		scmProviderType        string
 		scmAPIURL              string
 		gateStatusHeartbeat    time.Duration
+		graphCompactAbove      int
 	)
 
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
 		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
 			"re-check the gate's whole Graph. 0 writes the status on every evaluation.")
+	flag.IntVar(&graphCompactAbove, "graph-compact-above", graphpkg.DefaultCompactAbove,
+		"Environment count above which a Bundle's Graph uses the compact shape (one PromotionStep collection) "+
+			"when the Pipeline's kardinal.io/graph-shape annotation does not choose one. 0 makes every Graph compact.")
 	flag.BoolVar(&leaderElect, "leader-elect", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&zerologLevel, "log-level", "info",
@@ -184,6 +187,23 @@ func main() {
 			"When true and --ui-auth-token is not set, each request's bearer token is "+
 			"validated via authenticationv1.TokenReview. Fail-closed: API errors return 503. "+
 			"Also readable from KARDINAL_UI_TOKENREVIEW_AUTH environment variable (set to 'true').")
+
+	// --metriccheck-cloudwatch-ambient-credentials lets cloudwatch MetricChecks
+	// that name no credential Secret use the controller's own AWS identity
+	// (IRSA, EKS Pod Identity, environment). Off by default: any user who can
+	// create a MetricCheck could read CloudWatch with that identity.
+	var cloudWatchAmbient bool
+	flag.BoolVar(&cloudWatchAmbient, "metriccheck-cloudwatch-ambient-credentials", false,
+		"Let cloudwatch MetricChecks without credential Secret refs use the controller's own AWS identity "+
+			"(SDK default chain: environment, IRSA, EKS Pod Identity). Off by default.")
+
+	// --metriccheck-global-slots and --metriccheck-namespace-slots cap the
+	// outbound MetricCheck queries (metriccheckrecon.Limiter).
+	var metricGlobalSlots, metricNamespaceSlots int
+	flag.IntVar(&metricGlobalSlots, "metriccheck-global-slots", metriccheckrecon.DefaultGlobalSlots,
+		"Most MetricCheck queries running at once in the cluster (at least 1). The rest wait, first come, first served.")
+	flag.IntVar(&metricNamespaceSlots, "metriccheck-namespace-slots", metriccheckrecon.DefaultNamespaceSlots,
+		"Most MetricCheck queries of one namespace running at once (at least 1).")
 
 	var tlsCertFile string
 	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
@@ -312,6 +332,10 @@ func main() {
 	}
 	zerolog.SetGlobalLevel(level)
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	if metricGlobalSlots < 1 || metricNamespaceSlots < 1 {
+		logger.Fatal().Int("globalSlots", metricGlobalSlots).Int("namespaceSlots", metricNamespaceSlots).
+			Msg("--metriccheck-global-slots and --metriccheck-namespace-slots must be at least 1")
+	}
 	// Reconcilers log through zerolog.Ctx(ctx). controller-runtime does not put a
 	// zerolog logger in the reconcile context, so without this default every
 	// reconciler line, errors included, goes to a disabled logger.
@@ -470,7 +494,7 @@ func main() {
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
 		APIReader:        mgr.GetAPIReader(),
-		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
+		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), graphCompactAbove, logger),
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),
@@ -504,7 +528,8 @@ func main() {
 		}
 	}
 
-	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos}).
+	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
+		CompactAbove: &graphCompactAbove}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}
@@ -529,6 +554,7 @@ func main() {
 		AllowedRepositories: allowedRepos,
 		GitClient:           gitClient,
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
+		RemoteClusters:      &healthpkg.RemoteClusters{},
 		Recorder:            eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
@@ -536,7 +562,8 @@ func main() {
 
 	if err := (&metriccheckrecon.Reconciler{
 		Client:   mgr.GetClient(),
-		Provider: metriccheckrecon.NewPrometheusProvider(),
+		Backends: metriccheckrecon.DefaultBackends(cloudWatchAmbient),
+		Limiter:  metriccheckrecon.NewLimiter(metricGlobalSlots, metricNamespaceSlots),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up MetricCheckReconciler")
 	}
@@ -587,26 +614,12 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up NotificationHookReconciler")
 	}
 
-	// SubscriptionReconciler: polls OCI registries and Git repositories on an interval
-	// and creates Bundle CRDs when new artifacts are detected.
+	// SubscriptionReconciler: polls OCI registries, Git repositories and Helm
+	// chart repositories on an interval (or at once on a kardinal.io/refresh
+	// request from the webhook receiver) and creates Bundle CRDs when new
+	// artifacts are detected. WatcherFn nil is subscriptionrecon.NewWatcher.
 	if err := (&subscriptionrecon.Reconciler{
 		Client: mgr.GetClient(),
-		WatcherFn: func(sub *kardinalv1alpha1.Subscription) (source.Watcher, error) {
-			switch sub.Spec.Type {
-			case kardinalv1alpha1.SubscriptionTypeImage:
-				if sub.Spec.Image == nil {
-					return nil, fmt.Errorf("image subscription missing spec.image")
-				}
-				return source.NewOCIWatcher(sub.Spec.Image.Registry, sub.Spec.Image.TagFilter), nil
-			case kardinalv1alpha1.SubscriptionTypeGit:
-				if sub.Spec.Git == nil {
-					return nil, fmt.Errorf("git subscription missing spec.git")
-				}
-				return source.NewGitWatcher(sub.Spec.Git.RepoURL, sub.Spec.Git.Branch, sub.Spec.Git.PathGlob), nil
-			default:
-				return nil, fmt.Errorf("unknown subscription type %q", sub.Spec.Type)
-			}
-		},
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up SubscriptionReconciler")
 	}
@@ -641,6 +654,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/webhook/scm", tracing.Handler("webhook.scm", webhookSrv.Handler()))
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
+	// Registry and SCM webhooks that make a Subscription poll at once. Each
+	// Subscription opts in with spec.webhook and its own token.
+	mux.HandleFunc(subscriptionWebhookPrefix, newSubscriptionWebhook(mgr.GetClient(), logger).Handler())
 	mux.HandleFunc(openAPIPath, handleOpenAPI)
 	// Bundle API endpoint — only mounted if a token is configured.
 	if bundleAPIToken != "" {
@@ -812,7 +828,7 @@ func newHealthDetector(cfg *rest.Config, k8s sigs_client.Client, log zerolog.Log
 // newTranslator constructs the Translator wired with a GraphClient, Builder,
 // and the Graph identity provisioner.
 func newTranslator(mgr ctrl.Manager, identity *graphpkg.IdentityProvisioner,
-	policyNS []string, log zerolog.Logger) *translator.Translator {
+	policyNS []string, compactAbove int, log zerolog.Logger) *translator.Translator {
 	dynClient, err := dynamic.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		log.Fatal().Err(err).Msg("unable to create dynamic client for graph")
@@ -820,6 +836,7 @@ func newTranslator(mgr ctrl.Manager, identity *graphpkg.IdentityProvisioner,
 	graphClient := graphpkg.NewGraphClient(dynClient, log)
 	builder := graphpkg.NewBuilder()
 	builder.ServiceAccountName = identity.ServiceAccountName
+	builder.CompactAbove = compactAbove
 	return translator.New(graphClient, builder, mgr.GetClient(), policyNS, log).
 		WithIdentity(identity).
 		WithRESTMapper(mgr.GetRESTMapper())

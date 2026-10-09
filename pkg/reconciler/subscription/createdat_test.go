@@ -30,7 +30,7 @@ func TestSubscription_StampsCreatedAt(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
 	r := &subscription.Reconciler{
 		Client: c,
-		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
 			return &changedWatcher{digest: "sha256:new", tag: "sha-abc1234"}, nil
 		},
 		NowFn: func() time.Time { return now },
