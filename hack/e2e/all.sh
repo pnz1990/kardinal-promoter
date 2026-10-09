@@ -13,7 +13,8 @@
 # No other job sees the token.
 #
 #   -list    print the jobs this run would start and exit
-#   -matrix  print every job as the GitHub Actions matrix of e2e-live.yml
+#   -matrix  print every job (of SUITES, when set) as the GitHub Actions
+#            matrix of e2e-live.yml
 #
 # Env:
 #   JOBS        jobs at once (default 4; each cluster takes 2-3 GB of
@@ -70,10 +71,15 @@ while read -r suite k8s shard _ || [ -n "$suite" ]; do
 done <"$E2E_DIR/matrix.txt"
 
 if [ "$MODE" = -matrix ]; then
+  # SUITES (the e2e-live.yml dispatch input) keeps only those suites' jobs.
+  read -ra only <<<"${SUITES:-}"
   sep=
   printf '{"include":['
   for j in "${matrix[@]}"; do
     read -r id suite k8s shard <<<"$j"
+    if [ "${#only[@]}" -gt 0 ] && ! [[ " ${only[*]} " == *" $suite "* ]]; then
+      continue
+    fi
     [ "$shard" != - ] || shard=
     printf '%s{"id":"%s","suite":"%s","k8s":"%s","shard":"%s"}' "$sep" "$id" "$suite" "$k8s" "$shard"
     sep=,

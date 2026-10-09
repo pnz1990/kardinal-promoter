@@ -46,8 +46,8 @@
 #                    (default none; the scale suite's full profile wants one
 #                    on a shared host)
 #   KARDINAL_E2E_KRO_MEMORY  memory limit of the kro controller, e.g. 8Gi
-#                    (default: the kro chart's, 1Gi; the scale suite's full
-#                    profile needs more until #1492 is fixed)
+#                    (default: the kro chart's, 1Gi; the scale suite's 3Gi,
+#                    and its full profile needs 8Gi until #1492 is fixed)
 #   KARDINAL_E2E_TOOLS  pinned (default): install the kind, kubectl and helm
 #                    of hack/tool-versions.env into bin/e2e (tools.sh) and use
 #                    them; path: use the ones on PATH
@@ -105,6 +105,8 @@ case "$SUITE" in
   scale) COMPONENTS=("toxiproxy.sh forgejo.forgejo.svc.cluster.local:3000" "giteafamily.sh forgejo" prometheus.sh)
     RUN='^TestScale_'
     export KARDINAL_E2E_RACE=${KARDINAL_E2E_RACE:-1}
+    # kro's chart default (1 GiB) is OOMKilled under the suite's load (#1492).
+    export KARDINAL_E2E_KRO_MEMORY=${KARDINAL_E2E_KRO_MEMORY:-3Gi}
     export KARDINAL_E2E_GIT_ROOT_URL=http://toxiproxy.toxiproxy.svc.cluster.local:3000
     HELM_ARGS='--set serviceMonitor.enabled=true --set replicaCount=2 --set logLevel=info
       --set resources.limits.cpu=4 --set resources.limits.memory=4Gi --set resources.requests.cpu=500m --set resources.requests.memory=512Mi' ;;
@@ -176,4 +178,8 @@ for c in "${AFTER[@]}"; do
   # shellcheck disable=SC2086
   bash "$E2E_DIR/components/"$c
 done
+if [ "$SUITE" = scale ]; then
+  # A throttle a killed run left behind (scale.Throttle) slows every test.
+  "${KUBECTL[@]}" delete flowschema,prioritylevelconfiguration kardinal-scale-throttle --ignore-not-found >/dev/null
+fi
 log "suite $SUITE up on $CTX in $(($(date +%s) - start))s; env: $E2E_OUT/env; KUBECONFIG=$KUBECONFIG"

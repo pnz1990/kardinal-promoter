@@ -4,9 +4,10 @@
 // Command report reads `go test -json` from stdin, prints the test output as
 // it arrives, and ends with a summary. It exits 1 when a test failed, when a
 // test skipped (a skipped live test proves nothing), or when no test ran.
-// A test that skips with "KNOWN BUG #<issue>" (the scale suite's
-// scale.KnownBug: the rest of the test reproduces an open bug) is listed as
-// a known bug and does not fail the run.
+// A scale test that reproduces an open bug (scale.KnownBug) is an expected
+// failure: when it fails it is listed as a known bug (action "xfail") and
+// does not fail the run; when it passes, scale.KnownBug fails it with "KNOWN
+// BUG #n FIXED", which fails the run like any failure.
 // With GITHUB_STEP_SUMMARY set it also writes the summary there as Markdown;
 // with -out it writes the results as JSON for test/e2e/proof.
 //
@@ -41,13 +42,17 @@ type result struct {
 	Test    string  `json:"test"`
 	Action  string  `json:"action"`
 	Elapsed float64 `json:"elapsed"`
-	// KnownBug is the issue a skipped test named in its "KNOWN BUG #n"
-	// skip message.
+	// KnownBug is the open bug an expected failure ("xfail") reproduces.
 	KnownBug int `json:"knownBug,omitempty"`
 }
 
-// knownBug matches the skip message of scale.KnownBug.
-var knownBug = regexp.MustCompile(`KNOWN BUG #([0-9]+)`)
+// The lines scale.KnownBug logs, as testing prints a t.Log line (indented
+// "file.go:N: "): the bug the test reproduces, and the line its cleanup
+// adds when the test passed anyway. Only TestScale_ tests use KnownBug.
+var (
+	knownBug      = regexp.MustCompile(`^\s+[\w./-]+\.go:[0-9]+: KNOWN BUG #([0-9]+) https://github\.com/pnz1990/kardinal-promoter/issues/[0-9]+: `)
+	knownBugFixed = regexp.MustCompile(`^\s+[\w./-]+\.go:[0-9]+: KNOWN BUG #[0-9]+ FIXED`)
+)
 
 type summary struct {
 	results []result
@@ -66,34 +71,29 @@ type file struct {
 func (s *summary) count(action string) int {
 	n := 0
 	for _, r := range s.results {
-		if r.Action == action && (action != "skip" || r.KnownBug == 0) {
+		if r.Action == action {
 			n++
 		}
 	}
 	return n
 }
 
-// knownBugs counts the tests skipped as known bugs.
-func (s *summary) knownBugs() int {
-	n := 0
-	for _, r := range s.results {
-		if r.Action == "skip" && r.KnownBug > 0 {
-			n++
-		}
-	}
-	return n
-}
+// knownBugs counts the expected failures.
+func (s *summary) knownBugs() int { return s.count("xfail") }
 
 // ok reports whether the run proves anything: tests ran and all passed.
 func (s *summary) ok() bool {
-	return !s.pkgFailed && s.count("pass") > 0 && s.count("fail") == 0 && s.count("skip") == 0
+	// go test fails the package when a test fails, an expected failure too.
+	pkgOK := !s.pkgFailed || (s.count("xfail") > 0 && s.count("fail") == 0)
+	return pkgOK && s.count("pass") > 0 && s.count("fail") == 0 && s.count("skip") == 0
 }
 
 // read copies test output to out and collects results. Lines that are not
 // JSON (build errors go test prints before any event) are copied as-is.
 func read(in io.Reader, out io.Writer) (*summary, error) {
 	s := &summary{}
-	bugs := map[string]int{}
+	bugs, fixed := map[string]int{}, map[string]bool{}
+	pkgFail := false
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for sc.Scan() {
@@ -106,24 +106,32 @@ func read(in io.Reader, out io.Writer) (*summary, error) {
 		switch ev.Action {
 		case "output":
 			_, _ = fmt.Fprint(out, ev.Output)
-			if m := knownBug.FindStringSubmatch(ev.Output); m != nil && ev.Test != "" {
+			if !strings.HasPrefix(ev.Test, "TestScale_") {
+				break
+			}
+			if m := knownBug.FindStringSubmatch(ev.Output); m != nil {
 				bugs[ev.Test], _ = strconv.Atoi(m[1])
+			}
+			if knownBugFixed.MatchString(ev.Output) {
+				fixed[ev.Test] = true
 			}
 		case "pass", "fail", "skip":
 			if ev.Test == "" {
 				if ev.Action == "fail" {
-					s.pkgFailed = true
+					pkgFail = true
 				}
 				continue
 			}
 			r := result{Test: ev.Test, Action: ev.Action, Elapsed: ev.Elapsed}
-			if ev.Action == "skip" {
-				r.KnownBug = bugs[ev.Test]
+			if ev.Action == "fail" && bugs[ev.Test] > 0 && !fixed[ev.Test] {
+				r.Action, r.KnownBug = "xfail", bugs[ev.Test]
 			}
 			delete(bugs, ev.Test)
+			delete(fixed, ev.Test)
 			s.results = append(s.results, r)
 		}
 	}
+	s.pkgFailed = pkgFail
 	return s, sc.Err()
 }
 

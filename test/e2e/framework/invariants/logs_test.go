@@ -62,11 +62,25 @@ func TestCollectorScanKro(t *testing.T) {
 }
 
 func TestCheckLogs(t *testing.T) {
-	s := LogSummary{Unexpected: []LogGroup{{Key: "a", Count: 3, Example: Line{Message: "git clone failed", Error: "connection refused"}}}}
+	s := LogSummary{Pods: []string{"kardinal-promoter-x/controller#0"},
+		Unexpected: []LogGroup{{Key: "a", Count: 3, Example: Line{Message: "git clone failed", Error: "connection refused"}}}}
 	assert.Len(t, checkLogs(s, Options{}).Violations, 1)
 	o := Options{}
 	o.Allow = append(o.Allow, Benign[0])
 	assert.Len(t, checkLogs(s, o).Violations, 1, "an unrelated pattern does not allow it")
 	s.Races = []Block{{Pod: "p", Kind: "race", Lines: []string{"WARNING: DATA RACE"}}}
 	assert.Len(t, checkLogs(s, Options{}).Violations, 2)
+}
+
+func TestCheckLogsNothingRead(t *testing.T) {
+	v := checkLogs(LogSummary{Pods: []string{"kro-1/kro#0"}, StreamErrors: []string{"stream broke"}}, Options{}).Violations
+	require.Len(t, v, 2)
+	assert.Contains(t, v[0], "no controller container")
+	assert.Contains(t, v[1], "stream broke")
+}
+
+func TestScanReportsScannerErrors(t *testing.T) {
+	c := newTestCollector()
+	long := strings.Repeat("x", 5*1024*1024)
+	assert.Error(t, c.scan(strings.NewReader(long), "p", false), "a line past the scanner's buffer is an error")
 }

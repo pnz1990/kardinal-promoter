@@ -27,6 +27,10 @@ on:
         description: 'go test -count for every suite'
         required: true
         default: '1'
+      suites:
+        description: 'only these suites, space-separated (hack/e2e/all.sh SUITES); empty runs every suite'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -51,6 +55,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: List the jobs (hack/e2e/matrix.txt)
         id: matrix
+        env:
+          SUITES: ${{ inputs.suites }}
         run: |
           m=$(bash hack/e2e/all.sh -matrix)
           echo "matrix=$m" >> "$GITHUB_OUTPUT"
@@ -184,6 +190,10 @@ jobs:
     needs: suite
     if: always()
     runs-on: ubuntu-latest
+    # proof asks the GitHub API whether each known bug's issue is open.
+    permissions:
+      contents: read
+      issues: read
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -201,13 +211,15 @@ jobs:
       # A job that was re-run has one results/<job>-attempt-<n> directory per
       # attempt; only its latest counts.
       - name: Prove the coverage
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           declare -A latest
           while read -r d; do latest[${d%-attempt-*}]=$d; done < \
             <(find results -mindepth 1 -maxdepth 1 -type d -name '*-attempt-*' | sort -V)
           [ "${#latest[@]}" -gt 0 ] || { echo "::error::no suite uploaded results"; exit 1; }
           mapfile -t files < <(find "${latest[@]}" -name summary.json | sort)
-          go run ./test/e2e/proof -out coverage-proof.json "${files[@]}"
+          GITHUB_TOKEN="$GH_TOKEN" go run ./test/e2e/proof -out coverage-proof.json "${files[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:

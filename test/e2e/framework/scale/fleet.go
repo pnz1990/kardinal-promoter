@@ -48,16 +48,20 @@ type Fleet struct {
 	E  *framework.Env
 	NS string
 
+	// rng picks the Pipeline of each sustained-load Bundle.
+	rng *RNG
+
 	mu        sync.Mutex
 	pipelines map[string]*v1alpha1.Pipeline
 	repos     map[string]gitserver.Repo
 }
 
 // NewFleet creates the test's namespace (framework.Env.Namespace) and its
-// HealthDeployment, and waits until that is available.
-func NewFleet(t *testing.T, e *framework.Env) *Fleet {
+// HealthDeployment, and waits until that is available. rng drives the
+// fleet's random choices.
+func NewFleet(t *testing.T, e *framework.Env, rng *RNG) *Fleet {
 	t.Helper()
-	f := &Fleet{E: e, NS: e.Namespace(t), pipelines: map[string]*v1alpha1.Pipeline{}, repos: map[string]gitserver.Repo{}}
+	f := &Fleet{E: e, NS: e.Namespace(t), rng: rng, pipelines: map[string]*v1alpha1.Pipeline{}, repos: map[string]gitserver.Repo{}}
 	f.healthDeployment(t)
 	return f
 }

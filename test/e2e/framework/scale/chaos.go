@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"os"
 	"strings"
 	"sync"
@@ -59,11 +58,6 @@ func Start(t *testing.T, name string, every func() time.Duration, inject func(ct
 	}()
 	t.Cleanup(c.Stop)
 	return c
-}
-
-// Between is a random duration in [lo, hi).
-func Between(lo, hi time.Duration) func() time.Duration {
-	return func() time.Duration { return lo + time.Duration(rand.Int63n(int64(hi-lo))) }
 }
 
 // Stop ends the schedule and waits for a running injection.
@@ -250,6 +244,9 @@ func Throttle(t *testing.T, e *framework.Env) (undo func()) {
 		},
 	}
 	fc := e.Kube.FlowcontrolV1()
+	// A throttle an interrupted run left behind is replaced.
+	_ = fc.FlowSchemas().Delete(ctx, name, metav1.DeleteOptions{})
+	_ = fc.PriorityLevelConfigurations().Delete(ctx, name, metav1.DeleteOptions{})
 	if _, err := fc.PriorityLevelConfigurations().Create(ctx, pl, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create PriorityLevelConfiguration %s: %v", name, err)
 	}

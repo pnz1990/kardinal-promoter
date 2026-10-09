@@ -5,7 +5,6 @@ package scale
 
 import (
 	"context"
-	"math/rand"
 	"sort"
 	"sync"
 	"testing"
@@ -107,7 +106,7 @@ func (f *Fleet) Sustained(ctx context.Context, t *testing.T, pipelines []string,
 			}
 			return s
 		case <-tick.C:
-			p := pipelines[rand.Intn(len(pipelines))]
+			p := pipelines[f.rng.Intn(len(pipelines))]
 			mu.Lock()
 			next[p]++
 			i := next[p]

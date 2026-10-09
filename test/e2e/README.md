@@ -116,8 +116,8 @@ dependency. Each test ends with the invariants checker
 ```bash
 KIND_CLUSTER=kp-scale KARDINAL_E2E_BUILD=host KARDINAL_E2E_NODE_MEMORY=24g KARDINAL_E2E_KRO_MEMORY=8Gi make e2e-up SUITE=scale
 KIND_CLUSTER=kp-scale make test-e2e-live SUITE=scale                          # the ci profile
-KIND_CLUSTER=kp-scale KARDINAL_E2E_SCALE_PROFILE=full TIMEOUT=4h make test-e2e-live SUITE=scale
-KIND_CLUSTER=kp-scale KARDINAL_E2E_SCALE_PROFILE=soak TIMEOUT=3h RUN='^TestScale_LoadSustained$' make test-e2e-live SUITE=scale
+KIND_CLUSTER=kp-scale KARDINAL_E2E_SCALE_PROFILE=full KARDINAL_E2E_TIMEOUT=4h make test-e2e-live SUITE=scale
+KIND_CLUSTER=kp-scale KARDINAL_E2E_SCALE_PROFILE=soak KARDINAL_E2E_TIMEOUT=3h RUN='^TestScale_LoadSustained$' make test-e2e-live SUITE=scale
 ```
 
 The controller is built with `-race` (`KARDINAL_E2E_RACE=1`, the suite's
@@ -133,7 +133,7 @@ environments: the invariants read what kardinal wrote to git.
 
 | Profile | Sizes | Time |
 |---|---|---|
-| `ci` (default) | 50-stage chain, 4 waves x 5 regions, 30 Pipelines, a burst of 150 Bundles, 0.5 Bundles/s for 2 min, chaos for 3 min | 25 min on a 32-core host |
+| `ci` (default) | 30-stage chain, canary and 3 waves x 4 regions, 20 Pipelines, a burst of 100 Bundles, 0.5 Bundles/s for 2 min, chaos for 3 min, 10 min to settle; sized for a GitHub-hosted runner (4 vCPUs, 16 GB), 4 tests at a time (`KARDINAL_E2E_PARALLEL`) | 25 min on a 32-core host |
 | `full` | 100-stage chain, canary and 9 waves x 11 regions (100 environments, the cap), fan-in of 50, 200 Pipelines, a burst of 1,000 Bundles over 100 Pipelines, 2 Bundles/s for 10 min, chaos for 10 min | 2 h on a 32-core host; give the kind node 24 GB (`KARDINAL_E2E_NODE_MEMORY=24g`) and kro 8 GB (`KARDINAL_E2E_KRO_MEMORY=8Gi`) until #1492 is fixed |
 | `soak` | `full`, with 5 Bundles/s for 30 min over 100 Pipelines | `full` plus 40 min |
 
@@ -169,11 +169,13 @@ latency per stage, Bundle end to end, Graph sizes, reconcile errors, queue
 depth, memory and goroutines per Pod) and `report.md`, and keeps the raw
 controller and kro logs next to them.
 
-A test that reproduces an open bug calls `scale.KnownBug(t, issue, ...)`:
-it skips with `KNOWN BUG #<issue>`, which `test/e2e/report` and
-`test/e2e/proof` list as a known bug instead of a failure.
-`KARDINAL_E2E_SCALE_KNOWN_BUGS=1` runs those tests to reproduce the bugs.
-Remove the call when the bug is fixed.
+A test that reproduces an open bug calls `scale.KnownBug(t, issue, ...)`
+and runs on: it is an expected failure. When it fails, `test/e2e/report`
+lists it as a known bug (`xfail`) instead of a failure. When it passes,
+`KnownBug` fails it with `KNOWN BUG #<issue> FIXED`: remove the call and mark
+its coverage rows `covered` (they are `known-bug` until then).
+`test/e2e/proof` fails a known bug whose issue is closed; it asks the
+GitHub API when `GITHUB_TOKEN` is set, as in CI.
 
 ## Coverage
 
@@ -200,8 +202,9 @@ lists every row's result. `-complete` also fails on rows still todo.
 ## Rules
 
 - **A live test never skips.** A missing cluster, component or credential
-  fails the test. CI treats a skipped test as a failure too. The one
-  exception is `scale.KnownBug`: a skip that names an open bug issue.
+  fails the test. CI treats a skipped test as a failure too. A scale test
+  that reproduces an open bug still runs, as an expected failure
+  (`scale.KnownBug`).
 - **Each test owns its state.** `Env.Namespace` gives the test its own
   namespace and `Env.Repo` its own repo (a branch of one shared repo on
   GitHub), so tests run in any order and never see each other's PRs.

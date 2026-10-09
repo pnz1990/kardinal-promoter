@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +20,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/invariants"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale"
 )
 
@@ -88,7 +88,7 @@ func TestScale_RacePipelineEdit(t *testing.T) {
 					spec.HistoryLimit = 40 + edit%5
 				}
 			})
-			time.Sleep(time.Duration(1500+rand.Intn(2000)) * time.Millisecond)
+			time.Sleep(r.Rand.Duration(1500*time.Millisecond, 3500*time.Millisecond))
 		}
 	}
 	// The final shape: eight environments, all auto.
@@ -231,7 +231,7 @@ func TestScale_RacePauseStorm(t *testing.T) {
 			r.E.SetPipelinePaused(t, r.Fleet.NS, n, paused)
 			toggles++
 		}
-		time.Sleep(time.Duration(1000+rand.Intn(2000)) * time.Millisecond)
+		time.Sleep(r.Rand.Duration(time.Second, 3*time.Second))
 	}
 	for _, n := range names {
 		r.E.SetPipelinePaused(t, r.Fleet.NS, n, false)
@@ -355,7 +355,8 @@ func TestScale_RaceNamespaceDelete(t *testing.T) {
 	r.Note("namespaceGoneSeconds", int(time.Since(start).Seconds()))
 	scale.NoKardinalLeftovers(t, r.E, targets, 3*time.Minute)
 	r.Note("pipelines", len(names))
-	r.Finish(scale.Skip("the namespace and its Pipelines are deleted", "env-content"))
+	r.Finish(scale.Skip("the namespace and its Pipelines are deleted", "env-content"),
+		func(o *invariants.Options) { o.AllowEmpty = true })
 }
 
 // TestScale_RaceWebhooks sends the controller SCM webhooks a git server can

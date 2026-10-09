@@ -7,6 +7,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,4 +69,19 @@ func TestParallel(t *testing.T) {
 	assert.EqualError(t, err, "boom")
 	assert.Equal(t, int32(100), ran.Load(), "every item runs even after an error")
 	assert.NoError(t, Parallel(3, 0, func(int) error { return errors.New("never") }))
+}
+
+func TestRNGReplays(t *testing.T) {
+	a, b := NewRNG(42, "TestScale_X"), NewRNG(42, "TestScale_X")
+	other := NewRNG(42, "TestScale_Y")
+	same, differs := true, false
+	for i := 0; i < 50; i++ {
+		x, y, z := a.Duration(time.Second, time.Minute), b.Duration(time.Second, time.Minute), other.Duration(time.Second, time.Minute)
+		same = same && x == y
+		differs = differs || x != z
+		assert.GreaterOrEqual(t, x, time.Second)
+		assert.Less(t, x, time.Minute)
+	}
+	assert.True(t, same, "one seed and test name replay the same draws")
+	assert.True(t, differs, "each test has its own stream")
 }

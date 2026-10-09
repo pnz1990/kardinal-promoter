@@ -75,19 +75,20 @@ type Profile struct {
 	Settle time.Duration
 }
 
-// profiles are the named profiles. ci keeps each test to a few minutes on a
-// 4-CPU runner; full is the production-size run (24 GB kind node, about an
+// profiles are the named profiles. ci is sized for a GitHub-hosted runner
+// (4 vCPUs, 16 GB) running the -race controller, four tests at a time, and
+// keeps each test to a few minutes; full is the production-size run (24 GB kind node, about an
 // hour for the whole suite on 32 cores); soak is full with a 30-minute
 // sustained load at 5 Bundles a second.
 var profiles = map[string]Profile{
 	"ci": {
-		ChainStages: 50, LongChainStages: 120,
-		Waves: 4, WaveWidth: 5, BigWaves: 10, BigWaveWidth: 15,
-		LatticeDepth: 4, LatticeWidth: 3, FanIn: 15, SharedPipelines: 3,
-		Pipelines: 30, PipelineEnvs: 3, BurstBundles: 150, BurstPipelines: 15,
-		SustainedRate: 0.5, SustainedFor: 2 * time.Minute, SustainedPipelines: 10,
-		RapidFire: 15, ChaosFor: 3 * time.Minute, ChaosPipelines: 10,
-		Settle: 15 * time.Minute,
+		ChainStages: 30, LongChainStages: 120,
+		Waves: 3, WaveWidth: 4, BigWaves: 10, BigWaveWidth: 15,
+		LatticeDepth: 3, LatticeWidth: 3, FanIn: 10, SharedPipelines: 3,
+		Pipelines: 20, PipelineEnvs: 3, BurstBundles: 100, BurstPipelines: 10,
+		SustainedRate: 0.5, SustainedFor: 2 * time.Minute, SustainedPipelines: 8,
+		RapidFire: 10, ChaosFor: 3 * time.Minute, ChaosPipelines: 8,
+		Settle: 10 * time.Minute,
 	},
 	"full": {
 		ChainStages: 100, LongChainStages: 120,

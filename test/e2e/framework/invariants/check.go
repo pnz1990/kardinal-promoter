@@ -72,6 +72,8 @@ type Options struct {
 	Allow []*regexp.Regexp
 	// Extra are the test's own numbers, copied into the report.
 	Extra map[string]interface{}
+	// AllowEmpty lets the namespace have no Bundle (a test deleted them).
+	AllowEmpty bool
 	// Skip names checks not to run, each with the reason, for a test whose
 	// own assertions replace them (the report lists them as skipped).
 	Skip map[string]string
@@ -93,6 +95,16 @@ func Check(t *testing.T, e *framework.Env, o Options) *Report {
 	if err != nil {
 		r.add(Result{Name: "state", Violations: []string{err.Error()}})
 	} else {
+		// An empty run checks nothing: a test that meant to leave nothing
+		// behind says so (AllowEmpty).
+		var empty []string
+		if len(o.Targets) == 0 {
+			empty = append(empty, "no Pipeline to check")
+		}
+		if len(st.bundles) == 0 && !o.AllowEmpty {
+			empty = append(empty, "no Bundle in "+o.Namespace)
+		}
+		r.add(Result{Name: "not-empty", Violations: empty})
 		r.Bundles = PhaseCount(st.bundles)
 		r.Steps = stepCount(st.steps)
 		r.Latency = latency(st)
@@ -604,6 +616,18 @@ func checkAudit(ctx context.Context, e *framework.Env, o Options, st *state) Res
 // error-level line.
 func checkLogs(s LogSummary, o Options) Result {
 	res := Result{Name: "controller-logs"}
+	controllers := 0
+	for _, p := range s.Pods {
+		if !strings.HasPrefix(p, "kro-") {
+			controllers++
+		}
+	}
+	if controllers == 0 {
+		res.Violations = append(res.Violations, "no controller container's log was read: nothing was checked")
+	}
+	for _, e := range s.StreamErrors {
+		res.Violations = append(res.Violations, "log stream: "+e)
+	}
 	for _, b := range s.Races {
 		res.Violations = append(res.Violations, fmt.Sprintf("DATA RACE in %s:\n    %s", b.Pod, strings.Join(limit(b.Lines, 30), "\n    ")))
 	}

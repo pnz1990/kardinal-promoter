@@ -70,7 +70,7 @@ func TestScale_ChaosLeaderKill(t *testing.T) {
 	r.E.WaitControllerLeads(t)
 	var kills *scale.Chaos
 	chaosLoad(t, r, func() func() {
-		kills = scale.Start(t, "leader kill", scale.Between(20*time.Second, 60*time.Second), func(ctx context.Context) error {
+		kills = scale.Start(t, "leader kill", r.Rand.Between(20*time.Second, 60*time.Second), func(ctx context.Context) error {
 			return scale.KillLeader(ctx, r.E)
 		})
 		return kills.Stop
@@ -93,7 +93,7 @@ func TestScale_ChaosKroRestart(t *testing.T) {
 	r := scale.Begin(t)
 	var kills *scale.Chaos
 	chaosLoad(t, r, func() func() {
-		kills = scale.Start(t, "kro restart", scale.Between(45*time.Second, 75*time.Second), func(ctx context.Context) error {
+		kills = scale.Start(t, "kro restart", r.Rand.Between(45*time.Second, 75*time.Second), func(ctx context.Context) error {
 			return scale.RestartKro(ctx, r.E)
 		})
 		return kills.Stop

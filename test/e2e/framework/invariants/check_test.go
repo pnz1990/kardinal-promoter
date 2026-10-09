@@ -4,6 +4,7 @@
 package invariants
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -126,4 +127,38 @@ func TestReportSkipAndMarkdown(t *testing.T) {
 	md := r.Markdown()
 	assert.Contains(t, md, "| graphs-not-stuck | **FAIL** (1) | Graph g \\| outlived |")
 	assert.Contains(t, md, "| audit-consistent | pass | 3 AuditEvents |")
+}
+
+func TestNotEmpty(t *testing.T) {
+	r := &Report{}
+	r.add(Result{Name: "not-empty", Violations: []string{"no Pipeline to check"}})
+	assert.False(t, r.Checks[0].Pass)
+}
+
+func TestLeaks(t *testing.T) {
+	t0 := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
+	t1 := t0.Add(30 * time.Minute)
+	pod := func(from, to time.Time, rss0, rss1, g0, g1 float64) PodSeries {
+		return PodSeries{Pod: "p", From: from, To: to, RSSStartMiB: rss0, RSSEndMiB: rss1, RSSMaxMiB: math.Max(rss0, rss1),
+			GoroutinesStart: g0, GoroutinesEnd: g1, GoroutinesMax: math.Max(g0, g1)}
+	}
+	cases := []struct {
+		name   string
+		pods   []PodSeries
+		shared bool
+		want   int
+	}{
+		{"flat", []PodSeries{pod(t0, t1, 300, 500, 300, 320)}, false, 0},
+		{"RSS more than doubled plus 200 MiB", []PodSeries{pod(t0, t1, 300, 900, 300, 320)}, false, 1},
+		{"goroutines grew", []PodSeries{pod(t0, t1, 300, 300, 300, 500)}, false, 1},
+		{"shared controller: growth only reported", []PodSeries{pod(t0, t1, 300, 900, 300, 500)}, true, 0},
+		{"a Pod that started late is not compared", []PodSeries{pod(t0.Add(10*time.Minute), t1, 100, 900, 40, 400)}, false, 0},
+		{"near the limit", []PodSeries{pod(t0, t1, 300, 3800, 300, 300)}, true, 1},
+		{"no series", nil, false, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Len(t, leaks(tc.pods, t0, t1, 4096, tc.shared), tc.want)
+		})
+	}
 }

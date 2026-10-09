@@ -4,12 +4,15 @@
 package scale
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"regexp"
-	"strconv"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/invariants"
@@ -24,6 +27,8 @@ type Run struct {
 	Fleet *Fleet
 	Logs  *invariants.Collector
 	Start time.Time
+	// Rand is the test's seeded random source (EnvSeed).
+	Rand *RNG
 	// Extra are the test's own numbers for the report.
 	Extra map[string]interface{}
 
@@ -54,11 +59,18 @@ func begin(t *testing.T, shared bool) *Run {
 	if err != nil {
 		t.Fatal(err)
 	}
+	seed, err := Seed()
+	if err != nil {
+		t.Fatalf("%s: %v", EnvSeed, err)
+	}
 	e := framework.New(t)
-	r := &Run{T: t, E: e, P: p, Start: time.Now(), Extra: map[string]interface{}{"profile": p.Name}, shared: shared}
-	t.Logf("scale %s", p)
+	rng := NewRNG(seed, t.Name())
+	r := &Run{T: t, E: e, P: p, Start: time.Now(), Rand: rng,
+		Extra: map[string]interface{}{"profile": p.Name, "seed": seed}, shared: shared}
+	t.Logf("scale %s; seed %d (replay: %s=%d)", p, seed, EnvSeed, seed)
+	checkRaceBuild(t, e)
 	r.Logs = invariants.Collect(t, e, invariants.Dir(t))
-	r.Fleet = NewFleet(t, e)
+	r.Fleet = NewFleet(t, e, rng)
 	return r
 }
 
@@ -94,22 +106,21 @@ func Allow(patterns ...string) func(*invariants.Options) {
 	}
 }
 
-// EnvKnownBugs set to 1 runs the parts of tests that reproduce open bugs
-// (KnownBug) instead of skipping them.
-const EnvKnownBugs = "KARDINAL_E2E_SCALE_KNOWN_BUGS"
-
-// KnownBug marks the rest of the test as reproducing open bug issue (a
-// pnz1990/kardinal-promoter issue number): it skips with a "KNOWN BUG #n"
-// message, which test/e2e/report lists as a known bug instead of failing the
-// suite, unless KARDINAL_E2E_SCALE_KNOWN_BUGS=1, when the test goes on and
-// fails while the bug is open. Remove the call when the bug is fixed.
+// KnownBug marks the test as reproducing open bug issue (a
+// pnz1990/kardinal-promoter issue number): an expected failure. It logs a
+// "KNOWN BUG #n" line and the test goes on. test/e2e/report lists a known-bug
+// test that fails as a known bug (action xfail) instead of a failure, and
+// test/e2e/proof fails it once the issue is closed. A known-bug test that
+// passes is failed here with "KNOWN BUG #n FIXED": the bug is fixed, so
+// remove the call (and mark its coverage rows covered).
 func KnownBug(t *testing.T, issue int, what string) {
 	t.Helper()
-	if v, _ := strconv.ParseBool(os.Getenv(EnvKnownBugs)); v {
-		t.Logf("reproducing known bug #%d (%s=1): %s", issue, EnvKnownBugs, what)
-		return
-	}
-	t.Skip(KnownBugMessage(issue, what))
+	t.Log(KnownBugMessage(issue, what))
+	t.Cleanup(func() {
+		if !t.Failed() {
+			t.Errorf("KNOWN BUG #%d FIXED: the test passed; remove scale.KnownBug(t, %d, ...) and mark its coverage rows covered", issue, issue)
+		}
+	})
 }
 
 // KnownBugMessage is the skip message test/e2e/report recognizes.
@@ -126,5 +137,30 @@ func Skip(why string, checks ...string) func(*invariants.Options) {
 		for _, c := range checks {
 			o.Skip[c] = why
 		}
+	}
+}
+
+// EnvRace is set to 1 by hack/e2e/components/kardinal.sh when it built the
+// controller with -race.
+const EnvRace = "KARDINAL_E2E_RACE"
+
+// raceVersion is the ControllerVersion of the -race build (kardinal.sh).
+const raceVersion = "e2e-race"
+
+// checkRaceBuild fails the test when the suite asked for a -race controller
+// (EnvRace=1) and the controller runs another build: the controller writes
+// its version to the kardinal-version ConfigMap.
+func checkRaceBuild(t *testing.T, e *framework.Env) {
+	t.Helper()
+	if os.Getenv(EnvRace) != "1" {
+		return
+	}
+	var cm corev1.ConfigMap
+	key := types.NamespacedName{Namespace: framework.ControllerNamespace, Name: "kardinal-version"}
+	if err := e.Client.Get(context.Background(), key, &cm); err != nil {
+		t.Fatalf("%s=1 but the controller version is unknown: %v", EnvRace, err)
+	}
+	if v := cm.Data["version"]; v != raceVersion {
+		t.Fatalf("%s=1 but the controller runs version %q, not the -race build %q", EnvRace, v, raceVersion)
 	}
 }

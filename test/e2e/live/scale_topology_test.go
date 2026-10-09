@@ -8,6 +8,7 @@ package live
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,7 +47,10 @@ func applyBig(t *testing.T, r *scale.Run, name string, envs []v1alpha1.Environme
 	repo := r.Fleet.Repo(t, r.Fleet.NS+"-"+name, map[string][]string{name: scale.Names(envs)})
 	p := r.Fleet.PipelineSpec(name, repo, envs)
 	err := r.E.Client.Create(context.Background(), p)
-	if apierrors.IsInvalid(err) {
+	// Only the cap on spec.environments is the known bug; any other
+	// refusal is a failure of its own.
+	if apierrors.IsInvalid(err) && strings.Contains(err.Error(), "spec.environments: Too many") &&
+		strings.Contains(err.Error(), "must have at most") {
 		t.Logf("the API server refused a %d-environment Pipeline: %v", len(envs), err)
 		scale.KnownBug(t, tooManyEnvironments, fmt.Sprintf("a Pipeline of %d environments is refused (spec.environments has maxItems 100)", len(envs)))
 	}

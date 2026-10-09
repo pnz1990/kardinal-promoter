@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
@@ -74,6 +76,9 @@ type LogSummary struct {
 	// Unexpected groups the error lines no Benign pattern matches, by
 	// message, with a count and one example.
 	Unexpected []LogGroup `json:"unexpected,omitempty"`
+	// StreamErrors are log streams that broke or could not start: their
+	// lines were not checked.
+	StreamErrors []string `json:"streamErrors,omitempty"`
 	// ReconcileErrors groups controller-runtime "Reconciler error" lines by
 	// controller and error, benign or not.
 	ReconcileErrors []LogGroup `json:"reconcileErrors,omitempty"`
@@ -168,20 +173,49 @@ func (c *Collector) watch(ctx context.Context) {
 func (c *Collector) stream(ctx context.Context, ns, pod, container string, restart int32, kro bool) {
 	defer c.wg.Done()
 	since := metav1.NewTime(c.start)
-	rc, err := c.e.Kube.CoreV1().Pods(ns).GetLogs(pod, &corev1.PodLogOptions{
-		Container: container, Follow: true, SinceTime: &since,
-	}).Stream(ctx)
-	if err != nil {
+	var rc io.ReadCloser
+	var err error
+	// The API server refuses a log stream now and then under load; a Pod
+	// deleted meanwhile has no logs left to read.
+	for try := 0; try < 5; try++ {
+		rc, err = c.e.Kube.CoreV1().Pods(ns).GetLogs(pod, &corev1.PodLogOptions{
+			Container: container, Follow: true, SinceTime: &since,
+		}).Stream(ctx)
+		if err == nil || apierrors.IsNotFound(err) || ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Duration(try+1) * time.Second):
+		}
+	}
+	switch {
+	case err != nil && (apierrors.IsNotFound(err) || ctx.Err() != nil):
+		return
+	case err != nil:
+		c.streamError(fmt.Sprintf("stream the logs of %s/%s (%s): %v", ns, pod, container, err))
 		return
 	}
 	defer func() { _ = rc.Close() }()
 	name := fmt.Sprintf("%s.%s.%s.%d.log", ns, pod, container, restart)
 	f, err := os.Create(filepath.Join(c.dir, name))
 	if err != nil {
+		c.streamError(fmt.Sprintf("write the logs of %s/%s: %v", ns, pod, err))
 		return
 	}
 	defer func() { _ = f.Close() }()
-	c.scan(io.TeeReader(rc, f), pod, kro)
+	if err := c.scan(io.TeeReader(rc, f), pod, kro); err != nil && ctx.Err() == nil &&
+		!errors.Is(err, context.Canceled) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		c.streamError(fmt.Sprintf("read the logs of %s/%s (%s): %v", ns, pod, container, err))
+	}
+}
+
+// streamError records a log stream that broke: the lines after it were not
+// checked.
+func (c *Collector) streamError(msg string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sum.StreamErrors = append(c.sum.StreamErrors, msg)
 }
 
 // The Go runtime's reports: a race starts with "WARNING: DATA RACE" and ends
@@ -194,7 +228,7 @@ var (
 
 const blockLines = 80
 
-func (c *Collector) scan(r io.Reader, pod string, kro bool) {
+func (c *Collector) scan(r io.Reader, pod string, kro bool) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	var block *Block
@@ -226,6 +260,7 @@ func (c *Collector) scan(r io.Reader, pod string, kro bool) {
 	if block != nil {
 		c.addBlock(*block, kro)
 	}
+	return sc.Err()
 }
 
 func (c *Collector) addBlock(b Block, kro bool) {
@@ -327,6 +362,7 @@ func (c *Collector) Summary() LogSummary {
 	s.Races = append([]Block(nil), c.sum.Races...)
 	s.Panics = append([]Block(nil), c.sum.Panics...)
 	s.KroPanics = append([]Block(nil), c.sum.KroPanics...)
+	s.StreamErrors = append([]string(nil), c.sum.StreamErrors...)
 	s.Unexpected = groups(c.unexpected)
 	s.ReconcileErrors = groups(c.reconcile)
 	return s

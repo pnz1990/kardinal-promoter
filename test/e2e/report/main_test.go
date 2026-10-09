@@ -40,21 +40,36 @@ func TestRead(t *testing.T) {
 			pass: 1, skip: 1, wantInMD: "FAILED",
 		},
 		{
-			name: "a known-bug skip is listed and does not fail the run",
+			name: "an expected failure is a known bug and does not fail the run",
 			in: `{"Action":"pass","Test":"TestScale_A"}
 {"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
-{"Action":"skip","Test":"TestScale_B"}
-{"Action":"pass"}`,
-			ok: true, pass: 1, knownBugs: 1, wantInMD: "known bug [#1473]",
+{"Action":"fail","Test":"TestScale_B"}
+{"Action":"fail"}`,
+			ok: true, pass: 1, knownBugs: 1, pkgFailed: true, wantInMD: "known bug [#1473]",
 		},
 		{
-			name: "a known-bug line in a test that then fails is a failure",
-			in: `{"Action":"output","Test":"TestScale_B","Output":"reproducing known bug #1473 (KARDINAL_E2E_SCALE_KNOWN_BUGS=1)\n"}
-{"Action":"output","Test":"TestScale_B","Output":"KNOWN BUG #1473\n"}
+			name: "a known-bug test that passed fails the run",
+			in: `{"Action":"output","Test":"TestScale_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: too many\n"}
+{"Action":"output","Test":"TestScale_B","Output":"    run.go:99: KNOWN BUG #1473 FIXED: the test passed; remove scale.KnownBug\n"}
 {"Action":"fail","Test":"TestScale_B"}
-{"Action":"skip","Test":"TestScale_C"}
 {"Action":"fail"}`,
-			fail: 1, skip: 1, pkgFailed: true, wantInMD: "FAILED",
+			fail: 1, pkgFailed: true, wantInMD: "FAILED",
+		},
+		{
+			name: "the marker counts only on a TestScale_ test, as a t.Log line",
+			in: `{"Action":"output","Test":"TestCore_B","Output":"    x_test.go:9: KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: x\n"}
+{"Action":"fail","Test":"TestCore_B"}
+{"Action":"output","Test":"TestScale_C","Output":"error said KNOWN BUG #1473 https://github.com/pnz1990/kardinal-promoter/issues/1473: x\n"}
+{"Action":"fail","Test":"TestScale_C"}
+{"Action":"fail"}`,
+			fail: 2, pkgFailed: true, wantInMD: "FAILED",
+		},
+		{
+			name: "a skip still fails the run",
+			in: `{"Action":"pass","Test":"TestScale_A"}
+{"Action":"skip","Test":"TestScale_C"}
+{"Action":"pass"}`,
+			pass: 1, skip: 1, wantInMD: "FAILED",
 		},
 		{
 			name: "a failed test fails the run",

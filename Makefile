@@ -149,8 +149,10 @@ e2e-up: ## Create or update the kind cluster for live suite SUITE (default core)
 test-e2e-live: ## Run live suite SUITE against the cluster from make e2e-up; fails on any skip
 	KIND_CLUSTER=$${KIND_CLUSTER:-kardinal-e2e-$(SUITE)} COUNT=$(COUNT) RUN='$(RUN)' SHARD=$(SHARD) bash hack/e2e/run.sh $(SUITE)
 
-e2e-down: ## Delete the kind cluster of live suite SUITE (and the multi-cluster suite's spoke)
-	c=$${KIND_CLUSTER:-kardinal-e2e-$(SUITE)}; kc=$${KUBECONFIG:-test/e2e/results/$$c/kubeconfig}; kc=$${kc%%:*}; \
+e2e-down: ## Delete the kind cluster of live suite SUITE (and the multi-cluster suite's spoke); KIND_CLUSTER must start with kardinal-e2e- or kp-
+	c=$${KIND_CLUSTER:-kardinal-e2e-$(SUITE)}; \
+	case "$$c" in kardinal-e2e-*|kp-*) ;; *) echo "e2e-down: refusing to delete kind cluster $$c: KIND_CLUSTER must start with kardinal-e2e- or kp-" >&2; exit 1 ;; esac; \
+	kc=$${KUBECONFIG:-test/e2e/results/$$c/kubeconfig}; kc=$${kc%%:*}; \
 	kind delete cluster --name "$$c" --kubeconfig "$$kc" && \
 	if kind get clusters 2>/dev/null | grep -qx "$$c-spoke"; then kind delete cluster --name "$$c-spoke" --kubeconfig "$$kc"; fi
 

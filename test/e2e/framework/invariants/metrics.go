@@ -64,7 +64,8 @@ const ctrlSel = `namespace="` + framework.ControllerNamespace + `",job="` + fram
 // ratio must stay under MaxReconcileErrorRatio, every work queue must drain
 // (depth 0 at the end, checked for up to two minutes), and a controller Pod
 // that ran the whole window must end with no more than 1.5x (plus 100) the
-// goroutines it started with and under 90% of its memory limit.
+// goroutines and 2x (plus 200 MiB) the resident memory it started with, and
+// stay under 90% of its memory limit.
 func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, []Result) {
 	m := &Metrics{}
 	start, end := o.Start, time.Now()
@@ -138,21 +139,7 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 	}
 
 	m.Pods = podSeries(ctx, e, start, end)
-	limitMiB := memoryLimitMiB(ctx, e)
-	for _, p := range m.Pods {
-		whole := p.From.Sub(start) < time.Minute && end.Sub(p.To) < time.Minute
-		if whole && !o.SharedController && p.GoroutinesEnd > math.Max(1.5*p.GoroutinesStart, p.GoroutinesStart+100) {
-			leak.Violations = append(leak.Violations, fmt.Sprintf("%s: goroutines %.0f at the start, %.0f at the end (peak %.0f)",
-				p.Pod, p.GoroutinesStart, p.GoroutinesEnd, p.GoroutinesMax))
-		}
-		if limitMiB > 0 && p.RSSMaxMiB > 0.9*limitMiB {
-			leak.Violations = append(leak.Violations, fmt.Sprintf("%s: resident memory peaked at %.0f MiB, over 90%% of its %.0f MiB limit",
-				p.Pod, p.RSSMaxMiB, limitMiB))
-		}
-	}
-	if len(m.Pods) == 0 {
-		leak.Violations = append(leak.Violations, "Prometheus has no process_resident_memory_bytes for the controller in the run's window")
-	}
+	leak.Violations = leaks(m.Pods, start, end, memoryLimitMiB(ctx, e), o.SharedController)
 	return m, []Result{errs, queue, leak}
 }
 
@@ -272,4 +259,32 @@ func restarts(ctx context.Context, e *framework.Env, o Options, check, ns, name 
 		}
 	}
 	return res
+}
+
+// leaks checks each controller Pod's series: one that ran the whole window
+// (it started within a minute of start and was scraped within a minute of
+// end) must not end with more than 1.5x (plus 100) its goroutines or 2x
+// (plus 200 MiB) its resident memory, unless other tests shared the
+// controller; and no Pod may pass 90% of the memory limit.
+func leaks(pods []PodSeries, start, end time.Time, limitMiB float64, shared bool) []string {
+	var v []string
+	if len(pods) == 0 {
+		return []string{"Prometheus has no process_resident_memory_bytes for the controller in the run's window"}
+	}
+	for _, p := range pods {
+		whole := p.From.Sub(start) < time.Minute && end.Sub(p.To) < time.Minute
+		if whole && !shared && p.GoroutinesEnd > math.Max(1.5*p.GoroutinesStart, p.GoroutinesStart+100) {
+			v = append(v, fmt.Sprintf("%s: goroutines %.0f at the start, %.0f at the end (peak %.0f)",
+				p.Pod, p.GoroutinesStart, p.GoroutinesEnd, p.GoroutinesMax))
+		}
+		if whole && !shared && p.RSSEndMiB > 2*p.RSSStartMiB+200 {
+			v = append(v, fmt.Sprintf("%s: resident memory %.0f MiB at the start, %.0f MiB at the end (over 2x + 200 MiB; peak %.0f)",
+				p.Pod, p.RSSStartMiB, p.RSSEndMiB, p.RSSMaxMiB))
+		}
+		if limitMiB > 0 && p.RSSMaxMiB > 0.9*limitMiB {
+			v = append(v, fmt.Sprintf("%s: resident memory peaked at %.0f MiB, over 90%% of its %.0f MiB limit",
+				p.Pod, p.RSSMaxMiB, limitMiB))
+		}
+	}
+	return v
 }
