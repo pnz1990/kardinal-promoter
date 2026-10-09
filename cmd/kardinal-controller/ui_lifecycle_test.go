@@ -417,3 +417,80 @@ func TestBundleAPI_StampsCreatedAt(t *testing.T) {
 	}
 	assert.False(t, stamps[0].Equal(stamps[1]), "the stamps order the two bundles")
 }
+
+// TestUIAPI_RollbackHold (#1528): POST /rollback with hold creates the
+// rollback Bundle and holds the environment on it; a hold needs a reason,
+// a reason needs a hold; the pipelines list shows the hold on its
+// environment; POST /release-hold removes it, and 404s when nothing is held.
+func TestUIAPI_RollbackHold(t *testing.T) {
+	objs := func() []client.Object {
+		return []client.Object{
+			uiLcPipeline(),
+			uiLcBundle("app-v1", "1", 0), uiLcBundle("app-v2", "2", 10),
+			uiLcStep("app-v1", "prod", "Verified", 5), uiLcStep("app-v2", "prod", "Verified", 15),
+		}
+	}
+	for body, want := range map[string]string{
+		`{"pipeline":"app","environment":"prod","hold":true}`:                  "a hold needs a holdReason",
+		`{"pipeline":"app","environment":"prod","hold":true,"holdReason":" "}`: "a hold needs a holdReason",
+		`{"pipeline":"app","environment":"prod","holdReason":"x"}`:             "set hold",
+	} {
+		c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs()...).Build()
+		w := uiLcPost(t, c, "/api/v1/ui/rollback", body)
+		assert.Equal(t, http.StatusBadRequest, w.Code, body)
+		assert.Contains(t, w.Body.String(), want, body)
+		assert.Empty(t, uiLcCreated(t, c, "app-v1", "app-v2"), body)
+	}
+
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs()...).Build()
+	w := uiLcPost(t, c, "/api/v1/ui/rollback", `{"pipeline":"app","environment":"prod","hold":true,"holdReason":"INC-42"}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	var resp uiRollbackResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Held)
+	assert.Contains(t, resp.Message, "prod is held on "+resp.Bundle)
+	created := uiLcCreated(t, c, "app-v1", "app-v2")
+	require.Len(t, created, 1)
+	assert.Equal(t, resp.Bundle, created[0].Name)
+	var p v1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "app"}, &p))
+	require.Len(t, p.Spec.Holds, 1)
+	assert.Equal(t, v1alpha1.EnvironmentHold{Environment: "prod", Bundle: resp.Bundle, Reason: "INC-42",
+		CreatedBy: "kardinal-ui", CreatedAt: p.Spec.Holds[0].CreatedAt, Artifacts: lifecycle.ArtifactDigest(created[0].Spec)},
+		p.Spec.Holds[0])
+
+	// A second hold of the same environment conflicts.
+	w = uiLcPost(t, c, "/api/v1/ui/rollback", `{"pipeline":"app","environment":"prod","hold":true,"holdReason":"again"}`)
+	assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+
+	// The pipelines list shows the hold on prod only.
+	mux := http.NewServeMux()
+	newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
+	lw := httptest.NewRecorder()
+	mux.ServeHTTP(lw, httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil))
+	require.Equal(t, http.StatusOK, lw.Code, lw.Body.String())
+	var list []uiPipelineResponse
+	require.NoError(t, json.Unmarshal(lw.Body.Bytes(), &list))
+	require.Len(t, list, 1)
+	for _, env := range list[0].EnvironmentTopology {
+		if env.Name != "prod" {
+			assert.Nil(t, env.Hold, env.Name)
+			continue
+		}
+		require.NotNil(t, env.Hold)
+		assert.Equal(t, resp.Bundle, env.Hold.Bundle)
+		assert.Equal(t, "INC-42", env.Hold.Reason)
+		assert.Equal(t, "kardinal-ui", env.Hold.CreatedBy)
+		assert.NotEmpty(t, env.Hold.CreatedAt)
+	}
+
+	w = uiLcPost(t, c, "/api/v1/ui/release-hold", `{"pipeline":"app","environment":"prod"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "released the hold of prod (rollback "+resp.Bundle+")")
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "app"}, &p))
+	assert.Empty(t, p.Spec.Holds)
+	w = uiLcPost(t, c, "/api/v1/ui/release-hold", `{"pipeline":"app","environment":"prod"}`)
+	assert.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+	w = uiLcPost(t, c, "/api/v1/ui/release-hold", `{"pipeline":"app"}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+}
