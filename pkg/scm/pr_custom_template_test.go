@@ -5,6 +5,7 @@ package scm_test
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -400,4 +401,24 @@ func TestNewPRTemplateData_Bounded(t *testing.T) {
 	_, err = scm.RenderPR(&v1alpha1.PRConfig{Reviewers: []string{"x"}}, "t", body)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), ".Bundle.Name has a line break")
+}
+
+// TestRenderPR_PrintTheDataIsRefused (#1474 review): {{print . . ...}} with
+// 8000 dots passes the whole data struct to print 8000 times. It is refused
+// before anything formats it, fast and without a large allocation.
+//
+// Covers SCM-PRCTL-TPL-01.
+func TestRenderPR_PrintTheDataIsRefused(t *testing.T) {
+	text := "{{ print" + strings.Repeat(" .", 8000) + " }}"
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	_, err := scm.RenderPR(&v1alpha1.PRConfig{BodyTemplate: text}, "t", prTemplateBody())
+	elapsed := time.Since(start)
+	runtime.ReadMemStats(&after)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "print: takes strings, numbers and bools only")
+	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20), "no formatting of the data")
+	assert.Less(t, elapsed, 2*time.Second)
 }

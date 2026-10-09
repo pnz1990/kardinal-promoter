@@ -218,7 +218,8 @@ variables (`{{ $x := ... }}`, `{{ $x = ... }}`), `define`, `block`, `template`, 
 work is bounded by the template's length, not by the Bundle. The lists a body shows (images,
 gates, upstream environments) come from `imageList` and the evidence functions. `$` and `.`
 work as usual. `print`, `println`, `html`, `js` and `urlquery` take strings, numbers and bools
-only, and `replace` refuses an empty string to replace. Every function, the comparisons
+only: a struct, map, list or pointer argument, such as `.`, is refused before it is formatted.
+`replace` refuses an empty string to replace. Every function, the comparisons
 included, is counted, and its result size (for a comparison, what it reads) is computed from
 its arguments before it runs: one call builds at most 64 KiB and a whole render at most 1 MiB,
 in at most 2000 calls and one second, after which every call and write fails at once. A body

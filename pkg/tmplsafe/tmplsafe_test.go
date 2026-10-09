@@ -83,6 +83,9 @@ func TestExecute_Bounds(t *testing.T) {
 		{name: "with and else", text: `{{ with .Name }}{{ . }}{{ else }}none{{ end }}{{ with "" }}x{{ else }}-empty{{ end }}`, want: "web-empty"},
 		{name: "print scalars", text: `{{ print .Name 1 true }}`, want: "web1 true"},
 		{name: "print a map", text: `{{ print .Map }}`, wantErr: "print: takes strings, numbers and bools only"},
+		{name: "print the data", text: `{{ print . }}`, wantErr: "print: takes strings, numbers and bools only"},
+		{name: "html of a slice", text: `{{ html .Items }}`, wantErr: "html: takes strings, numbers and bools only"},
+		{name: "print many strings stops at the cap", text: `{{ print` + strings.Repeat(" .Big", 50) + ` }}`, wantErr: "print: would build"},
 		{name: "incomparable", text: `{{ eq .Name 1 }}`, wantErr: "incompatible types for comparison"},
 		{name: "index out of range", text: `{{ index .Items 5 }}`, wantErr: "index out of range"},
 		{name: "html growth", text: `{{ html .Big }}`, wantErr: "html: would build 1806 bytes, more than 512"},
@@ -320,12 +323,14 @@ func TestRandomTemplatesAreBounded(t *testing.T) {
 // calling goroutine, and stay under checkBounded's allocation bound.
 func TestWorstCaseTemplate(t *testing.T) {
 	cases := map[string]string{
-		"escapes":     `{{ html $.Big }}`,
-		"comparisons": `{{ if eq $.Name $.Name }}{{ end }}`,
-		"case":        `{{ upper (index $.Many 19) }}`,
-		"join":        `{{ join "," $.Many }}`,
-		"cheap calls": `{{ not $.Yes }}`,
-		"writes":      `{{ $.Name }}`,
+		"escapes":                    `{{ html $.Big }}`,
+		"comparisons":                `{{ if eq $.Name $.Name }}{{ end }}`,
+		"case":                       `{{ upper (index $.Many 19) }}`,
+		"join":                       `{{ join "," $.Many }}`,
+		"cheap calls":                `{{ not $.Yes }}`,
+		"print the data":             `{{ print` + strings.Repeat(" .", 8000) + ` }}`,
+		"print data in every action": `{{ print . . . . . . . . }}`,
+		"writes":                     `{{ $.Name }}`,
 	}
 	for name, action := range cases {
 		t.Run(name, func(t *testing.T) {

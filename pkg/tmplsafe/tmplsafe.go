@@ -107,7 +107,7 @@ type Template struct {
 // Parse parses text as template name with funcs and checks it (see the
 // package doc).
 func Parse(name, text string, funcs FuncMap, lim Limits) (*Template, error) {
-	all := builtins()
+	all := builtins(lim.MaxFuncOutput)
 	for k, f := range funcs {
 		all[k] = f
 	}
@@ -350,8 +350,9 @@ func walkBranch(b *parse.BranchNode) error {
 }
 
 // scalarSize is the most bytes fmt.Sprint makes of a scalar: a string, a
-// bool, a number or nil. Other values (maps, slices, structs) are refused,
-// since printing them builds an unbounded string.
+// bool, a number or nil. Other values (structs, pointers, maps, slices) are
+// refused before anything formats them: printing one builds a string as
+// large as the data, which a check after the call would be too late for.
 func scalarSize(v interface{}) (int, error) {
 	switch x := v.(type) {
 	case nil:
@@ -381,8 +382,10 @@ func scalarSize(v interface{}) (int, error) {
 }
 
 // scalarsSize is the size of fmt.Sprint(args...) with a separator between
-// every two arguments.
-func scalarsSize(args []interface{}, extra int) (int, error) {
+// every two arguments. It stops as soon as the total passes limit (the
+// charge then refuses the call), and refuses any argument that is not a
+// scalar.
+func scalarsSize(args []interface{}, extra, limit int) (int, error) {
 	n := extra
 	for _, a := range args {
 		s, err := scalarSize(a)
@@ -390,6 +393,9 @@ func scalarsSize(args []interface{}, extra int) (int, error) {
 			return 0, err
 		}
 		n += s + 1
+		if n > limit {
+			return n, nil
+		}
 	}
 	return n, nil
 }
@@ -416,12 +422,12 @@ const escapeGrowth = 6
 // FuncMap entry takes precedence over a builtin of the same name), and
 // disable printf (argument indexes repeat an argument without bound) and
 // call.
-func builtins() FuncMap {
+func builtins(limit int) FuncMap {
 	escaper := func(esc func(string) string) Func {
 		return Func{
 			Fn: func(args ...interface{}) string { return esc(fmt.Sprint(args...)) },
 			Size: func(args []interface{}) (int, error) {
-				n, err := scalarsSize(args, 0)
+				n, err := scalarsSize(args, 0, limit/escapeGrowth+1)
 				return n * escapeGrowth, err
 			},
 		}
@@ -441,8 +447,8 @@ func builtins() FuncMap {
 		}, Size: readSize}
 	}
 	return FuncMap{
-		"print":    {Fn: fmt.Sprint, Size: func(args []interface{}) (int, error) { return scalarsSize(args, 0) }},
-		"println":  {Fn: fmt.Sprintln, Size: func(args []interface{}) (int, error) { return scalarsSize(args, 1) }},
+		"print":    {Fn: fmt.Sprint, Size: func(args []interface{}) (int, error) { return scalarsSize(args, 0, limit) }},
+		"println":  {Fn: fmt.Sprintln, Size: func(args []interface{}) (int, error) { return scalarsSize(args, 1, limit) }},
 		"html":     escaper(texttemplate.HTMLEscapeString),
 		"js":       escaper(texttemplate.JSEscapeString),
 		"urlquery": escaper(url.QueryEscape),
