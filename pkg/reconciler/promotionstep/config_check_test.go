@@ -23,6 +23,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 func getStep(t *testing.T, c client.Client, name string) v1alpha1.PromotionStep {
@@ -169,4 +170,140 @@ func TestUnsupportedConfigFailsLoudly(t *testing.T) {
 			assert.Empty(t, got.Status.Steps, "no step may run")
 		})
 	}
+}
+
+// TestRepositoryNotAllowed covers #1332 and the QA findings on #1483: with
+// --scm-allowed-repositories set, a step of a Pipeline whose spec.git.url is
+// not allowed fails before git-clone, from Pending and from Promoting, and
+// opens no PR, unless the Pipeline never needs the shared token: its
+// git.secretRef Secret exists and no environment uses pr-review. A
+// secretRef to a missing Secret does not exempt it, and neither does one on
+// a Pipeline with a pr-review environment, whose PR the shared token opens.
+func TestRepositoryNotAllowed(t *testing.T) {
+	allow, err := scm.ParseRepositoryAllowlist([]string{"github.com/myorg/*"})
+	require.NoError(t, err)
+	tests := []struct {
+		name       string
+		allow      *scm.RepositoryAllowlist
+		url        string
+		secretRef  bool // the Pipeline names git.secretRef team-token
+		secret     bool // the Secret exists
+		prReview   bool // prod uses approval: pr-review
+		promoting  bool
+		wantFailed string
+	}{
+		{name: "not allowed, Pending", allow: allow, url: "https://github.com/other/repo.git",
+			wantFailed: "the Pipeline has no git.secretRef to a Secret that exists"},
+		{name: "not allowed, Promoting", allow: allow, url: "https://github.com/other/repo.git", promoting: true,
+			wantFailed: "the Pipeline has no git.secretRef to a Secret that exists"},
+		{name: "allowed", allow: allow, url: "https://github.com/myorg/repo.git", prReview: true, promoting: true},
+		{name: "own Secret, no PR", allow: allow, url: "https://github.com/other/repo.git", secretRef: true, secret: true, promoting: true},
+		{name: "own Secret, but a pr-review environment", allow: allow, url: "https://github.com/other/repo.git",
+			secretRef: true, secret: true, prReview: true, promoting: true,
+			wantFailed: `environment "prod" uses approval: pr-review`},
+		{name: "secretRef to a missing Secret", allow: allow, url: "https://github.com/other/repo.git",
+			secretRef: true, promoting: true, wantFailed: "the Pipeline has no git.secretRef to a Secret that exists"},
+		{name: "unset", url: "https://github.com/other/repo.git", prReview: true, promoting: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pipeline := makePipeline("nginx-demo")
+			pipeline.Spec.Git.URL = tt.url
+			if !tt.prReview {
+				pipeline.Spec.Environments[1].Approval = "auto"
+			}
+			objs := []client.Object{pipeline, makeBundle("b1", "nginx-demo")}
+			if tt.secretRef {
+				pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "team-token"}
+			}
+			if tt.secret {
+				objs = append(objs, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "team-token", Namespace: "default"},
+					Data: map[string][]byte{"token": []byte("t")}})
+			}
+			ps := makeStep("step-repo", "nginx-demo", "b1", "test")
+			if tt.promoting {
+				ps = asPromoting(ps, pipeline)
+			}
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}).
+				WithObjects(append(objs, ps)...).Build()
+			git := &cloneCountingGit{}
+			m := &mockSCM{}
+			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: git, AllowedRepositories: tt.allow,
+				WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
+
+			reconcileStep(t, r, "step-repo")
+			got := getStep(t, c, "step-repo")
+			if tt.wantFailed == "" {
+				assert.NotEqual(t, "Failed", got.Status.State, got.Status.Message)
+				return
+			}
+			assert.Equal(t, "Failed", got.Status.State)
+			assert.Contains(t, got.Status.Message, "is not in the controller's allowed repositories (github.com/myorg/*)")
+			assert.Contains(t, got.Status.Message, tt.wantFailed)
+			assert.Zero(t, git.clones, "no git-clone")
+			assert.Zero(t, m.openCalled, "no PR")
+			// Idempotent: the Failed step stays Failed.
+			reconcileStep(t, r, "step-repo")
+			assert.Equal(t, got.Status.Message, getStep(t, c, "step-repo").Status.Message)
+		})
+	}
+}
+
+// TestRepositoryNotAllowed_SupersededStepTouchesNothing is the regression
+// test for the first QA finding on #1483: the supersession guard closes a
+// step's PR and deletes its kardinal/ branch before any state handler runs,
+// so a Pipeline pointed at a repository that is not allowed could have the
+// shared token delete kardinal/<bundle>/<env> there. With the provider
+// wrapped in the allowlist (Guard, as the controller wires it), no SCM call
+// for that repository reaches the provider, and the step fails at once
+// instead of retrying the refused call.
+func TestRepositoryNotAllowed_SupersededStepTouchesNothing(t *testing.T) {
+	allow, err := scm.ParseRepositoryAllowlist([]string{"github.com/myorg/*"})
+	require.NoError(t, err)
+	for _, state := range []string{"", "Promoting", "WaitingForMerge"} {
+		t.Run("state "+state, func(t *testing.T) {
+			pipeline := makePipeline("nginx-demo")
+			pipeline.Spec.Git.URL = "https://github.com/victim/repo.git"
+			bundle := makeBundle("bundle-1", "nginx-demo")
+			bundle.Status.Phase = "Superseded"
+			ps := prStep(state, 0)
+			if state == "WaitingForMerge" {
+				ps = prStep(state, 8)
+				ps.Status.PRURL = "https://github.com/victim/repo/pull/8"
+				ps.Status.Outputs = map[string]string{"prURL": ps.Status.PRURL, "prNumber": "8"}
+			}
+			ps.Spec.PRStatusRef = ""
+			ps.Finalizers = []string{promotionstep.FinalizerClosePR}
+			c := newClient(t, ps, pipeline, bundle)
+			m := &mockSCM{open: true}
+			r := &promotionstep.Reconciler{Client: c, SCM: allow.Guard(m, "github.com"), GitClient: &mockGit{},
+				AllowedRepositories: allow, WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+			reconcileStep(t, r, "step")
+			got := getStep(t, c, "step")
+			assert.Equal(t, "Failed", got.Status.State, got.Status.Message)
+			assert.Empty(t, m.deleted, "no branch deleted")
+			assert.Empty(t, m.closed, "no PR closed")
+			assert.Empty(t, m.comments, "no comment")
+			assert.Zero(t, m.getPRCalled, "no PR read")
+			assert.Nil(t, got.Status.NextRetryAt, "the refused call is not retried")
+		})
+	}
+}
+
+// cloneCountingGit is a mockGit that counts clones.
+type cloneCountingGit struct {
+	mockGit
+	clones int
+}
+
+func (g *cloneCountingGit) Clone(ctx context.Context, url, branch, dir, token string) error {
+	g.clones++
+	return g.mockGit.Clone(ctx, url, branch, dir, token)
+}
+
+func (g *cloneCountingGit) CloneAt(ctx context.Context, url, ref, dir, token string) error {
+	g.clones++
+	return g.mockGit.CloneAt(ctx, url, ref, dir, token)
 }
