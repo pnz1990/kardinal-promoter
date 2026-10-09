@@ -25,7 +25,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -109,11 +111,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	log := zerolog.Ctx(ctx).With().Str("graph", req.Name).Str("namespace", req.Namespace).Logger()
 
+	if req.Name == pruneRequest {
+		return ctrl.Result{}, r.prune(ctx, log, req.Namespace)
+	}
+
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(graph.GraphGVK)
 	if err := r.Client.Get(ctx, req.NamespacedName, g); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, r.prune(ctx, log, req.Namespace)
+			// Gone: its delete event queued the namespace's prune
+			// (pruneOnDelete). A delete missed during a restart is pruned
+			// by the startup sweep, which runs only when --watch-namespace
+			// is empty, on the default shard (cmd/kardinal-controller); in
+			// namespace mode the next prune of the namespace covers it.
+			// Pruning here as well ran one uncached prune per deleted Graph
+			// again.
+			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get graph %s: %w", req, err)
 	}
@@ -274,9 +287,27 @@ func IsKardinalGraph(g client.Object) bool {
 	return owner != nil && owner.Kind == "Bundle" && owner.APIVersion == v1alpha1.GroupVersion.String()
 }
 
+// pruneRequest is the request name of a namespace's prune. It is not a
+// valid object name, so no Graph has it.
+const pruneRequest = "~prune"
+
+// PruneRequest is the request that prunes namespace's reader RoleBindings.
+func PruneRequest(namespace string) reconcile.Request {
+	return reconcile.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: pruneRequest}}
+}
+
+// pruneOnDelete maps a deleted kardinal Graph to its namespace's prune. The
+// work queue holds a key once, so the Graphs deleted in a namespace while a
+// prune waits share it. One prune per deleted Graph, each listing every
+// Graph of the namespace from the API server, fell behind Graph retirement
+// at two Bundles a second (graphcleanup queue at 676).
+func pruneOnDelete(_ context.Context, o client.Object) []reconcile.Request {
+	return []reconcile.Request{PruneRequest(o.GetNamespace())}
+}
+
 // SetupWithManager registers the Reconciler for kro Graphs. It passes
-// kardinal's Graphs only, and of those the deleted ones and the ones being
-// deleted, including those found at startup.
+// kardinal's Graphs only: the ones being deleted, including those found at
+// startup, by name, and the deleted ones as their namespace's prune.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(graph.GraphGVK)
@@ -286,10 +317,24 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(g, builder.WithPredicates(predicate.Funcs{
 			CreateFunc:  func(e event.CreateEvent) bool { return deleting(e.Object) },
 			UpdateFunc:  func(e event.UpdateEvent) bool { return deleting(e.ObjectNew) },
-			DeleteFunc:  func(e event.DeleteEvent) bool { return IsKardinalGraph(e.Object) },
+			DeleteFunc:  func(event.DeleteEvent) bool { return false },
 			GenericFunc: func(event.GenericEvent) bool { return false },
-		}))
+		})).
+		Watches(graphObject(), handler.EnqueueRequestsFromMapFunc(pruneOnDelete),
+			builder.WithPredicates(predicate.Funcs{
+				CreateFunc:  func(event.CreateEvent) bool { return false },
+				UpdateFunc:  func(event.UpdateEvent) bool { return false },
+				DeleteFunc:  func(e event.DeleteEvent) bool { return IsKardinalGraph(e.Object) },
+				GenericFunc: func(event.GenericEvent) bool { return false },
+			}))
 	return shard.Active().Complete(b, tracing.WrapReconciler("graphcleanup", r), graphList())
+}
+
+// graphObject is an empty kro Graph for a watch.
+func graphObject() *unstructured.Unstructured {
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(graph.GraphGVK)
+	return g
 }
 
 // graphList is an empty list of kro Graphs, for the shard gate's re-enqueue.
