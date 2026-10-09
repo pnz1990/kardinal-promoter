@@ -26,6 +26,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -205,7 +206,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.MetricCheck{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles})
-	return shard.Active().Complete(b, r, &kardinalv1alpha1.MetricCheckList{})
+	return shard.Active().Complete(b, tracing.WrapReconciler("metriccheck", r), &kardinalv1alpha1.MetricCheckList{})
 }
 
 // evaluateThreshold compares value against threshold and returns "Pass" or "Fail" with reason.

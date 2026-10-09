@@ -53,6 +53,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -435,7 +436,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.RollbackPolicy{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		Watches(&v1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(r.policiesForStep))
-	return shard.Active().Complete(b, r, &v1alpha1.RollbackPolicyList{})
+	return shard.Active().Complete(b, tracing.WrapReconciler("rollbackpolicy", r), &v1alpha1.RollbackPolicyList{})
 }
 
 // policiesForStep maps a PromotionStep to the RollbackPolicies that monitor its

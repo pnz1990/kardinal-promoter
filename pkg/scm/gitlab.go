@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // GitLabProvider implements SCMProvider against the GitLab REST API v4.
@@ -59,7 +61,7 @@ func NewGitLabProvider(token, apiURL, webhookSecret string) *GitLabProvider {
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuits:      NewCircuitRegistry(),
-		client:        &http.Client{Timeout: providerHTTPTimeout},
+		client:        &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 	}
 }
 

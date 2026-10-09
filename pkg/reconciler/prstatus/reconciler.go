@@ -82,6 +82,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -534,5 +535,5 @@ func (r *Reconciler) fetchMergeCommit(ctx context.Context, log zerolog.Logger, p
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PRStatus{})
-	return shard.Active().Complete(b, r, &v1alpha1.PRStatusList{})
+	return shard.Active().Complete(b, tracing.WrapReconciler("prstatus", r), &v1alpha1.PRStatusList{})
 }

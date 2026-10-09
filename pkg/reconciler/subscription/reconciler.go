@@ -51,6 +51,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -497,5 +498,5 @@ func digestLabelChars(digest string) string {
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Subscription{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged))
-	return shard.Active().Complete(b, r, &kardinalv1alpha1.SubscriptionList{})
+	return shard.Active().Complete(b, tracing.WrapReconciler("subscription", r), &kardinalv1alpha1.SubscriptionList{})
 }

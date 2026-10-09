@@ -47,6 +47,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -124,7 +125,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.ScheduleClock{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged))
-	return shard.Active().Complete(b, r, &kardinalv1alpha1.ScheduleClockList{})
+	return shard.Active().Complete(b, tracing.WrapReconciler("scheduleclock", r), &kardinalv1alpha1.ScheduleClockList{})
 }
 
 // now returns the current time, using NowFn if set (for testing).

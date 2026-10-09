@@ -16,15 +16,20 @@
 // Package notificationhook implements the NotificationHookReconciler.
 //
 // The NotificationHook CRD allows cluster operators to register outbound webhooks
-// that are fired when specific promotion events occur (Bundle.Verified, Bundle.Failed,
-// PolicyGate.Blocked, PromotionStep.Failed).
+// that are fired when specific promotion events occur (Bundle, PolicyGate and
+// PromotionStep events; see api/v1alpha1/notificationhook_types.go). The body
+// is the kardinal JSON payload, a Slack or Microsoft Teams message, or a
+// user template (spec.format).
 //
 // Architecture context:
 //
 //	This reconciler is an Owned node (Q2 in the Graph-first question stack):
-//	  - It writes only to its own CRD status (processedEventKeys, lastSentAt, ...).
-//	  - Each qualifying event is delivered once: its key is recorded in
-//	    status.processedEventKeys after a successful POST.
+//	  - It writes only to its own CRD status (processedEventKeys, lastSentAt,
+//	    conditions, ...). It reads Bundles, PolicyGates, PromotionSteps and the
+//	    hook's own Secret, and never writes them.
+//	  - Each qualifying event is delivered at least once, and exactly once
+//	    unless the controller stops between a successful POST and the status
+//	    write that records its key in status.processedEventKeys.
 //	  - time.Now() is only called inside a CRD status write — no logic leak.
 //	  - No cross-CRD status mutations, no exec.Command, no in-memory state.
 //
@@ -43,10 +48,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
+	"strings"
+	"text/template"
 	"time"
 
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -62,6 +69,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -88,6 +96,28 @@ const (
 	// identifies one blocking episode.
 	gateReadyCondition = "Ready"
 
+	// configRecheckDelay is how often a hook that cannot deliver (Ready=False:
+	// its Secret is missing, for example) is checked again. Secrets are not
+	// watched, so a fixed Secret is picked up on this schedule.
+	configRecheckDelay = 30 * time.Second
+
+	// Secret keys of spec.webhook.secretRef.
+	secretKeyAuthorization = "authorization"
+	secretKeyURL           = "url"
+	// labelReferenceable must be "true" on a Secret a hook's secretRef names,
+	// or the hook does not use it (Ready=False, SecretNotReferenceable). The
+	// same opt-in applies to every Secret a custom resource references
+	// (docs/guides/security.md#secrets-referenced-by-custom-resources).
+	labelReferenceable = "kardinal.io/referenceable"
+
+	// Hook conditions.
+	conditionReady               = "Ready"
+	conditionPlaintextCredential = "PlaintextCredential"
+
+	// Headers sent with every delivery so a receiver can route and dedupe.
+	headerEvent    = "X-Kardinal-Event"
+	headerEventKey = "X-Kardinal-Event-Key"
+
 	labelBundle      = "kardinal.io/bundle"
 	labelPipeline    = "kardinal.io/pipeline"
 	labelEnvironment = "kardinal.io/environment"
@@ -101,6 +131,8 @@ type notificationPayload struct {
 	Environment string `json:"environment,omitempty"`
 	Message     string `json:"message"`
 	Timestamp   string `json:"timestamp"`
+	// PRURL is set on PromotionStep.PROpened and PromotionStep.WaitingForApproval.
+	PRURL string `json:"prURL,omitempty"`
 }
 
 // pendingEvent describes a qualifying event.
@@ -114,8 +146,25 @@ type pendingEvent struct {
 	// event whose legacyKey equals status.lastEventKey was already delivered.
 	legacyKey string
 	at        time.Time
-	payload   notificationPayload
+	// rank orders events with the same time (rankStart, rankProgress, rankEnd).
+	rank    int
+	payload notificationPayload
 }
+
+// deliveryConfig is a hook's resolved delivery settings for one reconcile.
+type deliveryConfig struct {
+	url           string
+	authorization string
+	format        v1alpha1.NotificationHookFormat
+	tmpl          *template.Template
+	contentType   string
+}
+
+// configError is why a hook cannot deliver: the Ready=False reason and a
+// message that never contains a credential or the URL.
+type configError struct{ reason, message string }
+
+func (e *configError) Error() string { return e.message }
 
 // Reconciler handles NotificationHook objects and delivers webhooks on promotion events.
 // It is idempotent and safe to re-run after a crash.
@@ -183,6 +232,21 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	base := hook.DeepCopy()
+	cfg, cfgErr := r.resolveConfig(ctx, reader, &hook)
+	r.setConditions(&hook, cfgErr)
+	// Log condition changes once, not on every reconcile: every Bundle,
+	// PolicyGate and PromotionStep change in the namespace reconciles the hook.
+	if meta.FindStatusCondition(base.Status.Conditions, conditionPlaintextCredential) == nil &&
+		meta.FindStatusCondition(hook.Status.Conditions, conditionPlaintextCredential) != nil {
+		log.Warn().Msg("notificationhook: spec.webhook.authorizationHeader is deprecated and stored in plain text; use spec.webhook.secretRef")
+	}
+	if cfgErr != nil {
+		if was := meta.FindStatusCondition(base.Status.Conditions, conditionReady); was == nil ||
+			was.Status != metav1.ConditionFalse || was.Reason != cfgErr.reason {
+			log.Warn().Str("reason", cfgErr.reason).Str("message", cfgErr.message).
+				Msg("notificationhook: cannot deliver until the hook is fixed")
+		}
+	}
 	processed := make(map[string]bool, len(hook.Status.ProcessedEventKeys))
 	for _, k := range hook.Status.ProcessedEventKeys {
 		processed[k] = true
@@ -229,6 +293,19 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	var result ctrl.Result
+	if cfgErr != nil {
+		// Nothing is sent and no attempt is counted until the hook is fixed;
+		// pending events stay pending.
+		for _, ev := range events {
+			if delivered(ev) {
+				processed[ev.eventKey] = true
+			}
+		}
+		if err := writeStatus(); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: configRecheckDelay}, nil
+	}
 	sent := 0
 	for i := range events {
 		ev := events[i]
@@ -247,10 +324,22 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			result.RequeueAfter = wait
 			break
 		}
-		if deliveryErr := r.deliver(ctx, &hook, &ev); deliveryErr != nil {
+		if deliveryErr := r.deliver(ctx, &hook, cfg, &ev); deliveryErr != nil {
 			hook.Status.FailedAttempts++
-			log.Warn().Err(deliveryErr).Str("eventKey", ev.eventKey).Str("host", urlHost(hook.Spec.Webhook.URL)).
+			log.Warn().Err(deliveryErr).Str("eventKey", ev.eventKey).Str("host", urlHost(cfg.url)).
 				Int32("attempt", hook.Status.FailedAttempts).Msg("notificationhook: webhook delivery failed")
+			if errors.Is(deliveryErr, errTemplate) {
+				// The body cannot be rendered for this event; retrying the
+				// same event renders the same body.
+				processed[ev.eventKey] = true
+				hook.Status.FailureMessage = fmt.Sprintf("gave up on %s: %v", ev.eventKey, deliveryErr)
+				hook.Status.FailedAttempts = 0
+				hook.Status.NextRetryAt = ""
+				if err := writeStatus(); err != nil {
+					return ctrl.Result{}, err
+				}
+				continue
+			}
 			if hook.Status.FailedAttempts >= maxDeliveryAttempts {
 				processed[ev.eventKey] = true
 				hook.Status.FailureMessage = fmt.Sprintf("gave up on %s after %d attempts: %v",
@@ -276,7 +365,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		hook.Status.FailedAttempts = 0
 		hook.Status.NextRetryAt = ""
 		hook.Status.FailureMessage = ""
-		log.Info().Str("eventKey", ev.eventKey).Str("host", urlHost(hook.Spec.Webhook.URL)).
+		log.Info().Str("eventKey", ev.eventKey).Str("host", urlHost(cfg.url)).
 			Msg("notificationhook: webhook delivered")
 		// Record each delivery before the next POST, so a crash re-sends at most one.
 		if err := writeStatus(); err != nil {
@@ -318,132 +407,6 @@ func retryDelay(attempts int32) time.Duration {
 	return d
 }
 
-// qualifyingEvents returns the events that match hook, oldest first, limited
-// to the newest maxTrackedEvents.
-func (r *Reconciler) qualifyingEvents(ctx context.Context, hook *v1alpha1.NotificationHook) ([]pendingEvent, error) {
-	eventSet := make(map[v1alpha1.NotificationHookEventType]bool, len(hook.Spec.Events))
-	for _, e := range hook.Spec.Events {
-		eventSet[e] = true
-	}
-	selector := hook.Spec.PipelineSelector
-	var events []pendingEvent
-
-	// Bundle.Verified and Bundle.Failed. The pipeline is matched on
-	// spec.pipeline: Bundles created by `kardinal create bundle` or kubectl do
-	// not carry the kardinal.io/pipeline label.
-	if eventSet[v1alpha1.NotificationEventBundleVerified] || eventSet[v1alpha1.NotificationEventBundleFailed] {
-		var bundles v1alpha1.BundleList
-		if err := r.List(ctx, &bundles, client.InNamespace(hook.Namespace)); err != nil {
-			return nil, fmt.Errorf("list bundles: %w", err)
-		}
-		for _, b := range bundles.Items {
-			if selector != "" && b.Spec.Pipeline != selector {
-				continue
-			}
-			var evType v1alpha1.NotificationHookEventType
-			switch b.Status.Phase {
-			case "Verified":
-				evType = v1alpha1.NotificationEventBundleVerified
-			case "Failed":
-				evType = v1alpha1.NotificationEventBundleFailed
-			}
-			if evType == "" || !eventSet[evType] {
-				continue
-			}
-			events = append(events, pendingEvent{
-				eventType: evType,
-				eventKey:  string(evType) + "/" + b.Name,
-				at:        b.CreationTimestamp.Time,
-				payload: notificationPayload{
-					Event:    string(evType),
-					Pipeline: b.Spec.Pipeline,
-					Bundle:   b.Name,
-					Message:  fmt.Sprintf("Bundle %s is %s", b.Name, b.Status.Phase),
-				},
-			})
-		}
-	}
-
-	// PolicyGate.Blocked: one event per blocking episode of a gate instance.
-	// Templates (no kardinal.io/bundle label) are never evaluated, so they are
-	// not blocking anything. The episode is identified by the Ready
-	// condition's lastTransitionTime, which only moves when the gate flips;
-	// status.lastEvaluatedAt moves on every status write (a changed result,
-	// a step waiting for a fresh one, or the --gate-status-heartbeat).
-	if eventSet[v1alpha1.NotificationEventPolicyGateBlocked] {
-		var gates v1alpha1.PolicyGateList
-		if err := r.List(ctx, &gates, client.InNamespace(hook.Namespace)); err != nil {
-			return nil, fmt.Errorf("list policygates: %w", err)
-		}
-		for _, g := range gates.Items {
-			if g.Labels[labelBundle] == "" || g.Status.Ready {
-				continue
-			}
-			if selector != "" && g.Labels[labelPipeline] != selector {
-				continue
-			}
-			cond := meta.FindStatusCondition(g.Status.Conditions, gateReadyCondition)
-			if cond == nil || cond.Status != metav1.ConditionFalse {
-				continue
-			}
-			evType := v1alpha1.NotificationEventPolicyGateBlocked
-			events = append(events, pendingEvent{
-				eventType: evType,
-				eventKey:  string(evType) + "/" + g.Name + "/" + cond.LastTransitionTime.UTC().Format(time.RFC3339),
-				legacyKey: string(evType) + "/" + g.Name,
-				at:        cond.LastTransitionTime.Time,
-				payload: notificationPayload{
-					Event:       string(evType),
-					Pipeline:    g.Labels[labelPipeline],
-					Bundle:      g.Labels[labelBundle],
-					Environment: g.Labels[labelEnvironment],
-					Message:     fmt.Sprintf("PolicyGate %s is blocking: %s", g.Name, g.Status.Reason),
-				},
-			})
-		}
-	}
-
-	// PromotionStep.Failed.
-	if eventSet[v1alpha1.NotificationEventPromotionStepFailed] {
-		var steps v1alpha1.PromotionStepList
-		if err := r.List(ctx, &steps, client.InNamespace(hook.Namespace)); err != nil {
-			return nil, fmt.Errorf("list promotionsteps: %w", err)
-		}
-		for _, ps := range steps.Items {
-			if ps.Status.State != "Failed" {
-				continue
-			}
-			if selector != "" && ps.Spec.PipelineName != selector {
-				continue
-			}
-			evType := v1alpha1.NotificationEventPromotionStepFailed
-			events = append(events, pendingEvent{
-				eventType: evType,
-				eventKey:  string(evType) + "/" + ps.Name,
-				at:        ps.CreationTimestamp.Time,
-				payload: notificationPayload{
-					Event:       string(evType),
-					Pipeline:    ps.Spec.PipelineName,
-					Bundle:      ps.Spec.BundleName,
-					Environment: ps.Spec.Environment,
-					Message:     fmt.Sprintf("PromotionStep %s failed: %s", ps.Name, ps.Status.Message),
-				},
-			})
-		}
-	}
-
-	sort.SliceStable(events, func(i, j int) bool {
-		if !events[i].at.Equal(events[j].at) {
-			return events[i].at.Before(events[j].at)
-		}
-		return events[i].eventKey < events[j].eventKey
-	})
-	if len(events) > maxTrackedEvents {
-		events = events[len(events)-maxTrackedEvents:]
-	}
-	return events, nil
-}
-
 // errRedirect is returned for a 3xx response: redirects are not followed, so a
 // hook cannot bounce the controller's POST to another address.
 var errRedirect = errors.New("webhook redirects are not followed")
@@ -454,33 +417,159 @@ var errRedirect = errors.New("webhook redirects are not followed")
 // honours HTTP(S)_PROXY, as the default transport did.
 var guardedTransport = egress.NewTransport(http.ProxyFromEnvironment)
 
-// deliver sends the webhook payload to the configured URL.
+// resolveConfig reads the hook's URL and Authorization header (from the
+// spec, or from the Secret spec.webhook.secretRef names) and parses its
+// template. A *configError means the hook cannot deliver as configured.
+func (r *Reconciler) resolveConfig(ctx context.Context, reader client.Reader, hook *v1alpha1.NotificationHook) (*deliveryConfig, *configError) {
+	cfg := &deliveryConfig{
+		url:           strings.TrimSpace(hook.Spec.Webhook.URL),
+		authorization: hook.Spec.Webhook.AuthorizationHeader, //nolint:staticcheck // SA1019: the deprecated field keeps working
+		format:        hook.Spec.Format,
+		contentType:   "application/json",
+	}
+	if cfg.format == "" {
+		cfg.format = v1alpha1.NotificationFormatJSON
+	}
+	if ref := hook.Spec.Webhook.SecretRef; ref != nil {
+		var secret corev1.Secret
+		if err := reader.Get(ctx, client.ObjectKey{Namespace: hook.Namespace, Name: ref.Name}, &secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, &configError{"SecretNotFound",
+					fmt.Sprintf("Secret %s named by spec.webhook.secretRef does not exist in namespace %s", ref.Name, hook.Namespace)}
+			}
+			return nil, &configError{"SecretUnreadable",
+				fmt.Sprintf("cannot read Secret %s named by spec.webhook.secretRef: %v", ref.Name, apierrors.ReasonForError(err))}
+		}
+		// Opt-in: a user who may create hooks but not read Secrets must not be
+		// able to send an arbitrary Secret of the namespace to a URL of their
+		// choice. Only Secrets their owner marked referenceable are used.
+		if secret.Labels[labelReferenceable] != "true" {
+			return nil, &configError{"SecretNotReferenceable",
+				fmt.Sprintf("Secret %s named by spec.webhook.secretRef is not labeled %s=true; label it to let custom resources reference it",
+					ref.Name, labelReferenceable)}
+		}
+		auth, hasAuth := secret.Data[secretKeyAuthorization]
+		u, hasURL := secret.Data[secretKeyURL]
+		if !hasAuth && !hasURL {
+			return nil, &configError{"SecretKeyMissing",
+				fmt.Sprintf("Secret %s has neither an %q nor a %q key", ref.Name, secretKeyAuthorization, secretKeyURL)}
+		}
+		// A value pasted with a trailing newline is not a valid header or URL.
+		if hasAuth {
+			cfg.authorization = strings.TrimSpace(string(auth))
+		}
+		if hasURL {
+			cfg.url = strings.TrimSpace(string(u))
+		}
+	}
+	if cfg.url == "" {
+		return nil, &configError{"URLMissing", fmt.Sprintf("no webhook URL: set spec.webhook.url or the %q key of the Secret", secretKeyURL)}
+	}
+	if pu, err := url.Parse(cfg.url); err != nil || (pu.Scheme != "https" && pu.Scheme != "http") || pu.Host == "" {
+		// The URL is not quoted: incoming-webhook URLs embed their token.
+		return nil, &configError{"InvalidURL", "the webhook URL is not an absolute http:// or https:// URL"}
+	}
+	if strings.ContainsAny(cfg.authorization, "\r\n") {
+		return nil, &configError{"InvalidAuthorization", "the Authorization header value contains a line break"}
+	}
+	if cfg.format == v1alpha1.NotificationFormatTemplate {
+		if hook.Spec.Template == nil {
+			return nil, &configError{"InvalidTemplate", "format: template needs spec.template"}
+		}
+		t, err := parseBodyTemplate(hook.Spec.Template.Body)
+		if err != nil {
+			return nil, &configError{"InvalidTemplate", fmt.Sprintf("spec.template.body: %v", err)}
+		}
+		cfg.tmpl = t
+		if ct := strings.TrimSpace(hook.Spec.Template.ContentType); ct != "" {
+			cfg.contentType = ct
+		}
+	}
+	return cfg, nil
+}
+
+// setConditions writes the Ready and PlaintextCredential conditions.
+// time.Now() is read only for the condition transition times, inside the
+// status write.
+func (r *Reconciler) setConditions(hook *v1alpha1.NotificationHook, cfgErr *configError) {
+	now := metav1.NewTime(r.now())
+	ready := metav1.Condition{Type: conditionReady, Status: metav1.ConditionTrue, Reason: "Configured",
+		Message: "the hook delivers its events", ObservedGeneration: hook.Generation, LastTransitionTime: now}
+	if cfgErr != nil {
+		ready.Status, ready.Reason, ready.Message = metav1.ConditionFalse, cfgErr.reason, cfgErr.message
+	}
+	meta.SetStatusCondition(&hook.Status.Conditions, ready)
+	if hook.Spec.Webhook.AuthorizationHeader != "" { //nolint:staticcheck // SA1019: the deprecated field keeps working
+		meta.SetStatusCondition(&hook.Status.Conditions, metav1.Condition{
+			Type: conditionPlaintextCredential, Status: metav1.ConditionTrue, Reason: "AuthorizationHeaderInSpec",
+			Message: "spec.webhook.authorizationHeader is deprecated: it is stored in plain text in the hook. " +
+				"Move the value to a Secret's authorization key and set spec.webhook.secretRef",
+			ObservedGeneration: hook.Generation, LastTransitionTime: now,
+		})
+	} else {
+		meta.RemoveStatusCondition(&hook.Status.Conditions, conditionPlaintextCredential)
+	}
+}
+
+// templateData is the event as the slack, teams and template formats see it.
+func templateData(hook *v1alpha1.NotificationHook, ev *pendingEvent) *TemplateData {
+	p := ev.payload
+	return &TemplateData{
+		Event: p.Event, Key: ev.eventKey, Pipeline: p.Pipeline, Bundle: p.Bundle, Environment: p.Environment,
+		Message: p.Message, Timestamp: p.Timestamp, PRURL: p.PRURL, Hook: hook.Name, Namespace: hook.Namespace,
+	}
+}
+
+// body renders the request body of ev in the hook's format.
+func body(hook *v1alpha1.NotificationHook, cfg *deliveryConfig, ev *pendingEvent) ([]byte, error) {
+	switch cfg.format {
+	case v1alpha1.NotificationFormatSlack:
+		return slackBody(templateData(hook, ev))
+	case v1alpha1.NotificationFormatTeams:
+		return teamsBody(templateData(hook, ev))
+	case v1alpha1.NotificationFormatTemplate:
+		return renderTemplate(cfg.tmpl, templateData(hook, ev), cfg.contentType)
+	default:
+		b, err := json.Marshal(ev.payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal payload: %w", err)
+		}
+		return b, nil
+	}
+}
+
+// deliver sends the event to the configured URL.
 // The returned error never contains the URL, which may embed a token (Slack,
 // Teams); it is written to status and logs.
-func (r *Reconciler) deliver(ctx context.Context, hook *v1alpha1.NotificationHook, ev *pendingEvent) error {
+func (r *Reconciler) deliver(ctx context.Context, hook *v1alpha1.NotificationHook, cfg *deliveryConfig, ev *pendingEvent) error {
 	ev.payload.Timestamp = r.now().UTC().Format(time.RFC3339)
 
-	body, err := json.Marshal(ev.payload)
+	payload, err := body(hook, cfg, ev)
 	if err != nil {
-		return fmt.Errorf("marshal payload: %w", err)
+		return err
 	}
 
 	httpClient := http.Client{Timeout: webhookTimeout, Transport: guardedTransport}
 	if r.HTTPClient != nil {
 		httpClient = *r.HTTPClient
 	}
+	// The webhook carries the trace context (traceparent) of its delivery
+	// span when tracing is on, so a receiver can join the trace.
+	httpClient.Transport = tracing.Transport(httpClient.Transport, true)
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	reqCtx, cancel := context.WithTimeout(ctx, webhookTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, hook.Spec.Webhook.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.url, bytes.NewReader(payload))
 	if err != nil {
 		return errors.New("invalid webhook URL")
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if hook.Spec.Webhook.AuthorizationHeader != "" {
-		req.Header.Set("Authorization", hook.Spec.Webhook.AuthorizationHeader)
+	req.Header.Set("Content-Type", cfg.contentType)
+	req.Header.Set(headerEvent, string(ev.eventType))
+	req.Header.Set(headerEventKey, ev.eventKey)
+	if cfg.authorization != "" {
+		req.Header.Set("Authorization", cfg.authorization)
 	}
 
 	resp, err := httpClient.Do(req)
@@ -546,7 +635,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(mapToAllHooks)).
 		Watches(&v1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(mapToAllHooks)).
 		Named("notificationhook")
-	return shard.Active().Complete(b, r, &v1alpha1.NotificationHookList{})
+	return shard.Active().Complete(b, tracing.WrapReconciler("notificationhook", r), &v1alpha1.NotificationHookList{})
 }
 
 // now returns the current time, using NowFn if set (for testing).

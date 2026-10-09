@@ -39,6 +39,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -53,6 +54,9 @@ const (
 	// conditionReady is the gate condition whose lastTransitionTime marks when
 	// the gate last flipped between allowed and blocked.
 	conditionReady = "Ready"
+	// conditionReasonUnblocked is the Ready=True reason of a gate that
+	// blocked before and allows now (PolicyGate.Unblocked notifications).
+	conditionReasonUnblocked = "Unblocked"
 	// condBundleGraphReady is the Bundle condition that mirrors its Graph's
 	// Ready condition (written by the Bundle reconciler).
 	condBundleGraphReady = "GraphReady"
@@ -940,8 +944,9 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 	// blockedSince is when the current blocking episode started, read before
 	// the condition is updated.
 	var blockedSince time.Time
-	if c := meta.FindStatusCondition(gate.Status.Conditions, conditionReady); c != nil && c.Status == metav1.ConditionFalse {
-		blockedSince = c.LastTransitionTime.Time
+	prevCond := meta.FindStatusCondition(gate.Status.Conditions, conditionReady)
+	if prevCond != nil && prevCond.Status == metav1.ConditionFalse {
+		blockedSince = prevCond.LastTransitionTime.Time
 	}
 	// Optimistic lock: the patch carries the resourceVersion the gate was
 	// read at, so a reconcile from a stale cache, which would see the flip
@@ -965,6 +970,14 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 	}
 	if ready {
 		cond.Status, cond.Reason = metav1.ConditionTrue, "Allowed"
+		// A gate that was blocking and now allows reads Unblocked for the
+		// whole allowed episode, so the NotificationHook reconciler can send
+		// PolicyGate.Unblocked from this status alone; a gate that allowed on
+		// its first evaluation reads Allowed.
+		if prevCond != nil && (prevCond.Status == metav1.ConditionFalse ||
+			(prevCond.Status == metav1.ConditionTrue && prevCond.Reason == conditionReasonUnblocked)) {
+			cond.Reason = conditionReasonUnblocked
+		}
 	}
 	meta.SetStatusCondition(&gate.Status.Conditions, cond)
 	if err := r.Status().Patch(ctx, gate, patch); err != nil {
@@ -1211,7 +1224,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// are re-evaluated at once (#1300).
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(stepRequiredGateRequests),
 			builder.WithPredicates(unstartedStepCreated))
-	return shard.Active().Complete(b, r, &kardinalv1alpha1.PolicyGateList{})
+	return shard.Active().Complete(b, tracing.WrapReconciler("policygate", r), &kardinalv1alpha1.PolicyGateList{})
 }
 
 // instanceGateRequests lists PolicyGates and returns a request for every instance

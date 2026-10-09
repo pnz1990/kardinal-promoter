@@ -17,9 +17,10 @@
 #   ui      Forgejo + Argo CD + the UI auth, CORS and TLS releases (ui.sh)
 #   flux    Forgejo + Flux + Prometheus Operator, Prometheus, Pushgateway,
 #           Grafana
-#   chart   Forgejo + Argo CD + cert-manager + podinfo on the node, and no
-#           controller release: each TestChart_ test installs the chart from
-#           this checkout itself
+#   chart   Forgejo + Argo CD + cert-manager + podinfo on the node, the webhook
+#           receiver (TestChart_EgressAllowlist) and Jaeger (TestChart_Tracing), and no
+#           controller release:
+#           each TestChart_ test installs the chart from this checkout itself
 #   upgrade Forgejo + Argo CD + kardinal-promoter v0.8.1 (kardinal-v081.sh) and
 #           no kro: the TestUpgrade_ test upgrades v0.8.1 to this checkout,
 #           so the cluster serves one run; delete it before the next
@@ -78,7 +79,7 @@ case "$SUITE" in
   # ServiceMonitor, PrometheusRule and Grafana dashboard.
   flux) COMPONENTS=("giteafamily.sh forgejo" flux.sh prometheus.sh grafana.sh) RUN='^Test(Flux|Metric|Obs)_'
     HELM_ARGS='--set serviceMonitor.enabled=true --set prometheusRule.enabled=true --set grafanaDashboard.enabled=true' ;;
-  chart) COMPONENTS=("giteafamily.sh forgejo" argocd.sh cert-manager.sh podinfo.sh) RUN='^Test(Chart|Deprecated)_'
+  chart) COMPONENTS=("giteafamily.sh forgejo" argocd.sh cert-manager.sh podinfo.sh webhook-receiver.sh jaeger.sh) RUN='^Test(Chart|Deprecated)_'
     export KARDINAL_E2E_INSTALL=0 ;;
   # v0.8.1 ran its own Graph controller, so kro is not installed: the test
   # installs it as the upgrade guide's step 6. kardinal.sh only builds and
