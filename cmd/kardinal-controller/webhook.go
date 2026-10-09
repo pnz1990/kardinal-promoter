@@ -273,6 +273,19 @@ func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request, parser sc
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// webhookHealthResponse is the body of GET /webhook/scm/health.
+type webhookHealthResponse struct {
+	// Status is always "ok".
+	Status string `json:"status"`
+	// WebhookConfigured is true when a webhook secret is set; without one
+	// every event is refused.
+	WebhookConfigured bool `json:"webhookConfigured"`
+	// EventsProcessed counts the signed webhook events of any type since startup.
+	EventsProcessed int64 `json:"eventsProcessed"`
+	// MergedPREvents counts the merged pull request events among them.
+	MergedPREvents int64 `json:"mergedPREvents"`
+}
+
 // HealthHandler returns an http.HandlerFunc for GET /webhook/scm/health.
 // Responds with 200 OK and a JSON body indicating webhook configuration status,
 // the number of signed webhook events of any type since startup
@@ -282,11 +295,11 @@ func (s *webhookServer) HealthHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		resp := map[string]interface{}{
-			"status":            "ok",
-			"webhookConfigured": s.webhookConfigured,
-			"eventsProcessed":   s.eventsTotal.Load(),
-			"mergedPREvents":    s.mergedPREventsTotal.Load(),
+		resp := webhookHealthResponse{
+			Status:            "ok",
+			WebhookConfigured: s.webhookConfigured,
+			EventsProcessed:   s.eventsTotal.Load(),
+			MergedPREvents:    s.mergedPREventsTotal.Load(),
 		}
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			s.log.Error().Err(err).Msg("failed to encode health response")

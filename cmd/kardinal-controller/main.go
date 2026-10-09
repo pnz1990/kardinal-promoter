@@ -583,6 +583,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
+	mux.HandleFunc(openAPIPath, handleOpenAPI)
 	// Each ScmProvider and ClusterScmProvider has its own endpoint, checked
 	// with its own webhook secret (docs/scm-providers.md).
 	mux.HandleFunc("POST /webhook/scm/namespaces/{namespace}/{name}", webhookSrv.ProviderHandler(providers))
