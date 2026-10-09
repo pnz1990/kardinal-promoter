@@ -35,14 +35,18 @@ type yamlDoc struct {
 //
 // A stream with more than one document (---) is refused: decoding only the
 // first and writing it back would silently drop the others. Empty documents
-// after the first (a trailing "---", or "--- null") hold nothing and are
-// ignored; they are not written back.
+// after the first (a trailing "---", "--- null", or documents that hold only
+// comments) hold no data and their separators are not written back. Their
+// comments are: the parser attaches them to these documents ("--- # end",
+// "---\n# x\n---"), so they are moved to the end of the first document
+// instead of being dropped.
 func parseYAMLMapping(raw []byte) (*yamlDoc, error) {
 	d := &yamlDoc{compactSeq: compactSeqIndent(raw)}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	if err := dec.Decode(&d.doc); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
+	var trailing []string // comments of the empty documents after the first
 	for {
 		var extra yaml.Node
 		err := dec.Decode(&extra)
@@ -52,9 +56,10 @@ func parseYAMLMapping(raw []byte) (*yamlDoc, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !emptyDocument(&extra) || commentAfterFirstDocument(raw) {
-			return nil, fmt.Errorf("the file holds more than one YAML document (---), which is not supported")
+		if !emptyDocument(&extra) {
+			return nil, errMultiDocument
 		}
+		trailing = append(trailing, documentComments(&extra)...)
 	}
 	if d.doc.Kind == 0 {
 		d.doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
@@ -62,16 +67,22 @@ func parseYAMLMapping(raw []byte) (*yamlDoc, error) {
 	if d.doc.Kind != yaml.DocumentNode || len(d.doc.Content) != 1 || d.doc.Content[0].Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("top level is not a mapping")
 	}
+	if len(trailing) > 0 {
+		d.doc.FootComment = strings.Join(append(nonEmpty(d.doc.FootComment), trailing...), "\n\n")
+	}
 	return d, nil
 }
 
-// emptyDocument reports whether n is a document with no content and no
-// comments: nothing, or a single null scalar ("---" alone, or "--- null").
+var errMultiDocument = errors.New("the file holds more than one YAML document (---), which is not supported")
+
+// emptyDocument reports whether n is a document with no content: nothing,
+// or a single null scalar ("---" alone, or "--- null") without an anchor.
+// Comments do not count as content (documentComments returns them).
 func emptyDocument(n *yaml.Node) bool {
 	if n.Kind == 0 {
 		return true
 	}
-	if n.Kind != yaml.DocumentNode || n.HeadComment != "" || n.LineComment != "" || n.FootComment != "" {
+	if n.Kind != yaml.DocumentNode {
 		return false
 	}
 	switch len(n.Content) {
@@ -79,30 +90,28 @@ func emptyDocument(n *yaml.Node) bool {
 		return true
 	case 1:
 		c := n.Content[0]
-		return c.Kind == yaml.ScalarNode && c.Tag == "!!null" && c.Anchor == "" &&
-			c.HeadComment == "" && c.LineComment == "" && c.FootComment == ""
+		return c.Kind == yaml.ScalarNode && c.Tag == "!!null" && c.Anchor == ""
 	}
 	return false
 }
 
-// commentAfterFirstDocument reports whether a comment line follows the end of
-// the first document. The parser keeps no node for a document that holds
-// only comments, so writing the file back would drop them.
-func commentAfterFirstDocument(raw []byte) bool {
-	content, ended := false, false
-	for _, line := range strings.Split(string(raw), "\n") {
-		t := strings.TrimSpace(line)
-		separator := t == "---" || strings.HasPrefix(t, "--- ") || t == "..."
-		switch {
-		case ended && strings.HasPrefix(t, "#"):
-			return true
-		case separator && content:
-			ended = true
-		case !separator && t != "" && !strings.HasPrefix(t, "#"):
-			content = true
+// documentComments returns the comments of an empty document, in order.
+func documentComments(n *yaml.Node) []string {
+	out := nonEmpty(n.HeadComment, n.LineComment)
+	for _, c := range n.Content {
+		out = append(out, nonEmpty(c.HeadComment, c.LineComment, c.FootComment)...)
+	}
+	return append(out, nonEmpty(n.FootComment)...)
+}
+
+func nonEmpty(ss ...string) []string {
+	var out []string
+	for _, s := range ss {
+		if s != "" {
+			out = append(out, s)
 		}
 	}
-	return false
+	return out
 }
 
 // root returns the top-level mapping.

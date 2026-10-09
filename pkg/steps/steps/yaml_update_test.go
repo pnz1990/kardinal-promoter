@@ -264,13 +264,55 @@ func TestYAMLEdits_TrailingEmptyDocument(t *testing.T) {
 			assert.Contains(t, readEnvFile(t, envDir, "values.yaml"), `tag: "2.0.0"`)
 		})
 	}
-	for _, trailer := range []string{"---\nkind: Secret\n", "---\n# a comment only\n", "---\n- a\n"} {
+	for _, trailer := range []string{
+		"---\nkind: Secret\n", "---\n- a\n",
+		// A comment-only document followed by one with content.
+		"---\n# x\n---\nb: 2\n", "--- # x\n---\n- a\n",
+	} {
 		state, envDir := yamlState(t, map[string]string{"values.yaml": valuesYAML + trailer},
 			[]v1alpha1.YAMLUpdate{{File: "values.yaml", Path: "image.tag"}}, appV2)
 		res, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
 		require.Error(t, err, trailer)
 		assert.Contains(t, res.Message, "more than one YAML document")
 		assert.Equal(t, valuesYAML+trailer, readEnvFile(t, envDir, "values.yaml"))
+	}
+}
+
+// TestYAMLEdits_TrailingComments: comments after the document, after a
+// trailing "---" or on it ("--- # end"), and a "---" inside a block scalar do
+// not make the file a multi-document stream. The edit succeeds and every
+// comment is still in the file (QA on #1498: refusing them broke files that
+// worked on main).
+func TestYAMLEdits_TrailingComments(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		comments []string
+	}{
+		{"comment after a trailing separator", valuesYAML + "---\n# end\n", []string{"# end"}},
+		{"comment on a trailing separator", valuesYAML + "--- # end\n", []string{"# end"}},
+		{"comment-only last document", valuesYAML + "---\n# a comment only\n", []string{"# a comment only"}},
+		{"empty document, then a comment-only one", valuesYAML + "---\n---\n# end\n", []string{"# end"}},
+		{"comment-only document between separators", valuesYAML + "---\n# x\n---\n", []string{"# x"}},
+		{"two comment-only documents", valuesYAML + "--- # one\n--- # two\n", []string{"# one", "# two"}},
+		{"foot comment and a trailing comment", valuesYAML + "# foot\n--- # end\n", []string{"# foot", "# end"}},
+		{"separator inside a block scalar", "image:\n  tag: \"1.0.0\"\nnotes: |\n  a\n  ---\n  # not a comment\n  b\n---\n", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state, envDir := yamlState(t, map[string]string{"values.yaml": tt.content},
+				[]v1alpha1.YAMLUpdate{{File: "values.yaml", Path: "image.tag"}}, appV2)
+			res, err := mustLookup(t, "yaml-update").Execute(context.Background(), state)
+			require.NoError(t, err, res.Message)
+			got := readEnvFile(t, envDir, "values.yaml")
+			assert.Contains(t, got, `tag: "2.0.0"`)
+			for _, c := range tt.comments {
+				assert.Contains(t, got, c)
+			}
+			if strings.Contains(tt.name, "block scalar") {
+				assert.Contains(t, got, "notes: |\n  a\n  ---\n  # not a comment\n  b\n")
+			}
+		})
 	}
 }
 

@@ -393,8 +393,9 @@ update:
   file is parsed again before it is written and must still hold every value where it was set. The
   files are then written through new temporary files (never through a file or link already at that
   name) and renamed; if a rename fails, the files already replaced get their old content back.
-- Refused, failing the step: a file with more than one YAML document (`---`; an empty document
-  after the first, such as a trailing `---`, is ignored and not written back), an anchor or alias
+- Refused, failing the step: a file with more than one YAML document (`---`; an empty or
+  comment-only document after the first, such as a trailing `---` or `--- # end`, is not written
+  back, and its comments move to the end of the file), an anchor or alias
   (`&`, `*`) or a merge key (`<<`) on the edited path, a key that appears twice in one mapping, a
   symbolic link anywhere on the path (the environment directory, a directory in `file`, or the
   file), a file over 4 MiB, and a `file` that is absolute or contains `..`.
