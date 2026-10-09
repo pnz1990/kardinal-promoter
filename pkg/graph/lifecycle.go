@@ -52,6 +52,27 @@ func EnvironmentUpstreams(pipeline *kardinalv1alpha1.Pipeline, envName string) (
 	return ups, nil
 }
 
+// AllEnvironmentUpstreams is EnvironmentUpstreams for every environment of
+// the Pipeline, resolving the ordering once: callers that need every
+// environment's upstreams (the UI pipeline list) must not pay a full
+// resolution per environment.
+func AllEnvironmentUpstreams(pipeline *kardinalv1alpha1.Pipeline) (map[string][]string, error) {
+	if pipeline == nil {
+		return nil, fmt.Errorf("environment upstreams: pipeline is required")
+	}
+	ordered, deps, err := resolveOrdering(pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("environment upstreams: %w", err)
+	}
+	out := make(map[string][]string, len(ordered))
+	for _, env := range ordered {
+		ups := append([]string{}, deps[env]...)
+		sort.Strings(ups)
+		out[env] = ups
+	}
+	return out, nil
+}
+
 // SinkEnvironments returns the environments no other environment depends on
 // (explicit dependsOn, wave edges, or list order), in promotion order. A
 // linear pipeline returns its last environment; a fan-out returns every leaf.

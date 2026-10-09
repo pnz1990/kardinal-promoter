@@ -18,7 +18,7 @@ test.describe('Journey 008 — Loading state clears (#522 regression guard)', ()
   test('Step 2: Freshness indicator shows "just now" after initial load', async ({ page }) => {
     await page.goto('/')
     // After data loads, the indicator should say "just now" or "Xs ago"
-    await expect(page.getByText(/just now|ago/i)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByRole('button', { name: 'Refresh data' }).getByText(/just now|ago/i)).toBeVisible({ timeout: 5000 })
   })
 
   test('Step 3: No dual "Loading..." + "just now" simultaneous render', async ({ page }) => {

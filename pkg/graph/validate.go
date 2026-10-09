@@ -200,6 +200,9 @@ func ValidateBundleArtifacts(spec *kardinalv1alpha1.BundleSpec) error {
 	if needConfig && (spec.ConfigRef == nil || spec.ConfigRef.CommitSHA == "") {
 		return fmt.Errorf("type %q requires configRef.commitSHA", typ)
 	}
+	if typ == "chart" && (spec.Chart == nil || spec.Chart.Name == "" || spec.Chart.Version == "") {
+		return fmt.Errorf("type %q requires chart.name and chart.version", typ)
+	}
 	return nil
 }
 
@@ -326,13 +329,31 @@ func ValidateUpdateStrategy(p *kardinalv1alpha1.Pipeline) error {
 // the Argo CD Application, so the Bundle's Git config change would be
 // skipped. Failing at build stops the Bundle before its first environment,
 // even when only a later one uses argocd.
+//
+// A chart Bundle needs update.strategy helm in every environment it promotes:
+// only helm-set-image writes the chart version.
 func validateBundleStrategy(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle, envs []string) error {
-	if bundle.Spec.Type != "config" && bundle.Spec.Type != "mixed" {
-		return nil
-	}
 	promoted := make(map[string]bool, len(envs))
 	for _, name := range envs {
 		promoted[name] = true
+	}
+	if bundle.Spec.Type == "chart" {
+		for _, e := range pipeline.Spec.Environments {
+			if promoted[e.Name] && e.Update.Strategy != "helm" {
+				strategy := e.Update.Strategy
+				if strategy == "" {
+					strategy = "kustomize"
+				}
+				return fmt.Errorf("build: environment %q uses update.strategy %s, which cannot promote a chart "+
+					"Bundle: only update.strategy helm writes the chart version (update.helm.chartVersionFile and "+
+					"chartVersionPath); set it for that environment, or skip it with intent.skipEnvironments",
+					e.Name, strategy)
+			}
+		}
+		return nil
+	}
+	if bundle.Spec.Type != "config" && bundle.Spec.Type != "mixed" {
+		return nil
 	}
 	for _, e := range pipeline.Spec.Environments {
 		if promoted[e.Name] && e.Update.Strategy == "argocd" {

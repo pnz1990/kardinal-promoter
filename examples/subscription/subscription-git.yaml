@@ -7,9 +7,10 @@
 # myorg/platform-config-source is a placeholder; change it to your config
 # source repo. It uses the Pipeline's layout (environments/<name>), and
 # config-merge copies each environment's path from the new commit.
-# Watch a repo or branch the Pipeline does not write to: pathGlob (path
-# filtering) is not implemented and must be left unset, so a Subscription on
-# myorg/platform-config main would create a Bundle for every promotion commit.
+# Watch a repo or branch the Pipeline does not write to, or set
+# spec.git.pathGlob to paths kardinal does not write: a Subscription on
+# myorg/platform-config main without it would create a Bundle for every
+# promotion commit. A private repo needs spec.git.secretRef (docs/subscription.md).
 #
 # Usage:
 #   kubectl apply -f subscription-git.yaml

@@ -43,6 +43,13 @@ const PIPELINES = [
     environmentStates: { test: 'Verified', uat: 'Verified', prod: 'WaitingForMerge' },
     blockerCount: 0,
     failedStepCount: 0,
+    activeBundleVersion: 'sha-abc1234',
+    environmentTopology: [{ name: 'test' }, { name: 'uat', upstreams: ['test'] }, { name: 'prod', upstreams: ['uat'], approval: 'pr-review' }],
+    deployed: {
+      test: { bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', verifiedAt: new Date(Date.now() - 420_000).toISOString() },
+      uat: { bundle: 'kardinal-test-app-abc123', version: 'sha-abc1234', verifiedAt: new Date(Date.now() - 240_000).toISOString(), configFrom: 'kardinal-test-app-cfg9', configVersion: 'config 77aa001' },
+      prod: { bundle: 'kardinal-test-app-prev111', version: 'sha-9f8e7d6', verifiedAt: new Date(Date.now() - 7_000_000).toISOString() },
+    },
   },
   {
     name: 'payments-service',
@@ -53,6 +60,8 @@ const PIPELINES = [
     environmentStates: { staging: 'Promoting', prod: 'Pending' },
     blockerCount: 2,
     failedStepCount: 0,
+    activeBundleVersion: 'v2.4.0',
+    environmentTopology: [{ name: 'staging' }, { name: 'prod', upstreams: ['staging'] }],
   },
 ]
 
@@ -115,7 +124,11 @@ const GRAPHS = {
 
 const STEPS = {
   'kardinal-test-app-abc123': [
-    { name: 'step-test-abc', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'test', stepType: 'kustomize-set-image', state: 'Verified', currentStepIndex: 7, conditions: [{ type: 'Ready', status: 'True', message: 'All steps complete' }] },
+    { name: 'step-test-abc', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'test', stepType: 'kustomize-set-image', state: 'Verified', currentStepIndex: 7, conditions: [{ type: 'Ready', status: 'True', message: 'All steps complete' }],
+      steps: [
+        ['git-clone', 0, 2400], ['kustomize-set-image', 2400, 300], ['git-commit', 2700, 200], ['git-push', 2900, 1800], ['health-check', 4700, 41000],
+      ].map(([name, from, ms]) => ({ name, state: 'Completed', startedAt: new Date(Date.now() - 580_000 + from).toISOString(),
+        completedAt: new Date(Date.now() - 580_000 + from + ms).toISOString(), durationMs: ms })) },
     { name: 'step-prod-abc', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', stepType: 'kustomize-set-image', state: 'WaitingForMerge', prURL: 'https://github.com/org/repo/pull/42', currentStepIndex: 5 },
   ],
 }
