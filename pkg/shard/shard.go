@@ -102,7 +102,7 @@ const (
 	// fenceMargin: a shard stops acting fenceMargin before the others may
 	// take its namespaces, which covers clock rate differences and the time
 	// between a renewal's start and another shard seeing it.
-	fenceMargin = 15 * time.Second
+	fenceMargin = 16 * time.Second
 	// passInterval is how often the leader takes and releases tokens.
 	passInterval = 5 * time.Second
 	// fenceTick is how often the fence is checked on its own ticker, so a
@@ -702,7 +702,7 @@ func (g *Gate) take(ctx context.Context, ns *corev1.Namespace, now time.Time, be
 	if was {
 		g.drop(ns.Name, "its token names another holder")
 	}
-	if holder != "" && !g.heartbeatStopped(ctx, holder, home, now, beats) {
+	if holder != "" && !g.heartbeatStopped(ctx, holder, home, beats) {
 		if holder == id {
 			g.homeConflict(ns, home)
 			return
@@ -758,10 +758,10 @@ func (g *Gate) homeConflict(ns *corev1.Namespace, home string) {
 // the first time this shard saw its current resourceVersion (or saw it
 // missing), on this shard's clock. A heartbeat that cannot be read is alive.
 // beats memoizes the reads of one pass.
-func (g *Gate) heartbeatStopped(ctx context.Context, holder, home string, now time.Time, beats map[string]*observation) bool {
+func (g *Gate) heartbeatStopped(ctx context.Context, holder, home string, beats map[string]*observation) bool {
 	key := home + "/" + holder
 	if o, ok := beats[key]; ok {
-		return o != nil && now.Sub(o.at) >= leaseDuration
+		return o != nil && g.now().Sub(o.at) >= leaseDuration
 	}
 	rv := "missing"
 	if home != "" {
@@ -780,13 +780,17 @@ func (g *Gate) heartbeatStopped(ctx context.Context, holder, home string, now ti
 			return false
 		}
 	}
+	// The version was seen now, after the read returned, not when the pass
+	// started: a slow read must not date a new heartbeat version earlier
+	// than this shard could have seen it, which would shorten the wait.
+	seen := g.now()
 	o, ok := g.observed[key]
 	if !ok || o.rv != rv {
-		o = observation{rv: rv, at: now}
+		o = observation{rv: rv, at: seen}
 		g.observed[key] = o
 	}
 	beats[key] = &o
-	return now.Sub(o.at) >= leaseDuration
+	return seen.Sub(o.at) >= leaseDuration
 }
 
 // acquired records ns as held and enqueues its objects.
@@ -848,6 +852,7 @@ func (g *Gate) warnUnrunShards(ctx context.Context, now time.Time, namespaces []
 		g.log.Debug().Err(err).Msg("list shard heartbeats")
 		return
 	}
+	seen := g.now() // after the list returned
 	running := map[string]bool{DefaultShard: true}
 	for i := range beats.Items {
 		hb := &beats.Items[i]
@@ -857,10 +862,10 @@ func (g *Gate) warnUnrunShards(ctx context.Context, now time.Time, namespaces []
 		key := hb.Namespace + "/" + *hb.Spec.HolderIdentity
 		o, ok := g.observed[key]
 		if !ok || o.rv != hb.ResourceVersion {
-			o = observation{rv: hb.ResourceVersion, at: now}
+			o = observation{rv: hb.ResourceVersion, at: seen}
 			g.observed[key] = o
 		}
-		if now.Sub(o.at) < leaseDuration+renewInterval {
+		if seen.Sub(o.at) < leaseDuration+renewInterval {
 			running[hb.Labels[LabelShard]] = true
 		}
 	}

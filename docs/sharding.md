@@ -74,14 +74,14 @@ What is guaranteed:
   is off on either host does not shorten the wait. A new leader of the same shard takes
   its tokens at once.
 - A shard that cannot renew its heartbeat (the API server is unreachable, or it cannot
-  list namespaces and so cannot see a relabel) fences itself 45 seconds after the start
+  list namespaces and so cannot see a relabel) fences itself 44 seconds after the start
   of its last renewal, on its own ticker (every API call of the Lease loop times out after
   5 seconds, so a hung call cannot delay it): it starts no reconcile and cancels the ones
   running. Once it renews again it re-reads its tokens and gives up those another shard
   took meanwhile.
 - So during an API partition the old owner stops at least 13 seconds before a new owner
-  can start (60 s × 0.99 − 45 s × 1.01 − 1 s, allowing 1% clock rate difference between
-  hosts). Two owners overlap only if a reconcile keeps writing more than 13 seconds after
+  can start (60 s × 0.99 − 44 s × 1.01 − 1 s ≈ 13.96 s, allowing 1% clock rate difference
+  between hosts). Two owners overlap only if a reconcile keeps writing more than 13 seconds after
   its context was cancelled. Even then the side effects repeat safely: a push to the PR
   branch is a force-push of the same change, a push to the base branch never forces, and
   `open-pr` adopts the open PR of its branch instead of opening a second one on every

@@ -523,7 +523,7 @@ func TestGate_ConcurrentReconciles(t *testing.T) {
 // pass is still blocked. The worst-case margin to another shard's takeover,
 // at 1% clock rate difference, is more than 10 seconds.
 func TestGate_FenceWithHangingCalls(t *testing.T) {
-	assert.Greater(t, FenceMargin(), 10*time.Second, "worst-case margin")
+	assert.GreaterOrEqual(t, FenceMargin(), 13*time.Second, "worst-case margin")
 	w := newWorld(t, namespace("team", ""))
 	def := w.shard(DefaultShard, t0)
 	def.timeout = 200 * time.Millisecond
@@ -616,4 +616,112 @@ func TestGate_HomeConflict(t *testing.T) {
 	var l coordinationv1.Lease
 	require.NoError(t, w.c.Get(context.Background(), types.NamespacedName{Namespace: "team", Name: LeaseName}, &l))
 	assert.Equal(t, "ns-two", l.Annotations[AnnotationHeartbeat])
+}
+
+// hookReader runs onHeartbeat while a read of the default shard's heartbeat is in flight.
+type hookReader struct {
+	client.Reader
+	onHeartbeat func()
+}
+
+func (r hookReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if key.Name == HeartbeatName(DefaultShard) && r.onHeartbeat != nil {
+		f := r.onHeartbeat
+		r.onHeartbeat = nil
+		f()
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+// TestGate_SlowHeartbeatReadKeepsTheMargin (#1505 QA): a heartbeat version
+// is dated when the read returns, not when the pass started. Shard b's pass
+// starts, and while its heartbeat read is in flight (20 s) default renews
+// and then stops for good. b may take the namespace over only 60 s after it
+// saw that renewal, so default (fenced 44 s after the renewal started) has
+// stopped at least 13 s before b starts. Dating the version at the pass start
+// (before the read) left 11 s.
+func TestGate_SlowHeartbeatReadKeepsTheMargin(t *testing.T) {
+	w := newWorld(t, namespace("team", ""))
+	def := w.shard(DefaultShard, t0)
+	run(passInterval, def)
+	require.True(t, def.Owns("team"))
+	// A reconcile in flight keeps default from releasing the namespace: it
+	// holds it until it dies.
+	r := &counting{block: make(chan struct{}), in: make(chan struct{})}
+	go func() { _, _ = def.Wrap(r).Reconcile(context.Background(), req("team")) }()
+	<-r.in
+	defer close(r.block)
+	w.relabel("team", "b")
+
+	clk := def.clk // one clock for both shards
+	var renewed time.Time
+	once := false
+	reader := &hookReader{Reader: w.c}
+	reader.onHeartbeat = func() {
+		if once {
+			return
+		}
+		once = true
+		clk.add(5 * time.Second)
+		def.Pass(context.Background()) // due: renews the heartbeat mid-read
+		def.mu.Lock()
+		renewed = def.renewedAt
+		def.mu.Unlock()
+		clk.add(15 * time.Second)
+	}
+	b := New(Options{Name: "b", Home: "kardinal-b", Client: w.c, Reader: hookReader{Reader: w.c, onHeartbeat: reader.onHeartbeat},
+		Log: zerolog.Nop()})
+	b.now = clk.now
+	clk.add(renewInterval)
+	b.Pass(context.Background()) // the slow read; default stops after it
+	require.False(t, renewed.IsZero(), "default renewed during b's read")
+
+	for !b.Owns("team") {
+		clk.add(time.Second)
+		b.Pass(context.Background())
+		require.Less(t, clk.now().Sub(renewed), 5*time.Minute, "b never took over")
+	}
+	tookOver := clk.now()
+	fenced := renewed.Add(leaseDuration - fenceMargin)
+	gap := tookOver.Sub(fenced)
+	t.Logf("default fenced at +%s after its renewal, b took over at +%s: gap %s",
+		fenced.Sub(renewed), tookOver.Sub(renewed), gap)
+	assert.GreaterOrEqual(t, gap, 13*time.Second)
+}
+
+// TestGate_FenceTickerThroughStart (#1505 QA): Start runs the 1 s fence ticker
+// next to the pass. With every write hanging, the pass that Start runs first
+// is stuck in its heartbeat renewal, yet once the heartbeat is too old the
+// ticker fences the shard and cancels the reconcile in flight within a tick
+// or two of real time.
+func TestGate_FenceTickerThroughStart(t *testing.T) {
+	w := newWorld(t, namespace("team", ""))
+	def := w.shard(DefaultShard, t0)
+	run(passInterval, def)
+	require.True(t, def.Owns("team"))
+
+	r := &counting{block: make(chan struct{}), in: make(chan struct{})}
+	done := make(chan struct{})
+	go func() { _, _ = def.Wrap(r).Reconcile(context.Background(), req("team")); close(done) }()
+	<-r.in
+
+	def.timeout = time.Minute
+	def.api.hang.Store(true)
+	def.clk.add(leaseDuration) // the heartbeat is too old from now on
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() { _ = def.Start(ctx); close(stopped) }()
+	select {
+	case <-done:
+	case <-time.After(3 * fenceTick):
+		t.Fatal("the fence ticker did not cancel the reconcile in flight")
+	}
+	assert.True(t, r.cancelled.Load())
+	assert.False(t, def.Owns("team"))
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after its context ended")
+	}
 }
