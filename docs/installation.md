@@ -315,6 +315,14 @@ release name other than `kardinal-promoter`, the Service is named
 - **Step timings.** Selecting an environment step lists the steps of that promotion
   (`git-clone` … `health-check`) with their durations, and a bar for each that shows where it
   ran in the promotion's time. A slow health check or push stands out at once.
+- **Bundle types.** The Bundle card names what the shown Bundle changes: `image`, `config`,
+  `image + config` (a mixed Bundle) or `chart`. In the Bundle history only the Bundles that are
+  not image Bundles carry the tag.
+- **Keyboard.** The first Tab stop skips to the main content. Each fleet line, and the Bundle
+  history, is a single Tab stop: the arrow keys move between its stations or Bundles (Home and
+  End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
+  the shortcuts (`/` filter, `r` refresh, `Esc` close a panel). Every view is checked against
+  WCAG 2.1 AA, colour contrast included, in both themes.
 - **Dark and light themes.** The UI follows the operating system's setting until you pick one
   with the ☀ / ☾ button next to the refresh indicator; the choice is kept in the browser.
 

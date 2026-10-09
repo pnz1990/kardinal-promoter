@@ -1,7 +1,7 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// UI-TIMELINE-01: the bundle timeline (select, shift-click and Compare) and
+// UI-TIMELINE-01, UI-BUNDLETYPE-01 and part of UI-KEYBOARD-01: the bundle timeline (select, shift-click and Compare) and
 // the comparison panel. Go test: TestUI_BrowserTimeline
 // (test/e2e/live/ui_browser_test.go).
 //
@@ -83,6 +83,20 @@ test('the timeline selects a Bundle, and shift-click compares two', async ({ pag
     await expect(c.locator('.bundle-chip__name')).toHaveText(b.name.split('-').pop()!)
   }
   await expectShown(page, newer, older)
+
+  // UI-BUNDLETYPE-01: the Bundle card names the type; image Bundles, the
+  // common case, carry no badge in the timeline.
+  await expect(page.getByRole('img', { name: 'image Bundle' })).toBeVisible()
+  const bar = page.getByRole('toolbar', { name: /Bundle history/ })
+  await expect(bar.getByRole('img')).toHaveCount(0)
+  // UI-KEYBOARD-01: the timeline is one Tab stop, the arrow keys move in it.
+  await expect(bar.locator('.bundle-chip[tabindex="0"]')).toHaveCount(1)
+  await chip(page, newer).focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(chip(page, older)).toBeFocused()
+  await page.keyboard.press('ArrowLeft')
+  await expect(chip(page, newer)).toBeFocused()
+  await expect(bar.locator('.bundle-chip[tabindex="0"]')).toHaveCount(1)
 
   // A click shows the older Bundle, and it stays on screen across polls.
   await chip(page, older).click()
