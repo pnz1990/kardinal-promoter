@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
@@ -97,10 +98,12 @@ func inJitter(t *testing.T, want, got time.Duration, msg string) {
 func TestCircuitOpen_DoesNotSpendRetries(t *testing.T) {
 	cs := newCircuitStep(t, nil)
 	start := cs.now
+	distinct := map[time.Duration]bool{}
 	for i := 0; i < 30; i++ {
 		cs.open(7 * time.Second)
 		wait := cs.reconcile()
 		inJitter(t, 7*time.Second, wait, fmt.Sprintf("wait %d: requeue when the circuit lets a call through", i))
+		distinct[wait] = true
 		got := cs.step()
 		require.Equal(t, "Promoting", got.Status.State, got.Status.Message)
 		require.Zero(t, got.Status.RetryCount, "an open circuit is not a retry")
@@ -112,6 +115,9 @@ func TestCircuitOpen_DoesNotSpendRetries(t *testing.T) {
 	}
 	assert.Equal(t, 1, cs.events(promotionstep.ConditionSCMUnavailable), "one Warning Event per wait")
 	require.Equal(t, 30, cs.scm.openCalled)
+	// The same circuit, the same wait: only the jitter tells the waits
+	// apart, so the steps waiting for one circuit do not all call at once.
+	assert.Greater(t, len(distinct), 10, "jittered waits differ: %v", distinct)
 
 	// A circuit open for an hour (a rate-limit reset) is looked at again at
 	// least every retryMaxDelay.
@@ -171,6 +177,11 @@ func TestCircuitOpen_WaitIsBounded(t *testing.T) {
 			assert.Contains(t, got.Status.Message, "the SCM was unavailable for")
 			assert.Contains(t, got.Status.Message, "SCM circuit open")
 			assert.NotContains(t, got.Status.Message, "gave up after", "the bound fails the step, not the retries")
+			assert.Nil(t, got.Status.SCMWaitSince, "the wait is over")
+			cond := meta.FindStatusCondition(got.Status.Conditions, promotionstep.ConditionSCMUnavailable)
+			require.NotNil(t, cond)
+			assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			assert.Equal(t, "TimedOut", cond.Reason)
 		})
 	}
 }
@@ -217,4 +228,66 @@ func TestCircuitOpen_SupersededCloseWaits(t *testing.T) {
 	assert.NotContains(t, got.Status.Message, "by hand", "the PR was closed after the outage")
 	assert.Len(t, mock.closed, 13)
 	assert.False(t, mock.open)
+}
+
+// TestCircuitOpen_SupersededCloseBounded: a superseded step whose PR close
+// meets a circuit that stays open waits for the bound, then spends its close
+// retries and fails, asking for the PR to be closed by hand. The wait emits
+// exactly one SCMUnavailable Event, sent after the status patch that starts
+// the wait, and the failed step's SCMUnavailable is False with reason
+// TimedOut. Covers SCM-CIRCUIT-WAIT-03.
+func TestCircuitOpen_SupersededCloseBounded(t *testing.T) {
+	defer promotionstep.NoCircuitJitter()()
+	bundle := makeBundle("old", "my-pipeline")
+	bundle.Status.Phase = "Superseded"
+	step := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "old-prod", Namespace: "default"},
+		Spec:       v1alpha1.PromotionStepSpec{PipelineName: "my-pipeline", BundleName: "old", Environment: "prod"},
+		Status: v1alpha1.PromotionStepStatus{State: "WaitingForMerge",
+			Outputs: map[string]string{"prURL": "https://github.com/org/repo/pull/42"}},
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mock := &mockSCM{open: true}
+	failPatch := true
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(step, bundle, makePipeline("my-pipeline")).
+		WithStatusSubresource(step).WithInterceptorFuncs(interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+			patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			if failPatch {
+				failPatch = false
+				return errors.New("etcdserver: request timed out")
+			}
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	}).Build()
+	rec := events.NewFakeRecorder(100)
+	r := promotionstep.Reconciler{Client: c, SCM: mock, GitClient: &mockGit{}, Recorder: rec,
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }, NowFn: func() time.Time { return now },
+		SCMWaitTimeout: 2 * time.Minute}
+	cs := &circuitStep{t: t, rec: rec}
+
+	// The patch that would start the wait is lost: no Event for it.
+	mock.closeErrs = []error{fmt.Errorf("close PR: %w", &scm.ErrCircuitOpen{RetryAfter: now.Add(20 * time.Second)})}
+	_, err := r.Reconcile(context.Background(), reqFor("old-prod"))
+	require.Error(t, err)
+	assert.Zero(t, cs.events(promotionstep.ConditionSCMUnavailable), "no Event before the status patch succeeds")
+
+	state := ""
+	for i := 0; i < 40 && state != "Failed"; i++ {
+		mock.closeErrs = []error{fmt.Errorf("close PR: %w", &scm.ErrCircuitOpen{RetryAfter: now.Add(20 * time.Second)})}
+		res, err := r.Reconcile(context.Background(), reqFor("old-prod"))
+		require.NoError(t, err)
+		got := getStep(t, c, "old-prod")
+		state = got.Status.State
+		now = now.Add(res.RequeueAfter)
+	}
+	got := getStep(t, c, "old-prod")
+	require.Equal(t, "Failed", got.Status.State, "the bound and then the close retries are spent")
+	assert.Contains(t, got.Status.Message, "by hand")
+	assert.Equal(t, 1, cs.events(promotionstep.ConditionSCMUnavailable), "exactly one SCMUnavailable Event")
+	assert.Nil(t, got.Status.SCMWaitSince)
+	cond := meta.FindStatusCondition(got.Status.Conditions, promotionstep.ConditionSCMUnavailable)
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionFalse, cond.Status)
+	assert.Equal(t, "TimedOut", cond.Reason)
 }

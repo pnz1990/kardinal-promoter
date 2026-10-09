@@ -400,12 +400,12 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 			ps.Status.RetryCount = 0
 		}
 		wait, ok := circuitWait(closeErr, r.now())
+		started := false
 		if ok {
-			if waited, started := r.startSCMWait(ps, closeErr); waited >= r.scmWaitBound(0) {
+			var waited time.Duration
+			if waited, started = r.startSCMWait(ps, closeErr); waited >= r.scmWaitBound(0) {
 				// Waited for the whole bound: spend the close retries now.
 				ok = false
-			} else if started {
-				r.emitSCMUnavailable(ps, r.scmWaitBound(0), closeErr)
 			}
 		} else {
 			clearSCMWait(ps, r.now())
@@ -428,6 +428,11 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 				ps.Spec.BundleName, wait, closeErr)
 			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("patch supersession circuit wait: %w", err)
+			}
+			// After the patch: a lost patch starts the wait again on the
+			// next reconcile, which emits the one Event then.
+			if started {
+				r.emitSCMUnavailable(ps, r.scmWaitBound(0), closeErr)
 			}
 			return ctrl.Result{RequeueAfter: wait}, nil
 		}
@@ -452,6 +457,7 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 			return ctrl.Result{RequeueAfter: delay}, nil
 		}
 		msg += fmt.Sprintf("; closing its PR failed after %d retries (%v) — %s", maxStepRetries, closeErr, closeByHand(closeErr))
+		endSCMWaitTimedOut(ps, r.now())
 	} else {
 		meta.RemoveStatusCondition(&ps.Status.Conditions, ConditionSupersededCloseFailed)
 	}
@@ -1017,6 +1023,7 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 		}
 		// Waited for the whole bound: the SCM stays down. Fail the step.
 		execErr = fmt.Errorf("the SCM was unavailable for %s, the most this step waits: %w", waited.Round(time.Second), execErr)
+		endSCMWaitTimedOut(ps, r.now())
 		scmDown = true
 	}
 	if scmDown {

@@ -96,6 +96,23 @@ func clearSCMWait(ps *v1alpha1.PromotionStep, now time.Time) {
 	})
 }
 
+// endSCMWaitTimedOut ends a wait for the SCM that used up its bound: the
+// step fails. SCMUnavailable turns False with reason TimedOut, so the
+// condition does not claim the step still waits. The caller writes the status.
+func endSCMWaitTimedOut(ps *v1alpha1.PromotionStep, now time.Time) {
+	if ps.Status.SCMWaitSince == nil {
+		return
+	}
+	since := ps.Status.SCMWaitSince.Time
+	ps.Status.SCMWaitSince = nil
+	meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
+		Type: ConditionSCMUnavailable, Status: metav1.ConditionFalse, Reason: "TimedOut",
+		Message: fmt.Sprintf("the SCM was unavailable for %s, the most this step waits; the step failed",
+			now.Sub(since).Round(time.Second)),
+		ObservedGeneration: ps.Generation, LastTransitionTime: metav1.NewTime(now.UTC()),
+	})
+}
+
 // emitSCMUnavailable writes the one Warning Event of a wait.
 func (r *Reconciler) emitSCMUnavailable(ps *v1alpha1.PromotionStep, bound time.Duration, err error) {
 	kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, ConditionSCMUnavailable, "Promote",

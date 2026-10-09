@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -220,6 +219,8 @@ func TestCircuitRegistry_InFlightFailures(t *testing.T) {
 
 // TestCircuitRegistry_LateTransientKeepsQuotaOpen: a 5xx answered by a call
 // that started before the quota circuit opened does not close it.
+//
+// Covers SCM-BREAKER-LATE-01.
 func TestCircuitRegistry_LateTransientKeepsQuotaOpen(t *testing.T) {
 	reg := scm.NewCircuitRegistry()
 	before := time.Now().Add(-time.Second)
@@ -231,16 +232,4 @@ func TestCircuitRegistry_LateTransientKeepsQuotaOpen(t *testing.T) {
 	reg.Record("other", before, &http.Response{StatusCode: http.StatusOK, Header: http.Header{}}, nil)
 	require.ErrorAs(t, reg.Allow("acme"), &open, "late answers leave the quota circuit open")
 	assert.Greater(t, time.Until(open.RetryAfter), 9*time.Minute)
-}
-
-// TestCircuitRegistry_Metrics: kardinal_scm_circuit_open and
-// kardinal_scm_circuit_opens_total follow an owner's circuit.
-func TestCircuitRegistry_Metrics(t *testing.T) {
-	reg := scm.NewCircuitRegistry()
-	owner := "metrics-owner"
-	for i := 0; i < 5; i++ {
-		reg.Record(owner, time.Now(), nil, errors.New("connection refused"))
-	}
-	assert.Equal(t, 1.0, testutil.ToFloat64(scm.CircuitOpenGauge.WithLabelValues("owner", owner)))
-	assert.Equal(t, 1.0, testutil.ToFloat64(scm.CircuitOpens.WithLabelValues("owner", owner)))
 }

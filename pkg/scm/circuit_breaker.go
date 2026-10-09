@@ -112,10 +112,6 @@ type CircuitBreaker struct {
 	// openedAt is when the circuit last opened: a call that started before
 	// it says nothing about the outage (RecordFailureFrom, RecordSuccessFrom).
 	openedAt time.Time
-	// onChange, when set, is called with true when the circuit opens and
-	// false when it closes (the kardinal_scm_circuit_open metric). It runs
-	// with cb.mu held and must not call back into cb.
-	onChange func(open bool)
 }
 
 // NewCircuitBreaker creates a circuit breaker with sensible defaults.
@@ -196,14 +192,10 @@ func (cb *CircuitBreaker) RecordSuccessFrom(started time.Time) {
 	if cb.currentState() != CircuitClosed && started.Before(cb.openedAt) {
 		return
 	}
-	wasOpen := cb.state != CircuitClosed
 	cb.consecutiveFails = 0
 	cb.openings = 0
 	cb.state = CircuitClosed
 	cb.probeStarted = time.Time{}
-	if wasOpen && cb.onChange != nil {
-		cb.onChange(false)
-	}
 }
 
 // cancelProbe gives back the half-open probe slot of a call that Allow
@@ -279,15 +271,11 @@ func (cb *CircuitBreaker) RecordFailureFrom(started, retryAfter time.Time) {
 // openLocked opens the circuit for the current backoff, or until retryAfter
 // if that is later. Must be called with cb.mu held.
 func (cb *CircuitBreaker) openLocked(retryAfter time.Time) {
-	wasClosed := cb.state == CircuitClosed
 	now := time.Now()
 	cb.openUntil = latestTime(retryAfter, now.Add(cb.backoffDuration(cb.openings)))
 	cb.state = CircuitOpen
 	cb.openedAt = now
 	cb.probeStarted = time.Time{}
-	if wasClosed && cb.onChange != nil {
-		cb.onChange(true)
-	}
 }
 
 // backoffDuration returns the exponential backoff for the given step.

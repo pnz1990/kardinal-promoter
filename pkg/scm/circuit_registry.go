@@ -52,7 +52,6 @@ func NewCircuitRegistry() *CircuitRegistry {
 	quota := NewCircuitBreaker()
 	// The server says when the quota resets: one answer is enough.
 	quota.FailureThreshold = 1
-	watchCircuit(quota, "quota", "")
 	return &CircuitRegistry{owners: map[string]*CircuitBreaker{}, quota: quota}
 }
 
@@ -75,7 +74,6 @@ func (r *CircuitRegistry) owner(owner string) *CircuitBreaker {
 			r.pruneLocked()
 		}
 		cb = NewCircuitBreaker()
-		watchCircuit(cb, "owner", key)
 		r.owners[key] = cb
 	}
 	return cb
@@ -88,8 +86,6 @@ func (r *CircuitRegistry) pruneLocked() {
 	for k, cb := range r.owners {
 		if cb.pristine() {
 			delete(r.owners, k)
-			CircuitOpenGauge.DeleteLabelValues("owner", k)
-			CircuitOpens.DeleteLabelValues("owner", k)
 		}
 	}
 }

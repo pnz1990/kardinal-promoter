@@ -501,7 +501,8 @@ GitHub's API rate limit (5000 req/hr for authenticated requests) or GitLab's rat
 5. On probe success, the circuit closes and normal operation resumes
 6. A token rotation (a new value in the token Secret) keeps the circuits: the new token is first used by the probe
 7. A step that meets an open circuit waits for it and runs again. The wait does not count against the step's 5 retries: its message says "waiting ... for the SCM (not counted as a retry ...)", the condition `SCMUnavailable` is True, `status.scmWaitSince` says since when, and one `SCMUnavailable` Warning Event is written. The wait is bounded: the step fails ("the SCM was unavailable for ...") once it has waited the environment's `stepTimeoutSeconds`, or else the controller's `--scm-wait-timeout` (default 30 minutes). A superseded step closing its PR waits the same way, so its PR and `kardinal/` branch are not left behind, and after the bound it spends its close retries. PRStatus polls wait for the circuit too
-8. Metrics: `kardinal_scm_circuit_open{circuit,owner}` is 1 while a circuit is open or half-open (`circuit="owner"` for a repository owner, `circuit="quota"` with no owner for the token's rate limit), and `kardinal_scm_circuit_opens_total{circuit,owner}` counts how often each opened. An owner's series goes away once its circuit is closed and forgotten
+8. Once the bound fails a step, `status.scmWaitSince` is cleared and `SCMUnavailable` is False with reason `TimedOut`
+9. Metrics: `kardinal_scm_circuit_state{provider,owner}` is `0` closed, `1` half-open, `2` open, with `owner="_quota"` for the token's rate-limit circuit, and `kardinal_scm_requests_total{result="circuit_open"}` counts the calls an open circuit refused ([SCM API and git metrics](guides/monitoring.md#scm-api-and-git-metrics))
 
 **Checking circuit state in logs:**
 
