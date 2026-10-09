@@ -28,6 +28,8 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // AnnotationGraphRetireAfter on a Pipeline replaces every delay of the
@@ -459,7 +461,7 @@ func (r *Reconciler) reconcileRetire(ctx context.Context, req ctrl.Request) (ctr
 // Verified (it can replace older Verified ones everywhere, shortening their
 // delay), and a change to a Pipeline's AnnotationGraphRetireAfter.
 func (r *Reconciler) setupRetire(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		Named("bundle-retire").
 		For(&kardinalv1alpha1.Bundle{}, builder.WithPredicates(predicate.NewPredicateFuncs(finishedPhase))).
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(bundleLabelMapper)).
@@ -474,8 +476,11 @@ func (r *Reconciler) setupRetire(mgr ctrl.Manager) error {
 				DeleteFunc:  func(event.DeleteEvent) bool { return false },
 				GenericFunc: func(event.GenericEvent) bool { return false },
 			})).
-		WithOptions(controller.Options{MaxConcurrentReconciles: retireWorkers}).
-		Complete(reconcile.Func(r.reconcileRetire))
+		WithOptions(controller.Options{MaxConcurrentReconciles: retireWorkers})
+	// Sharded like the Bundle reconciler (#1505): a shard retires only the
+	// Bundles of the namespaces it holds.
+	return shard.Active().Complete(b, tracing.WrapReconciler("bundle-retire", reconcile.Func(r.reconcileRetire)),
+		&kardinalv1alpha1.BundleList{})
 }
 
 // graphObject is an empty kro Graph, unstructured so kardinal does not import

@@ -56,6 +56,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
@@ -1640,7 +1641,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := r.setupRetire(mgr); err != nil {
 		return fmt.Errorf("set up the bundle retirement controller: %w", err)
 	}
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Bundle{}).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.waitingSiblings),
 			builder.WithPredicates(bundlePhaseChanged)).
@@ -1649,8 +1650,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineBundles),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.gateBundles),
-			builder.WithPredicates(gateTemplateChanged)).
-		Complete(tracing.WrapReconciler("bundle", r))
+			builder.WithPredicates(gateTemplateChanged))
+	return shard.Active().Complete(b, tracing.WrapReconciler("bundle", r), &kardinalv1alpha1.BundleList{})
 }
 
 // bundlePipelineIndex is the spec.pipeline index function.
