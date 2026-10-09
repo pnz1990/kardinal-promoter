@@ -1058,6 +1058,10 @@
             "description": "Hold keeps the environment on the rollback until it is released (kardinal rollback --hold): no other Bundle promotes into it, and the rollback passes the gates that would block it, each pass audited.",
             "type": "boolean"
           },
+          "holdExpiresIn": {
+            "description": "HoldExpiresIn, a Go duration such as 24h, ends the hold that long after it is made. Empty: the hold lasts until it is released.",
+            "type": "string"
+          },
           "holdReason": {
             "description": "HoldReason says why the environment is held. Required with hold.",
             "type": "string"
@@ -1301,6 +1305,10 @@
           },
           "createdBy": {
             "description": "CreatedBy is who held the environment.",
+            "type": "string"
+          },
+          "expiresAt": {
+            "description": "ExpiresAt is when the controller removes the hold, RFC 3339; empty: when it is released.",
             "type": "string"
           },
           "reason": {

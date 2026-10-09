@@ -15,6 +15,10 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
@@ -186,8 +190,19 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "a hold needs a holdReason", http.StatusBadRequest)
 			return
 		}
+		var expiresIn time.Duration
+		if req.HoldExpiresIn != "" {
+			if expiresIn, err = time.ParseDuration(req.HoldExpiresIn); err != nil || expiresIn <= 0 {
+				http.Error(w, "holdExpiresIn must be a positive Go duration (24h)", http.StatusBadRequest)
+				return
+			}
+		}
+		if err := s.authorizeHold(r.Context(), ns, req.Pipeline); err != nil {
+			s.writeLifecycleError(w, "hold", err)
+			return
+		}
 		plan, _, err = lifecycle.RollbackAndHold(r.Context(), s.client,
-			lifecycle.HoldRequest{RollbackRequest: rollbackReq, HoldReason: req.HoldReason})
+			lifecycle.HoldRequest{RollbackRequest: rollbackReq, HoldReason: req.HoldReason, ExpiresIn: expiresIn})
 	} else {
 		plan, err = lifecycle.PlanRollback(r.Context(), s.client, rollbackReq)
 		if err == nil {
@@ -226,6 +241,22 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// authorizeHold checks that the UI user may update pipelines/hold of the
+// Pipeline, the virtual subresource the hold-writes admission policy asks of
+// a direct write. The controller writes the hold itself, so without this
+// check a user with plain update on Pipelines could hold through the UI.
+// With no UI auth mode there is no user to check.
+func (s *uiAPIServer) authorizeHold(ctx context.Context, ns, pipeline string) error {
+	a, ok := s.client.(interface {
+		AuthorizeSubresource(ctx context.Context, verb string, obj client.Object, subresource string) error
+	})
+	if !ok {
+		return nil
+	}
+	return a.AuthorizeSubresource(ctx, "update",
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: pipeline, Namespace: ns}}, "hold")
+}
+
 // handleReleaseHold handles POST /api/v1/ui/release-hold: it removes the hold
 // of an environment (lifecycle.ReleaseHold). UI equivalent of
 // `kardinal release-hold`. 404 when the environment is not held.
@@ -246,6 +277,10 @@ func (s *uiAPIServer) handleReleaseHold(w http.ResponseWriter, r *http.Request) 
 	ns := req.Namespace
 	if ns == "" {
 		ns = "default"
+	}
+	if err := s.authorizeHold(r.Context(), ns, req.Pipeline); err != nil {
+		s.writeLifecycleError(w, "release hold", err)
+		return
 	}
 	h, err := lifecycle.ReleaseHold(r.Context(), s.client, ns, req.Pipeline, req.Environment)
 	if err != nil {

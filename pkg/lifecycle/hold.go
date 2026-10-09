@@ -6,6 +6,7 @@ package lifecycle
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -30,10 +31,18 @@ import (
 //   - the PromotionStep reconciler holds the other Bundles' steps that exist
 //     there already before their next git step (HeldFrom);
 //   - the Bundle reconciler never supersedes the hold's Bundle;
-//   - the PolicyGate reconciler passes the hold's Bundle through every gate
-//     on its way, each pass with an EXEMPT reason, an AuditEvent and a
-//     Warning Event (GateExemption).
-// Writing a hold needs update on the Pipeline, like kardinal pause.
+//   - the Bundle reconciler does not garbage-collect it (historyLimit);
+//   - the PolicyGate reconciler passes the hold's Bundle through the gates
+//     of the held environment, each pass with an EXEMPT reason, an
+//     AuditEvent and a Warning Event (GateExemption), but only while
+//     VerifyHeldRollback holds: the Bundle restores artifacts that were
+//     Verified in the environment and still has the artifacts it had when
+//     the hold was made;
+//   - the Pipeline reconciler removes a hold at its expiresAt and writes the
+//     HoldCreated and HoldReleased AuditEvents for every client alike.
+// Writing a hold needs update on the virtual subresource pipelines/hold
+// (the chart's hold-writes admission policy), which also pins createdBy to
+// the requesting user.
 
 // HoldOf returns the hold of env in p, or nil.
 func HoldOf(p *v1alpha1.Pipeline, env string) *v1alpha1.EnvironmentHold {
@@ -96,6 +105,106 @@ type HoldRequest struct {
 	RollbackRequest
 	// Reason is why the environment is held (required).
 	HoldReason string
+	// ExpiresIn, when positive, ends the hold that long after it is made.
+	ExpiresIn time.Duration
+}
+
+// ArtifactDigest is the digest of what a Bundle deploys: its type, images
+// (repository, tag, digest), configRef and chart. A hold records it, and the gate
+// exemption applies only while the held Bundle still has the same digest.
+func ArtifactDigest(spec v1alpha1.BundleSpec) string {
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "type=%s\n", spec.Type)
+	for _, img := range spec.Images {
+		_, _ = fmt.Fprintf(h, "image=%s|%s|%s\n", img.Repository, img.Tag, img.Digest)
+	}
+	if spec.ConfigRef != nil {
+		_, _ = fmt.Fprintf(h, "config=%s|%s\n", spec.ConfigRef.GitRepo, spec.ConfigRef.CommitSHA)
+	}
+	if spec.Chart != nil {
+		_, _ = fmt.Fprintf(h, "chart=%s|%s|%s\n", spec.Chart.RepoURL, spec.Chart.Name, spec.Chart.Version)
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
+}
+
+// VerifyHeldRollback decides whether the Bundle h names may pass the gates
+// of h.Environment. It returns the Bundle, or "" and why not. The Bundle
+// must be a rollback Bundle (label kardinal.io/rollback=true) of the
+// Pipeline whose spec.provenance.rollbackOf names a Bundle Verified in the
+// environment; each of its images must be one that a Bundle Verified in
+// the environment deployed, and so must its configRef and chart; and its artifacts
+// must still have the digest h recorded. A Bundle that someone edited, or
+// that restores anything not already Verified there, is not exempt: it goes
+// through the gates like any Bundle.
+func VerifyHeldRollback(ctx context.Context, c client.Reader, p *v1alpha1.Pipeline, h *v1alpha1.EnvironmentHold) (*v1alpha1.Bundle, string) {
+	var b v1alpha1.Bundle
+	if err := c.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: h.Bundle}, &b); err != nil {
+		return nil, fmt.Sprintf("bundle %s: %v", h.Bundle, err)
+	}
+	if b.Labels[LabelRollback] != "true" || b.Spec.Pipeline != p.Name {
+		return nil, fmt.Sprintf("bundle %s is not a rollback Bundle of pipeline %s", h.Bundle, p.Name)
+	}
+	if h.Artifacts == "" {
+		return nil, "the hold records no artifact digest (holds made with kardinal rollback --hold or the UI do)"
+	}
+	if got := ArtifactDigest(b.Spec); got != h.Artifacts {
+		return nil, fmt.Sprintf("bundle %s no longer has the artifacts it had when the hold was made", h.Bundle)
+	}
+	if b.Spec.Provenance == nil || b.Spec.Provenance.RollbackOf == "" {
+		return nil, fmt.Sprintf("bundle %s names no rollbackOf", h.Bundle)
+	}
+	hist, err := loadEnvHistory(ctx, c, p.Namespace, p.Name, h.Environment)
+	if err != nil {
+		return nil, err.Error()
+	}
+	target := b.Spec.Provenance.RollbackOf
+	if !hist.verifiedIn(target) {
+		return nil, fmt.Sprintf("rollbackOf %s was never Verified in %s", target, h.Environment)
+	}
+	images := map[v1alpha1.ImageRef]bool{}
+	configs := map[v1alpha1.ConfigRef]bool{}
+	charts := map[v1alpha1.ChartRef]bool{}
+	for _, name := range hist.verifiedNewestFirst() {
+		if name == b.Name {
+			continue
+		}
+		var v v1alpha1.Bundle
+		if err := c.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: name}, &v); err != nil {
+			continue
+		}
+		for _, img := range v.Spec.Images {
+			images[img] = true
+		}
+		if v.Spec.ConfigRef != nil {
+			configs[v1alpha1.ConfigRef{GitRepo: v.Spec.ConfigRef.GitRepo, CommitSHA: v.Spec.ConfigRef.CommitSHA}] = true
+		}
+		if v.Spec.Chart != nil {
+			charts[*v.Spec.Chart] = true
+		}
+	}
+	for _, img := range b.Spec.Images {
+		if !images[img] {
+			return nil, fmt.Sprintf("image %s was not deployed by a Bundle Verified in %s", imageString(img), h.Environment)
+		}
+	}
+	if cr := b.Spec.ConfigRef; cr != nil && !configs[v1alpha1.ConfigRef{GitRepo: cr.GitRepo, CommitSHA: cr.CommitSHA}] {
+		return nil, fmt.Sprintf("config commit %s was not deployed by a Bundle Verified in %s", cr.CommitSHA, h.Environment)
+	}
+	if ch := b.Spec.Chart; ch != nil && !charts[*ch] {
+		return nil, fmt.Sprintf("chart %s %s was not deployed by a Bundle Verified in %s", ch.Name, ch.Version, h.Environment)
+	}
+	return &b, ""
+}
+
+func imageString(img v1alpha1.ImageRef) string {
+	s := img.Repository
+	if img.Tag != "" {
+		s += ":" + img.Tag
+	}
+	if img.Digest != "" {
+		s += "@" + img.Digest
+	}
+	return s
 }
 
 // RollbackAndHold rolls req.Environment back (PlanRollback) and holds it on
@@ -133,7 +242,11 @@ func RollbackAndHold(ctx context.Context, c client.Client, req HoldRequest) (*Ro
 	}
 	at := metav1.NewTime(now.UTC())
 	hold := v1alpha1.EnvironmentHold{Environment: req.Environment, Bundle: plan.Bundle.Name,
-		Reason: req.HoldReason, CreatedBy: req.Actor, CreatedAt: &at}
+		Reason: req.HoldReason, CreatedBy: req.Actor, CreatedAt: &at, Artifacts: ArtifactDigest(plan.Bundle.Spec)}
+	if req.ExpiresIn > 0 {
+		exp := metav1.NewTime(now.UTC().Add(req.ExpiresIn))
+		hold.ExpiresAt = &exp
+	}
 	if err := setHold(ctx, c, req.Namespace, req.Pipeline, hold); err != nil {
 		return nil, nil, err
 	}

@@ -456,7 +456,8 @@ func TestUIAPI_RollbackHold(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "app"}, &p))
 	require.Len(t, p.Spec.Holds, 1)
 	assert.Equal(t, v1alpha1.EnvironmentHold{Environment: "prod", Bundle: resp.Bundle, Reason: "INC-42",
-		CreatedBy: "kardinal-ui", CreatedAt: p.Spec.Holds[0].CreatedAt}, p.Spec.Holds[0])
+		CreatedBy: "kardinal-ui", CreatedAt: p.Spec.Holds[0].CreatedAt, Artifacts: lifecycle.ArtifactDigest(created[0].Spec)},
+		p.Spec.Holds[0])
 
 	// A second hold of the same environment conflicts.
 	w = uiLcPost(t, c, "/api/v1/ui/rollback", `{"pipeline":"app","environment":"prod","hold":true,"holdReason":"again"}`)

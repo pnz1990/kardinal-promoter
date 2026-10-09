@@ -29,11 +29,13 @@ and only those: the rest stays as deployed. --to a Bundle whose type cannot
 deploy what the deployed Bundle changed is refused.
 
 With --hold (and --reason), the environment stays on the rollback: no other
-Bundle promotes into it until kardinal release-hold <pipeline> --env <env>.
-The rollback is never superseded, and it passes every PolicyGate on its way
-that would block it, each pass shown as EXEMPT with who held the
-environment and why, recorded as a GateEvaluated AuditEvent and a
-GateExempted Warning Event. See docs/rollback.md.
+Bundle promotes into it until kardinal release-hold <pipeline> --env <env>
+(or --hold-expires-in has passed). The rollback is never superseded, and it
+passes the PolicyGates of that environment that would block it while the
+controller verifies it restores what was Verified there, each pass shown as
+EXEMPT with who held the environment and why, recorded as a GateEvaluated
+AuditEvent and a GateExempted Warning Event. Holding needs update on
+pipelines/hold. See docs/rollback.md.
 
 ```
 kardinal rollback <pipeline> [flags]
@@ -42,11 +44,12 @@ kardinal rollback <pipeline> [flags]
 ### Options
 
 ```
-      --env string      Target environment to roll back (required)
-  -h, --help            help for rollback
-      --hold            Keep the environment on the rollback until kardinal release-hold; the rollback passes blocking gates, each pass audited
-      --reason string   Why the environment is held (required with --hold)
-      --to string       Specific Bundle name to roll back to
+      --env string                 Target environment to roll back (required)
+  -h, --help                       help for rollback
+      --hold                       Keep the environment on the rollback until kardinal release-hold; the rollback passes blocking gates, each pass audited
+      --hold-expires-in duration   End the hold this long after it is made (e.g. 24h); default: until kardinal release-hold
+      --reason string              Why the environment is held (required with --hold)
+      --to string                  Specific Bundle name to roll back to
 ```
 
 ### Options inherited from parent commands

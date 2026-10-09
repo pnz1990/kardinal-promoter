@@ -1712,6 +1712,103 @@ func TestBundleReconciler_HistoryGC_DeletesOldestTerminal(t *testing.T) {
 	}
 }
 
+// TestBundleReconciler_HistoryGC_KeepsHeldBundle (#1528): the Bundle a hold
+// names is not garbage-collected while the hold lasts, and does not count
+// toward historyLimit.
+func TestBundleReconciler_HistoryGC_KeepsHeldBundle(t *testing.T) {
+	const limit = 3
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			HistoryLimit: limit,
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+			Holds:        []kardinalv1alpha1.EnvironmentHold{{Environment: "test", Bundle: "my-app-v1", Reason: "INC-42"}},
+		},
+	}
+
+	// Create 4 terminal bundles — one more than the limit.
+	// oldest → newest: v1, v2, v3, v4. v1 should be deleted.
+	bundles := []*kardinalv1alpha1.Bundle{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app-v1",
+				Namespace:         "default",
+				CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+			},
+			Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+			Status: kardinalv1alpha1.BundleStatus{Phase: "Verified"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app-v2",
+				Namespace:         "default",
+				CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)),
+			},
+			Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+			Status: kardinalv1alpha1.BundleStatus{Phase: "Superseded"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app-v3",
+				Namespace:         "default",
+				CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)),
+			},
+			Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+			Status: kardinalv1alpha1.BundleStatus{Phase: "Failed"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app-v4",
+				Namespace:         "default",
+				CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC)),
+			},
+			Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+			Status: kardinalv1alpha1.BundleStatus{Phase: "Verified"},
+		},
+	}
+
+	// The new bundle (v5) — no phase yet — triggers GC.
+	newBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app-v5",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)),
+		},
+		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+	}
+
+	s := newScheme()
+	objs := []client.Object{pipeline, newBundle}
+	for _, b := range bundles {
+		objs = append(objs, b)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(objs...).
+		WithStatusSubresource(newBundle).
+		WithIndex(&kardinalv1alpha1.Bundle{}, "spec.pipeline", func(obj client.Object) []string {
+			b, ok := obj.(*kardinalv1alpha1.Bundle)
+			if !ok || b.Spec.Pipeline == "" {
+				return nil
+			}
+			return []string{b.Spec.Pipeline}
+		}).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-v5", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	for _, name := range []string{"my-app-v1", "my-app-v2", "my-app-v3", "my-app-v4"} {
+		var b kardinalv1alpha1.Bundle
+		require.NoError(t, c.Get(context.Background(),
+			types.NamespacedName{Name: name, Namespace: "default"}, &b),
+			"bundle %s must still exist: v1 is held, and the other three are within the limit", name)
+	}
+}
+
 // TestBundleReconciler_HistoryGC_DefaultLimit verifies that when Pipeline.spec.historyLimit
 // is unset (zero), the default limit of 50 is applied (spec #910 O2).
 func TestBundleReconciler_HistoryGC_DefaultLimit(t *testing.T) {

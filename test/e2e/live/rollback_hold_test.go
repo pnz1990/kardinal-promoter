@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -28,9 +30,12 @@ import (
 // shows it. A Bundle created after the rollback promotes to test but gets
 // no prod step, and prod stays on the rollback, which is not superseded. A
 // second hold of prod is refused. After kardinal release-hold, the newer
-// Bundle promotes to prod.
+// Bundle promotes to prod. The hold names the caller's Kubernetes user,
+// the controller records HoldCreated and HoldReleased AuditEvents, and the
+// chart's hold-writes admission policy refuses a hold whose createdBy is
+// someone else.
 //
-// Covers RB-HOLD-01.
+// Covers RB-HOLD-01, RB-HOLD-02.
 func TestRollback_Hold(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -54,7 +59,7 @@ func TestRollback_Hold(t *testing.T) {
 	out, rb := rbRollback(t, a, "prod", "--hold", "--reason", reason)
 	assert.Contains(t, out, fmt.Sprintf("Environment prod held on %s: no other Bundle promotes there until: kardinal release-hold %s --env prod",
 		rb, pipelineName))
-	assert.Contains(t, out, "Gates that would block the rollback pass as EXEMPT (audited).")
+	assert.Contains(t, out, "Gates of prod that would block the rollback pass as EXEMPT (audited)")
 
 	var p v1alpha1.Pipeline
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &p))
@@ -63,8 +68,34 @@ func TestRollback_Hold(t *testing.T) {
 	assert.Equal(t, "prod", hold.Environment)
 	assert.Equal(t, rb, hold.Bundle)
 	assert.Equal(t, reason, hold.Reason)
-	assert.NotEmpty(t, hold.CreatedBy)
+	ssr, err := e.Kube.AuthenticationV1().SelfSubjectReviews().Create(ctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, ssr.Status.UserInfo.Username, hold.CreatedBy, "createdBy is the caller's Kubernetes user")
 	require.NotNil(t, hold.CreatedAt)
+	assert.NotEmpty(t, hold.Artifacts, "the hold records the rollback's artifact digest")
+	holdAudit := func(action string) func(context.Context) (bool, string) {
+		return func(ctx context.Context) (bool, string) {
+			evs, err := e.AuditEvents(ctx, a.ns, rb)
+			if err != nil {
+				return false, err.Error()
+			}
+			for _, ae := range evs {
+				if ae.Spec.Action == action {
+					return strings.Contains(ae.Spec.Message, reason), ae.Spec.Message
+				}
+			}
+			return false, "no " + action
+		}
+	}
+	framework.Eventually(t, time.Minute, "a HoldCreated AuditEvent", holdAudit("HoldCreated"))
+
+	// The admission policy pins createdBy to the caller.
+	forged := p.DeepCopy()
+	forged.Spec.Holds = append(forged.Spec.Holds, v1alpha1.EnvironmentHold{Environment: "test", Bundle: rb,
+		Reason: "forged", CreatedBy: "mallory", CreatedAt: hold.CreatedAt})
+	err = e.Client.Update(ctx, forged)
+	require.Error(t, err, "a hold in someone else's name is refused")
+	assert.Contains(t, err.Error(), "createdBy")
 
 	// The gate that blocks every rollback passes the held one, never silently.
 	exempt := fmt.Sprintf("EXEMPT: rollback %s holds prod (by %s: %s); without the hold: ", rb, hold.CreatedBy, reason)
@@ -119,4 +150,5 @@ func TestRollback_Hold(t *testing.T) {
 	assert.Empty(t, p.Spec.Holds)
 	_, err = e.Kardinal(t, a.ns, "release-hold", pipelineName, "--env", "prod")
 	assert.Error(t, err, "nothing is held any more")
+	framework.Eventually(t, time.Minute, "a HoldReleased AuditEvent", holdAudit("HoldReleased"))
 }

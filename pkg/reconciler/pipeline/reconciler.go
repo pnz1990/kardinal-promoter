@@ -111,6 +111,10 @@ type Reconciler struct {
 	// would get a compact Graph and that uses a feature the compact shape
 	// does not carry yet is Ready=False. Nil is graph.DefaultCompactAbove.
 	CompactAbove *int
+
+	// Now is the clock of hold expiry (spec.holds[].expiresAt). Nil is
+	// time.Now.
+	Now func() time.Time
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -138,6 +142,13 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get pipeline: %w", err)
+	}
+
+	// Holds (#1528): expiry, the HoldCreated/HoldReleased AuditEvents and
+	// status.observedHolds.
+	holdRecheck, updated, err := r.reconcileHolds(ctx, log, &p)
+	if err != nil || updated {
+		return ctrl.Result{}, err
 	}
 
 	// spec.paused is the request; the freeze gate is what the PromotionStep
@@ -174,6 +185,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	var result ctrl.Result
 	if desiredSecret != nil {
 		result.RequeueAfter = secretRecheck
+	}
+	if holdRecheck > 0 && (result.RequeueAfter == 0 || holdRecheck < result.RequeueAfter) {
+		result.RequeueAfter = holdRecheck
 	}
 	if desired.Reason == scm.ReasonRepositoryNotAllowed && p.Spec.Git.SecretRef != nil && !ownSecret {
 		result.RequeueAfter = secretRecheckInterval

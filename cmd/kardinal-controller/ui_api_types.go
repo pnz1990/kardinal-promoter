@@ -45,6 +45,9 @@ type uiRollbackRequest struct {
 	Hold bool `json:"hold,omitempty"`
 	// HoldReason says why the environment is held. Required with hold.
 	HoldReason string `json:"holdReason,omitempty"`
+	// HoldExpiresIn, a Go duration such as 24h, ends the hold that long after
+	// it is made. Empty: the hold lasts until it is released.
+	HoldExpiresIn string `json:"holdExpiresIn,omitempty"`
 }
 
 // uiReleaseHoldRequest is the body of POST /api/v1/ui/release-hold.

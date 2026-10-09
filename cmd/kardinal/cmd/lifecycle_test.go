@@ -264,23 +264,28 @@ func TestRollbackCmd_Hold(t *testing.T) {
 
 	c := lcClient(t, history...)
 	var buf bytes.Buffer
-	require.ErrorContains(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", " "), "--reason")
+	require.ErrorContains(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", " ", "alice", 0), "--reason")
 	assert.Empty(t, newBundles(t, c, "app-v1", "app-v2"))
 
-	require.NoError(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", "INC-42"))
+	require.NoError(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", "INC-42", "alice", 2*time.Hour))
 	created := newBundles(t, c, "app-v1", "app-v2")
 	require.Len(t, created, 1)
 	p := getP(c)
 	require.Len(t, p.Spec.Holds, 1)
 	assert.Equal(t, created[0].Name, p.Spec.Holds[0].Bundle)
 	assert.Equal(t, "INC-42", p.Spec.Holds[0].Reason)
+	assert.Equal(t, "alice", p.Spec.Holds[0].CreatedBy, "createdBy is the Kubernetes user the caller passes")
+	require.NotNil(t, p.Spec.Holds[0].ExpiresAt)
+	assert.Equal(t, 2*time.Hour, p.Spec.Holds[0].ExpiresAt.Sub(p.Spec.Holds[0].CreatedAt.Time))
+	assert.Equal(t, lifecycle.ArtifactDigest(created[0].Spec), p.Spec.Holds[0].Artifacts)
 	out := buf.String()
 	assert.Contains(t, out, "from app-v2 to app-v1")
 	assert.Contains(t, out, "Environment prod held on "+created[0].Name)
 	assert.Contains(t, out, "kardinal release-hold app --env prod")
 	assert.Contains(t, out, "EXEMPT")
+	assert.Contains(t, out, "The hold expires at ")
 
-	require.ErrorIs(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", "again"), lifecycle.ErrConflict)
+	require.ErrorIs(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", "again", "alice", 0), lifecycle.ErrConflict)
 
 	buf.Reset()
 	require.NoError(t, releaseHoldFn(&buf, c, "default", "app", "prod"))
@@ -293,9 +298,10 @@ func TestRollbackCmd_Hold(t *testing.T) {
 // before anything is created, and release-hold needs --env.
 func TestRollbackCmd_HoldFlags(t *testing.T) {
 	for args, want := range map[string]string{
-		"--reason x":      "--reason is the reason of a hold; add --hold",
-		"--hold":          "rollback --hold needs --reason",
-		"--hold --reason": "rollback --hold needs --reason",
+		"--reason x":           "--reason is the reason of a hold; add --hold",
+		"--hold":               "rollback --hold needs --reason",
+		"--hold --reason":      "rollback --hold needs --reason",
+		"--hold-expires-in 1h": "--hold-expires-in is a positive duration of a hold",
 	} {
 		cmd := newRollbackCmd()
 		argv := append([]string{"app", "--env", "prod"}, strings.Fields(args)...)

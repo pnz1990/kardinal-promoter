@@ -237,7 +237,8 @@ export function PipelineLaneView({
               {/* Held on a rollback (#1528): who, why, and the release action */}
               {hold && (
                 <div className="stage-card__hold"
-                  title={`Held on ${hold.bundle} by ${hold.createdBy || 'unknown'}: ${hold.reason}`}>
+                  title={`Held on ${hold.bundle} by ${hold.createdBy || 'unknown'}: ${hold.reason}` +
+                    (hold.expiresAt ? ` (until ${hold.expiresAt})` : '')}>
                   <span className="stage-card__hold-badge">Held</span>
                   <span className="stage-card__hold-reason">{hold.reason}</span>
                 </div>

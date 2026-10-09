@@ -33,8 +33,10 @@ export function PipelineActionDialog({ kind, pipelineName, environment, namespac
   const [error, setError] = useState<string>()
   const [hold, setHold] = useState(false)
   const [reason, setReason] = useState('')
+  const [expiresIn, setExpiresIn] = useState('')
   const holdId = useId()
   const reasonId = useId()
+  const expiresId = useId()
 
   function run() {
     if (kind === 'rollback' && hold && reason.trim() === '') {
@@ -53,7 +55,9 @@ export function PipelineActionDialog({ kind, pipelineName, environment, namespac
         break
       default:
         call = (hold
-          ? api.rollback(pipelineName, environment, namespace, undefined, reason.trim())
+          ? (expiresIn
+            ? api.rollback(pipelineName, environment, namespace, undefined, reason.trim(), expiresIn)
+            : api.rollback(pipelineName, environment, namespace, undefined, reason.trim()))
           : api.rollback(pipelineName, environment, namespace))
           .then(res => hold
             ? `Rollback started: bundle ${res.bundle}; ${environment} is held on it`
@@ -104,14 +108,23 @@ export function PipelineActionDialog({ kind, pipelineName, environment, namespac
           {hold && (
             <>
               <p className="hold-option__note">
-                No other bundle promotes into {environment} until the hold is released. Gates that
-                would block the rollback pass as EXEMPT, each pass recorded with your name and reason.
+                No other bundle promotes into {environment} until the hold is released. Gates of {environment} that
+                would block the rollback pass as EXEMPT while the controller verifies it restores what was
+                verified there, each pass recorded with your name and reason.
               </p>
               <label htmlFor={reasonId} className="hold-option__label">Reason (required)</label>
               <input id={reasonId} type="text" className="hold-option__reason" value={reason}
                 maxLength={1024} disabled={loading} required aria-required="true"
                 placeholder="e.g. INC-4211: v2.3 leaks connections"
                 onChange={e => setReason(e.target.value)} />
+              <label htmlFor={expiresId} className="hold-option__label">Hold ends</label>
+              <select id={expiresId} className="hold-option__reason" value={expiresIn} disabled={loading}
+                onChange={e => setExpiresIn(e.target.value)}>
+                <option value="">When released</option>
+                <option value="4h">After 4 hours</option>
+                <option value="24h">After 24 hours</option>
+                <option value="72h">After 3 days</option>
+              </select>
             </>
           )}
         </div>

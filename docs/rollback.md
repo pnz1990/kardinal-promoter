@@ -85,7 +85,7 @@ The `--to` flag names the Bundle to roll back to. It must exist in the Bundle hi
 ### Roll back and hold
 
 ```bash
-kardinal rollback my-app --env prod --hold --reason "INC-4521: v1.29.0 leaks connections"
+kardinal rollback my-app --env prod --hold --reason "INC-4521: v1.29.0 leaks connections" [--hold-expires-in 24h]
 ```
 
 Output:
@@ -93,7 +93,7 @@ Output:
 Rolling back my-app in prod from my-app-v1-29-0 to my-app-v1-28-0 (ghcr.io/myorg/my-app:v1.28.0)
 Bundle my-app-rollback-3f9a1c created (rollbackOf=my-app-v1-28-0)
 Environment prod held on my-app-rollback-3f9a1c: no other Bundle promotes there until: kardinal release-hold my-app --env prod
-Gates that would block the rollback pass as EXEMPT (audited).
+Gates of prod that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.
 Track with: kardinal explain my-app --env prod
 ```
 
@@ -102,22 +102,31 @@ promotes over the rollback as soon as its gates pass, which is usually not what 
 an incident is open. While the environment is held:
 
 - **No other Bundle promotes into it.** Bundles created after the rollback still promote to the
-  environments before it, then wait. A step of another Bundle that already exists in the held
-  environment holds before its next git step, with the message
-  `environment prod is held on rollback my-app-rollback-3f9a1c (INC-4521: ...) — release with: kardinal release-hold my-app --env prod`.
-  Environments after the held one wait too, since they depend on it.
-- **The rollback is never superseded** by a newer Bundle.
-- **The rollback passes the PolicyGates that would block it.** The exemption is never
-  silent. The gate's reason starts with
+  environments before it, then wait. Environments after the held one wait too, since they
+  depend on it. A step of another Bundle that already exists in the held environment:
+    - in `Pending` or `Promoting` holds before its next git step, with the message
+      `environment prod is held on rollback my-app-rollback-3f9a1c (INC-4521: ...) — release with: kardinal release-hold my-app --env prod`;
+    - in `WaitingForMerge` is cancelled as supersession cancels one: its PR is closed with a
+      comment naming the hold, and the step fails with that message;
+    - in `HealthChecking` has already merged, so it finishes. The rollback, a newer Bundle,
+      supersedes it.
+- **The rollback is never superseded** by a newer Bundle, and `historyLimit` never deletes it.
+- **The rollback passes the PolicyGates of the held environment that would block it**, if the
+  controller can verify it. See [what is exempt](policy-gates.md#rollback-hold-exemption).
+  The exemption is never silent. The gate's reason starts with
   `EXEMPT: rollback my-app-rollback-3f9a1c holds prod (by alice: INC-4521: ...); without the hold: <the gate's own result>`.
   The flip is recorded as a `GateEvaluated` AuditEvent (`kardinal audit`), and the gate gets a
-  `GateExempted` Warning Event. Only the hold's own Bundle is exempt, and only while the hold
-  lasts. It must also be a rollback Bundle (`kardinal.io/rollback=true`) of the same Pipeline.
-  A pause (`kardinal pause`) still holds it.
+  `GateExempted` Warning Event. Gates of the environments before the held one are not exempt:
+  the rollback passes them as any Bundle does, or through
+  [`kardinal override`](#rollback-and-policygates). A pause (`kardinal pause`) still holds it.
+- **Every hold change is audited.** The controller writes a `HoldCreated` AuditEvent when a hold
+  appears and a `HoldReleased` one when it goes, however it was changed: the CLI, the UI or
+  `kubectl`.
 
 `--reason` is required with `--hold`. The hold records who held the environment and when.
 `kardinal explain my-app --env prod` and the UI show it. An environment holds at most one rollback:
 a second `--hold` on the same environment is refused until the first is released.
+`--hold-expires-in` ends the hold by itself: the controller removes it at `expiresAt`.
 
 Release the hold when the fix is ready:
 
@@ -128,12 +137,37 @@ kardinal release-hold my-app --env prod
 The newest Bundle that was held back then promotes into the environment through its gates as
 usual. The rollback's gates are evaluated without the exemption again.
 
-In the UI, the rollback dialog has a **Hold** option with a reason field. A held environment
-shows a **Held** badge with the reason and a **Release hold** action.
+In the UI, the rollback dialog has a **Hold** option with a reason field and an optional end
+(4 hours, 24 hours, 3 days). A held environment shows a **Held** badge with the reason and a
+**Release hold** action.
 
-The hold is the Pipeline field [`spec.holds`](pipeline-reference.md#specholds). Holding needs
-`get` and `update` on the Pipeline and `create` on Bundles, the same as `kardinal pause` plus
-`kardinal rollback`.
+#### Who may hold
+
+The hold is the Pipeline field [`spec.holds`](pipeline-reference.md#specholds). The chart
+installs the ValidatingAdmissionPolicy `<release>-hold-writes`, which refuses any change to
+`spec.holds` unless the caller has `update` on the virtual subresource `pipelines/hold`. Plain
+`update` on the Pipeline is not enough. Every new entry must name the caller in `createdBy`
+(the CLI reads your Kubernetes user name with a SelfSubjectReview) and have a `createdAt`. An
+entry is added or removed, never edited in place. The UI checks `pipelines/hold` for the UI user
+before it writes the hold, and records that user in `createdBy`. Grant it like this:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: incident-commander
+  namespace: my-team
+rules:
+  - apiGroups: ["kardinal.io"]
+    resources: ["pipelines/hold"]
+    verbs: ["update"]
+  - apiGroups: ["kardinal.io"]
+    resources: ["pipelines"]
+    verbs: ["get", "update"]
+  - apiGroups: ["kardinal.io"]
+    resources: ["bundles"]
+    verbs: ["get", "list", "create"]
+```
 
 `--emergency` is deprecated and has no effect. It never bypassed a gate. It prints a warning, the rollback runs as without it, and the flag will be removed in the next minor release. To let a rollback through a blocking gate, use [`kardinal override`](#rollback-and-policygates).
 

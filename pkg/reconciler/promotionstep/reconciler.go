@@ -364,6 +364,16 @@ const ConditionSupersededCloseFailed = "SupersededCloseFailed"
 // nextRetryAt the close's: a step superseded during a git retry's backoff is
 // cancelled at once, not when that retry was due.
 func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
+	return r.cancelStep(ctx, log, ps, lifecycle.SupersededMessage(ps.Spec.BundleName),
+		"bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle", AuditActionPromotionSuperseded)
+}
+
+// cancelStep is handleSuperseded for any reason: why opens the step's
+// message, prComment is the comment on the closed PR and action the
+// AuditEvent of a started step. A close that fails is retried the same way,
+// under ConditionSupersededCloseFailed.
+func (r *Reconciler) cancelStep(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
+	why, prComment, action string) (ctrl.Result, error) {
 	closing := meta.IsStatusConditionTrue(ps.Status.Conditions, ConditionSupersededCloseFailed)
 	if closing && ps.Status.NextRetryAt != nil {
 		if wait := ps.Status.NextRetryAt.Sub(r.now()); wait > 0 {
@@ -376,18 +386,19 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 		Str("bundle", ps.Spec.BundleName).
 		Str("env", ps.Spec.Environment).
 		Str("state", ps.Status.State).
-		Msg("parent bundle superseded — closing open PR and cancelling step")
+		Str("why", why).
+		Msg("closing open PR and cancelling step")
 
 	// A step still Pending never started: no PromotionStarted record, no
 	// branch, no PR. It can exist when its Graph created it just before the
 	// Bundle was superseded (E2E-R20). It is not a cancelled promotion, so it
 	// is failed without a PromotionSuperseded record or step metrics.
 	unstarted := base.Status.State == StatePending || base.Status.State == StatePendingExplicit
-	msg := lifecycle.SupersededMessage(ps.Spec.BundleName) + " — promotion cancelled"
+	msg := why + " — promotion cancelled"
 	if unstarted {
-		msg = lifecycle.SupersededMessage(ps.Spec.BundleName) + " before this step started"
+		msg = why + " before this step started"
 	}
-	if closeErr := r.closeStepPR(ctx, ps, "bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle", false); closeErr != nil {
+	if closeErr := r.closeStepPR(ctx, ps, prComment, false); closeErr != nil {
 		if !closing {
 			ps.Status.RetryCount = 0
 		}
@@ -404,7 +415,7 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 			delay := retryDelay(ps.Status.RetryCount)
 			next := metav1.NewTime(r.now().Add(delay))
 			ps.Status.NextRetryAt = &next
-			ps.Status.Message = fmt.Sprintf("%s; closing its PR failed, retrying in %s (%d/%d): %v", lifecycle.SupersededMessage(ps.Spec.BundleName),
+			ps.Status.Message = fmt.Sprintf("%s; closing its PR failed, retrying in %s (%d/%d): %v", why,
 				delay, ps.Status.RetryCount, maxStepRetries, closeErr)
 			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("patch supersession retry: %w", err)
@@ -418,7 +429,7 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 	if unstarted {
 		return ctrl.Result{}, r.cancelUnstarted(ctx, base, ps, msg)
 	}
-	if err := r.transitionAudit(ctx, base, ps, StateFailed, msg, AuditActionPromotionSuperseded); err != nil {
+	if err := r.transitionAudit(ctx, base, ps, StateFailed, msg, action); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
@@ -1023,6 +1034,17 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	pipeline, err := r.loadPipeline(ctx, ps)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
+	}
+
+	// The environment is held on another Bundle's rollback (spec.holds,
+	// #1528): this PR would deploy over it once merged, so the promotion is
+	// cancelled as supersession cancels one, with its PR closed and a comment
+	// saying why. A step already HealthChecking has merged; it finishes.
+	if h := lifecycle.HeldFrom(pipeline, ps.Spec.Environment, ps.Spec.BundleName); h != nil {
+		return r.cancelStep(ctx, log, ps, lifecycle.HeldMessage(ps.Spec.PipelineName, h),
+			fmt.Sprintf("environment %s is held on rollback %s (%s), so kardinal cancelled this promotion; "+
+				"once the hold is released, a newer Bundle promotes here", h.Environment, h.Bundle, h.Reason),
+			AuditActionPromotionFailed)
 	}
 
 	// Apply WaitForMerge timeout if configured (#905).
@@ -1890,7 +1912,7 @@ func (r *Reconciler) pipelineHoldMapper(ctx context.Context, obj client.Object) 
 			continue
 		}
 		switch s.Status.State {
-		case StatePending, "Pending", StatePromoting:
+		case StatePending, "Pending", StatePromoting, StateWaitingForMerge:
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(s)})
 		}
 	}

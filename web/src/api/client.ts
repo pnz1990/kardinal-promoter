@@ -186,10 +186,12 @@ export const api = {
   promote: (pipeline: string, environment: string, namespace = 'default') =>
     post<{ bundle: string; message: string }>('/promote', { pipeline, environment, namespace }),
   /** Trigger a rollback for the given pipeline (#331). */
-  rollback: (pipeline: string, environment: string, namespace = 'default', toBundle?: string, holdReason?: string) =>
+  rollback: (pipeline: string, environment: string, namespace = 'default', toBundle?: string, holdReason?: string,
+    holdExpiresIn?: string) =>
     post<{ bundle: string; message: string; held?: boolean }>('/rollback', {
       pipeline, environment, namespace, toBundle,
       ...(holdReason !== undefined ? { hold: true, holdReason } : {}),
+      ...(holdReason !== undefined && holdExpiresIn ? { holdExpiresIn } : {}),
     }),
   /** Release the hold of a rollback on an environment (kardinal release-hold, #1528). */
   releaseHold: (pipeline: string, environment: string, namespace = 'default') =>

@@ -179,3 +179,42 @@ func TestHold_EnvironmentHeldOnAnotherBundle(t *testing.T) {
 		})
 	}
 }
+
+// TestHold_CancelsWaitingForMerge (#1528 QA): a step of another Bundle that
+// waits for its PR to merge in the held environment is cancelled like a
+// superseded one: its PR is closed with a comment naming the hold, and it
+// fails with the hold's message. A step of the hold's own Bundle waits on.
+func TestHold_CancelsWaitingForMerge(t *testing.T) {
+	for _, tc := range []struct {
+		name, holdBundle string
+		wantCancel       bool
+	}{
+		{name: "another bundle is cancelled", holdBundle: "rb-1", wantCancel: true},
+		{name: "the hold's own bundle waits on", holdBundle: "bundle-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := makePipeline("nginx-demo")
+			hold := v1alpha1.EnvironmentHold{Environment: "prod", Bundle: tc.holdBundle, Reason: "INC-42", CreatedBy: "alice"}
+			p.Spec.Holds = []v1alpha1.EnvironmentHold{hold}
+			step := prStep("WaitingForMerge", 5)
+			c := newClient(t, step, p, makeBundle("bundle-1", "nginx-demo"), openPRStatus("prs-step", "test/repo", 5))
+			m := &mockSCM{open: true}
+			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+			_, err := r.Reconcile(context.Background(), reqFor("step"))
+			require.NoError(t, err)
+			var got v1alpha1.PromotionStep
+			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(step), &got))
+			if !tc.wantCancel {
+				assert.Equal(t, "WaitingForMerge", got.Status.State)
+				assert.Empty(t, m.closed)
+				return
+			}
+			assert.Equal(t, "Failed", got.Status.State)
+			assert.Equal(t, lifecycle.HeldMessage("nginx-demo", &hold)+" — promotion cancelled", got.Status.Message)
+			assert.Equal(t, []string{"test/repo#5"}, m.closed, "the PR is closed")
+			require.Len(t, m.comments, 1)
+			assert.Contains(t, m.comments[0], "environment prod is held on rollback rb-1 (INC-42)")
+		})
+	}
+}

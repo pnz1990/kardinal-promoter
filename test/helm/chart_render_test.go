@@ -165,25 +165,31 @@ var allFeatures = []string{
 	"--set", "rbac.integrationTestJobs=true",
 }
 
-// ── C08-api-config-04, -16, -21: no ValidatingAdmissionPolicy ─────────────────
+// ── C08-api-config-04, -16, -21: only the hold admission policy ─────────────
 
-// TestChartRendersNoValidatingAdmissionPolicy: the chart's VAPs denied every
+// TestChartRendersOnlyHoldAdmissionPolicy: the chart's old VAPs denied every
 // Pipeline (spec.gitRepo does not exist), denied promote/rollback Bundles and
-// valid durations, needed Kubernetes 1.30, and collided across releases.
-// Validation lives in the CRD schema (api/v1alpha1/crd_schema_test.go);
-// validatingAdmissionPolicy.enabled is kept as a deprecated no-op so existing
-// `--set validatingAdmissionPolicy.enabled=false` installs keep working.
-func TestChartRendersNoValidatingAdmissionPolicy(t *testing.T) {
+// valid durations, and collided across releases. Validation lives in the CRD
+// schema (api/v1alpha1/crd_schema_test.go). The only admission objects are
+// the hold-writes policy and binding (hold-admission.yaml, #1528), named per
+// release and shipped whatever validatingAdmissionPolicy.enabled says, which
+// stays a deprecated no-op so existing --set values keep working.
+func TestChartRendersOnlyHoldAdmissionPolicy(t *testing.T) {
 	for _, args := range [][]string{
 		nil,
 		{"--set", "validatingAdmissionPolicy.enabled=true"},
 		{"--set", "validatingAdmissionPolicy.enabled=false"},
 	} {
-		docs := render(t, "kardinal-promoter", args...)
-		for _, d := range docs {
-			assert.NotContains(t, d.APIVersion, "admissionregistration.k8s.io",
-				"args %v: chart must not render %s %s", args, d.Kind, d.Name)
+		var got []string
+		for _, d := range render(t, "kardinal-promoter", args...) {
+			if strings.HasPrefix(d.APIVersion, "admissionregistration.k8s.io") {
+				got = append(got, d.Kind+"/"+d.Name)
+			}
 		}
+		assert.ElementsMatch(t, []string{
+			"ValidatingAdmissionPolicy/kardinal-promoter-hold-writes",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-hold-writes",
+		}, got, "args %v", args)
 	}
 }
 

@@ -617,11 +617,32 @@ kardinal override my-app --stage prod --gate no-weekend-deploy \
 
 ### Rollback hold exemption
 
-A rollback created with `kardinal rollback --hold` passes every gate that would block it,
-for as long as the hold lasts. A gate it passes this way has the `status.reason`
+A rollback created with `kardinal rollback --hold` can pass gates that would block it, for as
+long as the hold lasts. This is exactly what is exempt:
+
+- **Exempt:** the gate instances of the held environment (`kardinal.io/environment` equals the
+  hold's environment) for the Bundle the hold names.
+- **Not exempt:**
+    - gates of every other environment, including the ones the rollback crosses before the
+      held one;
+    - the freeze gate of a paused Pipeline, which holds steps on its own;
+    - any Bundle but the one the hold names.
+
+The exemption applies only to a rollback the controller verifies, at every evaluation:
+
+1. The Bundle is a rollback Bundle (`kardinal.io/rollback=true`) of the Pipeline.
+2. Its `spec.provenance.rollbackOf` names a Bundle that was Verified in the held environment.
+3. Each of its images, its config commit and its chart were deployed by a Bundle Verified in
+   that environment.
+4. Its artifacts still have the digest the hold recorded when it was made
+   (`spec.holds[].artifacts`). A Bundle edited after the hold is not exempt.
+
+When a hold names the Bundle but the checks fail, the gate blocks as usual, and its reason ends
+with `(hold exemption refused: <why>)`.
+
+An exempt gate has the `status.reason`
 `EXEMPT: rollback <bundle> holds <env> (by <user>: <reason>); without the hold: <the gate's own result>`.
 The flip is a `GateEvaluated` AuditEvent, and the gate gets a `GateExempted` Warning Event, so
-`kardinal explain`, `kardinal audit` and `kubectl get events` all show it. Only the Bundle named
-by the Pipeline's `spec.holds` is exempt, and only if it is a rollback Bundle of that Pipeline.
+`kardinal explain`, `kardinal audit` and `kubectl get events` all show it.
 `kardinal release-hold` ends the exemption, and the gates are evaluated again at once. See
 [Roll back and hold](rollback.md#roll-back-and-hold).

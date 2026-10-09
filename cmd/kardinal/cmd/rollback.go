@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -36,6 +37,7 @@ func newRollbackCmd() *cobra.Command {
 		emergencyFlag bool // deprecated, ignored (#1288)
 		holdFlag      bool
 		reasonFlag    string
+		expiresFlag   time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -66,11 +68,13 @@ and only those: the rest stays as deployed. --to a Bundle whose type cannot
 deploy what the deployed Bundle changed is refused.
 
 With --hold (and --reason), the environment stays on the rollback: no other
-Bundle promotes into it until kardinal release-hold <pipeline> --env <env>.
-The rollback is never superseded, and it passes every PolicyGate on its way
-that would block it, each pass shown as EXEMPT with who held the
-environment and why, recorded as a GateEvaluated AuditEvent and a
-GateExempted Warning Event. See docs/rollback.md.`,
+Bundle promotes into it until kardinal release-hold <pipeline> --env <env>
+(or --hold-expires-in has passed). The rollback is never superseded, and it
+passes the PolicyGates of that environment that would block it while the
+controller verifies it restores what was Verified there, each pass shown as
+EXEMPT with who held the environment and why, recorded as a GateEvaluated
+AuditEvent and a GateExempted Warning Event. Holding needs update on
+pipelines/hold. See docs/rollback.md.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if reasonFlag != "" && !holdFlag {
@@ -79,12 +83,22 @@ GateExempted Warning Event. See docs/rollback.md.`,
 			if holdFlag && strings.TrimSpace(reasonFlag) == "" {
 				return fmt.Errorf("rollback --hold needs --reason: say why the environment is held")
 			}
+			if expiresFlag != 0 && (!holdFlag || expiresFlag < 0) {
+				return fmt.Errorf("rollback: --hold-expires-in is a positive duration of a hold; add --hold")
+			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("rollback: %w", err)
 			}
 			if holdFlag {
-				return rollbackHoldFn(cmd.OutOrStdout(), c, ns, args[0], envFlag, toFlag, reasonFlag)
+				// The admission policy accepts a hold only with createdBy
+				// set to the requesting Kubernetes user.
+				actor, err := kubeUser(cmd.Context(), c)
+				if err != nil {
+					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v; recording %s as the hold's createdBy\n", err, currentUser())
+					actor = currentUser()
+				}
+				return rollbackHoldFn(cmd.OutOrStdout(), c, ns, args[0], envFlag, toFlag, reasonFlag, actor, expiresFlag)
 			}
 			return rollbackFn(cmd.OutOrStdout(), c, ns, args[0], envFlag, toFlag)
 		},
@@ -95,6 +109,7 @@ GateExempted Warning Event. See docs/rollback.md.`,
 	cmd.Flags().BoolVar(&holdFlag, "hold", false,
 		"Keep the environment on the rollback until kardinal release-hold; the rollback passes blocking gates, each pass audited")
 	cmd.Flags().StringVar(&reasonFlag, "reason", "", "Why the environment is held (required with --hold)")
+	cmd.Flags().DurationVar(&expiresFlag, "hold-expires-in", 0, "End the hold this long after it is made (e.g. 24h); default: until kardinal release-hold")
 	// Deprecated: --emergency never bypassed a gate and has no effect; use
 	// `kardinal override` to pass a blocking gate. Deleted in the next minor
 	// release (#1288).
@@ -143,7 +158,8 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 
 // rollbackHoldFn rolls back and holds the environment
 // (lifecycle.RollbackAndHold, the implementation the UI shares).
-func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBundle, reason string) error {
+func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBundle, reason, actor string,
+	expiresIn time.Duration) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("rollback --hold needs --reason: say why the environment is held")
 	}
@@ -153,10 +169,11 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 			Pipeline:    pipeline,
 			Environment: env,
 			ToBundle:    toBundle,
-			Actor:       currentUser(),
+			Actor:       actor,
 			Now:         time.Now(),
 		},
 		HoldReason: reason,
+		ExpiresIn:  expiresIn,
 	})
 	if err != nil {
 		return err
@@ -168,11 +185,17 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 	if _, err := fmt.Fprintf(w,
 		"Rolling back %s in %s from %s to %s (%s)\nBundle %s created (rollbackOf=%s)\n"+
 			"Environment %s held on %s: no other Bundle promotes there until: kardinal release-hold %s --env %s\n"+
-			"Gates that would block the rollback pass as EXEMPT (audited).\nTrack with: kardinal explain %s --env %s\n",
+			"Gates of %s that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.\n"+
+			"Track with: kardinal explain %s --env %s\n",
 		pipeline, env, from, plan.Target.Name, artifactSummary(plan.Bundle),
-		plan.Bundle.Name, plan.Target.Name, env, hold.Bundle, pipeline, env, pipeline, env,
+		plan.Bundle.Name, plan.Target.Name, env, hold.Bundle, pipeline, env, env, pipeline, env,
 	); err != nil {
 		return fmt.Errorf("write output: %w", err)
+	}
+	if hold.ExpiresAt != nil {
+		if _, err := fmt.Fprintf(w, "The hold expires at %s.\n", hold.ExpiresAt.UTC().Format(time.RFC3339)); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
 	}
 	return nil
 }
@@ -219,6 +242,22 @@ func orUnknown(s string) string {
 		return "unknown"
 	}
 	return s
+}
+
+// kubeUser is the Kubernetes user name of the CLI's credentials, from a
+// SelfSubjectReview (authentication.k8s.io/v1, Kubernetes 1.28+).
+func kubeUser(ctx context.Context, c sigs_client.Client) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ssr := &authenticationv1.SelfSubjectReview{}
+	if err := c.Create(ctx, ssr); err != nil {
+		return "", fmt.Errorf("cannot read your Kubernetes user name (SelfSubjectReview): %w", err)
+	}
+	if ssr.Status.UserInfo.Username == "" {
+		return "", fmt.Errorf("the SelfSubjectReview returned no user name")
+	}
+	return ssr.Status.UserInfo.Username, nil
 }
 
 // artifactSummary lists the images and config commit a Bundle deploys.

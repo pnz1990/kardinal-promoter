@@ -244,11 +244,17 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if bundleVersion != "" {
 		reason = fmt.Sprintf("bundle.version=%s: %s", bundleVersion, reason)
 	}
-	// The rollback an environment is held on (spec.holds) passes every gate
-	// on its way, with an explicit EXEMPT reason, the GateEvaluated audit
-	// record of the flip and a Warning Event: never a silent pass (#1528).
+	// The rollback an environment is held on (spec.holds) passes the gates
+	// of that environment, with an explicit EXEMPT reason, the GateEvaluated
+	// audit record of the flip and a Warning Event: never a silent pass
+	// (#1528). Only a rollback the controller verifies (VerifyHeldRollback)
+	// is exempt; a refused exemption is named in the gate's reason.
 	if !pass {
-		if h := r.holdExemption(ctx, &gate, bundleName); h != nil {
+		h, refused := r.holdExemption(ctx, &gate, bundleName)
+		if refused != "" {
+			reason += " (hold exemption refused: " + refused + ")"
+		}
+		if h != nil {
 			reason = lifecycle.GateExemption(h, reason)
 			log.Warn().Str("hold", h.Bundle).Str("reason", reason).Msg("policygate exempt for the held rollback")
 			// One Event per exempt episode, not per changed gate reason.
@@ -1345,30 +1351,39 @@ func (r *Reconciler) pipelineGateRequests(ctx context.Context, obj client.Object
 // ReasonGateExempted is the Warning Event of a gate the held rollback passed.
 const ReasonGateExempted = "GateExempted"
 
+// HoldExemptible reports whether a hold on env may exempt gate: a gate
+// instance of the held environment. The freeze gate of a paused Pipeline is
+// never an instance, and pause holds steps on its own. The exempt set is
+// documented in docs/policy-gates.md#rollback-hold-exemption and enforced
+// by TestHoldExemptible.
+func HoldExemptible(gate *kardinalv1alpha1.PolicyGate, env string) bool {
+	return gate.Labels[labelBundle] != "" && gate.Labels[labelEnvironment] == env &&
+		gate.Labels[lifecycle.LabelFreeze] != "true"
+}
+
 // holdExemption returns the hold that exempts gate, a gate instance of
-// bundleName: its Pipeline holds an environment on bundleName (spec.holds)
-// and the Bundle is a rollback (label kardinal.io/rollback=true). Writing a
-// hold needs update on the Pipeline, and a hold names its rollback Bundle, so
-// a Bundle cannot exempt itself.
-func (r *Reconciler) holdExemption(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleName string) *kardinalv1alpha1.EnvironmentHold {
+// bundleName: its Pipeline holds the gate's environment on bundleName
+// (spec.holds) and lifecycle.VerifyHeldRollback accepts the Bundle. When a
+// hold names the Bundle but the exemption does not apply, refused says why.
+// Writing a hold needs the pipelines/hold subresource, and a hold names its
+// rollback Bundle, so a Bundle cannot exempt itself.
+func (r *Reconciler) holdExemption(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleName string) (*kardinalv1alpha1.EnvironmentHold, string) {
 	pipeline := gate.Labels[labelPipeline]
 	if pipeline == "" {
-		return nil
+		return nil, ""
 	}
 	var p kardinalv1alpha1.Pipeline
 	if err := r.Get(ctx, client.ObjectKey{Namespace: gate.Namespace, Name: pipeline}, &p); err != nil {
-		return nil
+		return nil, ""
 	}
 	h := lifecycle.HoldNaming(&p, bundleName)
-	if h == nil {
-		return nil
+	if h == nil || !HoldExemptible(gate, h.Environment) {
+		return nil, ""
 	}
-	var b kardinalv1alpha1.Bundle
-	if err := r.Get(ctx, client.ObjectKey{Namespace: gate.Namespace, Name: bundleName}, &b); err != nil ||
-		b.Labels[lifecycle.LabelRollback] != "true" || b.Spec.Pipeline != pipeline {
-		return nil
+	if _, why := lifecycle.VerifyHeldRollback(ctx, r, &p, h); why != "" {
+		return nil, why
 	}
-	return h
+	return h, ""
 }
 
 // findActiveOverride returns the first non-expired override matching the given

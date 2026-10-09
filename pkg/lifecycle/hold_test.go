@@ -66,6 +66,8 @@ func TestRollbackAndHold(t *testing.T) {
 	assert.Equal(t, plan.Bundle.Name, h.Bundle)
 	assert.Equal(t, "INC-42: v2 leaks connections", h.Reason)
 	assert.Equal(t, "alice", h.CreatedBy)
+	assert.Equal(t, lifecycle.ArtifactDigest(b.Spec), h.Artifacts, "the hold records the rollback's artifact digest")
+	assert.Nil(t, h.ExpiresAt, "no expiry unless asked")
 	require.NotNil(t, h.CreatedAt)
 	assert.True(t, h.CreatedAt.Time.Equal(t0.Add(time.Hour)))
 
@@ -154,4 +156,43 @@ func TestReleaseHold(t *testing.T) {
 	require.ErrorIs(t, err, lifecycle.ErrNotFound)
 	_, err = lifecycle.ReleaseHold(context.Background(), c, ns, "nope", "prod")
 	require.ErrorIs(t, err, lifecycle.ErrNotFound)
+}
+
+// TestRollbackAndHold_ExpiresIn (#1528 QA): ExpiresIn sets expiresAt.
+func TestRollbackAndHold_ExpiresIn(t *testing.T) {
+	c := newClient(t, holdObjects()...)
+	req := holdRequest()
+	req.ExpiresIn = 4 * time.Hour
+	_, h, err := lifecycle.RollbackAndHold(context.Background(), c, req)
+	require.NoError(t, err)
+	require.NotNil(t, h.ExpiresAt)
+	assert.True(t, h.ExpiresAt.Time.Equal(t0.Add(5*time.Hour)))
+}
+
+// TestArtifactDigest (#1528 QA): the digest changes with every artifact
+// (type, an image's repository, tag or digest, the config commit, the chart)
+// and with nothing else.
+func TestArtifactDigest(t *testing.T) {
+	base := v1alpha1.BundleSpec{Type: "image", Pipeline: "app",
+		Images: []v1alpha1.ImageRef{{Repository: "r/app", Tag: "1"}}}
+	d := lifecycle.ArtifactDigest(base)
+	assert.True(t, strings.HasPrefix(d, "sha256:"))
+	same := base
+	same.Provenance = &v1alpha1.BundleProvenance{Author: "x"}
+	same.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
+	assert.Equal(t, d, lifecycle.ArtifactDigest(same), "provenance and intent are not artifacts")
+	for name, edit := range map[string]func(s *v1alpha1.BundleSpec){
+		"type": func(s *v1alpha1.BundleSpec) { s.Type = "mixed" },
+		"tag":  func(s *v1alpha1.BundleSpec) { s.Images = []v1alpha1.ImageRef{{Repository: "r/app", Tag: "2"}} },
+		"digest": func(s *v1alpha1.BundleSpec) {
+			s.Images = []v1alpha1.ImageRef{{Repository: "r/app", Tag: "1", Digest: "sha256:aa"}}
+		},
+		"repo":   func(s *v1alpha1.BundleSpec) { s.Images = []v1alpha1.ImageRef{{Repository: "r/other", Tag: "1"}} },
+		"config": func(s *v1alpha1.BundleSpec) { s.ConfigRef = &v1alpha1.ConfigRef{CommitSHA: "abcd"} },
+		"chart":  func(s *v1alpha1.BundleSpec) { s.Chart = &v1alpha1.ChartRef{Name: "c", Version: "1"} },
+	} {
+		s := base
+		edit(&s)
+		assert.NotEqual(t, d, lifecycle.ArtifactDigest(s), name)
+	}
 }

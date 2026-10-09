@@ -321,7 +321,7 @@ func writeExplainHolds(w io.Writer, p *v1alpha1.Pipeline, envFilter string) erro
 		if by == "" {
 			by = "unknown"
 		}
-		fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other Bundles do not promote here, and the rollback's gates pass as EXEMPT. Release with: kardinal release-hold %s --env %s\n",
+		fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other Bundles do not promote here, and its gates here pass as EXEMPT while the controller verifies it. Release with: kardinal release-hold %s --env %s\n",
 			h.Environment, h.Bundle, by, h.Reason, p.Name, h.Environment)
 	}
 	if buf.Len() == 0 {

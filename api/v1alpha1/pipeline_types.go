@@ -43,9 +43,13 @@ type PipelineSpec struct {
 
 	// Holds pin environments to a rollback (kardinal rollback --hold): while
 	// an environment has a hold, no Bundle but the hold's own promotes into
-	// it, the hold's Bundle is never superseded, and the hold's Bundle passes
-	// the PolicyGates on its way, each pass recorded (GateExempted). kardinal
-	// release-hold removes it. At most one hold per environment.
+	// it, the hold's Bundle is never superseded or garbage-collected, and,
+	// when the controller can verify it restores artifacts Verified in the
+	// environment, it passes that environment's PolicyGates, each pass
+	// recorded (GateExempted). kardinal release-hold removes it, and so does
+	// the controller at expiresAt. At most one hold per environment. Changing
+	// spec.holds needs update on the virtual subresource pipelines/hold
+	// (chart: <release>-hold-writes ValidatingAdmissionPolicy).
 	// +listType=map
 	// +listMapKey=environment
 	// +kubebuilder:validation:MaxItems=100
@@ -673,13 +677,26 @@ type EnvironmentHold struct {
 	// +kubebuilder:validation:MaxLength=1024
 	Reason string `json:"reason"`
 
-	// CreatedBy is who held the environment.
+	// CreatedBy is who held the environment: the Kubernetes user name of the
+	// request that added the hold (the admission policy refuses another
+	// value), or, for a hold added through the UI, the UI user the
+	// controller authenticated.
 	// +optional
 	CreatedBy string `json:"createdBy,omitempty"`
 
 	// CreatedAt is when.
 	// +optional
 	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+
+	// ExpiresAt, when set, is when the controller removes the hold.
+	// +optional
+	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
+
+	// Artifacts is the digest of the rollback Bundle's artifacts (type,
+	// images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+	// The gate exemption applies only while the Bundle still has them.
+	// +optional
+	Artifacts string `json:"artifacts,omitempty"`
 }
 
 // PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
@@ -707,6 +724,14 @@ type PipelineStatus struct {
 	// Conditions holds status conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ObservedHolds is spec.holds as the Pipeline reconciler last recorded
+	// it: the HoldCreated and HoldReleased AuditEvents are written from the
+	// difference, whichever client changed spec.holds.
+	// +listType=map
+	// +listMapKey=environment
+	// +optional
+	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
 
 	// DeploymentMetrics holds aggregate DORA-style metrics computed from the
 	// last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler.

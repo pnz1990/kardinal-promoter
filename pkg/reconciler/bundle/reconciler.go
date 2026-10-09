@@ -574,6 +574,11 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 
 	terminal := make([]*kardinalv1alpha1.Bundle, 0, len(allBundles.Items))
 	for i := range allBundles.Items {
+		// A Bundle a hold names (spec.holds, #1528) is kept while the hold
+		// lasts: it is what the environment is pinned to.
+		if lifecycle.HoldNaming(pipeline, allBundles.Items[i].Name) != nil {
+			continue
+		}
 		switch allBundles.Items[i].Status.Phase {
 		case phaseVerified, phaseFailed, phaseSuperseded:
 			terminal = append(terminal, &allBundles.Items[i])

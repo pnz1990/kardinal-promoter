@@ -215,6 +215,9 @@ type uiHoldResponse struct {
 	CreatedBy string `json:"createdBy,omitempty"`
 	// CreatedAt is when, RFC 3339.
 	CreatedAt string `json:"createdAt,omitempty"`
+	// ExpiresAt is when the controller removes the hold, RFC 3339; empty:
+	// when it is released.
+	ExpiresAt string `json:"expiresAt,omitempty"`
 }
 
 // holdResponse is the UI shape of the hold of env in p, or nil.
@@ -226,6 +229,9 @@ func holdResponse(p *v1alpha1.Pipeline, env string) *uiHoldResponse {
 	out := &uiHoldResponse{Bundle: h.Bundle, Reason: h.Reason, CreatedBy: h.CreatedBy}
 	if h.CreatedAt != nil {
 		out.CreatedAt = h.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if h.ExpiresAt != nil {
+		out.ExpiresAt = h.ExpiresAt.UTC().Format(time.RFC3339)
 	}
 	return out
 }

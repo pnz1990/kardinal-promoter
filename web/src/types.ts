@@ -104,6 +104,8 @@ export interface EnvironmentHold {
   createdBy?: string
   /** RFC 3339. */
   createdAt?: string
+  /** When the controller removes the hold, RFC 3339; absent: when released. */
+  expiresAt?: string
 }
 
 export interface Bundle {
