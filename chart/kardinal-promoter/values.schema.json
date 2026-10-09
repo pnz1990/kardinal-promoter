@@ -371,6 +371,32 @@
         }
       }
     },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Delete AuditEvents past their retention; false keeps every record and grants no delete."
+            },
+            "maxAge": {
+              "type": "string",
+              "pattern": "^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
+              "description": "--audit-retention-max-age: delete records older than this; 0s keeps any age."
+            },
+            "maxPerPipeline": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "--audit-retention-max-per-pipeline: newest records kept per Pipeline; 0 keeps any number."
+            }
+          }
+        }
+      }
+    },
     "scheduleClock": {
       "type": "object",
       "additionalProperties": false,

@@ -47,6 +47,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/auditretention"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	changewindowrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
@@ -100,7 +101,21 @@ func main() {
 		scmProviderType        string
 		scmAPIURL              string
 		gateStatusHeartbeat    time.Duration
+		auditRetention         bool
+		auditMaxAge            time.Duration
+		auditMaxPerPipeline    int
+		auditRetentionInterval time.Duration
 	)
+
+	flag.BoolVar(&auditRetention, "audit-retention", true,
+		"Delete AuditEvents past their retention (--audit-retention-max-age, --audit-retention-max-per-pipeline). "+
+			"false keeps every record, for an install that exports them and must not lose one.")
+	flag.DurationVar(&auditMaxAge, "audit-retention-max-age", auditretention.DefaultMaxAge,
+		"Delete AuditEvents whose spec.timestamp is older than this. 0 keeps records of any age.")
+	flag.IntVar(&auditMaxPerPipeline, "audit-retention-max-per-pipeline", auditretention.DefaultMaxPerPipeline,
+		"Keep at most this many newest AuditEvents per Pipeline. 0 keeps any number.")
+	flag.DurationVar(&auditRetentionInterval, "audit-retention-interval", auditretention.DefaultInterval,
+		"How often the leader applies AuditEvent retention.")
 
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
 		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
@@ -417,6 +432,23 @@ func main() {
 		}); err != nil {
 			logger.Fatal().Err(err).Msg("unable to register the reader RoleBinding sweep")
 		}
+	}
+
+	// AuditEvent retention: the leader deletes old records (they have no
+	// owner, so nothing else does).
+	if auditRetention {
+		if err := mgr.Add(&auditretention.Pruner{
+			Client:         mgr.GetClient(),
+			APIReader:      mgr.GetAPIReader(),
+			Namespace:      watchNamespace,
+			MaxAge:         auditMaxAge,
+			MaxPerPipeline: auditMaxPerPipeline,
+			Interval:       auditRetentionInterval,
+		}); err != nil {
+			logger.Fatal().Err(err).Msg("unable to register AuditEvent retention")
+		}
+	} else {
+		logger.Info().Msg("AuditEvent retention off (--audit-retention=false): every record is kept")
 	}
 
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos}).

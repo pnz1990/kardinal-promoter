@@ -10,6 +10,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **AuditEvent retention** (#1514) — AuditEvents have no owner, so they accumulated in etcd for ever. The controller's leader now deletes, every 10 minutes, records older than `audit.retention.maxAge` (default 90 days) and, per Pipeline, all but the `audit.retention.maxPerPipeline` newest (default 1000), at most 2000 a run. `kardinal_auditevents_pruned_total` counts them. `audit.retention.enabled: false` (`--audit-retention=false`) keeps every record and removes the controller's `delete` on AuditEvents. **Upgrade note:** the first run after the upgrade deletes the records past these limits; export them first, or turn retention off, if you need them. See [Retention](guides/security.md#retention)
 - **OpenAPI description of the REST API** — the controller serves an OpenAPI 3.1 document of the UI API, the Bundle API and the webhook health endpoint at `GET /api/v1/openapi.json` on both listeners (no credentials needed), also published as [`docs/reference/openapi.json`](reference/openapi.json). It is generated from the controller's request and response types, and a test fails when it drifts. The new [REST API](reference/rest-api.md) page lists the endpoints and shows how to give scripts their own ServiceAccount tokens (TokenRequest) with TokenReview auth
 
 ### Changed

@@ -283,6 +283,22 @@ networkPolicy:
   # :9090 for MetricChecks or a webhook receiver for NotificationHooks.
   extraEgress: []
 
+# -- AuditEvent retention. AuditEvents have no owner, so without retention
+# they stay in etcd for ever. The leader deletes, every 10 minutes, the
+# records older than maxAge and, per Pipeline, all but the maxPerPipeline
+# newest. Set enabled: false to keep every record (for example when you
+# export them to a SIEM and must not lose one); the chart then grants the
+# controller no delete on AuditEvents. See docs/guides/security.md.
+audit:
+  retention:
+    enabled: true
+    # -- Delete records older than this (--audit-retention-max-age, a Go
+    # duration). "0s" keeps records of any age.
+    maxAge: "2160h"
+    # -- Keep this many newest records per Pipeline
+    # (--audit-retention-max-per-pipeline). 0 keeps any number.
+    maxPerPipeline: 1000
+
 # -- ScheduleClock configuration.
 # One ScheduleClock is deployed per cluster. Each tick re-evaluates every
 # PolicyGate instance, so schedule.* expressions follow the interval; each

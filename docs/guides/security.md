@@ -27,7 +27,7 @@ What the namespaced rules grant:
 | `events.k8s.io` `events` | create, patch | Events from every reconciler (the events.k8s.io/v1 API) |
 | `events` (core) | get, list, watch, create, patch | The UI step event list reads Events through core/v1; leader election writes core Events |
 | All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
-| `auditevents` | get, list, watch, create | Audit records are append-only |
+| `auditevents` | get, list, watch, create; delete with `audit.retention.enabled` (the default) | Records are never changed; retention deletes old ones |
 | `graphs.kro.run` | full CRUD; get on `graphs/status` | One Graph per Bundle |
 | `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the two Graph ClusterRoles) | get, create; get, list, create, update, delete; bind | The Graph identity. `list` is for the sweep that deletes reader bindings no Graph reads through; it runs in cluster mode only and touches only RoleBindings labeled `app.kubernetes.io/managed-by=kardinal-promoter` |
 | `deployments`, `argoproj.io` `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch | Health adapters. `rbac.argocdApplicationsWrite=true` adds `patch` on Applications for `update.strategy: argocd` |
@@ -322,6 +322,23 @@ kardinal writes an immutable `AuditEvent` CRD record at every significant promot
 lifecycle transition, in the Pipeline's namespace. AuditEvents are append-only — the
 spec is set at creation and never mutated. Kubernetes RBAC controls who can delete them (see
 [RBAC: read-only access to audit records](#rbac-read-only-access-to-audit-records)).
+
+### Retention
+
+An AuditEvent has no owner, so it outlives the Bundle and the step it records, and nothing
+else deletes it. Without retention a busy cluster keeps every record in etcd for ever. The
+controller's leader therefore applies retention every 10 minutes:
+
+| Value | Flag | Default | Deletes |
+|---|---|---|---|
+| `audit.retention.maxAge` | `--audit-retention-max-age` | `2160h` (90 days) | records whose `spec.timestamp` is older. `0s` keeps any age |
+| `audit.retention.maxPerPipeline` | `--audit-retention-max-per-pipeline` | `1000` | per Pipeline (namespace and `kardinal.io/pipeline` label), all but the newest records, in the order `kardinal get auditevents` lists them. `0` keeps any number |
+| `audit.retention.enabled` | `--audit-retention` | `true` | `false` deletes nothing, and the chart grants the controller no `delete` on AuditEvents |
+
+A run deletes at most 2000 records, the oldest first, so a large backlog is cleared over
+several runs. `kardinal_auditevents_pruned_total` counts the deletions. If you must keep
+every record, export them to your SIEM ([SIEM integration](#siem-integration)) before
+retention deletes them, or set `audit.retention.enabled: false`.
 
 ### Events written automatically
 
