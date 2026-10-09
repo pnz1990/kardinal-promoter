@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -31,7 +32,9 @@ import (
 // Pipeline's records past the 3 newest (within one second by
 // kardinal.io/created-at) and keeps the rest, the other Pipeline's records
 // and a recent record whose spec.timestamp claims an old time included (age
-// is metadata.creationTimestamp). It restarts the
+// is metadata.creationTimestamp). It grants the controller delete on
+// AuditEvents in its namespace (the chart does with
+// audit.retention.enabled) and restarts the
 // controller, so it is not parallel. The chart's defaults (90 days, 1000)
 // and the off switch are checked in test/helm.
 //
@@ -56,6 +59,21 @@ func TestAudit_Retention(t *testing.T) {
 	}
 	create("api", "api-old", now.Add(-48*time.Hour))
 	create("api", "api-new", now)
+
+	// The chart grants delete on AuditEvents only with
+	// audit.retention.enabled, which this install leaves off: grant it in
+	// the test's namespace, as the chart's rule would.
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "audit-retention"},
+		Rules: []rbacv1.PolicyRule{{APIGroups: []string{"kardinal.io"}, Resources: []string{"auditevents"}, Verbs: []string{"delete"}}}}
+	_, err := e.Kube.RbacV1().Roles(ns).Create(ctx, role, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = e.Kube.RbacV1().RoleBindings(ns).Create(ctx, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "audit-retention"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: role.Name},
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: framework.ControllerServiceAccount,
+			Namespace: framework.ControllerNamespace}},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
 
 	restore := e.PatchController(t, func(spec *corev1.PodSpec) {
 		framework.SetArg(spec, "audit-retention", "true")
