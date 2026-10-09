@@ -658,7 +658,7 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "${datasource}"},
-      "description": "Rate-limit quota left, from the last response headers, by provider and repository owner. 0 means calls are refused until the reset.",
+      "description": "Rate-limit quota left, from the last response headers, by provider and repository owner (absent for Gitea, Forgejo and Bitbucket; Azure DevOps counts usage units; with one GitHub token every owner shows the token's window). 0 means calls are refused until the reset.",
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},
@@ -690,7 +690,7 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "${datasource}"},
-      "description": "Circuit breaker state by provider and owner: 0 closed, 1 half-open, 2 open. Owner \"quota\" is the rate-limit circuit.",
+      "description": "Circuit breaker state by provider and owner: 0 closed, 1 half-open, 2 open. Owner \"_quota\" is the rate-limit circuit.",
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "palette-classic"},

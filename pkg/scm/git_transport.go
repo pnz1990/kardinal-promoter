@@ -8,19 +8,56 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 // go-git's HTTP(S) transport, with the bytes of every smart-HTTP exchange
-// counted in kardinal_git_transfer_bytes_total (#1529). It is the default
-// transport (http.DefaultTransport, as go-git's own default client uses), so
-// proxies, TLS and connection pooling are unchanged; only the bodies are
-// counted as they are read.
+// counted in kardinal_git_transfer_bytes_total (#1529). The counted client
+// wraps http.DefaultTransport, as go-git's own default client does, so
+// connection pooling and the environment's proxy settings are unchanged.
+//
+// go-git configures a per-endpoint *http.Transport for a CA bundle, a client
+// certificate, InsecureSkipTLS or a proxy in the clone or push options, and
+// for that it needs the client's transport to be an *http.Transport: with the
+// counting wrapper it would fail (or panic in its transport cache). Those
+// endpoints go to go-git's default client unchanged, uncounted.
 func init() {
-	c := githttp.NewClient(&http.Client{Transport: &countingTransport{base: http.DefaultTransport}})
-	client.InstallProtocol("https", c)
-	client.InstallProtocol("http", c)
+	t := gitHTTPTransport{
+		counted: githttp.NewClient(&http.Client{Transport: &countingTransport{base: http.DefaultTransport}}),
+		plain:   githttp.DefaultClient,
+	}
+	client.InstallProtocol("https", t)
+	client.InstallProtocol("http", t)
+}
+
+// gitHTTPTransport picks the counted client, or go-git's default one for an
+// endpoint with its own TLS or proxy settings.
+type gitHTTPTransport struct {
+	counted, plain transport.Transport
+}
+
+// ownTransport reports whether go-git builds a per-endpoint *http.Transport
+// for ep (plumbing/transport/http newSession).
+func ownTransport(ep *transport.Endpoint) bool {
+	return len(ep.ClientKey) > 0 || len(ep.ClientCert) > 0 || len(ep.CaBundle) > 0 ||
+		ep.InsecureSkipTLS || ep.Proxy.URL != ""
+}
+
+func (g gitHTTPTransport) pick(ep *transport.Endpoint) transport.Transport {
+	if ownTransport(ep) {
+		return g.plain
+	}
+	return g.counted
+}
+
+func (g gitHTTPTransport) NewUploadPackSession(ep *transport.Endpoint, auth transport.AuthMethod) (transport.UploadPackSession, error) {
+	return g.pick(ep).NewUploadPackSession(ep, auth)
+}
+
+func (g gitHTTPTransport) NewReceivePackSession(ep *transport.Endpoint, auth transport.AuthMethod) (transport.ReceivePackSession, error) {
+	return g.pick(ep).NewReceivePackSession(ep, auth)
 }
 
 // countingTransport counts request and response body bytes by git service.

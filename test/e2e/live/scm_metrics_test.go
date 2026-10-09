@@ -69,13 +69,13 @@ func TestSCM_MetricsAfterPromotion(t *testing.T) {
 	assert.Greater(t, after.Sum("kardinal_git_transfer_bytes_total", map[string]string{"service": "push", "direction": "sent"}),
 		before.Sum("kardinal_git_transfer_bytes_total", map[string]string{"service": "push", "direction": "sent"}), "push bytes")
 	assert.Positive(t, after.Sum("kardinal_scm_request_duration_seconds_count", map[string]string{"provider": provider}))
-	assert.True(t, after.Has("kardinal_scm_circuit_state", map[string]string{"provider": provider, "owner": "quota"}))
+	assert.True(t, after.Has("kardinal_scm_circuit_state", map[string]string{"provider": provider, "owner": "_quota"}))
 	for _, s := range after {
 		if s.Name == "kardinal_scm_circuit_state" {
 			assert.Contains(t, []float64{0, 1, 2}, s.Value, "circuit state %v", s.Labels)
 		}
 	}
-	assert.LessOrEqual(t, len(after.LabelValues("kardinal_scm_requests_total", "owner")), 51, "owner label capped (50 + other)")
+	assert.LessOrEqual(t, len(after.LabelValues("kardinal_scm_requests_total", "owner")), 51, "owner label capped (50 + _other)")
 	assert.LessOrEqual(t, len(after.LabelValues("kardinal_scm_requests_total", "operation")), 101, "operation label capped")
 	for _, owner := range after.LabelValues("kardinal_scm_requests_total", "owner") {
 		assert.NotContains(t, owner, "/", "owners, never repositories")

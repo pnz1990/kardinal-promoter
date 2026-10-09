@@ -97,26 +97,39 @@ Azure DevOps) and every git clone and push is measured (`pkg/scm/metrics.go`):
 |---|---|---|---|
 | `kardinal_scm_requests_total` | Counter | `provider`, `owner`, `operation`, `result` | SCM API calls. `result` is `ok`, `client_error` (4xx), `server_error` (5xx), `rate_limited` (quota used up: 429, or 403 with `Retry-After` or no remaining quota), `network_error` (no response) or `circuit_open` (refused by the circuit breaker before any call) |
 | `kardinal_scm_request_duration_seconds` | Histogram | `provider`, `operation` | Latency of the calls that were made, including reading the response |
-| `kardinal_scm_rate_limit_remaining` | Gauge | `provider`, `owner` | Requests left in the rate-limit window, from the last response's `X-RateLimit-Remaining` (GitHub, Forgejo, Gitea, Azure DevOps) or `RateLimit-Remaining` (GitLab) header. Absent for providers that send neither (Bitbucket) |
+| `kardinal_scm_rate_limit_remaining` | Gauge | `provider`, `owner` | What is left in the rate-limit window, from the last response's `X-RateLimit-Remaining` or `RateLimit-Remaining` header. Absent until a response carries one (see below) |
 | `kardinal_scm_rate_limit_limit` | Gauge | `provider`, `owner` | The window's size (`X-RateLimit-Limit` / `RateLimit-Limit`) |
 | `kardinal_scm_rate_limit_reset_timestamp_seconds` | Gauge | `provider`, `owner` | When the window resets, as a Unix time (`X-RateLimit-Reset` / `RateLimit-Reset`) |
-| `kardinal_scm_circuit_state` | Gauge | `provider`, `owner` | Circuit breaker state: `0` closed, `1` half-open (one probe allowed), `2` open (calls refused). `owner="quota"` is the circuit that opens when the token's rate limit is used up |
+| `kardinal_scm_circuit_state` | Gauge | `provider`, `owner` | Circuit breaker state: `0` closed, `1` half-open (one probe allowed), `2` open (calls refused). `owner="_quota"` is the circuit that opens when the token's rate limit is used up |
 | `kardinal_git_operations_total` | Counter | `operation` (`clone`, `push`), `result` (`ok`, `error`, `non_fast_forward`) | Git clones and pushes. `non_fast_forward` is a push that lost to another writer of the branch (it is rebased and retried) |
 | `kardinal_git_operation_duration_seconds` | Histogram | `operation` | Duration of git clones and pushes |
 | `kardinal_git_transfer_bytes_total` | Counter | `service` (`fetch`, `push`), `direction` (`sent`, `received`) | Bytes git transferred over HTTP(S). `fetch` covers clones and fetches (git-upload-pack), `push` covers git-receive-pack. Git over ssh is not counted |
 
 **Cardinality is bounded.** The `owner` label is the repository owner (organization, user,
 top-level GitLab group, Bitbucket workspace or Azure DevOps organization). It is never the
-repository, and only the first 50 owners the controller sees get their own value; later ones
-are reported as `other`. Calls without an owner, such as the startup token check, use `none`.
+repository. An owner gets its own value only after a call for it succeeded (a 2xx response), and
+only the first 50 such owners do; calls for any other owner, including ones that only ever fail,
+are reported as `_other`. Calls without an owner, such as the startup token check, use `_none`.
 `operation` is the HTTP method and the API resource words of the path, for example
 `POST pulls`, `GET merge_requests` or `DELETE git refs heads`. Names, numbers and SHAs are
-dropped, and there are at most 100 values. A controller has at most 5 providers × 51 owners
-of each owner-labelled series.
+dropped, and there are at most 100 values. Owner and operation values are cut to 64 bytes. The
+reserved values `_other`, `_none` and `_quota` start with `_`. A controller has at most
+5 providers × 52 owner values of each owner-labelled series.
 
-The rate-limit gauges reflect the GitHub token kardinal uses. For a GitHub App with several
-installations, each installation, and so each organization, has its own window, which is why
-the gauges carry `owner`.
+**What the rate-limit gauges mean depends on the provider and the credential:**
+
+- **GitHub** sends `X-RateLimit-*` on every response. With a personal access token the quota
+  belongs to the token, not to the owner: every owner's gauge shows the same window, and it is
+  per owner only in name. With a GitHub App, each installation (and so each organization) has its
+  own window, which is why the gauges carry `owner`.
+- **GitLab** sends `RateLimit-*` when rate limiting is enabled on the instance (it is on
+  gitlab.com). The limit applies to the token's user.
+- **Gitea and Forgejo** send no rate-limit headers by default (the API is not rate limited unless
+  a proxy in front of it is), so the gauges are absent.
+- **Azure DevOps** sends `X-RateLimit-*` only when a request is delayed or close to the limit, and
+  counts in throughput units (TSTUs) over a sliding window, not in requests. Read
+  `remaining` as usage units left, not calls left.
+- **Bitbucket** sends none of these headers.
 
 ---
 

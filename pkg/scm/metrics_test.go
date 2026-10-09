@@ -17,6 +17,8 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
@@ -47,16 +49,57 @@ func TestSCMOperation(t *testing.T) {
 }
 
 // TestLabelCap (#1529): a label keeps its first max values; the rest are
-// "other", so a controller that sees many owners has a bounded series count.
+// "_other", so a controller that sees many owners has a bounded series
+// count. peek never admits. Values are cut to 64 bytes on a rune boundary.
 func TestLabelCap(t *testing.T) {
 	c := &labelCap{max: 3}
+	assert.Equal(t, labelOther, c.peek("o0"), "peek does not admit")
 	for i := range 3 {
 		assert.Equal(t, fmt.Sprintf("o%d", i), c.value(fmt.Sprintf("o%d", i)))
 	}
-	assert.Equal(t, "other", c.value("o3"))
+	assert.Equal(t, labelOther, c.value("o3"))
 	assert.Equal(t, "o1", c.value("o1"), "a value seen before keeps its own label")
-	assert.Equal(t, "none", ownerLabel(""))
-	assert.Equal(t, ownerLabel("acme-cap-test"), ownerLabel("ACME-Cap-Test"), "owners compare case-insensitively")
+	assert.Equal(t, "o1", c.peek("o1"))
+	assert.Equal(t, labelNone, ownerLabel(""))
+	assert.Equal(t, labelNone, knownOwnerLabel(""))
+	assert.Equal(t, ownerKey("acme-cap-test"), ownerKey("ACME-Cap-Test"), "owners compare case-insensitively")
+
+	assert.Equal(t, strings.Repeat("a", 64), truncateLabel(strings.Repeat("a", 100)))
+	long := strings.Repeat("a", 63) + "é" // the 2-byte rune straddles byte 64
+	assert.Equal(t, strings.Repeat("a", 63), truncateLabel(long), "no split rune")
+	assert.Equal(t, "short", truncateLabel("short"))
+	assert.LessOrEqual(t, len(ownerKey(strings.Repeat("x", 300))), 64)
+	assert.LessOrEqual(t, len(scmOperation("GET", "/"+strings.Repeat("pulls/", 40))), 64)
+}
+
+// TestSCMMetrics_OwnerAdmittedOnSuccess (#1529 QA): an owner gets its own
+// label only after a 2xx response, so failing calls for made-up owners
+// cannot take the slots; once admitted, its failures keep its label.
+func TestSCMMetrics_OwnerAdmittedOnSuccess(t *testing.T) {
+	status := http.StatusNotFound
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, "{}")
+	}))
+	defer srv.Close()
+	g := NewGitHubProvider("t", srv.URL, "")
+	ctx := context.Background()
+	const owner = "metrics-owner-admit"
+	count := func(label, result string) float64 {
+		return testutil.ToFloat64(SCMRequestsTotal.WithLabelValues("github", label, "PATCH pulls", result))
+	}
+	other := count(labelOther, "client_error")
+	require.Error(t, g.ClosePR(ctx, owner+"/app", 1))
+	assert.Equal(t, other+1, count(labelOther, "client_error"), "a failing call does not admit its owner")
+	assert.Equal(t, labelOther, knownOwnerLabel(owner))
+
+	status = http.StatusOK
+	require.NoError(t, g.ClosePR(ctx, owner+"/app", 1))
+	assert.Equal(t, 1.0, count(owner, "ok"), "a 2xx admits the owner")
+
+	status = http.StatusNotFound
+	require.Error(t, g.ClosePR(ctx, owner+"/app", 1))
+	assert.Equal(t, 1.0, count(owner, "client_error"), "an admitted owner keeps its label on failures")
 }
 
 // TestSCMMetrics_GitHubCalls (#1529): every GitHub API call counts by
@@ -94,7 +137,7 @@ func TestSCMMetrics_GitHubCalls(t *testing.T) {
 	before = count("PATCH pulls", "rate_limited")
 	require.Error(t, g.ClosePR(ctx, owner+"/app", 1))
 	assert.Equal(t, before+1, count("PATCH pulls", "rate_limited"))
-	assert.Equal(t, 2.0, testutil.ToFloat64(SCMCircuitState.WithLabelValues("github", "quota")), "the quota circuit opened")
+	assert.Equal(t, 2.0, testutil.ToFloat64(SCMCircuitState.WithLabelValues("github", labelQuota)), "the quota circuit opened")
 	before = count("PATCH pulls", "circuit_open")
 	require.Error(t, g.ClosePR(ctx, owner+"/app", 1))
 	assert.Equal(t, before+1, count("PATCH pulls", "circuit_open"), "refused before any call")
@@ -248,4 +291,31 @@ func collectRequests(t *testing.T) []requestSample {
 		out = append(out, s)
 	}
 	return out
+}
+
+// TestGitHTTPTransport_OwnTLSOrProxy (#1529 QA): an endpoint with a CA
+// bundle, a client certificate, InsecureSkipTLS or a proxy goes to go-git's
+// default client, which builds its own *http.Transport for it (the counting
+// wrapper is not one); every other endpoint is counted.
+func TestGitHTTPTransport_OwnTLSOrProxy(t *testing.T) {
+	installed, ok := client.Protocols["https"].(gitHTTPTransport)
+	require.True(t, ok, "kardinal's transport is installed for https")
+	plain := func(ep transport.Endpoint) bool { return installed.pick(&ep) == installed.plain }
+	base := transport.Endpoint{Protocol: "https", Host: "git.example", Path: "/o/r.git"}
+	assert.False(t, plain(base), "a plain endpoint is counted")
+	for name, ep := range map[string]transport.Endpoint{
+		"InsecureSkipTLS": {Protocol: "https", Host: "git.example", Path: "/o/r.git", InsecureSkipTLS: true},
+		"CABundle":        {Protocol: "https", Host: "git.example", Path: "/o/r.git", CaBundle: []byte("pem")},
+		"ClientCert":      {Protocol: "https", Host: "git.example", Path: "/o/r.git", ClientCert: []byte("c"), ClientKey: []byte("k")},
+		"Proxy":           {Protocol: "https", Host: "git.example", Path: "/o/r.git", Proxy: transport.ProxyOptions{URL: "http://proxy:3128"}},
+	} {
+		assert.True(t, plain(ep), name)
+	}
+	// The session for such an endpoint is created without error (the
+	// counting wrapper alone fails or panics here).
+	ep := base
+	ep.InsecureSkipTLS = true
+	sess, err := installed.NewUploadPackSession(&ep, nil)
+	require.NoError(t, err)
+	require.NoError(t, sess.Close())
 }

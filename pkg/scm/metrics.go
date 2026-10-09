@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -18,13 +19,19 @@ import (
 // SCM API and git metrics (#1529). Label cardinality is bounded:
 //   - provider: the five providers.
 //   - owner: the repository owner (organization, user, group, workspace),
-//     never the repository; at most maxOwnerLabels distinct owners, the
-//     rest are "other". Calls without an owner are "none", the quota circuit
-//     "quota".
+//     never the repository, at most maxLabelBytes long. An owner gets its
+//     own value only once a call for it got a 2xx response, so a stream of
+//     made-up owners that only ever fail cannot fill the slots; at most
+//     maxOwnerLabels distinct owners, the rest are labelOther. Calls without
+//     an owner are labelNone, the quota circuit labelQuota.
 //   - operation: the HTTP method and the API resource words of the path
 //     (scmOperation), never names, numbers or SHAs; at most
-//     maxOperationLabels, the rest "other".
+//     maxOperationLabels, the rest labelOther.
 //   - result, code class and git operation: fixed sets.
+//
+// The reserved values (labelOther, labelNone, labelQuota) start with "_",
+// which GitHub, Bitbucket and Azure DevOps owner names cannot, so a real
+// owner does not report under them.
 //
 // They are written as calls happen and drive nothing: no reconciler reads them.
 var (
@@ -67,10 +74,10 @@ var (
 	}, []string{"provider", "owner"})
 
 	// SCMCircuitState is the state of a circuit breaker: 0 closed, 1 half-open,
-	// 2 open. owner "quota" is the token's rate-limit circuit.
+	// 2 open. owner labelQuota is the token's rate-limit circuit.
 	SCMCircuitState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "kardinal_scm_circuit_state",
-		Help: "SCM circuit breaker state: 0 closed, 1 half-open, 2 open (owner \"quota\": the rate-limit circuit).",
+		Help: "SCM circuit breaker state: 0 closed, 1 half-open, 2 open (owner \"_quota\": the rate-limit circuit).",
 	}, []string{"provider", "owner"})
 
 	// GitOperationsTotal counts git clones and pushes by result (ok, error,
@@ -105,16 +112,26 @@ func init() {
 const (
 	maxOwnerLabels     = 50
 	maxOperationLabels = 100
+	// maxLabelBytes bounds the length of an owner or operation value.
+	maxLabelBytes = 64
+)
+
+// Reserved label values. A real owner or operation is never one of them.
+const (
+	labelOther = "_other"
+	labelNone  = "_none"
+	labelQuota = "_quota"
 )
 
 // labelCap keeps the first max distinct values of a label and maps the rest
-// to "other", so a controller that sees many owners has bounded series.
+// to labelOther, so a controller that sees many owners has bounded series.
 type labelCap struct {
 	mu   sync.Mutex
 	max  int
 	seen map[string]bool
 }
 
+// value admits v, if a slot is free, and returns its label.
 func (c *labelCap) value(v string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -122,7 +139,7 @@ func (c *labelCap) value(v string) string {
 		return v
 	}
 	if len(c.seen) >= c.max {
-		return "other"
+		return labelOther
 	}
 	if c.seen == nil {
 		c.seen = map[string]bool{}
@@ -131,19 +148,62 @@ func (c *labelCap) value(v string) string {
 	return v
 }
 
+// peek returns v's label without admitting it: v when it has a slot,
+// labelOther otherwise.
+func (c *labelCap) peek(v string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seen[v] {
+		return v
+	}
+	return labelOther
+}
+
+// truncateLabel cuts v to maxLabelBytes without splitting a UTF-8 sequence.
+func truncateLabel(v string) string {
+	if len(v) <= maxLabelBytes {
+		return v
+	}
+	cut := maxLabelBytes
+	for cut > 0 && !utf8.RuneStart(v[cut]) {
+		cut--
+	}
+	return v[:cut]
+}
+
 var (
 	ownerLabels     = &labelCap{max: maxOwnerLabels}
 	operationLabels = &labelCap{max: maxOperationLabels}
 )
 
-// ownerLabel is the owner label of a call: the owner lowercased (owners
-// compare case-insensitively), "none" for a call without one, at most
-// maxOwnerLabels distinct values.
-func ownerLabel(owner string) string {
+// ownerKey is the owner as a label value would be: lowercased (owners
+// compare case-insensitively) and at most maxLabelBytes; labelNone for a
+// call without one.
+func ownerKey(owner string) string {
 	if owner == "" {
-		return "none"
+		return labelNone
 	}
-	return ownerLabels.value(strings.ToLower(owner))
+	return truncateLabel(strings.ToLower(owner))
+}
+
+// ownerLabel is the owner label of a call that got a 2xx response: it admits
+// the owner if a slot is free.
+func ownerLabel(owner string) string {
+	k := ownerKey(owner)
+	if k == labelNone {
+		return k
+	}
+	return ownerLabels.value(k)
+}
+
+// knownOwnerLabel is the owner label of any other call: the owner's own
+// value only if a 2xx response admitted it before, labelOther otherwise.
+func knownOwnerLabel(owner string) string {
+	k := ownerKey(owner)
+	if k == labelNone {
+		return k
+	}
+	return ownerLabels.peek(k)
 }
 
 // apiWords are the path segments an operation label keeps: the resources of
@@ -175,7 +235,7 @@ func scmOperation(method, path string) string {
 	if len(words) > 6 {
 		words = words[:6]
 	}
-	return operationLabels.value(strings.Join(words, " "))
+	return operationLabels.value(truncateLabel(strings.Join(words, " ")))
 }
 
 // scmCall instruments one SCM API call of provider.
@@ -184,14 +244,17 @@ type scmCall struct {
 	start                      time.Time
 }
 
+// startSCMCall starts measuring a call. c.owner is the raw owner; its label
+// is decided when the outcome is known (done, circuitOpen).
 func startSCMCall(provider, owner, method, path string) *scmCall {
-	return &scmCall{provider: provider, owner: ownerLabel(owner), operation: scmOperation(method, path), start: time.Now()}
+	return &scmCall{provider: provider, owner: owner, operation: scmOperation(method, path), start: time.Now()}
 }
 
 // circuitOpen records a call the circuit breaker refused.
 func (c *scmCall) circuitOpen(reg *CircuitRegistry, owner string) {
-	SCMRequestsTotal.WithLabelValues(c.provider, c.owner, c.operation, "circuit_open").Inc()
-	c.circuits(reg, owner)
+	label := knownOwnerLabel(c.owner)
+	SCMRequestsTotal.WithLabelValues(c.provider, label, c.operation, "circuit_open").Inc()
+	c.circuits(reg, owner, label)
 }
 
 // done records the outcome of a call that was made: resp, or callErr when it
@@ -210,20 +273,24 @@ func (c *scmCall) done(resp *http.Response, callErr error, reg *CircuitRegistry,
 	case resp.StatusCode >= 400:
 		result = "client_error"
 	}
-	SCMRequestsTotal.WithLabelValues(c.provider, c.owner, c.operation, result).Inc()
-	if resp != nil {
-		recordRateLimit(c.provider, c.owner, resp.Header)
+	label := knownOwnerLabel(c.owner)
+	if resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		label = ownerLabel(c.owner)
 	}
-	c.circuits(reg, owner)
+	SCMRequestsTotal.WithLabelValues(c.provider, label, c.operation, result).Inc()
+	if resp != nil {
+		recordRateLimit(c.provider, label, resp.Header)
+	}
+	c.circuits(reg, owner, label)
 }
 
-func (c *scmCall) circuits(reg *CircuitRegistry, owner string) {
+func (c *scmCall) circuits(reg *CircuitRegistry, owner, label string) {
 	if reg == nil {
 		return
 	}
 	ownerState, quotaState := reg.states(owner)
-	SCMCircuitState.WithLabelValues(c.provider, c.owner).Set(circuitValue(ownerState))
-	SCMCircuitState.WithLabelValues(c.provider, "quota").Set(circuitValue(quotaState))
+	SCMCircuitState.WithLabelValues(c.provider, label).Set(circuitValue(ownerState))
+	SCMCircuitState.WithLabelValues(c.provider, labelQuota).Set(circuitValue(quotaState))
 }
 
 // circuitValue is the gauge value of a circuit state: 0 closed, 1 half-open,
