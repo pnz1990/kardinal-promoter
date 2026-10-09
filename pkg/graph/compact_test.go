@@ -444,6 +444,9 @@ func TestCompact_SameObjectKinds(t *testing.T) {
 			}
 			nodes, err := build(graph.GraphShapeNodes)
 			require.NoError(t, err)
+			// Every expression of both shapes reads only nodes they have
+			// (assertKroValid runs assertRefsResolve).
+			assertKroValid(t, nodes.Graph)
 			for _, k := range []string{"PromotionStep", "PolicyGate", "PRStatus", "MetricCheck"} {
 				require.True(t, kinds(nodes.Graph)[k], "the fixture exercises %s", k)
 			}
