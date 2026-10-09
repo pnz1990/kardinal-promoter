@@ -688,6 +688,8 @@ spec:
 		"ClusterRole /kardinal-promoter-graph-applier", "ClusterRole /kardinal-promoter-graph-reader",
 		"ClusterRole /kardinal-promoter-kro-watch",
 		"Role kardinal-system/kardinal-promoter-leader-election", "RoleBinding kardinal-system/kardinal-promoter-leader-election",
+		// #1542: only pipelines/hold may change spec.holds.
+		"ValidatingAdmissionPolicy /kardinal-promoter-hold-writes", "ValidatingAdmissionPolicyBinding /kardinal-promoter-hold-writes",
 	}, added, "objects the new chart adds")
 	framework.Eventually(t, time.Minute, "v0.8.1's Graph controller and CRDs deleted", func(ctx context.Context) (bool, string) {
 		if _, err := e.Kube.AppsV1().Deployments("kro-system").Get(ctx, "graph-controller", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
@@ -727,12 +729,21 @@ spec:
 	assert.NotContains(t, check, "warning(s)")
 	var warnings []string
 	for _, l := range logEntries(check) {
+		// The fixtures' Pipelines share one repository and write the same
+		// paths on purpose: each logs a PathConflict warning (#1504), which
+		// the guide describes apart from the startup warnings.
+		if strings.HasPrefix(l.Message, "environments write overlapping paths of the same repository and branch") {
+			continue
+		}
 		warnings = append(warnings, l.Level+": "+l.Message)
 	}
-	if assert.Len(t, warnings, 2, "the controller logs two warnings: %q", warnings) {
+	// The three the guide lists (docs/installation.md, step 9): the upgrade
+	// keeps the v0.8.1 values, which set none of these (#1560).
+	if assert.Len(t, warnings, 3, "the controller logs three warnings: %q", warnings) {
 		sort.Strings(warnings)
-		assert.True(t, strings.HasPrefix(warnings[0], "warn: SCM webhooks disabled: no --webhook-secret set"), warnings[0])
-		assert.True(t, strings.HasPrefix(warnings[1], "warn: UI API authentication is off"), warnings[1])
+		assert.True(t, strings.HasPrefix(warnings[0], "warn: --scm-allowed-repositories (Helm scm.allowedRepositories) is not set"), warnings[0])
+		assert.True(t, strings.HasPrefix(warnings[1], "warn: SCM webhooks disabled: no --webhook-secret set"), warnings[1])
+		assert.True(t, strings.HasPrefix(warnings[2], "warn: UI API authentication is off"), warnings[2])
 	}
 	created := map[string]bool{}
 	for _, l := range logEntries(rel.AllLogs(t)) {
@@ -840,7 +851,11 @@ spec:
 	assert.Zero(t, u.labelled(t, b0a))
 	u.get(t, "upgrade-hold", &v1alpha1.PolicyGate{})
 	u.get(t, "metrics-ok", &v1alpha1.PolicyGate{})
-	u.step(t, u.main, b1, "prod")
+	// The children of a Bundle that exists are kept. b1's own steps may be
+	// gone already: b2 replaced it in every environment, so its Graph is
+	// retired after graph.retire.superseded (#1527) and its steps live on in
+	// status.retiredSteps.
+	u.step(t, u.main, b2, "test")
 }
 
 // dryRun is a script that server-side dry-runs applying y in the namespace.
