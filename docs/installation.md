@@ -198,7 +198,10 @@ more Pipelines or a longer history, raise `resources.limits.memory` in proportio
 0.5 MiB per Pipeline with one Bundle (the 200-Pipeline run above), plus what the kept Bundles
 and their steps hold. Watch
 `container_memory_working_set_bytes` of the controller Pod, or `process_resident_memory_bytes`
-on its metrics port. kro has its own budget: [Sizing kro](#sizing-kro).
+on its metrics port. The controller sets the Go runtime's soft memory limit (`GOMEMLIMIT`) to 90% of
+its container limit, which the chart passes in from the downward API, so the garbage collector
+works harder before the kernel would OOMKill it; set `GOMEMLIMIT` in `controller.extraEnv` to
+choose another value. kro has its own budget: [Sizing kro](#sizing-kro).
 
 ## Helm values reference
 

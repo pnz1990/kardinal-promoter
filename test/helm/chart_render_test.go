@@ -1374,3 +1374,22 @@ func TestChartControllerMemoryDefaults(t *testing.T) {
 	assert.Equal(t, "256Mi", request.String())
 	assert.GreaterOrEqual(t, limit.Value(), int64(2*409<<20), "at least twice the largest measured peak")
 }
+
+// TestChartControllerMemoryLimitEnv (#1553): the controller gets its memory
+// limit from the downward API, from which it sets GOMEMLIMIT to 90%.
+func TestChartControllerMemoryLimitEnv(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	var found bool
+	for _, e := range c.Env {
+		if e.Name != "KARDINAL_MEMORY_LIMIT" {
+			continue
+		}
+		found = true
+		require.NotNil(t, e.ValueFrom)
+		require.NotNil(t, e.ValueFrom.ResourceFieldRef)
+		assert.Equal(t, "limits.memory", e.ValueFrom.ResourceFieldRef.Resource)
+		assert.Equal(t, "controller", e.ValueFrom.ResourceFieldRef.ContainerName)
+		assert.Equal(t, "1", e.ValueFrom.ResourceFieldRef.Divisor.String())
+	}
+	assert.True(t, found, "KARDINAL_MEMORY_LIMIT env")
+}
