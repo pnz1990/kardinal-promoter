@@ -118,7 +118,7 @@ func TestWriteAuditEvent_LogsErrors(t *testing.T) {
 		noLog   []string
 	}{
 		{name: "forbidden is logged", err: apierrors.NewForbidden(gr, "x", nil),
-			wantLog: []string{"failed to write AuditEvent", "forbidden", "PromotionFailed", `"level":"error"`}},
+			wantLog: []string{"failed to write AuditEvent", "forbidden", "s-failed", "pendingAuditEvents", `"level":"error"`}},
 		{name: "already exists is not logged", err: apierrors.NewAlreadyExists(gr, "x")},
 		// The namespace deletion removes the step next: nothing to report.
 		{name: "a namespace being deleted is debug", err: terminating,
@@ -152,12 +152,23 @@ func TestWriteAuditEvent_LogsErrors(t *testing.T) {
 	}
 }
 
-func TestWriteAuditEvent_NilClient(t *testing.T) {
-	ps := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+func TestAuditEntry_NeedsLabels(t *testing.T) {
+	_, ok := auditEntry(nil, AuditActionPromotionStarted, AuditOutcomePending, "", time.Now())
+	assert.False(t, ok, "no step, no record")
+	ps := &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"}}
+	_, ok = auditEntry(ps, AuditActionPromotionStarted, AuditOutcomePending, "", time.Now())
+	assert.False(t, ok, "a step without pipeline and bundle labels has no useful record")
+}
+
+// writeAuditEvent records action on ps through the outbox, as a transition
+// does: the entry is stored in ps's status and flushed.
+func writeAuditEvent(ctx context.Context, c client.Client, ps *v1alpha1.PromotionStep, action, outcome, message string) {
+	e, ok := auditEntry(ps, action, outcome, message, time.Now())
+	if !ok {
+		return
 	}
-	// Must not panic.
-	writeAuditEvent(context.Background(), nil, ps, AuditActionPromotionStarted, AuditOutcomePending, "")
+	ps.Status.PendingAuditEvents = []v1alpha1.PendingAuditEvent{e}
+	_ = (&Reconciler{Client: c}).flushAudit(ctx, ps)
 }
 
 func TestSanitizeK8sName(t *testing.T) {

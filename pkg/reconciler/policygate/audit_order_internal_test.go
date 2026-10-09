@@ -64,3 +64,15 @@ func TestGateAudit_FlipsWithinOneSecond(t *testing.T) {
 		assert.Equal(t, []string{"Failure", "Success", "Failure", "Success"}, got)
 	}
 }
+
+// writeGateAuditEvent records a flip through the outbox, as patchStatus
+// does: the entry is stored in the gate's status and flushed.
+func writeGateAuditEvent(ctx context.Context, c client.Client, gate *kardinalv1alpha1.PolicyGate,
+	outcome, reason string, at metav1.Time) {
+	e, ok := gateAuditEntry(gate, outcome, reason, at)
+	if !ok {
+		return
+	}
+	gate.Status.PendingAuditEvents = []kardinalv1alpha1.PendingAuditEvent{e}
+	_ = (&Reconciler{Client: c}).flushAudit(ctx, gate)
+}
