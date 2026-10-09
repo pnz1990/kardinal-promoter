@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,13 +28,83 @@ import (
 
 var now = time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 
-func event(ns, pipeline, name string, at time.Time) *v1alpha1.AuditEvent {
+// event is an AuditEvent created at `created` (one-second resolution, as the
+// API server stores it) with kardinal.io/created-at at createdAt.
+func event(ns, pipeline, name string, createdAt time.Time) *v1alpha1.AuditEvent {
 	ae := &v1alpha1.AuditEvent{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: map[string]string{"kardinal.io/pipeline": pipeline}},
-		Spec:       v1alpha1.AuditEventSpec{Timestamp: metav1.NewTime(at.Truncate(time.Second)), PipelineName: pipeline, Action: "PromotionStarted"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: map[string]string{"kardinal.io/pipeline": pipeline},
+			CreationTimestamp: metav1.NewTime(createdAt.Truncate(time.Second))},
+		Spec: v1alpha1.AuditEventSpec{Timestamp: metav1.NewTime(createdAt.Truncate(time.Second)), PipelineName: pipeline, Action: "PromotionStarted"},
 	}
-	lifecycle.StampCreatedAt(ae, at)
+	lifecycle.StampCreatedAt(ae, createdAt)
 	return ae
+}
+
+// pagedClient serves AuditEvent metadata lists page by page, honouring
+// Limit and Continue (the fake client ignores them), counts the list calls
+// and records the largest page asked for. expireAfter > 0 answers 410 Gone
+// to the continue token of that page.
+type pagedClient struct {
+	client.WithWatch
+	calls, maxLimit, expireAfter int
+	deletes                      []string
+}
+
+func newPaged(t *testing.T, objs ...client.Object) *pagedClient {
+	s := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(s))
+	return &pagedClient{WithWatch: fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()}
+}
+
+func (c *pagedClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	lo := &client.ListOptions{}
+	lo.ApplyOptions(opts)
+	pl, ok := list.(*metav1.PartialObjectMetadataList)
+	if !ok {
+		return c.WithWatch.List(ctx, list, opts...)
+	}
+	c.calls++
+	c.maxLimit = max(c.maxLimit, int(lo.Limit))
+	var all v1alpha1.AuditEventList
+	inner := []client.ListOption{}
+	if lo.Namespace != "" {
+		inner = append(inner, client.InNamespace(lo.Namespace))
+	}
+	if lo.LabelSelector != nil {
+		inner = append(inner, client.MatchingLabelsSelector{Selector: lo.LabelSelector})
+	}
+	if err := c.WithWatch.List(ctx, &all, inner...); err != nil {
+		return err
+	}
+	sort.Slice(all.Items, func(i, j int) bool {
+		return all.Items[i].Namespace+"/"+all.Items[i].Name < all.Items[j].Namespace+"/"+all.Items[j].Name
+	})
+	start := 0
+	if lo.Continue != "" {
+		page, _ := strconv.Atoi(lo.Continue)
+		if c.expireAfter > 0 && page >= c.expireAfter {
+			return apierrors.NewResourceExpired("continue token expired")
+		}
+		start = page * int(lo.Limit)
+	}
+	end := min(len(all.Items), start+int(lo.Limit))
+	if lo.Limit == 0 {
+		end = len(all.Items)
+	}
+	pl.Items = nil
+	for _, ae := range all.Items[start:end] {
+		pl.Items = append(pl.Items, metav1.PartialObjectMetadata{ObjectMeta: ae.ObjectMeta})
+	}
+	pl.Continue = ""
+	if end < len(all.Items) {
+		pl.Continue = strconv.Itoa(end / int(lo.Limit))
+	}
+	return nil
+}
+
+func (c *pagedClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	c.deletes = append(c.deletes, obj.GetName())
+	return c.WithWatch.Delete(ctx, obj, opts...)
 }
 
 func names(t *testing.T, c client.Client) []string {
@@ -47,90 +119,122 @@ func names(t *testing.T, c client.Client) []string {
 	return out
 }
 
-func newClient(t *testing.T, objs ...client.Object) client.WithWatch {
-	s := runtime.NewScheme()
-	require.NoError(t, v1alpha1.AddToScheme(s))
-	return fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
-}
-
-// TestPruner_MaxPerPipeline keeps the newest records of each Pipeline,
-// ordered as kardinal get auditevents orders them (within a second by
-// kardinal.io/created-at), and leaves other Pipelines and namespaces alone.
-// A second run deletes nothing (idempotent).
+// TestPruner_MaxPerPipeline keeps each Pipeline's newest records: by
+// creationTimestamp, then within its second by kardinal.io/created-at
+// (written in the reverse of name order here, so name order would be
+// wrong); other Pipelines and namespaces are untouched; deletion runs
+// oldest first; a second run deletes nothing.
+//
+// Covers AUDIT-RETENTION-02.
 func TestPruner_MaxPerPipeline(t *testing.T) {
 	var objs []client.Object
 	for i := 0; i < 5; i++ {
-		// Five records within one second: only created-at orders them.
-		objs = append(objs, event("a", "web", fmt.Sprintf("web-%d", i), now.Add(time.Duration(i)*100*time.Millisecond)))
+		objs = append(objs, event("a", "web", fmt.Sprintf("web-%d", 9-i), now.Add(time.Duration(i)*100*time.Millisecond)))
 	}
 	objs = append(objs, event("a", "api", "api-0", now), event("b", "web", "b-web-0", now), event("b", "web", "b-web-1", now.Add(time.Second)))
-	c := newClient(t, objs...)
-	p := &auditretention.Pruner{Client: c, APIReader: c, MaxPerPipeline: 2, Now: func() time.Time { return now }}
+	c := newPaged(t, objs...)
+	p := &auditretention.Pruner{Client: c, MaxPerPipeline: 2, Now: func() time.Time { return now.Add(time.Hour) }}
 	n, err := p.Run(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 3, n)
-	assert.Equal(t, []string{"a/api-0", "a/web-3", "a/web-4", "b/b-web-0", "b/b-web-1"}, names(t, c))
+	assert.Equal(t, []string{"a/api-0", "a/web-5", "a/web-6", "b/b-web-0", "b/b-web-1"}, names(t, c), "created-at decides within the second")
+	assert.Equal(t, []string{"web-9", "web-8", "web-7"}, c.deletes, "oldest first")
 
+	c.deletes = nil
 	n, err = p.Run(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n, "nothing left to delete")
 }
 
-// TestPruner_MaxAge deletes records older than MaxAge whatever the count;
-// the off switch (both limits 0) deletes nothing; Namespace limits the run.
+// TestPruner_MaxAge deletes records created longer ago than MaxAge while
+// streaming, never one that claims a future time; the off switch (both
+// limits 0) lists nothing; Namespace limits the run.
+//
+// Covers AUDIT-RETENTION-02.
 func TestPruner_MaxAge(t *testing.T) {
-	c := newClient(t,
+	c := newPaged(t,
 		event("a", "web", "old", now.Add(-100*24*time.Hour)),
 		event("a", "web", "recent", now.Add(-time.Hour)),
+		event("a", "web", "future", now.Add(24*time.Hour)),
 		event("b", "web", "old-b", now.Add(-100*24*time.Hour)))
-	off := &auditretention.Pruner{Client: c, APIReader: c, Now: func() time.Time { return now }}
+	off := &auditretention.Pruner{Client: c, Now: func() time.Time { return now }}
 	n, err := off.Run(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n)
+	assert.Zero(t, c.calls, "off: no list at all")
 
-	p := &auditretention.Pruner{Client: c, APIReader: c, Namespace: "a", MaxAge: auditretention.DefaultMaxAge, Now: func() time.Time { return now }}
+	p := &auditretention.Pruner{Client: c, Namespace: "a", MaxAge: auditretention.DefaultMaxAge, Now: func() time.Time { return now }}
 	n, err = p.Run(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
-	assert.Equal(t, []string{"a/recent", "b/old-b"}, names(t, c), "namespace b is outside the run")
+	assert.Equal(t, []string{"a/future", "a/recent", "b/old-b"}, names(t, c), "namespace b is outside the run")
 }
 
-// TestPruner_Pages lists past the first page (Continue).
-func TestPruner_Pages(t *testing.T) {
+// TestPruner_PagesAndCap: lists are paged (Limit 500, never all at once),
+// the count cap lists only the Pipeline past it, and one run deletes at
+// most 2000 records, the oldest first; the next run deletes the rest.
+//
+// Covers AUDIT-RETENTION-02.
+func TestPruner_PagesAndCap(t *testing.T) {
 	var objs []client.Object
-	for i := 0; i < 1200; i++ {
-		objs = append(objs, event("a", "web", fmt.Sprintf("e-%04d", i), now.Add(time.Duration(i)*time.Millisecond)))
+	for i := 0; i < 3100; i++ {
+		objs = append(objs, event("a", "web", fmt.Sprintf("e-%04d", i), now.Add(time.Duration(i)*time.Second)))
 	}
-	c := newClient(t, objs...)
-	pages := 0
-	lister := interceptor.NewClient(c, interceptor.Funcs{List: func(ctx context.Context, cl client.WithWatch, l client.ObjectList, opts ...client.ListOption) error {
-		pages++
-		return cl.List(ctx, l, opts...)
-	}})
-	p := &auditretention.Pruner{Client: c, APIReader: lister, MaxPerPipeline: 1000, Now: func() time.Time { return now }}
+	objs = append(objs, event("a", "api", "api-0", now))
+	c := newPaged(t, objs...)
+	p := &auditretention.Pruner{Client: c, MaxPerPipeline: 100, Now: func() time.Time { return now.Add(24 * time.Hour) }}
 	n, err := p.Run(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, 200, n, "the 200 oldest of 1200")
-	assert.Len(t, names(t, c), 1000)
-	assert.NotContains(t, names(t, c), "a/e-0199")
-	assert.Contains(t, names(t, c), "a/e-0200")
+	assert.Equal(t, 2000, n, "at most 2000 a run")
+	assert.Equal(t, 500, c.maxLimit, "pages of 500")
+	assert.GreaterOrEqual(t, c.calls, 7+7, "pass 1 and the web Pipeline's pass 2, page by page")
+	assert.Equal(t, "e-0000", c.deletes[0], "oldest first")
+	assert.Equal(t, "e-1999", c.deletes[1999])
+
+	n, err = p.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1000, n, "the rest at the next run")
+	got := names(t, c)
+	assert.Len(t, got, 101)
+	assert.Contains(t, got, "a/api-0")
+	assert.Contains(t, got, "a/e-3000")
+	assert.NotContains(t, got, "a/e-2999")
+}
+
+// TestPruner_ExpiredContinue: a 410 on an expired continue token ends the
+// run without an error; the next run starts over.
+//
+// Covers AUDIT-RETENTION-02.
+func TestPruner_ExpiredContinue(t *testing.T) {
+	var objs []client.Object
+	for i := 0; i < 1200; i++ {
+		objs = append(objs, event("a", "web", fmt.Sprintf("e-%04d", i), now.Add(-200*24*time.Hour)))
+	}
+	c := newPaged(t, objs...)
+	c.expireAfter = 1
+	p := &auditretention.Pruner{Client: c, MaxAge: time.Hour, Now: func() time.Time { return now }}
+	n, err := p.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 500, n, "the first page, then the stream ends")
 }
 
 // TestPruner_DeleteErrors: a record deleted meanwhile is not an error; an
 // API error stops the run with the count so far.
 func TestPruner_DeleteErrors(t *testing.T) {
-	c := newClient(t, event("a", "web", "x", now.Add(-200*24*time.Hour)), event("a", "web", "y", now.Add(-199*24*time.Hour)))
+	s := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(s))
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(event("a", "web", "x", now.Add(-200*24*time.Hour)),
+		event("a", "web", "y", now.Add(-199*24*time.Hour))).Build()
 	calls := 0
-	failing := interceptor.NewClient(c, interceptor.Funcs{Delete: func(ctx context.Context, cl client.WithWatch, o client.Object, opts ...client.DeleteOption) error {
+	c := interceptor.NewClient(base, interceptor.Funcs{Delete: func(ctx context.Context, cl client.WithWatch, o client.Object, opts ...client.DeleteOption) error {
 		calls++
 		if calls == 1 {
-			// Gone before the pruner got to it.
-			require.NoError(t, cl.Delete(ctx, o))
+			require.NoError(t, cl.Delete(ctx, o)) // gone before the pruner got to it
 			return cl.Delete(ctx, o, opts...)
 		}
 		return errors.New("etcd unavailable")
 	}})
-	p := &auditretention.Pruner{Client: failing, APIReader: c, MaxAge: time.Hour, Now: func() time.Time { return now }}
+	p := &auditretention.Pruner{Client: c, MaxAge: time.Hour, Now: func() time.Time { return now }}
 	n, err := p.Run(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "etcd unavailable")

@@ -107,9 +107,9 @@ func main() {
 		auditRetentionInterval time.Duration
 	)
 
-	flag.BoolVar(&auditRetention, "audit-retention", true,
+	flag.BoolVar(&auditRetention, "audit-retention", false,
 		"Delete AuditEvents past their retention (--audit-retention-max-age, --audit-retention-max-per-pipeline). "+
-			"false keeps every record, for an install that exports them and must not lose one.")
+			"Off by default: every record is kept until you opt in.")
 	flag.DurationVar(&auditMaxAge, "audit-retention-max-age", auditretention.DefaultMaxAge,
 		"Delete AuditEvents whose spec.timestamp is older than this. 0 keeps records of any age.")
 	flag.IntVar(&auditMaxPerPipeline, "audit-retention-max-per-pipeline", auditretention.DefaultMaxPerPipeline,
@@ -437,9 +437,16 @@ func main() {
 	// AuditEvent retention: the leader deletes old records (they have no
 	// owner, so nothing else does).
 	if auditRetention {
+		// A client of its own, uncached and slow (5 requests a second), so a
+		// large backlog never takes API capacity from the reconcilers.
+		retentionCfg := rest.CopyConfig(mgr.GetConfig())
+		retentionCfg.QPS, retentionCfg.Burst = auditretention.QPS, auditretention.Burst
+		retentionClient, err := sigs_client.New(retentionCfg, sigs_client.Options{Scheme: mgr.GetScheme(), Mapper: mgr.GetRESTMapper()})
+		if err != nil {
+			logger.Fatal().Err(err).Msg("unable to create the AuditEvent retention client")
+		}
 		if err := mgr.Add(&auditretention.Pruner{
-			Client:         mgr.GetClient(),
-			APIReader:      mgr.GetAPIReader(),
+			Client:         retentionClient,
 			Namespace:      watchNamespace,
 			MaxAge:         auditMaxAge,
 			MaxPerPipeline: auditMaxPerPipeline,

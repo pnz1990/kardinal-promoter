@@ -24,12 +24,14 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
 
-// TestAudit_Retention runs the controller with small retention limits
-// (--audit-retention-max-per-pipeline=3, --audit-retention-max-age=24h,
+// TestAudit_Retention turns retention on (off by default) and runs the
+// controller with small retention limits
+// (--audit-retention=true, --audit-retention-max-per-pipeline=3, --audit-retention-max-age=24h,
 // --audit-retention-interval=5s) and checks that the leader deletes a
-// Pipeline's records past the 3 newest, in kardinal get auditevents order
-// (within one second by kardinal.io/created-at), and a record of another
-// Pipeline older than a day, and keeps the rest. It restarts the
+// Pipeline's records past the 3 newest (within one second by
+// kardinal.io/created-at) and keeps the rest, the other Pipeline's records
+// and a recent record whose spec.timestamp claims an old time included (age
+// is metadata.creationTimestamp). It restarts the
 // controller, so it is not parallel. The chart's defaults (90 days, 1000)
 // and the off switch are checked in test/helm.
 //
@@ -56,13 +58,17 @@ func TestAudit_Retention(t *testing.T) {
 	create("api", "api-new", now)
 
 	restore := e.PatchController(t, func(spec *corev1.PodSpec) {
+		framework.SetArg(spec, "audit-retention", "true")
 		framework.SetArg(spec, "audit-retention-max-per-pipeline", "3")
+		// Age is measured from metadata.creationTimestamp, which the API
+		// server sets: the records here are new, so only the count cap
+		// deletes (the age limit is covered by the unit tests).
 		framework.SetArg(spec, "audit-retention-max-age", "24h")
 		framework.SetArg(spec, "audit-retention-interval", "5s")
 	})
 	defer restore()
 
-	want := []string{"api-new", "web-3", "web-4", "web-5"}
+	want := []string{"api-new", "api-old", "web-3", "web-4", "web-5"}
 	var got []string
 	framework.Eventually(t, 2*time.Minute, "retention to delete the old records", func(ctx context.Context) (bool, string) {
 		var list v1alpha1.AuditEventList

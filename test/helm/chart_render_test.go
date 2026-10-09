@@ -401,7 +401,6 @@ func controllerAccess() []apiAccess {
 		{"", "events", []string{"list", "create", "patch"}, inWatched, "", "UI step events list (ui_api.go); leader election Events (controller-runtime)"},
 		{"", "secrets", []string{"get"}, inWatched, "", "Pipeline git secret (promotionstep Get), SCM SecretWatcher (Get; Secrets are uncached)"},
 		{"kardinal.io", "auditevents", []string{"get", "list", "watch", "create"}, inWatched, "", "audit.go"},
-		{"kardinal.io", "auditevents", []string{"delete"}, inWatched, "", "auditretention retention.go (audit.retention.enabled, the default)"},
 		{"kro.run", "graphs", rwVerbs, inWatched, "", "pkg/graph client; get: promotionstep finalizer.go stepComeback"},
 		{"kro.run", "graphs/status", []string{"get"}, inWatched, "", "pkg/graph client"},
 		{"", "serviceaccounts", []string{"get", "create"}, inWatched, "", "graph identity.go"},
@@ -440,6 +439,9 @@ var optionalAccess = []struct {
 	{"ui.auth.tokenReview=true", []apiAccess{
 		{"authentication.k8s.io", "tokenreviews", []string{"create"}, inCluster, "", "pkg/uiauth TokenReview"},
 		{"authorization.k8s.io", "subjectaccessreviews", []string{"create"}, inCluster, "", "pkg/uiauth SubjectAccessReview"},
+	}},
+	{"audit.retention.enabled=true", []apiAccess{
+		{"kardinal.io", "auditevents", []string{"delete"}, inWatched, "", "auditretention retention.go"},
 	}},
 	{"rbac.argocdApplicationsWrite=true", []apiAccess{
 		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"},
@@ -1282,31 +1284,35 @@ func TestChartGateStatusHeartbeat(t *testing.T) {
 	assert.Error(t, err, "a value that is not a Go duration must fail:\n%s", out)
 }
 
-// TestChartAuditRetention: audit.retention sets the retention flags and,
-// with the controller's delete on AuditEvents, is on by default; enabled:
-// false passes --audit-retention=false and grants no delete, so an install
-// that must keep every record cannot lose one; the schema refuses a maxAge
-// that is not a Go duration and a negative count.
+// TestChartAuditRetention: audit.retention is off by default (no flag, no
+// delete on AuditEvents, so an upgrade deletes no record); enabled: true
+// passes --audit-retention=true with the limits (90 days, 1000) and grants
+// delete; the schema refuses a maxAge that is not a Go duration and a
+// negative count.
 func TestChartAuditRetention(t *testing.T) {
-	c := controllerContainer(t, render(t, "kardinal-promoter"))
-	assert.Equal(t, "2160h", argValues(c)["audit-retention-max-age"])
-	assert.Equal(t, "1000", argValues(c)["audit-retention-max-per-pipeline"])
-	assert.NotContains(t, argValues(c), "audit-retention")
-
-	c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "audit.retention.maxAge=720h", "--set", "audit.retention.maxPerPipeline=0"))
-	assert.Equal(t, "720h", argValues(c)["audit-retention-max-age"])
-	assert.Equal(t, "0", argValues(c)["audit-retention-max-per-pipeline"])
-
-	off := render(t, "kardinal-promoter", "--set", "audit.retention.enabled=false")
-	c = controllerContainer(t, off)
-	assert.Equal(t, "false", argValues(c)["audit-retention"])
-	assert.NotContains(t, argValues(c), "audit-retention-max-age")
-	v := newRBACView(t, off)
+	def := render(t, "kardinal-promoter")
+	c := controllerContainer(t, def)
+	for _, f := range []string{"audit-retention", "audit-retention-max-age", "audit-retention-max-per-pipeline"} {
+		assert.NotContains(t, argValues(c), f)
+	}
+	v := newRBACView(t, def)
 	for _, ns := range []string{"team-a", releaseNS} {
 		assert.False(t, v.allowed(releaseNS, "kardinal-promoter", ns, "kardinal.io", "auditevents", "delete", ""),
-			"retention off: no delete on AuditEvents in %s", ns)
+			"retention off by default: no delete on AuditEvents in %s", ns)
 		assert.True(t, v.allowed(releaseNS, "kardinal-promoter", ns, "kardinal.io", "auditevents", "create", ""))
 	}
+
+	on := render(t, "kardinal-promoter", "--set", "audit.retention.enabled=true")
+	c = controllerContainer(t, on)
+	assert.Equal(t, "true", argValues(c)["audit-retention"])
+	assert.Equal(t, "2160h", argValues(c)["audit-retention-max-age"])
+	assert.Equal(t, "1000", argValues(c)["audit-retention-max-per-pipeline"])
+	assert.True(t, newRBACView(t, on).allowed(releaseNS, "kardinal-promoter", "team-a", "kardinal.io", "auditevents", "delete", ""))
+
+	c = controllerContainer(t, render(t, "kardinal-promoter", "--set", "audit.retention.enabled=true",
+		"--set", "audit.retention.maxAge=720h", "--set", "audit.retention.maxPerPipeline=0"))
+	assert.Equal(t, "720h", argValues(c)["audit-retention-max-age"])
+	assert.Equal(t, "0", argValues(c)["audit-retention-max-per-pipeline"])
 
 	for _, bad := range [][]string{{"--set", "audit.retention.maxAge=90 days"}, {"--set", "audit.retention.maxPerPipeline=-1"}} {
 		out, err := helmTemplate(t, "kardinal-promoter", bad...)
