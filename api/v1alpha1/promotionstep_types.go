@@ -402,6 +402,14 @@ type PromotionStepStatus struct {
 	// +optional
 	NextRetryAt *metav1.Time `json:"nextRetryAt,omitempty"`
 
+	// SCMWaitSince is when the step started waiting for an open SCM circuit
+	// (condition SCMUnavailable): its SCM host failed, so the step makes no
+	// call and waits without spending retryCount. The wait ends when the
+	// SCM answers, or fails the step after the environment's
+	// stepTimeoutSeconds, else the controller's --scm-wait-timeout (30m).
+	// +optional
+	SCMWaitSince *metav1.Time `json:"scmWaitSince,omitempty"`
+
 	// LastHealthCheckAt records when the health adapter was last called. Used to
 	// space health checks at the health-check interval regardless of how often
 	// the step is reconciled.
@@ -435,6 +443,15 @@ type PromotionStepStatus struct {
 	// controller logs. Initialized when the step sequence starts (state → Promoting).
 	// +optional
 	Steps []StepStatus `json:"steps,omitempty"`
+
+	// PendingAuditEvents are AuditEvents for this step's transitions that are
+	// not yet written (the audit outbox, #1552). Each entry is stored in the
+	// same status patch as its transition and removed once the AuditEvent
+	// exists, so an API error or a controller restart between the two cannot
+	// lose the record. Normally empty.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	PendingAuditEvents []PendingAuditEvent `json:"pendingAuditEvents,omitempty"`
 }
 
 // +kubebuilder:object:root=true

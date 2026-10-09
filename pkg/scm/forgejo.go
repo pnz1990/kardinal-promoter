@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
@@ -398,19 +399,44 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 		call.circuitOpen(f.circuits, owner)
 		return fmt.Errorf("forgejo scm: %w", err)
 	}
+	// When the call started: a failure of a call that started before the
+	// circuit opened is not counted (CircuitBreaker.RecordFailureFrom).
+	started := time.Now()
+	resp, err := f.send(ctx, method, path, body, result)
+	callErr := callError(resp, err)
+	f.circuits.Record(owner, started, resp, callErr)
+	// After Record: the metric reads the circuit states the call left.
+	call.done(resp, callErr, f.circuits, owner)
+	return err
+}
 
+// callError is the error the circuit records for a call: the request's own
+// error when it got no response (resp is nil), else nil (the response says
+// the rest).
+func callError(resp *http.Response, err error) error {
+	if resp == nil {
+		return err
+	}
+	return nil
+}
+
+// send makes one authenticated request without the circuit (do records it;
+// DeleteBranch records a pair of requests once). It returns the response,
+// its body read and closed, or nil when there was none; an error response
+// is an *APIError.
+func (f *ForgejoProvider) send(ctx context.Context, method, path string, body, result interface{}) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("marshal request body: %w", err)
+			return nil, fmt.Errorf("marshal request body: %w", err)
 		}
 		bodyReader = bytes.NewReader(data)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, f.APIURL+path, bodyReader)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Authorization", "token "+f.Token)
 	if body != nil {
@@ -419,26 +445,19 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := f.client.Do(req)
-	// Arguments are taken now; the circuit states are read at return, after Record.
-	defer call.done(resp, err, f.circuits, owner)
 	if err != nil {
-		f.circuits.Record(owner, nil, err)
-		return fmt.Errorf("execute request %s %s: %w", method, path, err)
+		return nil, fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		apiErr := newAPIError("forgejo", method, path, resp, raw)
-		f.circuits.RecordAPIError(owner, resp, apiErr)
-		return apiErr
+		return resp, newAPIError("forgejo", method, path, resp, raw)
 	}
-
-	f.circuits.Record(owner, resp, nil)
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
-			return fmt.Errorf("decode response: %w", err)
+			return resp, fmt.Errorf("decode response: %w", err)
 		}
 	}
-	return nil
+	return resp, nil
 }

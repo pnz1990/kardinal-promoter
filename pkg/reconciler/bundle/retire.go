@@ -219,6 +219,13 @@ func (r *Reconciler) retire(ctx context.Context, log zerolog.Logger, b *kardinal
 		return ctrl.Result{}, fmt.Errorf("list promotion steps for bundle %s: %w", b.Name, err)
 	}
 	busy, aborted := unsettledStep(list.Items)
+	if busy == "" {
+		// Retiring deletes the Bundle's gate instances with the Graph: a gate
+		// whose audit outbox still holds records keeps it (#1552).
+		if busy, err = r.gateWithPendingAudit(ctx, b); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	// A step stopped by a health alarm waits for a person (resume or
 	// rollback) unless the Bundle was superseded: keep it as long as a
 	// Failed Bundle.
@@ -371,6 +378,11 @@ func unsettledStep(steps []kardinalv1alpha1.PromotionStep) (busy string, aborted
 			return fmt.Sprintf("PromotionStep %s (being deleted)", s.Name), aborted
 		case len(s.Finalizers) > 0:
 			return fmt.Sprintf("PromotionStep %s (finalizer %s)", s.Name, s.Finalizers[0]), aborted
+		case len(s.Status.PendingAuditEvents) > 0:
+			// Its AuditEvents are not all written yet: retiring would delete
+			// them with the step (#1552).
+			return fmt.Sprintf("PromotionStep %s (%d AuditEvents not yet written)", s.Name,
+				len(s.Status.PendingAuditEvents)), aborted
 		}
 		switch s.Status.State {
 		case "Verified", "Failed", "RollingBack":
@@ -385,6 +397,22 @@ func unsettledStep(steps []kardinalv1alpha1.PromotionStep) (busy string, aborted
 		}
 	}
 	return "", aborted
+}
+
+// gateWithPendingAudit names a gate instance of b whose audit outbox
+// (status.pendingAuditEvents) still holds records, or returns "".
+func (r *Reconciler) gateWithPendingAudit(ctx context.Context, b *kardinalv1alpha1.Bundle) (string, error) {
+	var gates kardinalv1alpha1.PolicyGateList
+	if err := r.List(ctx, &gates, client.InNamespace(b.Namespace),
+		client.MatchingLabels{lifecycle.LabelBundle: b.Name}); err != nil {
+		return "", fmt.Errorf("list policy gates for bundle %s: %w", b.Name, err)
+	}
+	for i := range gates.Items {
+		if n := len(gates.Items[i].Status.PendingAuditEvents); n > 0 {
+			return fmt.Sprintf("PolicyGate %s (%d AuditEvents not yet written)", gates.Items[i].Name, n), nil
+		}
+	}
+	return "", nil
 }
 
 // badDelayEvent emits a Warning Event naming an ignored retirement delay
