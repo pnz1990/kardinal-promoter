@@ -91,8 +91,9 @@ spec:
                 description: |-
                   Format is the shape of the request body: json (the kardinal payload,
                   the default), slack (an incoming-webhook message with blocks), teams (a
-                  Workflows webhook message with an Adaptive Card) or template
-                  (spec.template).
+                  Workflows webhook message with an Adaptive Card), template
+                  (spec.template) or cloudevents (the payload as a CloudEvents 1.0
+                  structured event).
                 enum:
                 - json
                 - slack

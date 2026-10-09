@@ -204,7 +204,7 @@ NotificationHook defines an outbound webhook that is triggered when specific pro
 |---|---|---|---|
 | `spec` | object |  | NotificationHookSpec defines the desired state of a NotificationHook. |
 | `spec.events` | []string | yes | Events is the list of event types that trigger delivery. At least one event type is required. See docs/notifications.md#events. |
-| `spec.format` | string |  | Format is the shape of the request body: json (the kardinal payload, the default), slack (an incoming-webhook message with blocks), teams (a Workflows webhook message with an Adaptive Card) or template (spec.template). One of: `json`, `slack`, `teams`, `template`, `cloudevents`. |
+| `spec.format` | string |  | Format is the shape of the request body: json (the kardinal payload, the default), slack (an incoming-webhook message with blocks), teams (a Workflows webhook message with an Adaptive Card), template (spec.template) or cloudevents (the payload as a CloudEvents 1.0 structured event). One of: `json`, `slack`, `teams`, `template`, `cloudevents`. |
 | `spec.pipelineSelector` | string |  | PipelineSelector restricts notifications to events originating from the named Pipeline. When empty, events from all Pipelines are delivered. |
 | `spec.signing` | object |  | Signing, when set, signs every request so the receiver can check that it comes from this controller, unchanged and not replayed (docs/notifications.md#signed-requests). |
 | `spec.signing.secretRef` | object | yes | SecretRef names the Secret, in the hook's namespace and labeled kardinal.io/referenceable=true, whose key holds the signing key. |

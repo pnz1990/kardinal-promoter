@@ -7,8 +7,12 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -148,4 +152,61 @@ func TestDelivery_SigningSecretErrors(t *testing.T) {
 			assert.Empty(t, h.Status.ProcessedEventKeys, "the event waits")
 		})
 	}
+}
+
+// flakyServer answers its first request 500 and the rest 200, recording all.
+type flakyServer struct {
+	mu   sync.Mutex
+	reqs []request
+}
+
+func (s *flakyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	b, _ := io.ReadAll(r.Body)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reqs = append(s.reqs, request{path: r.URL.Path, header: r.Header.Clone(), body: string(b)})
+	if len(s.reqs) == 1 {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// TestDelivery_RetryIsSignedAgain: a delivery answered 500 is retried after
+// the backoff with a new X-Kardinal-Timestamp and a signature over it, so a
+// receiver that refuses stale timestamps accepts the retry. The CloudEvent
+// keeps its id and its time (when the event happened); only the send-time
+// payload timestamp moves.
+func TestDelivery_RetryIsSignedAgain(t *testing.T) {
+	srv := &flakyServer{}
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	hook := newHook(ts.URL+"/hook", v1alpha1.NotificationEventBundleFailed)
+	hook.Spec.Format = v1alpha1.NotificationFormatCloudEvents
+	hook.Spec.Signing = &v1alpha1.NotificationSigning{SecretRef: v1alpha1.NotificationSigningSecretRef{Name: "signing"}}
+	f := newFixture(t, hook, failedBundle("app-v0", saturday),
+		webhookSecret("signing", map[string]string{"signing-key": signingKey}))
+
+	f.reconcileHook()
+	require.Equal(t, int32(1), f.hook().Status.FailedAttempts)
+	f.now = saturday.Add(10 * time.Minute) // past the backoff
+	f.reconcileHook()
+	srv.mu.Lock()
+	reqs := append([]request{}, srv.reqs...)
+	srv.mu.Unlock()
+	require.Len(t, reqs, 2)
+
+	first, retry := reqs[0], reqs[1]
+	assert.Equal(t, strconv.FormatInt(saturday.Unix(), 10), first.header.Get("X-Kardinal-Timestamp"))
+	assert.Equal(t, strconv.FormatInt(f.now.Unix(), 10), retry.header.Get("X-Kardinal-Timestamp"))
+	assert.NotEqual(t, first.header.Get("X-Kardinal-Signature"), retry.header.Get("X-Kardinal-Signature"))
+	require.NoError(t, notificationhook.Verify([]byte(signingKey), []byte(retry.body), retry.header.Get("X-Kardinal-Timestamp"),
+		retry.header.Get("X-Kardinal-Signature"), f.now, time.Minute), "the retry verifies at its own send time")
+	assert.Error(t, notificationhook.Verify([]byte(signingKey), []byte(first.body), first.header.Get("X-Kardinal-Timestamp"),
+		first.header.Get("X-Kardinal-Signature"), f.now, 5*time.Minute), "the first attempt is stale by then")
+
+	a, b := jsonMap(t, first.body), jsonMap(t, retry.body)
+	assert.Equal(t, a["id"], b["id"])
+	assert.Equal(t, a["time"], b["time"], "the event time does not move")
+	assert.NotEqual(t, a["data"].(map[string]interface{})["timestamp"], b["data"].(map[string]interface{})["timestamp"])
 }

@@ -575,7 +575,7 @@ func body(hook *v1alpha1.NotificationHook, cfg *deliveryConfig, ev *pendingEvent
 	case v1alpha1.NotificationFormatTemplate:
 		return renderTemplate(cfg.tmpl, templateData(hook, ev), cfg.contentType)
 	case v1alpha1.NotificationFormatCloudEvents:
-		return cloudEventsBody(hook.Namespace, ev.eventKey, ev.payload)
+		return cloudEventsBody(hook.Namespace, ev.eventKey, ev.at, ev.payload)
 	default:
 		b, err := json.Marshal(ev.payload)
 		if err != nil {

@@ -167,7 +167,7 @@ send neither.
 | `source` | The Pipeline the event belongs to, as an API path; the namespace path for an event without a Pipeline |
 | `type` | `io.kardinal.` + the event name in lower case (`io.kardinal.policygate.blocked`, `io.kardinal.promotionstep.failed`) |
 | `subject` | The Bundle, with `/<environment>` when the event has one |
-| `time` | When the event was sent (the payload's `timestamp`) |
+| `time` | When the event happened (the Bundle phase change, gate block, or step transition); a retry keeps it. The payload's `timestamp` is the send time |
 | `data` | The [Webhook payload](#webhook-payload) |
 
 The `X-Kardinal-*` headers are sent as well. Binary content mode (`ce-*` headers) is not offered.
@@ -493,7 +493,7 @@ function verify(key, headers, rawBody) {
 Shell, for a quick check:
 
 ```bash
-printf '%s.%s' "$TIMESTAMP" "$(cat body.json)" | openssl dgst -sha256 -hmac "$KEY" | sed 's/^.* /sha256=/'
+{ printf '%s.' "$TIMESTAMP"; cat body.json; } | openssl dgst -sha256 -hmac "$KEY" | sed 's/^.* /sha256=/'
 ```
 
 The signing Secret follows the same rules as the webhook Secret: it lives in the hook's

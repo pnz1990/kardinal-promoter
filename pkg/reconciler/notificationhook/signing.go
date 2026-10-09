@@ -77,12 +77,14 @@ func cloudEventType(event string) string {
 	return "io.kardinal." + strings.ToLower(event)
 }
 
-// cloudEventsBody wraps the kardinal payload in a CloudEvent. The id is the
+// cloudEventsBody wraps the kardinal payload in a CloudEvent. Its time is
+// when the event happened (at), not when it was sent (the payload's
+// timestamp); a retry keeps it. The id is the
 // event key, so a retried delivery has the same id and receivers can drop
 // duplicates on it. The source is the Pipeline the event belongs to (or the
 // namespace, for an event without one); the subject is the Bundle, with the
 // environment when there is one.
-func cloudEventsBody(namespace, eventKey string, p notificationPayload) ([]byte, error) {
+func cloudEventsBody(namespace, eventKey string, at time.Time, p notificationPayload) ([]byte, error) {
 	source := "/apis/kardinal.io/v1alpha1/namespaces/" + namespace
 	if p.Pipeline != "" {
 		source += "/pipelines/" + p.Pipeline
@@ -96,10 +98,18 @@ func cloudEventsBody(namespace, eventKey string, p notificationPayload) ([]byte,
 	}
 	b, err := json.Marshal(cloudEvent{
 		SpecVersion: "1.0", ID: eventKey, Source: source, Type: cloudEventType(p.Event), Subject: subject,
-		Time: p.Timestamp, DataContentType: "application/json", Data: p,
+		Time: eventTime(at, p.Timestamp), DataContentType: "application/json", Data: p,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal CloudEvent: %w", err)
 	}
 	return b, nil
+}
+
+// eventTime is at in RFC 3339, or sent when the event has no time.
+func eventTime(at time.Time, sent string) string {
+	if at.IsZero() {
+		return sent
+	}
+	return at.UTC().Format(time.RFC3339)
 }
