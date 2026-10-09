@@ -90,6 +90,7 @@ func (r *Run) Finish(edit ...func(*invariants.Options)) *invariants.Report {
 	o := invariants.Options{
 		Namespace: r.Fleet.NS, Targets: r.Fleet.Targets(), Image: ImageRepo, SeedTag: SeedTag,
 		Start: r.Start, Logs: r.Logs, Metrics: true, Extra: r.Extra, SharedController: r.shared,
+		RaceBuild: os.Getenv(EnvRace) == "1",
 	}
 	for _, fn := range edit {
 		fn(&o)

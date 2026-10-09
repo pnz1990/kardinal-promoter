@@ -60,6 +60,9 @@ type Options struct {
 	// Metrics turns on the Prometheus checks (the scale suite has
 	// Prometheus; other suites may not).
 	Metrics bool
+	// RaceBuild is set when the controller is built with -race: its memory
+	// growth threshold is wider (rssGrowthRace).
+	RaceBuild bool
 	// SharedController is set when other tests load the controller at the
 	// same time: the work queue and goroutine checks then only report, as
 	// neither drains nor stays flat for one test.

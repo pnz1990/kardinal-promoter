@@ -162,7 +162,7 @@ The invariants, after every Bundle settled:
 - no Graph outlived its Bundle, stayed deleting, reports an error or nears etcd's request limit;
 - AuditEvents agree with the step states;
 - the controller logged no `DATA RACE`, no panic and no error-level line outside the allowlist (`invariants.Benign` plus the faults a test injects), and neither its containers nor kro's restarted (OOMKilled, crashed);
-- Prometheus: the reconcile error ratio stays under the test's limit, every work queue drains, and no controller Pod that ran the whole test grew its goroutines past 1.5x or its memory past 90% of the limit.
+- Prometheus: the reconcile error ratio stays under the test's limit, every work queue drains, and no controller Pod that ran the whole test in one role (leader or standby) grew its goroutines past 1.5x (+100), its resident memory past 2x (+200 MiB; 2.5x + 500 MiB for a `-race` build, whose shadow memory grows with every allocation and is never returned: steady leaders measured up to 2.3x and +261 MiB in the `full` profile) or its memory past 90% of the limit.
 
 Each test writes `diagnostics/scale/<test>/report.json` (every number:
 latency per stage, Bundle end to end, Graph sizes, reconcile errors, queue

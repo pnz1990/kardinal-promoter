@@ -144,7 +144,7 @@ func checkMetrics(ctx context.Context, e *framework.Env, o Options) (*Metrics, [
 	}
 
 	m.Pods = podSeries(ctx, e, start, end)
-	leak.Violations = leaks(m.Pods, start, end, memoryLimitMiB(ctx, e), o.SharedController)
+	leak.Violations = leaks(m.Pods, start, end, memoryLimitMiB(ctx, e), o.SharedController, o.RaceBuild)
 	return m, []Result{errs, queue, leak}
 }
 
@@ -277,7 +277,26 @@ func restarts(ctx context.Context, e *framework.Env, o Options, check, ns, name 
 // minute of end, and led at both ends or at neither) must not end with more than 1.5x (plus 100) its goroutines or 2x
 // (plus 200 MiB) its resident memory, unless other tests shared the
 // controller; and no Pod may pass 90% of the memory limit.
-func leaks(pods []PodSeries, start, end time.Time, limitMiB float64, shared bool) []string {
+// RSS growth a controller Pod may show over a test without counting as a
+// leak: end <= factor x start + slack MiB. The race detector keeps shadow
+// memory for every allocation and never gives it back, so a -race build
+// grows more under the same load: measured over the full profile, steady
+// leaders grew up to 2.3x (165 to 380 MiB) and +261 MiB (641 to 902 MiB)
+// with no leak (test/e2e/README.md#scale-suite).
+var (
+	rssGrowth     = growth{factor: 2, slackMiB: 200}
+	rssGrowthRace = growth{factor: 2.5, slackMiB: 500}
+)
+
+type growth struct{ factor, slackMiB float64 }
+
+func (g growth) exceeded(start, end float64) bool { return end > g.factor*start+g.slackMiB }
+
+func leaks(pods []PodSeries, start, end time.Time, limitMiB float64, shared, race bool) []string {
+	rss := rssGrowth
+	if race {
+		rss = rssGrowthRace
+	}
 	var v []string
 	if len(pods) == 0 {
 		return []string{"Prometheus has no process_resident_memory_bytes for the controller in the run's window"}
@@ -290,9 +309,9 @@ func leaks(pods []PodSeries, start, end time.Time, limitMiB float64, shared bool
 			v = append(v, fmt.Sprintf("%s: goroutines %.0f at the start, %.0f at the end (peak %.0f)",
 				p.Pod, p.GoroutinesStart, p.GoroutinesEnd, p.GoroutinesMax))
 		}
-		if whole && !shared && p.RSSEndMiB > 2*p.RSSStartMiB+200 {
-			v = append(v, fmt.Sprintf("%s: resident memory %.0f MiB at the start, %.0f MiB at the end (over 2x + 200 MiB; peak %.0f)",
-				p.Pod, p.RSSStartMiB, p.RSSEndMiB, p.RSSMaxMiB))
+		if whole && !shared && rss.exceeded(p.RSSStartMiB, p.RSSEndMiB) {
+			v = append(v, fmt.Sprintf("%s: resident memory %.0f MiB at the start, %.0f MiB at the end (over %gx + %g MiB; peak %.0f)",
+				p.Pod, p.RSSStartMiB, p.RSSEndMiB, rss.factor, rss.slackMiB, p.RSSMaxMiB))
 		}
 		if limitMiB > 0 && p.RSSMaxMiB > 0.9*limitMiB {
 			v = append(v, fmt.Sprintf("%s: resident memory peaked at %.0f MiB, over 90%% of its %.0f MiB limit",

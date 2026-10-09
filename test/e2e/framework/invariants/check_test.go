@@ -146,24 +146,27 @@ func TestLeaks(t *testing.T) {
 		name   string
 		pods   []PodSeries
 		shared bool
+		race   bool
 		want   int
 	}{
-		{"flat", []PodSeries{pod(t0, t1, 300, 500, 300, 320)}, false, 0},
-		{"RSS more than doubled plus 200 MiB", []PodSeries{pod(t0, t1, 300, 900, 300, 320)}, false, 1},
-		{"goroutines grew", []PodSeries{pod(t0, t1, 300, 300, 300, 500)}, false, 1},
-		{"shared controller: growth only reported", []PodSeries{pod(t0, t1, 300, 900, 300, 500)}, true, 0},
-		{"a Pod that started late is not compared", []PodSeries{pod(t0.Add(10*time.Minute), t1, 100, 900, 40, 400)}, false, 0},
-		{"near the limit", []PodSeries{pod(t0, t1, 300, 3800, 300, 300)}, true, 1},
-		{"no series", nil, false, 1},
+		{"flat", []PodSeries{pod(t0, t1, 300, 500, 300, 320)}, false, false, 0},
+		{"race: steady growth measured over the full profile", []PodSeries{pod(t0, t1, 165, 380, 300, 320)}, false, true, 0},
+		{"race: growth past 2.5x + 500 MiB", []PodSeries{pod(t0, t1, 300, 1300, 300, 320)}, false, true, 1},
+		{"RSS more than doubled plus 200 MiB", []PodSeries{pod(t0, t1, 300, 900, 300, 320)}, false, false, 1},
+		{"goroutines grew", []PodSeries{pod(t0, t1, 300, 300, 300, 500)}, false, false, 1},
+		{"shared controller: growth only reported", []PodSeries{pod(t0, t1, 300, 900, 300, 500)}, true, false, 0},
+		{"a Pod that started late is not compared", []PodSeries{pod(t0.Add(10*time.Minute), t1, 100, 900, 40, 400)}, false, false, 0},
+		{"near the limit", []PodSeries{pod(t0, t1, 300, 3800, 300, 300)}, true, false, 1},
+		{"no series", nil, false, false, 1},
 		{"a standby that took over the lead", []PodSeries{func() PodSeries {
 			p := pod(t0, t1, 100, 300, 43, 325)
 			p.LeaderEnd = true
 			return p
-		}()}, false, 0},
+		}()}, false, false, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Len(t, leaks(tc.pods, t0, t1, 4096, tc.shared), tc.want)
+			assert.Len(t, leaks(tc.pods, t0, t1, 4096, tc.shared, tc.race), tc.want)
 		})
 	}
 }
