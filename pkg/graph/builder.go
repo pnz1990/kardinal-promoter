@@ -772,7 +772,6 @@ func verifiedCond(upstreamID string) string {
 	return fmt.Sprintf(`%s.status.state == "Verified"`, upstreamID)
 }
 
-
 // buildPromotionStepNode builds a Graph node for a PromotionStep.
 // nodeID is the CEL-safe identifier used in CEL expressions.
 // k8sName is the Kubernetes resource name (hyphens) for metadata.name.

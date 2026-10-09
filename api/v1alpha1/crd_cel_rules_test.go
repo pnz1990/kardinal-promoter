@@ -4,11 +4,11 @@
 package v1alpha1_test
 
 import (
-	"strings"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/google/cel-go/cel"
