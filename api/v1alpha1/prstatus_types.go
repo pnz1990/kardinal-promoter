@@ -34,6 +34,11 @@ type PRStatusSpec struct {
 	// +kubebuilder:validation:MaxLength=512
 	// +optional
 	Repo string `json:"repo,omitempty"`
+
+	// ScmProvider is the provider the PR was opened on, copied from the
+	// PromotionStep. Unset uses the controller's --scm-provider.
+	// +optional
+	ScmProvider *ScmProviderIdentity `json:"scmProvider,omitempty"`
 }
 
 // PRStatusStatus holds the observed state of the pull request.
