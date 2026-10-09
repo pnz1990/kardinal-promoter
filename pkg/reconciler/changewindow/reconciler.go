@@ -35,6 +35,8 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // maxRequeue bounds the wait between evaluations, as a safety net for clock
@@ -116,9 +118,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // annotation changes trigger a reconcile; the reconciler's own status write does
 // not, and boundaries are driven by RequeueAfter.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.ChangeWindow{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
-		Complete(r)
+	b := ctrl.NewControllerManagedBy(mgr).
+		For(&kardinalv1alpha1.ChangeWindow{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged))
+	return shard.Active().Complete(b, tracing.WrapReconciler("changewindow", r), &kardinalv1alpha1.ChangeWindowList{})
 }
 
 // ConditionValid is the ChangeWindow condition that reports whether the spec

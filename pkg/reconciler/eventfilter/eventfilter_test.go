@@ -56,3 +56,45 @@ func TestSpecOrAnnotationChanged(t *testing.T) {
 	assert.True(t, eventfilter.SpecOrAnnotationChanged.Delete(event.DeleteEvent{Object: g}))
 	assert.True(t, eventfilter.SpecOrAnnotationChanged.Generic(event.GenericEvent{Object: g}))
 }
+
+// TestLabelChangedExceptKro: kro's own labels (the collection-size kro
+// re-stamps on every item when a collection grows) do not trigger a
+// reconcile; any other label change does.
+func TestLabelChangedExceptKro(t *testing.T) {
+	step := func(labels map[string]string) *kardinalv1alpha1.PromotionStep {
+		return &kardinalv1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: "s", Labels: labels}}
+	}
+	base := map[string]string{"kardinal.io/bundle": "b", "kro.run/collection-size": "3", "kro.run/collection-index": "0"}
+	with := func(k, v string) map[string]string {
+		out := map[string]string{}
+		for a, b := range base {
+			out[a] = b
+		}
+		if v == "" {
+			delete(out, k)
+		} else {
+			out[k] = v
+		}
+		return out
+	}
+	tests := []struct {
+		name string
+		new  map[string]string
+		want bool
+	}{
+		{name: "unchanged", new: with("x", ""), want: false},
+		{name: "collection-size re-stamped", new: with("kro.run/collection-size", "4"), want: false},
+		{name: "collection-index moved", new: with("kro.run/collection-index", "2"), want: false},
+		{name: "kro label removed", new: with("kro.run/collection-size", ""), want: false},
+		{name: "kardinal label changed", new: with("kardinal.io/bundle", "c"), want: true},
+		{name: "label added", new: with("team", "a"), want: true},
+		{name: "label removed", new: with("kardinal.io/bundle", ""), want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := eventfilter.LabelChangedExceptKro.Update(event.UpdateEvent{ObjectOld: step(base), ObjectNew: step(tc.new)})
+			assert.Equal(t, tc.want, got)
+		})
+	}
+	assert.True(t, eventfilter.LabelChangedExceptKro.Create(event.CreateEvent{Object: step(base)}))
+}

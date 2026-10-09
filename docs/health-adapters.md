@@ -254,7 +254,58 @@ The step message carries the message of the Canary's `Promoted` condition, for e
 
 ## Remote Clusters
 
-kardinal checks health only in the cluster it runs in. It holds no credentials for other clusters and makes no calls to their API servers. To verify a workload in another cluster, run kardinal next to the GitOps hub that manages that cluster and read the hub's object:
+There are two ways to verify a workload in another cluster.
+
+**1. Read the cluster directly with a kubeconfig Secret** (`health.kubeconfigSecretRef`). Every
+health type then reads its object (Deployment, Application, Kustomization, Rollout, Canary) in the
+cluster the kubeconfig selects, instead of the controller's:
+
+```yaml
+health:
+  type: resource
+  resource:
+    name: my-app
+    namespace: my-app
+  kubeconfigSecretRef:
+    name: prod-eu-kubeconfig    # a Secret in the Pipeline's namespace
+    key: kubeconfig             # default "kubeconfig"
+```
+
+- The Secret must be in the Pipeline's namespace (a Pipeline cannot use another namespace's
+  credentials) and carry the label `kardinal.io/referenceable: "true"`; without the label the step
+  waits with `ClusterUnreachable: SecretNotReferenceable: ...` and the kubeconfig is not used. The
+  label is the Secret owner's consent to have it used for another cluster; it is the same rule as
+  for the Secrets of MetricChecks, NotificationHooks and Subscriptions. The
+  controller reads it at every check, so a rotated Secret is used from the next check.
+- Only inline credentials work: a bearer token (`token`), a client certificate and key
+  (`client-certificate-data`, `client-key-data`), or `username` and `password`, and the
+  `server` must be an `https` URL (an `http` server fails the step: anyone on the path could forge
+  its answers). A kubeconfig with `exec`, `auth-provider`, `tokenFile`, a file path
+  (`client-certificate`, `client-key`, `certificate-authority`), `proxy-url` or
+  `insecure-skip-tls-verify` is refused and the step fails with `kubeconfig not allowed: ... is not
+  supported`: these would run a command or read a file inside the controller, or send the
+  credentials to a server that is not verified. For EKS or GKE, use a ServiceAccount token in the remote cluster
+  (a `kubernetes.io/service-account-token` Secret there, or a token an external tool refreshes into
+  the kubeconfig Secret), bound to a role that can `get` and `list` the checked objects, and
+  `list` pods in their namespace (the `resource` check reads the new ReplicaSet's pods to name why
+  they do not start; without it the message just omits the pod's reason).
+- Only the kubeconfig's `current-context` is used. The API server address goes through the
+  controller's egress guard (no loopback, link-local or cloud metadata addresses) and is dialled
+  directly, not through `HTTP(S)_PROXY`. Each request has a 10 second timeout.
+- A cluster that cannot be reached, or a Secret that does not exist yet, is not an unhealthy
+  workload: the step shows `waiting for <adapter>: ClusterUnreachable: <reason>`, counts no health
+  failure (`status.consecutiveHealthFailures` does not move), and keeps checking every 10 seconds
+  until `health.timeout`. The reason is a class (`timed out`, `connection refused or unreachable`,
+  `host not found`, `TLS handshake failed`, `unauthorized (HTTP 401)`, `forbidden (HTTP 403)`,
+  `destination address is not allowed`, ...); the full error, which can quote the remote server,
+  is in the controller log only. During a `bake` an unreachable check stops the window like a
+  waiting result: the time the cluster could not be read is not healthy time, and `health.timeout`
+  bounds the wait for the next healthy check again.
+- Remote health is polled, not watched, and the Bundle's Graph has no health ref node for the
+  environment (kro reads only the cluster it runs in; see the
+  [Graph capability ledger](design/16-graph-capability-ledger.md#g8-logic-still-outside-the-graph)).
+
+**2. Read the GitOps hub's object.** Run kardinal next to the GitOps hub that manages the cluster:
 
 - **Argo CD hub:** use `type: argocd`. The Applications for every cluster live in the hub, and their status (health, sync and synced revision) covers the workload in the destination cluster.
 
@@ -275,12 +326,12 @@ kardinal checks health only in the cluster it runs in. It holds no credentials f
         namespace: flux-system
     ```
 
-**Limit: a spoke the hub cannot reach has no kardinal health check.** kardinal sees only what the hub reports. A cluster that runs its own Argo CD or Flux and is not managed from the hub (for example a pull-only or disconnected cluster) cannot be checked. While a managed spoke is unreachable, the hub's status is what Argo CD or Flux last recorded or an error, not a fresh reading of the workload.
+  With a hub, kardinal sees only what the hub reports: while a managed spoke is unreachable, the hub's status is what Argo CD or Flux last recorded. A cluster that runs its own Argo CD or Flux and is not managed from the hub needs `kubeconfigSecretRef`.
 
-`health.cluster` (a kubeconfig Secret for a remote cluster) is **not supported** and is deprecated. The Pipeline is `Ready=False` (reason `NotImplemented`), `kardinal validate` fails, and a PromotionStep whose environment sets it fails with:
+The old `health.cluster` string field is **not supported** and is deprecated. The Pipeline is `Ready=False` (reason `NotImplemented`), `kardinal validate` fails, and a PromotionStep whose environment sets it fails with:
 
 ```
-health.cluster is not supported: kardinal checks health only in the cluster it runs in; for a workload in another cluster, check its Argo CD Application or Flux Kustomization in this cluster (health.type: argocd or flux, see docs/health-adapters.md#remote-clusters)
+health.cluster is not supported: to check a workload in another cluster set health.kubeconfigSecretRef to a kubeconfig Secret, or check its Argo CD Application or Flux Kustomization in this cluster (health.type: argocd or flux, see docs/health-adapters.md#remote-clusters)
 ```
 
 Distributed mode (`kardinal-agent`, `shard`) was removed; see [Multi-Cluster](distributed-mode.md).

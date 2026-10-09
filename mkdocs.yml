@@ -100,6 +100,7 @@ nav:
     - Concepts: concepts.md
   - Guides:
     - Policy Gates: policy-gates.md
+    - Metric Checks: metric-checks.md
     - Health Verification: health-adapters.md
     - Rollback: rollback.md
     - CI Integration: ci-integration.md
@@ -107,8 +108,10 @@ nav:
     - Rendered Manifests: rendered-manifests.md
     - Argo CD Native Promotion: argocd-native-promotion.md
     - Subscriptions: subscription.md
+    - Subscription Webhooks: subscription-webhooks.md
     - Notifications: notifications.md
     - Multi-Cluster: distributed-mode.md
+    - Sharding Controllers: sharding.md
     - SCM Providers: scm-providers.md
     - Advanced Patterns: advanced-patterns.md
     - Security: guides/security.md
