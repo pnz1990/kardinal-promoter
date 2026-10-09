@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -134,9 +135,16 @@ func TestDeleteBranch(t *testing.T) {
 		t.Run(p.name+"/deleted", func(t *testing.T) {
 			srv, reqs := branchAPI(t, http.StatusNoContent, "")
 			require.NoError(t, p.new(srv.URL).DeleteBranch(context.Background(), p.repo, branch))
-			require.Len(t, reqs(), 1)
-			assert.Equal(t, http.MethodDelete, reqs()[0].Method)
-			assert.Equal(t, p.wantURI, reqs()[0].URI)
+			// Forgejo reads the branch first (#1476); every provider ends with
+			// one DELETE.
+			rs := reqs()
+			require.NotEmpty(t, rs)
+			last := rs[len(rs)-1]
+			assert.Equal(t, http.MethodDelete, last.Method)
+			assert.Equal(t, p.wantURI, last.URI)
+			for _, r := range rs[:len(rs)-1] {
+				assert.Equal(t, http.MethodGet, r.Method)
+			}
 		})
 		for _, g := range p.gone {
 			t.Run(p.name+"/already gone", func(t *testing.T) {
@@ -213,6 +221,8 @@ func TestDeleteBranch_ForgejoMissingBranch(t *testing.T) {
 		delBody   string
 		getStatus int
 		wantErr   string
+		// goneBefore makes the read before the delete answer 404.
+		goneBefore bool
 	}{
 		{name: "a 500 for a branch that reads 404 is gone", delStatus: http.StatusInternalServerError, delBody: missing,
 			getStatus: http.StatusNotFound},
@@ -222,6 +232,9 @@ func TestDeleteBranch_ForgejoMissingBranch(t *testing.T) {
 			getStatus: http.StatusOK, wantErr: "status 423"},
 		{name: "a branch the read cannot find either way is an error", delStatus: http.StatusInternalServerError, delBody: missing,
 			getStatus: http.StatusInternalServerError, wantErr: "status 500"},
+		// The read before the delete finds no branch: nothing is sent that
+		// Forgejo would answer with a 500 the SCM circuit counts (#1476).
+		{name: "a branch already gone is not deleted again", goneBefore: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -236,7 +249,12 @@ func TestDeleteBranch_ForgejoMissingBranch(t *testing.T) {
 					_, _ = io.WriteString(w, tc.delBody)
 					return
 				}
-				w.WriteHeader(tc.getStatus)
+				switch {
+				case len(reqs) > 1:
+					w.WriteHeader(tc.getStatus) // the read after the delete
+				case tc.goneBefore:
+					w.WriteHeader(http.StatusNotFound)
+				}
 				_, _ = io.WriteString(w, `{"name":"`+branch+`"}`)
 			}))
 			t.Cleanup(srv.Close)
@@ -250,7 +268,11 @@ func TestDeleteBranch_ForgejoMissingBranch(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			assert.Equal(t, []branchRequest{{Method: http.MethodDelete, URI: uri}, {Method: http.MethodGet, URI: uri}}, reqs)
+			want := []branchRequest{{Method: http.MethodGet, URI: uri}, {Method: http.MethodDelete, URI: uri}, {Method: http.MethodGet, URI: uri}}
+			if tc.goneBefore {
+				want = want[:1]
+			}
+			assert.Equal(t, want, reqs)
 		})
 	}
 }
@@ -314,4 +336,44 @@ func TestDeleteBranch_AzureDevOps(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "staleOldObjectId")
 	})
+}
+
+// TestDeleteBranch_ForgejoOneCircuitResult (#1476): the read and delete of a
+// branch are one call for the circuit. Deleting branches Forgejo answers 500
+// "object does not exist" for, and then reads as gone, never opens it;
+// deletes that keep failing open it after the threshold, as one call each.
+// Covers SCM-CIRCUIT-DELETE-01.
+func TestDeleteBranch_ForgejoOneCircuitResult(t *testing.T) {
+	const branch = "kardinal/b/prod"
+	var deletes int
+	gone := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodDelete:
+			deletes++
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"message":"object does not exist"}`)
+		case gone && deletes > 0:
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			_, _ = io.WriteString(w, `{"name":"`+branch+`"}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	p := scm.NewForgejoProvider("t", srv.URL, "s")
+	for i := 0; i < 10; i++ {
+		deletes = 0
+		require.NoError(t, p.DeleteBranch(context.Background(), "o/r", branch), "delete %d", i)
+	}
+	gone = false
+	var errs []error
+	for i := 0; i < 6; i++ {
+		errs = append(errs, p.DeleteBranch(context.Background(), "o/r", branch))
+	}
+	var open *scm.ErrCircuitOpen
+	for i, err := range errs[:5] {
+		require.Error(t, err)
+		assert.False(t, errors.As(err, &open), "delete %d is made", i)
+	}
+	assert.ErrorAs(t, errs[5], &open, "five failed deletes open the circuit")
 }
