@@ -348,6 +348,12 @@ func manifestFiles(docs [][]byte) ([]renderedFile, error) {
 	used := map[string]int{}
 	var total int
 	for _, d := range docs {
+		// The size is checked before the YAML is parsed: parsing a 16 MiB
+		// object only to refuse it costs seconds.
+		total += len(d)
+		if total > maxRenderOutputBytes {
+			return nil, parentsteps.Permanent(fmt.Errorf("the rendered manifests are larger than %d MiB", maxRenderOutputBytes>>20))
+		}
 		var m meta
 		if err := sigsyaml.Unmarshal(d, &m); err != nil {
 			return nil, parentsteps.Permanent(fmt.Errorf("rendered object is not YAML: %w", err))
@@ -367,10 +373,6 @@ func manifestFiles(docs [][]byte) ([]renderedFile, error) {
 			return nil, parentsteps.Permanent(fmt.Errorf("two rendered objects map to %s", p))
 		}
 		used[p]++
-		total += len(d)
-		if total > maxRenderOutputBytes {
-			return nil, parentsteps.Permanent(fmt.Errorf("the rendered manifests are larger than %d MiB", maxRenderOutputBytes>>20))
-		}
 		files = append(files, renderedFile{path: p, content: d})
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
