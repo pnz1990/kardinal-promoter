@@ -36,14 +36,22 @@ func newGitShapes(t *testing.T) *gitShapes {
 	return &gitShapes{t: t, dir: dir, repo: repo}
 }
 
-// commit writes a file and commits it with parents (none: a root).
+// commit writes a file of its own and commits it with parents (none: a
+// root).
 func (g *gitShapes) commit(msg string, parents ...plumbing.Hash) plumbing.Hash {
+	g.t.Helper()
+	return g.commitFile(filepath.Join("notes", msg+".txt"), msg, parents...)
+}
+
+// commitFile writes file (relative to the repository) and commits it.
+func (g *gitShapes) commitFile(file, msg string, parents ...plumbing.Hash) plumbing.Hash {
 	g.t.Helper()
 	g.n++
 	wt, err := g.repo.Worktree()
 	require.NoError(g.t, err)
-	require.NoError(g.t, os.WriteFile(filepath.Join(g.dir, "f.txt"), []byte(msg), 0o600))
-	_, err = wt.Add("f.txt")
+	require.NoError(g.t, os.MkdirAll(filepath.Dir(filepath.Join(g.dir, file)), 0o755))
+	require.NoError(g.t, os.WriteFile(filepath.Join(g.dir, file), []byte(msg), 0o600))
+	_, err = wt.Add(file)
 	require.NoError(g.t, err)
 	when := time.Date(2026, 10, 9, 12, 0, g.n, 0, time.UTC)
 	h, err := wt.Commit(msg, &gogit.CommitOptions{Parents: parents, AllowEmptyCommits: true,
@@ -71,7 +79,7 @@ func TestDescends_GitShapes(t *testing.T) {
 	check := func(t *testing.T, g *gitShapes, rev, want plumbing.Hash, contains bool) {
 		t.Helper()
 		r := &Reconciler{NowFn: func() time.Time { return time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC) }}
-		ok, err := r.descends(ctx, git, git, g.url(), "main", "", rev.String(), want.String())
+		ok, err := r.descends(ctx, git, git, g.url(), "main", "", rev.String(), want.String(), []string{"environments/test"})
 		require.NoError(t, err)
 		assert.Equal(t, contains, ok, "%s contains %s", rev.String()[:7], want.String()[:7])
 	}
@@ -120,5 +128,24 @@ func TestDescends_GitShapes(t *testing.T) {
 		check(t, g, p2r, other, true)
 		check(t, g, p2r, p2, false) // the original, not rebased, commit
 		check(t, g, p1r, p2r, false)
+	})
+
+	t.Run("a later commit changed the environment's files", func(t *testing.T) {
+		const env = "environments/test/kustomization.yaml"
+		g := newGitShapes(t)
+		b := g.commit("B")
+		older := g.commitFile(env, "newTag: 1", b) // an older Bundle's push
+		ours := g.commitFile(env, "newTag: 2", older)
+		other := g.commitFile("environments/prod/kustomization.yaml", "prod", ours)
+		note := g.commit("note", other)
+		late := g.commitFile(env, "newTag: 1", note) // the older Bundle's retry lands after ours
+		side := g.commitFile(env, "newTag: 3", ours) // a merged branch that rewrote it
+		merged := g.commit("merge", note, side)
+		g.setMain(late)
+		check(t, g, note, ours, true)  // others' paths: still ours
+		check(t, g, late, ours, false) // rewritten since
+		g.setMain(merged)
+		check(t, g, note, ours, true)
+		check(t, g, merged, ours, false) // the merge brings in a rewrite of our file
 	})
 }

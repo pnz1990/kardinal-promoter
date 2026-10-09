@@ -44,43 +44,63 @@ const (
 )
 
 // historyTimeout bounds the history reads of one check. A read that takes
-// longer (a slow or huge remote) counts as history not found: the PR branch
-// is rebuilt, which is always safe, instead of holding the reconcile.
+// longer (a slow or huge remote) does not hold the reconcile: the PR branch
+// is kept as it is and the next check reads again (#1584).
 var historyTimeout = 30 * time.Second
 
-// hintHistoryUnknown is added to the message of a rebuild done without
-// knowing which paths the base branch changed.
-const hintHistoryUnknown = "the base branch history since the PR was built could not be read (force-pushed, " +
-	"or the read timed out), so the PR branch was rebuilt to be safe"
+// hintForcePushed is added to the message of a rebuild because the base
+// branch was force-pushed: the commit the PR was built on is no longer in
+// its history, so which paths changed cannot be known.
+const hintForcePushed = "the commit the PR was built on is no longer in the base branch history (force-pushed), " +
+	"so the PR branch was rebuilt on the new base"
+
+// baseHistory is what a read of the base branch history found about the
+// commit a PR was built on.
+type baseHistory int
+
+const (
+	// baseUnknown: the read failed or timed out, or the commit is older
+	// than the deep history. Nothing is decided: the PR branch is kept.
+	baseUnknown baseHistory = iota
+	// baseFound: the commit is in the history; the changed paths are known.
+	baseFound
+	// baseRewritten: the whole branch was read and the commit is not in it,
+	// so the base branch was force-pushed.
+	baseRewritten
+)
 
 // changedSince returns the paths the base branch changed between since and
 // head, reading historyDepth commits and then, if since is not among them
-// and the branch had more, deepHistoryDepth. found is false when since is
-// not in the deeper history either, or when the reads take longer than
-// historyTimeout. top is the newest commit of the history read: head, or a
+// and the branch had more, deepHistoryDepth. The result says whether since
+// was found (baseFound), the whole branch was read without it
+// (baseRewritten), or nothing can be told (baseUnknown: a read error,
+// including a read longer than historyTimeout, or a since older than the
+// deep history). top is the newest commit of the history read: head, or a
 // later one when head came from a stale cache and the read was fresh.
-func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, since, token string) (changed []string, found bool, top string, err error) {
+func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, url, branch, head, since, token string) (changed []string, found baseHistory, top string, err error) {
 	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
 	defer cancel()
 	for _, depth := range []int{historyDepth, deepHistoryDepth} {
 		history, err := r.remotes.branchHistory(hctx, rh, url, branch, head, token, depth)
 		if err != nil {
-			if ctx.Err() == nil && errors.Is(hctx.Err(), context.DeadlineExceeded) {
-				return nil, false, top, nil // too slow: history not found
+			// The shared read has its own historyTimeout, which can fire just
+			// before hctx's.
+			if ctx.Err() == nil && (errors.Is(hctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded)) {
+				return nil, baseUnknown, top, fmt.Errorf("the read took longer than %s", historyTimeout)
 			}
-			return nil, false, top, err
+			return nil, baseUnknown, top, err
 		}
 		if len(history) > 0 {
 			top = history[0].SHA
 		}
 		if changed, found := scm.PathsChangedSince(history, since); found {
-			return changed, true, top, nil
+			return changed, baseFound, top, nil
 		}
 		if len(history) < depth {
-			break // the whole branch was read: since is not in it
+			return nil, baseRewritten, top, nil // the whole branch was read: since is not in it
 		}
 	}
-	return nil, false, top, nil
+	return nil, baseUnknown, top, fmt.Errorf("the PR's base is older than the last %d commits", deepHistoryDepth)
 }
 
 // revisionContains is health.CheckOptions.RevisionContains for a step whose
@@ -94,7 +114,7 @@ func (r *Reconciler) changedSince(ctx context.Context, rh scm.RemoteHeadReader, 
 // graph read per head and depth, shared by concurrent checks) and is bounded
 // by historyTimeout.
 func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
-	want string) func(context.Context, string) (bool, error) {
+	env v1alpha1.EnvironmentSpec, want string) func(context.Context, string) (bool, error) {
 	rh, ok := r.GitClient.(scm.RemoteHeadReader)
 	gr, gok := r.GitClient.(scm.BranchGraphReader)
 	if !ok || !gok || want == "" || pipeline == nil {
@@ -102,18 +122,21 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 	}
 	return func(ctx context.Context, rev string) (bool, error) {
 		cred := r.resolveGitCredential(ctx, log, pipeline)
-		return r.descends(ctx, rh, gr, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.token, rev, want)
+		return r.descends(ctx, rh, gr, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.token, rev, want, prPaths(env))
 	}
 }
 
-// descends reports whether rev contains want: want is rev or an ancestor of
-// it in the commit graph of branch (scm.Contains, through every parent, so
-// a merge commit contains both sides), read near the branch head at
-// historyDepth commits and then deepHistoryDepth. rev must be in that graph:
-// a revision that is not on the branch (another branch, a force-push) does
-// not count, and neither does a want the graph does not reach.
+// descends reports whether rev deploys want: want is rev or an ancestor of
+// it in the commit graph of branch (through every parent, so a merge commit
+// contains both sides), and no commit rev has and want does not changed one
+// of paths, the environment's files (scm.PathsSince): a later commit that
+// rewrote them, such as an older Bundle's push landing after ours, does not
+// count. The graph is read near the branch head at historyDepth commits and
+// then deepHistoryDepth. rev must be in that graph: a revision that is not
+// on the branch (another branch, a force-push) does not count, and neither
+// does a want the graph does not reach.
 func (r *Reconciler) descends(ctx context.Context, rh scm.RemoteHeadReader, gr scm.BranchGraphReader,
-	url, branch, token, rev, want string) (bool, error) {
+	url, branch, token, rev, want string, paths []string) (bool, error) {
 	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
 	defer cancel()
 	heads, err := r.remotes.remoteHeads(hctx, rh, url, token, r.now())
@@ -129,13 +152,14 @@ func (r *Reconciler) descends(ctx context.Context, rh scm.RemoteHeadReader, gr s
 		if err != nil {
 			return false, fmt.Errorf("read the history of %s: %w", branch, err)
 		}
-		switch scm.Contains(g.parents, rev, want) {
+		changed, a := scm.PathsSince(g.graph, rev, want)
+		switch a {
 		case scm.AncestryContains:
-			return true, nil
+			return !touchesAny(changed, paths), nil
 		case scm.AncestryNotContains:
 			return false, nil
 		}
-		if len(g.parents) < depth {
+		if len(g.graph) < depth {
 			return false, nil // the whole branch was read
 		}
 	}
@@ -210,7 +234,7 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	// built (read the heads again before rebuilding), and a fresh history
 	// read starts at a later commit (follow that one, never record the old).
 	changed, found, top, herr := r.changedSince(ctx, rh, url, branch, head, built, cred.token)
-	if herr == nil && !found {
+	if found == baseRewritten {
 		if fresh, ferr := r.remotes.readHeads(ctx, rh, url, cred.token, r.now()); ferr == nil && fresh[branch] != head {
 			head = fresh[branch]
 			if head == "" || head == built {
@@ -225,11 +249,20 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 			return false, nil
 		}
 	}
-	unknown := herr != nil || !found
 	switch {
-	case herr != nil:
-		log.Debug().Err(herr).Msg("could not read the base branch history; rebuilding the PR branch")
-	case found && !touchesAny(changed, prPaths(env)):
+	case found == baseUnknown:
+		// Rebuilding on uncertainty churns the PR and can dismiss its
+		// reviews (#1584): keep it, and read again at the next check.
+		log.Debug().Err(herr).Msg("could not read the base branch history; the PR branch is kept")
+		msg := withLabelsError(fmt.Sprintf("PR #%s is open, waiting for merge; base branch %s moved from %s to %s, "+
+			"and its history since the PR was built could not be read (%v), so the PR branch is kept and checked again",
+			pr, branch, short(built), short(head), herr), ps.Status.Outputs)
+		if ps.Status.Message == msg {
+			return false, nil
+		}
+		ps.Status.Message = msg
+		return true, r.Status().Patch(ctx, ps, client.MergeFrom(base))
+	case found == baseFound && !touchesAny(changed, prPaths(env)):
 		// The PR's paths did not change: it merges as it is.
 		outputs := cloneMap(ps.Status.Outputs)
 		outputs[builtinsteps.OutputBaseSHA] = head
@@ -283,8 +316,8 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 	if outputs["noChanges"] == "true" {
 		note = fmt.Sprintf("base branch %s moved from %s to %s and already has this change; the PR branch is unchanged",
 			branch, short(built), short(head))
-	} else if unknown {
-		note += "; " + hintHistoryUnknown
+	} else if found == baseRewritten {
+		note += "; " + hintForcePushed
 	}
 	ps.Status.Message = withLabelsError(fmt.Sprintf("PR #%s is open, waiting for merge (%s)", pr, note), outputs)
 	if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {

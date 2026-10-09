@@ -48,8 +48,8 @@ type remoteCache struct {
 
 // branchGraph is a cached scm.BranchGraphReader result.
 type branchGraph struct {
-	head    string
-	parents map[string][]string
+	head  string
+	graph map[string]scm.GraphCommit
 }
 
 // shared runs read once for every concurrent caller with the same key. The
@@ -163,8 +163,8 @@ func (c *remoteCache) branchGraph(ctx context.Context, gr scm.BranchGraphReader,
 		return g, nil
 	}
 	v, err := c.shared(ctx, "graph\x00"+key, func(ctx context.Context) (any, error) {
-		h, parents, err := gr.BranchGraph(ctx, url, branch, token, maxCommits)
-		return branchGraph{head: h, parents: parents}, err
+		h, graph, err := gr.BranchGraph(ctx, url, branch, token, maxCommits)
+		return branchGraph{head: h, graph: graph}, err
 	})
 	if err != nil {
 		return branchGraph{}, err

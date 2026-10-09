@@ -16,6 +16,9 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
+// envPaths are the environment files descends checks.
+var envPaths = []string{"environments/test"}
+
 // linearRemote is a branch of n commits c<n-1> (head) ... c0.
 type linearRemote struct {
 	mu       sync.Mutex
@@ -29,19 +32,23 @@ func (l *linearRemote) RemoteHeads(context.Context, string, string) (map[string]
 
 // BranchGraph is the last max commits of the chain, each with its parent
 // (the oldest one's parent is the shallow boundary).
-func (l *linearRemote) BranchGraph(_ context.Context, _, _, _ string, max int) (string, map[string][]string, error) {
+func (l *linearRemote) BranchGraph(_ context.Context, _, _, _ string, max int) (string, map[string]scm.GraphCommit, error) {
 	l.mu.Lock()
 	l.reads++
 	l.mu.Unlock()
 	if l.delay > 0 {
 		time.Sleep(l.delay)
 	}
-	g := map[string][]string{}
+	g := map[string]scm.GraphCommit{}
 	for i := l.n - 1; i >= 0 && len(g) < max; i-- {
-		g[fmt.Sprintf("c%07d", i)] = nil
+		gc := scm.GraphCommit{Paths: []string{fmt.Sprintf("notes/%d", i)}}
 		if i > 0 {
-			g[fmt.Sprintf("c%07d", i)] = []string{fmt.Sprintf("c%07d", i-1)}
+			gc.Parents = []string{fmt.Sprintf("c%07d", i-1)}
 		}
+		if len(g) == max-1 && i > 0 {
+			gc.Partial = true // its parent is past the depth
+		}
+		g[fmt.Sprintf("c%07d", i)] = gc
 	}
 	return fmt.Sprintf("c%07d", l.n-1), g, nil
 }
@@ -75,24 +82,24 @@ func TestDescends(t *testing.T) {
 		{"short SHAs compare by prefix", c(149)[:7], c(140), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, err := r.descends(ctx, rem, rem, "https://git/acc", "main", "tok", tc.rev, tc.want)
+			ok, err := r.descends(ctx, rem, rem, "https://git/acc", "main", "tok", tc.rev, tc.want, envPaths)
 			require.NoError(t, err)
 			assert.Equal(t, tc.ok, ok)
 		})
 	}
 	fresh := &Reconciler{NowFn: r.NowFn}
 	cold := &linearRemote{n: 150}
-	_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", "tok", c(149), c(140))
+	_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", "tok", c(149), c(140), envPaths)
 	assert.Equal(t, 1, cold.reads, "a recent commit: the first 20 commits")
-	_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", "tok", c(149), c(10))
+	_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", "tok", c(149), c(10), envPaths)
 	assert.Equal(t, 2, cold.reads, "an older commit reads the deep history once")
 	for i := range 100 { // 100 environments' checks on the same head
-		_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", "tok", c(149), c(11+i%100))
+		_, _ = fresh.descends(ctx, cold, cold, "https://git/acc", "main", "tok", c(149), c(11+i%100), envPaths)
 	}
 	assert.Equal(t, 2, cold.reads, "cached for the head")
 
 	deep := &linearRemote{n: deepHistoryDepth + 50}
-	ok, err := r.descends(ctx, deep, deep, "https://git/deep", "main", "tok", c(deep.n-1), c(0))
+	ok, err := r.descends(ctx, deep, deep, "https://git/deep", "main", "tok", c(deep.n-1), c(0), envPaths)
 	require.NoError(t, err)
 	assert.False(t, ok, "a promoted commit past the deep history is not assumed")
 }
@@ -108,7 +115,7 @@ func TestDescends_OneReadPerHead(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ok, err := r.descends(ctx, rem, rem, "https://git/wave", "main", "tok", fmt.Sprintf("c%07d", 29), fmt.Sprintf("c%07d", 10+i%19))
+			ok, err := r.descends(ctx, rem, rem, "https://git/wave", "main", "tok", fmt.Sprintf("c%07d", 29), fmt.Sprintf("c%07d", 10+i%19), envPaths)
 			assert.NoError(t, err)
 			assert.True(t, ok)
 		}()
