@@ -245,7 +245,7 @@ func TestReconciler_NonFiniteFails(t *testing.T) {
 
 // TestReconciler_WaitsForSlot: an overdue check that finds no free query
 // slot writes WaitingForSlot (keeping its last result, which still goes
-// stale), sends nothing, and asks again in 2s; once the slot is free it
+// stale), sends nothing, and asks again in 1s; once the slot is free it
 // queries. A check that is not overdue waits without writing.
 func TestReconciler_WaitsForSlot(t *testing.T) {
 	mc := newMetricCheck("m", "lt", 1)
@@ -261,7 +261,7 @@ func TestReconciler_WaitsForSlot(t *testing.T) {
 		Limiter: lim, NowFn: func() time.Time { return fixedNow }}
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(mc)})
 	require.NoError(t, err)
-	assert.Equal(t, 2*time.Second, res.RequeueAfter)
+	assert.Equal(t, time.Second, res.RequeueAfter)
 	assert.Zero(t, b.calls, "nothing is sent while waiting")
 	var got kardinalv1alpha1.MetricCheck
 	require.NoError(t, c.Get(context.Background(), key(mc), &got))

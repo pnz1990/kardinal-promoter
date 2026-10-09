@@ -57,7 +57,7 @@ const (
 	DefaultGlobalSlots    = 12
 	DefaultNamespaceSlots = 1
 	// busyRetry is how soon a check that found no free query slot asks again.
-	busyRetry = 2 * time.Second
+	busyRetry = time.Second
 )
 
 // MetricsProvider queries a Prometheus-compatible backend and returns a
@@ -167,8 +167,13 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			// result still goes stale at its validUntil (fail closed). The
 			// reason is written only once the check is overdue (no
 			// evaluation for an interval), so a short wait writes nothing.
+			// A failed write is not returned: the error backoff would delay
+			// the next ask, and a waiter that does not ask again holds up
+			// the queue until it expires.
 			if last := mc.Status.LastEvaluatedAt; last == nil || r.now().Sub(last.Time) >= interval {
-				return ctrl.Result{RequeueAfter: busyRetry}, r.markNotQueried(ctx, &mc, ReasonWaitingForSlot, false)
+				if err := r.markNotQueried(ctx, &mc, ReasonWaitingForSlot, false); err != nil {
+					log.Warn().Err(err).Msg("metriccheck WaitingForSlot status write failed")
+				}
 			}
 			return ctrl.Result{RequeueAfter: busyRetry}, nil
 		}

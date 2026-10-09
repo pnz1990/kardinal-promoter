@@ -42,8 +42,10 @@ type waiter struct {
 	lastSeen time.Time
 }
 
-// queueTTL is how long a waiting check keeps its place without asking again.
-const queueTTL = 15 * time.Second
+// queueTTL is how long a waiting check keeps its place without asking again:
+// a little over two busyRetry periods, so a waiter that stopped asking (its
+// reconcile failed or it was deleted) holds up the queue only briefly.
+const queueTTL = 3 * time.Second
 
 // NewLimiter returns a Limiter with global and per-namespace caps.
 func NewLimiter(global, perNamespace int) *Limiter {

@@ -179,8 +179,8 @@ spec:
 The check fails unless the response status is 2xx (redirects are not followed) and `jsonPath`
 selects exactly one string, number or boolean. Limits, so one slow or large endpoint cannot hold
 the controller: the response may be at most 64 KiB, recursive descent (`..`) is not supported, a
-request never takes longer than half of `interval`, and at most two web checks run at once (one
-that finds no slot is retried 2 seconds later). A JSONPath that selects nothing reports
+request never takes longer than half of `interval`, and queries are rationed per namespace like
+every provider's (see [Common fields](#common-fields)). A JSONPath that selects nothing reports
 `selected nothing`, never the document. A number, or a string that parses as one, can be
 compared with `threshold.value`; a string or boolean (`"true"`, `"false"`) with `threshold.text`.
 No CEL runs on the response.
