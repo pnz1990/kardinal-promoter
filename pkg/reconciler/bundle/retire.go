@@ -243,10 +243,14 @@ func (r *Reconciler) retire(ctx context.Context, log zerolog.Logger, b *kardinal
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Name < records[j].Name })
 	if why := tooManySteps(records); why != "" {
-		// Kept for good: the records would not fit in the Bundle.
+		// Kept for good: the records would not fit in the Bundle. Written
+		// once: every later reconcile finds the same condition and writes
+		// nothing.
 		before := b.DeepCopy()
-		setBundleCondition(b, lifecycle.ConditionGraphRetired, metav1.ConditionFalse, retireReasonTooMany,
-			why+"; the Graph is kept")
+		if !setBundleCondition(b, lifecycle.ConditionGraphRetired, metav1.ConditionFalse, retireReasonTooMany,
+			why+"; the Graph is kept") {
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, r.patchStatus(ctx, b, before)
 	}
 

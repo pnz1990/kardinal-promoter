@@ -539,6 +539,13 @@ func TestRetire_Gaps(t *testing.T) {
 		assert.Equal(t, "TooManySteps", cond.Reason)
 		assert.Contains(t, cond.Message, "the Graph is kept")
 		assert.Nil(t, lcGet(t, c, "app-v1").Status.RetiredAt)
+
+		// Idempotent: a second reconcile finds the same condition and
+		// writes nothing (QA #1527).
+		rv := lcGet(t, c, "app-v1").ResourceVersion
+		_, err = retireNow(t, r)
+		require.NoError(t, err)
+		assert.Equal(t, rv, lcGet(t, c, "app-v1").ResourceVersion, "no second status write")
 	})
 
 	t.Run("invalid annotation event", func(t *testing.T) {
