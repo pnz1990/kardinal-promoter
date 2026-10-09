@@ -190,7 +190,7 @@ ClusterScmProvider is a cluster-scoped ScmProvider: Pipelines of the namespaces 
 | `spec.secretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
 | `spec.secretRef.name` | string | yes | Name is the Secret name. |
 | `spec.secretRef.namespace` | string |  | Namespace is the Secret's namespace: required on a ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in its own namespace (a Pipeline author cannot borrow another namespace's token). |
-| `spec.type` | string | yes | Type is the SCM: github, gitlab, forgejo, gitea, bitbucket or azuredevops (the --scm-provider values). One of: `github`, `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops`. |
+| `spec.type` | string | yes | Type is the SCM: github, gitlab, forgejo, gitea, bitbucket, azuredevops or bitbucket-datacenter (the --scm-provider values). A bitbucket-datacenter provider needs apiURL, the server's base URL. One of: `github`, `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops`, `bitbucket-datacenter`. |
 | `spec.webhookSecretRef` | object |  | WebhookSecretRef names the Secret that holds the webhook secret this provider's webhook deliveries are checked with (key "secret" when unset). Without it the provider's webhook endpoint refuses every delivery, and merges are seen by polling. |
 | `spec.webhookSecretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
 | `spec.webhookSecretRef.name` | string | yes | Name is the Secret name. |
@@ -886,7 +886,7 @@ ScmProvider is an SCM that Pipelines in its namespace open their PRs on (spec.gi
 | `spec.secretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
 | `spec.secretRef.name` | string | yes | Name is the Secret name. |
 | `spec.secretRef.namespace` | string |  | Namespace is the Secret's namespace: required on a ClusterScmProvider, and empty on a ScmProvider, whose Secrets are in its own namespace (a Pipeline author cannot borrow another namespace's token). |
-| `spec.type` | string | yes | Type is the SCM: github, gitlab, forgejo, gitea, bitbucket or azuredevops (the --scm-provider values). One of: `github`, `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops`. |
+| `spec.type` | string | yes | Type is the SCM: github, gitlab, forgejo, gitea, bitbucket, azuredevops or bitbucket-datacenter (the --scm-provider values). A bitbucket-datacenter provider needs apiURL, the server's base URL. One of: `github`, `gitlab`, `forgejo`, `gitea`, `bitbucket`, `azuredevops`, `bitbucket-datacenter`. |
 | `spec.webhookSecretRef` | object |  | WebhookSecretRef names the Secret that holds the webhook secret this provider's webhook deliveries are checked with (key "secret" when unset). Without it the provider's webhook endpoint refuses every delivery, and merges are seen by polling. |
 | `spec.webhookSecretRef.key` | string |  | Key is the data key. Defaults to "token" for secretRef and "secret" for webhookSecretRef. |
 | `spec.webhookSecretRef.name` | string | yes | Name is the Secret name. |

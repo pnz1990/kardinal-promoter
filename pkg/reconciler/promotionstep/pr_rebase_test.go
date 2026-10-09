@@ -60,14 +60,14 @@ func (g *gitRemote) commitOn(branch string, files map[string]string, rewrite boo
 		_, err = repo.CreateRemote(&config.RemoteConfig{Name: "origin", URLs: []string{g.url()}})
 		require.NoError(g.t, err)
 	} else {
-		require.NoError(g.t, g.c.Clone(ctx, g.url(), branch, dir, ""))
+		require.NoError(g.t, g.c.Clone(ctx, g.url(), branch, dir, scm.GitAuth{}))
 	}
 	for p, content := range files {
 		require.NoError(g.t, os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0o755))
 		require.NoError(g.t, os.WriteFile(filepath.Join(dir, p), []byte(content), 0o600))
 	}
 	require.NoError(g.t, g.c.CommitAll(ctx, dir, "other writer", "o", "o@example.com"))
-	require.NoError(g.t, g.c.Push(ctx, dir, "origin", branch, "", rewrite))
+	require.NoError(g.t, g.c.Push(ctx, dir, "origin", branch, scm.GitAuth{}, rewrite))
 	return g.head(branch).Hash.String()
 }
 

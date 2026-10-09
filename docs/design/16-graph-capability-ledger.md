@@ -368,10 +368,12 @@ Graph cannot grant itself RBAC while running as that identity. So `IdentityProvi
   ClusterRole and ClusterRoleBinding for the Graph ServiceAccount of every namespace that uses
   it, and `IdentityProvisioner` creates only RoleBindings. Two v0.10.0 features avoid it: the
   translator inlines a `ClusterAnalysisTemplate` into the AnalysisRun template (#1444,
-  `pkg/translator/analysis.go`), and resolves a `ClusterScmProvider` into a static spec field
-  (#1459, **planned in #1517 (not on main)**), the same way it copies PolicyGate templates
-  into instances. No upstream ask: the grant is kardinal's to make, and
-  a static copy also gives the Bundle a snapshot.
+  `pkg/translator/analysis.go`), and copies only a `ClusterScmProvider`'s identity (kind,
+  name, UID) into the PromotionStep spec (#1459, #1517): no Graph node reads the provider. The
+  controller reads it with its own RBAC on every reconcile (`scm.Registry.ForIdentity`) and
+  refuses a provider that was deleted and recreated (the UID differs). This is not a snapshot:
+  an edit to the provider's `apiURL` or its Secret applies to in-flight Bundles too. No
+  upstream ask: the grant is kardinal's to make.
 
 ---
 

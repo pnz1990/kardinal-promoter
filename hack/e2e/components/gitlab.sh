@@ -65,13 +65,14 @@ spec:
         - name: gitlab
           image: $GITLAB_IMAGE
           imagePullPolicy: IfNotPresent
-          ports: [{name: http, containerPort: 80}]
+          ports: [{name: http, containerPort: 80}, {name: ssh, containerPort: 22}]
           env:
             - name: GITLAB_ROOT_PASSWORD
               valueFrom: {secretKeyRef: {name: gitlab-root, key: password}}
             - name: GITLAB_OMNIBUS_CONFIG
               value: |
                 external_url '$INCLUSTER'
+                gitlab_rails['gitlab_shell_ssh_port'] = 22
                 nginx['listen_port'] = 80
                 nginx['listen_https'] = false
                 letsencrypt['enable'] = false
@@ -120,7 +121,7 @@ metadata:
 spec:
   type: NodePort
   selector: {app: gitlab}
-  ports: [{name: http, port: 80, targetPort: http}]
+  ports: [{name: http, port: 80, targetPort: http}, {name: ssh, port: 22, targetPort: ssh}]
 EOF
 # A cold boot (reconfigure, migrations) takes about 3 minutes on a CI runner.
 "${KUBECTL[@]}" -n "$NS" rollout status deploy/gitlab --timeout=1200s >/dev/null
@@ -205,6 +206,8 @@ env_set KARDINAL_E2E_SCM_API "$INCLUSTER"
 env_set KARDINAL_E2E_GIT_KIND gitlab
 env_set KARDINAL_E2E_GIT_API "$BASE"
 env_set KARDINAL_E2E_GIT_CLONE_BASE "$INCLUSTER"
+env_set KARDINAL_E2E_GIT_SSH_BASE "ssh://git@gitlab.$NS.svc.cluster.local:22"
+env_set KARDINAL_E2E_GIT_SSH_ADDR "$(node_ip):$(nodeport "$NS" gitlab ssh)"
 env_set KARDINAL_E2E_GIT_OWNER "$GROUP"
 env_set KARDINAL_E2E_GIT_TOKEN "$(secret_get gitlab-root-token)"
 env_set KARDINAL_E2E_WEBHOOK_URL "$KARDINAL_WEBHOOK_URL"
