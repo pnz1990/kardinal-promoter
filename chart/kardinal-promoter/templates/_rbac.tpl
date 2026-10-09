@@ -53,6 +53,8 @@ rules exist for. A new client call needs a row there and a rule here.
     - metricchecks
     - scheduleclocks
     - notificationhooks
+    - hookruns
+    - imageverifications
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["kardinal.io"]
   resources:
@@ -66,7 +68,15 @@ rules exist for. A new client call needs a row there and a rule here.
     - metricchecks/status
     - scheduleclocks/status
     - notificationhooks/status
+    - hookruns/status
+    - imageverifications/status
   verbs: ["get", "update", "patch"]
+# Pipeline hooks (docs/hooks.md): the HookRun reconciler creates each hook's
+# Job, owned by the HookRun, and deletes one that ran past its timeout. The
+# informer caches only Jobs labelled kardinal.io/hookrun.
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "delete"]
 # Audit records are append-only. audit.retention.enabled adds delete: the
 # leader deletes records past their retention (pkg/reconciler/auditretention).
 - apiGroups: ["kardinal.io"]
@@ -129,6 +139,11 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["argoproj.io"]
   resources: ["rollouts"]
   verbs: ["get", "list", "watch"]
+# Argo Rollouts analysis (spec.verification): the translator reads the
+# AnalysisTemplates a Pipeline names, uncached, by name (pkg/translator/analysis.go).
+- apiGroups: ["argoproj.io"]
+  resources: ["analysistemplates"]
+  verbs: ["get"]
 - apiGroups: ["kustomize.toolkit.fluxcd.io"]
   resources: ["kustomizations"]
   verbs: ["get", "list", "watch"]
@@ -138,6 +153,11 @@ rules exist for. A new client call needs a row there and a rule here.
 {{- end }}
 
 {{- define "kardinal-promoter.rules.cluster" -}}
+# ClusterAnalysisTemplates a Pipeline's spec.verification names, read by the
+# translator uncached, by name (pkg/translator/analysis.go).
+- apiGroups: ["argoproj.io"]
+  resources: ["clusteranalysistemplates"]
+  verbs: ["get"]
 # ChangeWindow is cluster-scoped: PolicyGates read it, and its reconciler
 # writes status.
 - apiGroups: ["kardinal.io"]
@@ -184,6 +204,14 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["leases"]
   verbs: ["create"]
 {{- end }}
+
+# The PolicyGate reconciler records an override's createdBy as verified only
+# while the chart's gate-overrides admission policy and its binding exist
+# (--override-identity-policy): get on those two objects by name.
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+  verbs: ["get"]
+  resourceNames: [{{ printf "%s-gate-overrides" (include "kardinal-promoter.fullname" .) | quote }}]
 {{- if .Values.ui.auth.tokenReview }}
 # ui.auth.tokenReview: the UI API validates each bearer token with a
 # TokenReview and authorizes it with a SubjectAccessReview.

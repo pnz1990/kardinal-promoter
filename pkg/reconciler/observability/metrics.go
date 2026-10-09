@@ -41,13 +41,13 @@ import (
 var (
 	// BundlesTotal counts Bundle phase transitions. The "phase" label is the
 	// phase entered: "Promoting" when promotion starts, then one of the
-	// terminal phases "Verified", "Failed" or "Superseded".
+	// terminal phases "Verified", "Failed", "Superseded" or "Rejected".
 	// Only these transitions are counted, once each, to avoid double-counting
 	// on re-reconcile of the same phase.
 	BundlesTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kardinal_bundles_total",
-			Help: "Total number of Bundle phase transitions by phase entered (Promoting, Verified, Failed, Superseded).",
+			Help: "Total number of Bundle phase transitions by phase entered (Promoting, Verified, Failed, Superseded, Rejected).",
 		},
 		[]string{"phase"},
 	)

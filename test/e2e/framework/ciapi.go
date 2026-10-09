@@ -145,6 +145,10 @@ type Variant struct {
 	UIURL string
 }
 
+// MaxVariants is how many controller variants one test process may start:
+// the e2e install lists variant-1 ... variant-MaxVariants by exact name.
+const MaxVariants = 128
+
 // ControllerVariant runs a second controller for the test ns: the chart's
 // pod template with args appended and the env vars named in dropEnv removed,
 // in ControllerNamespace, and a NodePort Service to its webhook and UI ports.
@@ -201,7 +205,13 @@ func (e *Env) ControllerVariantSpec(t *testing.T, ns, what string, edit func(*co
 		t.Fatalf("the variant would run without --leader-elect=true (%v) and reconcile beside the controller", tmpl.Spec.Containers[0].Args)
 	}
 
-	name := fmt.Sprintf("variant-%s-%d", ns[len(ns)-8:], atomic.AddInt32(&variants, 1))
+	// variant-<n>: the e2e install lists exactly these usernames as kardinal
+	// controllers (hack/e2e/components/kardinal.sh, admission.controllerUsernames).
+	n := atomic.AddInt32(&variants, 1)
+	if n > MaxVariants {
+		t.Fatalf("controller variant %d: hack/e2e/components/kardinal.sh lists only %d variant ServiceAccounts", n, MaxVariants)
+	}
+	name := fmt.Sprintf("variant-%d", n)
 	labels := map[string]string{"app.kubernetes.io/name": "kardinal-e2e-variant", variantLabel: name}
 	chartSA := tmpl.Spec.ServiceAccountName
 	if chartSA == "" {

@@ -43,6 +43,7 @@ func TestPolicyGateReconciler_SettledBundleNotEvaluated(t *testing.T) {
 		evaluated  bool
 	}{
 		{name: "Superseded", phase: "Superseded"},
+		{name: "Rejected", phase: "Rejected"},
 		{name: "Verified, GraphReady True", phase: "Verified", conditions: graphReady(metav1.ConditionTrue)},
 		{name: "Verified, GraphReady False", phase: "Verified", conditions: graphReady(metav1.ConditionFalse), evaluated: true},
 		{name: "Verified, no GraphReady", phase: "Verified", evaluated: true},

@@ -61,6 +61,14 @@ spec:
               instead of ignored (#1353). Bundles stored before the rule keep working:
               CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
               supported) lets an update through when spec is unchanged.
+
+              A Bundle's spec is immutable: spec.type, spec.pipeline, spec.images,
+              spec.chart, spec.configRef, spec.provenance and spec.intent cannot change
+              after creation. The artifact is what gates, verifications and evidence were
+              checked against, and an intent edit would apply only at some later,
+              unrelated re-translation of the Graph; to promote something else, or to
+              another target, create a new Bundle. The rules are transition rules, so
+              they run only on update.
             properties:
               chart:
                 description: |-
@@ -181,6 +189,35 @@ spec:
                     format: date-time
                     type: string
                 type: object
+              rejected:
+                description: |-
+                  Rejected marks the Bundle as rejected (kardinal reject): it is never
+                  promoted again, its in-flight steps are cancelled, and rollback,
+                  promote and Subscriptions skip any Bundle carrying its artifacts.
+                  Setting it is one-way: it cannot be changed or removed. The chart's
+                  ValidatingAdmissionPolicy requires rejected.by to be the requesting
+                  user; without that policy nothing checks it.
+                properties:
+                  at:
+                    description: At is when the Bundle was rejected.
+                    format: date-time
+                    type: string
+                  by:
+                    description: |-
+                      By is the Kubernetes username of whoever rejected the Bundle. The
+                      chart's ValidatingAdmissionPolicy (kardinal-identity) admits a new
+                      rejection only when by equals the requesting user's username.
+                    minLength: 1
+                    type: string
+                  reason:
+                    description: Reason says why the Bundle was rejected.
+                    maxLength: 1024
+                    minLength: 1
+                    type: string
+                required:
+                - by
+                - reason
+                type: object
               type:
                 description: |-
                   Type classifies the bundle content.
@@ -200,10 +237,34 @@ spec:
             - type
             type: object
             x-kubernetes-validations:
+            - message: 'spec.type is immutable: create a new Bundle'
+              rule: self.type == oldSelf.type
+            - message: 'spec.pipeline is immutable: create a new Bundle'
+              rule: self.pipeline == oldSelf.pipeline
+            - message: 'spec.images is immutable: create a new Bundle'
+              rule: has(self.images) == has(oldSelf.images) && (!has(self.images)
+                || self.images == oldSelf.images)
+            - message: 'spec.chart is immutable: create a new Bundle'
+              rule: has(self.chart) == has(oldSelf.chart) && (!has(self.chart) ||
+                self.chart == oldSelf.chart)
+            - message: 'spec.configRef is immutable: create a new Bundle'
+              rule: has(self.configRef) == has(oldSelf.configRef) && (!has(self.configRef)
+                || self.configRef == oldSelf.configRef)
+            - message: 'spec.provenance is immutable: create a new Bundle'
+              rule: has(self.provenance) == has(oldSelf.provenance) && (!has(self.provenance)
+                || self.provenance == oldSelf.provenance)
+            - message: 'spec.intent is immutable: create a new Bundle'
+              rule: has(self.intent) == has(oldSelf.intent) && (!has(self.intent)
+                || self.intent == oldSelf.intent)
             - message: 'spec.configRef is used only by config and mixed Bundles: an
                 image Bundle deploys only its images; set type config or mixed, or
                 remove configRef'
               rule: '!(self.type == ''image'' && has(self.configRef))'
+            - message: 'spec.rejected cannot be removed: a rejected Bundle stays rejected'
+              rule: '!has(oldSelf.rejected) || has(self.rejected)'
+            - message: spec.rejected is immutable once set
+              rule: '!has(oldSelf.rejected) || !has(self.rejected) || self.rejected
+                == oldSelf.rejected'
           status:
             description: BundleStatus defines the observed state of a Bundle.
             properties:
@@ -331,13 +392,16 @@ spec:
                     type: integer
                 type: object
               phase:
-                description: Phase is the bundle promotion phase.
+                description: |-
+                  Phase is the bundle promotion phase. Rejected is final: spec.rejected
+                  is set, and nothing of this Bundle is promoted again.
                 enum:
                 - Available
                 - Promoting
                 - Verified
                 - Failed
                 - Superseded
+                - Rejected
                 type: string
               pipelineSpecHash:
                 description: |-
@@ -355,6 +419,58 @@ spec:
                   templates retries the Bundle, as a Pipeline change does. Empty
                   otherwise.
                 type: string
+              rejectedArtifacts:
+                description: |-
+                  RejectedArtifacts is what a rejection (spec.rejected) rejects: the
+                  artifacts of this Bundle that differ from what was Verified before it
+                  in the environments it reached, written by the Bundle reconciler when
+                  it marks the Bundle Rejected. A sidecar the Bundle carries unchanged is
+                  not in it, so rolling back to the Bundle before stays possible. Unset
+                  (a rejection not processed yet) means all of the Bundle's artifacts.
+                properties:
+                  comparedWith:
+                    description: |-
+                      ComparedWith names, per environment, the Verified Bundle the artifacts
+                      were compared with ("<env>=<bundle>"); empty when no environment had
+                      one, and then every artifact is rejected.
+                    items:
+                      type: string
+                    maxItems: 100
+                    type: array
+                  configCommitSHA:
+                    description: ConfigCommitSHA is the rejected config commit, when
+                      it differs.
+                    type: string
+                  images:
+                    description: |-
+                      Images are the rejected images: those not Verified, with the same
+                      digest (or tag, without a digest), before this Bundle in every
+                      environment it reached.
+                    items:
+                      description: ImageRef identifies a container image by repository,
+                        tag, and/or digest.
+                      properties:
+                        digest:
+                          description: Digest is the image digest (sha256:...), in
+                            the OCI digest grammar.
+                          pattern: ^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$
+                          type: string
+                        repository:
+                          description: Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
+                          minLength: 1
+                          type: string
+                        tag:
+                          description: |-
+                            Tag is the image tag, in the OCI distribution grammar: up to 128
+                            characters of [A-Za-z0-9_.-], not starting with "." or "-".
+                          pattern: ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$
+                          type: string
+                      required:
+                      - repository
+                      type: object
+                    maxItems: 100
+                    type: array
+                type: object
               retiredAt:
                 description: |-
                   RetiredAt is when the Bundle's Graph was retired: set in the same
