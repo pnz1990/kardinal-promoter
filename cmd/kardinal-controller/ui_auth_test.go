@@ -617,3 +617,37 @@ func TestUIHandler_HoldWithoutPipelineUpdate(t *testing.T) {
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "app"}, &p))
 	assert.Empty(t, p.Spec.Holds, "the controller released the hold")
 }
+
+// recordingAccess is holderAccess without create on bundles, recording each
+// check.
+type recordingAccess struct{ checked *[]authzv1.ResourceAttributes }
+
+func (a recordingAccess) Allowed(ctx context.Context, u authv1.UserInfo, attrs authzv1.ResourceAttributes) (bool, string, error) {
+	*a.checked = append(*a.checked, attrs)
+	if attrs.Verb == "create" {
+		return false, "", nil
+	}
+	return holderAccess{}.Allowed(ctx, u, attrs)
+}
+
+// TestUIHandler_HoldNeedsBundleCreateFirst (#1511 QA): a caller with
+// pipelines/hold who cannot create Bundles is refused before the hold is
+// checked or written, so no hold appears on the Pipeline even for a moment.
+func TestUIHandler_HoldNeedsBundleCreateFirst(t *testing.T) {
+	tokens := &uiTestTokens{users: map[string]string{"h": "holder"}}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
+			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}},
+	).Build()
+	var checked []authzv1.ResourceAttributes
+	h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: recordingAccess{checked: &checked}}, "", nil, zerolog.Nop())
+	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/rollback", "Bearer h",
+		`{"pipeline":"app","namespace":"team-a","environment":"prod","hold":true,"holdReason":"incident"}`)
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	for _, a := range checked {
+		assert.NotEqual(t, "hold", a.Subresource, "pipelines/hold is not checked after create bundles is denied")
+	}
+	var p v1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "app"}, &p))
+	assert.Empty(t, p.Spec.Holds)
+}

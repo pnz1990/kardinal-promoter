@@ -13,23 +13,28 @@ SubjectAccessReview, so these roles decide what a caller can do there too
                        kardinal kinds, and step events
   <fullname>-promoter  viewer + create Bundles (CI, create bundle, promote,
                        rollback) + pause and resume Pipelines (pipelines/pause)
+                       + roll back and hold, and release a hold
+                       (pipelines/hold)
   <fullname>-approver  viewer + override (approve) PolicyGates
                        (policygates/override) + create Approvals
   <fullname>-admin     every verb on every kardinal kind, and pipelines/edit
                        and policygates/edit; aggregates the other three and
                        <fullname>-admin-extra
 
-pipelines/pause, pipelines/edit, policygates/override and policygates/edit
-are virtual subresources: the API server serves no such endpoint, RBAC grants
-them and SubjectAccessReview checks them. The UI API authorizes pause, resume
-and gate approval on them and writes the change as the controller, recording
-the caller. The promoter and approver roles grant no update on Pipelines or
+pipelines/pause, pipelines/hold, pipelines/edit, policygates/override and
+policygates/edit are virtual subresources: the API server serves no such
+endpoint, RBAC grants them and SubjectAccessReview checks them. The UI API
+authorizes pause, resume, the hold of a rollback, release-hold and gate
+approval on them and writes the change as the controller, recording the
+caller. The promoter and approver roles grant no update on Pipelines or
 PolicyGates, so they cannot edit a Pipeline or a gate. With
-rbac.userRoles.directWrites they also get update and patch, for kardinal pause
-and kardinal override from a kubeconfig; the ValidatingAdmissionPolicy in
-identity-admission.yaml then limits a caller who has pipelines/pause but not
-pipelines/edit to spec.paused, and one who has policygates/override but not
-policygates/edit to spec.overrides.
+rbac.userRoles.directWrites they also get update and patch, for kardinal
+pause, rollback --hold, release-hold and override from a kubeconfig; the
+scoped-writes ValidatingAdmissionPolicy in identity-admission.yaml then limits
+a caller who has pipelines/pause or pipelines/hold but not pipelines/edit to
+spec.paused (with pipelines/pause) and spec.holds (with pipelines/hold, each
+entry checked by the hold-writes policy), and one who has
+policygates/override but not policygates/edit to spec.overrides.
 
 With rbac.userRoles.aggregateToDefaultRoles the roles also aggregate into the
 built-in view, edit and admin ClusterRoles (viewer into view; promoter and

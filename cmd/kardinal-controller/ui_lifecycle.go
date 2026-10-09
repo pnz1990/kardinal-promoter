@@ -194,6 +194,15 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// The caller must be able to create the rollback Bundle before the
+		// hold is written: one who cannot never gets a hold that is removed
+		// again a moment later.
+		if az, ok := s.client.(actionAuthorizer); ok {
+			if err = az.AuthorizeAction(r.Context(), "create", "kardinal.io", "bundles", "", ns, ""); err != nil {
+				s.writeLifecycleError(w, "rollback", err)
+				return
+			}
+		}
 		// The hold needs pipelines/hold, not update on the Pipeline: the
 		// controller writes it. The plan's reads and the Bundle create stay
 		// on the caller's client.
