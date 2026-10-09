@@ -25,6 +25,8 @@ type envExtras struct {
 	preHooks  []interface{} // spec.preHooks of the step
 	postHooks []interface{} // spec.postHooks of the step
 	analyses  []interface{} // spec.analyses of the step
+	// analysisPolicy is spec.analysisPolicy of the step.
+	analysisPolicy map[string]interface{}
 }
 
 // buildEnvExtras returns the hook and analysis nodes of one environment and
@@ -42,6 +44,9 @@ func buildEnvExtras(in hookNodesInput, analyses AnalysisInput, bundle *kardinalv
 	out.nodes = append(out.nodes, hooks.nodes...)
 	out.nodes = append(out.nodes, runs.nodes...)
 	out.analyses = runs.names
+	if len(runs.names) > 0 {
+		out.analysisPolicy = runs.policy
+	}
 	if len(hooks.nodes) > 0 || len(runs.nodes) > 0 {
 		out.nodes = append(out.nodes, buildLiveMirrorNode(in.env.Name, in.stepK8sName, in.bundleUID, hooks.names, len(runs.nodes) > 0))
 	}
@@ -60,6 +65,9 @@ func attachExtras(step GraphNode, x envExtras) {
 			spec[field] = v
 		}
 	}
+	if x.analysisPolicy != nil {
+		spec["analysisPolicy"] = x.analysisPolicy
+	}
 }
 
 // buildLiveMirrorNode builds the patch node that writes env's HookRun and
@@ -76,6 +84,7 @@ func buildLiveMirrorNode(env, stepK8sName, bundleUID string, hookNames []string,
 	}
 	if analyses {
 		live["analyses"] = fmt.Sprintf(`${%s.filter(r, r.metadata.labels[%q] == %s).map(r, {"name": r.metadata.name, `+
+			`"created": string(r.metadata.creationTimestamp), `+
 			`"template": r.metadata.labels[%q], "phase": r.?status.?phase.orValue("Pending"), "message": r.?status.?message.orValue("")})}`,
 			refAnalysisRunsNodeID, "kardinal.io/environment", strconv.Quote(env), LabelAnalysisTemplate)
 	}

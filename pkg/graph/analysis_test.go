@@ -113,11 +113,17 @@ func TestBuilder_AnalysisNodes(t *testing.T) {
 	}, args)
 
 	stepSpec := hookNode(t, g, "prod").Template["spec"].(map[string]interface{})
-	names := stepSpec["analyses"].([]interface{})
-	require.Len(t, names, 2)
-	for _, n := range names {
-		assert.Empty(t, validation.IsDNS1123Label(n.(string)), n)
-		assert.True(t, strings.HasPrefix(n.(string), "app-app-v1-prod-"), n)
+	assert.Equal(t, []interface{}{"smoke", "slo"}, stepSpec["analyses"],
+		"the step waits per template (the newest run of each), not for a run name a rebuild can change")
+	for _, id := range []string{"analysis0prod0smoke", "analysis0prod0slo"} {
+		run, err := celEval(t, nameExpr(t, g, id), map[string]interface{}{
+			"bundle": map[string]interface{}{"status": map[string]interface{}{"phase": "Promoting"}},
+			"refSteps": []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "app-app-v1-prod"},
+				"status": map[string]interface{}{"verificationStartedAt": "2026-10-09T00:00:00Z"}}},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, validation.IsDNS1123Label(run.(string)), run)
+		assert.True(t, strings.HasPrefix(run.(string), "app-app-v1-prod-"), run)
 	}
 	live := hookNode(t, g, "live0prod").Patch["spec"].(map[string]interface{})["live"].(map[string]interface{})
 	assert.Contains(t, live, "analyses")
@@ -167,7 +173,7 @@ func TestBuilder_AnalysisRunNameFollowsSpec(t *testing.T) {
 	name := func(query string) string {
 		res, err := buildAnalysis(t, p, analysisInput(smokeTemplate("AnalysisTemplate", "smoke", query)))
 		require.NoError(t, err)
-		return hookNode(t, res.Graph, "prod").Template["spec"].(map[string]interface{})["analyses"].([]interface{})[0].(string)
+		return nameExpr(t, res.Graph, "analysis0prod0smoke")
 	}
 	assert.Equal(t, name("a"), name("a"))
 	assert.NotEqual(t, name("a"), name("b"))
@@ -222,8 +228,8 @@ func TestBuilder_AnalysisMirror(t *testing.T) {
 	require.NoError(t, err)
 	expr := hookNode(t, res.Graph, "live0prod").Patch["spec"].(map[string]interface{})["live"].(map[string]interface{})["analyses"].(string)
 	run := func(name, env string, status map[string]interface{}) map[string]interface{} {
-		o := map[string]interface{}{"metadata": map[string]interface{}{"name": name, "labels": map[string]interface{}{
-			"kardinal.io/environment": env, "kardinal.io/analysis-template": "smoke"}}}
+		o := map[string]interface{}{"metadata": map[string]interface{}{"name": name, "creationTimestamp": "2026-10-09T00:00:0" + name[1:] + "Z",
+			"labels": map[string]interface{}{"kardinal.io/environment": env, "kardinal.io/analysis-template": "smoke"}}}
 		if status != nil {
 			o["status"] = status
 		}
@@ -237,8 +243,8 @@ func TestBuilder_AnalysisMirror(t *testing.T) {
 	require.NoError(t, err)
 	b, err := json.Marshal(out)
 	require.NoError(t, err)
-	assert.JSONEq(t, `[{"name":"r1","template":"smoke","phase":"Failed","message":"Metric \"x\" assessed Failed"},
-		{"name":"r3","template":"smoke","phase":"Pending","message":""}]`, string(b))
+	assert.JSONEq(t, `[{"name":"r1","created":"2026-10-09T00:00:01Z","template":"smoke","phase":"Failed","message":"Metric \"x\" assessed Failed"},
+		{"name":"r3","created":"2026-10-09T00:00:03Z","template":"smoke","phase":"Pending","message":""}]`, string(b))
 }
 
 // TestBuilder_AnalysisWithHooks: an environment with both hooks and
@@ -257,4 +263,94 @@ func TestBuilder_AnalysisWithHooks(t *testing.T) {
 	spec := hookNode(t, res.Graph, "prod").Template["spec"].(map[string]interface{})
 	assert.Len(t, spec["postHooks"], 1)
 	assert.Len(t, spec["analyses"], 1)
+}
+
+// TestBuilder_AnalysisArgInjection: a Bundle value outside its grammar is
+// not passed to a template that declares the arg: the Build fails (fail
+// closed). A template that does not declare it is not affected (regression,
+// QA #1502).
+func TestBuilder_AnalysisArgInjection(t *testing.T) {
+	cases := []struct {
+		name string
+		img  kardinalv1alpha1.ImageRef
+		arg  string
+		want string
+	}{
+		{"tag with a quote", kardinalv1alpha1.ImageRef{Repository: "ghcr.io/org/app", Tag: `1.0"}) or vector(1) #`}, "tag", "arg tag"},
+		{"tag with a space", kardinalv1alpha1.ImageRef{Repository: "ghcr.io/org/app", Tag: "1.0 ; rm -rf /"}, "tag", "arg tag"},
+		{"bad digest", kardinalv1alpha1.ImageRef{Repository: "ghcr.io/org/app", Digest: "sha256:../../x"}, "digest", "arg digest"},
+		{"bad repository", kardinalv1alpha1.ImageRef{Repository: "ghcr.io/Org/$(id)", Tag: "1"}, "image", "arg image"},
+		{"image with a bad tag", kardinalv1alpha1.ImageRef{Repository: "ghcr.io/org/app", Tag: "a b"}, "image", "arg image"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := analysisPipeline(kardinalv1alpha1.AnalysisTemplateRef{Name: "smoke"})
+			p.Spec.Environments[1].Verification.Args = nil
+			tmpl := graph.AnalysisTemplate{Kind: "AnalysisTemplate", Name: "smoke", Spec: map[string]interface{}{
+				"args":    []interface{}{map[string]interface{}{"name": tc.arg}},
+				"metrics": []interface{}{map[string]interface{}{"name": "m"}},
+			}}
+			b := makeBundle("app-v1", "app")
+			b.Spec.Images = []kardinalv1alpha1.ImageRef{tc.img}
+			_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b, Analyses: analysisInput(tmpl)})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, graph.ErrInvalid)
+			assert.Contains(t, err.Error(), tc.want)
+
+			// A template that does not use the arg builds.
+			tmpl.Spec["args"] = []interface{}{map[string]interface{}{"name": "environment"}}
+			_, err = graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b, Analyses: analysisInput(tmpl)})
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestBuilder_AnalysisTerminate: each AnalysisRun has a patch node that sets
+// spec.terminate once the step failed, was aborted or rolled back, or the
+// Bundle was superseded (regression, QA #1502).
+func TestBuilder_AnalysisTerminate(t *testing.T) {
+	p := analysisPipeline(kardinalv1alpha1.AnalysisTemplateRef{Name: "smoke"})
+	res, err := buildAnalysis(t, p, analysisInput(smokeTemplate("AnalysisTemplate", "smoke", "1")))
+	require.NoError(t, err)
+	n := hookNode(t, res.Graph, "terminate0prod0smoke")
+	require.NotNil(t, n.Patch)
+	assert.Equal(t, "AnalysisRun", n.Patch["kind"])
+	md := n.Patch["metadata"].(map[string]interface{})
+	assert.NotContains(t, md["name"], "${", "a literal target name")
+	expr := n.Patch["spec"].(map[string]interface{})["terminate"].(string)
+	vars := func(bundlePhase, state string) map[string]interface{} {
+		return map[string]interface{}{
+			"bundle": map[string]interface{}{"status": map[string]interface{}{"phase": bundlePhase}},
+			"refSteps": []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "app-app-v1-prod"},
+				"status": map[string]interface{}{"state": state}}},
+		}
+	}
+	cases := []struct {
+		phase, state string
+		want         bool
+	}{
+		{"Promoting", "Verifying", false},
+		{"Promoting", "Verified", false},
+		{"Promoting", "Failed", true},
+		{"Promoting", "AbortedByAlarm", true},
+		{"Promoting", "RollingBack", true},
+		{"Superseded", "Verifying", true},
+	}
+	for _, tc := range cases {
+		out, err := celEval(t, expr, vars(tc.phase, tc.state))
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, out, "bundle %s step %s", tc.phase, tc.state)
+	}
+}
+
+// TestBuilder_AnalysisPolicySnapshot: the verdict policy is copied into the
+// step (regression, QA #1502: it was read live from the Pipeline).
+func TestBuilder_AnalysisPolicySnapshot(t *testing.T) {
+	p := analysisPipeline(kardinalv1alpha1.AnalysisTemplateRef{Name: "smoke"})
+	p.Spec.Environments[1].Verification.Inconclusive = "pass"
+	p.Spec.Environments[1].Verification.Timeout = "20m"
+	res, err := buildAnalysis(t, p, analysisInput(smokeTemplate("AnalysisTemplate", "smoke", "1")))
+	require.NoError(t, err)
+	spec := hookNode(t, res.Graph, "prod").Template["spec"].(map[string]interface{})
+	assert.Equal(t, map[string]interface{}{"inconclusive": "pass", "timeout": "20m"}, spec["analysisPolicy"])
 }

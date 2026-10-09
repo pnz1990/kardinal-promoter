@@ -29,7 +29,7 @@ func analyses(entries ...string) []v1alpha1.LiveAnalysisRun {
 // given), started at started.
 func verifyingStep(started time.Time, hooks []string, live *v1alpha1.PromotionStepLive) *v1alpha1.PromotionStep {
 	ps := labelled(makeStep("step", "p", "b1", "test"))
-	ps.Spec.Analyses = []string{"run-a", "run-b"}
+	ps.Spec.Analyses = []string{"tmpl-run-a", "tmpl-run-b"}
 	ps.Spec.PostHooks = hooks
 	ps.Spec.Live = live
 	ps.Status.State = promotionstep.StateVerifying
@@ -53,7 +53,7 @@ func TestVerifyingAnalyses(t *testing.T) {
 		wantState    string
 		wantMsg      string
 	}{
-		{"no mirror yet", nil, "", now, "", "Verifying", "waiting for analysis run-a: not started"},
+		{"no mirror yet", nil, "", now, "", "Verifying", "waiting for analysis tmpl-run-a: not started"},
 		{"one running", analyses("run-a", "Successful", "run-b", "Running"), "", now, "", "Verifying",
 			"waiting for analysis tmpl-run-b (AnalysisRun run-b): Running"},
 		{"all successful", analyses("run-a", "Successful", "run-b", "Successful"), "", now, "", "Verified", "verification passed"},
@@ -69,11 +69,8 @@ func TestVerifyingAnalyses(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			pl := makePipeline("p")
-			pl.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{
-				AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "tmpl-run-a"}, {Name: "tmpl-run-b"}},
-				Inconclusive:      tc.inconclusive, Timeout: tc.timeout,
-			}
 			ps := verifyingStep(tc.started, nil, &v1alpha1.PromotionStepLive{Analyses: tc.live})
+			ps.Spec.AnalysisPolicy = &v1alpha1.StepAnalysisPolicy{Inconclusive: tc.inconclusive, Timeout: tc.timeout}
 			c := newClient(t, ps, pl, makeBundle("b1", "p"))
 			got, res := reconcileHookStep(t, c, "step")
 			assert.Equal(t, tc.wantState, got.Status.State)
@@ -97,8 +94,6 @@ func TestVerifyingAnalyses(t *testing.T) {
 func TestVerifyingHooksAndAnalyses(t *testing.T) {
 	now := time.Now()
 	pl := makePipeline("p")
-	pl.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{
-		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "a"}, {Name: "b"}}}
 
 	ps := verifyingStep(now, []string{"e2e"}, &v1alpha1.PromotionStepLive{
 		Hooks:    []v1alpha1.LiveHookRun{{Name: "e2e", Result: "Running"}},
@@ -120,11 +115,48 @@ func TestVerifyingHooksAndAnalyses(t *testing.T) {
 // hooks goes from HealthChecking to Verifying.
 func TestHealthPassEntersVerifyingForAnalyses(t *testing.T) {
 	ps := labelled(makeStep("step", "p", "b1", "test"))
-	ps.Spec.Analyses = []string{"run-a"}
+	ps.Spec.Analyses = []string{"tmpl-a"}
 	ps.Status.State = "HealthChecking"
 	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
 	got, _ := reconcileHookStep(t, c, "step")
 	assert.Equal(t, promotionstep.StateVerifying, got.Status.State)
 	assert.NotNil(t, got.Status.VerificationStartedAt)
-	assert.Contains(t, got.Status.Message, "running 1 analysis(es): run-a")
+	assert.Contains(t, got.Status.Message, "running 1 analysis(es): tmpl-a")
+}
+
+// TestVerifyingNewestRunWins: when a translation replaced a template's run
+// (the template changed), the step waits for the newest run, says so, and
+// keeps its timeout (regression, QA #1502).
+func TestVerifyingNewestRunWins(t *testing.T) {
+	started := time.Now().Add(-5 * time.Minute)
+	live := &v1alpha1.PromotionStepLive{Analyses: []v1alpha1.LiveAnalysisRun{
+		{Name: "old", Template: "tmpl-run-a", Created: "2026-10-09T10:00:00Z", Phase: "Failed"},
+		{Name: "new", Template: "tmpl-run-a", Created: "2026-10-09T10:05:00Z", Phase: "Running"},
+		{Name: "b", Template: "tmpl-run-b", Created: "2026-10-09T10:00:00Z", Phase: "Successful"},
+	}}
+	ps := verifyingStep(started, nil, live)
+	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	got, _ := reconcileHookStep(t, c, "step")
+	assert.Equal(t, promotionstep.StateVerifying, got.Status.State, "the replaced Failed run does not fail the step")
+	assert.Contains(t, got.Status.Message, "AnalysisRun new")
+	assert.Contains(t, got.Status.Message, "was replaced after its template changed")
+	assert.Equal(t, ps.Status.VerificationStartedAt.Unix(), got.Status.VerificationStartedAt.Unix(), "the timeout is not restarted")
+
+	got.Spec.Live.Analyses[1].Phase = "Successful"
+	require.NoError(t, c.Update(context.Background(), got))
+	got, _ = reconcileHookStep(t, c, "step")
+	assert.Equal(t, "Verified", got.Status.State)
+}
+
+// TestVerifyingPolicyFromStep: the verdict policy is the step's snapshot,
+// not the Pipeline's current one (regression, QA #1502).
+func TestVerifyingPolicyFromStep(t *testing.T) {
+	pl := makePipeline("p")
+	pl.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{
+		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "tmpl-run-a"}}, Inconclusive: "pass"}
+	ps := verifyingStep(time.Now(), nil, &v1alpha1.PromotionStepLive{Analyses: analyses("run-a", "Inconclusive", "run-b", "Successful")})
+	ps.Spec.AnalysisPolicy = &v1alpha1.StepAnalysisPolicy{Inconclusive: "fail"}
+	c := newClient(t, ps, pl, makeBundle("b1", "p"))
+	got, _ := reconcileHookStep(t, c, "step")
+	assert.Equal(t, "Failed", got.Status.State, "the step's snapshot says fail")
 }

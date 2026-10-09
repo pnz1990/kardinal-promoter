@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -239,4 +240,130 @@ func TestGraph_AnalysisFailsClosedWithoutRollouts(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok, "no environment was promoted")
 	a.fileHas(t, "prod", fixtures.V1, "prod in git")
+}
+
+// TestRollouts_AnalysisTerminatedWhenStepFails: with two analyses, one that
+// fails at once and one that would measure for minutes, the failure fails
+// the step and the other run is terminated (spec.terminate), so Argo
+// Rollouts stops measuring (regression, QA #1502).
+//
+// Covers ANALYSIS-TERMINATE-01.
+func TestRollouts_AnalysisTerminatedWhenStepFails(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	createAnalysisTemplate(t, e, a.ns, "fails", nil, jobMetric("errors", `exit 1`))
+	slow := jobMetric("slow", `sleep 5`)
+	slow["interval"] = "10s"
+	slow["count"] = int64(60)
+	createAnalysisTemplate(t, e, a.ns, "slow", nil, slow)
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{
+		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "fails"}, {Name: "slow"}}}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Failed", promoteTimeout)
+	framework.Eventually(t, 2*time.Minute, "the slow run to be terminated", func(ctx context.Context) (bool, string) {
+		runs, err := analysisRuns(ctx, e, a.ns, bundle, "prod")
+		if err != nil {
+			return false, err.Error()
+		}
+		for _, r := range runs {
+			if r.GetLabels()["kardinal.io/analysis-template"] != "slow" {
+				continue
+			}
+			term, _, _ := unstructured.NestedBool(r.Object, "spec", "terminate")
+			phase, _, _ := unstructured.NestedString(r.Object, "status", "phase")
+			return term && phase != "Running" && phase != "Pending" && phase != "",
+				fmt.Sprintf("terminate=%v phase=%q", term, phase)
+		}
+		return false, "no run of slow"
+	})
+	_ = ctx
+}
+
+// TestRollouts_AnalysisInvalidArgFailsClosed: a Bundle tag outside the OCI
+// tag grammar is never passed into an AnalysisRun: the API server refuses
+// the Bundle (when the Bundle CRD has the tag pattern) or the Bundle fails
+// before any environment (regression, QA #1502).
+//
+// Covers ANALYSIS-INJECT-01.
+func TestRollouts_AnalysisInvalidArgFailsClosed(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	createAnalysisTemplate(t, e, a.ns, "version-check", []string{"tag"}, jobMetric("v", `echo {{args.tag}}`))
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{
+		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "version-check"}}}
+	a.apply(t, p)
+	b := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "podinfo-inject", Namespace: a.ns},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: pipelineName,
+			Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: `6.14.1"; exit 0; #`}}},
+	}
+	if err := e.Client.Create(ctx, b); err != nil {
+		assert.Contains(t, err.Error(), "spec.images[0].tag", "refused at admission")
+		return
+	}
+	e.WaitBundle(t, a.ns, b.Name, time.Minute, "Failed with InvalidSpec", failedWith("GraphBuildFailed", "arg tag"))
+	runs, err := analysisRuns(ctx, e, a.ns, b.Name, "prod")
+	require.NoError(t, err)
+	assert.Empty(t, runs)
+	a.fileHas(t, "prod", fixtures.V1, "prod in git")
+}
+
+// TestRollouts_AnalysisTemplateEditedMidFlight: a template edited while its
+// run measures, picked up by a Pipeline edit, starts a new run (a new name);
+// the step waits for the newest run, not the replaced one, and is Verified
+// by it (regression, QA #1502).
+//
+// Covers ANALYSIS-REBUILD-01.
+func TestRollouts_AnalysisTemplateEditedMidFlight(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	createAnalysisTemplate(t, e, a.ns, "check", nil, jobMetric("m", `sleep 600`))
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{
+		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "check"}}}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verifying", promoteTimeout)
+	var first string
+	framework.Eventually(t, time.Minute, "the first run", func(ctx context.Context) (bool, string) {
+		runs, err := analysisRuns(ctx, e, a.ns, bundle, "prod")
+		if err != nil || len(runs) == 0 {
+			return false, fmt.Sprint(err)
+		}
+		first = runs[0].GetName()
+		return true, ""
+	})
+
+	// Edit the template, then the Pipeline so the Graph is re-translated.
+	tmpl, err := e.Dynamic.Resource(analysisTemplateGVR).Namespace(a.ns).Get(ctx, "check", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NoError(t, unstructured.SetNestedSlice(tmpl.Object, []interface{}{jobMetric("m", `exit 0`)}, "spec", "metrics"))
+	_, err = e.Dynamic.Resource(analysisTemplateGVR).Namespace(a.ns).Update(ctx, tmpl, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	var live v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
+	live.Spec.Environments[0].Verification.Args = []v1alpha1.AnalysisArg{{Name: "unused", Value: "x"}}
+	require.NoError(t, e.Client.Update(ctx, &live))
+
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	c := meta.FindStatusCondition(ps.Status.Conditions, "Verified")
+	require.NotNil(t, c)
+	assert.Equal(t, "VerificationSucceeded", c.Reason)
+	runs, err := analysisRuns(ctx, e, a.ns, bundle, "prod")
+	require.NoError(t, err)
+	var names []string
+	for _, r := range runs {
+		names = append(names, r.GetName())
+	}
+	assert.NotContains(t, names, first, "the replaced run is gone")
+	assert.NotEmpty(t, names)
 }

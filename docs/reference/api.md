@@ -394,11 +394,15 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | PromotionStepSpec defines the desired state of a PromotionStep. PromotionStep objects are created by the Graph controller — not by users. |
-| `spec.analyses` | []string |  | Analyses names the AnalysisRuns of the environment's verification. A step with analyses goes from HealthChecking to Verifying and is Verified only when every one of them is Successful in spec.live.analyses. |
+| `spec.analyses` | []string |  | Analyses names the AnalysisTemplates of the environment's verification. A step with analyses goes from HealthChecking to Verifying and is Verified only when, for every template, the newest AnalysisRun in spec.live.analyses is Successful: a run that a later translation replaced (the template changed) is not waited for, and the timeout keeps counting from status.verificationStartedAt. |
+| `spec.analysisPolicy` | object |  | AnalysisPolicy is the verification's verdict policy, copied from the Pipeline when the Graph was built, so a Pipeline edit does not change the verdict of a step in flight. |
+| `spec.analysisPolicy.inconclusive` | string |  | Inconclusive is "fail" (default) or "pass". |
+| `spec.analysisPolicy.timeout` | string |  | Timeout is the verification timeout (default 30m). |
 | `spec.bundleName` | string | yes | BundleName is the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment this step promotes into. |
 | `spec.live` | object |  | Live holds results the Graph mirrors onto the step while it runs (a patch node, not the step's template, so they keep updating after the step's own template stopped resolving). The reconciler reads only this copy, never the source objects. |
 | `spec.live.analyses` | []object |  | Analyses are the environment's AnalysisRuns for this Bundle. |
+| `spec.live.analyses[].created` | string |  | Created is the AnalysisRun's creationTimestamp (RFC 3339). The newest run of a template is the one the step waits for. |
 | `spec.live.analyses[].message` | string |  | Message is the AnalysisRun's status.message. |
 | `spec.live.analyses[].name` | string | yes | Name is the AnalysisRun name. |
 | `spec.live.analyses[].phase` | string |  | Phase is the AnalysisRun's status.phase (Pending when it has none yet): Pending, Running, Successful, Failed, Error or Inconclusive. |

@@ -77,6 +77,26 @@ Each AnalysisRun gets one arg for every arg its template declares, valued from, 
 
 An arg left with no value fails the run: Argo Rollouts reports `args.<name> was not resolved`.
 
+### Trust
+
+The built-in values come from the Bundle, which CI, a Subscription or anyone allowed to create
+Bundles writes; the AnalysisTemplate, written by whoever may create templates in the namespace,
+interpolates them into queries, URLs and Job commands. So kardinal passes a built-in value only
+when it matches its grammar, and otherwise fails the Bundle before any environment
+(`InvalidSpec`, `GraphBuildFailed`, `arg tag: ...`):
+
+| Arg | Grammar |
+|---|---|
+| `tag` | `^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$` (OCI tag) |
+| `digest` | `^sha256:[a-f0-9]{64}$` |
+| `commit` | `^[a-f0-9]{7,64}$` |
+| `image` | an OCI repository reference, plus a valid tag or digest |
+| `bundle`, `pipeline`, `environment` | Kubernetes names (the API server checks them) |
+
+A template that does not declare the arg is not affected. `verification.args` values are
+written by the Pipeline's author and passed as they are. Templates should still quote what
+they interpolate where the provider allows it.
+
 ## How it runs
 
 1. The health check (and any `bake` window) passed: the step enters **`Verifying`**, together
@@ -85,13 +105,21 @@ An arg left with no value fails the run: Argo Rollouts reports `args.<name> was 
    `<pipeline>-<bundle>-<env>-<template>-<hash>` and labelled `kardinal.io/bundle`,
    `kardinal.io/environment` and `kardinal.io/analysis-template`. The Argo Rollouts controller
    runs it.
-3. The Graph copies each run's `status.phase` onto the step (`spec.live.analyses`):
+3. The Graph copies each run's `status.phase` onto the step (`spec.live.analyses`). The step
+   waits per template, on the newest run of each (see [Template changes](#template-changes)):
     - every run `Successful` (and every post hook succeeded): the step is `Verified`, condition
       reason `VerificationSucceeded`;
     - a run `Failed`, `Error`, or `Inconclusive` with `inconclusive: fail`, or the timeout passed:
       the environment's `onHealthFailure` applies, as for a failed health check (`none` fails the
       step and the Bundle, `abort` stops it for a human, `rollback` rolls the environment back).
       The change is already deployed when the analysis runs.
+4. A run nothing waits for any more is terminated (`spec.terminate: true`, so Argo Rollouts stops
+   measuring): when the step failed (a failed run or hook, the timeout), was aborted or rolled
+   back, or the Bundle was superseded.
+
+`inconclusive` and `timeout` are copied into the step when its Graph is built
+(`spec.analysisPolicy`): a Pipeline edit applies to the next Bundle, not to a step already
+verifying.
 
 ```bash
 kubectl get analysisruns -n my-app -l kardinal.io/environment=prod
@@ -118,15 +146,15 @@ kardinal reads the templates when it builds the Bundle's Graph and copies their 
 AnalysisRuns, as it copies PolicyGate templates into gate instances: an edit to a template applies
 to the next Bundle, or to the Bundle in flight when the Pipeline changes. The run's name carries a
 hash of its spec, so an edit picked up mid-flight starts a new run instead of changing a run in
-progress.
+progress. The step then waits for the new run (the newest run of the template) and says so in its
+message; the timeout keeps counting from when the step entered `Verifying`, it does not restart.
 
 ## What it cannot do
 
 - The AnalysisRuns run in the Pipeline's namespace on the cluster kardinal runs in. The Argo
   Rollouts controller must watch that namespace (not run with `--namespaced` elsewhere).
 - An AnalysisRun deleted by hand is created again by the Graph and runs again.
-- A Bundle superseded while its analysis runs starts no new run; the running one finishes and
-  nothing waits for it.
+- A Bundle superseded while its analysis runs starts no new run; the running one is terminated.
 
 ## Permissions
 

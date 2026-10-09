@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -62,24 +63,32 @@ func (r *Reconciler) passHealth(ctx context.Context, base, ps *v1alpha1.Promotio
 // analysisVerdict is what a step's AnalysisRuns say.
 type analysisVerdict struct {
 	failed, waiting *v1alpha1.LiveAnalysisRun
-	// waitingName is the AnalysisRun name of waiting (the mirror may have no
-	// entry for it yet).
-	waitingName string
+	// replaced names templates whose run was replaced by a newer one (a
+	// template change picked up mid-flight).
+	replaced []string
 }
 
-// analysisResults checks ps.Spec.Analyses, in order, against
-// ps.Spec.Live.Analyses. inconclusivePasses counts Inconclusive as
-// Successful.
+// analysisResults checks, for each template in ps.Spec.Analyses in order,
+// the newest of its AnalysisRuns in ps.Spec.Live.Analyses. Older runs of a
+// template were replaced by a translation (the template changed): they are
+// not waited for. inconclusivePasses counts Inconclusive as Successful.
 func analysisResults(ps *v1alpha1.PromotionStep, inconclusivePasses bool) analysisVerdict {
-	live := map[string]v1alpha1.LiveAnalysisRun{}
+	newest := map[string]v1alpha1.LiveAnalysisRun{}
+	count := map[string]int{}
 	if ps.Spec.Live != nil {
 		for _, a := range ps.Spec.Live.Analyses {
-			live[a.Name] = a
+			count[a.Template]++
+			if cur, ok := newest[a.Template]; !ok || a.Created > cur.Created || (a.Created == cur.Created && a.Name > cur.Name) {
+				newest[a.Template] = a
+			}
 		}
 	}
 	var v analysisVerdict
-	for _, name := range ps.Spec.Analyses {
-		a, ok := live[name]
+	for _, tmpl := range ps.Spec.Analyses {
+		a, ok := newest[tmpl]
+		if count[tmpl] > 1 {
+			v.replaced = append(v.replaced, tmpl)
+		}
 		switch {
 		case ok && (a.Phase == analysisSuccessful || (a.Phase == analysisInconclusive && inconclusivePasses)):
 		case ok && (a.Phase == analysisFailed || a.Phase == analysisError || a.Phase == analysisInconclusive):
@@ -89,17 +98,17 @@ func analysisResults(ps *v1alpha1.PromotionStep, inconclusivePasses bool) analys
 			}
 		case v.waiting == nil:
 			if !ok {
-				a = v1alpha1.LiveAnalysisRun{Name: name}
+				a = v1alpha1.LiveAnalysisRun{Template: tmpl}
 			}
-			v.waiting, v.waitingName = &a, name
+			v.waiting = &a
 		}
 	}
 	return v
 }
 
 func analysisLabel(a *v1alpha1.LiveAnalysisRun) string {
-	if a.Template == "" {
-		return a.Name
+	if a.Name == "" {
+		return a.Template
 	}
 	return a.Template + " (AnalysisRun " + a.Name + ")"
 }
@@ -112,8 +121,14 @@ func analysisLabel(a *v1alpha1.LiveAnalysisRun) string {
 func (r *Reconciler) handleVerifying(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
 	base := ps.DeepCopy()
 	hooks := hookResults(ps, ps.Spec.PostHooks)
+	policy := v1alpha1.StepAnalysisPolicy{}
+	if ps.Spec.AnalysisPolicy != nil {
+		policy = *ps.Spec.AnalysisPolicy
+	}
+	an := analysisResults(ps, policy.Inconclusive == "pass")
 	var env v1alpha1.EnvironmentSpec
-	if len(ps.Spec.Analyses) > 0 || hooks.failed != nil {
+	if hooks.failed != nil || an.failed != nil || an.waiting != nil {
+		// onHealthFailure is read from the Pipeline, as for a failed health check.
 		pipeline, err := r.loadPipeline(ctx, ps)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
@@ -124,8 +139,6 @@ func (r *Reconciler) handleVerifying(ctx context.Context, log zerolog.Logger, ps
 		log.Info().Str("hook", hooks.failed.String()).Str("onHealthFailure", env.OnHealthFailure).Msg("post-deploy hook failed")
 		return r.applyHealthFailurePolicy(ctx, log, base, ps, env, "post-deploy hooks", hooks.failMessage("post"))
 	}
-	inconclusivePasses := env.Verification != nil && env.Verification.Inconclusive == "pass"
-	an := analysisResults(ps, inconclusivePasses)
 	if an.failed != nil {
 		msg := fmt.Sprintf("analysis %s %s", analysisLabel(an.failed), strings.ToLower(an.failed.Phase))
 		if an.failed.Message != "" {
@@ -150,10 +163,8 @@ func (r *Reconciler) handleVerifying(ctx context.Context, log zerolog.Logger, ps
 	requeue := requeueGateWait
 	if an.waiting != nil {
 		timeout := graph.DefaultAnalysisTimeout
-		if env.Verification != nil {
-			if d, err := graph.AnalysisTimeout(env.Verification.Timeout); err == nil {
-				timeout = d
-			}
+		if d, err := graph.AnalysisTimeout(policy.Timeout); err == nil {
+			timeout = d
 		}
 		if started := ps.Status.VerificationStartedAt; started != nil {
 			left := started.Add(timeout).Sub(r.now())
@@ -172,6 +183,16 @@ func (r *Reconciler) handleVerifying(ctx context.Context, log zerolog.Logger, ps
 		msg = hooks.waitMessage("post")
 	default:
 		msg = fmt.Sprintf("waiting for analysis %s: %s", analysisLabel(an.waiting), phaseOrNotStarted(an.waiting.Phase))
+	}
+	if len(an.replaced) > 0 {
+		// Not silent: a rebuild replaced a run; the timeout still counts from
+		// the start of Verifying.
+		since := "the start of Verifying"
+		if ps.Status.VerificationStartedAt != nil {
+			since = ps.Status.VerificationStartedAt.Format(time.RFC3339)
+		}
+		msg += fmt.Sprintf(" (the run of %s was replaced after its template changed; the timeout counts from %s)",
+			strings.Join(an.replaced, ", "), since)
 	}
 	if ps.Status.Message != msg {
 		ps.Status.Message = msg

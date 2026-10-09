@@ -63,12 +63,20 @@ type PromotionStepSpec struct {
 	// +optional
 	PostHooks []string `json:"postHooks,omitempty"`
 
-	// Analyses names the AnalysisRuns of the environment's verification. A
-	// step with analyses goes from HealthChecking to Verifying and is
-	// Verified only when every one of them is Successful in
-	// spec.live.analyses.
+	// Analyses names the AnalysisTemplates of the environment's
+	// verification. A step with analyses goes from HealthChecking to
+	// Verifying and is Verified only when, for every template, the newest
+	// AnalysisRun in spec.live.analyses is Successful: a run that a later
+	// translation replaced (the template changed) is not waited for, and the
+	// timeout keeps counting from status.verificationStartedAt.
 	// +optional
 	Analyses []string `json:"analyses,omitempty"`
+
+	// AnalysisPolicy is the verification's verdict policy, copied from the
+	// Pipeline when the Graph was built, so a Pipeline edit does not change
+	// the verdict of a step in flight.
+	// +optional
+	AnalysisPolicy *StepAnalysisPolicy `json:"analysisPolicy,omitempty"`
 
 	// Live holds results the Graph mirrors onto the step while it runs (a
 	// patch node, not the step's template, so they keep updating after the
@@ -99,10 +107,24 @@ type PromotionStepLive struct {
 	Analyses []LiveAnalysisRun `json:"analyses,omitempty"`
 }
 
+// StepAnalysisPolicy is a step's copy of spec.verification's verdict policy.
+type StepAnalysisPolicy struct {
+	// Inconclusive is "fail" (default) or "pass".
+	// +optional
+	Inconclusive string `json:"inconclusive,omitempty"`
+	// Timeout is the verification timeout (default 30m).
+	// +optional
+	Timeout string `json:"timeout,omitempty"`
+}
+
 // LiveAnalysisRun is the result of one Argo Rollouts AnalysisRun.
 type LiveAnalysisRun struct {
 	// Name is the AnalysisRun name.
 	Name string `json:"name"`
+	// Created is the AnalysisRun's creationTimestamp (RFC 3339). The newest
+	// run of a template is the one the step waits for.
+	// +optional
+	Created string `json:"created,omitempty"`
 	// Template is the AnalysisTemplate or ClusterAnalysisTemplate it runs.
 	// +optional
 	Template string `json:"template,omitempty"`

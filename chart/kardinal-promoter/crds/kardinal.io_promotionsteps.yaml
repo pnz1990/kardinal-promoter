@@ -64,13 +64,28 @@ spec:
             properties:
               analyses:
                 description: |-
-                  Analyses names the AnalysisRuns of the environment's verification. A
-                  step with analyses goes from HealthChecking to Verifying and is
-                  Verified only when every one of them is Successful in
-                  spec.live.analyses.
+                  Analyses names the AnalysisTemplates of the environment's
+                  verification. A step with analyses goes from HealthChecking to
+                  Verifying and is Verified only when, for every template, the newest
+                  AnalysisRun in spec.live.analyses is Successful: a run that a later
+                  translation replaced (the template changed) is not waited for, and the
+                  timeout keeps counting from status.verificationStartedAt.
                 items:
                   type: string
                 type: array
+              analysisPolicy:
+                description: |-
+                  AnalysisPolicy is the verification's verdict policy, copied from the
+                  Pipeline when the Graph was built, so a Pipeline edit does not change
+                  the verdict of a step in flight.
+                properties:
+                  inconclusive:
+                    description: Inconclusive is "fail" (default) or "pass".
+                    type: string
+                  timeout:
+                    description: Timeout is the verification timeout (default 30m).
+                    type: string
+                type: object
               bundleName:
                 description: BundleName is the Bundle being promoted.
                 minLength: 1
@@ -93,6 +108,11 @@ spec:
                       description: LiveAnalysisRun is the result of one Argo Rollouts
                         AnalysisRun.
                       properties:
+                        created:
+                          description: |-
+                            Created is the AnalysisRun's creationTimestamp (RFC 3339). The newest
+                            run of a template is the one the step waits for.
+                          type: string
                         message:
                           description: Message is the AnalysisRun's status.message.
                           type: string

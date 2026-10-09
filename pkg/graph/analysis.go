@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -121,7 +122,15 @@ func analysisNodeID(env, template string) string {
 // analysisNodes is the result of buildAnalysisNodes for one environment.
 type analysisNodes struct {
 	nodes []GraphNode
-	names []interface{} // spec.analyses of the step: the AnalysisRun names
+	names []interface{} // spec.analyses of the step: the template names
+	// policy is spec.analysisPolicy of the step.
+	policy map[string]interface{}
+}
+
+// terminateNodeID is the node ID of the patch node that terminates an
+// environment's AnalysisRun of template.
+func terminateNodeID(env, template string) string {
+	return "terminate0" + CELSafeSlug(env) + "0" + CELSafeSlug(template)
 }
 
 // buildAnalysisNodes returns the AnalysisRun nodes of one environment.
@@ -138,7 +147,14 @@ func buildAnalysisNodes(in hookNodesInput, a AnalysisInput, bundle *kardinalv1al
 	if _, err := AnalysisTimeout(v.Timeout); err != nil {
 		return out, fmt.Errorf("%s: %w", where, err)
 	}
-	builtins := analysisBuiltinArgs(in.pipeline, in.env.Name, bundle)
+	builtins, invalid := analysisBuiltinArgs(in.pipeline, in.env.Name, bundle)
+	out.policy = map[string]interface{}{}
+	if v.Inconclusive != "" {
+		out.policy["inconclusive"] = v.Inconclusive
+	}
+	if v.Timeout != "" {
+		out.policy["timeout"] = v.Timeout
+	}
 	for _, ref := range v.AnalysisTemplates {
 		kind := AnalysisTemplateKind(ref)
 		tmpl, ok := a.Templates[AnalysisTemplateKey(kind, ref.Name)]
@@ -148,7 +164,7 @@ func buildAnalysisNodes(in hookNodesInput, a AnalysisInput, bundle *kardinalv1al
 			}
 			return out, fmt.Errorf("%s: AnalysisTemplate %q not found in namespace %q", where, ref.Name, in.namespace)
 		}
-		spec, err := analysisRunSpec(tmpl, v.Args, builtins)
+		spec, err := analysisRunSpec(tmpl, v.Args, builtins, invalid)
 		if err != nil {
 			return out, fmt.Errorf("%s: %s %q: %w", where, kind, ref.Name, err)
 		}
@@ -178,14 +194,53 @@ func buildAnalysisNodes(in hookNodesInput, a AnalysisInput, bundle *kardinalv1al
 			},
 			ReadyWhen: []string{fmt.Sprintf(`${%s.?status.?phase.orValue("") == "Successful"}`, id)},
 		})
-		out.names = append(out.names, name)
+		out.nodes = append(out.nodes, terminateNode(in, ref.Name, name))
+		out.names = append(out.names, ref.Name)
 	}
 	return out, nil
 }
 
+// terminateNode is a patch node that sets spec.terminate on the
+// AnalysisRun once nothing waits for it any more: the step failed (a failed
+// analysis or hook, the verification timeout), was aborted or rolled back,
+// or the Bundle was superseded. Argo Rollouts then stops its measurements.
+// The target is the run's literal name, so the patch keeps working after the
+// run's own template stopped resolving (a Superseded Bundle).
+func terminateNode(in hookNodesInput, template, runName string) GraphNode {
+	cond := fmt.Sprintf(`${bundle.?status.?phase.orValue("") == "Superseded" || %s.exists(s, s.metadata.name == %s && `+
+		`s.?status.?state.orValue("") in ["Failed", "AbortedByAlarm", "RollingBack"])}`,
+		refStepsNodeID, strconv.Quote(in.stepK8sName))
+	return GraphNode{
+		ID: terminateNodeID(in.env.Name, template),
+		Patch: map[string]interface{}{
+			"apiVersion": AnalysisRunAPIVersion,
+			"kind":       "AnalysisRun",
+			"metadata":   map[string]interface{}{"name": runName},
+			"spec":       map[string]interface{}{"terminate": cond},
+		},
+	}
+}
+
+// Grammar of the Bundle values kardinal passes as AnalysisRun args. They
+// come from the Bundle (CI, a Subscription, the Bundle API), which is less
+// trusted than the AnalysisTemplate that interpolates them into queries,
+// URLs and Job commands: a value outside its grammar is refused rather than
+// passed on (docs/analysis.md#trust).
+var (
+	argTag    = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`)
+	argDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	argCommit = regexp.MustCompile(`^[a-f0-9]{7,64}$`)
+	// argRepo is the OCI distribution reference grammar for a repository:
+	// an optional host[:port], then path components.
+	argRepo = regexp.MustCompile(`^(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?))*(?::[0-9]+)?/)?` +
+		`[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$`)
+)
+
 // analysisBuiltinArgs are the arg values kardinal supplies to a template
-// that declares them.
-func analysisBuiltinArgs(pipeline, env string, b *kardinalv1alpha1.Bundle) map[string]string {
+// that declares them. invalid names each value that does not match its
+// grammar and why; a template that declares one fails the Build.
+func analysisBuiltinArgs(pipeline, env string, b *kardinalv1alpha1.Bundle) (map[string]string, map[string]string) {
+	invalid := map[string]string{}
 	args := map[string]string{"bundle": b.Name, "pipeline": pipeline, "environment": env}
 	if len(b.Spec.Images) > 0 {
 		img := b.Spec.Images[0]
@@ -211,7 +266,28 @@ func analysisBuiltinArgs(pipeline, env string, b *kardinalv1alpha1.Bundle) map[s
 			delete(args, k)
 		}
 	}
-	return args
+	check := func(arg string, re *regexp.Regexp, value string) {
+		if value != "" && !re.MatchString(value) {
+			invalid[arg] = fmt.Sprintf("the Bundle's %s %q does not match %s", arg, value, re)
+			delete(args, arg)
+		}
+	}
+	if len(b.Spec.Images) > 0 {
+		img := b.Spec.Images[0]
+		check("tag", argTag, img.Tag)
+		check("digest", argDigest, img.Digest)
+		switch {
+		case !argRepo.MatchString(img.Repository):
+			invalid["image"] = fmt.Sprintf("the Bundle's image repository %q is not a valid repository", img.Repository)
+		case invalid["tag"] != "" || invalid["digest"] != "":
+			invalid["image"] = "the Bundle's image has an invalid tag or digest"
+		}
+		if invalid["image"] != "" {
+			delete(args, "image")
+		}
+	}
+	check("commit", argCommit, args["commit"])
+	return args, invalid
 }
 
 // analysisRunSpec returns the AnalysisRun spec for tmpl: its metrics,
@@ -221,7 +297,7 @@ func analysisBuiltinArgs(pipeline, env string, b *kardinalv1alpha1.Bundle) map[s
 // arg left without a value is passed without one; Argo Rollouts then
 // fails the run ("args.<name> was not resolved").
 func analysisRunSpec(tmpl AnalysisTemplate, args []kardinalv1alpha1.AnalysisArg,
-	builtins map[string]string) (map[string]interface{}, error) {
+	builtins, invalid map[string]string) (map[string]interface{}, error) {
 	metrics, _ := tmpl.Spec["metrics"].([]interface{})
 	if len(metrics) == 0 {
 		return nil, fmt.Errorf("has no metrics")
@@ -250,6 +326,8 @@ func analysisRunSpec(tmpl AnalysisTemplate, args []kardinalv1alpha1.AnalysisArg,
 		arg := map[string]interface{}{"name": name}
 		if v, ok := given[name]; ok {
 			arg["value"] = v
+		} else if why, bad := invalid[name]; bad {
+			return nil, fmt.Errorf("arg %s: %s", name, why)
 		} else if v, ok := builtins[name]; ok {
 			arg["value"] = v
 		} else {
