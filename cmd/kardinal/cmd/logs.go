@@ -47,7 +47,7 @@ func newLogsCmd() *cobra.Command {
 It shows the PromotionSteps of every Bundle of the pipeline that is not
 Superseded (all of them if those have none), or of the Bundle --bundle names.
 For each PromotionStep, it shows:
-  - Current state (Promoting, WaitingForMerge, HealthChecking, Verified, Failed)
+  - Current state (Promoting, WaitingForMerge, HealthChecking, Verifying, Verified, Failed)
   - Step message (error details, health check results, PR URLs)
   - Step outputs (branch name, PR URL, PR number)
   - Conditions from the status
@@ -220,22 +220,10 @@ func fetchFilteredSteps(ctx context.Context, c sigs_client.Client, ns, pipeline,
 	if bundleFilter == "" {
 		var bundles v1alpha1.BundleList
 		if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err == nil {
-			activeBundles := make(map[string]bool)
-			for _, b := range bundles.Items {
-				if b.Spec.Pipeline == pipeline && b.Status.Phase != "Superseded" {
-					activeBundles[b.Name] = true
-				}
-			}
-			if len(activeBundles) > 0 {
-				var active []v1alpha1.PromotionStep
-				for _, s := range filtered {
-					if activeBundles[s.Labels["kardinal.io/bundle"]] {
-						active = append(active, s)
-					}
-				}
-				if len(active) > 0 {
-					filtered = active
-				}
+			// The current steps (currentSteps): not Halted, or a rejected
+			// change that is live.
+			if active, _ := currentSteps(pipeline, bundles.Items, filtered); len(active) > 0 {
+				filtered = active
 			}
 		}
 	}

@@ -11,6 +11,8 @@ In kardinal-promoter, rollback is not a special operation. It is a forward promo
 
 If there is nothing safe to roll back to (no earlier Verified Bundle, or only ones with the same artifacts as the failing Bundle), the command fails and creates nothing. The failing image is never promoted again.
 
+A [rejected](#reject-a-bundle) Bundle is never a target, and never the source of an image or config commit a rollback restores, even when it was Verified in the environment before it was rejected. Neither is any other Bundle that carries one of its artifacts (the same image digest or tag, or the same config commit). `--to` such a Bundle is refused.
+
 ### Images the target does not name
 
 A Bundle does not have to name every image of the application. If the deployed Bundle `v2` names only `b:2`, and the target `v1` names only `a:1`, copying `v1` would leave `b:2`, the failing version, in place. So for each image repository the deployed Bundle names and the target does not, the rollback Bundle also carries the version from the newest Bundle that was Verified in the environment, other than the deployed one and the ones an earlier rollback rolled back from.
@@ -81,6 +83,97 @@ kardinal rollback my-app --env prod --to my-app-v1-27-0
 ```
 
 The `--to` flag names the Bundle to roll back to. It must exist in the Bundle history (within `historyLimit`), belong to the pipeline, carry images or a config ref, differ from what is deployed now, and have been Verified in the environment; otherwise the command fails and creates nothing. `--to` can name a Bundle that an earlier rollback rolled back from. Images the deployed Bundle changed and the `--to` Bundle does not name are filled in the same way as without `--to`.
+
+### Roll back and hold
+
+```bash
+kardinal rollback my-app --env prod --hold --reason "INC-4521: v1.29.0 leaks connections" [--hold-expires-in 24h]
+```
+
+Output:
+```
+Rolling back my-app in prod from my-app-v1-29-0 to my-app-v1-28-0 (ghcr.io/myorg/my-app:v1.28.0)
+Bundle my-app-rollback-3f9a1c created (rollbackOf=my-app-v1-28-0)
+Environment prod held on my-app-rollback-3f9a1c: no other Bundle promotes there until: kardinal release-hold my-app --env prod
+Gates of prod that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.
+Track with: kardinal explain my-app --env prod
+```
+
+`--hold` restores the environment and keeps it there. Without it, the next Bundle CI creates
+promotes over the rollback as soon as its gates pass, which is usually not what you want while
+an incident is open. While the environment is held:
+
+- **No other Bundle promotes into it.** Bundles created after the rollback still promote to the
+  environments before it, then wait. Environments after the held one wait too, since they
+  depend on it. A step of another Bundle that already exists in the held environment:
+    - in `Pending` or `Promoting` holds before its next git step, with the message
+      `environment prod is held on rollback my-app-rollback-3f9a1c (INC-4521: ...) — release with: kardinal release-hold my-app --env prod`;
+    - in `WaitingForMerge` is cancelled as supersession cancels one: its PR is closed with a
+      comment naming the hold, and the step fails with that message;
+    - in `HealthChecking` has already merged, so it finishes. The rollback, a newer Bundle,
+      supersedes it.
+- **The rollback is never superseded** by a newer Bundle. `historyLimit` does not delete it, its
+  `rollbackOf`, or the Bundles that deployed its artifacts, and they do not count toward the
+  limit.
+- **The rollback passes the PolicyGates of the held environment that would block it**, if the
+  controller can verify it. See [what is exempt](policy-gates.md#rollback-hold-exemption).
+  The exemption is never silent. The gate's reason starts with
+  `EXEMPT: rollback my-app-rollback-3f9a1c holds prod (by alice: INC-4521: ...); without the hold: <the gate's own result>`.
+  The flip is recorded as a `GateEvaluated` AuditEvent (`kardinal audit`), and the gate gets a
+  `GateExempted` Warning Event. Gates of the environments before the held one are not exempt:
+  the rollback passes them as any Bundle does, or through
+  [`kardinal override`](#rollback-and-policygates). A pause (`kardinal pause`) still holds it.
+- **Every hold change is audited.** The controller writes a `HoldCreated` AuditEvent when a hold
+  appears and a `HoldReleased` one when it goes, however it was changed: the CLI, the UI or
+  `kubectl`.
+
+`--reason` is required with `--hold`. The hold records who held the environment and when.
+`kardinal explain my-app --env prod` and the UI show it. An environment holds at most one rollback:
+a second `--hold` on the same environment is refused until the first is released.
+`--hold-expires-in` ends the hold by itself. From `expiresAt` on, the hold counts as absent: the
+exemption ends, steps of other Bundles are no longer held, and the controller removes the entry
+and writes `HoldReleased`.
+
+Release the hold when the fix is ready:
+
+```bash
+kardinal release-hold my-app --env prod
+```
+
+The newest Bundle that was held back then promotes into the environment through its gates as
+usual. The rollback's gates are evaluated without the exemption again.
+
+In the UI, the rollback dialog has a **Hold** option with a reason field and an optional end
+(4 hours, 24 hours, 3 days). A held environment shows a **Held** badge with the reason and a
+**Release hold** action.
+
+#### Who may hold
+
+The hold is the Pipeline field [`spec.holds`](pipeline-reference.md#specholds). The chart
+installs the ValidatingAdmissionPolicy `<release>-hold-writes`, which refuses any change to
+`spec.holds` unless the caller has `update` on the virtual subresource `pipelines/hold`. Plain
+`update` on the Pipeline is not enough. Every new entry must name the caller in `createdBy`
+(the CLI reads your Kubernetes user name with a SelfSubjectReview) and have a `createdAt`. An
+entry is added or removed, never edited in place. The UI checks `pipelines/hold` for the UI user
+before it writes the hold, and records that user in `createdBy`. Grant it like this:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: incident-commander
+  namespace: my-team
+rules:
+  - apiGroups: ["kardinal.io"]
+    resources: ["pipelines/hold"]
+    verbs: ["update"]
+  - apiGroups: ["kardinal.io"]
+    resources: ["pipelines"]
+    verbs: ["get", "update"]
+  - apiGroups: ["kardinal.io"]
+    resources: ["bundles"]
+    verbs: ["get", "list", "create"]
+```
 
 `--emergency` is deprecated and has no effect. It never bypassed a gate. It prints a warning, the rollback runs as without it, and the flag will be removed in the next minor release. To let a rollback through a blocking gate, use [`kardinal override`](#rollback-and-policygates).
 
@@ -180,7 +273,7 @@ The rollback commit is a new commit, not a `git revert`. The history is always a
 
 Rollback Bundles go through the same PolicyGate evaluation as forward promotions. If the `no-weekend-deploys` gate is active and it is a weekend, the rollback PR will also be blocked.
 
-Rollback Bundles have no gate exemption. A skip-permission gate does not help: it only lets a Bundle skip an environment through `intent.skipEnvironments`, and a rollback does not skip the environment it rolls back.
+A rollback Bundle has no gate exemption unless it was created with `--hold` ([Roll back and hold](#roll-back-and-hold)). Then it passes the gates that would block it, each pass recorded with an `EXEMPT` reason, an AuditEvent and a Warning Event. A skip-permission gate does not help: it only lets a Bundle skip an environment through `intent.skipEnvironments`, and a rollback does not skip the environment it rolls back.
 
 To let a rollback through a blocking gate, use a break-glass override. It is time-limited and recorded in the audit trail:
 
@@ -231,6 +324,35 @@ For example, in a pipeline `dev -> staging -> [prod-us, prod-eu]`, if `prod-us` 
 | Argo Rollouts | Automatic in-cluster rollback on AnalysisRun failure (no cross-env awareness) |
 
 ---
+
+## Reject a Bundle
+
+A Bundle that must never reach another environment, for example a build with a known vulnerability, can be rejected:
+
+```bash
+kardinal reject my-app-v1-29-0 --reason "CVE-2026-1234 in the base image"
+```
+
+```
+Bundle my-app-v1-29-0 rejected by alice@example.com (was Promoting): CVE-2026-1234 in the base image
+It is never promoted again; its unfinished steps are cancelled.
+An environment that already runs it keeps it: roll back with kardinal rollback my-app --env <env>.
+```
+
+`kardinal reject` writes `spec.rejected` on the Bundle: the reason, the time and your Kubernetes username, which the CLI reads from the API server (a SelfSubjectReview, the call `kubectl auth whoami` makes). The chart's ValidatingAdmissionPolicy admits a rejection only when `spec.rejected.by` is the requesting user, so a rejection always names who made it (see [Verified identity](guides/security.md#verified-identity)). That check is the admission policy's: the CRD alone does not check `by`, so a cluster where the kardinal CRDs are installed without the chart's policy (`kubectl apply -f config/crd/bases`) records whatever name the writer puts there. Rejecting is final: the CRD refuses to change or remove `spec.rejected`.
+
+What happens, whatever phase the Bundle was in (Verified and Superseded included):
+
+- The Bundle turns `Rejected`. Its `Ready` condition is `False` with reason `Rejected`, and its `Rejected` condition names who rejected it and why. A Warning Event `Rejected` is emitted.
+- No new PromotionStep is created for it: every step of the Bundle's Graph holds on the Bundle phase, the same hold a Superseded Bundle gets. The Graph and the existing steps stay, as the record of what ran.
+- Its steps that have not delivered the change (Pending, Promoting, or WaitingForMerge with the PR still open) fail with `bundle <name> was rejected — promotion cancelled` (or `... rejected before this step started` for a step that never started), and an open PR is closed with a comment naming who rejected the Bundle. A started step writes a `PromotionRejected` AuditEvent.
+- A step that already delivered the change keeps going: a HealthChecking step keeps checking health, and a WaitingForMerge step whose PR merged before the rejection moves to HealthChecking as any merged step does. The change is live in that environment, so it is health-checked (`onHealthFailure` applies) and counts as what the environment runs; reject does not revert it.
+- A rejection is about the artifacts. `kardinal rollback`, the UI Rollback button, `onHealthFailure: rollback` and RollbackPolicy never roll back to the Bundle, or to any Bundle that carries one of its images or its config commit, and `kardinal promote` never copies one. A Subscription that sees one of those artifacts again creates no Bundle for it: its status message names the rejected Bundle. A Bundle created another way (CI, the CLI, the Bundle API) that carries one, and has not finished promoting, turns `Rejected` too, with the condition reason `RejectedArtifact` naming the rejected Bundle; its `spec.rejected` stays unset.
+- A rejection rejects what the Bundle changed, not everything it names. When the controller marks the Bundle `Rejected` it records the rejected artifacts in `status.rejectedArtifacts`: the images (and config commit) that differ from the Bundle Verified before it in each environment it reached (`comparedWith` names those Bundles; an environment counts once its change got past the merge, even if the health check then failed, but not when it failed before the merge), or, if it reached none, in each environment it targeted. Rejecting `app:2` + `sidecar:s1`, when the Bundle before ran `app:1` + `sidecar:s1`, rejects `app:2` only: a rollback to that Bundle, or any Bundle with `sidecar:s1`, stays possible, while a Bundle reusing `app:2` is refused. With no Verified Bundle before it in one of those environments, every artifact is rejected. Until the set is recorded (a moment after `kardinal reject`) a rollback treats every artifact as rejected, and no other Bundle is marked `RejectedArtifact`.
+- An image is matched by digest when the rejected Bundle's image has one: rejecting `r/app:latest@sha256:bad` blocks that digest under any tag, and not a fixed image pushed later under the same moving tag (`r/app:latest@sha256:fixed`). A rejected image without a digest is known only by its tag, so it blocks every image with that repository and tag.
+- A rejected Bundle supersedes nothing, and rejecting it does not bring back an older Bundle it already superseded: create a new Bundle to promote again.
+
+To take a rejected Bundle out of an environment that already runs it, roll that environment back. `historyLimit` never deletes a rejected Bundle (`spec.rejected`), whatever its phase, and does not count it: it is the record that its artifacts must not be promoted again (delete it by hand to lift the rejection). A Bundle that is `Rejected` only because it carries a rejected artifact (reason `RejectedArtifact`) adds nothing to that record and is history like a Superseded one, unless its change is live in an environment (see below): then it is kept. `kardinal get bundles --active` hides Rejected Bundles, and the pipeline views (`kardinal get pipelines`, `status`, `get steps`, `logs`, `explain`, the UI) treat them as history, as they treat Superseded ones, except where the rejected change is live: in an environment where a step of the Rejected Bundle is HealthChecking or Verified, that Bundle stays the current one there, marked Rejected (`<bundle>(Rejected)` in `kardinal get pipelines`), with the hint `rejected change is live; roll back (kardinal rollback <pipeline> --env <env>)`, and the Pipeline is `Degraded` until a rollback or a newer Bundle replaces it. This holds for a Bundle whose Graph was retired too: its `status.retiredSteps` say where it is live, and rejecting a retired Bundle works like rejecting any other. Rejecting from the UI is not available yet: the UI writes as the controller, not as you, so the identity policy would refuse it.
 
 ## Pause and Resume
 

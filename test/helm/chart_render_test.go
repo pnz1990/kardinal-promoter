@@ -165,25 +165,32 @@ var allFeatures = []string{
 	"--set", "rbac.integrationTestJobs=true",
 }
 
-// ── C08-api-config-04, -16, -21: no ValidatingAdmissionPolicy ─────────────────
+// ── C08-api-config-04, -16, -21: only the identity and hold admission policies ─
 
-// TestChartRendersNoValidatingAdmissionPolicy: the chart's VAPs denied every
-// Pipeline (spec.gitRepo does not exist), denied promote/rollback Bundles and
-// valid durations, needed Kubernetes 1.30, and collided across releases.
-// Validation lives in the CRD schema (api/v1alpha1/crd_schema_test.go);
-// validatingAdmissionPolicy.enabled is kept as a deprecated no-op so existing
-// `--set validatingAdmissionPolicy.enabled=false` installs keep working.
-func TestChartRendersNoValidatingAdmissionPolicy(t *testing.T) {
+// TestChartRendersOnlyIdentityAdmissionPolicies: the chart's old VAPs denied
+// every Pipeline (spec.gitRepo does not exist), denied promote/rollback
+// Bundles and valid durations, and collided across releases. Validation lives
+// in the CRD schema (api/v1alpha1/crd_schema_test.go). The only admission
+// objects are the identity policies (identity-admission.yaml) and the
+// hold-writes policy (hold-admission.yaml, #1528), named per release and
+// shipped whatever validatingAdmissionPolicy.enabled says, which stays a
+// deprecated no-op so existing --set values keep working.
+func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 	for _, args := range [][]string{
 		nil,
 		{"--set", "validatingAdmissionPolicy.enabled=true"},
 		{"--set", "validatingAdmissionPolicy.enabled=false"},
 	} {
-		docs := render(t, "kardinal-promoter", args...)
-		for _, d := range docs {
-			assert.NotContains(t, d.APIVersion, "admissionregistration.k8s.io",
-				"args %v: chart must not render %s %s", args, d.Kind, d.Name)
+		var got []string
+		for _, d := range render(t, "kardinal-promoter", args...) {
+			if strings.HasPrefix(d.APIVersion, "admissionregistration.k8s.io") {
+				got = append(got, d.Kind+"/"+d.Name)
+			}
 		}
+		assert.ElementsMatch(t, append(identityAdmissionObjects("kardinal-promoter"),
+			"ValidatingAdmissionPolicy/kardinal-promoter-hold-writes",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-hold-writes",
+		), got, "args %v", args)
 	}
 }
 
@@ -386,7 +393,7 @@ type apiAccess struct {
 var kardinalNamespacedKinds = []string{
 	"pipelines", "bundles", "policygates", "rollbackpolicies", "subscriptions",
 	"promotionsteps", "prstatuses", "metricchecks",
-	"scheduleclocks", "notificationhooks",
+	"scheduleclocks", "notificationhooks", "hookruns", "imageverifications",
 }
 
 var rwVerbs = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
@@ -412,8 +419,11 @@ func controllerAccess() []apiAccess {
 		{"", "pods", []string{"list"}, inWatched, "", "health adapter resource: podProblemLookup (uncached dynamic List of the new ReplicaSet's pods)"},
 		{"argoproj.io", "applications", readVerbs, inWatched, "", "health adapter argocd, argocd update strategy"},
 		{"argoproj.io", "rollouts", readVerbs, inWatched, "", "health adapter argoRollouts"},
+		{"argoproj.io", "analysistemplates", []string{"get"}, inWatched, "", "translator analysis.go collectAnalyses (uncached Get)"},
+		{"argoproj.io", "clusteranalysistemplates", []string{"get"}, inCluster, "", "translator analysis.go collectAnalyses (uncached Get)"},
 		{"kustomize.toolkit.fluxcd.io", "kustomizations", readVerbs, inWatched, "", "health adapter flux"},
 		{"flagger.app", "canaries", readVerbs, inWatched, "", "health adapter flagger"},
+		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "hookrun reconciler.go: hook Jobs (Owns, create, delete on timeout)"},
 		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "create", "update", "patch", "delete"}, inRelease, "", "leader election"},
 		{"", "configmaps", []string{"create"}, inRelease, "", "ensureVersionConfigMap"},
 		{"", "configmaps", []string{"get", "update", "patch"}, inRelease, "kardinal-version", "ensureVersionConfigMap"},
@@ -539,11 +549,9 @@ func TestChartRBACLeastPrivilege(t *testing.T) {
 		{releaseNS, "", "secrets", "list", ""},
 		{releaseNS, "", "secrets", "watch", ""},
 		{"team-a", "rbac.authorization.k8s.io", "clusterroles", "bind", "cluster-admin"},
-		// The integration-test step was removed (#1278); rbac.integrationTestJobs
-		// is a no-op, so even with it set the controller gets no Job access.
-		{"team-a", "batch", "jobs", "create", ""},
-		{"team-a", "batch", "jobs", "delete", ""},
-		{releaseNS, "batch", "jobs", "create", ""},
+		// Hook Jobs are created and deleted, never changed (docs/hooks.md).
+		{"team-a", "batch", "jobs", "update", ""},
+		{"team-a", "batch", "jobs", "patch", ""},
 	}
 	for _, d := range denied {
 		assert.False(t, v.allowed(releaseNS, sa, d.ns, d.group, d.resource, d.verb, d.name),
@@ -858,6 +866,8 @@ var everyValue = []string{
 	"--set", "scm.provider=gitlab",
 	"--set", "scm.apiURL=https://gitlab.example.com",
 	"--set", "scm.allowedRepositories={gitlab.example.com/acme/*,gitlab.example.com/platform/**}",
+	"--set", "scm.gatesCommitStatus.enabled=false",
+	"--set", "scm.gatesCommitStatus.context=acme/gates",
 	"--set", "github.secretRef.name=scm-token",
 	"--set", "webhook.secretRef.name=webhook-secret",
 	"--set", "bundleAPI.tokenSecretRef.name=bundle-token",
@@ -894,6 +904,8 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 		"scm-provider":             "gitlab",
 		"scm-api-url":              "https://gitlab.example.com",
 		"scm-allowed-repositories": "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
+		"gates-commit-status":      "false",
+		"gates-status-context":     "acme/gates",
 		"ui-tokenreview-auth":      "true",
 		"cors-allowed-origins":     "https://a.example.com,https://b.example.com",
 	}
@@ -1386,4 +1398,34 @@ func TestChartMetricCheckQuerySlots(t *testing.T) {
 		assert.Contains(t, out, "/metricCheck/querySlots/", bad)
 		assert.Regexp(t, `minimum|greater than or equal to 1`, out, bad)
 	}
+}
+
+// TestChartControllerMemoryDefaults (#1553): the default memory request and
+// limit fit the loads the scale suite measured (peak 409 MiB), so a default
+// install is not OOMKilled at 200 Pipelines as the old 128Mi limit was.
+func TestChartControllerMemoryDefaults(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	limit, request := c.Resources.Limits.Memory(), c.Resources.Requests.Memory()
+	assert.Equal(t, "1Gi", limit.String())
+	assert.Equal(t, "256Mi", request.String())
+	assert.GreaterOrEqual(t, limit.Value(), int64(2*409<<20), "at least twice the largest measured peak")
+}
+
+// TestChartControllerMemoryLimitEnv (#1553): the controller gets its memory
+// limit from the downward API, from which it sets GOMEMLIMIT to 90%.
+func TestChartControllerMemoryLimitEnv(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	var found bool
+	for _, e := range c.Env {
+		if e.Name != "KARDINAL_MEMORY_LIMIT" {
+			continue
+		}
+		found = true
+		require.NotNil(t, e.ValueFrom)
+		require.NotNil(t, e.ValueFrom.ResourceFieldRef)
+		assert.Equal(t, "limits.memory", e.ValueFrom.ResourceFieldRef.Resource)
+		assert.Equal(t, "controller", e.ValueFrom.ResourceFieldRef.ContainerName)
+		assert.Equal(t, "1", e.ValueFrom.ResourceFieldRef.Divisor.String())
+	}
+	assert.True(t, found, "KARDINAL_MEMORY_LIMIT env")
 }

@@ -311,8 +311,9 @@ func (g *GitLabProvider) do(ctx context.Context, method, path string, body, resu
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		g.circuits.Record(owner, started, resp, nil)
-		return newAPIError("GitLab", method, path, resp, raw)
+		apiErr := newAPIError("GitLab", method, path, resp, raw)
+		g.circuits.RecordAPIError(owner, started, resp, apiErr)
+		return apiErr
 	}
 
 	g.circuits.Record(owner, started, resp, nil)

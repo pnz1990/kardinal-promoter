@@ -323,7 +323,7 @@ func TestScheduleClockWatchOnlyTicks(t *testing.T) {
 		InformersByGVK: map[schema.GroupVersionKind]toolscache.SharedIndexInformer{gv.WithKind("ScheduleClock"): clocks}}
 	// Every watched kind has its informer up front: the watches start in
 	// parallel, and FakeInformers adds a missing informer without a lock.
-	for _, kind := range []string{"PolicyGate", "MetricCheck", "ChangeWindow", "PromotionStep"} {
+	for _, kind := range []string{"PolicyGate", "MetricCheck", "ChangeWindow", "PromotionStep", "Pipeline"} {
 		informers.InformersByGVK[gv.WithKind(kind)] = controllertest.NewFakeInformer(controllertest.Synced)
 	}
 	var gateLists atomic.Int32 // the clock mapper lists the gates to enqueue

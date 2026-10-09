@@ -137,6 +137,22 @@ func (r *CircuitRegistry) Record(owner string, started time.Time, resp *http.Res
 	}
 }
 
+// RecordAPIError records an error response the way Record does, but also
+// reads apiErr: GitHub can send a secondary rate limit as a 403 whose JSON
+// message is the only signal (APIError.Transient, isGitHubRateLimitMessage;
+// other providers' bodies are not read), and that counts against the shared
+// quota circuit like any other exhausted limit. started is the call's start
+// time, as for Record.
+func (r *CircuitRegistry) RecordAPIError(owner string, started time.Time, resp *http.Response, apiErr *APIError) {
+	if resp != nil && resp.StatusCode == http.StatusForbidden && apiErr != nil && apiErr.Transient &&
+		!IsTransientResponse(resp) && !IsQuotaExhausted(resp) {
+		r.quota.RecordFailureFrom(started, time.Time{})
+		r.owner(owner).cancelProbe()
+		return
+	}
+	r.Record(owner, started, resp, nil)
+}
+
 // IsQuotaExhausted reports whether resp says the token's rate limit is used
 // up: X-RateLimit-Remaining (GitHub, Forgejo) or RateLimit-Remaining (GitLab)
 // is 0 on an error response, the response is a 429, or it is a 403 with

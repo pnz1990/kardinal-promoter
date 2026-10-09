@@ -358,8 +358,9 @@ func (b *BitbucketProvider) do(ctx context.Context, method, path string, body, r
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		b.circuits.Record(owner, started, resp, nil)
-		return newAPIError("bitbucket", method, path, resp, raw)
+		apiErr := newAPIError("bitbucket", method, path, resp, raw)
+		b.circuits.RecordAPIError(owner, started, resp, apiErr)
+		return apiErr
 	}
 
 	b.circuits.Record(owner, started, resp, nil)
