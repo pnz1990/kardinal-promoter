@@ -57,7 +57,7 @@ const (
 	DefaultGlobalSlots    = 12
 	DefaultNamespaceSlots = 1
 	// busyRetry is how soon a check that found no free query slot asks again.
-	busyRetry = time.Second
+	busyRetry = 250 * time.Millisecond
 )
 
 // MetricsProvider queries a Prometheus-compatible backend and returns a

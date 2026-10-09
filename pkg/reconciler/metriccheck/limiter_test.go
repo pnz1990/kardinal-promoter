@@ -66,6 +66,26 @@ func TestLimiter_FIFO(t *testing.T) {
 	assert.Zero(t, l.Waiting())
 }
 
+// TestLimiter_NoNeedlessWait: with global slots to spare, a waiter in one
+// namespace does not hold up a check of another; within a namespace the
+// earlier waiter still goes first.
+func TestLimiter_NoNeedlessWait(t *testing.T) {
+	l := metriccheck.NewLimiter(4, 1)
+	holdA, ok := l.TryAcquire(nn("a", "1"))
+	require.True(t, ok)
+	_, ok = l.TryAcquire(nn("a", "2"))
+	require.False(t, ok, "namespace a is busy")
+	holdA()
+	rel, ok := l.TryAcquire(nn("b", "1"))
+	assert.True(t, ok, "a/2 waiting does not block namespace b while slots are free")
+	rel()
+	_, ok = l.TryAcquire(nn("a", "3"))
+	assert.False(t, ok, "a/2 waited first in namespace a")
+	rel, ok = l.TryAcquire(nn("a", "2"))
+	require.True(t, ok)
+	rel()
+}
+
 // TestLimiter_Concurrent: under contention the caps are never exceeded.
 func TestLimiter_Concurrent(t *testing.T) {
 	l := metriccheck.NewLimiter(3, 1)

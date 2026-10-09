@@ -17,8 +17,8 @@ import (
 //   - at most Global queries run at once;
 //   - at most PerNamespace queries of one namespace run at once;
 //   - slots are handed out first come, first served: a check that finds no
-//     slot joins a FIFO queue, and a later check may not take a slot while
-//     an earlier waiting check that could use it is still waiting.
+//     slot joins a FIFO queue, and a later check takes a slot only if one is
+//     left for every earlier waiting check that could use one.
 //
 // It never blocks: TryAcquire reports at once whether the caller may query,
 // so a waiting check does not hold a reconcile worker. A waiting check must
@@ -45,7 +45,7 @@ type waiter struct {
 // queueTTL is how long a waiting check keeps its place without asking again:
 // a little over two busyRetry periods, so a waiter that stopped asking (its
 // reconcile failed or it was deleted) holds up the queue only briefly.
-const queueTTL = 3 * time.Second
+const queueTTL = 2 * time.Second
 
 // NewLimiter returns a Limiter with global and per-namespace caps.
 func NewLimiter(global, perNamespace int) *Limiter {
@@ -88,19 +88,22 @@ func (l *Limiter) TryAcquire(key types.NamespacedName) (release func(), ok bool)
 
 	free := func(ns string) bool { return l.running[ns] < l.PerNamespace }
 	if l.total < l.Global && free(key.Namespace) {
-		// FIFO: an earlier waiter that could run now goes first.
+		// FIFO: the earlier waiters that could run now keep their slots;
+		// this check may take one only if a global slot is left after them.
 		limit := len(l.queue)
 		if pos >= 0 {
 			limit = pos
 		}
-		first := true
+		ahead, sameNS := 0, false
 		for _, w := range l.queue[:limit] {
-			if free(w.key.Namespace) {
-				first = false
-				break
+			switch {
+			case w.key.Namespace == key.Namespace:
+				sameNS = true
+			case free(w.key.Namespace):
+				ahead++
 			}
 		}
-		if first {
+		if !sameNS && l.total+ahead < l.Global {
 			if pos >= 0 {
 				l.queue = append(l.queue[:pos], l.queue[pos+1:]...)
 			}
