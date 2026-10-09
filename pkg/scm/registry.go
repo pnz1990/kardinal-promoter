@@ -587,12 +587,17 @@ func (r *Registry) Validate(ctx context.Context, spec ProviderSpec) []string {
 			problems = append(problems, fmt.Sprintf("spec.allowedNamespaces: %v", err))
 		}
 	}
-	r.forgetSecret(types.NamespacedName{Namespace: spec.SecretNamespace, Name: spec.Spec.SecretRef.Name})
+	// The Secrets Validate reads are cached like the ones a client reads:
+	// recorded for the provider, so Evict forgets them when it is deleted.
+	tokenNN := types.NamespacedName{Namespace: spec.SecretNamespace, Name: spec.Spec.SecretRef.Name}
+	r.recordSecrets(spec, tokenNN)
+	r.forgetSecret(tokenNN)
 	if _, _, err := r.secretValue(ctx, spec.SecretNamespace, spec.Spec.SecretRef, "token"); err != nil {
 		problems = append(problems, "spec.secretRef: "+trimSentinel(err, ErrProviderConfig))
 	}
 	if ref := spec.Spec.WebhookSecretRef; ref != nil {
 		ns := webhookSecretNamespace(spec)
+		r.recordSecrets(spec, types.NamespacedName{Namespace: ns, Name: ref.Name})
 		r.forgetSecret(types.NamespacedName{Namespace: ns, Name: ref.Name})
 		if _, _, err := r.secretValue(ctx, ns, *ref, "secret"); err != nil {
 			problems = append(problems, "spec.webhookSecretRef: "+trimSentinel(err, ErrProviderConfig))

@@ -5,7 +5,9 @@ package scmprovider_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scmprovider"
@@ -116,11 +119,46 @@ func TestReconcile_ClusterScmProvider(t *testing.T) {
 	}
 }
 
-// TestReconcile_Gone: a provider that does not exist ends the reconcile.
+// TestReconcile_Gone: a provider that does not exist ends the reconcile,
+// and a deleted provider's Secrets leave the shared Registry's cache: the
+// ones its Ready check read are recorded for it (QA #1517), so after the
+// delete they are read from the API again instead of served from memory.
 func TestReconcile_Gone(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme(t)).Build()
 	res, err := (&scmprovider.Reconciler{Client: c}).Reconcile(context.Background(),
 		ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "a", Name: "b"}})
 	require.NoError(t, err)
 	assert.Zero(t, res.RequeueAfter)
+
+	ctx := context.Background()
+	p := &v1alpha1.ScmProvider{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "gh", UID: "u1"},
+		Spec: v1alpha1.ScmProviderSpec{Type: "github", SecretRef: v1alpha1.ScmSecretKeyRef{Name: "tok"},
+			WebhookSecretRef: &v1alpha1.ScmSecretKeyRef{Name: "hook"}}}
+	var secretGets atomic.Int32
+	c = fake.NewClientBuilder().WithScheme(scheme(t)).
+		WithObjects(p, secret("team-a", "tok", "token", "t"), secret("team-a", "hook", "secret", "s")).
+		WithStatusSubresource(p).
+		WithInterceptorFuncs(interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Secret); ok {
+				secretGets.Add(1)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		}}).Build()
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	reg := &scm.Registry{Client: c, Now: func() time.Time { return now }}
+	r := &scmprovider.Reconciler{Client: c, Registry: reg}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "team-a", Name: "gh"}}
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	spec, err := scm.GetProvider(ctx, c, "team-a", v1alpha1.KindScmProvider, "gh")
+	require.NoError(t, err)
+
+	reads := secretGets.Load()
+
+	require.NoError(t, c.Delete(ctx, p))
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	_, err = reg.WebhookSecret(ctx, spec)
+	require.NoError(t, err)
+	assert.Equal(t, reads+1, secretGets.Load(), "evicted with the provider: read again")
 }
