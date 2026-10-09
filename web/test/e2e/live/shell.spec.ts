@@ -1,7 +1,7 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 //
-// UI-SHELL-01: the keyboard shortcuts, the dark and light themes, the deep
+// UI-SHELL-01 and UI-KEYBOARD-01: the skip link, the keyboard shortcuts, the dark and light themes, the deep
 // links and browser history, and the polling with its "refreshed ago"
 // indicator. Go test: TestUI_BrowserShell (test/e2e/live/ui_browser_test.go).
 //
@@ -58,6 +58,25 @@ async function secondsAgo(page: Page): Promise<number> {
   const m = label?.match(/^Data (\d+)s ago$/)
   return m ? Number(m[1]) : -1
 }
+
+test('the first Tab stop skips to the main content, and the fleet board moves with the arrow keys', async ({ page }) => {
+  await page.goto(`${base}/ui/`)
+  const board = page.getByRole('region', { name: 'Fleet' })
+  await expect(board).toBeVisible()
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('Tab')
+  const skip = page.getByRole('link', { name: 'Skip to main content' })
+  await expect(skip).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.locator('#main-content')).toBeFocused()
+
+  // The stations of a line are one Tab stop; Enter opens the pipeline.
+  const line = board.getByRole('group', { name: new RegExp(`^${PIPELINE} environments`) }).first()
+  await expect(line.locator('.fleet-station[tabindex="0"]')).toHaveCount(1)
+  await line.locator('.fleet-station[tabindex="0"]').focus()
+  await page.keyboard.press('Enter')
+  await expect(heading(page)).toHaveText(PIPELINE)
+})
 
 test('keyboard shortcuts: / focuses the filter, ? shows the help, r refreshes, Esc closes the open panel', async ({ page }) => {
   await openPipeline(page, base, ns)
