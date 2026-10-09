@@ -430,3 +430,33 @@ func TestRenderPR_PrintTheDataIsRefused(t *testing.T) {
 	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20), "no formatting of the data")
 	assert.Less(t, elapsed, 2*time.Second)
 }
+
+// TestRenderPR_EvidenceRenderedOnce: the template functions are built once
+// per RenderPR and the evidence sections render on first use, so 80 small
+// templates over a Bundle of 100 images (the CRD maximum) do not render the
+// default body 80 times.
+//
+// Covers SCM-PRCTL-TPL-01.
+func TestRenderPR_EvidenceRenderedOnce(t *testing.T) {
+	body := prTemplateBody()
+	body.Bundle.Images = nil
+	for i := 0; i < 100; i++ {
+		body.Bundle.Images = append(body.Bundle.Images, v1alpha1.ImageRef{Repository: fmt.Sprintf("ghcr.io/acme/svc-%03d", i), Tag: "1.0.0"})
+	}
+	cfg := &v1alpha1.PRConfig{BodyTemplate: "{{ evidence }}{{ provenanceTable }}"}
+	for i := 0; i < 80; i++ {
+		// 80 templates, 40 of them rendering one entry each, under the
+		// list cap of 50.
+		cfg.Labels = append(cfg.Labels, fmt.Sprintf("{{ if provenanceTable }}l%d{{ end }}", i%40))
+	}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	_, err := scm.RenderPR(cfg, "t", body)
+	elapsed := time.Since(start)
+	runtime.ReadMemStats(&after)
+	require.NoError(t, err)
+	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<20))
+	assert.Less(t, elapsed, 2*time.Second)
+}

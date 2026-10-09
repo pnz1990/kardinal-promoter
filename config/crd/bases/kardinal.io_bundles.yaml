@@ -68,22 +68,28 @@ spec:
                   when the bundle type is "config" or "mixed".
                 properties:
                   commitSHA:
-                    description: CommitSHA is the exact commit SHA for this config
-                      snapshot.
+                    description: |-
+                      CommitSHA is the exact commit SHA for this config snapshot: 4 to 64
+                      hex characters.
+                    pattern: ^[0-9a-fA-F]{4,64}$
                     type: string
                   gitRepo:
                     description: GitRepo is the GitOps repository URL.
                     type: string
                 type: object
               images:
-                description: Images lists the container images included in this Bundle.
+                description: |-
+                  Images lists the container images included in this Bundle, at most
+                  100.
                 items:
                   description: ImageRef identifies a container image by repository,
                     tag, and/or digest.
                   properties:
                     digest:
-                      description: Digest is the image digest (sha256:...).
+                      description: Digest is the image digest (sha256:...), in the
+                        OCI digest grammar.
                       maxLength: 256
+                      pattern: ^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$
                       type: string
                     repository:
                       description: Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
@@ -91,13 +97,16 @@ spec:
                       minLength: 1
                       type: string
                     tag:
-                      description: Tag is the image tag (at most 128 characters, the
-                        OCI limit).
+                      description: |-
+                        Tag is the image tag, in the OCI distribution grammar: up to 128
+                        characters of [A-Za-z0-9_.-], not starting with "." or "-".
                       maxLength: 128
+                      pattern: ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$
                       type: string
                   required:
                   - repository
                   type: object
+                maxItems: 100
                 type: array
               intent:
                 description: Intent declares optional targeting and skip overrides
@@ -132,8 +141,11 @@ spec:
                       Bundle.
                     type: string
                   commitSHA:
-                    description: CommitSHA is the application source commit that produced
-                      this Bundle.
+                    description: |-
+                      CommitSHA is the application source commit that produced this Bundle:
+                      4 to 64 hex characters, or an image digest (a Subscription records
+                      the digest it found).
+                    pattern: ^([0-9a-fA-F]{4,64}|[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,})$
                     type: string
                   rollbackOf:
                     description: RollbackOf is the name of the Bundle this Bundle

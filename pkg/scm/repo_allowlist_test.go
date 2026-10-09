@@ -389,3 +389,40 @@ func TestGuard_ForwardsPRControls(t *testing.T) {
 	}
 	assert.Len(t, calls, 3, "nothing for another repository reached the provider")
 }
+
+// autoMergeSCM is a provider that records the auto-merge calls reaching it.
+type autoMergeSCM struct {
+	scm.SCMProvider
+	enabled, disabled []string
+}
+
+func (a *autoMergeSCM) PRSupport() scm.PRSupport { return scm.PRSupport{AutoMerge: true} }
+func (a *autoMergeSCM) RequestReviewers(context.Context, string, int, []string, []string) error {
+	return nil
+}
+func (a *autoMergeSCM) AddAssignees(context.Context, string, int, []string) error { return nil }
+func (a *autoMergeSCM) EnableAutoMerge(_ context.Context, repo string, n int, opts scm.MergeOptions) error {
+	a.enabled = append(a.enabled, repo+"/"+opts.Method)
+	return nil
+}
+func (a *autoMergeSCM) DisableAutoMerge(_ context.Context, repo string, _ int) error {
+	a.disabled = append(a.disabled, repo)
+	return nil
+}
+
+// TestGuard_ForwardsAutoMerge: behind the allowlist Guard, enabling and
+// disabling auto-merge reach the provider, options included, for an allowed
+// repository only.
+func TestGuard_ForwardsAutoMerge(t *testing.T) {
+	a, err := scm.ParseRepositoryAllowlist([]string{"github.com/acme/*"})
+	require.NoError(t, err)
+	inner := &autoMergeSCM{}
+	ctl := a.Guard(inner, "github.com").(scm.PRController)
+	assert.True(t, ctl.PRSupport().AutoMerge)
+	ctx := context.Background()
+	require.NoError(t, ctl.EnableAutoMerge(ctx, "acme/app", 1, scm.MergeOptions{Method: "squash"}))
+	require.NoError(t, ctl.DisableAutoMerge(ctx, "acme/app", 1))
+	assert.ErrorIs(t, ctl.EnableAutoMerge(ctx, "evil/app", 1, scm.MergeOptions{}), scm.ErrRepositoryNotAllowed)
+	assert.Equal(t, []string{"acme/app/squash"}, inner.enabled)
+	assert.Equal(t, []string{"acme/app"}, inner.disabled)
+}

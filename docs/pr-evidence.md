@@ -222,9 +222,9 @@ only: a struct, map, list or pointer argument, such as `.`, is refused before it
 `replace` refuses an empty string to replace. Every function, the comparisons
 included, is counted, and its result size (for a comparison, what it reads) is computed from
 its arguments before it runs: one call builds at most 64 KiB and a whole render at most 1 MiB,
-in at most 2000 calls and one second, after which every call and write fails at once. A body
+in at most 2000 calls and 500 ms, after which every call and write fails at once. A body
 renders at most 64 KiB, a title or list entry 4 KiB and a commit message 16 KiB. The data is
-bounded too: at most 20 images and 1024 characters per value, image fields included. A
+bounded too: a Bundle holds at most 100 images, a template sees at most 20 of them, and each value is at most 1024 characters, image fields included. A
 template that breaks a rule is refused like one that does not parse. A list template refuses a
 value with a line break (an author `alice\nbob` would make two entries).
 
@@ -306,4 +306,12 @@ of a step that ended before it opened a PR. A merged PR keeps its branch.
 
 Bundle: my-app-x7k2p
 Pipeline: my-app
+Namespace: team-a
 ```
+
+When a promotion that pushes straight to the branch (`approval: auto`) is retried after its
+push landed (its status write was lost, for example on a controller restart), it finds this
+commit at the head of the branch and counts the change as its own, not as an environment
+that already had the version. It looks at the head commit only: if another commit landed on
+top in the meantime, the retry records `noChanges` and the deployment metrics miss that one
+deployment.
