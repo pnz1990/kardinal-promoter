@@ -19,6 +19,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **No duplicate gate audit records from a stale read** — the PolicyGate status write now carries the resourceVersion the gate was read at. A reconcile that read the gate from a stale cache, and so saw a flip that a newer reconcile had already written, wrote a second `GateEvaluated` AuditEvent milliseconds after the first. Now its write fails with a Conflict and is retried on the current gate, which writes nothing (#1513)
 - **A fixed PolicyGate retries the Bundle it broke** — a Bundle that failed with `InvalidSpec` reason `GraphBuildFailed` is retried when a PolicyGate template that applies to one of its environments changes (for example the skip-permission gate it lacked), not only when the Pipeline changes. A newer Bundle still supersedes it instead (#1312)
 - **A Bundle rolled back by `onHealthFailure: rollback` ends `Superseded`** — when the controller saw the step turn `RollingBack` before the rollback Bundle, the failing Bundle stayed `Failed`. A Bundle whose only failing environments are `RollingBack` now yields to the newer Bundle (#1428)
 - **`maxConcurrentPromotions` holds a recovering Failed Bundle** — a Failed Bundle whose failed environment recovered went back to `Promoting` even when another Bundle had taken its slot. While the cap is full a Failed Bundle has the condition `WaitingForSlot=True`: its Graph creates no new step, its `Pending` steps wait, and it returns to `Promoting` only when a slot frees (#1349)

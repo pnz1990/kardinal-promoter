@@ -127,7 +127,17 @@ func NewReconciler(c client.Client) (*Reconciler, error) {
 //
 // A PolicyGate deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	return objectgone.Reconcile(ctx, req, policyGatesResource, r.reconcile)
+	res, err := objectgone.Reconcile(ctx, req, policyGatesResource, r.reconcile)
+	if apierrors.IsConflict(err) {
+		// The status patch carries the resourceVersion the gate was read
+		// at (patchStatus): a reconcile from a stale cache lost to a newer
+		// write and wrote nothing, no audit record either. Evaluate again
+		// on the current gate.
+		zerolog.Ctx(ctx).Debug().Err(err).Str("gate", req.String()).
+			Msg("policygate changed since it was read; evaluating again")
+		return ctrl.Result{Requeue: true}, nil
+	}
+	return res, err
 }
 
 // policyGatesResource is the resource objectgone matches a NotFound against.
@@ -929,7 +939,11 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 	if c := meta.FindStatusCondition(gate.Status.Conditions, conditionReady); c != nil && c.Status == metav1.ConditionFalse {
 		blockedSince = c.LastTransitionTime.Time
 	}
-	patch := client.MergeFrom(gate.DeepCopy())
+	// Optimistic lock: the patch carries the resourceVersion the gate was
+	// read at, so a reconcile from a stale cache, which would see the flip
+	// a newer reconcile already wrote and audit it a second time, gets a
+	// Conflict and writes nothing (Reconcile requeues it, #1513).
+	patch := client.MergeFromWithOptions(gate.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	now := metav1.NewTime(r.now())
 	gate.Status.Ready = ready
 	gate.Status.Reason = reason

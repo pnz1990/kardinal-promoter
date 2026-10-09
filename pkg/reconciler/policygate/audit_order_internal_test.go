@@ -27,6 +27,8 @@ import (
 // Unix seconds) and was dropped as AlreadyExists. Now every flip has its own
 // record and lifecycle.CompareAuditEvents lists them in the order of the
 // flips, also when written again (idempotent).
+//
+// Covers GATE-AUDIT-02.
 func TestGateAudit_FlipsWithinOneSecond(t *testing.T) {
 	s := runtime.NewScheme()
 	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
