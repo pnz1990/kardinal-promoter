@@ -345,8 +345,12 @@ func main() {
 	if shardHome == "" {
 		shardHome = "kardinal-system"
 	}
-	gate := shard.New(shard.Options{Name: namespaceShard, Home: shardHome, Client: mgr.GetClient(),
-		Reader: mgr.GetAPIReader(), Recorder: mgr.GetEventRecorder("kardinal-shard"), Log: logger})
+	gateClient, gateReader, err := shardClients(mgr, namespaceShard)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create the shard gate's clients")
+	}
+	gate := shard.New(shard.Options{Name: namespaceShard, Home: shardHome, Client: gateClient,
+		Reader: gateReader, Recorder: mgr.GetEventRecorder("kardinal-shard"), Log: logger})
 	if err := shard.Setup(mgr, gate); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up the shard gate")
 	}

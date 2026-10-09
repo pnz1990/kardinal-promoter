@@ -50,6 +50,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,9 +81,12 @@ const (
 	DefaultShard = "default"
 	// LeaseName is the token Lease in each namespace: which shard holds it.
 	LeaseName = "kardinal-shard"
-	// HeartbeatName is each shard's heartbeat Lease, in the shard's own
-	// namespace.
-	HeartbeatName = "kardinal-shard-heartbeat"
+	// HeartbeatPrefix names each shard's heartbeat Lease, in the shard's own
+	// namespace: kardinal-shard-heartbeat-<shard>, so two shards installed in
+	// one namespace do not share one.
+	HeartbeatPrefix = "kardinal-shard-heartbeat-"
+	// labelHeartbeat marks heartbeat Leases, so the default shard lists them.
+	labelHeartbeat = "kardinal.io/shard-heartbeat"
 	// AnnotationHeartbeat on a token is the namespace of its holder's heartbeat.
 	AnnotationHeartbeat = "kardinal.io/shard-heartbeat"
 	// labelManagedBy marks both kinds of Lease; the controller caches only
@@ -101,6 +105,14 @@ const (
 	fenceMargin = 15 * time.Second
 	// passInterval is how often the leader takes and releases tokens.
 	passInterval = 5 * time.Second
+	// fenceTick is how often the fence is checked on its own ticker, so a
+	// pass blocked in an API call cannot delay it.
+	fenceTick = time.Second
+	// callTimeout bounds every API call of a pass, well under renewInterval.
+	callTimeout = 5 * time.Second
+	// maxClockRate is the clock rate difference between hosts the fence
+	// margin is computed for (1%; NTP-disciplined clocks are within 0.05%).
+	maxClockRate = 0.01
 	// pendingRequeue and maxPendingRequeue bound the retry of a reconcile of
 	// a namespace this shard waits for: it grows with the wait. Taking the
 	// namespace enqueues all its objects anyway.
@@ -111,6 +123,10 @@ const (
 	warnInterval = time.Minute
 	// ReasonShardNotRunning is the Warning Event on such a namespace.
 	ReasonShardNotRunning = "ShardNotRunning"
+	// ReasonShardHomeConflict is the Warning Event on a namespace whose token
+	// this shard holds from another live installation (two installations
+	// of one shard name).
+	ReasonShardHomeConflict = "ShardHomeConflict"
 )
 
 // Options configure a Gate.
@@ -161,6 +177,8 @@ type Gate struct {
 	startedAt time.Time
 	warnedAt  time.Time
 	warned    map[string]string // namespace -> shard it was warned about
+	conflicts map[string]bool   // namespaces a ShardHomeConflict was emitted for
+	timeout   time.Duration     // callTimeout; tests shorten it
 }
 
 var active = &Gate{}
@@ -172,13 +190,20 @@ func Install(g *Gate) { active = g }
 // Active returns the installed Gate; sharding is off until Install.
 func Active() *Gate { return active }
 
-// ValidateName checks a --namespace-shard value: a label value.
+// ValidateName checks a --namespace-shard value: a label value that is also
+// a DNS label, since it is part of the heartbeat Lease name.
 func ValidateName(name string) error {
 	if errs := validation.IsValidLabelValue(name); len(errs) > 0 {
 		return fmt.Errorf("--namespace-shard %q is not a valid label value: %v", name, errs)
 	}
+	if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+		return fmt.Errorf("--namespace-shard %q is not a lowercase DNS label: %v", name, errs)
+	}
 	return nil
 }
+
+// HeartbeatName is the heartbeat Lease of shard.
+func HeartbeatName(shard string) string { return HeartbeatPrefix + shard }
 
 // New returns the Gate of shard o.Name.
 func New(o Options) *Gate {
@@ -186,7 +211,8 @@ func New(o Options) *Gate {
 		log: o.Log.With().Str("shard", o.Name).Logger(), now: time.Now,
 		held: map[string]bool{}, releasing: map[string]bool{}, inflight: map[string]int{},
 		cancels: map[uint64]context.CancelFunc{}, waitSince: map[string]time.Time{},
-		observed: map[string]observation{}, warned: map[string]string{}}
+		observed: map[string]observation{}, warned: map[string]string{}, conflicts: map[string]bool{},
+		timeout: callTimeout}
 }
 
 // CacheByObject restricts the manager's Lease cache to the tokens: Leases
@@ -235,9 +261,18 @@ func (g *Gate) Owns(namespace string) bool {
 	if namespace == "" {
 		return g.OwnsClusterScoped()
 	}
+	now := g.now()
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.held[namespace] && !g.releasing[namespace] && !g.fenced
+	return g.held[namespace] && !g.releasing[namespace] && !g.fencedAt(now)
+}
+
+// fencedAt reports, with g.mu held, whether the shard must not act at now:
+// fenced already, or its heartbeat is too old (renewedAt + leaseDuration -
+// fenceMargin). Callers check it with a fresh now, so neither the fence
+// ticker nor a blocked pass delays it.
+func (g *Gate) fencedAt(now time.Time) bool {
+	return g.fenced || g.renewedAt.IsZero() || now.Sub(g.renewedAt) >= leaseDuration-fenceMargin
 }
 
 // Wrap gates r: a request for a namespace this shard holds runs (counted as
@@ -257,8 +292,9 @@ func (g *Gate) Wrap(r reconcile.Reconciler) reconcile.Reconciler {
 			}
 			return reconcile.Result{}, nil
 		}
+		now := g.now()
 		g.mu.Lock()
-		if g.held[ns] && !g.releasing[ns] && !g.fenced {
+		if g.held[ns] && !g.releasing[ns] && !g.fencedAt(now) {
 			g.inflight[ns]++
 			g.nextID++
 			id := g.nextID
@@ -274,7 +310,7 @@ func (g *Gate) Wrap(r reconcile.Reconciler) reconcile.Reconciler {
 			}()
 			return r.Reconcile(cctx, req)
 		}
-		fenced, held := g.fenced, g.held[ns]
+		fenced, held := g.fencedAt(now), g.held[ns]
 		g.mu.Unlock()
 		if fenced && held {
 			return reconcile.Result{RequeueAfter: pendingRequeue}, nil
@@ -358,6 +394,20 @@ func (g *Gate) Start(ctx context.Context) error {
 		<-ctx.Done()
 		return nil
 	}
+	// The fence runs on its own ticker with a fresh now: a pass blocked in
+	// an API call (each bounded by callTimeout) does not delay it.
+	go func() {
+		t := time.NewTicker(fenceTick)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				g.fence(g.now())
+			}
+		}
+	}()
 	t := time.NewTicker(passInterval)
 	defer t.Stop()
 	for {
@@ -370,26 +420,30 @@ func (g *Gate) Start(ctx context.Context) error {
 	}
 }
 
-// Pass lists the namespaces, renews the heartbeat, fences the shard if the
-// heartbeat is too old, and otherwise takes the tokens of the namespaces
-// assigned to it and gives up the ones relabelled away once nothing is in
-// flight there. Exported for tests.
+// call bounds one API call of a pass.
+func (g *Gate) call(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, g.timeout)
+}
+
+// Pass lists the namespaces, renews the heartbeat, and unless the shard is
+// fenced takes the tokens of the namespaces assigned to it and gives up the
+// ones relabelled away once nothing is in flight there. Every API call is
+// bounded by callTimeout. Exported for tests.
 func (g *Gate) Pass(ctx context.Context) {
 	now := g.now()
 	if g.startedAt.IsZero() {
 		g.startedAt = now
 	}
 	var list corev1.NamespaceList
-	listErr := g.client.List(ctx, &list)
+	cctx, cancel := g.call(ctx)
+	listErr := g.client.List(cctx, &list)
+	cancel()
 	if listErr != nil {
 		g.log.Warn().Err(listErr).Msg("list namespaces; not renewing the heartbeat")
 	} else {
 		g.renew(ctx, now)
 	}
-	if g.fence(now) {
-		return
-	}
-	if listErr != nil {
+	if g.fence(g.now()) || listErr != nil {
 		return
 	}
 	beats := map[string]*observation{} // heartbeats read in this pass
@@ -410,6 +464,8 @@ func (g *Gate) Pass(ctx context.Context) {
 			g.take(ctx, ns, now, beats)
 		case held && idle:
 			g.release(ctx, ns.Name)
+		case held:
+			g.checkStillHeld(ctx, ns.Name)
 		}
 	}
 	// A deleted namespace takes its token with it.
@@ -435,31 +491,34 @@ func (g *Gate) Pass(ctx context.Context) {
 // so the fence counts from no later than when other shards can see it.
 func (g *Gate) renew(ctx context.Context, now time.Time) {
 	g.mu.Lock()
-	due := g.renewedAt.IsZero() || now.Sub(g.renewedAt) >= renewInterval || g.fenced
+	due := g.fencedAt(now) || now.Sub(g.renewedAt) >= renewInterval
 	wasFenced := g.fenced || g.renewedAt.IsZero()
 	g.mu.Unlock()
 	if !due {
 		return
 	}
 	id := g.identity()
+	name := HeartbeatName(g.name)
 	secs := int32(leaseDuration / time.Second)
 	stamp := metav1.NewMicroTime(now)
 	var hb coordinationv1.Lease
-	err := g.reader.Get(ctx, client.ObjectKey{Namespace: g.home, Name: HeartbeatName}, &hb)
+	cctx, cancel := g.call(ctx)
+	defer cancel()
+	err := g.reader.Get(cctx, client.ObjectKey{Namespace: g.home, Name: name}, &hb)
 	switch {
 	case apierrors.IsNotFound(err):
 		hb = coordinationv1.Lease{
-			ObjectMeta: metav1.ObjectMeta{Name: HeartbeatName, Namespace: g.home,
-				Labels: map[string]string{labelManagedBy: managedBy, LabelShard: g.name}},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: g.home,
+				Labels: map[string]string{labelManagedBy: managedBy, labelHeartbeat: "true", LabelShard: g.name}},
 			Spec: coordinationv1.LeaseSpec{HolderIdentity: &id, LeaseDurationSeconds: &secs,
 				AcquireTime: &stamp, RenewTime: &stamp},
 		}
-		err = g.client.Create(ctx, &hb)
+		err = g.client.Create(cctx, &hb)
 	case err == nil:
 		hb.Spec.HolderIdentity = &id
 		hb.Spec.LeaseDurationSeconds = &secs
 		hb.Spec.RenewTime = &stamp
-		err = g.client.Update(ctx, &hb)
+		err = g.client.Update(cctx, &hb)
 	}
 	if err != nil {
 		g.log.Warn().Err(err).Msg("renew the shard heartbeat")
@@ -469,10 +528,10 @@ func (g *Gate) renew(ctx context.Context, now time.Time) {
 		return
 	}
 	g.mu.Lock()
-	g.renewedAt = now
 	if g.fenced {
 		g.log.Info().Msg("heartbeat renewed; reconciling again")
 	}
+	g.renewedAt = now
 	g.fenced = false
 	g.mu.Unlock()
 }
@@ -481,7 +540,9 @@ func (g *Gate) renew(ctx context.Context, now time.Time) {
 // after a fence another shard may have taken some.
 func (g *Gate) resync(ctx context.Context) bool {
 	var leases coordinationv1.LeaseList
-	if err := g.reader.List(ctx, &leases, client.MatchingFields{"metadata.name": LeaseName},
+	cctx, cancel := g.call(ctx)
+	defer cancel()
+	if err := g.reader.List(cctx, &leases, client.MatchingFields{"metadata.name": LeaseName},
 		client.MatchingLabels{labelManagedBy: managedBy}); err != nil {
 		g.log.Warn().Err(err).Msg("re-read the shard tokens")
 		return false
@@ -489,7 +550,8 @@ func (g *Gate) resync(ctx context.Context) bool {
 	mine := map[string]bool{}
 	for i := range leases.Items {
 		l := &leases.Items[i]
-		if l.Spec.HolderIdentity != nil && *l.Spec.HolderIdentity == g.identity() {
+		if l.Spec.HolderIdentity != nil && *l.Spec.HolderIdentity == g.identity() &&
+			l.Annotations[AnnotationHeartbeat] == g.home {
 			mine[l.Namespace] = true
 		}
 	}
@@ -507,11 +569,20 @@ func (g *Gate) resync(ctx context.Context) bool {
 
 // fence stops this shard from acting once its heartbeat may be taken for
 // dead (renewedAt + leaseDuration - fenceMargin), cancelling the reconciles
-// in flight. It reports whether the shard is fenced.
+// in flight. It runs on its own ticker (fenceTick) and in each pass. It
+// reports whether the shard is fenced.
+//
+// Worst case: this shard's last successful renewal started at R. Another
+// shard saw that renewal no earlier than R and waits leaseDuration on its own
+// clock: at least leaseDuration*(1-maxClockRate) of real time. This shard
+// starts nothing from R + (leaseDuration-fenceMargin)*(1+maxClockRate), and
+// cancels what runs by fenceTick later. Overlap needs a reconcile that keeps
+// going for the rest of the margin (FenceMargin) after its context was
+// cancelled.
 func (g *Gate) fence(now time.Time) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if !g.renewedAt.IsZero() && now.Sub(g.renewedAt) < leaseDuration-fenceMargin {
+	if !g.fencedAt(now) {
 		return false
 	}
 	if !g.fenced {
@@ -528,21 +599,66 @@ func (g *Gate) fence(now time.Time) bool {
 	return true
 }
 
-// take acquires the token of ns: a token held by this shard is adopted, a
-// free one taken, and one held by a shard whose heartbeat stopped taken
-// over. Taking writes the token with the resourceVersion read, so two shards
-// cannot both take it. A newly held namespace is announced to every
-// reconciler.
+// FenceMargin is the worst-case time between this shard cancelling its
+// reconciles and another shard taking its namespaces (see fence).
+func FenceMargin() time.Duration {
+	takeover := time.Duration(float64(leaseDuration) * (1 - maxClockRate))
+	stop := time.Duration(float64(leaseDuration-fenceMargin)*(1+maxClockRate)) + fenceTick
+	return takeover - stop
+}
+
+// checkStillHeld drops a namespace marked held whose token (in the cache)
+// names another holder: someone took it, and this shard must not act there.
+func (g *Gate) checkStillHeld(ctx context.Context, ns string) {
+	var lease coordinationv1.Lease
+	cctx, cancel := g.call(ctx)
+	defer cancel()
+	err := g.client.Get(cctx, client.ObjectKey{Namespace: ns, Name: LeaseName}, &lease)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return
+	}
+	if err == nil && lease.Spec.HolderIdentity != nil && *lease.Spec.HolderIdentity == g.identity() &&
+		lease.Annotations[AnnotationHeartbeat] == g.home {
+		return
+	}
+	g.drop(ns, "its token names another holder")
+}
+
+// drop forgets a namespace this shard no longer holds.
+func (g *Gate) drop(ns, why string) {
+	g.mu.Lock()
+	was := g.held[ns]
+	delete(g.held, ns)
+	delete(g.releasing, ns)
+	g.mu.Unlock()
+	if was {
+		g.log.Warn().Str("namespace", ns).Str("why", why).Msg("dropped a namespace this shard held")
+	}
+}
+
+// take acquires the token of ns, always through a write with the
+// resourceVersion read (compare-and-swap), so two shards cannot both hold
+// it: a token this shard's previous leader held is adopted by rewriting it, a
+// free one is taken, and one held by a shard whose heartbeat stopped is taken
+// over. A held namespace whose token (in the cache) names another holder is
+// dropped at once. A token that names this shard but another live
+// installation of it (another home) is refused with a ShardHomeConflict
+// Event. A newly held namespace is announced to every reconciler.
 func (g *Gate) take(ctx context.Context, ns *corev1.Namespace, now time.Time, beats map[string]*observation) {
 	id := g.identity()
 	var lease coordinationv1.Lease
-	err := g.client.Get(ctx, client.ObjectKey{Namespace: ns.Name, Name: LeaseName}, &lease)
+	cctx, cancel := g.call(ctx)
+	defer cancel()
+	err := g.client.Get(cctx, client.ObjectKey{Namespace: ns.Name, Name: LeaseName}, &lease)
 	g.mu.Lock()
 	was := g.held[ns.Name]
 	g.mu.Unlock()
 	stamp := metav1.NewMicroTime(now)
 	switch {
 	case apierrors.IsNotFound(err):
+		if was {
+			g.drop(ns.Name, "its token is gone")
+		}
 		secs := int32(leaseDuration / time.Second)
 		lease = coordinationv1.Lease{
 			ObjectMeta: metav1.ObjectMeta{Name: LeaseName, Namespace: ns.Name,
@@ -551,7 +667,7 @@ func (g *Gate) take(ctx context.Context, ns *corev1.Namespace, now time.Time, be
 			Spec: coordinationv1.LeaseSpec{HolderIdentity: &id, LeaseDurationSeconds: &secs,
 				AcquireTime: &stamp, RenewTime: &stamp},
 		}
-		if err := g.client.Create(ctx, &lease); err != nil {
+		if err := g.client.Create(cctx, &lease); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				g.log.Warn().Err(err).Str("namespace", ns.Name).Msg("create shard token")
 			}
@@ -567,18 +683,35 @@ func (g *Gate) take(ctx context.Context, ns *corev1.Namespace, now time.Time, be
 	if lease.Spec.HolderIdentity != nil {
 		holder = *lease.Spec.HolderIdentity
 	}
-	if holder == id && lease.Annotations[AnnotationHeartbeat] == g.home {
+	home := lease.Annotations[AnnotationHeartbeat]
+	if holder == id && home == g.home {
 		if !was {
-			g.acquired(ns) // this shard's previous leader held it
+			// This shard's previous leader held it: adopt it with a write, so
+			// a concurrent taker's write conflicts with ours.
+			lease.Spec.RenewTime = &stamp
+			if err := g.client.Update(cctx, &lease); err != nil {
+				if !apierrors.IsConflict(err) {
+					g.log.Warn().Err(err).Str("namespace", ns.Name).Msg("adopt shard token")
+				}
+				return
+			}
+			g.acquired(ns)
 		}
 		return
 	}
-	if holder != id && holder != "" && !g.heartbeatStopped(ctx, holder, lease.Annotations[AnnotationHeartbeat], now, beats) {
+	if was {
+		g.drop(ns.Name, "its token names another holder")
+	}
+	if holder != "" && !g.heartbeatStopped(ctx, holder, home, now, beats) {
+		if holder == id {
+			g.homeConflict(ns, home)
+			return
+		}
 		g.log.Debug().Str("namespace", ns.Name).Str("holder", holder).
 			Msg("namespace assigned to this shard; waiting for its holder to release it")
 		return
 	}
-	takeover := holder != id
+	takeover := holder != id || home != g.home
 	lease.Spec.HolderIdentity = &id
 	lease.Spec.RenewTime = &stamp
 	if lease.Annotations == nil {
@@ -592,17 +725,31 @@ func (g *Gate) take(ctx context.Context, ns *corev1.Namespace, now time.Time, be
 		}
 		*lease.Spec.LeaseTransitions++
 	}
-	if err := g.client.Update(ctx, &lease); err != nil {
+	if err := g.client.Update(cctx, &lease); err != nil {
 		if !apierrors.IsConflict(err) {
 			g.log.Warn().Err(err).Str("namespace", ns.Name).Msg("update shard token")
 		}
 		return
 	}
-	if takeover && holder != "" {
-		g.log.Info().Str("namespace", ns.Name).Str("from", holder).Msg("took over the namespace of a shard whose heartbeat stopped")
+	if holder != "" {
+		g.log.Info().Str("namespace", ns.Name).Str("from", holder).Str("fromHome", home).
+			Msg("took over the namespace of a shard whose heartbeat stopped")
 	}
-	if takeover || !was {
-		g.acquired(ns)
+	g.acquired(ns)
+}
+
+// homeConflict reports, once per namespace, a token held by this shard's
+// name from another live installation (home): two controllers run one shard.
+func (g *Gate) homeConflict(ns *corev1.Namespace, home string) {
+	if g.conflicts[ns.Name] {
+		return
+	}
+	g.conflicts[ns.Name] = true
+	note := fmt.Sprintf("namespace %s is held by shard %s installed in namespace %s, which is alive; this installation "+
+		"(namespace %s) runs the same shard name and does not take it. Run each shard name once", ns.Name, g.name, home, g.home)
+	g.log.Warn().Str("namespace", ns.Name).Str("otherHome", home).Msg(note)
+	if g.recorder != nil {
+		g.recorder.Eventf(ns, nil, corev1.EventTypeWarning, ReasonShardHomeConflict, "Reconcile", "%s", note)
 	}
 }
 
@@ -619,7 +766,9 @@ func (g *Gate) heartbeatStopped(ctx context.Context, holder, home string, now ti
 	rv := "missing"
 	if home != "" {
 		var hb coordinationv1.Lease
-		err := g.reader.Get(ctx, client.ObjectKey{Namespace: home, Name: HeartbeatName}, &hb)
+		cctx, cancel := g.call(ctx)
+		err := g.reader.Get(cctx, client.ObjectKey{Namespace: home, Name: HeartbeatName(strings.TrimPrefix(holder, "kardinal-shard/"))}, &hb)
+		cancel()
 		switch {
 		case err == nil && hb.Spec.HolderIdentity != nil && *hb.Spec.HolderIdentity == holder:
 			rv = hb.ResourceVersion
@@ -648,6 +797,7 @@ func (g *Gate) acquired(ns *corev1.Namespace) {
 	delete(g.waitSince, ns.Name)
 	subs := append([]chan event.GenericEvent(nil), g.subs...)
 	g.mu.Unlock()
+	delete(g.conflicts, ns.Name)
 	g.log.Info().Str("namespace", ns.Name).Msg("holding namespace")
 	for _, ch := range subs {
 		go func() { ch <- event.GenericEvent{Object: ns.DeepCopy()} }()
@@ -658,11 +808,13 @@ func (g *Gate) acquired(ns *corev1.Namespace) {
 // at once instead of after leaseDuration.
 func (g *Gate) release(ctx context.Context, ns string) {
 	var lease coordinationv1.Lease
-	if err := g.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: LeaseName}, &lease); err == nil &&
+	cctx, cancel := g.call(ctx)
+	defer cancel()
+	if err := g.client.Get(cctx, client.ObjectKey{Namespace: ns, Name: LeaseName}, &lease); err == nil &&
 		lease.Spec.HolderIdentity != nil && *lease.Spec.HolderIdentity == g.identity() {
 		empty := ""
 		lease.Spec.HolderIdentity = &empty
-		if err := g.client.Update(ctx, &lease); err != nil {
+		if err := g.client.Update(cctx, &lease); err != nil {
 			if !apierrors.IsConflict(err) {
 				g.log.Warn().Err(err).Str("namespace", ns).Msg("release shard token")
 			}
@@ -690,8 +842,9 @@ func (g *Gate) warnUnrunShards(ctx context.Context, now time.Time, namespaces []
 	}
 	g.warnedAt = now
 	var beats coordinationv1.LeaseList
-	if err := g.reader.List(ctx, &beats, client.MatchingFields{"metadata.name": HeartbeatName},
-		client.MatchingLabels{labelManagedBy: managedBy}); err != nil {
+	cctx, cancel := g.call(ctx)
+	defer cancel()
+	if err := g.reader.List(cctx, &beats, client.MatchingLabels{labelManagedBy: managedBy, labelHeartbeat: "true"}); err != nil {
 		g.log.Debug().Err(err).Msg("list shard heartbeats")
 		return
 	}

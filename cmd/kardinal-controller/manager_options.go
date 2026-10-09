@@ -4,9 +4,11 @@
 package main
 
 import (
+	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -90,6 +92,34 @@ func shardCacheOpts(opts cache.Options, namespaceShard string) cache.Options {
 		opts.ByObject = shard.CacheByObject()
 	}
 	return opts
+}
+
+// shardCallTimeout is the HTTP timeout of the shard gate's clients: every
+// call of a Lease pass ends well before the 10 s heartbeat renewal, so a
+// hung API server cannot stall a pass (pkg/shard fences on its own ticker
+// regardless).
+const shardCallTimeout = 5 * time.Second
+
+// shardClients returns the shard gate's clients: reads of Namespaces and
+// tokens through the manager's cache, writes and the uncached reads
+// (heartbeats, the token re-read after a fence) straight to the API server,
+// all with shardCallTimeout. With sharding off it returns the manager's.
+func shardClients(mgr ctrl.Manager, namespaceShard string) (sigs_client.Client, sigs_client.Reader, error) {
+	if namespaceShard == "" {
+		return mgr.GetClient(), mgr.GetAPIReader(), nil
+	}
+	cfg := rest.CopyConfig(mgr.GetConfig())
+	cfg.Timeout = shardCallTimeout
+	c, err := sigs_client.New(cfg, sigs_client.Options{Scheme: mgr.GetScheme(),
+		Cache: &sigs_client.CacheOptions{Reader: mgr.GetCache()}})
+	if err != nil {
+		return nil, nil, fmt.Errorf("shard client: %w", err)
+	}
+	r, err := sigs_client.New(cfg, sigs_client.Options{Scheme: mgr.GetScheme()})
+	if err != nil {
+		return nil, nil, fmt.Errorf("shard API reader: %w", err)
+	}
+	return c, r, nil
 }
 
 // uncachedObjects are the types the manager client reads straight from the

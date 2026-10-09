@@ -44,9 +44,13 @@ whether that shard is alive:
 
 - **The token**, Lease `kardinal-shard` in each namespace, names the shard that holds it
   (`kubectl get lease kardinal-shard -n team-payments` shows the holder,
-  `kardinal-shard/<shard>`). It is written only when the namespace changes hands.
-- **The heartbeat**, Lease `kardinal-shard-heartbeat` in each shard's own namespace, is
-  renewed by the shard's leader every 10 seconds. That is the only write a shard makes in
+  `kardinal-shard/<shard>`, and the annotation `kardinal.io/shard-heartbeat` names the
+  holder's namespace). It is written only when the namespace changes hands, and always
+  with the version read, so two shards cannot both take it. Do not delete token Leases:
+  a namespace whose token is gone is taken by the shard its label names at once, without
+  waiting for the old holder.
+- **The heartbeat**, Lease `kardinal-shard-heartbeat-<shard>` in each shard's own
+  namespace, is renewed by the shard's leader every 10 seconds. That is the only write a shard makes in
   steady state, however many namespaces it holds: with 1000 namespaces, 0.1 writes per
   second per shard, and no API reads beyond the renewal (namespaces and tokens come from
   the watch cache).
@@ -62,7 +66,7 @@ When you relabel a namespace:
    for its PR keeps the same PR. Until then it retries the namespace's objects with a
    delay that grows from 5 seconds to 2 minutes.
 
-There is never a moment with two owners:
+What is guaranteed:
 
 - A shard whose controller is down keeps its namespaces until its heartbeat has not
   changed for 60 seconds. The shard taking over measures that on its own clock, from
@@ -71,9 +75,20 @@ There is never a moment with two owners:
   its tokens at once.
 - A shard that cannot renew its heartbeat (the API server is unreachable, or it cannot
   list namespaces and so cannot see a relabel) fences itself 45 seconds after the start
-  of its last renewal, before any other shard may take its namespaces: it starts no
-  reconcile and cancels the ones running. Once it renews again it re-reads its tokens
-  and gives up those another shard took meanwhile.
+  of its last renewal, on its own ticker (every API call of the Lease loop times out after
+  5 seconds, so a hung call cannot delay it): it starts no reconcile and cancels the ones
+  running. Once it renews again it re-reads its tokens and gives up those another shard
+  took meanwhile.
+- So during an API partition the old owner stops at least 13 seconds before a new owner
+  can start (60 s × 0.99 − 45 s × 1.01 − 1 s, allowing 1% clock rate difference between
+  hosts). Two owners overlap only if a reconcile keeps writing more than 13 seconds after
+  its context was cancelled. Even then the side effects repeat safely: a push to the PR
+  branch is a force-push of the same change, a push to the base branch never forces, and
+  `open-pr` adopts the open PR of its branch instead of opening a second one on every
+  provider (GitHub, GitLab, Forgejo and Gitea, Bitbucket and Azure DevOps).
+- Each shard name runs once. A second installation of a shard name, in another namespace,
+  does not take a namespace the live first one holds; it emits a `ShardHomeConflict`
+  Warning Event on that namespace.
 
 A namespace labelled with a shard that no controller runs is not reconciled. The
 default shard emits a `ShardNotRunning` Warning Event on such a namespace (once, a
@@ -107,5 +122,7 @@ latency: the owning shard's PRStatus poll records the merge.
 With `controller.namespaceShard` set the chart also grants, cluster-wide: `list` and
 `watch` on Namespaces; `get`, `list`, `watch` and `update` on Leases named
 `kardinal-shard` (the controller lists and watches them by that name); `get` and `list`
-on Leases named `kardinal-shard-heartbeat`; and `create` on Leases, which RBAC cannot
-limit by name. Its own heartbeat is written through the release namespace's Role.
+on Leases (the other shards' heartbeats, whose names include shard names the chart does
+not know; read-only, no watch); and `create` on Leases, which RBAC cannot limit by name.
+Its own heartbeat is written through the release namespace's Role. Shard names must be
+lowercase DNS labels.

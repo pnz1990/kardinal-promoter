@@ -165,12 +165,13 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["leases"]
   resourceNames: ["kardinal-shard"]
   verbs: ["get", "list", "watch", "update"]
-# The other shards' heartbeats, read only: whether a token's holder is alive,
-# and (default shard) which shards run. This shard's own heartbeat is written
-# through rules.release.
+# The other shards' heartbeats (kardinal-shard-heartbeat-<shard>, in each
+# shard's namespace), read only: whether a token's holder is alive, and
+# (default shard) which shards run. Their names include shard names the chart
+# does not know, so get and list cannot be limited by name; there is no watch
+# and no write. This shard's own heartbeat is written through rules.release.
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
-  resourceNames: ["kardinal-shard-heartbeat"]
   verbs: ["get", "list"]
 # A token is created the first time a namespace is taken; create cannot be
 # limited by resourceNames.

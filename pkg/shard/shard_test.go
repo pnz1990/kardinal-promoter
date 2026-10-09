@@ -46,13 +46,26 @@ func namespace(name, shard string) *corev1.Namespace {
 type flaky struct {
 	client.Client
 	failUpdates, failNamespaceList atomic.Bool
-	writes, reads                  atomic.Int64
+	// hang makes every write block until its context ends.
+	hang          atomic.Bool
+	writes, reads atomic.Int64
+}
+
+func (f *flaky) block(ctx context.Context) error {
+	if !f.hang.Load() {
+		return nil
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 var errDown = errors.New("api server unreachable")
 
 func (f *flaky) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
 	f.writes.Add(1)
+	if err := f.block(ctx); err != nil {
+		return err
+	}
 	if f.failUpdates.Load() {
 		return errDown
 	}
@@ -61,6 +74,9 @@ func (f *flaky) Create(ctx context.Context, obj client.Object, opts ...client.Cr
 
 func (f *flaky) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
 	f.writes.Add(1)
+	if err := f.block(ctx); err != nil {
+		return err
+	}
 	if f.failUpdates.Load() {
 		return errDown
 	}
@@ -114,10 +130,15 @@ type shard struct {
 }
 
 func (w *world) shard(name string, at time.Time) *shard {
+	return w.shardIn(name, "kardinal-"+name, at)
+}
+
+// shardIn is a shard installed in namespace home.
+func (w *world) shardIn(name, home string, at time.Time) *shard {
 	api := &flaky{Client: w.c}
 	clk := &clock{t: at}
 	rec := events.NewFakeRecorder(100)
-	g := New(Options{Name: name, Home: "kardinal-" + name, Client: api, Reader: apiReader{w.c, &api.reads},
+	g := New(Options{Name: name, Home: home, Client: api, Reader: apiReader{w.c, &api.reads},
 		Recorder: rec, Log: zerolog.Nop()})
 	g.now = clk.now
 	return &shard{Gate: g, clk: clk, api: api, rec: rec}
@@ -412,11 +433,17 @@ func TestGate_SteadyStateCost(t *testing.T) {
 	}
 	w := newWorld(t, objs...)
 	def := w.shard(DefaultShard, t0)
+	start := time.Now()
 	run(passInterval, def)
+	firstPass := time.Since(start)
 	for _, o := range objs {
 		require.True(t, def.Owns(o.GetName()))
 	}
 	takeWrites := def.api.writes.Load()
+	// #1505 QA: the first pass takes every namespace in one go; against the
+	// fake client it is CPU only, so this is a floor, not the API latency
+	// (1001 writes at the client's QPS limit).
+	t.Logf("first pass over 1000 namespaces: %s, %d writes", firstPass, takeWrites)
 	assert.Equal(t, int64(n+1), takeWrites, "one token per namespace and the heartbeat")
 
 	def.api.writes.Store(0)
@@ -487,4 +514,106 @@ func TestGate_ConcurrentReconciles(t *testing.T) {
 	wg.Wait()
 	run(passInterval, g)
 	assert.Equal(t, "", w.holder("team"))
+}
+
+// TestGate_FenceWithHangingCalls (#1505 QA): the fence does not wait for a
+// pass. With every write hanging (until callTimeout), a shard stops
+// reconciling at renewedAt + leaseDuration - fenceMargin on a fresh clock
+// reading, and the fence tick cancels the reconcile in flight, while the
+// pass is still blocked. The worst-case margin to another shard's takeover,
+// at 1% clock rate difference, is more than 10 seconds.
+func TestGate_FenceWithHangingCalls(t *testing.T) {
+	assert.Greater(t, FenceMargin(), 10*time.Second, "worst-case margin")
+	w := newWorld(t, namespace("team", ""))
+	def := w.shard(DefaultShard, t0)
+	def.timeout = 200 * time.Millisecond
+	run(passInterval, def)
+	require.True(t, def.Owns("team"))
+
+	r := &counting{block: make(chan struct{}), in: make(chan struct{})}
+	done := make(chan struct{})
+	go func() { _, _ = def.Wrap(r).Reconcile(context.Background(), req("team")); close(done) }()
+	<-r.in
+
+	def.api.hang.Store(true)
+	passDone := make(chan struct{})
+	def.clk.add(renewInterval) // due to renew: the write hangs
+	go func() { def.Pass(context.Background()); close(passDone) }()
+
+	def.mu.Lock()
+	renewed := def.renewedAt
+	def.mu.Unlock()
+	def.clk.add(renewed.Add(leaseDuration - fenceMargin - time.Second).Sub(def.now()))
+	assert.True(t, def.Owns("team"), "not yet")
+	def.clk.add(time.Second)
+	assert.False(t, def.Owns("team"), "a fresh clock reading fences, without waiting for the pass")
+	def.fence(def.now()) // the fence tick
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fence did not cancel the reconcile in flight")
+	}
+	assert.True(t, r.cancelled.Load())
+	<-passDone // the hanging write ended at callTimeout
+}
+
+// TestGate_AdoptsOnlyByWrite (#1505 QA): a new leader of a shard takes the
+// tokens its previous leader held only through a write (compare-and-swap):
+// while its writes fail it holds nothing.
+func TestGate_AdoptsOnlyByWrite(t *testing.T) {
+	w := newWorld(t, namespace("team", ""))
+	old := w.shard(DefaultShard, t0)
+	run(passInterval, old)
+	require.True(t, old.Owns("team"))
+
+	next := w.shard(DefaultShard, t0)
+	next.api.failUpdates.Store(true)
+	next.renewedAt = next.now() // its heartbeat renewed; only the token write fails
+	next.Pass(context.Background())
+	assert.False(t, next.Owns("team"), "no adoption without a write")
+	next.api.failUpdates.Store(false)
+	run(passInterval, next)
+	assert.True(t, next.Owns("team"))
+}
+
+// TestGate_DropsWhenTokenNamesAnother (#1505 QA): a namespace this shard
+// holds whose token now names another holder is dropped at the next pass.
+func TestGate_DropsWhenTokenNamesAnother(t *testing.T) {
+	w := newWorld(t, namespace("team", ""), namespace("moving", "b"))
+	def := w.shard(DefaultShard, t0)
+	run(passInterval, def)
+	require.True(t, def.Owns("team"))
+	var l coordinationv1.Lease
+	require.NoError(t, w.c.Get(context.Background(), types.NamespacedName{Namespace: "team", Name: LeaseName}, &l))
+	other := "kardinal-shard/b"
+	l.Spec.HolderIdentity = &other
+	require.NoError(t, w.c.Update(context.Background(), &l))
+	run(passInterval, def)
+	assert.False(t, def.Owns("team"))
+}
+
+// TestGate_HomeConflict (#1505 QA): the heartbeat Lease is named after the
+// shard. A second installation of shard b (another home) does not take a
+// namespace the live first one holds: it emits ShardHomeConflict once. When
+// the first stops, the second takes over after the Lease duration.
+func TestGate_HomeConflict(t *testing.T) {
+	w := newWorld(t, namespace("team", "b"))
+	one := w.shardIn("b", "ns-one", t0)
+	run(passInterval, one)
+	require.True(t, one.Owns("team"))
+	var hb coordinationv1.Lease
+	require.NoError(t, w.c.Get(context.Background(), types.NamespacedName{Namespace: "ns-one", Name: "kardinal-shard-heartbeat-b"}, &hb))
+
+	two := w.shardIn("b", "ns-two", t0)
+	run(3*passInterval, one, two)
+	assert.False(t, two.Owns("team"))
+	assert.True(t, one.Owns("team"))
+	require.Len(t, two.rec.Events, 1)
+	assert.Contains(t, <-two.rec.Events, "Warning "+ReasonShardHomeConflict)
+
+	run(leaseDuration+2*passInterval, two) // one stopped
+	assert.True(t, two.Owns("team"))
+	var l coordinationv1.Lease
+	require.NoError(t, w.c.Get(context.Background(), types.NamespacedName{Namespace: "team", Name: LeaseName}, &l))
+	assert.Equal(t, "ns-two", l.Annotations[AnnotationHeartbeat])
 }
