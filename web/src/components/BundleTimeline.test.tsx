@@ -22,7 +22,7 @@ const makeBundle = (overrides: Partial<Bundle> = {}): Bundle => ({
   name: 'my-app-abc123',
   namespace: 'default',
   phase: 'Promoting',
-  type: 'standard',
+  type: 'image',
   pipeline: 'my-app',
   createdAt: '2026-04-15T10:00:00Z',
   ...overrides,
@@ -234,5 +234,48 @@ describe('BundleTimeline — ordering and visibility', () => {
     await user.keyboard('{/Shift}')
     expect(onCompareBundle).toHaveBeenCalledExactlyOnceWith(want)
     expect(onSelectBundle).not.toHaveBeenCalled()
+  })
+})
+
+describe('BundleTimeline — keyboard and type badges', () => {
+  const bundles = [
+    makeBundle({ name: 'app-ccccc', createdAt: '2026-04-15T12:00:00Z' }),
+    makeBundle({ name: 'app-bbbbb', createdAt: '2026-04-15T11:00:00Z', type: 'config', phase: 'Verified' }),
+    makeBundle({ name: 'app-aaaaa', createdAt: '2026-04-15T10:00:00Z', type: 'mixed', phase: 'Superseded' }),
+  ]
+
+  it('is one Tab stop, the shown bundle, and arrow keys move between bundles', async () => {
+    const user = userEvent.setup()
+    render(<><button>before</button><BundleTimeline bundles={bundles} selectedBundle="app-bbbbb" /><button>after</button></>)
+    const bar = screen.getByRole('toolbar', { name: /Bundle history/ })
+    const chips = Array.from(bar.querySelectorAll<HTMLButtonElement>('.bundle-chip'))
+    expect(chips.map(c => c.tabIndex)).toEqual([-1, 0, -1])
+
+    await user.click(screen.getByText('before'))
+    await user.tab()
+    expect(chips[1]).toHaveFocus()
+    await user.keyboard('{ArrowRight}')
+    expect(chips[2]).toHaveFocus()
+    await user.keyboard('{ArrowRight}')
+    expect(chips[2]).toHaveFocus()
+    await user.keyboard('{Home}')
+    expect(chips[0]).toHaveFocus()
+    await user.keyboard('{End}')
+    expect(chips[2]).toHaveFocus()
+    await user.keyboard('{ArrowLeft}')
+    expect(chips[1]).toHaveFocus()
+    await user.tab()
+    expect(screen.getByText('after')).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(chips[1]).toHaveFocus()
+  })
+
+  it('badges config and mixed bundles, not image ones', () => {
+    render(<BundleTimeline bundles={bundles} />)
+    expect(screen.getByRole('img', { name: 'config Bundle' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'image and config Bundle' })).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: 'image Bundle' })).not.toBeInTheDocument()
+    const chip = screen.getAllByRole('button').find(b => b.title.startsWith('app-bbbbb: '))!
+    expect(chip.title).toContain('config Bundle')
   })
 })
