@@ -509,6 +509,15 @@ spec:
                   limit the PromotionStep fails. Retries counted in gitCredentialRetries
                   are not counted here.
                 type: integer
+              scmWaitSince:
+                description: |-
+                  SCMWaitSince is when the step started waiting for an open SCM circuit
+                  (condition SCMUnavailable): its SCM host failed, so the step makes no
+                  call and waits without spending retryCount. The wait ends when the
+                  SCM answers, or fails the step after the environment's
+                  stepTimeoutSeconds, else the controller's --scm-wait-timeout (30m).
+                format: date-time
+                type: string
               state:
                 description: |-
                   State is the step execution state.
