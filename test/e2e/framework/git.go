@@ -103,8 +103,12 @@ func (e *Env) newRepo(t *testing.T, ns string, hook bool, create func(context.Co
 		e.beforeRepoDelete(t)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
+		// DeleteRepo retries the git server's transient refusals; one that
+		// lasts leaves a repo behind in a throwaway cluster, which harms no
+		// later test (repo names are per namespace), so it does not fail a
+		// test whose assertions passed (#1558).
 		if err := e.Git.DeleteRepo(ctx, repo); err != nil {
-			t.Errorf("delete repo %s: %v", repo.Name, err)
+			t.Logf("leaving repo %s: delete failed: %v", repo.Name, err)
 		}
 	})
 
