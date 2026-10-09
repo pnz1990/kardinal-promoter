@@ -345,7 +345,7 @@ func older(a, b *v1alpha1.HookRun) bool {
 // leaves a HookRun that knows its deadline.
 func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, hr *v1alpha1.HookRun, hash string) (ctrl.Result, error) {
 	now := metav1.NewTime(r.now())
-	if rec := hr.Spec.Recorded; rec != nil && rec.Result != "" && rec.SpecHash == hash {
+	if rec := hr.Spec.Recorded; rec.Result != "" && rec.SpecHash == hash {
 		// This hook already ran for the step (a HookRun of it was deleted
 		// and the Graph applied it again): take the step's record, never run
 		// the Job a second time.

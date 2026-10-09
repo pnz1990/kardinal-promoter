@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/ext"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -136,7 +137,9 @@ func celEval(t *testing.T, expr string, vars map[string]interface{}) (interface{
 	t.Helper()
 	require.True(t, strings.HasPrefix(expr, "${") && strings.HasSuffix(expr, "}"), "expression %q", expr)
 	var opts []cel.EnvOption
-	opts = append(opts, cel.OptionalTypes())
+	// As kro's environment (pkg/cel/environment.go): optionals, lists and
+	// strings extensions.
+	opts = append(opts, cel.OptionalTypes(), ext.Lists(), ext.Strings())
 	for k := range vars {
 		opts = append(opts, cel.Variable(k, cel.DynType))
 	}
@@ -420,31 +423,31 @@ func TestHookRunName(t *testing.T) {
 func TestBuilder_HookRecorded(t *testing.T) {
 	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: hookPipeline(), Bundle: makeBundle("app-v1", "app")})
 	require.NoError(t, err)
-	expr := hookNode(t, res.Graph, "hook0pre0prod0migrate").Template["spec"].(map[string]interface{})["recorded"].(string)
+	exprs := hookNode(t, res.Graph, "hook0pre0prod0migrate").Template["spec"].(map[string]interface{})["recorded"].(map[string]interface{})
 	step := func(records ...interface{}) map[string]interface{} {
 		return map[string]interface{}{"metadata": map[string]interface{}{"name": "app-app-v1-prod"},
 			"status": map[string]interface{}{"hookRecords": records}}
 	}
-	rec := map[string]interface{}{"hook": "migrate", "phase": "pre", "specHash": "abc", "result": "Succeeded"}
+	rec := map[string]interface{}{"hook": "migrate", "phase": "pre", "specHash": "abc", "result": "Succeeded", "message": "done"}
 	cases := []struct {
 		name  string
 		steps []interface{}
-		want  interface{}
+		want  map[string]string
 	}{
-		{"no step", []interface{}{}, map[string]interface{}{}},
-		{"no record", []interface{}{step()}, map[string]interface{}{}},
-		{"other hook", []interface{}{step(map[string]interface{}{"hook": "seed", "phase": "pre", "specHash": "x", "result": "Failed"})}, map[string]interface{}{}},
-		{"recorded", []interface{}{step(rec)}, rec},
+		{"no step", []interface{}{}, map[string]string{"specHash": "", "result": "", "message": ""}},
+		{"no records", []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"name": "app-app-v1-prod"}}},
+			map[string]string{"specHash": "", "result": "", "message": ""}},
+		{"other hook", []interface{}{step(map[string]interface{}{"hook": "seed", "phase": "pre", "specHash": "x", "result": "Failed"})},
+			map[string]string{"specHash": "", "result": "", "message": ""}},
+		{"recorded", []interface{}{step(rec)}, map[string]string{"specHash": "abc", "result": "Succeeded", "message": "done"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := celEval(t, expr, map[string]interface{}{"refSteps": tc.steps})
-			require.NoError(t, err)
-			got, err := json.Marshal(out)
-			require.NoError(t, err)
-			want, err := json.Marshal(tc.want)
-			require.NoError(t, err)
-			assert.JSONEq(t, string(want), string(got))
+			for f, want := range tc.want {
+				out, err := celEval(t, exprs[f].(string), map[string]interface{}{"refSteps": tc.steps})
+				require.NoError(t, err, f)
+				assert.Equal(t, want, out, f)
+			}
 		})
 	}
 }

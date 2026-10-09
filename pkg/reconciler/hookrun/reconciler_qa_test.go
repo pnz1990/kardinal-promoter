@@ -170,7 +170,7 @@ func TestHookRun_RecreatedTakesRecordedResult(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			hr := newHookRun(jobJSON(""))
-			hr.Spec.Recorded = &v1alpha1.HookRecord{Hook: "migrate", Phase: "pre", SpecHash: tc.specHash, Result: tc.result, Message: "Job x completed"}
+			hr.Spec.Recorded = v1alpha1.HookRunRecorded{SpecHash: tc.specHash, Result: tc.result, Message: "Job x completed"}
 			h := newHarness(t, hr)
 			h.reconcile()
 			h.reconcile()
