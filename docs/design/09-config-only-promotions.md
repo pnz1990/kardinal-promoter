@@ -128,7 +128,7 @@ spec:
   git:
     repoURL: https://github.com/myorg/app-config
     branch: main          # default main
-    pathGlob: configs/**  # recorded but not applied yet (see below)
+    pathGlob: configs/**  # only commits that change configs/** count
     interval: 5m          # default 5m
 ```
 
@@ -136,7 +136,7 @@ spec:
 
 `GitWatcher` (`pkg/source/git.go`) reads the branch head over the Git Smart HTTP protocol, without cloning. When the head differs from `status.lastSeenDigest`, the Subscription reconciler creates a Bundle with `type: config`, `configRef.gitRepo` set to `git.repoURL`, and `configRef.commitSHA` and `provenance.commitSHA` set to the new head. It then records the head in `status.lastSeenDigest` and the Bundle name in `status.lastBundleCreated`.
 
-Only the latest head is promoted: commits between two polls do not get their own Bundle. `pathGlob` is not applied, so any new commit on the branch creates a Bundle (#495).
+Only the latest head is promoted: commits between two polls do not get their own Bundle. With `pathGlob`, the watcher reads the commits since the previous poll (a shallow fetch of at most `discoveryLimit` commits) and the Bundle is for the newest commit that changed a matching path (#1454).
 
 ## CI Integration
 
@@ -216,4 +216,4 @@ These parts of the original design were never built. Open an issue before relyin
 - A per-Bundle `secretRef` for the config repo.
 - `message` and `path` fields on the config reference.
 - A config-specific PR body (commit message, changed files).
-- Subscription path filtering (`pathGlob`) and one Bundle per commit.
+- One Bundle per commit.

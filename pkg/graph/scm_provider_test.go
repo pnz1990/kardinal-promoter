@@ -14,15 +14,23 @@ import (
 )
 
 // TestBuilder_ScmProvider: the resolved provider is a static field of every
-// PromotionStep template, and none is written without one.
+// PromotionStep template, in the node shape and in the compact shape (one
+// forEach template), and none is written without one.
 func TestBuilder_ScmProvider(t *testing.T) {
 	id := &kardinalv1alpha1.ScmProviderIdentity{Kind: kardinalv1alpha1.KindScmProvider, Name: "gitlab", UID: "u-1"}
 	for _, tt := range []struct {
-		name string
-		id   *kardinalv1alpha1.ScmProviderIdentity
-	}{{"with providerRef", id}, {"without providerRef", nil}} {
+		name    string
+		id      *kardinalv1alpha1.ScmProviderIdentity
+		compact bool
+		steps   int
+	}{{"with providerRef", id, false, 2}, {"without providerRef", nil, false, 2},
+		{"compact with providerRef", id, true, 1}, {"compact without providerRef", nil, true, 1}} {
 		t.Run(tt.name, func(t *testing.T) {
-			res, err := graph.NewBuilder().Build(graph.BuildInput{
+			b := graph.NewBuilder()
+			if tt.compact {
+				b.CompactAbove = 0
+			}
+			res, err := b.Build(graph.BuildInput{
 				Pipeline:    makeLinearPipeline("app", "test", "prod"),
 				Bundle:      makeBundle("app-v1", "app"),
 				ScmProvider: tt.id,
@@ -42,7 +50,7 @@ func TestBuilder_ScmProvider(t *testing.T) {
 				}
 				assert.Equal(t, map[string]interface{}{"kind": "ScmProvider", "name": "gitlab", "uid": "u-1"}, spec["scmProvider"], n.ID)
 			}
-			assert.Equal(t, 2, steps)
+			assert.Equal(t, tt.steps, steps)
 		})
 	}
 }
