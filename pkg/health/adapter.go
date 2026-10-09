@@ -139,6 +139,17 @@ type CheckOptions struct {
 	// the ReplicaSet it names does not decide. Zero skips that check.
 	Since time.Time
 
+	// ChangedAt is the earliest time the promoted change can have reached
+	// the environment's branch: when git-push started for a direct push, or
+	// when the promotion PR was opened (kardinal does not record when the
+	// SCM merged it; the merge is later). Zero when unknown, or when the
+	// promotion changed nothing in git. The argoRollouts adapter counts a
+	// Healthy phase of a Rollout whose images cannot be compared only when
+	// it was set at or after this time (Since when zero), so a Rollout that
+	// turned Healthy between the merge and the start of the health check
+	// is not missed.
+	ChangedAt time.Time
+
 	// TargetUpdatedAt is when a check of this promotion first found the
 	// target (the Deployment, or the Canary's target) running the Bundle
 	// images (HealthStatus.TargetUpdated); zero when no check has yet. With
@@ -1343,7 +1354,12 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 			// The images cannot tell the promoted revision from the previous
 			// one (#1422): the phase counts only when set after this check
 			// started.
-			stale, note := healthySetBefore(rollout, opts.Since)
+			since := opts.ChangedAt
+			if since.IsZero() || opts.Since.IsZero() {
+				// Since zero: nothing changed in git, the phase decides.
+				since = opts.Since
+			}
+			stale, note := healthySetBefore(rollout, since)
 			if stale != "" {
 				return progressing(fmt.Sprintf("%s: Rollout phase: Healthy is for an earlier release: %s; "+
 					"waiting for Argo Rollouts to roll out the change", id, stale)), nil
@@ -1364,8 +1380,9 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 }
 
 // healthySetBefore explains why the Rollout's Healthy phase predates since,
-// the start of this health check, or returns "" when it does not (or since
-// is zero: the promotion changed nothing in git). Argo Rollouts sets its
+// the earliest time the promoted change can have reached git (see
+// CheckOptions.ChangedAt), or returns "" when it does not (or since is zero:
+// the promotion changed nothing in git). Argo Rollouts sets its
 // Healthy condition False when it starts rolling out a new revision and True
 // again once the revision is healthy, so the condition's lastTransitionTime
 // is when the current revision became healthy. Both times are compared in
@@ -1387,7 +1404,7 @@ func healthySetBefore(rollout *unstructured.Unstructured, since time.Time) (stal
 	}
 	start := since.Truncate(time.Second)
 	if at.Before(start) {
-		return fmt.Sprintf("its Healthy condition's lastTransitionTime %s is before this health check started (%s)",
+		return fmt.Sprintf("its Healthy condition's lastTransitionTime %s is before the promoted change reached git (%s)",
 			at.UTC().Format(time.RFC3339), start.UTC().Format(time.RFC3339)), ""
 	}
 	return "", ""

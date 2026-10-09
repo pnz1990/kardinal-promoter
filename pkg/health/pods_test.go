@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -85,6 +86,9 @@ func TestDeploymentAdapter_NamesNewPodFailure(t *testing.T) {
 			}(),
 			pods: []runtime.Object{pod("web-7d9f-abcde", "7d9f", waiting("app", "ImagePullBackOff", "Back-off pulling image"))},
 			want: "; new pod web-7d9f-abcde: container app is waiting: ImagePullBackOff: Back-off pulling image"},
+		{name: "a long multibyte message is cut on a rune boundary", deploy: stuckRollout(),
+			pods: []runtime.Object{pod("web-7d9f-abcde", "7d9f", waiting("app", "CrashLoopBackOff", "x"+strings.Repeat("é", 150)))},
+			want: "; new pod web-7d9f-abcde: container app is waiting: CrashLoopBackOff: x" + strings.Repeat("é", 99) + "..."},
 		{name: "a crash loop", deploy: stuckRollout(),
 			pods: []runtime.Object{pod("web-7d9f-abcde", "7d9f", waiting("app", "CrashLoopBackOff", "back-off 40s restarting failed container"))},
 			want: "; new pod web-7d9f-abcde: container app is waiting: CrashLoopBackOff: back-off 40s restarting failed container"},
@@ -110,6 +114,7 @@ func TestDeploymentAdapter_NamesNewPodFailure(t *testing.T) {
 				ExpectedImages: []health.ImageExpectation{{Repository: "ghcr.io/org/app", Tag: "v2"}},
 			})
 			require.NoError(t, err)
+			assert.True(t, utf8.ValidString(got.Reason), "the reason is valid UTF-8: %q", got.Reason)
 			assert.Contains(t, got.Reason, tt.want)
 			if tt.without != "" {
 				assert.False(t, strings.Contains(got.Reason, tt.without), got.Reason)

@@ -742,6 +742,11 @@ func TestBakeFlappingEnds(t *testing.T) {
 		return v1alpha1.EnvironmentSpec{Name: "test", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "1m"},
 			Bake: &v1alpha1.BakeConfig{Minutes: 30, Policy: policy}}
 	}
+	withMax := func(max string) v1alpha1.EnvironmentSpec {
+		e := env("reset-on-alarm")
+		e.Bake.MaxDuration = max
+		return e
+	}
 	ago := func(d time.Duration) *metav1.Time { t := metav1.NewTime(time.Now().Add(-d)); return &t }
 	in := func(d time.Duration) *metav1.Time { t := metav1.NewTime(time.Now().Add(d)); return &t }
 	// running is a window that started 20s ago, the first window at first.
@@ -789,6 +794,16 @@ func TestBakeFlappingEnds(t *testing.T) {
 			status: v1alpha1.PromotionStepStatus{HealthCheckExpiry: in(time.Minute), BakeFirstStartedAt: ago(10 * time.Minute), BakeResets: 2},
 			deploy: healthyDeployment("p", "test"), wantState: "HealthChecking", wantMsg: "bake: 0m/30m", wantResets: 2,
 			wantFirst: ago(10 * time.Minute)},
+		{name: "bake.maxDuration widens the deadline: an alarm resets", env: withMax("24h"),
+			status: running(ago(40 * time.Minute)), deploy: degradedDeployment("p", "test"),
+			wantState: "HealthChecking", wantMsg: "timer reset (resets=8", wantResets: 8, wantExpiry: time.Minute},
+		{name: "bake.maxDuration: an alarm after it fails", env: withMax("2h"),
+			status: running(ago(3 * time.Hour)), deploy: degradedDeployment("p", "test"),
+			wantState: "Failed", wantResets: 8,
+			wantMsg: "bake: no 30m contiguous healthy window within 2h0m0s of the first healthy check (bake.maxDuration; resets=8)"},
+		{name: "a bake.maxDuration shorter than the window counts as one window", env: withMax("10m"),
+			status: running(ago(20 * time.Minute)), deploy: degradedDeployment("p", "test"),
+			wantState: "HealthChecking", wantMsg: "timer reset (resets=8", wantResets: 8, wantExpiry: time.Minute},
 		{name: "a window from before bakeFirstStartedAt existed sets the deadline", env: env("reset-on-alarm"),
 			status: v1alpha1.PromotionStepStatus{HealthCheckExpiry: ago(time.Hour), BakeStartedAt: ago(32 * time.Minute)},
 			deploy: degradedDeployment("p", "test"), wantState: "Failed", wantMsg: deadlineMsg + "1)", wantResets: 1},

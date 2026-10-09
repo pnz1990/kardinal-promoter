@@ -197,14 +197,25 @@ func TestArgoRolloutsAdapter_ConfigBundleSince(t *testing.T) {
 		obj      *unstructured.Unstructured
 		expected []health.ImageExpectation
 		since    time.Time
+		changed  time.Time // CheckOptions.ChangedAt
 		want     wantKind
 		reason   string
 	}{
+		{name: "Healthy after the change reached git but before the health check started verifies",
+			obj:   rolloutObj(5, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("5"), "True", "2026-10-08T11:59:40Z")),
+			since: since, changed: since.Add(-time.Minute), want: isHealthy, reason: "Rollout phase: Healthy"},
+		{name: "Healthy before the change reached git waits",
+			obj:   rolloutObj(5, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("5"), "True", "2026-10-08T11:58:00Z")),
+			since: since, changed: since.Add(-time.Minute), want: isProgressing,
+			reason: "lastTransitionTime 2026-10-08T11:58:00Z is before the promoted change reached git (2026-10-08T11:59:00Z)"},
+		{name: "no Since (nothing changed in git) ignores ChangedAt",
+			obj:     rolloutObj(4, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("4"), "True", before)),
+			changed: since, want: isHealthy},
 		{name: "config-only: Healthy since before the health check waits",
 			obj:   rolloutObj(4, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("4"), "True", before)),
 			since: since, want: isProgressing,
 			reason: "Rollout prod/web: Rollout phase: Healthy is for an earlier release: its Healthy condition's lastTransitionTime " +
-				"2026-10-08T11:00:00Z is before this health check started (2026-10-08T12:00:00Z); waiting for Argo Rollouts to roll out the change"},
+				"2026-10-08T11:00:00Z is before the promoted change reached git (2026-10-08T12:00:00Z); waiting for Argo Rollouts to roll out the change"},
 		{name: "config-only: Healthy again after the health check started verifies",
 			obj:   rolloutObj(5, templateSpec(podinfo+":6.14.0"), withHealthyCondition(healthyRolloutStatus("5"), "True", after)),
 			since: since, want: isHealthy, reason: "Rollout phase: Healthy"},
@@ -231,6 +242,7 @@ func TestArgoRolloutsAdapter_ConfigBundleSince(t *testing.T) {
 				ArgoRollouts:   health.ArgoRolloutsConfig{Name: "web", Namespace: "prod"},
 				ExpectedImages: tt.expected,
 				Since:          tt.since,
+				ChangedAt:      tt.changed,
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, kindOf(got), got.Reason)

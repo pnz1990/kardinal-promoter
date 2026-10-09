@@ -210,7 +210,7 @@ func TestRollouts_VerifiedOnBundleRevision(t *testing.T) {
 // automated sync is off, so the Rollout is still Healthy on the previous
 // spec, its generation observed, when the step's health check runs: that
 // phase used to verify the step. It now counts only when Argo Rollouts
-// reported the Rollout Healthy after the health check started, so the step
+// reported the Rollout Healthy after the change reached git, so the step
 // waits with no failure, and is Verified once Argo CD applies the config and
 // the Rollout rolls it out.
 //
@@ -235,7 +235,7 @@ func TestRollouts_ConfigBundleWaitsForRollout(t *testing.T) {
 	stale := fmt.Sprintf("waiting for argoRollouts: Rollout %s/%s: Rollout phase: Healthy is for an earlier release: "+
 		"its Healthy condition's lastTransitionTime ", a.ns, rollout)
 	e.WaitStepMessageAll(t, a.ns, pipelineName, bundle, "prod", "HealthChecking", promoteTimeout,
-		stale, " is before this health check started (", "; waiting for Argo Rollouts to roll out the change")
+		stale, " is before the promoted change reached git (", "; waiting for Argo Rollouts to roll out the change")
 	require.Contains(t, e.ReadFile(t, a.repo, a.repo.Branch, file), configValue, "the config change is in git")
 	e.HoldStep(t, deliveryHold, a.ns, pipelineName, bundle, "prod", "a Healthy Rollout on the previous spec does not verify the config",
 		func(ps *v1alpha1.PromotionStep) bool {

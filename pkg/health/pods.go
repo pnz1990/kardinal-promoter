@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -130,7 +131,13 @@ func containerProblem(cs corev1.ContainerStatus) string {
 func trimMessage(reason, message string) string {
 	message = strings.Join(strings.Fields(message), " ")
 	if len(message) > maxPodMessage {
-		message = message[:maxPodMessage] + "..."
+		// Cut on a rune boundary: the reason is written to a status field,
+		// which must be valid UTF-8.
+		cut := maxPodMessage
+		for cut > 0 && !utf8.RuneStart(message[cut]) {
+			cut--
+		}
+		message = message[:cut] + "..."
 	}
 	if message == "" {
 		return reason

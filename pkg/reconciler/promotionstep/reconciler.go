@@ -1212,6 +1212,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	}
 	opts.ImagesOnly = bundle.Spec.Type == "image"
 	opts.Since = healthCheckStart(ps)
+	opts.ChangedAt = changeReachedGitAfter(ps)
 	if at := ps.Status.TargetUpdatedAt; at != nil {
 		opts.TargetUpdatedAt = at.Time
 	}
@@ -1509,6 +1510,26 @@ func healthCheckStart(ps *v1alpha1.PromotionStep) time.Time {
 	return time.Time{}
 }
 
+// changeReachedGitAfter is the earliest time the promoted change can have
+// reached the environment's branch: when the promotion PR was opened (the
+// merge is later; the SCM's merge time is not recorded), else when git-push
+// started. Zero when the step statuses record neither, or when the
+// promotion changed nothing in git.
+func changeReachedGitAfter(ps *v1alpha1.PromotionStep) time.Time {
+	if ps.Status.Outputs["noChanges"] == "true" {
+		return time.Time{}
+	}
+	if opened, ok := prOpenedAt(ps); ok {
+		return opened
+	}
+	for _, s := range ps.Status.Steps {
+		if s.Name == "git-push" && s.StartedAt != nil {
+			return s.StartedAt.Time
+		}
+	}
+	return time.Time{}
+}
+
 // handleBake implements the K-01 contiguous-healthy soak window.
 //
 // When env.Bake is configured, the step must be healthy for Bake.Minutes
@@ -1532,10 +1553,12 @@ func healthCheckStart(ps *v1alpha1.PromotionStep) time.Time {
 // A release that keeps flapping (healthy, then an alarm, within every
 // health.timeout) would re-arm that timeout forever. So the step must
 // complete one full window by a deadline: status.bakeFirstStartedAt (the
-// first window's start, never reset) + bake.minutes + health.timeout. A
-// window that stops at or after the deadline applies onHealthFailure, and a
-// stopped window's HealthCheckExpiry never passes the deadline (#1423). A
-// window running at the deadline may still complete.
+// first window's start, never reset) + bake.maxDuration (default
+// bake.minutes + health.timeout). A window that stops at or after the
+// deadline, on an alarm or on a Waiting result such as a paused canary,
+// applies onHealthFailure, and a stopped window's HealthCheckExpiry never
+// passes the deadline (#1423). A window running at the deadline may still
+// complete.
 //
 // All time values are written to CRD status fields — Graph-first compliant.
 func (r *Reconciler) handleBake(
@@ -1665,9 +1688,9 @@ func (r *Reconciler) handleBake(
 }
 
 // bakeDeadline is the time by which a step with env.bake must complete one
-// full window: the first window's start + bake.minutes + health.timeout. ok
-// is false before the first window started or without a bake. A step whose
-// window started before status.bakeFirstStartedAt existed takes the running
+// full window: the first window's start + bakeMaxDuration. ok is false
+// before the first window started or without a bake. A step whose window
+// started before status.bakeFirstStartedAt existed takes the running
 // window's start (handleBake records it).
 func bakeDeadline(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpec, timeout time.Duration) (time.Time, bool) {
 	if env.Bake == nil {
@@ -1680,7 +1703,18 @@ func bakeDeadline(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpec, time
 	if first == nil {
 		return time.Time{}, false
 	}
-	return first.Add(time.Duration(env.Bake.Minutes)*time.Minute + timeout), true
+	return first.Add(bakeMaxDuration(env, timeout)), true
+}
+
+// bakeMaxDuration is bake.maxDuration, or bake.minutes + health.timeout
+// when it is unset or not a duration (admission checks the format). A value
+// shorter than one window counts as one window.
+func bakeMaxDuration(env v1alpha1.EnvironmentSpec, timeout time.Duration) time.Duration {
+	window := time.Duration(env.Bake.Minutes) * time.Minute
+	if d, err := time.ParseDuration(env.Bake.MaxDuration); env.Bake.MaxDuration != "" && err == nil && d > 0 {
+		return max(d, window)
+	}
+	return window + timeout
 }
 
 // pastBakeDeadline reports that now is at or after the bake deadline.
@@ -1691,9 +1725,12 @@ func pastBakeDeadline(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpec, 
 
 // bakeDeadlineMessage says that the bake deadline passed.
 func bakeDeadlineMessage(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpec, timeout time.Duration) string {
-	return fmt.Sprintf("bake: no %dm contiguous healthy window within %s of the first healthy check "+
-		"(bake.minutes + health.timeout; resets=%d)",
-		env.Bake.Minutes, time.Duration(env.Bake.Minutes)*time.Minute+timeout, ps.Status.BakeResets)
+	source := "bake.minutes + health.timeout"
+	if env.Bake.MaxDuration != "" {
+		source = "bake.maxDuration"
+	}
+	return fmt.Sprintf("bake: no %dm contiguous healthy window within %s of the first healthy check (%s; resets=%d)",
+		env.Bake.Minutes, bakeMaxDuration(env, timeout), source, ps.Status.BakeResets)
 }
 
 // SetupWithManager registers the PromotionStep reconciler with controller-runtime.
