@@ -57,8 +57,8 @@ PIPE-NAME-01	live	core	covered	pipeline	environment name must be a DNS label, un
 PIPE-PATH-01	live	core	covered	pipeline	environment path must stay inside the repo: absolute paths, .. segments and escaping symlinks fail the step	docs/pipeline-reference.md:121
 PIPE-PHASE-01	live	core	covered	pipeline	Pipeline status.phase is Promoting while a Bundle is in flight or held by a gate	docs/changelog.md:244
 PIPE-DORA-01	live	core	covered	pipeline	status.deploymentMetrics: rolloutsLast30Days, p50/p90 commit-to-prod, autoRollbackRateMillis, operatorInterventionRateMillis, staleProdDays	api/v1alpha1/pipeline_types.go:663-745
-PIPE-DORA-02	live	core	covered	pipeline	status.deploymentMetrics change failure rate and mean time to restore (health failure, rollback), kardinal metrics rows, UI API	docs/guides/monitoring.md:208-226; api/v1alpha1/pipeline_types.go:705-740; pkg/reconciler/pipeline/metrics.go:310-492
-STEP-TIMINGS-01	live	core	covered	pipeline	PromotionStep status.steps records startedAt, completedAt and durationMs for every step	docs/guides/monitoring.md:228-234
+PIPE-DORA-02	live	core	covered	pipeline	status.deploymentMetrics change failure rate and mean time to restore (health failure, rollback), kardinal metrics rows, UI API	docs/guides/monitoring.md:209-227; api/v1alpha1/pipeline_types.go:705-740; pkg/reconciler/pipeline/metrics.go:310-492
+STEP-TIMINGS-01	live	core	covered	pipeline	PromotionStep status.steps records startedAt, completedAt and durationMs for every step	docs/guides/monitoring.md:229-235
 PIPE-GITSECRET-LABEL-01	live	core	covered	pipeline	an unlabeled git Secret still works and sets SecretReferenceable=False SecretNotReferenceable; labeling clears it	docs/pipeline-reference.md:99; pkg/reconciler/pipeline/reconciler.go:77-98
 STEP-SM-01	live	core	covered	step	PromotionStep state machine Pending -> Promoting -> (WaitingForMerge) -> HealthChecking -> Verified	api/v1alpha1/promotionstep_types.go:106-110; docs/concepts.md:189
 STEP-AUTO-01	live	core	covered	step	approval: auto clones, commits and pushes straight to the base branch; no PR	docs/pipeline-reference.md:127; docs/pr-evidence.md:150-152
@@ -251,7 +251,7 @@ METRIC-02	live	flux	covered	metriccheck	metrics.<name> in a gate expression bloc
 METRIC-03	live	flux	covered	metriccheck	result older than validUntil (max(3x interval, 30s)) reads Stale and the gate fails closed	docs/policy-gates.md:221-243; docs/reference/cel-context.md:138-144; pkg/reconciler/metriccheck/reconciler.go:481-483
 METRIC-04	live	flux	covered	metriccheck	query error, empty result or multi-element vector gives Fail (fail closed)	pkg/reconciler/metriccheck/prometheus.go:58-143; pkg/reconciler/metriccheck/prometheus.go:199-204; pkg/reconciler/metriccheck/reconciler.go:198-203
 METRIC-05	live	flux	covered	metriccheck	interval default 1m, minimum 10s; re-query on interval	api/v1alpha1/metriccheck_types.go:71-76; pkg/reconciler/metriccheck/reconciler.go:487-499
-METRIC-06	live	flux	covered	metriccheck	prometheusURL to loopback, link-local or metadata addresses is refused by the egress guard	docs/guides/security.md:555-621; pkg/egress/guard.go:70-93
+METRIC-06	live	flux	covered	metriccheck	prometheusURL to loopback, link-local or metadata addresses is refused by the egress guard	docs/guides/security.md:558-624; pkg/egress/guard.go:70-93
 METRIC-07	live	flux	covered	metriccheck	MetricCheck provider is one of prometheus, datadog, cloudwatch, newrelic, web: the CRD rejects any other provider and a provider without its settings block, and an unset provider defaults to prometheus	docs/metric-checks.md:7-13; api/v1alpha1/metriccheck_types.go:17-28
 METRIC-08	live	flux	covered	metriccheck	an org PolicyGate reads MetricChecks in its own namespace; a team MetricCheck with the same name cannot satisfy it	docs/policy-gates.md:175-186; docs/reference/cel-context.md:136; pkg/reconciler/policygate/reconciler.go:564-591
 METRIC-09	live	flux	covered	metriccheck	a MetricCheck whose status write fails evaluates again and retries the write after 5s once, then at its interval (no error backoff), and recovers within one interval once writes work	docs/changelog.md:153; docs/policy-gates.md:223-231; pkg/reconciler/metriccheck/reconciler.go:313-360
@@ -296,14 +296,14 @@ SUB-DEDUPE-02	live	core	covered	subscription	a digest that comes back after anot
 SUB-INTERVAL-01	live	core	covered	subscription	interval minimum 30s	docs/subscription.md:54; pkg/reconciler/subscription/reconciler.go:371-397
 SUB-STATUS-01	live	core	covered	subscription	status phase Watching/Error, lastBundle and lastCheckedAt; printer columns	docs/subscription.md:144-153; docs/subscription.md:182-191
 SUB-NS-01	live	core	covered	subscription	spec.namespace different from the Subscription namespace gives phase Error	api/v1alpha1/subscription_types.go:41-46
-SUB-EGRESS-01	live	core	covered	subscription	Subscription registry, token realm and git requests to loopback, link-local or metadata addresses are refused	pkg/source/watcher.go:48-61; docs/subscription.md:28-33; docs/guides/security.md:555-621; pkg/egress/guard.go:68-228
+SUB-EGRESS-01	live	core	covered	subscription	Subscription registry, token realm and git requests to loopback, link-local or metadata addresses are refused	pkg/source/watcher.go:48-61; docs/subscription.md:28-33; docs/guides/security.md:558-624; pkg/egress/guard.go:68-228
 NOTIF-01	live	core	covered	notifications	NotificationHook delivers Bundle.Verified with the documented JSON payload	docs/notifications.md:49-96; api/v1alpha1/notificationhook_types.go:10-12; pkg/reconciler/notificationhook/reconciler.go:125-135
 NOTIF-02	live	core	covered	notifications	NotificationHook delivers Bundle.Failed	docs/notifications.md:102
 NOTIF-03	live	core	covered	notifications	NotificationHook delivers PolicyGate.Blocked	docs/notifications.md:106; docs/notifications.md:124-133
 NOTIF-04	live	core	covered	notifications	NotificationHook delivers PromotionStep.Failed	docs/notifications.md:66-78; docs/notifications.md:108
 NOTIF-AUTH-01	live	core	covered	notifications	authorizationHeader sent verbatim (Slack/bearer)	docs/notifications.md:379-384; pkg/reconciler/notificationhook/reconciler.go:568-572
 NOTIF-SEL-01	live	core	covered	notifications	pipelineSelector limits which Pipelines a hook reports on	docs/notifications.md:439-450
-NOTIF-EGRESS-01	live	core	covered	notifications	hook URL to loopback, link-local or metadata address is refused	docs/guides/security.md:555-621; pkg/egress/guard.go:70-93
+NOTIF-EGRESS-01	live	core	covered	notifications	hook URL to loopback, link-local or metadata address is refused	docs/guides/security.md:558-624; pkg/egress/guard.go:70-93
 NOTIF-RETRY-01	live	core	covered	notifications	failed deliveries retried with backoff	docs/notifications.md:286-293; pkg/reconciler/notificationhook/reconciler.go:322-357; pkg/reconciler/notificationhook/reconciler.go:397-407
 NOTIF-GIVEUP-01	live	core	covered	notifications	delivery gives up after 10 attempts; a spec edit resets the count	docs/notifications.md:286-293
 NOTIF-NEW-01	live	core	covered	notifications	a new hook delivers only the newest existing event, not the backlog	docs/notifications.md:283-284
@@ -319,7 +319,7 @@ NOTIF-UNBLOCK-01	live	core	covered	notifications	PolicyGate.Unblocked once when 
 NOTIF-PR-01	live	core	covered	notifications	PromotionStep.PROpened and PromotionStep.WaitingForApproval with prURL for a pr-review step	docs/notifications.md:109-110
 NOTIF-SUPERSEDE-01	live	core	covered	notifications	Bundle.Superseded when a newer Bundle supersedes one	docs/notifications.md:103
 NOTIF-ROLLBACK-01	live	core	covered	notifications	Bundle.RollbackStarted and Bundle.RolledBack for kardinal rollback	docs/notifications.md:104-105
-NOTIF-ALLOWLIST-01	live	chart	covered	notifications	egress.allowlist: hosts and CIDRs allowed, other hook and MetricCheck URLs refused, deny list kept	docs/guides/security.md:580-608; pkg/egress/allowlist.go:41-78; pkg/egress/guard.go:158-182
+NOTIF-ALLOWLIST-01	live	chart	covered	notifications	egress.allowlist: hosts and CIDRs allowed, other hook and MetricCheck URLs refused, deny list kept	docs/guides/security.md:583-611; pkg/egress/allowlist.go:41-78; pkg/egress/guard.go:158-182
 NOTIF-RESTART-01	live	chart	covered	notifications	a controller restart sends no delivered event again	docs/notifications.md:317-323
 CLI-VERSION-01	live	core	covered	cli	kardinal version prints the CLI version line	cmd/kardinal/cmd/version.go:33; docs/reference/cli/kardinal-version.md
 CLI-VERSION-02	live	core	covered	cli	kardinal version shows the controller version from the kardinal-version ConfigMap (--controller-namespace)	cmd/kardinal/cmd/version.go:48-49; cmd/kardinal/cmd/version.go:65-75
@@ -350,7 +350,7 @@ CLI-POLICY-TEST-01	live	core	covered	cli	policy test evaluates an expression loc
 CLI-HISTORY-01	live	core	covered	cli	history <pipeline> --env --limit	cmd/kardinal/cmd/history.go:37
 CLI-LOGS-01	live	core	covered	cli	logs <pipeline> --env --bundle [-f] follows until a terminal state	cmd/kardinal/cmd/logs.go:42; docs/reference/cli/kardinal-logs.md:16
 CLI-DIFF-01	live	core	covered	cli	diff <bundleA> <bundleB>	cmd/kardinal/cmd/diff.go:32
-CLI-METRICS-01	live	core	covered	cli	metrics --pipeline [--env] [--days] prints DORA metrics	cmd/kardinal/cmd/metrics.go:28; docs/guides/monitoring.md:169-237
+CLI-METRICS-01	live	core	covered	cli	metrics --pipeline [--env] [--days] prints DORA metrics	cmd/kardinal/cmd/metrics.go:28; docs/guides/monitoring.md:170-238
 CLI-AUDIT-01	live	core	covered	cli	audit summary --pipeline --since	cmd/kardinal/cmd/audit.go:48
 CLI-REFRESH-01	live	core	covered	cli	refresh forces a re-reconcile via annotation	cmd/kardinal/cmd/refresh_dashboard.go:24
 CLI-DASHBOARD-01	live	core	covered	cli	dashboard [--address] [--no-open] opens the UI	cmd/kardinal/cmd/refresh_dashboard.go:81
@@ -374,17 +374,17 @@ UIAPI-APPROVE-01	live	ui	covered	ui-api	POST gates/[{ns}/]{name}/approve writes 
 UIAPI-VALIDATECEL-01	live	ui	covered	ui-api	POST validate-cel returns compile errors	cmd/kardinal-controller/ui_api.go:1206
 UIAPI-CREATE-01	live	ui	covered	ui-api	POST bundles creates a Bundle from the UI	cmd/kardinal-controller/ui_api.go:1536-1559; cmd/kardinal-controller/ui_api.go:1626-1650
 UIAPI-LOCAL-01	live	ui	covered	ui-api	with no UI auth mode, non-loopback clients or requests with proxy headers get 403	cmd/kardinal-controller/ui_peer.go:33-71; docs/installation.md:220-227; docs/changelog.md:237
-UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:798-841; cmd/kardinal-controller/ui_hosts.go:16-18; cmd/kardinal-controller/ui_hosts.go:53-64; cmd/kardinal-controller/main.go:912-917
-UIAPI-TOKEN-01	live	ui	covered	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:684-707
-UIAPI-TR-01	live	ui	covered	ui-api	TokenReview mode: 401 invalid token, 403 when SubjectAccessReview denies, 503 when review fails; 30s cache	docs/guides/security.md:716-727; pkg/uiauth/tokenreview.go:85-140; pkg/uiauth/cache.go:20-24
+UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:801-844; cmd/kardinal-controller/ui_hosts.go:16-18; cmd/kardinal-controller/ui_hosts.go:53-64; cmd/kardinal-controller/main.go:916-921
+UIAPI-TOKEN-01	live	ui	covered	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:687-710
+UIAPI-TR-01	live	ui	covered	ui-api	TokenReview mode: 401 invalid token, 403 when SubjectAccessReview denies, 503 when review fails; 30s cache	docs/guides/security.md:719-730; pkg/uiauth/tokenreview.go:85-140; pkg/uiauth/cache.go:20-24
 API-OPENAPI-01	live	ui	covered	ui-api	GET /api/v1/openapi.json serves docs/reference/openapi.json on both listeners and every UI read conforms to it	docs/reference/rest-api.md:1-20; cmd/kardinal-controller/openapi.go:11-32
 API-SATOKEN-01	live	ui	covered	ui-api	a ServiceAccount TokenRequest token with the viewer rules calls the UI API; another audience is refused	docs/reference/rest-api.md:54-137
-UIAPI-CORS-01	live	ui	covered	ui-api	CORS: allowed origin reflected, others 403, OPTIONS preflight 200	docs/guides/security.md:791-797
-UIAPI-TLS-01	live	ui	covered	ui-api	TLS on UI and webhook servers; cert without key is a startup error	docs/guides/security.md:871-875
-UIAPI-HEADERS-01	live	ui	covered	ui-api	browser security headers (CSP, nosniff, frame deny)	docs/guides/security.md:856-870; cmd/kardinal-controller/ui_security_headers.go:31-60
+UIAPI-CORS-01	live	ui	covered	ui-api	CORS: allowed origin reflected, others 403, OPTIONS preflight 200	docs/guides/security.md:794-800
+UIAPI-TLS-01	live	ui	covered	ui-api	TLS on UI and webhook servers; cert without key is a startup error	docs/guides/security.md:874-878
+UIAPI-HEADERS-01	live	ui	covered	ui-api	browser security headers (CSP, nosniff, frame deny)	docs/guides/security.md:859-873; cmd/kardinal-controller/ui_security_headers.go:31-60
 UIAPI-BODY-01	live	ui	covered	ui-api	request body over 1 MiB rejected	cmd/kardinal-controller/ui_auth.go:23; cmd/kardinal-controller/ui_auth.go:127-136
 UIAPI-REQUESTER-01	live	ui	covered	ui-api	TokenReview mode: a UI promote and a Bundle created from the UI record the caller's Kubernetes username as kardinal.io/requested-by and log it as requestedBy	docs/guides/security.md:381-404; cmd/kardinal-controller/ui_lifecycle.go:27-44; cmd/kardinal-controller/ui_api.go:1614-1642
-UIAPI-ACCESSLOG-01	live	ui	covered	ui-api	the UI API access log records a TokenReview login with user and groups, a 403 with the RBAC reason, a 401, and the source IP; no token is logged	docs/guides/security.md:469-512; pkg/accesslog/accesslog.go:94-131
+UIAPI-ACCESSLOG-01	live	ui	covered	ui-api	the UI API access log records a TokenReview login with user and groups, a 403 with the RBAC reason, a 401, and the source IP; no token is logged	docs/guides/security.md:469-515; pkg/accesslog/accesslog.go:159-196
 UIAPI-REQUESTER-02	live	ui	covered	ui-api	no UI auth: a UI promote and rollback record kardinal-ui as kardinal.io/requested-by	docs/guides/security.md:381-404; cmd/kardinal-controller/ui_lifecycle.go:23-25
 UIAPI-REQUESTER-03	live	ui	covered	ui-api	no UI auth: a Bundle created from the UI records kardinal-ui as kardinal.io/requested-by	docs/guides/security.md:381-404; cmd/kardinal-controller/ui_api.go:1614-1623
 UIAPI-REQUESTER-04	live	ui	covered	ui-api	no UI auth: a UI gate approval records kardinal-ui as the override's createdBy, which the gate reason shows	docs/guides/security.md:381-404; cmd/kardinal-controller/ui_api.go:1297; pkg/reconciler/policygate/reconciler.go:203
@@ -395,10 +395,10 @@ UI-STEPTIME-01	live	ui	covered	ui	step timings: a finished promotion's step list
 UI-DAG-01	live	ui	covered	ui	promotion DAG with per-env state, PR badge and tooltip	docs/roadmap.md:139
 UI-GATES-01	live	ui	covered	ui	Policy Gates panel, blocking banner and Promotion Errors panel	docs/roadmap.md:150
 UI-NODE-01	live	ui	covered	ui	node detail: step progress, events, CEL validate	docs/roadmap.md:146; docs/roadmap.md:150
-UI-ACTIONS-01	live	ui	covered	ui	promote, rollback, pause and resume from the UI	docs/roadmap.md:147; docs/guides/security.md:768-769
+UI-ACTIONS-01	live	ui	covered	ui	promote, rollback, pause and resume from the UI	docs/roadmap.md:147; docs/guides/security.md:771-772
 UI-CREATE-01	live	ui	covered	ui	Create Bundle dialog	docs/roadmap.md:147
 UI-TIMELINE-01	live	ui	covered	ui	bundle timeline select/compare and diff panel	docs/roadmap.md:140; docs/roadmap.md:149
-UI-INSECURE-01	live	ui	covered	ui	insecure-connection banner and port-forward hint	docs/guides/security.md:842-855
+UI-INSECURE-01	live	ui	covered	ui	insecure-connection banner and port-forward hint	docs/guides/security.md:845-858
 UI-SHELL-01	live	ui	covered	ui	keyboard shortcuts, theme, URL deep links, refreshed-ago polling	docs/roadmap.md:143
 UI-OVERRIDE-01	deprecated	ui	covered	ui	the web UI has no gate approve or override control (removed in #1245; use kardinal override)	docs/design/06-kardinal-ui.md:211; docs/comparison.md:35
 CIAPI-OFF-01	live	core	covered	ci-api	without --bundle-api-token / KARDINAL_BUNDLE_TOKEN, POST /api/v1/bundles is not mounted (404)	docs/ci-integration.md:233-259; cmd/kardinal-controller/main.go:650-663
@@ -423,9 +423,9 @@ CHART-PORTS-01	live	chart	covered	chart	metricsBindAddress, healthProbeBindAddre
 CHART-WATCHNS-01	live	chart	covered	chart	controller.watchNamespace: namespace-scoped install with Role instead of ClusterRole	chart/kardinal-promoter/values.yaml:83-90; docs/guides/security.md:223-260
 CHART-POLNS-01	live	chart	covered	chart	controller.policyNamespaces	chart/kardinal-promoter/values.yaml:91-95
 CHART-EXTRA-01	live	chart	covered	chart	extraArgs, extraEnv, volumes, volumeMounts	chart/kardinal-promoter/values.yaml:113-120
-CHART-TLS-01	live	chart	covered	chart	controller.tlsCertFile/tlsKeyFile with a mounted cert-manager Secret	chart/kardinal-promoter/values.yaml:70-82; docs/guides/security.md:877-925
-CHART-TLS-02	live	chart	covered	chart	a partial TLS config (controller.tlsCertFile or tlsKeyFile alone) fails helm install with a clear message; one TLS flag reaching the controller stops it with a clear error	chart/kardinal-promoter/templates/_helpers.tpl:109-113; chart/kardinal-promoter/values.yaml:71; cmd/kardinal-controller/http_server.go:31-33; docs/guides/security.md:875
-CHART-TLS-03	live	chart	covered	chart	TLS paths (controller.tlsCertFile and tlsKeyFile) not in a mounted secret, projected or csi volume fail helm install with a message naming the value; the same paths reaching the controller another way stop it with an error naming the file	chart/kardinal-promoter/templates/_helpers.tpl:114-146; chart/kardinal-promoter/values.yaml:74-76; docs/guides/security.md:921-925; docs/guides/security.md:927-940; cmd/kardinal-controller/http_server.go:85-89
+CHART-TLS-01	live	chart	covered	chart	controller.tlsCertFile/tlsKeyFile with a mounted cert-manager Secret	chart/kardinal-promoter/values.yaml:70-82; docs/guides/security.md:880-928
+CHART-TLS-02	live	chart	covered	chart	a partial TLS config (controller.tlsCertFile or tlsKeyFile alone) fails helm install with a clear message; one TLS flag reaching the controller stops it with a clear error	chart/kardinal-promoter/templates/_helpers.tpl:109-113; chart/kardinal-promoter/values.yaml:71; cmd/kardinal-controller/http_server.go:31-33; docs/guides/security.md:878
+CHART-TLS-03	live	chart	covered	chart	TLS paths (controller.tlsCertFile and tlsKeyFile) not in a mounted secret, projected or csi volume fail helm install with a message naming the value; the same paths reaching the controller another way stop it with an error naming the file	chart/kardinal-promoter/templates/_helpers.tpl:114-146; chart/kardinal-promoter/values.yaml:74-76; docs/guides/security.md:924-928; docs/guides/security.md:930-943; cmd/kardinal-controller/http_server.go:85-89
 CHART-SCM-01	live	chart	covered	chart	github.token, github.secretRef, scm.provider, scm.apiURL	chart/kardinal-promoter/values.yaml:157-185
 CHART-WEBHOOK-01	live	chart	covered	chart	webhook.secretRef	chart/kardinal-promoter/values.yaml:197-202
 CHART-BUNDLEAPI-01	live	chart	covered	chart	bundleAPI.tokenSecretRef mounts POST /api/v1/bundles	chart/kardinal-promoter/values.yaml:204-209
@@ -434,17 +434,17 @@ CHART-UIEXPOSE-01	live	chart	covered	chart	exposing the UI beyond port-forward	d
 CHART-RBAC-01	live	chart	covered	chart	ClusterRole/Role grants match what the controller reads and writes	chart/kardinal-promoter/templates/_rbac.tpl; docs/guides/security.md:7-58
 CHART-ARGOCDWRITE-01	live	core	covered	chart	rbac.argocdApplicationsWrite lets the argocd strategy patch Applications (checked on the rules helm template renders, bound in a test Role, not on the installed chart's RBAC)	chart/kardinal-promoter/values.yaml:240-242; chart/kardinal-promoter/templates/_rbac.tpl:115-123
 CHART-GRAPH-01	live	chart	covered	chart	graph.serviceAccountName, kroNamespace, readerNamespaces, aggregateToKro	chart/kardinal-promoter/values.yaml:248-273
-CHART-NETPOL-01	live	chart	covered	chart	networkPolicy allows metrics/UI/webhook ingress and API/SCM egress only	chart/kardinal-promoter/values.yaml:307-322; docs/guides/security.md:516-534
+CHART-NETPOL-01	live	chart	covered	chart	networkPolicy allows metrics/UI/webhook ingress and API/SCM egress only	chart/kardinal-promoter/values.yaml:307-322; docs/guides/security.md:519-537
 CHART-CLOCK-01	live	chart	covered	chart	scheduleClock creates kardinal-clock	chart/kardinal-promoter/values.yaml:343-349
 CHART-DEMO-01	live	chart	covered	chart	demo values	chart/kardinal-promoter/values.yaml:366-399
-CHART-MON-01	live	flux	covered	chart	serviceMonitor and prometheusRule are picked up by Prometheus Operator: the controller target is up and the alerts are loaded	chart/kardinal-promoter/values.yaml:401-426; docs/guides/monitoring.md:22-42; docs/guides/monitoring.md:238-271
-CHART-MON-02	live	flux	covered	chart	grafanaDashboard is imported by Grafana's dashboard sidecar, and its panels query the default Prometheus datasource and show data	chart/kardinal-promoter/values.yaml:428-450; chart/kardinal-promoter/templates/grafana-dashboard.yaml; chart/kardinal-promoter/dashboards/kardinal-promoter-dashboard.json:825-839; docs/guides/monitoring.md:316-363
+CHART-MON-01	live	flux	covered	chart	serviceMonitor and prometheusRule are picked up by Prometheus Operator: the controller target is up and the alerts are loaded	chart/kardinal-promoter/values.yaml:401-426; docs/guides/monitoring.md:22-42; docs/guides/monitoring.md:239-272
+CHART-MON-02	live	flux	covered	chart	grafanaDashboard is imported by Grafana's dashboard sidecar, and its panels query the default Prometheus datasource and show data	chart/kardinal-promoter/values.yaml:428-450; chart/kardinal-promoter/templates/grafana-dashboard.yaml; chart/kardinal-promoter/dashboards/kardinal-promoter-dashboard.json:825-839; docs/guides/monitoring.md:317-364
 CHART-SCHEMA-01	live	chart	covered	chart	values schema rejects removed keys (controller.shard, v0.8.1 krocodile block) with a clear error	chart/kardinal-promoter/values.schema.json:6; chart/kardinal-promoter/values.schema.json:93; docs/changelog.md:223; docs/installation.md:535
 CHART-INTEGJOBS-01	deprecated	chart	covered	chart	rbac.integrationTestJobs has no effect	chart/kardinal-promoter/values.yaml:243-246; docs/changelog.md:262; docs/installation.md:534
 CHART-VAP-01	deprecated	chart	covered	chart	validatingAdmissionPolicy.enabled has no effect	chart/kardinal-promoter/values.yaml:275-279; docs/changelog.md:262; docs/installation.md:533
-OBS-METRICS-01	live	flux	covered	observability	/metrics exposes the 7 kardinal metrics with labels after a promotion	docs/guides/monitoring.md:74-90; pkg/reconciler/observability/metrics.go:124-134
+OBS-METRICS-01	live	flux	covered	observability	/metrics exposes the 7 kardinal metrics with labels after a promotion	docs/guides/monitoring.md:74-91; pkg/reconciler/observability/metrics.go:124-134
 OBS-CRMETRICS-01	live	flux	covered	observability	controller-runtime reconcile and workqueue metrics	docs/guides/monitoring.md:46-73
-OBS-TRACING-01	live	chart	covered	observability	tracing.enabled exports OTLP/HTTP spans (reconcile, step, git, SCM, webhook) and NotificationHook webhooks carry traceparent	docs/guides/monitoring.md:367-413; pkg/tracing/http.go:32-67
+OBS-TRACING-01	live	chart	covered	observability	tracing.enabled exports OTLP/HTTP spans (reconcile, step, git, SCM, webhook) and NotificationHook webhooks carry traceparent	docs/guides/monitoring.md:368-414; pkg/tracing/http.go:32-67
 OBS-READYZ-01	live	core	covered	observability	/readyz readiness probe on the health port	chart/kardinal-promoter/templates/deployment.yaml:188-193
 OBS-HEALTHZ-01	live	core	covered	observability	/healthz liveness probe	chart/kardinal-promoter/templates/deployment.yaml:182-187
 UPG-CRDS-01	live	upgrade	covered	upgrade	v0.8.1 to v0.9.0: kro first, CRDs applied by hand, then helm upgrade	docs/changelog.md:96-104; docs/installation.md:270-285; docs/installation.md:407-441

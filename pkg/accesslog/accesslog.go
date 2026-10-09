@@ -17,8 +17,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
+
+// droppedTotal counts access log lines not written, by kind.
+var droppedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "kardinal_api_access_log_dropped_total",
+	Help: "API access log lines not written because their kind was over its per-second budget (denied, request). Logins and writes are never dropped.",
+}, []string{"kind"})
+
+func init() { ctrlmetrics.Registry.MustRegister(droppedTotal) }
 
 // Config selects what is logged.
 type Config struct {
@@ -29,16 +39,34 @@ type Config struct {
 	// TrustedProxies are the proxies whose X-Forwarded-For is believed when
 	// SourceIP is set. Others' X-Forwarded-For is ignored.
 	TrustedProxies []*net.IPNet
-	// PerSecond bounds the lines written per second (0: DefaultPerSecond).
-	// Lines past it are counted and reported in one summary line.
+	// PerSecond bounds the refusal lines (denied) and, separately, the
+	// all-requests lines (request) written per second (0: DefaultPerSecond).
+	// Logins and writes are never dropped. Dropped lines are counted
+	// (kardinal_api_access_log_dropped_total) and reported by kind every
+	// ReportEvery.
 	PerSecond int
+	// ReportEvery is how often dropped-line counts are logged (0:
+	// DefaultReportEvery).
+	ReportEvery time.Duration
 }
 
-// DefaultPerSecond is the default bound on access log lines per second.
+// DefaultPerSecond is the default per-kind bound on denied and request lines.
 const DefaultPerSecond = 50
 
-// maxReason is how much of a refusal's response body is logged.
-const maxReason = 256
+// DefaultReportEvery is how often dropped-line counts are logged by default.
+const DefaultReportEvery = 10 * time.Second
+
+// staticLoginEvery: a static-token request is logged as a login when the
+// token was not seen on that server for this long (like the TokenReview
+// cache, so a polling UI is one login, not one per poll).
+const staticLoginEvery = 30 * time.Second
+
+// maxReason is how much of a refusal's response body is logged, and
+// maxPath how much of the request path.
+const (
+	maxReason = 256
+	maxPath   = 256
+)
 
 // Logger writes access log lines.
 type Logger struct {
@@ -48,8 +76,9 @@ type Logger struct {
 
 	mu          sync.Mutex
 	windowStart time.Time
-	written     int
-	dropped     int
+	written     map[string]int
+	dropped     map[string]int
+	lastStatic  map[string]time.Time
 }
 
 // New returns a Logger writing to log.
@@ -57,7 +86,43 @@ func New(cfg Config, log zerolog.Logger) *Logger {
 	if cfg.PerSecond <= 0 {
 		cfg.PerSecond = DefaultPerSecond
 	}
-	return &Logger{cfg: cfg, log: log, now: time.Now}
+	if cfg.ReportEvery <= 0 {
+		cfg.ReportEvery = DefaultReportEvery
+	}
+	return &Logger{cfg: cfg, log: log, now: time.Now,
+		written: map[string]int{}, dropped: map[string]int{}, lastStatic: map[string]time.Time{}}
+}
+
+// Start reports dropped-line counts every ReportEvery until ctx ends (a
+// manager Runnable in the controller).
+func (l *Logger) Start(ctx context.Context) error {
+	t := time.NewTicker(l.cfg.ReportEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			l.report()
+			return nil
+		case <-t.C:
+			l.report()
+		}
+	}
+}
+
+// report logs and resets the dropped counts.
+func (l *Logger) report() {
+	l.mu.Lock()
+	dropped := l.dropped
+	l.dropped = map[string]int{}
+	l.mu.Unlock()
+	if len(dropped) == 0 {
+		return
+	}
+	ev := l.log.Warn().Int("perSecond", l.cfg.PerSecond)
+	for k, n := range dropped {
+		ev = ev.Int("dropped_"+k, n)
+	}
+	ev.Msg("api access log: lines dropped over the per-second budget")
 }
 
 // Entry is what the handlers learn about a request while serving it: the
@@ -99,18 +164,18 @@ func (l *Logger) Middleware(server string, next http.Handler) http.Handler {
 		e := &Entry{}
 		rw := &recorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r.WithContext(WithEntry(r.Context(), e)))
-		kind := l.kind(r, rw.status, e)
-		if kind == "" {
-			return
+		if e.Auth == "static-token" && l.staticLogin(server) {
+			e.Login = true
 		}
-		if !l.allow() {
+		kind := l.kind(r, rw.status, e)
+		if kind == "" || !l.allow(kind) {
 			return
 		}
 		ev := l.log.Info()
 		if rw.status >= 400 {
 			ev = l.log.Warn()
 		}
-		ev = ev.Str("access", kind).Str("server", server).Str("method", r.Method).Str("path", r.URL.Path).
+		ev = ev.Str("access", kind).Str("server", server).Str("method", r.Method).Str("path", clip(r.URL.Path, maxPath)).
 			Int("status", rw.status).Int64("durationMs", l.now().Sub(start).Milliseconds())
 		if e.User != "" {
 			ev = ev.Str("user", e.User)
@@ -121,7 +186,7 @@ func (l *Logger) Middleware(server string, next http.Handler) http.Handler {
 		if e.Auth != "" {
 			ev = ev.Str("auth", e.Auth)
 		}
-		if rw.status == http.StatusUnauthorized || rw.status == http.StatusForbidden || rw.status == http.StatusTooManyRequests {
+		if refused(rw.status) {
 			ev = ev.Str("reason", strings.TrimSpace(rw.reason.String()))
 		}
 		if l.cfg.SourceIP {
@@ -134,7 +199,7 @@ func (l *Logger) Middleware(server string, next http.Handler) http.Handler {
 // kind is why a request is logged, or "" when it is not.
 func (l *Logger) kind(r *http.Request, status int, e *Entry) string {
 	switch {
-	case status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusTooManyRequests:
+	case refused(status):
 		return "denied"
 	case isWrite(r.Method):
 		return "write"
@@ -154,25 +219,55 @@ func isWrite(method string) bool {
 	return true
 }
 
-// allow applies the per-second bound. When a second ends with lines
-// dropped, one summary line reports how many.
-func (l *Logger) allow() bool {
+// refused is a status the access log records as a refusal: 401, 403, 429,
+// and 503 (authentication unavailable: the review API failed, fail-closed).
+func refused(status int) bool {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusServiceUnavailable:
+		return true
+	}
+	return false
+}
+
+// allow applies the per-second budget of kind. Logins and writes always
+// pass; denied and request lines each have PerSecond a second.
+func (l *Logger) allow(kind string) bool {
+	if kind == "login" || kind == "write" {
+		return true
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
 	if now.Sub(l.windowStart) >= time.Second {
-		if l.dropped > 0 {
-			l.log.Warn().Int("dropped", l.dropped).Int("perSecond", l.cfg.PerSecond).
-				Msg("api access log: lines dropped over the rate limit")
-		}
-		l.windowStart, l.written, l.dropped = now, 0, 0
+		l.windowStart, l.written = now, map[string]int{}
 	}
-	if l.written >= l.cfg.PerSecond {
-		l.dropped++
+	if l.written[kind] >= l.cfg.PerSecond {
+		l.dropped[kind]++
+		droppedTotal.WithLabelValues(kind).Inc()
 		return false
 	}
-	l.written++
+	l.written[kind]++
 	return true
+}
+
+// staticLogin reports whether a static-token request on server is a login:
+// the first in staticLoginEvery.
+func (l *Logger) staticLogin(server string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if last, ok := l.lastStatic[server]; ok && now.Sub(last) < staticLoginEvery {
+		return false
+	}
+	l.lastStatic[server] = now
+	return true
+}
+
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 // sourceIP is the client address: the peer, or, when the peer is a trusted
@@ -185,7 +280,9 @@ func (l *Logger) sourceIP(r *http.Request) string {
 	if !l.trusted(host) {
 		return host
 	}
-	hops := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	// Every X-Forwarded-For header line, in order: a proxy may append a line
+	// instead of extending the first one.
+	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
 	for i := len(hops) - 1; i >= 0; i-- {
 		h := strings.TrimSpace(hops[i])
 		if h == "" {
@@ -274,3 +371,6 @@ func (r *recorder) Flush() {
 		f.Flush()
 	}
 }
+
+// NeedLeaderElection is false: every replica serves the APIs and logs.
+func (l *Logger) NeedLeaderElection() bool { return false }

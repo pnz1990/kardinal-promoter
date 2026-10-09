@@ -475,8 +475,8 @@ these accesses are logged:
 
 | `access` | When |
 |----------|------|
-| `login` | A token was checked with the API server (a TokenReview). Repeated requests within the 30-second review cache are not logins |
-| `denied` | The request was answered `401`, `403` or `429`. `reason` holds kardinal's message, for example `forbidden: user "…" cannot update pipelines.kardinal.io in namespace team-a` |
+| `login` | A token was checked with the API server (a TokenReview), or the shared static token was used for the first time in 30 seconds on that server. Repeated requests within the 30-second review cache are not logins |
+| `denied` | The request was answered `401`, `403`, `429` or `503` (authentication unavailable: the review API failed and the API fails closed). `reason` holds kardinal's message, for example `forbidden: user "…" cannot update pipelines.kardinal.io in namespace team-a` |
 | `write` | Any request that is not `GET`, `HEAD` or `OPTIONS`: promote, roll back, pause, resume, approve, create Bundle |
 | `request` | Any other request, only with `controller.accessLog.allRequests=true` (`--access-log-all-requests`) |
 
@@ -499,12 +499,15 @@ nearest `X-Forwarded-For` entry that is not a trusted proxy. It ignores `X-Forwa
 from any other peer, so clients cannot forge it.
 
 **What is never logged.** Tokens, request headers, request bodies and query strings are never
-logged. Only kardinal's own refusal message is logged: at most 256 bytes of the response, and
-only for `401`, `403` and `429`.
+logged. The request path is logged, cut to 256 bytes. It holds only route segments and object
+names, and a caller controls it, so it could carry anything put in a URL. For refusals, kardinal's own refusal
+message is logged: at most 256 bytes of the response, only for `401`, `403`, `429` and `503`.
 
-**Rate limit.** At most 50 access lines are written per second. Lines over the limit are
-counted, and one line with `dropped` reports how many, so a flood of refused requests cannot
-fill the log.
+**Rate limit.** `login` and `write` lines are never dropped. `denied` and `request` lines each
+have a budget of 50 a second. Lines over a budget are not written. Every 10 seconds one line
+reports how many of each kind were dropped (`dropped_denied`, `dropped_request`), and the
+counter `kardinal_api_access_log_dropped_total{kind}` counts them. So a flood of refused
+requests cannot fill the log, and it cannot hide a login or a write.
 
 The access log covers the HTTP APIs. What the controller then does (promotions, gate
 results, rollbacks) is in the AuditEvents above, with the caller in `kardinal.io/requested-by`

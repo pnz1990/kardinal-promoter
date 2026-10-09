@@ -668,6 +668,10 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to configure webhook server")
 	}
+	// Reports access log lines dropped over their per-second budget.
+	if err := mgr.Add(accessLog); err != nil {
+		logger.Fatal().Err(err).Msg("unable to add the access log reporter")
+	}
 	if err := mgr.Add(webhookServer); err != nil {
 		logger.Fatal().Err(err).Msg("unable to add webhook server")
 	}

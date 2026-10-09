@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -126,25 +127,98 @@ func TestSourceIP(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestRateBound: past PerSecond lines in a second, lines are dropped and one
-// summary line says how many.
-func TestRateBound(t *testing.T) {
+// TestBudgets: denied lines are capped per second and reported by kind,
+// with the Prometheus counter; logins and writes are never dropped.
+func TestBudgets(t *testing.T) {
 	var buf bytes.Buffer
 	now := time.Unix(1_000, 0)
 	l := New(Config{PerSecond: 3}, zerolog.New(&buf))
 	l.now = func() time.Time { return now }
 	h := l.Middleware("ui", handler())
-	for i := 0; i < 10; i++ {
-		req := httptest.NewRequest("POST", "/api/v1/ui/pause", nil)
-		req.Header.Set("Authorization", "Bearer nope")
+	do := func(method, path, auth string) {
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", auth)
 		h.ServeHTTP(httptest.NewRecorder(), req)
 	}
-	assert.Len(t, lines(t, &buf), 3)
-	now = now.Add(time.Second)
-	req := httptest.NewRequest("POST", "/api/v1/ui/pause", nil)
-	h.ServeHTTP(httptest.NewRecorder(), req)
+	before := testutil.ToFloat64(droppedTotal.WithLabelValues("denied"))
+	for i := 0; i < 10; i++ {
+		do("GET", "/api/v1/ui/pipelines", "Bearer nope") // denied
+		do("POST", "/api/v1/ui/pause", "Bearer good")    // write
+		do("GET", "/api/v1/ui/pipelines?login=1", "Bearer good")
+	}
+	kinds := map[string]int{}
+	for _, l := range lines(t, &buf) {
+		kinds[l["access"].(string)]++
+	}
+	assert.Equal(t, map[string]int{"denied": 3, "write": 10, "login": 10}, kinds)
+	assert.Equal(t, float64(7), testutil.ToFloat64(droppedTotal.WithLabelValues("denied"))-before)
+
+	buf.Reset()
+	l.report()
 	got := lines(t, &buf)
-	require.Len(t, got, 5)
-	assert.Equal(t, float64(7), got[3]["dropped"])
-	assert.Equal(t, "denied", got[4]["access"])
+	require.Len(t, got, 1)
+	assert.Equal(t, float64(7), got[0]["dropped_denied"])
+	buf.Reset()
+	l.report()
+	assert.Empty(t, buf.String(), "nothing to report")
+
+	now = now.Add(time.Second)
+	do("GET", "/api/v1/ui/pipelines", "Bearer nope")
+	assert.Len(t, lines(t, &buf), 1, "a new second has a new budget")
+}
+
+// TestRefusalsAndStaticLogins: a 503 (authentication unavailable) is a
+// refusal; a static-token request is a login once per 30 s per server; a
+// long path is cut to 256 bytes.
+func TestRefusalsAndStaticLogins(t *testing.T) {
+	var buf bytes.Buffer
+	now := time.Unix(2_000, 0)
+	l := New(Config{}, zerolog.New(&buf))
+	l.now = func() time.Time { return now }
+	unavailable := l.Middleware("ui", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "auth unavailable", http.StatusServiceUnavailable)
+	}))
+	unavailable.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/v1/ui/pipelines", nil))
+	got := lines(t, &buf)
+	require.Len(t, got, 1)
+	assert.Equal(t, "denied", got[0]["access"])
+	assert.Equal(t, "auth unavailable", got[0]["reason"])
+
+	buf.Reset()
+	h := l.Middleware("bundle-api", handler())
+	static := func(path string) {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("Authorization", "Bearer s3cret-static")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	static("/a")
+	static("/a")
+	now = now.Add(31 * time.Second)
+	static("/" + strings.Repeat("p", 1000))
+	got = lines(t, &buf)
+	require.Len(t, got, 2, "first use, then again after 30 s")
+	for _, g := range got {
+		assert.Equal(t, "login", g["access"])
+		assert.Equal(t, "static-token", g["auth"])
+	}
+	assert.Len(t, got[1]["path"], 256+len("…"))
+	assert.NotContains(t, buf.String(), "s3cret")
+}
+
+// TestSourceIP_MultipleHeaderLines: X-Forwarded-For lines are joined in
+// order before the right-to-left walk, so a proxy that appends a line is
+// followed and an earlier forged line is not believed.
+func TestSourceIP_MultipleHeaderLines(t *testing.T) {
+	proxies, err := ParseCIDRs([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+	l := New(Config{SourceIP: true, TrustedProxies: proxies}, zerolog.Nop())
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "10.0.0.2:443"
+	r.Header.Add("X-Forwarded-For", "1.1.1.1")                // forged by the client
+	r.Header.Add("X-Forwarded-For", "198.51.100.9, 10.0.0.7") // appended by the proxies
+	assert.Equal(t, "198.51.100.9", l.sourceIP(r))
+	r.Header.Del("X-Forwarded-For")
+	r.Header.Add("X-Forwarded-For", "198.51.100.9")
+	r.Header.Add("X-Forwarded-For", "10.0.0.7")
+	assert.Equal(t, "198.51.100.9", l.sourceIP(r), "the client is in the first line, a proxy in the second")
 }
