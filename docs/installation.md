@@ -42,12 +42,68 @@ The script also tunes kro for kardinal's Graphs:
 | `config.graphConcurrentReconciles` | 1 | 8 | `KRO_GRAPH_CONCURRENT_RECONCILES` |
 | `config.clientQps` | 100 | 300 | `KRO_CLIENT_QPS` |
 | `config.clientBurst` | 150 | 500 | `KRO_CLIENT_BURST` |
+| `deployment.resources.limits.memory` | 1024Mi | 2Gi | `KRO_MEMORY_LIMIT` |
+| `deployment.resources.requests.memory` | 128Mi | 768Mi | `KRO_MEMORY_REQUEST` |
 
 kro reconciles one Graph at a time by default, and each reconcile makes about three API calls per
 object the Graph applies. With one worker, one large promotion (a Pipeline with 150 environments)
 delays every other Graph in the cluster by several seconds, up to about 30 seconds while two such
 promotions run. Eight workers keep that under half a second. If you install kro another way, set
 the same values.
+
+### Sizing kro
+
+kro keeps every Graph it reconciles in memory: its compiled program and its watches, 3 to 6 MB
+for a kardinal Graph whatever its size (#1492: OOMKilled at 337 Graphs in 1 GiB; 5.4 MB per Graph
+measured for 14 KB Graphs under load). kardinal creates one Graph per
+Bundle and retires it once the Bundle has finished: the Graph is deleted, and the Bundle keeps a
+record of each PromotionStep in `status.retiredSteps`, which rollback, promote, history, metrics,
+the CLI and the UI read. So the Graphs kro holds are:
+
+| Graphs | How many |
+|---|---|
+| Bundles promoting | about one per Pipeline and Bundle type (a newer Bundle supersedes an older one) |
+| Superseded Bundles, and Verified or Failed ones a newer Verified Bundle replaced in every environment they touched | those whose steps settled in the last `graph.retire.superseded` (1m), plus the ones the controller has not reached yet |
+| Verified Bundles still deployed | those verified in the last `graph.retire.verified` (1h) |
+| Failed Bundles not replaced yet (and Bundles with a step stopped by a health alarm) | those failed in the last `graph.retire.failed` (24h) |
+
+Why these delays: nothing reads a Superseded Bundle's Graph once its steps have settled (a Graph
+is retired only when every step is `Verified`, `Failed`, `RollingBack` or `AbortedByAlarm` and none
+still holds a PR finalizer), so
+its delay is only a grace period, and it is the one that grows with the Bundle rate. At 2 Bundles a
+second, 1 minute keeps about 120 Superseded Graphs (about 650 MB); 10 minutes would keep about
+1,200 (about 6.5 GB, over kro's 1 GiB default). A Verified Bundle still deployed keeps its Graph
+an hour after it finished, and a Failed one a day, for a person to look at it before it becomes
+final (a retired Failed Bundle no longer recovers).
+
+Measured with the scale suite (`full` profile: 40 Pipelines, 2 Bundles a second for 10 minutes,
+1,200 Bundles), with the default delays:
+
+| Run | Live Graphs (peak) | kro working set (peak) |
+|---|---|---|
+| Steady load | 126 | 668 MiB |
+| Same load, controller leader killed 13 times | 91 | 657 MiB |
+| Before retirement had its own work queue, leader kills | about 300 | OOMKilled at 1 GiB |
+
+`hack/install-kro.sh` sets 2Gi: about three times that steady state, enough for the Graphs a
+restarted or lagging controller has not retired yet (some 300).
+
+Set `KRO_MEMORY_LIMIT` to about 256 MiB plus 6 MB times the live Graphs, with headroom for bursts.
+Per Pipeline, the live Graphs are about:
+
+    1 (in flight) + 1 (deployed, for an hour after it verified)
+      + B x 1m (Superseded: B Bundles a minute)
+      + F x 24h (Failed Bundles a minute that no newer Verified Bundle replaced yet)
+
+The failure term dominates for a Pipeline that fails often and is not fixed: 10 failures a day that
+stay unreplaced keep 10 Graphs. For 200 Pipelines that each promote a few Bundles an hour and fail
+one a day, about 600 Graphs, use 4Gi. A burst of
+Bundles, for example 2 a second for 10 minutes over 40 Pipelines, holds a few hundred Graphs while
+the controller catches up; size for the burst. A kro that
+runs out of memory restarts and stops promoting every Pipeline until it has compiled every Graph
+again. `kubectl get graphs -A --no-headers | wc -l` shows the live count. Shorter retirement delays
+(chart `graph.retire.*`, or a Pipeline's `kardinal.io/graph-retire-after` annotation) hold fewer
+Graphs; see [Bundle history](concepts.md#graph-retirement) for what a retired Bundle keeps.
 
 !!! warning "Version compatibility"
     The kro version kardinal-promoter is tested against is pinned in `hack/install-kro.sh`.
@@ -158,6 +214,7 @@ kardinal version
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
 | `graph.compactAbove` | `null` | Environment count above which a Bundle's Graph uses the compact shape (`--graph-compact-above`; default `100`; `0` makes every Graph compact). See [Large Pipelines](pipeline-reference.md#large-pipelines) |
 | `controller.gateStatusHeartbeat` | `""` | Longest a PolicyGate's status goes unwritten while its result does not change (`--gate-status-heartbeat`; default `10m`; `0s` writes on every evaluation). See [Policy gates](policy-gates.md#re-evaluation) |
+| `controller.workers.promotionStep` / `.prStatus` / `.policyGate` / `.bundle` / `.pipeline` | unset (16 / 8 / 8 / 4 / 4) | How many objects of a kind are reconciled at once (`--promotionstep-workers`, ...). One object is never reconciled twice at once. See [Controller concurrency](#controller-concurrency) |
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts`. Set both or neither: the chart refuses one alone, and a path that is not in a mounted `secret`, `projected` or `csi` volume (for certificates that come another way, set `KARDINAL_TLS_CERT_FILE` and `KARDINAL_TLS_KEY_FILE` with `controller.extraEnv`) |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
@@ -194,6 +251,9 @@ The monitoring values (`serviceMonitor`, `prometheusRule`, `grafanaDashboard`) a
 | `graph.kroNamespace` | `kro-system` | Namespace kro runs in (NetworkPolicy egress; `""` drops the rule) |
 | `graph.aggregateToKro` | `true` | Ship a ClusterRole aggregated into kro's controller role (kro with `rbac.mode=aggregation`) |
 | `graph.readerNamespaces` | `[argocd, flux-system]` | `--graph-reader-namespaces`: namespaces, besides a Graph's own, where the Graph identity may be bound to the reader role for health `ref` nodes. A health ref into any other namespace is dropped from the Graph with a warning (health refs are observational; the PromotionStep reconciler still checks health). Add the namespaces your `health.resource` targets live in. `["*"]` allows every namespace; use it only when every Pipeline author may read every namespace. `kube-system`, `kube-public` and `kube-node-lease` are never allowed |
+| `graph.retire.superseded` | `""` | How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, is kept before it is retired (`--graph-retire-superseded-after`; default `1m`; `0s` keeps it). See [Graph retirement](concepts.md#graph-retirement) |
+| `graph.retire.verified` | `""` | The same for a Verified Bundle still deployed in an environment (`--graph-retire-verified-after`; default `1h`) |
+| `graph.retire.failed` | `""` | The same for a Failed Bundle, which no longer recovers once retired (`--graph-retire-failed-after`; default `24h`) |
 
 ---
 
@@ -256,6 +316,14 @@ release name other than `kardinal-promoter`, the Service is named
 - **Step timings.** Selecting an environment step lists the steps of that promotion
   (`git-clone` … `health-check`) with their durations, and a bar for each that shows where it
   ran in the promotion's time. A slow health check or push stands out at once.
+- **Bundle types.** The Bundle card names what the shown Bundle changes: `image`, `config`,
+  `image + config` (a mixed Bundle) or `chart`. In the Bundle history only the Bundles that are
+  not image Bundles carry the tag.
+- **Keyboard.** The first Tab stop skips to the main content. Each fleet line, and the Bundle
+  history, is a single Tab stop: the arrow keys move between its stations or Bundles (Home and
+  End to the ends, Up and Down between fleet lines), and Enter opens the one in focus. `?` lists
+  the shortcuts (`/` filter, `r` refresh, `Esc` close a panel). Every view is checked against
+  WCAG 2.1 AA, colour contrast included, in both themes.
 - **Dark and light themes.** The UI follows the operating system's setting until you pick one
   with the ☀ / ☾ button next to the refresh indicator; the choice is kept in the browser.
 
@@ -562,6 +630,50 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 - **Rolling back to v0.8.1** was not tested.
 
 ---
+
+## Controller concurrency
+
+Each controller reconciles several objects at once. A PromotionStep holds its worker through
+every git and SCM round trip, so one worker made the steps of every Pipeline in the cluster wait
+for each other: one slow repository or git host slowed every promotion. The defaults below
+were measured with the scale suite's `full` profile (`TestScale_LoadPipelines`: 200 Pipelines
+x 3 automatic environments, one Bundle each, started together; `TestScale_LoadBurst`: 1,000
+Bundles over 100 Pipelines; controller built with `-race`, 4 CPU, 2 replicas):
+
+| Controller | 200 Pipelines: step p50 / p99 | Bundle end to end p50 / p99 | All settled | 1,000 Bundles: Bundle end to end p50 / p99 |
+|---|---|---|---|---|
+| 1 worker each (before) | 65 s / 81 s | 245 s / 319 s | 324 s | 201 s / 221 s |
+| the worker defaults | 1 s / 3 s | 110 s / 314 s | 325 s | 90 s / 153 s |
+| the defaults, and Graph translations of one namespace no longer list its Graphs under one lock for the whole controller | 3 s / 6 s | 52 s / 82 s | 87 s | 16 s / 26 s |
+
+With the defaults the `full` profile meets the latency objective of `TestScale_LatencySLO`
+(test/e2e/README.md, Latency SLO): automatic steps p50 2 s and p99 5 s, Bundles p99 92 s,
+against 10 s, 30 s and 2 minutes.
+
+With 1.5 s of latency on every git round trip and 2 Bundles a second over 40 Pipelines for 10
+minutes, one worker brought 180 steps to `Verified` (step p99 67 s, PromotionStep queue 84);
+the defaults brought 597 (step p99 20 s, queue 22). The controller's memory was the same with
+one worker and with the defaults (peak resident about 700 MiB in that run with the race
+detector, which inflates it), so in that run the workers added no memory of note. That is not a
+sizing guide: the controller's memory grows with the number of Pipelines, Bundles and steps it
+caches, and the chart's default limit is too small for the `full` profile ([#1553](https://github.com/pnz1990/kardinal-promoter/issues/1553)).
+
+| Value | Flag | Default | Why |
+|---|---|---|---|
+| `controller.workers.promotionStep` | `--promotionstep-workers` | `16` | git clone, commit, push, PR and health checks: almost all waiting on the network |
+| `controller.workers.prStatus` | `--prstatus-workers` | `8` | one SCM call per poll |
+| `controller.workers.policyGate` | `--policygate-workers` | `8` | CEL evaluation and a status write; the compiled programs are shared |
+| `controller.workers.bundle` | `--bundle-workers` | `4` | Graph creation; the Graph identity of one namespace is bound under that namespace's lock, so Bundles of different namespaces translate in parallel |
+| `controller.workers.pipeline` | `--pipeline-workers` | `4` | status and history |
+
+One object is never reconciled by two workers at once: the work queue serializes it. Bundles
+of one Pipeline with `maxConcurrentPromotions` count the free slots under a per-Pipeline lock
+(as does a Failed Bundle that recovers into a slot), so more workers never promote past the
+cap. Environments that promote in parallel to one branch (waves, a fan-in) push at the same
+time and rebase onto each other's commits (git-push retries a moved branch), so a wave of 50
+regions on one branch takes about a minute even when each step is fast. Raise `promotionStep` for many Pipelines on slow
+git hosts. Each step that runs at once holds one shallow clone of its repository in the
+controller's memory and its working directory on disk.
 
 ## Graceful shutdown
 

@@ -57,6 +57,23 @@ spec:
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
             {{- end }}
+            {{- with .Values.controller.workers }}
+            {{- with .promotionStep }}
+            - --promotionstep-workers={{ . }}
+            {{- end }}
+            {{- with .prStatus }}
+            - --prstatus-workers={{ . }}
+            {{- end }}
+            {{- with .policyGate }}
+            - --policygate-workers={{ . }}
+            {{- end }}
+            {{- with .bundle }}
+            - --bundle-workers={{ . }}
+            {{- end }}
+            {{- with .pipeline }}
+            - --pipeline-workers={{ . }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.controller.gateStatusHeartbeat }}
             - --gate-status-heartbeat={{ . }}
             {{- end }}
@@ -70,6 +87,15 @@ spec:
             {{- with .trustedProxies }}
             - --access-log-trusted-proxies={{ join "," . }}
             {{- end }}
+            {{- end }}
+            {{- with (.Values.graph.retire).superseded }}
+            - --graph-retire-superseded-after={{ . }}
+            {{- end }}
+            {{- with (.Values.graph.retire).failed }}
+            - --graph-retire-failed-after={{ . }}
+            {{- end }}
+            {{- with (.Values.graph.retire).verified }}
+            - --graph-retire-verified-after={{ . }}
             {{- end }}
             {{- with .Values.controller.watchNamespace }}
             - --watch-namespace={{ . }}

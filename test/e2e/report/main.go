@@ -3,7 +3,12 @@
 
 // Command report reads `go test -json` from stdin, prints the test output as
 // it arrives, and ends with a summary. It exits 1 when a test failed, when a
-// test skipped (a skipped live test proves nothing), or when no test ran.
+// test skipped (a skipped live test proves nothing), when no test ran, or
+// when the test binary crashed or timed out (a test started and never ended).
+// A scale test that reproduces an open bug (scale.KnownBug) is an expected
+// failure: when it fails it is listed as a known bug (action "xfail") and
+// does not fail the run; when it passes, scale.KnownBug fails it with "KNOWN
+// BUG #n FIXED", which fails the run like any failure.
 // With GITHUB_STEP_SUMMARY set it also writes the summary there as Markdown;
 // with -out it writes the results as JSON for test/e2e/proof.
 //
@@ -17,7 +22,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -36,13 +43,30 @@ type result struct {
 	Test    string  `json:"test"`
 	Action  string  `json:"action"`
 	Elapsed float64 `json:"elapsed"`
+	// KnownBug is the open bug an expected failure ("xfail") reproduces.
+	KnownBug int `json:"knownBug,omitempty"`
 }
+
+// The lines scale.KnownBug logs, as testing prints a t.Log line (indented
+// "file.go:N: "): the bug the test reproduces, and the line its cleanup
+// adds when the test passed anyway. Only TestScale_ tests use KnownBug.
+// crashLine is what the Go runtime prints when the test binary dies: a
+// timeout or a panic outside a test's own recovery.
+var crashLine = regexp.MustCompile(`^(panic: test timed out|panic: |fatal error: )`)
+
+var (
+	knownBug      = regexp.MustCompile(`^\s+[\w./-]+\.go:[0-9]+: KNOWN BUG #([0-9]+) https://github\.com/pnz1990/kardinal-promoter/issues/[0-9]+: `)
+	knownBugFixed = regexp.MustCompile(`^\s+[\w./-]+\.go:[0-9]+: KNOWN BUG #[0-9]+ FIXED`)
+)
 
 type summary struct {
 	results []result
 	// pkgFailed is set when a package failed outside any test (a build error,
 	// a panic in TestMain, a timeout).
 	pkgFailed bool
+	// crashed is set when the test binary panicked or timed out, or a test
+	// started and never ended: the run proves nothing, xfails or not.
+	crashed bool
 }
 
 // file is the -out JSON: test/e2e/proof reads one per suite run.
@@ -62,15 +86,29 @@ func (s *summary) count(action string) int {
 	return n
 }
 
+// knownBugs counts the expected failures.
+func (s *summary) knownBugs() int { return s.count("xfail") }
+
 // ok reports whether the run proves anything: tests ran and all passed.
 func (s *summary) ok() bool {
-	return !s.pkgFailed && s.count("pass") > 0 && s.count("fail") == 0 && s.count("skip") == 0
+	// go test fails the package when a test fails, an expected failure too.
+	pkgOK := !s.crashed && (!s.pkgFailed || (s.count("xfail") > 0 && s.count("fail") == 0))
+	return pkgOK && s.count("pass") > 0 && s.count("fail") == 0 && s.count("skip") == 0
 }
 
 // read copies test output to out and collects results. Lines that are not
 // JSON (build errors go test prints before any event) are copied as-is.
 func read(in io.Reader, out io.Writer) (*summary, error) {
 	s := &summary{}
+	bugs, fixed := map[string]int{}, map[string]bool{}
+	// crashedUnder holds the tests a crash line was printed under: their
+	// failure is the crash, not the known bug.
+	crashedUnder := map[string]bool{}
+	pkgFail := false
+	// running holds the tests that started and have not ended: a test
+	// binary that crashed or timed out leaves them there.
+	running := map[string]bool{}
+	var order []string
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
 	for sc.Scan() {
@@ -81,18 +119,55 @@ func read(in io.Reader, out io.Writer) (*summary, error) {
 			continue
 		}
 		switch ev.Action {
+		case "run":
+			if ev.Test != "" && !running[ev.Test] {
+				running[ev.Test] = true
+				order = append(order, ev.Test)
+			}
 		case "output":
 			_, _ = fmt.Fprint(out, ev.Output)
+			if crashLine.MatchString(ev.Output) {
+				s.crashed = true
+				if ev.Test != "" {
+					crashedUnder[ev.Test] = true
+				}
+			}
+			if !strings.HasPrefix(ev.Test, "TestScale_") {
+				break
+			}
+			if m := knownBug.FindStringSubmatch(ev.Output); m != nil {
+				bugs[ev.Test], _ = strconv.Atoi(m[1])
+			}
+			if knownBugFixed.MatchString(ev.Output) {
+				fixed[ev.Test] = true
+			}
 		case "pass", "fail", "skip":
 			if ev.Test == "" {
 				if ev.Action == "fail" {
-					s.pkgFailed = true
+					pkgFail = true
 				}
 				continue
 			}
-			s.results = append(s.results, result{Test: ev.Test, Action: ev.Action, Elapsed: ev.Elapsed})
+			r := result{Test: ev.Test, Action: ev.Action, Elapsed: ev.Elapsed}
+			if ev.Action == "fail" && bugs[ev.Test] > 0 && !fixed[ev.Test] && !crashedUnder[ev.Test] {
+				r.Action, r.KnownBug = "xfail", bugs[ev.Test]
+			}
+			delete(bugs, ev.Test)
+			delete(fixed, ev.Test)
+			delete(crashedUnder, ev.Test)
+			delete(running, ev.Test)
+			s.results = append(s.results, r)
 		}
 	}
+	// A test that never ended failed: the binary crashed or timed out
+	// under it, and its expected failure (if any) does not count.
+	for _, t := range order {
+		if running[t] {
+			s.results = append(s.results, result{Test: t, Action: "fail"})
+			s.crashed = true
+		}
+	}
+	s.pkgFailed = pkgFail
 	return s, sc.Err()
 }
 
@@ -104,15 +179,21 @@ func (s *summary) markdown(suite string) string {
 		verdict = "FAILED"
 	}
 	fmt.Fprintf(&b, "### Live e2e suite `%s`: %s\n\n", suite, verdict)
-	fmt.Fprintf(&b, "%d passed, %d failed, %d skipped", s.count("pass"), s.count("fail"), s.count("skip"))
-	if s.pkgFailed {
+	fmt.Fprintf(&b, "%d passed, %d failed, %d skipped, %d known bugs", s.count("pass"), s.count("fail"), s.count("skip"), s.knownBugs())
+	if s.crashed {
+		b.WriteString(", and the test binary crashed")
+	} else if s.pkgFailed {
 		b.WriteString(", and the test binary failed outside a test")
 	}
 	b.WriteString("\n\n| Test | Result | Time |\n|---|---|---|\n")
 	rs := append([]result(nil), s.results...)
 	sort.SliceStable(rs, func(i, j int) bool { return rs[i].Test < rs[j].Test })
 	for _, r := range rs {
-		fmt.Fprintf(&b, "| `%s` | %s | %.0fs |\n", r.Test, r.Action, r.Elapsed)
+		action := r.Action
+		if r.KnownBug > 0 {
+			action = fmt.Sprintf("known bug [#%d](https://github.com/pnz1990/kardinal-promoter/issues/%d)", r.KnownBug, r.KnownBug)
+		}
+		fmt.Fprintf(&b, "| `%s` | %s | %.0fs |\n", r.Test, action, r.Elapsed)
 	}
 	return b.String()
 }
@@ -127,9 +208,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "report: read go test output: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("\n=== suite %s: %d passed, %d failed, %d skipped\n", *suite, s.count("pass"), s.count("fail"), s.count("skip"))
+	fmt.Printf("\n=== suite %s: %d passed, %d failed, %d skipped, %d known bugs\n", *suite, s.count("pass"), s.count("fail"), s.count("skip"), s.knownBugs())
+	if s.crashed {
+		fmt.Println("    test binary crashed: the run proves nothing (a panic, a fatal error, a timeout, or a test that never ended)")
+	}
 	for _, r := range s.results {
-		if r.Action != "pass" {
+		switch {
+		case r.KnownBug > 0:
+			fmt.Printf("    KNOWN BUG #%d %s\n", r.KnownBug, r.Test)
+		case r.Action != "pass":
 			fmt.Printf("    %s %s\n", strings.ToUpper(r.Action), r.Test)
 		}
 	}

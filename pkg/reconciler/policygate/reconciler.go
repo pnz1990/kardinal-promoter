@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -80,6 +82,11 @@ const (
 // It only processes instances (gates with kardinal.io/bundle label).
 // Template PolicyGates (no bundle label) are ignored.
 type Reconciler struct {
+	// Workers is how many objects are reconciled at once (--policygate-workers);
+	// 0 is the manager's default. One object is never reconciled twice at
+	// once: the work queue serializes it.
+	Workers int
+
 	client.Client
 	// eval is the CEL evaluator, created once at construction time.
 	// Unexported: callers should use NewReconciler to get a properly initialized Reconciler.
@@ -1216,6 +1223,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	b := ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		// Watch MetricCheck objects: when a MetricCheck's result or value changes,
 		// the gates that read its namespace as metrics.* are re-evaluated
