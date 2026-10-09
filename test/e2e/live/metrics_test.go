@@ -428,22 +428,30 @@ func TestMetric_EgressGuard(t *testing.T) {
 	e.WaitMetricCheck(t, ns, "in-cluster", metricTimeout, "passing", framework.MetricResult("Pass", "0 lt 1 = true"))
 }
 
-// TestMetric_OnlyPrometheusProvider checks that prometheus is the only
-// provider: the API server rejects any other, and a MetricCheck that sets
-// none gets prometheus and evaluates.
+// TestMetric_ProviderValidation checks the provider field: the API server
+// rejects a provider kardinal does not have and a provider without its
+// settings block, and a MetricCheck that sets none gets prometheus and
+// evaluates.
 //
 // Covers METRIC-07.
-func TestMetric_OnlyPrometheusProvider(t *testing.T) {
+func TestMetric_ProviderValidation(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	ctx := context.Background()
 	ns := e.Namespace(t)
-	other := framework.MetricCheck(t, ns, "datadog", "vector(0)", "lt", 1, metricInterval)
-	other.Spec.Provider = "datadog"
+	other := framework.MetricCheck(t, ns, "graphite", "vector(0)", "lt", 1, metricInterval)
+	other.Spec.Provider = "graphite"
 	err := e.Client.Create(ctx, other)
-	require.Error(t, err, "provider datadog is rejected")
+	require.Error(t, err, "provider graphite is rejected")
 	assert.True(t, apierrors.IsInvalid(err), "rejected by validation: %v", err)
-	assert.Contains(t, err.Error(), `Unsupported value: "datadog"`)
+	assert.Contains(t, err.Error(), `Unsupported value: "graphite"`)
+
+	noBlock := framework.MetricCheck(t, ns, "datadog", "avg:x{*}", "lt", 1, metricInterval)
+	noBlock.Spec.Provider = "datadog"
+	err = e.Client.Create(ctx, noBlock)
+	require.Error(t, err, "provider datadog without spec.datadog is rejected")
+	assert.True(t, apierrors.IsInvalid(err), "rejected by validation: %v", err)
+	assert.Contains(t, err.Error(), "provider datadog requires datadog")
 
 	unset := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": v1alpha1.GroupVersion.String(),

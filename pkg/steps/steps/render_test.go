@@ -193,11 +193,14 @@ func TestRenderBranch_Kustomize(t *testing.T) {
 	files, _ = branchFiles(t, url, "env/prod")
 	assert.Contains(t, files["web-prod_deployment-web.yaml"], "ghcr.io/org/web:3.0.0")
 
-	// The same Bundle again changes nothing.
+	// The same Bundle again (a retry whose first result was lost) commits
+	// nothing new: the branch head is already its render.
+	_, before := branchFiles(t, url, "env/prod")
 	state = renderState(t, url, filepath.Join(t.TempDir(), "w"), env, "web-v3", "3.0.0")
 	_, err = promote(t, state)
 	require.NoError(t, err)
-	assert.Equal(t, "true", state.Outputs["noChanges"])
+	_, after := branchFiles(t, url, "env/prod")
+	assert.Equal(t, before, after, "no new commit")
 }
 
 // TestRenderBranch_Helm: a chart is rendered with helm template in process,

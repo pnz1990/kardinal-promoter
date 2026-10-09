@@ -703,3 +703,116 @@ spec:
 		})
 	}
 }
+
+// ── MetricCheck providers (#1445, #1446) ─────────────────────────────────────
+
+// TestCRDMetricCheckProviders: each provider needs its block (and query, but
+// web), credentials are Secret refs, threshold.text only takes eq/ne, and a
+// v0.9 Prometheus MetricCheck is still valid.
+func TestCRDMetricCheckProviders(t *testing.T) {
+	crds := loadCRDs(t)
+	ref := map[string]interface{}{"name": "s", "key": "k"}
+	mc := func(spec map[string]interface{}) map[string]interface{} {
+		if _, ok := spec["threshold"]; !ok {
+			spec["threshold"] = map[string]interface{}{"operator": "lt", "value": int64(1)}
+		}
+		return map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "MetricCheck",
+			"metadata": map[string]interface{}{"name": "m", "namespace": "default"}, "spec": spec}
+	}
+	accepted := map[string]map[string]interface{}{
+		"v0.9 prometheus": mc(map[string]interface{}{"provider": "prometheus", "prometheusURL": "http://p:9090", "query": "up",
+			"threshold": map[string]interface{}{"operator": "gte", "value": int64(1)}}),
+		"prometheus with auth": mc(map[string]interface{}{"provider": "prometheus", "prometheusURL": "http://p:9090", "query": "up",
+			"prometheus": map[string]interface{}{"authorizationSecretRef": ref}}),
+		"datadog": mc(map[string]interface{}{"provider": "datadog", "query": "avg:x{*}",
+			"datadog": map[string]interface{}{"site": "datadoghq.eu", "apiKeySecretRef": ref, "applicationKeySecretRef": ref}}),
+		"cloudwatch with keys": mc(map[string]interface{}{"provider": "cloudwatch", "query": "SELECT 1",
+			"cloudWatch": map[string]interface{}{"region": "us-gov-west-1", "accessKeyIDSecretRef": ref, "secretAccessKeySecretRef": ref, "sessionTokenSecretRef": ref}}),
+		"cloudwatch ambient": mc(map[string]interface{}{"provider": "cloudwatch", "query": "SELECT 1",
+			"cloudWatch": map[string]interface{}{"region": "eu-west-1"}}),
+		"newrelic": mc(map[string]interface{}{"provider": "newrelic", "query": "SELECT count(*) FROM T",
+			"newRelic": map[string]interface{}{"accountID": int64(1), "region": "EU", "apiKeySecretRef": ref}}),
+		"web text": mc(map[string]interface{}{"provider": "web", "perPromotion": true,
+			"web": map[string]interface{}{"url": "https://x/{{ bundle.version }}", "jsonPath": "{.status}",
+				"headers": []interface{}{map[string]interface{}{"name": "Authorization", "valueFromSecret": ref},
+					map[string]interface{}{"name": "X-Env", "value": "prod"}}},
+			"threshold": map[string]interface{}{"operator": "eq", "text": "ok"}}),
+	}
+	for name, obj := range accepted {
+		assert.Empty(t, validateCR(t, crds, obj), "%s must be accepted", name)
+	}
+	rejected := map[string]map[string]interface{}{
+		"prometheus without URL": mc(map[string]interface{}{"provider": "prometheus", "query": "up"}),
+		"datadog without block":  mc(map[string]interface{}{"provider": "datadog", "query": "q"}),
+		"datadog without keys":   mc(map[string]interface{}{"provider": "datadog", "query": "q", "datadog": map[string]interface{}{}}),
+		"cloudwatch half keys": mc(map[string]interface{}{"provider": "cloudwatch", "query": "q",
+			"cloudWatch": map[string]interface{}{"region": "eu-west-1", "accessKeyIDSecretRef": ref}}),
+		"cloudwatch token only": mc(map[string]interface{}{"provider": "cloudwatch", "query": "q",
+			"cloudWatch": map[string]interface{}{"region": "eu-west-1", "sessionTokenSecretRef": ref}}),
+		"cloudwatch bad region": mc(map[string]interface{}{"provider": "cloudwatch", "query": "q",
+			"cloudWatch": map[string]interface{}{"region": "https://evil"}}),
+		"newrelic without query": mc(map[string]interface{}{"provider": "newrelic",
+			"newRelic": map[string]interface{}{"accountID": int64(1), "apiKeySecretRef": ref}}),
+		"web without block": mc(map[string]interface{}{"provider": "web"}),
+		"web header both": mc(map[string]interface{}{"provider": "web", "web": map[string]interface{}{"url": "http://x", "jsonPath": "{.a}",
+			"headers": []interface{}{map[string]interface{}{"name": "A", "value": "v", "valueFromSecret": ref}}}}),
+		"web jsonPath without braces": mc(map[string]interface{}{"provider": "web",
+			"web": map[string]interface{}{"url": "http://x", "jsonPath": ".a"}}),
+		"text with lt": mc(map[string]interface{}{"provider": "web", "web": map[string]interface{}{"url": "http://x", "jsonPath": "{.a}"},
+			"threshold": map[string]interface{}{"operator": "lt", "text": "x"}}),
+		"unknown provider": mc(map[string]interface{}{"provider": "graphite", "query": "q"}),
+		"web recursive descent": mc(map[string]interface{}{"provider": "web",
+			"web": map[string]interface{}{"url": "http://x", "jsonPath": "{..a}"}}),
+	}
+	for name, obj := range rejected {
+		assert.NotEmpty(t, validateCR(t, crds, obj), "%s must be rejected", name)
+	}
+}
+
+// TestCRDBundleImageTag: a Bundle image tag follows the OCI grammar, so a
+// per-promotion MetricCheck never gets an empty, dotted or quoted tag
+// (QA #1479).
+func TestCRDBundleImageTag(t *testing.T) {
+	crds := loadCRDs(t)
+	bundle := func(tag string) map[string]interface{} {
+		return map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Bundle",
+			"metadata": map[string]interface{}{"name": "b", "namespace": "default"},
+			"spec": map[string]interface{}{"type": "image", "pipeline": "p",
+				"images": []interface{}{map[string]interface{}{"repository": "ghcr.io/a/b", "tag": tag}}}}
+	}
+	for _, ok := range []string{"1.2.3", "sha-abc1234", "v1_rc.2", "latest", "6.14.1-alpine"} {
+		assert.Empty(t, validateCR(t, crds, bundle(ok)), "tag %q must be accepted", ok)
+	}
+	for _, bad := range []string{".hidden", "-x", `x"} or vector(1)`, "a b", strings.Repeat("a", 129)} {
+		assert.NotEmpty(t, validateCR(t, crds, bundle(bad)), "tag %q must be rejected", bad)
+	}
+}
+
+// TestCRDBundleDigestAndCommit (QA #1479): digests follow the OCI digest
+// grammar and commit SHAs are hex (provenance also takes a digest, which a
+// Subscription records), so a placeholder never gets "@", a quote or a
+// space from them.
+func TestCRDBundleDigestAndCommit(t *testing.T) {
+	crds := loadCRDs(t)
+	bundle := func(digest, prov, config string) map[string]interface{} {
+		spec := map[string]interface{}{"type": "mixed", "pipeline": "p",
+			"images":     []interface{}{map[string]interface{}{"repository": "ghcr.io/a/b", "tag": "1", "digest": digest}},
+			"provenance": map[string]interface{}{"commitSHA": prov},
+			"configRef":  map[string]interface{}{"commitSHA": config}}
+		return map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Bundle",
+			"metadata": map[string]interface{}{"name": "b", "namespace": "default"}, "spec": spec}
+	}
+	d := "sha256:" + strings.Repeat("a", 64)
+	assert.Empty(t, validateCR(t, crds, bundle(d, "abc1234", "0123456789abcdef0123456789abcdef01234567")))
+	assert.Empty(t, validateCR(t, crds, bundle(d, d, "abcd")), "provenance may hold a digest")
+	for name, b := range map[string]map[string]interface{}{
+		"digest with @":        bundle("sha256:x@evil", "abc1234", "abcd"),
+		"short digest":         bundle("sha256:abc", "abc1234", "abcd"),
+		"commit with a space":  bundle(d, "abc 123", "abcd"),
+		"commit with @":        bundle(d, "abc@evil.example", "abcd"),
+		"configRef not hex":    bundle(d, "abc1234", "main"),
+		"configRef with colon": bundle(d, "abc1234", d),
+	} {
+		assert.NotEmpty(t, validateCR(t, crds, b), "%s must be rejected", name)
+	}
+}

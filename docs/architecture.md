@@ -50,7 +50,7 @@ The controller manager runs these reconcilers:
 | `PipelineReconciler` | `Pipeline` | Validates pipeline config; computes aggregate pipeline status |
 | `PromotionStepReconciler` | `PromotionStep` | Runs the steps engine: git-clone → image update → PR → health check |
 | `PolicyGateReconciler` | `PolicyGate` (instances) | Evaluates CEL expression; writes `status.ready` |
-| `MetricCheckReconciler` | `MetricCheck` | Queries Prometheus; writes result to status |
+| `MetricCheckReconciler` | `MetricCheck` | Queries Prometheus, Datadog, CloudWatch, New Relic or a JSON web API; writes result to status |
 | `PRStatusReconciler` | `PRStatus` | Polls SCM for PR merge/close signal; writes `status.merged`, `status.mergeCommitSHA` (or `status.mergeCommitUnavailable` once it stops asking for it) and, for a 401/403/404/410, `status.pollError` |
 | `RollbackPolicyReconciler` | `RollbackPolicy` | Reads one Bundle's PromotionSteps in one environment; creates a rollback Bundle at the failure threshold |
 | `ScheduleClockReconciler` | `ScheduleClock` | Writes `status.tick` on a configurable interval for time-based gates |
@@ -216,7 +216,7 @@ All state is stored in Kubernetes CRDs:
 | `PolicyGate` | Namespaced policy check: templates, and the per-Bundle instances the Graph creates |
 | `PRStatus` | Tracks a promotion PR's open, merged or closed state |
 | `RollbackPolicy` | Consecutive-failure rollback trigger for one Bundle in one environment (user-created; see [Rollback](rollback.md#autorollback-is-not-implemented)) |
-| `MetricCheck` | Prometheus query with a pass/fail threshold, created by the user; gates read it as `metrics.<name>` |
+| `MetricCheck` | Metric query (Prometheus, Datadog, CloudWatch, New Relic, web) with a pass/fail threshold, created by the user or, per promotion, by the Graph from a `perPromotion` template; gates read it as `metrics.<name>` |
 | `ScheduleClock` | Writes `status.tick` on a configurable interval; enables time-based policy gates |
 | `ChangeWindow` | Cluster-scoped blackout/recurring allow windows for pipeline promotions |
 | `Subscription` | Watches OCI registries or Git repos; auto-creates Bundles on new artifacts |

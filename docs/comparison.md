@@ -33,8 +33,9 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **CLI** | Full `kardinal` CLI incl. `explain`, `policy simulate`, `override`, `pause`, `rollback`, `metrics`, `logs`, `validate`, `status`, shell completion | `kargo` CLI (get, promote, approve, verify, grant, logs and more) | Minimal: `gitops-promoter dashboard`, `demo` and `version`; no operational commands |
 | **Explain and simulate gates** | Yes — `kardinal explain` shows why an environment is blocked; `kardinal policy simulate` runs the gates at a chosen time | No | No (a Go package can simulate `WebRequestCommitStatus` expressions) |
 | **UI dashboard** | Embedded UI: fleet health bar, ops table, pipeline lane and DAG, bundle timeline and comparison, policy gates with CEL expressions, metrics bar; create bundle, pause/resume, promote and roll back from the UI (gate override is CLI-only) | Polished Kargo UI: pipeline graph, Freight timeline and diffs, drag-and-drop promotion, step logs | Read-only dashboard, plus an Argo CD UI extension; both show promotion history |
-| **Metric-gated promotions** | Yes — `MetricCheck` CRD (Prometheus, a polled PromQL query) | Yes — verification with AnalysisTemplates (Prometheus, Datadog, CloudWatch, New Relic and others; needs Argo Rollouts installed) | Indirect — a `WebRequestCommitStatus` can call a metrics API |
-| **DORA metrics** | Yes — `Bundle.status.metrics`, `Pipeline.status.deploymentMetrics`, `kardinal metrics` | No — operational Prometheus metrics only (v1.12) | No — on its roadmap ([#574](https://github.com/argoproj-labs/gitops-promoter/issues/574), its most-requested open issue) |
+| **Metric-gated promotions** | Yes — `MetricCheck` CRD: Prometheus, Datadog, CloudWatch, New Relic, or any JSON API (`web`, JSONPath and a threshold); Secret-backed credentials; per-promotion queries templated with the Bundle version and environment ([Metric Checks](metric-checks.md)); no Argo Rollouts needed | Yes — verification with AnalysisTemplates (Prometheus, Datadog, CloudWatch, New Relic and others; needs Argo Rollouts installed) | Indirect — a `WebRequestCommitStatus` can call a metrics API |
+| **DORA metrics** | Yes — all four: deployment frequency, lead time, change failure rate and time to restore in `Pipeline.status.deploymentMetrics`, `kardinal metrics` and the UI; per-step timings in `PromotionStep.status.steps` | No — operational Prometheus metrics only (v1.12) | No — on its roadmap ([#574](https://github.com/argoproj-labs/gitops-promoter/issues/574), its most-requested open issue) |
+| **Distributed tracing** | Yes — OpenTelemetry over OTLP/HTTP, off by default: reconciles, promotion steps, git, SCM API calls, NotificationHook deliveries (with `traceparent`), inbound webhooks and Bundle API | On main, unreleased: OpenTelemetry tracing for control plane components ([kargo#7353](https://github.com/akuity/kargo/pull/7353), merged 2026-09-29); not in v1.12.1 | No |
 | **Audit trail** | `AuditEvent` CRD (promotions, rollbacks, supersession, gate results) and Kubernetes Events | Kubernetes Events; `record-audit-event` step in Kargo Enterprise (v1.12) | `ChangeTransferPolicyHistory` (last 20 promotions per environment, v0.41), git notes, Kubernetes Events |
 | **Custom promotion steps** | Partly — the sequence itself is fixed (Bundle type, `update.strategy`, `approval`; [Promotion Steps](pipeline-reference.md#promotion-steps)), but each environment can run its own Jobs before it starts and after its health check ([hooks](hooks.md)); no custom git, render or update steps | Yes — about 35 built-in steps composed in a Stage's `promotionTemplate`, reusable PromotionTasks, conditions and retries; container steps in Kargo Enterprise (v1.10+) | No |
 | **Rendered manifests (hydration)** | Yes — `layout: branch`: kustomize build or helm template in a sandboxed render Job per promotion (no credentials but the Pipeline's git Secret, resource and time limits), committed to `env/<name>` with the DRY commit in the trailers; pr-review PRs show rendered diffs; drift on the rendered branch fails the promotion; rollback re-renders the old DRY commit ([Rendered Manifests](rendered-manifests.md)) | Yes — `kustomize-build` and `helm-template` steps write to a stage branch in a promotion template | Yes — its core model: hydrated environment branches from the Argo CD Source Hydrator or any hydrator, with the DRY commit in hydrator metadata |
@@ -174,7 +175,8 @@ fan-out to fleets of targets with a concurrency limit.
 `Bundle.status.metrics` records `commitToProductionMinutes`, `bakeResets` and `operatorInterventions`
 (the `kardinal override` entries on the Bundle's gates) for every promotion.
 `Pipeline.status.deploymentMetrics` adds rollouts in the last 30 days, p50 and p90 lead time,
-and the auto-rollback and operator intervention rates. Lead time starts when the Bundle is created.
+the auto-rollback and operator intervention rates, and the change failure rate and mean time to
+restore over the last 30 deployments to the last environment. Lead time starts when the Bundle is created.
 The `kardinal metrics` CLI surfaces these per pipeline. Kargo v1.12 added operational Prometheus
 metrics, not DORA metrics; GitOps Promoter lists DORA metrics on its roadmap.
 
@@ -209,7 +211,9 @@ it with `dependsOn` on its environments.
   ones, with webhook receivers for registries and SCMs. kardinal's Subscription polls public
   registries and repos only; create Bundles from CI for private ones.
 - **Verification providers** (Kargo). AnalysisTemplates query Prometheus, Datadog, CloudWatch,
-  New Relic and others, per promotion. A kardinal `MetricCheck` is a polled Prometheus query.
+  New Relic and others, and can run a Job. A kardinal `MetricCheck` covers Prometheus, Datadog,
+  CloudWatch, New Relic and JSON web APIs, per promotion with `perPromotion` (unreleased), but
+  not Jobs or the long tail of AnalysisTemplate providers (Wavefront, Graphite, InfluxDB, Kayenta).
 - **Access control and API** (Kargo). Projects with per-project roles, OIDC claim mapping,
   API tokens and a REST API.
 - **Gates mirrored to the SCM** (GitOps Promoter). Commit statuses appear as SCM checks and are

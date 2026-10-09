@@ -77,8 +77,10 @@ spec:
                       or an image Bundle that pins its DRY commit).
                     properties:
                       commitSHA:
-                        description: CommitSHA is the exact commit SHA for this config
-                          snapshot.
+                        description: |-
+                          CommitSHA is the exact commit SHA for this config snapshot: 4 to 64
+                          hex characters.
+                        pattern: ^[0-9a-fA-F]{4,64}$
                         type: string
                       gitRepo:
                         description: GitRepo is the GitOps repository URL.
@@ -91,14 +93,19 @@ spec:
                         tag, and/or digest.
                       properties:
                         digest:
-                          description: Digest is the image digest (sha256:...).
+                          description: Digest is the image digest (sha256:...), in
+                            the OCI digest grammar.
+                          pattern: ^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$
                           type: string
                         repository:
                           description: Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
                           minLength: 1
                           type: string
                         tag:
-                          description: Tag is the image tag.
+                          description: |-
+                            Tag is the image tag, in the OCI distribution grammar: up to 128
+                            characters of [A-Za-z0-9_.-], not starting with "." or "-".
+                          pattern: ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$
                           type: string
                       required:
                       - repository

@@ -84,8 +84,10 @@ func TestRun(t *testing.T) {
 	again.KnownMarkerDigests = []string{res.MarkerDigest}
 	res2, err := renderjob.Run(ctx, again, t.TempDir(), "", git)
 	require.NoError(t, err)
-	assert.True(t, res2.NoChanges, "the same render pushes nothing")
-	assert.Empty(t, res2.CommitSHA)
+	// A retry of the same Bundle whose first result was lost: the branch
+	// head is already its render, which the result reports again.
+	assert.False(t, res2.NoChanges)
+	assert.Equal(t, res.CommitSHA, res2.CommitSHA, "the same render pushes no new commit")
 
 	pr := config(url, true)
 	pr.BundleName = "web-v3"

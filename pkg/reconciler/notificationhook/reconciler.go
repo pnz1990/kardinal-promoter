@@ -68,6 +68,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -551,6 +552,9 @@ func (r *Reconciler) deliver(ctx context.Context, hook *v1alpha1.NotificationHoo
 	if r.HTTPClient != nil {
 		httpClient = *r.HTTPClient
 	}
+	// The webhook carries the trace context (traceparent) of its delivery
+	// span when tracing is on, so a receiver can join the trace.
+	httpClient.Transport = tracing.Transport(httpClient.Transport, true)
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	reqCtx, cancel := context.WithTimeout(ctx, webhookTimeout)
@@ -630,7 +634,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(mapToAllHooks)).
 		Watches(&v1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(mapToAllHooks)).
 		Named("notificationhook").
-		Complete(r)
+		Complete(tracing.WrapReconciler("notificationhook", r))
 }
 
 // now returns the current time, using NowFn if set (for testing).

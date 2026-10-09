@@ -31,7 +31,7 @@ import (
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 
 	// Import built-ins to trigger init() registration.
-	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
 // mockGitClient records calls for testing.
@@ -244,6 +244,38 @@ func TestGitCommitStep_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, parentsteps.StepSuccess, result.Status)
 	assert.Equal(t, 1, git.commitCalls)
+}
+
+// TestGitCommitStep_NoChangesOutput: a clean tree is a no-op promotion
+// (noChanges=true), except when HEAD is this promotion's own commit from an
+// earlier attempt (ErrAlreadyCommitted), which is a real change.
+func TestGitCommitStep_NoChangesOutput(t *testing.T) {
+	tests := []struct {
+		name     string
+		approval string
+		err      error
+		want     string
+	}{
+		{"committed", "auto", nil, "false"},
+		{"nothing to commit", "auto", scm.ErrNothingToCommit, "true"},
+		{"committed by an earlier attempt, direct push", "auto", scm.ErrAlreadyCommitted, "false"},
+		// A pr-review step cloned the base branch: the commit got there through
+		// its merged PR, and a PR with no commits cannot be opened.
+		{"same commit on the base branch, pr-review", "pr-review", scm.ErrAlreadyCommitted, "true"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := makeState(t, &mockGitClient{commitErr: tt.err}, nil)
+			state.Environment.Approval = tt.approval
+			state.Sequence = parentsteps.DefaultSequenceForBundle(tt.approval, "image", "", "")
+			step, err := parentsteps.Lookup("git-commit")
+			require.NoError(t, err)
+			result, err := step.Execute(context.Background(), state)
+			require.NoError(t, err)
+			assert.Equal(t, parentsteps.StepSuccess, result.Status)
+			assert.Equal(t, tt.want, result.Outputs["noChanges"])
+		})
+	}
 }
 
 func TestGitPushStep_Success(t *testing.T) {
@@ -1195,4 +1227,13 @@ func TestKustomizeSetImageStep_NoImages(t *testing.T) {
 	assert.Equal(t, parentsteps.StepSuccess, result.Status)
 	assert.Equal(t, "no images to update", result.Message,
 		"empty images list must return 'no images to update' without calling kustomize")
+}
+
+// TestPromoteMessage: the promotion commit names the Bundle, environment,
+// Pipeline and namespace.
+func TestPromoteMessage(t *testing.T) {
+	assert.Equal(t, "[kardinal] Promote app-1 to prod\n\nBundle: app-1\nPipeline: app\nNamespace: team-a",
+		steps.PromoteMessage("app-1", "prod", "app", "team-a"))
+	assert.Equal(t, "[kardinal] Promote app-1 to prod\n\nBundle: app-1\nPipeline: app",
+		steps.PromoteMessage("app-1", "prod", "app", ""), "no namespace line without one")
 }

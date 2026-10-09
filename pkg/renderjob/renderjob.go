@@ -102,6 +102,7 @@ func Run(ctx context.Context, cfg Config, workDir, token string, git scm.GitClie
 		stateSeq = append(stateSeq, steps.OpenPRStepName)
 	}
 	state := &steps.StepState{
+		Namespace:    cfg.Namespace,
 		PipelineName: cfg.Pipeline,
 		Environment:  env,
 		Bundle:       cfg.Bundle,
