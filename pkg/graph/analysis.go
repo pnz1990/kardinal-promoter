@@ -350,3 +350,26 @@ func analysisRunSpec(tmpl AnalysisTemplate, args []kardinalv1alpha1.AnalysisArg,
 	}
 	return spec, nil
 }
+
+// The compact shape does not build AnalysisRun nodes, their terminate
+// patches or the mirror: they are per environment and read the
+// environment's step node, which the compact shape folds into the
+// PromotionSteps collection. A Pipeline with verification is built in the
+// node shape, or refused (compactUnsupported).
+func init() {
+	RegisterCompactUnsupported(verificationUsed)
+}
+
+// verificationUsed returns the feature name when an environment of the
+// Pipeline has spec.verification.
+func verificationUsed(in BuildInput) string {
+	if in.Pipeline == nil {
+		return ""
+	}
+	for _, env := range in.Pipeline.Spec.Environments {
+		if hasVerification(env) {
+			return "Argo Rollouts analysis (spec.environments[].verification)"
+		}
+	}
+	return ""
+}

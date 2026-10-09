@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -117,12 +119,17 @@ func (t *Translator) Translate(ctx context.Context,
 	// Build, identity.Ensure and graphClient.Create prefix their own errors
 	// ("build: ", "graph identity: ", "graph.Create "), so they are wrapped
 	// with the Translate context only.
+	shape, err := t.existingShape(ctx, pipeline, bundle)
+	if err != nil {
+		return "", fmt.Errorf("translator.Translate: %w", err)
+	}
 	result, err := t.builder.Build(graph.BuildInput{
 		Pipeline:         pipeline,
 		Bundle:           bundle,
 		PolicyGates:      gates,
 		PolicyNamespaces: t.policyNS,
 		Analyses:         analyses,
+		Shape:            shape,
 		MetricChecks:     metricChecks,
 	})
 	if err != nil {
@@ -143,7 +150,13 @@ func (t *Translator) Translate(ctx context.Context,
 			return t.identity.MayRead(result.Graph.Namespace, ns)
 		},
 	}
-	injected := h.inject(pipeline, result.Graph, result.Environments)
+	// A compact Graph gets no health ref nodes: they only feed Graph
+	// readiness (G3), and one scalar node per environment would undo the
+	// compact shape. The PromotionStep reconciler checks health either way.
+	var injected map[string]string
+	if !result.Compact {
+		injected = h.inject(pipeline, result.Graph, result.Environments)
+	}
 	if err := graph.ValidateNodeIDs(result.Graph.Spec.Nodes); err != nil {
 		return "", fmt.Errorf("translator.Translate: health nodes: %w", err)
 	}
@@ -191,6 +204,31 @@ func (t *Translator) Translate(ctx context.Context,
 		Msg("translation complete: graph applied")
 
 	return result.Graph.Name, nil
+}
+
+// existingShape returns the shape of the Bundle's Graph when it exists, so a
+// re-translation keeps it. It returns "" when the Bundle has no Graph yet.
+// Switching the shape of a Graph in flight would make kro prune every
+// PromotionStep the old shape's nodes created.
+//
+// The shape is read from the Graph's spec (graph.ShapeOf: a PromotionSteps
+// collection node means compact), not from its kardinal.io/graph-shape label,
+// which anyone may edit: the label is informational, and the builder writes
+// it again from the shape it keeps.
+func (t *Translator) existingShape(ctx context.Context, pipeline *kardinalv1alpha1.Pipeline,
+	bundle *kardinalv1alpha1.Bundle) (string, error) {
+	g, err := t.graphClient.Get(ctx, pipeline.Namespace, graph.GraphNameFrom(pipeline.Name, bundle.Name))
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the Bundle's Graph shape: %w", err)
+	}
+	if !metav1.IsControlledBy(g, bundle) {
+		// Another owner's Graph: Create refuses it (ErrGraphOwnedByOther).
+		return "", nil
+	}
+	return graph.ShapeOf(g), nil
 }
 
 // collectMetricTemplates returns the MetricChecks in ns with

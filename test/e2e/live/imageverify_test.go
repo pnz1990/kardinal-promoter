@@ -407,3 +407,34 @@ func waitImageVerificationPending(t *testing.T, e *framework.Env, ns, bundle str
 	})
 	return name
 }
+
+// TestStep_ImageVerificationRefusedInCompactGraph: the compact Graph shape
+// does not carry image verification, so a Pipeline with an image policy and
+// kardinal.io/graph-shape: compact is Ready=False naming it, and its Bundle
+// fails with GraphBuildFailed instead of promoting unverified.
+//
+// Covers IMGV-COMPACT-01.
+func TestStep_ImageVerificationRefusedInCompactGraph(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	s := newSignatures(t, a.ns)
+	_, pem, err := signtest.Bundle(fixtures.Image, fixtures.V2Digest)
+	require.NoError(t, err)
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{"kardinal.io/graph-shape": "compact"}
+	p.Spec.ImageVerification = keyPolicy(t, e, a.ns, s, pem, "")
+	a.apply(t, p)
+	const feature = "image signature verification (spec.imageVerification)"
+	e.WaitPipeline(t, a.ns, pipelineName, time.Minute, "Ready=False naming image verification", func(p *v1alpha1.Pipeline) bool {
+		for _, c := range p.Status.Conditions {
+			if c.Type == "Ready" && c.Status == metav1.ConditionFalse && strings.Contains(c.Message, feature) {
+				return true
+			}
+		}
+		return false
+	})
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
+	e.WaitBundle(t, a.ns, bundle, time.Minute, "Failed with GraphBuildFailed", failedWith("GraphBuildFailed", feature))
+	a.fileHas(t, "test", fixtures.V1, "test in git")
+}

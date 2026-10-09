@@ -146,6 +146,11 @@ kubectl get imageverification -n my-app my-app-my-app-x7k2p-verify -o jsonpath='
 
 ## What it cannot do
 
+- It needs the node Graph shape. A Pipeline whose Bundles get a
+  [compact Graph](pipeline-reference.md#large-pipelines) (more than `--graph-compact-above`
+  environments, default 100, or the annotation `kardinal.io/graph-shape: compact`) is
+  `Ready=False`, and its Bundles fail with `GraphBuildFailed` naming image signature
+  verification instead of promoting unverified.
 - It verifies before promotion, not at deploy time in the target cluster. To enforce signatures
   on every Pod, whoever deploys it, add admission-time verification there:
   [Sigstore policy-controller](https://docs.sigstore.dev/policy-controller/overview/) or

@@ -421,3 +421,28 @@ func TestRollouts_AnalysisForgedRunIgnored(t *testing.T) {
 		return ps.Status.State == "Verifying", "state " + ps.Status.State
 	})
 }
+
+// TestGraph_AnalysisRefusedInCompactGraph: the compact Graph shape does not
+// carry verification, so a Pipeline with verification and
+// kardinal.io/graph-shape: compact is Ready=False naming it, and its Bundle
+// fails with GraphBuildFailed instead of promoting unverified.
+//
+// Covers ANALYSIS-COMPACT-01.
+func TestGraph_AnalysisRefusedInCompactGraph(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "prod")
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{"kardinal.io/graph-shape": "compact"}
+	p.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{
+		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "smoke"}}}
+	a.apply(t, p)
+	const feature = "Argo Rollouts analysis (spec.environments[].verification)"
+	e.WaitPipeline(t, a.ns, pipelineName, time.Minute, "Ready=False naming verification", func(p *v1alpha1.Pipeline) bool {
+		c := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+		return c != nil && c.Status == metav1.ConditionFalse && strings.Contains(c.Message, feature)
+	})
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitBundle(t, a.ns, bundle, time.Minute, "Failed with GraphBuildFailed", failedWith("GraphBuildFailed", feature))
+	a.fileHas(t, "prod", fixtures.V1, "prod in git")
+}

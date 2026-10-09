@@ -224,3 +224,20 @@ func imageVerificationLive() map[string]interface{} {
 		"images":  fmt.Sprintf(`${%s.spec.?images.orValue([]).map(i, i.repository + "@" + i.digest)}`, imageVerifyNodeID),
 	}
 }
+
+// The compact shape does not build the ImageVerification node or the
+// mirror that holds the root steps (the steps come from one collection), so
+// a Pipeline with an image policy is built in the node shape, or refused
+// (compactUnsupported).
+func init() {
+	RegisterCompactUnsupported(imageVerificationUsed)
+}
+
+// imageVerificationUsed returns the feature name when the Pipeline has
+// spec.imageVerification.
+func imageVerificationUsed(in BuildInput) string {
+	if in.Pipeline == nil || in.Pipeline.Spec.ImageVerification == nil {
+		return ""
+	}
+	return "image signature verification (spec.imageVerification)"
+}
