@@ -32,7 +32,10 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
@@ -56,6 +59,8 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
@@ -66,6 +71,8 @@ const (
 	phaseVerified   = "Verified"
 	phaseFailed     = "Failed"
 	phaseSuperseded = "Superseded"
+	// phaseRejected is final: spec.rejected is set (kardinal reject).
+	phaseRejected = "Rejected"
 )
 
 // Bundle condition types.
@@ -86,6 +93,9 @@ const (
 	// fails, or (reason GraphDeleted) while the Graph of a Bundle that failed
 	// promoting is missing. It is only written once a sync has failed.
 	condGraphSynced = "GraphSynced"
+	// condRejected is True once spec.rejected is set; its message names who
+	// rejected the Bundle and why.
+	condRejected = "Rejected"
 )
 
 // errGraphDeletedAfterFailure is returned by syncGraph when the Graph of a
@@ -97,6 +107,16 @@ var errGraphDeletedAfterFailure = errors.New("the Graph of this failed Bundle wa
 // errNamespaceTerminating is returned by translate when the Bundle's namespace
 // is being deleted, so nothing was translated.
 var errNamespaceTerminating = errors.New("the namespace is being deleted")
+
+// errBundleRetired is returned by translate for a Bundle that the API server
+// says is retired (#1492) while the cache does not yet: a retired Bundle's
+// Graph is never built again.
+var errBundleRetired = errors.New("the bundle's Graph was retired")
+
+// skipTranslate reports whether a translate error means "nothing to do".
+func skipTranslate(err error) bool {
+	return errors.Is(err, errNamespaceTerminating) || errors.Is(err, errBundleRetired)
+}
 
 // indexPipeline is the Bundle field index on spec.pipeline.
 const indexPipeline = "spec.pipeline"
@@ -128,6 +148,14 @@ type graphReader interface {
 // manages Bundle supersession, syncs evidence from PromotionStep status into
 // Bundle.status.environments, and derives the Verified and Failed phases.
 type Reconciler struct {
+	// Workers is how many Bundles are reconciled at once (--bundle-workers);
+	// 0 is the manager's default. One Bundle is never reconciled twice at
+	// once (the work queue); the maxConcurrentPromotions count of one
+	// Pipeline runs under lockPipeline.
+	Workers int
+	// slotLocks are the per-Pipeline locks of lockPipeline.
+	slotLocks sync.Map
+
 	client.Client
 	// APIReader reads straight from the API server (mgr.GetAPIReader()). The
 	// maxConcurrentPromotions count reads through it, so a Bundle this
@@ -147,6 +175,9 @@ type Reconciler struct {
 	// PolicyGate templates hashed for a GraphBuildFailed retry (#1312) are
 	// the ones the Translator reads. Nil means the controller default.
 	PolicyNamespaces []string
+	// Retire says when the Graph of a finished Bundle is retired (#1492).
+	// The zero value keeps every Graph.
+	Retire RetirePolicy
 }
 
 // Reconcile is called whenever a Bundle is created or updated, and whenever a
@@ -167,10 +198,33 @@ type Reconciler struct {
 //     retried step, an accepted Graph), or back to Available when a Pipeline
 //     that failed validation is changed. A newer sibling supersedes it instead.
 //   - Verified, Superseded: settled; only the evidence is synced.
+//   - any phase with spec.rejected set: Rejected (markRejected), which is
+//     final; only the evidence is synced after that.
 //
 // A Bundle deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	return objectgone.Reconcile(ctx, req, bundlesResource, r.reconcile)
+	res, err := objectgone.Reconcile(ctx, req, bundlesResource, r.reconcile)
+	if apierrors.IsConflict(err) {
+		// A status patch carried an older resourceVersion: another writer (the
+		// retirement controller, or this one from a stale cache) changed the
+		// Bundle. Read it again rather than overwrite it (#1492).
+		zerolog.Ctx(ctx).Debug().Err(err).Str("bundle", req.Name).Msg("bundle changed under the reconcile; requeueing")
+		return ctrl.Result{RequeueAfter: requeueConflict}, nil
+	}
+	return res, err
+}
+
+// requeueConflict is how soon a reconcile whose status patch lost a race is
+// run again.
+const requeueConflict = time.Second
+
+// statusPatch is the merge patch of a Bundle's status from before, with an
+// optimistic lock: the patch fails with a Conflict when the Bundle changed
+// since before was read. Without it, a patch computed from a stale copy can
+// put back what another writer changed: status.conditions is a list, which a
+// merge patch replaces whole, and a stale phase could undo a retirement.
+func statusPatch(before *kardinalv1alpha1.Bundle) client.Patch {
+	return client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
 }
 
 // bundlesResource is the resource objectgone matches a NotFound against.
@@ -191,6 +245,27 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get bundle: %w", err)
 	}
 
+	// A rejection wins over every phase, Verified and Superseded included,
+	// and is recomputed from spec on every reconcile, so a crash between the
+	// spec write and this status write only delays it.
+	// It runs on a retired Bundle too (#1492): rejecting a Verified Bundle
+	// whose Graph is gone is the usual case, and the early return for
+	// retired Bundles comes later. A rejection recorded before the
+	// rejected-artifact set existed gets the set now.
+	if b.Spec.Rejected != nil && (b.Status.Phase != phaseRejected || b.Status.RejectedArtifacts == nil) {
+		return r.markRejected(ctx, log, &b)
+	}
+	// A rejection is about the artifacts: a Bundle that has not finished and
+	// carries an image or config commit of a rejected Bundle is rejected
+	// too, so a CI retry of a rejected build does not promote it again.
+	if inFlightOrFailed(b.Status.Phase) {
+		if from, err := r.rejectedArtifactOf(ctx, &b); err != nil {
+			log.Warn().Err(err).Msg("failed to check for rejected artifacts (non-fatal)")
+		} else if from != "" {
+			return r.markRejectedArtifact(ctx, log, &b, from)
+		}
+	}
+
 	switch b.Status.Phase {
 	case "":
 		return r.handleNew(ctx, log, &b)
@@ -206,11 +281,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 }
 
-// handleBound reconciles a Bundle past Available: Promoting, Failed, Verified
-// or Superseded.
+// handleBound reconciles a Bundle past Available: Promoting, Failed, Verified,
+// Superseded or Rejected.
 func (r *Reconciler) handleBound(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
-	active := b.Status.Phase != phaseVerified && b.Status.Phase != phaseSuperseded
+	active := b.Status.Phase != phaseVerified && b.Status.Phase != phaseSuperseded &&
+		b.Status.Phase != phaseRejected
 
 	// A newer same-type Bundle that started while this one was in flight
 	// supersedes it (#281).
@@ -244,6 +320,14 @@ func (r *Reconciler) handleBound(ctx context.Context, log zerolog.Logger,
 		}
 	} else {
 		pipeline = &pl
+	}
+
+	// A retired Bundle is final: its Graph is gone and is never rebuilt, not
+	// even by a Pipeline change, and its status is not synced from steps any
+	// more (status.retiredSteps holds them). The retirement controller
+	// (setupRetire) deletes the Graph.
+	if lifecycle.Retired(b) {
+		return ctrl.Result{}, nil
 	}
 
 	// A Bundle that failed validation before any Graph was created is retried
@@ -305,7 +389,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		return nil // no-op in test environments without a real translator
 	}
 	if err := r.ensurePipelineSpecCurrent(ctx, log, b, pipeline); err != nil {
-		if errors.Is(err, errNamespaceTerminating) {
+		if skipTranslate(err) {
 			return nil
 		}
 		return err
@@ -327,7 +411,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 			return errGraphDeletedAfterFailure
 		}
 		graphName, tErr := r.translate(ctx, log, pipeline, b)
-		if errors.Is(tErr, errNamespaceTerminating) {
+		if skipTranslate(tErr) {
 			return nil
 		}
 		if tErr != nil {
@@ -518,7 +602,7 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 		}
 	}
 
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	b.Status.Phase = phaseAvailable
 	// Ready=False/Available lets operators observe the phase via kubectl wait
 	// and lets GitOps controllers gate on standard conditions.
@@ -545,11 +629,13 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 	return ctrl.Result{RequeueAfter: 500 * time.Millisecond}, nil
 }
 
-// enforceHistoryLimit deletes the oldest terminal Bundles (Verified/Failed/Superseded)
+// enforceHistoryLimit deletes the oldest terminal Bundles (Verified/Failed/Superseded,
+// and Rejected for carrying a rejected artifact; never one with spec.rejected)
 // for the given pipeline in the given namespace, keeping at most historyLimit bundles.
 //
 // This implements Pipeline.spec.historyLimit enforcement (spec #910). Non-terminal
-// Bundles (Available, Promoting) are never deleted by this function.
+// Bundles (Available, Promoting) and Rejected Bundles are never deleted by
+// this function.
 //
 // Ordering: oldest-first by creation (lifecycle.CompareCreation).
 // Default limit: defaultHistoryLimit (50) when spec.historyLimit is unset or zero.
@@ -571,12 +657,38 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 		return fmt.Errorf("enforceHistoryLimit: list bundles: %w", err)
 	}
 
+	keep := heldHistory(pipeline, allBundles.Items)
 	terminal := make([]*kardinalv1alpha1.Bundle, 0, len(allBundles.Items))
 	for i := range allBundles.Items {
-		switch allBundles.Items[i].Status.Phase {
-		case phaseVerified, phaseFailed, phaseSuperseded:
-			terminal = append(terminal, &allBundles.Items[i])
+		b := &allBundles.Items[i]
+		if keep[b.Name] {
+			continue
 		}
+		if b.Spec.Rejected != nil {
+			// A rejected Bundle (spec.rejected) is kept whatever its phase,
+			// also before the reconciler marked it Rejected: it is the record
+			// that its artifacts must not be promoted again (rollback,
+			// promote and Subscriptions skip any Bundle carrying a rejected
+			// artifact, lifecycle.RejectedArtifacts). Rejections are rare and
+			// made by hand, so they stay few.
+			continue
+		}
+		switch b.Status.Phase {
+		case phaseVerified, phaseFailed, phaseSuperseded, phaseRejected:
+			// phaseRejected without spec.rejected: a Bundle the controller
+			// rejected because it carries a rejected artifact
+			// (markRejectedArtifact). It adds nothing to the record, which
+			// the original rejected Bundle holds, so it is history like the
+			// others.
+			terminal = append(terminal, b)
+		}
+	}
+	if len(terminal) <= limit {
+		return nil
+	}
+	terminal, err := r.withoutLiveCarriers(ctx, namespace, pipeline.Name, allBundles.Items, terminal)
+	if err != nil {
+		return err
 	}
 	if len(terminal) <= limit {
 		return nil
@@ -603,6 +715,75 @@ func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger
 	return nil
 }
 
+// heldHistory is the Bundles history GC keeps while a hold lasts (spec.holds,
+// #1528): the Bundle each hold names, its rollbackOf, and every Bundle that
+// deploys one of its artifacts (an image, config commit or chart). The gate
+// exemption checks the held Bundle against them (lifecycle.VerifyHeldRollback),
+// and none of them counts toward historyLimit.
+func heldHistory(p *kardinalv1alpha1.Pipeline, bundles []kardinalv1alpha1.Bundle) map[string]bool {
+	keep := map[string]bool{}
+	for i := range bundles {
+		held := &bundles[i]
+		if lifecycle.HoldNaming(p, held.Name) == nil {
+			continue
+		}
+		keep[held.Name] = true
+		if held.Spec.Provenance != nil && held.Spec.Provenance.RollbackOf != "" {
+			keep[held.Spec.Provenance.RollbackOf] = true
+		}
+		images := map[kardinalv1alpha1.ImageRef]bool{}
+		for _, img := range held.Spec.Images {
+			images[img] = true
+		}
+		for j := range bundles {
+			o := &bundles[j]
+			for _, img := range o.Spec.Images {
+				if images[img] {
+					keep[o.Name] = true
+				}
+			}
+			if c, oc := held.Spec.ConfigRef, o.Spec.ConfigRef; c != nil && oc != nil && c.CommitSHA != "" &&
+				c.GitRepo == oc.GitRepo && c.CommitSHA == oc.CommitSHA {
+				keep[o.Name] = true
+			}
+			if ch, och := held.Spec.Chart, o.Spec.Chart; ch != nil && och != nil && *ch == *och {
+				keep[o.Name] = true
+			}
+		}
+	}
+	return keep
+}
+
+// withoutLiveCarriers drops from terminal the Bundles rejected for carrying
+// a rejected artifact whose change is still live in an environment
+// (lifecycle.RejectedLiveEnvs, retired steps included): they are what that
+// environment runs, and the views show them with the roll-back hint, so
+// history GC keeps them. The steps are listed only when there is a carrier.
+func (r *Reconciler) withoutLiveCarriers(ctx context.Context, namespace, pipeline string,
+	bundles []kardinalv1alpha1.Bundle, terminal []*kardinalv1alpha1.Bundle) ([]*kardinalv1alpha1.Bundle, error) {
+	var steps []kardinalv1alpha1.PromotionStep
+	listed := false
+	out := terminal[:0:0]
+	for _, b := range terminal {
+		if b.Status.Phase == phaseRejected {
+			if !listed {
+				var list kardinalv1alpha1.PromotionStepList
+				if err := r.List(ctx, &list, client.InNamespace(namespace),
+					client.MatchingLabels{lifecycle.LabelPipeline: pipeline}); err != nil {
+					return nil, fmt.Errorf("enforceHistoryLimit: list promotion steps: %w", err)
+				}
+				steps = lifecycle.AddRetiredSteps(list.Items, bundles, map[string]string{lifecycle.LabelPipeline: pipeline})
+				listed = true
+			}
+			if len(lifecycle.RejectedLiveEnvs(b, steps)) > 0 {
+				continue
+			}
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
 // hasNewerSibling reports whether the pipeline has a Bundle of the same type
 // created after b (lifecycle.CompareCreation) that is still in flight: new,
 // Available or Promoting. With countVerified, a Verified sibling counts too;
@@ -624,17 +805,29 @@ func (r *Reconciler) hasNewerSibling(ctx context.Context, b *kardinalv1alpha1.Bu
 // or Available may itself wait for the slot, so it does not count.
 func (r *Reconciler) newerSiblings(ctx context.Context, b *kardinalv1alpha1.Bundle,
 	countVerified bool) (newer, replaced bool, err error) {
+	// The Bundle an environment is held on (spec.holds, kardinal rollback
+	// --hold) is never superseded: the hold pins the environment to it until
+	// it is released.
+	var p kardinalv1alpha1.Pipeline
+	if getErr := r.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pipeline}, &p); getErr == nil &&
+		lifecycle.HoldNaming(&p, b.Name) != nil {
+		return false, false, nil
+	}
 	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
 	if err != nil {
 		return false, false, fmt.Errorf("list bundles for supersession check: %w", err)
 	}
+	rejected := lifecycle.RejectedArtifactsOf(siblings, b.Spec.Pipeline)
 	for i := range siblings {
 		s := &siblings[i]
 		if s.Name == b.Name || s.Spec.Type != b.Spec.Type {
 			continue // image bundles are only superseded by image bundles, etc.
 		}
+		if _, bad := rejected.Carries(s); bad {
+			continue // a rejected Bundle, or one carrying a rejected artifact, never promotes: it supersedes nothing
+		}
 		switch s.Status.Phase {
-		case phaseSuperseded, phaseFailed:
+		case phaseSuperseded, phaseFailed, phaseRejected:
 			continue
 		case phaseVerified:
 			if !countVerified {
@@ -666,7 +859,7 @@ func (r *Reconciler) pipelineBundleList(ctx context.Context, ns, pipeline string
 // markSuperseded sets this bundle's status.phase to "Superseded" (self-supersession).
 func (r *Reconciler) markSuperseded(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	supersede(b)
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch bundle status Superseded: %w", err)
@@ -692,6 +885,106 @@ func (r *Reconciler) superseded(b *kardinalv1alpha1.Bundle) {
 	observability.BundlesTotal.WithLabelValues(phaseSuperseded).Inc()
 }
 
+// markRejected sets the phase of a Bundle whose spec.rejected is set to
+// Rejected, whatever the phase was. Nothing re-translates or recreates the
+// Graph of a Rejected Bundle (handleBound treats it as settled). The Graph is
+// kept: every PromotionStep template holds on the Bundle phase (graph
+// buildPromotionStepNode), so no new step is created and the existing steps
+// stay as history. The PromotionStep reconciler cancels the steps that have
+// not reached the environment yet.
+//
+// Graph-first: the Bundle reconciler writes only its own status, from its
+// own spec.
+func (r *Reconciler) markRejected(ctx context.Context, log zerolog.Logger,
+	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
+	from := b.Status.Phase
+	// What the rejection rejects: the artifacts not already Verified before
+	// this Bundle where it went (lifecycle.RejectedSetOf), so an unchanged
+	// sidecar does not block a rollback to the Bundle before.
+	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", b.Spec.Pipeline, err)
+	}
+	// The steps say where the change got past the merge, retired ones too.
+	var stepList kardinalv1alpha1.PromotionStepList
+	if err := r.List(ctx, &stepList, client.InNamespace(b.Namespace),
+		client.MatchingLabels{lifecycle.LabelBundle: b.Name}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list promotion steps of bundle %s: %w", b.Name, err)
+	}
+	steps := lifecycle.AddRetiredSteps(stepList.Items, []kardinalv1alpha1.Bundle{*b},
+		map[string]string{lifecycle.LabelBundle: b.Name})
+	set := lifecycle.RejectedSetOf(b, siblings, steps)
+	patch := statusPatch(b.DeepCopy())
+	msg := rejectionMessage(b.Spec.Rejected)
+	b.Status.RejectedArtifacts = &set
+	b.Status.Phase = phaseRejected
+	setBundleCondition(b, condReady, metav1.ConditionFalse, "Rejected", msg)
+	setBundleCondition(b, condRejected, metav1.ConditionTrue, "Rejected", msg)
+	if err := r.Status().Patch(ctx, b, patch); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("patch bundle status Rejected: %w", err)
+	}
+	if from == phaseRejected {
+		return ctrl.Result{}, nil // only the rejected-artifact set was added
+	}
+	log.Info().Str("from", from).Str("by", b.Spec.Rejected.By).Str("reason", b.Spec.Rejected.Reason).
+		Int("rejectedImages", len(set.Images)).Msg("bundle rejected")
+	r.event(b, corev1.EventTypeWarning, "Rejected", msg)
+	observability.BundlesTotal.WithLabelValues(phaseRejected).Inc()
+	return ctrl.Result{}, nil
+}
+
+// inFlightOrFailed reports whether a Bundle in phase can still promote.
+func inFlightOrFailed(phase string) bool {
+	switch phase {
+	case "", phaseAvailable, phasePromoting, phaseFailed:
+		return true
+	}
+	return false
+}
+
+// rejectedArtifactOf names the rejected Bundle of b's pipeline whose image or
+// config commit b carries, or "" (lifecycle.RejectedArtifacts). It reads the
+// sibling list from the cache, as supersession does.
+func (r *Reconciler) rejectedArtifactOf(ctx context.Context, b *kardinalv1alpha1.Bundle) (string, error) {
+	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
+	if err != nil {
+		return "", err
+	}
+	name, _ := lifecycle.RecordedRejectedArtifactsOf(siblings, b.Spec.Pipeline).Carries(b)
+	return name, nil
+}
+
+// markRejectedArtifact rejects b, which carries an artifact of the rejected
+// Bundle from: phase Rejected (final), Ready False and Rejected True with
+// reason RejectedArtifact. spec.rejected stays unset, since nobody rejected
+// b itself; everything that skips Rejected Bundles skips it.
+func (r *Reconciler) markRejectedArtifact(ctx context.Context, log zerolog.Logger,
+	b *kardinalv1alpha1.Bundle, from string) (ctrl.Result, error) {
+	patch := statusPatch(b.DeepCopy())
+	msg := fmt.Sprintf("carries an image or config commit of the rejected bundle %s; it is never promoted", from)
+	b.Status.Phase = phaseRejected
+	setBundleCondition(b, condReady, metav1.ConditionFalse, "RejectedArtifact", msg)
+	setBundleCondition(b, condRejected, metav1.ConditionTrue, "RejectedArtifact", msg)
+	if err := r.Status().Patch(ctx, b, patch); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("patch bundle status Rejected (artifact): %w", err)
+	}
+	log.Info().Str("rejectedBundle", from).Msg("bundle carries a rejected artifact — rejected")
+	r.event(b, corev1.EventTypeWarning, "Rejected", msg)
+	observability.BundlesTotal.WithLabelValues(phaseRejected).Inc()
+	return ctrl.Result{}, nil
+}
+
+// rejectionMessage is the Rejected condition message.
+func rejectionMessage(rej *kardinalv1alpha1.BundleRejection) string {
+	return fmt.Sprintf("rejected by %s: %s; it is never promoted again", rej.By, rej.Reason)
+}
+
 // markPipelineNotFound records that the Bundle's Pipeline does not exist.
 // The Bundle is kept: the Pipeline may be applied after the Bundle, or
 // spec.pipeline may be a typo the caller has to see. Creating the Pipeline
@@ -706,7 +999,7 @@ func (r *Reconciler) markPipelineNotFound(ctx context.Context, log zerolog.Logge
 		log.Debug().Str("pipeline", b.Spec.Pipeline).Msg("namespace is being deleted — pipeline gone with it")
 		return ctrl.Result{}, nil
 	}
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	msg := fmt.Sprintf("pipeline %q not found in namespace %s; create it or fix spec.pipeline", b.Spec.Pipeline, b.Namespace)
 	if setBundleCondition(b, condReady, metav1.ConditionFalse, "PipelineNotFound", msg) {
 		if err := r.Status().Patch(ctx, b, patch); err != nil {
@@ -748,6 +1041,10 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// Failed or Superseded, and that phase change re-queues the waiting
 	// siblings (see waitingSiblings). Reads only Bundle status.
 	if limit := pipeline.Spec.MaxConcurrentPromotions; limit > 0 {
+		// With several workers two Available Bundles of the Pipeline could
+		// both count a free slot: the count and the Promoting write that
+		// takes the slot run under the Pipeline's lock.
+		defer r.lockPipeline(b.Namespace, b.Spec.Pipeline)()
 		active, err := r.countPromoting(ctx, b)
 		if err != nil {
 			// A failed read is not a free slot: retry instead of promoting past the cap.
@@ -756,7 +1053,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		if active >= limit {
 			log.Info().Int("active", active).Int("limit", limit).Str("pipeline", b.Spec.Pipeline).
 				Msg("maxConcurrentPromotions reached — Available bundle waiting")
-			patch := client.MergeFrom(b.DeepCopy())
+			patch := statusPatch(b.DeepCopy())
 			if setBundleCondition(b, condReady, metav1.ConditionFalse, "WaitingForSlot", slotMessage(limit)) {
 				pErr := r.Status().Patch(ctx, b, patch)
 				if apierrors.IsNotFound(pErr) {
@@ -775,7 +1072,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// while the Pipeline's freeze gate exists (see pkg/lifecycle/pause.go), so
 	// a paused Pipeline still gets its Graph and resumes where it stopped.
 	graphName, err := r.translate(ctx, log, &pipeline, b)
-	if errors.Is(err, errNamespaceTerminating) {
+	if skipTranslate(err) {
 		return ctrl.Result{}, nil
 	}
 	if errors.Is(err, graph.ErrInvalid) {
@@ -788,7 +1085,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		// An API or RBAC error (timeout, conflict, missing permission). Stay
 		// Available and retry with backoff; the condition shows the error. A
 		// Bundle deleted meanwhile needs no retry.
-		patch := client.MergeFrom(b.DeepCopy())
+		patch := statusPatch(b.DeepCopy())
 		if setBundleCondition(b, condReady, metav1.ConditionFalse, "TranslationError",
 			fmt.Sprintf("graph creation failed, retrying: %v", err)) {
 			pErr := r.Status().Patch(ctx, b, patch)
@@ -806,7 +1103,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		return ctrl.Result{}, fmt.Errorf("translate bundle %s: %w", b.Name, err)
 	}
 
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	b.Status.Phase = phasePromoting
 	b.Status.GraphRef = graphName                              // for recreation detection (#490)
 	b.Status.PipelineSpecHash = pipelineSpecHashFor(&pipeline) // for change detection (#626)
@@ -904,12 +1201,41 @@ func (r *Reconciler) translate(ctx context.Context, log zerolog.Logger,
 		log.Debug().Msg("namespace is being deleted — not translating the bundle")
 		return "", errNamespaceTerminating
 	}
+	// The retirement controller writes status.retiredAt; this reconcile may
+	// hold a copy from before. Rebuilding a Bundle that had a Graph is rare
+	// (a Pipeline change, a deleted Graph), so read it fresh first.
+	if b.Status.GraphRef != "" && r.retiredSince(ctx, b) {
+		log.Debug().Msg("bundle retired — its Graph is not built again")
+		return "", errBundleRetired
+	}
 	name, err := r.Translator.Translate(ctx, pipeline, b)
 	if apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause) && r.namespaceDeleting(ctx, log, b.Namespace) {
 		log.Debug().Err(err).Msg("namespace is being deleted — bundle not translated")
 		return "", errNamespaceTerminating
 	}
+	if err == nil && b.Status.GraphRef != "" && r.retiredSince(ctx, b) {
+		// Retired between the check above and Translate: delete the Graph
+		// just written (the retirement controller would too, on the Graph's
+		// create event).
+		if d, ok := r.GraphChecker.(graphDeleter); ok {
+			if dErr := d.Delete(ctx, b.Namespace, name); dErr != nil && !apierrors.IsNotFound(dErr) {
+				return "", fmt.Errorf("delete the Graph of retired bundle %s: %w", b.Name, dErr)
+			}
+		}
+		return "", errBundleRetired
+	}
 	return name, err
+}
+
+// retiredSince reports whether the API server says b is retired (its
+// status.retiredAt is set), whatever the cached copy says. Without an
+// APIReader it reports false.
+func (r *Reconciler) retiredSince(ctx context.Context, b *kardinalv1alpha1.Bundle) bool {
+	if r.APIReader == nil {
+		return false
+	}
+	var fresh kardinalv1alpha1.Bundle
+	return r.APIReader.Get(ctx, client.ObjectKeyFromObject(b), &fresh) == nil && lifecycle.Retired(&fresh)
 }
 
 // namespaceDeleting reports whether namespace is being deleted. It reads the
@@ -936,7 +1262,7 @@ func (r *Reconciler) namespaceDeleting(ctx context.Context, log zerolog.Logger, 
 // so a changed Pipeline retries the Bundle (retryIfPipelineChanged).
 func (r *Reconciler) markInvalid(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle,
 	pipeline *kardinalv1alpha1.Pipeline, cause error) (ctrl.Result, error) {
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	reason, msg, _ := setInvalid(b, pipeline, cause, usedGatesHash(pipeline, cause))
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -1017,7 +1343,7 @@ func (r *Reconciler) retryIfPipelineChanged(ctx context.Context, log zerolog.Log
 		return r.markSuperseded(ctx, log, b)
 	}
 
-	patch := client.MergeFrom(b.DeepCopy())
+	patch := statusPatch(b.DeepCopy())
 	b.Status.Phase = phaseAvailable
 	b.Status.PipelineSpecHash = ""
 	b.Status.PolicyGatesHash = ""
@@ -1182,6 +1508,13 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		// waiting for the slot itself, so it does not lift the hold.
 		limit, held := 0, false
 		if !replaced {
+			if pipeline != nil && pipeline.Spec.MaxConcurrentPromotions > 0 {
+				// A recovery back into Promoting takes a slot too: count it and
+				// write the phase under the Pipeline's lock, as handleAvailable
+				// does, so a recovering and an Available Bundle never take the
+				// same free slot (#1509).
+				defer r.lockPipeline(b.Namespace, b.Spec.Pipeline)()
+			}
 			var err error
 			if limit, held, err = r.slotTaken(ctx, b, pipeline); err != nil {
 				// A failed read is not a free slot: keep the hold as it is and retry.
@@ -1219,7 +1552,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		log.Debug().Msg("bundle status already up to date")
 		return result, nil
 	}
-	if err := r.Status().Patch(ctx, b, client.MergeFrom(before)); err != nil {
+	if err := r.Status().Patch(ctx, b, statusPatch(before)); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
@@ -1307,6 +1640,7 @@ func setBundleCondition(b *kardinalv1alpha1.Bundle, condType string, status meta
 var eventActions = map[string]string{
 	"Available":        "Accept",
 	"Superseded":       "Supersede",
+	"Rejected":         "Reject",
 	"PipelineNotFound": "ResolvePipeline",
 	"TranslationError": "CreateGraph",
 	"Promoting":        "Promote",
@@ -1316,6 +1650,7 @@ var eventActions = map[string]string{
 	"GraphSyncFailed":  "SyncGraph",
 	"Verified":         "Verify",
 	"Recovered":        "Promote",
+	"GraphRetired":     "RetireGraph",
 }
 
 // event emits an Event when a Recorder is configured.
@@ -1562,7 +1897,13 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	graphObject := &unstructured.Unstructured{}
 	graphObject.SetGroupVersionKind(graph.GraphGVK)
 
-	return ctrl.NewControllerManagedBy(mgr).
+	// Registered whatever the policy: with every delay 0 a Pipeline's
+	// kardinal.io/graph-retire-after annotation still retires its Bundles.
+	if err := r.setupRetire(mgr); err != nil {
+		return fmt.Errorf("set up the bundle retirement controller: %w", err)
+	}
+	b := ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&kardinalv1alpha1.Bundle{}).
 		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.waitingSiblings),
 			builder.WithPredicates(bundlePhaseChanged)).
@@ -1571,8 +1912,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineBundles),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.gateBundles),
-			builder.WithPredicates(gateTemplateChanged)).
-		Complete(r)
+			builder.WithPredicates(gateTemplateChanged))
+	return shard.Active().Complete(b, tracing.WrapReconciler("bundle", r), &kardinalv1alpha1.BundleList{})
 }
 
 // bundlePipelineIndex is the spec.pipeline index function.
@@ -1605,8 +1946,13 @@ var bundlePhaseChanged = predicate.Funcs{
 }
 
 // waitingSiblings maps a Bundle event to the other Bundles of its pipeline
-// that are new, Available or Promoting, and to the Failed ones created before
-// it.
+// whose state the event can change: the new, Available or Promoting ones
+// created before it (a newer Bundle supersedes them), every new, Available
+// or Promoting one when the Pipeline sets maxConcurrentPromotions (a phase
+// change can take or free their slot, #1349), and the Failed ones as below.
+// Newer in-flight siblings of an uncapped Pipeline are not re-queued: nothing
+// an older Bundle does changes them, and re-queueing every sibling on every
+// event made a burst of Bundles quadratic (#1492 scale run: 1,161 queued).
 func (r *Reconciler) waitingSiblings(ctx context.Context, obj client.Object) []reconcile.Request {
 	b, ok := obj.(*kardinalv1alpha1.Bundle)
 	if !ok {
@@ -1619,6 +1965,13 @@ func (r *Reconciler) waitingSiblings(ctx context.Context, obj client.Object) []r
 		return nil
 	}
 	var reqs []reconcile.Request
+	capped, cappedRead := false, false
+	isCapped := func() bool {
+		if !cappedRead {
+			capped, cappedRead = r.capped(ctx, b), true
+		}
+		return capped
+	}
 	for i := range siblings {
 		s := &siblings[i]
 		if s.Name == b.Name {
@@ -1626,14 +1979,16 @@ func (r *Reconciler) waitingSiblings(ctx context.Context, obj client.Object) []r
 		}
 		switch s.Status.Phase {
 		case "", phaseAvailable, phasePromoting:
-			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(s)})
+			if lifecycle.CompareCreation(b, s) > 0 || isCapped() {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(s)})
+			}
 		case phaseFailed:
 			// A Failed Bundle yields to a newer one while it rolls back
 			// (#1428), so a newer Bundle re-queues it. Under a
 			// maxConcurrentPromotions cap every phase change can take or
 			// free the slot a Failed Bundle waits for (#1349). Only a Bundle
 			// with a Graph can roll back or be held.
-			if s.Status.GraphRef != "" && (lifecycle.CompareCreation(b, s) > 0 || r.capped(ctx, b)) {
+			if s.Status.GraphRef != "" && (lifecycle.CompareCreation(b, s) > 0 || isCapped()) {
 				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(s)})
 			}
 		}
@@ -1712,4 +2067,13 @@ func (r *Reconciler) pipelineBundles(ctx context.Context, obj client.Object) []r
 		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&bundles[i])})
 	}
 	return reqs
+}
+
+// lockPipeline locks the maxConcurrentPromotions slot count of one
+// Pipeline and returns the unlock.
+func (r *Reconciler) lockPipeline(namespace, pipeline string) (unlock func()) {
+	v, _ := r.slotLocks.LoadOrStore(namespace+"/"+pipeline, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }

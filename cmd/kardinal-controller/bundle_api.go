@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/accesslog"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
@@ -44,13 +45,16 @@ const (
 	// bundleRateLimit is the maximum number of Bundle creation requests per minute.
 	// There is one bundle API token, so this cap is shared by every CI caller.
 	bundleRateLimit = 60
+	// bundleAPICreator is the kardinal.io/created-by of a Bundle created
+	// through the Bundle API token.
+	bundleAPICreator = lifecycle.BundleAPICreator
 )
 
 // bundleCreateRequest is the JSON body accepted by POST /api/v1/bundles.
 type bundleCreateRequest struct {
 	// Pipeline is the target Pipeline name.
 	Pipeline string `json:"pipeline"`
-	// Type is the bundle type: "image", "config", or "mixed".
+	// Type is the bundle type: "image", "config", "mixed" or "chart".
 	Type string `json:"type"`
 	// Namespace is the target namespace. Defaults to the server's default namespace.
 	Namespace string `json:"namespace,omitempty"`
@@ -58,6 +62,8 @@ type bundleCreateRequest struct {
 	Images []v1alpha1.ImageRef `json:"images,omitempty"`
 	// ConfigRef is the GitOps commit for "config" and "mixed" bundles.
 	ConfigRef *v1alpha1.ConfigRef `json:"configRef,omitempty"`
+	// Chart is the Helm chart version of a "chart" bundle.
+	Chart *v1alpha1.ChartRef `json:"chart,omitempty"`
 	// Provenance carries build metadata.
 	Provenance *v1alpha1.BundleProvenance `json:"provenance,omitempty"`
 	// Intent limits or shapes the promotion (targetEnvironment, skipEnvironments).
@@ -169,6 +175,7 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 			subtle.ConstantTimeCompare([]byte(providedToken), []byte(s.token)) == 1
 		switch {
 		case static:
+			accesslog.FromContext(r.Context()).Auth = "static-token"
 			s.serve(w, r, s.client, "")
 		case s.review != nil:
 			s.review.ServeHTTP(w, r)
@@ -215,6 +222,7 @@ func (s *bundleAPIServer) serve(w http.ResponseWriter, r *http.Request, c client
 			Pipeline:   req.Pipeline,
 			Images:     req.Images,
 			ConfigRef:  req.ConfigRef,
+			Chart:      req.Chart,
 			Provenance: req.Provenance,
 			Intent:     req.Intent,
 		}
@@ -274,14 +282,19 @@ func (s *bundleAPIServer) serve(w http.ResponseWriter, r *http.Request, c client
 			Spec: spec,
 		}
 		lifecycle.StampCreatedAt(bundle, now) // sub-second creation order for supersession
+		// The creator excludeAuthor reads: the reviewed caller, or for the
+		// static token its holder, not a person (excludeAuthor never
+		// matches it). The controller may name any creator.
+		creator := bundleAPICreator
 		if requester != "" {
+			creator = requester
 			if bundle.Annotations == nil {
 				bundle.Annotations = map[string]string{}
 			}
 			bundle.Annotations[lifecycle.AnnotationRequestedBy] = requester
 		}
 
-		if err := c.Create(r.Context(), bundle); err != nil {
+		if err := lifecycle.CreateBundleAs(r.Context(), c, bundle, creator); err != nil {
 			s.log.Error().Err(err).Str("namespace", ns).Str("pipeline", req.Pipeline).Msg("failed to create bundle")
 			switch {
 			case apierrors.IsInvalid(err):

@@ -4,13 +4,21 @@
 package main
 
 import (
+	"fmt"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+
+	hookrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 )
 
 // gracefulShutdownTimeout is how long the controller waits on shutdown for
@@ -19,12 +27,23 @@ import (
 // leave room for cleanup. (#574)
 const gracefulShutdownTimeout = 30 * time.Second
 
+// hookJobSelector selects the Jobs of HookRuns.
+var hookJobSelector = func() labels.Selector {
+	req, err := labels.NewRequirement(hookrunrecon.LabelHookRun, selection.Exists, nil)
+	if err != nil {
+		panic(err) // a constant key: unreachable
+	}
+	return labels.NewSelector().Add(*req)
+}()
+
 // managerConfig holds the flags that shape the controller-runtime manager.
 type managerConfig struct {
 	metricsBindAddress     string
 	healthProbeBindAddress string
 	leaderElect            bool
 	watchNamespace         string
+	// namespaceShard is --namespace-shard: each shard elects its own leader.
+	namespaceShard string
 }
 
 // buildManagerOptions returns the options main passes to ctrl.NewManager.
@@ -47,26 +66,87 @@ func buildManagerOptions(cfg managerConfig) ctrl.Options {
 		},
 		HealthProbeBindAddress:        cfg.healthProbeBindAddress,
 		LeaderElection:                cfg.leaderElect,
-		LeaderElectionID:              "kardinal-promoter-leader",
+		LeaderElectionID:              leaderElectionID(cfg.namespaceShard),
 		LeaderElectionReleaseOnCancel: true,
 		GracefulShutdownTimeout:       ptr(gracefulShutdownTimeout),
-		Cache:                         buildCacheOpts(cfg.watchNamespace),
+		Cache:                         shardCacheOpts(buildCacheOpts(cfg.watchNamespace), cfg.namespaceShard),
 		Client: sigs_client.Options{
 			Cache: &sigs_client.CacheOptions{DisableFor: uncachedObjects()},
 		},
 	}
 }
 
+// leaderElectionID is the leader election Lease name: one per shard, so
+// every shard has its own leader.
+func leaderElectionID(shard string) string {
+	if shard == "" {
+		return "kardinal-promoter-leader"
+	}
+	return "kardinal-promoter-leader-" + shard
+}
+
 // buildCacheOpts limits the informer cache to watchNamespace when it is set.
 // This is the mechanism behind namespace-scoped install mode, where the Helm
 // chart renders a Role/RoleBinding instead of a ClusterRole/ClusterRoleBinding.
 // (docs/design/15-production-readiness.md §Lens 6)
+//
+// Jobs are cached only when they carry the kardinal.io/hookrun label: the
+// HookRun reconciler owns those (hook Jobs), and caching every Job in the
+// cluster would hold them all in memory for nothing.
 func buildCacheOpts(watchNamespace string) cache.Options {
-	opts := cache.Options{}
+	opts := cache.Options{
+		ByObject: map[sigs_client.Object]cache.ByObject{
+			&batchv1.Job{}: {Label: hookJobSelector},
+		},
+	}
 	if watchNamespace != "" {
 		opts.DefaultNamespaces = map[string]cache.Config{watchNamespace: {}}
 	}
 	return opts
+}
+
+// shardCacheOpts limits the Lease cache of a sharded controller to the
+// shard tokens (shard.CacheByObject): without it the shard gate's reads
+// would cache every Lease in the cluster, leader election Leases included.
+func shardCacheOpts(opts cache.Options, namespaceShard string) cache.Options {
+	if namespaceShard != "" {
+		if opts.ByObject == nil {
+			opts.ByObject = map[sigs_client.Object]cache.ByObject{}
+		}
+		// Added to, not replaced: the hook Job selector stays.
+		for obj, by := range shard.CacheByObject() {
+			opts.ByObject[obj] = by
+		}
+	}
+	return opts
+}
+
+// shardCallTimeout is the HTTP timeout of the shard gate's clients: every
+// call of a Lease pass ends well before the 10 s heartbeat renewal, so a
+// hung API server cannot stall a pass (pkg/shard fences on its own ticker
+// regardless).
+const shardCallTimeout = 5 * time.Second
+
+// shardClients returns the shard gate's clients: reads of Namespaces and
+// tokens through the manager's cache, writes and the uncached reads
+// (heartbeats, the token re-read after a fence) straight to the API server,
+// all with shardCallTimeout. With sharding off it returns the manager's.
+func shardClients(mgr ctrl.Manager, namespaceShard string) (sigs_client.Client, sigs_client.Reader, error) {
+	if namespaceShard == "" {
+		return mgr.GetClient(), mgr.GetAPIReader(), nil
+	}
+	cfg := rest.CopyConfig(mgr.GetConfig())
+	cfg.Timeout = shardCallTimeout
+	c, err := sigs_client.New(cfg, sigs_client.Options{Scheme: mgr.GetScheme(),
+		Cache: &sigs_client.CacheOptions{Reader: mgr.GetCache()}})
+	if err != nil {
+		return nil, nil, fmt.Errorf("shard client: %w", err)
+	}
+	r, err := sigs_client.New(cfg, sigs_client.Options{Scheme: mgr.GetScheme()})
+	if err != nil {
+		return nil, nil, fmt.Errorf("shard API reader: %w", err)
+	}
+	return c, r, nil
 }
 
 // uncachedObjects are the types the manager client reads straight from the

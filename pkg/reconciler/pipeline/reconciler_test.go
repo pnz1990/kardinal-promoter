@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -30,6 +31,7 @@ import (
 func newScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	_ = kardinalv1alpha1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
 	return s
 }
 
@@ -294,7 +296,9 @@ func TestPipelineReconciler_RepositoryNotAllowed(t *testing.T) {
 			require.NoError(t, corev1.AddToScheme(scheme))
 			objs := []client.Object{p}
 			if tc.secret {
-				objs = append(objs, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "team-token", Namespace: "default"}})
+				// Labelled, so the SecretReferenceable warning (and its re-check) stays out of this test.
+				objs = append(objs, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "team-token", Namespace: "default",
+					Labels: map[string]string{"kardinal.io/referenceable": "true"}}})
 			}
 			c := newClientWithIndex(scheme, objs...)
 			key := types.NamespacedName{Name: "app", Namespace: "default"}
@@ -532,4 +536,132 @@ func TestPipelineReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 		NamespacedName: types.NamespacedName{Name: "podinfo", Namespace: "default"},
 	})
 	objectgonetest.AssertQuiet(t, res, err, &logs)
+}
+
+// TestPipelineReconciler_GitSecretReferenceable: a git Secret without
+// kardinal.io/referenceable=true sets the SecretReferenceable=False warning
+// (the Secret is still used in v0.10.0, #1506) and requeues so a label added
+// later is seen; a labeled, missing or unnamed Secret sets nothing. Labeling
+// the Secret removes the warning; reconciling again changes nothing.
+func TestPipelineReconciler_GitSecretReferenceable(t *testing.T) {
+	secret := func(labels map[string]string) *corev1.Secret {
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "git-token", Namespace: "default", Labels: labels}}
+	}
+	tests := []struct {
+		name     string
+		ref      bool
+		secret   *corev1.Secret
+		wantWarn bool
+	}{
+		{name: "unlabeled Secret", ref: true, secret: secret(nil), wantWarn: true},
+		{name: "label with another value", ref: true, secret: secret(map[string]string{"kardinal.io/referenceable": "yes"}), wantWarn: true},
+		{name: "labeled Secret", ref: true, secret: secret(map[string]string{"kardinal.io/referenceable": "true"})},
+		{name: "missing Secret", ref: true},
+		{name: "no secretRef", secret: secret(nil)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+			if tc.ref {
+				p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "git-token"}
+			}
+			objs := []client.Object{p}
+			if tc.secret != nil {
+				objs = append(objs, tc.secret)
+			}
+			c := newClientWithIndex(newScheme(), objs...)
+			r := &pipeline.Reconciler{Client: c}
+			key := types.NamespacedName{Name: "app", Namespace: "default"}
+			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+			var got kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			cond := meta.FindStatusCondition(got.Status.Conditions, "SecretReferenceable")
+			if !tc.wantWarn {
+				assert.Nil(t, cond)
+				assert.Zero(t, res.RequeueAfter)
+				return
+			}
+			require.NotNil(t, cond)
+			assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			assert.Equal(t, "SecretNotReferenceable", cond.Reason)
+			assert.Contains(t, cond.Message, "git Secret git-token is not labeled kardinal.io/referenceable=true")
+			assert.Equal(t, 5*time.Minute, res.RequeueAfter, "recheck: Secrets are not watched")
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, ready)
+			assert.Equal(t, metav1.ConditionTrue, ready.Status, "a warning, not a failure")
+
+			rv := got.ResourceVersion
+			_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			assert.Equal(t, rv, got.ResourceVersion, "idempotent")
+
+			var s corev1.Secret
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "git-token", Namespace: "default"}, &s))
+			s.Labels = map[string]string{"kardinal.io/referenceable": "true"}
+			require.NoError(t, c.Update(context.Background(), &s))
+			res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "SecretReferenceable"), "labeled: warning removed")
+			assert.Zero(t, res.RequeueAfter)
+		})
+	}
+}
+
+// TestDerivePhase_RejectedLive (QA #1489): a Rejected Bundle whose change is
+// live in an environment (its step there is HealthChecking or Verified)
+// stays the newest Bundle there, so the Pipeline is Degraded: roll back. A
+// Rejected Bundle that never went live (its step was cancelled) is skipped
+// like a Superseded one, and a newer Bundle verified in the environment
+// replaces the rejected change.
+//
+// Covers BUNDLE-REJECT-07.
+func TestDerivePhase_RejectedLive(t *testing.T) {
+	t0 := metav1.Now()
+	t1 := metav1.NewTime(t0.Add(time.Minute))
+	t2 := metav1.NewTime(t0.Add(2 * time.Minute))
+	rejected := func(name string, at metav1.Time) kardinalv1alpha1.Bundle {
+		b := phaseBundle(name, "Rejected", at)
+		b.Spec.Rejected = &kardinalv1alpha1.BundleRejection{By: "alice", Reason: "CVE"}
+		return b
+	}
+	st := func(bundle, env, state string) kardinalv1alpha1.PromotionStep {
+		return kardinalv1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: bundle + "-" + env, Namespace: "default"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: bundle, Environment: env},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: state},
+		}
+	}
+	cases := []struct {
+		name    string
+		bundles []kardinalv1alpha1.Bundle
+		steps   []kardinalv1alpha1.PromotionStep
+		want    string
+	}{
+		{name: "rejected change verified in prod", bundles: []kardinalv1alpha1.Bundle{phaseBundle("v1", "Verified", t0), rejected("v2", t1)},
+			steps: []kardinalv1alpha1.PromotionStep{st("v1", "prod", "Verified"), st("v2", "prod", "Verified")}, want: "Degraded"},
+		{name: "rejected change health-checking in prod", bundles: []kardinalv1alpha1.Bundle{phaseBundle("v1", "Verified", t0), rejected("v2", t1)},
+			steps: []kardinalv1alpha1.PromotionStep{st("v1", "prod", "Verified"), st("v2", "prod", "HealthChecking")}, want: "Degraded"},
+		{name: "rejected before it went live", bundles: []kardinalv1alpha1.Bundle{phaseBundle("v1", "Verified", t0), rejected("v2", t1)},
+			steps: []kardinalv1alpha1.PromotionStep{st("v1", "prod", "Verified"), st("v2", "prod", "Failed")}, want: "Ready"},
+		{name: "rolled back by a newer bundle", bundles: []kardinalv1alpha1.Bundle{rejected("v2", t1), phaseBundle("v3", "Verified", t2)},
+			steps: []kardinalv1alpha1.PromotionStep{st("v2", "prod", "Verified"), st("v3", "prod", "Verified")}, want: "Ready"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, pipeline.DerivePhase("app", tc.bundles, tc.steps))
+		})
+	}
+
+	// A Bundle rejected after its Graph was retired (#1492) has only
+	// status.retiredSteps; with them (AddRetiredSteps, as the reconciler
+	// reads steps) its live change still makes the Pipeline Degraded.
+	retired := rejected("v2", t1)
+	retired.Status.RetiredAt = &t1
+	retired.Status.RetiredSteps = []kardinalv1alpha1.RetiredStep{{Name: "v2-prod", Environment: "prod", State: "Verified", CreatedAt: t1, VerifiedAt: &t1}}
+	bundles := []kardinalv1alpha1.Bundle{phaseBundle("v1", "Verified", t0), retired}
+	steps := lifecycle.AddRetiredSteps([]kardinalv1alpha1.PromotionStep{st("v1", "prod", "Verified")}, bundles, nil)
+	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", bundles, steps), "a retired rejected change that is live")
 }

@@ -26,14 +26,22 @@ spec:
       dependsOn: [<string>, ...]        # Environments this one depends on (default: previous in list)
       wave: <int>                       # Deployment wave, minimum 1 (default: none)
       update:
-        strategy: <string>              # "kustomize" (default), "helm" or "argocd"
+        strategy: <string>              # "kustomize" (default), "helm", "argocd" or "yaml"
         helm:                           # When strategy: helm
           imagePathTemplate: <string>   # Dot path of the image tag (default: ".image.tag")
           valuesFile: <string>          # Relative to path (default: "values.yaml")
+          chartVersionFile: <string>    # chart Bundles: file with the chart version (default: "Chart.yaml")
+          chartVersionPath: <string>    # chart Bundles: its dot path (default: ".dependencies[name=<chart>].version")
         argocd:                         # When strategy: argocd
           application: <string>         # Argo CD Application to patch (required)
           namespace: <string>           # Default: "argocd"
           imageKey: <string>            # Key in spec.source.helm.valuesObject (default: "image.tag")
+        yaml:                           # When strategy: yaml
+          updates:                      # One or more; all are applied in one commit
+            - file: <string>            # YAML file relative to path
+              path: <string>            # YAML path, e.g. "spec.template.spec.containers[name=app].image"
+              image: <string>           # Bundle image repository (optional with one image)
+              value: <string>           # tag (default), digest, tagWithDigest, image, imageWithDigest
       approval: <string>                # "auto" (default) or "pr-review"
       health:
         type: <string>                  # "resource" (default), "argocd", "flux", "argoRollouts", "flagger"
@@ -90,12 +98,13 @@ spec:
 | `branch` | No | `main` | Base branch: `git-clone` checks it out, `approval: auto` pushes to it, and `pr-review` PRs target it. The API server sets `main` when the field is omitted, and the controller also reads an empty value as `main`. |
 | `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch` (rendered manifests on per-environment branches) is **not implemented**: the `git-clone` step fails every promotion that uses it. See [Rendered Manifests](rendered-manifests.md). |
 | `provider` | No | (none) | **Not read by the controller.** The SCM provider is chosen once per controller by `--scm-provider` (`github`, `gitlab`, `forgejo`, `gitea`, `bitbucket` or `azuredevops`); see [SCM Providers](scm-providers.md). The CRD accepts only `github` or `gitlab` here. Leave it unset. |
-| `secretRef.name` | No | | `secretRef` is optional; when it is set, `name` must be too. Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token. Needed when the HTTPS remote refuses git without a token (every push to a hosted provider, and the clone of a private repository); not needed for an ssh remote or a URL that carries its credentials. When it is not set, or the Secret does not exist, and the HTTPS remote refuses `git-clone` or `git-push` without a token, the step retries until the Secret exists; the step message says what is missing (see [Troubleshooting](troubleshooting.md#symptom-authentication-required-with-git-secret-not-found-or-specgitsecretref-is-not-set)). |
+| `secretRef.name` | No | | `secretRef` is optional; when it is set, `name` must be too. Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token. Needed when the HTTPS remote refuses git without a token (every push to a hosted provider, and the clone of a private repository); not needed for an ssh remote or a URL that carries its credentials. When it is not set, or the Secret does not exist, and the HTTPS remote refuses `git-clone` or `git-push` without a token, the step retries until the Secret exists; the step message says what is missing (see [Troubleshooting](troubleshooting.md#symptom-authentication-required-with-git-secret-not-found-or-specgitsecretref-is-not-set)). **Label the Secret `kardinal.io/referenceable: "true"`** (`kubectl label secret github-token kardinal.io/referenceable=true`): the token goes to the Pipeline's `git.url`, which the Pipeline's author chooses, so the label records that the Secret's owner allows it. Deprecated in v0.10.0: an unlabeled Secret still works, and the Pipeline has the condition `SecretReferenceable=False` (reason `SecretNotReferenceable`); v0.11 will refuse it ([#1506](https://github.com/pnz1990/kardinal-promoter/issues/1506)). |
 | `secretRef.namespace` | No | Pipeline's namespace | Must be empty or the Pipeline's own namespace. Any other namespace fails the PromotionStep without reading the Secret, so a Pipeline cannot use another namespace's credentials. The Pipeline's `Ready` condition is `False` with reason `ValidationFailed`, and `kardinal validate` reports it when the file sets `metadata.namespace`. |
 
 ### spec.environments[]
 
-A Pipeline has 1 to 100 environments. The CRD rejects, at `kubectl apply` time:
+A Pipeline has 1 to 500 environments (see [Large Pipelines](#large-pipelines) for what fits in
+one Bundle's Graph). The CRD rejects, at `kubectl apply` time:
 
 - a name that is not a DNS label: lowercase letters, digits and `-`, starting and ending
   with a letter or digit, at most 63 characters. The name is used as a namespace
@@ -115,25 +124,30 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `path` | No | `environments/<name>` | Directory in the GitOps repo containing the environment's manifests. It must be relative and stay inside the repository: absolute paths, `..` segments and symlinks that point outside the checkout fail the step. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
 | `wave` | No | (none) | Assigns this environment to a numbered deployment wave (K-06). Minimum 1. Environments with the same wave number are promoted in parallel. A wave depends on every environment of the next lower wave, and on the environment without a wave listed before it. Gaps in the numbers are allowed. Composable with `dependsOn`. See [Wave Topology](#wave-topology-k-06). |
-| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches the image tag at `update.helm.imagePathTemplate` in `update.helm.valuesFile`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). |
+| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches the image tag at `update.helm.imagePathTemplate` in `update.helm.valuesFile`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). `yaml`: sets any YAML paths, in any files of the environment directory, to a Bundle image's tag, digest or reference; see [The yaml update strategy](#the-yaml-update-strategy). |
 | `update.helm.imagePathTemplate` | No | `.image.tag` | `helm` only. Dot path of the image tag in the values file. |
 | `update.helm.valuesFile` | No | `values.yaml` | `helm` only. Values file to patch, relative to the environment `path`. |
+| `update.helm.chartVersionFile` | No | `Chart.yaml` | `helm` only, for `chart` Bundles (from a [Helm Subscription](subscription.md#promoting-a-chart-version)). File the chart version is written to, relative to the environment `path`. A chart Bundle fails at build in an environment whose strategy is not `helm`. |
+| `update.helm.chartVersionPath` | No | `.dependencies[name=<chart>].version` | `helm` only. [YAML path](#yaml-paths) of the chart version in `chartVersionFile` (`.helmCharts[name=podinfo].version`, `.spec.chart.spec.version`, `.spec.source.targetRevision`). The default is the umbrella chart's dependency named after the Bundle's chart; the step fails when there is none. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. The step list is fixed when an environment's step starts: an edit applies to steps that start after it, so an environment already promoting finishes with the approval it started with and uses the new one from the next Bundle. A step that started as `auto` still pushes straight to the target branch after an edit to `pr-review`. The Bundle in flight still finishes: its Graph turns Ready once its steps are Verified and its gates pass, whether or not they opened a PR. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
 | `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. |
 | `health.timeout` | No | `10m` | Maximum time from the start of health checking to the first healthy check, and from the moment a `bake` window stops to the next healthy check. When it expires, it counts as a health failure and applies `onHealthFailure`. It does not cut a running `bake` window short. |
-| `health.cluster` | No | (must be empty) | **Deprecated, not supported.** kardinal checks health only in the cluster it runs in. A non-empty value sets the Pipeline `Ready=False` and fails the PromotionStep. For a workload in another cluster, check its Argo CD Application (`type: argocd`) or a Flux Kustomization that targets the cluster (`type: flux`) in the hub; see [Remote Clusters](health-adapters.md#remote-clusters). |
+| `health.cluster` | No | (must be empty) | **Deprecated, not supported.** A non-empty value sets the Pipeline `Ready=False` and fails the PromotionStep. Use `health.kubeconfigSecretRef`, or check the hub's Argo CD Application (`type: argocd`) or Flux Kustomization (`type: flux`); see [Remote Clusters](health-adapters.md#remote-clusters). |
+| `health.kubeconfigSecretRef` | No | — | `{name, key}` of a Secret in the Pipeline's namespace holding a kubeconfig (key default `kubeconfig`). The health check reads its object in that cluster. Inline credentials only; `exec`, `auth-provider` and file paths are refused. See [Remote Clusters](health-adapters.md#remote-clusters). |
 | `health.labelSelector` | No | (none) | `health.type=resource` only. When set, **every** Deployment in the namespace that matches these labels must pass the health check. No match is unhealthy. Example: `{"app": "nginx", "kardinal.io/pipeline": "nginx-demo"}`. When unset, a single Deployment named after the Pipeline is checked. Ignored for `argocd`, `flux`, `argoRollouts`, and `flagger`. |
 | `delivery.delegate` | No | `none` | Progressive delivery delegation. `argoRollouts`: watch Argo Rollouts Rollout status after promotion. `flagger`: watch Flagger Canary status. `none`: instant deploy (rolling update). |
 | `shard` | No | (must be empty) | **Deprecated, not supported.** Distributed mode was removed. A non-empty value sets the Pipeline `Ready=False` (reason `NotImplemented`), `kardinal validate` fails, and every PromotionStep of the environment fails with `shard is not supported`. Remove it; the controller reconciles every environment. See [Multi-Cluster](distributed-mode.md). |
 | `steps` | No | (none) | **Deprecated, not supported.** kardinal has no custom step engine: the controller always runs the sequence it infers from the Bundle type, `update.strategy`, `approval` and `layout`. The API server rejects a Pipeline that sets `steps` (an empty list is accepted). See [Promotion Steps](#promotion-steps). |
 | `promotionTemplate` | No | (none) | **Deprecated, not supported.** The `PromotionTemplate` CRD was removed. The API server rejects a Pipeline that sets `promotionTemplate`. |
-| `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR and deletes its head branch (`kardinal/<bundle>/<env>`), so a late merge cannot deliver the change: GitHub's API merges a closed PR whose branch is still there. Unset or `0` waits forever. |
+| `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR and deletes its head branch (`kardinal/<namespace hash>/<bundle>/<env>`), so a late merge cannot deliver the change: GitHub's API merges a closed PR whose branch is still there. Unset or `0` waits forever. |
 | `stepTimeoutSeconds` | No | (none) | Maximum seconds one built-in step (`git-clone`, `kustomize-set-image`, `open-pr`, ...) may run. The step is cancelled and the error is handled like any other step error: a retryable error is retried with backoff, then the PromotionStep is marked `Failed`. Minimum 1. Unset means no per-step timeout. |
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A check that is not healthy stops the window; it starts again at the next healthy check, and `health.timeout` bounds the wait for it. A Waiting check (the workload is changing, such as a canary paused at a step) is not an alarm under either policy. |
 | `bake.policy` | No | `reset-on-alarm` | What to do when a check is unhealthy during the bake window. `reset-on-alarm`: stop the window, increment `status.bakeResets`, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. A release that keeps flapping between healthy and unhealthy fails under `reset-on-alarm` when no full window completes by the first window's start + `bake.minutes` + `health.timeout` (see [Timings and failures](health-adapters.md#timings-and-failures)); `fail-on-alarm` fails it on the first unhealthy check. |
 | `bake.maxDuration` | No | `bake.minutes` + `health.timeout` | Go duration (`36h`). The longest time from the first bake window's start (`status.bakeFirstStartedAt`) to a complete window. A window that stops after it, on an alarm or a Waiting check such as a paused canary, applies `onHealthFailure`. A value shorter than `bake.minutes` counts as `bake.minutes`. |
 | `onHealthFailure` | No | `none` | What to do when `health.timeout` expires without a Healthy result, when the adapter reports a terminal failure (Deployment `ProgressDeadlineExceeded` from this promotion's rollout, Flagger `Failed`), or when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle with the artifacts of the Bundle verified before the failing one in this environment; step → RollingBack, or AbortedByAlarm when there is nothing safe to roll back to (a step of a rollback Bundle → AbortedByAlarm instead, so rollbacks do not chain). See [Automatic Rollback](rollback.md#automatic-rollback). |
+| `hooks` | No | (none) | Jobs run once per Bundle in this environment: `phase: pre` before the promotion starts (migrations), `phase: post` after the health check passed and before the environment is Verified (integration tests). Each is `{name, phase, job, timeout}`, `job` a `batch/v1` JobSpec. At most 10. A failed pre hook fails the step before it changes anything; a failed post hook applies `onHealthFailure`. See [Pre- and Post-Deploy Hooks](hooks.md). |
+| `verification` | No | (none) | Argo Rollouts analysis after the health check: `{analysisTemplates: [{name, kind}], args: [{name, value}], inconclusive, timeout}`. One AnalysisRun per template, with the Bundle's `tag`, `image`, `environment` and more as args; the environment is Verified only when every run is `Successful`, and a failed run applies `onHealthFailure`. Needs Argo Rollouts installed: without it the Bundle fails. See [Analysis](analysis.md). |
 | `regions` | No | (none) | **Deprecated, not supported.** Declare one environment per region instead (for example `prod-us` and `prod-eu`) and promote them in parallel with `wave` or `dependsOn`; each gets its own path, PR, gates and health check. Two or more regions set the Pipeline `Ready=False`, `kardinal validate` fails, and every Bundle fails when its Graph is built with `regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`. A single region is accepted and ignored. |
 
 **Reserved and unsupported fields.** `layout: branch` (on `spec.git` or an environment) and
@@ -149,7 +163,7 @@ Graph is built.
 
 ### spec.historyLimit
 
-Number of finished Bundles (Verified, Failed or Superseded) to retain per Pipeline. Older ones are garbage-collected, oldest first, when a new Bundle is created. `kardinal rollback` can only target a retained Bundle. The Git PR history is permanent regardless of this setting.
+Number of finished Bundles (Verified, Failed or Superseded; Rejected Bundles are never deleted) to retain per Pipeline. Older ones are garbage-collected, oldest first, when a new Bundle is created. `kardinal rollback` can only target a retained Bundle. The Git PR history is permanent regardless of this setting.
 
 Default: 50.
 
@@ -159,19 +173,106 @@ When `true`, no PromotionStep of the Pipeline leaves `Pending`, and a step in `P
 
 Default: `false`.
 
+### spec.holds
+
+Environments pinned to a rollback. `kardinal rollback --hold` (or the UI) writes them, and
+`kardinal release-hold` (or the UI) removes them. The controller also removes a hold at its
+`expiresAt`. Each entry has these fields:
+
+- `environment`
+- `bundle`: the rollback Bundle
+- `reason`: required, up to 1024 characters
+- `createdBy` and `createdAt`
+- `expiresAt` (optional)
+- `artifacts`: the digest of the rollback's artifacts when the hold was made
+
+An environment has at most one hold. While it lasts:
+
+- only `bundle` promotes into the environment;
+- `bundle` is never superseded or garbage-collected;
+- if the controller verifies `bundle`, it passes the environment's PolicyGates, each pass with
+  an `EXEMPT` reason and audited.
+
+Changing `spec.holds` needs `update` on `pipelines/hold`, and the chart's admission policy pins
+`createdBy` to the caller. `status.observedHolds` is the controller's record, from which it
+writes the `HoldCreated` and `HoldReleased` AuditEvents. See
+[Roll back and hold](rollback.md#roll-back-and-hold).
+
+```yaml
+spec:
+  holds:
+  - environment: prod
+    bundle: my-app-rollback-3f9a1c
+    reason: "INC-4521: v1.29.0 leaks connections"
+    createdBy: alice
+    createdAt: "2026-10-09T08:12:00Z"
+    expiresAt: "2026-10-10T08:12:00Z"
+    artifacts: "sha256:5b0f..."
+```
+
+Default: none.
+
 ### spec.maxConcurrentPromotions
 
-Maximum number of this Pipeline's Bundles in the `Promoting` phase at once. A Bundle over the cap stays `Available` with the `Ready` condition reason `WaitingForSlot`, and starts when a promoting Bundle becomes Verified, Failed or Superseded. `0` means no cap.
+Maximum number of this Pipeline's Bundles in the `Promoting` phase at once. A Bundle over the cap stays `Available` with the `Ready` condition reason `WaitingForSlot`, and starts when a promoting Bundle becomes Verified, Failed, Superseded or Rejected. `0` means no cap.
 
 A `Failed` Bundle does not count, so it does not take a slot back while the cap is full. While the cap is full it has the condition `WaitingForSlot=True`: its Graph creates no new PromotionStep and its `Pending` steps do not start, so a failed step that is deleted is not recreated until a slot frees. A step that was already running keeps running. When a slot frees the condition is removed, and once nothing is failing the Bundle returns to `Promoting`. A `Failed` Bundle that a newer Bundle of its type replaced (one that is `Promoting` or `Verified`) is never held: it can only be superseded. A newer Bundle that is still `Available` does not count, since it may be waiting for the slot too. When several `Failed` Bundles wait and one slot frees, the hold is lifted on all of them at once, so a step recreated for each can start before the first of them returns to `Promoting`; the next ones are then held again, but their started steps keep running.
 
 Default: `0`.
+
+### spec.imageVerification
+
+Requires the Bundle's images (selected by `images`, by digest) to carry a signature from one of
+`authorities` (a cosign key or a Sigstore keyless identity), and a config Bundle's commit to be
+signed when `commits.requireSigned`, before the Bundle is promoted into its first environments.
+See [Image Signature Verification](image-verification.md).
 
 ### spec.policyNamespaces
 
 Extra namespaces to read PolicyGates from. It only adds: the org policy namespaces (the controller's `--policy-namespaces`, default `platform-policies`) and the Pipeline's namespace are always read. A gate found only through it is a team gate unless it is labelled `kardinal.io/scope: org`, and it never grants a skip. See [Policy Gates](policy-gates.md).
 
 Default: none.
+
+### Large Pipelines
+
+Each Bundle is promoted by one kro Graph, and a Graph is one Kubernetes object, which etcd stores
+only up to 1.5 MiB. Two Graph shapes keep it in bounds:
+
+- **nodes** (Pipelines with up to 100 environments): one Graph node per environment. `kubectl get
+  graph -o yaml` shows each environment's PromotionStep as a node.
+- **compact** (above 100 environments): the promotion order is data in the Graph, and one node
+  creates every PromotionStep the order allows (upstream environments Verified, gates ready, the
+  Bundle not superseded, rejected or waiting for a `maxConcurrentPromotions` slot). A step that exists is not removed when a gate later closes or
+  the Bundle is superseded. The Graph has about a dozen nodes whatever the number of environments,
+  and no health ref nodes (health is checked by the PromotionStep as in the nodes shape).
+
+Both shapes promote the same way: the same PromotionSteps, PolicyGate instances and PRStatuses,
+with the same names. Choose one for a Pipeline with the annotation `kardinal.io/graph-shape:
+compact` or `nodes`; the controller's `--graph-compact-above` (chart `graph.compactAbove`) moves
+the threshold. A Bundle keeps the shape its Graph was created with: a later Pipeline edit, a changed
+annotation or threshold applies to new Bundles only, because switching the shape of a Graph in
+flight would delete its PromotionSteps. The shape is read from the Graph's nodes; the Graph's
+`kardinal.io/graph-shape` label only shows it.
+
+In the compact shape every PromotionStep comes from one collection, so a PolicyGate instance or a
+PromotionStep that kro cannot apply holds every environment of the Bundle, not only its own (the
+Bundle's `GatesCreated` condition names a gate that cannot be created). A feature the compact shape
+does not carry yet fails the Bundle with `GraphBuildFailed` naming the feature, and sets the
+Pipeline `Ready=False` while its new Bundles would get a compact Graph. Per-promotion MetricChecks
+(`spec.perPromotion`) are carried: the `MetricChecks` collection creates an environment's instances
+once its upstream environments are Verified, as the nodes shape does. One difference in pruning: if
+an upstream leaves Verified before the environment's step starts, the compact shape deletes that
+environment's instances (they leave the collection, so kro prunes them) and creates them again once
+the upstreams are Verified; once the step has started, its instances are kept.
+[Hooks](hooks.md) (`spec.environments[].hooks`), [analysis](analysis.md)
+(`spec.environments[].verification`) and [image verification](image-verification.md)
+(`spec.imageVerification`) are not carried yet: both the Bundle and the Pipeline condition report
+them.
+
+The Graph's size grows with environments and PolicyGates. Measured: 300 environments with one gate
+each, fully promoted, 0.47 MB; 300 with three gates each about 0.9 MB. A Bundle whose Graph would be
+over 1.2 MB, or create more than 4,500 objects, fails with `GraphBuildFailed` and the size in the
+message.
 
 ## Health Check Defaults
 
@@ -299,6 +400,63 @@ promotion whose Pipeline or environment sets `layout: branch`, before it changes
 
 See [Rendered Manifests](rendered-manifests.md) for the planned design.
 
+### Many Pipelines on one repository and branch
+
+Several Pipelines (and every environment of one Pipeline) can write the same repository
+and branch at once, as long as each environment has its own `path`. kardinal never
+force-pushes the base branch, so no writer's commit is lost:
+
+- **auto environments**: when `git-push` finds that the branch moved since its clone
+  (another writer pushed first), it fetches the new head and replays its commit onto it:
+  every file this promotion added, changed or deleted takes the promotion's version, every
+  other file the new head's. It pushes again, up to 6 times, without waiting in between. The
+  step message then reads
+  `pushed main after rebasing onto N newer commit(s) of other writers`. When the new commits
+  changed one of the same files, or the branch keeps moving, the whole step sequence runs
+  again from a fresh clone (at most 3 times in one reconcile), so the update is computed on
+  the other writer's version. After that the step is retried with jittered backoff (at most
+  2 minutes), counted in `status.contendedRetries` with no limit and not in
+  `status.retryCount`, so contention slows a promotion down but does not fail it.
+- **pr-review environments**: each promotion pushes its own branch
+  `kardinal/<namespace hash>/<bundle>/<environment>` (the hash is the first 8 hex digits of
+  the SHA-256 of the namespace, so Bundles of the same name in two namespaces get separate
+  branches; a PR opened by an earlier release keeps its `kardinal/<bundle>/<environment>`
+  branch). The branch starts at the base head of its clone. While the PR waits for its merge,
+  the controller reads the base head every 30 seconds (one `git ls-remote` per repository,
+  shared by every waiting PR). When the base moved, it reads the commits since the PR's base
+  (the last 20 of the branch, or the last 500 when the PR's base is further back; once per new
+  head) and:
+  - when they changed none of the PR's paths (the environment's `path`, and a Helm `valuesFile`
+    outside it), the PR still merges cleanly: only `status.outputs.baseSHA` moves, nothing is
+    pushed;
+  - when they changed one of its paths, or the PR's base is not among the last 500 (a
+    force-push), or reading them takes longer than 30 seconds, it reruns the promotion's steps on a fresh clone of the new head and
+    force-pushes the PR branch, so the PR is one commit on the current base
+    (`status.outputs.prBranchRebuilds` counts it; when the history could not be read, the
+    step message says the PR branch was rebuilt to be safe);
+  - when the PR branch has a commit kardinal did not push (its head is not
+    `status.outputs.pushedSHA`), it is never rebuilt, and the step message says so.
+
+  A rebuild replaces only kardinal's own commit; a host set to dismiss stale approvals asks for
+  the review again. PRs of different Pipelines change different paths, so
+  each merges without a conflict however many merged before it.
+- **Path isolation**: two environments that write the same path, or one inside the other,
+  overwrite each other's files and their PRs conflict. The Pipeline reconciler checks every
+  Pipeline the controller sees, including two environments of one Pipeline. A Pipeline writes
+  each environment's `path` and, for `update.strategy: helm`, a `valuesFile` outside it (such
+  as `../shared/values.yaml`). Repositories are compared by host and path, so the https, ssh
+  and `git@host:org/repo` URLs of one repository match (case, userinfo, port and a trailing
+  `.git` are ignored); branches must be equal. On an overlap the Pipeline gets
+  `PathConflict=True` (reason `OverlappingPath`). The message names the environments and the
+  Pipelines of the same namespace; Pipelines of other namespaces are only counted
+  (`environment prod (apps/prod) and 2 other Pipeline(s) in other namespaces`). It does not
+  stop promotions. Environments with `update.strategy: argocd` write no git and are not
+  compared.
+
+```bash
+kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[?(@.type=="PathConflict")].message}{"\n"}{end}'
+```
+
 ## Promotion Steps
 
 Every environment runs a fixed step sequence. The controller picks it from the Bundle type,
@@ -312,7 +470,8 @@ finishes, and its Graph turns Ready once its steps are Verified and its gates pa
 | Image Bundle, `update.strategy: kustomize` (default) | `git-clone`, `kustomize-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Image Bundle, `update.strategy: helm` | `git-clone`, `helm-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | Config Bundle | `git-clone`, `config-merge`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
-| Mixed Bundle | `git-clone`, `config-merge`, then the image Bundle's update step (`kustomize-set-image` or `helm-set-image`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Mixed Bundle | `git-clone`, `config-merge`, then the image Bundle's update step (`kustomize-set-image`, `helm-set-image` or `yaml-update`), `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Image Bundle, `update.strategy: yaml` | `git-clone`, `yaml-update`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
 | `update.strategy: argocd` | `argocd-set-image`, `health-check` |
 
 `open-pr` and `wait-for-merge` run only with `approval: pr-review`. When the files in git
@@ -323,7 +482,9 @@ describes each step.
 
 kardinal has no custom step engine. `spec.environments[].steps` and
 `spec.environments[].promotionTemplate` are deprecated and cannot change the sequence: the
-API server rejects a Pipeline that sets either, and `kardinal validate` reports it.
+API server rejects a Pipeline that sets either, and `kardinal validate` reports it. To run
+your own work around the sequence, use [hooks](hooks.md): Jobs before the step starts and
+after its health check.
 
 ### How `kustomize-set-image` matches images
 
@@ -342,22 +503,99 @@ manifests that use that name keep promoting:
 
 A short-name entry whose `newName` points at another repository is left alone.
 
+### The yaml update strategy
+
+`update.strategy: yaml` writes values of the Bundle's images into any YAML paths of any files
+in the environment directory: plain manifests, Helm values, a Kustomize `images` entry, a
+custom resource. Each `update.yaml.updates[]` entry sets one scalar:
+
+```yaml
+update:
+  strategy: yaml
+  yaml:
+    updates:
+      - file: deploy/deployment.yaml
+        path: spec.template.spec.containers[0].image
+        image: ghcr.io/org/api           # which Bundle image; optional with one image
+        value: image                     # ghcr.io/org/api:1.4.2
+      - file: deploy/deployment.yaml
+        path: spec.template.spec.containers[1].image
+        image: ghcr.io/org/sidecar
+        value: imageWithDigest           # ghcr.io/org/sidecar:0.3.0@sha256:...
+      - file: values.yaml
+        path: api.image.tag
+        image: ghcr.io/org/api           # value defaults to tag: 1.4.2
+```
+
+| `value` | Written |
+|---|---|
+| `tag` (default) | the tag |
+| `digest` | the digest (`sha256:...`) |
+| `tagWithDigest` | `<tag>@<digest>` |
+| `image` | `<repository>:<tag>` |
+| `imageWithDigest` | `<repository>:<tag>@<digest>`, or `<repository>@<digest>` without a tag |
+
+- `path` uses the [YAML path](#yaml-paths) grammar, as `update.helm.chartVersionPath` does.
+  Missing mapping keys are created; list elements are not.
+- The step computes every edit before it writes anything. An edit that cannot be applied (a
+  Bundle without the named image, a value the image does not have such as the digest of a
+  tag-only image, a missing list element, a path through a scalar, a path that would replace a
+  mapping or list, a file outside the repository) fails the step for good and no file is
+  changed.
+- Comments, key order, the quoting of the replaced value and the file mode are kept. Every edited
+  file is parsed again before it is written and must still hold every value where it was set. The
+  files are then written through new temporary files (never through a file or link already at that
+  name) and renamed; if a rename fails, the files already replaced get their old content back.
+- Refused, failing the step: a file with more than one YAML document (`---`; an empty or
+  comment-only document after the first, such as a trailing `---` or `--- # end`, is not written
+  back, and its comments move to the end of the file), an anchor or alias
+  (`&`, `*`) or a merge key (`<<`) on the edited path, a key that appears twice in one mapping, a
+  symbolic link anywhere on the path (the environment directory, a directory in `file`, or the
+  file), a file over 4 MiB, and a `file` that is absolute or contains `..`.
+- A Bundle without images (a config Bundle) changes nothing.
+
+### YAML paths
+
+`update.yaml.updates[].path` and `update.helm.chartVersionPath` name a scalar in a YAML file
+with one grammar:
+
+- Keys separated by `.`; a leading `.` is optional (`image.tag` and `.image.tag` are the same).
+  A key is letters, digits, `_` and `-`. A key that contains `.` or `/` (an annotation such as
+  `app.kubernetes.io/version`) cannot be addressed.
+- `[N]` after a key picks a list element by position: `spec.template.spec.containers[0].image`.
+  A digits-only key does the same when it reaches a list (`.dependencies.0.version`); in a
+  mapping it is a key. An index has at most 9 digits.
+- `[field=value]` picks the list element (a mapping) whose `field` has that value:
+  `spec.template.spec.containers[name=app].image`, `.dependencies[name=podinfo].version`. The
+  value is letters, digits and `_ - . / : @`.
+- The element a list step names must exist, and so must the list: a missing or null value before
+  `[N]`, `[field=value]` or a digits-only key fails the step for good instead of being created
+  as a mapping.
+
+The API server checks the grammar: a Pipeline with a path outside it is refused.
+
 ### Image signatures and tests
 
 Checks that must hold for the running workload belong where it runs, not in the promoter:
 
-- **Image signatures.** Enforce them at admission in the cluster that runs the pods, with
+- **Image signatures.** `spec.imageVerification` verifies cosign and Sigstore signatures
+  before a Bundle is promoted ([Image Signature Verification](image-verification.md)). Also
+  enforce them at admission in the cluster that runs the pods, with
   [Sigstore policy-controller](https://docs.sigstore.dev/policy-controller/overview/) or
-  [Kyverno `verifyImages`](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/).
-  A check in the promoter is bypassed by anyone who can push to the GitOps repository;
+  [Kyverno `verifyImages`](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/):
+  a check in the promoter is bypassed by anyone who can push to the GitOps repository;
   admission is not.
-- **Tests after a deploy.** Run them as an Argo CD
+- **Tests after a deploy.** Run them as a [post-deploy hook](hooks.md): a Job kardinal runs
+  after the health check passed; the environment is Verified only when it succeeded. Or run
+  them as an Argo CD
   [PostSync hook](https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/) Job and
   set `health.type: argocd`. Argo CD keeps the sync operation open while the hook runs and
   marks it failed when a PostSync hook fails. The argocd adapter is healthy only when the
   Application is Healthy and Synced on the promoted revision and its last operation is
   `Succeeded` (or there is none), so the step waits for the tests; a `Failed` or `Error`
   operation on that revision is a health failure and applies `onHealthFailure`.
+- **Analysis.** Name Argo Rollouts AnalysisTemplates in `verification` (any Rollouts
+  provider: Prometheus, Datadog, CloudWatch, New Relic, web, Job); see [Analysis](analysis.md).
 - **Metric checks.** Create a `MetricCheck` and read it from a PolicyGate on the next
   environment, for example `metrics["error-rate"].result == "Pass"`. See
   [Policy Gates: Metric-based](policy-gates.md#metric-based).

@@ -80,18 +80,18 @@ func TestNextLink(t *testing.T) {
 
 // TestWatchersHaveTimeouts verifies that neither watcher uses a client without
 // a timeout, which would let a hung host block the reconcile worker (C05-steps-28),
-// and that both use the egress-guarded transport.
+// and that both use the traced, egress-guarded transport.
 func TestWatchersHaveTimeouts(t *testing.T) {
 	oci := NewOCIWatcher("ghcr.io/a/b", "")
 	require.NotNil(t, oci.httpClient)
 	assert.Equal(t, defaultHTTPTimeout, oci.httpClient.Timeout)
-	assert.Same(t, guardedTransport, oci.httpClient.Transport)
-	assert.Same(t, guardedTransport, (&OCIWatcher{}).client().Transport)
+	assert.Same(t, watcherTransport, oci.httpClient.Transport)
+	assert.Same(t, watcherTransport, (&OCIWatcher{}).client().Transport)
 
 	git := NewGitWatcher("https://example.com/a", "main", "")
 	require.NotNil(t, git.httpClient)
 	assert.Equal(t, defaultHTTPTimeout, git.httpClient.Timeout)
-	assert.Same(t, guardedTransport, git.httpClient.Transport)
+	assert.Same(t, watcherTransport, git.httpClient.Transport)
 }
 
 // TestTokenRealmIsGuarded verifies that the anonymous token request goes
@@ -105,7 +105,7 @@ func TestTokenRealmIsGuarded(t *testing.T) {
 	base, name, err := parseRegistryRef("ghcr.io/a/b")
 	require.NoError(t, err)
 	s := &registrySession{client: newHTTPClient(), base: base, name: name}
-	err = s.fetchAnonymousToken(t.Context(), `Bearer realm="`+srv.URL+`/token",service="ghcr.io"`)
+	err = s.answerChallenge(t.Context(), `Bearer realm="`+srv.URL+`/token",service="ghcr.io"`)
 	require.ErrorIs(t, err, egress.ErrBlockedAddress)
 	assert.Contains(t, err.Error(), "is loopback")
 	assert.Zero(t, hits.Load(), "no request reaches the loopback realm")
@@ -116,7 +116,7 @@ func TestRealmMustBeHTTPS(t *testing.T) {
 	base, name, err := parseRegistryRef("ghcr.io/a/b")
 	require.NoError(t, err)
 	s := &registrySession{client: newHTTPClient(), base: base, name: name}
-	err = s.fetchAnonymousToken(t.Context(), `Bearer realm="http://ghcr.io/token",service="ghcr.io"`)
+	err = s.answerChallenge(t.Context(), `Bearer realm="http://ghcr.io/token",service="ghcr.io"`)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not https")
 	assert.Empty(t, s.token)

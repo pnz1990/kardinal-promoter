@@ -12,13 +12,32 @@ import (
 // instead of ignored (#1353). Bundles stored before the rule keep working:
 // CRD validation ratcheting (on by default from Kubernetes 1.30, the oldest
 // supported) lets an update through when spec is unchanged.
+//
+// A Bundle's spec is immutable: spec.type, spec.pipeline, spec.images,
+// spec.chart, spec.configRef, spec.provenance and spec.intent cannot change
+// after creation. The artifact is what gates, verifications and evidence were
+// checked against, and an intent edit would apply only at some later,
+// unrelated re-translation of the Graph; to promote something else, or to
+// another target, create a new Bundle. The rules are transition rules, so
+// they run only on update.
+// +kubebuilder:validation:XValidation:rule="self.type == oldSelf.type",message="spec.type is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="self.pipeline == oldSelf.pipeline",message="spec.pipeline is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="has(self.images) == has(oldSelf.images) && (!has(self.images) || self.images == oldSelf.images)",message="spec.images is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="has(self.chart) == has(oldSelf.chart) && (!has(self.chart) || self.chart == oldSelf.chart)",message="spec.chart is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="has(self.configRef) == has(oldSelf.configRef) && (!has(self.configRef) || self.configRef == oldSelf.configRef)",message="spec.configRef is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="has(self.provenance) == has(oldSelf.provenance) && (!has(self.provenance) || self.provenance == oldSelf.provenance)",message="spec.provenance is immutable: create a new Bundle"
+// +kubebuilder:validation:XValidation:rule="has(self.intent) == has(oldSelf.intent) && (!has(self.intent) || self.intent == oldSelf.intent)",message="spec.intent is immutable: create a new Bundle"
 // +kubebuilder:validation:XValidation:rule="!(self.type == 'image' && has(self.configRef))",message="spec.configRef is used only by config and mixed Bundles: an image Bundle deploys only its images; set type config or mixed, or remove configRef"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.rejected) || has(self.rejected)",message="spec.rejected cannot be removed: a rejected Bundle stays rejected"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.rejected) || !has(self.rejected) || self.rejected == oldSelf.rejected",message="spec.rejected is immutable once set"
 type BundleSpec struct {
 	// Type classifies the bundle content.
 	// Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
 	// An image bundle does NOT supersede a config bundle and vice versa.
 	// This allows image and config promotions to coexist independently in the same pipeline.
-	// +kubebuilder:validation:Enum=image;config;mixed
+	// A chart Bundle promotes a Helm chart version (spec.chart) with
+	// update.strategy helm.
+	// +kubebuilder:validation:Enum=image;config;mixed;chart
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`
 
@@ -35,6 +54,11 @@ type BundleSpec struct {
 	// +optional
 	ConfigRef *ConfigRef `json:"configRef,omitempty"`
 
+	// Chart is the Helm chart version a "chart" Bundle promotes. The
+	// helm-set-image step writes chart.version at update.helm.chartVersionPath.
+	// +optional
+	Chart *ChartRef `json:"chart,omitempty"`
+
 	// Provenance carries build metadata for audit and rollback.
 	// +optional
 	Provenance *BundleProvenance `json:"provenance,omitempty"`
@@ -42,6 +66,53 @@ type BundleSpec struct {
 	// Intent declares optional targeting and skip overrides for this Bundle.
 	// +optional
 	Intent *BundleIntent `json:"intent,omitempty"`
+
+	// Rejected marks the Bundle as rejected (kardinal reject): it is never
+	// promoted again, its in-flight steps are cancelled, and rollback,
+	// promote and Subscriptions skip any Bundle carrying its artifacts.
+	// Setting it is one-way: it cannot be changed or removed. The chart's
+	// ValidatingAdmissionPolicy requires rejected.by to be the requesting
+	// user; without that policy nothing checks it.
+	// +optional
+	Rejected *BundleRejection `json:"rejected,omitempty"`
+}
+
+// BundleRejection records who rejected a Bundle and why.
+type BundleRejection struct {
+	// Reason says why the Bundle was rejected.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Reason string `json:"reason"`
+
+	// By is the Kubernetes username of whoever rejected the Bundle. The
+	// chart's ValidatingAdmissionPolicy (kardinal-identity) admits a new
+	// rejection only when by equals the requesting user's username.
+	// +kubebuilder:validation:MinLength=1
+	By string `json:"by"`
+
+	// At is when the Bundle was rejected.
+	// +optional
+	At *metav1.Time `json:"at,omitempty"`
+}
+
+// RejectedArtifactSet is the part of a rejected Bundle that the rejection
+// covers (BundleStatus.RejectedArtifacts).
+type RejectedArtifactSet struct {
+	// Images are the rejected images: those not Verified, with the same
+	// digest (or tag, without a digest), before this Bundle in every
+	// environment it reached.
+	// +optional
+	// +kubebuilder:validation:MaxItems=100
+	Images []ImageRef `json:"images,omitempty"`
+	// ConfigCommitSHA is the rejected config commit, when it differs.
+	// +optional
+	ConfigCommitSHA string `json:"configCommitSHA,omitempty"`
+	// ComparedWith names, per environment, the Verified Bundle the artifacts
+	// were compared with ("<env>=<bundle>"); empty when no environment had
+	// one, and then every artifact is rejected.
+	// +optional
+	// +kubebuilder:validation:MaxItems=100
+	ComparedWith []string `json:"comparedWith,omitempty"`
 }
 
 // ImageRef identifies a container image by repository, tag, and/or digest.
@@ -50,11 +121,14 @@ type ImageRef struct {
 	// +kubebuilder:validation:MinLength=1
 	Repository string `json:"repository"`
 
-	// Tag is the image tag.
+	// Tag is the image tag, in the OCI distribution grammar: up to 128
+	// characters of [A-Za-z0-9_.-], not starting with "." or "-".
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`
 	// +optional
 	Tag string `json:"tag,omitempty"`
 
-	// Digest is the image digest (sha256:...).
+	// Digest is the image digest (sha256:...), in the OCI digest grammar.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,}$`
 	// +optional
 	Digest string `json:"digest,omitempty"`
 }
@@ -65,14 +139,44 @@ type ConfigRef struct {
 	// +optional
 	GitRepo string `json:"gitRepo,omitempty"`
 
-	// CommitSHA is the exact commit SHA for this config snapshot.
+	// CommitSHA is the exact commit SHA for this config snapshot: 4 to 64
+	// hex characters.
+	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F]{4,64}$`
 	// +optional
 	CommitSHA string `json:"commitSHA,omitempty"`
 }
 
+// ChartRef identifies a Helm chart version.
+type ChartRef struct {
+	// RepoURL is the chart repository (https://... or oci://...).
+	// +optional
+	RepoURL string `json:"repoURL,omitempty"`
+
+	// Name is the chart name: letters, digits, ".", "_" and "-", starting
+	// and ending with a letter or digit. It is joined into the chart's
+	// index and OCI paths, so a "/", "]" or other path character would
+	// point the version lookup elsewhere.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=250
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$`
+	Name string `json:"name"`
+
+	// Version is the chart version.
+	// +kubebuilder:validation:MinLength=1
+	Version string `json:"version"`
+
+	// Digest is the chart package digest (index.yaml digest, or the OCI
+	// manifest digest).
+	// +optional
+	Digest string `json:"digest,omitempty"`
+}
+
 // BundleProvenance carries build origin metadata.
 type BundleProvenance struct {
-	// CommitSHA is the application source commit that produced this Bundle.
+	// CommitSHA is the application source commit that produced this Bundle:
+	// 4 to 64 hex characters, or an image digest (a Subscription records
+	// the digest it found).
+	// +kubebuilder:validation:Pattern=`^([0-9a-fA-F]{4,64}|[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,})$`
 	// +optional
 	CommitSHA string `json:"commitSHA,omitempty"`
 
@@ -107,9 +211,11 @@ type BundleIntent struct {
 }
 
 // BundleStatus defines the observed state of a Bundle.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.retiredAt) || has(self.retiredAt)",message="status.retiredAt cannot be removed: a retired Bundle stays retired"
 type BundleStatus struct {
-	// Phase is the bundle promotion phase.
-	// +kubebuilder:validation:Enum=Available;Promoting;Verified;Failed;Superseded
+	// Phase is the bundle promotion phase. Rejected is final: spec.rejected
+	// is set, and nothing of this Bundle is promoted again.
+	// +kubebuilder:validation:Enum=Available;Promoting;Verified;Failed;Superseded;Rejected
 	Phase string `json:"phase,omitempty"`
 
 	// Conditions holds status conditions.
@@ -149,6 +255,73 @@ type BundleStatus struct {
 	// otherwise.
 	// +optional
 	PolicyGatesHash string `json:"policyGatesHash,omitempty"`
+
+	// RetiredSteps records the PromotionSteps of a Bundle whose Graph was
+	// retired (condition GraphRetired=True). Deleting a finished Bundle's
+	// Graph deletes the PromotionSteps, PolicyGate instances and PRStatuses
+	// it created, so kro does not hold every finished Graph in memory
+	// (#1492). Rollback, promote, history, metrics, the CLI and the UI read
+	// these records where they read the steps of a Bundle that is still
+	// promoting.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=1000
+	RetiredSteps []RetiredStep `json:"retiredSteps,omitempty"`
+
+	// RejectedArtifacts is what a rejection (spec.rejected) rejects: the
+	// artifacts of this Bundle that differ from what was Verified before it
+	// in the environments it reached, written by the Bundle reconciler when
+	// it marks the Bundle Rejected. A sidecar the Bundle carries unchanged is
+	// not in it, so rolling back to the Bundle before stays possible. Unset
+	// (a rejection not processed yet) means all of the Bundle's artifacts.
+	// +optional
+	RejectedArtifacts *RejectedArtifactSet `json:"rejectedArtifacts,omitempty"`
+
+	// RetiredAt is when the Bundle's Graph was retired: set in the same
+	// write as RetiredSteps, and never cleared. A Bundle with RetiredAt is
+	// final; the GraphRetired condition only shows the retirement's progress.
+	// +optional
+	RetiredAt *metav1.Time `json:"retiredAt,omitempty"`
+}
+
+// RetiredStep is what a retired Bundle keeps of one of its PromotionSteps.
+type RetiredStep struct {
+	// Name is the PromotionStep's name.
+	Name string `json:"name"`
+
+	// Environment is the PromotionStep's spec.environment.
+	Environment string `json:"environment"`
+
+	// StepType is the PromotionStep's spec.stepType.
+	// +optional
+	StepType string `json:"stepType,omitempty"`
+
+	// State is the PromotionStep's final status.state.
+	// +optional
+	State string `json:"state,omitempty"`
+
+	// Message is the PromotionStep's final status.message, cut to 512 bytes.
+	// +optional
+	// +kubebuilder:validation:MaxLength=512
+	Message string `json:"message,omitempty"`
+
+	// PRURL is the PromotionStep's status.prURL.
+	// +optional
+	// +kubebuilder:validation:MaxLength=2048
+	PRURL string `json:"prURL,omitempty"`
+
+	// CreatedAt is the PromotionStep's creationTimestamp.
+	CreatedAt metav1.Time `json:"createdAt"`
+
+	// VerifiedAt is when the PromotionStep became Verified.
+	// +optional
+	VerifiedAt *metav1.Time `json:"verifiedAt,omitempty"`
+
+	// HealthCheckExpiry is the PromotionStep's status.healthCheckExpiry: set
+	// once its change merged and the health check started.
+	// +optional
+	HealthCheckExpiry *metav1.Time `json:"healthCheckExpiry,omitempty"`
 }
 
 // BundleMetrics holds deployment efficiency metrics for a single Bundle (K-05).

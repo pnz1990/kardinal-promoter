@@ -83,7 +83,7 @@ func postBundle(t *testing.T, base, token, ns string) (int, string) {
 //   - viewer lists A's Pipeline and not B's (namespace RBAC, no 403), and
 //     may not pause (403) or create Bundles (403);
 //   - promoter creates a Bundle through the Bundle API in A (201, recorded
-//     in kardinal.io/requested-by), not in B (403), pauses and resumes A,
+//     in kardinal.io/created-by and requested-by), not in B (403), pauses and resumes A,
 //     and may not override a gate (403);
 //   - approver overrides A's gate and may not create Bundles (403);
 //   - a binding to Kubernetes' built-in view role grants the viewer rules
@@ -212,6 +212,7 @@ func TestUI_UserRoles(t *testing.T) {
 	var b v1alpha1.Bundle
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: nsA, Name: created.Name}, &b))
 	assert.Equal(t, promoter.username(), b.Annotations[lifecycle.AnnotationRequestedBy])
+	assert.Equal(t, promoter.username(), b.Annotations[lifecycle.AnnotationCreatedBy], "the reviewed caller is the verified creator")
 	code, body = postBundle(t, v.URL, promoter.token, nsB)
 	assert.Equal(t, http.StatusForbidden, code, "promoter is not bound in B: %s", body)
 	for _, action := range []string{"pause", "resume"} {
@@ -260,7 +261,10 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 		{APIGroups: []string{"kardinal.io"}, Resources: []string{"pipelines", "policygates"}, Verbs: []string{"update", "patch"}}}}
 	edit := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "pipelines-edit", Namespace: ns}, Rules: []rbacv1.PolicyRule{
 		{APIGroups: []string{"kardinal.io"}, Resources: []string{"pipelines/edit"}, Verbs: []string{"update"}}}}
-	for _, r := range []*rbacv1.Role{direct, edit} {
+	pauseOnly := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "pause-only", Namespace: ns}, Rules: []rbacv1.PolicyRule{
+		{APIGroups: []string{"kardinal.io"}, Resources: []string{"pipelines/pause"}, Verbs: []string{"update"}},
+		{APIGroups: []string{"kardinal.io"}, Resources: []string{"pipelines"}, Verbs: []string{"get"}}}}
+	for _, r := range []*rbacv1.Role{direct, edit, pauseOnly} {
 		_, err := e.Kube.RbacV1().Roles(ns).Create(ctx, r, metav1.CreateOptions{})
 		require.NoError(t, err)
 	}
@@ -280,6 +284,10 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 	editor := newRoleUser(t, e, ns, "editor", role("promoter"))
 	bind(editor, direct.Name)
 	bind(editor, edit.Name)
+	// pipelines/pause without pipelines/hold (the promoter role has both).
+	onlyPauser := newRoleUser(t, e, ns, "only-pauser", role("viewer"))
+	bind(onlyPauser, pauseOnly.Name)
+	bind(onlyPauser, direct.Name)
 
 	// These callers talk to the API server, so their tokens are for its
 	// audience, not kardinal's.
@@ -296,7 +304,8 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 	framework.Eventually(t, time.Minute, "the bindings to take effect", func(context.Context) (bool, string) {
 		return e.Can(t, pauser.username(), framework.Access{Verb: "update", Group: "kardinal.io", Resource: "pipelines", Namespace: ns}) &&
 			e.Can(t, gater.username(), framework.Access{Verb: "update", Group: "kardinal.io", Resource: "policygates", Subresource: "override", Namespace: ns}) &&
-			e.Can(t, editor.username(), framework.Access{Verb: "update", Group: "kardinal.io", Resource: "pipelines", Subresource: "edit", Namespace: ns}), "not yet"
+			e.Can(t, editor.username(), framework.Access{Verb: "update", Group: "kardinal.io", Resource: "pipelines", Subresource: "edit", Namespace: ns}) &&
+			e.Can(t, onlyPauser.username(), framework.Access{Verb: "update", Group: "kardinal.io", Resource: "pipelines", Subresource: "pause", Namespace: ns}), "not yet"
 	})
 
 	key := types.NamespacedName{Namespace: ns, Name: pipelineName}
@@ -328,6 +337,17 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 			"you may not change the metadata"},
 		{"pauser may not add a finalizer", pauser, func(p *v1alpha1.Pipeline) { p.Finalizers = append(p.Finalizers, "e2e.kardinal.io/hold") }, false,
 			"you may not change the metadata"},
+		{"pauser holds an environment", pauser, func(p *v1alpha1.Pipeline) {
+			p.Spec.Holds = append(p.Spec.Holds, v1alpha1.EnvironmentHold{Environment: "test", Bundle: pipelineName + "-rollback-e2e",
+				Reason: "e2e scoped write", CreatedBy: pauser.username(), CreatedAt: ptr.To(metav1.Now())})
+		}, true, ""},
+		{"pauser releases the hold", pauser, func(p *v1alpha1.Pipeline) { p.Spec.Holds = nil }, true, ""},
+		{"pipelines/pause alone pauses", onlyPauser, func(p *v1alpha1.Pipeline) { p.Spec.Paused = true }, true, ""},
+		{"pipelines/pause alone may not hold", onlyPauser, func(p *v1alpha1.Pipeline) {
+			p.Spec.Holds = append(p.Spec.Holds, v1alpha1.EnvironmentHold{Environment: "test", Bundle: pipelineName + "-rollback-e2e",
+				Reason: "e2e scoped write", CreatedBy: onlyPauser.username(), CreatedAt: ptr.To(metav1.Now())})
+		}, false, "spec."},
+		{"pipelines/pause alone resumes", onlyPauser, func(p *v1alpha1.Pipeline) { p.Spec.Paused = false }, true, ""},
 		{"editor changes the branch", editor, func(p *v1alpha1.Pipeline) { p.Spec.Git.Branch = "other" }, true, ""},
 	}
 	for _, tt := range tests {

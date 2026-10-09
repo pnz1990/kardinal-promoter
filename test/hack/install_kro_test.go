@@ -110,7 +110,8 @@ func TestInstallKroRefusesOldKubernetes(t *testing.T) {
 }
 
 // TestInstallKroTuning: hack/install-kro.sh raises kro's Graph worker count
-// and client rate limit (ledger gap G9), and the environment overrides them.
+// and client rate limit (ledger gap G9), sets kro's memory limit and request
+// (G15), and the environment overrides them.
 func TestInstallKroTuning(t *testing.T) {
 	tests := []struct {
 		name string
@@ -123,15 +124,20 @@ func TestInstallKroTuning(t *testing.T) {
 				"--set config.graphConcurrentReconciles=8",
 				"--set config.clientQps=300",
 				"--set config.clientBurst=500",
+				"--set deployment.resources.limits.memory=2Gi",
+				"--set deployment.resources.requests.memory=768Mi",
 			},
 		},
 		{
 			name: "overrides",
-			env:  []string{"KRO_GRAPH_CONCURRENT_RECONCILES=16", "KRO_CLIENT_QPS=50", "KRO_CLIENT_BURST=75"},
+			env: []string{"KRO_GRAPH_CONCURRENT_RECONCILES=16", "KRO_CLIENT_QPS=50", "KRO_CLIENT_BURST=75",
+				"KRO_MEMORY_LIMIT=3Gi", "KRO_MEMORY_REQUEST=1Gi"},
 			want: []string{
 				"--set config.graphConcurrentReconciles=16",
 				"--set config.clientQps=50",
 				"--set config.clientBurst=75",
+				"--set deployment.resources.limits.memory=3Gi",
+				"--set deployment.resources.requests.memory=1Gi",
 			},
 		},
 	}

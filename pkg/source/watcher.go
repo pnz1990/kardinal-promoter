@@ -17,8 +17,10 @@
 //
 // The Watcher interface is the pluggable integration point for artifact discovery.
 // OCIWatcher uses the OCI Distribution Specification API to list tags and read digests.
-// GitWatcher uses the Git Smart HTTP protocol to read branch HEAD SHAs without cloning.
-// Both send their requests through the egress guard (pkg/egress).
+// GitWatcher uses the Git Smart HTTP protocol (or git-upload-pack over SSH) to
+// read branch HEAD SHAs without cloning, and a shallow fetch to match pathGlob.
+// HelmWatcher reads an HTTP chart repository's index.yaml or an OCI chart's tags.
+// All of them send their requests through the egress guard (pkg/egress).
 package source
 
 import (
@@ -26,9 +28,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -54,10 +58,44 @@ const (
 // default transport did.
 var guardedTransport = egress.NewTransport(http.ProxyFromEnvironment)
 
+// watcherTransport is guardedTransport with an OpenTelemetry client span per
+// request (registry, Helm repository and git HTTP requests, redirects and
+// token fetches) when tracing is on. It sends no trace headers (traceparent,
+// tracestate, baggage): a registry or git host is a third party.
+var watcherTransport = tracing.Transport(guardedTransport, false)
+
 // newHTTPClient returns the client the watchers use by default: it times out,
-// and its transport applies the egress guard.
+// its transport applies the egress guard, and its requests are traced.
 func newHTTPClient() *http.Client {
-	return &http.Client{Timeout: defaultHTTPTimeout, Transport: guardedTransport}
+	return &http.Client{Timeout: defaultHTTPTimeout, Transport: watcherTransport}
+}
+
+// credentialRedirects returns c with a redirect policy for requests that
+// carry credentials: a redirect from https to http is refused, and so is a
+// redirect to another host, so the credentials go only where the
+// Subscription points. blobsMayLeave allows a cross-host redirect of a
+// registry blob download (registries send those to object storage) after
+// dropping the Authorization header.
+func credentialRedirects(c *http.Client, blobsMayLeave bool) *http.Client {
+	cc := *c
+	cc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		first := via[0]
+		if first.URL.Scheme == "https" && req.URL.Scheme != "https" {
+			return fmt.Errorf("refusing a redirect from https to %s while sending credentials", req.URL.Scheme)
+		}
+		if req.URL.Host != first.URL.Host {
+			if blobsMayLeave && req.Method == http.MethodGet && strings.Contains(first.URL.Path, "/blobs/") {
+				req.Header.Del("Authorization")
+				return nil
+			}
+			return fmt.Errorf("refusing a redirect to another host (%s) while sending credentials", req.URL.Hostname())
+		}
+		return nil
+	}
+	return &cc
 }
 
 // readLimited reads r fully and fails when it is longer than limit bytes.
@@ -85,8 +123,13 @@ type WatchResult struct {
 	//   - OCI image: the full digest (e.g. "sha256:abc123...")
 	//   - Git commit: the full SHA (e.g. "abc1234...")
 	Digest string
-	// Tag is a human-readable label (image tag or short commit SHA).
+	// Tag is a human-readable label (image tag, short commit SHA or chart
+	// version).
 	Tag string
+	// Revision is the source position the poll read up to when it differs
+	// from Digest: the branch head of a pathGlob Git poll, whose Digest is
+	// the newest matching commit. Empty otherwise.
+	Revision string
 	// Changed is true when Digest differs from the last known digest.
 	Changed bool
 }

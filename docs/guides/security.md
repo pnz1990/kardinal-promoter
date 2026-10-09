@@ -67,7 +67,7 @@ The controller uses a GitHub Personal Access Token (PAT) to:
 1. Open pull requests (one per environment promotion)
 2. Read PR status (merged, closed, open)
 3. Post comments on PRs (soak time, gate results, rollback evidence)
-4. Delete the head branch of a PR it closed without a merge (`kardinal/<bundle>/<env>`)
+4. Delete the head branch of a PR it closed without a merge (`kardinal/<namespace hash>/<bundle>/<env>`)
 
 ### Minimum required scopes (classic PAT)
 
@@ -165,7 +165,7 @@ The namespace is kardinal's tenancy unit. There is no Project CRD, and none is p
 Git clone and push use the Pipeline's `git.secretRef` token. The controller uses its own SCM
 token (`github.token` or `github.secretRef`, the controller Pod's `GITHUB_TOKEN`) to open, label,
 comment on and close PRs. When it closes a PR that was not merged, it also deletes the PR's head
-branch, `kardinal/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
+branch, `kardinal/<namespace hash>/<bundle>/<env>`, with that token, so the closed PR cannot be merged later. It
 deletes that branch too when a step that pushed it ends before it opens a PR. It deletes only
 branches under `kardinal/`. So the controller token needs write access to repository contents,
 not only to pull requests.
@@ -361,6 +361,9 @@ spec is set at creation and never mutated. Kubernetes RBAC controls who can dele
 | `PromotionSucceeded` | Health check passed; PromotionStep reached Verified |
 | `PromotionFailed` | PromotionStep reached Failed or AbortedByAlarm |
 | `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion |
+| `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../rollback.md#reject-a-bundle)) |
+| `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
+| `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
@@ -466,6 +469,54 @@ rules:
     # Intentionally no "delete" or "update"
 ```
 
+### API access log
+
+The controller logs access to the UI API (`:8082/api/v1/ui/*`) and the Bundle API
+(`POST :8083/api/v1/bundles`). Each access is one structured log line with
+`component=access`, written to the controller's log next to its other lines. By default
+these accesses are logged:
+
+| `access` | When |
+|----------|------|
+| `login` | A token was checked with the API server (a TokenReview), or the shared static token was used for the first time in 30 seconds on that server. Repeated requests within the 30-second review cache are not logins |
+| `denied` | The request was answered `401`, `403`, `429` or `503` (authentication unavailable: the review API failed and the API fails closed). `reason` holds kardinal's message, for example `forbidden: user "…" cannot update pipelines.kardinal.io in namespace team-a` |
+| `write` | Any request that is not `GET`, `HEAD` or `OPTIONS`: promote, roll back, pause, resume, approve, create Bundle |
+| `request` | Any other request, only with `controller.accessLog.allRequests=true` (`--access-log-all-requests`) |
+
+```json
+{"level":"warn","component":"access","access":"denied","server":"ui","method":"POST","path":"/api/v1/ui/pause","status":403,"durationMs":4,"user":"system:serviceaccount:team-a:dashboard","groups":["system:serviceaccounts","system:serviceaccounts:team-a","system:authenticated"],"auth":"tokenreview","reason":"forbidden: user \"system:serviceaccount:team-a:dashboard\" cannot update pipelines.kardinal.io in namespace team-a","message":"api access"}
+```
+
+**Fields:**
+
+- `server`: `ui` or `bundle-api`.
+- `method`, `path`, `status` and `durationMs`.
+- `user` and `groups`: the authenticated caller, in TokenReview mode.
+- `auth`: `tokenreview` or `static-token`. A shared static token has no user, so its line says only `static-token`.
+
+**Source address.** With `controller.accessLog.sourceIP=true` (`--access-log-source-ip`), each
+line also has `sourceIP`, the address of the connecting peer. Behind an Ingress, list the
+Ingress controller's addresses in `controller.accessLog.trustedProxies`
+(`--access-log-trusted-proxies`, CIDRs). kardinal then takes the client address from the
+nearest `X-Forwarded-For` entry that is not a trusted proxy. It ignores `X-Forwarded-For`
+from any other peer, so clients cannot forge it.
+
+**What is never logged.** Tokens, request headers, request bodies and query strings are never
+logged. The request path is logged, cut to 256 bytes. It holds only route segments and object
+names, and a caller controls it, so it could carry anything put in a URL. For refusals, kardinal's own refusal
+message is logged: at most 256 bytes of the response, only for `401`, `403`, `429` and `503`.
+
+**Rate limit.** `login` and `write` lines are never dropped. `denied` and `request` lines each
+have a budget of 50 a second. Lines over a budget are not written. Every 10 seconds one line
+reports how many of each kind were dropped (`dropped_denied`, `dropped_request`), and the
+counter `kardinal_api_access_log_dropped_total{kind}` counts them. So a flood of refused
+requests cannot fill the log, and it cannot hide a login or a write.
+
+The access log covers the HTTP APIs. What the controller then does (promotions, gate
+results, rollbacks) is in the AuditEvents above, with the caller in `kardinal.io/requested-by`
+where the UI or Bundle API made the change. Ship the controller's log to your SIEM to keep
+both records.
+
 ---
 
 ## NetworkPolicy
@@ -487,11 +538,32 @@ The policy allows:
 
 Disable with `--set networkPolicy.enabled=false` if your CNI does not support NetworkPolicy.
 
+### Secrets that kardinal may send
+
+A MetricCheck, NotificationHook or Subscription names a Secret in its own namespace, and the
+controller sends that Secret's value to a URL the object's author chose. The controller can read
+every Secret, so a user who can create one of these objects but cannot read Secrets could
+otherwise have any Secret of the namespace sent to a server they run (a confused deputy).
+
+**Rule:** the controller reads a Secret for these kinds only when the Secret carries the label
+`kardinal.io/referenceable: "true"`. Without the label the object reports `SecretNotReferenceable`
+(a MetricCheck fails with that reason, which blocks gates on it) and no request with a credential
+is sent. Label a Secret only when it is meant to leave the cluster through kardinal:
+
+```bash
+kubectl -n my-app label secret datadog kardinal.io/referenceable=true
+```
+
+Who may set the label is who may `update` (or `patch`) Secrets in the namespace. Pipeline
+`spec.git.secretRef` is not covered: it must be in the Pipeline's namespace and is sent only to
+the Pipeline's git and SCM hosts.
+
 ### Outbound requests to user URLs
 
-NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`)
-and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`)
-send HTTP requests from the controller to a URL a user wrote into a resource. The controller
+NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`,
+`datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`)
+and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`,
+`spec.helm.repoURL`) send HTTP requests from the controller to a URL a user wrote into a resource. The controller
 refuses to connect when the address is one of these:
 
 - loopback (`127.0.0.0/8`, `::1`), which includes the controller's own UI API;
@@ -502,7 +574,9 @@ refuses to connect when the address is one of these:
 - unspecified (`0.0.0.0/8`, `::`) and multicast addresses.
 
 The check runs when the connection is opened, on the resolved address, for every
-connection including redirects. A host name that resolves, or later re-resolves, to one of
+connection including redirects. An SSH `spec.git.repoURL` is checked the same way: the host
+is resolved and every address checked before the connection, which then goes to the address
+that was checked, and the host key is verified against the Secret's `known_hosts`. A host name that resolves, or later re-resolves, to one of
 these addresses is refused too. The failure reads `destination address is not allowed:
 127.0.0.1 is loopback` and appears where that resource reports errors: NotificationHook
 `status.failureMessage`, MetricCheck `status.reason` or Subscription `status.message`.
@@ -541,8 +615,19 @@ The allowlist works at the HTTP level and on any CNI. To enforce egress at the n
 level as well, enable the NetworkPolicy and list the allowed destinations in
 `networkPolicy.extraEgress`.
 
-NotificationHook, MetricCheck and Subscription requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
-`NO_PROXY`.
+NotificationHook, MetricCheck and Subscription HTTP requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY` (SSH connections do not use a proxy).
+
+Subscription credentials (`spec.*.secretRef`) and webhook tokens (`spec.webhook.secretRef`)
+are read only from the Subscription's own namespace, so whoever can create a Subscription
+can use only the Secrets of that namespace. The controller reads them with `get` on every
+poll or delivery; it never lists Secrets. The webhook receiver
+(`/webhook/subscriptions/...`, see [Subscription webhooks](../subscription-webhooks.md))
+answers every authentication failure, and a Subscription that does not exist, with the
+same 401, limits requests per source address and per Subscription, and writes only the
+`kardinal.io/refresh` annotation. Any Secret a Subscription reads (credentials and the
+webhook token) must be labelled `kardinal.io/referenceable: "true"`; an unlabelled Secret
+is not read and nothing is sent.
 Through a proxy, the controller connects to the proxy, so before it sends a request there it
 checks the target itself: an IP address against the list above, and a host name by resolving
 it and checking every address it resolves to. This applies to every request, including
@@ -552,6 +637,15 @@ also enforce its own egress policy. The proxy's own address is checked too: a pr
 loopback address is refused.
 
 ---
+
+**MetricCheck `web` reads from wherever the controller can reach.** A `web` MetricCheck sends a
+GET or POST to a URL its author chooses and copies one JSONPath value of the answer into
+`status.lastValue` (at most 256 bytes, a string, number or boolean). The egress guard keeps it off
+loopback, link-local and metadata addresses, but private addresses stay allowed, so anyone who can
+create a MetricCheck can read a field from an in-cluster Service that answers JSON. Give `create`
+on MetricChecks only to people who may read those Services, and restrict the targets with the
+controller egress allowlist (`--egress-allowlist`, #1474) or the chart NetworkPolicy
+(`networkPolicy.enabled`, `networkPolicy.extraEgress`).
 
 ## Admission Validation
 
@@ -565,8 +659,84 @@ The CRDs do not check that `spec.expression` is valid CEL. Run `kardinal validat
 before you apply: it compiles each PolicyGate expression with the controller's CEL environment.
 After you apply a gate, the controller compiles it and writes the result to `status.reason`.
 
-The chart no longer installs a `ValidatingAdmissionPolicy`. The
-`validatingAdmissionPolicy.enabled` value is deprecated and has no effect.
+The chart's only `ValidatingAdmissionPolicy` objects are the identity policies below. The
+`validatingAdmissionPolicy.enabled` value is deprecated and has no effect: the identity
+policies are always installed.
+
+### Verified identity
+
+Records that name a person are checked by the API server, not trusted from the client. The
+chart installs a `ValidatingAdmissionPolicy` with a `Deny` binding, per release:
+
+| Policy | Checks |
+|---|---|
+| `<release>-bundle-rejection` | A Bundle's new `spec.rejected.by` ([`kardinal reject`](../rollback.md#reject-a-bundle)) equals the requesting user's `request.userInfo.username`. A rejection already set is immutable (CRD rule), so it is checked only when it is first written. |
+| `<release>-gate-overrides` | Every new or changed `spec.overrides[]` entry of a PolicyGate ([`kardinal override`](../policy-gates.md#emergency-overrides-k-09)) has `createdBy` equal to the requesting user; the controller's ServiceAccount is exempt, because it writes overrides for the UI. Only the namespace's Graph ServiceAccount (kro) and the controller may create a gate instance (label `kardinal.io/bundle`, checked on CREATE and UPDATE) or change anything in it but `spec.overrides`: the rest of the spec and the whole metadata (labels, annotations, owner references, finalizers) are frozen, except `managedFields`, `resourceVersion` and `generation`, which the API server writes, and the `kardinal.io/force-recheck` annotation, which forces a re-evaluation. The garbage collector and the namespace controller may update an instance (they remove owner references and finalizers). In namespace mode (`controller.watchNamespace`) it applies to the watched namespace only. |
+| `<release>-approvals` | An `Approval` ([`kardinal approve`](../policy-gates.md#approval-gates)) is created only with `spec.user` equal to the requesting user and `spec.groups` among the requester's groups (checked at create time only), and its `kardinal.io/bundle` and `kardinal.io/environment` labels always equal `spec.bundle` and `spec.environment`. It may be owned only by the Bundle it approves (`spec.bundle`, `spec.bundleUID`), and its owner references cannot change later. Only its approver may delete (revoke) it; the garbage collector and the namespace controller are exempt (kardinal's controller is not: it never deletes Approvals). The spec is immutable (CRD rule). |
+| `<release>-bundle-creator` | A new Bundle's `kardinal.io/created-by` annotation, when set, equals the requesting user, and it cannot be added, changed or removed later. Exactly this release's controller ServiceAccount is exempt, plus the usernames listed in `admission.controllerUsernames` (exact usernames, no wildcards; never a namespace or a group: in namespace mode the release namespace is the tenant's): it names the creator of the Bundles it creates (the UI user, `subscription:<name>`, `bundle-api`, `kardinal-controller`). Another controller instance that is not listed creates its Bundles without a creator, which excludeAuthor gates hold. An approval gate's `excludeAuthor` reads it. |
+| `<release>-graph-objects` | The objects a promotion Graph makes and nothing else should: PromotionSteps, PRStatuses, HookRuns, RenderRuns, ImageVerifications and per-promotion MetricCheck instances (label `kardinal.io/bundle`; a MetricCheck you write is not checked), spec, metadata and status. Only kro, this release's controller ServiceAccount and the exact usernames in `admission.controllerUsernames` may create or change them. kro counts only when it impersonates the namespace's Graph ServiceAccount: a request as that ServiceAccount that carries `authentication.kubernetes.io/credential-id` (a token from `kubectl create token`, a bound token) or `authentication.kubernetes.io/pod-name` (a Pod running as it) is refused, so `kubectl create token` and Pods running as the Graph ServiceAccount do not pass as kro. Admission cannot tell kro's impersonation from anyone else's: whoever may impersonate the Graph ServiceAccount, or read a legacy token Secret of it, passes as kro (see Trust below). The garbage collector and the namespace controller may update them, as they do while deleting objects (owner references, their `orphan`/`foregroundDeletion` finalizers); kardinal's own finalizers are removed by its controller. Deleting one is not checked, since the Graph recreates it (deleting a failed PromotionStep retries it), except HookRuns: a recreated HookRun would run its hook again, so only kro, the controllers, the garbage collector and the namespace controller delete them. Argo Rollouts AnalysisRuns labelled `kardinal.io/bundle` are protected on create only: the Rollouts controller writes them afterwards. No one may turn an existing MetricCheck into an instance (kro adopts by name, see below). |
+
+Anyone who may impersonate other users or groups (`impersonate` RBAC) passes these checks as
+whoever they impersonate: treat `impersonate` as full trust.
+
+What a caller can do with overrides depends on its access. A caller allowed to update
+PolicyGates (full edit) can add an override only in its own name, but can also remove any
+override, or remove one and add it again in its own name (re-attribute it). Removing does not
+erase the record: the controller keeps a record of every override it saw (`status.overrides`,
+with its first-seen time) and its `GateOverridden` AuditEvent, and an entry added again keeps
+its first-seen time, so it cannot restart the override cap. A caller that may only record
+overrides (the `policygates/override` role) is append-only.
+
+The controller records an override's `createdBy` as **verified** only when it first sees the
+override while the `<release>-gate-overrides` policy and its `Deny` binding exist: the chart
+passes their name (`--override-identity-policy`) and lets the controller `get` those two
+objects. An override first seen while they are missing, or one already on a gate when the
+upgrade that added the check ran, stays unverified: the gate reason, the AuditEvent and the UI
+API (`createdByVerified: false`) say so.
+
+A PolicyGate created ahead of kro under the name a gate instance will get cannot become that
+instance: kro adopts an existing object of the name it applies and keeps the fields its template
+does not set (an override, say), so the `<release>-gate-overrides` policy refuses every update
+that adds `kardinal.io/bundle` to an existing PolicyGate, kro's included. The promotion then
+waits until the squatter is deleted; kro creates the real instance in its place.
+
+Each release exempts only its own controller, so each binds its policies only to the namespaces
+it manages: the watched namespace in namespace mode, its shard's namespaces with
+`controller.namespaceShard` (the `default` shard also the unlabelled ones), every namespace in
+cluster mode. Releases still overlap in two cases, and then each must list the others' controller
+ServiceAccounts, by exact username, in `admission.controllerUsernames`:
+
+- two cluster-mode releases on one cluster (both bind every namespace);
+- shards during a handoff: when a namespace changes shard (its `kardinal.io/shard` label), the
+  previous shard's controller may still finish a write there, and the new shard's policies refuse
+  it unless it is listed. List every shard's controller in every shard's release.
+
+**Who is trusted as kro in a namespace.** The stock `edit` and `admin` roles grant `impersonate` on
+ServiceAccounts and let their holders create legacy ServiceAccount token Secrets, so a user with
+`edit` or `admin` in a namespace can act as its Graph ServiceAccount through either, and is
+trusted as kro there: they can forge a gate instance, a PromotionStep or a PRStatus in that
+namespace. kardinal's user roles (`<release>-viewer`, `-promoter` and `-approver`, from #1511; until
+it lands, `<release>-approvals`) grant neither `impersonate` nor `create` on Secrets. Give tenants kardinal's roles plus the stock `view` role,
+not `edit`, where promotions must not be forged. A namespace's `edit`/`admin` holders are its
+owners as far as kardinal can check (ledger G16 has the upstream ask that would close this).
+
+**Impersonation is full trust.** Anyone allowed to impersonate (`impersonate` RBAC) passes every
+check here as whoever they impersonate, the Graph ServiceAccount and the controller included; a
+cluster admin can. In namespace mode the controller's ServiceAccount lives in the namespace the
+release manages, so whoever may create Pods or tokens there can act as the controller: namespace
+mode trusts the namespace's editors that far. A Pod's token carries `pod-name` just as the
+controller's own does, so the rule that tells kro from a token cannot tell the controller from a
+Pod running as it.
+
+The checks exist only where the chart's policies are installed: the CRDs do not check the
+names. Installing the CRDs alone (`kubectl apply -f config/crd/bases`) or deleting a policy
+binding turns them off.
+
+The CLI reads your username from the API server with a SelfSubjectReview (what
+`kubectl auth whoami` shows): an OIDC user is often `oidc:alice@example.com`, a ServiceAccount
+`system:serviceaccount:<namespace>:<name>`. The local OS user is not used. The policy has
+`failurePolicy: Fail`, so a policy that cannot be evaluated denies the write. It needs
+Kubernetes 1.30 or later, the chart's minimum.
 
 ---
 
@@ -691,6 +861,7 @@ The user needs these permissions:
 | Promote | `get` on `pipelines`; `list` on `promotionsteps` and `bundles`; `create` on `bundles` |
 | Roll back | `get` on `pipelines` and `bundles`; `list` on `promotionsteps` and `bundles`; `create` on `bundles` |
 | Pause, resume | `get` on `pipelines`; `update` on `pipelines/pause` |
+| Roll back and hold, release a hold | as roll back; `update` on `pipelines/hold` |
 | Approve a gate | `get` on `policygates`; `update` on `policygates/override` |
 
 Each action is checked call by call, so it needs every verb in its row. Promote and roll
@@ -722,9 +893,9 @@ API and the Bundle API, and they work the same for `kubectl` and the `kardinal` 
 | ClusterRole | Grants | For |
 |-------------|--------|-----|
 | `<fullname>-viewer` | `get`, `list`, `watch` on every kardinal kind; `get`, `list`, `watch` on `events` | Dashboards, read-only users |
-| `<fullname>-promoter` | viewer, `create` on `bundles`, `update` on `pipelines/pause` | CI (Bundle API, `kardinal create bundle`), promote, roll back, pause and resume in the UI |
-| `<fullname>-approver` | viewer, `update` on `policygates/override`, `create` on `approvals` | Gate overrides in the UI |
-| `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/edit`, `policygates/override` and `policygates/edit`; aggregates the three above | Pipeline owners |
+| `<fullname>-promoter` | viewer, `create` on `bundles`, `update` on `pipelines/pause` and `pipelines/hold` | CI (Bundle API, `kardinal create bundle`), promote, roll back (and hold), pause and resume in the UI |
+| `<fullname>-approver` | viewer, `update` on `policygates/override`, `create` and `delete` on `approvals` | Gate overrides in the UI, approvals |
+| `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override` and `policygates/edit`; aggregates the three above | Pipeline owners |
 
 `<fullname>` is the release's full name: `kardinal-promoter` for the default release, so
 `kardinal-promoter-viewer` and so on. Bind these roles explicitly; that is the only way to
@@ -749,29 +920,36 @@ Promote and roll back also read the environment's history (the viewer rules, inc
 
 Neither the promoter nor the approver role grants `update` on Pipelines or PolicyGates. They
 act through the UI API, which checks the action subresource and writes as the controller,
-recording the caller (`kardinal.io/requested-by` on Bundles, `createdBy` on overrides). The
-admin role holds `pipelines/edit` and `policygates/edit`, which mean "may change anything".
+recording the caller (`kardinal.io/created-by` and `kardinal.io/requested-by` on Bundles,
+`createdBy` on overrides and holds). The promoter also holds `pipelines/hold` (roll back and
+hold, release a hold) and the approver `create` and `delete` on `approvals`. The admin role
+holds `pipelines/edit` and `policygates/edit`, which mean "may change anything".
 
-`kardinal pause` and `kardinal override` write from the user's kubeconfig, so they need
-`update` on the object. `rbac.userRoles.directWrites=true` adds `update`/`patch` on
-`pipelines` to the promoter and on `policygates` to the approver, and the chart's
-`<fullname>-scoped-writes` ValidatingAdmissionPolicy (always installed) limits such writes:
-a caller who holds `pipelines/pause` but not `pipelines/edit` may change only `spec.paused`
-of a Pipeline, and one who holds `policygates/override` but not `policygates/edit` only
-`spec.overrides` of a PolicyGate; neither may change labels or annotations. The policy checks
+`kardinal pause`, `kardinal rollback --hold`, `kardinal release-hold` and `kardinal override`
+write from the user's kubeconfig, so they need `update` on the object.
+`rbac.userRoles.directWrites=true` adds `update`/`patch` on `pipelines` to the promoter and
+on `policygates` to the approver, and the chart's `<fullname>-scoped-writes`
+ValidatingAdmissionPolicy (always installed, UPDATE only) limits such writes: a caller who
+holds `pipelines/pause` or `pipelines/hold` but not `pipelines/edit` may change only
+`spec.paused` (with `pipelines/pause`) and `spec.holds` (with `pipelines/hold`; the
+`<fullname>-hold-writes` policy checks each entry) of a Pipeline, and one who holds
+`policygates/override` but not `policygates/edit` only `spec.overrides` of a PolicyGate;
+neither may change labels or annotations. The policy checks
 with the API server's authorizer, so it applies to any binding, not only the chart's roles.
 A caller with neither subresource is not limited by it: their RBAC decides. For these
 callers the policy also keeps all of the metadata as it was, except what the API server sets
 (managedFields, resourceVersion, generation): no labels, annotations, finalizers or
 ownerReferences (an ownerReference to a deleted object would have the garbage collector
 delete the gate). It makes `spec.overrides` append-only, requires `createdBy` to be the
-caller on each new entry, and requires an `expiresAt` at most `gateOverrides.maxMinutes`
-(default 1440, the same bound the UI applies) after its `createdAt`. The admission policy cannot read the clock, so the PolicyGate reconciler enforces the cap
-in time: it records when it first saw each override (`status.overridesSeen`), ends an
-override at the earlier of its `expiresAt` and that time plus `gateOverrides.maxMinutes`,
-and ignores an entry whose `createdAt` is more than 5 minutes after it first saw it
-(condition `OverrideIgnored`, naming the entries). Entries chained a cap apart in advance
-therefore give one cap, not one per entry.
+caller on each new entry (as the `<fullname>-gate-overrides` policy does for everyone), and
+requires an `expiresAt` at most the override cap (`controller.gateOverrideMaxMinutes`,
+default 1440, the bound the UI and the PolicyGate reconciler apply) after its `createdAt`.
+The admission policy cannot read the clock, so the PolicyGate reconciler enforces the cap in
+time: it records when it first saw each override (`status.overrides`), ends an override at
+the earlier of its `expiresAt` and that time plus the cap, and does not count an entry whose
+`createdAt` is more than 5 minutes after it first saw it (condition `OverrideIgnored`, naming
+the entries). Entries chained a cap apart in advance therefore give one cap, not one per
+entry.
 
 `directWrites` weakens two guarantees. First, separation of duties: the narrow roles become
 direct write access, held back only by this policy. Second, the audit trail: such a write is

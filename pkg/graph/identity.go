@@ -23,7 +23,8 @@ import (
 // the Helm chart (templates/graph-rbac.yaml).
 const (
 	// DefaultApplierClusterRole grants what a kardinal Graph applies in its own
-	// namespace: PromotionSteps, PolicyGates, PRStatuses, and read on Bundles.
+	// namespace: PromotionSteps, PolicyGates, PRStatuses, MetricChecks, and read
+	// on Bundles.
 	DefaultApplierClusterRole = "kardinal-graph-applier"
 	// DefaultReaderClusterRole grants read/watch on the health kinds a Graph
 	// references (Deployments, Argo CD Applications, Flux Kustomizations,
@@ -92,27 +93,55 @@ type IdentityProvisioner struct {
 	// every read elsewhere is forbidden.
 	OnlyNamespace string
 
-	// mu is held through Lock and Unlock.
-	mu sync.Mutex
+	// locks are the per-namespace locks of LockNamespace.
+	locks sync.Map // namespace -> *sync.Mutex
 }
 
-// Lock serializes the callers that bind and prune reader RoleBindings. The
-// translator holds it from Ensure until its Graph is created; every Prune
+// LockNamespace serializes, in one Graph namespace, the callers that bind
+// and prune its reader RoleBindings, and returns the unlock. The translator
+// holds it from Ensure until its Graph is created (and pruned); every Prune
 // caller holds it from listing the namespace's Graphs until Prune returns.
 // Without it a Prune that listed the Graphs just before a new Graph was
-// created could delete the reader binding Ensure had just made for it. A nil
+// created could delete the reader binding Ensure had just made for it.
+// Everything Ensure and Prune touch is keyed by the Graph namespace (the
+// reader bindings' name, the record on its applier binding), so Graphs of
+// other namespaces are bound and pruned at the same time (#1509). A nil
 // provisioner does nothing.
-func (p *IdentityProvisioner) Lock() {
-	if p != nil {
-		p.mu.Lock()
+func (p *IdentityProvisioner) LockNamespace(graphNS string) (unlock func()) {
+	if p == nil {
+		return func() {}
 	}
+	v, _ := p.locks.LoadOrStore(graphNS, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
-// Unlock releases Lock.
-func (p *IdentityProvisioner) Unlock() {
-	if p != nil {
-		p.mu.Unlock()
+// MayNeedPrune reports whether a Prune of graphNS after g was created or
+// updated could delete anything: whether the reader namespaces recorded for
+// graphNS include one g does not read. When every recorded namespace is
+// still read by g, every binding is still needed, and the caller skips
+// listing the namespace's Graphs (#1509: that list, under the lock, made
+// each translation cost as much as the Graphs in its namespace). An unknown
+// record (no applier binding, or a read error) may need a prune.
+func (p *IdentityProvisioner) MayNeedPrune(ctx context.Context, graphNS string, g *Graph) bool {
+	if p == nil || g == nil {
+		return false
 	}
+	recorded, found, err := p.recorded(ctx, graphNS)
+	if err != nil || !found {
+		return true
+	}
+	reads := map[string]bool{}
+	for _, ns := range RefNamespaces(g) {
+		reads[ns] = true
+	}
+	for _, ns := range recorded {
+		if !reads[ns] {
+			return true
+		}
+	}
+	return false
 }
 
 // ApplierBindingName is the name of the applier RoleBinding in every Graph
@@ -251,7 +280,8 @@ func (p *IdentityProvisioner) Ensure(ctx context.Context, g *Graph) ([]string, e
 // in graphNS and every namespace ReaderNamespaces names; with AllNamespaces
 // the others are left for the sweep (PruneIn). With OnlyNamespace set, only
 // that namespace is looked in. A namespace whose binding cannot be read stays
-// in the record, so a later Prune tries again. The caller must hold Lock.
+// in the record, so a later Prune tries again. The caller must hold
+// LockNamespace(graphNS).
 func (p *IdentityProvisioner) Prune(ctx context.Context, graphNS string, graphs []*Graph) error {
 	return p.PruneIn(ctx, graphNS, graphs, nil)
 }

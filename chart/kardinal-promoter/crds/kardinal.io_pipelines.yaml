@@ -61,7 +61,7 @@ spec:
                   has no upstream dependency. This sequential default means a list of N environments
                   without dependsOn fields produces a linear chain. Override with dependsOn to
                   express parallel fan-out or explicit DAG structure.
-                  Environment names must be unique; at most 100 environments (a bound
+                  Environment names must be unique; at most 500 environments (a bound
                   the API server needs to cost the CEL rules on each entry).
                 items:
                   description: EnvironmentSpec defines one environment in a Pipeline.
@@ -187,9 +187,9 @@ spec:
                             supported" instead of silently checking the local cluster.
 
                             Deprecated: remove cluster. To verify a workload in another cluster,
-                            check its Argo CD Application (health.type: argocd) or Flux
-                            Kustomization (health.type: flux) in the hub cluster kardinal runs in;
-                            see docs/health-adapters.md#remote-clusters.
+                            set kubeconfigSecretRef, or check its Argo CD Application
+                            (health.type: argocd) or Flux Kustomization (health.type: flux) in the
+                            hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
                           type: string
                         flagger:
                           description: |-
@@ -215,6 +215,37 @@ spec:
                             namespace:
                               description: Namespace is the object namespace.
                               type: string
+                          type: object
+                        kubeconfigSecretRef:
+                          description: |-
+                            KubeconfigSecretRef runs the health check against another cluster: the
+                            one the kubeconfig in this Secret key selects (its current context).
+                            The Secret must be in the Pipeline's namespace. Every health type reads
+                            its object (Deployment, Application, Kustomization, Rollout, Canary)
+                            in that cluster instead of the controller's.
+
+                            Only inline credentials are accepted: a bearer token, a client
+                            certificate and key (-data fields), or a username and password. A
+                            kubeconfig with exec, auth-provider, tokenFile or any file path is
+                            refused and the step fails: it would run a command, or read a file, in
+                            the controller. The API server address goes through the controller's
+                            egress guard (no loopback, link-local or metadata addresses) and is
+                            dialled directly, not through HTTP(S)_PROXY.
+
+                            A cluster that cannot be reached is not unhealthy: the step reports
+                            ClusterUnreachable and keeps checking until health.timeout. Remote
+                            health is polled, not watched.
+                          properties:
+                            key:
+                              description: Key is the key holding the kubeconfig.
+                                Defaults to "kubeconfig".
+                              type: string
+                            name:
+                              description: Name is the Secret name.
+                              minLength: 1
+                              type: string
+                          required:
+                          - name
                           type: object
                         labelSelector:
                           additionalProperties:
@@ -282,6 +313,63 @@ spec:
                           - flagger
                           type: string
                       type: object
+                    hooks:
+                      description: |-
+                        Hooks are Jobs that run for each Bundle in this environment: "pre"
+                        hooks before the promotion starts (database migrations), "post" hooks
+                        after the health check passed and before the environment is Verified
+                        (integration tests). Each runs once per Bundle, as a HookRun the
+                        Bundle's Graph creates. See docs/hooks.md.
+                      items:
+                        description: |-
+                          HookSpec is one pre- or post-deploy hook of a Pipeline environment: a
+                          Kubernetes Job the controller runs once per Bundle and environment.
+                        properties:
+                          job:
+                            description: |-
+                              Job is a batch/v1 JobSpec. The controller creates the Job in the
+                              Pipeline namespace with the HookRun as its owner. The Pod's
+                              serviceAccountName (default "default") must be in the controller's
+                              --hook-service-accounts list. restartPolicy defaults to Never, and
+                              activeDeadlineSeconds to the timeout.
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                          name:
+                            description: |-
+                              Name identifies the hook within its environment and phase. It is part of
+                              the HookRun and Job names.
+                            maxLength: 40
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                          phase:
+                            description: |-
+                              Phase is when the hook runs. "pre": after the environment's upstreams
+                              are Verified and its gates are ready, before the promotion starts; the
+                              promotion starts only when every pre hook succeeded. "post": after the
+                              health check passed; the environment is Verified only when every post
+                              hook succeeded, and a failed post hook applies onHealthFailure. Hooks of
+                              one phase run one after another, in list order.
+                            enum:
+                            - pre
+                            - post
+                            type: string
+                          timeout:
+                            description: |-
+                              Timeout bounds the hook from the moment its HookRun starts: a hook that
+                              has not finished by then fails and its Job is deleted. Empty or "0" means 30m.
+                            pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                            type: string
+                        required:
+                        - job
+                        - name
+                        - phase
+                        type: object
+                      maxItems: 10
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - name
+                      x-kubernetes-list-type: map
                     layout:
                       default: directory
                       description: |-
@@ -472,6 +560,27 @@ spec:
                             Helm holds Helm-specific update configuration.
                             Used when Strategy is "helm".
                           properties:
+                            chartVersionFile:
+                              description: |-
+                                ChartVersionFile is the file a chart Bundle's version is written to,
+                                relative to the environment path: an umbrella Chart.yaml, an Argo CD
+                                Application, a Flux HelmRelease or a kustomization.yaml with
+                                helmCharts. Defaults to "Chart.yaml".
+                              type: string
+                            chartVersionPath:
+                              description: |-
+                                ChartVersionPath is the YAML path of the chart version in
+                                chartVersionFile, in the grammar of update.yaml.updates[].path: keys
+                                separated by ".", "[N]" (or a digits-only key) to index a list, and
+                                "[field=value]" for the list element whose field has that value. Defaults to
+                                ".dependencies[name=<chart>].version": the umbrella chart's dependency
+                                named after the Bundle's chart (an error when there is none). For
+                                example ".spec.source.targetRevision" (Argo CD Application),
+                                ".spec.chart.spec.version" (Flux HelmRelease) or
+                                ".helmCharts[name=podinfo].version" (kustomize).
+                              maxLength: 512
+                              pattern: ^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$
+                              type: string
                             imagePathTemplate:
                               description: |-
                                 ImagePathTemplate is the YAML dot-path to the image tag in values.yaml.
@@ -486,12 +595,168 @@ spec:
                           type: object
                         strategy:
                           default: kustomize
-                          description: Strategy selects the manifest update strategy.
+                          description: |-
+                            Strategy selects the manifest update strategy: kustomize (default,
+                            kustomization.yaml images), helm (one values key), argocd (patch the
+                            Application, no git), or yaml (any YAML paths in any files of the
+                            environment directory).
                           enum:
                           - kustomize
                           - helm
                           - argocd
+                          - yaml
                           type: string
+                        yaml:
+                          description: |-
+                            YAML holds the edits of the yaml strategy.
+                            Used when Strategy is "yaml".
+                          properties:
+                            updates:
+                              description: Updates are the values to set.
+                              items:
+                                description: |-
+                                  YAMLUpdate sets one scalar in one YAML file to a value taken from a Bundle
+                                  image. The file must be a regular file of at most 4 MiB holding one YAML
+                                  document; symbolic links and anchors or aliases on the path are refused.
+                                properties:
+                                  file:
+                                    description: |-
+                                      File is the YAML file, relative to the environment path, for example
+                                      "values.yaml" or "deploy/deployment.yaml". It must stay inside the
+                                      repository. A file with several documents (---) is not supported.
+                                      Each path segment starts with a letter, digit or "_" and has single
+                                      dots only, so the file can neither be absolute nor leave the
+                                      environment path.
+                                    maxLength: 512
+                                    pattern: ^[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*(/[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*)*$
+                                    type: string
+                                  image:
+                                    description: |-
+                                      Image is the repository of the Bundle image whose value is written,
+                                      for example "ghcr.io/org/app". It may be empty when the Bundle has
+                                      exactly one image.
+                                    type: string
+                                  path:
+                                    description: |-
+                                      Path is the key path of the scalar to set, in the grammar
+                                      chartVersionPath uses too: keys separated by "." (a leading "." is
+                                      optional), "[N]" to index a list and "[field=value]" for the list
+                                      element whose field has that value, for example "image.tag",
+                                      "spec.template.spec.containers[0].image" or
+                                      "spec.template.spec.containers[name=app].image". A digits-only key
+                                      indexes a list when it reaches one. Missing mapping keys are created;
+                                      list elements are not. A key that contains "." is not supported.
+                                    maxLength: 512
+                                    pattern: ^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$
+                                    type: string
+                                  value:
+                                    description: |-
+                                      Value is what to write: tag (default), digest, tagWithDigest
+                                      ("<tag>@<digest>"), image ("<repository>:<tag>"), or imageWithDigest
+                                      ("<repository>:<tag>@<digest>", or "<repository>@<digest>" without a
+                                      tag). A value the image does not have (a digest of a tag-only image)
+                                      fails the step.
+                                    enum:
+                                    - tag
+                                    - digest
+                                    - tagWithDigest
+                                    - image
+                                    - imageWithDigest
+                                    type: string
+                                required:
+                                - file
+                                - path
+                                type: object
+                              maxItems: 64
+                              minItems: 1
+                              type: array
+                          required:
+                          - updates
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                      - message: update.strategy yaml requires update.yaml.updates
+                        rule: '!has(self.strategy) || self.strategy != ''yaml'' ||
+                          (has(self.yaml) && size(self.yaml.updates) > 0)'
+                    verification:
+                      description: |-
+                        Verification runs Argo Rollouts analyses after the environment passed
+                        its health check: one AnalysisRun per template, with the Bundle's
+                        version and environment as args. The environment is Verified only when
+                        every analysis is Successful. Needs Argo Rollouts' CRDs: without them
+                        the Bundle fails (it never promotes unverified). See docs/analysis.md.
+                      properties:
+                        analysisTemplates:
+                          description: AnalysisTemplates are the templates to run,
+                            each as its own AnalysisRun.
+                          items:
+                            description: |-
+                              AnalysisTemplateRef names an Argo Rollouts AnalysisTemplate (in the
+                              Pipeline namespace) or ClusterAnalysisTemplate.
+                            properties:
+                              kind:
+                                description: Kind is AnalysisTemplate (default) or
+                                  ClusterAnalysisTemplate.
+                                enum:
+                                - AnalysisTemplate
+                                - ClusterAnalysisTemplate
+                                type: string
+                              name:
+                                description: Name is the template name.
+                                maxLength: 63
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          maxItems: 10
+                          minItems: 1
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                        args:
+                          description: |-
+                            Args set template args by name. They take precedence over the args
+                            kardinal sets (bundle, pipeline, environment, image, tag, digest,
+                            commit) and over the template's defaults. Only args a template declares
+                            are passed to its AnalysisRun.
+                          items:
+                            description: AnalysisArg is one AnalysisRun arg.
+                            properties:
+                              name:
+                                description: Name is the arg name the template declares.
+                                minLength: 1
+                                type: string
+                              value:
+                                description: Value is the arg value.
+                                type: string
+                            required:
+                            - name
+                            - value
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                        inconclusive:
+                          description: |-
+                            Inconclusive is what an Inconclusive AnalysisRun counts as: "fail"
+                            (default) or "pass".
+                          enum:
+                          - fail
+                          - pass
+                          type: string
+                        timeout:
+                          description: |-
+                            Timeout bounds the analyses from the moment the environment entered
+                            Verifying. An analysis still running then fails the environment.
+                            Empty or "0" means 30m.
+                          pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                          type: string
+                      required:
+                      - analysisTemplates
                       type: object
                     waitForMergeTimeout:
                       description: |-
@@ -543,7 +808,7 @@ spec:
                       graph, self, each, item, ...) and CEL keywords are not allowed;
                       rename the environment'
                     rule: '!(self.name in [''api-version'',''kind'',''metadata'',''namespace'',''spec'',''status'',''graph'',''graphengine'',''kro'',''each'',''item'',''items'',''object'',''self'',''this'',''context'',''true'',''false'',''null'',''in'',''as'',''break'',''const'',''continue'',''else'',''for'',''function'',''if'',''import'',''let'',''loop'',''package'',''return'',''var'',''void'',''while'',''bundle'',''time''])'
-                maxItems: 100
+                maxItems: 500
                 minItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
@@ -614,6 +879,258 @@ spec:
                   beyond this limit are deleted oldest-first on each new Bundle creation.
                 minimum: 1
                 type: integer
+              holds:
+                description: |-
+                  Holds pin environments to a rollback (kardinal rollback --hold): while
+                  an environment has a hold, no Bundle but the hold's own promotes into
+                  it, the hold's Bundle is never superseded or garbage-collected, and,
+                  when the controller can verify it restores artifacts Verified in the
+                  environment, it passes that environment's PolicyGates, each pass
+                  recorded (GateExempted). kardinal release-hold removes it, and so does
+                  the controller at expiresAt. At most one hold per environment. Changing
+                  spec.holds needs update on the virtual subresource pipelines/hold
+                  (chart: <release>-hold-writes ValidatingAdmissionPolicy).
+                items:
+                  description: EnvironmentHold pins one environment of a Pipeline
+                    to a rollback Bundle.
+                  properties:
+                    artifacts:
+                      description: |-
+                        Artifacts is the digest of the rollback Bundle's artifacts (type,
+                        images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+                        The gate exemption applies only while the Bundle still has them.
+                      type: string
+                    bundle:
+                      description: |-
+                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle that promotes into it while the hold lasts.
+                      minLength: 1
+                      type: string
+                    createdAt:
+                      description: CreatedAt is when.
+                      format: date-time
+                      type: string
+                    createdBy:
+                      description: |-
+                        CreatedBy is who held the environment: the Kubernetes user name of the
+                        request that added the hold (the admission policy refuses another
+                        value), or, for a hold added through the UI, the UI user the
+                        controller authenticated.
+                      type: string
+                    environment:
+                      description: Environment is the held environment.
+                      minLength: 1
+                      type: string
+                    expiresAt:
+                      description: ExpiresAt, when set, is when the controller removes
+                        the hold.
+                      format: date-time
+                      type: string
+                    reason:
+                      description: |-
+                        Reason says why the environment is held. It is shown wherever the hold
+                        or a gate it exempts is.
+                      maxLength: 1024
+                      minLength: 1
+                      type: string
+                  required:
+                  - bundle
+                  - environment
+                  - reason
+                  type: object
+                maxItems: 100
+                type: array
+                x-kubernetes-list-map-keys:
+                - environment
+                x-kubernetes-list-type: map
+              imageVerification:
+                description: |-
+                  ImageVerification requires the signatures of the Bundle's images (and
+                  of a config Bundle's commit) to verify before the Bundle is promoted
+                  into its first environments. Selected images must be pinned by digest.
+                  See docs/image-verification.md.
+                properties:
+                  authorities:
+                    description: |-
+                      Authorities are the signers an image may be signed by: an image is
+                      verified when one of its signatures verifies against any authority.
+                    items:
+                      description: |-
+                        SignatureAuthority is one accepted signer: a public key, or a keyless
+                        (Sigstore Fulcio) identity. Exactly one of key and keyless is set.
+                      properties:
+                        key:
+                          description: |-
+                            Key is a PEM public key (cosign.pub) in a Secret of the Pipeline
+                            namespace.
+                          properties:
+                            requireTransparencyLog:
+                              description: |-
+                                RequireTransparencyLog requires a Rekor entry (and its inclusion
+                                proof) in the Sigstore bundle. Default false: a key signature is
+                                verified against the key alone, like cosign --insecure-ignore-tlog.
+                              type: boolean
+                            secretRef:
+                              description: SecretRef names the Secret and key holding
+                                the PEM public key.
+                              properties:
+                                key:
+                                  description: Key is the data key.
+                                  minLength: 1
+                                  type: string
+                                name:
+                                  description: Name is the object name.
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                          required:
+                          - secretRef
+                          type: object
+                        keyless:
+                          description: |-
+                            Keyless is a Sigstore keyless identity: the OIDC issuer and subject
+                            of the Fulcio certificate that signed.
+                          properties:
+                            issuer:
+                              description: |-
+                                Issuer is the OIDC issuer, for example
+                                https://token.actions.githubusercontent.com.
+                              minLength: 1
+                              type: string
+                            subject:
+                              description: |-
+                                Subject is the certificate's subject (SAN), for example
+                                https://github.com/myorg/app/.github/workflows/release.yml@refs/heads/main.
+                              type: string
+                            subjectRegExp:
+                              description: SubjectRegExp is a regular expression the
+                                subject must match.
+                              type: string
+                            trustedRootRef:
+                              description: |-
+                                TrustedRootRef names a Secret key in the Pipeline namespace holding a
+                                Sigstore trusted_root.json (a private Sigstore). Empty means the
+                                Sigstore public-good instance, whose trusted root the controller
+                                fetches through TUF.
+                              properties:
+                                key:
+                                  description: Key is the data key.
+                                  minLength: 1
+                                  type: string
+                                name:
+                                  description: Name is the object name.
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - key
+                              - name
+                              type: object
+                          required:
+                          - issuer
+                          type: object
+                          x-kubernetes-validations:
+                          - message: set exactly one of subject and subjectRegExp
+                            rule: has(self.subject) != has(self.subjectRegExp)
+                        name:
+                          description: Name identifies the authority in results.
+                          maxLength: 63
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                      x-kubernetes-validations:
+                      - message: set exactly one of key and keyless
+                        rule: has(self.key) != has(self.keyless)
+                    maxItems: 10
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  commits:
+                    description: |-
+                      Commits, when requireSigned is true, requires the commit of a config or
+                      mixed Bundle (spec.configRef.commitSHA) to be signed, as the SCM
+                      provider reports it (GitHub, GitLab, Forgejo, Gitea).
+                    properties:
+                      allowedSigners:
+                        description: |-
+                          AllowedSigners, when set, also requires the signer to be one of these:
+                          an SCM login or an email address, as the SCM reports the verified
+                          signer (GitLab: the key owner's verified email, the committer's for
+                          SSH; never a key title). Commits the SCM platform signed itself, not a
+                          person, are refused unless listed here explicitly: "web-flow" (GitHub
+                          web UI edits and merges), "gitlab-system" (GitLab verified_system) and
+                          "forgejo-instance" (the Forgejo/Gitea instance key). To accept PRs
+                          merged in the web UI, list the platform identity. Empty means any
+                          person's signature the SCM verified.
+                        items:
+                          type: string
+                        maxItems: 50
+                        type: array
+                      requireSigned:
+                        description: |-
+                          RequireSigned requires the config Bundle's commit to be signed with a
+                          signature the SCM provider verified. configRef.commitSHA must then be
+                          a full 40- or 64-character SHA, and configRef.gitRepo must be on the
+                          controller's SCM host.
+                        type: boolean
+                    required:
+                    - requireSigned
+                    type: object
+                  images:
+                    description: |-
+                      Images selects the Bundle images to verify by repository, with "*"
+                      matching any characters ("ghcr.io/myorg/*"). Empty means every image.
+                      Every selected image must be pinned by digest in the Bundle.
+                    items:
+                      type: string
+                    maxItems: 20
+                    type: array
+                  insecureRegistries:
+                    description: |-
+                      InsecureRegistries are registry hosts ("registry.local:5000") read over
+                      plain HTTP. Every other registry is read over HTTPS.
+                    items:
+                      type: string
+                    maxItems: 10
+                    type: array
+                  registrySecretRef:
+                    description: |-
+                      RegistrySecretRef names a kubernetes.io/dockerconfigjson Secret in the
+                      Pipeline namespace with credentials for the registries holding the
+                      images and their signatures. Without it registries are read
+                      anonymously.
+                    properties:
+                      name:
+                        description: Name is the object name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  signatureRepository:
+                    description: |-
+                      SignatureRepository is the repository that holds the signatures, when
+                      they are not stored next to the images (cosign's COSIGN_REPOSITORY),
+                      for example "registry.example.com/signatures". Signatures are looked
+                      up there by image digest.
+                    type: string
+                  timeout:
+                    description: |-
+                      Timeout bounds how long a missing signature is waited for (CI may sign
+                      after it pushes), from the moment the ImageVerification starts. A
+                      signature that does not verify fails at once. Empty or "0" means 10m.
+                    pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: set authorities, commits.requireSigned, or both
+                  rule: (has(self.authorities) && size(self.authorities) > 0) || (has(self.commits)
+                    && self.commits.requireSigned)
               maxConcurrentPromotions:
                 default: 0
                 description: |-
@@ -748,11 +1265,44 @@ spec:
                       (e.g. 83 = 8.3%).
                       Stored as integer to avoid floating-point in CRD YAML.
                     type: integer
+                  changeFailureRateMillis:
+                    description: |-
+                      ChangeFailureRateMillis is failedDeployments / deployments as integer
+                      thousandths (DORA change failure rate; 250 = 25%).
+                    type: integer
                   computedAt:
                     description: ComputedAt is when these metrics were last written
                       by the PipelineReconciler.
                     format: date-time
                     type: string
+                  deployments:
+                    description: |-
+                      Deployments is the number of deployments the change failure rate and
+                      time to restore are computed over: the last 30 Bundles whose change
+                      reached a final environment (one nothing depends on; its health check
+                      started), whatever the outcome, once per Bundle. Not deployments: a
+                      no-op promotion (outputs.noChanges), the steps a supersession
+                      cancelled (a RollingBack, AbortedByAlarm or already Failed step of a
+                      superseded Bundle still counts), and rollback Bundles (they count only
+                      as restores).
+                    type: integer
+                  failedDeployments:
+                    description: |-
+                      FailedDeployments is how many of those deployments failed: a
+                      PromotionStep in a final environment ended Failed, AbortedByAlarm or
+                      RollingBack after its health check started, a rollback Bundle later
+                      rolled a final environment back from it (annotation
+                      kardinal.io/rollback-from), or the Bundle was rejected after it was
+                      deployed.
+                    type: integer
+                  meanTimeToRestoreMinutes:
+                    description: |-
+                      MeanTimeToRestoreMinutes is the mean, in whole minutes, from each failed
+                      deployment reaching a final environment to the first later Bundle
+                      Verified in every final environment it targets, in every region (DORA
+                      time to restore). Failures not restored yet are not counted.
+                    format: int64
+                    type: integer
                   operatorInterventionRateMillis:
                     description: |-
                       OperatorInterventionRateMillis is the fraction of sampled Bundles that had
@@ -770,6 +1320,11 @@ spec:
                       creation to the final environment reaching Verified, over the sample window.
                     format: int64
                     type: integer
+                  restoredFailures:
+                    description: |-
+                      RestoredFailures is the number of failed deployments in
+                      meanTimeToRestoreMinutes.
+                    type: integer
                   rolloutsLast30Days:
                     description: |-
                       RolloutsLast30Days is the number of successful (Verified) promotions to
@@ -786,6 +1341,63 @@ spec:
                       Until a Bundle is Verified there, deploymentMetrics is not set at all.
                     type: integer
                 type: object
+              observedHolds:
+                description: |-
+                  ObservedHolds is spec.holds as the Pipeline reconciler last recorded
+                  it: the HoldCreated and HoldReleased AuditEvents are written from the
+                  difference, whichever client changed spec.holds.
+                items:
+                  description: EnvironmentHold pins one environment of a Pipeline
+                    to a rollback Bundle.
+                  properties:
+                    artifacts:
+                      description: |-
+                        Artifacts is the digest of the rollback Bundle's artifacts (type,
+                        images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+                        The gate exemption applies only while the Bundle still has them.
+                      type: string
+                    bundle:
+                      description: |-
+                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle that promotes into it while the hold lasts.
+                      minLength: 1
+                      type: string
+                    createdAt:
+                      description: CreatedAt is when.
+                      format: date-time
+                      type: string
+                    createdBy:
+                      description: |-
+                        CreatedBy is who held the environment: the Kubernetes user name of the
+                        request that added the hold (the admission policy refuses another
+                        value), or, for a hold added through the UI, the UI user the
+                        controller authenticated.
+                      type: string
+                    environment:
+                      description: Environment is the held environment.
+                      minLength: 1
+                      type: string
+                    expiresAt:
+                      description: ExpiresAt, when set, is when the controller removes
+                        the hold.
+                      format: date-time
+                      type: string
+                    reason:
+                      description: |-
+                        Reason says why the environment is held. It is shown wherever the hold
+                        or a gate it exempts is.
+                      maxLength: 1024
+                      minLength: 1
+                      type: string
+                  required:
+                  - bundle
+                  - environment
+                  - reason
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - environment
+                x-kubernetes-list-type: map
               phase:
                 default: Unknown
                 description: |-

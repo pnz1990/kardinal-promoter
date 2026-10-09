@@ -314,6 +314,8 @@ func TestChart_DefaultInstall(t *testing.T) {
 		{Verb: "create", Resource: "serviceaccounts", Namespace: a.ns},
 		{Verb: "create", Group: "rbac.authorization.k8s.io", Resource: "rolebindings", Namespace: a.ns},
 		{Verb: "bind", Group: "rbac.authorization.k8s.io", Resource: "clusterroles", Name: "kardinal-promoter-graph-applier"},
+		{Verb: "create", Group: "batch", Resource: "jobs", Namespace: a.ns},
+		{Verb: "update", Group: "kardinal.io", Resource: "hookruns", Subresource: "status", Namespace: a.ns},
 	}, []framework.Access{
 		{Verb: "list", Resource: "secrets"},
 		{Verb: "watch", Resource: "secrets", Namespace: a.ns},
@@ -321,7 +323,7 @@ func TestChart_DefaultInstall(t *testing.T) {
 		{Verb: "patch", Group: "apps", Resource: "deployments", Namespace: a.ns},
 		{Verb: "list", Group: "apps", Resource: "replicasets", Namespace: a.ns},
 		{Verb: "patch", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace},
-		{Verb: "create", Group: "batch", Resource: "jobs", Namespace: a.ns},
+		{Verb: "patch", Group: "batch", Resource: "jobs", Namespace: a.ns},
 		{Verb: "list", Resource: "configmaps", Namespace: a.ns},
 		{Verb: "bind", Group: "rbac.authorization.k8s.io", Resource: "clusterroles", Name: "cluster-admin"},
 		{Verb: "escalate", Group: "rbac.authorization.k8s.io", Resource: "clusterroles"},
@@ -333,6 +335,8 @@ func TestChart_DefaultInstall(t *testing.T) {
 		{Verb: "create", Group: "kardinal.io", Resource: "promotionsteps", Namespace: a.ns},
 		{Verb: "create", Group: "kardinal.io", Resource: "policygates", Namespace: a.ns},
 		{Verb: "create", Group: "kardinal.io", Resource: "prstatuses", Namespace: a.ns},
+		{Verb: "create", Group: "kardinal.io", Resource: "hookruns", Namespace: a.ns},
+		{Verb: "create", Group: "kardinal.io", Resource: "metricchecks", Namespace: a.ns},
 		{Verb: "get", Group: "kardinal.io", Resource: "bundles", Namespace: a.ns},
 		{Verb: "get", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace},
 	}, []framework.Access{
@@ -345,6 +349,7 @@ func TestChart_DefaultInstall(t *testing.T) {
 		{Verb: "watch", Group: "kardinal.io", Resource: "promotionsteps"},
 		{Verb: "watch", Group: "kardinal.io", Resource: "policygates"},
 		{Verb: "watch", Group: "kardinal.io", Resource: "prstatuses"},
+		{Verb: "watch", Group: "kardinal.io", Resource: "metricchecks"},
 	}, nil)
 
 	logs := r.AllLogs(t)
@@ -597,7 +602,8 @@ func TestChart_ScheduleClock(t *testing.T) {
 
 // TestChart_DeprecatedValues checks the two deprecated values do nothing:
 // setting them renders the same manifest, no ValidatingAdmissionPolicy is
-// ever created, and the controller gets no Job permissions.
+// ever created, and the controller's Job permissions are the hooks' (create,
+// get, delete; never patch), whatever rbac.integrationTestJobs says.
 //
 // Covers CHART-INTEGJOBS-01, CHART-VAP-01.
 func TestChart_DeprecatedValues(t *testing.T) {
@@ -651,10 +657,13 @@ func TestChart_DeprecatedValues(t *testing.T) {
 	}
 
 	controller := framework.ServiceAccountUser(ns, r.Fullname)
-	checkAccess(t, e, controller, nil, []framework.Access{
+	checkAccess(t, e, controller, []framework.Access{
 		{Verb: "create", Group: "batch", Resource: "jobs", Namespace: ns},
 		{Verb: "get", Group: "batch", Resource: "jobs", Namespace: ns},
 		{Verb: "delete", Group: "batch", Resource: "jobs", Namespace: ns},
+	}, []framework.Access{
+		{Verb: "patch", Group: "batch", Resource: "jobs", Namespace: ns},
+		{Verb: "update", Group: "batch", Resource: "jobs", Namespace: ns},
 	})
 }
 

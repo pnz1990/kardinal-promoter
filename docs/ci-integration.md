@@ -288,8 +288,9 @@ curl -X POST https://kardinal.example.com/api/v1/bundles -H "Authorization: Bear
 
 An invalid token, or one for another audience, gets `401`, a caller RBAC denies `403`
 naming the verb, resource and namespace, and an unreachable review API `503`. A client address
-that sends more than 60 new tokens a minute gets `429` before any `TokenReview` is sent. The Bundle records the caller in
-`kardinal.io/requested-by`. Each caller has its own 60-a-minute window. The static token, when
+that sends more than 60 new tokens a minute gets `429` before any `TokenReview` is sent. The Bundle records the caller as its
+verified creator, `kardinal.io/created-by` (which an approval gate's `excludeAuthor` reads), and
+in `kardinal.io/requested-by`; with the static token the creator is `bundle-api`. Each caller has its own 60-a-minute window. The static token, when
 set, keeps working beside it (a request whose token is the static token acts as the
 controller). The chart grants the controller `create` on `tokenreviews` and
 `subjectaccessreviews` when this is on.
@@ -447,10 +448,11 @@ rejected with `400`, so a misspelt key fails the request instead of being ignore
 | Field | Required | Description |
 |---|---|---|
 | `pipeline` | Yes | Pipeline name (a valid Kubernetes name, at most 63 characters) |
-| `type` | No | `image` (default), `config` or `mixed` |
+| `type` | No | `image` (default), `config`, `mixed` or `chart` |
 | `namespace` | No | Target namespace. Defaults to `--watch-namespace`, or `default` |
 | `images` | For `image` and `mixed` | At least one image |
 | `configRef` | For `config` and `mixed` | `gitRepo` and `commitSHA` (`commitSHA` is required). An `image` Bundle with a `configRef` gets 400: it would deploy only its images |
+| `chart` | For `chart` | `name` and `version` (required), `repoURL`, `digest`; promoted with `update.strategy: helm` (see [Promoting a chart version](subscription.md#promoting-a-chart-version)) |
 | `provenance` | No | `commitSHA`, `ciRunURL` (empty or an absolute `http(s)` URL, see [Provenance](#provenance)), `author`, `timestamp` (set to now if empty) |
 | `intent` | No | `targetEnvironment`, `skipEnvironments` |
 

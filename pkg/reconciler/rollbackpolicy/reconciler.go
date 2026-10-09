@@ -52,6 +52,8 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -369,7 +371,7 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 		return "", &refusal{reason: reason, message: kubeevent.Truncate(err.Error())}, nil
 	}
 
-	if err := r.Create(ctx, plan.Bundle); err != nil && !apierrors.IsAlreadyExists(err) {
+	if err := lifecycle.CreateBundleAs(ctx, r.Client, plan.Bundle, lifecycle.ControllerCreator); err != nil && !apierrors.IsAlreadyExists(err) {
 		return "", nil, fmt.Errorf("create rollback bundle: %w", err)
 	}
 
@@ -431,10 +433,10 @@ func (r *Reconciler) now() time.Time {
 //     the new step are mapped, so a change of
 //     status.consecutiveHealthFailures, or a step moving away, enqueues.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.RollbackPolicy{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
-		Watches(&v1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(r.policiesForStep)).
-		Complete(r)
+		Watches(&v1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(r.policiesForStep))
+	return shard.Active().Complete(b, tracing.WrapReconciler("rollbackpolicy", r), &v1alpha1.RollbackPolicyList{})
 }
 
 // policiesForStep maps a PromotionStep to the RollbackPolicies that monitor its

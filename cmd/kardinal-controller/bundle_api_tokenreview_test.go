@@ -41,7 +41,7 @@ func (r rbacRules) Allowed(_ context.Context, u authv1.UserInfo, a authzv1.Resou
 // TestBundleAPI_TokenReview: with --bundle-api-tokenreview-auth a Kubernetes
 // token is authenticated with TokenReview and the caller needs get on the
 // Pipeline and create on bundles in the namespace; the Bundle records the
-// caller in kardinal.io/requested-by. The static token still works and acts
+// caller in kardinal.io/created-by and kardinal.io/requested-by. The static token still works and acts
 // as the controller.
 func TestBundleAPI_TokenReview(t *testing.T) {
 	ci := "system:serviceaccount:team-a:ci"
@@ -86,8 +86,12 @@ func TestBundleAPI_TokenReview(t *testing.T) {
 			require.Len(t, bundles.Items, 1)
 			if tt.wantRequestr == "" {
 				assert.NotContains(t, bundles.Items[0].Annotations, "kardinal.io/requested-by")
+				assert.Equal(t, "bundle-api", bundles.Items[0].Annotations["kardinal.io/created-by"],
+					"the static token's holder is not a person")
 			} else {
 				assert.Equal(t, tt.wantRequestr, bundles.Items[0].Annotations["kardinal.io/requested-by"])
+				assert.Equal(t, tt.wantRequestr, bundles.Items[0].Annotations["kardinal.io/created-by"],
+					"the reviewed caller is the verified creator")
 			}
 		})
 	}

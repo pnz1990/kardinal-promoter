@@ -30,6 +30,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	sigroot "github.com/sigstore/sigstore-go/pkg/root"
+	sigtuf "github.com/sigstore/sigstore-go/pkg/tuf"
+	tuffetcher "github.com/theupdateframework/go-tuf/v2/metadata/fetcher"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,12 +48,15 @@ import (
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/accesslog"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	changewindowrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
+	hookrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
+	ivrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification"
 	metriccheckrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
 	nhookrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
@@ -61,13 +67,14 @@ import (
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
 	// Import built-in steps to register them via init().
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 
 	// Embed the IANA timezone database. The runtime image has no tzdata, and
 	// ChangeWindow spec.schedule.timezone ("America/Los_Angeles") needs it:
@@ -102,11 +109,54 @@ func main() {
 		scmProviderType        string
 		scmAPIURL              string
 		gateStatusHeartbeat    time.Duration
+		workers                = map[string]*int{}
+		graphCompactAbove      int
+		retire                 bundlereconciler.RetirePolicy
 	)
 
+	// Workers per controller: one object is never reconciled twice at once
+	// (the work queue serializes it), so these only let different objects
+	// run side by side. The defaults are measured with the scale suite
+	// (docs/installation.md, Controller concurrency).
+	for _, w := range []struct {
+		name string
+		def  int
+		what string
+	}{
+		{"promotionstep", defaultPromotionStepWorkers, "PromotionSteps (git clone, commit, push, PR, health check)"},
+		{"bundle", defaultBundleWorkers, "Bundles (Graph creation)"},
+		{"prstatus", defaultPRStatusWorkers, "PRStatuses (SCM polls)"},
+		{"policygate", defaultPolicyGateWorkers, "PolicyGates (CEL evaluation)"},
+		{"pipeline", defaultPipelineWorkers, "Pipelines (status, history)"},
+	} {
+		v := new(int)
+		workers[w.name] = v
+		flag.IntVar(v, w.name+"-workers", w.def, "How many "+w.what+" are reconciled at once.")
+	}
+
+	var gateOverrideMaxMinutes int
+	flag.IntVar(&gateOverrideMaxMinutes, "gate-override-max-minutes", int(policygaterecon.DefaultMaxOverride.Minutes()),
+		"Longest a gate override counts, from when the controller first saw it; an override ends at the earlier of "+
+			"its expiresAt and this cap. The UI API refuses a longer override, and the chart's scoped-writes "+
+			"admission policy one written with kubectl by a caller limited to policygates/override "+
+			"(Helm controller.gateOverrideMaxMinutes).")
+	var overrideIdentityPolicy string
+	flag.StringVar(&overrideIdentityPolicy, "override-identity-policy", "",
+		"Name of the chart's gate-overrides ValidatingAdmissionPolicy and binding. The controller records an "+
+			"override's createdBy as verified only while both exist; empty records every override unverified.")
 	flag.DurationVar(&gateStatusHeartbeat, "gate-status-heartbeat", policygaterecon.DefaultStatusHeartbeat,
 		"Longest a PolicyGate's status goes unwritten while its result does not change. Each status write makes kro "+
 			"re-check the gate's whole Graph. 0 writes the status on every evaluation.")
+	flag.IntVar(&graphCompactAbove, "graph-compact-above", graphpkg.DefaultCompactAbove,
+		"Environment count above which a Bundle's Graph uses the compact shape (one PromotionStep collection) "+
+			"when the Pipeline's kardinal.io/graph-shape annotation does not choose one. 0 makes every Graph compact.")
+	flag.DurationVar(&retire.Superseded, "graph-retire-superseded-after", bundlereconciler.DefaultRetirePolicy.Superseded,
+		"How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, "+
+			"is kept before it is retired (deleted; the Bundle keeps its PromotionSteps in status.retiredSteps). 0 keeps it.")
+	flag.DurationVar(&retire.Failed, "graph-retire-failed-after", bundlereconciler.DefaultRetirePolicy.Failed,
+		"How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle no longer recovers. 0 keeps it.")
+	flag.DurationVar(&retire.Verified, "graph-retire-verified-after", bundlereconciler.DefaultRetirePolicy.Verified,
+		"How long the Graph of a Verified Bundle that is still deployed in an environment is kept before it is retired. 0 keeps it.")
 	flag.BoolVar(&leaderElect, "leader-elect", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&zerologLevel, "log-level", "info",
@@ -134,6 +184,16 @@ func main() {
 			"refused, and a Pipeline that would need the token for one is Ready=False/RepositoryNotAllowed "+
 			"and its steps fail. Empty allows every repository.")
 
+	gatesCommitStatus := true
+	flag.BoolVar(&gatesCommitStatus, "gates-commit-status", true,
+		"Post the gate results of a waiting pr-review step as a commit status on its PR (Helm "+
+			"scm.gatesCommitStatus.enabled). false posts none, for a token without the commit-status permission.")
+	var gatesStatusContext string
+	flag.StringVar(&gatesStatusContext, "gates-status-context", scm.GatesStatusContext,
+		"Commit status context (GitLab name, Bitbucket key, Azure DevOps genre/name) the gate results are "+
+			"posted under (Helm scm.gatesCommitStatus.context). Reserved for kardinal: branch protection "+
+			"requires it, so nothing else may post under it.")
+
 	var bundleToken string
 	flag.StringVar(&bundleToken, "bundle-api-token", os.Getenv("KARDINAL_BUNDLE_TOKEN"),
 		"Bearer token for authenticating POST /api/v1/bundles requests.")
@@ -156,6 +216,17 @@ func main() {
 			"Default (empty): same-origin only — cross-origin requests are rejected with 403. "+
 			"Set to '*' to allow all origins (development only). "+
 			"Also readable from KARDINAL_CORS_ORIGINS environment variable.")
+
+	var accessLogAll, accessLogSourceIP bool
+	var accessLogTrustedProxies string
+	flag.BoolVar(&accessLogAll, "access-log-all-requests", os.Getenv("KARDINAL_ACCESS_LOG_ALL_REQUESTS") == "true",
+		"Log every UI API and Bundle API request, not only logins (TokenReviews), refusals (401/403/429) and "+
+			"writes. Chart value: controller.accessLog.allRequests.")
+	flag.BoolVar(&accessLogSourceIP, "access-log-source-ip", os.Getenv("KARDINAL_ACCESS_LOG_SOURCE_IP") == "true",
+		"Add the client address to each access log line. Chart value: controller.accessLog.sourceIP.")
+	flag.StringVar(&accessLogTrustedProxies, "access-log-trusted-proxies", os.Getenv("KARDINAL_ACCESS_LOG_TRUSTED_PROXIES"),
+		"Comma-separated CIDRs of proxies (an Ingress controller) whose X-Forwarded-For gives the client address "+
+			"in the access log. Chart value: controller.accessLog.trustedProxies.")
 
 	var uiAllowedHosts string
 	flag.StringVar(&uiAllowedHosts, "ui-allowed-hosts", os.Getenv("KARDINAL_UI_ALLOWED_HOSTS"),
@@ -212,9 +283,23 @@ func main() {
 			"every UI caller acts as the controller. Without it that combination stops the controller. "+
 			"Chart value: ui.auth.allowStaticTokenWithTokenReview.")
 
-	flag.IntVar(&maxGateOverrideMinutes, "gate-override-max-minutes", maxGateOverrideMinutes,
-		"Longest gate override the UI API accepts, in minutes. Chart value: gateOverrides.maxMinutes, which also "+
-			"bounds overrides written with kubectl by callers limited to policygates/override (admission policy).")
+	// --metriccheck-cloudwatch-ambient-credentials lets cloudwatch MetricChecks
+	// that name no credential Secret use the controller's own AWS identity
+	// (IRSA, EKS Pod Identity, environment). Off by default: any user who can
+	// create a MetricCheck could read CloudWatch with that identity.
+	var cloudWatchAmbient bool
+	flag.BoolVar(&cloudWatchAmbient, "metriccheck-cloudwatch-ambient-credentials", false,
+		"Let cloudwatch MetricChecks without credential Secret refs use the controller's own AWS identity "+
+			"(SDK default chain: environment, IRSA, EKS Pod Identity). Off by default.")
+
+	// --metriccheck-global-slots and --metriccheck-namespace-slots cap the
+	// outbound MetricCheck queries (metriccheckrecon.Limiter).
+	var metricGlobalSlots, metricNamespaceSlots int
+	flag.IntVar(&metricGlobalSlots, "metriccheck-global-slots", metriccheckrecon.DefaultGlobalSlots,
+		"Most MetricCheck queries running at once in the cluster (at least 1). The rest wait, first come, first served. "+
+			"The MetricCheck controller runs this many workers plus 4, at least 16.")
+	flag.IntVar(&metricNamespaceSlots, "metriccheck-namespace-slots", metriccheckrecon.DefaultNamespaceSlots,
+		"Most MetricCheck queries of one namespace running at once (at least 1).")
 
 	var tlsCertFile string
 	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
@@ -272,6 +357,15 @@ func main() {
 			"instead of a ClusterRole/ClusterRoleBinding. "+
 			"Also readable from KARDINAL_WATCH_NAMESPACE environment variable.")
 
+	// --namespace-shard splits the reconcilers across controller
+	// installations by the namespace label kardinal.io/shard (pkg/shard).
+	var namespaceShard string
+	flag.StringVar(&namespaceShard, "namespace-shard", os.Getenv("KARDINAL_NAMESPACE_SHARD"),
+		"Shard this controller reconciles: namespaces labelled kardinal.io/shard=<name>; \"default\" also "+
+			"takes namespaces without the label and the cluster-scoped kinds. Empty (the default): no sharding, "+
+			"every namespace. Every controller of a sharded cluster needs a shard name. "+
+			"Also readable from KARDINAL_NAMESPACE_SHARD.")
+
 	// Graph identity: kro applies each Graph as this ServiceAccount in the
 	// Pipeline's namespace. The controller creates it and binds it to the two
 	// ClusterRoles the chart ships (templates/graph-rbac.yaml). The translator,
@@ -295,6 +389,41 @@ func main() {
 			"except kube-system, kube-public and kube-node-lease. Health checks in other namespaces "+
 			"get no Graph ref.")
 
+	var scmInstanceSigners string
+	flag.StringVar(&scmInstanceSigners, "scm-instance-signers", "",
+		"Comma-separated names or emails the Forgejo/Gitea instance signs commits with (repository.signing "+
+			"SIGNING_NAME / SIGNING_EMAIL). Image verification treats a commit signed by one as a platform "+
+			"signature (forgejo-instance), refused unless commits.allowedSigners lists forgejo-instance. Without "+
+			"it, a verified signer that is not a user of the instance is the instance key.")
+
+	var hookServiceAccounts string
+	flag.StringVar(&hookServiceAccounts, "hook-service-accounts", hookrunrecon.DefaultServiceAccount,
+		"Comma-separated ServiceAccount names a Pipeline hook's Job Pod may run as (in the Pipeline "+
+			"namespace). A hook whose Pod names another ServiceAccount fails without running. The Graph "+
+			"ServiceAccount (--graph-service-account) is never allowed. See docs/hooks.md.")
+
+	var hookPodSecurityLevel string
+	flag.StringVar(&hookPodSecurityLevel, "hook-pod-security-level", hookrunrecon.DefaultPodSecurityLevel,
+		"Pod Security Standard a hook Job Pod must meet: baseline (default), restricted or privileged "+
+			"(no Pod checks). Below privileged, nodeName and hostPort are refused too. A hook that breaks it fails "+
+			"without running. See docs/hooks.md.")
+
+	var tracingCfg tracing.Config
+	flag.BoolVar(&tracingCfg.Enabled, "tracing-enabled", os.Getenv("KARDINAL_TRACING_ENABLED") == "true",
+		"Export OpenTelemetry traces over OTLP/HTTP: a span per reconcile, promotion step, git clone and push, "+
+			"SCM API request and NotificationHook delivery, and server spans for /webhook/scm and /api/v1/bundles. "+
+			"Off by default. Chart value: tracing.enabled. Also readable from KARDINAL_TRACING_ENABLED.")
+	flag.StringVar(&tracingCfg.Endpoint, "tracing-endpoint", os.Getenv("KARDINAL_TRACING_ENDPOINT"),
+		"OTLP/HTTP endpoint: a URL (http://otel-collector.observability:4318; /v1/traces is added) or host:port. "+
+			"Empty uses OTEL_EXPORTER_OTLP_TRACES_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT, else localhost:4318. "+
+			"Chart value: tracing.endpoint.")
+	flag.BoolVar(&tracingCfg.Insecure, "tracing-insecure", os.Getenv("KARDINAL_TRACING_INSECURE") == "true",
+		"Send traces over plain HTTP to a host:port --tracing-endpoint. Chart value: tracing.insecure.")
+	flag.Float64Var(&tracingCfg.SamplingRatio, "tracing-sampling-ratio", 0.1,
+		"Fraction of traces recorded, 0 to 1, decided once per trace at its root (a reconcile, or an inbound "+
+			"request: an inbound traceparent is linked, not trusted, so it does not force sampling). "+
+			"Chart value: tracing.samplingRatio.")
+
 	var egressAllowlist string
 	flag.StringVar(&egressAllowlist, "egress-allowlist", os.Getenv("KARDINAL_EGRESS_ALLOWLIST"),
 		"Comma-separated destinations NotificationHook, MetricCheck and Subscription requests may reach: "+
@@ -308,6 +437,9 @@ func main() {
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+	// One cap for the reconciler, the UI API and the chart's scoped-writes
+	// policy (test/helm TestGateOverrideCapIsOneValue).
+	maxGateOverrideMinutes = gateOverrideMaxMinutes
 	graphIdentity.ReaderNamespaces = splitCSV(graphReaderNamespaces)
 	graphIdentity.OnlyNamespace = watchNamespace
 
@@ -318,6 +450,10 @@ func main() {
 	}
 	zerolog.SetGlobalLevel(level)
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	if metricGlobalSlots < 1 || metricNamespaceSlots < 1 {
+		logger.Fatal().Int("globalSlots", metricGlobalSlots).Int("namespaceSlots", metricNamespaceSlots).
+			Msg("--metriccheck-global-slots and --metriccheck-namespace-slots must be at least 1")
+	}
 	// Reconcilers log through zerolog.Ctx(ctx). controller-runtime does not put a
 	// zerolog logger in the reconcile context, so without this default every
 	// reconciler line, errors included, goes to a disabled logger.
@@ -328,6 +464,25 @@ func main() {
 	}
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
+
+	// The Go runtime's soft memory limit at 90% of the container limit, so
+	// the GC works harder before the kernel OOMKills the controller (#1553).
+	if limit, why, err := applyGoMemoryLimit(os.Getenv("GOMEMLIMIT"), os.Getenv("KARDINAL_MEMORY_LIMIT")); err != nil {
+		logger.Warn().Err(err).Msg("Go memory limit not set")
+	} else if limit > 0 {
+		logger.Info().Int64("bytes", limit).Str("from", why).Msg("Go soft memory limit set")
+	}
+
+	tracingCfg.ServiceVersion = ControllerVersion
+	tracingCfg.OnError = func(err error) { logger.Warn().Err(err).Msg("OpenTelemetry: span export failed") }
+	shutdownTracing, err := tracing.Setup(context.Background(), tracingCfg)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid tracing configuration")
+	}
+	if tracingCfg.Enabled {
+		logger.Info().Str("endpoint", tracingCfg.Endpoint).Float64("samplingRatio", tracingCfg.SamplingRatio).
+			Msg("OpenTelemetry tracing enabled")
+	}
 
 	allowlist, err := egress.ParseAllowlist(splitCSV(egressAllowlist))
 	if err != nil {
@@ -352,6 +507,13 @@ func main() {
 			Msg("the controller's SCM token is limited to the allowed repositories")
 	}
 
+	trustedProxies, err := accesslog.ParseCIDRs(splitCSV(accessLogTrustedProxies))
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --access-log-trusted-proxies")
+	}
+	accessLog := accesslog.New(accesslog.Config{AllRequests: accessLogAll, SourceIP: accessLogSourceIP,
+		TrustedProxies: trustedProxies}, logger.With().Str("component", "access").Logger())
+
 	uiHosts, err := parseUIAllowedHosts(uiAllowedHosts)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("invalid --ui-allowed-hosts")
@@ -361,15 +523,41 @@ func main() {
 		logger.Info().Str("watchNamespace", watchNamespace).
 			Msg("namespace-scoped mode: controller cache limited to single namespace")
 	}
+	if namespaceShard != "" {
+		if err := shard.ValidateName(namespaceShard); err != nil {
+			logger.Fatal().Err(err).Msg("invalid --namespace-shard")
+		}
+		if watchNamespace != "" {
+			logger.Fatal().Msg("--namespace-shard and --watch-namespace cannot be combined: " +
+				"a namespace-scoped controller already owns exactly one namespace")
+		}
+		logger.Info().Str("shard", namespaceShard).Msg("sharded: reconciling the namespaces of this shard only")
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), buildManagerOptions(managerConfig{
 		metricsBindAddress:     metricsBindAddress,
 		healthProbeBindAddress: healthProbeBindAddress,
 		leaderElect:            leaderElect,
 		watchNamespace:         watchNamespace,
+		namespaceShard:         namespaceShard,
 	}))
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create manager")
+	}
+	// The shard gate must be in place before the reconcilers are set up:
+	// each wraps itself in shard.Active().
+	shardHome := os.Getenv("POD_NAMESPACE")
+	if shardHome == "" {
+		shardHome = "kardinal-system"
+	}
+	gateClient, gateReader, err := shardClients(mgr, namespaceShard)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create the shard gate's clients")
+	}
+	gate := shard.New(shard.Options{Name: namespaceShard, Home: shardHome, Client: gateClient,
+		Reader: gateReader, Recorder: mgr.GetEventRecorder("kardinal-shard"), Log: logger})
+	if err := shard.Setup(mgr, gate); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up the shard gate")
 	}
 	graphIdentity.Writer = mgr.GetClient()
 	graphIdentity.Reader = mgr.GetAPIReader()
@@ -434,15 +622,23 @@ func main() {
 	// patch on events.k8s.io events for this recorder.
 	eventRecorder := mgr.GetEventRecorder("kardinal-controller")
 
+	if err := retire.Validate(); err != nil {
+		logger.Fatal().Err(err).Msg("invalid --graph-retire-*-after")
+	}
+	if retire == (bundlereconciler.RetirePolicy{}) {
+		logger.Info().Msg("every --graph-retire-*-after is 0: finished Bundles keep their Graphs unless their Pipeline sets kardinal.io/graph-retire-after")
+	}
 	if err := (&bundlereconciler.Reconciler{
-		Client: mgr.GetClient(),
+		Workers: *workers["bundle"],
+		Client:  mgr.GetClient(),
 		// Uncached: the maxConcurrentPromotions count must see the Promoting
 		// patch of the previous reconcile (#1310).
 		APIReader:        mgr.GetAPIReader(),
-		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
+		Translator:       newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), graphCompactAbove, logger),
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),
+		Retire:           retire,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
@@ -462,7 +658,8 @@ func main() {
 	// The sweep lists RoleBindings cluster-wide, which namespace mode does not
 	// grant; there the controller binds the reader role only in the watched
 	// namespace, and the reconciler's prune covers it.
-	if watchNamespace == "" {
+	// The sweep lists cluster-wide; in a sharded cluster the default shard runs it.
+	if watchNamespace == "" && gate.OwnsClusterScoped() {
 		if err := mgr.Add(&graphcleanup.Sweep{
 			APIReader: mgr.GetAPIReader(),
 			Graphs:    graphLister,
@@ -472,7 +669,8 @@ func main() {
 		}
 	}
 
-	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos}).
+	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
+		CompactAbove: &graphCompactAbove, Workers: *workers["pipeline"]}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}
@@ -486,33 +684,86 @@ func main() {
 	// namespace, the same namespaces the translator takes org gates from.
 	pgReconciler.PolicyNamespaces = splitCSV(policyNamespaces)
 	pgReconciler.StatusHeartbeat = gateStatusHeartbeat
-	pgReconciler.MaxOverride = time.Duration(maxGateOverrideMinutes) * time.Minute
+	pgReconciler.Workers = *workers["policygate"]
+	pgReconciler.MaxOverride = time.Duration(gateOverrideMaxMinutes) * time.Minute
+	pgReconciler.IdentityPolicy = &policygaterecon.IdentityPolicyCheck{Reader: mgr.GetAPIReader(), Name: overrideIdentityPolicy}
+	if overrideIdentityPolicy == "" {
+		logger.Warn().Msg("--override-identity-policy is not set: gate overrides are recorded with an unverified createdBy")
+	}
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
 
 	if err := (&psreconciler.Reconciler{
+		Workers:             *workers["promotionstep"],
 		Client:              mgr.GetClient(),
 		APIReader:           mgr.GetAPIReader(),
 		SCM:                 scmProvider,
 		AllowedRepositories: allowedRepos,
 		GitClient:           gitClient,
+		GatesStatusDisabled: !gatesCommitStatus,
+		GatesStatusContext:  gatesStatusContext,
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
+		RemoteClusters:      &healthpkg.RemoteClusters{},
 		Recorder:            eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}
 
+	if _, err := hookrunrecon.ParsePodSecurityLevel(hookPodSecurityLevel); err != nil {
+		logger.Fatal().Err(err).Msg("invalid --hook-pod-security-level")
+	}
+	hookControllerNS := os.Getenv("POD_NAMESPACE")
+	if hookControllerNS == "" {
+		hookControllerNS = "kardinal-system"
+	}
+	if err := (&hookrunrecon.Reconciler{
+		Client:                 mgr.GetClient(),
+		APIReader:              mgr.GetAPIReader(),
+		AllowedServiceAccounts: splitCSV(hookServiceAccounts),
+		GraphServiceAccount:    graphIdentity.ServiceAccountName,
+		ControllerNamespace:    hookControllerNS,
+		PodSecurityLevel:       hookPodSecurityLevel,
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up HookRunReconciler")
+	}
+
+	ivSCMHost, ivHostErr := scm.WebHost(scmProviderType, scmAPIURL)
+	if ivHostErr != nil {
+		logger.Warn().Err(ivHostErr).Msg("no SCM host: image policies with commits.requireSigned will fail")
+	}
+	if err := (&ivrecon.Reconciler{
+		Client:          mgr.GetClient(),
+		Registry:        &ivrecon.OCIRegistry{},
+		SCM:             scmProvider,
+		SCMHost:         ivSCMHost,
+		InstanceSigners: splitCSV(scmInstanceSigners),
+		PublicGoodRoot: ivrecon.PublicGoodRoot(func() (sigroot.TrustedMaterial, error) {
+			// In memory: the controller's root file system is read-only.
+			// Every TUF request is time-bounded and egress-guarded.
+			opts := sigtuf.DefaultOptions().WithDisableLocalCache()
+			opts.Fetcher = tuffetcher.NewDefaultFetcher().NewFetcherWithHTTPClient(&http.Client{
+				Timeout:   ivrecon.PublicGoodFetchTimeout,
+				Transport: egress.NewTransport(http.ProxyFromEnvironment),
+			})
+			return sigroot.FetchTrustedRootWithOptions(opts)
+		}),
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up ImageVerificationReconciler")
+	}
+
 	if err := (&metriccheckrecon.Reconciler{
 		Client:   mgr.GetClient(),
-		Provider: metriccheckrecon.NewPrometheusProvider(),
+		Backends: metriccheckrecon.DefaultBackends(cloudWatchAmbient),
+		Limiter:  metriccheckrecon.NewLimiter(metricGlobalSlots, metricNamespaceSlots),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up MetricCheckReconciler")
 	}
 
 	if err := (&prstatusrecon.Reconciler{
-		Client: mgr.GetClient(),
-		SCM:    scmProvider,
+		Workers: *workers["prstatus"],
+		Client:  mgr.GetClient(),
+		SCM:     scmProvider,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PRStatusReconciler")
 	}
@@ -556,26 +807,12 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up NotificationHookReconciler")
 	}
 
-	// SubscriptionReconciler: polls OCI registries and Git repositories on an interval
-	// and creates Bundle CRDs when new artifacts are detected.
+	// SubscriptionReconciler: polls OCI registries, Git repositories and Helm
+	// chart repositories on an interval (or at once on a kardinal.io/refresh
+	// request from the webhook receiver) and creates Bundle CRDs when new
+	// artifacts are detected. WatcherFn nil is subscriptionrecon.NewWatcher.
 	if err := (&subscriptionrecon.Reconciler{
 		Client: mgr.GetClient(),
-		WatcherFn: func(sub *kardinalv1alpha1.Subscription) (source.Watcher, error) {
-			switch sub.Spec.Type {
-			case kardinalv1alpha1.SubscriptionTypeImage:
-				if sub.Spec.Image == nil {
-					return nil, fmt.Errorf("image subscription missing spec.image")
-				}
-				return source.NewOCIWatcher(sub.Spec.Image.Registry, sub.Spec.Image.TagFilter), nil
-			case kardinalv1alpha1.SubscriptionTypeGit:
-				if sub.Spec.Git == nil {
-					return nil, fmt.Errorf("git subscription missing spec.git")
-				}
-				return source.NewGitWatcher(sub.Spec.Git.RepoURL, sub.Spec.Git.Branch, sub.Spec.Git.PathGlob), nil
-			default:
-				return nil, fmt.Errorf("unknown subscription type %q", sub.Spec.Type)
-			}
-		},
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up SubscriptionReconciler")
 	}
@@ -610,8 +847,11 @@ func main() {
 	review := reviewOptions{audiences: splitCSV(tokenReviewAudiences), acceptAPIServer: tokenReviewAcceptAPIServer,
 		apiServerAudiences: uiauth.APIServerAudiences(uiauth.ServiceAccountTokenPath), shared: &sharedReviewers{}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
+	mux.Handle("/webhook/scm", tracing.Handler("webhook.scm", webhookSrv.Handler()))
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
+	// Registry and SCM webhooks that make a Subscription poll at once. Each
+	// Subscription opts in with spec.webhook and its own token.
+	mux.HandleFunc(subscriptionWebhookPrefix, newSubscriptionWebhook(mgr.GetClient(), logger).Handler())
 	mux.HandleFunc(openAPIPath, handleOpenAPI)
 	// Bundle API endpoint — only mounted if a token or TokenReview is configured.
 	if bundleAPIToken != "" || bundleTokenReviewAuth {
@@ -632,7 +872,7 @@ func main() {
 			bundleAPI.enableTokenReview(tokens, access)
 			logger.Info().Msg("bundle API accepts Kubernetes tokens (TokenReview + SubjectAccessReview)")
 		}
-		mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
+		mux.Handle("/api/v1/bundles", accessLog.Middleware("bundle-api", tracing.Handler("bundleapi.create", bundleAPI.Handler())))
 		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
 	}
 	// The webhook and UI servers are manager Runnables: they start after the
@@ -641,6 +881,10 @@ func main() {
 	webhookServer, err := newHTTPServer("webhook", webhookBindAddress, mux, tlsCertFile, tlsKeyFile, logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to configure webhook server")
+	}
+	// Reports access log lines dropped over their per-second budget.
+	if err := mgr.Add(accessLog); err != nil {
+		logger.Fatal().Err(err).Msg("unable to add the access log reporter")
 	}
 	if err := mgr.Add(webhookServer); err != nil {
 		logger.Fatal().Err(err).Msg("unable to add webhook server")
@@ -675,7 +919,7 @@ func main() {
 		distFS = nil
 	}
 	uiServer, err := newHTTPServer("ui", uiListenAddress,
-		newUIHandler(mgr.GetClient(), distFS, uiAuth, corsAllowedOrigins, uiHosts, logger),
+		accessLog.Middleware("ui", newUIHandler(mgr.GetClient(), distFS, uiAuth, corsAllowedOrigins, uiHosts, logger)),
 		tlsCertFile, tlsKeyFile, logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to configure UI server")
@@ -708,9 +952,13 @@ func main() {
 		logger.Warn().Err(err).Msg("failed to register version ConfigMap runnable")
 	}
 
-	// Nothing may run after Start returns: a leader has released its Lease by
-	// then (LeaderElectionReleaseOnCancel), and a standby may already lead.
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	// Nothing may reconcile after Start returns: a leader has released its
+	// Lease by then (LeaderElectionReleaseOnCancel), and a standby may
+	// already lead. Flushing buffered spans is not reconciling: it runs
+	// after every reconciler and HTTP server has drained, so their last
+	// spans are exported too.
+	signals := ctrl.SetupSignalHandler()
+	if err := runThenFlush(func() error { return mgr.Start(signals) }, shutdownTracing, logger); err != nil {
 		logger.Fatal().Err(err).Msg("problem running manager")
 	}
 }
@@ -790,7 +1038,7 @@ func newHealthDetector(cfg *rest.Config, k8s sigs_client.Client, log zerolog.Log
 // newTranslator constructs the Translator wired with a GraphClient, Builder,
 // and the Graph identity provisioner.
 func newTranslator(mgr ctrl.Manager, identity *graphpkg.IdentityProvisioner,
-	policyNS []string, log zerolog.Logger) *translator.Translator {
+	policyNS []string, compactAbove int, log zerolog.Logger) *translator.Translator {
 	dynClient, err := dynamic.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		log.Fatal().Err(err).Msg("unable to create dynamic client for graph")
@@ -798,6 +1046,7 @@ func newTranslator(mgr ctrl.Manager, identity *graphpkg.IdentityProvisioner,
 	graphClient := graphpkg.NewGraphClient(dynClient, log)
 	builder := graphpkg.NewBuilder()
 	builder.ServiceAccountName = identity.ServiceAccountName
+	builder.CompactAbove = compactAbove
 	return translator.New(graphClient, builder, mgr.GetClient(), policyNS, log).
 		WithIdentity(identity).
 		WithRESTMapper(mgr.GetRESTMapper())

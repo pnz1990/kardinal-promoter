@@ -92,6 +92,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "accessLog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allRequests": {"type": "boolean"},
+            "sourceIP": {"type": "boolean"},
+            "trustedProxies": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": "^[0-9a-fA-F.:/]+$"}}
+          }
+        },
         "tlsCertFile": {
           "type": "string"
         },
@@ -100,6 +109,10 @@
         },
         "watchNamespace": {
           "type": "string"
+        },
+        "namespaceShard": {
+          "type": "string",
+          "pattern": "^$|^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
         },
         "policyNamespaces": {
           "type": "array",
@@ -110,6 +123,43 @@
         "gateStatusHeartbeat": {
           "type": "string",
           "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        },
+        "workers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "promotionStep": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "prStatus": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "policyGate": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "bundle": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "pipeline": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            }
+          }
+        },
+        "gateOverrideMaxMinutes": {
+          "type": ["string", "integer"],
+          "pattern": "^$|^[1-9][0-9]*$",
+          "minimum": 1,
+          "description": "--gate-override-max-minutes: the override cap in minutes; empty keeps 1440."
         },
         "extraArgs": {
           "type": "array",
@@ -214,6 +264,31 @@
             "minLength": 1
           },
           "description": "--scm-allowed-repositories: host/repository globs the controller's SCM token may act on."
+        },
+        "instanceSigners": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "--scm-instance-signers: names or emails the Forgejo/Gitea instance signs commits with."
+        },
+        "gatesCommitStatus": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "--gates-commit-status: post the gate results as a commit status on pr-review PRs."
+            },
+            "context": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "pattern": "^[^\\s,]+$",
+              "description": "--gates-status-context: the reserved commit status name branch protection requires."
+            }
+          }
         }
       }
     },
@@ -303,13 +378,6 @@
         }
       }
     },
-    "gateOverrides": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "maxMinutes": {"type": "integer", "minimum": 1, "maximum": 10080}
-      }
-    },
     "tokenReview": {
       "type": "object",
       "additionalProperties": false,
@@ -354,7 +422,8 @@
       "additionalProperties": false,
       "properties": {
         "serviceAccountName": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         },
         "kroNamespace": {
           "type": "string"
@@ -362,11 +431,54 @@
         "aggregateToKro": {
           "type": "boolean"
         },
+        "compactAbove": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
         "readerNamespaces": {
           "type": "array",
           "items": {
             "type": "string"
           }
+        },
+        "retire": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "superseded": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            },
+            "failed": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            },
+            "verified": {
+              "type": "string",
+              "pattern": "^$|^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+            }
+          }
+        }
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Pipeline pre- and post-deploy hooks (docs/hooks.md).",
+      "properties": {
+        "serviceAccounts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+          },
+          "minItems": 1,
+          "description": "ServiceAccount names a hook's Job Pod may run as (--hook-service-accounts)."
+        },
+        "podSecurityLevel": {
+          "type": "string",
+          "enum": ["baseline", "restricted", "privileged"],
+          "description": "Pod Security Standard a hook's Pod must meet (--hook-pod-security-level)."
         }
       }
     },
@@ -379,6 +491,27 @@
         }
       },
       "description": "Deprecated, no effect."
+    },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "controllerUsernames": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "pattern": "^[^*]+$"},
+          "description": "Exact usernames, besides this release's controller ServiceAccount, that run a kardinal controller."
+        }
+      }
+    },
+    "tracing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "endpoint": {"type": "string", "pattern": "^$|^https?://[^\\s/]+(/\\S*)?$|^[^\\s/:]+:[0-9]{1,5}$"},
+        "insecure": {"type": "boolean"},
+        "samplingRatio": {"type": "number", "minimum": 0, "maximum": 1}
+      }
     },
     "egress": {
       "type": "object",
@@ -421,6 +554,37 @@
         },
         "extraEgress": {
           "type": "array"
+        }
+      }
+    },
+    "metricCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cloudWatch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ambientCredentials": {
+              "type": "boolean"
+            }
+          }
+        },
+        "querySlots": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "global": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "perNamespace": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
         }
       }
     },

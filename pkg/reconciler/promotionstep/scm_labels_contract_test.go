@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -101,6 +102,9 @@ func labelsRefused(t *testing.T, gitURL string, p scm.SCMProvider, calls func() 
 	all := calls()
 	require.Greater(t, len(all), 2, "the PR create, the label request and the status reads: %+v", all)
 	for _, c := range all[2:] {
+		if strings.Contains(c.Route, "/statuses/") {
+			continue // the kardinal/gates commit status (#1452)
+		}
 		assert.Equal(t, status, c.Route, "after the label request the step only reads the PR status")
 	}
 	return all[:2]
@@ -132,7 +136,7 @@ func TestLabelsRefused_GitHub(t *testing.T) {
 		"https://github.com/acme/web-app/pull/7", "7",
 		"add labels to PR acme/web-app#7: GitHub API POST /repos/acme/web-app/issues/7/labels: status 403: "+refused)
 	assert.Equal(t, "POST /repos/acme/web-app/pulls", got[0].Route)
-	assert.Equal(t, "kardinal/b1/prod", got[0].Body["head"])
+	assert.Equal(t, "kardinal/37a8eec1/b1/prod", got[0].Body["head"])
 	assert.Equal(t, labels, got[1].Route)
 	assert.Equal(t, map[string]interface{}{"labels": []interface{}{"kardinal", "kardinal/promotion"}}, got[1].Body)
 }
@@ -162,7 +166,7 @@ func TestLabelsRefused_GitLab(t *testing.T) {
 		"https://gitlab.example.com/acme/web-app/-/merge_requests/7", "7",
 		"add labels to MR acme/web-app!7: GitLab API PUT /api/v4/projects/acme%2Fweb-app/merge_requests/7: status 403: "+refused)
 	assert.Equal(t, "POST /api/v4/projects/acme%2Fweb-app/merge_requests", got[0].Route)
-	assert.Equal(t, "kardinal/b1/prod", got[0].Body["source_branch"])
+	assert.Equal(t, "kardinal/37a8eec1/b1/prod", got[0].Body["source_branch"])
 	assert.Equal(t, mr, got[1].Route)
 	assert.Equal(t, map[string]interface{}{"add_labels": "kardinal,kardinal/promotion"}, got[1].Body)
 }

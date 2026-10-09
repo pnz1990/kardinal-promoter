@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // GitLabProvider implements SCMProvider against the GitLab REST API v4.
@@ -59,7 +61,7 @@ func NewGitLabProvider(token, apiURL, webhookSecret string) *GitLabProvider {
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuits:      NewCircuitRegistry(),
-		client:        &http.Client{Timeout: providerHTTPTimeout},
+		client:        &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 	}
 }
 
@@ -270,7 +272,9 @@ func (g *GitLabProvider) AddLabelsToPR(ctx context.Context, repo string, prNumbe
 // do executes an authenticated GitLab API request.
 func (g *GitLabProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
 	owner := ownerFromPath(path, "/api/v4/projects/")
+	call := startSCMCall("gitlab", owner, method, path)
 	if err := g.circuits.Allow(owner); err != nil {
+		call.circuitOpen(g.circuits, owner)
 		return fmt.Errorf("gitlab scm: %w", err)
 	}
 
@@ -293,6 +297,8 @@ func (g *GitLabProvider) do(ctx context.Context, method, path string, body, resu
 	}
 
 	resp, err := g.client.Do(req)
+	// Arguments are taken now; the circuit states are read at return, after Record.
+	defer call.done(resp, err, g.circuits, owner)
 	if err != nil {
 		g.circuits.Record(owner, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
@@ -301,8 +307,9 @@ func (g *GitLabProvider) do(ctx context.Context, method, path string, body, resu
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		g.circuits.Record(owner, resp, nil)
-		return newAPIError("GitLab", method, path, resp, raw)
+		apiErr := newAPIError("GitLab", method, path, resp, raw)
+		g.circuits.RecordAPIError(owner, resp, apiErr)
+		return apiErr
 	}
 
 	g.circuits.Record(owner, resp, nil)

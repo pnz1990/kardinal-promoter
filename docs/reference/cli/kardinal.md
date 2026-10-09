@@ -19,6 +19,7 @@ It communicates with the Kubernetes API server to read and write CRDs.
 
 ### SEE ALSO
 
+* [kardinal approve](kardinal-approve.md)	 - Approve (or reject) a Bundle for an environment's approval gates
 * [kardinal audit](kardinal-audit.md)	 - Audit log commands — view and summarize promotion events
 * [kardinal completion](kardinal-completion.md)	 - Generate shell completion scripts
 * [kardinal create](kardinal-create.md)	 - Create kardinal resources
@@ -37,6 +38,8 @@ It communicates with the Kubernetes API server to read and write CRDs.
 * [kardinal policy](kardinal-policy.md)	 - Manage and evaluate promotion policy gates
 * [kardinal promote](kardinal-promote.md)	 - Promote the Bundle verified upstream into an environment
 * [kardinal refresh](kardinal-refresh.md)	 - Force re-reconciliation of a Pipeline
+* [kardinal reject](kardinal-reject.md)	 - Reject a Bundle: it is never promoted again, and rollback never picks it
+* [kardinal release-hold](kardinal-release-hold.md)	 - Release the hold of a rollback on an environment
 * [kardinal resume](kardinal-resume.md)	 - Resume a paused pipeline
 * [kardinal rollback](kardinal-rollback.md)	 - Roll back a pipeline environment to a previous Bundle
 * [kardinal status](kardinal-status.md)	 - Show controller health or per-pipeline in-flight promotion details

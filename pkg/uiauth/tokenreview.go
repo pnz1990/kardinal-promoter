@@ -36,6 +36,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/accesslog"
 )
 
 // TokenReviewer is an interface for validating bearer tokens via Kubernetes TokenReview.
@@ -186,6 +188,8 @@ func MiddlewareFor(next http.Handler, reviewer TokenReviewer, prefix, realm stri
 			return
 		}
 
+		entry := accesslog.FromContext(r.Context())
+		entry.User, entry.Groups, entry.Auth = status.User.Username, status.User.Groups, "tokenreview"
 		ctx := WithUser(r.Context(), status.User)
 		ctx, state := withRequestAuth(ctx)
 		gw := &guardedWriter{ResponseWriter: w, state: state}

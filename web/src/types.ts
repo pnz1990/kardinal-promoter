@@ -6,11 +6,11 @@
 
 /** PromotionStep status.state values (api/v1alpha1), plus the graph API's synthetic NotStarted. */
 export type PromotionStepState =
-  | 'Pending' | 'Promoting' | 'WaitingForMerge' | 'HealthChecking'
+  | 'Pending' | 'Promoting' | 'WaitingForMerge' | 'HealthChecking' | 'Verifying'
   | 'Verified' | 'Failed' | 'AbortedByAlarm' | 'RollingBack' | 'NotStarted'
 
 /** Bundle status.phase values. */
-export type BundlePhase = 'Available' | 'Promoting' | 'Verified' | 'Failed' | 'Superseded'
+export type BundlePhase = 'Available' | 'Promoting' | 'Verified' | 'Failed' | 'Superseded' | 'Rejected'
 
 /** status.steps[].state values. */
 export type StepExecutionState = 'Pending' | 'InProgress' | 'Completed' | 'Failed'
@@ -40,6 +40,48 @@ export interface Pipeline {
   lastMergedAt?: string
   /** #525: static pipeline topology from spec — shown even when no Bundle is promoting. */
   environmentTopology?: EnvironmentNode[]
+  /** What the active Bundle ships: its image tag, or "config <sha>" (fleet board). */
+  activeBundleVersion?: string
+  /** Per environment, the Bundle it runs (fleet board). Absent: never deployed. */
+  deployed?: Record<string, DeployedRelease>
+  /** Pipeline.status.deploymentMetrics, computed by the controller (DORA). */
+  deploymentMetrics?: DeploymentMetrics
+}
+
+/** What one environment runs: the newest PromotionStep there that landed its change. */
+export interface DeployedRelease {
+  bundle: string
+  /** Image tag(s) or "config <sha>"; empty when the Bundle is gone. */
+  version?: string
+  /** RFC 3339; absent while the change is still being health checked. */
+  verifiedAt?: string
+  /** Under an image Bundle: the last Bundle that deployed a config commit here,
+   *  and that commit ("config abc1234"). Image and config Bundles do not
+   *  supersede each other, so the environment runs both (#1353). */
+  configFrom?: string
+  configVersion?: string
+  /** Under a config Bundle: the last Bundle that deployed images here, and their tags. */
+  imagesFrom?: string
+  imagesVersion?: string
+}
+
+/** Pipeline.status.deploymentMetrics: DORA metrics for the last environment. */
+export interface DeploymentMetrics {
+  rolloutsLast30Days?: number
+  p50CommitToProdMinutes?: number
+  p90CommitToProdMinutes?: number
+  autoRollbackRateMillis?: number
+  operatorInterventionRateMillis?: number
+  staleProdDays?: number
+  sampleSize?: number
+  /** Deployments the stability pair is computed over (last 30). */
+  deployments?: number
+  failedDeployments?: number
+  /** failedDeployments / deployments, thousandths. */
+  changeFailureRateMillis?: number
+  meanTimeToRestoreMinutes?: number
+  restoredFailures?: number
+  computedAt?: string
 }
 
 /** #525: one environment in the static Pipeline spec topology. */
@@ -47,6 +89,23 @@ export interface EnvironmentNode {
   name: string
   dependsOn?: string[]
   approval?: string
+  /** The environments it waits for as the controller resolves them (dependsOn,
+   *  waves, or the previous entry). Absent for a root, or when the ordering is invalid. */
+  upstreams?: string[]
+  /** The environment's hold (spec.holds, kardinal rollback --hold), if held. */
+  hold?: EnvironmentHold
+}
+
+/** A Pipeline environment pinned to a rollback Bundle until it is released (#1528). */
+export interface EnvironmentHold {
+  /** The rollback Bundle the environment is held on. */
+  bundle: string
+  reason: string
+  createdBy?: string
+  /** RFC 3339. */
+  createdAt?: string
+  /** When the controller removes the hold, RFC 3339; absent: when released. */
+  expiresAt?: string
 }
 
 export interface Bundle {
@@ -63,6 +122,10 @@ export interface Bundle {
   environments?: BundleEnvStatus[]
   /** #563: Container images in this Bundle — used by NodeDetail diff preview. */
   images?: ImageRef[]
+  /** Environments where this Rejected bundle's change is live (its step is
+   *  HealthChecking or Verified there): it stays current, marked Rejected,
+   *  with a roll-back hint (RejectedLiveBanner). */
+  rejectedLiveEnvironments?: string[]
 }
 
 /** #563: A container image reference — repository, tag, and optional digest. */
@@ -168,10 +231,11 @@ export interface StepStatus {
 /**
  * PolicyGate state from the UI API, decided by graph.GateState:
  * Pass (ready), Block (holds the bundle back; only these count as blocked),
- * Superseded (its bundle was superseded; final), Pending (not evaluated yet),
+ * Superseded (its bundle was superseded; final), Rejected (its bundle was
+ * rejected with kardinal reject; final), Pending (not evaluated yet),
  * Waiting (not ready, not holding the bundle; E2E-R19).
  */
-export type GateState = 'Pass' | 'Block' | 'Superseded' | 'Pending' | 'Waiting'
+export type GateState = 'Pass' | 'Block' | 'Superseded' | 'Rejected' | 'Pending' | 'Waiting'
 
 export interface PolicyGate {
   name: string

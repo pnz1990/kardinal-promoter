@@ -34,7 +34,8 @@ serviceMonitor:
 ```
 
 The ServiceMonitor scrapes the chart Service's `metrics` port over plain HTTP, in the
-release namespace. Prometheus Operator sets the `job` label to the Service name, which
+release namespace. It collects every metric on this page, the SCM API and git metrics
+included; no extra endpoint or relabeling is needed. Prometheus Operator sets the `job` label to the Service name, which
 is the chart's full name (`kardinal-promoter` for a release named `kardinal-promoter`).
 The alerts from `prometheusRule.enabled` select `job="<full name>"`, so they match this
 ServiceMonitor with no extra settings. If you scrape with your own ServiceMonitor or a
@@ -81,10 +82,54 @@ The controller registers these on the same `/metrics` endpoint
 | `kardinal_bundles_total` | Counter | `phase` | Bundle phase transitions, labelled by the phase entered |
 | `kardinal_steps_total` | Counter | `type` (always `PromotionStep`), `result` (`succeeded`, `failed`) | PromotionSteps reaching a terminal state |
 | `kardinal_gate_evaluations_total` | Counter | `result` (`allowed`, `blocked`) | PolicyGate evaluations |
+| `kardinal_api_access_log_dropped_total` | Counter | `kind` (`denied`, `request`) | API access log lines not written over their per-second budget ([API access log](security.md#api-access-log)) |
 | `kardinal_pr_duration_seconds` | Histogram | — | Time from the PR opening (the `open-pr` step completing) to the merge the controller sees, observed once, when the step's move to `HealthChecking` is written |
 | `kardinal_step_duration_seconds` | Histogram | `step` (step name, e.g. `git-clone`) | Duration of each promotion step, observed once, when the status that records it Completed or Failed is written. `wait-for-merge` lasts until the merge; `health-check` covers the health check and the bake |
 | `kardinal_gate_blocking_duration_seconds` | Histogram | — | How long a PolicyGate was blocked before it allowed |
 | `kardinal_promotionstep_age_seconds` | Histogram | — | PromotionStep age when it reaches a terminal state |
+
+### SCM API and git metrics
+
+Every call the controller makes to the SCM API (GitHub, GitLab, Forgejo/Gitea, Bitbucket,
+Azure DevOps) and every git clone and push is measured (`pkg/scm/metrics.go`):
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `kardinal_scm_requests_total` | Counter | `provider`, `owner`, `operation`, `result` | SCM API calls. `result` is `ok`, `client_error` (4xx), `server_error` (5xx), `rate_limited` (quota used up: 429, or 403 with `Retry-After` or no remaining quota), `network_error` (no response) or `circuit_open` (refused by the circuit breaker before any call) |
+| `kardinal_scm_request_duration_seconds` | Histogram | `provider`, `operation` | Latency of the calls that were made, including reading the response |
+| `kardinal_scm_rate_limit_remaining` | Gauge | `provider`, `owner` | What is left in the rate-limit window, from the last response's `X-RateLimit-Remaining` or `RateLimit-Remaining` header. Absent until a response carries one (see below) |
+| `kardinal_scm_rate_limit_limit` | Gauge | `provider`, `owner` | The window's size (`X-RateLimit-Limit` / `RateLimit-Limit`) |
+| `kardinal_scm_rate_limit_reset_timestamp_seconds` | Gauge | `provider`, `owner` | When the window resets, as a Unix time (`X-RateLimit-Reset` / `RateLimit-Reset`) |
+| `kardinal_scm_circuit_state` | Gauge | `provider`, `owner` | Circuit breaker state: `0` closed, `1` half-open (one probe allowed), `2` open (calls refused). `owner="_quota"` is the circuit that opens when the token's rate limit is used up |
+| `kardinal_git_operations_total` | Counter | `operation` (`clone`, `push`), `result` (`ok`, `error`, `non_fast_forward`) | Git clones and pushes. `non_fast_forward` is a push that lost to another writer of the branch (it is rebased and retried) |
+| `kardinal_git_operation_duration_seconds` | Histogram | `operation` | Duration of git clones and pushes |
+| `kardinal_git_transfer_bytes_total` | Counter | `git_service` (`fetch`, `push`), `direction` (`sent`, `received`) | Bytes git transferred over HTTP(S). `fetch` covers clones and fetches (git-upload-pack), `push` covers git-receive-pack. Git over ssh is not counted |
+
+**Cardinality is bounded.** The `owner` label is the repository owner (organization, user,
+top-level GitLab group, Bitbucket workspace or Azure DevOps organization). It is never the
+repository. An owner gets its own value only after a call for it succeeded (a 2xx response), and
+only the first 50 such owners do; calls for any other owner, including ones that only ever fail,
+are reported as `_other`. Calls without an owner, such as the startup token check, use `_none`.
+`operation` is the HTTP method and the API resource words of the path, for example
+`POST pulls`, `GET merge_requests` or `DELETE git refs heads`. Names, numbers and SHAs are
+dropped, and there are at most 100 values. Owner and operation values are cut to 64 bytes. The
+reserved values `_other`, `_none` and `_quota` start with `_`. A controller has at most
+5 providers × 52 owner values of each owner-labelled series.
+
+**What the rate-limit gauges mean depends on the provider and the credential:**
+
+- **GitHub** sends `X-RateLimit-*` on every response. With a personal access token the quota
+  belongs to the token, not to the owner: every owner's gauge shows the same window, and it is
+  per owner only in name. With a GitHub App, each installation (and so each organization) has its
+  own window, which is why the gauges carry `owner`.
+- **GitLab** sends `RateLimit-*` when rate limiting is enabled on the instance (it is on
+  gitlab.com). The limit applies to the token's user.
+- **Gitea and Forgejo** send no rate-limit headers by default (the API is not rate limited unless
+  a proxy in front of it is), so the gauges are absent.
+- **Azure DevOps** sends `X-RateLimit-*` only when a request is delayed or close to the limit, and
+  counts in throughput units (TSTUs) over a sliding window, not in requests. Read
+  `remaining` as usage units left, not calls left.
+- **Bitbucket** sends none of these headers.
 
 ---
 
@@ -158,6 +203,27 @@ histogram_quantile(0.99,
 )
 ```
 
+### SCM rate limit nearly used up
+
+```promql
+# Below 10% of the window left, for any owner
+min by (provider, owner) (kardinal_scm_rate_limit_remaining / (kardinal_scm_rate_limit_limit > 0)) < 0.1
+```
+
+### SCM calls refused by an open circuit
+
+```promql
+sum by (provider, owner) (rate(kardinal_scm_requests_total{result="circuit_open"}[5m])) > 0
+```
+
+### Git push contention
+
+```promql
+# Share of pushes that lost to another writer of the branch
+sum(rate(kardinal_git_operations_total{operation="push",result="non_fast_forward"}[15m]))
+  / sum(rate(kardinal_git_operations_total{operation="push"}[15m]))
+```
+
 ### Work queue depth (are we falling behind?)
 
 ```promql
@@ -201,7 +267,37 @@ When `--env` is the Pipeline's last environment and `--days` is 30 (the defaults
 the flags are given or not), the command prints the controller's own figures from
 `Pipeline.status.deploymentMetrics` instead, when they are present: `rollouts_last_30d`, `p50_commit_to_prod`,
 `p90_commit_to_prod`, `auto_rollback_rate`, `operator_intervention_rate` and
-`stale_prod_days`, over the last 30 Bundles Verified in the last environment.
+`stale_prod_days`, over the last 30 Bundles Verified in the last environment, and
+`change_failure_rate` and `time_to_restore` over the last 30 deployments to it (see
+[Change failure rate and time to restore](#change-failure-rate-and-time-to-restore)).
+
+### Change failure rate and time to restore
+
+The PipelineReconciler computes the two DORA stability metrics from PromotionStep and Bundle
+status into `Pipeline.status.deploymentMetrics`, over the Pipeline's final environments: every
+environment nothing depends on (one for a chain, several for a fan-out such as `prod-eu` and
+`prod-us`):
+
+| Field | Meaning |
+|-------|---------|
+| `deployments` | Deployments in the sample: the last 30 Bundles whose change reached a final environment (the step's `health-check` entry in `status.steps` started: after `git-push`, or after the merge for `pr-review`). A Bundle counts once, however many final environments and regions it reaches. Not deployments: a failure before that (a refused push, a closed PR), a promotion with nothing to change (`outputs.noChanges`), the steps a newer Bundle's supersession cancelled (a step that had already failed, is `AbortedByAlarm`, or is `RollingBack` when an automatic rollback supersedes its Bundle, still counts as a failed deployment), and rollback Bundles (they count only as restores) |
+| `failedDeployments` | Deployments that failed: a step in any final environment ended `Failed`, `AbortedByAlarm` or `RollingBack` after its health check started, a rollback Bundle for a final environment later rolled back from it (`kardinal rollback`, the UI, RollbackPolicy or `onHealthFailure: rollback`; annotation `kardinal.io/rollback-from`), or the Bundle was rejected after it was deployed |
+| `changeFailureRateMillis` | `failedDeployments / deployments` in thousandths (`250` = 25%) |
+| `meanTimeToRestoreMinutes` | Mean whole minutes from each failed deployment reaching a final environment (its health check started: when users got the change) to the first later Bundle Verified in every final environment it targets: all of them, or, for a rollback of one environment, that one. Every one of its steps there (all regions) must be Verified; the last gives the time. A region of the failed Bundle itself, or an older Bundle, never restores it |
+| `restoredFailures` | Failures counted in `meanTimeToRestoreMinutes`; one not restored yet is left out |
+
+`deploymentMetrics` is set once a Bundle has been Verified in the last environment, or a
+deployment there has failed. While every deployment has failed, it holds only the stability
+fields (a 100% change failure rate); the lead-time and staleness fields stay unset, and
+`kardinal metrics` prints `-` for them.
+
+### Step timings
+
+Every PromotionStep records each step of its sequence in `status.steps[]`: `name`, `state`,
+`startedAt`, `completedAt` and `durationMs`. `wait-for-merge` spans the time the PR waited,
+and `health-check` the real health check (bake included). The UI shows each step's duration
+in the node detail panel, `kardinal logs` prints them, and `kardinal_step_duration_seconds`
+exports them to Prometheus.
 
 ---
 
@@ -291,6 +387,7 @@ kardinal-promoter ships a pre-built Grafana dashboard covering:
 - **Throughput**: bundle phase rate and step terminal rate over time
 - **Step latency**: P50/P99 per step type (git-clone, kustomize, open-pr, health-check), PR review latency, PromotionStep age
 - **Policy gates**: gate evaluation rate and blocking duration histograms
+- **SCM API and git**: SCM requests by result, P99 latency by operation, rate limit left per owner, circuit breaker state, git clone and push P90 duration, git bytes transferred, and git operations by result
 - **Reconciler health**: reconcile rate, error rate, P99 latency, work queue depth per controller
 - **Go runtime**: goroutines, heap memory, CPU usage
 
@@ -333,6 +430,54 @@ dashboard's **Prometheus** selector, which starts at your default Prometheus
 datasource.
 
 ---
+
+## Tracing (OpenTelemetry)
+
+The controller can export OpenTelemetry traces over OTLP/HTTP to any collector or backend
+that accepts it (the OpenTelemetry Collector, Jaeger, Tempo, Honeycomb, Datadog Agent, ...).
+Tracing is off by default.
+
+```yaml
+tracing:
+  enabled: true
+  endpoint: http://otel-collector.observability:4318   # /v1/traces is added
+  samplingRatio: 0.1                                   # default
+```
+
+| Value | Flag | Meaning |
+|-------|------|---------|
+| `tracing.enabled` | `--tracing-enabled` | Export traces. Default `false` |
+| `tracing.endpoint` | `--tracing-endpoint` | An `http://` or `https://` URL, or `host:port`. Empty uses `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` (set them with `controller.extraEnv`), else `localhost:4318` |
+| `tracing.insecure` | `--tracing-insecure` | Plain HTTP to a `host:port` endpoint. A URL's scheme decides by itself |
+| `tracing.samplingRatio` | `--tracing-sampling-ratio` | Fraction of traces recorded, 0 to 1, decided at each trace's root (a reconcile or an inbound request); a span's children follow it. An inbound `traceparent` is linked, not trusted, so it does not force recording |
+
+Only OTLP over HTTP (protobuf, port 4318) is supported, not OTLP/gRPC. The standard
+`OTEL_EXPORTER_OTLP_*` variables for headers, certificates and timeouts apply, through
+`controller.extraEnv`. Spans have the resource `service.name=kardinal-controller` and
+`service.version` set to the controller version.
+
+| Span | Kind | Attributes |
+|------|------|------------|
+| `<controller>.Reconcile` (`bundle`, `promotionstep`, `policygate`, `notificationhook`, ...) | internal | `kardinal.controller`, `k8s.namespace.name`, `kardinal.object.name`, `kardinal.requeue_after_ms`; error status when the reconcile fails |
+| `step <name>` (`step git-clone`, `step open-pr`, ...) | internal | `kardinal.step`, `kardinal.step.index`, `kardinal.environment`, `kardinal.step.status` |
+| `git clone`, `git push` | internal | `server.address`, `kardinal.git.branch` (or `kardinal.git.commit`), `kardinal.git.force` |
+| `HTTP <method>` | client | `http.request.method`, `server.address`, `url.scheme`, `http.response.status_code`: SCM API requests, MetricCheck queries (every provider), Subscription polls (registry, Helm repository and git over HTTP) and NotificationHook deliveries |
+| `webhook.scm`, `bundleapi.create` | server | `http.request.method`, `http.response.status_code`: inbound SCM webhooks and Bundle API calls |
+
+**Trace context.** NotificationHook deliveries carry the W3C `traceparent` (and `tracestate`,
+`baggage`) of their client span, so a receiver that traces can join the trace. SCM API
+requests, MetricCheck queries and Subscription polls do not carry trace headers. `/webhook/scm` and `/api/v1/bundles` are reached before
+the caller is authenticated, so an inbound `traceparent` is not trusted: their server span
+starts a new trace, sampled by the controller's own sampler, with a link to the caller's span
+(a CI job that traces sees the link, not a child).
+
+**What spans never hold.** No URL path, query or user info in attributes, no headers, no
+request or response bodies: incoming-webhook URLs and git remotes can carry tokens. A span
+names only the host it talked to. When a span records an error, every URL in the error text
+is cut to its scheme and host (`https://github.com/…`).
+
+**Shutdown.** Buffered spans are exported every 5 seconds and once more when the controller
+stops, after every reconciler and HTTP server has drained (at most 5 seconds more).
 
 ## Changing the Metrics Port
 

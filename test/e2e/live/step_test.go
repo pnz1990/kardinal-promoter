@@ -83,7 +83,7 @@ func TestStep_AutoPushAndCommitFormat(t *testing.T) {
 	a.running(t, "test", imageV2, "test after its auto promotion")
 	pushed := a.commitsSince(t, a.repo.Branch, base)
 	require.Len(t, pushed, 1, "auto pushes one commit to %s", a.repo.Branch)
-	checkPromoteCommit(t, pushed[0], bundle, "test")
+	checkPromoteCommit(t, pushed[0], a.ns, bundle, "test")
 	a.fileHas(t, "test", fixtures.V2, "auto commits to the base branch")
 
 	pr := a.openPR(t, bundle, "prod")
@@ -95,11 +95,11 @@ func TestStep_AutoPushAndCommitFormat(t *testing.T) {
 	for _, p := range prs {
 		heads = append(heads, p.Head)
 	}
-	assert.Equal(t, []string{prHead(bundle, "prod")}, heads, "only the pr-review environment opens a PR")
-	onBranch, err := gitserver.Commits(ctx, e.Git, a.repo, prHead(bundle, "prod"), 1)
+	assert.Equal(t, []string{prHead(a.ns, bundle, "prod")}, heads, "only the pr-review environment opens a PR")
+	onBranch, err := gitserver.Commits(ctx, e.Git, a.repo, prHead(a.ns, bundle, "prod"), 1)
 	require.NoError(t, err)
 	require.NotEmpty(t, onBranch, "the PR branch has commits")
-	checkPromoteCommit(t, onBranch[0], bundle, "prod")
+	checkPromoteCommit(t, onBranch[0], a.ns, bundle, "prod")
 	assert.Empty(t, a.commitsSince(t, a.repo.Branch, pushed[0].SHA), "pr-review does not push to %s", a.repo.Branch)
 	a.fileHas(t, "prod", fixtures.V1, "prod before the merge")
 
@@ -262,6 +262,60 @@ func TestStep_HelmValues(t *testing.T) {
 	a.running(t, "test", imageV2, "test after the promotion")
 }
 
+// TestStep_YAMLUpdate promotes plain manifests (a kustomization without an
+// images list) with update.strategy yaml: yaml-update writes the image
+// reference at spec.template.spec.containers[name=podinfo].image (a list
+// element picked by its name) in deployment.yaml and the tag at
+// .release.version (a leading "." as in chartVersionPath) in a second file,
+// in one commit, and the new version runs. A later edit that cannot be applied (a list element that does
+// not exist) fails the step for good, and nothing is pushed: both files keep
+// the previous release.
+//
+// Covers STEP-YAML-01, STEP-YAML-02.
+func TestStep_YAMLUpdate(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	plain := func(ns string) map[string][]byte {
+		files := fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: []string{"test"}})
+		k := fixtures.Path("test") + "/kustomization.yaml"
+		files[k] = []byte(strings.Split(string(files[k]), "images:")[0])
+		files[fixtures.Path("test")+"/release.yaml"] = []byte("# written by kardinal\nrelease:\n  version: " + fixtures.V1 + "\n")
+		return files
+	}
+	a := newArgoAppFiles(t, e, plain, "test")
+	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("test"), imageV1, syncTimeout)
+
+	updates := []v1alpha1.YAMLUpdate{
+		{File: "deployment.yaml", Path: "spec.template.spec.containers[name=podinfo].image", Value: "image"},
+		{File: "release.yaml", Path: ".release.version", Image: fixtures.Image},
+	}
+	p := a.pipeline(nil)
+	envSpec(t, p, "test").Update = v1alpha1.UpdateConfig{Strategy: "yaml", YAML: &v1alpha1.YAMLUpdateConfig{Updates: updates}}
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	checkSteps(t, ps, imageSteps("yaml-update", false))
+	dep := e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/deployment.yaml")
+	assert.Contains(t, dep, "image: "+imageV2, "deployment.yaml has the new image")
+	release := e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/release.yaml")
+	assert.Equal(t, "# written by kardinal\nrelease:\n  version: "+fixtures.V2+"\n", release, "release.yaml has the new tag, comment kept")
+	a.running(t, "test", imageV2, "test after the promotion")
+
+	// A path that cannot be applied fails the step, with nothing pushed.
+	var live v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: a.ns, Name: pipelineName}, &live))
+	broken := append([]v1alpha1.YAMLUpdate{}, updates...)
+	broken = append(broken, v1alpha1.YAMLUpdate{File: "deployment.yaml", Path: "spec.template.spec.containers[3].image"})
+	envSpec(t, &live, "test").Update.YAML.Updates = broken
+	require.NoError(t, e.Client.Update(context.Background(), &live))
+	bad := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
+	ps = e.WaitStepState(t, a.ns, pipelineName, bad, "test", "Failed", promoteTimeout)
+	assert.Contains(t, ps.Status.Message, "containers has 1 elements, no [3]")
+	assert.Equal(t, dep, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/deployment.yaml"), "nothing pushed")
+	assert.Equal(t, release, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/release.yaml"), "nothing pushed")
+	a.running(t, "test", imageV2, "test keeps the previous release")
+}
+
 // TestStep_GitAuth makes the GitOps repo private, so cloning needs
 // credentials, and points the Pipeline's git.secretRef at a Secret holding a
 // wrong token. git-clone is refused and the step retries (status.message
@@ -320,7 +374,7 @@ func TestStep_GitAuth(t *testing.T) {
 	checkSteps(t, ps, imageSteps("kustomize-set-image", false))
 	pushed := a.commitsSince(t, a.repo.Branch, base)
 	require.Len(t, pushed, 1, "the promotion commit is pushed with the rotated token")
-	checkPromoteCommit(t, pushed[0], bundle, "test")
+	checkPromoteCommit(t, pushed[0], a.ns, bundle, "test")
 	a.running(t, "test", imageV2, "test after the token rotation")
 
 	events, err := e.Events(ctx, a.ns, "PromotionStep", ps.Name)
@@ -403,7 +457,7 @@ func TestStep_RetriesTransientGitErrors(t *testing.T) {
 	checkSteps(t, ps, imageSteps("kustomize-set-image", false))
 	pushed := a.commitsSince(t, a.repo.Branch, base)
 	require.Len(t, pushed, 1, "the retried promotion pushes once")
-	checkPromoteCommit(t, pushed[0], bundle, "test")
+	checkPromoteCommit(t, pushed[0], a.ns, bundle, "test")
 	a.running(t, "test", imageV2, "test after the retries")
 }
 
@@ -481,9 +535,9 @@ func TestStep_SupersededCloseRetriesWithBackoff(t *testing.T) {
 	require.NotNil(t, ps.Status.NextRetryAt, "status.nextRetryAt of a step that retries the close: %s", ps.Status.Message)
 	ok, cond := framework.CondIs(ps.Status.Conditions, "SupersededCloseFailed", metav1.ConditionTrue, "CloseFailed")
 	assert.True(t, ok, "SupersededCloseFailed: %s", cond)
-	assert.Contains(t, ps.Status.Message, "deleting its branch "+prHead(older, "test")+" failed")
+	assert.Contains(t, ps.Status.Message, "deleting its branch "+prHead(a.ns, older, "test")+" failed")
 	e.WaitPRState(t, a.repo, pr.Number, "closed", time.Second)
-	_, err := brancher.BranchHead(ctx, a.repo, prHead(older, "test"))
+	_, err := brancher.BranchHead(ctx, a.repo, prHead(a.ns, older, "test"))
 	require.NoError(t, err, "the branch is kept while the repository is archived")
 
 	require.NoError(t, archiver.SetArchived(ctx, a.repo, false))
@@ -492,7 +546,7 @@ func TestStep_SupersededCloseRetriesWithBackoff(t *testing.T) {
 	assert.NotContains(t, ps.Status.Message, "by hand")
 	assert.Nil(t, meta.FindStatusCondition(ps.Status.Conditions, "SupersededCloseFailed"), "the condition once the close is done")
 	assert.Nil(t, ps.Status.NextRetryAt, "status.nextRetryAt of a Failed step")
-	_, err = brancher.BranchHead(ctx, a.repo, prHead(older, "test"))
+	_, err = brancher.BranchHead(ctx, a.repo, prHead(a.ns, older, "test"))
 	assert.Error(t, err, "the branch is deleted")
 	comments := e.PRComments(t, a.repo, pr.Number, "kardinal closed this PR: bundle "+older+" was superseded")
 	assert.LessOrEqual(t, len(comments), 1, "the PR is commented on at most once")
@@ -558,7 +612,7 @@ func TestStep_ApprovalEditMidPromotion(t *testing.T) {
 			if !prReview {
 				pushed := a.commitsSince(t, a.repo.Branch, base)
 				require.Len(t, pushed, 1, "auto pushes one commit to %s", a.repo.Branch)
-				checkPromoteCommit(t, pushed[0], bundle, "test")
+				checkPromoteCommit(t, pushed[0], a.ns, bundle, "test")
 				prs, err := e.Git.PullRequests(context.Background(), a.repo)
 				require.NoError(t, err)
 				assert.Empty(t, prs, "no PR is opened")
@@ -748,7 +802,9 @@ func TestStep_OrphansCleanedUp(t *testing.T) {
 		Spec: v1alpha1.PromotionStepSpec{PipelineName: pipelineName, BundleName: "gone", Environment: "test",
 			StepType: "kustomize-set-image"},
 	}
-	require.NoError(t, e.Client.Create(ctx, orphan))
+	// Only kardinal creates PromotionSteps (graph-objects policy): the test
+	// stands in for a Graph that is gone.
+	require.NoError(t, e.AsController(t).Create(ctx, orphan))
 	framework.Eventually(t, time.Minute, "the orphaned PromotionStep deletes itself", func(ctx context.Context) (bool, string) {
 		var ps v1alpha1.PromotionStep
 		err := e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: orphan.Name}, &ps)
@@ -854,14 +910,14 @@ func retrying(t *testing.T, step string, redact func(string) string) func(*v1alp
 }
 
 // promoteMessage is the commit message of a promotion (docs/pr-evidence.md).
-func promoteMessage(bundle, env string) string {
-	return fmt.Sprintf("[kardinal] Promote %s to %s\n\nBundle: %s\nPipeline: %s", bundle, env, bundle, pipelineName)
+func promoteMessage(ns, bundle, env string) string {
+	return fmt.Sprintf("[kardinal] Promote %s to %s\n\nBundle: %s\nPipeline: %s\nNamespace: %s", bundle, env, bundle, pipelineName, ns)
 }
 
 // checkPromoteCommit checks c is the promotion commit of bundle to env.
-func checkPromoteCommit(t *testing.T, c gitserver.Commit, bundle, env string) {
+func checkPromoteCommit(t *testing.T, c gitserver.Commit, ns, bundle, env string) {
 	t.Helper()
-	assert.Equal(t, promoteMessage(bundle, env), strings.TrimSpace(c.Message), "commit %s message", c.SHA)
+	assert.Equal(t, promoteMessage(ns, bundle, env), strings.TrimSpace(c.Message), "commit %s message", c.SHA)
 	assert.Equal(t, "kardinal-promoter", c.AuthorName, "commit %s author", c.SHA)
 	assert.Equal(t, "kardinal@kardinal.io", c.AuthorEmail, "commit %s author email", c.SHA)
 }

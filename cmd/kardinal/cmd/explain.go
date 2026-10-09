@@ -33,6 +33,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func newExplainCmd() *cobra.Command {
@@ -78,6 +79,7 @@ A gate's STATE is the one the UI shows, the first that applies:
                 and the environment has no step yet, or the gate holds
                 the environment's Pending step
     Superseded  the Bundle was superseded; the gate is not evaluated again
+    Rejected    the Bundle was rejected (kardinal reject); not evaluated again
     Pending     not evaluated yet
     Waiting     evaluated not ready, not holding the Bundle: the Bundle has
                 not reached the environment, or it failed (it can retry)
@@ -169,6 +171,8 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
 		return fmt.Errorf("list bundles: %w", err)
 	}
+	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
+	steps.Items = lifecycle.AddRetiredSteps(steps.Items, bundles.Items, map[string]string{"kardinal.io/pipeline": pipeline})
 
 	type explainRow struct {
 		environment string
@@ -302,7 +306,40 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	if _, err := fmt.Fprint(w, output); err != nil {
 		return fmt.Errorf("write explain output: %w", err)
 	}
-	return writeExplainDeployed(w, pipeline, envNames, envFilter, current, steps.Items, bundleByName)
+	for _, h := range rejectedLiveHints(pipeline, current, bundles.Items, steps.Items, envFilter) {
+		if _, err := fmt.Fprintln(w, h); err != nil {
+			return fmt.Errorf("write explain hint: %w", err)
+		}
+	}
+	if err := writeExplainDeployed(w, pipeline, envNames, envFilter, current, steps.Items, bundleByName); err != nil {
+		return err
+	}
+	return writeExplainHolds(w, pipe, envFilter)
+}
+
+// writeExplainHolds prints the holds (spec.holds, kardinal rollback --hold)
+// of the shown environments: the rollback each is held on, who held it and
+// why, and how to release it.
+func writeExplainHolds(w io.Writer, p *v1alpha1.Pipeline, envFilter string) error {
+	var buf strings.Builder
+	for _, h := range p.Spec.Holds {
+		if (envFilter != "" && h.Environment != envFilter) || h.Expired(time.Now()) {
+			continue
+		}
+		by := h.CreatedBy
+		if by == "" {
+			by = "unknown"
+		}
+		fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other Bundles do not promote here, and its gates here pass as EXEMPT while the controller verifies it. Release with: kardinal release-hold %s --env %s\n",
+			h.Environment, h.Bundle, by, h.Reason, p.Name, h.Environment)
+	}
+	if buf.Len() == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprint(w, "\n"+buf.String()); err != nil {
+		return fmt.Errorf("write holds: %w", err)
+	}
+	return nil
 }
 
 // writeExplainDeployed prints, for each environment with a current Bundle

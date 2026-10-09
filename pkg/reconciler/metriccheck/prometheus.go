@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // maxResponseBytes bounds the Prometheus response body that is read.
@@ -44,9 +45,18 @@ type PrometheusProvider struct {
 // destinations at dial time (pkg/egress), so a MetricCheck URL cannot reach
 // the controller's own UI API or the node's credential endpoints. Private
 // ranges stay allowed for in-cluster Prometheus. It honours HTTP(S)_PROXY.
+// Every request gets an OpenTelemetry client span when tracing is on; no
+// trace context is sent to the metrics API.
 var defaultHTTPClient = &http.Client{
 	Timeout:   10 * time.Second,
-	Transport: egress.NewTransport(http.ProxyFromEnvironment),
+	Transport: metricTransport(egress.NewTransport(http.ProxyFromEnvironment)),
+}
+
+// metricTransport wraps base (the egress-guarded transport) with a client
+// span per request. It sends no trace headers (traceparent, tracestate,
+// baggage): a metrics API is a third party.
+func metricTransport(base http.RoundTripper) http.RoundTripper {
+	return tracing.Transport(base, false)
 }
 
 // NewPrometheusProvider creates a PrometheusProvider with the default,
@@ -55,9 +65,34 @@ func NewPrometheusProvider() *PrometheusProvider {
 	return &PrometheusProvider{HTTPClient: defaultHTTPClient}
 }
 
+// Evaluate implements Backend: it runs spec.query against spec.prometheusURL,
+// with the Authorization header from spec.prometheus.authorizationSecretRef
+// when set.
+func (p *PrometheusProvider) Evaluate(ctx context.Context, q Query) (Value, error) {
+	var auth string
+	if q.Spec.Prometheus != nil && q.Spec.Prometheus.AuthorizationSecretRef != nil {
+		v, err := q.Secret(ctx, *q.Spec.Prometheus.AuthorizationSecretRef)
+		if err != nil {
+			return Value{}, fmt.Errorf("prometheus authorization: %w", err)
+		}
+		auth = v
+	}
+	v, err := p.query(ctx, q.Spec.PrometheusURL, q.Spec.Query, auth)
+	if err != nil {
+		return Value{}, err
+	}
+	return NumberValue(v), nil
+}
+
 // QueryScalar calls the Prometheus instant query API and extracts the scalar result.
 // Returns an error if the query returns no data, multiple results, or a non-scalar type.
 func (p *PrometheusProvider) QueryScalar(ctx context.Context, prometheusURL, query string) (float64, error) {
+	return p.query(ctx, prometheusURL, query, "")
+}
+
+// query runs an instant query, sending authorization (if not empty) as the
+// Authorization header.
+func (p *PrometheusProvider) query(ctx context.Context, prometheusURL, query, authorization string) (float64, error) {
 	base, err := url.Parse(prometheusURL)
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
 		return 0, errors.New("parse prometheus URL: must be an http or https URL with a host")
@@ -70,6 +105,9 @@ func (p *PrometheusProvider) QueryScalar(ctx context.Context, prometheusURL, que
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return 0, errors.New("build prometheus request: invalid URL")
+	}
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
 	}
 
 	hc := p.HTTPClient

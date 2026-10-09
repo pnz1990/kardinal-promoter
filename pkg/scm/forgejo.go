@@ -25,6 +25,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // ForgejoProvider implements SCMProvider against the Forgejo/Gitea REST API v1.
@@ -64,7 +66,7 @@ func NewForgejoProvider(token, apiURL, webhookSecret string) *ForgejoProvider {
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuits:      NewCircuitRegistry(),
-		client:        &http.Client{Timeout: providerHTTPTimeout},
+		client:        &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 	}
 }
 
@@ -391,7 +393,9 @@ func (f *ForgejoProvider) ensureLabels(ctx context.Context, owner, repo string, 
 // do executes an authenticated Forgejo/Gitea API request.
 func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
 	owner := ownerFromPath(path, "/api/v1/repos/")
+	call := startSCMCall("forgejo", owner, method, path)
 	if err := f.circuits.Allow(owner); err != nil {
+		call.circuitOpen(f.circuits, owner)
 		return fmt.Errorf("forgejo scm: %w", err)
 	}
 
@@ -415,6 +419,8 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := f.client.Do(req)
+	// Arguments are taken now; the circuit states are read at return, after Record.
+	defer call.done(resp, err, f.circuits, owner)
 	if err != nil {
 		f.circuits.Record(owner, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
@@ -423,8 +429,9 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		f.circuits.Record(owner, resp, nil)
-		return newAPIError("forgejo", method, path, resp, raw)
+		apiErr := newAPIError("forgejo", method, path, resp, raw)
+		f.circuits.RecordAPIError(owner, resp, apiErr)
+		return apiErr
 	}
 
 	f.circuits.Record(owner, resp, nil)

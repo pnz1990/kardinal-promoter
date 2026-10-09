@@ -41,12 +41,14 @@ const count = (gates: PolicyGate[], ...states: GateState[]) =>
 
 /**
  * Collapsed summary chip: N blocked, else N waiting (not ready, not holding
- * the bundle, or not evaluated yet), else N superseded, else N passing.
+ * the bundle, or not evaluated yet), else N superseded, else N rejected, else
+ * N passing.
  */
 function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
   const blocked = count(gates, 'Block')
   const waiting = count(gates, 'Waiting', 'Pending')
   const superseded = count(gates, 'Superseded')
+  const rejected = count(gates, 'Rejected')
   const total = gates.length
   if (total === 0) return null
   // meaning: read by screen readers and shown on hover.
@@ -56,6 +58,8 @@ function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
     ? ['Pending', `${waiting} waiting`, 'not ready, not holding the bundle']
     : superseded > 0
     ? ['Unknown', `${superseded} superseded`, 'bundle superseded, not evaluated again']
+    : rejected > 0
+    ? ['Unknown', `${rejected} rejected`, 'bundle rejected, not evaluated again']
     : ['Ready', `${total} passing`, undefined]
   const { bg, text, border } = healthChipColors(health)
   return (

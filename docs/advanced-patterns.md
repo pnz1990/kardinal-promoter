@@ -321,7 +321,7 @@ still waiting or promoting (`Available` or `Promoting`) is superseded. A `Failed
 1. The old Bundle's status is set to `Superseded`, which is final.
 2. Its unfinished PromotionSteps are failed. A PR one of them opened that is still open
    is closed with a comment noting it was superseded, and its head branch
-   (`kardinal/<bundle>/<env>`) is deleted, so the closed PR cannot be merged later.
+   (`kardinal/<namespace hash>/<bundle>/<env>`) is deleted, so the closed PR cannot be merged later.
 3. Its Graph, PromotionSteps and PolicyGates are kept as history. The Graph creates no
    new PromotionStep (for a Graph built before this behaviour, only a step created at the
    moment of supersession), and its PolicyGates are no longer evaluated: they keep the

@@ -51,14 +51,63 @@ spec:
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
             - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
+            - --hook-service-accounts={{ join "," .Values.hooks.serviceAccounts }}
+            - --hook-pod-security-level={{ .Values.hooks.podSecurityLevel }}
+            {{- if not (kindIs "invalid" .Values.graph.compactAbove) }}
+            - --graph-compact-above={{ .Values.graph.compactAbove }}
+            {{- end }}
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
+            {{- end }}
+            {{- with .Values.controller.workers }}
+            {{- with .promotionStep }}
+            - --promotionstep-workers={{ . }}
+            {{- end }}
+            {{- with .prStatus }}
+            - --prstatus-workers={{ . }}
+            {{- end }}
+            {{- with .policyGate }}
+            - --policygate-workers={{ . }}
+            {{- end }}
+            {{- with .bundle }}
+            - --bundle-workers={{ . }}
+            {{- end }}
+            {{- with .pipeline }}
+            - --pipeline-workers={{ . }}
+            {{- end }}
             {{- end }}
             {{- with .Values.controller.gateStatusHeartbeat }}
             - --gate-status-heartbeat={{ . }}
             {{- end }}
+            {{- with .Values.controller.accessLog }}
+            {{- if .allRequests }}
+            - --access-log-all-requests=true
+            {{- end }}
+            {{- if .sourceIP }}
+            - --access-log-source-ip=true
+            {{- end }}
+            {{- with .trustedProxies }}
+            - --access-log-trusted-proxies={{ join "," . }}
+            {{- end }}
+            {{- end }}
+            {{- with (.Values.graph.retire).superseded }}
+            - --graph-retire-superseded-after={{ . }}
+            {{- end }}
+            {{- with (.Values.graph.retire).failed }}
+            - --graph-retire-failed-after={{ . }}
+            {{- end }}
+            {{- with (.Values.graph.retire).verified }}
+            - --graph-retire-verified-after={{ . }}
+            {{- end }}
+            - --override-identity-policy={{ include "kardinal-promoter.fullname" . }}-gate-overrides
+            {{- with .Values.controller.gateOverrideMaxMinutes }}
+            - --gate-override-max-minutes={{ . }}
+            {{- end }}
             {{- with .Values.controller.watchNamespace }}
             - --watch-namespace={{ . }}
+            {{- end }}
+            {{- with .Values.controller.namespaceShard }}
+            - --namespace-shard={{ . }}
             {{- end }}
             {{- with .Values.scm.provider }}
             - --scm-provider={{ . }}
@@ -66,8 +115,19 @@ spec:
             {{- with .Values.scm.apiURL }}
             - --scm-api-url={{ . }}
             {{- end }}
+            {{- with .Values.scm.instanceSigners }}
+            - --scm-instance-signers={{ join "," . }}
+            {{- end }}
             {{- with .Values.scm.allowedRepositories }}
             - --scm-allowed-repositories={{ join "," . }}
+            {{- end }}
+            {{- with .Values.scm.gatesCommitStatus }}
+            {{- if eq (toString .enabled) "false" }}
+            - --gates-commit-status=false
+            {{- end }}
+            {{- if and .context (ne .context "kardinal/gates") }}
+            - --gates-status-context={{ .context }}
+            {{- end }}
             {{- end }}
             {{- if .Values.ui.auth.tokenReview }}
             - --ui-tokenreview-auth=true
@@ -75,7 +135,6 @@ spec:
             {{- if .Values.bundleAPI.tokenReview }}
             - --bundle-api-tokenreview-auth=true
             {{- end }}
-            - --gate-override-max-minutes={{ int .Values.gateOverrides.maxMinutes }}
             {{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
             {{- if and (not .Values.tokenReview.audiences) (not .Values.tokenReview.acceptAPIServerAudience) }}
             {{- fail "tokenReview.audiences is empty: set an audience (kardinal-promoter) or tokenReview.acceptAPIServerAudience=true" }}
@@ -91,10 +150,27 @@ spec:
             {{- end }}
             - --ui-auth-static-overrides-tokenreview=true
             {{- end }}
+            {{- if .Values.metricCheck.cloudWatch.ambientCredentials }}
+            - --metriccheck-cloudwatch-ambient-credentials=true
+            {{- end }}
+            - --metriccheck-global-slots={{ .Values.metricCheck.querySlots.global }}
+            - --metriccheck-namespace-slots={{ .Values.metricCheck.querySlots.perNamespace }}
             {{- with .Values.ui.corsAllowedOrigins }}
             - --cors-allowed-origins={{ join "," . }}
             {{- end }}
             - --ui-allowed-hosts={{ include "kardinal-promoter.uiAllowedHosts" . }}
+            {{- with .Values.tracing }}
+            {{- if .enabled }}
+            - --tracing-enabled=true
+            {{- with .endpoint }}
+            - --tracing-endpoint={{ . }}
+            {{- end }}
+            {{- if .insecure }}
+            - --tracing-insecure=true
+            {{- end }}
+            - --tracing-sampling-ratio={{ if kindIs "invalid" .samplingRatio }}0.1{{ else }}{{ .samplingRatio }}{{ end }}
+            {{- end }}
+            {{- end }}
             {{- with (.Values.egress).allowlist }}
             - --egress-allowlist={{ join "," . }}
             {{- end }}
@@ -108,6 +184,15 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # The container's memory limit in bytes: the controller sets the
+            # Go runtime's soft memory limit (GOMEMLIMIT) to 90% of it. A
+            # GOMEMLIMIT in controller.extraEnv takes precedence.
+            - name: KARDINAL_MEMORY_LIMIT
+              valueFrom:
+                resourceFieldRef:
+                  containerName: controller
+                  resource: limits.memory
+                  divisor: "1"
             {{- with include "kardinal-promoter.githubSecretName" . }}
             - name: GITHUB_TOKEN
               valueFrom:

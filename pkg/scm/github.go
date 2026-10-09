@@ -25,6 +25,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 // GitHubProvider implements SCMProvider against the GitHub REST API.
@@ -59,7 +61,7 @@ func NewGitHubProvider(token, apiURL, webhookSecret string) *GitHubProvider {
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuits:      NewCircuitRegistry(),
-		client:        &http.Client{Timeout: providerHTTPTimeout},
+		client:        &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 	}
 }
 
@@ -305,7 +307,9 @@ func (g *GitHubProvider) AddLabelsToPR(ctx context.Context, repo string, prNumbe
 func (g *GitHubProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
 	// Check circuit breaker before making the call.
 	owner := ownerFromPath(path, "/repos/")
+	call := startSCMCall("github", owner, method, path)
 	if err := g.circuits.Allow(owner); err != nil {
+		call.circuitOpen(g.circuits, owner)
 		return fmt.Errorf("github scm: %w", err)
 	}
 
@@ -330,6 +334,8 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 	}
 
 	resp, err := g.client.Do(req)
+	// Arguments are taken now; the circuit states are read at return, after Record.
+	defer call.done(resp, err, g.circuits, owner)
 	if err != nil {
 		// Network error — record as failure with no retry-after hint.
 		g.circuits.Record(owner, nil, err)
@@ -339,8 +345,9 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		g.circuits.Record(owner, resp, nil)
-		return newAPIError("GitHub", method, path, resp, raw)
+		apiErr := newAPIError("GitHub", method, path, resp, raw)
+		g.circuits.RecordAPIError(owner, resp, apiErr)
+		return apiErr
 	}
 
 	g.circuits.Record(owner, resp, nil)

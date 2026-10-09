@@ -15,9 +15,12 @@
 
 // Package subscription implements the SubscriptionReconciler.
 //
-// The Subscription CRD enables CI-less artifact discovery by polling OCI registries
-// and Git repositories on a configurable interval. When a new digest or commit is
-// detected, the reconciler creates a Bundle CRD to trigger the promotion pipeline.
+// The Subscription CRD enables CI-less artifact discovery by polling OCI registries,
+// Git repositories and Helm chart repositories on a configurable interval, with
+// credentials from a Secret in the Subscription's namespace. When a new digest,
+// commit or chart version is detected, the reconciler creates a Bundle CRD to
+// trigger the promotion pipeline. The kardinal.io/refresh annotation (set by the
+// webhook receiver) makes it poll at once, at most once per minRefreshSpacing.
 //
 // Architecture (Graph-first compliance):
 //
@@ -28,11 +31,14 @@
 //	    promotions) in place.
 //	  - time.Now() is only used inside status writes (no bare time calls in logic)
 //	  - No cross-CRD status mutations
-//	  - No exec.Command or in-memory state between reconcile iterations
+//	  - No exec.Command or in-memory state between reconcile iterations: the
+//	    refresh request it answered and the pathGlob read position are status
+//	    fields (lastRefreshRequest, lastSeenRevision)
 package subscription
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -40,16 +46,20 @@ import (
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -63,15 +73,21 @@ const (
 	minInterval = 30 * time.Second
 	// errorRequeueInterval is how long to wait before retrying after a watch error.
 	errorRequeueInterval = 1 * time.Minute
+	// minRefreshSpacing is the shortest time between a poll and a poll that a
+	// refresh request (kardinal.io/refresh) asks for: a webhook storm costs at
+	// most one source poll per Subscription every 10 seconds.
+	minRefreshSpacing = 10 * time.Second
+	// maxConcurrentPolls is how many Subscriptions poll at once.
+	maxConcurrentPolls = 4
 )
 
 // Reconciler watches artifact sources and creates Bundle CRDs when new artifacts are detected.
 // It is idempotent and safe to re-run after a crash.
 type Reconciler struct {
 	client.Client
-	// WatcherFn constructs a Watcher for the given Subscription.
-	// Overridable for testing.
-	WatcherFn func(*kardinalv1alpha1.Subscription) (source.Watcher, error)
+	// WatcherFn constructs a Watcher for the given Subscription with the
+	// credentials from its secretRef. Nil means NewWatcher; tests override it.
+	WatcherFn func(*kardinalv1alpha1.Subscription, source.Credentials) (source.Watcher, error)
 	// NowFn returns the current time. Overridable for testing.
 	NowFn func() time.Time
 }
@@ -80,7 +96,9 @@ type Reconciler struct {
 //
 // State machine:
 //  1. Not found → skip (deleted).
-//  2. Create watcher via WatcherFn.
+//     A refresh request less than minRefreshSpacing after the last poll waits
+//     for the rest of it.
+//  2. Read the secretRef credentials; create watcher via WatcherFn.
 //  3. Call watcher.Watch(lastSeenDigest).
 //  4. If error → write phase=Error + message, requeue after 1m.
 //  5. If Changed=false → write phase=Watching, requeue after interval.
@@ -115,22 +133,64 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// create a Subscription start promotions of an image they choose in another
 	// team's Pipeline.
 	if sub.Spec.Namespace != "" && sub.Spec.Namespace != sub.Namespace {
-		return r.writeError(ctx, &sub, now, fmt.Sprintf(
+		return r.writeErrorReason(ctx, &sub, now, reasonInvalidSpec, fmt.Sprintf(
 			"spec.namespace %q is not allowed: a Subscription creates Bundles only in its own namespace %q; "+
 				"remove spec.namespace or create the Subscription in %q",
 			sub.Spec.Namespace, sub.Namespace, sub.Spec.Namespace))
 	}
 
+	// A refresh request (webhook) right after a poll waits, so a storm of
+	// deliveries costs one poll per minRefreshSpacing.
+	if wait := r.refreshWait(&sub, now); wait > 0 {
+		log.Debug().Dur("wait", wait).Msg("refresh requested right after a poll; waiting")
+		return ctrl.Result{RequeueAfter: wait}, nil
+	}
+
+	creds, err := resolveCredentials(ctx, r.Client, &sub)
+	if err != nil {
+		reason := reasonSecretUnreadable
+		var ce *credentialError
+		if errors.As(err, &ce) {
+			reason = ce.reason
+		}
+		return r.writeErrorReason(ctx, &sub, now, reason, err.Error())
+	}
+
+	// A new or edited pathGlob starts from a new baseline: the walk from an
+	// earlier read position, or for an earlier glob, would make an older
+	// commit look new.
+	globChanged := sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit && sub.Spec.Git != nil &&
+		sub.Spec.Git.PathGlob != sub.Status.ObservedPathGlob
+	forWatcher := &sub
+	if globChanged {
+		forWatcher = sub.DeepCopy()
+		forWatcher.Status.LastSeenRevision = ""
+	}
+
 	// Create the watcher for this subscription type.
-	watcher, err := r.WatcherFn(&sub)
+	watcherFn := r.WatcherFn
+	if watcherFn == nil {
+		watcherFn = NewWatcher
+	}
+	watcher, err := watcherFn(forWatcher, creds)
 	if err != nil {
 		return r.writeError(ctx, &sub, now, fmt.Sprintf("create watcher: %s", err))
 	}
 
-	// Poll the artifact source.
-	result, watchErr := watcher.Watch(ctx, sub.Status.LastSeenDigest)
+	// Poll the artifact source, within a bound for the source type: a server
+	// that stalls must not hold a reconcile worker.
+	watchCtx, cancel := context.WithTimeout(ctx, watchTimeout(&sub))
+	result, watchErr := watcher.Watch(watchCtx, sub.Status.LastSeenDigest)
+	cancel()
 	if watchErr != nil {
 		return r.writeError(ctx, &sub, now, watchErr.Error())
+	}
+	if globChanged {
+		result.Changed = false
+	}
+	observedGlob := ""
+	if sub.Spec.Git != nil {
+		observedGlob = sub.Spec.Git.PathGlob
 	}
 
 	interval := r.parseInterval(&sub)
@@ -145,13 +205,31 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			s.LastCheckedAt = now.UTC().Format(time.RFC3339)
 			if result.Digest != "" {
 				s.LastSeenDigest = result.Digest
+				s.LastSeenTag = result.Tag
 			}
+			s.LastSeenRevision = result.Revision
+			s.ObservedPathGlob = observedGlob
+			s.LastRefreshRequest = sub.Annotations[kardinalv1alpha1.RefreshAnnotation]
 			s.Message = ""
+			setReady(s, sub.Generation, now)
 		})
 	}
 
 	// New artifact detected — create a Bundle.
 	bundleName, createErr := r.createBundle(ctx, &sub, result, now)
+	var rejected *artifactRejectedError
+	if errors.As(createErr, &rejected) {
+		// A rejected artifact is never promoted again (#1451): record it as
+		// seen, so the next poll does not try again, and say why.
+		log.Info().Str("digest", result.Digest).Str("rejectedBundle", rejected.bundle).
+			Msg("artifact was rejected; no Bundle created")
+		return ctrl.Result{RequeueAfter: interval}, r.patchStatus(ctx, &sub, func(s *kardinalv1alpha1.SubscriptionStatus) {
+			s.Phase = "Watching"
+			s.LastCheckedAt = now.UTC().Format(time.RFC3339)
+			s.LastSeenDigest = result.Digest
+			s.Message = rejected.Error()
+		})
+	}
 	if createErr != nil {
 		return r.writeError(ctx, &sub, now, fmt.Sprintf("create bundle: %s", createErr))
 	}
@@ -162,9 +240,33 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		s.Phase = "Watching"
 		s.LastCheckedAt = now.UTC().Format(time.RFC3339)
 		s.LastSeenDigest = result.Digest
+		s.LastSeenTag = result.Tag
+		s.LastSeenRevision = result.Revision
 		s.LastBundleCreated = bundleName
+		s.ObservedPathGlob = observedGlob
+		s.LastRefreshRequest = sub.Annotations[kardinalv1alpha1.RefreshAnnotation]
 		s.Message = ""
+		setReady(s, sub.Generation, now)
 	})
+}
+
+// refreshWait returns how long a pending refresh request (a
+// kardinal.io/refresh value the status has not answered) must wait so it
+// polls no sooner than minRefreshSpacing after the last poll; 0 to poll now.
+func (r *Reconciler) refreshWait(sub *kardinalv1alpha1.Subscription, now time.Time) time.Duration {
+	req := sub.Annotations[kardinalv1alpha1.RefreshAnnotation]
+	if req == "" || req == sub.Status.LastRefreshRequest {
+		return 0
+	}
+	last, err := time.Parse(time.RFC3339, sub.Status.LastCheckedAt)
+	if err != nil {
+		return 0
+	}
+	// lastCheckedAt has one-second resolution: count from the end of its second.
+	if wait := last.Add(time.Second + minRefreshSpacing).Sub(now); wait > 0 && wait <= minRefreshSpacing+time.Second {
+		return wait
+	}
+	return 0
 }
 
 // createBundle creates a Bundle CRD from the WatchResult.
@@ -201,8 +303,11 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 	bundleName := bundleNameFor(sub.Name, result, now, generation)
 
 	bundleType := "image"
-	if sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit {
+	switch sub.Spec.Type {
+	case kardinalv1alpha1.SubscriptionTypeGit:
 		bundleType = "config"
+	case kardinalv1alpha1.SubscriptionTypeHelm:
+		bundleType = "chart"
 	}
 
 	bundle := &kardinalv1alpha1.Bundle{
@@ -226,7 +331,8 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 	}
 
 	// Populate artifact-specific fields.
-	if sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeImage && sub.Spec.Image != nil {
+	switch {
+	case sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeImage && sub.Spec.Image != nil:
 		bundle.Spec.Images = []kardinalv1alpha1.ImageRef{
 			{
 				// The watcher accepts an explicit scheme
@@ -240,7 +346,7 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 		bundle.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{
 			CommitSHA: result.Digest,
 		}
-	} else if sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit && sub.Spec.Git != nil {
+	case sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit && sub.Spec.Git != nil:
 		bundle.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{
 			GitRepo:   sub.Spec.Git.RepoURL,
 			CommitSHA: result.Digest,
@@ -248,10 +354,25 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 		bundle.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{
 			CommitSHA: result.Digest,
 		}
+	case sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeHelm && sub.Spec.Helm != nil:
+		bundle.Spec.Chart = &kardinalv1alpha1.ChartRef{
+			RepoURL: sub.Spec.Helm.RepoURL,
+			Name:    sub.Spec.Helm.Chart,
+			Version: result.Tag,
+			Digest:  result.Digest,
+		}
 	}
 	lifecycle.StampCreatedAt(bundle, now) // sub-second creation order for supersession
 
-	if err := r.Create(ctx, bundle); err != nil {
+	rej, err := lifecycle.LoadRejectedArtifacts(ctx, r.Client, ns, sub.Spec.Pipeline)
+	if err != nil {
+		return "", fmt.Errorf("createBundle: %w", err)
+	}
+	if name, bad := rej.Carries(bundle); bad {
+		return "", &artifactRejectedError{digest: result.Digest, bundle: name}
+	}
+
+	if err := lifecycle.CreateBundleAs(ctx, r.Client, bundle, "subscription:"+sub.Name); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return "", fmt.Errorf("create bundle %s: %w", bundleName, err)
 		}
@@ -346,13 +467,53 @@ func dnsSlug(s string) string {
 	return strings.TrimRight(b.String(), "-")
 }
 
-// writeError patches status to phase=Error and returns a requeue result.
+// Reasons of the Ready condition.
+const (
+	reasonWatching         = "Watching"
+	reasonWatchFailed      = "WatchFailed"
+	reasonInvalidSpec      = "InvalidSpec"
+	reasonSecretNotFound   = "SecretNotFound"
+	reasonSecretUnreadable = "SecretUnreadable"
+	reasonSecretNoKeys     = "SecretHasNoCredentials"
+)
+
+// setReady sets the Ready condition True.
+func setReady(s *kardinalv1alpha1.SubscriptionStatus, generation int64, now time.Time) {
+	meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue,
+		Reason: reasonWatching, Message: "polling the source", ObservedGeneration: generation,
+		LastTransitionTime: metav1.NewTime(now)})
+}
+
+// watchTimeout bounds one poll of the source: newest-build ordering reads
+// up to discoveryLimit images, a pathGlob poll fetches history.
+func watchTimeout(sub *kardinalv1alpha1.Subscription) time.Duration {
+	switch sub.Spec.Type {
+	case kardinalv1alpha1.SubscriptionTypeImage:
+		return 3 * time.Minute
+	case kardinalv1alpha1.SubscriptionTypeGit:
+		return 2 * time.Minute
+	default:
+		return time.Minute
+	}
+}
+
+// writeError patches status to phase=Error (Ready False, WatchFailed) and
+// returns a requeue result.
 func (r *Reconciler) writeError(ctx context.Context, sub *kardinalv1alpha1.Subscription, now time.Time, msg string) (ctrl.Result, error) {
-	zerolog.Ctx(ctx).Warn().Str("subscription", sub.Name).Str("error", msg).Msg("subscription watch error")
+	return r.writeErrorReason(ctx, sub, now, reasonWatchFailed, msg)
+}
+
+// writeErrorReason is writeError with the Ready condition's reason.
+func (r *Reconciler) writeErrorReason(ctx context.Context, sub *kardinalv1alpha1.Subscription, now time.Time,
+	reason, msg string) (ctrl.Result, error) {
+	zerolog.Ctx(ctx).Warn().Str("subscription", sub.Name).Str("reason", reason).Str("error", msg).Msg("subscription watch error")
 	patchErr := r.patchStatus(ctx, sub, func(s *kardinalv1alpha1.SubscriptionStatus) {
 		s.Phase = "Error"
 		s.LastCheckedAt = now.UTC().Format(time.RFC3339)
+		s.LastRefreshRequest = sub.Annotations[kardinalv1alpha1.RefreshAnnotation]
 		s.Message = msg
+		meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse,
+			Reason: reason, Message: msg, ObservedGeneration: sub.Generation, LastTransitionTime: metav1.NewTime(now)})
 	})
 	return ctrl.Result{RequeueAfter: errorRequeueInterval}, patchErr
 }
@@ -381,6 +542,10 @@ func (r *Reconciler) parseInterval(sub *kardinalv1alpha1.Subscription) time.Dura
 		if sub.Spec.Git != nil {
 			raw = sub.Spec.Git.Interval
 		}
+	case kardinalv1alpha1.SubscriptionTypeHelm:
+		if sub.Spec.Helm != nil {
+			raw = sub.Spec.Helm.Interval
+		}
 	}
 	if raw == "" {
 		return defaultInterval
@@ -401,6 +566,16 @@ func (r *Reconciler) now() time.Time {
 		return r.NowFn()
 	}
 	return time.Now().UTC()
+}
+
+// artifactRejectedError is returned by createBundle when the new artifact is
+// one a rejected Bundle of the pipeline carries (lifecycle.RejectedArtifacts).
+type artifactRejectedError struct {
+	digest, bundle string
+}
+
+func (e *artifactRejectedError) Error() string {
+	return fmt.Sprintf("artifact %s was rejected (bundle %s): no Bundle is created for it", e.digest, e.bundle)
 }
 
 // bundlesForDigest lists the Subscription's Bundles (label
@@ -494,7 +669,11 @@ func digestLabelChars(digest string) string {
 // or git poll (C04-gates-36). Polling is driven by RequeueAfter; a spec edit or
 // an annotation change polls at once.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Subscription{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
-		Complete(r)
+		// Several workers, so one slow source (each poll is bounded by
+		// watchTimeout) does not delay every other Subscription. The
+		// workqueue never hands one Subscription to two workers at once.
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentPolls})
+	return shard.Active().Complete(b, tracing.WrapReconciler("subscription", r), &kardinalv1alpha1.SubscriptionList{})
 }

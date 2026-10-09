@@ -588,6 +588,236 @@
     {
       "collapsed": false,
       "gridPos": {"h": 1, "w": 24, "x": 0, "y": 40},
+      "id": 106,
+      "title": "SCM API and Git",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "SCM API calls per second by provider and result (ok, client_error, server_error, rate_limited, network_error, circuit_open).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 41},
+      "id": 60,
+      "options": {
+        "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "single", "sort": "none"}
+      },
+      "title": "SCM Requests by Result (req/s)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "sum by (provider, result) (rate(kardinal_scm_requests_total[5m]))",
+          "legendFormat": "{{provider}} {{result}}"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "99th percentile SCM API latency by provider and operation.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 41},
+      "id": 61,
+      "options": {
+        "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "single", "sort": "none"}
+      },
+      "title": "SCM Request Latency P99 by Operation",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "histogram_quantile(0.99, sum by (provider, operation, le) (rate(kardinal_scm_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{provider}} {{operation}}"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Rate-limit quota left, from the last response headers, by provider and repository owner (absent for Gitea, Forgejo and Bitbucket; Azure DevOps counts usage units; with one GitHub token every owner shows the token's window). 0 means calls are refused until the reset.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 49},
+      "id": 62,
+      "options": {
+        "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "single", "sort": "none"}
+      },
+      "title": "SCM Rate Limit Remaining (fraction)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "max by (provider, owner) (kardinal_scm_rate_limit_remaining) / max by (provider, owner) (kardinal_scm_rate_limit_limit > 0)",
+          "legendFormat": "{{provider}} {{owner}}"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Circuit breaker state by provider and owner: 0 closed, 1 half-open, 2 open. Owner \"_quota\" is the rate-limit circuit.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 49},
+      "id": 63,
+      "options": {
+        "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "single", "sort": "none"}
+      },
+      "title": "SCM Circuit State",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "max by (provider, owner) (kardinal_scm_circuit_state)",
+          "legendFormat": "{{provider}} {{owner}}"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "90th percentile duration of git clones and pushes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 49},
+      "id": 64,
+      "options": {
+        "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "single", "sort": "none"}
+      },
+      "title": "Git Clone and Push Duration P90",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "histogram_quantile(0.90, sum by (operation, le) (rate(kardinal_git_operation_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{operation}}"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Bytes git sends and receives over HTTP(S), by service (fetch: clone and fetch; push) and direction. Git over ssh is not counted.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "Bps"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 57},
+      "id": 65,
+      "options": {
+        "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "single", "sort": "none"}
+      },
+      "title": "Git Transfer (bytes/s)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "sum by (git_service, direction) (rate(kardinal_git_transfer_bytes_total[5m]))",
+          "legendFormat": "{{git_service}} {{direction}}"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Git clones and pushes per second by result (ok, error, non_fast_forward).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "ops"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 57},
+      "id": 66,
+      "options": {
+        "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "single", "sort": "none"}
+      },
+      "title": "Git Operations by Result (ops/s)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "expr": "sum by (operation, result) (rate(kardinal_git_operations_total[5m]))",
+          "legendFormat": "{{operation}} {{result}}"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 65},
       "id": 104,
       "title": "Reconciler Health",
       "type": "row"
@@ -607,7 +837,7 @@
           "unit": "ops"
         }
       },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 41},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 66},
       "id": 40,
       "options": {
         "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"},
@@ -638,7 +868,7 @@
           "unit": "ops"
         }
       },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 41},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 66},
       "id": 41,
       "options": {
         "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"},
@@ -669,7 +899,7 @@
           "unit": "s"
         }
       },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 49},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 74},
       "id": 42,
       "options": {
         "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"},
@@ -700,7 +930,7 @@
           "unit": "short"
         }
       },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 49},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 74},
       "id": 43,
       "options": {
         "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom"},
@@ -718,7 +948,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 57},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 82},
       "id": 105,
       "title": "Go Runtime",
       "type": "row"
@@ -738,7 +968,7 @@
           "unit": "short"
         }
       },
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 58},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 83},
       "id": 50,
       "options": {
         "legend": {"calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom"},
@@ -769,7 +999,7 @@
           "unit": "bytes"
         }
       },
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 58},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 83},
       "id": 51,
       "options": {
         "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "list", "placement": "bottom"},
@@ -800,7 +1030,7 @@
           "unit": "percentunit"
         }
       },
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 58},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 83},
       "id": 52,
       "options": {
         "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "list", "placement": "bottom"},

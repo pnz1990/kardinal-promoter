@@ -43,7 +43,7 @@ var crdGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version:
 var (
 	primaryKinds   = []string{"Pipeline", "Bundle", "PolicyGate", "PromotionStep"}
 	secondaryKinds = []string{"Subscription", "NotificationHook", "MetricCheck", "ChangeWindow",
-		"ScheduleClock", "RollbackPolicy", "AuditEvent", "PRStatus"}
+		"ScheduleClock", "RollbackPolicy", "AuditEvent", "PRStatus", "HookRun", "Approval", "ImageVerification"}
 )
 
 // TestCore_KroInstalled checks the kro hack/install-kro.sh installs
@@ -136,9 +136,10 @@ func TestCore_KroInstalled(t *testing.T) {
 // TestCore_KroTuned checks the kro tuning hack/install-kro.sh applies
 // (docs/installation.md, Install kro; ledger gap G9): the kro Deployment runs
 // 8 Graph workers instead of kro's 1, with client QPS 300 and burst 500, so
-// one large promotion does not hold up every other Graph.
+// one large promotion does not hold up every other Graph, and the memory
+// limit and request the script sets (G15).
 //
-// Covers INST-KRO-02.
+// Covers INST-KRO-02, INST-KRO-03.
 func TestCore_KroTuned(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -152,6 +153,9 @@ func TestCore_KroTuned(t *testing.T) {
 	assert.Equal(t, "8", env["KRO_GRAPH_CONCURRENT_RECONCILES"], "Graph workers (--graph-concurrent-reconciles)")
 	assert.Equal(t, "300", env["KRO_CLIENT_QPS"], "client QPS")
 	assert.Equal(t, "500", env["KRO_CLIENT_BURST"], "client burst")
+	mem := dep.Spec.Template.Spec.Containers[0].Resources
+	assert.Equal(t, "2Gi", mem.Limits.Memory().String(), "memory limit (KRO_MEMORY_LIMIT)")
+	assert.Equal(t, "768Mi", mem.Requests.Memory().String(), "memory request (KRO_MEMORY_REQUEST)")
 	assert.True(t, deploymentAvailable(dep), "the kro Deployment is Available: %+v", dep.Status.Conditions)
 }
 
@@ -299,8 +303,8 @@ func crdFiles(t *testing.T) map[string]*unstructured.Unstructured {
 }
 
 // TestCore_CRDsInstalled checks the kardinal CRDs in config/crd/bases
-// (docs/installation.md: the chart's crds/ and the 12 CRDs an upgrade
-// applies). The directory holds exactly the 12 kardinal.io CRDs. Each of the
+// (docs/installation.md: the chart's crds/ and the 13 CRDs an upgrade
+// applies). The directory holds exactly the 13 kardinal.io CRDs. Each of the
 // four core ones (Pipeline, Bundle, PolicyGate, PromotionStep) is accepted by
 // a server-side apply, and the installed CRD is the file: Established, its
 // names accepted, the same group, names, scope and versions (schema, printer
@@ -324,9 +328,9 @@ func TestCore_CRDsInstalled(t *testing.T) {
 	checkCRDs(t, e, files, primaryKinds)
 }
 
-// TestCore_SecondaryCRDsServed checks the eight secondary kardinal CRDs
+// TestCore_SecondaryCRDsServed checks the ten secondary kardinal CRDs
 // (Subscription, NotificationHook, MetricCheck, ChangeWindow, ScheduleClock,
-// RollbackPolicy, AuditEvent, PRStatus) the same way: config/crd/bases has
+// RollbackPolicy, AuditEvent, PRStatus, HookRun, Approval, ImageVerification) the same way: config/crd/bases has
 // each, a server-side apply accepts it, the installed CRD is the file, and the
 // API serves the resource (discovery, kubectl get with the printer columns, a
 // list).

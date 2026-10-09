@@ -410,6 +410,11 @@ func TestHealth_UnsupportedKind(t *testing.T) {
 // (prod reads a condition Deployments do not have), each check counts one
 // more consecutive failure, and the expiry fails the step with the last
 // result in the message. Covers HEALTH-TIMEOUT-01, HEALTH-FAILCOUNT-01.
+//
+// prod's check reads test's Deployment, which is rolled out on the Bundle's
+// image before prod starts: on prod's own, the 1m timeout includes the new
+// Pod's start, and under load the Pod was still ContainerCreating (the
+// check waiting, not failing) when the timeout passed.
 func TestHealth_TimeoutFails(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -418,6 +423,7 @@ func TestHealth_TimeoutFails(t *testing.T) {
 	envSpec(t, p, "test").Health.Timeout = ""
 	prod := envSpec(t, p, "prod")
 	prod.Health.Timeout = "1m"
+	prod.Health.Resource.Name = fixtures.Workload("test")
 	prod.Health.Resource.Condition = "Ready"
 	a.apply(t, p)
 
@@ -430,7 +436,7 @@ func TestHealth_TimeoutFails(t *testing.T) {
 	assert.False(t, expiry.Before(start.Add(10*time.Minute-time.Second)), "default timeout 10m: expiry %s, test started %s", expiry, start)
 	assert.False(t, expiry.After(verified.Add(10*time.Minute+time.Second)), "default timeout 10m: expiry %s, Verified %s", expiry, verified)
 
-	unhealthy := fmt.Sprintf(`unhealthy via resource: Deployment %s/%s: condition "Ready" not found`, a.ns, fixtures.Workload("prod"))
+	unhealthy := fmt.Sprintf(`unhealthy via resource: Deployment %s/%s: condition "Ready" not found`, a.ns, fixtures.Workload("test"))
 	first := e.WaitStep(t, a.ns, pipelineName, bundle, "prod", promoteTimeout, "an unhealthy check",
 		func(ps *v1alpha1.PromotionStep) (bool, string) {
 			return ps.Status.State == "HealthChecking" && ps.Status.Message == unhealthy && ps.Status.ConsecutiveHealthFailures >= 1, framework.DescribeStep(ps)
@@ -452,7 +458,7 @@ func TestHealth_TimeoutFails(t *testing.T) {
 	// At least the unhealthy checks seen above; the timeout counts one more.
 	assert.GreaterOrEqual(t, ps.Status.ConsecutiveHealthFailures, 2)
 	assert.Greater(t, ps.Status.ConsecutiveHealthFailures, next.Status.ConsecutiveHealthFailures, "the timeout counts as one more failure")
-	assert.Equal(t, imageV2, e.DeploymentImage(t, a.ns, fixtures.Workload("prod")), "prod runs the new version; only the check failed")
+	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("prod"), imageV2, syncTimeout) // prod got the new version; only the check failed
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
 }
 
@@ -759,6 +765,23 @@ func newHookedArgoApp(t *testing.T, e *framework.Env, env, phase, script string)
 	e.ArgoApp(t, a.argoApp(env), a.repo, fixtures.Path(env), ns)
 	e.WaitArgoApp(t, a.argoApp(env), syncTimeout)
 	e.WaitDeploymentImage(t, ns, fixtures.Workload(env), fixtures.Image+":"+fixtures.V1, syncTimeout)
+	// The first sync, with its hook, must be over before a test promotes:
+	// Healthy and Synced come before a PostSync hook runs. Under load the
+	// first sync's hook Job (Job "hook", HookSucceeded) was still there
+	// when the promoted commit's sync started, and Argo CD took it as that
+	// sync's hook: the operation Succeeded without running the hook on the
+	// new version (TestHealth_ArgoFailures saw the step Verified).
+	e.WaitArgoOperation(t, a.argoApp(env), "Succeeded", syncTimeout)
+	framework.Eventually(t, syncTimeout, "the first sync's hook Job deleted (HookSucceeded)", func(ctx context.Context) (bool, string) {
+		_, err := e.Kube.BatchV1().Jobs(ns).Get(ctx, "hook", metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return true, ""
+		}
+		if err != nil {
+			return false, err.Error()
+		}
+		return false, "Job hook still exists"
+	})
 	return a
 }
 
@@ -1249,6 +1272,26 @@ func TestHealth_ArgoStrategyPatchesApplication(t *testing.T) {
 	e.WaitBundlePhase(t, ns, bundle, "Verified", time.Minute)
 }
 
+// TestHealth_ArgoStrategyWritesDigest: a Bundle image pinned by digest is
+// written to the Application as "<tag>@<digest>", so Argo CD deploys the
+// digest the Bundle pins (and image verification checked), not whatever the
+// tag points to (regression, QA #1521). Covers ARGOSTRAT-DIGEST-01.
+func TestHealth_ArgoStrategyWritesDigest(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ns, repo, app := argoStrategyApp(t, e, map[string]interface{}{
+		"app": map[string]interface{}{"image": map[string]interface{}{"tag": fixtures.V1}}})
+	e.GrantArgoPatch(t, ns, app)
+	require.NoError(t, e.Client.Create(context.Background(), argoStrategyPipeline(ns, repo, argoStrategyEnv("test", app, argoImageKey))))
+
+	pinned := fixtures.V2 + "@" + fixtures.V2Digest
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", fixtures.Image+":"+pinned)
+	ps := e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, pinned, ps.Status.Outputs["imageTag"])
+	assert.Equal(t, pinned, valuesKey(t, e, app, argoImageKey))
+	e.WaitDeploymentImage(t, ns, fixtures.Workload("test"), fixtures.Image+":"+pinned, syncTimeout)
+}
+
 // valuesObject is the Application's spec.source.helm.valuesObject, nil when
 // unset.
 func valuesObject(t *testing.T, e *framework.Env, app string) map[string]interface{} {
@@ -1392,7 +1435,7 @@ func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
 		write[i].ResourceNames = []string{app}
 	}
 	e.BindArgoRules(t, ns, write)
-	require.True(t, e.ControllerCan(t, "patch", app))
+	e.WaitControllerCan(t, "patch", app, time.Minute)
 	require.False(t, e.ControllerCan(t, "patch", ""), "patch is granted on %s only", app)
 
 	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)

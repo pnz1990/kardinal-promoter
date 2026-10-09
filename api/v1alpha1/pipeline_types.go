@@ -4,6 +4,8 @@
 package v1alpha1
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -19,10 +21,10 @@ type PipelineSpec struct {
 	// has no upstream dependency. This sequential default means a list of N environments
 	// without dependsOn fields produces a linear chain. Override with dependsOn to
 	// express parallel fan-out or explicit DAG structure.
-	// Environment names must be unique; at most 100 environments (a bound
+	// Environment names must be unique; at most 500 environments (a bound
 	// the API server needs to cost the CEL rules on each entry).
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=100
+	// +kubebuilder:validation:MaxItems=500
 	// +listType=map
 	// +listMapKey=name
 	Environments []EnvironmentSpec `json:"environments"`
@@ -41,6 +43,21 @@ type PipelineSpec struct {
 	// +optional
 	Paused bool `json:"paused,omitempty"`
 
+	// Holds pin environments to a rollback (kardinal rollback --hold): while
+	// an environment has a hold, no Bundle but the hold's own promotes into
+	// it, the hold's Bundle is never superseded or garbage-collected, and,
+	// when the controller can verify it restores artifacts Verified in the
+	// environment, it passes that environment's PolicyGates, each pass
+	// recorded (GateExempted). kardinal release-hold removes it, and so does
+	// the controller at expiresAt. At most one hold per environment. Changing
+	// spec.holds needs update on the virtual subresource pipelines/hold
+	// (chart: <release>-hold-writes ValidatingAdmissionPolicy).
+	// +listType=map
+	// +listMapKey=environment
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	Holds []EnvironmentHold `json:"holds,omitempty"`
+
 	// HistoryLimit is the number of completed Bundle promotions to retain.
 	// When unset or zero, defaults to 50. Terminal Bundles (Verified, Failed, Superseded)
 	// beyond this limit are deleted oldest-first on each new Bundle creation.
@@ -56,6 +73,13 @@ type PipelineSpec struct {
 	// field are team gates: they never count as org gates and never grant a skip.
 	// +optional
 	PolicyNamespaces []string `json:"policyNamespaces,omitempty"`
+
+	// ImageVerification requires the signatures of the Bundle's images (and
+	// of a config Bundle's commit) to verify before the Bundle is promoted
+	// into its first environments. Selected images must be pinned by digest.
+	// See docs/image-verification.md.
+	// +optional
+	ImageVerification *ImageVerificationPolicy `json:"imageVerification,omitempty"`
 
 	// MaxConcurrentPromotions caps the number of Bundles in Promoting phase for this
 	// pipeline at any given time. When 0 or unset (default), there is no cap and all
@@ -266,6 +290,25 @@ type EnvironmentSpec struct {
 	// +optional
 	StepTimeoutSeconds int `json:"stepTimeoutSeconds,omitempty"`
 
+	// Hooks are Jobs that run for each Bundle in this environment: "pre"
+	// hooks before the promotion starts (database migrations), "post" hooks
+	// after the health check passed and before the environment is Verified
+	// (integration tests). Each runs once per Bundle, as a HookRun the
+	// Bundle's Graph creates. See docs/hooks.md.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	Hooks []HookSpec `json:"hooks,omitempty"`
+
+	// Verification runs Argo Rollouts analyses after the environment passed
+	// its health check: one AnalysisRun per template, with the Bundle's
+	// version and environment as args. The environment is Verified only when
+	// every analysis is Successful. Needs Argo Rollouts' CRDs: without them
+	// the Bundle fails (it never promotes unverified). See docs/analysis.md.
+	// +optional
+	Verification *VerificationSpec `json:"verification,omitempty"`
+
 	// Regions is not supported: every region would edit the same path and push
 	// the same branch. With two or more regions the Pipeline is Ready=False
 	// (reason NotImplemented) and every Bundle fails when its Graph is built
@@ -275,6 +318,62 @@ type EnvironmentSpec struct {
 	// use wave.
 	// +optional
 	Regions []string `json:"regions,omitempty"`
+}
+
+// VerificationSpec configures Argo Rollouts analysis of an environment.
+type VerificationSpec struct {
+	// AnalysisTemplates are the templates to run, each as its own AnalysisRun.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=10
+	// +listType=map
+	// +listMapKey=name
+	AnalysisTemplates []AnalysisTemplateRef `json:"analysisTemplates"`
+
+	// Args set template args by name. They take precedence over the args
+	// kardinal sets (bundle, pipeline, environment, image, tag, digest,
+	// commit) and over the template's defaults. Only args a template declares
+	// are passed to its AnalysisRun.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Args []AnalysisArg `json:"args,omitempty"`
+
+	// Inconclusive is what an Inconclusive AnalysisRun counts as: "fail"
+	// (default) or "pass".
+	// +kubebuilder:validation:Enum=fail;pass
+	// +optional
+	Inconclusive string `json:"inconclusive,omitempty"`
+
+	// Timeout bounds the analyses from the moment the environment entered
+	// Verifying. An analysis still running then fails the environment.
+	// Empty or "0" means 30m.
+	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
+	// +optional
+	Timeout string `json:"timeout,omitempty"`
+}
+
+// AnalysisTemplateRef names an Argo Rollouts AnalysisTemplate (in the
+// Pipeline namespace) or ClusterAnalysisTemplate.
+type AnalysisTemplateRef struct {
+	// Name is the template name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// Kind is AnalysisTemplate (default) or ClusterAnalysisTemplate.
+	// +kubebuilder:validation:Enum=AnalysisTemplate;ClusterAnalysisTemplate
+	// +optional
+	Kind string `json:"kind,omitempty"`
+}
+
+// AnalysisArg is one AnalysisRun arg.
+type AnalysisArg struct {
+	// Name is the arg name the template declares.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// Value is the arg value.
+	Value string `json:"value"`
 }
 
 // PromotionTemplateRef is the shape of the deprecated
@@ -365,12 +464,22 @@ type StepSpec struct {
 }
 
 // UpdateConfig holds manifest update strategy configuration.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.strategy) || self.strategy != 'yaml' || (has(self.yaml) && size(self.yaml.updates) > 0)",message="update.strategy yaml requires update.yaml.updates"
 type UpdateConfig struct {
-	// Strategy selects the manifest update strategy.
-	// +kubebuilder:validation:Enum=kustomize;helm;argocd
+	// Strategy selects the manifest update strategy: kustomize (default,
+	// kustomization.yaml images), helm (one values key), argocd (patch the
+	// Application, no git), or yaml (any YAML paths in any files of the
+	// environment directory).
+	// +kubebuilder:validation:Enum=kustomize;helm;argocd;yaml
 	// +kubebuilder:default=kustomize
 	// +optional
 	Strategy string `json:"strategy,omitempty"`
+
+	// YAML holds the edits of the yaml strategy.
+	// Used when Strategy is "yaml".
+	// +optional
+	YAML *YAMLUpdateConfig `json:"yaml,omitempty"`
 
 	// Helm holds Helm-specific update configuration.
 	// Used when Strategy is "helm".
@@ -382,6 +491,57 @@ type UpdateConfig struct {
 	// spec.source.helm.valuesObject directly without a git commit.
 	// +optional
 	ArgoCD *ArgoCDUpdateConfig `json:"argocd,omitempty"`
+}
+
+// YAMLUpdateConfig lists the edits of the yaml update strategy. All of them
+// are applied in one commit; when one cannot be applied, none is written.
+type YAMLUpdateConfig struct {
+	// Updates are the values to set.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
+	Updates []YAMLUpdate `json:"updates"`
+}
+
+// YAMLUpdate sets one scalar in one YAML file to a value taken from a Bundle
+// image. The file must be a regular file of at most 4 MiB holding one YAML
+// document; symbolic links and anchors or aliases on the path are refused.
+type YAMLUpdate struct {
+	// File is the YAML file, relative to the environment path, for example
+	// "values.yaml" or "deploy/deployment.yaml". It must stay inside the
+	// repository. A file with several documents (---) is not supported.
+	// Each path segment starts with a letter, digit or "_" and has single
+	// dots only, so the file can neither be absolute nor leave the
+	// environment path.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*(/[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*)*$`
+	// +kubebuilder:validation:MaxLength=512
+	File string `json:"file"`
+
+	// Path is the key path of the scalar to set, in the grammar
+	// chartVersionPath uses too: keys separated by "." (a leading "." is
+	// optional), "[N]" to index a list and "[field=value]" for the list
+	// element whose field has that value, for example "image.tag",
+	// "spec.template.spec.containers[0].image" or
+	// "spec.template.spec.containers[name=app].image". A digits-only key
+	// indexes a list when it reaches one. Missing mapping keys are created;
+	// list elements are not. A key that contains "." is not supported.
+	// +kubebuilder:validation:Pattern=`^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$`
+	// +kubebuilder:validation:MaxLength=512
+	Path string `json:"path"`
+
+	// Image is the repository of the Bundle image whose value is written,
+	// for example "ghcr.io/org/app". It may be empty when the Bundle has
+	// exactly one image.
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Value is what to write: tag (default), digest, tagWithDigest
+	// ("<tag>@<digest>"), image ("<repository>:<tag>"), or imageWithDigest
+	// ("<repository>:<tag>@<digest>", or "<repository>@<digest>" without a
+	// tag). A value the image does not have (a digest of a tag-only image)
+	// fails the step.
+	// +kubebuilder:validation:Enum=tag;digest;tagWithDigest;image;imageWithDigest
+	// +optional
+	Value string `json:"value,omitempty"`
 }
 
 // HelmUpdateConfig holds Helm-specific update strategy configuration.
@@ -396,6 +556,26 @@ type HelmUpdateConfig struct {
 	// environment path). Defaults to "values.yaml".
 	// +optional
 	ValuesFile string `json:"valuesFile,omitempty"`
+	// ChartVersionFile is the file a chart Bundle's version is written to,
+	// relative to the environment path: an umbrella Chart.yaml, an Argo CD
+	// Application, a Flux HelmRelease or a kustomization.yaml with
+	// helmCharts. Defaults to "Chart.yaml".
+	// +optional
+	ChartVersionFile string `json:"chartVersionFile,omitempty"`
+
+	// ChartVersionPath is the YAML path of the chart version in
+	// chartVersionFile, in the grammar of update.yaml.updates[].path: keys
+	// separated by ".", "[N]" (or a digits-only key) to index a list, and
+	// "[field=value]" for the list element whose field has that value. Defaults to
+	// ".dependencies[name=<chart>].version": the umbrella chart's dependency
+	// named after the Bundle's chart (an error when there is none). For
+	// example ".spec.source.targetRevision" (Argo CD Application),
+	// ".spec.chart.spec.version" (Flux HelmRelease) or
+	// ".helmCharts[name=podinfo].version" (kustomize).
+	// +optional
+	// +kubebuilder:validation:Pattern=`^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$`
+	// +kubebuilder:validation:MaxLength=512
+	ChartVersionPath string `json:"chartVersionPath,omitempty"`
 }
 
 // ArgoCDUpdateConfig holds ArgoCD-native update strategy configuration.
@@ -446,11 +626,31 @@ type HealthConfig struct {
 	// supported" instead of silently checking the local cluster.
 	//
 	// Deprecated: remove cluster. To verify a workload in another cluster,
-	// check its Argo CD Application (health.type: argocd) or Flux
-	// Kustomization (health.type: flux) in the hub cluster kardinal runs in;
-	// see docs/health-adapters.md#remote-clusters.
+	// set kubeconfigSecretRef, or check its Argo CD Application
+	// (health.type: argocd) or Flux Kustomization (health.type: flux) in the
+	// hub cluster kardinal runs in; see docs/health-adapters.md#remote-clusters.
 	// +optional
 	Cluster string `json:"cluster,omitempty"`
+
+	// KubeconfigSecretRef runs the health check against another cluster: the
+	// one the kubeconfig in this Secret key selects (its current context).
+	// The Secret must be in the Pipeline's namespace. Every health type reads
+	// its object (Deployment, Application, Kustomization, Rollout, Canary)
+	// in that cluster instead of the controller's.
+	//
+	// Only inline credentials are accepted: a bearer token, a client
+	// certificate and key (-data fields), or a username and password. A
+	// kubeconfig with exec, auth-provider, tokenFile or any file path is
+	// refused and the step fails: it would run a command, or read a file, in
+	// the controller. The API server address goes through the controller's
+	// egress guard (no loopback, link-local or metadata addresses) and is
+	// dialled directly, not through HTTP(S)_PROXY.
+	//
+	// A cluster that cannot be reached is not unhealthy: the step reports
+	// ClusterUnreachable and keeps checking until health.timeout. Remote
+	// health is polled, not watched.
+	// +optional
+	KubeconfigSecretRef *KubeconfigSecretRef `json:"kubeconfigSecretRef,omitempty"`
 
 	// LabelSelector enables WatchKind mode for health.type=resource.
 	// When set, the health node watches ALL Deployments in the environment namespace
@@ -496,6 +696,18 @@ type HealthConfig struct {
 	Flagger *HealthTargetRef `json:"flagger,omitempty"`
 }
 
+// KubeconfigSecretRef names the key of a Secret, in the Pipeline's
+// namespace, that holds a kubeconfig.
+type KubeconfigSecretRef struct {
+	// Name is the Secret name.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Key is the key holding the kubeconfig. Defaults to "kubeconfig".
+	// +optional
+	Key string `json:"key,omitempty"`
+}
+
 // HealthTargetRef names the object a health adapter reads.
 // Empty fields fall back to the adapter's default.
 type HealthTargetRef struct {
@@ -539,6 +751,51 @@ type DeliveryConfig struct {
 	Delegate string `json:"delegate,omitempty"`
 }
 
+// Expired reports whether the hold's expiresAt has passed at now. An expired
+// hold counts as absent; the Pipeline reconciler removes it from spec.holds.
+func (h *EnvironmentHold) Expired(now time.Time) bool {
+	return h != nil && h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time)
+}
+
+// EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.
+type EnvironmentHold struct {
+	// Environment is the held environment.
+	// +kubebuilder:validation:MinLength=1
+	Environment string `json:"environment"`
+
+	// Bundle is the rollback Bundle the environment is held on: the only
+	// Bundle that promotes into it while the hold lasts.
+	// +kubebuilder:validation:MinLength=1
+	Bundle string `json:"bundle"`
+
+	// Reason says why the environment is held. It is shown wherever the hold
+	// or a gate it exempts is.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Reason string `json:"reason"`
+
+	// CreatedBy is who held the environment: the Kubernetes user name of the
+	// request that added the hold (the admission policy refuses another
+	// value), or, for a hold added through the UI, the UI user the
+	// controller authenticated.
+	// +optional
+	CreatedBy string `json:"createdBy,omitempty"`
+
+	// CreatedAt is when.
+	// +optional
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+
+	// ExpiresAt, when set, is when the controller removes the hold.
+	// +optional
+	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
+
+	// Artifacts is the digest of the rollback Bundle's artifacts (type,
+	// images, configRef) when the hold was made (lifecycle.ArtifactDigest).
+	// The gate exemption applies only while the Bundle still has them.
+	// +optional
+	Artifacts string `json:"artifacts,omitempty"`
+}
+
 // PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
 // any promotion in this pipeline can proceed.
 type PipelinePolicyGateRef struct {
@@ -564,6 +821,14 @@ type PipelineStatus struct {
 	// Conditions holds status conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ObservedHolds is spec.holds as the Pipeline reconciler last recorded
+	// it: the HoldCreated and HoldReleased AuditEvents are written from the
+	// difference, whichever client changed spec.holds.
+	// +listType=map
+	// +listMapKey=environment
+	// +optional
+	ObservedHolds []EnvironmentHold `json:"observedHolds,omitempty"`
 
 	// DeploymentMetrics holds aggregate DORA-style metrics computed from the
 	// last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler.
@@ -612,6 +877,43 @@ type PipelineDeploymentMetrics struct {
 	// SampleSize is the number of Bundles included in this computation.
 	// +optional
 	SampleSize int `json:"sampleSize,omitempty"`
+
+	// Deployments is the number of deployments the change failure rate and
+	// time to restore are computed over: the last 30 Bundles whose change
+	// reached a final environment (one nothing depends on; its health check
+	// started), whatever the outcome, once per Bundle. Not deployments: a
+	// no-op promotion (outputs.noChanges), the steps a supersession
+	// cancelled (a RollingBack, AbortedByAlarm or already Failed step of a
+	// superseded Bundle still counts), and rollback Bundles (they count only
+	// as restores).
+	// +optional
+	Deployments int `json:"deployments,omitempty"`
+
+	// FailedDeployments is how many of those deployments failed: a
+	// PromotionStep in a final environment ended Failed, AbortedByAlarm or
+	// RollingBack after its health check started, a rollback Bundle later
+	// rolled a final environment back from it (annotation
+	// kardinal.io/rollback-from), or the Bundle was rejected after it was
+	// deployed.
+	// +optional
+	FailedDeployments int `json:"failedDeployments,omitempty"`
+
+	// ChangeFailureRateMillis is failedDeployments / deployments as integer
+	// thousandths (DORA change failure rate; 250 = 25%).
+	// +optional
+	ChangeFailureRateMillis int `json:"changeFailureRateMillis,omitempty"`
+
+	// MeanTimeToRestoreMinutes is the mean, in whole minutes, from each failed
+	// deployment reaching a final environment to the first later Bundle
+	// Verified in every final environment it targets, in every region (DORA
+	// time to restore). Failures not restored yet are not counted.
+	// +optional
+	MeanTimeToRestoreMinutes int64 `json:"meanTimeToRestoreMinutes,omitempty"`
+
+	// RestoredFailures is the number of failed deployments in
+	// meanTimeToRestoreMinutes.
+	// +optional
+	RestoredFailures int `json:"restoredFailures,omitempty"`
 
 	// ComputedAt is when these metrics were last written by the PipelineReconciler.
 	// +optional

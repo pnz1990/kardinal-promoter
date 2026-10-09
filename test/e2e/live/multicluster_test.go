@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -384,9 +385,10 @@ func (f *fleet) promote(t *testing.T, bundle, tag string, prods ...string) {
 		assert.Equal(t, "org", g.Labels["kardinal.io/scope"])
 		require.Equal(t, !weekend(g.Status.LastEvaluatedAt.Time), g.Status.Ready, "no-weekend-deploys: %s", framework.DescribeGate(g))
 		if !g.Status.Ready {
+			oncall := whoAmI(t, e)
 			e.Override(t, g, v1alpha1.PolicyGateOverride{Reason: "e2e runs on weekends", Stage: env,
-				CreatedBy: "e2e-oncall", ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
-			e.WaitGateReady(t, f.ns, bundle, env, "no-weekend-deploys-"+env, true, "OVERRIDDEN by e2e-oncall", gateTimeout)
+				CreatedBy: oncall, ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
+			e.WaitGateReady(t, f.ns, bundle, env, "no-weekend-deploys-"+env, true, "OVERRIDDEN by "+oncall, gateTimeout)
 		}
 	}
 
@@ -512,4 +514,91 @@ func TestMultiCluster_FleetExample(t *testing.T) {
 	}
 	assert.Contains(t, e.ReadFile(t, f.repo, f.repo.Branch, fixtures.Path("prod-eu")+"/kustomization.yaml"), "newTag: "+fixtures.V2)
 	s.WaitRolloutHealthy(t, ns, fixtures.Workload("prod-eu"), fixtures.Image+":"+fixtures.V2, time.Second)
+}
+
+// spokeKubeconfig returns the spoke kubeconfig hack/e2e/components/spoke.sh
+// gave the hub's Flux: a ServiceAccount token, the spoke's CA, and the
+// server as the hub reaches it.
+func spokeKubeconfig(t *testing.T, e *framework.Env) string {
+	t.Helper()
+	s, err := e.Kube.CoreV1().Secrets(framework.FluxNamespace).Get(context.Background(), framework.SpokeKubeconfigSecret, metav1.GetOptions{})
+	require.NoError(t, err)
+	kc := string(s.Data[framework.SpokeKubeconfigKey])
+	require.NotEmpty(t, kc)
+	return kc
+}
+
+// putKubeconfig creates or replaces the Secret ns/name holding kubeconfig
+// under key "kubeconfig".
+func putKubeconfig(t *testing.T, e *framework.Env, ns, name, kubeconfig string) {
+	t.Helper()
+	ctx := context.Background()
+	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns,
+		Labels: map[string]string{"kardinal.io/referenceable": "true"}},
+		Data: map[string][]byte{"kubeconfig": []byte(kubeconfig)}}
+	if _, err := e.Kube.CoreV1().Secrets(ns).Create(ctx, s, metav1.CreateOptions{}); apierrors.IsAlreadyExists(err) {
+		_, err = e.Kube.CoreV1().Secrets(ns).Update(ctx, s, metav1.UpdateOptions{})
+		require.NoError(t, err)
+	} else {
+		require.NoError(t, err)
+	}
+}
+
+// TestMultiCluster_KubeconfigHealth checks health.kubeconfigSecretRef: the
+// hub's Argo CD deploys prod into the spoke, and health.type resource reads
+// the Deployment in the spoke through a kubeconfig Secret in the Pipeline
+// namespace, so the release is Verified on what runs there. When the Secret
+// points at an address where no API server listens, the step reports
+// ClusterUnreachable without counting a health failure, and once the Secret
+// is fixed (rotation) it is Verified. A kubeconfig with an exec plugin fails
+// the step: the controller never runs a command for it.
+//
+// Covers MC-KUBECONFIG-01, MC-KUBECONFIG-02, MC-KUBECONFIG-03.
+func TestMultiCluster_KubeconfigHealth(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	s := e.Spoke(t)
+	a := newSpokeApp(t, e, s, fixtures.KustomizeRepo, "prod")
+	workload := fixtures.Workload("prod")
+	s.WaitDeploymentImage(t, a.ns, workload, fixtures.Image+":"+fixtures.V1, syncTimeout)
+	notInHub(t, e, a.ns, workload)
+	good := spokeKubeconfig(t, e)
+	putKubeconfig(t, e, a.ns, "spoke", good)
+
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Health = v1alpha1.HealthConfig{Type: "resource", Timeout: "4m",
+		Resource:            &v1alpha1.ResourceRef{Name: workload, Namespace: a.ns},
+		KubeconfigSecretRef: &v1alpha1.KubeconfigSecretRef{Name: "spoke"}}
+	a.apply(t, p)
+
+	v2 := fixtures.Image + ":" + fixtures.V2
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", v2)
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assert.Contains(t, ps.Status.Message, "health check passed via resource")
+	assert.Equal(t, v2, s.DeploymentImage(t, a.ns, workload), "the spoke runs the release")
+	notInHub(t, e, a.ns, workload)
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+
+	// No API server listens on port 1 of the spoke's node.
+	unreachable := strings.Replace(good, ":6443", ":1", 1)
+	require.NotEqual(t, good, unreachable)
+	putKubeconfig(t, e, a.ns, "spoke", unreachable)
+	v3 := fixtures.Image + ":" + fixtures.V3
+	bundle = e.CreateBundle(t, a.ns, pipelineName, "--image", v3)
+	ps = e.WaitStepMessage(t, a.ns, pipelineName, bundle, "prod", "HealthChecking",
+		"waiting for resource: ClusterUnreachable: ", 3*time.Minute)
+	assert.Zero(t, ps.Status.ConsecutiveHealthFailures, "an unreachable cluster is not a health failure")
+	assert.NotContains(t, ps.Status.Message, "token")
+	putKubeconfig(t, e, a.ns, "spoke", good)
+	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assert.Contains(t, ps.Status.Message, "health check passed via resource")
+	assert.Equal(t, v3, s.DeploymentImage(t, a.ns, workload))
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+
+	exec := strings.Replace(good, "    user:\n", "    user:\n      exec: {apiVersion: client.authentication.k8s.io/v1, command: /bin/sh, args: [-c, \"touch /tmp/pwned\"]}\n", 1)
+	require.NotEqual(t, good, exec, "the kubeconfig has a users[].user entry")
+	putKubeconfig(t, e, a.ns, "spoke", exec)
+	bundle = e.CreateBundle(t, a.ns, pipelineName, "--image", v2)
+	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Failed", promoteTimeout)
+	assert.Contains(t, ps.Status.Message, `health.kubeconfigSecretRef "spoke": kubeconfig not allowed: users[].user.exec is not supported`)
 }

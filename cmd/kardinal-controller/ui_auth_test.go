@@ -460,7 +460,62 @@ func TestUIHandler_ActionsUseVirtualSubresources(t *testing.T) {
 }
 
 // TestGateOverrideCapDefault: the UI's default cap is the chart's
-// gateOverrides.maxMinutes default (test/helm TestGateOverrideCapIsOneValue).
+// controller.gateOverrideMaxMinutes default (test/helm TestGateOverrideCapIsOneValue).
 func TestGateOverrideCapDefault(t *testing.T) {
 	assert.Equal(t, 1440, maxGateOverrideMinutes)
+}
+
+// holdAccess allows every kardinal.io verb in team-a, and the hold
+// subresource only to holdUser.
+type holdAccess struct{ holdUser string }
+
+func (a holdAccess) Allowed(_ context.Context, u authv1.UserInfo, attrs authzv1.ResourceAttributes) (bool, string, error) {
+	if attrs.Subresource == "hold" {
+		return u.Username == a.holdUser && attrs.Verb == "update" && attrs.Resource == "pipelines", "", nil
+	}
+	return attrs.Group == "kardinal.io" && attrs.Namespace == "team-a" && attrs.Subresource == "", "", nil
+}
+
+// TestUIHandler_HoldNeedsHoldSubresource (#1528 QA): holding or releasing
+// through the UI needs update on pipelines/hold, the subresource the
+// hold-writes admission policy asks of a direct write: plain update on the
+// Pipeline is not enough, and a refused request writes nothing.
+func TestUIHandler_HoldNeedsHoldSubresource(t *testing.T) {
+	tokens := &uiTestTokens{users: map[string]string{"d": "deployer", "h": "holder"}}
+	held := func() *v1alpha1.Pipeline {
+		p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
+			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}}
+		p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-1", Reason: "x"}}
+		return p
+	}
+	for _, tc := range []struct {
+		token    string
+		wantCode int
+		wantHeld bool
+	}{
+		{token: "d", wantCode: http.StatusForbidden, wantHeld: true},
+		{token: "h", wantCode: http.StatusOK, wantHeld: false},
+	} {
+		c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(held()).Build()
+		h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: holdAccess{holdUser: "holder"}}, "", nil, zerolog.Nop())
+		rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/release-hold", "Bearer "+tc.token,
+			`{"pipeline":"app","namespace":"team-a","environment":"prod"}`)
+		require.Equal(t, tc.wantCode, rec.Code, rec.Body.String())
+		var p v1alpha1.Pipeline
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "app"}, &p))
+		assert.Equal(t, tc.wantHeld, len(p.Spec.Holds) == 1, tc.token)
+	}
+
+	// A rollback with a hold by a user without pipelines/hold creates
+	// nothing.
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
+			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}}).Build()
+	h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: holdAccess{holdUser: "holder"}}, "", nil, zerolog.Nop())
+	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/rollback", "Bearer d",
+		`{"pipeline":"app","namespace":"team-a","environment":"prod","hold":true,"holdReason":"x"}`)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	assert.Empty(t, bundles.Items)
 }

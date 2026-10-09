@@ -160,3 +160,9 @@ func TestManagerOptions_SecretsConfigMapsEventsReadLive(t *testing.T) {
 	}, live, "Secret, ConfigMap and Event reads must go to the API server")
 	assert.Equal(t, []string{"*v1alpha1.Pipeline"}, cached.reads, "CRD reads stay on the informer cache")
 }
+
+// TestLeaderElectionIDPerShard: each --namespace-shard elects its own leader.
+func TestLeaderElectionIDPerShard(t *testing.T) {
+	assert.Equal(t, "kardinal-promoter-leader", buildManagerOptions(managerConfig{}).LeaderElectionID)
+	assert.Equal(t, "kardinal-promoter-leader-b", buildManagerOptions(managerConfig{namespaceShard: "b"}).LeaderElectionID)
+}

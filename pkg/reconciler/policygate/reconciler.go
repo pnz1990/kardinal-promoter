@@ -13,8 +13,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,6 +41,8 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const (
@@ -78,6 +83,11 @@ const (
 // It only processes instances (gates with kardinal.io/bundle label).
 // Template PolicyGates (no bundle label) are ignored.
 type Reconciler struct {
+	// Workers is how many objects are reconciled at once (--policygate-workers);
+	// 0 is the manager's default. One object is never reconciled twice at
+	// once: the work queue serializes it.
+	Workers int
+
 	client.Client
 	// eval is the CEL evaluator, created once at construction time.
 	// Unexported: callers should use NewReconciler to get a properly initialized Reconciler.
@@ -107,16 +117,12 @@ type Reconciler struct {
 	// controller first saw it (--gate-override-max-minutes). Zero means
 	// DefaultMaxOverride.
 	MaxOverride time.Duration
-}
-
-// DefaultMaxOverride is the --gate-override-max-minutes default.
-const DefaultMaxOverride = 24 * time.Hour
-
-func (r *Reconciler) maxOverride() time.Duration {
-	if r.MaxOverride > 0 {
-		return r.MaxOverride
+	// IdentityPolicy reports whether the chart's override identity
+	// admission policy is bound (IdentityPolicyCheck). Overrides first seen
+	// while it is not are recorded unverified. Nil: always unverified.
+	IdentityPolicy interface {
+		Active(ctx context.Context) bool
 	}
-	return DefaultMaxOverride
 }
 
 // DefaultStatusHeartbeat is the controller's --gate-status-heartbeat default.
@@ -195,9 +201,15 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.reconcileTemplate(ctx, &gate)
 	}
 
+	// Every override is recorded and audited once (GateOverridden), whatever
+	// the Bundle's phase, before anything else reads it.
+	if err := r.recordOverrides(ctx, &gate); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// A settled Bundle never promotes again, so its gate instances are left
 	// as they were: no evaluation, status write, audit record or requeue.
-	// Superseded is terminal (E2E-R20). A Verified Bundle whose GraphReady is
+	// Superseded and Rejected are terminal (E2E-R20, #1451). A Verified Bundle whose GraphReady is
 	// True is finished: its Graph is not read again, so a gate write would
 	// only wake the Graph and NotificationHook watchers for nothing (#1301).
 	// A Failed Bundle can recover, so its gates keep being evaluated.
@@ -212,22 +224,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// this gate (matching stage or stage=""), the gate passes immediately.
 	// This check is done before building the CEL context for performance.
 	now := r.now()
-	if err := r.recordOverrides(ctx, &gate, now); err != nil {
-		return ctrl.Result{}, err
-	}
-	if activeOverride, end := findActiveOverride(gate.Spec.Overrides, gate.Labels[labelEnvironment], now,
-		firstSeenOf(gate.Status.OverridesSeen), r.maxOverride()); activeOverride != nil {
-		overrideReason := fmt.Sprintf("OVERRIDDEN by %s: %s (expires %s)",
-			activeOverride.CreatedBy,
-			activeOverride.Reason,
-			end.UTC().Format("2006-01-02T15:04Z"))
+	if active, ok := findActiveOverride(&gate, gate.Labels[labelEnvironment], now, r.maxOverride()); ok {
+		overrideReason := active.reason()
 		log.Info().Str("reason", overrideReason).Msg("policygate override active, passing")
 		if patchErr := r.patchStatus(ctx, &gate, true, overrideReason); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status (override): %w", patchErr)
 		}
-		// Re-evaluate just after the override expires, so the gate does not stay
-		// force-passed for up to a whole recheck interval (C04-gates-21).
-		return ctrl.Result{RequeueAfter: min(recheckInterval, end.Sub(now)+time.Second)}, nil
+		// Re-evaluate just after the override ends (its expiresAt or the
+		// cap), so the gate does not stay force-passed for up to a whole
+		// recheck interval (C04-gates-21).
+		return ctrl.Result{RequeueAfter: min(recheckInterval, active.end.Sub(now)+time.Second)}, nil
 	}
 
 	// Build CEL context. bundleVersion is returned separately so it can be
@@ -243,8 +249,26 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
 	}
 
+	// Approvals (#1449): count spec.approvals, which the Graph copies from
+	// the Bundle's Approval objects, against spec.approval (buildContext
+	// exposes the same count to the expression as approvals.*).
+	tally := tallyApprovals(&gate, bundleCreator(celCtx))
+	if err := r.recordApprovals(ctx, &gate, tally); apierrors.IsConflict(err) {
+		return ctrl.Result{}, err // a stale read: Reconcile evaluates again (#1513)
+	} else if err != nil {
+		log.Warn().Err(err).Msg("failed to record approvals in status (non-fatal)")
+	}
+
 	// Evaluate CEL expression
 	pass, reason, evalErr := r.eval.evaluate(ctx, gate.Spec.Expression, celCtx)
+	// The approval policy holds a gate whose expression passes.
+	if pass && evalErr == nil {
+		if held := tally.blocked(); held != "" {
+			pass, reason = false, held
+		} else if met := tally.met(); met != "" {
+			reason = reason + "; " + met
+		}
+	}
 	// Name the stale metrics the expression uses when it blocks: a stale
 	// value is empty, so a double(...) comparison fails with an evaluation
 	// error rather than false.
@@ -259,6 +283,31 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// evaluation error carries it too.
 	if bundleVersion != "" {
 		reason = fmt.Sprintf("bundle.version=%s: %s", bundleVersion, reason)
+	}
+	// The rollback an environment is held on (spec.holds) passes the gates
+	// of that environment, with an explicit EXEMPT reason, the GateEvaluated
+	// audit record of the flip and a Warning Event: never a silent pass
+	// (#1528). Only a rollback the controller verifies (VerifyHeldRollback)
+	// is exempt; a refused exemption is named in the gate's reason.
+	if !pass {
+		h, refused := r.holdExemption(ctx, &gate, bundleName)
+		if refused != "" {
+			reason += " (hold exemption refused: " + refused + ")"
+		}
+		if h != nil {
+			reason = lifecycle.GateExemption(h, reason)
+			log.Warn().Str("hold", h.Bundle).Str("reason", reason).Msg("policygate exempt for the held rollback")
+			// One Event per exempt episode, not per changed gate reason.
+			first := !gate.Status.Ready || !lifecycle.IsHoldExemption(gate.Status.Reason)
+			if patchErr := r.patchStatus(ctx, &gate, true, reason); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("patch gate status (hold exemption): %w", patchErr)
+			}
+			if r.Recorder != nil && first {
+				kubeevent.Emit(r.Recorder, &gate, corev1.EventTypeWarning, ReasonGateExempted, "Evaluate", reason)
+			}
+			// The exemption ends at the hold's expiresAt.
+			return ctrl.Result{RequeueAfter: lifecycle.UntilExpiry(h, recheckInterval)}, nil
+		}
 	}
 	if evalErr != nil {
 		// Fail-closed on evaluation error. spec.message explains a false
@@ -385,7 +434,7 @@ func (r *Reconciler) markGenerated(ctx context.Context, gate *kardinalv1alpha1.P
 }
 
 // bundleSettled reports whether the gate's Bundle exists and is either
-// Superseded, or Verified with its GraphReady condition True. The Bundle
+// Superseded or Rejected (both final), or Verified with its GraphReady condition True. The Bundle
 // reconciler keeps a Verified Bundle's GraphReady up to date until it is True
 // and does not read the Graph after that. A read error is not treated as
 // settled: buildContext reports it and the gate fails closed as before.
@@ -395,7 +444,7 @@ func (r *Reconciler) bundleSettled(ctx context.Context, namespace, bundleName st
 		return false
 	}
 	switch bundle.Status.Phase {
-	case "Superseded":
+	case "Superseded", "Rejected":
 		return true
 	case "Verified":
 		return meta.IsStatusConditionTrue(bundle.Status.Conditions, condBundleGraphReady)
@@ -430,6 +479,9 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"type":    bundle.Spec.Type,
 		"version": version,
 		"labels":  labelsCtx,
+		// createdBy is the verified creator (kardinal.io/created-by), "" when
+		// the Bundle has none.
+		"createdBy": bundle.Annotations[lifecycle.AnnotationCreatedBy],
 		"provenance": map[string]interface{}{
 			"author":    "",
 			"commitSHA": "",
@@ -461,7 +513,8 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	metricsNS, err := r.metricsNamespace(ctx, gate)
 	var metricsCtx map[string]interface{}
 	if err == nil {
-		metricsCtx, err = r.buildMetricsContext(ctx, metricsNS, metricsNow)
+		metricsCtx, err = r.buildMetricsContext(ctx, metricsNS, metricsNow,
+			gate.Labels[labelBundle], gate.Labels[labelEnvironment])
 	}
 	if err != nil {
 		// Non-fatal: log and continue with empty metrics context so the gate
@@ -527,7 +580,16 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"metrics":      metricsCtx,
 		"upstream":     upstreamCtx,
 		"changewindow": cwCtx,
+		"approvals":    tallyApprovals(gate, bundleCreator(map[string]interface{}{"bundle": bundleCtx})).context(),
 	}, version, nil
+}
+
+// bundleCreator reads bundle.createdBy from a CEL context built by
+// buildContext.
+func bundleCreator(celCtx map[string]interface{}) string {
+	b, _ := celCtx["bundle"].(map[string]interface{})
+	creator, _ := b["createdBy"].(string)
+	return creator
 }
 
 // directUpstreamSoakMinutes returns the soak minutes of the environments that
@@ -617,23 +679,48 @@ func (r *Reconciler) metricsNamespace(ctx context.Context, gate *kardinalv1alpha
 // an outage or while its status patch keeps failing. It is exposed as result
 // "Stale" with an empty value, so both metrics.x.result == "Pass" and
 // double(metrics.x.value) < ... fail closed, and stale is true.
-func (r *Reconciler) buildMetricsContext(ctx context.Context, ns string, now time.Time) (map[string]interface{}, error) {
+//
+// Per-promotion MetricChecks (spec.perPromotion) are templates with no result
+// of their own. The instance the Graph made from template T for this gate's
+// Bundle and environment (labels kardinal.io/metric-template=T,
+// kardinal.io/bundle, kardinal.io/environment) is exposed as metrics.T.
+// Until it exists, and when more than one object claims to be it, metrics.T
+// is stale. Instances of other Bundles and environments are not exposed.
+func (r *Reconciler) buildMetricsContext(ctx context.Context, ns string, now time.Time,
+	bundle, env string) (map[string]interface{}, error) {
 	var list kardinalv1alpha1.MetricCheckList
 	if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
 		return nil, fmt.Errorf("list metricchecks: %w", err)
 	}
 
+	entryOf := func(mc *kardinalv1alpha1.MetricCheck) map[string]interface{} {
+		if mc == nil || mc.Spec.PerPromotion || mc.Status.ValidUntil == nil || mc.Status.ValidUntil.Time.Before(now) {
+			return map[string]interface{}{"value": "", "result": metricResultStale, "stale": true}
+		}
+		return map[string]interface{}{"value": mc.Status.LastValue, "result": mc.Status.Result, "stale": false}
+	}
 	result := make(map[string]interface{}, len(list.Items))
-	for _, mc := range list.Items {
-		entry := map[string]interface{}{
-			"value":  mc.Status.LastValue,
-			"result": mc.Status.Result,
-			"stale":  false,
+	instances := map[string][]*kardinalv1alpha1.MetricCheck{}
+	for i := range list.Items {
+		mc := &list.Items[i]
+		if tmpl, ok := mc.Labels[graph.LabelMetricTemplate]; ok {
+			if bundle != "" && mc.Labels[labelBundle] == bundle && mc.Labels[labelEnvironment] == env {
+				instances[tmpl] = append(instances[tmpl], mc)
+			}
+			continue
 		}
-		if mc.Status.ValidUntil == nil || mc.Status.ValidUntil.Time.Before(now) {
-			entry["value"], entry["result"], entry["stale"] = "", metricResultStale, true
+		result[mc.Name] = entryOf(mc)
+	}
+	for i := range list.Items {
+		mc := &list.Items[i]
+		if _, isInstance := mc.Labels[graph.LabelMetricTemplate]; isInstance || !mc.Spec.PerPromotion {
+			continue
 		}
-		result[mc.Name] = entry
+		var inst *kardinalv1alpha1.MetricCheck
+		if found := instances[mc.Name]; len(found) == 1 {
+			inst = found[0]
+		}
+		result[mc.Name] = entryOf(inst)
 	}
 	return result, nil
 }
@@ -658,24 +745,7 @@ func staleMetricNotes(expr string, celCtx map[string]interface{}) string {
 // exprRefersToMetric reports whether expr names the metric: metrics["name"],
 // metrics['name'] or metrics.name.
 func exprRefersToMetric(expr, name string) bool {
-	if strings.Contains(expr, `"`+name+`"`) || strings.Contains(expr, `'`+name+`'`) {
-		return true
-	}
-	for rest := expr; ; {
-		i := strings.Index(rest, "metrics."+name)
-		if i < 0 {
-			return false
-		}
-		rest = rest[i+len("metrics."+name):]
-		if rest == "" || !isIdentChar(rest[0]) {
-			return true
-		}
-	}
-}
-
-// isIdentChar reports whether c can continue a CEL identifier.
-func isIdentChar(c byte) bool {
-	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+	return graph.ExprReadsMetric(expr, name)
 }
 
 // buildUpstreamContext reads per-environment soak minutes from bundle status.
@@ -973,6 +1043,7 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 	gate.Status.Ready = ready
 	gate.Status.Reason = reason
 	gate.Status.LastEvaluatedAt = &now
+	stampVerifiedSince(gate, now.Time)
 	// The Ready condition's lastTransitionTime moves only when the gate flips,
 	// unlike lastEvaluatedAt, so it identifies one blocking episode. The
 	// NotificationHook reconciler keys PolicyGate.Blocked on it.
@@ -1222,7 +1293,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return r.instanceGateRequests(ctx, "ChangeWindow", "changewindow")
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Workers}).
 		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		// Watch MetricCheck objects: when a MetricCheck's result or value changes,
 		// the gates that read its namespace as metrics.* are re-evaluated
@@ -1236,11 +1308,16 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Watch ChangeWindow objects: a window boundary (status.active write) or a
 		// spec edit re-evaluates the gates that reference changewindow.
 		Watches(&kardinalv1alpha1.ChangeWindow{}, handler.EnqueueRequestsFromMapFunc(changeWindowMapper)).
+		// Watch Pipelines: adding or releasing a hold (spec.holds) re-evaluates
+		// the Pipeline's gate instances, so the held rollback's exemption
+		// starts and ends at once.
+		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineGateRequests),
+			builder.WithPredicates(pipelineHoldsChanged)).
 		// Watch PromotionStep creates: a new unstarted step's required gates
 		// are re-evaluated at once (#1300).
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(stepRequiredGateRequests),
-			builder.WithPredicates(unstartedStepCreated)).
-		Complete(r)
+			builder.WithPredicates(unstartedStepCreated))
+	return shard.Active().Complete(b, tracing.WrapReconciler("policygate", r), &kardinalv1alpha1.PolicyGateList{})
 }
 
 // instanceGateRequests lists PolicyGates and returns a request for every instance
@@ -1278,17 +1355,7 @@ func (r *Reconciler) instanceGateRequests(ctx context.Context, source, exprConta
 // extractVersion returns the version string from a Bundle.
 // For image bundles: first image tag. For config bundles: first 8 chars of commitSHA.
 func extractVersion(bundle *kardinalv1alpha1.Bundle) string {
-	if bundle.Spec.Type == "config" && bundle.Spec.ConfigRef != nil {
-		sha := bundle.Spec.ConfigRef.CommitSHA
-		if len(sha) > 8 {
-			return sha[:8]
-		}
-		return sha
-	}
-	if len(bundle.Spec.Images) > 0 {
-		return bundle.Spec.Images[0].Tag
-	}
-	return ""
+	return graph.BundleVersion(bundle)
 }
 
 // parseRecheckInterval parses a Go duration string, returning
@@ -1306,4 +1373,79 @@ func parseRecheckInterval(s string) time.Duration {
 		return minRecheckInterval
 	}
 	return d
+}
+
+// pipelineHoldsChanged passes Pipeline updates that change spec.holds.
+var pipelineHoldsChanged = predicate.Funcs{
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, ok1 := e.ObjectOld.(*kardinalv1alpha1.Pipeline)
+		n, ok2 := e.ObjectNew.(*kardinalv1alpha1.Pipeline)
+		return ok1 && ok2 && !equality.Semantic.DeepEqual(o.Spec.Holds, n.Spec.Holds)
+	},
+}
+
+// pipelineGateRequests enqueues the gate instances of a Pipeline.
+func (r *Reconciler) pipelineGateRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	var list kardinalv1alpha1.PolicyGateList
+	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace()),
+		client.MatchingLabels{labelPipeline: obj.GetName()}); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		if list.Items[i].Labels[labelBundle] != "" {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+		}
+	}
+	return reqs
+}
+
+// ReasonGateExempted is the Warning Event of a gate the held rollback passed.
+const ReasonGateExempted = "GateExempted"
+
+// HoldExemptible reports whether a hold on env may exempt gate: a gate
+// instance of the held environment, except an approval gate (approvalGate).
+// The freeze gate of a paused Pipeline is never an instance, and pause holds
+// steps on its own. The exempt set is
+// documented in docs/policy-gates.md#rollback-hold-exemption and enforced
+// by TestHoldExemptible.
+func HoldExemptible(gate *kardinalv1alpha1.PolicyGate, env string) bool {
+	return gate.Labels[labelBundle] != "" && gate.Labels[labelEnvironment] == env &&
+		gate.Labels[lifecycle.LabelFreeze] != "true" &&
+		!approvalGate(gate) // #1449: a quorum of people is never bypassed by a hold
+}
+
+// approvalGate reports whether gate counts approvals: it has an approval
+// policy (spec.approval) or its expression reads approvals.*. A hold never
+// exempts one, met or not.
+func approvalGate(g *kardinalv1alpha1.PolicyGate) bool {
+	return g.Spec.Approval != nil || strings.Contains(g.Spec.Expression, "approvals.")
+}
+
+// holdExemption returns the hold that exempts gate, a gate instance of
+// bundleName: its Pipeline holds the gate's environment on bundleName
+// (spec.holds) and lifecycle.VerifyHeldRollback accepts the Bundle. When a
+// hold names the Bundle but the exemption does not apply, refused says why.
+// Writing a hold needs the pipelines/hold subresource, and a hold names its
+// rollback Bundle, so a Bundle cannot exempt itself.
+func (r *Reconciler) holdExemption(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleName string) (*kardinalv1alpha1.EnvironmentHold, string) {
+	pipeline := gate.Labels[labelPipeline]
+	if pipeline == "" {
+		return nil, ""
+	}
+	var p kardinalv1alpha1.Pipeline
+	if err := r.Get(ctx, client.ObjectKey{Namespace: gate.Namespace, Name: pipeline}, &p); err != nil {
+		return nil, ""
+	}
+	h := lifecycle.HoldNaming(&p, bundleName)
+	if h == nil || !HoldExemptible(gate, h.Environment) {
+		return nil, ""
+	}
+	if _, why := lifecycle.VerifyHeldRollback(ctx, r, &p, h); why != "" {
+		return nil, why
+	}
+	return h, ""
 }

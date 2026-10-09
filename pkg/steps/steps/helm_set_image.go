@@ -16,6 +16,7 @@ package steps
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -30,23 +31,32 @@ func init() {
 }
 
 // helmSetImageStep writes the Bundle's image tag into a Helm values file at
-// update.helm.imagePathTemplate (default ".image.tag").
+// update.helm.imagePathTemplate (default ".image.tag"), and a chart Bundle's
+// chart version into update.helm.chartVersionFile (default "Chart.yaml") at
+// update.helm.chartVersionPath (default ".dependencies[name=<chart>].version").
 //
 // The path template addresses one value, so the Bundle must carry exactly one
 // image. A digest is pinned by writing "<tag>@<digest>", which a chart that
 // renders "<repository>:<tag>" turns into a digest-pinned reference. A
 // digest-only image, a Bundle with several images, or a path that runs into a
 // scalar fail the step instead of succeeding without a change (C05-steps-17).
+// The chart version path must lead through existing lists (a numeric segment
+// indexes one); a missing list element fails the step.
 //
-// The values file is edited through the YAML node API, so comments and key
+// The files are edited through the YAML node API, so comments and key
 // order are kept, and all file IO is confined to the checkout.
-// Idempotent: setting the same tag twice produces the same result.
+// Idempotent: setting the same tag or version twice produces the same result.
 type helmSetImageStep struct{}
 
 func (s *helmSetImageStep) Name() string { return "helm-set-image" }
 
 func (s *helmSetImageStep) Execute(_ context.Context, state *parentsteps.StepState) (parentsteps.StepResult, error) {
-	if len(state.Bundle.Images) == 0 {
+	chart := state.Bundle.Chart
+	if len(state.Bundle.Images) == 0 && chart == nil {
+		if state.Bundle.Type == "chart" {
+			err := parentsteps.Permanent(fmt.Errorf("the chart Bundle has no spec.chart"))
+			return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
+		}
 		return parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "no images to update"}, nil
 	}
 	fail := func(err error) (parentsteps.StepResult, error) {
@@ -55,6 +65,8 @@ func (s *helmSetImageStep) Execute(_ context.Context, state *parentsteps.StepSta
 
 	valuesFile := "values.yaml"
 	pathTemplate := ".image.tag"
+	chartFile := "Chart.yaml"
+	chartPath := ""
 	if h := state.Environment.Update.Helm; h != nil {
 		if h.ValuesFile != "" {
 			valuesFile = h.ValuesFile
@@ -62,17 +74,11 @@ func (s *helmSetImageStep) Execute(_ context.Context, state *parentsteps.StepSta
 		if h.ImagePathTemplate != "" {
 			pathTemplate = h.ImagePathTemplate
 		}
-	}
-
-	// A Bundle or template the step cannot express is refused for good.
-	value, err := helmImageValue(state.Bundle.Images)
-	if err != nil {
-		return fail(parentsteps.Permanent(err))
-	}
-	keys := strings.Split(strings.TrimPrefix(pathTemplate, "."), ".")
-	for _, k := range keys {
-		if k == "" {
-			return fail(parentsteps.Permanent(fmt.Errorf("invalid imagePathTemplate %q", pathTemplate)))
+		if h.ChartVersionFile != "" {
+			chartFile = h.ChartVersionFile
+		}
+		if h.ChartVersionPath != "" {
+			chartPath = h.ChartVersionPath
 		}
 	}
 
@@ -80,43 +86,109 @@ func (s *helmSetImageStep) Execute(_ context.Context, state *parentsteps.StepSta
 	if err != nil {
 		return fail(err)
 	}
-	valuesRel, err := confinedRel(filepath.Join(envRel, filepath.FromSlash(valuesFile)))
-	if err != nil {
-		return fail(fmt.Errorf("valuesFile: %w", err))
-	}
 	root, err := openCheckout(state)
 	if err != nil {
 		return fail(err)
 	}
 	defer func() { _ = root.Close() }()
 
-	raw, err := root.ReadFile(valuesRel)
-	if err != nil {
-		return fail(fmt.Errorf("read %s: %w", filepath.ToSlash(valuesRel), err))
+	var messages []string
+	outputs := map[string]string{}
+	if len(state.Bundle.Images) > 0 {
+		// A Bundle or template the step cannot express is refused for good.
+		value, err := helmImageValue(state.Bundle.Images)
+		if err != nil {
+			return fail(parentsteps.Permanent(err))
+		}
+		keys, err := yamlPathKeys(pathTemplate, "imagePathTemplate")
+		if err != nil {
+			return fail(parentsteps.Permanent(err))
+		}
+		valuesRel, err := confinedRel(filepath.Join(envRel, filepath.FromSlash(valuesFile)))
+		if err != nil {
+			return fail(fmt.Errorf("valuesFile: %w", err))
+		}
+		if err := editYAMLFile(root, valuesRel, func(doc *yamlDoc) error {
+			if err := setNestedScalar(doc.root(), keys, value); err != nil {
+				return fmt.Errorf("set %s in %s: %w", pathTemplate, filepath.ToSlash(valuesRel), err)
+			}
+			return nil
+		}); err != nil {
+			return fail(err)
+		}
+		messages = append(messages, fmt.Sprintf("set %s=%s in %s", pathTemplate, value, valuesFile))
+		outputs["helmValuesPath"] = filepath.Join(state.WorkDir, valuesRel)
+		outputs["imageTag"] = value
 	}
-	doc, err := parseYAMLMapping(raw)
-	if err != nil {
-		return fail(fmt.Errorf("parse %s: %w", filepath.ToSlash(valuesRel), err))
-	}
-	if err := setNestedScalar(doc.root(), keys, value); err != nil {
-		return fail(fmt.Errorf("set %s in %s: %w", pathTemplate, filepath.ToSlash(valuesRel), err))
-	}
-	out, err := doc.encode()
-	if err != nil {
-		return fail(fmt.Errorf("encode %s: %w", filepath.ToSlash(valuesRel), err))
-	}
-	if err := root.WriteFile(valuesRel, out, 0o644); err != nil {
-		return fail(fmt.Errorf("write %s: %w", filepath.ToSlash(valuesRel), err))
+	if chart != nil {
+		if chart.Version == "" {
+			return fail(parentsteps.Permanent(fmt.Errorf("the Bundle's chart %s has no version", chart.Name)))
+		}
+		if chartPath == "" {
+			// The umbrella chart's dependency of that name, not the first one.
+			chartPath = fmt.Sprintf(".dependencies[name=%s].version", chart.Name)
+		}
+		if _, err := parseYAMLPath(chartPath); err != nil {
+			return fail(parentsteps.Permanent(fmt.Errorf("invalid chartVersionPath %q: %w", chartPath, err)))
+		}
+		chartRel, err := confinedRel(filepath.Join(envRel, filepath.FromSlash(chartFile)))
+		if err != nil {
+			return fail(fmt.Errorf("chartVersionFile: %w", err))
+		}
+		if err := editYAMLFile(root, chartRel, func(doc *yamlDoc) error {
+			if err := setYAMLPath(doc.root(), chartPath, chart.Version); err != nil {
+				return fmt.Errorf("set %s in %s: %w", chartPath, filepath.ToSlash(chartRel), err)
+			}
+			return nil
+		}); err != nil {
+			return fail(err)
+		}
+		messages = append(messages, fmt.Sprintf("set %s=%s in %s", chartPath, chart.Version, chartFile))
+		outputs["helmChartPath"] = filepath.Join(state.WorkDir, chartRel)
+		outputs["chartVersion"] = chart.Version
 	}
 
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
-		Message: fmt.Sprintf("set %s=%s in %s", pathTemplate, value, valuesFile),
-		Outputs: map[string]string{
-			"helmValuesPath": filepath.Join(state.WorkDir, valuesRel),
-			"imageTag":       value,
-		},
+		Message: strings.Join(messages, "; "),
+		Outputs: outputs,
 	}, nil
+}
+
+// yamlPathKeys splits a ".a.b.c" path into its keys; field names the spec
+// field in errors.
+func yamlPathKeys(path, field string) ([]string, error) {
+	keys := strings.Split(strings.TrimPrefix(path, "."), ".")
+	for _, k := range keys {
+		if k == "" {
+			return nil, fmt.Errorf("invalid %s %q", field, path)
+		}
+	}
+	return keys, nil
+}
+
+// editYAMLFile reads rel from the checkout, applies edit to the parsed
+// document and writes it back.
+func editYAMLFile(root *os.Root, rel string, edit func(*yamlDoc) error) error {
+	raw, err := root.ReadFile(rel)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", filepath.ToSlash(rel), err)
+	}
+	doc, err := parseYAMLMapping(raw)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", filepath.ToSlash(rel), err)
+	}
+	if err := edit(doc); err != nil {
+		return err
+	}
+	out, err := doc.encode()
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", filepath.ToSlash(rel), err)
+	}
+	if err := root.WriteFile(rel, out, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.ToSlash(rel), err)
+	}
+	return nil
 }
 
 // helmImageValue returns the value to write for the Bundle's single image:

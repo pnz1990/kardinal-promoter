@@ -25,6 +25,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
 const bitbucketDefaultAPIURL = "https://api.bitbucket.org"
@@ -67,7 +69,7 @@ func NewBitbucketProvider(token, apiURL, webhookSecret string) *BitbucketProvide
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuits:      NewCircuitRegistry(),
-		client:        &http.Client{Timeout: providerHTTPTimeout},
+		client:        &http.Client{Timeout: providerHTTPTimeout, Transport: tracing.Transport(nil, false)},
 	}
 }
 
@@ -317,7 +319,9 @@ func (b *BitbucketProvider) AddLabelsToPR(_ context.Context, _ string, _ int, _ 
 // do executes an authenticated Bitbucket API request using Bearer token auth.
 func (b *BitbucketProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
 	owner := ownerFromPath(path, "/2.0/repositories/")
+	call := startSCMCall("bitbucket", owner, method, path)
 	if err := b.circuits.Allow(owner); err != nil {
+		call.circuitOpen(b.circuits, owner)
 		return fmt.Errorf("bitbucket scm: %w", err)
 	}
 
@@ -340,6 +344,8 @@ func (b *BitbucketProvider) do(ctx context.Context, method, path string, body, r
 	}
 
 	resp, err := b.client.Do(req)
+	// Arguments are taken now; the circuit states are read at return, after Record.
+	defer call.done(resp, err, b.circuits, owner)
 	if err != nil {
 		b.circuits.Record(owner, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
@@ -348,8 +354,9 @@ func (b *BitbucketProvider) do(ctx context.Context, method, path string, body, r
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		b.circuits.Record(owner, resp, nil)
-		return newAPIError("bitbucket", method, path, resp, raw)
+		apiErr := newAPIError("bitbucket", method, path, resp, raw)
+		b.circuits.RecordAPIError(owner, resp, apiErr)
+		return apiErr
 	}
 
 	b.circuits.Record(owner, resp, nil)

@@ -207,7 +207,9 @@ func listedPipeline(t *testing.T, c framework.UIClient, ns, name string) (uiPipe
 // name; the fleet bar counts what the API lists, and its Blocked, CI Red and
 // Healthy badges filter the list. Selecting a row opens that pipeline.
 //
-// Covers UI-LIST-01.
+// It also checks the fleet board drawn from the same pipelines.
+//
+// Covers UI-LIST-01, UI-FLEET-01.
 func TestUI_BrowserPipelineList(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -391,9 +393,10 @@ func subSteps(t *testing.T, ps *v1alpha1.PromotionStep) string {
 // running one "waiting for merge"), an elapsed time that ticks, the merge
 // link and its events; the test step shows its finished sub-steps and its
 // events. A gate shows its CEL expression checked as valid; a gate whose
-// expression does not compile shows the compile error.
+// expression does not compile shows the compile error. The test step's
+// finished sub-steps are timing bars in the order they ran.
 //
-// Covers UI-NODE-01.
+// Covers UI-NODE-01, UI-STEPTIME-01.
 func TestUI_BrowserNodeDetail(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -630,9 +633,10 @@ type timelineEntry struct {
 // Shift-clicking the newer one opens the comparison of the two, the one on
 // screen as A: the images, authors and commit SHAs differ, and the other
 // fields print the same on both sides. Close and Esc close it; a link with
-// bundle= opens it.
+// bundle= opens it. The Bundle card names the Bundle type, and the timeline
+// is one Tab stop moved through with the arrow keys.
 //
-// Covers UI-TIMELINE-01.
+// Covers UI-TIMELINE-01, UI-BUNDLETYPE-01, UI-KEYBOARD-01.
 func TestUI_BrowserTimeline(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -676,9 +680,10 @@ func TestUI_BrowserTimeline(t *testing.T) {
 // polling, whose indicator tells how old the data is and why it is old (an
 // API that never answers, one that fails). podinfo has one Verified Bundle;
 // a second pipeline has none, and the spec pauses it through the API while
-// the page is open, which the page shows without a reload.
+// the page is open, which the page shows without a reload. The first Tab
+// stop skips to the main content, and a fleet line is one Tab stop.
 //
-// Covers UI-SHELL-01.
+// Covers UI-SHELL-01, UI-KEYBOARD-01.
 func TestUI_BrowserShell(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)

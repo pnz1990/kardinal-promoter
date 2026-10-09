@@ -109,6 +109,10 @@ Use --dry-run to preview the promotion graph without creating any resources.`,
 		"Absolute http(s) URL of the CI run that built the Bundle (provenance)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
 		"Preview the promotion graph without creating any cluster resources")
+	compactAbove := graph.DefaultCompactAbove
+	opts.CompactAbove = &compactAbove
+	cmd.Flags().IntVar(&compactAbove, "graph-compact-above", graph.DefaultCompactAbove,
+		"With --dry-run: the controller's --graph-compact-above (chart graph.compactAbove), the environment count above which the Graph is compact")
 
 	return cmd
 }
@@ -122,6 +126,9 @@ type createBundleOptions struct {
 	Commit       string
 	Author       string
 	CIRunURL     string
+	// CompactAbove is the controller's --graph-compact-above, for --dry-run;
+	// nil means graph.DefaultCompactAbove.
+	CompactAbove *int
 }
 
 // bundleSpec turns the flags into a Bundle spec for pipeline and checks it
@@ -186,6 +193,7 @@ func createBundleFn(w io.Writer, c sigs_client.Client, ns, pipeline string, opts
 	// Record sub-second creation order so supersession picks the newer of two
 	// Bundles created in the same second.
 	lifecycle.StampCreatedAt(bundle, time.Now())
+	stampCreator(ctx, w, c, bundle)
 
 	if err := c.Create(ctx, bundle); err != nil {
 		return fmt.Errorf("create bundle for pipeline %s: %w", pipeline, err)
@@ -237,6 +245,9 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 
 	// Run graph.Builder.Build — pure function, no cluster writes
 	b := graph.NewBuilder()
+	if opts.CompactAbove != nil {
+		b.CompactAbove = *opts.CompactAbove
+	}
 	result, err := b.Build(graph.BuildInput{
 		Pipeline:    &pipe,
 		Bundle:      bundle,
@@ -248,7 +259,11 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 
 	// Print a human-readable summary
 	_, _ = fmt.Fprintf(w, "[DRY-RUN] Bundle %q for pipeline %q\n", bundle.Name, pipelineName)
-	_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s)\n", result.NodeCount)
+	if result.Compact {
+		_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s), compact shape\n", result.NodeCount)
+	} else {
+		_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s)\n", result.NodeCount)
+	}
 	_, _ = fmt.Fprintf(w, "\nEnvironments in promotion order:\n")
 
 	// The gate instances the Graph would create, per environment.

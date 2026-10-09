@@ -1685,8 +1685,8 @@ func TestPolicyGateReconciler_DeletedBeforeWrite(t *testing.T) {
 
 // TestReconciler_ChainedOverridesStopAtTheCap: a gate with 30 overrides
 // chained a cap apart (createdAt T, T+24h, ...) passes for one cap only. The
-// reconciler records when it first saw each entry in status.overridesSeen,
-// sets OverrideIgnored for the 29 dated after that, and blocks once the cap
+// reconciler records when it first saw each entry in status.overrides, sets
+// OverrideIgnored for the 29 dated after that, and blocks once the cap
 // is over, though every entry passed admission.
 func TestReconciler_ChainedOverridesStopAtTheCap(t *testing.T) {
 	t0 := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
@@ -1723,13 +1723,13 @@ func TestReconciler_ChainedOverridesStopAtTheCap(t *testing.T) {
 		require.NoError(t, err)
 		g := get()
 		assert.Equal(t, step.ready, g.Status.Ready, "after %s: %s", step.after, g.Status.Reason)
-		require.Len(t, g.Status.OverridesSeen, 30)
-		for _, o := range g.Status.OverridesSeen {
+		require.Len(t, g.Status.Overrides, 30)
+		for _, o := range g.Status.Overrides {
 			assert.True(t, o.FirstSeen.Time.Equal(t0), "firstSeen stays the first reconcile")
 		}
 		cond := meta.FindStatusCondition(g.Status.Conditions, "OverrideIgnored")
 		require.NotNil(t, cond)
 		assert.Equal(t, metav1.ConditionTrue, cond.Status)
-		assert.Contains(t, cond.Message, "29 override(s) ignored")
+		assert.Contains(t, cond.Message, "29 override(s) not counted")
 	}
 }

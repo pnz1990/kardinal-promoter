@@ -88,6 +88,15 @@ controller:
   # into the namespace it watches); org-level PolicyGates are read from this
   # namespace too.
   watchNamespace: ""
+  # -- Controller shard (--namespace-shard). Empty = no sharding: this
+  # controller reconciles every namespace. Set, it reconciles the namespaces
+  # labelled kardinal.io/shard=<name>; "default" also takes the namespaces
+  # without the label and the cluster-scoped kinds. Install one release per
+  # shard (one of them "default"), each in its own namespace labelled with its
+  # shard. Grants list/watch on Namespaces and Leases cluster-wide: each shard
+  # holds a Lease kardinal-shard in every namespace it reconciles. Cannot be
+  # combined with watchNamespace. See docs/sharding.md.
+  namespaceShard: ""
   # -- Namespaces holding org-level PolicyGates (--policy-namespaces).
   # Empty keeps the controller default, platform-policies. In namespace
   # mode org gates are read from watchNamespace, and an entry other than
@@ -98,6 +107,35 @@ controller:
   # default, 10m. "0s" writes the status on every evaluation; each write makes
   # kro re-check the gate's whole Graph.
   gateStatusHeartbeat: ""
+  # -- Workers per controller: how many objects of a kind are reconciled at
+  # once (--promotionstep-workers, ...). One object is never reconciled twice
+  # at once. Unset keeps the controller defaults, measured with the scale
+  # suite: promotionStep 16, prStatus 8, policyGate 8, bundle 4, pipeline 4.
+  # Raise promotionStep for many Pipelines on slow git hosts. See
+  # docs/installation.md (Controller concurrency).
+  workers: {}
+  #   promotionStep: 16
+  #   prStatus: 8
+  #   policyGate: 8
+  #   bundle: 4
+  #   pipeline: 4
+  # -- Access log of the UI API and the Bundle API: logins (TokenReviews),
+  # refusals (401/403/429, with the reason) and writes are always logged as
+  # structured lines (component=access). Tokens are never logged.
+  accessLog:
+    # -- Log every request (--access-log-all-requests).
+    allRequests: false
+    # -- Add the client address (--access-log-source-ip).
+    sourceIP: false
+    # -- CIDRs of proxies (an Ingress controller) whose X-Forwarded-For gives
+    # the client address (--access-log-trusted-proxies). Other clients'
+    # X-Forwarded-For is ignored.
+    trustedProxies: []
+
+  # -- Longest a gate override counts, in minutes from when the controller
+  # first saw it (--gate-override-max-minutes): an override ends at the
+  # earlier of its expiresAt and this cap. Empty keeps the default, 1440 (24h).
+  gateOverrideMaxMinutes: ""
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).
@@ -125,13 +163,20 @@ service:
   # and /api/v1/bundles
   webhookPort: 8083
 
+# -- Controller resources. The controller caches every Pipeline, Bundle,
+# PromotionStep, PRStatus and PolicyGate it watches, so its memory grows with
+# Pipelines times the Bundle history. Measured peaks (scale suite, #1553):
+# 166 MiB for 200 Pipelines with a Bundle each, 409 MiB for 2 Bundles a second
+# over 40 Pipelines with leader kills; 55-70 MiB with no Pipelines. The
+# defaults give the larger load 2.5x headroom; see "Sizing the controller" in
+# docs/installation.md.
 resources:
   limits:
     cpu: 500m
-    memory: 128Mi
+    memory: 1Gi
   requests:
     cpu: 10m
-    memory: 64Mi
+    memory: 256Mi
 
 # -- Node selector for the controller Pod
 nodeSelector: {}
@@ -168,6 +213,18 @@ github:
 # -- SCM provider (--scm-provider): github (default when empty), gitlab,
 # forgejo, gitea, bitbucket or azuredevops, and its API base URL
 # (--scm-api-url) for self-hosted instances. See docs/scm-providers.md.
+
+# Identity admission policies (templates/identity-admission.yaml,
+# docs/guides/security.md#verified-identity).
+admission:
+  # -- Usernames, besides this release's controller ServiceAccount, that run
+  # a kardinal controller: they may name any Bundle's kardinal.io/created-by
+  # and write the objects a promotion Graph manages. Exact usernames only,
+  # for example "system:serviceaccount:kardinal-system:kardinal-promoter-b";
+  # there are no wildcards. Never list a ServiceAccount of a tenant's
+  # namespace: whoever can mint tokens for a listed ServiceAccount passes
+  # these checks.
+  controllerUsernames: []
 scm:
   provider: ""
   apiURL: ""
@@ -181,6 +238,20 @@ scm:
   # environment). Empty allows every repository the token can write to, and
   # the controller logs a warning at startup. See docs/guides/security.md.
   allowedRepositories: []
+  # -- Forgejo/Gitea only: the names or emails the instance signs commits
+  # with (its repository.signing SIGNING_NAME / SIGNING_EMAIL,
+  # --scm-instance-signers). Image verification treats such a commit as a
+  # platform signature (forgejo-instance). Without it, a verified signer that
+  # is not a user of the instance is taken as the instance key.
+  instanceSigners: []
+  # -- The gate results of a waiting pr-review step as a commit status on the
+  # commit kardinal pushed to its PR (docs/pr-evidence.md). enabled: false
+  # (--gates-commit-status=false) posts none, for a token without the
+  # commit-status permission. context (--gates-status-context) is the status
+  # name branch protection requires; it is reserved for kardinal.
+  gatesCommitStatus:
+    enabled: true
+    context: kardinal/gates
 
 # -- Webhook secret for :8083/webhook/scm (KARDINAL_WEBHOOK_SECRET): the HMAC
 # key, or for GitLab and Azure DevOps the plain token the SCM sends.
@@ -202,13 +273,6 @@ bundleAPI:
   tokenReview: false
 
 # -- Gate overrides (approvals) made through kardinal.
-gateOverrides:
-  # -- Longest override, in minutes (--gate-override-max-minutes). The UI
-  # refuses a longer one, and the scoped-writes admission policy refuses a
-  # longer one written with kubectl by a caller limited to
-  # policygates/override.
-  maxMinutes: 1440
-
 # -- TokenReview settings shared by ui.auth.tokenReview and
 # bundleAPI.tokenReview.
 tokenReview:
@@ -261,8 +325,9 @@ rbac:
   # (update.strategy: argocd).
   argocdApplicationsWrite: false
   # -- Deprecated, no effect, removed in v0.10. The integration-test step was
-  # removed, so the chart no longer grants batch Jobs access. Kept so existing
-  # --set rbac.integrationTestJobs=... keeps passing the values schema.
+  # removed; the Job access the chart grants is for hooks (hooks.serviceAccounts),
+  # whatever this says. Kept so existing --set rbac.integrationTestJobs=...
+  # keeps passing the values schema.
   integrationTestJobs: false
   userRoles:
     # -- ClusterRoles for users and automation: <fullname>-viewer, -promoter,
@@ -307,12 +372,71 @@ graph:
   # -- Ship a ClusterRole aggregated into kro's controller role, for kro
   # installed with rbac.mode=aggregation (the hack/install-kro.sh default).
   aggregateToKro: true
+  # -- Environment count above which a Bundle's Graph uses the compact shape
+  # (--graph-compact-above): one PromotionStep collection instead of one node
+  # per environment. null keeps the controller default, 100; 0 makes every
+  # Graph compact. A Pipeline's kardinal.io/graph-shape annotation overrides it.
+  compactAbove: null
+  # -- When the Graph of a finished Bundle is retired: deleted, with the
+  # Bundle's PromotionSteps kept in status.retiredSteps. kro holds every Graph
+  # in memory (3 to 6 MB each), so keeping the Graph of every finished Bundle
+  # until spec.historyLimit prunes it runs kro out of memory. Go durations;
+  # empty keeps the controller default; "0s" keeps those Graphs. A Pipeline's
+  # kardinal.io/graph-retire-after annotation replaces all three for its
+  # Bundles. See docs/installation.md#sizing-kro.
+  retire:
+    # -- A Superseded Bundle, or a Verified one that a newer Bundle replaced
+    # in every environment (--graph-retire-superseded-after, default 1m).
+    superseded: ""
+    # -- A Failed Bundle (--graph-retire-failed-after, default 24h). A retired
+    # Failed Bundle no longer recovers.
+    failed: ""
+    # -- A Verified Bundle still deployed in an environment
+    # (--graph-retire-verified-after, default 1h).
+    verified: ""
 
-# -- Deprecated, no effect. The chart no longer ships ValidatingAdmissionPolicies;
-# the CRD schemas validate these fields instead. Kept so existing
-# --set validatingAdmissionPolicy.enabled=... keeps working.
+# -- Pipeline pre- and post-deploy hooks (spec.environments[].hooks,
+# docs/hooks.md). The controller runs each hook as a Job in the Pipeline
+# namespace.
+hooks:
+  # -- ServiceAccount names a hook's Job Pod may run as (--hook-service-accounts),
+  # in the Pipeline namespace. A hook whose Pod names another one fails
+  # without running. Anyone who can edit a Pipeline can run a Pod as one of
+  # these, so list only ServiceAccounts with the rights a hook needs. The
+  # Graph ServiceAccount (graph.serviceAccountName) is never allowed.
+  serviceAccounts:
+    - default
+  # -- Pod Security Standard a hook's Pod must meet (--hook-pod-security-level):
+  # baseline (no privileged containers, host namespaces, hostPath volumes,
+  # added capabilities beyond the baseline set...), restricted (also non-root,
+  # no privilege escalation, seccomp RuntimeDefault, all capabilities
+  # dropped), or privileged (no Pod checks). Below privileged, nodeName and
+  # hostPort are refused too. A hook that breaks it fails without running.
+  podSecurityLevel: baseline
+
+# -- Deprecated, no effect. The CRD schemas validate the kardinal fields. The
+# chart always ships the identity ValidatingAdmissionPolicies
+# (templates/identity-admission.yaml), which pin the user a record names
+# (spec.rejected.by) to the requesting user; they cannot be turned off. Kept
+# so existing --set validatingAdmissionPolicy.enabled=... keeps working.
 validatingAdmissionPolicy:
   enabled: true
+
+tracing:
+  # -- Export OpenTelemetry traces over OTLP/HTTP (--tracing-enabled): spans for
+  # reconciles, promotion steps, git clone/push, SCM API calls and
+  # NotificationHook deliveries (which carry a traceparent header), and server
+  # spans for /webhook/scm and /api/v1/bundles. See docs/guides/monitoring.md.
+  enabled: false
+  # -- OTLP/HTTP endpoint: a URL (http://otel-collector.observability:4318) or
+  # host:port. Empty uses OTEL_EXPORTER_OTLP_ENDPOINT (set it with
+  # controller.extraEnv), else localhost:4318.
+  endpoint: ""
+  # -- Plain HTTP to a host:port endpoint (a URL's scheme decides by itself).
+  insecure: false
+  # -- Fraction of traces recorded, 0 to 1, decided at each trace's root. An
+  # inbound traceparent is linked, not trusted, so it does not force recording.
+  samplingRatio: 0.1
 
 egress:
   # -- Destinations NotificationHook, MetricCheck and Subscription requests may
@@ -340,6 +464,27 @@ networkPolicy:
   # -- Extra egress rules (NetworkPolicyEgressRule list), e.g. Prometheus on
   # :9090 for MetricChecks or a webhook receiver for NotificationHooks.
   extraEgress: []
+
+# -- MetricCheck providers.
+metricCheck:
+  cloudWatch:
+    # -- Let cloudwatch MetricChecks that name no credential Secret use the
+    # controller's own AWS identity (IRSA, EKS Pod Identity, environment).
+    # Off by default: anyone who can create a MetricCheck could then read
+    # CloudWatch with that identity. Annotate serviceAccount for IRSA.
+    ambientCredentials: false
+  # -- Outbound MetricCheck query slots. Every provider dials an address the
+  # MetricCheck's author chose, so queries are capped: at most `global` run
+  # at once in the cluster, at most `perNamespace` per namespace, and the
+  # rest wait first come, first served (status reason WaitingForSlot). The
+  # sustained throughput is about global / query time: with 12 slots and
+  # 0.5 s queries, 24 queries a second, so 1,440 MetricChecks at a 60 s
+  # interval. One namespace gets at most perNamespace / query time. The
+  # MetricCheck controller runs global + 4 workers (at least 16), so every
+  # slot can be used.
+  querySlots:
+    global: 12
+    perNamespace: 1
 
 # -- ScheduleClock configuration.
 # One ScheduleClock is deployed per cluster. Each tick re-evaluates every

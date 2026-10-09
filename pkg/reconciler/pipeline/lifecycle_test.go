@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 )
@@ -70,6 +71,15 @@ func TestPipelineLifecycle_ReadyCondition(t *testing.T) {
 			name:       "dependsOn cycle",
 			objs:       []client.Object{cyclic},
 			wantStatus: metav1.ConditionFalse, wantReason: "ValidationFailed", wantMsg: "circular dependency",
+		}, {
+			name: "unknown graph-shape annotation",
+			objs: []client.Object{func() client.Object {
+				p := makePipelineWithEnvs("app", "default", "test", "prod")
+				p.Annotations = map[string]string{"kardinal.io/graph-shape": "flat"}
+				return p
+			}()},
+			wantStatus: metav1.ConditionFalse, wantReason: "ValidationFailed",
+			wantMsg: `annotation kardinal.io/graph-shape="flat": use "compact" or "nodes", or remove it`,
 		},
 	}
 	for _, tc := range tests {
@@ -498,4 +508,60 @@ func TestPipelineLifecycle_PausedCondition(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "Paused"), "resume removes the condition")
 	require.NotNil(t, meta.FindStatusCondition(got.Status.Conditions, "Ready"))
+}
+
+// TestPipelineLifecycle_CompactUnsupported checks that a Pipeline whose new
+// Bundles would get a compact Graph is Ready=False when it uses a feature the
+// compact shape does not carry yet (graph.CompactUnsupported), and Ready when
+// it uses the node shape.
+func TestPipelineLifecycle_CompactUnsupported(t *testing.T) {
+	unregister := graph.RegisterCompactUnsupported(func(in graph.BuildInput) string {
+		if in.Pipeline.Annotations["test-feature"] == "on" {
+			return "test hooks"
+		}
+		return ""
+	})
+	t.Cleanup(unregister)
+	for _, tc := range []struct {
+		shape      string
+		wantStatus metav1.ConditionStatus
+	}{
+		{shape: "compact", wantStatus: metav1.ConditionFalse},
+		{shape: "nodes", wantStatus: metav1.ConditionTrue},
+	} {
+		t.Run(tc.shape, func(t *testing.T) {
+			p := makePipelineWithEnvs("app", "default", "test", "prod")
+			p.Annotations = map[string]string{"test-feature": "on", graph.AnnotationGraphShape: tc.shape}
+			got, err := reconcilePipeline(t, newClientWithIndex(newPipelineScheme(), p), "app")
+			require.NoError(t, err)
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, ready)
+			assert.Equal(t, tc.wantStatus, ready.Status, ready.Message)
+			if tc.wantStatus == metav1.ConditionFalse {
+				assert.Contains(t, ready.Message, "the compact shape does not support test hooks yet")
+			}
+		})
+	}
+}
+
+// TestPipelineLifecycle_RetiredBundleKeepsPhaseAndMetrics checks that a
+// Pipeline whose Verified Bundle was retired (#1492), so only the Bundle's
+// status.retiredSteps are left, stays Ready and keeps its deployment
+// metrics.
+func TestPipelineLifecycle_RetiredBundleKeepsPhaseAndMetrics(t *testing.T) {
+	now := time.Now().UTC()
+	b := makeVerifiedBundle("app-v1", "default", "app", now.Add(-2*time.Hour))
+	b.Status.Conditions = []metav1.Condition{{Type: lifecycle.ConditionGraphRetired, Status: metav1.ConditionTrue,
+		Reason: "Retired", LastTransitionTime: metav1.NewTime(now)}}
+	b.Status.RetiredAt = &metav1.Time{Time: now}
+	for _, env := range []string{"test", "prod"} {
+		b.Status.RetiredSteps = append(b.Status.RetiredSteps,
+			lifecycle.RetiredStepOf(makeVerifiedStep("app-v1", "app", env, "default", now.Add(-time.Hour))))
+	}
+	got, err := reconcilePipeline(t, newClientWithIndex(newPipelineScheme(),
+		makePipelineWithEnvs("app", "default", "test", "prod"), b), "app")
+	require.NoError(t, err)
+	assert.Equal(t, "Ready", got.Status.Phase)
+	require.NotNil(t, got.Status.DeploymentMetrics)
+	assert.Equal(t, 1, got.Status.DeploymentMetrics.RolloutsLast30Days)
 }

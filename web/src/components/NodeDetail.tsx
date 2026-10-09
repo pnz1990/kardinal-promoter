@@ -23,6 +23,7 @@ import { HealthChip } from './HealthChip'
 import { api } from '../api/client'
 import EventsPanel, { type StepEvent } from './EventsPanel'
 import CopyButton from './CopyButton'
+import { stepTimeline } from '../stepTimeline'
 import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionDialog'
 import { formatElapsedSince } from '../timeFormat'
 import { isHttpURL } from '../prLink'
@@ -53,7 +54,7 @@ interface Props {
 /** PromotionStep states in which work is running (Go never reports "Running"). */
 // RollingBack is an end state: the step failed health and a rollback Bundle
 // took over; the rollback Bundle's own step is the one in flight.
-const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking'])
+const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'Verifying'])
 
 /** Format an ISO timestamp to a human-readable string. */
 function formatTimestamp(iso: string): string {
@@ -235,6 +236,8 @@ function stepNote(s: StepStatus, shown: StepStatus['state'], promotion: Promotio
   if (shown === 'InProgress') {
     if (promotion.state === 'WaitingForMerge') return 'waiting for merge'
     if (promotion.state === 'HealthChecking') return 'checking health'
+    // Verifying waits for post-deploy hooks and Argo Rollouts analyses.
+    if (promotion.state === 'Verifying') return 'verifying: post-deploy hooks and analyses'
     return null
   }
   if (shown === 'Completed' && s.durationMs) return formatDuration(s.durationMs)
@@ -248,6 +251,8 @@ function stepNote(s: StepStatus, shown: StepStatus['state'], promotion: Promotio
  */
 function StepProgress({ step }: { step: PromotionStep }) {
   const list = step.steps ?? []
+  const bars = stepTimeline(list)
+  const hasBars = bars.some(b => b !== null)
   return (
     <div style={{ marginBottom: '0.75rem' }}>
       <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', marginBottom: '0.5rem' }}>
@@ -305,6 +310,28 @@ function StepProgress({ step }: { step: PromotionStep }) {
                     overflowWrap: 'anywhere',
                   }}>
                     {note}
+                  </span>
+                )}
+                {hasBars && (
+                  // Waterfall: where this step sits in the promotion's time span.
+                  <span
+                    aria-hidden="true"
+                    data-testid="step-bar-track"
+                    style={{ flexBasis: '100%', height: '3px', marginLeft: '20px', background: 'var(--color-border-muted)', borderRadius: '2px', position: 'relative' }}
+                  >
+                    {bars[i] && (
+                      <span
+                        data-testid="step-bar"
+                        data-offset={bars[i]!.offset.toFixed(1)}
+                        data-width={bars[i]!.width.toFixed(1)}
+                        style={{
+                          position: 'absolute', top: 0, bottom: 0, borderRadius: '2px',
+                          left: `${bars[i]!.offset}%`, width: `${bars[i]!.width}%`,
+                          background: view.color,
+                          opacity: shown === 'Completed' ? 0.75 : 1,
+                        }}
+                      />
+                    )}
                   </span>
                 )}
               </li>

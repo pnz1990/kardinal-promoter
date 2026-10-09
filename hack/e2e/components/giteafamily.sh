@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # hack/e2e/components/giteafamily.sh forgejo|gitea
 #
-# Installs a single-pod Forgejo or Gitea (rootless image, SQLite, no SSH) in
-# namespace <flavor> and seeds it for the live suites:
+# Installs a single-pod Forgejo or Gitea (rootless image, SQLite, the built-in
+# SSH server on port 2222) in namespace <flavor> and seeds it for the live
+# suites:
 #   - admin user; its token (scope all) is the test runner's
 #     KARDINAL_E2E_GIT_TOKEN, used to create per-test repos, merge and close PRs
 #   - bot user whose token has only the scopes docs/scm-providers.md lists
@@ -13,6 +14,9 @@
 #     kardinal-system/scm-webhook (key secret)
 # Webhooks go to the controller's ClusterIP, which the webhook allow list
 # must let through; each test registers its own.
+# KARDINAL_E2E_GIT_ROOT_URL, when set, is the URL in-cluster clients use
+# instead of the server's Service (the scale suite's Toxiproxy in front of
+# it): the server's ROOT_URL, so its clone URLs, and the controller's SCM API.
 # Idempotent.
 #
 # Copyright 2026 The kardinal-promoter Authors.
@@ -27,12 +31,12 @@ case "$FLAVOR" in
   # Forgejo reads the webhook allow list from [webhook], where "*" allows
   # every host. Gitea 28 reads it from [security] (the [webhook] key only logs
   # a deprecation error), rejects "*", and needs private hosts listed.
-  forgejo) IMAGE=$FORGEJO_IMAGE PFX=FORGEJO ALLOW_SECTION=webhook ALLOW_HOSTS='*' ;;
-  gitea) IMAGE=$GITEA_IMAGE PFX=GITEA ALLOW_SECTION=security ALLOW_HOSTS='*.svc.cluster.local' ;;
+  forgejo) IMAGE=$FORGEJO_IMAGE PFX=FORGEJO ALLOW_SECTION=webhook ALLOW_HOSTS='*' INI=/var/lib/gitea/custom/conf/app.ini ;;
+  gitea) IMAGE=$GITEA_IMAGE PFX=GITEA ALLOW_SECTION=security ALLOW_HOSTS='*.svc.cluster.local' INI=/etc/gitea/app.ini ;;
   *) die "flavor must be forgejo or gitea" ;;
 esac
 NS=$FLAVOR
-INCLUSTER="http://$FLAVOR.$NS.svc.cluster.local:3000"
+INCLUSTER=${KARDINAL_E2E_GIT_ROOT_URL:-"http://$FLAVOR.$NS.svc.cluster.local:3000"}
 ORG=kardinal
 
 load_image "$IMAGE"
@@ -56,18 +60,43 @@ spec:
       labels: {app: $FLAVOR}
     spec:
       securityContext: {fsGroup: 1000}
+      # The instance signing key (repository.signing): a GPG key made at
+      # start, its ID written to app.ini, so API commits by users with a
+      # public key are instance-signed, as on a production instance with
+      # signing set up (image verification tests).
+      initContainers:
+        - name: signing-key
+          image: $IMAGE
+          imagePullPolicy: IfNotPresent
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              export GNUPGHOME=/var/lib/gitea/gnupg
+              mkdir -p "\$GNUPGHOME" && chmod 700 "\$GNUPGHOME"
+              gpg2 --batch --passphrase "" --quick-gen-key "$FLAVOR-instance <instance@example.com>" ed25519 sign never
+              key=\$(gpg2 --list-secret-keys --with-colons | awk -F: '/^sec/{print \$5; exit}')
+              mkdir -p "\$(dirname $INI)"
+              printf '[repository.signing]\nSIGNING_KEY = %s\n' "\$key" > $INI
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/gitea}
+            - {name: config, mountPath: /etc/gitea}
       containers:
         - name: $FLAVOR
           image: $IMAGE
           imagePullPolicy: IfNotPresent
-          ports: [{name: http, containerPort: 3000}]
+          ports: [{name: http, containerPort: 3000}, {name: ssh, containerPort: 2222}]
           env:
             - {name: ${PFX}__security__INSTALL_LOCK, value: "true"}
             - {name: ${PFX}__database__DB_TYPE, value: sqlite3}
             - {name: ${PFX}__server__ROOT_URL, value: "$INCLUSTER/"}
             - {name: ${PFX}__server__HTTP_PORT, value: "3000"}
-            - {name: ${PFX}__server__DISABLE_SSH, value: "true"}
-            - {name: ${PFX}__server__START_SSH_SERVER, value: "false"}
+            # The built-in SSH server, for Subscriptions on ssh:// repoURLs.
+            - {name: ${PFX}__server__DISABLE_SSH, value: "false"}
+            - {name: ${PFX}__server__START_SSH_SERVER, value: "true"}
+            - {name: ${PFX}__server__SSH_DOMAIN, value: "$FLAVOR.$NS.svc.cluster.local"}
+            - {name: ${PFX}__server__SSH_PORT, value: "2222"}
+            - {name: ${PFX}__server__SSH_LISTEN_PORT, value: "2222"}
             - {name: ${PFX}__server__OFFLINE_MODE, value: "true"}
             # The default ("external") blocks webhooks to the controller's ClusterIP.
             - {name: ${PFX}__${ALLOW_SECTION}__ALLOWED_HOST_LIST, value: "$ALLOW_HOSTS"}
@@ -78,6 +107,16 @@ spec:
             - {name: ${PFX}__actions__ENABLED, value: "false"}
             - {name: ${PFX}__mailer__ENABLED, value: "false"}
             - {name: ${PFX}__cron_0X2E_update_checker__ENABLED, value: "false"}
+            - {name: GNUPGHOME, value: /var/lib/gitea/gnupg}
+            - {name: ${PFX}__repository_0X2E_signing__SIGNING_NAME, value: "$FLAVOR-instance"}
+            - {name: ${PFX}__repository_0X2E_signing__SIGNING_EMAIL, value: instance@example.com}
+            # Sign only for users with a public key: the tests' fixtures stay
+            # unsigned (signing serializes on gpg-agent), and a user with a
+            # key gets instance-signed API commits (InstanceCommitAs).
+            - {name: ${PFX}__repository_0X2E_signing__CRUD_ACTIONS, value: pubkey}
+            - {name: ${PFX}__repository_0X2E_signing__INITIAL_COMMIT, value: never}
+            - {name: ${PFX}__repository_0X2E_signing__MERGES, value: never}
+            - {name: ${PFX}__git_0X2E_config__gpg_0X2E_program, value: gpg2}
           readinessProbe:
             httpGet: {path: /api/healthz, port: http}
             periodSeconds: 3
@@ -100,7 +139,7 @@ metadata:
 spec:
   type: NodePort
   selector: {app: $FLAVOR}
-  ports: [{name: http, port: 3000, targetPort: http}]
+  ports: [{name: http, port: 3000, targetPort: http}, {name: ssh, port: 2222, targetPort: ssh}]
 EOF
 "${KUBECTL[@]}" -n "$NS" rollout status "deploy/$FLAVOR" --timeout=300s >/dev/null
 BASE="http://$(node_ip):$(nodeport "$NS" "$FLAVOR" http)"
@@ -167,6 +206,8 @@ env_set KARDINAL_E2E_SCM_API "$INCLUSTER"
 env_set KARDINAL_E2E_GIT_KIND "$FLAVOR"
 env_set KARDINAL_E2E_GIT_API "$BASE"
 env_set KARDINAL_E2E_GIT_CLONE_BASE "$INCLUSTER"
+env_set KARDINAL_E2E_GIT_SSH "$FLAVOR.$NS.svc.cluster.local:2222"
+env_set KARDINAL_E2E_GIT_SSH_API "$(node_ip):$(nodeport "$NS" "$FLAVOR" ssh)"
 env_set KARDINAL_E2E_GIT_OWNER "$ORG"
 env_set KARDINAL_E2E_GIT_TOKEN "$(secret_get "$FLAVOR-admin-token")"
 env_set KARDINAL_E2E_WEBHOOK_URL "$KARDINAL_WEBHOOK_URL"

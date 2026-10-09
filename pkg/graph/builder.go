@@ -25,11 +25,26 @@ type BuildInput struct {
 	// PolicyGates contains all gates from all policy namespaces + pipeline namespace.
 	PolicyGates []kardinalv1alpha1.PolicyGate
 
+	// Shape, when set (GraphShapeNodes or GraphShapeCompact), is the shape of
+	// the Bundle's existing Graph, which a re-translation keeps: switching
+	// the shape of a Graph in flight would make kro prune the PromotionSteps
+	// of the old shape's nodes. Empty chooses the shape (Builder.CompactAbove,
+	// the Pipeline's AnnotationGraphShape).
+	Shape string
+
 	// PolicyNamespaces are the controller's org policy namespaces (not the
 	// Pipeline's spec.policyNamespaces). Only skip-permission gates in these
 	// namespaces can permit skipping an org-gated environment. Empty means
 	// DefaultPolicyNamespace.
 	PolicyNamespaces []string
+
+	// Analyses are the Argo Rollouts analysis templates the environments'
+	// spec.verification names, as the translator read them.
+	Analyses AnalysisInput
+	// MetricChecks are the MetricChecks of the Pipeline namespace. Each one
+	// with spec.perPromotion that a gate of an environment reads gets an
+	// instance node for that environment (buildMetricCheckNode).
+	MetricChecks []kardinalv1alpha1.MetricCheck
 }
 
 // BuildResult is the output of the graph builder.
@@ -46,6 +61,12 @@ type BuildResult struct {
 	// PolicyGateData node; callers that need the gates (dry runs, policy
 	// simulate) read them here instead of parsing the Graph.
 	GateInstances []kardinalv1alpha1.PolicyGate
+	// Upstreams are each environment's upstream environments in this Graph,
+	// after skipped environments are bridged.
+	Upstreams map[string][]string
+	// Compact reports whether the Graph uses the compact shape: one
+	// PromotionSteps collection instead of one node per environment.
+	Compact bool
 }
 
 // DefaultGraphServiceAccount is the ServiceAccount (in the Pipeline's
@@ -60,11 +81,16 @@ type Builder struct {
 	// ServiceAccountName is written to Graph.spec.serviceAccountName.
 	// Empty means DefaultGraphServiceAccount.
 	ServiceAccountName string
+	// CompactAbove is the environment count above which a Graph uses the
+	// compact shape when the Pipeline does not choose one
+	// (AnnotationGraphShape). NewBuilder sets DefaultCompactAbove; zero makes
+	// every Graph compact.
+	CompactAbove int
 }
 
 // NewBuilder creates a new Builder.
 func NewBuilder() *Builder {
-	return &Builder{}
+	return &Builder{CompactAbove: DefaultCompactAbove}
 }
 
 // Build generates a Graph spec. Returns an error if the Pipeline is invalid
@@ -88,6 +114,9 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 		return nil, fmt.Errorf("build: bundle is nil")
 	}
 	if err := validateInput(input.Pipeline, input.Bundle); err != nil {
+		return nil, err
+	}
+	if err := ValidateHooks(input.Pipeline); err != nil {
 		return nil, err
 	}
 
@@ -128,7 +157,17 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 5 & 6: build nodes and wire edges
-	nodes, instances, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates)
+	compact, err := b.compactShape(input.Pipeline, len(filteredEnvs), input.Shape)
+	if err != nil {
+		return nil, err
+	}
+	if compact {
+		if err := checkCompactSupport(input); err != nil {
+			return nil, err
+		}
+	}
+	nodes, instances, upstreams, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates,
+		input.MetricChecks, input.PolicyNamespaces, input.Analyses, compact)
 	if err != nil {
 		return nil, err
 	}
@@ -138,12 +177,18 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 
 	// Step 7: assemble Graph
 	g := assembleGraph(input.Pipeline, input.Bundle, nodes, b.serviceAccountName())
+	g.Labels[LabelGraphShape] = GraphShapeNodes
+	if compact {
+		g.Labels[LabelGraphShape] = GraphShapeCompact
+	}
 
 	return &BuildResult{
 		Graph:         g,
 		NodeCount:     len(nodes),
 		Environments:  filteredEnvs,
 		GateInstances: instances,
+		Upstreams:     upstreams,
+		Compact:       compact,
 	}, nil
 }
 
@@ -159,9 +204,24 @@ func (b *Builder) serviceAccountName() string {
 // resolveOrdering reads spec.environments, builds the dependency map,
 // and returns the topologically sorted environment names.
 func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string][]string, error) {
+	sorted, deps, cycle, err := orderEnvironments(pipeline, nil)
+	if cycle != nil {
+		// Only a cycle needs to know where each edge came from: record it
+		// on a second pass rather than on every call (the UI lists every
+		// Pipeline's ordering on each poll).
+		why := map[string]map[string]edgeSource{}
+		_, _, cycle, _ = orderEnvironments(pipeline, why)
+		return nil, nil, cycleError(cycle, why, pipeline.Spec.Environments)
+	}
+	return sorted, deps, err
+}
+
+// orderEnvironments is resolveOrdering's work. With why non-nil it records
+// where each edge came from. It returns the cycle, if there is one.
+func orderEnvironments(pipeline *kardinalv1alpha1.Pipeline, why map[string]map[string]edgeSource) ([]string, map[string][]string, []string, error) {
 	envs := pipeline.Spec.Environments
 	if len(envs) == 0 {
-		return nil, nil, fmt.Errorf("build: pipeline has no environments")
+		return nil, nil, nil, fmt.Errorf("build: pipeline has no environments")
 	}
 
 	// Build name set and dependency map
@@ -175,16 +235,17 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 	waves := indexWaves(envs)
 
 	deps := make(map[string][]string, len(envs)) // env → []dependsOn
-	// why records where each edge came from, so a cycle error can say which
-	// part of the spec made it.
-	why := make(map[string]map[string]edgeSource, len(envs))
 	for i, e := range envs {
-		why[e.Name] = map[string]edgeSource{}
 		var merged []string
 		add := func(dep string, src edgeSource) {
 			if !containsStr(merged, dep) {
 				merged = append(merged, dep)
-				why[e.Name][dep] = src
+				if why != nil {
+					if why[e.Name] == nil {
+						why[e.Name] = map[string]edgeSource{}
+					}
+					why[e.Name][dep] = src
+				}
 			}
 		}
 		// Start with the edges to the previous wave, if there is one.
@@ -194,7 +255,7 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 		// Union with explicit DependsOn.
 		for _, dep := range e.DependsOn {
 			if !nameSet[dep] {
-				return nil, nil, fmt.Errorf("build: environment %q dependsOn unknown environment %q",
+				return nil, nil, nil, fmt.Errorf("build: environment %q dependsOn unknown environment %q",
 					e.Name, dep)
 			}
 			add(dep, fromDependsOn)
@@ -210,10 +271,9 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 	// Topological sort (Kahn's algorithm) to detect cycles
 	sorted, cycle := topoSort(nameSet, deps)
 	if cycle != nil {
-		return nil, nil, cycleError(cycle, why, envs)
+		return nil, nil, cycle, nil
 	}
-
-	return sorted, deps, nil
+	return sorted, deps, nil, nil
 }
 
 // edgeSource is the part of a Pipeline spec an ordering edge comes from.
@@ -299,36 +359,49 @@ func waveOrder(cycle []string, wave map[string]int) string {
 // the graph has a cycle it returns nil and the cycle as a path that starts
 // and ends at the same environment.
 func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, []string) {
-	// Compute in-degree
-	inDegree := make(map[string]int, len(nodes))
+	// Index-based Kahn's algorithm: the names are sorted once, so a node's
+	// index orders it as its name does, and the queue and each node's
+	// dependents need only integer sorts.
+	names := make([]string, 0, len(nodes))
 	for n := range nodes {
-		inDegree[n] = 0
+		names = append(names, n)
 	}
-	// Build reverse map: node → dependents (nodes that depend on it)
-	dependents := make(map[string][]string, len(nodes))
+	sort.Strings(names)
+	idx := make(map[string]int, len(names))
+	for i, n := range names {
+		idx[n] = i
+	}
+	inDegree := make([]int, len(names))
+	dependents := make([][]int, len(names))
 	for n, ds := range deps {
+		ni, ok := idx[n]
+		if !ok {
+			continue
+		}
 		for _, d := range ds {
-			dependents[d] = append(dependents[d], n)
-			inDegree[n]++
+			di, ok := idx[d]
+			if !ok {
+				continue
+			}
+			dependents[di] = append(dependents[di], ni)
+			inDegree[ni]++
 		}
 	}
-
-	// Start with nodes that have no prerequisites
-	var queue []string
-	for n := range nodes {
-		if inDegree[n] == 0 {
-			queue = append(queue, n)
+	queue := make([]int, 0, len(names))
+	for i := range names {
+		if inDegree[i] == 0 {
+			queue = append(queue, i) // ascending: names are sorted
 		}
 	}
-	sort.Strings(queue) // deterministic order
-
-	var sorted []string
+	sorted := make([]string, 0, len(names))
 	for len(queue) > 0 {
 		n := queue[0]
 		queue = queue[1:]
-		sorted = append(sorted, n)
+		sorted = append(sorted, names[n])
 		next := dependents[n]
-		sort.Strings(next)
+		if len(next) > 1 {
+			sort.Ints(next)
+		}
 		for _, d := range next {
 			inDegree[d]--
 			if inDegree[d] == 0 {
@@ -336,7 +409,6 @@ func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, []stri
 			}
 		}
 	}
-
 	if len(sorted) != len(nodes) {
 		return nil, findCycle(nodes, deps, sorted)
 	}
@@ -519,8 +591,11 @@ func matchGatesByEnv(filteredEnvs []string,
 func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
-	skipGates map[string][]skipPermissionGate) ([]GraphNode, []kardinalv1alpha1.PolicyGate, error) {
+	skipGates map[string][]skipPermissionGate,
+	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string, analyses AnalysisInput,
+	compact bool) ([]GraphNode, []kardinalv1alpha1.PolicyGate, map[string][]string, error) {
 	pipelineName := pipeline.Name
+	bundleSlug := CELSafeSlug(bundle.Name) // camelCase — node IDs only
 
 	// Filter deps to only include filtered envs
 	filteredSet := make(map[string]bool, len(filteredEnvs))
@@ -546,14 +621,30 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		// ReadyWhen intentionally omitted — ref: is read-only.
 	}
 	nodes = append(nodes, bundleWatchNode)
+	nodes = append(nodes, readBackRefs(pipeline, filteredEnvs, bundle)...)
+	ivNode, ivName, err := buildImageVerificationNode(pipeline, bundle)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if ivNode != nil {
+		nodes = append(nodes, *ivNode)
+	}
+	if anyNeedsApprovals(gatesByEnv) {
+		nodes = append(nodes, approvalsRefNode(bundle)) // approval gates (approvals.go)
+	}
 
 	gates := newGateCollections(pipelineName, bundle.Name)
 	var prItems []interface{}
+	var compactSteps []compactStep
+	var compactMetrics []compactMetric
+	upstreamEnvs := make(map[string][]string, len(filteredEnvs))
+	var mirrorSteps []interface{} // pr-review steps with gates (mirror.go)
 
 	for _, envName := range filteredEnvs {
 		// Compute upstream deps for this env (filtered to only include surviving envs)
 		// Return as CEL-safe IDs (matching the step node IDs built with CELSafeSlug).
 		rawUpstreams := filteredDeps(envName, deps, filteredSet)
+		upstreamEnvs[envName] = rawUpstreams
 		upstreams := make([]string, len(rawUpstreams))
 		for i, up := range rawUpstreams {
 			upstreams[i] = CELSafeSlug(up)
@@ -565,7 +656,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			k8s := gateNodeK8sName(bundle.Name, gate.Name, gate.Namespace, envName)
 			name, err := gates.add(gate, envName, k8s, nil)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			envGates = append(envGates, name)
 		}
@@ -576,9 +667,32 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			k8s := gateNodeK8sName(bundle.Name, sg.gate.Name, sg.gate.Namespace, envName)
 			name, err := gates.add(sg.gate, envName, k8s, sg.skipped)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			envGates = append(envGates, name)
+		}
+
+		// Per-promotion MetricCheck instances the gates of this environment
+		// read: a node each, or items of the compact shape's MetricChecks
+		// collection.
+		vars := MetricTemplateVars(pipeline, bundle, envName)
+		for _, mc := range metricTemplatesFor(gatesByEnv[envName], metricChecks, pipeline.Namespace, policyNamespaces) {
+			k8sName := metricNodeK8sName(bundle.Name, mc.Name, envName)
+			if compact {
+				spec, _, _, _, err := metricCheckSpec(mc, vars)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				compactMetrics = append(compactMetrics, compactMetric{name: k8sName, env: envName,
+					template: mc.Name, upstreams: rawUpstreams, spec: spec})
+				continue
+			}
+			node, err := buildMetricCheckNode(metricNodeName(bundleSlug, mc.Name, envName), k8sName,
+				mc, vars, pipelineName, bundle.Name, envName, upstreams)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			nodes = append(nodes, node)
 		}
 
 		// PRStatus — created alongside each PromotionStep. The open-pr step
@@ -588,17 +702,57 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		prName := prStatusNodeK8sName(bundle.Name, envName)
 		prItems = append(prItems, map[string]interface{}{"name": prName, "environment": envName})
 
+		if len(envGates) > 0 && envApproval(pipeline, envName) == "pr-review" {
+			mirrorSteps = append(mirrorSteps, map[string]interface{}{
+				"name": promotionStepK8sName(pipelineName, bundle.Name, envName), "environment": envName})
+		}
+
+		if compact {
+			compactSteps = append(compactSteps, compactStep{env: envName,
+				name:      promotionStepK8sName(pipelineName, bundle.Name, envName),
+				prStatus:  prName,
+				upstreams: rawUpstreams,
+				gates:     envGates,
+			})
+			continue
+		}
 		// PromotionStep node — node ID must be a valid CEL identifier.
-		nodes = append(nodes, buildPromotionStepNode(
+		stepNode := buildPromotionStepNode(
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
-		))
+			heldCond(pipeline, envName),
+		)
+		in := hookNodesInput{
+			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
+			bundleUID:   string(bundle.UID),
+			env:         findEnvSpec(pipeline, envName),
+			stepK8sName: promotionStepK8sName(pipelineName, bundle.Name, envName),
+			conds:       stepConds(heldCond(pipeline, envName), upstreams, envGates, gates.readyCond),
+		}
+		if ivName != "" && len(upstreams) == 0 {
+			// A root step waits for the image verification, and so do its
+			// pre-deploy hooks (a migration must not run for an unverified image).
+			in.imageVerification = ivName
+			in.conds = append(in.conds, imageVerifiedCond())
+		}
+		extras, err := buildEnvExtras(in, analyses, bundle)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		attachExtras(stepNode, extras)
+		nodes = append(nodes, stepNode)
+		nodes = append(nodes, extras.nodes...)
 	}
 
 	nodes = append(nodes, gates.nodes()...)
+	nodes = append(nodes, gateMirrorNodes(mirrorSteps, gates.collectionIDs())...)
 	nodes = append(nodes, GraphNode{ID: NodePRStatusData, Def: map[string]interface{}{"items": prItems}},
 		prStatusesNode(pipelineName, bundle.Name))
+	if compact {
+		nodes = append(nodes, compactNodes(pipeline, bundle, compactSteps, gates.collectionIDs())...)
+		nodes = append(nodes, compactMetricNodes(pipelineName, bundle.Name, compactMetrics)...)
+	}
 
-	return nodes, gates.instances, nil
+	return nodes, gates.instances, upstreamEnvs, nil
 }
 
 // filteredDeps returns the upstream dependencies of envName, filtered to only
@@ -651,11 +805,46 @@ func resolvableWhen(cond, value string) string {
 const CondBundleWaitingForSlot = "WaitingForSlot"
 
 // bundleHeld is the condition spec.bundleName of every PromotionStep node
-// resolves under: the Bundle is not Superseded and does not wait for a
+// resolves under: the Bundle is neither Superseded nor Rejected (kardinal
+// reject, #1451; both final) and does not wait for a
 // maxConcurrentPromotions slot. has() keeps a Bundle without conditions
 // resolvable (a missing key would be data-pending, see resolvableWhen).
-const bundleHeld = `bundle.status.phase != "Superseded" && !(has(bundle.status.conditions) && ` +
+const bundleHeld = `bundle.status.phase != "Superseded" && bundle.status.phase != "Rejected" && !(has(bundle.status.conditions) && ` +
 	`bundle.status.conditions.exists(c_, c_.type == "` + CondBundleWaitingForSlot + `" && c_.status == "True"))`
+
+// heldCond is the extra condition spec.bundleName of env's PromotionStep
+// resolves under when the Pipeline holds env (spec.holds, kardinal rollback
+// --hold, #1528): only the hold's Bundle may promote there. "" when env is
+// not held. The hold is read when the Graph is built; adding or releasing a
+// hold changes the Pipeline spec, which rebuilds every active Bundle's Graph
+// in place (bundle reconciler ensurePipelineSpecCurrent), so the condition
+// follows it. A Bundle the condition holds back gets no step in env; the
+// steps that existed already are held by the PromotionStep reconciler.
+func heldCond(pipeline *kardinalv1alpha1.Pipeline, env string) string {
+	if h := heldBundle(pipeline, env); h != "" {
+		return "bundle.metadata.name == " + celString(h)
+	}
+	return ""
+}
+
+// heldBundle is the Bundle the Pipeline holds env on (spec.holds), or "".
+func heldBundle(pipeline *kardinalv1alpha1.Pipeline, env string) string {
+	for _, h := range pipeline.Spec.Holds {
+		if h.Environment == env {
+			return h.Bundle
+		}
+	}
+	return ""
+}
+
+// stepCond is the condition spec.bundleName resolves under: bundleHeld, and
+// held when env is held (heldCond).
+func stepCond(held string) string {
+	if held == "" {
+		return bundleHeld
+	}
+	return bundleHeld + " && " + held
+}
 
 // verifiedCond returns the CEL condition "upstream PromotionStep is Verified".
 func verifiedCond(upstreamID string) string {
@@ -671,7 +860,7 @@ func verifiedCond(upstreamID string) string {
 // upstream PromotionStep is Verified and every PolicyGate is ready (see
 // resolvableWhen). Until then kro does not create this PromotionStep.
 // spec.bundleName holds every step, roots included, once the Bundle is
-// Superseded.
+// Superseded or Rejected.
 //
 // There is no per-region fan-out: Build rejects two or more
 // spec.environments[].regions (see RegionsNotSupported) and ignores one.
@@ -682,6 +871,7 @@ func buildPromotionStepNode(
 	gateNames []string,
 	gateReady func(name string) string,
 	prStatusName string,
+	held string,
 ) GraphNode {
 	// Determine step type based on bundle type
 	stepType := defaultStepType(bundle.Spec.Type)
@@ -702,7 +892,8 @@ func buildPromotionStepNode(
 	templateSpec := map[string]interface{}{
 		"pipelineName": pipelineName,
 		// bundleName: live CEL reference to the Bundle ref node (#622). It only
-		// resolves while the Bundle is not Superseded, so a Superseded Bundle's
+		// resolves while the Bundle is not Superseded or Rejected (kardinal
+		// reject, #1451), so a Superseded or Rejected Bundle's
 		// Graph creates no new PromotionStep when a gate or upstream later turns
 		// ready (E2E-R20). kro re-reads the ref and watches it on every apply
 		// (executor/simple.go applyRef), so the hold takes effect on the next
@@ -712,7 +903,7 @@ func buildPromotionStepNode(
 		// is not used because an excluded node is pruned. Failed is not held:
 		// a Failed Bundle can return to Promoting, unless it waits for a
 		// maxConcurrentPromotions slot (bundleHeld, #1349).
-		"bundleName":  resolvableWhen(bundleHeld, "bundle.metadata.name"),
+		"bundleName":  resolvableWhen(stepCond(held), "bundle.metadata.name"),
 		"environment": envName,
 		"stepType":    stepType,
 		// prStatusRef names the environment's PRStatus. The PromotionStep
@@ -861,6 +1052,8 @@ func defaultStepType(bundleType string) string {
 	switch bundleType {
 	case "config":
 		return "config-merge"
+	case "chart":
+		return "helm-set-image"
 	default:
 		return "kustomize-set-image"
 	}

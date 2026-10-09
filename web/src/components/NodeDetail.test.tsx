@@ -232,6 +232,21 @@ describe('NodeDetail — step sequence from status.steps[] (C10b-web-07)', () =>
       note: 'checking health',
     },
     {
+      name: 'verifying after the health check',
+      step: makeStep({
+        state: 'Verifying',
+        stepType: 'kustomize-set-image',
+        currentStepIndex: 1,
+        steps: [
+          { name: 'git-push', state: 'Completed' },
+          { name: 'health-check', state: 'InProgress' },
+        ],
+      }),
+      want: ['git-push', 'health-check'],
+      current: 'health-check',
+      note: 'verifying: post-deploy hooks and analyses',
+    },
+    {
       name: 'kustomize sequence at git-commit',
       step: makeStep({
         state: 'Promoting',
@@ -272,6 +287,29 @@ describe('NodeDetail — step sequence from status.steps[] (C10b-web-07)', () =>
     const li = screen.getByText('health-check').closest('li')!
     expect(li).toHaveAttribute('data-step-state', 'Failed')
     expect(within(li).getByText('health check timeout after 10m0s')).toBeInTheDocument()
+  })
+
+  it('draws each step on a waterfall of the promotion time span', () => {
+    const t = (s: number) => new Date(Date.UTC(2026, 9, 1, 9, 0, s)).toISOString()
+    const step = makeStep({
+      state: 'Verified',
+      steps: [
+        { name: 'git-clone', state: 'Completed', startedAt: t(0), completedAt: t(10), durationMs: 10_000 },
+        { name: 'health-check', state: 'Completed', startedAt: t(10), completedAt: t(40), durationMs: 30_000 },
+      ],
+    })
+    render(<NodeDetail node={makePromotionStepNode({ state: 'Verified' })} onClose={vi.fn()} steps={[step]} />)
+    const bar = (name: string) => within(screen.getByText(name).closest('li')!).getByTestId('step-bar') as HTMLElement
+    expect(bar('git-clone').style.left).toBe('0%')
+    expect(bar('git-clone').style.width).toBe('25%')
+    expect(bar('health-check').style.left).toBe('25%')
+    expect(bar('health-check').style.width).toBe('75%')
+  })
+
+  it('draws no waterfall when no step has a start time', () => {
+    const step = makeStep({ state: 'Promoting', steps: [{ name: 'git-clone', state: 'InProgress' }] })
+    render(<NodeDetail node={makePromotionStepNode()} onClose={vi.fn()} steps={[step]} />)
+    expect(screen.queryByTestId('step-bar-track')).toBeNull()
   })
 
   it('says when the controller has not reported steps yet', () => {

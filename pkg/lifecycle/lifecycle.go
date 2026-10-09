@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,7 +49,52 @@ const (
 	// AnnotationRequestedBy records who asked for a promote, a rollback or a
 	// Bundle created from the UI.
 	AnnotationRequestedBy = "kardinal.io/requested-by"
+	// AnnotationCreatedBy is who created a Bundle: the Kubernetes username of
+	// a person (the chart's admission policy pins it to the requester), or a
+	// kardinal component ("subscription:<name>", "bundle-api",
+	// "kardinal-controller") for the Bundles the controller creates. An
+	// approval gate's excludeAuthor compares approvers with it.
+	AnnotationCreatedBy = "kardinal.io/created-by"
 )
+
+// ControllerCreator is the kardinal.io/created-by of the Bundles the
+// controller creates on its own (automatic rollbacks).
+const ControllerCreator = "kardinal-controller"
+
+// Creator names of kardinal components, not people: the Bundle API's static
+// token and the UI without per-user authentication.
+const (
+	BundleAPICreator = "bundle-api"
+	UICreator        = "kardinal-ui"
+)
+
+// ComponentCreator reports whether who, a kardinal.io/created-by value,
+// names a kardinal component rather than a person: excludeAuthor cannot tell
+// who asked for such a Bundle.
+func ComponentCreator(who string) bool {
+	switch who {
+	case ControllerCreator, BundleAPICreator, UICreator:
+		return true
+	}
+	return strings.HasPrefix(who, "subscription:")
+}
+
+// StampCreatedBy sets the kardinal.io/created-by annotation on obj to who,
+// unless it is already set or who is empty.
+func StampCreatedBy(obj metav1.Object, who string) {
+	if who == "" {
+		return
+	}
+	ann := obj.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	if _, ok := ann[AnnotationCreatedBy]; ok {
+		return
+	}
+	ann[AnnotationCreatedBy] = who
+	obj.SetAnnotations(ann)
+}
 
 // Sentinel errors. Callers map them to exit messages or HTTP status codes
 // (ErrNotFound → 404, ErrInvalid → 400, ErrConflict → 409).
@@ -105,29 +151,86 @@ func CompareCreation(a, b *v1alpha1.Bundle) int {
 	return strings.Compare(a.Name, b.Name)
 }
 
+// Halted reports whether b never promotes again: a newer Bundle superseded
+// it, or it was rejected (Rejected). Both are history, so every view that
+// picks a Pipeline's current Bundle skips them the same way.
+func Halted(b *v1alpha1.Bundle) bool {
+	return b.Status.Phase == "Superseded" || Rejected(b)
+}
+
+// RejectedLiveHint is what the views say about a Rejected Bundle whose change
+// is live in an environment (RejectedLiveStep): rejecting stops promotions,
+// it does not revert what was merged.
+const RejectedLiveHint = "rejected change is live; roll back"
+
+// LiveStepState reports whether a PromotionStep in state has its change in
+// the environment: its PR merged or its push landed, and the health check
+// runs (HealthChecking) or passed (Verified).
+func LiveStepState(state string) bool {
+	return state == "HealthChecking" || state == "Verified"
+}
+
+// RejectedLiveStep reports whether s, a step of b, is a rejected change that
+// is live: b is Rejected and s is HealthChecking or Verified. Such a Bundle
+// stays the current one in that environment, marked Rejected, so the views
+// show what is deployed there instead of hiding it with the Halted Bundles.
+func RejectedLiveStep(b *v1alpha1.Bundle, s *v1alpha1.PromotionStep) bool {
+	return Rejected(b) && s.Spec.BundleName == b.Name && LiveStepState(s.Status.State)
+}
+
+// RejectedLiveEnvs returns, sorted, the environments where the Rejected
+// Bundle b's change is live (RejectedLiveStep), or nil.
+func RejectedLiveEnvs(b *v1alpha1.Bundle, steps []v1alpha1.PromotionStep) []string {
+	if !Rejected(b) {
+		return nil
+	}
+	seen := map[string]bool{}
+	var envs []string
+	for i := range steps {
+		s := &steps[i]
+		if s.Namespace == b.Namespace && RejectedLiveStep(b, s) && !seen[s.Spec.Environment] {
+			seen[s.Spec.Environment] = true
+			envs = append(envs, s.Spec.Environment)
+		}
+	}
+	sort.Strings(envs)
+	return envs
+}
+
 // moreCurrent reports whether Bundle a outranks Bundle b of the same
-// Pipeline as the Pipeline's current Bundle. A Bundle that is not Superseded
-// outranks a Superseded one whatever its phase, so a newer Failed Bundle is
-// never hidden behind an older Verified or Promoting one (E2E-R15). Otherwise
-// the newer one (CompareCreation) wins.
-func moreCurrent(a, b *v1alpha1.Bundle) bool {
-	aSuperseded, bSuperseded := a.Status.Phase == "Superseded", b.Status.Phase == "Superseded"
-	if aSuperseded != bSuperseded {
-		return bSuperseded
+// Pipeline as the Pipeline's current Bundle. A Bundle that is not Halted
+// (Superseded or Rejected), or is Rejected with its change live somewhere
+// (live), outranks a Halted one whatever its phase, so a newer Failed Bundle
+// is never hidden behind an older Verified or Promoting one (E2E-R15), and a
+// rejected change that is deployed is not hidden behind an older Bundle.
+// Otherwise the newer one (CompareCreation) wins.
+func moreCurrent(a, b *v1alpha1.Bundle, live map[string]bool) bool {
+	aHalted := Halted(a) && !live[a.Namespace+"/"+a.Name]
+	bHalted := Halted(b) && !live[b.Namespace+"/"+b.Name]
+	if aHalted != bHalted {
+		return bHalted
 	}
 	return CompareCreation(a, b) > 0
 }
 
 // CurrentBundle returns the current Bundle of one Pipeline, given its
-// Bundles: the newest Bundle that is not Superseded, whatever its phase, or
-// the newest one when every Bundle is Superseded (moreCurrent). It returns
-// nil when bundles is empty. The UI API's activeBundleName, the pipeline
-// table of kardinal get pipelines and web/src/bundleSelection.ts
+// Bundles and (any superset of) their PromotionSteps: the newest Bundle that
+// is not Superseded or Rejected, whatever its phase, where a Rejected Bundle
+// whose change is live in some environment (RejectedLiveStep) counts as not
+// Rejected; or the newest one when every Bundle is Halted (moreCurrent). It
+// returns nil when bundles is empty. The UI API's activeBundleName, the
+// pipeline table of kardinal get pipelines and web/src/bundleSelection.ts
 // pickDefaultBundle all use this rule.
-func CurrentBundle(bundles []v1alpha1.Bundle) *v1alpha1.Bundle {
+func CurrentBundle(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionStep) *v1alpha1.Bundle {
+	live := map[string]bool{}
+	for i := range bundles {
+		if len(RejectedLiveEnvs(&bundles[i], steps)) > 0 {
+			live[bundles[i].Namespace+"/"+bundles[i].Name] = true
+		}
+	}
 	var current *v1alpha1.Bundle
 	for i := range bundles {
-		if current == nil || moreCurrent(&bundles[i], current) {
+		if current == nil || moreCurrent(&bundles[i], current, live) {
 			current = &bundles[i]
 		}
 	}
@@ -177,15 +280,16 @@ func createdAtOf(obj metav1.Object) (time.Time, bool) {
 }
 
 // HasArtifacts reports whether the Bundle carries something to deploy: at
-// least one image, or a config commit.
+// least one image, a config commit, or a chart version.
 func HasArtifacts(b *v1alpha1.Bundle) bool {
-	return len(b.Spec.Images) > 0 || (b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != "")
+	return len(b.Spec.Images) > 0 || (b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != "") ||
+		(b.Spec.Chart != nil && b.Spec.Chart.Version != "")
 }
 
 // SameArtifacts reports whether two Bundles deploy the same images and config
 // commit, ignoring image order.
 func SameArtifacts(a, b *v1alpha1.Bundle) bool {
-	return slices.Equal(imageKeys(a), imageKeys(b)) && configKey(a) == configKey(b)
+	return slices.Equal(imageKeys(a), imageKeys(b)) && configKey(a) == configKey(b) && chartKey(a) == chartKey(b)
 }
 
 func imageKeys(b *v1alpha1.Bundle) []string {
@@ -209,7 +313,15 @@ func configKey(b *v1alpha1.Bundle) string {
 	return b.Spec.ConfigRef.GitRepo + "@" + b.Spec.ConfigRef.CommitSHA
 }
 
-// copyArtifacts deep-copies the images and config ref of src into dst. An
+// chartKey identifies a chart Bundle's chart version.
+func chartKey(b *v1alpha1.Bundle) string {
+	if b.Spec.Chart == nil {
+		return ""
+	}
+	return b.Spec.Chart.RepoURL + "/" + b.Spec.Chart.Name + ":" + b.Spec.Chart.Version + "@" + b.Spec.Chart.Digest
+}
+
+// copyArtifacts deep-copies the images, config ref and chart of src into dst. An
 // image Bundle stored before the CRD refused a configRef on it may carry one
 // it never deployed; it is not copied, so the copy passes the CRD (#1353).
 func copyArtifacts(dst *v1alpha1.BundleSpec, src *v1alpha1.Bundle) {
@@ -220,6 +332,10 @@ func copyArtifacts(dst *v1alpha1.BundleSpec, src *v1alpha1.Bundle) {
 	if src.Spec.ConfigRef != nil && src.Spec.Type != "image" {
 		ref := *src.Spec.ConfigRef
 		dst.ConfigRef = &ref
+	}
+	if src.Spec.Chart != nil {
+		chart := *src.Spec.Chart
+		dst.Chart = &chart
 	}
 }
 
@@ -264,4 +380,26 @@ func VerifiedTime(s *v1alpha1.PromotionStep) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return cond.LastTransitionTime.Time, true
+}
+
+// SupersededMessage starts the message of every PromotionStep the
+// supersession of its Bundle cancels (the PromotionStep reconciler writes
+// it), so readers can tell such a step from one that failed on its own.
+func SupersededMessage(bundle string) string {
+	return "bundle " + bundle + " was superseded"
+}
+
+// CancelledBySupersession reports whether s ended because its Bundle was
+// superseded, not because its promotion failed: it is Failed with
+// SupersededMessage, or still in a state the supersession guard cancels
+// (it has not run yet). A RollingBack or AbortedByAlarm step, or one that
+// failed before the supersession, is not.
+func CancelledBySupersession(s *v1alpha1.PromotionStep) bool {
+	switch s.Status.State {
+	case "Failed":
+		return strings.HasPrefix(s.Status.Message, SupersededMessage(s.Spec.BundleName))
+	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking":
+		return true
+	}
+	return false
 }

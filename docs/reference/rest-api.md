@@ -32,7 +32,8 @@ With controller TLS set (`controller.tlsCertFile`), both listeners use `https://
 | `POST` | `/api/v1/ui/gates/{gate}/approve` | Override a PolicyGate for a while |
 | `POST` | `/api/v1/ui/gates/{namespace}/{gate}/approve` | Override a PolicyGate in a namespace for a while |
 | `POST` | `/api/v1/ui/promote` | Promote the Bundle Verified upstream into an environment |
-| `POST` | `/api/v1/ui/rollback` | Roll an environment back |
+| `POST` | `/api/v1/ui/rollback` | Roll an environment back (with `hold`, keep it on the rollback) |
+| `POST` | `/api/v1/ui/release-hold` | Release the hold of a rollback on an environment |
 | `POST` | `/api/v1/ui/pause` | Pause a Pipeline |
 | `POST` | `/api/v1/ui/resume` | Resume a Pipeline |
 | `POST` | `/api/v1/ui/validate-cel` | Compile a PolicyGate CEL expression |
