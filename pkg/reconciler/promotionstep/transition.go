@@ -64,16 +64,16 @@ func (r *Reconciler) transitionClosing(ctx context.Context, base, ps *v1alpha1.P
 }
 
 // cancelUnstarted fails a step that never left Pending because its Bundle was
-// superseded. The step did no work, so unlike transition it writes no
+// superseded or rejected (eventReason Superseded or Rejected). The step did no work, so unlike transition it writes no
 // AuditEvent and records no step metrics: kardinal audit summary counts
 // neither a started nor a superseded promotion (E2E-R20). Only the Kubernetes
 // Event is emitted.
-func (r *Reconciler) cancelUnstarted(ctx context.Context, base, ps *v1alpha1.PromotionStep, message string) error {
+func (r *Reconciler) cancelUnstarted(ctx context.Context, base, ps *v1alpha1.PromotionStep, message, eventReason string) error {
 	changed, err := r.patchState(ctx, base, ps, StateFailed, message, nil)
 	if err != nil || !changed {
 		return err
 	}
-	kubeevent.Emit(r.Recorder, ps, corev1.EventTypeNormal, "Superseded", "Cancel",
+	kubeevent.Emit(r.Recorder, ps, corev1.EventTypeNormal, eventReason, "Cancel",
 		fmt.Sprintf("env %s: %s", ps.Spec.Environment, message))
 	return nil
 }
@@ -128,8 +128,8 @@ func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.Promotio
 		eventAction = "CheckHealth"
 		note = fmt.Sprintf("env %s: change delivered, running health check", env)
 	case StateVerifying:
-		eventAction = "RunHooks"
-		note = fmt.Sprintf("env %s: health check passed, running post-deploy hooks", env)
+		eventAction = "RunVerification"
+		note = fmt.Sprintf("env %s: health check passed, verifying (post-deploy hooks and analyses)", env)
 	case StateVerified:
 		eventAction = "Verify"
 		note = fmt.Sprintf("env %s: step completed successfully", env)

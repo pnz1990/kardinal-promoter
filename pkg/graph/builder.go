@@ -38,6 +38,9 @@ type BuildInput struct {
 	// DefaultPolicyNamespace.
 	PolicyNamespaces []string
 
+	// Analyses are the Argo Rollouts analysis templates the environments'
+	// spec.verification names, as the translator read them.
+	Analyses AnalysisInput
 	// MetricChecks are the MetricChecks of the Pipeline namespace. Each one
 	// with spec.perPromotion that a gate of an environment reads gets an
 	// instance node for that environment (buildMetricCheckNode).
@@ -164,7 +167,7 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 		}
 	}
 	nodes, instances, upstreams, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates,
-		input.MetricChecks, input.PolicyNamespaces, compact)
+		input.MetricChecks, input.PolicyNamespaces, input.Analyses, compact)
 	if err != nil {
 		return nil, err
 	}
@@ -589,7 +592,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
 	skipGates map[string][]skipPermissionGate,
-	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string,
+	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string, analyses AnalysisInput,
 	compact bool) ([]GraphNode, []kardinalv1alpha1.PolicyGate, map[string][]string, error) {
 	pipelineName := pipeline.Name
 	bundleSlug := CELSafeSlug(bundle.Name) // camelCase — node IDs only
@@ -618,8 +621,9 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		// ReadyWhen intentionally omitted — ref: is read-only.
 	}
 	nodes = append(nodes, bundleWatchNode)
-	if hasHooks(pipeline, filteredEnvs) {
-		nodes = append(nodes, hookRefNodes(pipelineName, bundle.Name, bundle.Namespace)...)
+	nodes = append(nodes, readBackRefs(pipeline, filteredEnvs, bundle)...)
+	if anyNeedsApprovals(gatesByEnv) {
+		nodes = append(nodes, approvalsRefNode(bundle)) // approval gates (approvals.go)
 	}
 
 	gates := newGateCollections(pipelineName, bundle.Name)
@@ -627,6 +631,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	var compactSteps []compactStep
 	var compactMetrics []compactMetric
 	upstreamEnvs := make(map[string][]string, len(filteredEnvs))
+	var mirrorSteps []interface{} // pr-review steps with gates (mirror.go)
 
 	for _, envName := range filteredEnvs {
 		// Compute upstream deps for this env (filtered to only include surviving envs)
@@ -690,6 +695,11 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		prName := prStatusNodeK8sName(bundle.Name, envName)
 		prItems = append(prItems, map[string]interface{}{"name": prName, "environment": envName})
 
+		if len(envGates) > 0 && envApproval(pipeline, envName) == "pr-review" {
+			mirrorSteps = append(mirrorSteps, map[string]interface{}{
+				"name": promotionStepK8sName(pipelineName, bundle.Name, envName), "environment": envName})
+		}
+
 		if compact {
 			compactSteps = append(compactSteps, compactStep{env: envName,
 				name:      promotionStepK8sName(pipelineName, bundle.Name, envName),
@@ -704,22 +714,23 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
 			heldCond(pipeline, envName),
 		)
-		hooks, err := buildHookNodes(hookNodesInput{
+		extras, err := buildEnvExtras(hookNodesInput{
 			pipeline: pipelineName, bundle: bundle.Name, namespace: bundle.Namespace,
 			bundleUID:   string(bundle.UID),
 			env:         findEnvSpec(pipeline, envName),
 			stepK8sName: promotionStepK8sName(pipelineName, bundle.Name, envName),
 			conds:       stepConds(heldCond(pipeline, envName), upstreams, envGates, gates.readyCond),
-		})
+		}, analyses, bundle)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		attachHooks(stepNode, hooks)
+		attachExtras(stepNode, extras)
 		nodes = append(nodes, stepNode)
-		nodes = append(nodes, hooks.nodes...)
+		nodes = append(nodes, extras.nodes...)
 	}
 
 	nodes = append(nodes, gates.nodes()...)
+	nodes = append(nodes, gateMirrorNodes(mirrorSteps, gates.collectionIDs())...)
 	nodes = append(nodes, GraphNode{ID: NodePRStatusData, Def: map[string]interface{}{"items": prItems}},
 		prStatusesNode(pipelineName, bundle.Name))
 	if compact {
@@ -780,10 +791,11 @@ func resolvableWhen(cond, value string) string {
 const CondBundleWaitingForSlot = "WaitingForSlot"
 
 // bundleHeld is the condition spec.bundleName of every PromotionStep node
-// resolves under: the Bundle is not Superseded and does not wait for a
+// resolves under: the Bundle is neither Superseded nor Rejected (kardinal
+// reject, #1451; both final) and does not wait for a
 // maxConcurrentPromotions slot. has() keeps a Bundle without conditions
 // resolvable (a missing key would be data-pending, see resolvableWhen).
-const bundleHeld = `bundle.status.phase != "Superseded" && !(has(bundle.status.conditions) && ` +
+const bundleHeld = `bundle.status.phase != "Superseded" && bundle.status.phase != "Rejected" && !(has(bundle.status.conditions) && ` +
 	`bundle.status.conditions.exists(c_, c_.type == "` + CondBundleWaitingForSlot + `" && c_.status == "True"))`
 
 // heldCond is the extra condition spec.bundleName of env's PromotionStep
@@ -834,7 +846,7 @@ func verifiedCond(upstreamID string) string {
 // upstream PromotionStep is Verified and every PolicyGate is ready (see
 // resolvableWhen). Until then kro does not create this PromotionStep.
 // spec.bundleName holds every step, roots included, once the Bundle is
-// Superseded.
+// Superseded or Rejected.
 //
 // There is no per-region fan-out: Build rejects two or more
 // spec.environments[].regions (see RegionsNotSupported) and ignores one.
@@ -866,7 +878,8 @@ func buildPromotionStepNode(
 	templateSpec := map[string]interface{}{
 		"pipelineName": pipelineName,
 		// bundleName: live CEL reference to the Bundle ref node (#622). It only
-		// resolves while the Bundle is not Superseded, so a Superseded Bundle's
+		// resolves while the Bundle is not Superseded or Rejected (kardinal
+		// reject, #1451), so a Superseded or Rejected Bundle's
 		// Graph creates no new PromotionStep when a gate or upstream later turns
 		// ready (E2E-R20). kro re-reads the ref and watches it on every apply
 		// (executor/simple.go applyRef), so the hold takes effect on the next

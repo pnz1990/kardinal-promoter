@@ -867,6 +867,7 @@ func TestCLI_Refresh(t *testing.T) {
 	e := framework.New(t)
 	cli := e.CLI(t)
 	ns := e.Namespace(t)
+	created := time.Now().Add(-time.Second)
 	barePipeline(t, e, ns, pipelineName)
 	waitPipelineValid(t, e, ns, pipelineName)
 
@@ -880,7 +881,25 @@ func TestCLI_Refresh(t *testing.T) {
 		}
 		return lines
 	}
-	idle := time.Now().Add(time.Second)
+	// The status write that made the Pipeline Valid triggers one more
+	// reconcile ("already correct"), which a loaded controller runs seconds
+	// later (#1555). The idle window starts once that has happened:
+	// the last line is that reconcile's "already correct" and no reconcile
+	// has been logged for 3s.
+	count, since := -1, time.Now()
+	framework.Eventually(t, time.Minute, "the reconciles after the Pipeline turned Valid to settle", func(context.Context) (bool, string) {
+		lines := reconciled(created)
+		if len(lines) != count {
+			count, since = len(lines), time.Now()
+		}
+		last := ""
+		if len(lines) > 0 {
+			last = lines[len(lines)-1]
+		}
+		return strings.Contains(last, "already correct") && time.Since(since) >= 3*time.Second,
+			fmt.Sprintf("%d reconciles logged, the last %s ago: %s", len(lines), time.Since(since).Round(time.Second), last)
+	})
+	idle := time.Now()
 	framework.Consistently(t, 15*time.Second, "no reconcile while nothing changes", func(context.Context) (bool, string) {
 		lines := reconciled(idle)
 		return len(lines) == 0, strings.Join(lines, "\n")

@@ -57,8 +57,7 @@ func failingRules(t *testing.T, node map[string]interface{}, self map[string]int
 	for _, r := range rules {
 		rule := r.(map[string]interface{})
 		if strings.Contains(rule["rule"].(string), "oldSelf") {
-			// A transition rule runs only on update, never on create.
-			continue
+			continue // a transition rule: only checked on update, see TestBundleCRDRejectedIsOneWay
 		}
 		ast, iss := env.Compile(rule["rule"].(string))
 		require.NoError(t, iss.Err(), "rule %q", rule["rule"])
@@ -259,4 +258,64 @@ func TestBundleCRDRejectsConfigRefOnImage(t *testing.T) {
 			assert.Equal(t, tc.want, failingRules(t, spec, tc.self))
 		})
 	}
+}
+
+// TestBundleCRDRejectedIsOneWay verifies the Bundle spec transition rules for
+// spec.rejected (#1451): it can be set once, and never changed or removed.
+func TestBundleCRDRejectedIsOneWay(t *testing.T) {
+	spec := crdSchema(t, "kardinal.io_bundles.yaml", "spec")
+	var rules []interface{}
+	for _, r := range spec["x-kubernetes-validations"].([]interface{}) {
+		// The transition rules on spec.rejected; the artifact immutability
+		// rules (#1526) are oldSelf rules too and have their own test.
+		if rule := r.(map[string]interface{})["rule"].(string); strings.Contains(rule, "oldSelf") && strings.Contains(rule, "rejected") {
+			rules = append(rules, r)
+		}
+	}
+	require.Len(t, rules, 2)
+	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	require.NoError(t, err)
+	failing := func(old, cur map[string]interface{}) []string {
+		var failed []string
+		for _, r := range rules {
+			rule := r.(map[string]interface{})
+			ast, iss := env.Compile(rule["rule"].(string))
+			require.NoError(t, iss.Err(), "rule %q", rule["rule"])
+			prg, err := env.Program(ast)
+			require.NoError(t, err)
+			out, _, err := prg.Eval(map[string]interface{}{"self": cur, "oldSelf": old})
+			require.NoError(t, err, "rule %q", rule["rule"])
+			if out.Value() != true {
+				failed = append(failed, rule["message"].(string))
+			}
+		}
+		return failed
+	}
+	rej := map[string]interface{}{"by": "alice", "reason": "bad"}
+	other := map[string]interface{}{"by": "bob", "reason": "bad"}
+	base := func(r map[string]interface{}) map[string]interface{} {
+		m := map[string]interface{}{"type": "image", "pipeline": "app"}
+		if r != nil {
+			m["rejected"] = r
+		}
+		return m
+	}
+	tests := []struct {
+		name     string
+		old, cur map[string]interface{}
+		want     []string
+	}{
+		{name: "set", old: base(nil), cur: base(rej)},
+		{name: "unchanged", old: base(rej), cur: base(rej)},
+		{name: "no rejection", old: base(nil), cur: base(nil)},
+		{name: "removed", old: base(rej), cur: base(nil),
+			want: []string{"spec.rejected cannot be removed: a rejected Bundle stays rejected"}},
+		{name: "changed", old: base(rej), cur: base(other), want: []string{"spec.rejected is immutable once set"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, failing(tc.old, tc.cur))
+		})
+	}
+	assert.Contains(t, crdSchema(t, "kardinal.io_bundles.yaml", "status", "phase")["enum"], "Rejected")
 }

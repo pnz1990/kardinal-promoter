@@ -67,17 +67,17 @@ type GraphNode struct {
 	// with ${...} is evaluated.
 	Def map[string]interface{} `json:"def,omitempty"`
 
+	// Patch contributes fields to an object kro does not create from this
+	// node (kro "patch" node, which may target another node's object):
+	// {apiVersion, kind, metadata: {name}, spec...}. kro applies only those
+	// fields, under a field manager of its own (one per node), and waits while
+	// the target does not exist. Other nodes cannot reference a patch node.
+	Patch map[string]interface{} `json:"patch,omitempty"`
+
 	// Ref identifies an existing object or collection:
 	//
 	//	{apiVersion, kind, metadata: {name | selector, namespace}}
 	Ref map[string]interface{} `json:"ref,omitempty"`
-
-	// Patch contributes fields to an object kro does not create for this node
-	// (it may be another node's object): {apiVersion, kind, metadata: {name},
-	// <fields>}. kro applies only those fields, with a field manager of its
-	// own, and waits while the target does not exist. Other nodes cannot
-	// reference a patch node.
-	Patch map[string]interface{} `json:"patch,omitempty"`
 
 	// ReadyWhen holds CEL expressions over the node itself (or "each" for a
 	// forEach collection). They feed the Graph's Ready condition and the UI.

@@ -136,13 +136,14 @@ func slotHeld(b *v1alpha1.Bundle) bool {
 }
 
 // bundleWakesSteps passes the Bundle events that steps act on: a Bundle that
-// is Superseded (the supersession guard) and a slot hold set or lifted.
+// is Superseded or Rejected (the supersession guard, isHalted) and a slot
+// hold set or lifted.
 var bundleWakesSteps = predicate.Funcs{
-	CreateFunc:  func(e event.CreateEvent) bool { return isSuperseded(e.Object) },
-	DeleteFunc:  func(e event.DeleteEvent) bool { return isSuperseded(e.Object) },
-	GenericFunc: func(e event.GenericEvent) bool { return isSuperseded(e.Object) },
+	CreateFunc:  func(e event.CreateEvent) bool { return isHalted(e.Object) },
+	DeleteFunc:  func(e event.DeleteEvent) bool { return isHalted(e.Object) },
+	GenericFunc: func(e event.GenericEvent) bool { return isHalted(e.Object) },
 	UpdateFunc: func(e event.UpdateEvent) bool {
-		if isSuperseded(e.ObjectNew) {
+		if isHalted(e.ObjectNew) {
 			return true
 		}
 		oldB, okOld := e.ObjectOld.(*v1alpha1.Bundle)
@@ -201,7 +202,7 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 		}
 		return "", nil, fmt.Errorf("plan rollback: %w", planErr)
 	}
-	if createErr := r.Create(ctx, plan.Bundle); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+	if createErr := lifecycle.CreateBundleAs(ctx, r.Client, plan.Bundle, lifecycle.ControllerCreator); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
 		return "", nil, fmt.Errorf("create rollback bundle %s: %w", name, createErr)
 	}
 	return name, nil, nil

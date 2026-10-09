@@ -94,7 +94,18 @@ func TestSub_ImageFilters(t *testing.T) {
 		return st.LastCheckedAt != s.Status.LastCheckedAt
 	})
 	assert.Equal(t, digest["1.1.0"], getSub(t, e, a.ns, "allow").Status.LastSeenDigest, "1.3.0 is not in allowTags")
-	assert.Len(t, bundles(t, e, a.ns), 1)
+	// exclude (tagFilter ^1\.) takes 1.3.0 too, at its own 30s poll or the
+	// poke: count each Subscription's Bundles, not the namespace's, which
+	// held exclude's Bundle whenever its poll came first (#1564).
+	poke(t, e, a.ns, "exclude")
+	wantExclude := "exclude-1-3-0-" + digestHex(d)[:8]
+	waitSub(t, e, a.ns, "exclude", "a Bundle for 1.3.0", func(st v1alpha1.SubscriptionStatus) bool {
+		return st.LastBundleCreated == wantExclude
+	})
+	for sub, want := range map[string]int{"major-one": 1, "exclude": 1, "allow": 0, "dated": 0, "bad": 0} {
+		assert.Len(t, subBundles(t, e, a.ns, sub), want, "%s's Bundles", sub)
+	}
+	assert.Len(t, bundles(t, e, a.ns), 2)
 }
 
 // TestSub_GitPrivate checks a private Git repository over HTTP: without
