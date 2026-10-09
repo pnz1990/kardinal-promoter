@@ -45,10 +45,14 @@ const (
 	// minInterval is the shortest re-evaluation interval: a smaller
 	// spec.interval would poll Prometheus in a hot loop (C04-gates-17).
 	minInterval = 10 * time.Second
-	// maxConcurrentReconciles is the reconcile worker count. Queries take at
-	// most DefaultGlobalSlots of them (Limiter), so the rest keep serving
-	// templates, suspended checks and checks waiting for a slot.
+	// maxConcurrentReconciles is the least reconcile worker count. Queries
+	// take at most the Limiter's global slots of them, so the rest keep
+	// serving templates, suspended checks and checks waiting for a slot
+	// (workerCount).
 	maxConcurrentReconciles = 16
+	// spareWorkers is how many workers are kept free of queries when the
+	// global slots are raised past maxConcurrentReconciles - spareWorkers.
+	spareWorkers = 4
 	// staleAfterIntervals and minValidFor set status.validUntil: a result is
 	// valid for three intervals (two missed evaluations of margin), and at
 	// least minValidFor. PolicyGates treat a result past validUntil as stale.
@@ -398,7 +402,7 @@ func (r *Reconciler) now() time.Time {
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.MetricCheck{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
-		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles})
+		WithOptions(controller.Options{MaxConcurrentReconciles: workerCount(r.Limiter)})
 	if r.Limiter != nil {
 		wake := make(chan event.GenericEvent, wakeBuffer)
 		r.Limiter.Wake = func(key types.NamespacedName) {
@@ -497,4 +501,16 @@ func parseInterval(s string) time.Duration {
 		return minInterval
 	}
 	return d
+}
+
+// workerCount is the reconcile worker count: maxConcurrentReconciles, or the
+// Limiter's global slots plus spareWorkers when that is more. A query runs
+// inside a reconcile, so with fewer workers than slots the slots past the
+// worker count could never be used (--metriccheck-global-slots 40 ran at
+// most 16 queries), and the checks without a query would wait behind them.
+func workerCount(l *Limiter) int {
+	if l != nil && l.Global+spareWorkers > maxConcurrentReconciles {
+		return l.Global + spareWorkers
+	}
+	return maxConcurrentReconciles
 }

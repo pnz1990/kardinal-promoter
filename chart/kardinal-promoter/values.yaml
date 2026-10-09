@@ -405,7 +405,9 @@ metricCheck:
   # rest wait first come, first served (status reason WaitingForSlot). The
   # sustained throughput is about global / query time: with 12 slots and
   # 0.5 s queries, 24 queries a second, so 1,440 MetricChecks at a 60 s
-  # interval. One namespace gets at most perNamespace / query time.
+  # interval. One namespace gets at most perNamespace / query time. The
+  # MetricCheck controller runs global + 4 workers (at least 16), so every
+  # slot can be used.
   querySlots:
     global: 12
     perNamespace: 1
