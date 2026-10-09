@@ -554,7 +554,7 @@ with 3 gates and 2 hooks about 210.
 
 **kardinal workaround.** `pkg/graph/size.go` `CheckSize`, called by the translator before the
 Graph is written: the JSON size plus 260 bytes per template node may not exceed 1,200,000
-bytes. Over it, the Bundle fails with `TranslationError` and a message that names the size and
+bytes. Over it, the Bundle fails with `GraphBuildFailed` and a message that names the size and
 the fix. Collections shrink the spec (G9 workaround); a compact shape that keeps the promotion
 DAG as data in a `def` node is planned for Pipelines with more than about 200 environments.
 
