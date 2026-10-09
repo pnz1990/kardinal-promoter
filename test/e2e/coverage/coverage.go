@@ -38,7 +38,9 @@ type Row struct {
 	// Suite is the hack/e2e/up.sh suite that runs the row's tests, or unit
 	// for a contract row.
 	Suite string
-	// Status is covered when a test claims the row, else todo.
+	// Status is covered when a test claims the row, known-bug when the test
+	// that claims it reproduces an open bug (scale.KnownBug: an expected
+	// failure until the bug is fixed), else todo.
 	Status  string
 	Area    string
 	Feature string

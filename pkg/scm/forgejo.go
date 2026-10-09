@@ -393,7 +393,9 @@ func (f *ForgejoProvider) ensureLabels(ctx context.Context, owner, repo string, 
 // do executes an authenticated Forgejo/Gitea API request.
 func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
 	owner := ownerFromPath(path, "/api/v1/repos/")
+	call := startSCMCall("forgejo", owner, method, path)
 	if err := f.circuits.Allow(owner); err != nil {
+		call.circuitOpen(f.circuits, owner)
 		return fmt.Errorf("forgejo scm: %w", err)
 	}
 
@@ -417,6 +419,8 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := f.client.Do(req)
+	// Arguments are taken now; the circuit states are read at return, after Record.
+	defer call.done(resp, err, f.circuits, owner)
 	if err != nil {
 		f.circuits.Record(owner, nil, err)
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
