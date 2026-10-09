@@ -79,3 +79,47 @@ func TestLabelsErrorInWaitingMessage(t *testing.T) {
 		assert.NotContains(t, got.Status.Outputs, "prLabelsError")
 	})
 }
+
+// TestControlsErrorInWaitingMessage: the pr controls open-pr could not apply
+// (status.outputs.prControlsError) and an enabled auto-merge
+// (status.outputs.prAutoMerge) stay in the WaitingForMerge message, which
+// replaces open-pr's, and the message rebuilt on a reopen (#1453).
+//
+// Covers SCM-PRCTL-ERR-01.
+func TestControlsErrorInWaitingMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		outputs map[string]string
+		want    string
+	}{
+		{name: "controls failed", outputs: map[string]string{"prControlsError": "reviewers: status 422"},
+			want: "PR #5 is open, waiting for merge; PR controls failed: reviewers: status 422"},
+		{name: "auto-merge on", outputs: map[string]string{"prAutoMerge": "enabled"},
+			want: "PR #5 is open, waiting for merge; auto-merge enabled"},
+		{name: "labels and controls", outputs: map[string]string{"prLabelsError": "status 403", "prControlsError": "assignees: x", "prAutoMerge": "enabled"},
+			want: "PR #5 is open, waiting for merge; adding labels failed: status 403; PR controls failed: assignees: x; auto-merge enabled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prs := openPRStatus("prs", "test/repo", 5)
+			step := makeStep("step", "nginx-demo", "bundle-1", "prod")
+			step.Spec.PRStatusRef = prs.Name
+			step.Status.State = "WaitingForMerge"
+			// A reopened PR: the message is rebuilt from the outputs.
+			step.Status.Message = "PR #5 is closed; the step fails 5m0s after closing unless it is reopened"
+			step.Status.Outputs = map[string]string{"prURL": "https://github.com/test/repo/pull/5", "prNumber": "5"}
+			for k, v := range tt.outputs {
+				step.Status.Outputs[k] = v
+			}
+			c := newClient(t, step, prs, makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo"))
+			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+
+			reconcileStep(t, r, "step")
+			assert.Equal(t, tt.want, getStep(t, c, "step").Status.Message)
+			// A second reconcile changes nothing.
+			reconcileStep(t, r, "step")
+			assert.Equal(t, tt.want, getStep(t, c, "step").Status.Message)
+		})
+	}
+}
